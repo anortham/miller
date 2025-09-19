@@ -20,7 +20,7 @@
   "author": "Claude & Murphy",
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^0.5.0",
+    "@modelcontextprotocol/sdk": "^1.0.0",
     "web-tree-sitter": "^0.20.8",
     "minisearch": "^6.3.0",
     "chokidar": "^3.5.3",

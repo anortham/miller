@@ -1,5 +1,12 @@
+#!/usr/bin/env bun
+
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+  ToolSchema,
+} from "@modelcontextprotocol/sdk/types.js";
 import { CodeIntelligenceEngine } from './engine/code-intelligence.js';
 
 class MillerMCPServer {
@@ -29,7 +36,7 @@ class MillerMCPServer {
 
   private setupHandlers() {
     // List available tools
-    this.server.setRequestHandler("tools/list", async () => ({
+    this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: [
         {
           name: "search_code",
@@ -69,7 +76,7 @@ class MillerMCPServer {
             },
             required: ["query"]
           }
-        },
+        } satisfies ToolSchema,
         {
           name: "goto_definition",
           description: "Find the definition of a symbol at a specific location",
@@ -91,7 +98,7 @@ class MillerMCPServer {
             },
             required: ["file", "line", "column"]
           }
-        },
+        } satisfies ToolSchema,
         {
           name: "find_references",
           description: "Find all references to a symbol at a specific location",
@@ -113,7 +120,7 @@ class MillerMCPServer {
             },
             required: ["file", "line", "column"]
           }
-        },
+        } satisfies ToolSchema,
         {
           name: "get_hover_info",
           description: "Get detailed information about a symbol (type, documentation, signature)",
@@ -135,7 +142,7 @@ class MillerMCPServer {
             },
             required: ["file", "line", "column"]
           }
-        },
+        } satisfies ToolSchema,
         {
           name: "get_call_hierarchy",
           description: "Get incoming or outgoing call hierarchy for a function/method",
@@ -162,7 +169,7 @@ class MillerMCPServer {
             },
             required: ["file", "line", "column", "direction"]
           }
-        },
+        } satisfies ToolSchema,
         {
           name: "find_cross_language_bindings",
           description: "Find API calls and cross-language bindings in a file",
@@ -176,7 +183,7 @@ class MillerMCPServer {
             },
             required: ["file"]
           }
-        },
+        } satisfies ToolSchema,
         {
           name: "index_workspace",
           description: "Index or reindex a workspace directory for code intelligence",
@@ -194,7 +201,7 @@ class MillerMCPServer {
               }
             }
           }
-        },
+        } satisfies ToolSchema,
         {
           name: "get_workspace_stats",
           description: "Get statistics about the indexed workspace (files, symbols, etc.)",
@@ -202,7 +209,7 @@ class MillerMCPServer {
             type: "object",
             properties: {}
           }
-        },
+        } satisfies ToolSchema,
         {
           name: "health_check",
           description: "Check the health status of the code intelligence engine",
@@ -210,12 +217,12 @@ class MillerMCPServer {
             type: "object",
             properties: {}
           }
-        }
+        } satisfies ToolSchema
       ]
     }));
 
     // Handle tool calls
-    this.server.setRequestHandler("tools/call", async (request) => {
+    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name, arguments: args } = request.params;
 
       try {
