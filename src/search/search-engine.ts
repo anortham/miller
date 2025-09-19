@@ -159,7 +159,7 @@ export class SearchEngine {
 
     const results = this.miniSearch.search(query, searchOptions);
 
-    return Promise.all(results.map(async (r: any) => {
+    const processedResults = await Promise.all(results.map(async (r: any) => {
       const result: SearchResult = {
         file: r.file,
         line: r.line,
@@ -180,6 +180,9 @@ export class SearchEngine {
 
       return result;
     }));
+
+    // Ensure we respect the limit after processing
+    return processedResults.slice(0, limit);
   }
 
   /**

@@ -57,11 +57,6 @@ export class MillerPaths {
     return path.join(this.getLogsDir(), 'parser.log');
   }
 
-  // Get today's log file path for a specific category
-  getTodayLogPath(category: string): string {
-    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-    return path.join(this.getLogsDir(), `${category}-${today}.log`);
-  }
 
   getSearchIndexPath(): string {
     return path.join(this.getCacheDir(), 'search-index.json');
@@ -109,7 +104,7 @@ export class MillerPaths {
   }
 
   // Get today's log file with rotation
-  getTodayLogPath(type: 'main' | 'error' | 'debug' | 'parser' = 'main'): string {
+  getTodayLogPath(type: string = 'main'): string {
     const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
     const baseDir = this.getLogsDir();
 

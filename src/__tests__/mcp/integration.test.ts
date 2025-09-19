@@ -8,7 +8,10 @@ describe('Miller MCP Integration Tests', () => {
   beforeAll(async () => {
     // Initialize logger for tests
     const { initializeLogger } = await import('../../utils/logger.js');
-    initializeLogger(process.cwd());
+    const { MillerPaths } = await import('../../utils/miller-paths.js');
+    const paths = new MillerPaths(process.cwd());
+    await paths.ensureDirectories();
+    initializeLogger(paths);
 
     // Import and set up the engine
     const { CodeIntelligenceEngine } = await import('../../engine/code-intelligence.js');
@@ -91,7 +94,8 @@ describe('Miller MCP Integration Tests', () => {
     });
 
     it('should filter by symbol kind', async () => {
-      const classResults = await mcpTools.searchCode('', {
+      // Search for a term that will return results, then filter by class
+      const classResults = await mcpTools.searchCode('Extractor', {
         symbolKinds: ['class'],
         limit: 10
       });

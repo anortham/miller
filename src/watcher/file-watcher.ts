@@ -1,5 +1,5 @@
-import { watch, FSWatcher, readFile, stat } from 'fs';
-import { readFile as readFileAsync } from 'fs/promises';
+import { watch, FSWatcher, readFile } from 'fs';
+import { readFile as readFileAsync, stat as statAsync } from 'fs/promises';
 import path from 'path';
 
 export interface FileWatcherOptions {
@@ -195,7 +195,7 @@ export class FileWatcher {
 
   private async fileExists(filePath: string): Promise<boolean> {
     try {
-      await stat(filePath);
+      await statAsync(filePath);
       return true;
     } catch {
       return false;
@@ -205,7 +205,7 @@ export class FileWatcher {
   private async readFileWithSizeCheck(filePath: string): Promise<string | null> {
     try {
       // Check file size first
-      const stats = await stat(filePath);
+      const stats = await statAsync(filePath);
       if (stats.size > this.options.maxFileSize) {
         console.warn(`File too large to process: ${filePath} (${stats.size} bytes)`);
         return null;
@@ -245,10 +245,15 @@ export class FileWatcher {
     // Simple pattern matching - could be enhanced with a proper glob library
     if (pattern.includes('**')) {
       // Handle ** patterns
-      const regexPattern = pattern
+      let regexPattern = pattern
         .replace(/\*\*/g, '.*')
         .replace(/\*/g, '[^/\\\\]*')
         .replace(/\?/g, '[^/\\\\]');
+
+      // Special case for hidden files pattern: **/.* should match files starting with dot
+      if (pattern === '**/.*') {
+        regexPattern = '.*/\\.[^/\\\\]*';
+      }
 
       const regex = new RegExp(regexPattern, 'i');
       return regex.test(filePath);
