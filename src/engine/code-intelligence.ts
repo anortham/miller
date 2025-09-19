@@ -533,6 +533,35 @@ export class CodeIntelligenceEngine {
     log.engine(LogLevel.INFO, 'Code Intelligence Engine disposed');
   }
 
+  // Get comprehensive workspace statistics
+  getWorkspaceStats() {
+    const stats = this.getStats();
+
+    return {
+      totalSymbols: stats.database.symbols || 0,
+      totalFiles: stats.database.files || 0,
+      languages: stats.parser.languages || [],
+      symbolsByKind: stats.database.symbolsByKind || {},
+      symbolsByLanguage: stats.database.symbolsByLanguage || {},
+      searchEngine: {
+        indexedDocuments: stats.search.indexedDocuments || 0,
+        isIndexed: stats.search.isIndexed || false
+      },
+      parser: {
+        initialized: stats.parser.initialized || false,
+        loadedLanguages: stats.parser.loadedLanguages || 0,
+        supportedExtensions: stats.parser.supportedExtensions || 0
+      },
+      fileWatcher: {
+        watchedPaths: stats.watcher.watchedPaths || 0,
+        pendingUpdates: stats.watcher.pendingUpdates || 0,
+        processingFiles: stats.watcher.processingFiles || 0
+      },
+      extractors: stats.extractors,
+      engineStatus: this.isInitialized ? 'Initialized' : 'Not Initialized'
+    };
+  }
+
   // Health check
   async healthCheck(): Promise<{ status: 'healthy' | 'unhealthy'; details: any }> {
     try {
@@ -546,7 +575,25 @@ export class CodeIntelligenceEngine {
 
       return {
         status: isHealthy ? 'healthy' : 'unhealthy',
-        details: stats
+        components: {
+          database: stats.database.symbols > 0 ? 'healthy' : 'unhealthy',
+          parser: stats.parser.initialized ? 'healthy' : 'unhealthy',
+          searchEngine: stats.search.isIndexed ? 'healthy' : 'unhealthy',
+          fileWatcher: this.fileWatcher.isWatching() ? 'healthy' : 'unhealthy'
+        },
+        details: {
+          parsers: {
+            loaded: stats.parser.languages || []
+          },
+          database: {
+            symbols: stats.database.symbols || 0,
+            files: stats.database.files || 0
+          },
+          searchIndex: {
+            documents: stats.search.indexedDocuments || 0,
+            isIndexed: stats.search.isIndexed || false
+          }
+        }
       };
     } catch (error) {
       return {
