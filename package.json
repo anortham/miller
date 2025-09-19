@@ -1,0 +1,45 @@
+{
+  "name": "miller",
+  "version": "1.0.0",
+  "description": "Miller - Multi-language code intelligence MCP server providing LSP-quality features across 15-20 programming languages",
+  "main": "src/mcp-server.ts",
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/mcp-server.ts",
+    "dev": "bun --watch src/mcp-server.ts",
+    "build": "bun build src/mcp-server.ts --compile --target=bun --outfile=miller-server"
+  },
+  "keywords": [
+    "mcp",
+    "code-intelligence",
+    "lsp",
+    "tree-sitter",
+    "multi-language",
+    "code-analysis"
+  ],
+  "author": "Claude & Murphy",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^0.5.0",
+    "web-tree-sitter": "^0.20.8",
+    "minisearch": "^6.3.0",
+    "chokidar": "^3.5.3",
+    "tree-sitter-javascript": "^0.20.0",
+    "tree-sitter-typescript": "^0.20.0",
+    "tree-sitter-python": "^0.20.0",
+    "tree-sitter-rust": "^0.20.0",
+    "tree-sitter-go": "^0.20.0",
+    "tree-sitter-java": "^0.20.0",
+    "tree-sitter-c-sharp": "^0.20.0",
+    "tree-sitter-c": "^0.20.0",
+    "tree-sitter-cpp": "^0.20.0",
+    "tree-sitter-ruby": "^0.20.0",
+    "tree-sitter-php": "^0.20.0"
+  },
+  "devDependencies": {
+    "bun-types": "latest"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  }
+}

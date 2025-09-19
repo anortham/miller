@@ -1,0 +1,526 @@
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { CodeIntelligenceEngine } from './engine/code-intelligence.js';
+
+class MillerMCPServer {
+  private server: Server;
+  private engine: CodeIntelligenceEngine;
+  private workspacePath: string = process.cwd();
+
+  constructor() {
+    this.engine = new CodeIntelligenceEngine({
+      enableWatcher: true,
+      watcherDebounceMs: 300,
+      batchSize: 10
+    });
+
+    this.server = new Server({
+      name: "miller",
+      version: "1.0.0",
+      description: "Miller - Multi-language code intelligence MCP server providing LSP-quality features across 15-20 programming languages"
+    }, {
+      capabilities: {
+        tools: {}
+      }
+    });
+
+    this.setupHandlers();
+  }
+
+  private setupHandlers() {
+    // List available tools
+    this.server.setRequestHandler("tools/list", async () => ({
+      tools: [
+        {
+          name: "search_code",
+          description: "Search for code symbols, functions, classes, etc. using fuzzy matching",
+          inputSchema: {
+            type: "object",
+            properties: {
+              query: {
+                type: "string",
+                description: "Search query (symbol name, partial name, etc.)"
+              },
+              type: {
+                type: "string",
+                enum: ["fuzzy", "exact", "type"],
+                description: "Search type: fuzzy (default), exact pattern, or by type name",
+                default: "fuzzy"
+              },
+              limit: {
+                type: "number",
+                description: "Maximum number of results (default: 50)",
+                default: 50
+              },
+              language: {
+                type: "string",
+                description: "Filter by programming language (optional)"
+              },
+              symbolKinds: {
+                type: "array",
+                items: { type: "string" },
+                description: "Filter by symbol kinds (class, function, variable, etc.)"
+              },
+              includeSignature: {
+                type: "boolean",
+                description: "Include function/method signatures in results",
+                default: true
+              }
+            },
+            required: ["query"]
+          }
+        },
+        {
+          name: "goto_definition",
+          description: "Find the definition of a symbol at a specific location",
+          inputSchema: {
+            type: "object",
+            properties: {
+              file: {
+                type: "string",
+                description: "File path (absolute or relative to workspace)"
+              },
+              line: {
+                type: "number",
+                description: "Line number (1-based)"
+              },
+              column: {
+                type: "number",
+                description: "Column number (0-based)"
+              }
+            },
+            required: ["file", "line", "column"]
+          }
+        },
+        {
+          name: "find_references",
+          description: "Find all references to a symbol at a specific location",
+          inputSchema: {
+            type: "object",
+            properties: {
+              file: {
+                type: "string",
+                description: "File path (absolute or relative to workspace)"
+              },
+              line: {
+                type: "number",
+                description: "Line number (1-based)"
+              },
+              column: {
+                type: "number",
+                description: "Column number (0-based)"
+              }
+            },
+            required: ["file", "line", "column"]
+          }
+        },
+        {
+          name: "get_hover_info",
+          description: "Get detailed information about a symbol (type, documentation, signature)",
+          inputSchema: {
+            type: "object",
+            properties: {
+              file: {
+                type: "string",
+                description: "File path (absolute or relative to workspace)"
+              },
+              line: {
+                type: "number",
+                description: "Line number (1-based)"
+              },
+              column: {
+                type: "number",
+                description: "Column number (0-based)"
+              }
+            },
+            required: ["file", "line", "column"]
+          }
+        },
+        {
+          name: "get_call_hierarchy",
+          description: "Get incoming or outgoing call hierarchy for a function/method",
+          inputSchema: {
+            type: "object",
+            properties: {
+              file: {
+                type: "string",
+                description: "File path (absolute or relative to workspace)"
+              },
+              line: {
+                type: "number",
+                description: "Line number (1-based)"
+              },
+              column: {
+                type: "number",
+                description: "Column number (0-based)"
+              },
+              direction: {
+                type: "string",
+                enum: ["incoming", "outgoing"],
+                description: "Direction: incoming (callers) or outgoing (callees)"
+              }
+            },
+            required: ["file", "line", "column", "direction"]
+          }
+        },
+        {
+          name: "find_cross_language_bindings",
+          description: "Find API calls and cross-language bindings in a file",
+          inputSchema: {
+            type: "object",
+            properties: {
+              file: {
+                type: "string",
+                description: "File path to analyze for cross-language bindings"
+              }
+            },
+            required: ["file"]
+          }
+        },
+        {
+          name: "index_workspace",
+          description: "Index or reindex a workspace directory for code intelligence",
+          inputSchema: {
+            type: "object",
+            properties: {
+              path: {
+                type: "string",
+                description: "Workspace path to index (default: current directory)"
+              },
+              force: {
+                type: "boolean",
+                description: "Force reindexing even if files haven't changed",
+                default: false
+              }
+            }
+          }
+        },
+        {
+          name: "get_workspace_stats",
+          description: "Get statistics about the indexed workspace (files, symbols, etc.)",
+          inputSchema: {
+            type: "object",
+            properties: {}
+          }
+        },
+        {
+          name: "health_check",
+          description: "Check the health status of the code intelligence engine",
+          inputSchema: {
+            type: "object",
+            properties: {}
+          }
+        }
+      ]
+    }));
+
+    // Handle tool calls
+    this.server.setRequestHandler("tools/call", async (request) => {
+      const { name, arguments: args } = request.params;
+
+      try {
+        switch (name) {
+          case "search_code": {
+            const { query, type = "fuzzy", limit = 50, language, symbolKinds, includeSignature = true } = args;
+
+            let results;
+            if (type === 'exact') {
+              results = await this.engine.searchExact(query, { limit, language, symbolKinds });
+            } else if (type === 'type') {
+              results = await this.engine.searchByType(query, { limit, language });
+            } else {
+              results = await this.engine.searchCode(query, {
+                limit,
+                language,
+                symbolKinds,
+                includeSignature
+              });
+            }
+
+            return {
+              content: [{
+                type: "text",
+                text: `Found ${results.length} results:\n\n` +
+                      results.map(r =>
+                        `**${r.text}** (${r.kind || 'unknown'}) - ${r.file}:${r.line}:${r.column}` +
+                        (r.signature ? `\n  Signature: \`${r.signature}\`` : '') +
+                        (r.score ? `\n  Score: ${r.score.toFixed(2)}` : '')
+                      ).join('\n\n')
+              }]
+            };
+          }
+
+          case "goto_definition": {
+            const { file, line, column } = args;
+            const resolvedPath = this.resolvePath(file);
+            const result = await this.engine.goToDefinition(resolvedPath, line, column);
+
+            if (!result) {
+              return {
+                content: [{
+                  type: "text",
+                  text: "No definition found at the specified location."
+                }]
+              };
+            }
+
+            return {
+              content: [{
+                type: "text",
+                text: `Definition found at: **${result.file}:${result.line}:${result.column}**`
+              }]
+            };
+          }
+
+          case "find_references": {
+            const { file, line, column } = args;
+            const resolvedPath = this.resolvePath(file);
+            const references = await this.engine.findReferences(resolvedPath, line, column);
+
+            if (references.length === 0) {
+              return {
+                content: [{
+                  type: "text",
+                  text: "No references found for the symbol at the specified location."
+                }]
+              };
+            }
+
+            return {
+              content: [{
+                type: "text",
+                text: `Found ${references.length} references:\n\n` +
+                      references.map(ref =>
+                        `- ${ref.file}:${ref.line}:${ref.column}`
+                      ).join('\n')
+              }]
+            };
+          }
+
+          case "get_hover_info": {
+            const { file, line, column } = args;
+            const resolvedPath = this.resolvePath(file);
+            const info = await this.engine.hover(resolvedPath, line, column);
+
+            if (!info) {
+              return {
+                content: [{
+                  type: "text",
+                  text: "No information available for the symbol at the specified location."
+                }]
+              };
+            }
+
+            let response = `**${info.name}** (${info.kind})\n`;
+            if (info.signature) response += `\nSignature: \`${info.signature}\``;
+            if (info.type) response += `\nType: \`${info.type}\``;
+            if (info.documentation) response += `\n\nDocumentation:\n${info.documentation}`;
+            if (info.location) response += `\n\nDefined at: ${info.location.file}:${info.location.line}:${info.location.column}`;
+
+            return {
+              content: [{
+                type: "text",
+                text: response
+              }]
+            };
+          }
+
+          case "get_call_hierarchy": {
+            const { file, line, column, direction } = args;
+            const resolvedPath = this.resolvePath(file);
+            const hierarchy = await this.engine.getCallHierarchy(resolvedPath, line, column, direction);
+
+            if (hierarchy.length === 0) {
+              return {
+                content: [{
+                  type: "text",
+                  text: `No ${direction} calls found for the symbol at the specified location.`
+                }]
+              };
+            }
+
+            return {
+              content: [{
+                type: "text",
+                text: `${direction === 'incoming' ? 'Callers' : 'Callees'} (${hierarchy.length}):\n\n` +
+                      hierarchy.map(item =>
+                        `${'  '.repeat(item.level)}${item.symbol.name} (${item.symbol.kind}) - ${item.symbol.filePath}:${item.symbol.startLine}`
+                      ).join('\n')
+              }]
+            };
+          }
+
+          case "find_cross_language_bindings": {
+            const { file } = args;
+            const resolvedPath = this.resolvePath(file);
+            const bindings = await this.engine.findCrossLanguageBindings(resolvedPath);
+
+            if (bindings.length === 0) {
+              return {
+                content: [{
+                  type: "text",
+                  text: "No cross-language bindings found in the specified file."
+                }]
+              };
+            }
+
+            return {
+              content: [{
+                type: "text",
+                text: `Found ${bindings.length} cross-language bindings:\n\n` +
+                      bindings.map(binding =>
+                        `- ${binding.binding_kind}: ${binding.source_name} (${binding.source_language}) → ${binding.target_name || 'external'} (${binding.target_language || 'unknown'})`
+                      ).join('\n')
+              }]
+            };
+          }
+
+          case "index_workspace": {
+            const { path = this.workspacePath, force = false } = args;
+            const resolvedPath = this.resolvePath(path);
+
+            await this.engine.indexWorkspace(resolvedPath);
+
+            return {
+              content: [{
+                type: "text",
+                text: `Workspace indexed successfully: ${resolvedPath}`
+              }]
+            };
+          }
+
+          case "get_workspace_stats": {
+            const stats = this.engine.getStats();
+
+            const response = `**Workspace Statistics**
+
+**Database:**
+- Symbols: ${stats.database.symbols}
+- Files: ${stats.database.files}
+- Relationships: ${stats.database.relationships}
+
+**Parser:**
+- Initialized: ${stats.parser.initialized}
+- Loaded Languages: ${stats.parser.loadedLanguages}
+- Supported Extensions: ${stats.parser.supportedExtensions}
+
+**Search:**
+- Total Symbols: ${stats.search.totalSymbols}
+- Indexed Documents: ${stats.search.indexedDocuments}
+- Is Indexed: ${stats.search.isIndexed}
+
+**File Watcher:**
+- Watched Paths: ${stats.watcher.watchedPaths}
+- Pending Updates: ${stats.watcher.pendingUpdates}
+- Processing Files: ${stats.watcher.processingFiles}
+
+**Extractors:**
+- Registered: ${stats.extractors.registered}
+- Languages: ${stats.extractors.languages.join(', ')}
+
+**Engine Status:** ${stats.isInitialized ? 'Initialized' : 'Not Initialized'}`;
+
+            return {
+              content: [{
+                type: "text",
+                text: response
+              }]
+            };
+          }
+
+          case "health_check": {
+            const health = await this.engine.healthCheck();
+
+            return {
+              content: [{
+                type: "text",
+                text: `**Health Status:** ${health.status}\n\n` +
+                      `**Details:**\n${JSON.stringify(health.details, null, 2)}`
+              }]
+            };
+          }
+
+          default:
+            throw new Error(`Unknown tool: ${name}`);
+        }
+      } catch (error) {
+        console.error(`Error executing tool ${name}:`, error);
+
+        return {
+          content: [{
+            type: "text",
+            text: `Error: ${error instanceof Error ? error.message : 'Unknown error occurred'}`
+          }]
+        };
+      }
+    });
+  }
+
+  private resolvePath(filePath: string): string {
+    // Convert relative paths to absolute paths relative to workspace
+    if (!filePath.startsWith('/')) {
+      return require('path').resolve(this.workspacePath, filePath);
+    }
+    return filePath;
+  }
+
+  async start() {
+    try {
+      console.log('Starting Miller MCP Server...');
+
+      // Initialize the code intelligence engine
+      await this.engine.initialize();
+
+      // Auto-index current workspace on startup
+      console.log(`Auto-indexing workspace: ${this.workspacePath}`);
+      await this.engine.indexWorkspace(this.workspacePath);
+
+      // Connect to stdio transport
+      const transport = new StdioServerTransport();
+      await this.server.connect(transport);
+
+      console.log("Miller MCP Server is running and ready to serve code intelligence!");
+      console.log(`Workspace: ${this.workspacePath}`);
+
+      // Log initial stats
+      const stats = this.engine.getStats();
+      console.log(`Indexed ${stats.database.symbols} symbols from ${stats.database.files} files`);
+
+    } catch (error) {
+      console.error('Failed to start Miller MCP Server:', error);
+      process.exit(1);
+    }
+  }
+
+  async shutdown() {
+    console.log('Shutting down Miller MCP Server...');
+    await this.engine.dispose();
+    console.log('Miller MCP Server shutdown complete');
+  }
+}
+
+// Handle graceful shutdown
+process.on('SIGINT', async () => {
+  console.log('\nReceived SIGINT, shutting down gracefully...');
+  if (globalThis.server) {
+    await globalThis.server.shutdown();
+  }
+  process.exit(0);
+});
+
+process.on('SIGTERM', async () => {
+  console.log('Received SIGTERM, shutting down gracefully...');
+  if (globalThis.server) {
+    await globalThis.server.shutdown();
+  }
+  process.exit(0);
+});
+
+// Start the server
+const server = new MillerMCPServer();
+globalThis.server = server;
+
+server.start().catch(error => {
+  console.error('Fatal error:', error);
+  process.exit(1);
+});
