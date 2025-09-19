@@ -8,9 +8,11 @@ import { SearchEngine } from '../search/search-engine.js';
 import { FileWatcher, FileChangeEvent } from '../watcher/file-watcher.js';
 import { BaseExtractor, Symbol, Relationship, SymbolKind } from '../extractors/base-extractor.js';
 import { TypeScriptExtractor } from '../extractors/typescript-extractor.js';
+import { MillerPaths } from '../utils/miller-paths.js';
+import { log, LogLevel } from '../utils/logger.js';
 
 export interface CodeIntelligenceConfig {
-  dbPath?: string;
+  workspacePath?: string;
   maxFileSize?: number;
   batchSize?: number;
   enableWatcher?: boolean;
@@ -45,18 +47,20 @@ export class CodeIntelligenceEngine {
   private fileWatcher: FileWatcher;
   private extractors = new Map<string, typeof BaseExtractor>();
   private config: Required<CodeIntelligenceConfig>;
+  private paths: MillerPaths;
   private isInitialized = false;
 
   constructor(config: CodeIntelligenceConfig = {}) {
     this.config = {
-      dbPath: config.dbPath ?? './code-intel.db',
+      workspacePath: config.workspacePath ?? process.cwd(),
       maxFileSize: config.maxFileSize ?? 5 * 1024 * 1024,
       batchSize: config.batchSize ?? 10,
       enableWatcher: config.enableWatcher ?? true,
       watcherDebounceMs: config.watcherDebounceMs ?? 300
     };
 
-    this.db = new CodeIntelDB(this.config.dbPath);
+    this.paths = new MillerPaths(this.config.workspacePath);
+    this.db = new CodeIntelDB(this.paths);
     this.parserManager = new ParserManager();
     this.searchEngine = new SearchEngine(this.db['db']); // Access the underlying Database
 
@@ -85,16 +89,25 @@ export class CodeIntelligenceEngine {
   async initialize(): Promise<void> {
     if (this.isInitialized) return;
 
-    console.log('Initializing Code Intelligence Engine...');
+    log.engine(LogLevel.INFO, 'Initializing Code Intelligence Engine...', {
+      workspacePath: this.config.workspacePath,
+      enableWatcher: this.config.enableWatcher
+    });
 
     try {
+      // Ensure Miller directories exist
+      await this.paths.ensureDirectories();
+      await this.paths.createGitignore();
+
+      log.engine(LogLevel.INFO, `Created .miller directory structure at ${this.paths.getMillerDir()}`);
+
       await this.parserManager.initialize();
       await this.searchEngine.indexSymbols();
 
       this.isInitialized = true;
-      console.log('Code Intelligence Engine initialized successfully');
+      log.engine(LogLevel.INFO, 'Code Intelligence Engine initialized successfully');
     } catch (error) {
-      console.error('Failed to initialize Code Intelligence Engine:', error);
+      log.engine(LogLevel.ERROR, 'Failed to initialize Code Intelligence Engine', error);
       throw error;
     }
   }
@@ -105,12 +118,12 @@ export class CodeIntelligenceEngine {
     }
 
     const absolutePath = path.resolve(workspacePath);
-    console.log(`Indexing workspace: ${absolutePath}`);
+    log.engine(LogLevel.INFO, `Indexing workspace: ${absolutePath}`);
 
     try {
       // Get all code files
       const files = await this.getAllCodeFiles(absolutePath);
-      console.log(`Found ${files.length} code files to index`);
+      log.engine(LogLevel.INFO, `Found ${files.length} code files to index`);
 
       // Process files in batches for better performance
       const batchSize = this.config.batchSize;
@@ -123,7 +136,7 @@ export class CodeIntelligenceEngine {
         try {
           await Promise.allSettled(batchPromises);
           processed += batch.length;
-          console.log(`Indexed ${Math.min(processed, files.length)}/${files.length} files`);
+          log.engine(LogLevel.INFO, `Indexed ${Math.min(processed, files.length)}/${files.length} files`);
         } catch (error) {
           console.error(`Error processing batch starting at index ${i}:`, error);
         }
@@ -137,7 +150,7 @@ export class CodeIntelligenceEngine {
         await this.fileWatcher.watchDirectory(absolutePath);
       }
 
-      console.log('Workspace indexing complete');
+      log.engine(LogLevel.INFO, 'Workspace indexing complete');
     } catch (error) {
       console.error('Error indexing workspace:', error);
       throw error;
@@ -255,7 +268,7 @@ export class CodeIntelligenceEngine {
   }
 
   private async handleFileChange(event: FileChangeEvent): Promise<void> {
-    console.log(`File ${event.type}: ${event.filePath}`);
+    log.watcher(LogLevel.INFO, `File ${event.type}: ${event.filePath}`);
 
     try {
       if (event.type === 'delete') {
@@ -277,7 +290,7 @@ export class CodeIntelligenceEngine {
   }
 
   private async handleFileDelete(filePath: string): Promise<void> {
-    console.log(`File deleted: ${filePath}`);
+    log.watcher(LogLevel.INFO, `File deleted: ${filePath}`);
     await this.clearFileData(filePath);
     await this.searchEngine.removeFromIndex(filePath);
   }
@@ -504,12 +517,12 @@ export class CodeIntelligenceEngine {
 
   updateConfig(newConfig: Partial<CodeIntelligenceConfig>): void {
     this.config = { ...this.config, ...newConfig };
-    console.log('Configuration updated:', this.config);
+    log.engine(LogLevel.INFO, 'Configuration updated', this.config);
   }
 
   // Cleanup
   async dispose(): Promise<void> {
-    console.log('Disposing Code Intelligence Engine...');
+    log.engine(LogLevel.INFO, 'Disposing Code Intelligence Engine...');
 
     this.fileWatcher.dispose();
     this.parserManager.cleanup();
@@ -517,7 +530,7 @@ export class CodeIntelligenceEngine {
     this.db.close();
 
     this.isInitialized = false;
-    console.log('Code Intelligence Engine disposed');
+    log.engine(LogLevel.INFO, 'Code Intelligence Engine disposed');
   }
 
   // Health check

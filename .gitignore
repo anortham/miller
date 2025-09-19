@@ -12,6 +12,9 @@ out/
 *.tsbuildinfo
 miller-server
 
+# Miller runtime directory (contains databases, logs, cache)
+.miller/
+
 # Database files (created during operation)
 *.db
 *.sqlite

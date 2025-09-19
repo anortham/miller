@@ -9,14 +9,22 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { CodeIntelligenceEngine } from './engine/code-intelligence.js';
+import { MillerPaths } from './utils/miller-paths.js';
+import { initializeLogger, log, LogLevel } from './utils/logger.js';
 
 class MillerMCPServer {
   private server: Server;
   private engine: CodeIntelligenceEngine;
   private workspacePath: string = process.cwd();
+  private paths: MillerPaths;
 
   constructor() {
+    // Initialize paths and logger first
+    this.paths = new MillerPaths(this.workspacePath);
+    initializeLogger(this.paths, LogLevel.INFO);
+
     this.engine = new CodeIntelligenceEngine({
+      workspacePath: this.workspacePath,
       enableWatcher: true,
       watcherDebounceMs: 300,
       batchSize: 10
@@ -451,7 +459,7 @@ class MillerMCPServer {
             throw new Error(`Unknown tool: ${name}`);
         }
       } catch (error) {
-        console.error(`Error executing tool ${name}:`, error);
+        log.tool(name, false, undefined, error instanceof Error ? error : new Error(String(error)));
 
         return {
           content: [{
@@ -473,42 +481,45 @@ class MillerMCPServer {
 
   async start() {
     try {
-      console.log('Starting Miller MCP Server...');
+      log.lifecycle('startup', 'Starting Miller MCP Server...');
 
       // Initialize the code intelligence engine
       await this.engine.initialize();
 
       // Auto-index current workspace on startup
-      console.log(`Auto-indexing workspace: ${this.workspacePath}`);
+      log.lifecycle('startup', `Auto-indexing workspace: ${this.workspacePath}`);
       await this.engine.indexWorkspace(this.workspacePath);
 
       // Connect to stdio transport
       const transport = new StdioServerTransport();
       await this.server.connect(transport);
 
-      console.log("Miller MCP Server is running and ready to serve code intelligence!");
-      console.log(`Workspace: ${this.workspacePath}`);
+      log.lifecycle('ready', "Miller MCP Server is running and ready to serve code intelligence!", {
+        workspace: this.workspacePath,
+        millerDir: this.paths.getMillerDir()
+      });
 
       // Log initial stats
       const stats = this.engine.getStats();
-      console.log(`Indexed ${stats.database.symbols} symbols from ${stats.database.files} files`);
+      log.lifecycle('ready', `Indexed ${stats.database.symbols} symbols from ${stats.database.files} files`, stats);
 
     } catch (error) {
-      console.error('Failed to start Miller MCP Server:', error);
+      log.error('MCP', 'Failed to start Miller MCP Server', error);
       process.exit(1);
     }
   }
 
   async shutdown() {
-    console.log('Shutting down Miller MCP Server...');
+    log.lifecycle('shutdown', 'Shutting down Miller MCP Server...');
     await this.engine.dispose();
-    console.log('Miller MCP Server shutdown complete');
+    await log.flush(); // Ensure all logs are written before shutdown
+    log.lifecycle('shutdown', 'Miller MCP Server shutdown complete');
   }
 }
 
 // Handle graceful shutdown
 process.on('SIGINT', async () => {
-  console.log('\nReceived SIGINT, shutting down gracefully...');
+  log.lifecycle('shutdown', 'Received SIGINT, shutting down gracefully...');
   if (globalThis.server) {
     await globalThis.server.shutdown();
   }
@@ -516,7 +527,7 @@ process.on('SIGINT', async () => {
 });
 
 process.on('SIGTERM', async () => {
-  console.log('Received SIGTERM, shutting down gracefully...');
+  log.lifecycle('shutdown', 'Received SIGTERM, shutting down gracefully...');
   if (globalThis.server) {
     await globalThis.server.shutdown();
   }
@@ -528,6 +539,6 @@ const server = new MillerMCPServer();
 globalThis.server = server;
 
 server.start().catch(error => {
-  console.error('Fatal error:', error);
+  log.error('MCP', 'Fatal error during server startup', error);
   process.exit(1);
 });

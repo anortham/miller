@@ -1,14 +1,27 @@
 import { Database } from 'bun:sqlite';
+import { MillerPaths } from '../utils/miller-paths.js';
+import { log, LogLevel } from '../utils/logger.js';
 
 export class CodeIntelDB {
   private db: Database;
+  private dbPath: string;
 
-  constructor(dbPath = './code-intel.db') {
-    this.db = new Database(dbPath);
+  constructor(paths: MillerPaths) {
+    this.dbPath = paths.getDatabasePath();
+
+    // Ensure parent directory exists before creating database
+    const dir = require('path').dirname(this.dbPath);
+    if (!require('fs').existsSync(dir)) {
+      require('fs').mkdirSync(dir, { recursive: true });
+    }
+
+    this.db = new Database(this.dbPath);
     this.initialize();
   }
 
   private initialize() {
+    log.database(LogLevel.INFO, `Initializing database at ${this.dbPath}`);
+
     // Core symbols table - stores all code entities
     this.db.run(`
       CREATE TABLE IF NOT EXISTS symbols (
@@ -111,6 +124,8 @@ export class CodeIntelDB {
         tokenize = 'porter ascii'
       )
     `);
+
+    log.database(LogLevel.INFO, 'Database schema initialized successfully');
   }
 
   // Add getters for prepared statements (for performance)

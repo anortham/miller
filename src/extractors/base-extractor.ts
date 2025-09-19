@@ -188,20 +188,56 @@ export abstract class BaseExtractor {
   protected findContainingSymbol(node: Parser.SyntaxNode, symbols: Symbol[]): Symbol | undefined {
     const position = node.startPosition;
 
-    // Find the smallest symbol that contains this position
-    return symbols
-      .filter(s =>
-        s.startLine <= position.row + 1 &&
-        s.endLine >= position.row + 1 &&
-        s.startColumn <= position.column &&
-        s.endColumn >= position.column
-      )
-      .sort((a, b) => {
-        // Sort by size (smaller first)
-        const sizeA = (a.endLine - a.startLine) * 1000 + (a.endColumn - a.startColumn);
-        const sizeB = (b.endLine - b.startLine) * 1000 + (b.endColumn - b.startColumn);
-        return sizeA - sizeB;
-      })[0];
+    // Find symbols that contain this position
+    // Note: symbols store 1-based line numbers and 0-based column numbers
+    const containingSymbols = symbols.filter(s => {
+      const lineContains = s.startLine <= position.row + 1 && s.endLine >= position.row + 1;
+
+      // For column containment, we need to be careful about multi-line spans
+      let colContains = false;
+      if (position.row + 1 === s.startLine && position.row + 1 === s.endLine) {
+        // Single line span
+        colContains = s.startColumn <= position.column && s.endColumn >= position.column;
+      } else if (position.row + 1 === s.startLine) {
+        // First line of multi-line span
+        colContains = s.startColumn <= position.column;
+      } else if (position.row + 1 === s.endLine) {
+        // Last line of multi-line span
+        colContains = s.endColumn >= position.column;
+      } else {
+        // Middle line of multi-line span
+        colContains = true;
+      }
+
+      return lineContains && colContains;
+    });
+
+    if (containingSymbols.length === 0) return undefined;
+
+    // Prefer functions, methods, classes over variables when finding the containing symbol
+    const priorityOrder = {
+      [SymbolKind.Function]: 1,
+      [SymbolKind.Method]: 1,
+      [SymbolKind.Constructor]: 1,
+      [SymbolKind.Class]: 2,
+      [SymbolKind.Interface]: 2,
+      [SymbolKind.Namespace]: 3,
+      [SymbolKind.Variable]: 10,
+      [SymbolKind.Constant]: 10,
+      [SymbolKind.Property]: 10
+    };
+
+    return containingSymbols.sort((a, b) => {
+      // First, sort by priority (functions first)
+      const priorityA = priorityOrder[a.kind] || 5;
+      const priorityB = priorityOrder[b.kind] || 5;
+      if (priorityA !== priorityB) return priorityA - priorityB;
+
+      // Then by size (smaller first)
+      const sizeA = (a.endLine - a.startLine) * 1000 + (a.endColumn - a.startColumn);
+      const sizeB = (b.endLine - b.startLine) * 1000 + (b.endColumn - b.startColumn);
+      return sizeA - sizeB;
+    })[0];
   }
 
   protected extractVisibility(node: Parser.SyntaxNode): 'public' | 'private' | 'protected' | undefined {

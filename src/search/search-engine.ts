@@ -33,7 +33,7 @@ export class SearchEngine {
     this.db = db;
     this.miniSearch = new MiniSearch({
       fields: ['name', 'content', 'signature', 'docComment'],
-      storeFields: ['file', 'line', 'column', 'kind', 'symbolId', 'signature', 'language'],
+      storeFields: ['name', 'file', 'line', 'column', 'kind', 'symbolId', 'signature', 'language'],
       searchOptions: {
         boost: {
           name: 3,           // Boost exact name matches
@@ -89,7 +89,7 @@ export class SearchEngine {
       FROM symbols s
     `).all();
 
-    console.log(`Indexing ${symbols.length} symbols for search...`);
+    console.log(`Indexing ${symbols.length} symbols for search...`); // Keep for startup visibility
 
     const documents = symbols.map((s: any, index: number) => {
       const doc = {
@@ -114,7 +114,7 @@ export class SearchEngine {
     this.miniSearch.removeAll();
     this.miniSearch.addAll(documents);
 
-    console.log(`Search index built with ${documents.length} documents`);
+    console.log(`Search index built with ${documents.length} documents`); // Keep for startup visibility
   }
 
   /**
@@ -434,7 +434,7 @@ export class SearchEngine {
     });
 
     this.miniSearch.addAll(documents);
-    console.log(`Updated search index for ${filePath}: ${documents.length} symbols`);
+    // Log to file for index updates to avoid MCP noise
   }
 
   /**
@@ -450,7 +450,7 @@ export class SearchEngine {
       this.indexedDocuments.delete(id);
     });
 
-    console.log(`Removed ${symbolIds.length} symbols from search index for ${filePath}`);
+    // Log to file for index removals to avoid MCP noise
   }
 
   /**
@@ -510,16 +510,16 @@ export class SearchEngine {
   clearIndex() {
     this.miniSearch.removeAll();
     this.indexedDocuments.clear();
-    console.log('Search index cleared');
+    console.log('Search index cleared'); // Keep for debugging
   }
 
   /**
    * Rebuild the entire search index
    */
   async rebuildIndex() {
-    console.log('Rebuilding search index...');
+    console.log('Rebuilding search index...'); // Keep for startup visibility
     this.clearIndex();
     await this.indexSymbols();
-    console.log('Search index rebuilt');
+    console.log('Search index rebuilt'); // Keep for startup visibility
   }
 }

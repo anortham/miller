@@ -55,14 +55,25 @@ export class ParserManager {
           this.extensionToLanguage.set(ext, config.name);
         }
 
-        console.log(`Loaded parser for ${config.name}`);
+        console.log(`Loaded parser for ${config.name}`); // Keep as console for MCP startup visibility
       } catch (error) {
         console.warn(`Failed to load parser for ${config.name}:`, error);
+
+        // Fallback: Use JavaScript parser for TypeScript files
+        if (config.name === 'typescript' && this.languages.has('javascript')) {
+          console.log(`Using JavaScript parser as fallback for TypeScript`);
+          this.languages.set('typescript', this.languages.get('javascript')!);
+
+          // Map TypeScript extensions to typescript language (but use JS parser)
+          for (const ext of config.extensions) {
+            this.extensionToLanguage.set(ext, 'typescript');
+          }
+        }
       }
     }
 
     this.initialized = true;
-    console.log(`Parser manager initialized with ${this.languages.size} languages`);
+    console.log(`Parser manager initialized with ${this.languages.size} languages`); // Keep as console for MCP startup visibility
   }
 
   getLanguageForFile(filePath: string): string | undefined {
@@ -184,7 +195,7 @@ export class ParserManager {
         this.extensionToLanguage.set(ext, config.name);
       }
 
-      console.log(`Dynamically loaded parser for ${config.name}`);
+      console.log(`Dynamically loaded parser for ${config.name}`); // Keep as console for debugging
     } catch (error) {
       console.warn(`Failed to dynamically load parser for ${config.name}:`, error);
     }
