@@ -19,6 +19,7 @@
         "tree-sitter-rust": "^0.20.0",
         "tree-sitter-typescript": "^0.20.0",
         "web-tree-sitter": "^0.20.8",
+        "zod": "^4.1.9",
       },
       "devDependencies": {
         "bun-types": "latest",
@@ -464,9 +465,11 @@
 
     "yallist": ["yallist@4.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/yallist/-/yallist-4.0.0.tgz", {}, "sha1-m7knkNnA7/7GO+c1GeEaNQGaOnI="],
 
-    "zod": ["zod@3.25.76", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/zod/-/zod-3.25.76.tgz", {}, "sha1-JoQcP2/SKmonYOfMtxkXl2hHHjQ="],
+    "zod": ["zod@4.1.9", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/zod/-/zod-4.1.9.tgz", {}, "sha1-wDoN2xD1V48T+PcPGVn4n9CcHAY="],
 
     "zod-to-json-schema": ["zod-to-json-schema@3.24.6", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/zod-to-json-schema/-/zod-to-json-schema-3.24.6.tgz", { "peerDependencies": { "zod": "^3.24.1" } }, "sha1-WSDwIMTSZH7fu5VPoDYIK5LJ4S0="],
+
+    "@modelcontextprotocol/sdk/zod": ["zod@3.25.76", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/zod/-/zod-3.25.76.tgz", {}, "sha1-JoQcP2/SKmonYOfMtxkXl2hHHjQ="],
 
     "body-parser/iconv-lite": ["iconv-lite@0.6.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/iconv-lite/-/iconv-lite-0.6.3.tgz", { "dependencies": { "safer-buffer": ">= 2.1.2 < 3.0.0" } }, "sha1-pS+AvzjaGVLrXGgXkHGYcaGnJQE="],
 

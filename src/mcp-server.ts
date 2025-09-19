@@ -1,16 +1,12 @@
 #!/usr/bin/env bun
 
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-  ToolSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+import { z } from "zod";
 import { CodeIntelligenceEngine } from './engine/code-intelligence.js';
 
 class MillerMCPServer {
-  private server: Server;
+  private server: McpServer;
   private engine: CodeIntelligenceEngine;
   private workspacePath: string = process.cwd();
 
@@ -21,385 +17,248 @@ class MillerMCPServer {
       batchSize: 10
     });
 
-    this.server = new Server({
+    this.server = new McpServer({
       name: "miller",
-      version: "1.0.0",
-      description: "Miller - Multi-language code intelligence MCP server providing LSP-quality features across 15-20 programming languages"
-    }, {
-      capabilities: {
-        tools: {}
-      }
+      version: "1.0.0"
     });
 
-    this.setupHandlers();
+    this.setupTools();
   }
 
-  private setupHandlers() {
-    // List available tools
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: [
-        {
-          name: "search_code",
-          description: "Search for code symbols, functions, classes, etc. using fuzzy matching",
-          inputSchema: {
-            type: "object",
-            properties: {
-              query: {
-                type: "string",
-                description: "Search query (symbol name, partial name, etc.)"
-              },
-              type: {
-                type: "string",
-                enum: ["fuzzy", "exact", "type"],
-                description: "Search type: fuzzy (default), exact pattern, or by type name",
-                default: "fuzzy"
-              },
-              limit: {
-                type: "number",
-                description: "Maximum number of results (default: 50)",
-                default: 50
-              },
-              language: {
-                type: "string",
-                description: "Filter by programming language (optional)"
-              },
-              symbolKinds: {
-                type: "array",
-                items: { type: "string" },
-                description: "Filter by symbol kinds (class, function, variable, etc.)"
-              },
-              includeSignature: {
-                type: "boolean",
-                description: "Include function/method signatures in results",
-                default: true
-              }
-            },
-            required: ["query"]
-          }
-        } satisfies ToolSchema,
-        {
-          name: "goto_definition",
-          description: "Find the definition of a symbol at a specific location",
-          inputSchema: {
-            type: "object",
-            properties: {
-              file: {
-                type: "string",
-                description: "File path (absolute or relative to workspace)"
-              },
-              line: {
-                type: "number",
-                description: "Line number (1-based)"
-              },
-              column: {
-                type: "number",
-                description: "Column number (0-based)"
-              }
-            },
-            required: ["file", "line", "column"]
-          }
-        } satisfies ToolSchema,
-        {
-          name: "find_references",
-          description: "Find all references to a symbol at a specific location",
-          inputSchema: {
-            type: "object",
-            properties: {
-              file: {
-                type: "string",
-                description: "File path (absolute or relative to workspace)"
-              },
-              line: {
-                type: "number",
-                description: "Line number (1-based)"
-              },
-              column: {
-                type: "number",
-                description: "Column number (0-based)"
-              }
-            },
-            required: ["file", "line", "column"]
-          }
-        } satisfies ToolSchema,
-        {
-          name: "get_hover_info",
-          description: "Get detailed information about a symbol (type, documentation, signature)",
-          inputSchema: {
-            type: "object",
-            properties: {
-              file: {
-                type: "string",
-                description: "File path (absolute or relative to workspace)"
-              },
-              line: {
-                type: "number",
-                description: "Line number (1-based)"
-              },
-              column: {
-                type: "number",
-                description: "Column number (0-based)"
-              }
-            },
-            required: ["file", "line", "column"]
-          }
-        } satisfies ToolSchema,
-        {
-          name: "get_call_hierarchy",
-          description: "Get incoming or outgoing call hierarchy for a function/method",
-          inputSchema: {
-            type: "object",
-            properties: {
-              file: {
-                type: "string",
-                description: "File path (absolute or relative to workspace)"
-              },
-              line: {
-                type: "number",
-                description: "Line number (1-based)"
-              },
-              column: {
-                type: "number",
-                description: "Column number (0-based)"
-              },
-              direction: {
-                type: "string",
-                enum: ["incoming", "outgoing"],
-                description: "Direction: incoming (callers) or outgoing (callees)"
-              }
-            },
-            required: ["file", "line", "column", "direction"]
-          }
-        } satisfies ToolSchema,
-        {
-          name: "find_cross_language_bindings",
-          description: "Find API calls and cross-language bindings in a file",
-          inputSchema: {
-            type: "object",
-            properties: {
-              file: {
-                type: "string",
-                description: "File path to analyze for cross-language bindings"
-              }
-            },
-            required: ["file"]
-          }
-        } satisfies ToolSchema,
-        {
-          name: "index_workspace",
-          description: "Index or reindex a workspace directory for code intelligence",
-          inputSchema: {
-            type: "object",
-            properties: {
-              path: {
-                type: "string",
-                description: "Workspace path to index (default: current directory)"
-              },
-              force: {
-                type: "boolean",
-                description: "Force reindexing even if files haven't changed",
-                default: false
-              }
-            }
-          }
-        } satisfies ToolSchema,
-        {
-          name: "get_workspace_stats",
-          description: "Get statistics about the indexed workspace (files, symbols, etc.)",
-          inputSchema: {
-            type: "object",
-            properties: {}
-          }
-        } satisfies ToolSchema,
-        {
-          name: "health_check",
-          description: "Check the health status of the code intelligence engine",
-          inputSchema: {
-            type: "object",
-            properties: {}
-          }
-        } satisfies ToolSchema
-      ]
-    }));
+  private setupTools() {
+    // Search for code symbols with fuzzy matching
+    this.server.registerTool("search_code", {
+      title: "Code Search",
+      description: "Search for code symbols, functions, classes, etc. using fuzzy matching",
+      inputSchema: {
+        query: z.string().describe("Search query (symbol name, partial name, etc.)"),
+        type: z.enum(["fuzzy", "exact", "type"]).default("fuzzy").describe("Search type"),
+        limit: z.number().default(50).describe("Maximum number of results"),
+        language: z.string().optional().describe("Filter by programming language"),
+        symbolKinds: z.array(z.string()).optional().describe("Filter by symbol kinds"),
+        includeSignature: z.boolean().default(true).describe("Include function/method signatures")
+      }
+    }, async ({ query, type = "fuzzy", limit = 50, language, symbolKinds, includeSignature = true }) => {
+      let results;
+      if (type === 'exact') {
+        results = await this.engine.searchExact(query, { limit, language, symbolKinds });
+      } else if (type === 'type') {
+        results = await this.engine.searchByType(query, { limit, language });
+      } else {
+        results = await this.engine.searchCode(query, {
+          limit,
+          language,
+          symbolKinds,
+          includeSignature
+        });
+      }
 
-    // Handle tool calls
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      const { name, arguments: args } = request.params;
+      return {
+        content: [{
+          type: "text",
+          text: `Found ${results.length} results:\n\n` +
+                results.map(r =>
+                  `**${r.text}** (${r.kind || 'unknown'}) - ${r.file}:${r.line}:${r.column}` +
+                  (r.signature ? `\n  Signature: \`${r.signature}\`` : '') +
+                  (r.score ? `\n  Score: ${r.score.toFixed(2)}` : '')
+                ).join('\n\n')
+        }]
+      };
+    });
 
-      try {
-        switch (name) {
-          case "search_code": {
-            const { query, type = "fuzzy", limit = 50, language, symbolKinds, includeSignature = true } = args;
+    // Go to definition
+    this.server.registerTool("goto_definition", {
+      title: "Go to Definition",
+      description: "Find the definition of a symbol at a specific location",
+      inputSchema: {
+        file: z.string().describe("File path (absolute or relative to workspace)"),
+        line: z.number().describe("Line number (1-based)"),
+        column: z.number().describe("Column number (0-based)")
+      }
+    }, async ({ file, line, column }) => {
+      const resolvedPath = this.resolvePath(file);
+      const result = await this.engine.goToDefinition(resolvedPath, line, column);
 
-            let results;
-            if (type === 'exact') {
-              results = await this.engine.searchExact(query, { limit, language, symbolKinds });
-            } else if (type === 'type') {
-              results = await this.engine.searchByType(query, { limit, language });
-            } else {
-              results = await this.engine.searchCode(query, {
-                limit,
-                language,
-                symbolKinds,
-                includeSignature
-              });
-            }
+      if (!result) {
+        return {
+          content: [{
+            type: "text",
+            text: "No definition found at the specified location."
+          }]
+        };
+      }
 
-            return {
-              content: [{
-                type: "text",
-                text: `Found ${results.length} results:\n\n` +
-                      results.map(r =>
-                        `**${r.text}** (${r.kind || 'unknown'}) - ${r.file}:${r.line}:${r.column}` +
-                        (r.signature ? `\n  Signature: \`${r.signature}\`` : '') +
-                        (r.score ? `\n  Score: ${r.score.toFixed(2)}` : '')
-                      ).join('\n\n')
-              }]
-            };
-          }
+      return {
+        content: [{
+          type: "text",
+          text: `Definition found at: **${result.file}:${result.line}:${result.column}**`
+        }]
+      };
+    });
 
-          case "goto_definition": {
-            const { file, line, column } = args;
-            const resolvedPath = this.resolvePath(file);
-            const result = await this.engine.goToDefinition(resolvedPath, line, column);
+    // Find references
+    this.server.registerTool("find_references", {
+      title: "Find References",
+      description: "Find all references to a symbol at a specific location",
+      inputSchema: {
+        file: z.string().describe("File path (absolute or relative to workspace)"),
+        line: z.number().describe("Line number (1-based)"),
+        column: z.number().describe("Column number (0-based)")
+      }
+    }, async ({ file, line, column }) => {
+      const resolvedPath = this.resolvePath(file);
+      const references = await this.engine.findReferences(resolvedPath, line, column);
 
-            if (!result) {
-              return {
-                content: [{
-                  type: "text",
-                  text: "No definition found at the specified location."
-                }]
-              };
-            }
+      if (references.length === 0) {
+        return {
+          content: [{
+            type: "text",
+            text: "No references found for the symbol at the specified location."
+          }]
+        };
+      }
 
-            return {
-              content: [{
-                type: "text",
-                text: `Definition found at: **${result.file}:${result.line}:${result.column}**`
-              }]
-            };
-          }
+      return {
+        content: [{
+          type: "text",
+          text: `Found ${references.length} references:\n\n` +
+                references.map(ref =>
+                  `- ${ref.file}:${ref.line}:${ref.column}`
+                ).join('\n')
+        }]
+      };
+    });
 
-          case "find_references": {
-            const { file, line, column } = args;
-            const resolvedPath = this.resolvePath(file);
-            const references = await this.engine.findReferences(resolvedPath, line, column);
+    // Get hover info
+    this.server.registerTool("get_hover_info", {
+      title: "Hover Information",
+      description: "Get detailed information about a symbol (type, documentation, signature)",
+      inputSchema: {
+        file: z.string().describe("File path (absolute or relative to workspace)"),
+        line: z.number().describe("Line number (1-based)"),
+        column: z.number().describe("Column number (0-based)")
+      }
+    }, async ({ file, line, column }) => {
+      const resolvedPath = this.resolvePath(file);
+      const info = await this.engine.hover(resolvedPath, line, column);
 
-            if (references.length === 0) {
-              return {
-                content: [{
-                  type: "text",
-                  text: "No references found for the symbol at the specified location."
-                }]
-              };
-            }
+      if (!info) {
+        return {
+          content: [{
+            type: "text",
+            text: "No information available for the symbol at the specified location."
+          }]
+        };
+      }
 
-            return {
-              content: [{
-                type: "text",
-                text: `Found ${references.length} references:\n\n` +
-                      references.map(ref =>
-                        `- ${ref.file}:${ref.line}:${ref.column}`
-                      ).join('\n')
-              }]
-            };
-          }
+      let response = `**${info.name}** (${info.kind})\n`;
+      if (info.signature) response += `\nSignature: \`${info.signature}\``;
+      if (info.type) response += `\nType: \`${info.type}\``;
+      if (info.documentation) response += `\n\nDocumentation:\n${info.documentation}`;
+      if (info.location) response += `\n\nDefined at: ${info.location.file}:${info.location.line}:${info.location.column}`;
 
-          case "get_hover_info": {
-            const { file, line, column } = args;
-            const resolvedPath = this.resolvePath(file);
-            const info = await this.engine.hover(resolvedPath, line, column);
+      return {
+        content: [{
+          type: "text",
+          text: response
+        }]
+      };
+    });
 
-            if (!info) {
-              return {
-                content: [{
-                  type: "text",
-                  text: "No information available for the symbol at the specified location."
-                }]
-              };
-            }
+    // Get call hierarchy
+    this.server.registerTool("get_call_hierarchy", {
+      title: "Call Hierarchy",
+      description: "Get incoming or outgoing call hierarchy for a function/method",
+      inputSchema: {
+        file: z.string().describe("File path (absolute or relative to workspace)"),
+        line: z.number().describe("Line number (1-based)"),
+        column: z.number().describe("Column number (0-based)"),
+        direction: z.enum(["incoming", "outgoing"]).describe("Direction: incoming (callers) or outgoing (callees)")
+      }
+    }, async ({ file, line, column, direction }) => {
+      const resolvedPath = this.resolvePath(file);
+      const hierarchy = await this.engine.getCallHierarchy(resolvedPath, line, column, direction);
 
-            let response = `**${info.name}** (${info.kind})\n`;
-            if (info.signature) response += `\nSignature: \`${info.signature}\``;
-            if (info.type) response += `\nType: \`${info.type}\``;
-            if (info.documentation) response += `\n\nDocumentation:\n${info.documentation}`;
-            if (info.location) response += `\n\nDefined at: ${info.location.file}:${info.location.line}:${info.location.column}`;
+      if (hierarchy.length === 0) {
+        return {
+          content: [{
+            type: "text",
+            text: `No ${direction} calls found for the symbol at the specified location.`
+          }]
+        };
+      }
 
-            return {
-              content: [{
-                type: "text",
-                text: response
-              }]
-            };
-          }
+      return {
+        content: [{
+          type: "text",
+          text: `${direction === 'incoming' ? 'Callers' : 'Callees'} (${hierarchy.length}):\n\n` +
+                hierarchy.map(item =>
+                  `${'  '.repeat(item.level)}${item.symbol.name} (${item.symbol.kind}) - ${item.symbol.filePath}:${item.symbol.startLine}`
+                ).join('\n')
+        }]
+      };
+    });
 
-          case "get_call_hierarchy": {
-            const { file, line, column, direction } = args;
-            const resolvedPath = this.resolvePath(file);
-            const hierarchy = await this.engine.getCallHierarchy(resolvedPath, line, column, direction);
+    // Find cross-language bindings
+    this.server.registerTool("find_cross_language_bindings", {
+      title: "Cross-Language Bindings",
+      description: "Find API calls and cross-language bindings in a file",
+      inputSchema: {
+        file: z.string().describe("File path to analyze for cross-language bindings")
+      }
+    }, async ({ file }) => {
+      const resolvedPath = this.resolvePath(file);
+      const bindings = await this.engine.findCrossLanguageBindings(resolvedPath);
 
-            if (hierarchy.length === 0) {
-              return {
-                content: [{
-                  type: "text",
-                  text: `No ${direction} calls found for the symbol at the specified location.`
-                }]
-              };
-            }
+      if (bindings.length === 0) {
+        return {
+          content: [{
+            type: "text",
+            text: "No cross-language bindings found in the specified file."
+          }]
+        };
+      }
 
-            return {
-              content: [{
-                type: "text",
-                text: `${direction === 'incoming' ? 'Callers' : 'Callees'} (${hierarchy.length}):\n\n` +
-                      hierarchy.map(item =>
-                        `${'  '.repeat(item.level)}${item.symbol.name} (${item.symbol.kind}) - ${item.symbol.filePath}:${item.symbol.startLine}`
-                      ).join('\n')
-              }]
-            };
-          }
+      return {
+        content: [{
+          type: "text",
+          text: `Found ${bindings.length} cross-language bindings:\n\n` +
+                bindings.map(binding =>
+                  `- ${binding.binding_kind}: ${binding.source_name} (${binding.source_language}) → ${binding.target_name || 'external'} (${binding.target_language || 'unknown'})`
+                ).join('\n')
+        }]
+      };
+    });
 
-          case "find_cross_language_bindings": {
-            const { file } = args;
-            const resolvedPath = this.resolvePath(file);
-            const bindings = await this.engine.findCrossLanguageBindings(resolvedPath);
+    // Index workspace
+    this.server.registerTool("index_workspace", {
+      title: "Index Workspace",
+      description: "Index or reindex a workspace directory for code intelligence",
+      inputSchema: {
+        path: z.string().optional().describe("Workspace path to index (default: current directory)"),
+        force: z.boolean().default(false).describe("Force reindexing even if files haven't changed")
+      }
+    }, async ({ path = this.workspacePath, force = false }) => {
+      const resolvedPath = this.resolvePath(path);
+      await this.engine.indexWorkspace(resolvedPath);
 
-            if (bindings.length === 0) {
-              return {
-                content: [{
-                  type: "text",
-                  text: "No cross-language bindings found in the specified file."
-                }]
-              };
-            }
+      return {
+        content: [{
+          type: "text",
+          text: `Workspace indexed successfully: ${resolvedPath}`
+        }]
+      };
+    });
 
-            return {
-              content: [{
-                type: "text",
-                text: `Found ${bindings.length} cross-language bindings:\n\n` +
-                      bindings.map(binding =>
-                        `- ${binding.binding_kind}: ${binding.source_name} (${binding.source_language}) → ${binding.target_name || 'external'} (${binding.target_language || 'unknown'})`
-                      ).join('\n')
-              }]
-            };
-          }
+    // Get workspace stats
+    this.server.registerTool("get_workspace_stats", {
+      title: "Workspace Statistics",
+      description: "Get statistics about the indexed workspace (files, symbols, etc.)",
+      inputSchema: {}
+    }, async () => {
+      const stats = this.engine.getStats();
 
-          case "index_workspace": {
-            const { path = this.workspacePath, force = false } = args;
-            const resolvedPath = this.resolvePath(path);
-
-            await this.engine.indexWorkspace(resolvedPath);
-
-            return {
-              content: [{
-                type: "text",
-                text: `Workspace indexed successfully: ${resolvedPath}`
-              }]
-            };
-          }
-
-          case "get_workspace_stats": {
-            const stats = this.engine.getStats();
-
-            const response = `**Workspace Statistics**
+      const response = `**Workspace Statistics**
 
 **Database:**
 - Symbols: ${stats.database.symbols}
@@ -427,39 +286,29 @@ class MillerMCPServer {
 
 **Engine Status:** ${stats.isInitialized ? 'Initialized' : 'Not Initialized'}`;
 
-            return {
-              content: [{
-                type: "text",
-                text: response
-              }]
-            };
-          }
+      return {
+        content: [{
+          type: "text",
+          text: response
+        }]
+      };
+    });
 
-          case "health_check": {
-            const health = await this.engine.healthCheck();
+    // Health check
+    this.server.registerTool("health_check", {
+      title: "Health Check",
+      description: "Check the health status of the code intelligence engine",
+      inputSchema: {}
+    }, async () => {
+      const health = await this.engine.healthCheck();
 
-            return {
-              content: [{
-                type: "text",
-                text: `**Health Status:** ${health.status}\n\n` +
-                      `**Details:**\n${JSON.stringify(health.details, null, 2)}`
-              }]
-            };
-          }
-
-          default:
-            throw new Error(`Unknown tool: ${name}`);
-        }
-      } catch (error) {
-        console.error(`Error executing tool ${name}:`, error);
-
-        return {
-          content: [{
-            type: "text",
-            text: `Error: ${error instanceof Error ? error.message : 'Unknown error occurred'}`
-          }]
-        };
-      }
+      return {
+        content: [{
+          type: "text",
+          text: `**Health Status:** ${health.status}\n\n` +
+                `**Details:**\n${JSON.stringify(health.details, null, 2)}`
+        }]
+      };
     });
   }
 
