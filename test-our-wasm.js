@@ -1,0 +1,1 @@
+import Parser from "./node_modules/web-tree-sitter/tree-sitter.js"; await Parser.init(); const Language = await Parser.Language.load("./wasm/tree-sitter-swift.wasm"); console.log("Our custom Swift WASM works\!");

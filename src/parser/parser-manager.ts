@@ -22,8 +22,13 @@ export class ParserManager {
   private initialized = false;
 
   private languageConfigs: LanguageConfig[] = [
+    // Core web languages
     { name: 'javascript', extensions: ['.js', '.jsx', '.mjs'] },
     { name: 'typescript', extensions: ['.ts', '.tsx'] },
+    { name: 'css', extensions: ['.css', '.scss', '.sass', '.less'] },
+    { name: 'html', extensions: ['.html', '.htm'] },
+
+    // Microsoft priority languages
     { name: 'python', extensions: ['.py', '.pyw'] },
     { name: 'rust', extensions: ['.rs'] },
     { name: 'go', extensions: ['.go'] },
@@ -33,6 +38,17 @@ export class ParserManager {
     { name: 'cpp', extensions: ['.cpp', '.cc', '.cxx', '.hpp', '.hxx'] },
     { name: 'ruby', extensions: ['.rb'] },
     { name: 'php', extensions: ['.php'] },
+
+    // Mobile development
+    { name: 'swift', extensions: ['.swift'], wasmPath: './wasm/tree-sitter-swift.wasm' },
+    { name: 'kotlin', extensions: ['.kt', '.kts'], wasmPath: './wasm/tree-sitter-kotlin.wasm' },
+
+    // Web frameworks
+    { name: 'vue', extensions: ['.vue'] }, // Special handling - no WASM needed
+    { name: 'razor', extensions: ['.razor', '.cshtml'], wasmPath: './wasm/tree-sitter-razor.wasm' },
+
+    // Utility parsers
+    { name: 'regex', extensions: [] }, // Regex patterns don't have file extensions - handled specially
   ];
 
   async initialize() {
@@ -43,9 +59,48 @@ export class ParserManager {
     // Load all language parsers
     for (const config of this.languageConfigs) {
       try {
-        // Use npm package WASM files
-        const wasmPath = config.wasmPath ||
-          `./node_modules/tree-sitter-${config.name.replace('_', '-')}/tree-sitter-${config.name.replace('_', '-')}.wasm`;
+        // Skip languages without extensions, except special parsers
+        if (config.extensions.length === 0 && !['regex', 'vue'].includes(config.name)) {
+          console.log(`Skipping ${config.name} - no file extensions defined`);
+          continue;
+        }
+
+        // Vue is handled specially - no WASM parser needed
+        if (config.name === 'vue') {
+          // Map extensions to languages for Vue
+          for (const ext of config.extensions) {
+            this.extensionToLanguage.set(ext, config.name);
+          }
+          console.log(`Registered Vue SFC handler for ${config.extensions.join(', ')}`);
+          continue;
+        }
+
+        // Use Microsoft's pre-built WASM files first, fall back to individual packages
+        let wasmPath = config.wasmPath;
+        if (!wasmPath) {
+          // Try Microsoft's @vscode/tree-sitter-wasm first
+          const msWasmPath = `./node_modules/@vscode/tree-sitter-wasm/wasm/tree-sitter-${config.name.replace('_', '-')}.wasm`;
+
+          // Fallback to individual npm packages
+          const packageName = config.name.replace('_', '-');
+          let wasmFileName = config.name.replace('-', '_'); // For c-sharp -> c_sharp
+
+          // Special cases for known different naming
+          if (config.name === 'c_sharp') {
+            wasmFileName = 'c_sharp';
+          }
+
+          const fallbackPath = `./node_modules/tree-sitter-${packageName}/tree-sitter-${wasmFileName}.wasm`;
+
+          // Choose Microsoft's path for supported languages
+          const msSupported = ['javascript', 'typescript', 'python', 'rust', 'go', 'java', 'c_sharp', 'cpp', 'ruby', 'php', 'regex'];
+          if (msSupported.includes(config.name)) {
+            wasmPath = msWasmPath;
+          } else {
+            wasmPath = fallbackPath;
+          }
+
+        }
 
         const language = await Parser.Language.load(wasmPath);
         this.languages.set(config.name, language);
@@ -101,6 +156,17 @@ export class ParserManager {
     const language = this.getLanguageForFile(filePath);
     if (!language) {
       throw new Error(`No parser available for file: ${filePath}`);
+    }
+
+    // Special handling for Vue files - they don't use tree-sitter parsing
+    if (language === 'vue') {
+      return {
+        tree: null as any, // Vue extractor doesn't need a tree
+        language,
+        filePath,
+        content,
+        hash: createHash('md5').update(content).digest('hex')
+      };
     }
 
     const languageObj = this.languages.get(language);

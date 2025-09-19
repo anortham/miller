@@ -9,67 +9,161 @@ Miller currently has solid support for **JavaScript/TypeScript** with comprehens
 - Complete file watching system
 - Full-text search capabilities
 
-## Phase 1: High-Priority Languages (Immediate - Q1)
+## Phase 1: Microsoft-Proven + Mobile (Immediate - Q1)
 
-### 1. Python (High Impact)
-**Priority**: ⭐⭐⭐⭐⭐
+### 1. Python (Microsoft Priority #1)
+**Priority**: ⭐⭐⭐⭐⭐ (Microsoft uses)
 **Effort**: Low-Medium
-**Dependencies**: `tree-sitter-python`
-
-```bash
-bun add tree-sitter-python
-```
+**Dependencies**: ✅ `tree-sitter-python` already installed
 
 **Implementation**:
 - Create `src/extractors/python-extractor.ts`
 - Support: classes, functions, imports, decorators, async/await
 - Special handling: docstrings, type hints, dunder methods
 
-### 2. Rust (Developer Favorite)
-**Priority**: ⭐⭐⭐⭐⭐
-**Effort**: Medium
-**Dependencies**: `tree-sitter-rust`
+### 2. CSS (Microsoft Priority - Missing!)
+**Priority**: ⭐⭐⭐⭐⭐ (Microsoft uses, we lack)
+**Effort**: Low
+**Dependencies**: `tree-sitter-css`
 
 ```bash
-bun add tree-sitter-rust
+bun add tree-sitter-css
 ```
+
+**Implementation**:
+- Create `src/extractors/css-extractor.ts`
+- Support: selectors, properties, at-rules, variables
+- Special handling: CSS custom properties, media queries
+
+### 3. Swift (Mobile iOS - User Priority)
+**Priority**: ⭐⭐⭐⭐⭐ (User requirement)
+**Effort**: Medium
+**Dependencies**: `tree-sitter-swift`
+
+```bash
+bun add tree-sitter-swift
+```
+
+**Implementation**:
+- Create `src/extractors/swift-extractor.ts`
+- Support: classes, structs, protocols, functions, extensions
+- Special handling: optionals, generics, SwiftUI modifiers
+
+### 4. Kotlin (Mobile Android - User Priority)
+**Priority**: ⭐⭐⭐⭐⭐ (User requirement)
+**Effort**: Medium
+**Dependencies**: `tree-sitter-kotlin`
+
+```bash
+bun add tree-sitter-kotlin
+```
+
+**Implementation**:
+- Create `src/extractors/kotlin-extractor.ts`
+- Support: classes, objects, data classes, sealed classes, functions
+- Special handling: coroutines, extension functions, nullability
+
+### 5. Rust (Microsoft Priority)
+**Priority**: ⭐⭐⭐⭐ (Microsoft uses)
+**Effort**: Medium
+**Dependencies**: ✅ `tree-sitter-rust` already installed
 
 **Implementation**:
 - Create `src/extractors/rust-extractor.ts`
 - Support: structs, enums, impl blocks, traits, modules, macros
 - Special handling: lifetimes, generics, pub visibility
 
-### 3. Go (Cloud/Backend)
-**Priority**: ⭐⭐⭐⭐
+### 6. Go (Microsoft Priority)
+**Priority**: ⭐⭐⭐⭐ (Microsoft uses)
 **Effort**: Low-Medium
-**Dependencies**: `tree-sitter-go`
-
-```bash
-bun add tree-sitter-go
-```
+**Dependencies**: ✅ `tree-sitter-go` already installed
 
 **Implementation**:
 - Create `src/extractors/go-extractor.ts`
 - Support: packages, structs, interfaces, functions, methods
 - Special handling: goroutines, channels, embedding
 
-## Phase 2: Enterprise Languages (Q1-Q2)
+## Phase 2: Enterprise + Web Frameworks (Q1-Q2)
 
-### 4. Java (Enterprise Standard)
-**Priority**: ⭐⭐⭐⭐
+### 7. Java (Microsoft Priority)
+**Priority**: ⭐⭐⭐⭐ (Microsoft uses)
 **Effort**: Medium-High
-**Dependencies**: `tree-sitter-java`
-
-```bash
-bun add tree-sitter-java
-```
+**Dependencies**: ✅ `tree-sitter-java` already installed
 
 **Implementation**:
 - Create `src/extractors/java-extractor.ts`
 - Support: classes, interfaces, enums, annotations, packages
 - Special handling: generics, lambda expressions, streams
 
-### 5. C# (.NET Ecosystem)
+### 8. Vue (User Priority - Web Framework)
+**Priority**: ⭐⭐⭐⭐ (User requirement)
+**Effort**: Medium
+**Dependencies**: `tree-sitter-vue` (⚠️ 4 years old)
+
+```bash
+bun add tree-sitter-vue
+```
+
+**⚠️ Note**: Parser is 4 years old - may need Vue 3 compatibility testing
+
+**Implementation**:
+- Create `src/extractors/vue-extractor.ts`
+- Support: components, props, methods, computed, templates
+- Special handling: SFC (Single File Components), Composition API
+
+### 9. Regex (Microsoft Priority - Missing!)
+**Priority**: ⭐⭐⭐⭐ (Microsoft uses, we lack)
+**Effort**: Low
+**Dependencies**: `tree-sitter-regex`
+
+```bash
+bun add tree-sitter-regex
+```
+
+**Implementation**:
+- Create `src/extractors/regex-extractor.ts`
+- Support: pattern matching, groups, flags
+- Special handling: integration with other language regex literals
+
+### 10. Razor/Blazor (User Priority - ✅ **WORKING!**)
+**Priority**: ⭐⭐⭐⭐⭐ (User requirement - **COMPLETED**)
+**Effort**: Medium (build WASM) - **DONE**
+**Dependencies**: `tris203/tree-sitter-razor` (✅ Active Nov 2024)
+
+**✅ Status**: **SUCCESSFULLY INTEGRATED** - Custom WASM build working!
+
+**✅ Implementation Completed**:
+```bash
+# ✅ DONE: Cloned community repository
+git clone https://github.com/tris203/tree-sitter-razor.git
+# ✅ DONE: Installed emscripten via brew
+brew install emscripten
+# ✅ DONE: Built WASM file
+tree-sitter build-wasm
+# ✅ DONE: Integrated with Miller parser manager
+```
+
+**✅ Results**:
+- Razor parser loads successfully ✅
+- Supports `.razor` and `.cshtml` file extensions ✅
+- Miller detects and classifies Razor files correctly ✅
+- Ready for symbol extraction (needs `RazorExtractor` implementation) ✅
+
+**Next**: Implement `RazorExtractor` class for symbol/relationship extraction
+
+## Phase 3: Additional Microsoft Priorities (Q2)
+
+### 11. C# (.NET Ecosystem - Microsoft Priority)
+**Priority**: ⭐⭐⭐⭐ (Microsoft uses)
+**Effort**: Medium-High
+**Dependencies**: ✅ `tree-sitter-c-sharp` already installed
+
+**Implementation**:
+- Create `src/extractors/csharp-extractor.ts`
+- Support: classes, interfaces, properties, events, LINQ
+- Special handling: nullable reference types, async/await, attributes
+
+### 12. C/C++ (Microsoft Priority)
 **Priority**: ⭐⭐⭐⭐
 **Effort**: Medium-High
 **Dependencies**: `tree-sitter-c-sharp`

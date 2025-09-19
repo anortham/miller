@@ -8,6 +8,7 @@ import { SearchEngine } from '../search/search-engine.js';
 import { FileWatcher, FileChangeEvent } from '../watcher/file-watcher.js';
 import { BaseExtractor, Symbol, Relationship, SymbolKind } from '../extractors/base-extractor.js';
 import { TypeScriptExtractor } from '../extractors/typescript-extractor.js';
+import { VueExtractor } from '../extractors/vue-extractor.js';
 import { MillerPaths } from '../utils/miller-paths.js';
 import { log, LogLevel } from '../utils/logger.js';
 
@@ -81,6 +82,7 @@ export class CodeIntelligenceEngine {
     // Register language extractors
     this.extractors.set('typescript', TypeScriptExtractor);
     this.extractors.set('javascript', TypeScriptExtractor);
+    this.extractors.set('vue', VueExtractor);
     // Additional extractors can be registered here
     // this.extractors.set('python', PythonExtractor);
     // this.extractors.set('rust', RustExtractor);

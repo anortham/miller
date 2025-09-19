@@ -1,0 +1,1 @@
+import Parser from "./node_modules/web-tree-sitter/tree-sitter.js"; await Parser.init(); const Language = await Parser.Language.load("./node_modules/@vscode/tree-sitter-wasm/wasm/tree-sitter-cpp.wasm"); console.log("Microsoft C++ WASM works with our web-tree-sitter 0.20.8\!");

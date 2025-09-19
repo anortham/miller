@@ -5,19 +5,26 @@
       "name": "miller",
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.0.0",
+        "@vscode/tree-sitter-wasm": "^0.0.5-php.2",
         "chokidar": "^3.5.3",
         "minisearch": "^6.3.0",
-        "tree-sitter-c": "^0.20.0",
-        "tree-sitter-c-sharp": "^0.20.0",
-        "tree-sitter-cpp": "^0.20.0",
-        "tree-sitter-go": "^0.20.0",
-        "tree-sitter-java": "^0.20.0",
-        "tree-sitter-javascript": "^0.20.0",
-        "tree-sitter-php": "^0.20.0",
-        "tree-sitter-python": "^0.20.0",
-        "tree-sitter-ruby": "^0.20.0",
-        "tree-sitter-rust": "^0.20.0",
-        "tree-sitter-typescript": "^0.20.0",
+        "tree-sitter-c": "^0.23.0",
+        "tree-sitter-c-sharp": "^0.23.0",
+        "tree-sitter-cpp": "^0.23.1",
+        "tree-sitter-css": "^0.23.0",
+        "tree-sitter-go": "^0.23.4",
+        "tree-sitter-html": "^0.23.2",
+        "tree-sitter-java": "^0.23.5",
+        "tree-sitter-javascript": "^0.25.0",
+        "tree-sitter-kotlin": "^0.3.8",
+        "tree-sitter-php": "^0.23.4",
+        "tree-sitter-python": "^0.23.6",
+        "tree-sitter-regex": "^0.23.0",
+        "tree-sitter-ruby": "^0.23.1",
+        "tree-sitter-rust": "^0.24.0",
+        "tree-sitter-swift": "^0.7.1",
+        "tree-sitter-typescript": "^0.23.2",
+        "tree-sitter-vue": "^0.2.1",
         "web-tree-sitter": "^0.20.8",
         "zod": "^4.1.9",
       },
@@ -27,37 +34,19 @@
     },
   },
   "packages": {
-    "@isaacs/cliui": ["@isaacs/cliui@8.0.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@isaacs/cliui/-/cliui-8.0.2.tgz", { "dependencies": { "string-width": "^5.1.2", "string-width-cjs": "npm:string-width@^4.2.0", "strip-ansi": "^7.0.1", "strip-ansi-cjs": "npm:strip-ansi@^6.0.1", "wrap-ansi": "^8.1.0", "wrap-ansi-cjs": "npm:wrap-ansi@^7.0.0" } }, "sha1-s3Znt7wYHBaHgiWbq0JHT79StVA="],
-
     "@modelcontextprotocol/sdk": ["@modelcontextprotocol/sdk@1.18.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@modelcontextprotocol/sdk/-/sdk-1.18.1.tgz", { "dependencies": { "ajv": "^6.12.6", "content-type": "^1.0.5", "cors": "^2.8.5", "cross-spawn": "^7.0.5", "eventsource": "^3.0.2", "eventsource-parser": "^3.0.0", "express": "^5.0.1", "express-rate-limit": "^7.5.0", "pkce-challenge": "^5.0.0", "raw-body": "^3.0.0", "zod": "^3.23.8", "zod-to-json-schema": "^3.24.1" } }, "sha1-zcfggJMZsEZlmbk/v2Vdr6n0nOs="],
-
-    "@npmcli/agent": ["@npmcli/agent@2.2.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@npmcli/agent/-/agent-2.2.2.tgz", { "dependencies": { "agent-base": "^7.1.0", "http-proxy-agent": "^7.0.0", "https-proxy-agent": "^7.0.1", "lru-cache": "^10.0.1", "socks-proxy-agent": "^8.0.3" } }, "sha1-lnYEkY5i9iCmSMeXVGHJyedPxdU="],
-
-    "@npmcli/fs": ["@npmcli/fs@3.1.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@npmcli/fs/-/fs-3.1.1.tgz", { "dependencies": { "semver": "^7.3.5" } }, "sha1-Wc2qWtypXRNfwA8rtT9XcVdc5yY="],
-
-    "@pkgjs/parseargs": ["@pkgjs/parseargs@0.11.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@pkgjs/parseargs/-/parseargs-0.11.0.tgz", {}, "sha1-p36nQvqyV3UUVDTrHSMoz1ATrDM="],
 
     "@types/node": ["@types/node@24.5.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@types/node/-/node-24.5.2.tgz", { "dependencies": { "undici-types": "~7.12.0" } }, "sha1-Us64P1D+D8/fvSqfq22y6efvZEY="],
 
     "@types/react": ["@types/react@19.1.13", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@types/react/-/react-19.1.13.tgz", { "dependencies": { "csstype": "^3.0.2" } }, "sha1-/GUP+mgNc5olpTD11+vgDN13GIM="],
 
-    "abbrev": ["abbrev@2.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/abbrev/-/abbrev-2.0.0.tgz", {}, "sha1-z1mCm4tPA/id2idxy382U4KMib8="],
+    "@vscode/tree-sitter-wasm": ["@vscode/tree-sitter-wasm@0.0.5-php.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@vscode/tree-sitter-wasm/-/tree-sitter-wasm-0.0.5-php.2.tgz", {}, "sha1-sQQfo2+oUrfwo4gNwb3wh0njtHc="],
 
     "accepts": ["accepts@2.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/accepts/-/accepts-2.0.0.tgz", { "dependencies": { "mime-types": "^3.0.0", "negotiator": "^1.0.0" } }, "sha1-u89LpQdUZ/PyEx6rPP/HPC9deJU="],
 
-    "agent-base": ["agent-base@7.1.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/agent-base/-/agent-base-7.1.4.tgz", {}, "sha1-48121MVI7oldPD/Y3B9sW5Ay56g="],
-
-    "aggregate-error": ["aggregate-error@3.1.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/aggregate-error/-/aggregate-error-3.1.0.tgz", { "dependencies": { "clean-stack": "^2.0.0", "indent-string": "^4.0.0" } }, "sha1-kmcP9Q9TWb23o+DUDQ7DDFc3aHo="],
-
     "ajv": ["ajv@6.12.6", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/ajv/-/ajv-6.12.6.tgz", { "dependencies": { "fast-deep-equal": "^3.1.1", "fast-json-stable-stringify": "^2.0.0", "json-schema-traverse": "^0.4.1", "uri-js": "^4.2.2" } }, "sha1-uvWmLoArB9l3A0WG+MO69a3ybfQ="],
 
-    "ansi-regex": ["ansi-regex@6.2.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/ansi-regex/-/ansi-regex-6.2.2.tgz", {}, "sha1-YCFu6kZNhkWXzigyAAc4oFiWUME="],
-
-    "ansi-styles": ["ansi-styles@6.2.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/ansi-styles/-/ansi-styles-6.2.3.tgz", {}, "sha1-wETV3MUhoHZBNHJZehrLHxA8QEE="],
-
     "anymatch": ["anymatch@3.1.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/anymatch/-/anymatch-3.1.3.tgz", { "dependencies": { "normalize-path": "^3.0.0", "picomatch": "^2.0.4" } }, "sha1-eQxYsZuhcgqEIFtXxhjVrYUklz4="],
-
-    "balanced-match": ["balanced-match@1.0.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/balanced-match/-/balanced-match-1.0.2.tgz", {}, "sha1-6D46fj8wCzTLnYf2FfoMvzV2kO4="],
 
     "base64-js": ["base64-js@1.5.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/base64-js/-/base64-js-1.5.1.tgz", {}, "sha1-GxtEAWClv3rUC2UPCVljSBkDkwo="],
 
@@ -67,8 +56,6 @@
 
     "body-parser": ["body-parser@2.2.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/body-parser/-/body-parser-2.2.0.tgz", { "dependencies": { "bytes": "^3.1.2", "content-type": "^1.0.5", "debug": "^4.4.0", "http-errors": "^2.0.0", "iconv-lite": "^0.6.3", "on-finished": "^2.4.1", "qs": "^6.14.0", "raw-body": "^3.0.0", "type-is": "^2.0.0" } }, "sha1-96llbeMFJJpxW1Sbe4/Rq5393Po="],
 
-    "brace-expansion": ["brace-expansion@2.0.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/brace-expansion/-/brace-expansion-2.0.2.tgz", { "dependencies": { "balanced-match": "^1.0.0" } }, "sha1-VPxTI3phPYVMe9N0Y6rRffhyFOc="],
-
     "braces": ["braces@3.0.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/braces/-/braces-3.0.3.tgz", { "dependencies": { "fill-range": "^7.1.1" } }, "sha1-SQMy9AkZRSJy1VqEgK3AxEE1h4k="],
 
     "buffer": ["buffer@5.7.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/buffer/-/buffer-5.7.1.tgz", { "dependencies": { "base64-js": "^1.3.1", "ieee754": "^1.1.13" } }, "sha1-umLnwTEzBTWCGXFghRqPZI6Z7tA="],
@@ -77,21 +64,13 @@
 
     "bytes": ["bytes@3.1.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/bytes/-/bytes-3.1.2.tgz", {}, "sha1-iwvuuYYFrfGxKPpDhkA8AJ4CIaU="],
 
-    "cacache": ["cacache@18.0.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/cacache/-/cacache-18.0.4.tgz", { "dependencies": { "@npmcli/fs": "^3.1.0", "fs-minipass": "^3.0.0", "glob": "^10.2.2", "lru-cache": "^10.0.1", "minipass": "^7.0.3", "minipass-collect": "^2.0.1", "minipass-flush": "^1.0.5", "minipass-pipeline": "^1.2.4", "p-map": "^4.0.0", "ssri": "^10.0.0", "tar": "^6.1.11", "unique-filename": "^3.0.0" } }, "sha1-RgHXV42ttZxmBE4VfQKjMUaC1qU="],
-
     "call-bind-apply-helpers": ["call-bind-apply-helpers@1.0.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/call-bind-apply-helpers/-/call-bind-apply-helpers-1.0.2.tgz", { "dependencies": { "es-errors": "^1.3.0", "function-bind": "^1.1.2" } }, "sha1-S1QowiK+mF15w9gmV0edvgtZstY="],
 
     "call-bound": ["call-bound@1.0.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/call-bound/-/call-bound-1.0.4.tgz", { "dependencies": { "call-bind-apply-helpers": "^1.0.2", "get-intrinsic": "^1.3.0" } }, "sha1-I43pNdKippKSjFOMfM+pEGf9Bio="],
 
     "chokidar": ["chokidar@3.6.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/chokidar/-/chokidar-3.6.0.tgz", { "dependencies": { "anymatch": "~3.1.2", "braces": "~3.0.2", "glob-parent": "~5.1.2", "is-binary-path": "~2.1.0", "is-glob": "~4.0.1", "normalize-path": "~3.0.0", "readdirp": "~3.6.0" }, "optionalDependencies": { "fsevents": "~2.3.2" } }, "sha1-GXxsxmnvKo3F57TZfuTgksPrDVs="],
 
-    "chownr": ["chownr@2.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/chownr/-/chownr-2.0.0.tgz", {}, "sha1-Fb++U9LqtM9w8YqM1o6+Wzyx3s4="],
-
-    "clean-stack": ["clean-stack@2.2.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/clean-stack/-/clean-stack-2.2.0.tgz", {}, "sha1-7oRy27Ep5yezHooQpCfe6d/kAIs="],
-
-    "color-convert": ["color-convert@2.0.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/color-convert/-/color-convert-2.0.1.tgz", { "dependencies": { "color-name": "~1.1.4" } }, "sha1-ctOmjVmMm9s68q0ehPIdiWq9TeM="],
-
-    "color-name": ["color-name@1.1.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/color-name/-/color-name-1.1.4.tgz", {}, "sha1-wqCah6y95pVD3m9j+jmVyCbFNqI="],
+    "chownr": ["chownr@1.1.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/chownr/-/chownr-1.1.4.tgz", {}, "sha1-b8nXtC0ypYNZYzdmbn0ICE2izGs="],
 
     "content-disposition": ["content-disposition@1.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/content-disposition/-/content-disposition-1.0.0.tgz", { "dependencies": { "safe-buffer": "5.2.1" } }, "sha1-hEQmyzmPk0yu/LsXIgASa8fOrOI="],
 
@@ -119,21 +98,11 @@
 
     "dunder-proto": ["dunder-proto@1.0.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/dunder-proto/-/dunder-proto-1.0.1.tgz", { "dependencies": { "call-bind-apply-helpers": "^1.0.1", "es-errors": "^1.3.0", "gopd": "^1.2.0" } }, "sha1-165mfh3INIL4tw/Q9u78UNow9Yo="],
 
-    "eastasianwidth": ["eastasianwidth@0.2.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/eastasianwidth/-/eastasianwidth-0.2.0.tgz", {}, "sha1-aWzi7Aqg5uqTo5f/zySqeEDIJ8s="],
-
     "ee-first": ["ee-first@1.1.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/ee-first/-/ee-first-1.1.1.tgz", {}, "sha1-WQxhFWsK4vTwJVcyoViyZrxWsh0="],
-
-    "emoji-regex": ["emoji-regex@9.2.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/emoji-regex/-/emoji-regex-9.2.2.tgz", {}, "sha1-hAyIA7DYBH9P8M+WMXazLU7z7XI="],
 
     "encodeurl": ["encodeurl@2.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/encodeurl/-/encodeurl-2.0.0.tgz", {}, "sha1-e46omAd9fkCdOsRUdOo46vCFelg="],
 
-    "encoding": ["encoding@0.1.13", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/encoding/-/encoding-0.1.13.tgz", { "dependencies": { "iconv-lite": "^0.6.2" } }, "sha1-VldK/deR9UqOmyeFwFgqLSYhD6k="],
-
     "end-of-stream": ["end-of-stream@1.4.5", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/end-of-stream/-/end-of-stream-1.4.5.tgz", { "dependencies": { "once": "^1.4.0" } }, "sha1-c0TXEd6kDgt0q8LtSXeHQ8ztsIw="],
-
-    "env-paths": ["env-paths@2.2.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/env-paths/-/env-paths-2.2.1.tgz", {}, "sha1-QgOZ1BbOH76bwKB8Yvpo1n/Q+PI="],
-
-    "err-code": ["err-code@2.0.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/err-code/-/err-code-2.0.3.tgz", {}, "sha1-I8Lzt1b/38YI0w4nyalBAkgH5/k="],
 
     "es-define-property": ["es-define-property@1.0.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/es-define-property/-/es-define-property-1.0.1.tgz", {}, "sha1-mD6y+aZyTpMD9hrd8BHHLgngsPo="],
 
@@ -151,8 +120,6 @@
 
     "expand-template": ["expand-template@2.0.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/expand-template/-/expand-template-2.0.3.tgz", {}, "sha1-bhSz/O4POmNA7LV9LokYaSBSpHw="],
 
-    "exponential-backoff": ["exponential-backoff@3.1.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/exponential-backoff/-/exponential-backoff-3.1.2.tgz", {}, "sha1-qPJq25a/eOjNitEDeSjV5cBnnZE="],
-
     "express": ["express@5.1.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/express/-/express-5.1.0.tgz", { "dependencies": { "accepts": "^2.0.0", "body-parser": "^2.2.0", "content-disposition": "^1.0.0", "content-type": "^1.0.5", "cookie": "^0.7.1", "cookie-signature": "^1.2.1", "debug": "^4.4.0", "encodeurl": "^2.0.0", "escape-html": "^1.0.3", "etag": "^1.8.1", "finalhandler": "^2.1.0", "fresh": "^2.0.0", "http-errors": "^2.0.0", "merge-descriptors": "^2.0.0", "mime-types": "^3.0.0", "on-finished": "^2.4.1", "once": "^1.4.0", "parseurl": "^1.3.3", "proxy-addr": "^2.0.7", "qs": "^6.14.0", "range-parser": "^1.2.1", "router": "^2.2.0", "send": "^1.1.0", "serve-static": "^2.2.0", "statuses": "^2.0.1", "type-is": "^2.0.1", "vary": "^1.1.2" } }, "sha1-0xvq9xWgAW8NU/R9O016zyjHXMk="],
 
     "express-rate-limit": ["express-rate-limit@7.5.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/express-rate-limit/-/express-rate-limit-7.5.1.tgz", { "peerDependencies": { "express": ">= 4.11" } }, "sha1-jDpC9pIJo6HJaYkAcOzp4gqHnew="],
@@ -165,15 +132,11 @@
 
     "finalhandler": ["finalhandler@2.1.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/finalhandler/-/finalhandler-2.1.0.tgz", { "dependencies": { "debug": "^4.4.0", "encodeurl": "^2.0.0", "escape-html": "^1.0.3", "on-finished": "^2.4.1", "parseurl": "^1.3.3", "statuses": "^2.0.1" } }, "sha1-cjBjc6qJ0FqCQu1WnthqG/98Vh8="],
 
-    "foreground-child": ["foreground-child@3.3.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/foreground-child/-/foreground-child-3.3.1.tgz", { "dependencies": { "cross-spawn": "^7.0.6", "signal-exit": "^4.0.1" } }, "sha1-Mujp7Rtoo0l777msK2rfkqY4V28="],
-
     "forwarded": ["forwarded@0.2.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/forwarded/-/forwarded-0.2.0.tgz", {}, "sha1-ImmTZCiq1MFcfr6XeahL8LKoGBE="],
 
     "fresh": ["fresh@2.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/fresh/-/fresh-2.0.0.tgz", {}, "sha1-jdffahs6Gzpc8YbAWl3SZ2ImNaQ="],
 
     "fs-constants": ["fs-constants@1.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/fs-constants/-/fs-constants-1.0.0.tgz", {}, "sha1-a+Dem+mYzhavivwkSXue6bfM2a0="],
-
-    "fs-minipass": ["fs-minipass@2.1.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/fs-minipass/-/fs-minipass-2.1.0.tgz", { "dependencies": { "minipass": "^3.0.0" } }, "sha1-f1A2/b8SxjwWkZDL5BmchSJx+fs="],
 
     "fsevents": ["fsevents@2.3.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/fsevents/-/fsevents-2.3.3.tgz", { "os": "darwin" }, "sha1-ysZAd4XQNnWipeGlMFxpezR9kNY="],
 
@@ -185,39 +148,23 @@
 
     "github-from-package": ["github-from-package@0.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/github-from-package/-/github-from-package-0.0.0.tgz", {}, "sha1-l/tdlr/eiXMxPyDoKI75oWf6ZM4="],
 
-    "glob": ["glob@10.4.5", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/glob/-/glob-10.4.5.tgz", { "dependencies": { "foreground-child": "^3.1.0", "jackspeak": "^3.1.2", "minimatch": "^9.0.4", "minipass": "^7.1.2", "package-json-from-dist": "^1.0.0", "path-scurry": "^1.11.1" }, "bin": { "glob": "./dist/esm/bin.mjs" } }, "sha1-9NnwuQ/9urCcnXf18ptCYlF7CVY="],
-
     "glob-parent": ["glob-parent@5.1.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/glob-parent/-/glob-parent-5.1.2.tgz", { "dependencies": { "is-glob": "^4.0.1" } }, "sha1-hpgyxYA0/mikCTwX3BXoNA2EAcQ="],
 
     "gopd": ["gopd@1.2.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/gopd/-/gopd-1.2.0.tgz", {}, "sha1-ifVrghe9vIgCvSmd9tfxCB1+UaE="],
-
-    "graceful-fs": ["graceful-fs@4.2.11", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/graceful-fs/-/graceful-fs-4.2.11.tgz", {}, "sha1-QYPk6L8Iu24Fu7L30uDI9xLKQOM="],
 
     "has-symbols": ["has-symbols@1.1.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/has-symbols/-/has-symbols-1.1.0.tgz", {}, "sha1-/JxqeDoISVHQuXH+EBjegTcHozg="],
 
     "hasown": ["hasown@2.0.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/hasown/-/hasown-2.0.2.tgz", { "dependencies": { "function-bind": "^1.1.2" } }, "sha1-AD6vkb563DcuhOxZ3DclLO24AAM="],
 
-    "http-cache-semantics": ["http-cache-semantics@4.2.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/http-cache-semantics/-/http-cache-semantics-4.2.0.tgz", {}, "sha1-IF9Ntk+FYrdqT/kjWqUnmDmgndU="],
-
     "http-errors": ["http-errors@2.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/http-errors/-/http-errors-2.0.0.tgz", { "dependencies": { "depd": "2.0.0", "inherits": "2.0.4", "setprototypeof": "1.2.0", "statuses": "2.0.1", "toidentifier": "1.0.1" } }, "sha1-t3dKFIbvc892Z6ya4IWMASxXudM="],
-
-    "http-proxy-agent": ["http-proxy-agent@7.0.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/http-proxy-agent/-/http-proxy-agent-7.0.2.tgz", { "dependencies": { "agent-base": "^7.1.0", "debug": "^4.3.4" } }, "sha1-mosfJGhmwChQlIZYX2K48sGMJw4="],
-
-    "https-proxy-agent": ["https-proxy-agent@7.0.6", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/https-proxy-agent/-/https-proxy-agent-7.0.6.tgz", { "dependencies": { "agent-base": "^7.1.2", "debug": "4" } }, "sha1-2o3+rH2hMLBcK6S1nJts1mYRprk="],
 
     "iconv-lite": ["iconv-lite@0.7.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/iconv-lite/-/iconv-lite-0.7.0.tgz", { "dependencies": { "safer-buffer": ">= 2.1.2 < 3.0.0" } }, "sha1-xQzYDmdGyoEV65h0OvqBqg4Uej4="],
 
     "ieee754": ["ieee754@1.2.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/ieee754/-/ieee754-1.2.1.tgz", {}, "sha1-jrehCmP/8l0VpXsAFYbRd9Gw01I="],
 
-    "imurmurhash": ["imurmurhash@0.1.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/imurmurhash/-/imurmurhash-0.1.4.tgz", {}, "sha1-khi5srkoojixPcT7a21XbyMUU+o="],
-
-    "indent-string": ["indent-string@4.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/indent-string/-/indent-string-4.0.0.tgz", {}, "sha1-Yk+PRJfWGbLZdoUx1Y9BIoVNclE="],
-
     "inherits": ["inherits@2.0.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/inherits/-/inherits-2.0.4.tgz", {}, "sha1-D6LGT5MpF8NDOg3tVTY6rjdBa3w="],
 
     "ini": ["ini@1.3.8", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/ini/-/ini-1.3.8.tgz", {}, "sha1-op2kJbSIBvNHZ6Tvzjlyaa8oQyw="],
-
-    "ip-address": ["ip-address@10.0.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/ip-address/-/ip-address-10.0.1.tgz", {}, "sha1-qBgLeDzneId315YobWG85CdoGO0="],
 
     "ipaddr.js": ["ipaddr.js@1.9.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/ipaddr.js/-/ipaddr.js-1.9.1.tgz", {}, "sha1-v/OFQ+64mEglB5/zoqjmy9RngbM="],
 
@@ -225,11 +172,7 @@
 
     "is-extglob": ["is-extglob@2.1.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/is-extglob/-/is-extglob-2.1.1.tgz", {}, "sha1-qIwCU1eR8C7TfHahueqXc8gz+MI="],
 
-    "is-fullwidth-code-point": ["is-fullwidth-code-point@3.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/is-fullwidth-code-point/-/is-fullwidth-code-point-3.0.0.tgz", {}, "sha1-8Rb4Bk/pCz94RKOJl8C3UFEmnx0="],
-
     "is-glob": ["is-glob@4.0.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/is-glob/-/is-glob-4.0.3.tgz", { "dependencies": { "is-extglob": "^2.1.1" } }, "sha1-ZPYeQsu7LuwgcanawLKLoeZdUIQ="],
-
-    "is-lambda": ["is-lambda@1.0.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/is-lambda/-/is-lambda-1.0.1.tgz", {}, "sha1-PZh3iZ5qU+/AFgUEzeFfgubwYdU="],
 
     "is-number": ["is-number@7.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/is-number/-/is-number-7.0.0.tgz", {}, "sha1-dTU0W4lnNNX4DE0GxQlVUnoU8Ss="],
 
@@ -237,13 +180,7 @@
 
     "isexe": ["isexe@2.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/isexe/-/isexe-2.0.0.tgz", {}, "sha1-6PvzdNxVb/iUehDcsFctYz8s+hA="],
 
-    "jackspeak": ["jackspeak@3.4.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/jackspeak/-/jackspeak-3.4.3.tgz", { "dependencies": { "@isaacs/cliui": "^8.0.2" }, "optionalDependencies": { "@pkgjs/parseargs": "^0.11.0" } }, "sha1-iDOp2Jq0rN5hiJQr0cU7Y5DtWoo="],
-
     "json-schema-traverse": ["json-schema-traverse@0.4.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/json-schema-traverse/-/json-schema-traverse-0.4.1.tgz", {}, "sha1-afaofZUTq4u4/mO9sJecRI5oRmA="],
-
-    "lru-cache": ["lru-cache@10.4.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/lru-cache/-/lru-cache-10.4.3.tgz", {}, "sha1-QQ/IoXtw5ZgBPfJXwkRrfzOD8Rk="],
-
-    "make-fetch-happen": ["make-fetch-happen@13.0.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/make-fetch-happen/-/make-fetch-happen-13.0.1.tgz", { "dependencies": { "@npmcli/agent": "^2.0.0", "cacache": "^18.0.0", "http-cache-semantics": "^4.1.1", "is-lambda": "^1.0.1", "minipass": "^7.0.2", "minipass-fetch": "^3.0.0", "minipass-flush": "^1.0.5", "minipass-pipeline": "^1.2.4", "negotiator": "^0.6.3", "proc-log": "^4.2.0", "promise-retry": "^2.0.1", "ssri": "^10.0.0" } }, "sha1-Jzui949F4fOm3Kkc7eh9n6SCHjY="],
 
     "math-intrinsics": ["math-intrinsics@1.1.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/math-intrinsics/-/math-intrinsics-1.1.0.tgz", {}, "sha1-oN10voHiqlwvJ+Zc4oNgXuTit/k="],
 
@@ -257,27 +194,9 @@
 
     "mimic-response": ["mimic-response@3.1.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/mimic-response/-/mimic-response-3.1.0.tgz", {}, "sha1-LR1Zr5wbEpgVrMwsRqAipc4fo8k="],
 
-    "minimatch": ["minimatch@9.0.5", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/minimatch/-/minimatch-9.0.5.tgz", { "dependencies": { "brace-expansion": "^2.0.1" } }, "sha1-10+d1rV9g9jpjPuCEzsDl4vJKeU="],
-
     "minimist": ["minimist@1.2.8", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/minimist/-/minimist-1.2.8.tgz", {}, "sha1-waRk52kzAuCCoHXO4MBXdBrEdyw="],
 
-    "minipass": ["minipass@7.1.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/minipass/-/minipass-7.1.2.tgz", {}, "sha1-k6libOXl5mvU24aEnnUV6SNApwc="],
-
-    "minipass-collect": ["minipass-collect@2.0.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/minipass-collect/-/minipass-collect-2.0.1.tgz", { "dependencies": { "minipass": "^7.0.3" } }, "sha1-FiG8d+EiWKEsYNNOInbsXCBoCGM="],
-
-    "minipass-fetch": ["minipass-fetch@3.0.5", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/minipass-fetch/-/minipass-fetch-3.0.5.tgz", { "dependencies": { "minipass": "^7.0.3", "minipass-sized": "^1.0.3", "minizlib": "^2.1.2" }, "optionalDependencies": { "encoding": "^0.1.13" } }, "sha1-8Pl+QFgK/8SjXMShNJ8FrjbLHkw="],
-
-    "minipass-flush": ["minipass-flush@1.0.5", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/minipass-flush/-/minipass-flush-1.0.5.tgz", { "dependencies": { "minipass": "^3.0.0" } }, "sha1-gucTXX6JpQ/+ZGEKeHlTxMTLs3M="],
-
-    "minipass-pipeline": ["minipass-pipeline@1.2.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/minipass-pipeline/-/minipass-pipeline-1.2.4.tgz", { "dependencies": { "minipass": "^3.0.0" } }, "sha1-aEcveXEcCEZXwGfFxq2Tzd6oIUw="],
-
-    "minipass-sized": ["minipass-sized@1.0.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/minipass-sized/-/minipass-sized-1.0.3.tgz", { "dependencies": { "minipass": "^3.0.0" } }, "sha1-cO5afFBSBwr6z7wil36nne81O3A="],
-
     "minisearch": ["minisearch@6.3.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/minisearch/-/minisearch-6.3.0.tgz", {}, "sha1-mFovHKPHPC1lr5TwYWv+VxZLC2s="],
-
-    "minizlib": ["minizlib@2.1.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/minizlib/-/minizlib-2.1.2.tgz", { "dependencies": { "minipass": "^3.0.0", "yallist": "^4.0.0" } }, "sha1-6Q00Zrogm5MkUVCKEc49NjIUWTE="],
-
-    "mkdirp": ["mkdirp@1.0.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/mkdirp/-/mkdirp-1.0.4.tgz", { "bin": { "mkdirp": "bin/cmd.js" } }, "sha1-PrXtYmInVteaXw4qIh3+utdcL34="],
 
     "mkdirp-classic": ["mkdirp-classic@0.5.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/mkdirp-classic/-/mkdirp-classic-0.5.3.tgz", {}, "sha1-+hDJEVzG2IZb4iG6R+6b7XhgERM="],
 
@@ -291,9 +210,9 @@
 
     "node-abi": ["node-abi@3.77.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/node-abi/-/node-abi-3.77.0.tgz", { "dependencies": { "semver": "^7.3.5" } }, "sha1-OtkNXJ1FZjQg5apP9Y2/TjYlQZo="],
 
-    "node-gyp": ["node-gyp@10.3.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/node-gyp/-/node-gyp-10.3.1.tgz", { "dependencies": { "env-paths": "^2.2.0", "exponential-backoff": "^3.1.1", "glob": "^10.3.10", "graceful-fs": "^4.2.6", "make-fetch-happen": "^13.0.0", "nopt": "^7.0.0", "proc-log": "^4.1.0", "semver": "^7.3.5", "tar": "^6.2.1", "which": "^4.0.0" }, "bin": { "node-gyp": "bin/node-gyp.js" } }, "sha1-HdGhocbFxZ2hp2rqBqBieGssiho="],
+    "node-addon-api": ["node-addon-api@8.5.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/node-addon-api/-/node-addon-api-8.5.0.tgz", {}, "sha1-yRstdoL6RX0uHDiBUPDf+ar7jz8="],
 
-    "nopt": ["nopt@7.2.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/nopt/-/nopt-7.2.1.tgz", { "dependencies": { "abbrev": "^2.0.0" }, "bin": { "nopt": "bin/nopt.js" } }, "sha1-HKwOq5uOl8kJMzhEbt3UCyyMoec="],
+    "node-gyp-build": ["node-gyp-build@4.8.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/node-gyp-build/-/node-gyp-build-4.8.4.tgz", { "bin": { "node-gyp-build": "./bin.js", "node-gyp-build-optional": "./optional.js", "node-gyp-build-test": "./build-test.js" } }, "sha1-inDuhUZK5SMndyqQ1mxgd6kAz8g="],
 
     "normalize-path": ["normalize-path@3.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/normalize-path/-/normalize-path-3.0.0.tgz", {}, "sha1-Dc1p/yOhybEf0JeDFmRKA4ghamU="],
 
@@ -305,15 +224,9 @@
 
     "once": ["once@1.4.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/once/-/once-1.4.0.tgz", { "dependencies": { "wrappy": "1" } }, "sha1-WDsap3WWHUsROsF9nFC6753Xa9E="],
 
-    "p-map": ["p-map@4.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/p-map/-/p-map-4.0.0.tgz", { "dependencies": { "aggregate-error": "^3.0.0" } }, "sha1-uy+Vpe2i7BaOySdOBqdHw+KQTSs="],
-
-    "package-json-from-dist": ["package-json-from-dist@1.0.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/package-json-from-dist/-/package-json-from-dist-1.0.1.tgz", {}, "sha1-TxRxoBCCeob5TP2bByfjbSZ95QU="],
-
     "parseurl": ["parseurl@1.3.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/parseurl/-/parseurl-1.3.3.tgz", {}, "sha1-naGee+6NEt/wUT7Vt2lXeTvC6NQ="],
 
     "path-key": ["path-key@3.1.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/path-key/-/path-key-3.1.1.tgz", {}, "sha1-WB9q3mWMu6ZaDTOA3ndTKVBU83U="],
-
-    "path-scurry": ["path-scurry@1.11.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/path-scurry/-/path-scurry-1.11.1.tgz", { "dependencies": { "lru-cache": "^10.2.0", "minipass": "^5.0.0 || ^6.0.2 || ^7.0.0" } }, "sha1-eWCmaIiFlKByCxKpEdGnQqufEdI="],
 
     "path-to-regexp": ["path-to-regexp@8.3.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/path-to-regexp/-/path-to-regexp-8.3.0.tgz", {}, "sha1-qoGKaYH5kyEAOgiYfTzsnDR0zR8="],
 
@@ -322,10 +235,6 @@
     "pkce-challenge": ["pkce-challenge@5.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/pkce-challenge/-/pkce-challenge-5.0.0.tgz", {}, "sha1-w6QFy0nicglKOOiQorUdoCKMTZc="],
 
     "prebuild-install": ["prebuild-install@7.1.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/prebuild-install/-/prebuild-install-7.1.3.tgz", { "dependencies": { "detect-libc": "^2.0.0", "expand-template": "^2.0.3", "github-from-package": "0.0.0", "minimist": "^1.2.3", "mkdirp-classic": "^0.5.3", "napi-build-utils": "^2.0.0", "node-abi": "^3.3.0", "pump": "^3.0.0", "rc": "^1.2.7", "simple-get": "^4.0.0", "tar-fs": "^2.0.0", "tunnel-agent": "^0.6.0" }, "bin": { "prebuild-install": "bin.js" } }, "sha1-1jCrrSsUdEPyCiEpF76uaLgJLuw="],
-
-    "proc-log": ["proc-log@4.2.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/proc-log/-/proc-log-4.2.0.tgz", {}, "sha1-tvRh5AJudf3+IosmXp96AHedcDQ="],
-
-    "promise-retry": ["promise-retry@2.0.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/promise-retry/-/promise-retry-2.0.1.tgz", { "dependencies": { "err-code": "^2.0.2", "retry": "^0.12.0" } }, "sha1-/3R6E2IKtXumiPX8Z4VUEMNw2iI="],
 
     "proxy-addr": ["proxy-addr@2.0.7", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/proxy-addr/-/proxy-addr-2.0.7.tgz", { "dependencies": { "forwarded": "0.2.0", "ipaddr.js": "1.9.1" } }, "sha1-8Z/mnOqzEe65S0LnDowgcPm6ECU="],
 
@@ -344,8 +253,6 @@
     "readable-stream": ["readable-stream@3.6.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/readable-stream/-/readable-stream-3.6.2.tgz", { "dependencies": { "inherits": "^2.0.3", "string_decoder": "^1.1.1", "util-deprecate": "^1.0.1" } }, "sha1-VqmzbqllwAxak+8x6xEaDxEFaWc="],
 
     "readdirp": ["readdirp@3.6.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/readdirp/-/readdirp-3.6.0.tgz", { "dependencies": { "picomatch": "^2.2.1" } }, "sha1-dKNwvYVxFuJFspzJc0DNQxoCpsc="],
-
-    "retry": ["retry@0.12.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/retry/-/retry-0.12.0.tgz", {}, "sha1-G0KmJmoh8HQh0bC1S33BZ7AcATs="],
 
     "router": ["router@2.2.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/router/-/router-2.2.0.tgz", { "dependencies": { "debug": "^4.4.0", "depd": "^2.0.0", "is-promise": "^4.0.0", "parseurl": "^1.3.3", "path-to-regexp": "^8.0.0" } }, "sha1-AZvmILcRyHZBFnzHm5kJDwCxRu8="],
 
@@ -373,35 +280,15 @@
 
     "side-channel-weakmap": ["side-channel-weakmap@1.0.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/side-channel-weakmap/-/side-channel-weakmap-1.0.2.tgz", { "dependencies": { "call-bound": "^1.0.2", "es-errors": "^1.3.0", "get-intrinsic": "^1.2.5", "object-inspect": "^1.13.3", "side-channel-map": "^1.0.1" } }, "sha1-Ed2hnVNo5Azp7CvcH7DsvAeQ7Oo="],
 
-    "signal-exit": ["signal-exit@4.1.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/signal-exit/-/signal-exit-4.1.0.tgz", {}, "sha1-lSGIwcvVRgcOLdIND0HArgUwywQ="],
-
     "simple-concat": ["simple-concat@1.0.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/simple-concat/-/simple-concat-1.0.1.tgz", {}, "sha1-9Gl2CCujXCJj8cirXt/ibEHJVS8="],
 
     "simple-get": ["simple-get@4.0.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/simple-get/-/simple-get-4.0.1.tgz", { "dependencies": { "decompress-response": "^6.0.0", "once": "^1.3.1", "simple-concat": "^1.0.0" } }, "sha1-SjnbVJKHyXnTUhEvoD/Zn9a8NUM="],
 
-    "smart-buffer": ["smart-buffer@4.2.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/smart-buffer/-/smart-buffer-4.2.0.tgz", {}, "sha1-bh1x+k8YwF99D/IW3RakgdDo2a4="],
-
-    "socks": ["socks@2.8.7", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/socks/-/socks-2.8.7.tgz", { "dependencies": { "ip-address": "^10.0.1", "smart-buffer": "^4.2.0" } }, "sha1-4vsdmmA63XUFCiBn24w4GgtWaeo="],
-
-    "socks-proxy-agent": ["socks-proxy-agent@8.0.5", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/socks-proxy-agent/-/socks-proxy-agent-8.0.5.tgz", { "dependencies": { "agent-base": "^7.1.2", "debug": "^4.3.4", "socks": "^2.8.3" } }, "sha1-uc205+mYUJ12WdaJznaXrCFkW+4="],
-
-    "ssri": ["ssri@10.0.6", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/ssri/-/ssri-10.0.6.tgz", { "dependencies": { "minipass": "^7.0.3" } }, "sha1-qKreLeYLorzoaI4/o0m60Fx9weU="],
-
     "statuses": ["statuses@2.0.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/statuses/-/statuses-2.0.1.tgz", {}, "sha1-VcsADM8dSHKL0jxoWgY5mM8aG2M="],
-
-    "string-width": ["string-width@5.1.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/string-width/-/string-width-5.1.2.tgz", { "dependencies": { "eastasianwidth": "^0.2.0", "emoji-regex": "^9.2.2", "strip-ansi": "^7.0.1" } }, "sha1-FPja7G2B5yIdKjV+Zoyrc728p5Q="],
-
-    "string-width-cjs": ["string-width@4.2.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/string-width/-/string-width-4.2.3.tgz", { "dependencies": { "emoji-regex": "^8.0.0", "is-fullwidth-code-point": "^3.0.0", "strip-ansi": "^6.0.1" } }, "sha1-JpxxF9J7Ba0uU2gwqOyJXvnG0BA="],
 
     "string_decoder": ["string_decoder@1.3.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/string_decoder/-/string_decoder-1.3.0.tgz", { "dependencies": { "safe-buffer": "~5.2.0" } }, "sha1-QvEUWUpGzxqOMLCoT1bHjD7awh4="],
 
-    "strip-ansi": ["strip-ansi@7.1.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/strip-ansi/-/strip-ansi-7.1.2.tgz", { "dependencies": { "ansi-regex": "^6.0.1" } }, "sha1-Eyh1q95njH6o1pFTPy5+Irt0Tbo="],
-
-    "strip-ansi-cjs": ["strip-ansi@6.0.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/strip-ansi/-/strip-ansi-6.0.1.tgz", { "dependencies": { "ansi-regex": "^5.0.1" } }, "sha1-nibGPTD1NEPpSJSVshBdN7Z6hdk="],
-
     "strip-json-comments": ["strip-json-comments@2.0.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/strip-json-comments/-/strip-json-comments-2.0.1.tgz", {}, "sha1-PFMZQukIwml8DsNEhYwobHygpgo="],
-
-    "tar": ["tar@6.2.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tar/-/tar-6.2.1.tgz", { "dependencies": { "chownr": "^2.0.0", "fs-minipass": "^2.0.0", "minipass": "^5.0.0", "minizlib": "^2.1.1", "mkdirp": "^1.0.3", "yallist": "^4.0.0" } }, "sha1-cXVJxUG8PCrxV1G+qUsd0GjUsDo="],
 
     "tar-fs": ["tar-fs@2.1.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tar-fs/-/tar-fs-2.1.4.tgz", { "dependencies": { "chownr": "^1.1.1", "mkdirp-classic": "^0.5.2", "pump": "^3.0.0", "tar-stream": "^2.1.4" } }, "sha1-gAgk2/TvBt7Zr+pKyv5xxnx2uTA="],
 
@@ -413,37 +300,47 @@
 
     "tree-sitter": ["tree-sitter@0.20.6", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter/-/tree-sitter-0.20.6.tgz", { "dependencies": { "nan": "^2.18.0", "prebuild-install": "^7.1.1" } }, "sha1-/sUuXXzGxYMTV1ZHnyRA3YmyXL4="],
 
-    "tree-sitter-c": ["tree-sitter-c@0.20.8", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-c/-/tree-sitter-c-0.20.8.tgz", { "dependencies": { "nan": "^2.18.0" } }, "sha1-1p2C7pRsRrsl78otTbe7ImnsOEg="],
+    "tree-sitter-c": ["tree-sitter-c@0.23.6", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-c/-/tree-sitter-c-0.23.6.tgz", { "dependencies": { "node-addon-api": "^8.3.0", "node-gyp-build": "^4.8.4" }, "peerDependencies": { "tree-sitter": "^0.22.1" }, "optionalPeers": ["tree-sitter"] }, "sha1-YqemmkF8vwIvqXqNX34q+1cS3Ps="],
 
-    "tree-sitter-c-sharp": ["tree-sitter-c-sharp@0.20.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-c-sharp/-/tree-sitter-c-sharp-0.20.0.tgz", { "dependencies": { "nan": "^2.14.0" } }, "sha1-lhURC2ztIZFZ8m0ZyPHPuFsGvBg="],
+    "tree-sitter-c-sharp": ["tree-sitter-c-sharp@0.23.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-c-sharp/-/tree-sitter-c-sharp-0.23.1.tgz", { "dependencies": { "node-addon-api": "^8.2.2", "node-gyp-build": "^4.8.2" }, "peerDependencies": { "tree-sitter": "^0.21.1" }, "optionalPeers": ["tree-sitter"] }, "sha1-iw0zbeXaoss7OWi4KXzjv5VoxM4="],
 
-    "tree-sitter-cpp": ["tree-sitter-cpp@0.20.5", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-cpp/-/tree-sitter-cpp-0.20.5.tgz", { "dependencies": { "nan": "^2.18.0" } }, "sha1-Azk9mpt0kDgJY+EXUtK2jl9UTsM="],
+    "tree-sitter-cli": ["tree-sitter-cli@0.23.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-cli/-/tree-sitter-cli-0.23.2.tgz", { "bin": { "tree-sitter": "cli.js" } }, "sha1-DQChGTv6LPIsZSx+NHbZzk6/biw="],
 
-    "tree-sitter-go": ["tree-sitter-go@0.20.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-go/-/tree-sitter-go-0.20.0.tgz", { "dependencies": { "nan": "^2.14.0" } }, "sha1-P1tSMH6nXAznKscBNQpDLuWRbzg="],
+    "tree-sitter-cpp": ["tree-sitter-cpp@0.23.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-cpp/-/tree-sitter-cpp-0.23.4.tgz", { "dependencies": { "node-addon-api": "^8.2.1", "node-gyp-build": "^4.8.2", "tree-sitter-c": "^0.23.1" }, "peerDependencies": { "tree-sitter": "^0.21.1" }, "optionalPeers": ["tree-sitter"] }, "sha1-9A3Rj2FUASo1fpkbdX4FHPEcqY8="],
 
-    "tree-sitter-java": ["tree-sitter-java@0.20.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-java/-/tree-sitter-java-0.20.2.tgz", { "dependencies": { "nan": "^2.14.1" } }, "sha1-fOR4/ZPYb5dWMu4J/GZsCZRKM1A="],
+    "tree-sitter-css": ["tree-sitter-css@0.23.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-css/-/tree-sitter-css-0.23.2.tgz", { "dependencies": { "node-addon-api": "^8.2.2", "node-gyp-build": "^4.8.2" }, "peerDependencies": { "tree-sitter": "^0.22.4" }, "optionalPeers": ["tree-sitter"] }, "sha1-k9Fy9rFZYaympxeFYNP0+djsevU="],
 
-    "tree-sitter-javascript": ["tree-sitter-javascript@0.20.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-javascript/-/tree-sitter-javascript-0.20.4.tgz", { "dependencies": { "nan": "^2.18.0" } }, "sha1-+BNRrlo52URW9L87YAzxYguw+mQ="],
+    "tree-sitter-go": ["tree-sitter-go@0.23.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-go/-/tree-sitter-go-0.23.4.tgz", { "dependencies": { "node-addon-api": "^8.2.1", "node-gyp-build": "^4.8.2" }, "peerDependencies": { "tree-sitter": "^0.21.1" }, "optionalPeers": ["tree-sitter"] }, "sha1-C+0U2ccefcUsB1fBBKpPvyFxOb8="],
 
-    "tree-sitter-php": ["tree-sitter-php@0.20.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-php/-/tree-sitter-php-0.20.0.tgz", { "dependencies": { "nan": "^2.18.0" } }, "sha1-HMDqx8aCO1eJnQE9cVbYhtH96R0="],
+    "tree-sitter-html": ["tree-sitter-html@0.23.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-html/-/tree-sitter-html-0.23.2.tgz", { "dependencies": { "node-addon-api": "^8.2.2", "node-gyp-build": "^4.8.2" }, "peerDependencies": { "tree-sitter": "^0.21.1" }, "optionalPeers": ["tree-sitter"] }, "sha1-fjIz7Jt1slTOV0R/u4IPhIUo5TY="],
 
-    "tree-sitter-python": ["tree-sitter-python@0.20.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-python/-/tree-sitter-python-0.20.4.tgz", { "dependencies": { "nan": "^2.17.0" } }, "sha1-WM1V++rrFx6FnEuk2TCLcPjGkGU="],
+    "tree-sitter-java": ["tree-sitter-java@0.23.5", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-java/-/tree-sitter-java-0.23.5.tgz", { "dependencies": { "node-addon-api": "^8.2.2", "node-gyp-build": "^4.8.2" }, "peerDependencies": { "tree-sitter": "^0.21.1" }, "optionalPeers": ["tree-sitter"] }, "sha1-+xUP2qnIUrPXG6MUQQkAisakesI="],
 
-    "tree-sitter-ruby": ["tree-sitter-ruby@0.20.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-ruby/-/tree-sitter-ruby-0.20.1.tgz", { "dependencies": { "nan": "^2.18.0", "node-gyp": "^10.0.1", "prebuild-install": "^7.1.1" } }, "sha1-FKKVyJ4YPovsDwb7YeYDWpUFY0g="],
+    "tree-sitter-javascript": ["tree-sitter-javascript@0.25.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-javascript/-/tree-sitter-javascript-0.25.0.tgz", { "dependencies": { "node-addon-api": "^8.3.1", "node-gyp-build": "^4.8.4" }, "peerDependencies": { "tree-sitter": "^0.25.0" }, "optionalPeers": ["tree-sitter"] }, "sha1-LjNrjxKOboVAHrZ2Z9/YfPzxU+g="],
 
-    "tree-sitter-rust": ["tree-sitter-rust@0.20.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-rust/-/tree-sitter-rust-0.20.4.tgz", { "dependencies": { "nan": "^2.17.0" } }, "sha1-uVPQjOcm3Tkor34OwcylD/OBMpo="],
+    "tree-sitter-kotlin": ["tree-sitter-kotlin@0.3.8", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-kotlin/-/tree-sitter-kotlin-0.3.8.tgz", { "dependencies": { "node-addon-api": "^7.1.0", "node-gyp-build": "^4.8.0" }, "peerDependencies": { "tree-sitter": "^0.21.0" } }, "sha1-nLP7yUde8WRcMoLOw75y/WMlwk4="],
 
-    "tree-sitter-typescript": ["tree-sitter-typescript@0.20.5", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-typescript/-/tree-sitter-typescript-0.20.5.tgz", { "dependencies": { "nan": "^2.18.0", "tree-sitter": "^0.20.6" } }, "sha1-KeMMBSvLBsuZL/0tOS4BCw4XaLM="],
+    "tree-sitter-php": ["tree-sitter-php@0.23.12", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-php/-/tree-sitter-php-0.23.12.tgz", { "dependencies": { "node-addon-api": "^8.2.2", "node-gyp-build": "^4.8.2" }, "peerDependencies": { "tree-sitter": "^0.21.1" }, "optionalPeers": ["tree-sitter"] }, "sha1-+RrElpsw7EBuNh15yZN4SOLZeZs="],
+
+    "tree-sitter-python": ["tree-sitter-python@0.23.6", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-python/-/tree-sitter-python-0.23.6.tgz", { "dependencies": { "node-addon-api": "^8.3.0", "node-gyp-build": "^4.8.4" }, "peerDependencies": { "tree-sitter": "^0.22.1" }, "optionalPeers": ["tree-sitter"] }, "sha1-gH5QxBWnYcYTYU+QJDL1Y+hbUbY="],
+
+    "tree-sitter-regex": ["tree-sitter-regex@0.23.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-regex/-/tree-sitter-regex-0.23.0.tgz", { "dependencies": { "node-addon-api": "^8.1.0", "node-gyp-build": "^4.8.2" }, "peerDependencies": { "tree-sitter": "^0.21.0" } }, "sha1-YZ+YhJjCGPnZUdeRF7kxktDZ5ac="],
+
+    "tree-sitter-ruby": ["tree-sitter-ruby@0.23.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-ruby/-/tree-sitter-ruby-0.23.1.tgz", { "dependencies": { "node-addon-api": "^8.2.2", "node-gyp-build": "^4.8.2" }, "peerDependencies": { "tree-sitter": "^0.21.1" }, "optionalPeers": ["tree-sitter"] }, "sha1-4PVmtU18dJu28G+D1MQIf15uLJU="],
+
+    "tree-sitter-rust": ["tree-sitter-rust@0.24.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-rust/-/tree-sitter-rust-0.24.0.tgz", { "dependencies": { "node-addon-api": "^8.2.2", "node-gyp-build": "^4.8.4" }, "peerDependencies": { "tree-sitter": "^0.22.1" }, "optionalPeers": ["tree-sitter"] }, "sha1-7+kQQFKuAi6Y0s0wAYWHvQXOAfM="],
+
+    "tree-sitter-swift": ["tree-sitter-swift@0.7.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-swift/-/tree-sitter-swift-0.7.1.tgz", { "dependencies": { "node-addon-api": "^8.0.0", "node-gyp-build": "^4.8.0", "tree-sitter-cli": "^0.23", "which": "2.0.2" }, "peerDependencies": { "tree-sitter": "^0.22.1" } }, "sha1-57QUAtvCn8OodBeTUT56Dz41zFU="],
+
+    "tree-sitter-typescript": ["tree-sitter-typescript@0.23.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-typescript/-/tree-sitter-typescript-0.23.2.tgz", { "dependencies": { "node-addon-api": "^8.2.2", "node-gyp-build": "^4.8.2", "tree-sitter-javascript": "^0.23.1" }, "peerDependencies": { "tree-sitter": "^0.21.0" }, "optionalPeers": ["tree-sitter"] }, "sha1-cLxhWi9mSo6ch8UzOCvspYfyirM="],
+
+    "tree-sitter-vue": ["tree-sitter-vue@0.2.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-vue/-/tree-sitter-vue-0.2.1.tgz", { "dependencies": { "nan": "^2.14.0" } }, "sha1-zHB4pn+YR0V7WDAwB2036UaN5eY="],
 
     "tunnel-agent": ["tunnel-agent@0.6.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tunnel-agent/-/tunnel-agent-0.6.0.tgz", { "dependencies": { "safe-buffer": "^5.0.1" } }, "sha1-J6XeoGs2sEoKmWZ3SykIaPD8QP0="],
 
     "type-is": ["type-is@2.0.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/type-is/-/type-is-2.0.1.tgz", { "dependencies": { "content-type": "^1.0.5", "media-typer": "^1.1.0", "mime-types": "^3.0.0" } }, "sha1-ZPbPA/kvzkAVwrIkeT9r3UsGjJc="],
 
     "undici-types": ["undici-types@7.12.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/undici-types/-/undici-types-7.12.0.tgz", {}, "sha1-FcXHR1wqO6MGWVKfXNtGdLYi+vs="],
-
-    "unique-filename": ["unique-filename@3.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/unique-filename/-/unique-filename-3.0.0.tgz", { "dependencies": { "unique-slug": "^4.0.0" } }, "sha1-SLp6WhaEn1CA0mx2DIbPXPBXcOo="],
-
-    "unique-slug": ["unique-slug@4.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/unique-slug/-/unique-slug-4.0.0.tgz", { "dependencies": { "imurmurhash": "^0.1.4" } }, "sha1-a65rsWvpE1G63STNznQfiSplMuM="],
 
     "unpipe": ["unpipe@1.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/unpipe/-/unpipe-1.0.0.tgz", {}, "sha1-sr9O6FFKrmFltIF4KdIbLvSZBOw="],
 
@@ -457,13 +354,7 @@
 
     "which": ["which@2.0.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/which/-/which-2.0.2.tgz", { "dependencies": { "isexe": "^2.0.0" }, "bin": { "node-which": "./bin/node-which" } }, "sha1-fGqN0KY2oDJ+ELWckobu6T8/UbE="],
 
-    "wrap-ansi": ["wrap-ansi@8.1.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/wrap-ansi/-/wrap-ansi-8.1.0.tgz", { "dependencies": { "ansi-styles": "^6.1.0", "string-width": "^5.0.1", "strip-ansi": "^7.0.1" } }, "sha1-VtwiNo7lcPrOG0mBmXXZuaXq0hQ="],
-
-    "wrap-ansi-cjs": ["wrap-ansi@7.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/wrap-ansi/-/wrap-ansi-7.0.0.tgz", { "dependencies": { "ansi-styles": "^4.0.0", "string-width": "^4.1.0", "strip-ansi": "^6.0.0" } }, "sha1-Z+FFz/UQpqaYS98RUpEdadLrnkM="],
-
     "wrappy": ["wrappy@1.0.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/wrappy/-/wrappy-1.0.2.tgz", {}, "sha1-tSQ9jz7BqjXxNkYFvA0QNuMKtp8="],
-
-    "yallist": ["yallist@4.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/yallist/-/yallist-4.0.0.tgz", {}, "sha1-m7knkNnA7/7GO+c1GeEaNQGaOnI="],
 
     "zod": ["zod@4.1.9", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/zod/-/zod-4.1.9.tgz", {}, "sha1-wDoN2xD1V48T+PcPGVn4n9CcHAY="],
 
@@ -473,46 +364,8 @@
 
     "body-parser/iconv-lite": ["iconv-lite@0.6.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/iconv-lite/-/iconv-lite-0.6.3.tgz", { "dependencies": { "safer-buffer": ">= 2.1.2 < 3.0.0" } }, "sha1-pS+AvzjaGVLrXGgXkHGYcaGnJQE="],
 
-    "cacache/fs-minipass": ["fs-minipass@3.0.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/fs-minipass/-/fs-minipass-3.0.3.tgz", { "dependencies": { "minipass": "^7.0.3" } }, "sha1-eahZgcTcEgBl6W9iCGv2+dwmzFQ="],
+    "tree-sitter-kotlin/node-addon-api": ["node-addon-api@7.1.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/node-addon-api/-/node-addon-api-7.1.1.tgz", {}, "sha1-Grpmk7DyVSWKBJ1iEykykyKq1Vg="],
 
-    "encoding/iconv-lite": ["iconv-lite@0.6.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/iconv-lite/-/iconv-lite-0.6.3.tgz", { "dependencies": { "safer-buffer": ">= 2.1.2 < 3.0.0" } }, "sha1-pS+AvzjaGVLrXGgXkHGYcaGnJQE="],
-
-    "fs-minipass/minipass": ["minipass@3.3.6", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/minipass/-/minipass-3.3.6.tgz", { "dependencies": { "yallist": "^4.0.0" } }, "sha1-e7o4TbOhUg0YycDlJRw0ROld2Uo="],
-
-    "make-fetch-happen/negotiator": ["negotiator@0.6.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/negotiator/-/negotiator-0.6.4.tgz", {}, "sha1-d3lI4kUmUcVwtxLdAcI+JicT//c="],
-
-    "minipass-flush/minipass": ["minipass@3.3.6", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/minipass/-/minipass-3.3.6.tgz", { "dependencies": { "yallist": "^4.0.0" } }, "sha1-e7o4TbOhUg0YycDlJRw0ROld2Uo="],
-
-    "minipass-pipeline/minipass": ["minipass@3.3.6", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/minipass/-/minipass-3.3.6.tgz", { "dependencies": { "yallist": "^4.0.0" } }, "sha1-e7o4TbOhUg0YycDlJRw0ROld2Uo="],
-
-    "minipass-sized/minipass": ["minipass@3.3.6", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/minipass/-/minipass-3.3.6.tgz", { "dependencies": { "yallist": "^4.0.0" } }, "sha1-e7o4TbOhUg0YycDlJRw0ROld2Uo="],
-
-    "minizlib/minipass": ["minipass@3.3.6", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/minipass/-/minipass-3.3.6.tgz", { "dependencies": { "yallist": "^4.0.0" } }, "sha1-e7o4TbOhUg0YycDlJRw0ROld2Uo="],
-
-    "node-gyp/which": ["which@4.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/which/-/which-4.0.0.tgz", { "dependencies": { "isexe": "^3.1.1" }, "bin": { "node-which": "bin/which.js" } }, "sha1-zWC150UDo/vPv2zWtBOKi65kTBo="],
-
-    "string-width-cjs/emoji-regex": ["emoji-regex@8.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/emoji-regex/-/emoji-regex-8.0.0.tgz", {}, "sha1-6Bj9ac5cz8tARZT4QpY79TFkzDc="],
-
-    "string-width-cjs/strip-ansi": ["strip-ansi@6.0.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/strip-ansi/-/strip-ansi-6.0.1.tgz", { "dependencies": { "ansi-regex": "^5.0.1" } }, "sha1-nibGPTD1NEPpSJSVshBdN7Z6hdk="],
-
-    "strip-ansi-cjs/ansi-regex": ["ansi-regex@5.0.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/ansi-regex/-/ansi-regex-5.0.1.tgz", {}, "sha1-CCyyyJyf6GWaMRpTvWpNxTAdswQ="],
-
-    "tar/minipass": ["minipass@5.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/minipass/-/minipass-5.0.0.tgz", {}, "sha1-PpeI/7kLaUpdDslEeaRbXYc4Ez0="],
-
-    "tar-fs/chownr": ["chownr@1.1.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/chownr/-/chownr-1.1.4.tgz", {}, "sha1-b8nXtC0ypYNZYzdmbn0ICE2izGs="],
-
-    "wrap-ansi-cjs/ansi-styles": ["ansi-styles@4.3.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/ansi-styles/-/ansi-styles-4.3.0.tgz", { "dependencies": { "color-convert": "^2.0.1" } }, "sha1-7dgDYornHATIWuegkG7a00tkiTc="],
-
-    "wrap-ansi-cjs/string-width": ["string-width@4.2.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/string-width/-/string-width-4.2.3.tgz", { "dependencies": { "emoji-regex": "^8.0.0", "is-fullwidth-code-point": "^3.0.0", "strip-ansi": "^6.0.1" } }, "sha1-JpxxF9J7Ba0uU2gwqOyJXvnG0BA="],
-
-    "wrap-ansi-cjs/strip-ansi": ["strip-ansi@6.0.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/strip-ansi/-/strip-ansi-6.0.1.tgz", { "dependencies": { "ansi-regex": "^5.0.1" } }, "sha1-nibGPTD1NEPpSJSVshBdN7Z6hdk="],
-
-    "node-gyp/which/isexe": ["isexe@3.1.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/isexe/-/isexe-3.1.1.tgz", {}, "sha1-SkB+K9eN37FL6gwnxvcHLd53Xw0="],
-
-    "string-width-cjs/strip-ansi/ansi-regex": ["ansi-regex@5.0.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/ansi-regex/-/ansi-regex-5.0.1.tgz", {}, "sha1-CCyyyJyf6GWaMRpTvWpNxTAdswQ="],
-
-    "wrap-ansi-cjs/string-width/emoji-regex": ["emoji-regex@8.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/emoji-regex/-/emoji-regex-8.0.0.tgz", {}, "sha1-6Bj9ac5cz8tARZT4QpY79TFkzDc="],
-
-    "wrap-ansi-cjs/strip-ansi/ansi-regex": ["ansi-regex@5.0.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/ansi-regex/-/ansi-regex-5.0.1.tgz", {}, "sha1-CCyyyJyf6GWaMRpTvWpNxTAdswQ="],
+    "tree-sitter-typescript/tree-sitter-javascript": ["tree-sitter-javascript@0.23.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-javascript/-/tree-sitter-javascript-0.23.1.tgz", { "dependencies": { "node-addon-api": "^8.2.2", "node-gyp-build": "^4.8.2" }, "peerDependencies": { "tree-sitter": "^0.21.1" }, "optionalPeers": ["tree-sitter"] }, "sha1-Tkn6OtX5lrOsXPT3jWxd2HZ4j68="],
   }
 }
