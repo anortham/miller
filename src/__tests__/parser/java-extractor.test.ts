@@ -1756,7 +1756,7 @@ public class Service${i} {
     }
 }`).join('\n');
 
-      const entities = Array.from({ length, 15 }, (_, i) => `
+      const entities = Array.from({ length: 15 }, (_, i) => `
 @Entity
 @Table(name = "entity_${i}")
 public class Entity${i} {

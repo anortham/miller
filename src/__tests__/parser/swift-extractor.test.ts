@@ -252,9 +252,9 @@ enum HTTPStatusCode: Int, CaseIterable {
       expect(north?.kind).toBe(SymbolKind.EnumMember);
 
       // Generic enum with associated values
-      const result = symbols.find(s => s.name === 'Result');
-      expect(result).toBeDefined();
-      expect(result?.signature).toContain('enum Result<T>');
+      const resultSymbol = symbols.find(s => s.name === 'Result');
+      expect(resultSymbol).toBeDefined();
+      expect(resultSymbol?.signature).toContain('enum Result<T>');
 
       const success = symbols.find(s => s.name === 'success');
       expect(success).toBeDefined();

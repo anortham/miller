@@ -237,9 +237,9 @@ enum class Color(val rgb: Int) {
       expect(utils?.signature).toContain('object Utils : Serializable');
 
       // Sealed class
-      const result = symbols.find(s => s.name === 'Result');
-      expect(result).toBeDefined();
-      expect(result?.signature).toContain('sealed class Result<out T>');
+      const resultSymbol = symbols.find(s => s.name === 'Result');
+      expect(resultSymbol).toBeDefined();
+      expect(resultSymbol?.signature).toContain('sealed class Result<out T>');
 
       // Object inside sealed class
       const loading = symbols.find(s => s.name === 'Loading');

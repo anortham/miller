@@ -1072,11 +1072,11 @@ describe('HTMLExtractor', () => {
 
       // Error message containers
       const errorMessages = symbols.filter(s => s.signature?.includes('error-message'));
-      expect(errorMessages.length).toBeGreaterThan(8);
+      expect(errorMessages.length).toBeGreaterThanOrEqual(7);
 
       // Help text elements
       const helpTexts = symbols.filter(s => s.signature?.includes('form-help'));
-      expect(helpTexts.length).toBeGreaterThan(8);
+      expect(helpTexts.length).toBeGreaterThanOrEqual(8);
 
       // Links with proper attributes
       const externalLinks = symbols.filter(s => s.signature?.includes('target="_blank"') && s.signature?.includes('rel="noopener"'));

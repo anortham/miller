@@ -140,6 +140,7 @@ https?://[^\\s]+                       // URL pattern
       const extractor = new RegexExtractor('regex', 'basic.regex', regexCode);
       const symbols = extractor.extractSymbols(result);
 
+
       // Basic literals
       const helloPattern = symbols.find(s => s.name === 'hello');
       expect(helloPattern).toBeDefined();
@@ -328,13 +329,13 @@ https?://[^\\s]+                       // URL pattern
 
 // Backreferences
 (\\w+)\\s+\\1        // Capture word, match same word again
-(["'])(.*?)\\1      // Match quoted string with same quote type
+(["\'])(.*?)\\1      // Match quoted string with same quote type
 <(\\w+)>.*?</\\1>    // Match XML/HTML tags
 (\\d{2})/(\\d{2})/(\\d{4})\\s+\\1/\\2/\\3  // Date repetition
 
 // Named backreferences
 (?<tag>\\w+).*?</\\k<tag>>         // Named backreference
-(?<quote>["']).*?\\k<quote>        // Match quoted content
+(?<quote>["\']).*?\\k<quote>        // Match quoted content
 (?P<open>\\().*?\\)(?P=open)       // Python-style named backreference
 
 // Positive lookahead
@@ -471,7 +472,7 @@ https?://(www\\.)?[-a-zA-Z0-9@:%._\\+~#=]{1,256}\\.[a-zA-Z0-9()]{1,6}\\b([-a-zA-
       const wordRepetition = symbols.find(s => s.name === '(\\w+)\\s+\\1');
       expect(wordRepetition).toBeDefined();
 
-      const quotedString = symbols.find(s => s.name === '(["'])(.*?)\\1');
+      const quotedString = symbols.find(s => s.name === '(["\'])(.*?)\\1');
       expect(quotedString).toBeDefined();
 
       const xmlTag = symbols.find(s => s.name === '<(\\w+)>.*?</\\1>');
@@ -810,6 +811,7 @@ start:                     // Label
       const extractor = new RegexExtractor('regex', 'performance.regex', regexCode);
       const symbols = extractor.extractSymbols(result);
 
+
       // Catastrophic backtracking patterns
       const exponentialBacktrack = symbols.find(s => s.name === '(a+)+b');
       expect(exponentialBacktrack).toBeDefined();
@@ -1052,7 +1054,7 @@ start:                     // Label
       const redundantQuantifiers = symbols.find(s => s.name === '.*.*');
       expect(redundantQuantifiers).toBeDefined();
 
-      const catastrophicPattern = symbols.find(s => s.name === '(.*)');
+      const catastrophicPattern = symbols.find(s => s.name === '(.*)*');
       expect(catastrophicPattern).toBeDefined();
 
       const conflictingQuantifiers = symbols.find(s => s.name === '.+?.*');

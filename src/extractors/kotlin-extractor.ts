@@ -31,10 +31,14 @@ export class KotlinExtractor extends BaseExtractor {
           symbol = this.extractFunction(node, parentId);
           break;
         case 'property_declaration':
+        case 'property_signature': // Interface properties
           symbol = this.extractProperty(node, parentId);
           break;
         case 'enum_class_body':
           this.extractEnumMembers(node, symbols, parentId);
+          break;
+        case 'primary_constructor':
+          this.extractConstructorParameters(node, symbols, parentId);
           break;
         case 'package_header':
           symbol = this.extractPackage(node, parentId);
@@ -197,12 +201,15 @@ export class KotlinExtractor extends BaseExtractor {
       signature += `: ${returnType}`;
     }
 
-    return this.createSymbol(node, name, SymbolKind.Function, {
+    // Functions inside classes/interfaces are methods
+    const symbolKind = parentId ? SymbolKind.Method : SymbolKind.Function;
+
+    return this.createSymbol(node, name, symbolKind, {
       signature,
       visibility: this.determineVisibility(modifiers),
       parentId,
       metadata: {
-        type: 'function',
+        type: parentId ? 'method' : 'function',
         modifiers,
         parameters: parameters,
         returnType: returnType
@@ -211,13 +218,29 @@ export class KotlinExtractor extends BaseExtractor {
   }
 
   private extractProperty(node: Parser.SyntaxNode, parentId?: string): Symbol {
-    const nameNode = node.children.find(c => c.type === 'simple_identifier');
+    // Look for name in variable_declaration (interface properties)
+    let nameNode = node.children.find(c => c.type === 'simple_identifier');
+    if (!nameNode) {
+      const varDecl = node.children.find(c => c.type === 'variable_declaration');
+      if (varDecl) {
+        nameNode = varDecl.children.find(c => c.type === 'simple_identifier');
+      }
+    }
     const name = nameNode ? this.getNodeText(nameNode) : 'unknownProperty';
 
     const modifiers = this.extractModifiers(node);
     const type = this.extractPropertyType(node);
-    const isVal = node.children.some(c => c.type === 'val');
-    const isVar = node.children.some(c => c.type === 'var');
+    // Check for val/var in binding_pattern_kind for interface properties
+    let isVal = node.children.some(c => c.type === 'val');
+    let isVar = node.children.some(c => c.type === 'var');
+
+    if (!isVal && !isVar) {
+      const bindingPattern = node.children.find(c => c.type === 'binding_pattern_kind');
+      if (bindingPattern) {
+        isVal = bindingPattern.children.some(c => c.type === 'val');
+        isVar = bindingPattern.children.some(c => c.type === 'var');
+      }
+    }
 
     let signature = `${isVal ? 'val' : isVar ? 'var' : 'val'} ${name}`;
 
@@ -297,7 +320,7 @@ export class KotlinExtractor extends BaseExtractor {
 
     if (modifiersList) {
       for (const child of modifiersList.children) {
-        if (['public', 'private', 'protected', 'internal', 'open', 'final', 'abstract', 'sealed', 'data', 'inline', 'suspend', 'operator', 'infix'].includes(child.type)) {
+        if (['public', 'private', 'protected', 'internal', 'open', 'final', 'abstract', 'sealed', 'data', 'inline', 'suspend', 'operator', 'infix', 'annotation'].includes(child.type)) {
           modifiers.push(this.getNodeText(child));
         }
       }
@@ -313,7 +336,22 @@ export class KotlinExtractor extends BaseExtractor {
 
   private extractSuperTypes(node: Parser.SyntaxNode): string | null {
     const delegation = node.children.find(c => c.type === 'delegation_specifiers');
-    return delegation ? this.getNodeText(delegation) : null;
+    if (!delegation) return null;
+
+    // Extract the actual type names from delegation specifiers
+    const superTypes: string[] = [];
+    for (const child of delegation.children) {
+      if (child.type === 'delegated_super_type') {
+        const typeNode = child.children.find(c => c.type === 'type' || c.type === 'user_type' || c.type === 'simple_identifier');
+        if (typeNode) {
+          superTypes.push(this.getNodeText(typeNode));
+        }
+      } else if (child.type === 'type' || child.type === 'user_type' || child.type === 'simple_identifier') {
+        superTypes.push(this.getNodeText(child));
+      }
+    }
+
+    return superTypes.length > 0 ? superTypes.join(', ') : this.getNodeText(delegation);
   }
 
   private extractParameters(node: Parser.SyntaxNode): string | null {
@@ -322,12 +360,32 @@ export class KotlinExtractor extends BaseExtractor {
   }
 
   private extractReturnType(node: Parser.SyntaxNode): string | null {
-    const returnType = node.children.find(c => c.type === 'type');
-    return returnType ? this.getNodeText(returnType) : null;
+    // Look for return type after the colon in function declarations
+    let foundColon = false;
+    for (const child of node.children) {
+      if (child.type === ':') {
+        foundColon = true;
+        continue;
+      }
+      if (foundColon && (child.type === 'type' || child.type === 'user_type' || child.type === 'simple_identifier')) {
+        return this.getNodeText(child);
+      }
+    }
+    return null;
   }
 
   private extractPropertyType(node: Parser.SyntaxNode): string | null {
-    const type = node.children.find(c => c.type === 'type');
+    // Look for type in variable_declaration (interface properties)
+    const varDecl = node.children.find(c => c.type === 'variable_declaration');
+    if (varDecl) {
+      const userType = varDecl.children.find(c => c.type === 'user_type' || c.type === 'type');
+      if (userType) {
+        return this.getNodeText(userType);
+      }
+    }
+
+    // Look for direct type node (regular properties)
+    const type = node.children.find(c => c.type === 'type' || c.type === 'user_type');
     return type ? this.getNodeText(type) : null;
   }
 
@@ -376,21 +434,88 @@ export class KotlinExtractor extends BaseExtractor {
     if (delegation) {
       // Parse inheritance relationships
       for (const delegationChild of delegation.children) {
+        let baseTypeName: string | null = null;
+
         if (delegationChild.type === 'delegated_super_type') {
-          const typeNode = delegationChild.children.find(c => c.type === 'type');
+          const typeNode = delegationChild.children.find(c =>
+            c.type === 'type' || c.type === 'user_type' || c.type === 'simple_identifier'
+          );
           if (typeNode) {
-            const baseTypeName = this.getNodeText(typeNode);
-            relationships.push({
-              fromSymbolId: classSymbol.id,
-              toSymbolId: `kotlin-type:${baseTypeName}`,
-              kind: RelationshipKind.Extends,
-              filePath: this.filePath,
-              lineNumber: node.startPosition.row + 1,
-              confidence: 1.0,
-              metadata: { baseType: baseTypeName }
-            });
+            baseTypeName = this.getNodeText(typeNode);
           }
+        } else if (delegationChild.type === 'type' || delegationChild.type === 'user_type' || delegationChild.type === 'simple_identifier') {
+          baseTypeName = this.getNodeText(delegationChild);
         }
+
+        if (baseTypeName) {
+          relationships.push({
+            fromSymbolId: classSymbol.id,
+            toSymbolId: `kotlin-type:${baseTypeName}`,
+            kind: RelationshipKind.Extends,
+            filePath: this.filePath,
+            lineNumber: node.startPosition.row + 1,
+            confidence: 1.0,
+            metadata: { baseType: baseTypeName }
+          });
+        }
+      }
+    }
+  }
+
+  private extractConstructorParameters(node: Parser.SyntaxNode, symbols: Symbol[], parentId?: string): void {
+    // Extract class_parameter nodes as properties
+    for (const child of node.children) {
+      if (child.type === 'class_parameter') {
+        const nameNode = child.children.find(c => c.type === 'simple_identifier');
+        const name = nameNode ? this.getNodeText(nameNode) : 'unknownParam';
+
+        // Get binding pattern (val/var)
+        const bindingNode = child.children.find(c => c.type === 'binding_pattern_kind');
+        const binding = bindingNode ? this.getNodeText(bindingNode) : 'val';
+
+        // Get type
+        const typeNode = child.children.find(c => c.type === 'user_type' || c.type === 'type');
+        const type = typeNode ? this.getNodeText(typeNode) : '';
+
+        // Get modifiers (like private)
+        const modifiersNode = child.children.find(c => c.type === 'modifiers');
+        const modifiers = modifiersNode ? this.getNodeText(modifiersNode) : '';
+
+        // Get default value
+        const defaultValue = child.children.find(c => c.type === 'integer_literal' || c.type === 'string_literal');
+        const defaultVal = defaultValue ? ` = ${this.getNodeText(defaultValue)}` : '';
+
+        // Build signature
+        let signature = `${binding} ${name}`;
+        if (type) {
+          signature += `: ${type}`;
+        }
+        if (defaultVal) {
+          signature += defaultVal;
+        }
+
+        // Add modifiers to signature if present
+        if (modifiers) {
+          signature = `${modifiers} ${signature}`;
+        }
+
+        // Determine visibility
+        const visibility = modifiers.includes('private') ? 'private' :
+                          modifiers.includes('protected') ? 'protected' : 'public';
+
+        const propertySymbol = this.createSymbol(child, name, SymbolKind.Property, {
+          signature,
+          visibility,
+          parentId,
+          metadata: {
+            type: 'property',
+            binding,
+            dataType: type,
+            hasDefaultValue: !!defaultVal
+          }
+        });
+
+        symbols.push(propertySymbol);
       }
     }
   }
@@ -398,10 +523,12 @@ export class KotlinExtractor extends BaseExtractor {
   inferTypes(symbols: Symbol[]): Map<string, string> {
     const types = new Map<string, string>();
     for (const symbol of symbols) {
-      if (symbol.metadata?.type) {
-        types.set(symbol.id, symbol.metadata.type);
-      } else if (symbol.metadata?.returnType) {
+      if (symbol.metadata?.returnType) {
         types.set(symbol.id, symbol.metadata.returnType);
+      } else if (symbol.metadata?.propertyType) {
+        types.set(symbol.id, symbol.metadata.propertyType);
+      } else if (symbol.metadata?.dataType) {
+        types.set(symbol.id, symbol.metadata.dataType);
       }
     }
     return types;

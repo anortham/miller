@@ -759,9 +759,9 @@ func FanIn(channels ...<-chan Result) <-chan Result {
       expect(job).toBeDefined();
       expect(job?.kind).toBe(SymbolKind.Class);
 
-      const result = symbols.find(s => s.name === 'Result');
-      expect(result).toBeDefined();
-      expect(result?.kind).toBe(SymbolKind.Class);
+      const resultSymbol = symbols.find(s => s.name === 'Result');
+      expect(resultSymbol).toBeDefined();
+      expect(resultSymbol?.kind).toBe(SymbolKind.Class);
 
       const newWorkerPool = symbols.find(s => s.name === 'NewWorkerPool');
       expect(newWorkerPool).toBeDefined();
@@ -1646,7 +1646,7 @@ type Interface${i} interface {
     Method${i}C(ctx context.Context) <-chan Result
 }`).join('\n');
 
-      const functions = Array.from({ length, 10 }, (_, i) => `
+      const functions = Array.from({ length: 10 }, (_, i) => `
 func GlobalFunction${i}(param1 string, param2 int) (string, error) {
     return fmt.Sprintf("function%d: %s-%d", ${i}, param1, param2), nil
 }
