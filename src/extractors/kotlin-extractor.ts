@@ -71,7 +71,7 @@ export class KotlinExtractor extends BaseExtractor {
   }
 
   private extractClass(node: Parser.SyntaxNode, parentId?: string): Symbol {
-    const nameNode = node.children.find(c => c.type === 'simple_identifier');
+    const nameNode = node.children.find(c => c.type === 'type_identifier');
     const name = nameNode ? this.getNodeText(nameNode) : 'UnknownClass';
 
     const modifiers = this.extractModifiers(node);
@@ -108,7 +108,7 @@ export class KotlinExtractor extends BaseExtractor {
   }
 
   private extractInterface(node: Parser.SyntaxNode, parentId?: string): Symbol {
-    const nameNode = node.children.find(c => c.type === 'simple_identifier');
+    const nameNode = node.children.find(c => c.type === 'type_identifier');
     const name = nameNode ? this.getNodeText(nameNode) : 'UnknownInterface';
 
     const modifiers = this.extractModifiers(node);
@@ -142,7 +142,7 @@ export class KotlinExtractor extends BaseExtractor {
   }
 
   private extractObject(node: Parser.SyntaxNode, parentId?: string): Symbol {
-    const nameNode = node.children.find(c => c.type === 'simple_identifier');
+    const nameNode = node.children.find(c => c.type === 'type_identifier');
     const name = nameNode ? this.getNodeText(nameNode) : 'UnknownObject';
 
     const modifiers = this.extractModifiers(node);
@@ -405,7 +405,7 @@ export class KotlinExtractor extends BaseExtractor {
   }
 
   private findClassSymbol(node: Parser.SyntaxNode, symbols: Symbol[]): Symbol | null {
-    const nameNode = node.children.find(c => c.type === 'simple_identifier');
+    const nameNode = node.children.find(c => c.type === 'type_identifier');
     const className = nameNode ? this.getNodeText(nameNode) : null;
 
     return symbols.find(s =>

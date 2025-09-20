@@ -22,9 +22,8 @@ import { CSSExtractor } from '../extractors/css-extractor.js';
 import { RegexExtractor } from '../extractors/regex-extractor.js';
 import { KotlinExtractor } from '../extractors/kotlin-extractor.js';
 import { SwiftExtractor } from '../extractors/swift-extractor.js';
-import { PhpExtractor } from '../extractors/php-extractor.js';
+import { PHPExtractor } from '../extractors/php-extractor.js';
 import { RazorExtractor } from '../extractors/razor-extractor.js';
-import { RubyExtractor } from '../extractors/ruby-extractor.js';
 import { MillerPaths } from '../utils/miller-paths.js';
 import { log, LogLevel } from '../utils/logger.js';
 
@@ -111,9 +110,9 @@ export class CodeIntelligenceEngine {
     this.extractors.set('regex', RegexExtractor);
     this.extractors.set('kotlin', KotlinExtractor);
     this.extractors.set('swift', SwiftExtractor);
-    this.extractors.set('php', PhpExtractor);
+    this.extractors.set('php', PHPExtractor);
     this.extractors.set('razor', RazorExtractor);
-    this.extractors.set('ruby', RubyExtractor);
+    // Note: Ruby extractor not implemented yet
     // Additional extractors can be registered here
   }
 
