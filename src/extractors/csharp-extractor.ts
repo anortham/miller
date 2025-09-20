@@ -327,9 +327,9 @@ export class CSharpExtractor extends BaseExtractor {
       accessors = ' ' + this.getNodeText(accessorList);
     } else {
       // Expression-bodied property
-      const arrowIndex = node.children.findIndex(c => c.type === '=>');
-      if (arrowIndex !== -1) {
-        accessors = ' => ' + node.children.slice(arrowIndex + 1).map(n => this.getNodeText(n)).join('').trim();
+      const arrowClause = node.children.find(c => c.type === 'arrow_expression_clause');
+      if (arrowClause) {
+        accessors = ' ' + this.getNodeText(arrowClause);
       }
     }
 

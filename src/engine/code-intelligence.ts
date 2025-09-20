@@ -8,6 +8,7 @@ import { SearchEngine } from '../search/search-engine.js';
 import { FileWatcher, FileChangeEvent } from '../watcher/file-watcher.js';
 import { BaseExtractor, Symbol, Relationship, SymbolKind } from '../extractors/base-extractor.js';
 import { TypeScriptExtractor } from '../extractors/typescript-extractor.js';
+import { JavaScriptExtractor } from '../extractors/javascript-extractor.js';
 import { VueExtractor } from '../extractors/vue-extractor.js';
 import { PythonExtractor } from '../extractors/python-extractor.js';
 import { RustExtractor } from '../extractors/rust-extractor.js';
@@ -15,6 +16,15 @@ import { GoExtractor } from '../extractors/go-extractor.js';
 import { JavaExtractor } from '../extractors/java-extractor.js';
 import { CSharpExtractor } from '../extractors/csharp-extractor.js';
 import { CppExtractor } from '../extractors/cpp-extractor.js';
+import { CExtractor } from '../extractors/c-extractor.js';
+import { HTMLExtractor } from '../extractors/html-extractor.js';
+import { CSSExtractor } from '../extractors/css-extractor.js';
+import { RegexExtractor } from '../extractors/regex-extractor.js';
+import { KotlinExtractor } from '../extractors/kotlin-extractor.js';
+import { SwiftExtractor } from '../extractors/swift-extractor.js';
+import { PhpExtractor } from '../extractors/php-extractor.js';
+import { RazorExtractor } from '../extractors/razor-extractor.js';
+import { RubyExtractor } from '../extractors/ruby-extractor.js';
 import { MillerPaths } from '../utils/miller-paths.js';
 import { log, LogLevel } from '../utils/logger.js';
 
@@ -87,7 +97,7 @@ export class CodeIntelligenceEngine {
   private registerExtractors() {
     // Register language extractors
     this.extractors.set('typescript', TypeScriptExtractor);
-    this.extractors.set('javascript', TypeScriptExtractor);
+    this.extractors.set('javascript', JavaScriptExtractor);
     this.extractors.set('vue', VueExtractor);
     this.extractors.set('python', PythonExtractor);
     this.extractors.set('rust', RustExtractor);
@@ -95,6 +105,15 @@ export class CodeIntelligenceEngine {
     this.extractors.set('java', JavaExtractor);
     this.extractors.set('c_sharp', CSharpExtractor);
     this.extractors.set('cpp', CppExtractor);
+    this.extractors.set('c', CExtractor);
+    this.extractors.set('html', HTMLExtractor);
+    this.extractors.set('css', CSSExtractor);
+    this.extractors.set('regex', RegexExtractor);
+    this.extractors.set('kotlin', KotlinExtractor);
+    this.extractors.set('swift', SwiftExtractor);
+    this.extractors.set('php', PhpExtractor);
+    this.extractors.set('razor', RazorExtractor);
+    this.extractors.set('ruby', RubyExtractor);
     // Additional extractors can be registered here
   }
 
