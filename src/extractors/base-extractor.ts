@@ -141,6 +141,7 @@ export abstract class BaseExtractor {
       visibility?: 'public' | 'private' | 'protected';
       parentId?: string;
       metadata?: any;
+      docComment?: string;
     } = {}
   ): Symbol {
     const id = this.generateId(name, node.startPosition.row, node.startPosition.column);
@@ -158,7 +159,7 @@ export abstract class BaseExtractor {
       startByte: node.startIndex,
       endByte: node.endIndex,
       signature: options.signature,
-      docComment: this.findDocComment(node),
+      docComment: options.docComment ?? this.findDocComment(node),
       visibility: options.visibility,
       parentId: options.parentId,
       metadata: options.metadata

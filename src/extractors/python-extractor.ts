@@ -28,6 +28,11 @@ export class PythonExtractor extends BaseExtractor {
           symbol = this.extractClass(node, parentId);
           break;
         case 'function_definition':
+          // Skip function definitions that are part of decorated definitions
+          // (they will be handled by extractDecoratedDefinition)
+          if (node.parent?.type === 'decorated_definition') {
+            break;
+          }
           symbol = this.extractFunction(node, parentId);
           break;
         case 'assignment':
@@ -95,6 +100,9 @@ export class PythonExtractor extends BaseExtractor {
           break;
         case 'function_definition':
           this.extractFunctionRelationships(node, symbolMap, relationships);
+          break;
+        case 'assignment':
+          this.extractAssignmentRelationships(node, symbolMap, relationships);
           break;
         case 'call':
           this.extractCallRelationships(node, symbolMap, relationships);
@@ -196,7 +204,7 @@ export class PythonExtractor extends BaseExtractor {
     });
   }
 
-  private extractFunction(node: Parser.SyntaxNode, parentId?: string): Symbol {
+  private extractFunction(node: Parser.SyntaxNode, parentId?: string, providedDecorators?: string[]): Symbol {
     const nameNode = node.childForFieldName('name');
     const name = nameNode ? this.getNodeText(nameNode) : 'Anonymous';
 
@@ -211,8 +219,8 @@ export class PythonExtractor extends BaseExtractor {
     const returnType = node.childForFieldName('return_type');
     const returnTypeStr = returnType ? `: ${this.getNodeText(returnType)}` : '';
 
-    // Extract decorators
-    const decorators = this.extractDecorators(node);
+    // Extract decorators (use provided ones if available, otherwise extract from node)
+    const decorators = providedDecorators || this.extractDecorators(node);
     const decoratorInfo = decorators.length > 0 ? `@${decorators.join(' @')} ` : '';
 
     const asyncPrefix = isAsync ? 'async ' : '';
@@ -263,8 +271,27 @@ export class PythonExtractor extends BaseExtractor {
       return null;
     }
 
+    // Check if this is a special class attribute that should be a property
+    if (name === '__slots__') {
+      kind = SymbolKind.Property;
+    }
+    // Check if this is a property descriptor assignment
+    else if (right && right.type === 'call') {
+      const functionNode = right.childForFieldName('function');
+      if (functionNode) {
+        const functionName = this.getNodeText(functionNode);
+        // Detect descriptor patterns like Descriptor(), property(), etc.
+        if (functionName.includes('Descriptor') ||
+            functionName.includes('descriptor') ||
+            functionName === 'property' ||
+            functionName.includes('Property')) {
+          kind = SymbolKind.Property;
+        }
+      }
+    }
+
     // Check if it's a constant (uppercase name) or enum member
-    if (name === name.toUpperCase() && name.length > 1) {
+    if (kind === SymbolKind.Variable && name === name.toUpperCase() && name.length > 1) {
       if (parentIsEnum) {
         kind = SymbolKind.EnumMember;
       } else {
@@ -390,8 +417,57 @@ export class PythonExtractor extends BaseExtractor {
     const definitionNode = node.childForFieldName('definition');
     if (!definitionNode) return null;
 
-    // The actual symbol will be extracted when we visit the definition node
-    // but we can extract decorator information here
+    // Extract decorators
+    const decorators = this.extractDecorators(node);
+    console.log(`DEBUG: extractDecoratedDefinition - decorators: [${decorators.join(', ')}]`);
+
+    // Handle the definition based on its type
+    if (definitionNode.type === 'function_definition') {
+      // Check if this is a property (function with @property decorator)
+      const isProperty = decorators.some(decorator =>
+        decorator === 'property' || decorator.includes('property')
+      );
+      console.log(`DEBUG: isProperty check - isProperty: ${isProperty}`);
+
+      if (isProperty) {
+        // Extract as property instead of method
+        const nameNode = definitionNode.childForFieldName('name');
+        const name = nameNode ? this.getNodeText(nameNode) : 'unknownProperty';
+
+        const parametersNode = definitionNode.childForFieldName('parameters');
+        const parameters = parametersNode ? this.extractParameters(parametersNode) : [];
+        const returnTypeNode = definitionNode.childForFieldName('return_type');
+        const returnType = returnTypeNode ? `: ${this.getNodeText(returnTypeNode)}` : '';
+
+        let signature = `@${decorators.join(' @')} def ${name}`;
+        signature += `(${parameters.join(', ')})`;
+        if (returnType) {
+          signature += returnType;
+        }
+
+        // Extract docComment from the function definition
+        const docComment = this.extractDocstring(definitionNode);
+
+        return this.createSymbol(node, name, SymbolKind.Property, {
+          signature,
+          visibility: this.inferVisibility(name),
+          parentId,
+          docComment,
+          metadata: {
+            decorators,
+            type: 'property',
+            isProperty: true
+          }
+        });
+      } else {
+        // Extract as regular function/method with decorators
+        return this.extractFunction(definitionNode, parentId, decorators);
+      }
+    } else if (definitionNode.type === 'class_definition') {
+      // TODO: Handle decorated classes if needed
+      return this.extractClass(definitionNode, parentId);
+    }
+
     return null;
   }
 
@@ -434,18 +510,35 @@ export class PythonExtractor extends BaseExtractor {
 
   private extractDecorators(node: Parser.SyntaxNode): string[] {
     const decorators: string[] = [];
-    let current = node;
+    let decoratedNode: Parser.SyntaxNode | null = null;
 
-    // Walk up to find decorated_definition parent
-    while (current.parent && current.parent.type !== 'decorated_definition') {
-      current = current.parent;
+    // Check if current node is already a decorated_definition
+    if (node.type === 'decorated_definition') {
+      decoratedNode = node;
+    } else {
+      // Walk up to find decorated_definition parent
+      let current = node;
+      while (current.parent && current.parent.type !== 'decorated_definition') {
+        current = current.parent;
+      }
+
+      if (current.parent && current.parent.type === 'decorated_definition') {
+        decoratedNode = current.parent;
+      }
     }
 
-    if (current.parent && current.parent.type === 'decorated_definition') {
-      const decoratedNode = current.parent;
+    if (decoratedNode) {
       for (const child of decoratedNode.children) {
         if (child.type === 'decorator') {
-          const decoratorText = this.getNodeText(child).slice(1); // Remove @
+          let decoratorText = this.getNodeText(child).slice(1); // Remove @
+
+          // Extract just the decorator name without parameters
+          // e.g., "lru_cache(maxsize=128)" -> "lru_cache"
+          const parenIndex = decoratorText.indexOf('(');
+          if (parenIndex !== -1) {
+            decoratorText = decoratorText.substring(0, parenIndex);
+          }
+
           decorators.push(decoratorText);
         }
       }
@@ -620,10 +713,15 @@ export class PythonExtractor extends BaseExtractor {
       for (const base of bases) {
         const baseSymbol = symbolMap.get(base);
         if (baseSymbol) {
+          // Determine relationship kind: implements for interfaces/protocols, extends for classes
+          const relationshipKind = baseSymbol.kind === SymbolKind.Interface
+            ? RelationshipKind.Implements
+            : RelationshipKind.Extends;
+
           relationships.push({
             fromSymbolId: classSymbol.id,
             toSymbolId: baseSymbol.id,
-            kind: RelationshipKind.Extends,
+            kind: relationshipKind,
             filePath: this.filePath,
             lineNumber: node.startPosition.row + 1,
             confidence: 0.95
@@ -646,8 +744,125 @@ export class PythonExtractor extends BaseExtractor {
     const functionSymbol = symbolMap.get(functionName);
     if (!functionSymbol) return;
 
+    // For methods within classes, prefer class-level relationships for type usage
+    const enclosingSymbol = this.findEnclosingSymbol(node, symbolMap) || functionSymbol;
+
+    // Extract type annotation relationships from parameters
+    const parametersNode = node.childForFieldName('parameters');
+    if (parametersNode) {
+      this.extractTypeAnnotationRelationships(parametersNode, enclosingSymbol, symbolMap, relationships);
+    }
+
+    // Extract return type relationships
+    const returnTypeNode = node.childForFieldName('return_type');
+    if (returnTypeNode) {
+      this.extractTypeAnnotationRelationships(returnTypeNode, enclosingSymbol, symbolMap, relationships);
+    }
+
     // Look for function calls within the function body
     this.findCallsInNode(node, functionSymbol, symbolMap, relationships);
+  }
+
+  private extractAssignmentRelationships(
+    node: Parser.SyntaxNode,
+    symbolMap: Map<string, Symbol>,
+    relationships: Relationship[]
+  ) {
+    // Check if assignment has a type annotation
+    const typeNode = node.children.find(c => c.type === 'type');
+    if (typeNode) {
+      // Find the enclosing class or function that contains this assignment
+      const containingSymbol = this.findEnclosingSymbol(node, symbolMap);
+      if (containingSymbol) {
+        this.extractTypeAnnotationRelationships(typeNode, containingSymbol, symbolMap, relationships);
+      }
+    }
+  }
+
+  private findEnclosingSymbol(node: Parser.SyntaxNode, symbolMap: Map<string, Symbol>): Symbol | null {
+    let classSymbol: Symbol | null = null;
+    let functionSymbol: Symbol | null = null;
+
+    let current = node.parent;
+    while (current) {
+      if (current.type === 'class_definition') {
+        const nameNode = current.childForFieldName('name');
+        if (nameNode) {
+          const symbolName = this.getNodeText(nameNode);
+          classSymbol = symbolMap.get(symbolName) || null;
+        }
+      } else if (current.type === 'function_definition' && !functionSymbol) {
+        const nameNode = current.childForFieldName('name');
+        if (nameNode) {
+          const symbolName = this.getNodeText(nameNode);
+          functionSymbol = symbolMap.get(symbolName) || null;
+        }
+      }
+      current = current.parent;
+    }
+
+    // Prefer class symbol for 'uses' relationships to create class-level dependencies
+    return classSymbol || functionSymbol;
+  }
+
+  private extractTypeAnnotationRelationships(
+    node: Parser.SyntaxNode,
+    fromSymbol: Symbol,
+    symbolMap: Map<string, Symbol>,
+    relationships: Relationship[]
+  ) {
+    // Extract type names from type annotations
+    const typeNames = this.extractTypeNames(node);
+
+    for (const typeName of typeNames) {
+      const typeSymbol = symbolMap.get(typeName);
+      if (typeSymbol && typeSymbol.id !== fromSymbol.id) {
+        // Create 'uses' relationship
+        const relationship = this.createRelationship(
+          fromSymbol.id,
+          typeSymbol.id,
+          'uses',
+          node
+        );
+        relationships.push(relationship);
+      }
+    }
+  }
+
+  private extractTypeNames(node: Parser.SyntaxNode): string[] {
+    const typeNames: string[] = [];
+
+    // Recursively extract type identifiers
+    const extractFromNode = (n: Parser.SyntaxNode) => {
+      if (n.type === 'identifier') {
+        const name = this.getNodeText(n);
+        // Avoid built-in types
+        if (!this.isBuiltinType(name)) {
+          typeNames.push(name);
+        }
+      } else if (n.type === 'subscript') {
+        // Handle generic types like list[Shape], Dict[str, Shape]
+        for (const child of n.children) {
+          extractFromNode(child);
+        }
+      } else {
+        // Recursively check children
+        for (const child of n.children) {
+          extractFromNode(child);
+        }
+      }
+    };
+
+    extractFromNode(node);
+    return typeNames;
+  }
+
+  private isBuiltinType(typeName: string): boolean {
+    const builtinTypes = [
+      'int', 'float', 'str', 'bool', 'list', 'dict', 'tuple', 'set',
+      'None', 'Any', 'Optional', 'Union', 'List', 'Dict', 'Tuple', 'Set'
+    ];
+    return builtinTypes.includes(typeName);
   }
 
   private extractCallRelationships(
