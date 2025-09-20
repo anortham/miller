@@ -74,11 +74,14 @@ export class KotlinExtractor extends BaseExtractor {
     const nameNode = node.children.find(c => c.type === 'type_identifier');
     const name = nameNode ? this.getNodeText(nameNode) : 'UnknownClass';
 
+    // Check if this is actually an interface by looking for 'interface' child node
+    const isInterface = node.children.some(c => c.type === 'interface');
+
     const modifiers = this.extractModifiers(node);
     const typeParams = this.extractTypeParameters(node);
     const superTypes = this.extractSuperTypes(node);
 
-    let signature = `class ${name}`;
+    let signature = isInterface ? `interface ${name}` : `class ${name}`;
 
     if (modifiers.length > 0) {
       signature = `${modifiers.join(' ')} ${signature}`;
@@ -92,7 +95,7 @@ export class KotlinExtractor extends BaseExtractor {
       signature += ` : ${superTypes}`;
     }
 
-    const symbolKind = this.determineClassKind(modifiers, node);
+    const symbolKind = isInterface ? SymbolKind.Interface : this.determineClassKind(modifiers, node);
 
     return this.createSymbol(node, name, symbolKind, {
       signature,
