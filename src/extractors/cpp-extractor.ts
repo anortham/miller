@@ -132,11 +132,36 @@ export class CppExtractor extends BaseExtractor {
   }
 
   private extractClass(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
-    const nameNode = node.children.find(c => c.type === 'type_identifier');
-    if (!nameNode) return null;
+    // Handle both regular classes and template specializations
+    let nameNode = node.children.find(c => c.type === 'type_identifier');
+    let name: string;
 
-    const name = this.getNodeText(nameNode);
-    let signature = `class ${name}`;
+    if (!nameNode) {
+      // Check for template specialization (e.g., Vector<bool>)
+      const templateTypeNode = node.children.find(c => c.type === 'template_type');
+      if (templateTypeNode) {
+        nameNode = templateTypeNode;
+        // For template specializations, extract just the base name (e.g., "Vector" from "Vector<bool>")
+        const baseTypeIdentifier = templateTypeNode.children.find(c => c.type === 'type_identifier');
+        if (baseTypeIdentifier) {
+          name = this.getNodeText(baseTypeIdentifier); // Gets just "Vector"
+        } else {
+          name = this.getNodeText(templateTypeNode); // Fallback to full name
+        }
+      } else {
+        return null;
+      }
+    } else {
+      name = this.getNodeText(nameNode);
+    }
+    // Build signature - for template specializations, include the full type
+    let className = name;
+    if (nameNode && nameNode.type === 'template_type') {
+      // For template specializations, use the full template type in signature
+      className = this.getNodeText(nameNode); // e.g., "Vector<bool>"
+    }
+
+    let signature = `class ${className}`;
 
     // Handle template parameters (if this is inside a template_declaration)
     const templateParams = this.extractTemplateParameters(node.parent);
@@ -377,6 +402,12 @@ export class CppExtractor extends BaseExtractor {
   }
 
   private extractDeclaration(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    // Check if this is a conversion operator (e.g., operator double())
+    const operatorCast = node.children.find(c => c.type === 'operator_cast');
+    if (operatorCast) {
+      return this.extractConversionOperator(node, operatorCast, parentId);
+    }
+
     // Check if this is a function declaration
     const funcDeclarator = node.children.find(c => c.type === 'function_declarator');
     if (funcDeclarator) {
@@ -649,6 +680,52 @@ export class CppExtractor extends BaseExtractor {
     );
 
     return typeNode ? this.getNodeText(typeNode) : null;
+  }
+
+  private extractConversionOperator(declarationNode: Parser.SyntaxNode, operatorCastNode: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    // Extract the target type for the conversion operator
+    // operator_cast: "operator double() const"
+    //   operator: "operator"
+    //   primitive_type: "double"  ← This is what we want
+    //   abstract_function_declarator: "() const"
+
+    const targetType = operatorCastNode.children.find(c =>
+      c.type === 'primitive_type' ||
+      c.type === 'type_identifier' ||
+      c.type === 'qualified_identifier'
+    );
+
+    if (!targetType) return null;
+
+    const typeName = this.getNodeText(targetType);
+    const operatorName = `operator ${typeName}`;
+
+    // Build signature
+    let signature = operatorName;
+
+    // Check for explicit keyword
+    const explicitSpec = declarationNode.children.find(c => c.type === 'explicit_function_specifier');
+    if (explicitSpec) {
+      signature = `explicit ${signature}`;
+    }
+
+    // Add const qualifier if present
+    const funcDeclarator = operatorCastNode.children.find(c => c.type === 'abstract_function_declarator');
+    if (funcDeclarator) {
+      const constQualifier = funcDeclarator.children.find(c => c.type === 'type_qualifier');
+      if (constQualifier && this.getNodeText(constQualifier) === 'const') {
+        signature += ' const';
+      }
+    }
+
+    // Extract visibility
+    const visibility = this.extractVisibility(declarationNode);
+
+    return this.createSymbol(declarationNode, operatorName, SymbolKind.Operator, {
+      signature,
+      visibility,
+      parentId
+    });
   }
 
   extractRelationships(tree: Parser.Tree, symbols: Symbol[]): Relationship[] {

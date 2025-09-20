@@ -606,7 +606,7 @@ export default {
     it('should handle large files without memory issues', async () => {
       // Create a larger test file to stress test WASM parsing
       const largeKotlinContent = `
-${'// Large Kotlin file test\\n'.repeat(100)}
+${'// Large Kotlin file test\n'.repeat(100)}
 ${Array.from({ length: 50 }, (_, i) => `
 class TestClass${i} {
     fun method${i}(): String {
@@ -617,7 +617,7 @@ class TestClass${i} {
         const val CONSTANT${i} = ${i}
     }
 }
-`).join('\\n')}
+`).join('\n')}
       `;
 
       writeFileSync(join(testDir, 'LargeTest.kt'), largeKotlinContent);

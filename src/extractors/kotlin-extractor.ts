@@ -201,6 +201,12 @@ export class KotlinExtractor extends BaseExtractor {
       signature += `: ${returnType}`;
     }
 
+    // Check for expression body (= expression)
+    const functionBody = node.children.find(c => c.type === 'function_body');
+    if (functionBody && functionBody.text.startsWith('=')) {
+      signature += ` ${functionBody.text}`;
+    }
+
     // Functions inside classes/interfaces are methods
     const symbolKind = parentId ? SymbolKind.Method : SymbolKind.Function;
 
@@ -335,10 +341,17 @@ export class KotlinExtractor extends BaseExtractor {
   }
 
   private extractSuperTypes(node: Parser.SyntaxNode): string | null {
-    const delegation = node.children.find(c => c.type === 'delegation_specifiers');
+    // Look for both singular and plural forms as they appear in different contexts
+    const delegation = node.children.find(c => c.type === 'delegation_specifiers' || c.type === 'delegation_specifier');
     if (!delegation) return null;
 
-    // Extract the actual type names from delegation specifiers
+    // Handle single delegation_specifier vs multiple delegation_specifiers
+    if (delegation.type === 'delegation_specifier') {
+      // Single inheritance case - delegation_specifier is the type directly
+      return this.getNodeText(delegation);
+    }
+
+    // Multiple inheritance case - extract from delegation_specifiers children
     const superTypes: string[] = [];
     for (const child of delegation.children) {
       if (child.type === 'delegated_super_type') {

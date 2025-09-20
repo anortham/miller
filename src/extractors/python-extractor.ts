@@ -20,7 +20,7 @@ export class PythonExtractor extends BaseExtractor {
   extractSymbols(tree: Parser.Tree): Symbol[] {
     const symbols: Symbol[] = [];
 
-    const visitNode = (node: Parser.SyntaxNode, parentId?: string) => {
+    const visitNode = (node: Parser.SyntaxNode, parentId?: string, parentIsEnum: boolean = false) => {
       let symbol: Symbol | null = null;
 
       switch (node.type) {
@@ -31,7 +31,7 @@ export class PythonExtractor extends BaseExtractor {
           symbol = this.extractFunction(node, parentId);
           break;
         case 'assignment':
-          symbol = this.extractVariable(node, parentId);
+          symbol = this.extractVariable(node, parentId, parentIsEnum);
           break;
         case 'import_statement':
         case 'import_from_statement':
@@ -57,9 +57,26 @@ export class PythonExtractor extends BaseExtractor {
         parentId = symbol.id;
       }
 
+      // Determine if we're entering an enum class for child traversal
+      let isEnumClass = false;
+      if (node.type === 'class_definition') {
+        // Check if this class extends Enum
+        const nameNode = node.childForFieldName('name');
+        const className = nameNode ? this.getNodeText(nameNode) : 'Unknown';
+
+        const superclasses = node.childForFieldName('superclasses');
+        if (superclasses) {
+          const allArgs = this.extractArgumentList(superclasses);
+          const bases = allArgs.filter(arg => !arg.includes('='));
+          isEnumClass = bases.some(base => base === 'Enum' || base.includes('Enum'));
+        }
+      }
+
       // Recursively visit children
       for (const child of node.children) {
-        visitNode(child, parentId);
+        // For non-symbol-producing nodes, inherit the parent's enum status
+        const inheritedEnumStatus = parentIsEnum || isEnumClass;
+        visitNode(child, parentId, inheritedEnumStatus);
       }
     };
 
@@ -116,13 +133,40 @@ export class PythonExtractor extends BaseExtractor {
     const nameNode = node.childForFieldName('name');
     const name = nameNode ? this.getNodeText(nameNode) : 'Anonymous';
 
-    // Extract base classes (inheritance)
+    // Extract base classes and metaclass arguments
     const superclasses = node.childForFieldName('superclasses');
     let extendsInfo = '';
+    let isEnum = false;
+    let isProtocol = false;
+
     if (superclasses) {
-      const bases = this.extractArgumentList(superclasses);
+      const allArgs = this.extractArgumentList(superclasses);
+      const fullArgs = this.getNodeText(superclasses);
+
+      // Separate regular base classes from keyword arguments
+      const bases = allArgs.filter(arg => !arg.includes('='));
+      const keywordArgs = allArgs.filter(arg => arg.includes('='));
+
+      // Check if this is an Enum class
+      isEnum = bases.some(base => base === 'Enum' || base.includes('Enum'));
+
+      // Check if this is a Protocol class (should be treated as Interface)
+      isProtocol = bases.some(base => base === 'Protocol' || base.includes('Protocol'));
+
+      // Build extends information
+      const extendsParts = [];
       if (bases.length > 0) {
-        extendsInfo = ` extends ${bases.join(', ')}`;
+        extendsParts.push(`extends ${bases.join(', ')}`);
+      }
+
+      // Add metaclass info if present
+      const metaclassArg = keywordArgs.find(arg => arg.startsWith('metaclass='));
+      if (metaclassArg) {
+        extendsParts.push(metaclassArg);
+      }
+
+      if (extendsParts.length > 0) {
+        extendsInfo = ` ${extendsParts.join(' ')}`;
       }
     }
 
@@ -132,13 +176,22 @@ export class PythonExtractor extends BaseExtractor {
 
     const signature = `${decoratorInfo}class ${name}${extendsInfo}`;
 
-    return this.createSymbol(node, name, SymbolKind.Class, {
+    // Determine the symbol kind based on base classes
+    let symbolKind = SymbolKind.Class;
+    if (isEnum) {
+      symbolKind = SymbolKind.Enum;
+    } else if (isProtocol) {
+      symbolKind = SymbolKind.Interface;
+    }
+
+    return this.createSymbol(node, name, symbolKind, {
       signature,
       visibility: 'public',
       parentId,
       metadata: {
         decorators,
-        superclasses: extendsInfo ? this.extractArgumentList(superclasses) : []
+        superclasses: superclasses ? this.extractArgumentList(superclasses) : [],
+        isEnum
       }
     });
   }
@@ -180,7 +233,7 @@ export class PythonExtractor extends BaseExtractor {
     });
   }
 
-  private extractVariable(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+  private extractVariable(node: Parser.SyntaxNode, parentId?: string, parentIsEnum: boolean = false): Symbol | null {
     // Handle assignments like: x = 5, x: int = 5, self.x = 5
     const left = node.childForFieldName('left');
     const right = node.childForFieldName('right');
@@ -210,9 +263,13 @@ export class PythonExtractor extends BaseExtractor {
       return null;
     }
 
-    // Check if it's a constant (uppercase name)
+    // Check if it's a constant (uppercase name) or enum member
     if (name === name.toUpperCase() && name.length > 1) {
-      kind = SymbolKind.Constant;
+      if (parentIsEnum) {
+        kind = SymbolKind.EnumMember;
+      } else {
+        kind = SymbolKind.Constant;
+      }
     }
 
     // Extract type annotation from assignment node
@@ -496,6 +553,17 @@ export class PythonExtractor extends BaseExtractor {
     for (const child of node.children) {
       if (child.type === 'identifier' || child.type === 'attribute') {
         args.push(this.getNodeText(child));
+      } else if (child.type === 'subscript') {
+        // Handle generic types like Generic[K, V]
+        args.push(this.getNodeText(child));
+      } else if (child.type === 'keyword_argument') {
+        // Handle keyword arguments like metaclass=SingletonMeta
+        const keywordNode = child.children.find(c => c.type === 'identifier');
+        const valueNode = child.children[child.children.length - 1]; // Last child is the value
+        if (keywordNode && valueNode && keywordNode.text === 'metaclass') {
+          // For metaclass, we want to capture this as a special case for signature building
+          args.push(`${keywordNode.text}=${valueNode.text}`);
+        }
       }
     }
 

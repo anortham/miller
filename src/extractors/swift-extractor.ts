@@ -312,7 +312,8 @@ export class SwiftExtractor extends BaseExtractor {
   }
 
   private extractProperty(node: Parser.SyntaxNode, parentId?: string): Symbol {
-    const nameNode = node.children.find(c => c.type === 'simple_identifier');
+    // Swift property structure: property_declaration has a 'pattern' child containing the name
+    const nameNode = node.children.find(c => c.type === 'pattern');
     const name = nameNode ? this.getNodeText(nameNode) : 'unknownProperty';
 
     const modifiers = this.extractModifiers(node);
