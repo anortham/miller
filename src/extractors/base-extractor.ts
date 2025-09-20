@@ -41,7 +41,9 @@ export enum SymbolKind {
   Destructor = 'destructor',
   Operator = 'operator',
   Import = 'import',
-  Export = 'export'
+  Export = 'export',
+  Event = 'event',
+  Delegate = 'delegate'
 }
 
 export interface Relationship {
