@@ -33,6 +33,9 @@ export class SwiftExtractor extends BaseExtractor {
         case 'enum_case_declaration':
           this.extractEnumCases(node, symbols, parentId);
           break;
+        case 'enum_entry':
+          symbol = this.extractEnumCase(node, parentId);
+          break;
         case 'function_declaration':
           symbol = this.extractFunction(node, parentId);
           break;
@@ -80,13 +83,37 @@ export class SwiftExtractor extends BaseExtractor {
     const nameNode = node.children.find(c => c.type === 'type_identifier');
     const name = nameNode ? this.getNodeText(nameNode) : 'UnknownClass';
 
+    // Check if this is actually an enum (Swift parser uses class_declaration for enums)
+    const isEnum = node.children.some(c => c.type === 'enum');
+    const isStruct = node.children.some(c => c.type === 'struct');
+
     const modifiers = this.extractModifiers(node);
     const genericParams = this.extractGenericParameters(node);
     const inheritance = this.extractInheritance(node);
 
-    let signature = `class ${name}`;
+    // Determine the correct keyword and symbol kind
+    let keyword = 'class';
+    let symbolKind = SymbolKind.Class;
 
-    if (modifiers.length > 0) {
+    if (isEnum) {
+      keyword = 'enum';
+      symbolKind = SymbolKind.Enum;
+
+      // Check for indirect modifier for enums (special case)
+      const isIndirect = node.children.some(c => c.type === 'indirect');
+      if (isIndirect) {
+        keyword = 'indirect enum';
+      }
+    } else if (isStruct) {
+      keyword = 'struct';
+      symbolKind = SymbolKind.Struct;
+    }
+
+    let signature = `${keyword} ${name}`;
+
+    // For enums with indirect modifier, don't add modifiers again
+    const isEnumWithIndirect = isEnum && keyword.includes('indirect');
+    if (modifiers.length > 0 && !isEnumWithIndirect) {
       signature = `${modifiers.join(' ')} ${signature}`;
     }
 
@@ -98,7 +125,7 @@ export class SwiftExtractor extends BaseExtractor {
       signature += `: ${inheritance}`;
     }
 
-    return this.createSymbol(node, name, SymbolKind.Class, {
+    return this.createSymbol(node, name, symbolKind, {
       signature,
       visibility: this.determineVisibility(modifiers),
       parentId,
@@ -237,6 +264,40 @@ export class SwiftExtractor extends BaseExtractor {
     }
   }
 
+  private extractEnumCase(node: Parser.SyntaxNode, parentId?: string): Symbol {
+    // enum_entry structure: case keyword + simple_identifier + optional associated values/raw values
+    const nameNode = node.children.find(c => c.type === 'simple_identifier');
+    const name = nameNode ? this.getNodeText(nameNode) : 'unknownCase';
+
+    let signature = name;
+
+    // Check for associated values (enum_type_parameters for associated values)
+    const associatedValues = node.children.find(c => c.type === 'enum_type_parameters');
+    if (associatedValues) {
+      signature += this.getNodeText(associatedValues);
+    }
+
+    // Check for raw values (= followed by literal)
+    const equalIndex = node.children.findIndex(c => c.type === '=');
+    if (equalIndex !== -1 && equalIndex + 1 < node.children.length) {
+      const rawValueNode = node.children[equalIndex + 1];
+      if (rawValueNode) {
+        signature += ` = ${this.getNodeText(rawValueNode)}`;
+      }
+    }
+
+    return this.createSymbol(node, name, SymbolKind.EnumMember, {
+      signature,
+      visibility: 'public', // Enum cases are implicitly public
+      parentId,
+      metadata: {
+        type: 'enum-case',
+        associatedValues: associatedValues ? this.getNodeText(associatedValues) : null,
+        rawValue: equalIndex !== -1 ? this.getNodeText(node.children[equalIndex + 1]) : null
+      }
+    });
+  }
+
   private extractFunction(node: Parser.SyntaxNode, parentId?: string): Symbol {
     const nameNode = node.children.find(c => c.type === 'simple_identifier');
     const name = nameNode ? this.getNodeText(nameNode) : 'unknownFunction';
@@ -262,7 +323,10 @@ export class SwiftExtractor extends BaseExtractor {
       signature += ` -> ${returnType}`;
     }
 
-    return this.createSymbol(node, name, SymbolKind.Function, {
+    // Functions inside classes/structs are methods
+    const symbolKind = parentId ? SymbolKind.Method : SymbolKind.Function;
+
+    return this.createSymbol(node, name, symbolKind, {
       signature,
       visibility: this.determineVisibility(modifiers),
       parentId,
@@ -319,11 +383,18 @@ export class SwiftExtractor extends BaseExtractor {
     const modifiers = this.extractModifiers(node);
     const type = this.extractPropertyType(node);
 
-    let signature = `var ${name}`;
-
-    if (modifiers.length > 0) {
-      signature = `${modifiers.join(' ')} ${signature}`;
+    // Extract the actual property keyword (var or let) from value_binding_pattern
+    const bindingPattern = node.children.find(c => c.type === 'value_binding_pattern');
+    let keyword = 'var'; // default fallback
+    if (bindingPattern) {
+      const keywordNode = bindingPattern.children.find(c => c.type === 'var' || c.type === 'let');
+      if (keywordNode) {
+        keyword = this.getNodeText(keywordNode);
+      }
     }
+
+    // Build signature without visibility modifiers (they go in the visibility field)
+    let signature = `${keyword} ${name}`;
 
     if (type) {
       signature += `: ${type}`;
@@ -336,7 +407,8 @@ export class SwiftExtractor extends BaseExtractor {
       metadata: {
         type: 'property',
         modifiers,
-        propertyType: type
+        propertyType: type,
+        keyword
       }
     });
   }
@@ -390,7 +462,16 @@ export class SwiftExtractor extends BaseExtractor {
 
     if (modifiersList) {
       for (const child of modifiersList.children) {
-        if (['public', 'private', 'internal', 'fileprivate', 'open', 'final', 'static', 'class', 'override', 'lazy', 'weak', 'unowned', 'required', 'convenience', 'dynamic'].includes(child.type)) {
+        // Swift modifiers have specific node types, extract their text content
+        if (child.type === 'visibility_modifier' ||
+            child.type === 'mutation_modifier' ||
+            child.type === 'declaration_modifier' ||
+            child.type === 'access_level_modifier' ||
+            child.type === 'property_modifier') {
+          modifiers.push(this.getNodeText(child));
+        }
+        // Also handle direct modifier keywords (fallback)
+        else if (['public', 'private', 'internal', 'fileprivate', 'open', 'final', 'static', 'class', 'override', 'lazy', 'weak', 'unowned', 'required', 'convenience', 'dynamic'].includes(child.type)) {
           modifiers.push(this.getNodeText(child));
         }
       }
@@ -405,11 +486,24 @@ export class SwiftExtractor extends BaseExtractor {
   }
 
   private extractInheritance(node: Parser.SyntaxNode): string | null {
+    // First try the standard type_inheritance_clause (for classes/protocols)
     const inheritance = node.children.find(c => c.type === 'type_inheritance_clause');
     if (inheritance) {
       const types = inheritance.children.filter(c => c.type === 'type_identifier' || c.type === 'type');
       return types.map(t => this.getNodeText(t)).join(', ');
     }
+
+    // For Swift enums, inheritance is represented as direct inheritance_specifier nodes
+    const inheritanceSpecifiers = node.children.filter(c => c.type === 'inheritance_specifier');
+    if (inheritanceSpecifiers.length > 0) {
+      const types = inheritanceSpecifiers.map(spec => {
+        // inheritance_specifier usually contains a user_type or type_identifier
+        const typeNode = spec.children.find(c => c.type === 'user_type' || c.type === 'type_identifier' || c.type === 'type');
+        return typeNode ? this.getNodeText(typeNode) : this.getNodeText(spec);
+      });
+      return types.join(', ');
+    }
+
     return null;
   }
 
@@ -439,7 +533,14 @@ export class SwiftExtractor extends BaseExtractor {
   private extractPropertyType(node: Parser.SyntaxNode): string | null {
     const typeAnnotation = node.children.find(c => c.type === 'type_annotation');
     if (typeAnnotation) {
-      const typeNode = typeAnnotation.children.find(c => c.type === 'type');
+      // Swift type annotations can have various type nodes
+      const typeNode = typeAnnotation.children.find(c =>
+        c.type === 'type' ||
+        c.type === 'user_type' ||
+        c.type === 'primitive_type' ||
+        c.type === 'optional_type' ||
+        c.type === 'function_type'
+      );
       return typeNode ? this.getNodeText(typeNode) : null;
     }
     return null;
