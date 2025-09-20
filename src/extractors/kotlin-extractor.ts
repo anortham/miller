@@ -27,6 +27,9 @@ export class KotlinExtractor extends BaseExtractor {
         case 'object_declaration':
           symbol = this.extractObject(node, parentId);
           break;
+        case 'companion_object':
+          symbol = this.extractCompanionObject(node, parentId);
+          break;
         case 'function_declaration':
           symbol = this.extractFunction(node, parentId);
           break;
@@ -45,6 +48,9 @@ export class KotlinExtractor extends BaseExtractor {
           break;
         case 'import_header':
           symbol = this.extractImport(node, parentId);
+          break;
+        case 'typealias_declaration':
+          symbol = this.extractTypeAlias(node, parentId);
           break;
       }
 
@@ -176,6 +182,29 @@ export class KotlinExtractor extends BaseExtractor {
     });
   }
 
+  private extractCompanionObject(node: Parser.SyntaxNode, parentId?: string): Symbol {
+    // Companion objects always have the name "Companion"
+    const name = 'Companion';
+
+    let signature = 'companion object';
+
+    // Check if companion object has a custom name
+    const nameNode = node.children.find(c => c.type === 'type_identifier');
+    if (nameNode) {
+      const customName = this.getNodeText(nameNode);
+      signature += ` ${customName}`;
+    }
+
+    return this.createSymbol(node, name, SymbolKind.Class, {
+      signature,
+      visibility: 'public',
+      parentId,
+      metadata: {
+        type: 'companion-object'
+      }
+    });
+  }
+
   private extractFunction(node: Parser.SyntaxNode, parentId?: string): Symbol {
     const nameNode = node.children.find(c => c.type === 'simple_identifier');
     const name = nameNode ? this.getNodeText(nameNode) : 'unknownFunction';
@@ -258,12 +287,22 @@ export class KotlinExtractor extends BaseExtractor {
       signature += `: ${type}`;
     }
 
-    return this.createSymbol(node, name, SymbolKind.Property, {
+    // Check for property delegation (by lazy, by Delegates.notNull(), etc.)
+    const delegation = this.extractPropertyDelegation(node);
+    if (delegation) {
+      signature += ` ${delegation}`;
+    }
+
+    // Determine symbol kind - const val should be Constant
+    const isConst = modifiers.includes('const');
+    const symbolKind = isConst && isVal ? SymbolKind.Constant : SymbolKind.Property;
+
+    return this.createSymbol(node, name, symbolKind, {
       signature,
       visibility: this.determineVisibility(modifiers),
       parentId,
       metadata: {
-        type: 'property',
+        type: isConst ? 'constant' : 'property',
         modifiers,
         propertyType: type,
         isVal: isVal,
@@ -320,13 +359,68 @@ export class KotlinExtractor extends BaseExtractor {
     });
   }
 
+  private extractTypeAlias(node: Parser.SyntaxNode, parentId?: string): Symbol {
+    const nameNode = node.children.find(c => c.type === 'type_identifier');
+    const name = nameNode ? this.getNodeText(nameNode) : 'UnknownTypeAlias';
+
+    const modifiers = this.extractModifiers(node);
+    const typeParams = this.extractTypeParameters(node);
+
+    // Find the aliased type (after =)
+    let aliasedType = '';
+    const equalIndex = node.children.findIndex(c => this.getNodeText(c) === '=');
+    if (equalIndex !== -1 && equalIndex + 1 < node.children.length) {
+      const typeNode = node.children[equalIndex + 1];
+      aliasedType = this.getNodeText(typeNode);
+    }
+
+    let signature = `typealias ${name}`;
+
+    if (modifiers.length > 0) {
+      signature = `${modifiers.join(' ')} ${signature}`;
+    }
+
+    if (typeParams) {
+      signature += typeParams;
+    }
+
+    if (aliasedType) {
+      signature += ` = ${aliasedType}`;
+    }
+
+    return this.createSymbol(node, name, SymbolKind.Type, {
+      signature,
+      visibility: this.determineVisibility(modifiers),
+      parentId,
+      metadata: {
+        type: 'typealias',
+        modifiers,
+        aliasedType: aliasedType
+      }
+    });
+  }
+
   private extractModifiers(node: Parser.SyntaxNode): string[] {
     const modifiers: string[] = [];
     const modifiersList = node.children.find(c => c.type === 'modifiers');
 
     if (modifiersList) {
       for (const child of modifiersList.children) {
-        if (['public', 'private', 'protected', 'internal', 'open', 'final', 'abstract', 'sealed', 'data', 'inline', 'suspend', 'operator', 'infix', 'annotation'].includes(child.type)) {
+        // Handle modifier nodes by extracting their text content
+        if (child.type === 'class_modifier' ||
+            child.type === 'function_modifier' ||
+            child.type === 'property_modifier' ||
+            child.type === 'visibility_modifier' ||
+            child.type === 'inheritance_modifier' ||
+            child.type === 'member_modifier') {
+          modifiers.push(this.getNodeText(child));
+        }
+        // Handle annotation nodes
+        else if (child.type === 'annotation') {
+          modifiers.push(this.getNodeText(child));
+        }
+        // Fallback: check for direct modifier keywords (backward compatibility)
+        else if (['public', 'private', 'protected', 'internal', 'open', 'final', 'abstract', 'sealed', 'data', 'inline', 'suspend', 'operator', 'infix', 'annotation'].includes(child.type)) {
           modifiers.push(this.getNodeText(child));
         }
       }
@@ -341,30 +435,30 @@ export class KotlinExtractor extends BaseExtractor {
   }
 
   private extractSuperTypes(node: Parser.SyntaxNode): string | null {
-    // Look for both singular and plural forms as they appear in different contexts
-    const delegation = node.children.find(c => c.type === 'delegation_specifiers' || c.type === 'delegation_specifier');
-    if (!delegation) return null;
-
-    // Handle single delegation_specifier vs multiple delegation_specifiers
-    if (delegation.type === 'delegation_specifier') {
-      // Single inheritance case - delegation_specifier is the type directly
-      return this.getNodeText(delegation);
-    }
-
-    // Multiple inheritance case - extract from delegation_specifiers children
     const superTypes: string[] = [];
-    for (const child of delegation.children) {
-      if (child.type === 'delegated_super_type') {
-        const typeNode = child.children.find(c => c.type === 'type' || c.type === 'user_type' || c.type === 'simple_identifier');
-        if (typeNode) {
-          superTypes.push(this.getNodeText(typeNode));
+
+    // Look for delegation_specifiers container first (wrapped case)
+    const delegationContainer = node.children.find(c => c.type === 'delegation_specifiers');
+    if (delegationContainer) {
+      for (const child of delegationContainer.children) {
+        if (child.type === 'delegated_super_type') {
+          const typeNode = child.children.find(c => c.type === 'type' || c.type === 'user_type' || c.type === 'simple_identifier');
+          if (typeNode) {
+            superTypes.push(this.getNodeText(typeNode));
+          }
+        } else if (child.type === 'type' || child.type === 'user_type' || child.type === 'simple_identifier') {
+          superTypes.push(this.getNodeText(child));
         }
-      } else if (child.type === 'type' || child.type === 'user_type' || child.type === 'simple_identifier') {
-        superTypes.push(this.getNodeText(child));
+      }
+    } else {
+      // Look for individual delegation_specifier nodes (multiple at same level)
+      const delegationSpecifiers = node.children.filter(c => c.type === 'delegation_specifier');
+      for (const delegation of delegationSpecifiers) {
+        superTypes.push(this.getNodeText(delegation));
       }
     }
 
-    return superTypes.length > 0 ? superTypes.join(', ') : this.getNodeText(delegation);
+    return superTypes.length > 0 ? superTypes.join(', ') : null;
   }
 
   private extractParameters(node: Parser.SyntaxNode): string | null {
@@ -384,6 +478,23 @@ export class KotlinExtractor extends BaseExtractor {
         return this.getNodeText(child);
       }
     }
+    return null;
+  }
+
+  private extractPropertyDelegation(node: Parser.SyntaxNode): string | null {
+    // Look for property_delegate or 'by' keyword
+    const byIndex = node.children.findIndex(c => this.getNodeText(c) === 'by');
+    if (byIndex !== -1 && byIndex + 1 < node.children.length) {
+      const delegateNode = node.children[byIndex + 1];
+      return `by ${this.getNodeText(delegateNode)}`;
+    }
+
+    // Also check for property_delegate node type
+    const delegateNode = node.children.find(c => c.type === 'property_delegate');
+    if (delegateNode) {
+      return this.getNodeText(delegateNode);
+    }
+
     return null;
   }
 
@@ -443,34 +554,64 @@ export class KotlinExtractor extends BaseExtractor {
     const classSymbol = this.findClassSymbol(node, symbols);
     if (!classSymbol) return;
 
-    const delegation = node.children.find(c => c.type === 'delegation_specifiers');
-    if (delegation) {
-      // Parse inheritance relationships
-      for (const delegationChild of delegation.children) {
-        let baseTypeName: string | null = null;
+    // Look for delegation_specifiers container first (wrapped case)
+    const delegationContainer = node.children.find(c => c.type === 'delegation_specifiers');
+    const baseTypeNames: string[] = [];
 
-        if (delegationChild.type === 'delegated_super_type') {
-          const typeNode = delegationChild.children.find(c =>
-            c.type === 'type' || c.type === 'user_type' || c.type === 'simple_identifier'
-          );
+    if (delegationContainer) {
+      for (const child of delegationContainer.children) {
+        if (child.type === 'delegated_super_type') {
+          const typeNode = child.children.find(c => c.type === 'type' || c.type === 'user_type' || c.type === 'simple_identifier');
           if (typeNode) {
-            baseTypeName = this.getNodeText(typeNode);
+            baseTypeNames.push(this.getNodeText(typeNode));
           }
-        } else if (delegationChild.type === 'type' || delegationChild.type === 'user_type' || delegationChild.type === 'simple_identifier') {
-          baseTypeName = this.getNodeText(delegationChild);
+        } else if (child.type === 'type' || child.type === 'user_type' || child.type === 'simple_identifier') {
+          baseTypeNames.push(this.getNodeText(child));
         }
+      }
+    } else {
+      // Look for individual delegation_specifier nodes (multiple at same level)
+      const delegationSpecifiers = node.children.filter(c => c.type === 'delegation_specifier');
+      for (const delegation of delegationSpecifiers) {
+        // Extract just the type name from the delegation (remove "by delegate" part)
+        const explicitDelegation = delegation.children.find(c => c.type === 'explicit_delegation');
+        if (explicitDelegation) {
+          const typeText = this.getNodeText(explicitDelegation);
+          const typeName = typeText.split(' by ')[0]; // Get part before "by"
+          baseTypeNames.push(typeName);
+        } else {
+          // Fallback - extract type nodes directly
+          const typeNode = delegation.children.find(c => c.type === 'type' || c.type === 'user_type' || c.type === 'simple_identifier');
+          if (typeNode) {
+            baseTypeNames.push(this.getNodeText(typeNode));
+          }
+        }
+      }
+    }
 
-        if (baseTypeName) {
-          relationships.push({
-            fromSymbolId: classSymbol.id,
-            toSymbolId: `kotlin-type:${baseTypeName}`,
-            kind: RelationshipKind.Extends,
-            filePath: this.filePath,
-            lineNumber: node.startPosition.row + 1,
-            confidence: 1.0,
-            metadata: { baseType: baseTypeName }
-          });
-        }
+    // Create relationships for each base type
+    for (const baseTypeName of baseTypeNames) {
+      // Find the actual base type symbol
+      const baseTypeSymbol = symbols.find(s =>
+        s.name === baseTypeName &&
+        (s.kind === SymbolKind.Class || s.kind === SymbolKind.Interface || s.kind === SymbolKind.Struct)
+      );
+
+      if (baseTypeSymbol) {
+        // Determine relationship kind: classes extend, interfaces implement
+        const relationshipKind = baseTypeSymbol.kind === SymbolKind.Interface
+          ? RelationshipKind.Implements
+          : RelationshipKind.Extends;
+
+        relationships.push({
+          fromSymbolId: classSymbol.id,
+          toSymbolId: baseTypeSymbol.id,
+          kind: relationshipKind,
+          filePath: this.filePath,
+          lineNumber: node.startPosition.row + 1,
+          confidence: 1.0,
+          metadata: { baseType: baseTypeName }
+        });
       }
     }
   }

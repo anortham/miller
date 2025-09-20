@@ -51,6 +51,8 @@ export class JavaExtractor extends BaseExtractor {
         return this.extractEnumConstant(node, parentId);
       case 'annotation_type_declaration':
         return this.extractAnnotation(node, parentId);
+      case 'record_declaration':
+        return this.extractRecord(node, parentId);
       default:
         return null;
     }
@@ -204,11 +206,15 @@ export class JavaExtractor extends BaseExtractor {
     // Handle generic type parameters on the method
     const typeParams = this.extractTypeParameters(node);
 
+    // Check for throws clause
+    const throwsClause = this.extractThrowsClause(node);
+
     // Build signature
     const modifierStr = modifiers.length > 0 ? `${modifiers.join(' ')} ` : '';
     const typeParamStr = typeParams ? `${typeParams} ` : '';
+    const throwsStr = throwsClause ? ` ${throwsClause}` : '';
 
-    const signature = `${modifierStr}${typeParamStr}${returnType} ${name}${params}`;
+    const signature = `${modifierStr}${typeParamStr}${returnType} ${name}${params}${throwsStr}`;
 
     return this.createSymbol(node, name, SymbolKind.Method, {
       signature,
@@ -298,7 +304,13 @@ export class JavaExtractor extends BaseExtractor {
 
     // Build signature
     const modifierStr = modifiers.length > 0 ? `${modifiers.join(' ')} ` : '';
-    const signature = `${modifierStr}enum ${name}`;
+    let signature = `${modifierStr}enum ${name}`;
+
+    // Check for interface implementations (enums can implement interfaces)
+    const interfaces = this.extractImplementedInterfaces(node);
+    if (interfaces.length > 0) {
+      signature += ` implements ${interfaces.join(', ')}`;
+    }
 
     return this.createSymbol(node, name, SymbolKind.Enum, {
       signature,
@@ -346,14 +358,155 @@ export class JavaExtractor extends BaseExtractor {
     });
   }
 
+  private extractRecord(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    const nameNode = node.children.find(c => c.type === 'identifier');
+    if (!nameNode) return null;
+
+    const name = this.getNodeText(nameNode);
+    const modifiers = this.extractModifiers(node);
+    const visibility = this.determineVisibility(modifiers);
+
+    // Get record parameters (record components)
+    const paramList = node.children.find(c => c.type === 'formal_parameters');
+    const params = paramList ? this.extractParameters(paramList) : '()';
+
+    // Build signature
+    let signature = modifiers.length > 0 ? `${modifiers.join(' ')} record ${name}${params}` : `record ${name}${params}`;
+
+    // Handle generic type parameters
+    const typeParams = this.extractTypeParameters(node);
+    if (typeParams) {
+      signature = signature.replace(`record ${name}`, `record ${name}${typeParams}`);
+    }
+
+    // Check for interface implementations (records can implement interfaces)
+    const interfaces = this.extractImplementedInterfaces(node);
+    if (interfaces.length > 0) {
+      signature += ` implements ${interfaces.join(', ')}`;
+    }
+
+    return this.createSymbol(node, name, SymbolKind.Class, {
+      signature,
+      visibility,
+      parentId,
+      metadata: {
+        type: 'record'
+      }
+    });
+  }
+
   extractRelationships(tree: Parser.Tree, symbols: Symbol[]): Relationship[] {
-    // TODO: Implement relationship extraction
-    return [];
+    const relationships: Relationship[] = [];
+
+    const visitNode = (node: Parser.SyntaxNode) => {
+      switch (node.type) {
+        case 'class_declaration':
+        case 'interface_declaration':
+        case 'enum_declaration':
+        case 'record_declaration':
+          this.extractInheritanceRelationships(node, symbols, relationships);
+          break;
+      }
+
+      for (const child of node.children) {
+        visitNode(child);
+      }
+    };
+
+    visitNode(tree.rootNode);
+    return relationships;
+  }
+
+  private extractInheritanceRelationships(
+    node: Parser.SyntaxNode,
+    symbols: Symbol[],
+    relationships: Relationship[]
+  ) {
+    const typeSymbol = this.findTypeSymbol(node, symbols);
+    if (!typeSymbol) return;
+
+    // Handle class inheritance (extends)
+    const superclass = this.extractSuperclass(node);
+    if (superclass) {
+      const baseTypeSymbol = symbols.find(s =>
+        s.name === superclass &&
+        (s.kind === SymbolKind.Class || s.kind === SymbolKind.Interface)
+      );
+
+      if (baseTypeSymbol) {
+        relationships.push({
+          fromSymbolId: typeSymbol.id,
+          toSymbolId: baseTypeSymbol.id,
+          kind: RelationshipKind.Extends,
+          filePath: this.filePath,
+          lineNumber: node.startPosition.row + 1,
+          confidence: 1.0,
+          metadata: { baseType: superclass }
+        });
+      }
+    }
+
+    // Handle interface implementations
+    const interfaces = this.extractImplementedInterfaces(node);
+    for (const interfaceName of interfaces) {
+      const interfaceSymbol = symbols.find(s =>
+        s.name === interfaceName &&
+        s.kind === SymbolKind.Interface
+      );
+
+      if (interfaceSymbol) {
+        relationships.push({
+          fromSymbolId: typeSymbol.id,
+          toSymbolId: interfaceSymbol.id,
+          kind: RelationshipKind.Implements,
+          filePath: this.filePath,
+          lineNumber: node.startPosition.row + 1,
+          confidence: 1.0,
+          metadata: { interface: interfaceName }
+        });
+      }
+    }
+  }
+
+  private findTypeSymbol(node: Parser.SyntaxNode, symbols: Symbol[]): Symbol | null {
+    const nameNode = node.children.find(c => c.type === 'identifier');
+    const typeName = nameNode ? this.getNodeText(nameNode) : null;
+
+    return symbols.find(s =>
+      s.name === typeName &&
+      (s.kind === SymbolKind.Class || s.kind === SymbolKind.Interface || s.kind === SymbolKind.Enum) &&
+      s.filePath === this.filePath
+    ) || null;
   }
 
   inferTypes(symbols: Symbol[]): Map<string, string> {
-    // TODO: Implement type inference
-    return new Map();
+    const types = new Map<string, string>();
+
+    for (const symbol of symbols) {
+      // Extract return type from method signatures
+      if (symbol.kind === SymbolKind.Method && symbol.signature) {
+        const returnTypeMatch = symbol.signature.match(/(\w+[\w<>\[\], ]*)\s+\w+\s*\(/);
+        if (returnTypeMatch) {
+          const returnType = returnTypeMatch[1].trim();
+          // Clean up modifiers from return type
+          const cleanReturnType = returnType.replace(/^(public|private|protected|static|final|abstract|synchronized|native|strictfp)\s+/, '');
+          types.set(symbol.id, cleanReturnType);
+        }
+      }
+
+      // Extract field types from field signatures
+      if (symbol.kind === SymbolKind.Property && symbol.signature) {
+        const fieldTypeMatch = symbol.signature.match(/(\w+[\w<>\[\], ]*)\s+\w+/);
+        if (fieldTypeMatch) {
+          const fieldType = fieldTypeMatch[1].trim();
+          // Clean up modifiers from field type
+          const cleanFieldType = fieldType.replace(/^(public|private|protected|static|final|volatile|transient)\s+/, '');
+          types.set(symbol.id, cleanFieldType);
+        }
+      }
+    }
+
+    return types;
   }
 
   // Helper methods for Java-specific parsing
@@ -414,5 +567,20 @@ export class JavaExtractor extends BaseExtractor {
   private extractParameters(paramList: Parser.SyntaxNode): string {
     // Get the full parameter list text
     return this.getNodeText(paramList);
+  }
+
+  private extractThrowsClause(node: Parser.SyntaxNode): string | null {
+    const throwsNode = node.children.find(c => c.type === 'throws');
+    if (!throwsNode) return null;
+
+    // Find the exception types after the 'throws' keyword
+    const throwsIndex = node.children.indexOf(throwsNode);
+    const exceptionNodes = node.children.slice(throwsIndex + 1)
+      .filter(c => c.type === 'type_identifier' || c.type === 'generic_type');
+
+    if (exceptionNodes.length === 0) return null;
+
+    const exceptions = exceptionNodes.map(n => this.getNodeText(n)).join(', ');
+    return `throws ${exceptions}`;
   }
 }
