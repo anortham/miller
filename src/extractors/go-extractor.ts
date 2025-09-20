@@ -14,7 +14,34 @@ export class GoExtractor extends BaseExtractor {
   extractSymbols(tree: Parser.Tree): Symbol[] {
     const symbols: Symbol[] = [];
     this.walkTree(tree.rootNode, symbols);
-    return symbols;
+
+    // Prioritize functions over fields with the same name
+    return this.prioritizeFunctionsOverFields(symbols);
+  }
+
+  private prioritizeFunctionsOverFields(symbols: Symbol[]): Symbol[] {
+    const symbolMap = new Map<string, Symbol[]>();
+
+    // Group symbols by name
+    for (const symbol of symbols) {
+      if (!symbolMap.has(symbol.name)) {
+        symbolMap.set(symbol.name, []);
+      }
+      symbolMap.get(symbol.name)!.push(symbol);
+    }
+
+    const result: Symbol[] = [];
+
+    // For each name group, add functions first, then other types
+    for (const [name, symbolGroup] of symbolMap) {
+      const functions = symbolGroup.filter(s => s.kind === SymbolKind.Function || s.kind === SymbolKind.Method);
+      const others = symbolGroup.filter(s => s.kind !== SymbolKind.Function && s.kind !== SymbolKind.Method);
+
+      result.push(...functions);
+      result.push(...others);
+    }
+
+    return result;
   }
 
   private walkTree(node: Parser.SyntaxNode, symbols: Symbol[], parentId?: string) {
@@ -51,6 +78,10 @@ export class GoExtractor extends BaseExtractor {
         return this.extractFunction(node, parentId);
       case 'method_declaration':
         return this.extractMethod(node, parentId);
+      case 'field_declaration':
+        return this.extractField(node, parentId);
+      case 'ERROR':
+        return this.extractFromErrorNode(node, parentId);
       default:
         return null;
     }
@@ -175,8 +206,8 @@ export class GoExtractor extends BaseExtractor {
   }
 
   private extractTypeDeclaration(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
-    // Go type declarations can contain multiple type specs
-    const typeSpecs = node.children.filter(c => c.type === 'type_spec');
+    // Go type declarations can contain multiple type specs or type aliases
+    const typeSpecs = node.children.filter(c => c.type === 'type_spec' || c.type === 'type_alias');
 
     // For now, handle the first type spec (we could extend to handle multiple)
     if (typeSpecs.length === 0) return null;
@@ -187,32 +218,51 @@ export class GoExtractor extends BaseExtractor {
 
     const name = this.getNodeText(nameNode);
 
-    // Determine the type kind based on the type definition
-    // Priority: struct_type, interface_type, then any other type node (for aliases)
-    const typeDefNode = typeSpec.children.find(c => c.type === 'struct_type') ||
-                       typeSpec.children.find(c => c.type === 'interface_type') ||
-                       typeSpec.children.find(c => c !== nameNode && c.type !== 'type');
-
-    if (!typeDefNode) return null;
+    // Check for generic type parameters
+    const typeParamsNode = typeSpec.children.find(c => c.type === 'type_parameter_list');
+    const typeParams = typeParamsNode ? this.getNodeText(typeParamsNode) : '';
 
     let kind: SymbolKind;
-    let signature = `type ${name}`;
+    let signature = `type ${name}${typeParams}`;
 
-    switch (typeDefNode.type) {
-      case 'struct_type':
-        kind = SymbolKind.Class;
-        signature += ' struct';
-        break;
-      case 'interface_type':
-        kind = SymbolKind.Interface;
-        signature += ' interface';
-        break;
-      default:
-        // Type alias
-        kind = SymbolKind.Type;
-        const aliasType = this.getNodeText(typeDefNode);
-        signature += ` = ${aliasType}`;
-        break;
+    // Handle type_alias differently from type_spec
+    if (typeSpec.type === 'type_alias') {
+      // Type alias: type Name = Type
+      kind = SymbolKind.Type;
+      const aliasTypeNode = typeSpec.children.find(c => c.type === 'type_identifier' && c !== nameNode);
+      const aliasType = aliasTypeNode ? this.getNodeText(aliasTypeNode) : 'unknown';
+      signature += ` = ${aliasType}`;
+    } else {
+      // Regular type_spec: handle struct, interface, or type definition
+      const typeDefNode = typeSpec.children.find(c => c.type === 'struct_type') ||
+                         typeSpec.children.find(c => c.type === 'interface_type') ||
+                         typeSpec.children.find(c => c !== nameNode && c.type !== 'type_parameter_list' && c.type !== 'type');
+
+      if (!typeDefNode) return null;
+
+      switch (typeDefNode.type) {
+        case 'struct_type':
+          kind = SymbolKind.Class;
+          signature += ' struct';
+          break;
+        case 'interface_type':
+          kind = SymbolKind.Interface;
+          signature += ' interface';
+
+          // Extract interface body content (union types, methods, etc.)
+          const typeElems = typeDefNode.children.filter(c => c.type === 'type_elem');
+          if (typeElems.length > 0) {
+            const typeElemContent = typeElems.map(elem => this.getNodeText(elem)).join('; ');
+            signature += ` { ${typeElemContent} }`;
+          }
+          break;
+        default:
+          // Type definition: type Name Type - normalize to alias format for consistency
+          kind = SymbolKind.Type;
+          const aliasType = this.getNodeText(typeDefNode);
+          signature += ` = ${aliasType}`;
+          break;
+      }
     }
 
     return this.createSymbol(node, name, kind, {
@@ -226,17 +276,74 @@ export class GoExtractor extends BaseExtractor {
     const nameNode = node.children.find(c => c.type === 'identifier');
     const name = nameNode ? this.getNodeText(nameNode) : 'anonymous';
 
+    // Check for generic type parameters
+    const typeParamsNode = node.children.find(c => c.type === 'type_parameter_list');
+    const typeParams = typeParamsNode ? this.getNodeText(typeParamsNode) : '';
+
     // Extract parameters and return type
     const params = this.extractFunctionParameters(node);
     const returnType = this.extractFunctionReturnType(node);
 
     // Build signature
-    let signature = `func ${name}(${params.join(', ')})`;
+    let signature = `func ${name}${typeParams}(${params.join(', ')})`;
     if (returnType) {
       signature += ` ${returnType}`;
     }
 
     return this.createSymbol(node, name, SymbolKind.Function, {
+      signature,
+      visibility: this.isPublic(name) ? 'public' : 'private',
+      parentId
+    });
+  }
+
+  private extractFromErrorNode(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    // Try to recover function signatures from ERROR nodes
+    // Look for identifier + parenthesized_type pattern (function signature)
+    const identifier = node.children.find(c => c.type === 'identifier');
+    const paramType = node.children.find(c => c.type === 'parenthesized_type');
+
+    if (identifier && paramType) {
+      const name = this.getNodeText(identifier);
+      const params = this.getNodeText(paramType);
+
+      // This looks like a function signature trapped in an ERROR node
+      const signature = `func ${name}${params}`;
+
+      return this.createSymbol(node, name, SymbolKind.Function, {
+        signature,
+        visibility: this.isPublic(name) ? 'public' : 'private',
+        parentId
+      });
+    }
+
+    return null;
+  }
+
+  private extractField(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    // Extract field name from field_identifier
+    const nameNode = node.children.find(c => c.type === 'field_identifier');
+    if (!nameNode) return null;
+
+    const name = this.getNodeText(nameNode);
+
+    // Extract field type from various type nodes
+    const typeNode = node.children.find(c =>
+      c.type === 'type_identifier' ||
+      c.type === 'map_type' ||
+      c.type === 'array_type' ||
+      c.type === 'slice_type' ||
+      c.type === 'channel_type' ||
+      c.type === 'pointer_type' ||
+      c.type === 'interface_type'
+    );
+
+    const fieldType = typeNode ? this.getNodeText(typeNode) : 'unknown';
+
+    // Build signature
+    const signature = `${name} ${fieldType}`;
+
+    return this.createSymbol(node, name, SymbolKind.Property, {
       signature,
       visibility: this.isPublic(name) ? 'public' : 'private',
       parentId
@@ -357,7 +464,9 @@ export class GoExtractor extends BaseExtractor {
 
   private extractParametersFromList(paramList: Parser.SyntaxNode): string[] {
     const parameters: string[] = [];
-    const paramDecls = paramList.children.filter(c => c.type === 'parameter_declaration');
+    const paramDecls = paramList.children.filter(c =>
+      c.type === 'parameter_declaration' || c.type === 'variadic_parameter_declaration'
+    );
 
     for (const paramDecl of paramDecls) {
       const paramText = this.getNodeText(paramDecl);
@@ -398,7 +507,15 @@ export class GoExtractor extends BaseExtractor {
 
     if (nameIndex === -1) return undefined;
 
-    // Look for return type after method parameters
+    // Find all parameter_list nodes after the method name
+    const paramLists = children.slice(nameIndex + 1).filter(c => c.type === 'parameter_list');
+
+    // If there are 2+ parameter_lists after the name, the last one is the return type
+    if (paramLists.length >= 2) {
+      return this.getNodeText(paramLists[paramLists.length - 1]);
+    }
+
+    // Look for other return type nodes (non-parameter_list types)
     for (let i = nameIndex + 1; i < children.length; i++) {
       const child = children[i];
       if (child.type === 'block') break; // Reached method body

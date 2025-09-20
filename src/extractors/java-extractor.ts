@@ -140,6 +140,12 @@ export class JavaExtractor extends BaseExtractor {
       signature += ` implements ${interfaces.join(', ')}`;
     }
 
+    // Handle sealed class permits clause (Java 17+)
+    const permitsClause = node.children.find(c => c.type === 'permits');
+    if (permitsClause) {
+      signature += ` ${this.getNodeText(permitsClause)}`;
+    }
+
     return this.createSymbol(node, name, SymbolKind.Class, {
       signature,
       visibility,
@@ -255,7 +261,11 @@ export class JavaExtractor extends BaseExtractor {
       c.type === 'type_identifier' ||
       c.type === 'generic_type' ||
       c.type === 'array_type' ||
-      c.type === 'primitive_type'
+      c.type === 'primitive_type' ||
+      c.type === 'boolean_type' ||
+      c.type === 'integral_type' ||
+      c.type === 'floating_point_type' ||
+      c.type === 'void_type'
     );
     const type = typeNode ? this.getNodeText(typeNode) : 'unknown';
 
@@ -573,14 +583,7 @@ export class JavaExtractor extends BaseExtractor {
     const throwsNode = node.children.find(c => c.type === 'throws');
     if (!throwsNode) return null;
 
-    // Find the exception types after the 'throws' keyword
-    const throwsIndex = node.children.indexOf(throwsNode);
-    const exceptionNodes = node.children.slice(throwsIndex + 1)
-      .filter(c => c.type === 'type_identifier' || c.type === 'generic_type');
-
-    if (exceptionNodes.length === 0) return null;
-
-    const exceptions = exceptionNodes.map(n => this.getNodeText(n)).join(', ');
-    return `throws ${exceptions}`;
+    // The throws node contains the entire clause including the 'throws' keyword
+    return this.getNodeText(throwsNode);
   }
 }
