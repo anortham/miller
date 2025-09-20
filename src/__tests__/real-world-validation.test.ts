@@ -123,20 +123,44 @@ describe('Real-World Code Validation', () => {
     }
   });
 
+  describe('Vue Real-World Files', () => {
+    const vueDir = path.join(REAL_WORLD_TEST_DIR, 'vue');
+
+    if (fs.existsSync(vueDir)) {
+      const vueFiles = fs.readdirSync(vueDir).filter(f => f.endsWith('.vue'));
+
+      for (const fileName of vueFiles) {
+        test(`should extract symbols from real-world Vue file: ${fileName}`, async () => {
+          const filePath = path.join(vueDir, fileName);
+          const content = fs.readFileSync(filePath, 'utf-8');
+
+          console.log(`🟢 Processing real Vue file: ${fileName} (${content.length} chars)`);
+
+          const result = await parserManager.parseFile(fileName, content);
+          expect(result.tree).toBeDefined();
+
+          // Note: Vue files use a special SFC handler, so we don't extract directly
+          // This test validates that Vue files can be parsed without errors
+          console.log(`📊 Vue file parsed successfully`);
+        });
+      }
+    }
+  });
+
   describe('Cross-Language Project Validation', () => {
     test('should handle multi-language real-world project', async () => {
       const allSymbols: any[] = [];
       const allRelationships: any[] = [];
 
       // Process all languages in the real-world test directory
-      const languages = ['kotlin', 'swift', 'java', 'typescript'];
+      const languages = ['kotlin', 'swift', 'java', 'typescript', 'vue'];
 
       for (const lang of languages) {
         const langDir = path.join(REAL_WORLD_TEST_DIR, lang);
         if (!fs.existsSync(langDir)) continue;
 
         const files = fs.readdirSync(langDir).filter(f =>
-          f.endsWith('.kt') || f.endsWith('.swift') || f.endsWith('.java') || f.endsWith('.ts')
+          f.endsWith('.kt') || f.endsWith('.swift') || f.endsWith('.java') || f.endsWith('.ts') || f.endsWith('.vue')
         );
 
         for (const fileName of files) {
@@ -155,6 +179,10 @@ describe('Real-World Code Validation', () => {
             extractor = new JavaExtractor('java', fileName, content);
           } else if (fileName.endsWith('.ts')) {
             extractor = new TypeScriptExtractor('typescript', fileName, content);
+          } else if (fileName.endsWith('.vue')) {
+            // Vue files use special SFC handling, just validate they can be parsed
+            console.log(`🟢 Vue file ${fileName} parsed successfully`);
+            continue;
           }
 
           if (extractor) {

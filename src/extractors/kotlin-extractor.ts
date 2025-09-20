@@ -19,6 +19,7 @@ export class KotlinExtractor extends BaseExtractor {
 
       switch (node.type) {
         case 'class_declaration':
+        case 'enum_declaration': // Handle enum classes
           symbol = this.extractClass(node, parentId);
           break;
         case 'interface_declaration':
@@ -49,7 +50,7 @@ export class KotlinExtractor extends BaseExtractor {
         case 'import_header':
           symbol = this.extractImport(node, parentId);
           break;
-        case 'typealias_declaration':
+        case 'type_alias': // Correct node type for type aliases
           symbol = this.extractTypeAlias(node, parentId);
           break;
       }
@@ -90,15 +91,35 @@ export class KotlinExtractor extends BaseExtractor {
     const modifiers = this.extractModifiers(node);
     const typeParams = this.extractTypeParameters(node);
     const superTypes = this.extractSuperTypes(node);
+    const constructorParams = this.extractPrimaryConstructorSignature(node);
 
-    let signature = isInterface ? `interface ${name}` : `class ${name}`;
+    // Determine if this is an enum class
+    const isEnum = this.determineClassKind(modifiers, node) === SymbolKind.Enum;
 
-    if (modifiers.length > 0) {
-      signature = `${modifiers.join(' ')} ${signature}`;
+    // Check for fun interface by looking for direct 'fun' child
+    const hasFunKeyword = node.children.some(c => this.getNodeText(c) === 'fun');
+
+    let signature = isInterface ?
+                     (hasFunKeyword ? `fun interface ${name}` : `interface ${name}`) :
+                   isEnum ? `enum class ${name}` :
+                   `class ${name}`;
+
+    // For enum classes, don't include 'enum' in modifiers since it's already in the signature
+    // For fun interfaces, don't include 'fun' in modifiers since it's already in the signature
+    const finalModifiers = isEnum ? modifiers.filter(m => m !== 'enum') :
+                          (hasFunKeyword ? modifiers.filter(m => m !== 'fun') : modifiers);
+
+    if (finalModifiers.length > 0) {
+      signature = `${finalModifiers.join(' ')} ${signature}`;
     }
 
     if (typeParams) {
       signature += typeParams;
+    }
+
+    // Add primary constructor parameters to signature if present
+    if (constructorParams) {
+      signature += constructorParams;
     }
 
     if (superTypes) {
@@ -211,17 +232,26 @@ export class KotlinExtractor extends BaseExtractor {
 
     const modifiers = this.extractModifiers(node);
     const typeParams = this.extractTypeParameters(node);
+    const receiverType = this.extractReceiverType(node);
     const parameters = this.extractParameters(node);
     const returnType = this.extractReturnType(node);
 
-    let signature = `fun ${name}`;
+    // Correct Kotlin signature order: modifiers + fun + typeParams + name
+    let signature = 'fun';
 
     if (modifiers.length > 0) {
       signature = `${modifiers.join(' ')} ${signature}`;
     }
 
     if (typeParams) {
-      signature += typeParams;
+      signature += ` ${typeParams}`;
+    }
+
+    // Add receiver type for extension functions (e.g., String.functionName)
+    if (receiverType) {
+      signature += ` ${receiverType}.${name}`;
+    } else {
+      signature += ` ${name}`;
     }
 
     signature += parameters || '()';
@@ -230,14 +260,27 @@ export class KotlinExtractor extends BaseExtractor {
       signature += `: ${returnType}`;
     }
 
+    // Check for where clause (sibling node)
+    const whereClause = this.extractWhereClause(node);
+    if (whereClause) {
+      signature += ` ${whereClause}`;
+    }
+
     // Check for expression body (= expression)
     const functionBody = node.children.find(c => c.type === 'function_body');
     if (functionBody && functionBody.text.startsWith('=')) {
       signature += ` ${functionBody.text}`;
     }
 
-    // Functions inside classes/interfaces are methods
-    const symbolKind = parentId ? SymbolKind.Method : SymbolKind.Function;
+    // Determine symbol kind based on modifiers and context
+    let symbolKind: SymbolKind;
+    if (modifiers.includes('operator')) {
+      symbolKind = SymbolKind.Operator;
+    } else if (parentId) {
+      symbolKind = SymbolKind.Method;
+    } else {
+      symbolKind = SymbolKind.Function;
+    }
 
     return this.createSymbol(node, name, symbolKind, {
       signature,
@@ -287,6 +330,12 @@ export class KotlinExtractor extends BaseExtractor {
       signature += `: ${type}`;
     }
 
+    // Add initializer value if present (especially for const val)
+    const initializer = this.extractPropertyInitializer(node);
+    if (initializer) {
+      signature += ` = ${initializer}`;
+    }
+
     // Check for property delegation (by lazy, by Delegates.notNull(), etc.)
     const delegation = this.extractPropertyDelegation(node);
     if (delegation) {
@@ -317,8 +366,17 @@ export class KotlinExtractor extends BaseExtractor {
         const nameNode = child.children.find(c => c.type === 'simple_identifier');
         if (nameNode) {
           const name = this.getNodeText(nameNode);
+
+          // Check for constructor parameters
+          let signature = name;
+          const valueArgs = child.children.find(c => c.type === 'value_arguments');
+          if (valueArgs) {
+            const args = this.getNodeText(valueArgs);
+            signature += args;
+          }
+
           const symbol = this.createSymbol(child, name, SymbolKind.EnumMember, {
-            signature: name,
+            signature,
             visibility: 'public',
             parentId,
             metadata: {
@@ -366,12 +424,13 @@ export class KotlinExtractor extends BaseExtractor {
     const modifiers = this.extractModifiers(node);
     const typeParams = this.extractTypeParameters(node);
 
-    // Find the aliased type (after =)
+    // Find the aliased type (after =) - may consist of multiple nodes
     let aliasedType = '';
     const equalIndex = node.children.findIndex(c => this.getNodeText(c) === '=');
     if (equalIndex !== -1 && equalIndex + 1 < node.children.length) {
-      const typeNode = node.children[equalIndex + 1];
-      aliasedType = this.getNodeText(typeNode);
+      // Concatenate all nodes after the = (e.g., "suspend" + "(T) -> Unit")
+      const typeNodes = node.children.slice(equalIndex + 1);
+      aliasedType = typeNodes.map(n => this.getNodeText(n)).join(' ');
     }
 
     let signature = `typealias ${name}`;
@@ -474,10 +533,37 @@ export class KotlinExtractor extends BaseExtractor {
         foundColon = true;
         continue;
       }
-      if (foundColon && (child.type === 'type' || child.type === 'user_type' || child.type === 'simple_identifier')) {
+      if (foundColon && (
+        child.type === 'type' ||
+        child.type === 'user_type' ||
+        child.type === 'simple_identifier' ||
+        child.type === 'function_type' ||
+        child.type === 'nullable_type'
+      )) {
         return this.getNodeText(child);
       }
     }
+    return null;
+  }
+
+  private extractPropertyInitializer(node: Parser.SyntaxNode): string | null {
+    // Look for assignment (=) followed by initializer expression
+    const assignmentIndex = node.children.findIndex(c => this.getNodeText(c) === '=');
+    if (assignmentIndex !== -1 && assignmentIndex + 1 < node.children.length) {
+      const initializerNode = node.children[assignmentIndex + 1];
+      return this.getNodeText(initializerNode).trim();
+    }
+
+    // Also check for property_initializer node type
+    const initializerNode = node.children.find(c =>
+      c.type === 'property_initializer' ||
+      c.type === 'expression' ||
+      c.type === 'literal'
+    );
+    if (initializerNode) {
+      return this.getNodeText(initializerNode).trim();
+    }
+
     return null;
   }
 
@@ -498,23 +584,125 @@ export class KotlinExtractor extends BaseExtractor {
     return null;
   }
 
+  private extractPrimaryConstructorSignature(node: Parser.SyntaxNode): string | null {
+    // Look for primary_constructor node
+    const primaryConstructor = node.children.find(c => c.type === 'primary_constructor');
+    if (!primaryConstructor) return null;
+
+    // Extract class parameters
+    const params: string[] = [];
+    for (const child of primaryConstructor.children) {
+      if (child.type === 'class_parameter') {
+        const nameNode = child.children.find(c => c.type === 'simple_identifier');
+        const name = nameNode ? this.getNodeText(nameNode) : 'unknownParam';
+
+        // Get binding pattern (val/var)
+        const bindingNode = child.children.find(c => c.type === 'binding_pattern_kind');
+        const binding = bindingNode ? this.getNodeText(bindingNode) : '';
+
+        // Get type
+        const typeNode = child.children.find(c =>
+          c.type === 'user_type' ||
+          c.type === 'type' ||
+          c.type === 'nullable_type' ||
+          c.type === 'type_reference'
+        );
+        const type = typeNode ? this.getNodeText(typeNode) : '';
+
+        // Get modifiers (like private)
+        const modifiersNode = child.children.find(c => c.type === 'modifiers');
+        const modifiers = modifiersNode ? this.getNodeText(modifiersNode) : '';
+
+        // Build parameter signature
+        let paramSig = '';
+        if (modifiers) {
+          paramSig += `${modifiers} `;
+        }
+        if (binding) {
+          paramSig += `${binding} `;
+        }
+        paramSig += name;
+        if (type) {
+          paramSig += `: ${type}`;
+        }
+
+        params.push(paramSig);
+      }
+    }
+
+    return params.length > 0 ? `(${params.join(', ')})` : null;
+  }
+
+  private extractWhereClause(node: Parser.SyntaxNode): string | null {
+    // Where clauses are parsed as sibling infix_expression nodes
+    if (!node.parent) return null;
+
+    const siblings = node.parent.children;
+
+    // Find current node by position comparison
+    let currentIndex = -1;
+    for (let i = 0; i < siblings.length; i++) {
+      if (siblings[i].startPosition.row === node.startPosition.row &&
+          siblings[i].startPosition.column === node.startPosition.column) {
+        currentIndex = i;
+        break;
+      }
+    }
+
+    // Look for the immediate next sibling that's an infix_expression starting with "where"
+    if (currentIndex !== -1 && currentIndex + 1 < siblings.length) {
+      const nextSibling = siblings[currentIndex + 1];
+      if (nextSibling.type === 'infix_expression' && nextSibling.text.trim().startsWith('where')) {
+        // Extract just the where clause part (before the function body)
+        const whereText = nextSibling.text.split('{')[0].trim();
+        return whereText;
+      }
+    }
+
+    return null;
+  }
+
+  private extractReceiverType(node: Parser.SyntaxNode): string | null {
+    // Look for receiver_type node for extension functions
+    const receiverTypeNode = node.children.find(c => c.type === 'receiver_type');
+    return receiverTypeNode ? this.getNodeText(receiverTypeNode) : null;
+  }
+
   private extractPropertyType(node: Parser.SyntaxNode): string | null {
     // Look for type in variable_declaration (interface properties)
     const varDecl = node.children.find(c => c.type === 'variable_declaration');
     if (varDecl) {
-      const userType = varDecl.children.find(c => c.type === 'user_type' || c.type === 'type');
+      const userType = varDecl.children.find(c =>
+        c.type === 'user_type' ||
+        c.type === 'type' ||
+        c.type === 'nullable_type' ||
+        c.type === 'type_reference'
+      );
       if (userType) {
         return this.getNodeText(userType);
       }
     }
 
     // Look for direct type node (regular properties)
-    const type = node.children.find(c => c.type === 'type' || c.type === 'user_type');
+    const type = node.children.find(c =>
+      c.type === 'type' ||
+      c.type === 'user_type' ||
+      c.type === 'nullable_type' ||
+      c.type === 'type_reference'
+    );
     return type ? this.getNodeText(type) : null;
   }
 
   private determineClassKind(modifiers: string[], node: Parser.SyntaxNode): SymbolKind {
-    if (modifiers.includes('enum')) return SymbolKind.Enum;
+    // Check if this is an enum declaration by node type
+    if (node.type === 'enum_declaration') return SymbolKind.Enum;
+
+    // Check for enum class by looking for 'enum' keyword in the node
+    const hasEnumKeyword = node.children.some(c => this.getNodeText(c) === 'enum');
+    if (hasEnumKeyword) return SymbolKind.Enum;
+
+    // Check modifiers
+    if (modifiers.includes('enum') || modifiers.includes('enum class')) return SymbolKind.Enum;
     if (modifiers.includes('data')) return SymbolKind.Class;
     if (modifiers.includes('sealed')) return SymbolKind.Class;
     return SymbolKind.Class;
@@ -532,7 +720,9 @@ export class KotlinExtractor extends BaseExtractor {
     const visitNode = (node: Parser.SyntaxNode) => {
       switch (node.type) {
         case 'class_declaration':
+        case 'enum_declaration': // Include enum classes
         case 'object_declaration':
+        case 'interface_declaration': // Include interfaces
           this.extractInheritanceRelationships(node, symbols, relationships);
           break;
       }
@@ -580,10 +770,23 @@ export class KotlinExtractor extends BaseExtractor {
           const typeName = typeText.split(' by ')[0]; // Get part before "by"
           baseTypeNames.push(typeName);
         } else {
-          // Fallback - extract type nodes directly
-          const typeNode = delegation.children.find(c => c.type === 'type' || c.type === 'user_type' || c.type === 'simple_identifier');
+          // Extract type nodes directly - handle both user_type and constructor_invocation
+          const typeNode = delegation.children.find(c =>
+            c.type === 'type' ||
+            c.type === 'user_type' ||
+            c.type === 'simple_identifier' ||
+            c.type === 'constructor_invocation'
+          );
           if (typeNode) {
-            baseTypeNames.push(this.getNodeText(typeNode));
+            if (typeNode.type === 'constructor_invocation') {
+              // For constructor invocations like Widget(), extract just the type name
+              const userTypeNode = typeNode.children.find(c => c.type === 'user_type');
+              if (userTypeNode) {
+                baseTypeNames.push(this.getNodeText(userTypeNode));
+              }
+            } else {
+              baseTypeNames.push(this.getNodeText(typeNode));
+            }
           }
         }
       }
@@ -627,17 +830,53 @@ export class KotlinExtractor extends BaseExtractor {
         const bindingNode = child.children.find(c => c.type === 'binding_pattern_kind');
         const binding = bindingNode ? this.getNodeText(bindingNode) : 'val';
 
-        // Get type
-        const typeNode = child.children.find(c => c.type === 'user_type' || c.type === 'type');
+        // Get type (handle various type node structures including nullable)
+        const typeNode = child.children.find(c =>
+          c.type === 'user_type' ||
+          c.type === 'type' ||
+          c.type === 'nullable_type' ||
+          c.type === 'type_reference'
+        );
         const type = typeNode ? this.getNodeText(typeNode) : '';
 
         // Get modifiers (like private)
         const modifiersNode = child.children.find(c => c.type === 'modifiers');
         const modifiers = modifiersNode ? this.getNodeText(modifiersNode) : '';
 
-        // Get default value
-        const defaultValue = child.children.find(c => c.type === 'integer_literal' || c.type === 'string_literal');
+        // Get default value (handle various literal types and expressions)
+        const defaultValue = child.children.find(c =>
+          c.type === 'integer_literal' ||
+          c.type === 'string_literal' ||
+          c.type === 'boolean_literal' ||
+          c.type === 'expression' ||
+          c.type === 'call_expression'
+        );
         const defaultVal = defaultValue ? ` = ${this.getNodeText(defaultValue)}` : '';
+
+        // Alternative: look for assignment pattern (= value)
+        if (!defaultVal) {
+          const equalIndex = child.children.findIndex(c => this.getNodeText(c) === '=');
+          if (equalIndex !== -1 && equalIndex + 1 < child.children.length) {
+            const valueNode = child.children[equalIndex + 1];
+            const defaultAssignment = ` = ${this.getNodeText(valueNode)}`;
+            // Use this value instead
+            const signature2 = `${binding} ${name}`;
+            const finalSig = type ? `${signature2}: ${type}${defaultAssignment}` : `${signature2}${defaultAssignment}`;
+            const finalSignature = modifiers ? `${modifiers} ${finalSig}` : finalSig;
+
+            symbols.push(this.createSymbol(child, name, SymbolKind.Property, {
+              signature: finalSignature,
+              visibility: modifiers.includes('private') ? 'private' : 'public',
+              parentId,
+              metadata: {
+                type: 'constructor-parameter',
+                binding,
+                propertyType: type
+              }
+            }));
+            continue;
+          }
+        }
 
         // Build signature
         let signature = `${binding} ${name}`;

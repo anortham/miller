@@ -60,6 +60,14 @@ export class CSharpExtractor extends BaseExtractor {
         return this.extractDelegate(node, parentId);
       case 'record_declaration':
         return this.extractRecord(node, parentId);
+      case 'destructor_declaration':
+        return this.extractDestructor(node, parentId);
+      case 'operator_declaration':
+        return this.extractOperator(node, parentId);
+      case 'conversion_operator_declaration':
+        return this.extractConversionOperator(node, parentId);
+      case 'indexer_declaration':
+        return this.extractIndexer(node, parentId);
       default:
         return null;
     }
@@ -141,6 +149,13 @@ export class CSharpExtractor extends BaseExtractor {
       signature += ` : ${baseList.join(', ')}`;
     }
 
+    // Handle where clauses (type parameter constraints)
+    const whereClauses = node.children.filter(c => c.type === 'type_parameter_constraints_clause');
+    if (whereClauses.length > 0) {
+      const whereTexts = whereClauses.map(clause => this.getNodeText(clause));
+      signature += ' ' + whereTexts.join(' ');
+    }
+
     return this.createSymbol(node, name, SymbolKind.Class, {
       signature,
       visibility,
@@ -169,6 +184,13 @@ export class CSharpExtractor extends BaseExtractor {
     const baseList = this.extractBaseList(node);
     if (baseList.length > 0) {
       signature += ` : ${baseList.join(', ')}`;
+    }
+
+    // Handle where clauses (type parameter constraints)
+    const whereClauses = node.children.filter(c => c.type === 'type_parameter_constraints_clause');
+    if (whereClauses.length > 0) {
+      const whereTexts = whereClauses.map(clause => this.getNodeText(clause));
+      signature += ' ' + whereTexts.join(' ');
     }
 
     return this.createSymbol(node, name, SymbolKind.Interface, {
@@ -257,7 +279,20 @@ export class CSharpExtractor extends BaseExtractor {
   }
 
   private extractMethod(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
-    const nameNode = node.children.find(c => c.type === 'identifier');
+    // Find method name identifier - comes before parameter_list (may have type_parameter_list in between)
+    const paramListIndex = node.children.findIndex(c => c.type === 'parameter_list');
+    if (paramListIndex === -1) return null;
+
+    // Look backwards from parameter_list to find the method name identifier
+    let nameNode: Parser.SyntaxNode | null = null;
+    for (let i = paramListIndex - 1; i >= 0; i--) {
+      const child = node.children[i];
+      if (child.type === 'identifier') {
+        nameNode = child;
+        break;
+      }
+    }
+
     if (!nameNode) return null;
 
     const name = this.getNodeText(nameNode);
@@ -277,7 +312,20 @@ export class CSharpExtractor extends BaseExtractor {
     // Build signature
     const modifierStr = modifiers.length > 0 ? `${modifiers.join(' ')} ` : '';
     const typeParamStr = typeParams ? `${typeParams} ` : '';
-    const signature = `${modifierStr}${typeParamStr}${returnType} ${name}${params}`;
+    let signature = `${modifierStr}${typeParamStr}${returnType} ${name}${params}`;
+
+    // Handle expression-bodied method (=> expression)
+    const arrowClause = node.children.find(c => c.type === 'arrow_expression_clause');
+    if (arrowClause) {
+      signature += ' ' + this.getNodeText(arrowClause);
+    }
+
+    // Handle where clauses (type parameter constraints)
+    const whereClauses = node.children.filter(c => c.type === 'type_parameter_constraints_clause');
+    if (whereClauses.length > 0) {
+      const whereTexts = whereClauses.map(clause => this.getNodeText(clause));
+      signature += ' ' + whereTexts.join(' ');
+    }
 
     return this.createSymbol(node, name, SymbolKind.Method, {
       signature,
@@ -507,9 +555,153 @@ export class CSharpExtractor extends BaseExtractor {
       signature += this.getNodeText(paramList);
     }
 
+    // Handle inheritance (base_list)
+    const baseList = node.children.find(c => c.type === 'base_list');
+    if (baseList) {
+      signature += ' ' + this.getNodeText(baseList);
+    }
+
     const symbolKind = isStruct ? SymbolKind.Struct : SymbolKind.Class;
 
     return this.createSymbol(node, name, symbolKind, {
+      signature,
+      visibility,
+      parentId
+    });
+  }
+
+  private extractDestructor(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    // Find class name identifier (Child 1)
+    const nameNode = node.children.find(c => c.type === 'identifier');
+    if (!nameNode) return null;
+
+    const className = this.getNodeText(nameNode);
+    const name = `~${className}`;
+
+    // Get parameters
+    const paramList = node.children.find(c => c.type === 'parameter_list');
+    const params = paramList ? this.getNodeText(paramList) : '()';
+
+    // Build signature
+    const signature = `~${className}${params}`;
+
+    return this.createSymbol(node, name, SymbolKind.Method, {
+      signature,
+      visibility: 'protected', // Destructors are implicitly protected
+      parentId
+    });
+  }
+
+  private extractOperator(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    // Find operator symbol (Child 4: +, -, ==, !=, etc.)
+    const operatorSymbol = node.children.find(c =>
+      c.text === '+' || c.text === '-' || c.text === '*' || c.text === '/' ||
+      c.text === '==' || c.text === '!=' || c.text === '<' || c.text === '>' ||
+      c.text === '<=' || c.text === '>=' || c.text === '!' || c.text === '~' ||
+      c.text === '++' || c.text === '--' || c.text === '%' || c.text === '&' ||
+      c.text === '|' || c.text === '^' || c.text === '<<' || c.text === '>>' ||
+      c.text === 'true' || c.text === 'false'
+    );
+
+    if (!operatorSymbol) return null;
+
+    const name = `operator ${operatorSymbol.text}`;
+    const modifiers = this.extractModifiers(node);
+    const visibility = this.determineVisibility(modifiers);
+
+    // Find return type (before 'operator' keyword)
+    const operatorKeywordIndex = node.children.findIndex(c => c.text === 'operator');
+    const returnTypeNode = node.children.slice(0, operatorKeywordIndex).find(c =>
+      c.type === 'predefined_type' ||
+      c.type === 'identifier' ||
+      c.type === 'generic_name'
+    );
+    const returnType = returnTypeNode ? this.getNodeText(returnTypeNode) : 'void';
+
+    // Get parameters
+    const paramList = node.children.find(c => c.type === 'parameter_list');
+    const params = paramList ? this.getNodeText(paramList) : '()';
+
+    // Build signature
+    const modifierStr = modifiers.length > 0 ? `${modifiers.join(' ')} ` : '';
+    let signature = `${modifierStr}${returnType} operator ${operatorSymbol.text}${params}`;
+
+    // Handle expression-bodied operator
+    const arrowClause = node.children.find(c => c.type === 'arrow_expression_clause');
+    if (arrowClause) {
+      signature += ' ' + this.getNodeText(arrowClause);
+    }
+
+    return this.createSymbol(node, name, SymbolKind.Method, {
+      signature,
+      visibility,
+      parentId
+    });
+  }
+
+  private extractConversionOperator(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    // Find conversion type (implicit/explicit)
+    const conversionType = node.children.find(c => c.text === 'implicit' || c.text === 'explicit');
+    if (!conversionType) return null;
+
+    const modifiers = this.extractModifiers(node);
+    const visibility = this.determineVisibility(modifiers);
+
+    // Find target type (after 'operator' keyword)
+    const operatorKeywordIndex = node.children.findIndex(c => c.text === 'operator');
+    const targetTypeNode = node.children.slice(operatorKeywordIndex + 1).find(c =>
+      c.type === 'predefined_type' ||
+      c.type === 'identifier' ||
+      c.type === 'generic_name'
+    );
+    const targetType = targetTypeNode ? this.getNodeText(targetTypeNode) : 'unknown';
+
+    const name = `${conversionType.text} operator ${targetType}`;
+
+    // Get parameters
+    const paramList = node.children.find(c => c.type === 'parameter_list');
+    const params = paramList ? this.getNodeText(paramList) : '()';
+
+    // Build signature
+    const modifierStr = modifiers.length > 0 ? `${modifiers.join(' ')} ` : '';
+    let signature = `${modifierStr}${conversionType.text} operator ${targetType}${params}`;
+
+    // Handle expression-bodied operator
+    const arrowClause = node.children.find(c => c.type === 'arrow_expression_clause');
+    if (arrowClause) {
+      signature += ' ' + this.getNodeText(arrowClause);
+    }
+
+    return this.createSymbol(node, name, SymbolKind.Method, {
+      signature,
+      visibility,
+      parentId
+    });
+  }
+
+  private extractIndexer(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    const modifiers = this.extractModifiers(node);
+    const visibility = this.determineVisibility(modifiers);
+
+    // Find return type (Child 1)
+    const returnTypeNode = node.children.find(c =>
+      c.type === 'predefined_type' ||
+      c.type === 'identifier' ||
+      c.type === 'generic_name'
+    );
+    const returnType = returnTypeNode ? this.getNodeText(returnTypeNode) : 'object';
+
+    // Get bracketed parameters (Child 3)
+    const bracketedParams = node.children.find(c => c.type === 'bracketed_parameter_list');
+    const params = bracketedParams ? this.getNodeText(bracketedParams) : '[object index]';
+
+    const name = `this${params}`;
+
+    // Build signature
+    const modifierStr = modifiers.length > 0 ? `${modifiers.join(' ')} ` : '';
+    const signature = `${modifierStr}${returnType} this${params}`;
+
+    return this.createSymbol(node, name, SymbolKind.Property, {
       signature,
       visibility,
       parentId
@@ -751,18 +943,32 @@ export class CSharpExtractor extends BaseExtractor {
   }
 
   private extractReturnType(node: Parser.SyntaxNode): string | null {
-    // Find return type - usually comes before the method name
-    const nameNode = node.children.find(c => c.type === 'identifier');
+    // Find method name identifier - comes before parameter_list (may have type_parameter_list in between)
+    const paramListIndex = node.children.findIndex(c => c.type === 'parameter_list');
+    if (paramListIndex === -1) return null;
+
+    // Look backwards from parameter_list to find the method name identifier
+    let nameNode: Parser.SyntaxNode | null = null;
+    for (let i = paramListIndex - 1; i >= 0; i--) {
+      const child = node.children[i];
+      if (child.type === 'identifier') {
+        nameNode = child;
+        break;
+      }
+    }
+
     if (!nameNode) return null;
 
     const nameIndex = node.children.indexOf(nameNode);
+    // Look for return type, but exclude modifiers
     const returnTypeNode = node.children.slice(0, nameIndex).find(c =>
       c.type === 'predefined_type' ||
       c.type === 'identifier' ||
       c.type === 'qualified_name' ||
       c.type === 'generic_name' ||
       c.type === 'array_type' ||
-      c.type === 'nullable_type'
+      c.type === 'nullable_type' ||
+      c.type === 'tuple_type'
     );
 
     return returnTypeNode ? this.getNodeText(returnTypeNode) : null;
