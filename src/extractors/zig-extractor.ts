@@ -18,28 +18,45 @@ export class ZigExtractor extends BaseExtractor {
   extractSymbols(tree: Parser.Tree): Symbol[] {
     const symbols: Symbol[] = [];
 
-    this.traverseTree(tree.rootNode, (node) => {
+    const visitNode = (node: Parser.SyntaxNode, parentId?: string) => {
+      if (!node || !node.type) {
+        return; // Skip invalid nodes
+      }
+
+      let symbol: Symbol | null = null;
+
       try {
         switch (node.type) {
           case 'function_declaration':
           case 'function_definition':
-            this.extractFunction(node, symbols);
+            symbol = this.extractFunction(node, parentId);
             break;
           case 'struct_declaration':
-            this.extractStruct(node, symbols);
+            symbol = this.extractStruct(node, parentId);
             break;
           case 'enum_declaration':
-            this.extractEnum(node, symbols);
+            symbol = this.extractEnum(node, parentId);
             break;
           case 'variable_declaration':
           case 'const_declaration':
-            this.extractVariable(node, symbols);
+            symbol = this.extractVariable(node, parentId);
             break;
           case 'error_declaration':
-            this.extractErrorType(node, symbols);
+            symbol = this.extractErrorType(node, parentId);
             break;
           case 'type_declaration':
-            this.extractTypeAlias(node, symbols);
+            symbol = this.extractTypeAlias(node, parentId);
+            break;
+          case 'parameter':
+            symbol = this.extractParameter(node, parentId);
+            break;
+          case 'field_declaration':
+          case 'struct_field':
+            symbol = this.extractStructField(node, parentId);
+            break;
+          case 'enum_field':
+          case 'enum_variant':
+            symbol = this.extractEnumVariant(node, parentId);
             break;
           default:
             // Handle other Zig constructs
@@ -48,14 +65,37 @@ export class ZigExtractor extends BaseExtractor {
       } catch (error) {
         console.warn(`Error extracting Zig symbol from ${node.type}:`, error);
       }
-    });
+
+      if (symbol) {
+        symbols.push(symbol);
+        parentId = symbol.id;
+      }
+
+      // Recursively visit children
+      if (node.children && node.children.length > 0) {
+        for (const child of node.children) {
+          try {
+            visitNode(child, parentId);
+          } catch (error) {
+            // Skip problematic child nodes
+            continue;
+          }
+        }
+      }
+    };
+
+    try {
+      visitNode(tree.rootNode);
+    } catch (error) {
+      console.warn('Zig parsing failed:', error);
+    }
 
     return symbols;
   }
 
-  private extractFunction(node: Parser.SyntaxNode, symbols: Symbol[]): void {
+  private extractFunction(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
     const nameNode = this.findChildByType(node, 'identifier');
-    if (!nameNode) return;
+    if (!nameNode) return null;
 
     const name = this.getNodeText(nameNode);
 
@@ -65,184 +105,106 @@ export class ZigExtractor extends BaseExtractor {
     // Check if it's an export function
     const isExport = this.isExportFunction(node);
 
-    const functionSymbol: Symbol = {
-      id: this.generateId(name, node.startPosition),
-      name,
-      kind: SymbolKind.Function,
+    const functionSymbol = this.createSymbol(node, name, SymbolKind.Function, {
       signature: this.extractFunctionSignature(node),
-      startLine: node.startPosition.row,
-      startColumn: node.startPosition.column,
-      endLine: node.endPosition.row,
-      endColumn: node.endPosition.column,
-      filePath: this.filePath,
-      language: this.language,
-      parentId: undefined,
       visibility: isPublic || isExport ? 'public' : 'private',
-      documentation: this.extractDocumentation(node)
-    };
-
-    symbols.push(functionSymbol);
-
-    // Extract function parameters
-    this.extractFunctionParameters(node, symbols, functionSymbol.id);
-  }
-
-  private extractFunctionParameters(funcNode: Parser.SyntaxNode, symbols: Symbol[], parentId: string): void {
-    const paramList = this.findChildByType(funcNode, 'parameter_list');
-    if (!paramList) return;
-
-    this.traverseTree(paramList, (node) => {
-      if (node.type === 'parameter') {
-        const nameNode = this.findChildByType(node, 'identifier');
-        if (!nameNode) return;
-
-        const paramName = this.getNodeText(nameNode);
-        const typeNode = this.findChildByType(node, 'type_expression') ||
-                        this.findChildByType(node, 'identifier', 1); // Second identifier is often the type
-
-        const paramType = typeNode ? this.getNodeText(typeNode) : 'unknown';
-
-        const paramSymbol: Symbol = {
-          id: this.generateId(`${paramName}_param`, node.startPosition),
-          name: paramName,
-          kind: SymbolKind.Variable,
-          signature: `${paramName}: ${paramType}`,
-          startLine: node.startPosition.row,
-          startColumn: node.startPosition.column,
-          endLine: node.endPosition.row,
-          endColumn: node.endPosition.column,
-          filePath: this.filePath,
-          language: this.language,
-          parentId,
-          visibility: 'public'
-        };
-
-        symbols.push(paramSymbol);
-      }
+      parentId,
+      docComment: this.extractDocumentation(node)
     });
+
+    return functionSymbol;
   }
 
-  private extractStruct(node: Parser.SyntaxNode, symbols: Symbol[]): void {
+  private extractParameter(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
     const nameNode = this.findChildByType(node, 'identifier');
-    if (!nameNode) return;
+    if (!nameNode) return null;
+
+    const paramName = this.getNodeText(nameNode);
+    const typeNode = this.findChildByType(node, 'type_expression') ||
+                    this.findChildByType(node, 'identifier', 1); // Second identifier is often the type
+
+    const paramType = typeNode ? this.getNodeText(typeNode) : 'unknown';
+
+    const paramSymbol = this.createSymbol(node, paramName, SymbolKind.Variable, {
+      signature: `${paramName}: ${paramType}`,
+      visibility: 'public',
+      parentId
+    });
+
+    return paramSymbol;
+  }
+
+  private extractStruct(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    const nameNode = this.findChildByType(node, 'identifier');
+    if (!nameNode) return null;
 
     const name = this.getNodeText(nameNode);
     const isPublic = this.isPublicDeclaration(node);
 
-    const structSymbol: Symbol = {
-      id: this.generateId(name, node.startPosition),
-      name,
-      kind: SymbolKind.Class, // Structs are like classes in Zig
+    const structSymbol = this.createSymbol(node, name, SymbolKind.Class, {
       signature: `struct ${name}`,
-      startLine: node.startPosition.row,
-      startColumn: node.startPosition.column,
-      endLine: node.endPosition.row,
-      endColumn: node.endPosition.column,
-      filePath: this.filePath,
-      language: this.language,
-      parentId: undefined,
       visibility: isPublic ? 'public' : 'private',
-      documentation: this.extractDocumentation(node)
-    };
-
-    symbols.push(structSymbol);
-
-    // Extract struct fields
-    this.extractStructFields(node, symbols, structSymbol.id);
-  }
-
-  private extractStructFields(structNode: Parser.SyntaxNode, symbols: Symbol[], parentId: string): void {
-    this.traverseTree(structNode, (node) => {
-      if (node.type === 'field_declaration' || node.type === 'struct_field') {
-        const nameNode = this.findChildByType(node, 'identifier');
-        if (!nameNode) return;
-
-        const fieldName = this.getNodeText(nameNode);
-        const typeNode = this.findChildByType(node, 'type_expression') ||
-                        this.findChildByType(node, 'identifier', 1);
-
-        const fieldType = typeNode ? this.getNodeText(typeNode) : 'unknown';
-
-        const fieldSymbol: Symbol = {
-          id: this.generateId(`${fieldName}_field`, node.startPosition),
-          name: fieldName,
-          kind: SymbolKind.Property,
-          signature: `${fieldName}: ${fieldType}`,
-          startLine: node.startPosition.row,
-          startColumn: node.startPosition.column,
-          endLine: node.endPosition.row,
-          endColumn: node.endPosition.column,
-          filePath: this.filePath,
-          language: this.language,
-          parentId,
-          visibility: 'public' // Zig struct fields are generally public
-        };
-
-        symbols.push(fieldSymbol);
-      }
+      parentId,
+      docComment: this.extractDocumentation(node)
     });
+
+    return structSymbol;
   }
 
-  private extractEnum(node: Parser.SyntaxNode, symbols: Symbol[]): void {
+  private extractStructField(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
     const nameNode = this.findChildByType(node, 'identifier');
-    if (!nameNode) return;
+    if (!nameNode) return null;
+
+    const fieldName = this.getNodeText(nameNode);
+    const typeNode = this.findChildByType(node, 'type_expression') ||
+                    this.findChildByType(node, 'identifier', 1);
+
+    const fieldType = typeNode ? this.getNodeText(typeNode) : 'unknown';
+
+    const fieldSymbol = this.createSymbol(node, fieldName, SymbolKind.Property, {
+      signature: `${fieldName}: ${fieldType}`,
+      visibility: 'public', // Zig struct fields are generally public
+      parentId
+    });
+
+    return fieldSymbol;
+  }
+
+  private extractEnum(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    const nameNode = this.findChildByType(node, 'identifier');
+    if (!nameNode) return null;
 
     const name = this.getNodeText(nameNode);
     const isPublic = this.isPublicDeclaration(node);
 
-    const enumSymbol: Symbol = {
-      id: this.generateId(name, node.startPosition),
-      name,
-      kind: SymbolKind.Enum,
+    const enumSymbol = this.createSymbol(node, name, SymbolKind.Enum, {
       signature: `enum ${name}`,
-      startLine: node.startPosition.row,
-      startColumn: node.startPosition.column,
-      endLine: node.endPosition.row,
-      endColumn: node.endPosition.column,
-      filePath: this.filePath,
-      language: this.language,
-      parentId: undefined,
       visibility: isPublic ? 'public' : 'private',
-      documentation: this.extractDocumentation(node)
-    };
-
-    symbols.push(enumSymbol);
-
-    // Extract enum variants
-    this.extractEnumVariants(node, symbols, enumSymbol.id);
-  }
-
-  private extractEnumVariants(enumNode: Parser.SyntaxNode, symbols: Symbol[], parentId: string): void {
-    this.traverseTree(enumNode, (node) => {
-      if (node.type === 'enum_field' || node.type === 'enum_variant') {
-        const nameNode = this.findChildByType(node, 'identifier');
-        if (!nameNode) return;
-
-        const variantName = this.getNodeText(nameNode);
-
-        const variantSymbol: Symbol = {
-          id: this.generateId(`${variantName}_variant`, node.startPosition),
-          name: variantName,
-          kind: SymbolKind.EnumMember,
-          signature: variantName,
-          startLine: node.startPosition.row,
-          startColumn: node.startPosition.column,
-          endLine: node.endPosition.row,
-          endColumn: node.endPosition.column,
-          filePath: this.filePath,
-          language: this.language,
-          parentId,
-          visibility: 'public'
-        };
-
-        symbols.push(variantSymbol);
-      }
+      parentId,
+      docComment: this.extractDocumentation(node)
     });
+
+    return enumSymbol;
   }
 
-  private extractVariable(node: Parser.SyntaxNode, symbols: Symbol[]): void {
+  private extractEnumVariant(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
     const nameNode = this.findChildByType(node, 'identifier');
-    if (!nameNode) return;
+    if (!nameNode) return null;
+
+    const variantName = this.getNodeText(nameNode);
+
+    const variantSymbol = this.createSymbol(node, variantName, SymbolKind.EnumMember, {
+      signature: variantName,
+      visibility: 'public',
+      parentId
+    });
+
+    return variantSymbol;
+  }
+
+  private extractVariable(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    const nameNode = this.findChildByType(node, 'identifier');
+    if (!nameNode) return null;
 
     const name = this.getNodeText(nameNode);
     const isConst = node.type === 'const_declaration' || this.getNodeText(node).includes('const');
@@ -252,74 +214,49 @@ export class ZigExtractor extends BaseExtractor {
     const typeNode = this.findChildByType(node, 'type_expression');
     const varType = typeNode ? this.getNodeText(typeNode) : 'inferred';
 
-    const variableSymbol: Symbol = {
-      id: this.generateId(name, node.startPosition),
-      name,
-      kind: isConst ? SymbolKind.Constant : SymbolKind.Variable,
+    const variableSymbol = this.createSymbol(node, name, isConst ? SymbolKind.Constant : SymbolKind.Variable, {
       signature: `${isConst ? 'const' : 'var'} ${name}: ${varType}`,
-      startLine: node.startPosition.row,
-      startColumn: node.startPosition.column,
-      endLine: node.endPosition.row,
-      endColumn: node.endPosition.column,
-      filePath: this.filePath,
-      language: this.language,
-      parentId: undefined,
       visibility: isPublic ? 'public' : 'private',
-      documentation: this.extractDocumentation(node)
-    };
+      parentId,
+      docComment: this.extractDocumentation(node)
+    });
 
-    symbols.push(variableSymbol);
+    return variableSymbol;
   }
 
-  private extractErrorType(node: Parser.SyntaxNode, symbols: Symbol[]): void {
+  private extractErrorType(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
     const nameNode = this.findChildByType(node, 'identifier');
-    if (!nameNode) return;
+    if (!nameNode) return null;
 
     const name = this.getNodeText(nameNode);
 
-    const errorSymbol: Symbol = {
-      id: this.generateId(name, node.startPosition),
-      name,
-      kind: SymbolKind.Class, // Error types are like special classes
+    const errorSymbol = this.createSymbol(node, name, SymbolKind.Class, {
       signature: `error ${name}`,
-      startLine: node.startPosition.row,
-      startColumn: node.startPosition.column,
-      endLine: node.endPosition.row,
-      endColumn: node.endPosition.column,
-      filePath: this.filePath,
-      language: this.language,
-      parentId: undefined,
       visibility: 'public',
-      documentation: this.extractDocumentation(node)
-    };
+      parentId,
+      docComment: this.extractDocumentation(node),
+      metadata: { isErrorType: true }
+    });
 
-    symbols.push(errorSymbol);
+    return errorSymbol;
   }
 
-  private extractTypeAlias(node: Parser.SyntaxNode, symbols: Symbol[]): void {
+  private extractTypeAlias(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
     const nameNode = this.findChildByType(node, 'identifier');
-    if (!nameNode) return;
+    if (!nameNode) return null;
 
     const name = this.getNodeText(nameNode);
     const isPublic = this.isPublicDeclaration(node);
 
-    const typeSymbol: Symbol = {
-      id: this.generateId(name, node.startPosition),
-      name,
-      kind: SymbolKind.Interface, // Type aliases are like interfaces
+    const typeSymbol = this.createSymbol(node, name, SymbolKind.Interface, {
       signature: `type ${name}`,
-      startLine: node.startPosition.row,
-      startColumn: node.startPosition.column,
-      endLine: node.endPosition.row,
-      endColumn: node.endPosition.column,
-      filePath: this.filePath,
-      language: this.language,
-      parentId: undefined,
       visibility: isPublic ? 'public' : 'private',
-      documentation: this.extractDocumentation(node)
-    };
+      parentId,
+      docComment: this.extractDocumentation(node),
+      metadata: { isTypeAlias: true }
+    });
 
-    symbols.push(typeSymbol);
+    return typeSymbol;
   }
 
   private isPublicFunction(node: Parser.SyntaxNode): boolean {
@@ -436,8 +373,8 @@ export class ZigExtractor extends BaseExtractor {
           if (referencedSymbol && referencedSymbol.id !== structSymbol.id) {
             relationships.push({
               id: this.generateId(`struct_uses_${typeName}`, fieldNode.startPosition),
-              sourceId: structSymbol.id,
-              targetId: referencedSymbol.id,
+              fromSymbolId: structSymbol.id,
+              toSymbolId: referencedSymbol.id,
               kind: RelationshipKind.Uses,
               filePath: this.filePath,
               startLine: fieldNode.startPosition.row,
@@ -475,8 +412,8 @@ export class ZigExtractor extends BaseExtractor {
           if (callerSymbol && callerSymbol.id !== calledSymbol.id) {
             relationships.push({
               id: this.generateId(`call_${callerName}_${calledFuncName}`, node.startPosition),
-              sourceId: callerSymbol.id,
-              targetId: calledSymbol.id,
+              fromSymbolId: callerSymbol.id,
+              toSymbolId: calledSymbol.id,
               kind: RelationshipKind.Calls,
               filePath: this.filePath,
               startLine: node.startPosition.row,
@@ -510,6 +447,38 @@ export class ZigExtractor extends BaseExtractor {
         }
       }
     });
+
+    return types;
+  }
+
+  inferTypes(symbols: Symbol[]): Map<string, string> {
+    const types = new Map<string, string>();
+
+    // Zig type inference based on symbol metadata and signatures
+    for (const symbol of symbols) {
+      if (symbol.signature) {
+        // Extract Zig types from signatures like "const name: i32", "var buffer: []u8"
+        const zigTypePattern = /:\s*([\w\[\]!?*]+)/;
+        const typeMatch = symbol.signature.match(zigTypePattern);
+        if (typeMatch) {
+          types.set(symbol.name, typeMatch[1]);
+        }
+      }
+
+      // Use metadata for Zig-specific types
+      if (symbol.metadata?.isErrorType) {
+        types.set(symbol.name, 'error');
+      }
+      if (symbol.metadata?.isTypeAlias) {
+        types.set(symbol.name, 'type');
+      }
+      if (symbol.kind === SymbolKind.Class && !symbol.metadata?.isErrorType) {
+        types.set(symbol.name, 'struct');
+      }
+      if (symbol.kind === SymbolKind.Enum) {
+        types.set(symbol.name, 'enum');
+      }
+    }
 
     return types;
   }

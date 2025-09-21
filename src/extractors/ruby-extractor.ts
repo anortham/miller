@@ -285,7 +285,8 @@ export class RubyExtractor extends BaseExtractor {
     if (!leftNode) return null;
 
     const name = this.getNodeText(leftNode);
-    const rightNode = node.children.find(c => c.type !== leftNode.type);
+    // Find the value node - it's typically the last child after the '=' operator
+    const rightNode = node.children.length >= 2 ? node.children[node.children.length - 1] : null;
     const value = rightNode ? this.getNodeText(rightNode) : '';
 
     // Class variables (@@var)

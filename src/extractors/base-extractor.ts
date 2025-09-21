@@ -334,6 +334,63 @@ export abstract class BaseExtractor {
     this.typeInfo.clear();
   }
 
+  // Tree traversal helper - standardized across all extractors
+  protected traverseTree(node: Parser.SyntaxNode, callback: (node: Parser.SyntaxNode) => void): void {
+    try {
+      callback(node);
+    } catch (error) {
+      console.warn(`Error processing node ${node.type}:`, error);
+    }
+
+    // Recursively traverse children
+    if (node.children && node.children.length > 0) {
+      for (const child of node.children) {
+        try {
+          this.traverseTree(child, callback);
+        } catch (error) {
+          // Skip problematic child nodes
+          continue;
+        }
+      }
+    }
+  }
+
+  // Find first child node by type
+  protected findChildByType(node: Parser.SyntaxNode, type: string): Parser.SyntaxNode | null {
+    for (const child of node.children) {
+      if (child.type === type) {
+        return child;
+      }
+    }
+    return null;
+  }
+
+  // Find all child nodes by type
+  protected findChildrenByType(node: Parser.SyntaxNode, type: string): Parser.SyntaxNode[] {
+    const results: Parser.SyntaxNode[] = [];
+    for (const child of node.children) {
+      if (child.type === type) {
+        results.push(child);
+      }
+    }
+    return results;
+  }
+
+  // Find child node by multiple possible types
+  protected findChildByTypes(node: Parser.SyntaxNode, types: string[]): Parser.SyntaxNode | null {
+    for (const child of node.children) {
+      if (types.includes(child.type)) {
+        return child;
+      }
+    }
+    return null;
+  }
+
+  // Alias for findDocComment - used by newer extractors for consistency
+  protected extractDocumentation(node: Parser.SyntaxNode): string | undefined {
+    return this.findDocComment(node);
+  }
+
   // Get extraction results
   getResults() {
     return {

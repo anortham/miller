@@ -64,9 +64,9 @@ function Set-CustomProperty {
 }
 `;
 
-      const parseResult = await parserManager.parseFile('test.ps1', powershellCode);
+      const result = await parserManager.parseFile('test.ps1', powershellCode);
       const extractor = new PowerShellExtractor('powershell', 'test.ps1', powershellCode);
-      const symbols = extractor.extractSymbols(parseResult.tree);
+      const symbols = extractor.extractSymbols(result.tree);
 
       // Should extract functions
       const functions = symbols.filter(s => s.kind === SymbolKind.Function);
@@ -125,9 +125,9 @@ Write-Host "Current location: $PWD"
 Write-Host "Last exit code: $LASTEXITCODE"
 `;
 
-      const parseResult = await parserManager.parseFile('variables.ps1', powershellCode);
+      const result = await parserManager.parseFile('variables.ps1', powershellCode);
       const extractor = new PowerShellExtractor('powershell', 'variables.ps1', powershellCode);
-      const symbols = extractor.extractSymbols(parseResult.tree);
+      const symbols = extractor.extractSymbols(result.tree);
 
       // Should extract user-defined variables
       const variables = symbols.filter(s => s.kind === SymbolKind.Variable);
@@ -214,9 +214,9 @@ class ServerInfo : ComputerInfo {
 }
 `;
 
-      const parseResult = await parserManager.parseFile('classes.ps1', powershellCode);
+      const result = await parserManager.parseFile('classes.ps1', powershellCode);
       const extractor = new PowerShellExtractor('powershell', 'classes.ps1', powershellCode);
-      const symbols = extractor.extractSymbols(parseResult.tree);
+      const symbols = extractor.extractSymbols(result.tree);
 
       // Should extract classes
       const classes = symbols.filter(s => s.kind === SymbolKind.Class);
@@ -334,9 +334,9 @@ function Run-DeploymentPipeline {
 }
 `;
 
-      const parseResult = await parserManager.parseFile('azure-devops.ps1', powershellCode);
+      const result = await parserManager.parseFile('azure-devops.ps1', powershellCode);
       const extractor = new PowerShellExtractor('powershell', 'azure-devops.ps1', powershellCode);
-      const symbols = extractor.extractSymbols(parseResult.tree);
+      const symbols = extractor.extractSymbols(result.tree);
 
       // Should extract Azure commands
       const azureCommands = symbols.filter(s =>
@@ -401,14 +401,14 @@ $ModuleManifestData = @{
 }
 
 # Export module members
-Export-ModuleMember -Function Get-CustomData, Set-CustomData
-Export-ModuleMember -Variable $Global:ConfigSettings
-Export-ModuleMember -Alias gcd, scd
+Export-ModuleMember -Function Get-CustomData
+Export-ModuleMember -Variable ConfigSettings
+Export-ModuleMember -Alias gcd
 `;
 
-      const parseResult = await parserManager.parseFile('modules.ps1', powershellCode);
+      const result = await parserManager.parseFile('modules.ps1', powershellCode);
       const extractor = new PowerShellExtractor('powershell', 'modules.ps1', powershellCode);
-      const symbols = extractor.extractSymbols(parseResult.tree);
+      const symbols = extractor.extractSymbols(result.tree);
 
       // Should extract import statements
       const imports = symbols.filter(s => s.kind === SymbolKind.Import);
@@ -462,16 +462,16 @@ function Working-Function {
 $ValidVariable = "This should work"
 `;
 
-      const parseResult = await parserManager.parseFile('malformed.ps1', malformedPowerShell);
+      const result = await parserManager.parseFile('malformed.ps1', malformedPowerShell);
       const extractor = new PowerShellExtractor('powershell', 'malformed.ps1', malformedPowerShell);
 
       // Should not throw errors
       expect(() => {
-        const symbols = extractor.extractSymbols(parseResult.tree);
-        const relationships = extractor.extractRelationships(parseResult.tree, symbols);
+        const symbols = extractor.extractSymbols(result.tree);
+        const relationships = extractor.extractRelationships(result.tree, symbols);
       }).not.toThrow();
 
-      const symbols = extractor.extractSymbols(parseResult.tree);
+      const symbols = extractor.extractSymbols(result.tree);
 
       // Should still extract valid symbols
       const validFunction = symbols.find(s => s.name === 'Working-Function');

@@ -189,10 +189,10 @@ export class HTMLExtractor extends BaseExtractor {
   }
 
   private extractTagName(node: Parser.SyntaxNode): string {
-    // Look for start_tag child and extract tag name
-    const startTag = node.children.find(c => c.type === 'start_tag');
-    if (startTag) {
-      const tagNameNode = startTag.children.find(c => c.type === 'tag_name');
+    // Look for start_tag or self_closing_tag child and extract tag name
+    const tagContainer = node.children.find(c => c.type === 'start_tag' || c.type === 'self_closing_tag');
+    if (tagContainer) {
+      const tagNameNode = tagContainer.children.find(c => c.type === 'tag_name');
       if (tagNameNode) {
         return this.getNodeText(tagNameNode);
       }
@@ -210,8 +210,8 @@ export class HTMLExtractor extends BaseExtractor {
   private extractAttributes(node: Parser.SyntaxNode): Record<string, string> {
     const attributes: Record<string, string> = {};
 
-    const startTag = node.children.find(c => c.type === 'start_tag');
-    const attributesContainer = startTag || node;
+    const tagContainer = node.children.find(c => c.type === 'start_tag' || c.type === 'self_closing_tag');
+    const attributesContainer = tagContainer || node;
 
     for (const child of attributesContainer.children) {
       if (child.type === 'attribute') {
@@ -369,6 +369,11 @@ export class HTMLExtractor extends BaseExtractor {
     // Form input elements are fields
     if (this.isFormField(tagName)) {
       return SymbolKind.Field;
+    }
+
+    // Media elements are variables (img, video, audio, etc.)
+    if (['img', 'video', 'audio', 'picture', 'source', 'track'].includes(tagName)) {
+      return SymbolKind.Variable;
     }
 
     // All other HTML elements are classes

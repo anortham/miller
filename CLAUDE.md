@@ -210,6 +210,8 @@ await tools.find_references({
 
 ### Testing
 
+**This is a test first TDD project**
+
 ```bash
 # Run specific file parsing test
 bun run src/mcp-server.ts

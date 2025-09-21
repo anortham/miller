@@ -16,27 +16,30 @@ export class SqlExtractor extends BaseExtractor {
   extractSymbols(tree: Parser.Tree): Symbol[] {
     const symbols: Symbol[] = [];
 
-    this.traverseTree(tree.rootNode, (node) => {
+    const visitNode = (node: Parser.SyntaxNode, parentId?: string) => {
+      if (!node || !node.type) {
+        return; // Skip invalid nodes
+      }
+
+      let symbol: Symbol | null = null;
+
       try {
         switch (node.type) {
           case 'create_table_statement':
-            this.extractTableDefinition(node, symbols);
+            symbol = this.extractTableDefinition(node, parentId);
             break;
           case 'create_procedure_statement':
           case 'create_function_statement':
-            this.extractStoredProcedure(node, symbols);
+            symbol = this.extractStoredProcedure(node, parentId);
             break;
           case 'create_view_statement':
-            this.extractView(node, symbols);
+            symbol = this.extractView(node, parentId);
             break;
           case 'create_index_statement':
-            this.extractIndex(node, symbols);
+            symbol = this.extractIndex(node, parentId);
             break;
           case 'create_trigger_statement':
-            this.extractTrigger(node, symbols);
-            break;
-          case 'column_definition':
-            // Handled within table extraction
+            symbol = this.extractTrigger(node, parentId);
             break;
           default:
             // Handle other SQL constructs
@@ -45,38 +48,51 @@ export class SqlExtractor extends BaseExtractor {
       } catch (error) {
         console.warn(`Error extracting SQL symbol from ${node.type}:`, error);
       }
-    });
+
+      if (symbol) {
+        symbols.push(symbol);
+        parentId = symbol.id;
+      }
+
+      // Recursively visit children
+      if (node.children && node.children.length > 0) {
+        for (const child of node.children) {
+          try {
+            visitNode(child, parentId);
+          } catch (error) {
+            // Skip problematic child nodes
+            continue;
+          }
+        }
+      }
+    };
+
+    try {
+      visitNode(tree.rootNode);
+    } catch (error) {
+      console.warn('SQL parsing failed:', error);
+    }
 
     return symbols;
   }
 
-  private extractTableDefinition(node: Parser.SyntaxNode, symbols: Symbol[]): void {
+  private extractTableDefinition(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
     const tableNameNode = this.findChildByType(node, 'identifier') ||
                          this.findChildByType(node, 'table_name');
 
-    if (!tableNameNode) return;
+    if (!tableNameNode) return null;
 
     const tableName = this.getNodeText(tableNameNode);
-    const tableSymbol: Symbol = {
-      id: this.generateId(tableName, node.startPosition),
-      name: tableName,
-      kind: SymbolKind.Class, // Tables are like classes - they define structure
+
+    const tableSymbol = this.createSymbol(node, tableName, SymbolKind.Class, {
       signature: this.extractTableSignature(node),
-      startLine: node.startPosition.row,
-      startColumn: node.startPosition.column,
-      endLine: node.endPosition.row,
-      endColumn: node.endPosition.column,
-      filePath: this.filePath,
-      language: this.language,
-      parentId: undefined,
-      visibility: 'public', // Database objects are generally public
-      documentation: this.extractDocumentation(node)
-    };
+      visibility: 'public',
+      parentId,
+      docComment: this.extractDocumentation(node),
+      metadata: { isTable: true }
+    });
 
-    symbols.push(tableSymbol);
-
-    // Extract column definitions as properties/fields
-    this.extractTableColumns(node, symbols, tableSymbol.id);
+    return tableSymbol;
   }
 
   private extractTableColumns(tableNode: Parser.SyntaxNode, symbols: Symbol[], parentTableId: string): void {
@@ -142,36 +158,26 @@ export class SqlExtractor extends BaseExtractor {
     return constraints.length > 0 ? ` (${constraints.join(', ')})` : '';
   }
 
-  private extractStoredProcedure(node: Parser.SyntaxNode, symbols: Symbol[]): void {
+  private extractStoredProcedure(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
     const nameNode = this.findChildByType(node, 'identifier') ||
                     this.findChildByType(node, 'procedure_name') ||
                     this.findChildByType(node, 'function_name');
 
-    if (!nameNode) return;
+    if (!nameNode) return null;
 
     const name = this.getNodeText(nameNode);
     const isFunction = node.type.includes('function');
 
-    const symbol: Symbol = {
-      id: this.generateId(name, node.startPosition),
-      name,
-      kind: isFunction ? SymbolKind.Function : SymbolKind.Method,
+    const symbol = this.createSymbol(node, name,
+      isFunction ? SymbolKind.Function : SymbolKind.Method, {
       signature: this.extractProcedureSignature(node),
-      startLine: node.startPosition.row,
-      startColumn: node.startPosition.column,
-      endLine: node.endPosition.row,
-      endColumn: node.endPosition.column,
-      filePath: this.filePath,
-      language: this.language,
-      parentId: undefined,
       visibility: 'public',
-      documentation: this.extractDocumentation(node)
-    };
+      parentId,
+      docComment: this.extractDocumentation(node),
+      metadata: { isFunction, isStoredProcedure: true }
+    });
 
-    symbols.push(symbol);
-
-    // Extract parameters
-    this.extractProcedureParameters(node, symbols, symbol.id);
+    return symbol;
   }
 
   private extractProcedureParameters(procNode: Parser.SyntaxNode, symbols: Symbol[], parentId: string): void {
@@ -207,84 +213,60 @@ export class SqlExtractor extends BaseExtractor {
     });
   }
 
-  private extractView(node: Parser.SyntaxNode, symbols: Symbol[]): void {
+  private extractView(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
     const nameNode = this.findChildByType(node, 'identifier') ||
                     this.findChildByType(node, 'view_name');
 
-    if (!nameNode) return;
+    if (!nameNode) return null;
 
     const name = this.getNodeText(nameNode);
 
-    const symbol: Symbol = {
-      id: this.generateId(name, node.startPosition),
-      name,
-      kind: SymbolKind.Interface, // Views are like interfaces - they present data
+    const symbol = this.createSymbol(node, name, SymbolKind.Interface, {
       signature: `VIEW ${name}`,
-      startLine: node.startPosition.row,
-      startColumn: node.startPosition.column,
-      endLine: node.endPosition.row,
-      endColumn: node.endPosition.column,
-      filePath: this.filePath,
-      language: this.language,
-      parentId: undefined,
       visibility: 'public',
-      documentation: this.extractDocumentation(node)
-    };
+      parentId,
+      docComment: this.extractDocumentation(node),
+      metadata: { isView: true }
+    });
 
-    symbols.push(symbol);
+    return symbol;
   }
 
-  private extractIndex(node: Parser.SyntaxNode, symbols: Symbol[]): void {
+  private extractIndex(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
     const nameNode = this.findChildByType(node, 'identifier') ||
                     this.findChildByType(node, 'index_name');
 
-    if (!nameNode) return;
+    if (!nameNode) return null;
 
     const name = this.getNodeText(nameNode);
 
-    const symbol: Symbol = {
-      id: this.generateId(name, node.startPosition),
-      name,
-      kind: SymbolKind.Property, // Indexes are database optimizations
+    const symbol = this.createSymbol(node, name, SymbolKind.Property, {
       signature: `INDEX ${name}`,
-      startLine: node.startPosition.row,
-      startColumn: node.startPosition.column,
-      endLine: node.endPosition.row,
-      endColumn: node.endPosition.column,
-      filePath: this.filePath,
-      language: this.language,
-      parentId: undefined,
-      visibility: 'public'
-    };
+      visibility: 'public',
+      parentId,
+      metadata: { isIndex: true }
+    });
 
-    symbols.push(symbol);
+    return symbol;
   }
 
-  private extractTrigger(node: Parser.SyntaxNode, symbols: Symbol[]): void {
+  private extractTrigger(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
     const nameNode = this.findChildByType(node, 'identifier') ||
                     this.findChildByType(node, 'trigger_name');
 
-    if (!nameNode) return;
+    if (!nameNode) return null;
 
     const name = this.getNodeText(nameNode);
 
-    const symbol: Symbol = {
-      id: this.generateId(name, node.startPosition),
-      name,
-      kind: SymbolKind.Method, // Triggers are like event handlers
+    const symbol = this.createSymbol(node, name, SymbolKind.Method, {
       signature: `TRIGGER ${name}`,
-      startLine: node.startPosition.row,
-      startColumn: node.startPosition.column,
-      endLine: node.endPosition.row,
-      endColumn: node.endPosition.column,
-      filePath: this.filePath,
-      language: this.language,
-      parentId: undefined,
       visibility: 'public',
-      documentation: this.extractDocumentation(node)
-    };
+      parentId,
+      docComment: this.extractDocumentation(node),
+      metadata: { isTrigger: true }
+    });
 
-    symbols.push(symbol);
+    return symbol;
   }
 
   private extractTableSignature(node: Parser.SyntaxNode): string {
@@ -431,6 +413,35 @@ export class SqlExtractor extends BaseExtractor {
         }
       }
     });
+
+    return types;
+  }
+
+  inferTypes(symbols: Symbol[]): Map<string, string> {
+    const types = new Map<string, string>();
+
+    // SQL type inference based on symbol metadata and signatures
+    for (const symbol of symbols) {
+      if (symbol.signature) {
+        // Extract SQL data types from signatures like "CREATE TABLE users (id INT, name VARCHAR(100))"
+        const sqlTypePattern = /\b(INT|INTEGER|VARCHAR|TEXT|DECIMAL|FLOAT|BOOLEAN|DATE|TIMESTAMP|CHAR|BIGINT|SMALLINT)\b/gi;
+        const typeMatch = symbol.signature.match(sqlTypePattern);
+        if (typeMatch) {
+          types.set(symbol.name, typeMatch[0].toUpperCase());
+        }
+      }
+
+      // Use metadata for SQL-specific types
+      if (symbol.metadata?.isTable) {
+        types.set(symbol.name, 'TABLE');
+      }
+      if (symbol.metadata?.isView) {
+        types.set(symbol.name, 'VIEW');
+      }
+      if (symbol.metadata?.isStoredProcedure) {
+        types.set(symbol.name, 'PROCEDURE');
+      }
+    }
 
     return types;
   }

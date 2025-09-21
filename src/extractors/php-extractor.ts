@@ -166,7 +166,11 @@ export class PhpExtractor extends BaseExtractor {
       }
     }
 
-    let signature = `function ${name}`;
+    // Check for reference modifier (&)
+    const referenceModifier = node.children.find(c => c.type === 'reference_modifier');
+    const refPrefix = referenceModifier ? '&' : '';
+
+    let signature = `function ${refPrefix}${name}`;
 
     if (modifiers.length > 0) {
       signature = `${modifiers.join(' ')} ${signature}`;
@@ -309,8 +313,20 @@ export class PhpExtractor extends BaseExtractor {
       if (child.type === 'visibility_modifier') {
         // Handle visibility_modifier node
         modifiers.push(this.getNodeText(child));
+      } else if (child.type === 'abstract_modifier') {
+        // Handle abstract_modifier node
+        modifiers.push('abstract');
+      } else if (child.type === 'static_modifier') {
+        // Handle static_modifier node
+        modifiers.push('static');
+      } else if (child.type === 'final_modifier') {
+        // Handle final_modifier node
+        modifiers.push('final');
+      } else if (child.type === 'readonly_modifier') {
+        // Handle readonly_modifier node
+        modifiers.push('readonly');
       } else if (['public', 'private', 'protected', 'static', 'abstract', 'final', 'readonly'].includes(child.type)) {
-        // Handle direct modifier nodes
+        // Handle direct modifier nodes (fallback)
         modifiers.push(this.getNodeText(child));
       }
     }
@@ -476,9 +492,19 @@ export class PhpExtractor extends BaseExtractor {
       }
     }
 
+    // Check for implements clause (e.g., implements JsonSerializable)
+    const implementsNode = node.children.find(c => c.type === 'class_interface_clause');
+    let implementsClause = null;
+    if (implementsNode) {
+      implementsClause = this.getNodeText(implementsNode).replace('implements', '').trim();
+    }
+
     let signature = `enum ${name}`;
     if (backingType) {
       signature += `: ${backingType}`;
+    }
+    if (implementsClause) {
+      signature += ` implements ${implementsClause}`;
     }
 
     return this.createSymbol(node, name, SymbolKind.Enum, {

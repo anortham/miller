@@ -182,16 +182,21 @@ export class BashExtractor extends BaseExtractor {
 
       const name = this.getNodeText(nameNode);
 
-      // Check if it's an environment variable
-      const isEnvironment = this.isEnvironmentVariable(assignment, name);
+      // Check if it's readonly: either 'readonly' command or 'declare -r'
+      const isReadonly = declarationType === 'readonly' ||
+                        declarationType.includes('readonly') ||
+                        (declarationType === 'declare' && this.getNodeText(node).includes(' -r '));
+
+      // Check if it's an environment variable (but not if it's readonly)
+      const isEnvironment = !isReadonly && this.isEnvironmentVariable(assignment, name);
       const isExported = declarationType === 'export';
 
       return this.createSymbol(assignment, name,
-        (declarationType === 'readonly' || declarationType.includes('readonly')) ? SymbolKind.Constant : SymbolKind.Variable, {
+        isReadonly ? SymbolKind.Constant : SymbolKind.Variable, {
         signature: `${declarationType} ${name}`,
         visibility: isExported ? 'public' : 'private',
         parentId,
-        docComment: this.extractVariableDocumentation(assignment, isEnvironment, isExported)
+        docComment: this.extractVariableDocumentation(assignment, isEnvironment, isExported, isReadonly)
       });
     }
 
@@ -319,9 +324,10 @@ export class BashExtractor extends BaseExtractor {
   }
 
   // Documentation helpers
-  private extractVariableDocumentation(node: Parser.SyntaxNode, isEnvironment: boolean, isExported: boolean): string {
+  private extractVariableDocumentation(node: Parser.SyntaxNode, isEnvironment: boolean, isExported: boolean, isReadonly?: boolean): string {
     const annotations: string[] = [];
 
+    if (isReadonly) annotations.push('READONLY');
     if (isEnvironment) annotations.push('Environment Variable');
     if (isExported) annotations.push('Exported');
 

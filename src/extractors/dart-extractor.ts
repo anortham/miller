@@ -20,35 +20,49 @@ export class DartExtractor extends BaseExtractor {
   extractSymbols(tree: Parser.Tree): Symbol[] {
     const symbols: Symbol[] = [];
 
-    this.traverseTree(tree.rootNode, (node) => {
+    const visitNode = (node: Parser.SyntaxNode, parentId?: string) => {
+      if (!node || !node.type) {
+        return; // Skip invalid nodes
+      }
+
+      let symbol: Symbol | null = null;
+
       try {
         switch (node.type) {
           case 'class_definition':
-            this.extractClass(node, symbols);
+            symbol = this.extractClass(node, parentId);
             break;
           case 'function_signature':
           case 'function_declaration':
-            this.extractFunction(node, symbols);
+            symbol = this.extractFunction(node, parentId);
             break;
           case 'method_signature':
           case 'method_declaration':
-            this.extractMethod(node, symbols);
+            symbol = this.extractMethod(node, parentId);
             break;
           case 'enum_declaration':
-            this.extractEnum(node, symbols);
+            symbol = this.extractEnum(node, parentId);
             break;
           case 'mixin_declaration':
-            this.extractMixin(node, symbols);
+            symbol = this.extractMixin(node, parentId);
             break;
           case 'extension_declaration':
-            this.extractExtension(node, symbols);
+            symbol = this.extractExtension(node, parentId);
             break;
           case 'constructor_signature':
-            this.extractConstructor(node, symbols);
+          case 'factory_constructor_signature':
+          case 'constant_constructor_signature':
+            symbol = this.extractConstructor(node, parentId);
+            break;
+          case 'getter_signature':
+            symbol = this.extractGetter(node, parentId);
+            break;
+          case 'setter_signature':
+            symbol = this.extractSetter(node, parentId);
             break;
           case 'top_level_variable_declaration':
           case 'initialized_variable_definition':
-            this.extractVariable(node, symbols);
+            symbol = this.extractVariable(node, parentId);
             break;
           default:
             // Handle other Dart constructs
@@ -57,14 +71,37 @@ export class DartExtractor extends BaseExtractor {
       } catch (error) {
         console.warn(`Error extracting Dart symbol from ${node.type}:`, error);
       }
-    });
+
+      if (symbol) {
+        symbols.push(symbol);
+        parentId = symbol.id;
+      }
+
+      // Recursively visit children
+      if (node.children && node.children.length > 0) {
+        for (const child of node.children) {
+          try {
+            visitNode(child, parentId);
+          } catch (error) {
+            // Skip problematic child nodes
+            continue;
+          }
+        }
+      }
+    };
+
+    try {
+      visitNode(tree.rootNode);
+    } catch (error) {
+      console.warn('Dart parsing failed:', error);
+    }
 
     return symbols;
   }
 
-  private extractClass(node: Parser.SyntaxNode, symbols: Symbol[]): void {
+  private extractClass(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
     const nameNode = this.findChildByType(node, 'identifier');
-    if (!nameNode) return;
+    if (!nameNode) return null;
 
     const name = this.getNodeText(nameNode);
 
@@ -83,7 +120,7 @@ export class DartExtractor extends BaseExtractor {
       endColumn: node.endPosition.column,
       filePath: this.filePath,
       language: this.language,
-      parentId: undefined,
+      parentId,
       visibility: 'public', // Dart classes are generally public unless private (_)
       documentation: this.extractDocumentation(node)
     };
@@ -93,10 +130,7 @@ export class DartExtractor extends BaseExtractor {
       classSymbol.documentation = (classSymbol.documentation || '') + ' [Flutter Widget]';
     }
 
-    symbols.push(classSymbol);
-
-    // Extract class members
-    this.extractClassMembers(node, symbols, classSymbol.id);
+    return classSymbol;
   }
 
   private extractClassMembers(classNode: Parser.SyntaxNode, symbols: Symbol[], parentId: string): void {
@@ -126,131 +160,113 @@ export class DartExtractor extends BaseExtractor {
     });
   }
 
-  private extractFunction(node: Parser.SyntaxNode, symbols: Symbol[], parentId?: string): void {
+  private extractFunction(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
     const nameNode = this.findChildByType(node, 'identifier');
-    if (!nameNode) return;
+    if (!nameNode) return null;
 
     const name = this.getNodeText(nameNode);
     const isAsync = this.isAsyncFunction(node);
     const isPrivate = name.startsWith('_');
 
-    const functionSymbol: Symbol = {
-      id: this.generateId(name, node.startPosition),
-      name,
-      kind: SymbolKind.Function,
+    // Use Method kind if inside a class (has parentId), otherwise Function
+    const symbolKind = parentId ? SymbolKind.Method : SymbolKind.Function;
+
+    const functionSymbol = this.createSymbol(node, name, symbolKind, {
       signature: this.extractFunctionSignature(node),
-      startLine: node.startPosition.row,
-      startColumn: node.startPosition.column,
-      endLine: node.endPosition.row,
-      endColumn: node.endPosition.column,
-      filePath: this.filePath,
-      language: this.language,
-      parentId,
       visibility: isPrivate ? 'private' : 'public',
-      documentation: this.extractDocumentation(node)
-    };
+      parentId,
+      docComment: this.extractDocumentation(node)
+    });
 
     // Add async annotation
     if (isAsync) {
-      functionSymbol.documentation = (functionSymbol.documentation || '') + ' [Async]';
+      functionSymbol.metadata = { ...functionSymbol.metadata, isAsync: true };
     }
 
-    symbols.push(functionSymbol);
-
-    // Extract function parameters
-    this.extractFunctionParameters(node, symbols, functionSymbol.id);
+    return functionSymbol;
   }
 
-  private extractMethod(node: Parser.SyntaxNode, symbols: Symbol[], parentId?: string): void {
+  private extractMethod(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
     const nameNode = this.findChildByType(node, 'identifier');
-    if (!nameNode) return;
+    if (!nameNode) return null;
 
     const name = this.getNodeText(nameNode);
     const isAsync = this.isAsyncFunction(node);
     const isStatic = this.isStaticMethod(node);
     const isPrivate = name.startsWith('_');
     const isOverride = this.isOverrideMethod(node);
-
-    // Check for Flutter lifecycle methods
     const isFlutterLifecycle = this.isFlutterLifecycleMethod(name);
 
-    const methodSymbol: Symbol = {
-      id: this.generateId(name, node.startPosition),
-      name,
-      kind: SymbolKind.Method,
+    const methodSymbol = this.createSymbol(node, name, SymbolKind.Method, {
       signature: this.extractFunctionSignature(node),
-      startLine: node.startPosition.row,
-      startColumn: node.startPosition.column,
-      endLine: node.endPosition.row,
-      endColumn: node.endPosition.column,
-      filePath: this.filePath,
-      language: this.language,
-      parentId,
       visibility: isPrivate ? 'private' : 'public',
-      documentation: this.extractDocumentation(node)
-    };
+      parentId,
+      docComment: this.extractDocumentation(node),
+      metadata: {
+        isAsync,
+        isStatic,
+        isOverride,
+        isFlutterLifecycle
+      }
+    });
 
-    // Add method annotations
-    const annotations: string[] = [];
-    if (isAsync) annotations.push('Async');
-    if (isStatic) annotations.push('Static');
-    if (isOverride) annotations.push('Override');
-    if (isFlutterLifecycle) annotations.push('Flutter Lifecycle');
-
-    if (annotations.length > 0) {
-      methodSymbol.documentation = (methodSymbol.documentation || '') + ` [${annotations.join(', ')}]`;
-    }
-
-    symbols.push(methodSymbol);
-
-    // Extract method parameters
-    this.extractFunctionParameters(node, symbols, methodSymbol.id);
+    return methodSymbol;
   }
 
-  private extractConstructor(node: Parser.SyntaxNode, symbols: Symbol[], parentId?: string): void {
-    const nameNode = this.findChildByType(node, 'identifier');
-    const className = parentId ? symbols.find(s => s.id === parentId)?.name : 'Unknown';
+  private extractConstructor(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    // Extract constructor name more precisely
+    let constructorName = 'Constructor';
 
-    let constructorName = className || 'Constructor';
-    if (nameNode) {
-      const explicitName = this.getNodeText(nameNode);
-      if (explicitName !== className) {
-        constructorName = `${className}.${explicitName}`;
+    // For different constructor types, extract names differently
+    if (node.type === 'factory_constructor_signature') {
+      // Factory constructor: factory ClassName.methodName
+      const identifiers = [];
+      let skipNext = false;
+      this.traverseTree(node, (child) => {
+        if (child.type === 'identifier' && !skipNext) {
+          identifiers.push(this.getNodeText(child));
+          if (identifiers.length >= 2) skipNext = true; // Only take first 2 identifiers
+        }
+      });
+      constructorName = identifiers.slice(0, 2).join('.');
+    } else if (node.type === 'constant_constructor_signature') {
+      // Const constructor: const ClassName.methodName
+      const identifiers = [];
+      let skipNext = false;
+      this.traverseTree(node, (child) => {
+        if (child.type === 'identifier' && !skipNext) {
+          identifiers.push(this.getNodeText(child));
+          if (identifiers.length >= 2) skipNext = true; // Only take first 2 identifiers
+        }
+      });
+      constructorName = identifiers.slice(0, 2).join('.');
+    } else {
+      // Regular constructor or named constructor
+      const directChildren = node.children?.filter(child => child.type === 'identifier') || [];
+      if (directChildren.length === 1) {
+        // Default constructor: ClassName()
+        constructorName = this.getNodeText(directChildren[0]);
+      } else if (directChildren.length >= 2) {
+        // Named constructor: ClassName.namedConstructor()
+        constructorName = directChildren.slice(0, 2).map(child => this.getNodeText(child)).join('.');
       }
     }
 
     const isFactory = this.isFactoryConstructor(node);
     const isConst = this.isConstConstructor(node);
 
-    const constructorSymbol: Symbol = {
-      id: this.generateId(constructorName, node.startPosition),
-      name: constructorName,
-      kind: SymbolKind.Constructor,
-      signature: this.extractConstructorSignature(node, className || ''),
-      startLine: node.startPosition.row,
-      startColumn: node.startPosition.column,
-      endLine: node.endPosition.row,
-      endColumn: node.endPosition.column,
-      filePath: this.filePath,
-      language: this.language,
-      parentId,
+    const constructorSymbol = this.createSymbol(node, constructorName, SymbolKind.Constructor, {
+      signature: this.extractConstructorSignature(node),
       visibility: 'public',
-      documentation: this.extractDocumentation(node)
-    };
+      parentId,
+      docComment: this.extractDocumentation(node),
+      metadata: {
+        isFactory,
+        isConst
+      }
+    });
 
-    // Add constructor annotations
-    const annotations: string[] = [];
-    if (isFactory) annotations.push('Factory');
-    if (isConst) annotations.push('Const');
-
-    if (annotations.length > 0) {
-      constructorSymbol.documentation = (constructorSymbol.documentation || '') + ` [${annotations.join(', ')}]`;
-    }
-
-    symbols.push(constructorSymbol);
-
-    // Extract constructor parameters
-    this.extractFunctionParameters(node, symbols, constructorSymbol.id);
+    return constructorSymbol;
   }
 
   private extractField(node: Parser.SyntaxNode, symbols: Symbol[], parentId: string): void {
@@ -345,32 +361,20 @@ export class DartExtractor extends BaseExtractor {
     symbols.push(setterSymbol);
   }
 
-  private extractEnum(node: Parser.SyntaxNode, symbols: Symbol[]): void {
+  private extractEnum(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
     const nameNode = this.findChildByType(node, 'identifier');
-    if (!nameNode) return;
+    if (!nameNode) return null;
 
     const name = this.getNodeText(nameNode);
 
-    const enumSymbol: Symbol = {
-      id: this.generateId(name, node.startPosition),
-      name,
-      kind: SymbolKind.Enum,
+    const enumSymbol = this.createSymbol(node, name, SymbolKind.Enum, {
       signature: `enum ${name}`,
-      startLine: node.startPosition.row,
-      startColumn: node.startPosition.column,
-      endLine: node.endPosition.row,
-      endColumn: node.endPosition.column,
-      filePath: this.filePath,
-      language: this.language,
-      parentId: undefined,
       visibility: 'public',
-      documentation: this.extractDocumentation(node)
-    };
+      parentId,
+      docComment: this.extractDocumentation(node)
+    });
 
-    symbols.push(enumSymbol);
-
-    // Extract enum values
-    this.extractEnumValues(node, symbols, enumSymbol.id);
+    return enumSymbol;
   }
 
   private extractEnumValues(enumNode: Parser.SyntaxNode, symbols: Symbol[], parentId: string): void {
@@ -401,64 +405,47 @@ export class DartExtractor extends BaseExtractor {
     });
   }
 
-  private extractMixin(node: Parser.SyntaxNode, symbols: Symbol[]): void {
+  private extractMixin(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
     const nameNode = this.findChildByType(node, 'identifier');
-    if (!nameNode) return;
+    if (!nameNode) return null;
 
     const name = this.getNodeText(nameNode);
 
-    const mixinSymbol: Symbol = {
-      id: this.generateId(name, node.startPosition),
-      name,
-      kind: SymbolKind.Interface, // Mixins are like interfaces
+    const mixinSymbol = this.createSymbol(node, name, SymbolKind.Interface, {
       signature: `mixin ${name}`,
-      startLine: node.startPosition.row,
-      startColumn: node.startPosition.column,
-      endLine: node.endPosition.row,
-      endColumn: node.endPosition.column,
-      filePath: this.filePath,
-      language: this.language,
-      parentId: undefined,
       visibility: 'public',
-      documentation: this.extractDocumentation(node) + ' [Mixin]'
-    };
+      parentId,
+      docComment: this.extractDocumentation(node),
+      metadata: { isMixin: true }
+    });
 
-    symbols.push(mixinSymbol);
-
-    // Extract mixin members
-    this.extractClassMembers(node, symbols, mixinSymbol.id);
+    return mixinSymbol;
   }
 
-  private extractExtension(node: Parser.SyntaxNode, symbols: Symbol[]): void {
+  private extractExtension(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
     const nameNode = this.findChildByType(node, 'identifier');
-    if (!nameNode) return;
+    if (!nameNode) return null;
 
     const name = this.getNodeText(nameNode);
 
-    const extensionSymbol: Symbol = {
-      id: this.generateId(name, node.startPosition),
-      name,
-      kind: SymbolKind.Module, // Extensions are like modules
+    const extensionSymbol = this.createSymbol(node, name, SymbolKind.Module, {
       signature: `extension ${name}`,
-      startLine: node.startPosition.row,
-      startColumn: node.startPosition.column,
-      endLine: node.endPosition.row,
-      endColumn: node.endPosition.column,
-      filePath: this.filePath,
-      language: this.language,
-      parentId: undefined,
       visibility: 'public',
-      documentation: this.extractDocumentation(node) + ' [Extension]'
-    };
+      parentId,
+      docComment: this.extractDocumentation(node),
+      metadata: { isExtension: true }
+    });
 
-    symbols.push(extensionSymbol);
-
-    // Extract extension members
-    this.extractClassMembers(node, symbols, extensionSymbol.id);
+    return extensionSymbol;
   }
 
-  private extractVariable(node: Parser.SyntaxNode, symbols: Symbol[]): void {
+  private extractVariable(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    // Look for the first variable definition in this node
+    let foundVariable: Symbol | null = null;
+
     this.traverseTree(node, (varNode) => {
+      if (foundVariable) return; // Already found one
+
       if (varNode.type === 'initialized_variable_definition') {
         const nameNode = this.findChildByType(varNode, 'identifier');
         if (!nameNode) return;
@@ -468,24 +455,17 @@ export class DartExtractor extends BaseExtractor {
         const isFinal = this.isFinalVariable(varNode);
         const isConst = this.isConstVariable(varNode);
 
-        const variableSymbol: Symbol = {
-          id: this.generateId(name, varNode.startPosition),
-          name,
-          kind: (isFinal || isConst) ? SymbolKind.Constant : SymbolKind.Variable,
+        foundVariable = this.createSymbol(varNode, name,
+          (isFinal || isConst) ? SymbolKind.Constant : SymbolKind.Variable, {
           signature: this.extractVariableSignature(varNode),
-          startLine: varNode.startPosition.row,
-          startColumn: varNode.startPosition.column,
-          endLine: varNode.endPosition.row,
-          endColumn: varNode.endPosition.column,
-          filePath: this.filePath,
-          language: this.language,
-          parentId: undefined,
-          visibility: isPrivate ? 'private' : 'public'
-        };
-
-        symbols.push(variableSymbol);
+          visibility: isPrivate ? 'private' : 'public',
+          parentId,
+          metadata: { isFinal, isConst }
+        });
       }
     });
+
+    return foundVariable;
   }
 
   // Flutter-specific helper methods
@@ -587,13 +567,16 @@ export class DartExtractor extends BaseExtractor {
     const nameNode = this.findChildByType(node, 'identifier');
     const name = nameNode ? this.getNodeText(nameNode) : 'Unknown';
 
+    const isAbstract = this.isAbstractClass(node);
+    const abstractPrefix = isAbstract ? 'abstract ' : '';
+
     const extendsClause = this.findChildByType(node, 'superclass');
     const extendsText = extendsClause ? ` extends ${this.getNodeText(extendsClause)}` : '';
 
     const implementsClause = this.findChildByType(node, 'interfaces');
     const implementsText = implementsClause ? ` implements ${this.getNodeText(implementsClause)}` : '';
 
-    return `class ${name}${extendsText}${implementsText}`;
+    return `${abstractPrefix}class ${name}${extendsText}${implementsText}`;
   }
 
   private extractFunctionSignature(node: Parser.SyntaxNode): string {
@@ -604,12 +587,25 @@ export class DartExtractor extends BaseExtractor {
     return `${name}()`;
   }
 
-  private extractConstructorSignature(node: Parser.SyntaxNode, className: string): string {
-    const nameNode = this.findChildByType(node, 'identifier');
-    if (nameNode && this.getNodeText(nameNode) !== className) {
-      return `${className}.${this.getNodeText(nameNode)}()`;
-    }
-    return `${className}()`;
+  private extractConstructorSignature(node: Parser.SyntaxNode): string {
+    const isFactory = node.type === 'factory_constructor_signature';
+    const isConst = node.type === 'constant_constructor_signature';
+
+    // Extract constructor name (class name or named constructor)
+    const identifiers = [];
+    this.traverseTree(node, (child) => {
+      if (child.type === 'identifier') {
+        identifiers.push(this.getNodeText(child));
+      }
+    });
+
+    let constructorName = identifiers.length > 0 ? identifiers.join('.') : 'Constructor';
+
+    // Add prefixes
+    const factoryPrefix = isFactory ? 'factory ' : '';
+    const constPrefix = isConst ? 'const ' : '';
+
+    return `${factoryPrefix}${constPrefix}${constructorName}()`;
   }
 
   private extractFieldSignature(node: Parser.SyntaxNode): string {
@@ -622,6 +618,42 @@ export class DartExtractor extends BaseExtractor {
     const nameNode = this.findChildByType(node, 'identifier');
     const name = nameNode ? this.getNodeText(nameNode) : 'unknown';
     return name;
+  }
+
+  private extractGetter(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    const nameNode = this.findChildByType(node, 'identifier');
+    if (!nameNode) return null;
+
+    const name = this.getNodeText(nameNode);
+    const isPrivate = name.startsWith('_');
+
+    const getterSymbol = this.createSymbol(node, name, SymbolKind.Property, {
+      signature: `get ${name}`,
+      visibility: isPrivate ? 'private' : 'public',
+      parentId,
+      docComment: this.extractDocumentation(node),
+      metadata: { isGetter: true }
+    });
+
+    return getterSymbol;
+  }
+
+  private extractSetter(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    const nameNode = this.findChildByType(node, 'identifier');
+    if (!nameNode) return null;
+
+    const name = this.getNodeText(nameNode);
+    const isPrivate = name.startsWith('_');
+
+    const setterSymbol = this.createSymbol(node, name, SymbolKind.Property, {
+      signature: `set ${name}`,
+      visibility: isPrivate ? 'private' : 'public',
+      parentId,
+      docComment: this.extractDocumentation(node),
+      metadata: { isSetter: true }
+    });
+
+    return setterSymbol;
   }
 
   extractRelationships(tree: Parser.Tree, symbols: Symbol[]): Relationship[] {
@@ -677,6 +709,31 @@ export class DartExtractor extends BaseExtractor {
   private extractMethodCallRelationships(node: Parser.SyntaxNode, symbols: Symbol[], relationships: Relationship[]): void {
     // Extract method call relationships for cross-method dependencies
     // This could be expanded for more detailed call graph analysis
+  }
+
+  inferTypes(symbols: Symbol[]): Map<string, string> {
+    const types = new Map<string, string>();
+
+    // Simple type inference based on symbol metadata and signatures
+    for (const symbol of symbols) {
+      if (symbol.signature) {
+        // Extract type from signatures like "int counter = 0" or "String name"
+        const typeMatch = symbol.signature.match(/^(\w+)\s+\w+/);
+        if (typeMatch) {
+          types.set(symbol.name, typeMatch[1]);
+        }
+      }
+
+      // Use metadata for final/const detection
+      if (symbol.metadata?.isFinal) {
+        types.set(symbol.name, types.get(symbol.name) || 'final');
+      }
+      if (symbol.metadata?.isConst) {
+        types.set(symbol.name, types.get(symbol.name) || 'const');
+      }
+    }
+
+    return types;
   }
 
   extractTypes(tree: Parser.Tree): Map<string, string> {
