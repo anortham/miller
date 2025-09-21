@@ -210,6 +210,28 @@ export class ZigExtractor extends BaseExtractor {
     const isConst = node.type === 'const_declaration' || this.getNodeText(node).includes('const');
     const isPublic = this.isPublicDeclaration(node);
 
+    // SYSTEMATIC FIX: Check if this is a struct declaration (const Point = struct { ... })
+    const structNode = this.findChildByType(node, 'struct_declaration');
+    if (structNode) {
+      // Check if it's a packed struct by looking at the full text
+      const nodeText = this.getNodeText(node);
+      const isPacked = nodeText.includes('packed struct');
+      const isExtern = nodeText.includes('extern struct');
+
+      let structType = 'struct';
+      if (isPacked) structType = 'packed struct';
+      else if (isExtern) structType = 'extern struct';
+
+      // This is a struct, extract it as a class
+      const structSymbol = this.createSymbol(node, name, SymbolKind.Class, {
+        signature: `const ${name} = ${structType}`,
+        visibility: isPublic ? 'public' : 'private',
+        parentId,
+        docComment: this.extractDocumentation(node)
+      });
+      return structSymbol;
+    }
+
     // Extract type if available
     const typeNode = this.findChildByType(node, 'type_expression');
     const varType = typeNode ? this.getNodeText(typeNode) : 'inferred';
@@ -318,9 +340,11 @@ export class ZigExtractor extends BaseExtractor {
       });
     }
 
-    // Extract return type
+    // Extract return type (including Zig error union types)
     const returnTypeNode = this.findChildByType(node, 'return_type') ||
-                          this.findChildByType(node, 'type_expression');
+                          this.findChildByType(node, 'type_expression') ||
+                          this.findChildByType(node, 'error_union_type') ||
+                          this.findChildByType(node, 'builtin_type');
     const returnType = returnTypeNode ? this.getNodeText(returnTypeNode) : 'void';
 
     return `fn ${name}(${params.join(', ')}) ${returnType}`;

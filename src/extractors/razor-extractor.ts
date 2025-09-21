@@ -25,7 +25,12 @@ export class RazorExtractor extends BaseExtractor {
         case 'razor_namespace_directive':
         case 'razor_model_directive':
         case 'razor_attribute_directive':
+        case 'razor_inherits_directive':
+        case 'razor_implements_directive':
           symbol = this.extractDirective(node, parentId);
+          break;
+        case 'razor_section':
+          symbol = this.extractSection(node, parentId);
           break;
         case 'razor_block':
           symbol = this.extractCodeBlock(node, parentId);
@@ -56,6 +61,12 @@ export class RazorExtractor extends BaseExtractor {
           break;
         case 'method_declaration':
           symbol = this.extractMethod(node, parentId);
+          break;
+        case 'assignment_expression':
+          symbol = this.extractAssignment(node, parentId);
+          break;
+        case 'razor_html_attribute':
+          symbol = this.extractHtmlAttribute(node, parentId);
           break;
       }
 
@@ -467,6 +478,10 @@ export class RazorExtractor extends BaseExtractor {
         return 'attribute';
       case 'razor_namespace_directive':
         return 'namespace';
+      case 'razor_inherits_directive':
+        return 'inherits';
+      case 'razor_implements_directive':
+        return 'implements';
       default:
         // Fallback to text parsing
         const text = this.getNodeText(node);
@@ -497,6 +512,18 @@ export class RazorExtractor extends BaseExtractor {
       case 'razor_attribute_directive':
         const attributeList = node.children.find(c => c.type === 'attribute_list');
         return attributeList ? this.getNodeText(attributeList) : null;
+
+      case 'razor_namespace_directive':
+        const namespaceQualified = node.children.find(c => c.type === 'qualified_name' || c.type === 'identifier');
+        return namespaceQualified ? this.getNodeText(namespaceQualified) : null;
+
+      case 'razor_inherits_directive':
+        const inheritsIdentifier = node.children.find(c => c.type === 'identifier');
+        return inheritsIdentifier ? this.getNodeText(inheritsIdentifier) : null;
+
+      case 'razor_implements_directive':
+        const implementsIdentifier = node.children.find(c => c.type === 'identifier');
+        return implementsIdentifier ? this.getNodeText(implementsIdentifier) : null;
 
       default:
         // Fallback to text parsing
@@ -674,6 +701,114 @@ export class RazorExtractor extends BaseExtractor {
     });
   }
 
+  private extractSection(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    // Find the section name from the identifier node
+    const identifierNode = this.findChildByType(node, 'identifier');
+    if (!identifierNode) return null;
+
+    const sectionName = this.getNodeText(identifierNode);
+    const signature = `@section ${sectionName}`;
+
+    return this.createSymbol(node, sectionName, SymbolKind.Module, {
+      signature,
+      visibility: 'public',
+      parentId,
+      metadata: {
+        type: 'razor-section',
+        sectionName
+      }
+    });
+  }
+
+  private extractAssignment(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    // Check if this is ViewData or ViewBag assignment
+    const assignmentText = this.getNodeText(node);
+
+    if (assignmentText.includes('ViewData[') || assignmentText.includes('ViewBag.')) {
+      // Extract the variable name for ViewData["Title"] or ViewBag.MetaDescription
+      let variableName = 'assignment';
+
+      if (assignmentText.includes('ViewData[')) {
+        const match = assignmentText.match(/ViewData\["([^"]+)"\]/);
+        if (match) {
+          variableName = `ViewData_${match[1]}`;
+        }
+      } else if (assignmentText.includes('ViewBag.')) {
+        const match = assignmentText.match(/ViewBag\.(\w+)/);
+        if (match) {
+          variableName = `ViewBag_${match[1]}`;
+        }
+      }
+
+      return this.createSymbol(node, variableName, SymbolKind.Variable, {
+        signature: assignmentText,
+        visibility: 'public',
+        parentId,
+        metadata: {
+          type: 'razor-assignment',
+          isViewData: assignmentText.includes('ViewData'),
+          isViewBag: assignmentText.includes('ViewBag')
+        }
+      });
+    }
+
+    return null;
+  }
+
+  private extractHtmlAttribute(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    // Check for data binding attributes like @bind-Value
+    const attributeText = this.getNodeText(node);
+
+    if (attributeText.includes('@bind')) {
+      const bindingName = attributeText.includes('-Value') ? 'bind_Value' : 'bind';
+      const signature = attributeText;
+
+      return this.createSymbol(node, bindingName, SymbolKind.Variable, {
+        signature,
+        visibility: 'public',
+        parentId,
+        metadata: {
+          type: 'razor-binding',
+          isDataBinding: true
+        }
+      });
+    }
+
+    return null;
+  }
+
+  private extractTokenDirective(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    // Handle token-based directives like at_inherits, at_namespace, at_implements
+    const directiveType = node.type.replace('at_', '');
+    let directiveName = `@${directiveType}`;
+
+    // Look for the next sibling to get the directive value
+    let directiveValue = '';
+    let current = node.nextSibling;
+
+    // Skip whitespace and find the value
+    while (current && (current.type === ' ' || current.type === '\t' || current.type === '\n')) {
+      current = current.nextSibling;
+    }
+
+    if (current && (current.type === 'identifier' || current.type === 'qualified_name')) {
+      directiveValue = this.getNodeText(current);
+    }
+
+    const signature = directiveValue ? `${directiveName} ${directiveValue}` : directiveName;
+
+    return this.createSymbol(node, directiveName, SymbolKind.Import, {
+      signature,
+      visibility: 'public',
+      parentId,
+      metadata: {
+        type: 'razor-token-directive',
+        directiveType,
+        directiveValue
+      }
+    });
+  }
+
   inferTypes(symbols: Symbol[]): Map<string, string> {
     const types = new Map<string, string>();
     for (const symbol of symbols) {
@@ -681,6 +816,9 @@ export class RazorExtractor extends BaseExtractor {
         types.set(symbol.id, symbol.metadata.type);
       } else if (symbol.metadata?.returnType) {
         types.set(symbol.id, symbol.metadata.returnType);
+      } else if (symbol.metadata?.isDataBinding) {
+        // Improve type inference for properties
+        types.set(symbol.id, 'bool');
       }
     }
     return types;

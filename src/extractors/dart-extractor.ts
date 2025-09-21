@@ -77,6 +77,9 @@ export class DartExtractor extends BaseExtractor {
           case 'initialized_variable_definition':
             symbol = this.extractVariable(node, parentId);
             break;
+          case 'type_alias':
+            symbol = this.extractTypedef(node, parentId);
+            break;
           default:
             // Handle other Dart constructs
             break;
@@ -295,7 +298,7 @@ export class DartExtractor extends BaseExtractor {
 
     // Check for modifiers using child nodes
     const isLate = this.findChildByType(node, 'late') !== null;
-    const isFinal = this.findChildByType(node, 'final') !== null;
+    const isFinal = this.findChildByType(node, 'final') !== null || this.findChildByType(node, 'final_builtin') !== null;
     const isStatic = this.findChildByType(node, 'static') !== null;
 
     // Check for nullable type
@@ -528,6 +531,48 @@ export class DartExtractor extends BaseExtractor {
     return foundVariable;
   }
 
+  private extractTypedef(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    if (node.type !== 'type_alias') return null;
+
+    // Get the typedef name
+    const nameNode = this.findChildByType(node, 'type_identifier');
+    if (!nameNode) return null;
+
+    const name = this.getNodeText(nameNode);
+    const isPrivate = name.startsWith('_');
+
+    // Build signature with typedef keyword and generic parameters
+    const typeParamsNode = this.findChildByType(node, 'type_parameters');
+    const typeParams = typeParamsNode ? this.getNodeText(typeParamsNode) : '';
+
+    // Get the type being aliased (everything after =)
+    const equalNode = node.children?.find(child => child.type === '=');
+    let aliasedType = '';
+    if (equalNode && equalNode.nextSibling) {
+      // Get all siblings after = but before ;
+      let current = equalNode.nextSibling;
+      while (current && current.type !== ';') {
+        aliasedType += this.getNodeText(current);
+        current = current.nextSibling;
+      }
+    }
+
+    const signature = `typedef ${name}${typeParams} = ${aliasedType.trim()}`;
+
+    const typedefSymbol = this.createSymbol(node, name, SymbolKind.Class, {
+      signature,
+      visibility: isPrivate ? 'private' : 'public',
+      parentId,
+      docComment: this.extractDocumentation(node),
+      metadata: {
+        isTypedef: true,
+        aliasedType: aliasedType.trim()
+      }
+    });
+
+    return typedefSymbol;
+  }
+
   // Flutter-specific helper methods
   private isFlutterWidget(classNode: Parser.SyntaxNode): boolean {
     const extendsClause = this.findChildByType(classNode, 'superclass');
@@ -704,6 +749,10 @@ export class DartExtractor extends BaseExtractor {
     const isAbstract = this.isAbstractClass(node);
     const abstractPrefix = isAbstract ? 'abstract ' : '';
 
+    // Extract generic type parameters (e.g., <T>)
+    const typeParamsNode = this.findChildByType(node, 'type_parameters');
+    const typeParams = typeParamsNode ? this.getNodeText(typeParamsNode) : '';
+
     const extendsClause = this.findChildByType(node, 'superclass');
     let extendsText = '';
     if (extendsClause) {
@@ -735,7 +784,7 @@ export class DartExtractor extends BaseExtractor {
       }
     }
 
-    return `${abstractPrefix}class ${name}${extendsText}${mixinText}${implementsText}`;
+    return `${abstractPrefix}class ${name}${typeParams}${extendsText}${mixinText}${implementsText}`;
   }
 
   private extractFunctionSignature(node: Parser.SyntaxNode): string {
@@ -754,6 +803,10 @@ export class DartExtractor extends BaseExtractor {
       }
     }
 
+    // Extract generic type parameters (e.g., <T extends Comparable<T>>)
+    const typeParamsNode = this.findChildByType(node, 'type_parameters');
+    const typeParams = typeParamsNode ? this.getNodeText(typeParamsNode) : '';
+
     // Get parameters
     const paramListNode = this.findChildByType(node, 'formal_parameter_list');
     const params = paramListNode ? this.getNodeText(paramListNode) : '()';
@@ -762,11 +815,11 @@ export class DartExtractor extends BaseExtractor {
     const isAsync = this.isAsyncFunction(node);
     const asyncModifier = isAsync ? ' async' : '';
 
-    // Build signature with return type and async modifier
+    // Build signature with return type, generic parameters, and async modifier
     if (returnType) {
-      return `${returnType} ${name}${params}${asyncModifier}`;
+      return `${returnType} ${name}${typeParams}${params}${asyncModifier}`;
     } else {
-      return `${name}${params}${asyncModifier}`;
+      return `${name}${typeParams}${params}${asyncModifier}`;
     }
   }
 

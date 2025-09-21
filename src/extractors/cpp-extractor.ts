@@ -45,10 +45,15 @@ export class CppExtractor extends BaseExtractor {
     // Track more node types to prevent duplicates seen in debugging
     const shouldTrack = (
       (node.type === 'function_declarator' && node.parent?.type === 'field_declaration') ||
-      // SYSTEMATIC FIX: Only track template functions, not template classes (classes need unique extraction)
-      (node.type === 'function_definition' && node.parent?.type === 'template_declaration') ||
-      // Prevent duplicate destructors from different extraction paths
-      (node.type === 'declaration' && node.children.some(c =>
+      // SYSTEMATIC FIX: Only track template functions, not destructors or constructors (they need unique extraction)
+      (node.type === 'function_definition' &&
+       node.parent?.type === 'template_declaration' &&
+       !this.isDestructorFunction(node) &&
+       !this.isConstructorFunction(node)) ||
+      // Prevent duplicate destructors from different extraction paths (but only for standalone declarations, not in-class destructors)
+      (node.type === 'declaration' &&
+       !this.isInsideClass(node) &&
+       node.children.some(c =>
         c.type === 'function_declarator' &&
         c.children.some(d => d.type === 'destructor_name')
       ))
@@ -209,7 +214,7 @@ export class CppExtractor extends BaseExtractor {
     let signature = `class ${className}`;
 
     // Handle template parameters (if this is inside a template_declaration)
-    const templateParams = this.extractTemplateParameters(node.parent);
+    const templateParams = this.extractTemplateParameters(node);
     if (templateParams) {
       signature = `${templateParams}\n${signature}`;
     }
@@ -938,6 +943,32 @@ export class CppExtractor extends BaseExtractor {
   }
 
   // Helper methods for C++-specific parsing
+  private isDestructorFunction(node: Parser.SyntaxNode): boolean {
+    if (node.type !== 'function_definition') return false;
+
+    // Look for function_declarator with destructor_name
+    const funcDeclarator = node.children.find(c => c.type === 'function_declarator');
+    if (funcDeclarator) {
+      return funcDeclarator.children.some(c => c.type === 'destructor_name');
+    }
+    return false;
+  }
+
+  private isConstructorFunction(node: Parser.SyntaxNode): boolean {
+    if (node.type !== 'function_definition') return false;
+
+    // Look for function_declarator and check if it's a constructor
+    const funcDeclarator = node.children.find(c => c.type === 'function_declarator');
+    if (funcDeclarator) {
+      const nameNode = this.extractFunctionName(funcDeclarator);
+      if (nameNode) {
+        const name = this.getNodeText(nameNode);
+        return this.isConstructor(name, node);
+      }
+    }
+    return false;
+  }
+
   private extractTemplateParameters(templateNode: Parser.SyntaxNode | null): string | null {
     // Walk up the tree to find template_declaration (not just immediate parent)
     let current = templateNode;
