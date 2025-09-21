@@ -24,7 +24,6 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "@vscode/tree-sitter-wasm": "^0.0.5-php.2",
     "chokidar": "^3.5.3",
     "minisearch": "^6.3.0",
     "tree-sitter-c": "^0.23.0",
@@ -44,7 +43,7 @@
     "tree-sitter-swift": "^0.7.1",
     "tree-sitter-typescript": "^0.23.2",
     "tree-sitter-vue": "^0.2.1",
-    "web-tree-sitter": "^0.20.8",
+    "web-tree-sitter": "0.25.9",
     "zod": "^4.1.9"
   },
   "devDependencies": {

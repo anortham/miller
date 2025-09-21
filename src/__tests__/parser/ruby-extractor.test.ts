@@ -935,8 +935,8 @@ end
       // Might infer Boolean from method name pattern and return value
 
       // Instance variables with initial values
-      const result = symbols.find(s => s.name === '@result');
-      expect(result).toBeDefined();
+      const resultSymbol = symbols.find(s => s.name === '@result');
+      expect(resultSymbol).toBeDefined();
       // Might infer Integer from assignment
 
       const factor = symbols.find(s => s.name === '@factor');

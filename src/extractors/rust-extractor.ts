@@ -1,4 +1,4 @@
-import Parser from 'web-tree-sitter';
+import { Parser } from 'web-tree-sitter';
 import { BaseExtractor, Symbol, Relationship, SymbolKind, RelationshipKind } from './base-extractor.js';
 
 /**

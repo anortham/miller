@@ -1,4 +1,4 @@
-import Parser from 'web-tree-sitter';
+import { Parser } from 'web-tree-sitter';
 import { BaseExtractor, Symbol, Relationship, SymbolKind, RelationshipKind } from './base-extractor.js';
 
 /**
@@ -14,8 +14,11 @@ import { BaseExtractor, Symbol, Relationship, SymbolKind, RelationshipKind } fro
  * - Multiple inheritance and virtual functions
  */
 export class CppExtractor extends BaseExtractor {
+  private processedNodes: Set<string> = new Set();
+
   extractSymbols(tree: Parser.Tree): Symbol[] {
     const symbols: Symbol[] = [];
+    this.processedNodes.clear(); // Reset for each extraction
     this.walkTree(tree.rootNode, symbols);
     return symbols;
   }
@@ -32,43 +35,85 @@ export class CppExtractor extends BaseExtractor {
     }
   }
 
+  private getNodeKey(node: Parser.SyntaxNode): string {
+    return `${node.startPosition.row}:${node.startPosition.column}:${node.endPosition.row}:${node.endPosition.column}:${node.type}`;
+  }
+
   protected extractSymbol(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    const nodeKey = this.getNodeKey(node);
+
+    // Track more node types to prevent duplicates seen in debugging
+    const shouldTrack = (
+      (node.type === 'function_declarator' && node.parent?.type === 'field_declaration') ||
+      (node.type === 'class_specifier' && node.parent?.type === 'template_declaration') ||
+      (node.type === 'function_definition' && node.parent?.type === 'template_declaration') ||
+      // Prevent duplicate destructors from different extraction paths
+      (node.type === 'declaration' && node.children.some(c =>
+        c.type === 'function_declarator' &&
+        c.children.some(d => d.type === 'destructor_name')
+      ))
+    );
+    if (shouldTrack && this.processedNodes.has(nodeKey)) {
+      return null;
+    }
+
+    let symbol: Symbol | null = null;
+
     switch (node.type) {
       case 'namespace_definition':
-        return this.extractNamespace(node, parentId);
+        symbol = this.extractNamespace(node, parentId);
+        break;
       case 'using_declaration':
       case 'namespace_alias_definition':
-        return this.extractUsing(node, parentId);
+        symbol = this.extractUsing(node, parentId);
+        break;
       case 'class_specifier':
-        return this.extractClass(node, parentId);
+        symbol = this.extractClass(node, parentId);
+        break;
       case 'struct_specifier':
-        return this.extractStruct(node, parentId);
+        symbol = this.extractStruct(node, parentId);
+        break;
       case 'union_specifier':
-        return this.extractUnion(node, parentId);
+        symbol = this.extractUnion(node, parentId);
+        break;
       case 'enum_specifier':
-        return this.extractEnum(node, parentId);
+        symbol = this.extractEnum(node, parentId);
+        break;
       case 'enumerator':
-        return this.extractEnumMember(node, parentId);
+        symbol = this.extractEnumMember(node, parentId);
+        break;
       case 'function_definition':
-        return this.extractFunction(node, parentId);
+        symbol = this.extractFunction(node, parentId);
+        break;
       case 'function_declarator':
         // Only extract standalone function declarators (not those inside function_definition)
         if (node.parent?.type !== 'function_definition') {
-          return this.extractFunction(node, parentId);
+          symbol = this.extractFunction(node, parentId);
         }
-        return null;
+        break;
       case 'declaration':
         // This can contain function declarations or variable declarations
-        return this.extractDeclaration(node, parentId);
+        symbol = this.extractDeclaration(node, parentId);
+        break;
       case 'template_declaration':
-        return this.extractTemplate(node, parentId);
+        symbol = this.extractTemplate(node, parentId);
+        break;
       case 'field_declaration':
-        return this.extractField(node, parentId);
+        symbol = this.extractField(node, parentId);
+        break;
       case 'friend_declaration':
-        return this.extractFriendDeclaration(node, parentId);
+        symbol = this.extractFriendDeclaration(node, parentId);
+        break;
       default:
         return null;
     }
+
+    // Mark node as processed if we successfully extracted a symbol and should track this node type
+    if (symbol && shouldTrack) {
+      this.processedNodes.add(nodeKey);
+    }
+
+    return symbol;
   }
 
   private extractNamespace(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
@@ -307,7 +352,8 @@ export class CppExtractor extends BaseExtractor {
     // Handle both function_definition and function_declarator
     let funcNode = node;
     if (node.type === 'function_definition') {
-      funcNode = node.children.find(c => c.type === 'function_declarator') || node;
+      // Look for function_declarator or reference_declarator (for ref-qualified methods)
+      funcNode = node.children.find(c => c.type === 'function_declarator' || c.type === 'reference_declarator') || node;
     }
 
     const nameNode = this.extractFunctionName(funcNode);
@@ -567,25 +613,46 @@ export class CppExtractor extends BaseExtractor {
     const funcDeclarator = node.children.find(c => c.type === 'function_declarator');
     if (funcDeclarator) {
       // This is a method declaration, treat it as a method
-      return this.extractMethodFromField(node, funcDeclarator, parentId);
+      const symbol = this.extractMethodFromField(node, funcDeclarator, parentId);
+
+      // Mark the function_declarator as processed to prevent duplicate extraction
+      if (symbol) {
+        const funcKey = this.getNodeKey(funcDeclarator);
+        this.processedNodes.add(funcKey);
+      }
+
+      return symbol;
     }
 
     // Handle regular field declarations
     const declarators = node.children.filter(c => c.type === 'field_declarator');
-    if (declarators.length === 0) return null;
+    let nameNode: Parser.SyntaxNode | null = null;
+    let name: string = '';
 
-    const declarator = declarators[0];
-    const nameNode = this.extractDeclaratorName(declarator);
-    if (!nameNode) return null;
+    if (declarators.length > 0) {
+      // Traditional field declarator
+      const declarator = declarators[0];
+      nameNode = this.extractDeclaratorName(declarator);
+      if (nameNode) {
+        name = this.getNodeText(nameNode);
+      }
+    } else {
+      // Look for field_identifier (modern C++ fields like std::atomic<int> atomicCounter)
+      const fieldId = node.children.find(c => c.type === 'field_identifier');
+      if (fieldId) {
+        nameNode = fieldId;
+        name = this.getNodeText(fieldId);
+      }
+    }
 
-    const name = this.getNodeText(nameNode);
+    if (!nameNode || !name) return null;
 
     const storageClass = this.extractStorageClass(node);
     const typeSpecifiers = this.extractTypeSpecifiers(node);
     const isConstant = this.isConstantDeclaration(storageClass, typeSpecifiers);
 
     const kind = isConstant ? SymbolKind.Constant : SymbolKind.Field;
-    const signature = this.buildVariableSignature(node, declarator, name);
+    const signature = this.buildVariableSignature(node, nameNode, name);
     const visibility = this.extractVisibility(node);
 
     return this.createSymbol(node, name, kind, {
@@ -872,12 +939,18 @@ export class CppExtractor extends BaseExtractor {
 
   // Helper methods for C++-specific parsing
   private extractTemplateParameters(templateNode: Parser.SyntaxNode | null): string | null {
-    if (!templateNode || templateNode.type !== 'template_declaration') return null;
-
-    const paramList = templateNode.children.find(c => c.type === 'template_parameter_list');
-    if (!paramList) return null;
-
-    return `template${this.getNodeText(paramList)}`;
+    // Walk up the tree to find template_declaration (not just immediate parent)
+    let current = templateNode;
+    while (current) {
+      if (current.type === 'template_declaration') {
+        const paramList = current.children.find(c => c.type === 'template_parameter_list');
+        if (paramList) {
+          return `template${this.getNodeText(paramList)}`;
+        }
+      }
+      current = current.parent;
+    }
+    return null;
   }
 
   private extractBaseClasses(baseClause: Parser.SyntaxNode): string[] {
@@ -899,12 +972,12 @@ export class CppExtractor extends BaseExtractor {
         i++;
         if (i < baseClause.children.length) {
           const classNode = baseClause.children[i];
-          if (classNode.type === 'type_identifier') {
+          if (classNode.type === 'type_identifier' || classNode.type === 'qualified_identifier' || classNode.type === 'template_type') {
             const className = this.getNodeText(classNode);
             bases.push(`${access} ${className}`);
           }
         }
-      } else if (child.type === 'type_identifier') {
+      } else if (child.type === 'type_identifier' || child.type === 'qualified_identifier' || child.type === 'template_type') {
         // Class name without explicit access specifier
         const className = this.getNodeText(child);
         bases.push(className);
@@ -980,9 +1053,19 @@ export class CppExtractor extends BaseExtractor {
     let current = node.parent;
     while (current) {
       if (current.type === 'class_specifier' || current.type === 'struct_specifier') {
-        const classNameNode = current.children.find(c => c.type === 'type_identifier');
-        if (classNameNode && this.getNodeText(classNameNode) === name) {
-          return true;
+        const classNameNode = current.children.find(c => c.type === 'type_identifier' || c.type === 'template_type');
+        if (classNameNode) {
+          let className;
+          if (classNameNode.type === 'template_type') {
+            // For template specializations like "TemplateClass1<int>", extract base name "TemplateClass1"
+            const baseTypeNode = classNameNode.children.find(c => c.type === 'type_identifier');
+            className = baseTypeNode ? this.getNodeText(baseTypeNode) : this.getNodeText(classNameNode);
+          } else {
+            className = this.getNodeText(classNameNode);
+          }
+          if (className === name) {
+            return true;
+          }
         }
         break;
       }
@@ -998,7 +1081,10 @@ export class CppExtractor extends BaseExtractor {
     const trailingReturnType = this.extractTrailingReturnType(node);
     const parameters = this.extractFunctionParameters(funcNode);
     const constQualifier = this.extractConstQualifier(funcNode);
+    const refQualifier = this.extractRefQualifier(funcNode);
     const noexceptSpec = this.extractNoexceptSpecifier(funcNode);
+    const virtualSpecifiers = this.extractVirtualSpecifiers(funcNode);
+    const deleteOrDefaultClause = this.extractDeleteOrDefaultClause(node);
 
     // Build signature
     let signature = '';
@@ -1021,8 +1107,20 @@ export class CppExtractor extends BaseExtractor {
       signature += ' const';
     }
 
+    if (refQualifier) {
+      signature += ` ${refQualifier}`;
+    }
+
     if (noexceptSpec) {
       signature += ` ${noexceptSpec}`;
+    }
+
+    if (virtualSpecifiers.length > 0) {
+      signature += ` ${virtualSpecifiers.join(' ')}`;
+    }
+
+    if (deleteOrDefaultClause) {
+      signature += ` ${deleteOrDefaultClause}`;
     }
 
     return signature;
@@ -1083,6 +1181,12 @@ export class CppExtractor extends BaseExtractor {
       } else if (child.type === 'storage_class_specifier') {
         // Handle storage class specifiers like inline
         modifiers.push(this.getNodeText(child));
+      } else if (child.type === 'type_qualifier') {
+        // Handle type qualifiers like constexpr and consteval
+        const qualifierText = this.getNodeText(child);
+        if (qualifierText === 'constexpr' || qualifierText === 'consteval') {
+          modifiers.push(qualifierText);
+        }
       }
     }
 
@@ -1095,17 +1199,84 @@ export class CppExtractor extends BaseExtractor {
   }
 
   private extractBasicReturnType(node: Parser.SyntaxNode): string | null {
-    // Look for type specifiers before the function name, including 'auto'
+    // For function_declarator nodes, check parent function_definition
+    if (node.type === 'function_declarator' && node.parent?.type === 'reference_declarator' && node.parent.parent?.type === 'function_definition') {
+      const funcDef = node.parent.parent;
+      const typeIdentifier = funcDef.children.find(c => c.type === 'type_identifier' || c.type === 'primitive_type');
+      const refDeclarator = funcDef.children.find(c => c.type === 'reference_declarator');
+
+      if (typeIdentifier && refDeclarator) {
+        // Extract base type (e.g., "T") and leading references (e.g., "&&")
+        const baseType = this.getNodeText(typeIdentifier);
+        const leadingRef = refDeclarator.children.find(c => c.type === '&&' || c.type === '&');
+
+        if (leadingRef) {
+          return `${baseType}${this.getNodeText(leadingRef)}`;
+        }
+        return baseType;
+      }
+    }
+
+    // For function_definition with reference_declarator (ref-qualified methods)
+    if (node.type === 'function_definition') {
+      const typeIdentifier = node.children.find(c => c.type === 'type_identifier' || c.type === 'primitive_type');
+      const refDeclarator = node.children.find(c => c.type === 'reference_declarator');
+
+      if (typeIdentifier && refDeclarator) {
+        // Extract base type (e.g., "T") and leading references (e.g., "&&")
+        const baseType = this.getNodeText(typeIdentifier);
+        const leadingRef = refDeclarator.children.find(c => c.type === '&&' || c.type === '&');
+
+        if (leadingRef) {
+          return `${baseType}${this.getNodeText(leadingRef)}`;
+        }
+        return baseType;
+      }
+    }
+
+    // Look for type specifiers before the function name, including 'auto' and SFINAE patterns
     const typeNodes = node.children.filter(c =>
       c.type === 'primitive_type' ||
       c.type === 'type_identifier' ||
       c.type === 'qualified_identifier' ||
       c.type === 'template_type' ||
       c.type === 'placeholder_type_specifier' ||
+      c.type === 'dependent_type' ||  // For SFINAE patterns like "typename std::enable_if_t<...>"
       this.getNodeText(c) === 'auto'
     );
 
+    // For reference_declarator nodes, extract return type from the declarator text
+    const refDeclarator = node.children.find(c => c.type === 'reference_declarator');
+    if (refDeclarator) {
+      return this.extractReturnTypeFromRefDeclarator(refDeclarator);
+    }
+
     return typeNodes.length > 0 ? typeNodes.map(n => this.getNodeText(n)).join(' ') : null;
+  }
+
+  private extractReturnTypeFromRefDeclarator(refDeclarator: Parser.SyntaxNode): string | null {
+    const text = this.getNodeText(refDeclarator);
+    // Pattern like "&& moveData() &&" - extract the leading reference part
+    const match = text.match(/^([&*]+)\s*([^(]+)/);
+    if (match) {
+      const refs = match[1]; // "&&" or "&"
+      // Check if there are type specifiers before the reference_declarator
+      const parent = refDeclarator.parent;
+      if (parent) {
+        const typeNodes = parent.children.filter(c =>
+          (c.type === 'primitive_type' ||
+           c.type === 'type_identifier' ||
+           c.type === 'qualified_identifier' ||
+           c.type === 'template_type') &&
+          c !== refDeclarator
+        );
+        if (typeNodes.length > 0) {
+          const baseType = typeNodes.map(n => this.getNodeText(n)).join(' ');
+          return `${baseType}${refs}`;
+        }
+      }
+    }
+    return null;
   }
 
   private extractTrailingReturnType(node: Parser.SyntaxNode): string | null {
@@ -1160,9 +1331,81 @@ export class CppExtractor extends BaseExtractor {
     return funcNode.children.some(c => c.type === 'type_qualifier' && this.getNodeText(c) === 'const');
   }
 
+  private extractRefQualifier(funcNode: Parser.SyntaxNode): string | null {
+    // For ref-qualified methods, check if this is a reference_declarator
+    if (funcNode.type === 'reference_declarator') {
+      // Look for function_declarator child which contains the ref-qualifier
+      const funcDeclarator = funcNode.children.find(c => c.type === 'function_declarator');
+      if (funcDeclarator) {
+        const text = this.getNodeText(funcDeclarator);
+        // Look for ref-qualifiers at the end: "moveData() &&" or "getData() const&"
+        if (text.endsWith(' &&')) {
+          return '&&';
+        }
+        if (text.endsWith(' &')) {
+          return '&';
+        }
+        if (text.includes(') const&')) {
+          return '&';
+        }
+      }
+    }
+
+    // For regular function_declarator nodes
+    if (funcNode.type === 'function_declarator') {
+      const text = this.getNodeText(funcNode);
+      if (text.endsWith(' &&')) {
+        return '&&';
+      }
+      if (text.endsWith(' &')) {
+        return '&';
+      }
+      if (text.includes(') const&')) {
+        return '&';
+      }
+    }
+
+    // Also check child nodes for ref-qualifiers
+    for (const child of funcNode.children) {
+      if (child.type === 'reference_declarator') {
+        const refQual = this.extractRefQualifier(child);
+        if (refQual) return refQual;
+      }
+    }
+
+    return null;
+  }
+
   private extractNoexceptSpecifier(funcNode: Parser.SyntaxNode): string | null {
     const noexceptNode = funcNode.children.find(c => c.type === 'noexcept');
     return noexceptNode ? this.getNodeText(noexceptNode) : null;
+  }
+
+  private extractDeleteOrDefaultClause(node: Parser.SyntaxNode): string | null {
+    // Check for delete_method_clause or default_method_clause in function_definition
+    const deleteClause = node.children.find(c => c.type === 'delete_method_clause');
+    if (deleteClause) {
+      return this.getNodeText(deleteClause);
+    }
+
+    const defaultClause = node.children.find(c => c.type === 'default_method_clause');
+    if (defaultClause) {
+      return this.getNodeText(defaultClause);
+    }
+
+    return null;
+  }
+
+  private extractVirtualSpecifiers(funcNode: Parser.SyntaxNode): string[] {
+    const virtualSpecs: string[] = [];
+
+    for (const child of funcNode.children) {
+      if (child.type === 'virtual_specifier') {
+        virtualSpecs.push(this.getNodeText(child));
+      }
+    }
+
+    return virtualSpecs;
   }
 
   private extractStorageClass(node: Parser.SyntaxNode): string[] {
@@ -1187,7 +1430,7 @@ export class CppExtractor extends BaseExtractor {
       if (child.type === 'type_qualifier') {
         // Handle const, volatile, etc.
         typeSpecs.push(this.getNodeText(child));
-      } else if (child.type === 'primitive_type' || child.type === 'type_identifier') {
+      } else if (child.type === 'primitive_type' || child.type === 'type_identifier' || child.type === 'qualified_identifier') {
         typeSpecs.push(this.getNodeText(child));
       }
     }
@@ -1220,22 +1463,72 @@ export class CppExtractor extends BaseExtractor {
   }
 
   private extractVisibility(node: Parser.SyntaxNode): 'public' | 'private' | 'protected' {
-    // In C++, visibility is determined by the current access section
-    let current = node.parent;
-    while (current) {
-      if (current.type === 'access_specifier') {
-        const specifier = this.getNodeText(current);
-        if (specifier === 'private:') return 'private';
-        if (specifier === 'protected:') return 'protected';
-        if (specifier === 'public:') return 'public';
-      }
-      current = current.parent;
+    // Find the field_declaration_list (class body) that contains this node
+    let fieldList = node;
+    while (fieldList && fieldList.type !== 'field_declaration_list') {
+      fieldList = fieldList.parent;
     }
 
-    // Default visibility depends on the container
+    if (!fieldList) {
+      // Default visibility depends on the container
+      const container = this.findContainerType(node);
+      if (container === 'class_specifier') return 'private';
+      return 'public'; // struct default
+    }
+
+    // Track current access level by walking through siblings until we reach our node
+    let currentAccess: 'public' | 'private' | 'protected';
+
+    // Default access depends on the container type
     const container = this.findContainerType(node);
-    if (container === 'class_specifier') return 'private';
-    return 'public'; // struct default
+    currentAccess = (container === 'class_specifier') ? 'private' : 'public';
+
+    // Find our node's position and track access specifiers before it
+    const children = fieldList.children;
+    let nodeIndex = -1;
+
+    // Find the index of our target node using position-based comparison
+    for (let i = 0; i < children.length; i++) {
+      if (this.isSameNode(children[i], node) || this.isNodeAncestor(children[i], node)) {
+        nodeIndex = i;
+        break;
+      }
+    }
+
+    if (nodeIndex === -1) {
+      return currentAccess; // Node not found, return default
+    }
+
+    // Walk backwards from our node to find the most recent access specifier
+    for (let i = nodeIndex - 1; i >= 0; i--) {
+      const child = children[i];
+      if (child.type === 'access_specifier') {
+        const specifier = this.getNodeText(child);
+        if (specifier === 'private') return 'private';
+        else if (specifier === 'protected') return 'protected';
+        else if (specifier === 'public') return 'public';
+      }
+    }
+
+    return currentAccess;
+  }
+
+  private isNodeAncestor(ancestor: Parser.SyntaxNode, descendant: Parser.SyntaxNode): boolean {
+    let current = descendant;
+    while (current) {
+      if (this.isSameNode(current, ancestor)) return true;
+      current = current.parent;
+    }
+    return false;
+  }
+
+  private isSameNode(node1: Parser.SyntaxNode, node2: Parser.SyntaxNode): boolean {
+    // Compare nodes based on their position and content
+    return node1.startPosition.row === node2.startPosition.row &&
+           node1.startPosition.column === node2.startPosition.column &&
+           node1.endPosition.row === node2.endPosition.row &&
+           node1.endPosition.column === node2.endPosition.column &&
+           node1.type === node2.type;
   }
 
   private findContainerType(node: Parser.SyntaxNode): string | null {
@@ -1253,8 +1546,17 @@ export class CppExtractor extends BaseExtractor {
     let current = node.parent;
     while (current) {
       if (current.type === 'class_specifier' || current.type === 'struct_specifier') {
-        const nameNode = current.children.find(c => c.type === 'type_identifier');
-        return nameNode ? this.getNodeText(nameNode) : null;
+        const nameNode = current.children.find(c => c.type === 'type_identifier' || c.type === 'template_type');
+        if (nameNode) {
+          if (nameNode.type === 'template_type') {
+            // For template specializations like "TemplateClass1<int>", extract base name "TemplateClass1"
+            const baseTypeNode = nameNode.children.find(c => c.type === 'type_identifier');
+            return baseTypeNode ? this.getNodeText(baseTypeNode) : this.getNodeText(nameNode);
+          } else {
+            return this.getNodeText(nameNode);
+          }
+        }
+        return null;
       }
       current = current.parent;
     }

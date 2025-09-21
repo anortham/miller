@@ -5,7 +5,6 @@
       "name": "miller",
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.0.0",
-        "@vscode/tree-sitter-wasm": "^0.0.5-php.2",
         "chokidar": "^3.5.3",
         "minisearch": "^6.3.0",
         "tree-sitter-c": "^0.23.0",
@@ -25,7 +24,7 @@
         "tree-sitter-swift": "^0.7.1",
         "tree-sitter-typescript": "^0.23.2",
         "tree-sitter-vue": "^0.2.1",
-        "web-tree-sitter": "^0.20.8",
+        "web-tree-sitter": "0.25.9",
         "zod": "^4.1.9",
       },
       "devDependencies": {
@@ -39,8 +38,6 @@
     "@types/node": ["@types/node@24.5.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@types/node/-/node-24.5.2.tgz", { "dependencies": { "undici-types": "~7.12.0" } }, "sha1-Us64P1D+D8/fvSqfq22y6efvZEY="],
 
     "@types/react": ["@types/react@19.1.13", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@types/react/-/react-19.1.13.tgz", { "dependencies": { "csstype": "^3.0.2" } }, "sha1-/GUP+mgNc5olpTD11+vgDN13GIM="],
-
-    "@vscode/tree-sitter-wasm": ["@vscode/tree-sitter-wasm@0.0.5-php.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@vscode/tree-sitter-wasm/-/tree-sitter-wasm-0.0.5-php.2.tgz", {}, "sha1-sQQfo2+oUrfwo4gNwb3wh0njtHc="],
 
     "accepts": ["accepts@2.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/accepts/-/accepts-2.0.0.tgz", { "dependencies": { "mime-types": "^3.0.0", "negotiator": "^1.0.0" } }, "sha1-u89LpQdUZ/PyEx6rPP/HPC9deJU="],
 
@@ -350,7 +347,7 @@
 
     "vary": ["vary@1.1.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/vary/-/vary-1.1.2.tgz", {}, "sha1-IpnwLG3tMNSllhsLn3RSShj2NPw="],
 
-    "web-tree-sitter": ["web-tree-sitter@0.20.8", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/web-tree-sitter/-/web-tree-sitter-0.20.8.tgz", {}, "sha1-HjcctXdYR4nK3XXLScfd+8mdBMg="],
+    "web-tree-sitter": ["web-tree-sitter@0.25.9", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/web-tree-sitter/-/web-tree-sitter-0.25.9.tgz", { "peerDependencies": { "@types/emscripten": "^1.40.0" }, "optionalPeers": ["@types/emscripten"] }, "sha1-VV/xdq85beceRxDWKwupsmB/39U="],
 
     "which": ["which@2.0.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/which/-/which-2.0.2.tgz", { "dependencies": { "isexe": "^2.0.0" }, "bin": { "node-which": "./bin/node-which" } }, "sha1-fGqN0KY2oDJ+ELWckobu6T8/UbE="],
 

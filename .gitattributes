@@ -1,0 +1,77 @@
+# Handle line endings automatically for cross-platform compatibility
+* text=auto
+
+# Source code files
+*.ts text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Test files
+*.test.ts text eol=lf
+*.spec.ts text eol=lf
+
+# Configuration files
+.gitignore text eol=lf
+.gitattributes text eol=lf
+tsconfig.json text eol=lf
+package.json text eol=lf
+bun.lockb binary
+
+# Documentation
+*.md text eol=lf
+CLAUDE.md text eol=lf
+README.md text eol=lf
+
+# Binary files
+*.wasm binary
+*.node binary
+*.dylib binary
+*.so binary
+*.dll binary
+
+# Images
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.svg text eol=lf
+
+# Archives
+*.zip binary
+*.tar.gz binary
+*.tgz binary
+
+# IDE files
+.vscode/* text eol=lf
+*.code-workspace text eol=lf
+
+# OS files
+.DS_Store binary
+Thumbs.db binary
+
+# Language specific files for proper handling
+*.rb text eol=lf
+*.php text eol=lf
+*.cpp text eol=lf
+*.c text eol=lf
+*.h text eol=lf
+*.hpp text eol=lf
+*.cs text eol=lf
+*.java text eol=lf
+*.kt text eol=lf
+*.swift text eol=lf
+*.go text eol=lf
+*.rs text eol=lf
+*.py text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.scss text eol=lf
+*.vue text eol=lf
+
+# Generated files (usually should be ignored, but if tracked)
+*.d.ts text eol=lf
+*.map text eol=lf

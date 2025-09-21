@@ -1753,7 +1753,7 @@ namespace ExceptionHandling {
       const moveConstructor = symbols.filter(s => s.kind === SymbolKind.Constructor && s.signature?.includes('&&'));
       expect(moveConstructor.length).toBeGreaterThanOrEqual(1);
 
-      const moveAssignment = symbols.filter(s => s.signature?.includes('operator=' && s.signature?.includes('&&')));
+      const moveAssignment = symbols.filter(s => s.signature?.includes('operator=') && s.signature?.includes('&&'));
       expect(moveAssignment.length).toBeGreaterThanOrEqual(1);
 
       const read = symbols.find(s => s.name === 'read');

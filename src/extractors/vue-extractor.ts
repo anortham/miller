@@ -1,5 +1,5 @@
 import { BaseExtractor, Symbol, Relationship, SymbolKind } from './base-extractor.js';
-import Parser from 'web-tree-sitter';
+import { Parser } from 'web-tree-sitter';
 
 interface VueSection {
   type: 'template' | 'script' | 'style';

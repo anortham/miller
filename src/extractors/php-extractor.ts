@@ -7,7 +7,7 @@ import {
   RelationshipKind
 } from './base-extractor.js';
 
-export class PHPExtractor extends BaseExtractor {
+export class PhpExtractor extends BaseExtractor {
   extractSymbols(tree: Parser.Tree): Symbol[] {
     const symbols: Symbol[] = [];
     const visitNode = (node: Parser.SyntaxNode, parentId?: string) => {
@@ -27,6 +27,9 @@ export class PHPExtractor extends BaseExtractor {
         case 'trait_declaration':
           symbol = this.extractTrait(node, parentId);
           break;
+        case 'enum_declaration':
+          symbol = this.extractEnum(node, parentId);
+          break;
         case 'function_definition':
         case 'method_declaration':
           symbol = this.extractFunction(node, parentId);
@@ -41,6 +44,7 @@ export class PHPExtractor extends BaseExtractor {
           symbol = this.extractNamespace(node, parentId);
           break;
         case 'use_declaration':
+        case 'namespace_use_declaration':
           symbol = this.extractUse(node, parentId);
           break;
       }
@@ -151,7 +155,16 @@ export class PHPExtractor extends BaseExtractor {
 
     const modifiers = this.extractModifiers(node);
     const parametersNode = node.children.find(c => c.type === 'formal_parameters');
-    const returnTypeNode = node.children.find(c => c.type === 'return_type');
+
+    // PHP return type comes after : as primitive_type node
+    const colonIndex = node.children.findIndex(c => c.type === ':');
+    let returnTypeNode = null;
+    if (colonIndex >= 0 && colonIndex + 1 < node.children.length) {
+      const nextNode = node.children[colonIndex + 1];
+      if (nextNode.type === 'primitive_type' || nextNode.type === 'named_type') {
+        returnTypeNode = nextNode;
+      }
+    }
 
     let signature = `function ${name}`;
 
@@ -253,8 +266,23 @@ export class PHPExtractor extends BaseExtractor {
   }
 
   private extractUse(node: Parser.SyntaxNode, parentId?: string): Symbol {
-    const nameNode = node.children.find(c => c.type === 'namespace_name' || c.type === 'qualified_name');
-    const name = nameNode ? this.getNodeText(nameNode) : 'UnknownImport';
+    let nameNode: Parser.SyntaxNode | undefined;
+    let name: string;
+
+    if (node.type === 'namespace_use_declaration') {
+      // Handle new namespace_use_declaration format
+      const useClause = node.children.find(c => c.type === 'namespace_use_clause');
+      if (useClause) {
+        nameNode = useClause.children.find(c => c.type === 'qualified_name');
+        name = nameNode ? this.getNodeText(nameNode) : 'UnknownImport';
+      } else {
+        name = 'UnknownImport';
+      }
+    } else {
+      // Handle legacy use_declaration format
+      nameNode = node.children.find(c => c.type === 'namespace_name' || c.type === 'qualified_name');
+      name = nameNode ? this.getNodeText(nameNode) : 'UnknownImport';
+    }
 
     const aliasNode = node.children.find(c => c.type === 'namespace_aliasing_clause');
     let signature = `use ${name}`;
@@ -278,7 +306,11 @@ export class PHPExtractor extends BaseExtractor {
     const modifiers: string[] = [];
 
     for (const child of node.children) {
-      if (['public', 'private', 'protected', 'static', 'abstract', 'final', 'readonly'].includes(child.type)) {
+      if (child.type === 'visibility_modifier') {
+        // Handle visibility_modifier node
+        modifiers.push(this.getNodeText(child));
+      } else if (['public', 'private', 'protected', 'static', 'abstract', 'final', 'readonly'].includes(child.type)) {
+        // Handle direct modifier nodes
         modifiers.push(this.getNodeText(child));
       }
     }
@@ -346,13 +378,20 @@ export class PHPExtractor extends BaseExtractor {
         .map(name => name.trim());
 
       for (const interfaceName of interfaceNames) {
+        // Find the actual interface symbol instead of using synthetic ID
+        const interfaceSymbol = symbols.find(s =>
+          s.name === interfaceName &&
+          s.kind === SymbolKind.Interface &&
+          s.filePath === this.filePath
+        );
+
         relationships.push({
           fromSymbolId: classSymbol.id,
-          toSymbolId: `php-interface:${interfaceName}`,
+          toSymbolId: interfaceSymbol?.id || `php-interface:${interfaceName}`,
           kind: RelationshipKind.Implements,
           filePath: this.filePath,
           lineNumber: node.startPosition.row + 1,
-          confidence: 1.0,
+          confidence: interfaceSymbol ? 1.0 : 0.8,
           metadata: { interface: interfaceName }
         });
       }
@@ -421,5 +460,35 @@ export class PHPExtractor extends BaseExtractor {
       s.kind === SymbolKind.Interface &&
       s.filePath === this.filePath
     ) || null;
+  }
+
+  private extractEnum(node: Parser.SyntaxNode, parentId?: string): Symbol {
+    const nameNode = node.children.find(c => c.type === 'name');
+    const name = nameNode ? this.getNodeText(nameNode) : 'UnknownEnum';
+
+    // Check for backing type (e.g., enum Status: string)
+    const colonIndex = node.children.findIndex(c => c.type === ':');
+    let backingType = null;
+    if (colonIndex >= 0 && colonIndex + 1 < node.children.length) {
+      const typeNode = node.children[colonIndex + 1];
+      if (typeNode.type === 'primitive_type') {
+        backingType = this.getNodeText(typeNode);
+      }
+    }
+
+    let signature = `enum ${name}`;
+    if (backingType) {
+      signature += `: ${backingType}`;
+    }
+
+    return this.createSymbol(node, name, SymbolKind.Enum, {
+      signature,
+      visibility: 'public',
+      parentId,
+      metadata: {
+        type: 'enum',
+        backingType
+      }
+    });
   }
 }

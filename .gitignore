@@ -70,6 +70,13 @@ temp/
 *.temp
 .cache/
 
+# Debug and testing artifacts
+debug/
+debug-*.js
+test-*.js
+*debug*.js
+*.bun-build
+
 # Tree-sitter generated files (if building custom parsers)
 tree-sitter-*/
 parser.c

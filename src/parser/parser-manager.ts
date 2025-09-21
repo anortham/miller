@@ -1,4 +1,4 @@
-import Parser from 'web-tree-sitter';
+import { Parser, Language } from 'web-tree-sitter';
 import { createHash } from 'crypto';
 
 export interface ParseResult {
@@ -47,6 +47,19 @@ export class ParserManager {
     { name: 'vue', extensions: ['.vue'] }, // Special handling - no WASM needed
     { name: 'razor', extensions: ['.razor', '.cshtml'], wasmPath: './wasm/tree-sitter-razor.wasm' },
 
+    // Database languages
+    { name: 'sql', extensions: ['.sql', '.ddl', '.dml'] },
+
+    // Systems programming languages
+    { name: 'zig', extensions: ['.zig'] },
+
+    // Mobile development languages
+    { name: 'dart', extensions: ['.dart'] },
+
+    // DevOps/scripting languages
+    { name: 'bash', extensions: ['.sh', '.bash', '.zsh'] },
+    { name: 'powershell', extensions: ['.ps1', '.psm1', '.psd1'] },
+
     // Utility parsers
     { name: 'regex', extensions: [] }, // Regex patterns don't have file extensions - handled specially
   ];
@@ -75,34 +88,19 @@ export class ParserManager {
           continue;
         }
 
-        // Use Microsoft's pre-built WASM files first, fall back to individual packages
+        // Use our locally built WASM files
         let wasmPath = config.wasmPath;
         if (!wasmPath) {
-          // Try Microsoft's @vscode/tree-sitter-wasm first
-          const msWasmPath = `./node_modules/@vscode/tree-sitter-wasm/wasm/tree-sitter-${config.name.replace('_', '-')}.wasm`;
-
-          // Fallback to individual npm packages
-          const packageName = config.name.replace('_', '-');
-          let wasmFileName = config.name.replace('-', '_'); // For c-sharp -> c_sharp
-
-          // Special cases for known different naming
-          if (config.name === 'c_sharp') {
-            wasmFileName = 'c_sharp';
+          // All parsers use our locally built WASM files
+          // Special handling for c_sharp to maintain underscore in filename
+          let fileName = config.name;
+          if (config.name !== 'c_sharp') {
+            fileName = config.name.replace('_', '-');
           }
-
-          const fallbackPath = `./node_modules/tree-sitter-${packageName}/tree-sitter-${wasmFileName}.wasm`;
-
-          // Choose Microsoft's path for supported languages
-          const msSupported = ['javascript', 'typescript', 'python', 'rust', 'go', 'java', 'c_sharp', 'cpp', 'ruby', 'php', 'regex'];
-          if (msSupported.includes(config.name)) {
-            wasmPath = msWasmPath;
-          } else {
-            wasmPath = fallbackPath;
-          }
-
+          wasmPath = `./wasm/tree-sitter-${fileName}.wasm`;
         }
 
-        const language = await Parser.Language.load(wasmPath);
+        const language = await Language.load(wasmPath);
         this.languages.set(config.name, language);
 
         // Map extensions to languages
@@ -177,10 +175,19 @@ export class ParserManager {
     const parser = new Parser();
     parser.setLanguage(languageObj);
 
-    const tree = parser.parse(content);
+    let tree: Parser.Tree;
+    try {
+      tree = parser.parse(content);
+    } catch (error) {
+      // Tree-sitter WASM parsing failed - create a minimal fallback tree
+      console.warn(`Tree-sitter parsing failed for ${filePath}:`, error);
+      tree = this.createFallbackTree(content, language);
+    }
 
-    if (!tree.rootNode) {
-      throw new Error(`Failed to parse file: ${filePath}`);
+    if (!tree || !tree.rootNode) {
+      // Second fallback - create an even more basic tree
+      console.warn(`No valid tree or root node for ${filePath}, creating basic fallback`);
+      tree = this.createFallbackTree(content, language);
     }
 
     return {
@@ -279,5 +286,60 @@ export class ParserManager {
     this.languages.clear();
     this.extensionToLanguage.clear();
     this.initialized = false;
+  }
+
+  private createFallbackTree(content: string, language: string): Parser.Tree {
+    // Create a minimal fallback tree when tree-sitter parsing fails
+    // This is a workaround for complex content that tree-sitter can't handle
+
+    const fallbackNode: any = {
+      type: 'document',
+      startPosition: { row: 0, column: 0 },
+      endPosition: { row: 0, column: content.length },
+      startIndex: 0,
+      endIndex: content.length,
+      text: content,
+      children: [],
+      parent: null,
+      nextSibling: null,
+      previousSibling: null,
+      toString: () => content,
+      walk: () => ({
+        nodeType: 'document',
+        currentNode: fallbackNode,
+        gotoFirstChild: () => false,
+        gotoNextSibling: () => false,
+        gotoParent: () => false,
+        delete: () => {}
+      })
+    };
+
+    // Add a minimal ERROR child node to indicate parsing issues
+    const errorNode: any = {
+      type: 'ERROR',
+      startPosition: { row: 0, column: 0 },
+      endPosition: { row: 0, column: content.length },
+      startIndex: 0,
+      endIndex: content.length,
+      text: content,
+      children: [],
+      parent: fallbackNode,
+      nextSibling: null,
+      previousSibling: null,
+      toString: () => content
+    };
+
+    fallbackNode.children = [errorNode];
+
+    const fallbackTree: any = {
+      rootNode: fallbackNode,
+      edit: () => {},
+      copy: () => fallbackTree,
+      delete: () => {},
+      getLanguage: () => null,
+      walk: () => fallbackNode.walk()
+    };
+
+    return fallbackTree as Parser.Tree;
   }
 }
