@@ -824,7 +824,7 @@ end
       expect(included?.signature).toContain('def self.included(base)');
 
       // Nested module
-      const classMethods = symbols.find(s => s.name === 'ClassMethods');
+      const classMethods = symbols.find(s => s.name === 'ClassMethods' && s.kind === SymbolKind.Module);
       expect(classMethods).toBeDefined();
       expect(classMethods?.parentId).toBe(loggable?.id);
 
@@ -959,6 +959,12 @@ end
 module Colorable
   def set_color(color)
     @color = color
+  end
+end
+
+module Comparable
+  def <=>(other)
+    # Implementation
   end
 end
 
