@@ -45,7 +45,7 @@ export class CppExtractor extends BaseExtractor {
     // Track more node types to prevent duplicates seen in debugging
     const shouldTrack = (
       (node.type === 'function_declarator' && node.parent?.type === 'field_declaration') ||
-      (node.type === 'class_specifier' && node.parent?.type === 'template_declaration') ||
+      // SYSTEMATIC FIX: Only track template functions, not template classes (classes need unique extraction)
       (node.type === 'function_definition' && node.parent?.type === 'template_declaration') ||
       // Prevent duplicate destructors from different extraction paths
       (node.type === 'declaration' && node.children.some(c =>

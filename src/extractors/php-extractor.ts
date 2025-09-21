@@ -47,6 +47,12 @@ export class PhpExtractor extends BaseExtractor {
         case 'namespace_use_declaration':
           symbol = this.extractUse(node, parentId);
           break;
+        case 'enum_case':
+          symbol = this.extractEnumCase(node, parentId);
+          break;
+        case 'assignment_expression':
+          symbol = this.extractVariableAssignment(node, parentId);
+          break;
       }
 
       if (symbol) {
@@ -82,8 +88,16 @@ export class PhpExtractor extends BaseExtractor {
     const modifiers = this.extractModifiers(node);
     const extendsNode = node.children.find(c => c.type === 'base_clause');
     const implementsNode = node.children.find(c => c.type === 'class_interface_clause');
+    const attributeList = node.children.find(c => c.type === 'attribute_list');
 
-    let signature = `class ${name}`;
+    let signature = '';
+
+    // Add attributes if present
+    if (attributeList) {
+      signature += this.getNodeText(attributeList) + '\n';
+    }
+
+    signature += `class ${name}`;
 
     if (modifiers.length > 0) {
       signature = `${modifiers.join(' ')} ${signature}`;
@@ -97,6 +111,16 @@ export class PhpExtractor extends BaseExtractor {
     if (implementsNode) {
       const interfaces = this.getNodeText(implementsNode).replace('implements', '').trim();
       signature += ` implements ${interfaces}`;
+    }
+
+    // Add trait usages from declaration_list
+    const declarationList = node.children.find(c => c.type === 'declaration_list');
+    if (declarationList) {
+      const useDeclarations = declarationList.children.filter(c => c.type === 'use_declaration');
+      if (useDeclarations.length > 0) {
+        const traitUsages = useDeclarations.map(use => this.getNodeText(use)).join(' ');
+        signature += ` ${traitUsages}`;
+      }
     }
 
     return this.createSymbol(node, name, SymbolKind.Class, {
@@ -139,7 +163,7 @@ export class PhpExtractor extends BaseExtractor {
     const nameNode = node.children.find(c => c.type === 'name');
     const name = nameNode ? this.getNodeText(nameNode) : 'UnknownTrait';
 
-    return this.createSymbol(node, name, SymbolKind.Class, {
+    return this.createSymbol(node, name, SymbolKind.Trait, {
       signature: `trait ${name}`,
       visibility: 'public',
       parentId,
@@ -155,13 +179,14 @@ export class PhpExtractor extends BaseExtractor {
 
     const modifiers = this.extractModifiers(node);
     const parametersNode = node.children.find(c => c.type === 'formal_parameters');
+    const attributeList = node.children.find(c => c.type === 'attribute_list');
 
     // PHP return type comes after : as primitive_type node
     const colonIndex = node.children.findIndex(c => c.type === ':');
     let returnTypeNode = null;
     if (colonIndex >= 0 && colonIndex + 1 < node.children.length) {
       const nextNode = node.children[colonIndex + 1];
-      if (nextNode.type === 'primitive_type' || nextNode.type === 'named_type') {
+      if (nextNode.type === 'primitive_type' || nextNode.type === 'named_type' || nextNode.type === 'union_type' || nextNode.type === 'optional_type') {
         returnTypeNode = nextNode;
       }
     }
@@ -170,10 +195,24 @@ export class PhpExtractor extends BaseExtractor {
     const referenceModifier = node.children.find(c => c.type === 'reference_modifier');
     const refPrefix = referenceModifier ? '&' : '';
 
-    let signature = `function ${refPrefix}${name}`;
+    // Determine if this is a constructor or destructor
+    const isConstructor = name === '__construct';
+    const isDestructor = name === '__destruct';
+    let symbolKind = SymbolKind.Function;
+    if (isConstructor) symbolKind = SymbolKind.Constructor;
+    else if (isDestructor) symbolKind = SymbolKind.Destructor;
+
+    let signature = '';
+
+    // Add attributes if present
+    if (attributeList) {
+      signature += this.getNodeText(attributeList) + '\n';
+    }
+
+    signature += `function ${refPrefix}${name}`;
 
     if (modifiers.length > 0) {
-      signature = `${modifiers.join(' ')} ${signature}`;
+      signature = signature.replace(`function ${refPrefix}${name}`, `${modifiers.join(' ')} function ${refPrefix}${name}`);
     }
 
     if (parametersNode) {
@@ -186,7 +225,7 @@ export class PhpExtractor extends BaseExtractor {
       signature += `: ${this.getNodeText(returnTypeNode)}`;
     }
 
-    return this.createSymbol(node, name, SymbolKind.Function, {
+    return this.createSymbol(node, name, symbolKind, {
       signature,
       visibility: this.determineVisibility(modifiers),
       parentId,
@@ -208,16 +247,32 @@ export class PhpExtractor extends BaseExtractor {
     const name = nameNode ? this.getNodeText(nameNode) : 'unknownProperty';
 
     const modifiers = this.extractModifiers(node);
-    const typeNode = node.children.find(c => c.type === 'type' || c.type === 'primitive_type');
+    const typeNode = node.children.find(c => c.type === 'type' || c.type === 'primitive_type' || c.type === 'optional_type' || c.type === 'named_type');
+    const attributeList = node.children.find(c => c.type === 'attribute_list');
 
-    let signature = `${name}`;
+    // Check for default value assignment
+    const propertyValue = this.extractPropertyValue(propertyElement);
+
+    // Build signature in correct order: attributes + modifiers + type + name + value
+    let signature = '';
+
+    // Add attributes if present
+    if (attributeList) {
+      signature += this.getNodeText(attributeList) + '\n';
+    }
 
     if (modifiers.length > 0) {
-      signature = `${modifiers.join(' ')} ${signature}`;
+      signature += modifiers.join(' ') + ' ';
     }
 
     if (typeNode) {
-      signature = `${this.getNodeText(typeNode)} ${signature}`;
+      signature += this.getNodeText(typeNode) + ' ';
+    }
+
+    signature += name;
+
+    if (propertyValue) {
+      signature += ` = ${propertyValue}`;
     }
 
     return this.createSymbol(node, name.replace('$', ''), SymbolKind.Property, {
@@ -232,25 +287,40 @@ export class PhpExtractor extends BaseExtractor {
     });
   }
 
-  private extractConstant(node: Parser.SyntaxNode, parentId?: string): Symbol {
-    const nameNode = node.children.find(c => c.type === 'name');
-    const name = nameNode ? this.getNodeText(nameNode) : 'UNKNOWN_CONST';
+  private extractConstant(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    // const_declaration contains const_element nodes
+    const constElement = node.children.find(c => c.type === 'const_element');
+    if (!constElement) return null;
 
-    const valueNode = node.children.find(c => c.type === 'expression');
-    let signature = `const ${name}`;
+    const nameNode = constElement.children.find(c => c.type === 'name');
+    if (!nameNode) return null;
 
-    if (valueNode) {
-      const value = this.getNodeText(valueNode);
+    const name = this.getNodeText(nameNode);
+
+    // Extract modifiers for visibility
+    const modifiers = this.extractModifiers(node);
+    const visibility = this.determineVisibility(modifiers);
+
+    // Look for assignment and value
+    const assignmentIndex = constElement.children.findIndex(c => c.type === '=');
+    let value = null;
+    if (assignmentIndex >= 0 && assignmentIndex + 1 < constElement.children.length) {
+      const valueNode = constElement.children[assignmentIndex + 1];
+      value = this.getNodeText(valueNode);
+    }
+
+    let signature = `${visibility} const ${name}`;
+    if (value) {
       signature += ` = ${value}`;
     }
 
     return this.createSymbol(node, name, SymbolKind.Constant, {
       signature,
-      visibility: 'public',
+      visibility,
       parentId,
       metadata: {
         type: 'constant',
-        value: valueNode ? this.getNodeText(valueNode) : null
+        value
       }
     });
   }
@@ -374,15 +444,19 @@ export class PhpExtractor extends BaseExtractor {
     const extendsNode = node.children.find(c => c.type === 'base_clause');
     if (extendsNode) {
       const baseClassName = this.getNodeText(extendsNode).replace('extends', '').trim();
-      relationships.push({
-        fromSymbolId: classSymbol.id,
-        toSymbolId: `php-class:${baseClassName}`,
-        kind: RelationshipKind.Extends,
-        filePath: this.filePath,
-        lineNumber: node.startPosition.row + 1,
-        confidence: 1.0,
-        metadata: { baseClass: baseClassName }
-      });
+      // Find the actual symbol for the base class
+      const baseClassSymbol = symbols.find(s => s.name === baseClassName && s.kind === 'class');
+      if (baseClassSymbol) {
+        relationships.push({
+          fromSymbolId: classSymbol.id,
+          toSymbolId: baseClassSymbol.id,
+          kind: RelationshipKind.Extends,
+          filePath: this.filePath,
+          lineNumber: node.startPosition.row + 1,
+          confidence: 1.0,
+          metadata: { baseClass: baseClassName }
+        });
+      }
     }
 
     // Implementation relationships
@@ -458,10 +532,13 @@ export class PhpExtractor extends BaseExtractor {
   inferTypes(symbols: Symbol[]): Map<string, string> {
     const types = new Map<string, string>();
     for (const symbol of symbols) {
-      if (symbol.metadata?.type) {
-        types.set(symbol.id, symbol.metadata.type);
-      } else if (symbol.metadata?.returnType) {
+      // Prioritize specific types over generic ones
+      if (symbol.metadata?.returnType) {
         types.set(symbol.id, symbol.metadata.returnType);
+      } else if (symbol.metadata?.propertyType) {
+        types.set(symbol.id, symbol.metadata.propertyType);
+      } else if (symbol.metadata?.type && !['function', 'property'].includes(symbol.metadata.type)) {
+        types.set(symbol.id, symbol.metadata.type);
       }
     }
     return types;
@@ -514,6 +591,79 @@ export class PhpExtractor extends BaseExtractor {
       metadata: {
         type: 'enum',
         backingType
+      }
+    });
+  }
+
+  private extractEnumCase(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    const nameNode = node.children.find(c => c.type === 'name');
+    if (!nameNode) return null;
+
+    const caseName = this.getNodeText(nameNode);
+
+    // Check for value assignment (e.g., case PENDING = 'pending')
+    const assignmentIndex = node.children.findIndex(c => c.type === '=');
+    let value = null;
+    if (assignmentIndex >= 0 && assignmentIndex + 1 < node.children.length) {
+      const valueNode = node.children[assignmentIndex + 1];
+      if (valueNode.type === 'string' || valueNode.type === 'integer') {
+        value = this.getNodeText(valueNode);
+      }
+    }
+
+    let signature = `case ${caseName}`;
+    if (value) {
+      signature += ` = ${value}`;
+    }
+
+    return this.createSymbol(node, caseName, SymbolKind.EnumMember, {
+      signature,
+      visibility: 'public',
+      parentId,
+      metadata: {
+        type: 'enum_case',
+        value
+      }
+    });
+  }
+
+  private extractPropertyValue(propertyElement: Parser.SyntaxNode): string | null {
+    // Look for assignment in property_element (e.g., $color = 'black')
+    const assignmentIndex = propertyElement.children.findIndex(c => c.type === '=');
+    if (assignmentIndex >= 0 && assignmentIndex + 1 < propertyElement.children.length) {
+      const valueNode = propertyElement.children[assignmentIndex + 1];
+      return this.getNodeText(valueNode);
+    }
+    return null;
+  }
+
+  private extractVariableAssignment(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    // Find variable name (left side of assignment)
+    const variableNameNode = node.children.find(c => c.type === 'variable_name');
+    if (!variableNameNode) return null;
+
+    const nameNode = variableNameNode.children.find(c => c.type === 'name');
+    if (!nameNode) return null;
+
+    const varName = this.getNodeText(nameNode);
+
+    // Find assignment value (right side of assignment)
+    const assignmentIndex = node.children.findIndex(c => c.type === '=');
+    let valueText = '';
+    if (assignmentIndex >= 0 && assignmentIndex + 1 < node.children.length) {
+      const valueNode = node.children[assignmentIndex + 1];
+      valueText = this.getNodeText(valueNode);
+    }
+
+    const signature = `${this.getNodeText(variableNameNode)} = ${valueText}`;
+
+    return this.createSymbol(node, varName, SymbolKind.Variable, {
+      signature,
+      visibility: 'public',
+      parentId,
+      metadata: {
+        type: 'variable_assignment',
+        value: valueText
       }
     });
   }

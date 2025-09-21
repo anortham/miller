@@ -551,13 +551,14 @@ export class PythonExtractor extends BaseExtractor {
     const bodyNode = node.childForFieldName('body');
     if (!bodyNode) return undefined;
 
-    // Look for first string in function body
+    // Look for first string in function/class body (Python docstrings are direct string nodes)
     const firstChild = bodyNode.children.find(child =>
-      child.type === 'expression_statement'
+      child.type === 'string'
     );
 
     if (firstChild) {
-      const exprNode = firstChild.childForFieldName('expression') || firstChild.children[0];
+      // firstChild is already the string node
+      const exprNode = firstChild;
       if (exprNode && exprNode.type === 'string') {
         let docstring = this.getNodeText(exprNode);
         // Remove quotes (single, double, or triple quotes)

@@ -39,7 +39,12 @@ export class RubyExtractor extends BaseExtractor {
           symbol = this.extractSingletonMethod(node, parentId, newVisibility);
           break;
         case 'assignment':
+        case 'operator_assignment':
           symbol = this.extractAssignment(node, parentId);
+          break;
+        case 'class_variable':
+        case 'instance_variable':
+          symbol = this.extractVariable(node, parentId);
           break;
         case 'constant':
           symbol = this.extractConstant(node, parentId);
@@ -228,7 +233,7 @@ export class RubyExtractor extends BaseExtractor {
   }
 
   private extractMethod(node: Parser.SyntaxNode, parentId?: string, visibility: string = 'public'): Symbol {
-    const nameNode = node.children.find(c => c.type === 'identifier');
+    const nameNode = node.children.find(c => c.type === 'identifier' || c.type === 'operator');
     const name = nameNode ? this.getNodeText(nameNode) : 'unknownMethod';
 
     const parametersNode = node.children.find(c => c.type === 'method_parameters');
@@ -256,7 +261,7 @@ export class RubyExtractor extends BaseExtractor {
   }
 
   private extractSingletonMethod(node: Parser.SyntaxNode, parentId?: string, visibility: string = 'public'): Symbol {
-    const nameNode = node.children.find(c => c.type === 'identifier');
+    const nameNode = node.children.find(c => c.type === 'identifier' || c.type === 'operator');
     const name = nameNode ? this.getNodeText(nameNode) : 'unknownMethod';
 
     const parametersNode = node.children.find(c => c.type === 'method_parameters');
@@ -368,6 +373,37 @@ export class RubyExtractor extends BaseExtractor {
       metadata: {
         type: 'alias',
         originalMethod: oldName
+      }
+    });
+  }
+
+  private extractVariable(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    const varName = this.getNodeText(node);
+
+    // Determine variable type and kind
+    let kind = SymbolKind.Variable;
+    let signature = varName;
+
+    if (varName.startsWith('@@')) {
+      // Class variable
+      signature = `class variable ${varName}`;
+    } else if (varName.startsWith('@')) {
+      // Instance variable
+      signature = `instance variable ${varName}`;
+    } else if (varName.startsWith('$')) {
+      // Global variable
+      signature = `global variable ${varName}`;
+    }
+
+    return this.createSymbol(node, varName, kind, {
+      signature,
+      visibility: 'public',
+      parentId,
+      metadata: {
+        type: 'variable',
+        isClass: varName.startsWith('@@'),
+        isInstance: varName.startsWith('@'),
+        isGlobal: varName.startsWith('$')
       }
     });
   }

@@ -123,3 +123,4 @@ $RECYCLE.BIN/
 # Optional WASM files (if using custom builds)
 *.wasm.temp
 *.wasm.backup
+docs/future/

@@ -32,16 +32,19 @@ export class DartExtractor extends BaseExtractor {
           case 'class_definition':
             symbol = this.extractClass(node, parentId);
             break;
-          case 'function_signature':
           case 'function_declaration':
             symbol = this.extractFunction(node, parentId);
             break;
           case 'method_signature':
           case 'method_declaration':
+          case 'function_signature':
             symbol = this.extractMethod(node, parentId);
             break;
           case 'enum_declaration':
             symbol = this.extractEnum(node, parentId);
+            break;
+          case 'enum_constant':
+            symbol = this.extractEnumConstant(node, parentId);
             break;
           case 'mixin_declaration':
             symbol = this.extractMixin(node, parentId);
@@ -59,6 +62,9 @@ export class DartExtractor extends BaseExtractor {
             break;
           case 'setter_signature':
             symbol = this.extractSetter(node, parentId);
+            break;
+          case 'declaration':
+            symbol = this.extractField(node, parentId);
             break;
           case 'top_level_variable_declaration':
           case 'initialized_variable_definition':
@@ -133,32 +139,6 @@ export class DartExtractor extends BaseExtractor {
     return classSymbol;
   }
 
-  private extractClassMembers(classNode: Parser.SyntaxNode, symbols: Symbol[], parentId: string): void {
-    this.traverseTree(classNode, (node) => {
-      try {
-        switch (node.type) {
-          case 'method_signature':
-          case 'method_declaration':
-            this.extractMethod(node, symbols, parentId);
-            break;
-          case 'constructor_signature':
-            this.extractConstructor(node, symbols, parentId);
-            break;
-          case 'getter_signature':
-            this.extractGetter(node, symbols, parentId);
-            break;
-          case 'setter_signature':
-            this.extractSetter(node, symbols, parentId);
-            break;
-          case 'field_declaration':
-            this.extractField(node, symbols, parentId);
-            break;
-        }
-      } catch (error) {
-        console.warn(`Error extracting Dart class member from ${node.type}:`, error);
-      }
-    });
-  }
 
   private extractFunction(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
     const nameNode = this.findChildByType(node, 'identifier');
@@ -197,8 +177,17 @@ export class DartExtractor extends BaseExtractor {
     const isOverride = this.isOverrideMethod(node);
     const isFlutterLifecycle = this.isFlutterLifecycleMethod(name);
 
+    // Build method signature with modifiers
+    const modifiers = [];
+    if (isStatic) modifiers.push('static');
+    if (isAsync) modifiers.push('async');
+    if (isOverride) modifiers.push('@override');
+
+    const modifierPrefix = modifiers.length > 0 ? modifiers.join(' ') + ' ' : '';
+    const signature = `${modifierPrefix}${name}()`;
+
     const methodSymbol = this.createSymbol(node, name, SymbolKind.Method, {
-      signature: this.extractFunctionSignature(node),
+      signature,
       visibility: isPrivate ? 'private' : 'public',
       parentId,
       docComment: this.extractDocumentation(node),
@@ -230,16 +219,11 @@ export class DartExtractor extends BaseExtractor {
       });
       constructorName = identifiers.slice(0, 2).join('.');
     } else if (node.type === 'constant_constructor_signature') {
-      // Const constructor: const ClassName.methodName
-      const identifiers = [];
-      let skipNext = false;
-      this.traverseTree(node, (child) => {
-        if (child.type === 'identifier' && !skipNext) {
-          identifiers.push(this.getNodeText(child));
-          if (identifiers.length >= 2) skipNext = true; // Only take first 2 identifiers
-        }
-      });
-      constructorName = identifiers.slice(0, 2).join('.');
+      // Const constructor: const ClassName(...) or const ClassName.namedConstructor(...)
+      const firstIdentifier = this.findChildByType(node, 'identifier');
+      if (firstIdentifier) {
+        constructorName = this.getNodeText(firstIdentifier);
+      }
     } else {
       // Regular constructor or named constructor
       const directChildren = node.children?.filter(child => child.type === 'identifier') || [];
@@ -269,96 +253,103 @@ export class DartExtractor extends BaseExtractor {
     return constructorSymbol;
   }
 
-  private extractField(node: Parser.SyntaxNode, symbols: Symbol[], parentId: string): void {
-    this.traverseTree(node, (fieldNode) => {
-      if (fieldNode.type === 'initialized_variable_definition') {
-        const nameNode = this.findChildByType(fieldNode, 'identifier');
-        if (!nameNode) return;
+  private extractField(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    if (node.type !== 'declaration') return null;
 
-        const fieldName = this.getNodeText(nameNode);
-        const isPrivate = fieldName.startsWith('_');
-        const isFinal = this.isFinalField(fieldNode);
-        const isStatic = this.isStaticField(fieldNode);
+    // Find the type and identifier
+    const typeNode = this.findChildByType(node, 'type_identifier');
+    const identifierListNode = this.findChildByType(node, 'initialized_identifier_list');
 
-        const fieldSymbol: Symbol = {
-          id: this.generateId(`${fieldName}_field`, fieldNode.startPosition),
-          name: fieldName,
-          kind: SymbolKind.Property,
-          signature: this.extractFieldSignature(fieldNode),
-          startLine: fieldNode.startPosition.row,
-          startColumn: fieldNode.startPosition.column,
-          endLine: fieldNode.endPosition.row,
-          endColumn: fieldNode.endPosition.column,
-          filePath: this.filePath,
-          language: this.language,
-          parentId,
-          visibility: isPrivate ? 'private' : 'public'
-        };
+    if (!typeNode || !identifierListNode) return null;
 
-        // Add field annotations
-        const annotations: string[] = [];
-        if (isFinal) annotations.push('Final');
-        if (isStatic) annotations.push('Static');
+    // Get the first initialized_identifier (fields can have multiple like "String a, b, c;")
+    const identifierNode = this.findChildByType(identifierListNode, 'initialized_identifier');
+    if (!identifierNode) return null;
 
-        if (annotations.length > 0) {
-          fieldSymbol.documentation = `[${annotations.join(', ')}]`;
-        }
+    // Get just the identifier part (not the assignment)
+    const nameNode = this.findChildByType(identifierNode, 'identifier');
+    if (!nameNode) return null;
 
-        symbols.push(fieldSymbol);
-      }
+    const fieldName = this.getNodeText(nameNode);
+    const fieldType = this.getNodeText(typeNode);
+    const isPrivate = fieldName.startsWith('_');
+
+    // Check for modifiers using child nodes
+    const isLate = this.findChildByType(node, 'late') !== null;
+    const isFinal = this.findChildByType(node, 'final') !== null;
+    const isStatic = this.findChildByType(node, 'static') !== null;
+
+    // Check for nullable type
+    const nullableNode = this.findChildByType(node, 'nullable_type');
+    const isNullable = nullableNode !== null;
+
+    // Build signature with modifiers
+    const modifiers = [];
+    if (isStatic) modifiers.push('static');
+    if (isFinal) modifiers.push('final');
+    if (isLate) modifiers.push('late');
+
+    const modifierPrefix = modifiers.length > 0 ? modifiers.join(' ') + ' ' : '';
+    const fieldSignature = `${modifierPrefix}${fieldType}${isNullable ? '?' : ''} ${fieldName}`;
+
+    const fieldSymbol = this.createSymbol(node, fieldName, SymbolKind.Field, {
+      signature: fieldSignature,
+      visibility: isPrivate ? 'private' : 'public',
+      parentId,
+      docComment: this.extractDocumentation(node)
     });
+
+    // Add field annotations
+    const annotations: string[] = [];
+    if (isLate) annotations.push('Late');
+    if (isFinal) annotations.push('Final');
+    if (isStatic) annotations.push('Static');
+
+    if (annotations.length > 0) {
+      fieldSymbol.documentation = (fieldSymbol.documentation || '') + ` [${annotations.join(', ')}]`;
+    }
+
+    return fieldSymbol;
   }
 
-  private extractGetter(node: Parser.SyntaxNode, symbols: Symbol[], parentId: string): void {
+  private extractGetter(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
     const nameNode = this.findChildByType(node, 'identifier');
-    if (!nameNode) return;
+    if (!nameNode) return null;
 
     const name = this.getNodeText(nameNode);
     const isPrivate = name.startsWith('_');
 
-    const getterSymbol: Symbol = {
-      id: this.generateId(`${name}_get`, node.startPosition),
-      name,
-      kind: SymbolKind.Property,
+    const getterSymbol = this.createSymbol(node, name, SymbolKind.Property, {
       signature: `get ${name}`,
-      startLine: node.startPosition.row,
-      startColumn: node.startPosition.column,
-      endLine: node.endPosition.row,
-      endColumn: node.endPosition.column,
-      filePath: this.filePath,
-      language: this.language,
-      parentId,
       visibility: isPrivate ? 'private' : 'public',
-      documentation: '[Getter]'
-    };
+      parentId,
+      docComment: this.extractDocumentation(node)
+    });
 
-    symbols.push(getterSymbol);
+    // Add getter annotation
+    getterSymbol.documentation = (getterSymbol.documentation || '') + ' [Getter]';
+
+    return getterSymbol;
   }
 
-  private extractSetter(node: Parser.SyntaxNode, symbols: Symbol[], parentId: string): void {
+  private extractSetter(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
     const nameNode = this.findChildByType(node, 'identifier');
-    if (!nameNode) return;
+    if (!nameNode) return null;
 
     const name = this.getNodeText(nameNode);
     const isPrivate = name.startsWith('_');
 
-    const setterSymbol: Symbol = {
-      id: this.generateId(`${name}_set`, node.startPosition),
-      name,
-      kind: SymbolKind.Property,
+    const setterSymbol = this.createSymbol(node, name, SymbolKind.Property, {
       signature: `set ${name}`,
-      startLine: node.startPosition.row,
-      startColumn: node.startPosition.column,
-      endLine: node.endPosition.row,
-      endColumn: node.endPosition.column,
-      filePath: this.filePath,
-      language: this.language,
-      parentId,
       visibility: isPrivate ? 'private' : 'public',
-      documentation: '[Setter]'
-    };
+      parentId,
+      docComment: this.extractDocumentation(node)
+    });
 
-    symbols.push(setterSymbol);
+    // Add setter annotation
+    setterSymbol.documentation = (setterSymbol.documentation || '') + ' [Setter]';
+
+    return setterSymbol;
   }
 
   private extractEnum(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
@@ -375,6 +366,30 @@ export class DartExtractor extends BaseExtractor {
     });
 
     return enumSymbol;
+  }
+
+  private extractEnumConstant(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    if (node.type !== 'enum_constant') return null;
+
+    const nameNode = this.findChildByType(node, 'identifier');
+    if (!nameNode) return null;
+
+    const constantName = this.getNodeText(nameNode);
+
+    // Check if there are arguments (enhanced enum)
+    const argumentPart = this.findChildByType(node, 'argument_part');
+    const signature = argumentPart ?
+      `${constantName}${this.getNodeText(argumentPart)}` :
+      constantName;
+
+    const enumConstant = this.createSymbol(node, constantName, SymbolKind.EnumMember, {
+      signature,
+      visibility: 'public',
+      parentId,
+      docComment: this.extractDocumentation(node)
+    });
+
+    return enumConstant;
   }
 
   private extractEnumValues(enumNode: Parser.SyntaxNode, symbols: Symbol[], parentId: string): void {
@@ -500,7 +515,45 @@ export class DartExtractor extends BaseExtractor {
   }
 
   private isStaticMethod(node: Parser.SyntaxNode): boolean {
-    return this.getNodeText(node).includes('static');
+    // Check if the node text contains static
+    if (this.getNodeText(node).includes('static')) {
+      return true;
+    }
+
+    // For function_signature nodes that might be static methods in enums
+    if (node.type === 'function_signature') {
+      // Check if previous sibling is an enum_body with static enum_constant
+      let current = node.previousSibling;
+      while (current) {
+        if (current.type === 'enum_body') {
+          // Look inside enum_body for static enum_constant
+          if (current.children) {
+            for (const child of current.children) {
+              if (child.type === 'enum_constant' && this.getNodeText(child) === 'static') {
+                return true;
+              }
+            }
+          }
+        }
+        current = current.previousSibling;
+      }
+    }
+
+    // Check if previous sibling is a static keyword (for parsing edge cases)
+    let current = node.previousSibling;
+    while (current) {
+      if (current.type === 'enum_constant' && this.getNodeText(current) === 'static') {
+        return true;
+      }
+      if (current.type === 'static' || this.getNodeText(current) === 'static') {
+        return true;
+      }
+      // Don't go too far back
+      if (current.type === ';' || current.type === '}') break;
+      current = current.previousSibling;
+    }
+
+    return false;
   }
 
   private isOverrideMethod(node: Parser.SyntaxNode): boolean {
@@ -591,15 +644,33 @@ export class DartExtractor extends BaseExtractor {
     const isFactory = node.type === 'factory_constructor_signature';
     const isConst = node.type === 'constant_constructor_signature';
 
-    // Extract constructor name (class name or named constructor)
-    const identifiers = [];
-    this.traverseTree(node, (child) => {
-      if (child.type === 'identifier') {
-        identifiers.push(this.getNodeText(child));
-      }
-    });
+    // Extract constructor name - use consistent logic with extractConstructor
+    let constructorName = 'Constructor';
 
-    let constructorName = identifiers.length > 0 ? identifiers.join('.') : 'Constructor';
+    if (isConst) {
+      // For const constructors, just get the first identifier
+      const firstIdentifier = this.findChildByType(node, 'identifier');
+      if (firstIdentifier) {
+        constructorName = this.getNodeText(firstIdentifier);
+      }
+    } else if (isFactory) {
+      // For factory constructors, may need class.name pattern
+      const identifiers = [];
+      let skipNext = false;
+      this.traverseTree(node, (child) => {
+        if (child.type === 'identifier' && !skipNext) {
+          identifiers.push(this.getNodeText(child));
+          if (identifiers.length >= 2) skipNext = true;
+        }
+      });
+      constructorName = identifiers.slice(0, 2).join('.');
+    } else {
+      // Regular constructor
+      const firstIdentifier = this.findChildByType(node, 'identifier');
+      if (firstIdentifier) {
+        constructorName = this.getNodeText(firstIdentifier);
+      }
+    }
 
     // Add prefixes
     const factoryPrefix = isFactory ? 'factory ' : '';
