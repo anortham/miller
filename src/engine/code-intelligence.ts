@@ -22,8 +22,12 @@ import { CSSExtractor } from '../extractors/css-extractor.js';
 import { RegexExtractor } from '../extractors/regex-extractor.js';
 import { KotlinExtractor } from '../extractors/kotlin-extractor.js';
 import { SwiftExtractor } from '../extractors/swift-extractor.js';
-import { PHPExtractor } from '../extractors/php-extractor.js';
+import { PhpExtractor } from '../extractors/php-extractor.js';
+import { RubyExtractor } from '../extractors/ruby-extractor.js';
 import { RazorExtractor } from '../extractors/razor-extractor.js';
+import { SqlExtractor } from '../extractors/sql-extractor.js';
+import { ZigExtractor } from '../extractors/zig-extractor.js';
+import { DartExtractor } from '../extractors/dart-extractor.js';
 import { MillerPaths } from '../utils/miller-paths.js';
 import { log, LogLevel } from '../utils/logger.js';
 
@@ -110,9 +114,12 @@ export class CodeIntelligenceEngine {
     this.extractors.set('regex', RegexExtractor);
     this.extractors.set('kotlin', KotlinExtractor);
     this.extractors.set('swift', SwiftExtractor);
-    this.extractors.set('php', PHPExtractor);
+    this.extractors.set('php', PhpExtractor);
+    this.extractors.set('ruby', RubyExtractor);
     this.extractors.set('razor', RazorExtractor);
-    // Note: Ruby extractor not implemented yet
+    this.extractors.set('sql', SqlExtractor);
+    this.extractors.set('zig', ZigExtractor);
+    this.extractors.set('dart', DartExtractor);
     // Additional extractors can be registered here
   }
 
