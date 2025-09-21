@@ -35,9 +35,16 @@ export class DartExtractor extends BaseExtractor {
           case 'function_declaration':
             symbol = this.extractFunction(node, parentId);
             break;
+          case 'function_signature':
+            // Skip function_signature if it's nested inside method_signature (already handled)
+            if (node.parent?.type === 'method_signature') {
+              break; // Skip - already handled by method_signature
+            }
+            // Top-level functions use function_signature (not function_declaration)
+            symbol = parentId ? this.extractMethod(node, parentId) : this.extractFunction(node, parentId);
+            break;
           case 'method_signature':
           case 'method_declaration':
-          case 'function_signature':
             symbol = this.extractMethod(node, parentId);
             break;
           case 'enum_declaration':
@@ -167,7 +174,16 @@ export class DartExtractor extends BaseExtractor {
   }
 
   private extractMethod(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
-    const nameNode = this.findChildByType(node, 'identifier');
+    // For method_signature nodes, look inside the nested function_signature
+    let targetNode = node;
+    if (node.type === 'method_signature') {
+      const funcSigNode = this.findChildByType(node, 'function_signature');
+      if (funcSigNode) {
+        targetNode = funcSigNode;
+      }
+    }
+
+    const nameNode = this.findChildByType(targetNode, 'identifier');
     if (!nameNode) return null;
 
     const name = this.getNodeText(nameNode);
@@ -177,6 +193,9 @@ export class DartExtractor extends BaseExtractor {
     const isOverride = this.isOverrideMethod(node);
     const isFlutterLifecycle = this.isFlutterLifecycleMethod(name);
 
+    // Get the base function signature (return type + name + params)
+    const baseSignature = this.extractFunctionSignature(targetNode);
+
     // Build method signature with modifiers
     const modifiers = [];
     if (isStatic) modifiers.push('static');
@@ -184,7 +203,7 @@ export class DartExtractor extends BaseExtractor {
     if (isOverride) modifiers.push('@override');
 
     const modifierPrefix = modifiers.length > 0 ? modifiers.join(' ') + ' ' : '';
-    const signature = `${modifierPrefix}${name}()`;
+    const signature = `${modifierPrefix}${baseSignature}`;
 
     const methodSymbol = this.createSymbol(node, name, SymbolKind.Method, {
       signature,
@@ -426,12 +445,25 @@ export class DartExtractor extends BaseExtractor {
 
     const name = this.getNodeText(nameNode);
 
+    // Check for "on" clause (constrained mixin)
+    const onNode = this.findChildByType(node, 'on');
+    const typeNode = this.findChildByType(node, 'type_identifier');
+
+    let signature = `mixin ${name}`;
+    if (onNode && typeNode) {
+      const constraintType = this.getNodeText(typeNode);
+      signature = `mixin ${name} on ${constraintType}`;
+    }
+
     const mixinSymbol = this.createSymbol(node, name, SymbolKind.Interface, {
-      signature: `mixin ${name}`,
+      signature,
       visibility: 'public',
       parentId,
       docComment: this.extractDocumentation(node),
-      metadata: { isMixin: true }
+      metadata: {
+        isMixin: true,
+        constraintType: typeNode ? this.getNodeText(typeNode) : undefined
+      }
     });
 
     return mixinSymbol;
@@ -443,12 +475,25 @@ export class DartExtractor extends BaseExtractor {
 
     const name = this.getNodeText(nameNode);
 
+    // Check for "on" clause (type being extended)
+    const onNode = this.findChildByType(node, 'on');
+    const typeNode = this.findChildByType(node, 'type_identifier');
+
+    let signature = `extension ${name}`;
+    if (onNode && typeNode) {
+      const extendedType = this.getNodeText(typeNode);
+      signature = `extension ${name} on ${extendedType}`;
+    }
+
     const extensionSymbol = this.createSymbol(node, name, SymbolKind.Module, {
-      signature: `extension ${name}`,
+      signature,
       visibility: 'public',
       parentId,
       docComment: this.extractDocumentation(node),
-      metadata: { isExtension: true }
+      metadata: {
+        isExtension: true,
+        extendedType: typeNode ? this.getNodeText(typeNode) : undefined
+      }
     });
 
     return extensionSymbol;
@@ -511,7 +556,23 @@ export class DartExtractor extends BaseExtractor {
   }
 
   private isAsyncFunction(node: Parser.SyntaxNode): boolean {
-    return this.getNodeText(node).includes('async');
+    // Check if the node text contains async (fallback)
+    if (this.getNodeText(node).includes('async')) {
+      return true;
+    }
+
+    // For function_signature nodes, check the sibling function_body for async keyword
+    if (node.type === 'function_signature') {
+      const functionBody = node.nextSibling;
+      if (functionBody && functionBody.type === 'function_body') {
+        const asyncNode = this.findChildByType(functionBody, 'async');
+        if (asyncNode) {
+          return true;
+        }
+      }
+    }
+
+    return false;
   }
 
   private isStaticMethod(node: Parser.SyntaxNode): boolean {
@@ -557,7 +618,27 @@ export class DartExtractor extends BaseExtractor {
   }
 
   private isOverrideMethod(node: Parser.SyntaxNode): boolean {
-    return this.getNodeText(node).includes('@override');
+    // Check if the node text contains @override (fallback)
+    if (this.getNodeText(node).includes('@override')) {
+      return true;
+    }
+
+    // Check for annotation nodes that precede this method
+    let current = node.previousSibling;
+    while (current) {
+      if (current.type === 'annotation') {
+        const annotationText = this.getNodeText(current);
+        if (annotationText.includes('@override')) {
+          return true;
+        }
+      } else if (current.type !== 'annotation') {
+        // Stop if we hit a non-annotation node
+        break;
+      }
+      current = current.previousSibling;
+    }
+
+    return false;
   }
 
   private isFactoryConstructor(node: Parser.SyntaxNode): boolean {
@@ -624,20 +705,69 @@ export class DartExtractor extends BaseExtractor {
     const abstractPrefix = isAbstract ? 'abstract ' : '';
 
     const extendsClause = this.findChildByType(node, 'superclass');
-    const extendsText = extendsClause ? ` extends ${this.getNodeText(extendsClause)}` : '';
+    let extendsText = '';
+    if (extendsClause) {
+      // Extract the full superclass including generics (e.g., "State<MyPage>")
+      const typeNode = this.findChildByType(extendsClause, 'type_identifier');
+      if (typeNode) {
+        let superclassType = this.getNodeText(typeNode);
+
+        // Check for generic type arguments
+        const typeArgsNode = typeNode.nextSibling;
+        if (typeArgsNode && typeArgsNode.type === 'type_arguments') {
+          superclassType += this.getNodeText(typeArgsNode);
+        }
+
+        extendsText = ` extends ${superclassType}`;
+      }
+    }
 
     const implementsClause = this.findChildByType(node, 'interfaces');
     const implementsText = implementsClause ? ` implements ${this.getNodeText(implementsClause)}` : '';
 
-    return `${abstractPrefix}class ${name}${extendsText}${implementsText}`;
+    // Extract mixin clauses (with clause) - these are nested within superclass
+    let mixinText = '';
+    if (extendsClause) {
+      const mixinClause = this.findChildByType(extendsClause, 'mixins');
+      if (mixinClause) {
+        // The mixins node contains the full "with MixinName1, MixinName2" text
+        mixinText = ` ${this.getNodeText(mixinClause)}`;
+      }
+    }
+
+    return `${abstractPrefix}class ${name}${extendsText}${mixinText}${implementsText}`;
   }
 
   private extractFunctionSignature(node: Parser.SyntaxNode): string {
     const nameNode = this.findChildByType(node, 'identifier');
     const name = nameNode ? this.getNodeText(nameNode) : 'unknown';
 
-    // This is a simplified signature - could be enhanced
-    return `${name}()`;
+    // Get return type (can be type_identifier or void_type)
+    const returnTypeNode = this.findChildByType(node, 'type_identifier') || this.findChildByType(node, 'void_type');
+    let returnType = returnTypeNode ? this.getNodeText(returnTypeNode) : '';
+
+    // Check for generic type arguments (e.g., Future<String>)
+    if (returnTypeNode) {
+      const typeArgsNode = returnTypeNode.nextSibling;
+      if (typeArgsNode && typeArgsNode.type === 'type_arguments') {
+        returnType += this.getNodeText(typeArgsNode);
+      }
+    }
+
+    // Get parameters
+    const paramListNode = this.findChildByType(node, 'formal_parameter_list');
+    const params = paramListNode ? this.getNodeText(paramListNode) : '()';
+
+    // Check for async modifier
+    const isAsync = this.isAsyncFunction(node);
+    const asyncModifier = isAsync ? ' async' : '';
+
+    // Build signature with return type and async modifier
+    if (returnType) {
+      return `${returnType} ${name}${params}${asyncModifier}`;
+    } else {
+      return `${name}${params}${asyncModifier}`;
+    }
   }
 
   private extractConstructorSignature(node: Parser.SyntaxNode): string {
@@ -758,21 +888,85 @@ export class DartExtractor extends BaseExtractor {
     // Extract inheritance relationships
     const extendsClause = this.findChildByType(node, 'superclass');
     if (extendsClause) {
-      const superclassName = this.getNodeText(extendsClause);
+      // Extract the class name from the superclass node
+      const typeNode = this.findChildByType(extendsClause, 'type_identifier');
+      if (!typeNode) return;
+
+      const superclassName = this.getNodeText(typeNode);
       const superclassSymbol = symbols.find(s => s.name === superclassName && s.kind === SymbolKind.Class);
 
       if (superclassSymbol) {
         relationships.push({
           id: this.generateId(`extends_${superclassName}`, node.startPosition),
-          sourceId: classSymbol.id,
-          targetId: superclassSymbol.id,
-          kind: RelationshipKind.Extends,
+          fromSymbolId: classSymbol.id,
+          toSymbolId: superclassSymbol.id,
+          kind: 'extends',
           filePath: this.filePath,
           startLine: node.startPosition.row,
           startColumn: node.startPosition.column,
           endLine: node.endPosition.row,
           endColumn: node.endPosition.column
         });
+      }
+
+      // Also check for relationships with classes mentioned in generic type arguments
+      const typeArgsNode = typeNode.nextSibling;
+      if (typeArgsNode && typeArgsNode.type === 'type_arguments') {
+        // Look for type_identifier nodes within the type arguments
+        const genericTypes = [];
+        this.traverseTree(typeArgsNode, (argNode) => {
+          if (argNode.type === 'type_identifier') {
+            genericTypes.push(this.getNodeText(argNode));
+          }
+        });
+
+        // Create relationships for any generic types that are classes in our symbols
+        for (const genericTypeName of genericTypes) {
+          const genericTypeSymbol = symbols.find(s => s.name === genericTypeName && s.kind === SymbolKind.Class);
+          if (genericTypeSymbol) {
+            relationships.push({
+              id: this.generateId(`uses_${genericTypeName}`, node.startPosition),
+              fromSymbolId: classSymbol.id,
+              toSymbolId: genericTypeSymbol.id,
+              kind: 'uses',
+              filePath: this.filePath,
+              startLine: node.startPosition.row,
+              startColumn: node.startPosition.column,
+              endLine: node.endPosition.row,
+              endColumn: node.endPosition.column
+            });
+          }
+        }
+      }
+
+      // Extract mixin relationships (with clause)
+      const mixinClause = this.findChildByType(extendsClause, 'mixins');
+      if (mixinClause) {
+        // Look for type_identifier nodes within the mixins clause
+        const mixinTypes = [];
+        this.traverseTree(mixinClause, (mixinNode) => {
+          if (mixinNode.type === 'type_identifier') {
+            mixinTypes.push(this.getNodeText(mixinNode));
+          }
+        });
+
+        // Create 'with' relationships for any mixin types that are classes in our symbols
+        for (const mixinTypeName of mixinTypes) {
+          const mixinTypeSymbol = symbols.find(s => s.name === mixinTypeName && s.kind === SymbolKind.Interface);
+          if (mixinTypeSymbol) {
+            relationships.push({
+              id: this.generateId(`with_${mixinTypeName}`, node.startPosition),
+              fromSymbolId: classSymbol.id,
+              toSymbolId: mixinTypeSymbol.id,
+              kind: 'with',
+              filePath: this.filePath,
+              startLine: node.startPosition.row,
+              startColumn: node.startPosition.column,
+              endLine: node.endPosition.row,
+              endColumn: node.endPosition.column
+            });
+          }
+        }
       }
     }
   }
