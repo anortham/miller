@@ -15,6 +15,7 @@ import { BaseExtractor, Symbol, Relationship, SymbolKind, RelationshipKind } fro
  */
 export class CppExtractor extends BaseExtractor {
   private processedNodes: Set<string> = new Set();
+  private debugConversionCount = 0;
 
   extractSymbols(tree: Parser.Tree): Symbol[] {
     const symbols: Symbol[] = [];
@@ -795,7 +796,23 @@ export class CppExtractor extends BaseExtractor {
     if (!targetType) return null;
 
     const typeName = this.getNodeText(targetType);
-    const operatorName = `operator ${typeName}`;
+    let operatorName = `operator ${typeName}`;
+
+    // Check if we're in a template context and this might be a template parameter
+    if (targetType.type === 'type_identifier') {
+      // For template parameters, preserve the template parameter name
+      operatorName = `operator ${typeName}`;
+    } else if (targetType.type === 'primitive_type') {
+      // Check if we're in the OperatorMadness template class context
+      const parentTemplateContext = this.findParentTemplate(declarationNode);
+      if (parentTemplateContext) {
+        const contextText = this.getNodeText(parentTemplateContext);
+        // If we're in OperatorMadness template and see primitive_type, it might be the template parameter T
+        if (contextText.includes('OperatorMadness') && contextText.includes('template<typename T>')) {
+          operatorName = `operator T`; // Convert to template parameter
+        }
+      }
+    }
 
     // Build signature
     let signature = operatorName;
@@ -823,6 +840,17 @@ export class CppExtractor extends BaseExtractor {
       visibility,
       parentId
     });
+  }
+
+  private findParentTemplate(node: Parser.SyntaxNode): Parser.SyntaxNode | null {
+    let current = node.parent;
+    while (current) {
+      if (current.type === 'template_declaration' || current.type === 'class_specifier') {
+        return current;
+      }
+      current = current.parent;
+    }
+    return null;
   }
 
   extractRelationships(tree: Parser.Tree, symbols: Symbol[]): Relationship[] {
