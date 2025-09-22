@@ -114,6 +114,17 @@ export class CodeIntelDB {
       CREATE INDEX IF NOT EXISTS idx_types_language ON types(language);
     `);
 
+    // Workspace tracking table
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS workspaces (
+        path TEXT PRIMARY KEY,
+        last_indexed DATETIME DEFAULT CURRENT_TIMESTAMP,
+        symbol_count INTEGER DEFAULT 0,
+        file_count INTEGER DEFAULT 0,
+        metadata JSON
+      )
+    `);
+
     // FTS5 table for code search
     this.db.run(`
       CREATE VIRTUAL TABLE IF NOT EXISTS code_search USING fts5(
@@ -278,6 +289,44 @@ export class CodeIntelDB {
       files: fileCount.count,
       relationships: relationshipCount.count
     };
+  }
+
+  // Workspace management methods
+  recordWorkspace(workspacePath: string) {
+    this.db.prepare(`
+      INSERT OR REPLACE INTO workspaces (path, last_indexed)
+      VALUES (?, CURRENT_TIMESTAMP)
+    `).run(workspacePath);
+  }
+
+  updateWorkspaceStats(workspacePath: string, symbolCount: number, fileCount: number) {
+    this.db.prepare(`
+      UPDATE workspaces
+      SET symbol_count = ?, file_count = ?, last_indexed = CURRENT_TIMESTAMP
+      WHERE path = ?
+    `).run(symbolCount, fileCount, workspacePath);
+  }
+
+  getWorkspaces() {
+    return this.db.prepare(`
+      SELECT
+        path,
+        last_indexed,
+        symbol_count,
+        file_count
+      FROM workspaces
+      ORDER BY last_indexed DESC
+    `).all();
+  }
+
+  removeWorkspace(workspacePath: string): boolean {
+    // Remove workspace record
+    const workspaceResult = this.db.prepare('DELETE FROM workspaces WHERE path = ?').run(workspacePath);
+
+    // Remove all symbols/relationships for this workspace
+    this.db.prepare('DELETE FROM symbols WHERE file_path LIKE ?').run(`${workspacePath}%`);
+
+    return workspaceResult.changes > 0;
   }
 
   // Close database connection

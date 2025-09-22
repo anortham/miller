@@ -243,9 +243,15 @@ Miller automatically indexes supported files and provides intelligent code analy
             inputSchema: {
               type: "object",
               properties: {
+                mode: {
+                  type: "string",
+                  enum: ["index", "list", "remove"],
+                  description: "Operation: index (default), list indexed workspaces, or remove workspace",
+                  default: "index"
+                },
                 path: {
                   type: "string",
-                  description: "Workspace path to index (default: current directory)"
+                  description: "Workspace path (required for index/remove, ignored for list)"
                 },
                 force: {
                   type: "boolean",
@@ -440,17 +446,71 @@ Miller automatically indexes supported files and provides intelligent code analy
           }
 
           case "index_workspace": {
-            const { path = this.workspacePath, force = false } = args;
-            const resolvedPath = this.resolvePath(path);
+            const { mode = "index", path, force = false } = args;
 
-            await this.engine.indexWorkspace(resolvedPath);
+            switch (mode) {
+              case "list": {
+                const workspaces = await this.engine.listIndexedWorkspaces();
 
-            return {
-              content: [{
-                type: "text",
-                text: `Workspace indexed successfully: ${resolvedPath}`
-              }]
-            };
+                return {
+                  content: [{
+                    type: "text",
+                    text: `**Indexed Workspaces (${workspaces.length}):**\n\n` +
+                          workspaces.map((ws, i) =>
+                            `${i + 1}. **${ws.path}**\n   - ${ws.symbolCount} symbols, ${ws.fileCount} files\n   - Last indexed: ${ws.lastIndexed}`
+                          ).join('\n\n') +
+                          (workspaces.length === 0 ? "No workspaces currently indexed." : "")
+                  }]
+                };
+              }
+
+              case "remove": {
+                if (!path) {
+                  return {
+                    content: [{
+                      type: "text",
+                      text: "Error: Path is required for remove operation"
+                    }]
+                  };
+                }
+
+                const resolvedPath = this.resolvePath(path);
+
+                // Prevent removing current workspace
+                if (resolvedPath === this.workspacePath) {
+                  return {
+                    content: [{
+                      type: "text",
+                      text: "Error: Cannot remove current workspace. Switch to a different workspace first."
+                    }]
+                  };
+                }
+
+                const removed = await this.engine.removeWorkspace(resolvedPath);
+
+                return {
+                  content: [{
+                    type: "text",
+                    text: removed
+                      ? `Workspace removed successfully: ${resolvedPath}`
+                      : `Workspace not found or already removed: ${resolvedPath}`
+                  }]
+                };
+              }
+
+              case "index":
+              default: {
+                const resolvedPath = this.resolvePath(path || this.workspacePath);
+                await this.engine.indexWorkspace(resolvedPath);
+
+                return {
+                  content: [{
+                    type: "text",
+                    text: `Workspace indexed successfully: ${resolvedPath}`
+                  }]
+                };
+              }
+            }
           }
 
           case "get_workspace_stats": {

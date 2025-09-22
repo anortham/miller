@@ -162,6 +162,9 @@ export class CodeIntelligenceEngine {
     const startTime = Date.now();
     log.engine(LogLevel.INFO, `Indexing workspace: ${absolutePath}`);
 
+    // Record workspace in database
+    this.db.recordWorkspace(absolutePath);
+
     try {
       // Get all code files
       const fileDiscoveryStart = Date.now();
@@ -208,11 +211,42 @@ export class CodeIntelligenceEngine {
       const totalTime = Date.now() - startTime;
       console.log(`Total workspace indexing completed in ${totalTime}ms (discovery: ${fileDiscoveryTime}ms, extraction: ${extractionTime}ms, search: ${indexTime}ms)`);
 
+      // Update workspace statistics
+      const symbolCount = this.db.db.prepare('SELECT COUNT(*) as count FROM symbols WHERE file_path LIKE ?').get(`${absolutePath}%`) as { count: number };
+      const fileCount = files.length;
+      this.db.updateWorkspaceStats(absolutePath, symbolCount.count, fileCount);
+
       log.engine(LogLevel.INFO, 'Workspace indexing complete');
     } catch (error) {
       console.error('Error indexing workspace:', error);
       throw error;
     }
+  }
+
+  async listIndexedWorkspaces(): Promise<Array<{
+    path: string;
+    symbolCount: number;
+    fileCount: number;
+    lastIndexed: string;
+  }>> {
+    return this.db.getWorkspaces().map((ws: any) => ({
+      path: ws.path,
+      symbolCount: ws.symbol_count,
+      fileCount: ws.file_count,
+      lastIndexed: new Date(ws.last_indexed).toLocaleString()
+    }));
+  }
+
+  async removeWorkspace(workspacePath: string): Promise<boolean> {
+    const absolutePath = path.resolve(workspacePath);
+    const removed = this.db.removeWorkspace(absolutePath);
+
+    // Rebuild search index if workspace was removed
+    if (removed) {
+      await this.searchEngine.rebuildIndex();
+    }
+
+    return removed;
   }
 
   private async indexFile(filePath: string): Promise<void> {
