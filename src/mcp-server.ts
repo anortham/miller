@@ -27,7 +27,7 @@ class MillerMCPServer {
       workspacePath: this.workspacePath,
       enableWatcher: true,
       watcherDebounceMs: 300,
-      batchSize: 10
+      batchSize: 50
     });
 
     this.server = new Server({

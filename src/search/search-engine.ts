@@ -90,46 +90,65 @@ export class SearchEngine {
   }
 
   async indexSymbols() {
-    const symbols = this.db.prepare(`
-      SELECT
-        s.id as symbolId,
-        s.name,
-        s.kind,
-        s.signature,
-        s.doc_comment as docComment,
-        s.file_path as file,
-        s.start_line as line,
-        s.start_column as column,
-        s.language
-      FROM symbols s
-    `).all();
+    const startTime = Date.now();
+    const totalSymbols = this.db.prepare(`SELECT COUNT(*) as count FROM symbols`).get() as { count: number };
 
-    console.log(`Indexing ${symbols.length} symbols for search...`); // Keep for startup visibility
+    console.log(`Indexing ${totalSymbols.count} symbols for search...`); // Keep for startup visibility
 
-    const documents = symbols.map((s: any, index: number) => {
-      const doc = {
-        id: s.symbolId,
-        symbolId: s.symbolId,
-        name: s.name,
-        content: this.buildSearchContent(s),
-        signature: s.signature || s.name,
-        docComment: s.docComment || '',
-        file: s.file,
-        line: s.line,
-        column: s.column,
-        kind: s.kind,
-        language: s.language
-      };
-
-      this.indexedDocuments.set(s.symbolId, doc);
-      return doc;
-    });
-
-    // Clear existing index and add all documents
+    // Clear existing index first
     this.miniSearch.removeAll();
-    this.miniSearch.addAll(documents);
+    this.indexedDocuments.clear();
 
-    console.log(`Search index built with ${documents.length} documents`); // Keep for startup visibility
+    // Process symbols in chunks to avoid memory issues and hangs
+    const chunkSize = 1000; // Process 1000 symbols at a time
+    let processed = 0;
+
+    for (let offset = 0; offset < totalSymbols.count; offset += chunkSize) {
+      const symbols = this.db.prepare(`
+        SELECT
+          s.id as symbolId,
+          s.name,
+          s.kind,
+          s.signature,
+          s.doc_comment as docComment,
+          s.file_path as file,
+          s.start_line as line,
+          s.start_column as column,
+          s.language
+        FROM symbols s
+        LIMIT ? OFFSET ?
+      `).all(chunkSize, offset);
+
+      const documents = symbols.map((s: any) => {
+        const doc = {
+          id: s.symbolId,
+          symbolId: s.symbolId,
+          name: s.name,
+          content: this.buildSearchContent(s),
+          signature: s.signature || s.name,
+          docComment: s.docComment || '',
+          file: s.file,
+          line: s.line,
+          column: s.column,
+          kind: s.kind,
+          language: s.language
+        };
+
+        this.indexedDocuments.set(s.symbolId, doc);
+        return doc;
+      });
+
+      // Add chunk to search index
+      this.miniSearch.addAll(documents);
+      processed += documents.length;
+
+      if (processed % 5000 === 0 || processed === totalSymbols.count) {
+        console.log(`Search indexing progress: ${processed}/${totalSymbols.count} symbols`);
+      }
+    }
+
+    const duration = Date.now() - startTime;
+    console.log(`Search index built with ${processed} documents in ${duration}ms`); // Keep for startup visibility
   }
 
   /**

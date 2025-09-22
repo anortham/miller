@@ -28,6 +28,8 @@ import { RazorExtractor } from '../extractors/razor-extractor.js';
 import { SqlExtractor } from '../extractors/sql-extractor.js';
 import { ZigExtractor } from '../extractors/zig-extractor.js';
 import { DartExtractor } from '../extractors/dart-extractor.js';
+import { BashExtractor } from '../extractors/bash-extractor.js';
+import { PowershellExtractor } from '../extractors/powershell-extractor.js';
 import { MillerPaths } from '../utils/miller-paths.js';
 import { log, LogLevel } from '../utils/logger.js';
 
@@ -74,7 +76,7 @@ export class CodeIntelligenceEngine {
     this.config = {
       workspacePath: config.workspacePath ?? process.cwd(),
       maxFileSize: config.maxFileSize ?? 5 * 1024 * 1024,
-      batchSize: config.batchSize ?? 10,
+      batchSize: config.batchSize ?? 50, // Increased from 10 to 50 for better performance
       enableWatcher: config.enableWatcher ?? true,
       watcherDebounceMs: config.watcherDebounceMs ?? 300
     };
@@ -120,6 +122,8 @@ export class CodeIntelligenceEngine {
     this.extractors.set('sql', SqlExtractor);
     this.extractors.set('zig', ZigExtractor);
     this.extractors.set('dart', DartExtractor);
+    this.extractors.set('bash', BashExtractor);
+    this.extractors.set('powershell', PowershellExtractor);
     // Additional extractors can be registered here
   }
 
@@ -155,37 +159,54 @@ export class CodeIntelligenceEngine {
     }
 
     const absolutePath = path.resolve(workspacePath);
+    const startTime = Date.now();
     log.engine(LogLevel.INFO, `Indexing workspace: ${absolutePath}`);
 
     try {
       // Get all code files
+      const fileDiscoveryStart = Date.now();
       const files = await this.getAllCodeFiles(absolutePath);
-      log.engine(LogLevel.INFO, `Found ${files.length} code files to index`);
+      const fileDiscoveryTime = Date.now() - fileDiscoveryStart;
+      log.engine(LogLevel.INFO, `Found ${files.length} code files to index (${fileDiscoveryTime}ms)`);
 
       // Process files in batches for better performance
       const batchSize = this.config.batchSize;
       let processed = 0;
+      const extractionStart = Date.now();
 
       for (let i = 0; i < files.length; i += batchSize) {
+        const batchStart = Date.now();
         const batch = files.slice(i, i + batchSize);
         const batchPromises = batch.map(file => this.indexFile(file));
 
         try {
           await Promise.allSettled(batchPromises);
           processed += batch.length;
-          log.engine(LogLevel.INFO, `Indexed ${Math.min(processed, files.length)}/${files.length} files`);
+          const batchTime = Date.now() - batchStart;
+          const avgTimePerFile = batchTime / batch.length;
+          log.engine(LogLevel.INFO, `Indexed ${Math.min(processed, files.length)}/${files.length} files (batch: ${batchTime}ms, avg: ${avgTimePerFile.toFixed(1)}ms/file)`);
         } catch (error) {
           console.error(`Error processing batch starting at index ${i}:`, error);
         }
       }
 
+      const extractionTime = Date.now() - extractionStart;
+      console.log(`Extraction phase completed in ${extractionTime}ms (${(extractionTime/files.length).toFixed(1)}ms per file)`);
+
       // Rebuild search index with all symbols
+      console.log('Starting search index rebuild...');
+      const indexStart = Date.now();
       await this.searchEngine.rebuildIndex();
+      const indexTime = Date.now() - indexStart;
+      console.log(`Search index rebuild completed in ${indexTime}ms`);
 
       // Start watching for changes if enabled
       if (this.config.enableWatcher) {
         await this.fileWatcher.watchDirectory(absolutePath);
       }
+
+      const totalTime = Date.now() - startTime;
+      console.log(`Total workspace indexing completed in ${totalTime}ms (discovery: ${fileDiscoveryTime}ms, extraction: ${extractionTime}ms, search: ${indexTime}ms)`);
 
       log.engine(LogLevel.INFO, 'Workspace indexing complete');
     } catch (error) {
