@@ -67,6 +67,10 @@ export class SqlExtractor extends BaseExtractor {
         if (node.type === 'ERROR' && (symbol.metadata?.isStoredProcedure || symbol.metadata?.isFunction)) {
           this.extractParametersFromErrorNode(node, symbols, symbol.id);
         }
+        // Extract DECLARE variables from function bodies
+        if ((node.type === 'create_function' || node.type === 'create_function_statement') && symbol) {
+          this.extractDeclareVariables(node, symbols, symbol.id);
+        }
         parentId = symbol.id;
       }
 
@@ -348,15 +352,19 @@ export class SqlExtractor extends BaseExtractor {
   }
 
   private extractView(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
-    const nameNode = this.findChildByType(node, 'identifier') ||
-                    this.findChildByType(node, 'view_name');
+    // Look for view name - it may be inside an object_reference
+    const objectRefNode = this.findChildByType(node, 'object_reference');
+    const nameNode = objectRefNode ?
+      this.findChildByType(objectRefNode, 'identifier') :
+      (this.findChildByType(node, 'identifier') ||
+       this.findChildByType(node, 'view_name'));
 
     if (!nameNode) return null;
 
     const name = this.getNodeText(nameNode);
 
     const symbol = this.createSymbol(node, name, SymbolKind.Interface, {
-      signature: `VIEW ${name}`,
+      signature: `CREATE VIEW ${name}`,
       visibility: 'public',
       parentId,
       docComment: this.extractDocumentation(node),
@@ -427,7 +435,85 @@ export class SqlExtractor extends BaseExtractor {
       return functionSymbol;
     }
 
+    // Extract triggers from ERROR nodes
+    const triggerMatch = errorText.match(/CREATE\s+TRIGGER\s+([a-zA-Z_][a-zA-Z0-9_]*)/i);
+    if (triggerMatch) {
+      const triggerName = triggerMatch[1];
+
+      // Try to extract trigger details (BEFORE/AFTER, event, table)
+      const detailsMatch = errorText.match(/CREATE\s+TRIGGER\s+[a-zA-Z_][a-zA-Z0-9_]*\s+(BEFORE|AFTER)\s+(INSERT|UPDATE|DELETE)\s+ON\s+([a-zA-Z_][a-zA-Z0-9_]*)/i);
+
+      let signature = `CREATE TRIGGER ${triggerName}`;
+      if (detailsMatch) {
+        const timing = detailsMatch[1];
+        const event = detailsMatch[2];
+        const table = detailsMatch[3];
+        signature = `CREATE TRIGGER ${triggerName} ${timing} ${event} ON ${table}`;
+      }
+
+      const triggerSymbol = this.createSymbol(node, triggerName, SymbolKind.Method, {
+        signature,
+        visibility: 'public',
+        parentId,
+        metadata: { isTrigger: true, extractedFromError: true }
+      });
+      return triggerSymbol;
+    }
+
     return null;
+  }
+
+  private extractDeclareVariables(functionNode: Parser.SyntaxNode, symbols: Symbol[], parentId: string): void {
+
+    // Look for DECLARE statements within function bodies
+    this.traverseTree(functionNode, (node) => {
+      // PostgreSQL style: function_declaration nodes like "v_current_prefs JSONB;"
+      if (node.type === 'function_declaration') {
+        // Parse the declaration text to extract variable name and type
+        const declarationText = this.getNodeText(node).trim();
+        // Match patterns like "v_current_prefs JSONB;" or "v_score DECIMAL(10,2) DEFAULT 0.0;"
+        const match = declarationText.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s+([A-Z0-9(),\s]+)/i);
+
+        if (match) {
+          const variableName = match[1];
+          const variableType = match[2].split(/\s+/)[0]; // Get first word as type
+
+          const variableSymbol = this.createSymbol(node, variableName, SymbolKind.Variable, {
+            signature: `DECLARE ${variableName} ${variableType}`,
+            visibility: 'private',
+            parentId,
+            metadata: { isLocalVariable: true, isDeclaredVariable: true }
+          });
+          symbols.push(variableSymbol);
+        }
+      }
+
+      // MySQL style: keyword_declare followed by identifier and type
+      else if (node.type === 'keyword_declare') {
+        // For MySQL DECLARE statements, look for the pattern in the surrounding text
+        const parent = node.parent;
+        if (parent) {
+          const parentText = this.getNodeText(parent);
+
+          // Look for DECLARE patterns in the parent text
+          const declareRegex = /DECLARE\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+(DECIMAL\([^)]+\)|INT|BIGINT|VARCHAR\([^)]+\)|TEXT|BOOLEAN)/gi;
+          let match;
+
+          while ((match = declareRegex.exec(parentText)) !== null) {
+            const variableName = match[1];
+            const variableType = match[2];
+
+            const variableSymbol = this.createSymbol(node, variableName, SymbolKind.Variable, {
+              signature: `DECLARE ${variableName} ${variableType}`,
+              visibility: 'private',
+              parentId,
+              metadata: { isLocalVariable: true, isDeclaredVariable: true }
+            });
+            symbols.push(variableSymbol);
+          }
+        }
+      }
+    });
   }
 
   private extractParametersFromErrorNode(node: Parser.SyntaxNode, symbols: Symbol[], parentId: string): void {
