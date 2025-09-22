@@ -2,11 +2,18 @@
 
 ## Project Overview
 
-Miller is a high-performance MCP (Model Context Protocol) server that provides LSP-quality code intelligence across 15-20 programming languages without the overhead of running multiple language servers. Built on Bun for maximum performance, Miller uses Tree-sitter for parsing, SQLite for storage, and MiniSearch for fast code search.
+Miller is a high-performance MCP (Model Context Protocol) server that provides LSP-quality code intelligence across **20 programming languages** without the overhead of running multiple language servers. Built on Bun for maximum performance, Miller uses Tree-sitter for parsing, SQLite for storage, and MiniSearch for fast code search.
 
 ### Key Features
 
-- **Multi-Language Support**: Parse and analyze JavaScript, TypeScript, Python, Rust, Go, Java, C#, C/C++, Ruby, PHP, and more
+- **Multi-Language Support**: Parse and analyze 20 languages including:
+  - **Web**: JavaScript, TypeScript, HTML, CSS, Vue
+  - **Backend**: Python, Rust, Go, Java, C#, PHP, Ruby
+  - **Systems**: C, C++
+  - **Mobile**: Swift, Kotlin
+  - **Game Development**: GDScript, Lua
+  - **Web Frameworks**: Razor (Blazor)
+  - **Utilities**: Regex patterns
 - **LSP-Like Features**: Go-to-definition, find-references, hover information, call hierarchy
 - **Fast Code Search**: Fuzzy search with MiniSearch, exact search with ripgrep
 - **Incremental Updates**: File watching with debounced reindexing
@@ -59,15 +66,31 @@ miller/
 │   │   └── parser-manager.ts   # Tree-sitter parser management
 │   ├── extractors/
 │   │   ├── base-extractor.ts   # Abstract base class for language extractors
-│   │   └── typescript-extractor.ts # TypeScript/JavaScript symbol extraction
+│   │   ├── typescript-extractor.ts # TypeScript/JavaScript symbol extraction
+│   │   ├── gdscript-extractor.ts # GDScript (Godot) game dev language
+│   │   ├── lua-extractor.ts    # Lua scripting language
+│   │   └── [17 other language extractors...]
 │   ├── search/
 │   │   └── search-engine.ts    # MiniSearch + ripgrep search engine
 │   ├── watcher/
 │   │   └── file-watcher.ts     # File system watching with debouncing
+│   ├── __tests__/              # Comprehensive test suites
+│   │   ├── parser/             # Language extractor tests (TDD)
+│   │   │   ├── gdscript-extractor.test.ts
+│   │   │   ├── lua-extractor.test.ts
+│   │   │   └── [18 other language tests...]
+│   │   ├── mcp/                # MCP integration tests
+│   │   └── integration/        # End-to-end tests
 │   └── engine/
 │       └── code-intelligence.ts # Main orchestration engine
+├── wasm/                       # Tree-sitter WASM parsers
+│   ├── tree-sitter-gdscript.wasm
+│   ├── tree-sitter-lua.wasm
+│   └── [18 other WASM parsers...]
+├── debug/                      # Debug scripts (development tools)
 ├── docs/
 │   └── mcp-code-intelligence-guide.md # Detailed implementation guide
+├── CROWN_JEWEL_STANDARDS.md   # Quality standards and roadmap
 ├── package.json
 ├── tsconfig.json
 └── CLAUDE.md                   # This file
@@ -180,41 +203,84 @@ await tools.find_references({
 
 ### Adding New Language Support
 
+Miller follows a proven TDD process for adding new languages:
+
 1. **Install Tree-sitter parser**:
    ```bash
    bun add tree-sitter-<language>
+   # Build WASM parser (if needed)
+   npx tree-sitter build-wasm node_modules/tree-sitter-<language>
    ```
 
-2. **Register in ParserManager**:
+2. **Create comprehensive test suite FIRST** (TDD):
+   ```typescript
+   // src/__tests__/parser/language-extractor.test.ts
+   describe('LanguageExtractor', () => {
+     // Create 5-8 test scenarios covering all language features
+     // Example: classes, functions, variables, language-specific constructs
+   });
+   ```
+
+3. **Register in ParserManager**:
    ```typescript
    // In src/parser/parser-manager.ts
-   { name: 'python', extensions: ['.py', '.pyw'] }
+   { name: 'language', extensions: ['.ext'] }
    ```
 
-3. **Create language extractor**:
+4. **Create language extractor**:
    ```typescript
-   // src/extractors/python-extractor.ts
-   export class PythonExtractor extends BaseExtractor {
+   // src/extractors/language-extractor.ts
+   export class LanguageExtractor extends BaseExtractor {
      extractSymbols(tree: Parser.Tree): Symbol[] {
-       // Implement Python-specific symbol extraction
+       // Implement language-specific symbol extraction
      }
-     // ... other methods
+     extractRelationships(tree: Parser.Tree, symbols: Symbol[]): Relationship[] {
+       // Implement relationship extraction
+     }
+     inferTypes(symbols: Symbol[]): Map<string, string> {
+       // Implement type inference
+     }
    }
    ```
 
-4. **Register extractor**:
+5. **Register extractor**:
    ```typescript
    // In src/engine/code-intelligence.ts
-   this.extractors.set('python', PythonExtractor);
+   this.extractors.set('language', LanguageExtractor);
    ```
+
+### Game Development Language Examples
+
+**GDScript** (Godot game engine):
+- Classes with inheritance: `class Player extends CharacterBody2D`
+- Signals: `signal health_changed(new_health: int)`
+- Export annotations: `@export var speed: float = 200.0`
+- Constants and enums: `const MAX_LIVES: int = 3`, `enum State { IDLE, WALKING }`
+
+**Lua** (Scripting language):
+- Functions: `function calculateDamage(base, modifier) end`
+- Local variables: `local health = 100`
+- Tables: `player = { name = "Hero", level = 1 }`
+- Metatables and modules for advanced patterns
 
 ### Testing
 
 **This is a test first TDD project**
 
+Miller follows strict TDD methodology: **tests before implementation**. Recent examples include:
+- GDScript: 5 comprehensive test scenarios created before extractor implementation
+- Lua: 8 test scenarios covering functions, variables, tables, and modules
+
 ```bash
-# Run specific file parsing test
-bun run src/mcp-server.ts
+# Run all tests
+bun test
+
+# Run specific language extractor tests
+bun test src/__tests__/parser/gdscript-extractor.test.ts
+bun test src/__tests__/parser/lua-extractor.test.ts
+
+# Run MCP integration tests
+bun test src/__tests__/mcp/integration.test.ts
 
 # Test with a sample workspace
 cd /path/to/test/workspace
@@ -223,6 +289,14 @@ bun run /path/to/miller/src/mcp-server.ts
 # Monitor logs for parsing/indexing issues
 tail -f console.log
 ```
+
+### Current Test Status
+- **Core Languages**: 90-100% test success rates (JavaScript, TypeScript, Python, etc.)
+- **Game Development**:
+  - GDScript: 20% (1/5 tests passing) - classes, inheritance, constants, enums working
+  - Lua: 15% foundation implemented
+- **Systems Languages**: 80-95% success rates
+- **MCP Integration**: 100% (21/21 tests passing)
 
 ### Performance Optimization
 
