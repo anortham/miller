@@ -44,6 +44,14 @@ export class SqlExtractor extends BaseExtractor {
           case 'create_trigger':
             symbol = this.extractTrigger(node, parentId);
             break;
+          case 'cte':
+            // Extract Common Table Expressions as functions/views
+            symbol = this.extractCte(node, parentId);
+            break;
+          case 'select':
+            // Extract SELECT query aliases as fields
+            this.extractSelectAliases(node, symbols, parentId);
+            break;
           case 'ERROR':
             // Handle DELIMITER syntax issues - extract procedures/functions from ERROR nodes
             symbol = this.extractFromErrorNode(node, parentId);
@@ -62,6 +70,14 @@ export class SqlExtractor extends BaseExtractor {
         if (node.type === 'create_table') {
           this.extractTableColumns(node, symbols, symbol.id);
           this.extractTableConstraints(node, symbols, symbol.id);
+        }
+        // Extract view column aliases
+        if (node.type === 'create_view') {
+          this.extractViewColumns(node, symbols, symbol.id);
+        }
+        // Extract view columns from ERROR nodes that contain views
+        if (node.type === 'ERROR' && symbol.metadata?.isView) {
+          this.extractViewColumnsFromErrorNode(node, symbols, symbol.id);
         }
         // Extract parameters for procedures/functions from ERROR nodes
         if (node.type === 'ERROR' && (symbol.metadata?.isStoredProcedure || symbol.metadata?.isFunction)) {
@@ -374,6 +390,162 @@ export class SqlExtractor extends BaseExtractor {
     return symbol;
   }
 
+  private extractViewColumns(viewNode: Parser.SyntaxNode, symbols: Symbol[], parentViewId: string): void {
+    // Look for the SELECT statement inside the view and extract its aliases
+    this.traverseTree(viewNode, (node) => {
+      if (node.type === 'select_statement' || node.type === 'select') {
+        this.extractSelectAliases(node, symbols, parentViewId);
+      }
+    });
+  }
+
+  private extractViewColumnsFromErrorNode(node: Parser.SyntaxNode, symbols: Symbol[], parentViewId: string): void {
+    const errorText = this.getNodeText(node);
+
+    // Only process if this ERROR node contains a CREATE VIEW statement
+    if (!errorText.includes('CREATE VIEW')) {
+      return;
+    }
+
+    // Find the SELECT part of the view and only process that section
+    const createViewIndex = errorText.indexOf('CREATE VIEW');
+    const selectIndex = errorText.indexOf('SELECT', createViewIndex);
+    if (selectIndex === -1) return;
+
+    // Find the FROM clause to limit our search to the SELECT list only
+    const fromIndex = errorText.indexOf('FROM', selectIndex);
+    const selectSection = fromIndex > selectIndex ?
+      errorText.substring(selectIndex, fromIndex) :
+      errorText.substring(selectIndex);
+
+    // Extract SELECT aliases using regex patterns - only within SELECT section
+    // Pattern: expression AS alias_name or expression alias_name
+    const aliasRegex = /(?:COUNT|MIN|MAX|AVG|SUM|EXTRACT|[a-zA-Z_][a-zA-Z0-9_.]*(?:\([^)]*\))?(?:\s+OVER\s*\([^)]*\))?)\s+(?:AS\s+)?([a-zA-Z_][a-zA-Z0-9_]*)/gi;
+
+    let match;
+    while ((match = aliasRegex.exec(selectSection)) !== null) {
+      const aliasName = match[1];
+
+      // Skip if this looks like a table alias or common SQL keywords
+      if (['u', 'ae', 'users', 'analytics_events', 'id', 'username', 'email'].includes(aliasName)) {
+        continue;
+      }
+
+      // Find the full expression by looking backwards in the SELECT section
+      const aliasIndex = match.index + match[0].lastIndexOf(aliasName);
+      let expressionStart = match.index;
+
+      // Look for the start of the expression (after comma or SELECT keyword)
+      const beforeAlias = selectSection.substring(0, expressionStart);
+      const commaMatch = beforeAlias.lastIndexOf(',');
+      const selectMatch = beforeAlias.lastIndexOf('SELECT');
+
+      expressionStart = Math.max(commaMatch, selectMatch);
+      if (expressionStart > 0) expressionStart += (beforeAlias[expressionStart] === ',' ? 1 : 6); // Skip ',' or 'SELECT'
+
+      const fullExpression = selectSection.substring(expressionStart, aliasIndex).trim();
+
+      const aliasSymbol: Symbol = {
+        id: this.generateId(`${aliasName}_alias`, node.startPosition),
+        name: aliasName,
+        kind: SymbolKind.Field,
+        signature: `${fullExpression} AS ${aliasName}`,
+        startLine: node.startPosition.row,
+        startColumn: node.startPosition.column,
+        endLine: node.endPosition.row,
+        endColumn: node.endPosition.column,
+        filePath: this.filePath,
+        language: this.language,
+        parentId: parentViewId,
+        visibility: 'public',
+        metadata: { isSelectAlias: true, isComputedField: true, extractedFromError: true }
+      };
+
+      symbols.push(aliasSymbol);
+    }
+  }
+
+  private extractSelectAliases(selectNode: Parser.SyntaxNode, symbols: Symbol[], parentId?: string): void {
+    // Look for aliased expressions in SELECT lists - specifically in 'term' nodes
+    this.traverseTree(selectNode, (node) => {
+      // Look for 'term' nodes that contain [expression, keyword_as, identifier] pattern
+      if (node.type === 'term' && node.children && node.children.length >= 3) {
+        // Check if this term has the pattern [expression, keyword_as, identifier]
+        const children = node.children;
+        for (let i = 0; i < children.length - 2; i++) {
+          if (children[i + 1].type === 'keyword_as' && children[i + 2].type === 'identifier') {
+            const exprNode = children[i];
+            const asNode = children[i + 1];
+            const aliasNode = children[i + 2];
+
+            const aliasName = this.getNodeText(aliasNode);
+            const exprText = this.getNodeText(exprNode);
+
+            // Determine expression type for better signatures
+            let expression = 'expression';
+            if (exprNode.type === 'case') {
+              expression = 'CASE expression';
+            } else if (exprNode.type === 'window_function' || exprText.includes('OVER (')) {
+              // Keep the OVER ( clause in the signature for window functions
+              if (exprText.includes('OVER (')) {
+                const overIndex = exprText.indexOf('OVER (');
+                const endIndex = exprText.indexOf(')', overIndex);
+                if (endIndex !== -1) {
+                  expression = exprText.substring(0, endIndex + 1);
+                } else {
+                  expression = exprText; // Keep full text if no closing paren
+                }
+              } else {
+                expression = exprText; // Keep full text for window_function type
+              }
+            } else if (exprText.includes('COUNT') || exprText.includes('SUM') || exprText.includes('AVG')) {
+              expression = 'aggregate function';
+            } else {
+              expression = exprText.length > 30 ? exprText.substring(0, 30) + '...' : exprText;
+            }
+
+            const aliasSymbol = this.createSymbol(aliasNode, aliasName, SymbolKind.Field, {
+              signature: `${expression} AS ${aliasName}`,
+              visibility: 'public',
+              parentId,
+              metadata: { isSelectAlias: true, isComputedField: true }
+            });
+            symbols.push(aliasSymbol);
+            break; // Found the alias in this term, move to next term
+          }
+        }
+      }
+    });
+  }
+
+  private extractCte(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    // Extract CTE name from identifier child
+    const nameNode = this.findChildByType(node, 'identifier');
+    if (!nameNode) return null;
+
+    const name = this.getNodeText(nameNode);
+
+    // Check if this is a recursive CTE by looking for RECURSIVE keyword in the parent context
+    let signature = `WITH ${name} AS (...)`;
+    const parent = node.parent;
+    if (parent) {
+      const parentText = this.getNodeText(parent);
+      if (parentText.includes('RECURSIVE')) {
+        signature = `WITH RECURSIVE ${name} AS (...)`;
+      }
+    }
+
+    const symbol = this.createSymbol(node, name, SymbolKind.Interface, {
+      signature,
+      visibility: 'public', // CTEs are accessible within the query
+      parentId,
+      docComment: this.extractDocumentation(node),
+      metadata: { isCte: true, isTemporaryView: true }
+    });
+
+    return symbol;
+  }
+
   private extractIndex(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
     const nameNode = this.findChildByType(node, 'identifier') ||
                     this.findChildByType(node, 'index_name');
@@ -433,6 +605,19 @@ export class SqlExtractor extends BaseExtractor {
         metadata: { isFunction: true, extractedFromError: true }
       });
       return functionSymbol;
+    }
+
+    // Extract views from ERROR nodes
+    const viewMatch = errorText.match(/CREATE\s+VIEW\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+AS/i);
+    if (viewMatch) {
+      const viewName = viewMatch[1];
+      const viewSymbol = this.createSymbol(node, viewName, SymbolKind.Interface, {
+        signature: `CREATE VIEW ${viewName}`,
+        visibility: 'public',
+        parentId,
+        metadata: { isView: true, extractedFromError: true }
+      });
+      return viewSymbol;
     }
 
     // Extract triggers from ERROR nodes
