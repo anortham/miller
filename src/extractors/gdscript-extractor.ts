@@ -1,5 +1,6 @@
 import { Parser } from 'web-tree-sitter';
 import { BaseExtractor, Symbol, SymbolKind, Relationship, RelationshipKind } from './base-extractor.js';
+import { log, LogLevel } from '../utils/logger.js';
 
 export class GDScriptExtractor extends BaseExtractor {
   private symbols: Symbol[] = [];
@@ -77,7 +78,7 @@ export class GDScriptExtractor extends BaseExtractor {
           if (identifierNode) {
             const baseClassName = this.getNodeText(identifierNode);
             this.pendingInheritance.set(className, baseClassName);
-            console.log('Collected inheritance:', className, 'extends', baseClassName);
+            // Debug: Collected inheritance tracking
           }
         }
       }
@@ -195,10 +196,10 @@ export class GDScriptExtractor extends BaseExtractor {
     const baseClassName = this.pendingInheritance.get(name);
     if (baseClassName) {
       (symbol as any).baseClass = baseClassName;
-      console.log('Applied inheritance:', name, 'extends', baseClassName);
+      // Debug: Applied inheritance relationship
     }
 
-    console.log('Created class symbol:', name, 'with parentId:', parentId);
+    // Debug: Created class symbol
     this.symbols.push(symbol);
     return symbol;
   }
@@ -603,5 +604,49 @@ export class GDScriptExtractor extends BaseExtractor {
 
   getRelationships(): Relationship[] {
     return this.relationships;
+  }
+
+  extractRelationships(tree: Parser.Tree, symbols: Symbol[]): Relationship[] {
+    // Return the relationships already collected during symbol extraction
+    return this.relationships;
+  }
+
+  inferTypes(symbols: Symbol[]): Map<string, string> {
+    // Basic type inference for GDScript symbols
+    const typeMap = new Map<string, string>();
+
+    for (const symbol of symbols) {
+      switch (symbol.kind) {
+        case 'class':
+          typeMap.set(symbol.id, 'class');
+          break;
+        case 'function':
+        case 'method':
+          typeMap.set(symbol.id, 'function');
+          break;
+        case 'variable':
+          // Try to infer from signature or default to 'var'
+          if (symbol.signature?.includes('int')) {
+            typeMap.set(symbol.id, 'int');
+          } else if (symbol.signature?.includes('float')) {
+            typeMap.set(symbol.id, 'float');
+          } else if (symbol.signature?.includes('String')) {
+            typeMap.set(symbol.id, 'String');
+          } else {
+            typeMap.set(symbol.id, 'var');
+          }
+          break;
+        case 'constant':
+          typeMap.set(symbol.id, 'const');
+          break;
+        case 'enum':
+          typeMap.set(symbol.id, 'enum');
+          break;
+        default:
+          typeMap.set(symbol.id, 'unknown');
+      }
+    }
+
+    return typeMap;
   }
 }

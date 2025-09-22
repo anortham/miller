@@ -97,7 +97,7 @@
 ### 🚧 In Progress
 
 #### Repository Housekeeping
-- [x] Clean up test files in root directory (moved to test-scripts/)
+- [x] Clean up test files in root directory (moved to debug/)
 - [x] Remove database files from root (code-intel.db removed)
 - [x] Create professional README.md
 - [x] Update implementation checklist to reflect actual progress
@@ -285,14 +285,16 @@ miller/
 │   ├── tree-sitter-swift.wasm # ✅ Swift parser (3.58MB)
 │   ├── tree-sitter-kotlin.wasm # ✅ Kotlin parser (5.5MB)
 │   └── tree-sitter-razor.wasm # ✅ Razor parser (11MB)
-├── test-scripts/              # ✅ Development test scripts
-│   ├── test-full-swift.js
-│   ├── test-kotlin-compat.js
-│   ├── test-ms-compat.js
-│   ├── test-our-wasm.js
-│   ├── test-proper-razor.js
-│   ├── test-razor-compat.js
-│   └── test-swift-compat.js
+├── debug/                      # ✅ Debug scripts and test workspaces
+│   ├── test-scripts/              # ✅ Development test scripts
+│   │   ├── test-full-swift.js
+│   │   ├── test-kotlin-compat.js
+│   │   ├── test-ms-compat.js
+│   │   ├── test-our-wasm.js
+│   │   ├── test-proper-razor.js
+│   │   ├── test-razor-compat.js
+│   │   └── test-swift-compat.js
+│   └── [60+ debug scripts for language testing]
 ├── scripts/                   # ✅ Build and platform scripts
 │   ├── test-platforms.sh
 │   ├── test-platforms.bat

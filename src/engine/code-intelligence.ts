@@ -30,6 +30,8 @@ import { ZigExtractor } from '../extractors/zig-extractor.js';
 import { DartExtractor } from '../extractors/dart-extractor.js';
 import { BashExtractor } from '../extractors/bash-extractor.js';
 import { PowerShellExtractor } from '../extractors/powershell-extractor.js';
+import { GDScriptExtractor } from '../extractors/gdscript-extractor.js';
+import { LuaExtractor } from '../extractors/lua-extractor.js';
 import { MillerPaths } from '../utils/miller-paths.js';
 import { log, LogLevel } from '../utils/logger.js';
 
@@ -71,6 +73,7 @@ export class CodeIntelligenceEngine {
   private config: Required<CodeIntelligenceConfig>;
   private paths: MillerPaths;
   private isInitialized = false;
+  private isBulkIndexing = false;
 
   constructor(config: CodeIntelligenceConfig = {}) {
     this.config = {
@@ -124,6 +127,8 @@ export class CodeIntelligenceEngine {
     this.extractors.set('dart', DartExtractor);
     this.extractors.set('bash', BashExtractor);
     this.extractors.set('powershell', PowerShellExtractor);
+    this.extractors.set('gdscript', GDScriptExtractor);
+    this.extractors.set('lua', LuaExtractor);
     // Additional extractors can be registered here
   }
 
@@ -143,7 +148,7 @@ export class CodeIntelligenceEngine {
       log.engine(LogLevel.INFO, `Created .miller directory structure at ${this.paths.getMillerDir()}`);
 
       await this.parserManager.initialize();
-      await this.searchEngine.indexSymbols();
+      // Note: Search engine symbol indexing is now lazy - only happens when workspace is indexed
 
       this.isInitialized = true;
       log.engine(LogLevel.INFO, 'Code Intelligence Engine initialized successfully');
@@ -161,6 +166,9 @@ export class CodeIntelligenceEngine {
     const absolutePath = path.resolve(workspacePath);
     const startTime = Date.now();
     log.engine(LogLevel.INFO, `Indexing workspace: ${absolutePath}`);
+
+    // Set bulk indexing flag to avoid duplicate search index updates
+    this.isBulkIndexing = true;
 
     // Record workspace in database
     this.db.recordWorkspace(absolutePath);
@@ -237,6 +245,9 @@ export class CodeIntelligenceEngine {
       log.engine(LogLevel.ERROR, 'Error indexing workspace:', error);
       // Log the error but don't throw to handle malformed files gracefully
       log.engine(LogLevel.WARN, 'Workspace indexing completed with errors, but processing continued');
+    } finally {
+      // Always reset bulk indexing flag
+      this.isBulkIndexing = false;
     }
   }
 
@@ -306,14 +317,18 @@ export class CodeIntelligenceEngine {
       // Store in database (within a transaction for consistency)
       await this.storeExtractionResults(symbols, relationships, types);
 
-      // Update search index
-      await this.searchEngine.updateIndex(filePath, symbols);
+      // Update search index (skip during bulk indexing to avoid duplicates)
+      if (!this.isBulkIndexing) {
+        await this.searchEngine.updateIndex(filePath, symbols);
+      }
 
       // Update file metadata
       await this.updateFileMetadata(filePath, parseResult.hash, parseResult.language);
 
     } catch (error) {
-      log.engine(LogLevel.ERROR, `Error indexing file ${filePath}:`, error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      log.engine(LogLevel.ERROR, `Error indexing file ${filePath}: ${errorMessage}`, errorStack ? { stack: errorStack } : error);
     }
   }
 
@@ -378,6 +393,12 @@ export class CodeIntelligenceEngine {
 
   private async handleFileChange(event: FileChangeEvent): Promise<void> {
     log.watcher(LogLevel.INFO, `File ${event.type}: ${event.filePath}`);
+
+    // Skip file watcher updates during bulk indexing to prevent SQLITE_BUSY errors
+    if (this.isBulkIndexing) {
+      log.watcher(LogLevel.DEBUG, `Skipping file change during bulk indexing: ${event.filePath}`);
+      return;
+    }
 
     try {
       if (event.type === 'delete') {

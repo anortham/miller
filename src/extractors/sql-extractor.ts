@@ -1,5 +1,6 @@
 import { Parser } from 'web-tree-sitter';
 import { BaseExtractor, Symbol, Relationship, SymbolKind, RelationshipKind } from './base-extractor.js';
+import { log, LogLevel } from '../utils/logger.js';
 
 /**
  * SQL language extractor that handles SQL-specific constructs for cross-language tracing:
@@ -26,9 +27,7 @@ export class SqlExtractor extends BaseExtractor {
       try {
         switch (node.type) {
           case 'create_table':
-            console.log('DEBUG: Found create_table node');
             symbol = this.extractTableDefinition(node, parentId);
-            console.log('DEBUG: extractTableDefinition returned:', symbol?.name);
             break;
           case 'create_procedure':
           case 'create_function':

@@ -419,7 +419,7 @@ export class PythonExtractor extends BaseExtractor {
 
     // Extract decorators
     const decorators = this.extractDecorators(node);
-    console.log(`DEBUG: extractDecoratedDefinition - decorators: [${decorators.join(', ')}]`);
+    // Debug: extractDecoratedDefinition processed decorators
 
     // Handle the definition based on its type
     if (definitionNode.type === 'function_definition') {
@@ -427,7 +427,7 @@ export class PythonExtractor extends BaseExtractor {
       const isProperty = decorators.some(decorator =>
         decorator === 'property' || decorator.includes('property')
       );
-      console.log(`DEBUG: isProperty check - isProperty: ${isProperty}`);
+      // Debug: Property decorator check completed
 
       if (isProperty) {
         // Extract as property instead of method

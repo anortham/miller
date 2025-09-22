@@ -1,5 +1,6 @@
 import { Parser } from 'web-tree-sitter';
 import { BaseExtractor, Symbol, Relationship, SymbolKind, RelationshipKind } from './base-extractor.js';
+import { log, LogLevel } from '../utils/logger.js';
 
 /**
  * C++ language extractor that handles C++-specific constructs including:
@@ -34,7 +35,7 @@ export class CppExtractor extends BaseExtractor {
     // Debug ComplexHierarchy AST traversal
     const nodeText = this.getNodeText(node);
     if (nodeText.includes('ComplexHierarchy')) {
-      console.log(`[DEBUG] Found ComplexHierarchy in AST: ${node.type} - "${nodeText.substring(0, 100)}..."`);
+      log.extractor(LogLevel.DEBUG, `Found ComplexHierarchy in AST: ${node.type} - "${nodeText.substring(0, 100)}..."`);
     }
 
     const symbol = this.extractSymbol(node, parentId);
@@ -871,11 +872,11 @@ export class CppExtractor extends BaseExtractor {
 
   private extractFromErrorNode(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
     const nodeText = this.getNodeText(node);
-    console.log(`[DEBUG] Processing ERROR node: ${nodeText.substring(0, 200)}...`);
+    log.extractor(LogLevel.DEBUG, `Processing ERROR node: ${nodeText.substring(0, 200)}...`);
 
     // Debug: Check if this ERROR node contains OperatorMadness
     if (nodeText.includes('OperatorMadness')) {
-      console.log(`[DEBUG] Found OperatorMadness in ERROR node (full text): ${nodeText}`);
+      log.extractor(LogLevel.DEBUG, `Found OperatorMadness in ERROR node (full text): ${nodeText}`);
     }
 
     // Look for template class patterns anywhere in the ERROR node (global search)
@@ -884,7 +885,7 @@ export class CppExtractor extends BaseExtractor {
     const templateClassWithInheritanceMatches = Array.from(nodeText.matchAll(/template<([^>]+)>\s*class\s+(\w+)\s*:\s*([^{]+?)\s*\{/g));
     for (const match of templateClassWithInheritanceMatches) {
       const [, templateParams, className, inheritance] = match;
-      console.log(`[DEBUG] Found template class in ERROR: ${className}, inheritance: ${inheritance}`);
+      log.extractor(LogLevel.DEBUG, `Found template class in ERROR: ${className}, inheritance: ${inheritance}`);
 
       // Create a symbol for the complex template class
       const signature = `template<${templateParams}>\nclass ${className} : ${inheritance}`;
@@ -907,7 +908,7 @@ export class CppExtractor extends BaseExtractor {
     const templateClassMatches = Array.from(nodeText.matchAll(/template<([^>]+)>\s*class\s+(\w+)\s*\{/g));
     for (const match of templateClassMatches) {
       const [, templateParams, className] = match;
-      console.log(`[DEBUG] Found template class in ERROR: ${className}, params: ${templateParams}`);
+      log.extractor(LogLevel.DEBUG, `Found template class in ERROR: ${className}, params: ${templateParams}`);
 
       // Create a symbol for the template class
       const signature = `template<${templateParams}>\nclass ${className}`;
@@ -930,7 +931,7 @@ export class CppExtractor extends BaseExtractor {
     for (const identNode of identifierNodes) {
       const identName = this.getNodeText(identNode);
       if (identName === 'ComplexHierarchy') {
-        console.log(`[DEBUG] Found ComplexHierarchy identifier in ERROR node`);
+        log.extractor(LogLevel.DEBUG, `Found ComplexHierarchy identifier in ERROR node`);
         // Try to extract basic class info even from malformed syntax
         const signature = nodeText.includes('template<typename T>')
           ? `template<typename T>\nclass ComplexHierarchy : public TemplateClass1<T>, public TemplateClass2<T>`
@@ -949,7 +950,7 @@ export class CppExtractor extends BaseExtractor {
   }
 
   private extractOperatorsFromErrorNode(nodeText: string, classId: string): Symbol[] {
-    console.log(`[DEBUG] Extracting operators from ERROR node for class ${classId}`);
+    log.extractor(LogLevel.DEBUG, `Extracting operators from ERROR node for class ${classId}`);
     const operators: Symbol[] = [];
 
     // Extract conversion operators like "operator T() const" (but not explicit ones)
@@ -961,7 +962,7 @@ export class CppExtractor extends BaseExtractor {
           const operatorName = `operator ${typeMatch[1]}`;
           const signature = match.includes('const') ? `${operatorName}() const` : `${operatorName}()`;
 
-          console.log(`[DEBUG] Found conversion operator: ${operatorName}`);
+          log.extractor(LogLevel.DEBUG, `Found conversion operator: ${operatorName}`);
 
           // Create a mock node for the operator
           const mockNode = {
@@ -981,7 +982,7 @@ export class CppExtractor extends BaseExtractor {
 
           if (symbol) {
             operators.push(symbol);
-            console.log(`[DEBUG] Created conversion operator symbol: ${symbol.name} with ID: ${symbol.id}`);
+            log.extractor(LogLevel.DEBUG, `Created conversion operator symbol: ${symbol.name} with ID: ${symbol.id}`);
           }
         }
       }
@@ -996,7 +997,7 @@ export class CppExtractor extends BaseExtractor {
           const operatorName = `operator ${typeMatch[1]}`;
           const signature = `explicit ${operatorName}() const`;
 
-          console.log(`[DEBUG] Found explicit conversion operator: ${operatorName}`);
+          log.extractor(LogLevel.DEBUG, `Found explicit conversion operator: ${operatorName}`);
 
           // Create a mock node for the operator
           const mockNode = {
@@ -1016,7 +1017,7 @@ export class CppExtractor extends BaseExtractor {
 
           if (symbol) {
             operators.push(symbol);
-            console.log(`[DEBUG] Created explicit conversion operator symbol: ${symbol.name} with ID: ${symbol.id}`);
+            log.extractor(LogLevel.DEBUG, `Created explicit conversion operator symbol: ${symbol.name} with ID: ${symbol.id}`);
           }
         }
       }
@@ -1031,7 +1032,7 @@ export class CppExtractor extends BaseExtractor {
           const operatorSymbol = opMatch[1];
           const operatorName = `operator${operatorSymbol}`;
 
-          console.log(`[DEBUG] Found operator: ${operatorName}`);
+          log.extractor(LogLevel.DEBUG, `Found operator: ${operatorName}`);
 
           // Create a mock node for the operator
           const mockNode = {

@@ -6,6 +6,7 @@ import {
   Relationship,
   RelationshipKind
 } from './base-extractor.js';
+import { log, LogLevel } from '../utils/logger.js';
 
 export class RubyExtractor extends BaseExtractor {
   private currentVisibility: 'public' | 'private' | 'protected' = 'public';
@@ -104,7 +105,7 @@ export class RubyExtractor extends BaseExtractor {
     try {
       visitNode(tree.rootNode);
     } catch (error) {
-      console.warn('Ruby parsing failed, attempting basic extraction:', error);
+      log.extractor(LogLevel.WARN, 'Ruby parsing failed, attempting basic extraction:', error);
       return this.extractBasicStructure(tree);
     }
 
@@ -114,7 +115,7 @@ export class RubyExtractor extends BaseExtractor {
     );
 
     if (hasOnlyErrors || symbols.length === 0) {
-      console.warn('Ruby extraction produced only errors or no symbols, using basic structure fallback');
+      log.extractor(LogLevel.WARN, 'Ruby extraction produced only errors or no symbols, using basic structure fallback');
       return this.extractBasicStructure(tree);
     }
 

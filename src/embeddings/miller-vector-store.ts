@@ -168,7 +168,7 @@ export class MillerVectorStore {
    * Store embedding for a symbol
    */
   async storeSymbolEmbedding(
-    symbolId: number,
+    symbolId: string | number,
     embedding: EmbeddingResult
   ): Promise<void> {
     if (!this.isInitialized) {
@@ -176,21 +176,30 @@ export class MillerVectorStore {
     }
 
     try {
+      // Convert string UUID to integer for vec0 compatibility
+      const integerRowId = typeof symbolId === 'string'
+        ? this.stringToInteger(symbolId)
+        : symbolId;
+
       // Debug logging
       console.log(`🔍 Storing embedding for symbol ${symbolId}:`);
+      console.log(`   Original ID: ${symbolId} (${typeof symbolId})`);
+      console.log(`   Integer ID: ${integerRowId}`);
       console.log(`   Vector type: ${typeof embedding.vector}`);
       console.log(`   Vector length: ${embedding.vector.length}`);
-      console.log(`   Vector constructor: ${embedding.vector.constructor.name}`);
       console.log(`   Sample values: [${Array.from(embedding.vector.slice(0, 3)).join(', ')}...]`);
 
-      // Use symbol_id as rowid for the vector table
+      // Store mapping for later retrieval
+      await this.storeSymbolMapping(symbolId.toString(), integerRowId);
+
+      // Use integer rowid for the vector table
       const stmt = this.db.prepare(`
         INSERT OR REPLACE INTO symbol_vectors (rowid, embedding)
         VALUES (?, ?)
       `);
 
-      stmt.run(symbolId, embedding.vector);
-      console.log(`✅ Successfully stored embedding for symbol ${symbolId}`);
+      stmt.run(integerRowId, embedding.vector);
+      console.log(`✅ Successfully stored embedding for symbol ${symbolId} → ${integerRowId}`);
 
     } catch (error) {
       console.error(`❌ Failed to store embedding for symbol ${symbolId}:`);
@@ -203,10 +212,50 @@ export class MillerVectorStore {
   }
 
   /**
+   * Convert string UUID to consistent integer for vec0 primary key
+   */
+  private stringToInteger(str: string): number {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32bit integer
+    }
+    // Ensure positive integer (vec0 expects positive rowids)
+    return Math.abs(hash);
+  }
+
+  /**
+   * Store mapping between original symbol ID and integer rowid
+   */
+  private async storeSymbolMapping(originalId: string, integerRowId: number): Promise<void> {
+    try {
+      const stmt = this.db.prepare(`
+        INSERT OR REPLACE INTO symbol_id_mapping (original_id, integer_id)
+        VALUES (?, ?)
+      `);
+      stmt.run(originalId, integerRowId);
+    } catch (error) {
+      // If mapping table doesn't exist, create it
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS symbol_id_mapping (
+          original_id TEXT PRIMARY KEY,
+          integer_id INTEGER UNIQUE
+        )
+      `);
+      const stmt = this.db.prepare(`
+        INSERT OR REPLACE INTO symbol_id_mapping (original_id, integer_id)
+        VALUES (?, ?)
+      `);
+      stmt.run(originalId, integerRowId);
+    }
+  }
+
+  /**
    * Store embeddings for multiple symbols in batch
    */
   async storeBatch(
-    embeddings: Array<{ symbolId: number; embedding: EmbeddingResult }>
+    embeddings: Array<{ symbolId: string | number; embedding: EmbeddingResult }>
   ): Promise<void> {
     if (!this.isInitialized) {
       await this.initialize();

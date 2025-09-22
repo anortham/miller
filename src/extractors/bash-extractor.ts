@@ -1,5 +1,6 @@
 import { Parser } from 'web-tree-sitter';
 import { BaseExtractor, Symbol, Relationship, SymbolKind, RelationshipKind } from './base-extractor.js';
+import { log, LogLevel } from '../utils/logger.js';
 
 /**
  * Bash language extractor that handles Bash/shell-specific constructs for DevOps tracing:
@@ -60,7 +61,7 @@ export class BashExtractor extends BaseExtractor {
           return null;
       }
     } catch (error) {
-      console.warn(`Error extracting Bash symbol from ${node.type}:`, error);
+      log.extractor(LogLevel.WARN, `Error extracting Bash symbol from ${node.type}:`, error);
       return null;
     }
   }
@@ -375,7 +376,7 @@ export class BashExtractor extends BaseExtractor {
           break;
       }
     } catch (error) {
-      console.warn(`Error extracting Bash relationship from ${node.type}:`, error);
+      log.extractor(LogLevel.WARN, `Error extracting Bash relationship from ${node.type}:`, error);
     }
 
     for (const child of node.children) {

@@ -1,5 +1,6 @@
 import { Parser } from 'web-tree-sitter';
 import { createHash } from 'crypto';
+import { log, LogLevel } from '../utils/logger.js';
 
 export interface Symbol {
   id: string;
@@ -340,7 +341,7 @@ export abstract class BaseExtractor {
     try {
       callback(node);
     } catch (error) {
-      console.warn(`Error processing node ${node.type}:`, error);
+      log.extractor(LogLevel.WARN, `Error processing node ${node.type}:`, error);
     }
 
     // Recursively traverse children

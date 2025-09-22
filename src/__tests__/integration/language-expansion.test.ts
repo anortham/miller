@@ -12,7 +12,7 @@ describe('Language Expansion Integration', () => {
 
   beforeAll(async () => {
     // Create temporary test directory
-    testDir = join(process.cwd(), 'test-workspace-integration');
+    testDir = join(process.cwd(), 'debug/test-workspace-integration');
     mkdirSync(testDir, { recursive: true });
 
     // Initialize Miller

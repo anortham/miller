@@ -47,12 +47,26 @@ export class SearchEngine {
         prefix: true,
         combineWith: 'AND'
       },
-      tokenize: this.codeTokenizer.bind(this),
+      // Use simple tokenization for fast indexing, complex search-time processing
+      tokenize: this.simpleTokenizer.bind(this),
       processTerm: (term: string) => {
-        // Preserve case for exact matches, but also provide lowercase
-        return term.length > 2 ? [term, term.toLowerCase()] : [term.toLowerCase()];
+        // Simple single-term processing for fast indexing
+        return term.toLowerCase();
       }
     });
+  }
+
+  /**
+   * Simple fast tokenizer for indexing - prioritizes speed over search sophistication
+   */
+  private simpleTokenizer(text: string): string[] {
+    if (!text) return [];
+
+    // Simple split on word boundaries and common separators
+    return text
+      .split(/[\s\W]+/)
+      .filter(token => token.length > 1)
+      .map(token => token.toLowerCase());
   }
 
   /**
@@ -100,8 +114,9 @@ export class SearchEngine {
     this.miniSearch.removeAll();
     this.indexedDocuments.clear();
 
-    // Process symbols in chunks to avoid memory issues and hangs
-    const chunkSize = 1000; // Process 1000 symbols at a time
+    // Collect all documents first, then index once (avoid O(n²) performance)
+    const allDocuments: any[] = [];
+    const chunkSize = 5000; // Larger chunks for fewer DB queries
     let processed = 0;
 
     for (let offset = 0; offset < totalSymbols.count; offset += chunkSize) {
@@ -139,14 +154,17 @@ export class SearchEngine {
         return doc;
       });
 
-      // Add chunk to search index
-      this.miniSearch.addAll(documents);
+      allDocuments.push(...documents);
       processed += documents.length;
 
-      if (processed % 5000 === 0 || processed === totalSymbols.count) {
-        log.engine(LogLevel.INFO, `Search indexing progress: ${processed}/${totalSymbols.count} symbols`);
+      if (processed % 10000 === 0 || processed === totalSymbols.count) {
+        log.engine(LogLevel.INFO, `Collected ${processed}/${totalSymbols.count} symbols for indexing`);
       }
     }
+
+    // Index all documents at once - massive performance improvement
+    log.engine(LogLevel.INFO, `Building search index for ${allDocuments.length} documents...`);
+    this.miniSearch.addAll(allDocuments);
 
     const duration = Date.now() - startTime;
     log.engine(LogLevel.INFO, `Search index built with ${processed} documents in ${duration}ms`);

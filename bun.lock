@@ -4,9 +4,11 @@
     "": {
       "name": "miller",
       "dependencies": {
+        "@huggingface/transformers": "^3.7.3",
         "@modelcontextprotocol/sdk": "^1.0.0",
         "chokidar": "^3.5.3",
         "minisearch": "^6.3.0",
+        "sqlite-vec": "^0.1.7-alpha.2",
         "tree-sitter-c": "^0.23.0",
         "tree-sitter-c-sharp": "^0.23.0",
         "tree-sitter-cpp": "^0.23.1",
@@ -35,7 +37,81 @@
     },
   },
   "packages": {
+    "@emnapi/runtime": ["@emnapi/runtime@1.5.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@emnapi/runtime/-/runtime-1.5.0.tgz", { "dependencies": { "tslib": "^2.4.0" } }, "sha1-muv8ubFxldzjq1PIZ4emt9BY23M="],
+
+    "@huggingface/jinja": ["@huggingface/jinja@0.5.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@huggingface/jinja/-/jinja-0.5.1.tgz", {}, "sha1-CB0zTdz2I39lVhrj1mW7cTqP908="],
+
+    "@huggingface/transformers": ["@huggingface/transformers@3.7.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@huggingface/transformers/-/transformers-3.7.3.tgz", { "dependencies": { "@huggingface/jinja": "^0.5.1", "onnxruntime-node": "1.21.0", "onnxruntime-web": "1.22.0-dev.20250409-89f8206ba4", "sharp": "^0.34.1" } }, "sha1-Bi8iIU6RC/dRnQbJ/sIChOz/Myo="],
+
+    "@img/colour": ["@img/colour@1.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@img/colour/-/colour-1.0.0.tgz", {}, "sha1-0vq7IjRVp5O/O/nHDePShSaqgxE="],
+
+    "@img/sharp-darwin-arm64": ["@img/sharp-darwin-arm64@0.34.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@img/sharp-darwin-arm64/-/sharp-darwin-arm64-0.34.4.tgz", { "optionalDependencies": { "@img/sharp-libvips-darwin-arm64": "1.2.3" }, "os": "darwin", "cpu": "arm64" }, "sha1-ig3KyeYh/1M/vy6DD2qXezjWegw="],
+
+    "@img/sharp-darwin-x64": ["@img/sharp-darwin-x64@0.34.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@img/sharp-darwin-x64/-/sharp-darwin-x64-0.34.4.tgz", { "optionalDependencies": { "@img/sharp-libvips-darwin-x64": "1.2.3" }, "os": "darwin", "cpu": "x64" }, "sha1-C6K9nb8H9zAPq3MwW3h+ZhVvd1I="],
+
+    "@img/sharp-libvips-darwin-arm64": ["@img/sharp-libvips-darwin-arm64@1.2.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@img/sharp-libvips-darwin-arm64/-/sharp-libvips-darwin-arm64-1.2.3.tgz", { "os": "darwin", "cpu": "arm64" }, "sha1-9Dyao7dP0wfkMY2mPrvg7Uw050Q="],
+
+    "@img/sharp-libvips-darwin-x64": ["@img/sharp-libvips-darwin-x64@1.2.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@img/sharp-libvips-darwin-x64/-/sharp-libvips-darwin-x64-1.2.3.tgz", { "os": "darwin", "cpu": "x64" }, "sha1-xC/3htSh9C74kp26Spid1d9kF/A="],
+
+    "@img/sharp-libvips-linux-arm": ["@img/sharp-libvips-linux-arm@1.2.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@img/sharp-libvips-linux-arm/-/sharp-libvips-linux-arm-1.2.3.tgz", { "os": "linux", "cpu": "arm" }, "sha1-PLwzP9a48iShTWmwOh3RHfiXx5k="],
+
+    "@img/sharp-libvips-linux-arm64": ["@img/sharp-libvips-linux-arm64@1.2.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@img/sharp-libvips-linux-arm64/-/sharp-libvips-linux-arm64-1.2.3.tgz", { "os": "linux", "cpu": "arm64" }, "sha1-yQc+XEtinuQX93fbIcVSkQ2E7Xc="],
+
+    "@img/sharp-libvips-linux-ppc64": ["@img/sharp-libvips-linux-ppc64@1.2.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@img/sharp-libvips-linux-ppc64/-/sharp-libvips-linux-ppc64-1.2.3.tgz", { "os": "linux", "cpu": "ppc64" }, "sha1-aODgB2KZ9D2DhGhnVnT6vMcWHRY="],
+
+    "@img/sharp-libvips-linux-s390x": ["@img/sharp-libvips-linux-s390x@1.2.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@img/sharp-libvips-linux-s390x/-/sharp-libvips-linux-s390x-1.2.3.tgz", { "os": "linux", "cpu": "s390x" }, "sha1-famrEaUMDKkFl58KrhSkzP+rJ7I="],
+
+    "@img/sharp-libvips-linux-x64": ["@img/sharp-libvips-linux-x64@1.2.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@img/sharp-libvips-linux-x64/-/sharp-libvips-linux-x64-1.2.3.tgz", { "os": "linux", "cpu": "x64" }, "sha1-OxYtaxkM93kmgZBA4J+xXuxCE14="],
+
+    "@img/sharp-libvips-linuxmusl-arm64": ["@img/sharp-libvips-linuxmusl-arm64@1.2.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@img/sharp-libvips-linuxmusl-arm64/-/sharp-libvips-linuxmusl-arm64-1.2.3.tgz", { "os": "linux", "cpu": "arm64" }, "sha1-rJlXZjDdjjPLWY18RYb24GVZEuo="],
+
+    "@img/sharp-libvips-linuxmusl-x64": ["@img/sharp-libvips-linuxmusl-x64@1.2.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@img/sharp-libvips-linuxmusl-x64/-/sharp-libvips-linuxmusl-x64-1.2.3.tgz", { "os": "linux", "cpu": "x64" }, "sha1-k+lJWve/bE4NQd1x0BlsNcN1Ohw="],
+
+    "@img/sharp-linux-arm": ["@img/sharp-linux-arm@0.34.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@img/sharp-linux-arm/-/sharp-linux-arm-0.34.4.tgz", { "optionalDependencies": { "@img/sharp-libvips-linux-arm": "1.2.3" }, "os": "linux", "cpu": "arm" }, "sha1-XwINkz9U8/xJID0yw7fdDsEf/Ns="],
+
+    "@img/sharp-linux-arm64": ["@img/sharp-linux-arm64@0.34.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@img/sharp-linux-arm64/-/sharp-linux-arm64-0.34.4.tgz", { "optionalDependencies": { "@img/sharp-libvips-linux-arm64": "1.2.3" }, "os": "linux", "cpu": "arm64" }, "sha1-BXD/Gk+m4dZ3lFb8qLXowYpqnPI="],
+
+    "@img/sharp-linux-ppc64": ["@img/sharp-linux-ppc64@0.34.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@img/sharp-linux-ppc64/-/sharp-linux-ppc64-0.34.4.tgz", { "optionalDependencies": { "@img/sharp-libvips-linux-ppc64": "1.2.3" }, "os": "linux", "cpu": "ppc64" }, "sha1-jVd19tx+MOo6HvpDeYt2kLtcs0Q="],
+
+    "@img/sharp-linux-s390x": ["@img/sharp-linux-s390x@0.34.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@img/sharp-linux-s390x/-/sharp-linux-s390x-0.34.4.tgz", { "optionalDependencies": { "@img/sharp-libvips-linux-s390x": "1.2.3" }, "os": "linux", "cpu": "s390x" }, "sha1-dAqls2kYjuLBkTsQFef4MPTf21A="],
+
+    "@img/sharp-linux-x64": ["@img/sharp-linux-x64@0.34.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@img/sharp-linux-x64/-/sharp-linux-x64-0.34.4.tgz", { "optionalDependencies": { "@img/sharp-libvips-linux-x64": "1.2.3" }, "os": "linux", "cpu": "x64" }, "sha1-VzzkGWstB3G7oyrME6N7etybYhI="],
+
+    "@img/sharp-linuxmusl-arm64": ["@img/sharp-linuxmusl-arm64@0.34.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@img/sharp-linuxmusl-arm64/-/sharp-linuxmusl-arm64-0.34.4.tgz", { "optionalDependencies": { "@img/sharp-libvips-linuxmusl-arm64": "1.2.3" }, "os": "linux", "cpu": "arm64" }, "sha1-PJG8g0jMO0K0PG/KFPnbtctHvQ0="],
+
+    "@img/sharp-linuxmusl-x64": ["@img/sharp-linuxmusl-x64@0.34.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@img/sharp-linuxmusl-x64/-/sharp-linuxmusl-x64-0.34.4.tgz", { "optionalDependencies": { "@img/sharp-libvips-linuxmusl-x64": "1.2.3" }, "os": "linux", "cpu": "x64" }, "sha1-M959R2rJ4tt+9lQzG1TMZ5uAa9o="],
+
+    "@img/sharp-wasm32": ["@img/sharp-wasm32@0.34.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@img/sharp-wasm32/-/sharp-wasm32-0.34.4.tgz", { "dependencies": { "@emnapi/runtime": "^1.5.0" }, "cpu": "none" }, "sha1-1hf3s/hR+JmAIpjzYGZ8IGBcAZg="],
+
+    "@img/sharp-win32-arm64": ["@img/sharp-win32-arm64@0.34.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@img/sharp-win32-arm64/-/sharp-win32-arm64-0.34.4.tgz", { "os": "win32", "cpu": "arm64" }, "sha1-OOLIqIgm6sZH98P5nv77OYl6j1w="],
+
+    "@img/sharp-win32-ia32": ["@img/sharp-win32-ia32@0.34.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@img/sharp-win32-ia32/-/sharp-win32-ia32-0.34.4.tgz", { "os": "win32", "cpu": "ia32" }, "sha1-ADp+sP2rpgB5DDAHz9dW5Bqc90k="],
+
+    "@img/sharp-win32-x64": ["@img/sharp-win32-x64@0.34.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@img/sharp-win32-x64/-/sharp-win32-x64-0.34.4.tgz", { "os": "win32", "cpu": "x64" }, "sha1-sZ8fiKzov8IHhKCtMXZ/NDjgJdE="],
+
+    "@isaacs/fs-minipass": ["@isaacs/fs-minipass@4.0.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@isaacs/fs-minipass/-/fs-minipass-4.0.1.tgz", { "dependencies": { "minipass": "^7.0.4" } }, "sha1-LVmuOrSzj7QnC/oj0w+OLobH/jI="],
+
     "@modelcontextprotocol/sdk": ["@modelcontextprotocol/sdk@1.18.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@modelcontextprotocol/sdk/-/sdk-1.18.1.tgz", { "dependencies": { "ajv": "^6.12.6", "content-type": "^1.0.5", "cors": "^2.8.5", "cross-spawn": "^7.0.5", "eventsource": "^3.0.2", "eventsource-parser": "^3.0.0", "express": "^5.0.1", "express-rate-limit": "^7.5.0", "pkce-challenge": "^5.0.0", "raw-body": "^3.0.0", "zod": "^3.23.8", "zod-to-json-schema": "^3.24.1" } }, "sha1-zcfggJMZsEZlmbk/v2Vdr6n0nOs="],
+
+    "@protobufjs/aspromise": ["@protobufjs/aspromise@1.1.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@protobufjs/aspromise/-/aspromise-1.1.2.tgz", {}, "sha1-m4sMxmPWaafY9vXQiToU00jzD78="],
+
+    "@protobufjs/base64": ["@protobufjs/base64@1.1.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@protobufjs/base64/-/base64-1.1.2.tgz", {}, "sha1-TIVzDlm5ofHzSQR9vyQpYDS7JzU="],
+
+    "@protobufjs/codegen": ["@protobufjs/codegen@2.0.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@protobufjs/codegen/-/codegen-2.0.4.tgz", {}, "sha1-fvN/DQEPsCitGtWXIuUG2SYoFcs="],
+
+    "@protobufjs/eventemitter": ["@protobufjs/eventemitter@1.1.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@protobufjs/eventemitter/-/eventemitter-1.1.0.tgz", {}, "sha1-NVy8mLr61ZePntCV85diHx0Ga3A="],
+
+    "@protobufjs/fetch": ["@protobufjs/fetch@1.1.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@protobufjs/fetch/-/fetch-1.1.0.tgz", { "dependencies": { "@protobufjs/aspromise": "^1.1.1", "@protobufjs/inquire": "^1.1.0" } }, "sha1-upn7WYYUr2VwDBYZ/wbUVLDYTEU="],
+
+    "@protobufjs/float": ["@protobufjs/float@1.0.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@protobufjs/float/-/float-1.0.2.tgz", {}, "sha1-Xp4avctz/Ap8uLKR33jIy9l7h9E="],
+
+    "@protobufjs/inquire": ["@protobufjs/inquire@1.1.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@protobufjs/inquire/-/inquire-1.1.0.tgz", {}, "sha1-/yAOPnzyQp4tyvwRQIKOjMY48Ik="],
+
+    "@protobufjs/path": ["@protobufjs/path@1.1.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@protobufjs/path/-/path-1.1.2.tgz", {}, "sha1-bMKyDFya1q0NzP0hynZz2Nf79o0="],
+
+    "@protobufjs/pool": ["@protobufjs/pool@1.1.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@protobufjs/pool/-/pool-1.1.0.tgz", {}, "sha1-Cf0V8tbTq/qbZbw2ZQbWrXhG/1Q="],
+
+    "@protobufjs/utf8": ["@protobufjs/utf8@1.1.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@protobufjs/utf8/-/utf8-1.1.0.tgz", {}, "sha1-p3c2C1s5oaLlEG+OhY8v0tBgxXA="],
 
     "@types/node": ["@types/node@24.5.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/@types/node/-/node-24.5.2.tgz", { "dependencies": { "undici-types": "~7.12.0" } }, "sha1-Us64P1D+D8/fvSqfq22y6efvZEY="],
 
@@ -55,6 +131,8 @@
 
     "body-parser": ["body-parser@2.2.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/body-parser/-/body-parser-2.2.0.tgz", { "dependencies": { "bytes": "^3.1.2", "content-type": "^1.0.5", "debug": "^4.4.0", "http-errors": "^2.0.0", "iconv-lite": "^0.6.3", "on-finished": "^2.4.1", "qs": "^6.14.0", "raw-body": "^3.0.0", "type-is": "^2.0.0" } }, "sha1-96llbeMFJJpxW1Sbe4/Rq5393Po="],
 
+    "boolean": ["boolean@3.2.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/boolean/-/boolean-3.2.0.tgz", {}, "sha1-nlKUr06YMUSUy7F5efpUyhWfEWs="],
+
     "braces": ["braces@3.0.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/braces/-/braces-3.0.3.tgz", { "dependencies": { "fill-range": "^7.1.1" } }, "sha1-SQMy9AkZRSJy1VqEgK3AxEE1h4k="],
 
     "buffer": ["buffer@5.7.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/buffer/-/buffer-5.7.1.tgz", { "dependencies": { "base64-js": "^1.3.1", "ieee754": "^1.1.13" } }, "sha1-umLnwTEzBTWCGXFghRqPZI6Z7tA="],
@@ -69,7 +147,7 @@
 
     "chokidar": ["chokidar@3.6.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/chokidar/-/chokidar-3.6.0.tgz", { "dependencies": { "anymatch": "~3.1.2", "braces": "~3.0.2", "glob-parent": "~5.1.2", "is-binary-path": "~2.1.0", "is-glob": "~4.0.1", "normalize-path": "~3.0.0", "readdirp": "~3.6.0" }, "optionalDependencies": { "fsevents": "~2.3.2" } }, "sha1-GXxsxmnvKo3F57TZfuTgksPrDVs="],
 
-    "chownr": ["chownr@1.1.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/chownr/-/chownr-1.1.4.tgz", {}, "sha1-b8nXtC0ypYNZYzdmbn0ICE2izGs="],
+    "chownr": ["chownr@3.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/chownr/-/chownr-3.0.0.tgz", {}, "sha1-mFXmTs0kCpzEJnzopKpdJKHaFeQ="],
 
     "content-disposition": ["content-disposition@1.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/content-disposition/-/content-disposition-1.0.0.tgz", { "dependencies": { "safe-buffer": "5.2.1" } }, "sha1-hEQmyzmPk0yu/LsXIgASa8fOrOI="],
 
@@ -91,9 +169,15 @@
 
     "deep-extend": ["deep-extend@0.6.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/deep-extend/-/deep-extend-0.6.0.tgz", {}, "sha1-xPp8lUBKF6nD6Mp+FTcxK3NjMKw="],
 
+    "define-data-property": ["define-data-property@1.1.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/define-data-property/-/define-data-property-1.1.4.tgz", { "dependencies": { "es-define-property": "^1.0.0", "es-errors": "^1.3.0", "gopd": "^1.0.1" } }, "sha1-iU3BQbt9MGCuQ2b2oBB+aPvkjF4="],
+
+    "define-properties": ["define-properties@1.2.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/define-properties/-/define-properties-1.2.1.tgz", { "dependencies": { "define-data-property": "^1.0.1", "has-property-descriptors": "^1.0.0", "object-keys": "^1.1.1" } }, "sha1-EHgcxhbrlRqAoDS6/Kpzd/avK2w="],
+
     "depd": ["depd@2.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/depd/-/depd-2.0.0.tgz", {}, "sha1-tpYWPMdXVg0JzyLMj60Vcbeedt8="],
 
     "detect-libc": ["detect-libc@2.1.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/detect-libc/-/detect-libc-2.1.0.tgz", {}, "sha1-PKgR9gp7UEsEgOUAitrMZgsLjE8="],
+
+    "detect-node": ["detect-node@2.1.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/detect-node/-/detect-node-2.1.0.tgz", {}, "sha1-yccHdaScPQO8LAbZpzvlUPl4+LE="],
 
     "dunder-proto": ["dunder-proto@1.0.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/dunder-proto/-/dunder-proto-1.0.1.tgz", { "dependencies": { "call-bind-apply-helpers": "^1.0.1", "es-errors": "^1.3.0", "gopd": "^1.2.0" } }, "sha1-165mfh3INIL4tw/Q9u78UNow9Yo="],
 
@@ -109,7 +193,11 @@
 
     "es-object-atoms": ["es-object-atoms@1.1.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/es-object-atoms/-/es-object-atoms-1.1.1.tgz", { "dependencies": { "es-errors": "^1.3.0" } }, "sha1-HE8sSDcydZfOadLKGQp/3RcjOME="],
 
+    "es6-error": ["es6-error@4.1.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/es6-error/-/es6-error-4.1.1.tgz", {}, "sha1-njr0B0Wd7tR+mpH5uIWoTrBcVh0="],
+
     "escape-html": ["escape-html@1.0.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/escape-html/-/escape-html-1.0.3.tgz", {}, "sha1-Aljq5NPQwJdN4cFpGI7wBR0dGYg="],
+
+    "escape-string-regexp": ["escape-string-regexp@4.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/escape-string-regexp/-/escape-string-regexp-4.0.0.tgz", {}, "sha1-FLqDpdNz49MR5a/KKc9b+tllvzQ="],
 
     "etag": ["etag@1.8.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/etag/-/etag-1.8.1.tgz", {}, "sha1-Qa4u62XvpiJorr/qg6x9eSmbCIc="],
 
@@ -131,6 +219,8 @@
 
     "finalhandler": ["finalhandler@2.1.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/finalhandler/-/finalhandler-2.1.0.tgz", { "dependencies": { "debug": "^4.4.0", "encodeurl": "^2.0.0", "escape-html": "^1.0.3", "on-finished": "^2.4.1", "parseurl": "^1.3.3", "statuses": "^2.0.1" } }, "sha1-cjBjc6qJ0FqCQu1WnthqG/98Vh8="],
 
+    "flatbuffers": ["flatbuffers@25.2.10", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/flatbuffers/-/flatbuffers-25.2.10.tgz", {}, "sha1-MIt1BUX2LbZwykydfbxmFhQgqV4="],
+
     "forwarded": ["forwarded@0.2.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/forwarded/-/forwarded-0.2.0.tgz", {}, "sha1-ImmTZCiq1MFcfr6XeahL8LKoGBE="],
 
     "fresh": ["fresh@2.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/fresh/-/fresh-2.0.0.tgz", {}, "sha1-jdffahs6Gzpc8YbAWl3SZ2ImNaQ="],
@@ -149,7 +239,15 @@
 
     "glob-parent": ["glob-parent@5.1.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/glob-parent/-/glob-parent-5.1.2.tgz", { "dependencies": { "is-glob": "^4.0.1" } }, "sha1-hpgyxYA0/mikCTwX3BXoNA2EAcQ="],
 
+    "global-agent": ["global-agent@3.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/global-agent/-/global-agent-3.0.0.tgz", { "dependencies": { "boolean": "^3.0.1", "es6-error": "^4.1.1", "matcher": "^3.0.0", "roarr": "^2.15.3", "semver": "^7.3.2", "serialize-error": "^7.0.1" } }, "sha1-rnzTG9NYO5PFoWQ3oa/ifMM6GrY="],
+
+    "globalthis": ["globalthis@1.0.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/globalthis/-/globalthis-1.0.4.tgz", { "dependencies": { "define-properties": "^1.2.1", "gopd": "^1.0.1" } }, "sha1-dDDtOpddl7+1m8zkH1yruvplEjY="],
+
     "gopd": ["gopd@1.2.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/gopd/-/gopd-1.2.0.tgz", {}, "sha1-ifVrghe9vIgCvSmd9tfxCB1+UaE="],
+
+    "guid-typescript": ["guid-typescript@1.0.9", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/guid-typescript/-/guid-typescript-1.0.9.tgz", {}, "sha1-4193ADU1sCl+oIVI9azmrbFIDdw="],
+
+    "has-property-descriptors": ["has-property-descriptors@1.0.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/has-property-descriptors/-/has-property-descriptors-1.0.2.tgz", { "dependencies": { "es-define-property": "^1.0.0" } }, "sha1-lj7X0HHce/XwhMW/vg0bYiJYaFQ="],
 
     "has-symbols": ["has-symbols@1.1.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/has-symbols/-/has-symbols-1.1.0.tgz", {}, "sha1-/JxqeDoISVHQuXH+EBjegTcHozg="],
 
@@ -181,6 +279,12 @@
 
     "json-schema-traverse": ["json-schema-traverse@0.4.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/json-schema-traverse/-/json-schema-traverse-0.4.1.tgz", {}, "sha1-afaofZUTq4u4/mO9sJecRI5oRmA="],
 
+    "json-stringify-safe": ["json-stringify-safe@5.0.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/json-stringify-safe/-/json-stringify-safe-5.0.1.tgz", {}, "sha1-Epai1Y/UXxmg9s4B1lcB4sc1tus="],
+
+    "long": ["long@5.3.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/long/-/long-5.3.2.tgz", {}, "sha1-HYRGMJWZkmLX17f4v9SozFUWf4M="],
+
+    "matcher": ["matcher@3.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/matcher/-/matcher-3.0.0.tgz", { "dependencies": { "escape-string-regexp": "^4.0.0" } }, "sha1-vZBg9MW3CqgEHMxvgDaHYJlPMMo="],
+
     "math-intrinsics": ["math-intrinsics@1.1.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/math-intrinsics/-/math-intrinsics-1.1.0.tgz", {}, "sha1-oN10voHiqlwvJ+Zc4oNgXuTit/k="],
 
     "media-typer": ["media-typer@1.1.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/media-typer/-/media-typer-1.1.0.tgz", {}, "sha1-ardLjy0zIPIGSyqHo455Mf86VWE="],
@@ -195,7 +299,11 @@
 
     "minimist": ["minimist@1.2.8", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/minimist/-/minimist-1.2.8.tgz", {}, "sha1-waRk52kzAuCCoHXO4MBXdBrEdyw="],
 
+    "minipass": ["minipass@7.1.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/minipass/-/minipass-7.1.2.tgz", {}, "sha1-k6libOXl5mvU24aEnnUV6SNApwc="],
+
     "minisearch": ["minisearch@6.3.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/minisearch/-/minisearch-6.3.0.tgz", {}, "sha1-mFovHKPHPC1lr5TwYWv+VxZLC2s="],
+
+    "minizlib": ["minizlib@3.1.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/minizlib/-/minizlib-3.1.0.tgz", { "dependencies": { "minipass": "^7.1.2" } }, "sha1-atdsOo8QInybUdHJrI4wsn9aJRw="],
 
     "mkdirp-classic": ["mkdirp-classic@0.5.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/mkdirp-classic/-/mkdirp-classic-0.5.3.tgz", {}, "sha1-+hDJEVzG2IZb4iG6R+6b7XhgERM="],
 
@@ -219,9 +327,17 @@
 
     "object-inspect": ["object-inspect@1.13.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/object-inspect/-/object-inspect-1.13.4.tgz", {}, "sha1-g3UmXiG8IND6WCwi4bE0hdbgAhM="],
 
+    "object-keys": ["object-keys@1.1.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/object-keys/-/object-keys-1.1.1.tgz", {}, "sha1-HEfyct8nfzsdrwYWd9nILiMixg4="],
+
     "on-finished": ["on-finished@2.4.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/on-finished/-/on-finished-2.4.1.tgz", { "dependencies": { "ee-first": "1.1.1" } }, "sha1-WMjEQRblSEWtV/FKsQsDUzGErD8="],
 
     "once": ["once@1.4.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/once/-/once-1.4.0.tgz", { "dependencies": { "wrappy": "1" } }, "sha1-WDsap3WWHUsROsF9nFC6753Xa9E="],
+
+    "onnxruntime-common": ["onnxruntime-common@1.21.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/onnxruntime-common/-/onnxruntime-common-1.21.0.tgz", {}, "sha1-qB1BkdQYrLv/JUapVMwswj7rCfg="],
+
+    "onnxruntime-node": ["onnxruntime-node@1.21.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/onnxruntime-node/-/onnxruntime-node-1.21.0.tgz", { "dependencies": { "global-agent": "^3.0.0", "onnxruntime-common": "1.21.0", "tar": "^7.0.1" }, "os": [ "linux", "win32", "darwin", ] }, "sha1-f09ZRVuvhRGB4gf8hAEoisLrENE="],
+
+    "onnxruntime-web": ["onnxruntime-web@1.22.0-dev.20250409-89f8206ba4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/onnxruntime-web/-/onnxruntime-web-1.22.0-dev.20250409-89f8206ba4.tgz", { "dependencies": { "flatbuffers": "^25.1.24", "guid-typescript": "^1.0.9", "long": "^5.2.3", "onnxruntime-common": "1.22.0-dev.20250409-89f8206ba4", "platform": "^1.3.6", "protobufjs": "^7.2.4" } }, "sha1-0eOgTgPf7jkrQdQg71R7agNRsGs="],
 
     "parseurl": ["parseurl@1.3.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/parseurl/-/parseurl-1.3.3.tgz", {}, "sha1-naGee+6NEt/wUT7Vt2lXeTvC6NQ="],
 
@@ -233,7 +349,11 @@
 
     "pkce-challenge": ["pkce-challenge@5.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/pkce-challenge/-/pkce-challenge-5.0.0.tgz", {}, "sha1-w6QFy0nicglKOOiQorUdoCKMTZc="],
 
+    "platform": ["platform@1.3.6", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/platform/-/platform-1.3.6.tgz", {}, "sha1-SLTOmDFksgnC1FoQetsx9HOm56c="],
+
     "prebuild-install": ["prebuild-install@7.1.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/prebuild-install/-/prebuild-install-7.1.3.tgz", { "dependencies": { "detect-libc": "^2.0.0", "expand-template": "^2.0.3", "github-from-package": "0.0.0", "minimist": "^1.2.3", "mkdirp-classic": "^0.5.3", "napi-build-utils": "^2.0.0", "node-abi": "^3.3.0", "pump": "^3.0.0", "rc": "^1.2.7", "simple-get": "^4.0.0", "tar-fs": "^2.0.0", "tunnel-agent": "^0.6.0" }, "bin": { "prebuild-install": "bin.js" } }, "sha1-1jCrrSsUdEPyCiEpF76uaLgJLuw="],
+
+    "protobufjs": ["protobufjs@7.5.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/protobufjs/-/protobufjs-7.5.4.tgz", { "dependencies": { "@protobufjs/aspromise": "^1.1.2", "@protobufjs/base64": "^1.1.2", "@protobufjs/codegen": "^2.0.4", "@protobufjs/eventemitter": "^1.1.0", "@protobufjs/fetch": "^1.1.0", "@protobufjs/float": "^1.0.2", "@protobufjs/inquire": "^1.1.0", "@protobufjs/path": "^1.1.2", "@protobufjs/pool": "^1.1.0", "@protobufjs/utf8": "^1.1.0", "@types/node": ">=13.7.0", "long": "^5.0.0" } }, "sha1-iF0x/pxLN/JdG7YA2jCxxbN9KGo="],
 
     "proxy-addr": ["proxy-addr@2.0.7", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/proxy-addr/-/proxy-addr-2.0.7.tgz", { "dependencies": { "forwarded": "0.2.0", "ipaddr.js": "1.9.1" } }, "sha1-8Z/mnOqzEe65S0LnDowgcPm6ECU="],
 
@@ -253,6 +373,8 @@
 
     "readdirp": ["readdirp@3.6.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/readdirp/-/readdirp-3.6.0.tgz", { "dependencies": { "picomatch": "^2.2.1" } }, "sha1-dKNwvYVxFuJFspzJc0DNQxoCpsc="],
 
+    "roarr": ["roarr@2.15.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/roarr/-/roarr-2.15.4.tgz", { "dependencies": { "boolean": "^3.0.1", "detect-node": "^2.0.4", "globalthis": "^1.0.1", "json-stringify-safe": "^5.0.1", "semver-compare": "^1.0.0", "sprintf-js": "^1.1.2" } }, "sha1-9f55W3uDjM/jXcYI4Cgrnrouev0="],
+
     "router": ["router@2.2.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/router/-/router-2.2.0.tgz", { "dependencies": { "debug": "^4.4.0", "depd": "^2.0.0", "is-promise": "^4.0.0", "parseurl": "^1.3.3", "path-to-regexp": "^8.0.0" } }, "sha1-AZvmILcRyHZBFnzHm5kJDwCxRu8="],
 
     "safe-buffer": ["safe-buffer@5.2.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/safe-buffer/-/safe-buffer-5.2.1.tgz", {}, "sha1-Hq+fqb2x/dTsdfWPnNtOa3gn7sY="],
@@ -261,11 +383,17 @@
 
     "semver": ["semver@7.7.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/semver/-/semver-7.7.2.tgz", { "bin": { "semver": "bin/semver.js" } }, "sha1-Z9mf3NNc7CHm+Lh6f9UVoz+YK1g="],
 
+    "semver-compare": ["semver-compare@1.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/semver-compare/-/semver-compare-1.0.0.tgz", {}, "sha1-De4hahyUGrN+nvsXiPavxf9VN/w="],
+
     "send": ["send@1.2.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/send/-/send-1.2.0.tgz", { "dependencies": { "debug": "^4.3.5", "encodeurl": "^2.0.0", "escape-html": "^1.0.3", "etag": "^1.8.1", "fresh": "^2.0.0", "http-errors": "^2.0.0", "mime-types": "^3.0.1", "ms": "^2.1.3", "on-finished": "^2.4.1", "range-parser": "^1.2.1", "statuses": "^2.0.1" } }, "sha1-MqdVT7d3uDHfqCg3D3c6OAjTchI="],
+
+    "serialize-error": ["serialize-error@7.0.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/serialize-error/-/serialize-error-7.0.1.tgz", { "dependencies": { "type-fest": "^0.13.1" } }, "sha1-8TYLBEf2H/tIPsQVfHN/q313jhg="],
 
     "serve-static": ["serve-static@2.2.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/serve-static/-/serve-static-2.2.0.tgz", { "dependencies": { "encodeurl": "^2.0.0", "escape-html": "^1.0.3", "parseurl": "^1.3.3", "send": "^1.2.0" } }, "sha1-nAJWTuJZvdIlG4LWWaLn4ZONZvk="],
 
     "setprototypeof": ["setprototypeof@1.2.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/setprototypeof/-/setprototypeof-1.2.0.tgz", {}, "sha1-ZsmiSnP5/CjL5msJ/tPTPcrxtCQ="],
+
+    "sharp": ["sharp@0.34.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/sharp/-/sharp-0.34.4.tgz", { "dependencies": { "@img/colour": "^1.0.0", "detect-libc": "^2.1.0", "semver": "^7.7.2" }, "optionalDependencies": { "@img/sharp-darwin-arm64": "0.34.4", "@img/sharp-darwin-x64": "0.34.4", "@img/sharp-libvips-darwin-arm64": "1.2.3", "@img/sharp-libvips-darwin-x64": "1.2.3", "@img/sharp-libvips-linux-arm": "1.2.3", "@img/sharp-libvips-linux-arm64": "1.2.3", "@img/sharp-libvips-linux-ppc64": "1.2.3", "@img/sharp-libvips-linux-s390x": "1.2.3", "@img/sharp-libvips-linux-x64": "1.2.3", "@img/sharp-libvips-linuxmusl-arm64": "1.2.3", "@img/sharp-libvips-linuxmusl-x64": "1.2.3", "@img/sharp-linux-arm": "0.34.4", "@img/sharp-linux-arm64": "0.34.4", "@img/sharp-linux-ppc64": "0.34.4", "@img/sharp-linux-s390x": "0.34.4", "@img/sharp-linux-x64": "0.34.4", "@img/sharp-linuxmusl-arm64": "0.34.4", "@img/sharp-linuxmusl-x64": "0.34.4", "@img/sharp-wasm32": "0.34.4", "@img/sharp-win32-arm64": "0.34.4", "@img/sharp-win32-ia32": "0.34.4", "@img/sharp-win32-x64": "0.34.4" } }, "sha1-c8LFpCXpglC4uSflU39xHaiWbjg="],
 
     "shebang-command": ["shebang-command@2.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/shebang-command/-/shebang-command-2.0.0.tgz", { "dependencies": { "shebang-regex": "^3.0.0" } }, "sha1-zNCvT4g1+9wmW4JGGq8MNmY/NOo="],
 
@@ -283,11 +411,27 @@
 
     "simple-get": ["simple-get@4.0.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/simple-get/-/simple-get-4.0.1.tgz", { "dependencies": { "decompress-response": "^6.0.0", "once": "^1.3.1", "simple-concat": "^1.0.0" } }, "sha1-SjnbVJKHyXnTUhEvoD/Zn9a8NUM="],
 
+    "sprintf-js": ["sprintf-js@1.1.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/sprintf-js/-/sprintf-js-1.1.3.tgz", {}, "sha1-SRS5A6L4toXRf994pw6RfocuREo="],
+
+    "sqlite-vec": ["sqlite-vec@0.1.7-alpha.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/sqlite-vec/-/sqlite-vec-0.1.7-alpha.2.tgz", { "optionalDependencies": { "sqlite-vec-darwin-arm64": "0.1.7-alpha.2", "sqlite-vec-darwin-x64": "0.1.7-alpha.2", "sqlite-vec-linux-arm64": "0.1.7-alpha.2", "sqlite-vec-linux-x64": "0.1.7-alpha.2", "sqlite-vec-windows-x64": "0.1.7-alpha.2" } }, "sha1-ZphDARwN5G4ZahkkpIWsR0HQQZA="],
+
+    "sqlite-vec-darwin-arm64": ["sqlite-vec-darwin-arm64@0.1.7-alpha.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/sqlite-vec-darwin-arm64/-/sqlite-vec-darwin-arm64-0.1.7-alpha.2.tgz", { "os": "darwin", "cpu": "arm64" }, "sha1-1LDHmgcvNm8dKamaOzwfIQFGrPM="],
+
+    "sqlite-vec-darwin-x64": ["sqlite-vec-darwin-x64@0.1.7-alpha.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/sqlite-vec-darwin-x64/-/sqlite-vec-darwin-x64-0.1.7-alpha.2.tgz", { "os": "darwin", "cpu": "x64" }, "sha1-84APKbRam8GZOmOvKYgr1ynCQms="],
+
+    "sqlite-vec-linux-arm64": ["sqlite-vec-linux-arm64@0.1.7-alpha.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/sqlite-vec-linux-arm64/-/sqlite-vec-linux-arm64-0.1.7-alpha.2.tgz", { "os": "linux", "cpu": "arm64" }, "sha1-/SiC586H0VE8w4K1a/Fo0B+io4g="],
+
+    "sqlite-vec-linux-x64": ["sqlite-vec-linux-x64@0.1.7-alpha.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/sqlite-vec-linux-x64/-/sqlite-vec-linux-x64-0.1.7-alpha.2.tgz", { "os": "linux", "cpu": "x64" }, "sha1-3Voe0a0ZYy6N7SXkSOhj3dLNiKw="],
+
+    "sqlite-vec-windows-x64": ["sqlite-vec-windows-x64@0.1.7-alpha.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/sqlite-vec-windows-x64/-/sqlite-vec-windows-x64-0.1.7-alpha.2.tgz", { "os": "win32", "cpu": "x64" }, "sha1-D6XTvxcCgfnlh4VcEbfpfpkxfAU="],
+
     "statuses": ["statuses@2.0.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/statuses/-/statuses-2.0.1.tgz", {}, "sha1-VcsADM8dSHKL0jxoWgY5mM8aG2M="],
 
     "string_decoder": ["string_decoder@1.3.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/string_decoder/-/string_decoder-1.3.0.tgz", { "dependencies": { "safe-buffer": "~5.2.0" } }, "sha1-QvEUWUpGzxqOMLCoT1bHjD7awh4="],
 
     "strip-json-comments": ["strip-json-comments@2.0.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/strip-json-comments/-/strip-json-comments-2.0.1.tgz", {}, "sha1-PFMZQukIwml8DsNEhYwobHygpgo="],
+
+    "tar": ["tar@7.4.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tar/-/tar-7.4.4.tgz", { "dependencies": { "@isaacs/fs-minipass": "^4.0.0", "chownr": "^3.0.0", "minipass": "^7.1.2", "minizlib": "^3.1.0", "yallist": "^5.0.0" } }, "sha1-akvLXLU9Y6FuOlmCLUjYlQbo7Mk="],
 
     "tar-fs": ["tar-fs@2.1.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tar-fs/-/tar-fs-2.1.4.tgz", { "dependencies": { "chownr": "^1.1.1", "mkdirp-classic": "^0.5.2", "pump": "^3.0.0", "tar-stream": "^2.1.4" } }, "sha1-gAgk2/TvBt7Zr+pKyv5xxnx2uTA="],
 
@@ -339,7 +483,11 @@
 
     "tree-sitter-vue": ["tree-sitter-vue@0.2.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-vue/-/tree-sitter-vue-0.2.1.tgz", { "dependencies": { "nan": "^2.14.0" } }, "sha1-zHB4pn+YR0V7WDAwB2036UaN5eY="],
 
+    "tslib": ["tslib@2.8.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tslib/-/tslib-2.8.1.tgz", {}, "sha1-YS7+TtI11Wfoq6Xypfq3AoCt6D8="],
+
     "tunnel-agent": ["tunnel-agent@0.6.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tunnel-agent/-/tunnel-agent-0.6.0.tgz", { "dependencies": { "safe-buffer": "^5.0.1" } }, "sha1-J6XeoGs2sEoKmWZ3SykIaPD8QP0="],
+
+    "type-fest": ["type-fest@0.13.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/type-fest/-/type-fest-0.13.1.tgz", {}, "sha1-AXLLW86AsL1ULqNI21DH4hg02TQ="],
 
     "type-is": ["type-is@2.0.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/type-is/-/type-is-2.0.1.tgz", { "dependencies": { "content-type": "^1.0.5", "media-typer": "^1.1.0", "mime-types": "^3.0.0" } }, "sha1-ZPbPA/kvzkAVwrIkeT9r3UsGjJc="],
 
@@ -359,6 +507,8 @@
 
     "wrappy": ["wrappy@1.0.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/wrappy/-/wrappy-1.0.2.tgz", {}, "sha1-tSQ9jz7BqjXxNkYFvA0QNuMKtp8="],
 
+    "yallist": ["yallist@5.0.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/yallist/-/yallist-5.0.0.tgz", {}, "sha1-AOLeRDY57Q14/YfeDSdGn7z/tTM="],
+
     "zod": ["zod@4.1.9", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/zod/-/zod-4.1.9.tgz", {}, "sha1-wDoN2xD1V48T+PcPGVn4n9CcHAY="],
 
     "zod-to-json-schema": ["zod-to-json-schema@3.24.6", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/zod-to-json-schema/-/zod-to-json-schema-3.24.6.tgz", { "peerDependencies": { "zod": "^3.24.1" } }, "sha1-WSDwIMTSZH7fu5VPoDYIK5LJ4S0="],
@@ -366,6 +516,10 @@
     "@modelcontextprotocol/sdk/zod": ["zod@3.25.76", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/zod/-/zod-3.25.76.tgz", {}, "sha1-JoQcP2/SKmonYOfMtxkXl2hHHjQ="],
 
     "body-parser/iconv-lite": ["iconv-lite@0.6.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/iconv-lite/-/iconv-lite-0.6.3.tgz", { "dependencies": { "safer-buffer": ">= 2.1.2 < 3.0.0" } }, "sha1-pS+AvzjaGVLrXGgXkHGYcaGnJQE="],
+
+    "onnxruntime-web/onnxruntime-common": ["onnxruntime-common@1.22.0-dev.20250409-89f8206ba4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/onnxruntime-common/-/onnxruntime-common-1.22.0-dev.20250409-89f8206ba4.tgz", {}, "sha1-PUo5VjuT2z0EKLVSfLpYo8j4JsI="],
+
+    "tar-fs/chownr": ["chownr@1.1.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/chownr/-/chownr-1.1.4.tgz", {}, "sha1-b8nXtC0ypYNZYzdmbn0ICE2izGs="],
 
     "tree-sitter-kotlin/node-addon-api": ["node-addon-api@7.1.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/node-addon-api/-/node-addon-api-7.1.1.tgz", {}, "sha1-Grpmk7DyVSWKBJ1iEykykyKq1Vg="],
 

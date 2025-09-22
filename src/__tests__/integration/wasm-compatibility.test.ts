@@ -12,7 +12,7 @@ describe('WASM Compatibility Integration', () => {
 
   beforeAll(async () => {
     // Create temporary test directory
-    testDir = join(process.cwd(), 'test-workspace-wasm-compat');
+    testDir = join(process.cwd(), 'debug/test-workspace-wasm-compat');
     mkdirSync(testDir, { recursive: true });
 
     // Initialize Miller

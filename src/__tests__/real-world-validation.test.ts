@@ -8,7 +8,7 @@ import { JavaExtractor } from '../extractors/java-extractor.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
-const REAL_WORLD_TEST_DIR = path.join(process.cwd(), 'test-workspace-real');
+const REAL_WORLD_TEST_DIR = path.join(process.cwd(), 'debug/test-workspace-real');
 
 describe('Real-World Code Validation', () => {
   let parserManager: ParserManager;

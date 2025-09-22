@@ -1,6 +1,7 @@
 import { watch, FSWatcher, readFile } from 'fs';
 import { readFile as readFileAsync, stat as statAsync } from 'fs/promises';
 import path from 'path';
+import { log, LogLevel } from '../utils/logger.js';
 
 export interface FileWatcherOptions {
   debounceMs?: number;
@@ -69,7 +70,7 @@ export class FileWatcher {
     try {
       const absolutePath = path.resolve(dirPath);
 
-      console.log(`Starting file watcher for: ${absolutePath}`);
+      log.watcher(LogLevel.DEBUG, `Starting file watcher for: ${absolutePath}`);
 
       const watcher = watch(
         absolutePath,
@@ -87,7 +88,7 @@ export class FileWatcher {
       });
 
       this.watchers.set(absolutePath, watcher);
-      console.log(`File watcher active for ${absolutePath} (recursive: ${this.options.recursive})`);
+      log.watcher(LogLevel.INFO, `File watcher active for ${absolutePath} (recursive: ${this.options.recursive})`);
     } catch (error) {
       this.handleError(error as Error, dirPath);
     }
@@ -98,11 +99,11 @@ export class FileWatcher {
       const absolutePath = path.resolve(filePath);
 
       if (!this.isFileSupported(absolutePath)) {
-        console.warn(`File type not supported: ${absolutePath}`);
+        log.watcher(LogLevel.WARN, `File type not supported: ${absolutePath}`);
         return;
       }
 
-      console.log(`Starting file watcher for file: ${absolutePath}`);
+      log.watcher(LogLevel.DEBUG, `Starting file watcher for file: ${absolutePath}`);
 
       const watcher = watch(absolutePath, (eventType) => {
         this.handleRawFileEvent(absolutePath, eventType);
@@ -207,7 +208,7 @@ export class FileWatcher {
       // Check file size first
       const stats = await statAsync(filePath);
       if (stats.size > this.options.maxFileSize) {
-        console.warn(`File too large to process: ${filePath} (${stats.size} bytes)`);
+        log.watcher(LogLevel.WARN, `File too large to process: ${filePath} (${stats.size} bytes)`);
         return null;
       }
 
@@ -269,7 +270,7 @@ export class FileWatcher {
   }
 
   private handleError(error: Error, filePath?: string): void {
-    console.error(`File watcher error${filePath ? ` for ${filePath}` : ''}:`, error);
+    log.watcher(LogLevel.ERROR, `File watcher error${filePath ? ` for ${filePath}` : ''}:`, error);
 
     if (this.onError) {
       this.onError(error, filePath);
@@ -283,13 +284,13 @@ export class FileWatcher {
       if (watcher) {
         watcher.close();
         this.watchers.delete(absolutePath);
-        console.log(`Stopped watching: ${absolutePath}`);
+        log.watcher(LogLevel.DEBUG, `Stopped watching: ${absolutePath}`);
       }
     } else {
       // Stop all watchers
       for (const [path, watcher] of this.watchers) {
         watcher.close();
-        console.log(`Stopped watching: ${path}`);
+        log.watcher(LogLevel.DEBUG, `Stopped watching: ${path}`);
       }
       this.watchers.clear();
     }
@@ -332,13 +333,13 @@ export class FileWatcher {
       supportedExtensions: newOptions.supportedExtensions ?? this.options.supportedExtensions
     };
 
-    console.log('File watcher options updated:', this.options);
+    log.watcher(LogLevel.DEBUG, 'File watcher options updated:', this.options);
   }
 
   addIgnorePattern(pattern: string): void {
     if (!this.options.ignorePatterns.includes(pattern)) {
       this.options.ignorePatterns.push(pattern);
-      console.log(`Added ignore pattern: ${pattern}`);
+      log.watcher(LogLevel.DEBUG, `Added ignore pattern: ${pattern}`);
     }
   }
 
@@ -346,7 +347,7 @@ export class FileWatcher {
     const index = this.options.ignorePatterns.indexOf(pattern);
     if (index > -1) {
       this.options.ignorePatterns.splice(index, 1);
-      console.log(`Removed ignore pattern: ${pattern}`);
+      log.watcher(LogLevel.DEBUG, `Removed ignore pattern: ${pattern}`);
     }
   }
 
@@ -354,7 +355,7 @@ export class FileWatcher {
     const ext = extension.startsWith('.') ? extension : `.${extension}`;
     if (!this.options.supportedExtensions.includes(ext)) {
       this.options.supportedExtensions.push(ext);
-      console.log(`Added supported extension: ${ext}`);
+      log.watcher(LogLevel.DEBUG, `Added supported extension: ${ext}`);
     }
   }
 
@@ -363,7 +364,7 @@ export class FileWatcher {
     const index = this.options.supportedExtensions.indexOf(ext);
     if (index > -1) {
       this.options.supportedExtensions.splice(index, 1);
-      console.log(`Removed supported extension: ${ext}`);
+      log.watcher(LogLevel.DEBUG, `Removed supported extension: ${ext}`);
     }
   }
 

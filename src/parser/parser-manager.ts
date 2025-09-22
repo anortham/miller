@@ -1,5 +1,6 @@
 import { Parser, Language } from 'web-tree-sitter';
 import { createHash } from 'crypto';
+import { log, LogLevel } from '../utils/logger.js';
 
 export interface ParseResult {
   tree: Parser.Tree;
@@ -73,64 +74,74 @@ export class ParserManager {
 
     await Parser.init();
 
-    // Load all language parsers
+    // Set up extension to language mappings (but don't load parsers yet - lazy loading)
     for (const config of this.languageConfigs) {
-      try {
-        // Skip languages without extensions, except special parsers
-        if (config.extensions.length === 0 && !['regex', 'vue'].includes(config.name)) {
-          console.log(`Skipping ${config.name} - no file extensions defined`);
-          continue;
-        }
+      // Skip languages without extensions, except special parsers
+      if (config.extensions.length === 0 && !['regex', 'vue'].includes(config.name)) {
+        log.engine(LogLevel.DEBUG, `Skipping ${config.name} - no file extensions defined`);
+        continue;
+      }
 
-        // Vue is handled specially - no WASM parser needed
-        if (config.name === 'vue') {
-          // Map extensions to languages for Vue
-          for (const ext of config.extensions) {
-            this.extensionToLanguage.set(ext, config.name);
-          }
-          console.log(`Registered Vue SFC handler for ${config.extensions.join(', ')}`);
-          continue;
-        }
-
-        // Use our locally built WASM files
-        let wasmPath = config.wasmPath;
-        if (!wasmPath) {
-          // All parsers use our locally built WASM files
-          // Special handling for c_sharp to maintain underscore in filename
-          let fileName = config.name;
-          if (config.name !== 'c_sharp') {
-            fileName = config.name.replace('_', '-');
-          }
-          wasmPath = `./wasm/tree-sitter-${fileName}.wasm`;
-        }
-
-        const language = await Language.load(wasmPath);
-        this.languages.set(config.name, language);
-
-        // Map extensions to languages
-        for (const ext of config.extensions) {
-          this.extensionToLanguage.set(ext, config.name);
-        }
-
-        console.log(`Loaded parser for ${config.name}`); // Keep as console for MCP startup visibility
-      } catch (error) {
-        console.warn(`Failed to load parser for ${config.name}:`, error);
-
-        // Fallback: Use JavaScript parser for TypeScript files
-        if (config.name === 'typescript' && this.languages.has('javascript')) {
-          console.log(`Using JavaScript parser as fallback for TypeScript`);
-          this.languages.set('typescript', this.languages.get('javascript')!);
-
-          // Map TypeScript extensions to typescript language (but use JS parser)
-          for (const ext of config.extensions) {
-            this.extensionToLanguage.set(ext, 'typescript');
-          }
-        }
+      // Map extensions to languages for all supported languages
+      for (const ext of config.extensions) {
+        this.extensionToLanguage.set(ext, config.name);
       }
     }
 
     this.initialized = true;
-    console.log(`Parser manager initialized with ${this.languages.size} languages`); // Keep as console for MCP startup visibility
+    log.engine(LogLevel.INFO, `Parser manager initialized with lazy loading for ${this.languageConfigs.length} languages`);
+  }
+
+  private async loadLanguageParser(language: string): Promise<Parser.Language | null> {
+    // Return already loaded parser
+    if (this.languages.has(language)) {
+      return this.languages.get(language)!;
+    }
+
+    // Find config for this language
+    const config = this.languageConfigs.find(c => c.name === language);
+    if (!config) {
+      throw new Error(`Unknown language: ${language}`);
+    }
+
+    try {
+      // Vue is handled specially - no WASM parser needed
+      if (config.name === 'vue') {
+        log.engine(LogLevel.DEBUG, `Vue SFC handler ready for ${config.extensions.join(', ')}`);
+        return null; // Vue doesn't need a tree-sitter parser
+      }
+
+      // Use our locally built WASM files
+      let wasmPath = config.wasmPath;
+      if (!wasmPath) {
+        // All parsers use our locally built WASM files
+        // Special handling for c_sharp to maintain underscore in filename
+        let fileName = config.name;
+        if (config.name !== 'c_sharp') {
+          fileName = config.name.replace('_', '-');
+        }
+        wasmPath = `./wasm/tree-sitter-${fileName}.wasm`;
+      }
+
+      log.engine(LogLevel.DEBUG, `Loading parser for ${config.name}...`);
+      const languageParser = await Language.load(wasmPath);
+      this.languages.set(config.name, languageParser);
+      log.engine(LogLevel.DEBUG, `✓ Loaded parser for ${config.name}`);
+
+      return languageParser;
+    } catch (error) {
+      log.engine(LogLevel.WARN, `Failed to load parser for ${config.name}:`, error);
+
+      // Fallback: Use JavaScript parser for TypeScript files
+      if (config.name === 'typescript' && this.languages.has('javascript')) {
+        log.engine(LogLevel.INFO, `Using JavaScript parser as fallback for TypeScript`);
+        const jsParser = this.languages.get('javascript')!;
+        this.languages.set('typescript', jsParser);
+        return jsParser;
+      }
+
+      throw error;
+    }
   }
 
   getLanguageForFile(filePath: string): string | undefined {
@@ -171,9 +182,10 @@ export class ParserManager {
       };
     }
 
-    const languageObj = this.languages.get(language);
+    // Load parser on-demand (lazy loading)
+    const languageObj = await this.loadLanguageParser(language);
     if (!languageObj) {
-      throw new Error(`Language parser not loaded: ${language}`);
+      throw new Error(`Failed to load language parser: ${language}`);
     }
 
     const parser = new Parser();
@@ -184,13 +196,13 @@ export class ParserManager {
       tree = parser.parse(content);
     } catch (error) {
       // Tree-sitter WASM parsing failed - create a minimal fallback tree
-      console.warn(`Tree-sitter parsing failed for ${filePath}:`, error);
+      log.engine(LogLevel.WARN, `Tree-sitter parsing failed for ${filePath}:`, error);
       tree = this.createFallbackTree(content, language);
     }
 
     if (!tree || !tree.rootNode) {
       // Second fallback - create an even more basic tree
-      console.warn(`No valid tree or root node for ${filePath}, creating basic fallback`);
+      log.engine(LogLevel.WARN, `No valid tree or root node for ${filePath}, creating basic fallback`);
       tree = this.createFallbackTree(content, language);
     }
 
@@ -272,9 +284,9 @@ export class ParserManager {
         this.extensionToLanguage.set(ext, config.name);
       }
 
-      console.log(`Dynamically loaded parser for ${config.name}`); // Keep as console for debugging
+      log.engine(LogLevel.DEBUG, `Dynamically loaded parser for ${config.name}`);
     } catch (error) {
-      console.warn(`Failed to dynamically load parser for ${config.name}:`, error);
+      log.engine(LogLevel.WARN, `Failed to dynamically load parser for ${config.name}:`, error);
     }
   }
 

@@ -81,7 +81,7 @@ export class TypeScriptExtractor extends BaseExtractor {
 
     const signature = this.buildClassSignature(node);
 
-    return this.createSymbol(node, name, SymbolKind.Class, {
+    return this.createSymbol(nameNode || node, name, SymbolKind.Class, {
       signature,
       visibility: this.extractVisibility(node),
       parentId,
@@ -101,7 +101,7 @@ export class TypeScriptExtractor extends BaseExtractor {
     const heritage = node.childForFieldName('heritage');
     const extendsClause = heritage?.children.find(c => c.type === 'extends_clause');
 
-    return this.createSymbol(node, name, SymbolKind.Interface, {
+    return this.createSymbol(nameNode || node, name, SymbolKind.Interface, {
       signature: `interface ${name}`,
       parentId,
       metadata: {
@@ -129,7 +129,10 @@ export class TypeScriptExtractor extends BaseExtractor {
 
     const signature = this.buildFunctionSignature(node, name);
 
-    return this.createSymbol(node, name, SymbolKind.Function, {
+    // Use nameNode for position if available, otherwise fall back to node
+    const positionNode = nameNode || node;
+
+    return this.createSymbol(positionNode, name, SymbolKind.Function, {
       signature,
       visibility: this.extractVisibility(node),
       parentId,
