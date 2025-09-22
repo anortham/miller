@@ -48,6 +48,9 @@ export class SqlExtractor extends BaseExtractor {
             // Extract Common Table Expressions as functions/views
             symbol = this.extractCte(node, parentId);
             break;
+          case 'create_schema':
+            symbol = this.extractSchema(node, parentId);
+            break;
           case 'select':
             // Extract SELECT query aliases as fields
             this.extractSelectAliases(node, symbols, parentId);
@@ -390,6 +393,29 @@ export class SqlExtractor extends BaseExtractor {
     return symbol;
   }
 
+  private extractSchema(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    // Look for schema name - it may be inside an object_reference
+    const objectRefNode = this.findChildByType(node, 'object_reference');
+    const nameNode = objectRefNode ?
+      this.findChildByType(objectRefNode, 'identifier') :
+      (this.findChildByType(node, 'identifier') ||
+       this.findChildByType(node, 'schema_name'));
+
+    if (!nameNode) return null;
+
+    const name = this.getNodeText(nameNode);
+
+    const symbol = this.createSymbol(node, name, SymbolKind.Namespace, {
+      signature: `CREATE SCHEMA ${name}`,
+      visibility: 'public',
+      parentId,
+      docComment: this.extractDocumentation(node),
+      metadata: { isSchema: true }
+    });
+
+    return symbol;
+  }
+
   private extractViewColumns(viewNode: Parser.SyntaxNode, symbols: Symbol[], parentViewId: string): void {
     // Look for the SELECT statement inside the view and extract its aliases
     this.traverseTree(viewNode, (node) => {
@@ -554,11 +580,48 @@ export class SqlExtractor extends BaseExtractor {
 
     const name = this.getNodeText(nameNode);
 
+    // Get the full index text for signature
+    const nodeText = this.getNodeText(node);
+    const isUnique = nodeText.includes('UNIQUE');
+
+    // Build a more comprehensive signature that includes key parts
+    let signature = isUnique ? `CREATE UNIQUE INDEX ${name}` : `CREATE INDEX ${name}`;
+
+    // Add table and column information if found
+    const onMatch = nodeText.match(/ON\s+([a-zA-Z_][a-zA-Z0-9_]*)/i);
+    if (onMatch) {
+      signature += ` ON ${onMatch[1]}`;
+    }
+
+    // Add USING clause if present (before columns)
+    const usingMatch = nodeText.match(/USING\s+([A-Z]+)/i);
+    if (usingMatch) {
+      signature += ` USING ${usingMatch[1]}`;
+    }
+
+    // Add column information if found
+    const columnMatch = nodeText.match(/(?:ON\s+[a-zA-Z_][a-zA-Z0-9_]*(?:\s+USING\s+[A-Z]+)?\s*)?(\([^)]+\))/i);
+    if (columnMatch) {
+      signature += ` ${columnMatch[1]}`;
+    }
+
+    // Add INCLUDE clause if present
+    const includeMatch = nodeText.match(/INCLUDE\s*(\([^)]+\))/i);
+    if (includeMatch) {
+      signature += ` INCLUDE ${includeMatch[1]}`;
+    }
+
+    // Add WHERE clause if present
+    const whereMatch = nodeText.match(/WHERE\s+(.+?)(?:;|$)/i);
+    if (whereMatch) {
+      signature += ` WHERE ${whereMatch[1].trim()}`;
+    }
+
     const symbol = this.createSymbol(node, name, SymbolKind.Property, {
-      signature: `INDEX ${name}`,
+      signature,
       visibility: 'public',
       parentId,
-      metadata: { isIndex: true }
+      metadata: { isIndex: true, isUnique }
     });
 
     return symbol;
@@ -605,6 +668,19 @@ export class SqlExtractor extends BaseExtractor {
         metadata: { isFunction: true, extractedFromError: true }
       });
       return functionSymbol;
+    }
+
+    // Extract schemas from ERROR nodes
+    const schemaMatch = errorText.match(/CREATE\s+SCHEMA\s+([a-zA-Z_][a-zA-Z0-9_]*)/i);
+    if (schemaMatch) {
+      const schemaName = schemaMatch[1];
+      const schemaSymbol = this.createSymbol(node, schemaName, SymbolKind.Namespace, {
+        signature: `CREATE SCHEMA ${schemaName}`,
+        visibility: 'public',
+        parentId,
+        metadata: { isSchema: true, extractedFromError: true }
+      });
+      return schemaSymbol;
     }
 
     // Extract views from ERROR nodes
