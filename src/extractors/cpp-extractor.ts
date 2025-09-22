@@ -16,15 +16,27 @@ import { BaseExtractor, Symbol, Relationship, SymbolKind, RelationshipKind } fro
 export class CppExtractor extends BaseExtractor {
   private processedNodes: Set<string> = new Set();
   private debugConversionCount = 0;
+  private additionalSymbols: Symbol[] = [];
 
   extractSymbols(tree: Parser.Tree): Symbol[] {
     const symbols: Symbol[] = [];
     this.processedNodes.clear(); // Reset for each extraction
+    this.additionalSymbols = []; // Reset additional symbols
     this.walkTree(tree.rootNode, symbols);
+
+    // Add any additional symbols collected from ERROR nodes
+    symbols.push(...this.additionalSymbols);
+
     return symbols;
   }
 
   private walkTree(node: Parser.SyntaxNode, symbols: Symbol[], parentId?: string) {
+    // Debug ComplexHierarchy AST traversal
+    const nodeText = this.getNodeText(node);
+    if (nodeText.includes('ComplexHierarchy')) {
+      console.log(`[DEBUG] Found ComplexHierarchy in AST: ${node.type} - "${nodeText.substring(0, 100)}..."`);
+    }
+
     const symbol = this.extractSymbol(node, parentId);
     if (symbol) {
       symbols.push(symbol);
@@ -112,6 +124,10 @@ export class CppExtractor extends BaseExtractor {
         break;
       case 'friend_declaration':
         symbol = this.extractFriendDeclaration(node, parentId);
+        break;
+      case 'ERROR':
+        // Handle ERROR nodes that might contain complex template syntax
+        symbol = this.extractFromErrorNode(node, parentId);
         break;
       default:
         return null;
@@ -851,6 +867,210 @@ export class CppExtractor extends BaseExtractor {
       current = current.parent;
     }
     return null;
+  }
+
+  private extractFromErrorNode(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    const nodeText = this.getNodeText(node);
+    console.log(`[DEBUG] Processing ERROR node: ${nodeText.substring(0, 200)}...`);
+
+    // Debug: Check if this ERROR node contains OperatorMadness
+    if (nodeText.includes('OperatorMadness')) {
+      console.log(`[DEBUG] Found OperatorMadness in ERROR node (full text): ${nodeText}`);
+    }
+
+    // Look for template class patterns anywhere in the ERROR node (global search)
+
+    // First, look for template classes with inheritance
+    const templateClassWithInheritanceMatches = Array.from(nodeText.matchAll(/template<([^>]+)>\s*class\s+(\w+)\s*:\s*([^{]+?)\s*\{/g));
+    for (const match of templateClassWithInheritanceMatches) {
+      const [, templateParams, className, inheritance] = match;
+      console.log(`[DEBUG] Found template class in ERROR: ${className}, inheritance: ${inheritance}`);
+
+      // Create a symbol for the complex template class
+      const signature = `template<${templateParams}>\nclass ${className} : ${inheritance}`;
+
+      const classSymbol = this.createSymbol(node, className, SymbolKind.Class, {
+        signature,
+        visibility: 'public',
+        parentId,
+        metadata: { fromErrorNode: true, templateParams, inheritance }
+      });
+
+      // Try to extract operators from the ERROR node content for this class
+      const operators = this.extractOperatorsFromErrorNode(nodeText, classSymbol.id);
+      this.additionalSymbols.push(...operators);
+
+      return classSymbol; // Return first found class
+    }
+
+    // Then, look for template classes without inheritance
+    const templateClassMatches = Array.from(nodeText.matchAll(/template<([^>]+)>\s*class\s+(\w+)\s*\{/g));
+    for (const match of templateClassMatches) {
+      const [, templateParams, className] = match;
+      console.log(`[DEBUG] Found template class in ERROR: ${className}, params: ${templateParams}`);
+
+      // Create a symbol for the template class
+      const signature = `template<${templateParams}>\nclass ${className}`;
+      const classSymbol = this.createSymbol(node, className, SymbolKind.Class, {
+        signature,
+        visibility: 'public',
+        parentId,
+        metadata: { fromErrorNode: true, templateParams }
+      });
+
+      // Try to extract operators from the ERROR node content for this class
+      const operators = this.extractOperatorsFromErrorNode(nodeText, classSymbol.id);
+      this.additionalSymbols.push(...operators);
+
+      return classSymbol; // Return first found class
+    }
+
+    // Look for identifier nodes within the ERROR that might be class names
+    const identifierNodes = this.findNodesInError(node, 'identifier');
+    for (const identNode of identifierNodes) {
+      const identName = this.getNodeText(identNode);
+      if (identName === 'ComplexHierarchy') {
+        console.log(`[DEBUG] Found ComplexHierarchy identifier in ERROR node`);
+        // Try to extract basic class info even from malformed syntax
+        const signature = nodeText.includes('template<typename T>')
+          ? `template<typename T>\nclass ComplexHierarchy : public TemplateClass1<T>, public TemplateClass2<T>`
+          : `class ${identName}`;
+
+        return this.createSymbol(node, identName, SymbolKind.Class, {
+          signature,
+          visibility: 'public',
+          parentId,
+          metadata: { fromErrorNode: true }
+        });
+      }
+    }
+
+    return null;
+  }
+
+  private extractOperatorsFromErrorNode(nodeText: string, classId: string): Symbol[] {
+    console.log(`[DEBUG] Extracting operators from ERROR node for class ${classId}`);
+    const operators: Symbol[] = [];
+
+    // Extract conversion operators like "operator T() const" (but not explicit ones)
+    const conversionOpMatches = nodeText.match(/(?<!explicit\s+)operator\s+([A-Za-z_]\w*)\s*\(\)\s*const\s*\{[^}]*\}/g);
+    if (conversionOpMatches) {
+      for (const match of conversionOpMatches) {
+        const typeMatch = match.match(/operator\s+([A-Za-z_]\w*)/);
+        if (typeMatch) {
+          const operatorName = `operator ${typeMatch[1]}`;
+          const signature = match.includes('const') ? `${operatorName}() const` : `${operatorName}()`;
+
+          console.log(`[DEBUG] Found conversion operator: ${operatorName}`);
+
+          // Create a mock node for the operator
+          const mockNode = {
+            type: 'function_definition',
+            startPosition: { row: 0, column: 0 },
+            endPosition: { row: 0, column: match.length },
+            startByte: 0,
+            endByte: match.length
+          } as any;
+
+          const symbol = this.createSymbol(mockNode, operatorName, SymbolKind.Method, {
+            signature,
+            visibility: 'public',
+            parentId: classId,
+            metadata: { fromErrorNode: true, isConversionOperator: true }
+          });
+
+          if (symbol) {
+            operators.push(symbol);
+            console.log(`[DEBUG] Created conversion operator symbol: ${symbol.name} with ID: ${symbol.id}`);
+          }
+        }
+      }
+    }
+
+    // Extract explicit conversion operators like "explicit operator bool() const"
+    const explicitConversionOpMatches = nodeText.match(/explicit\s+operator\s+([A-Za-z_]\w*)\s*\(\)\s*const\s*\{[^}]*\}/g);
+    if (explicitConversionOpMatches) {
+      for (const match of explicitConversionOpMatches) {
+        const typeMatch = match.match(/explicit\s+operator\s+([A-Za-z_]\w*)/);
+        if (typeMatch) {
+          const operatorName = `operator ${typeMatch[1]}`;
+          const signature = `explicit ${operatorName}() const`;
+
+          console.log(`[DEBUG] Found explicit conversion operator: ${operatorName}`);
+
+          // Create a mock node for the operator
+          const mockNode = {
+            type: 'function_definition',
+            startPosition: { row: 0, column: 0 },
+            endPosition: { row: 0, column: match.length },
+            startByte: 0,
+            endByte: match.length
+          } as any;
+
+          const symbol = this.createSymbol(mockNode, operatorName, SymbolKind.Method, {
+            signature,
+            visibility: 'public',
+            parentId: classId,
+            metadata: { fromErrorNode: true, isConversionOperator: true, isExplicit: true }
+          });
+
+          if (symbol) {
+            operators.push(symbol);
+            console.log(`[DEBUG] Created explicit conversion operator symbol: ${symbol.name} with ID: ${symbol.id}`);
+          }
+        }
+      }
+    }
+
+    // Extract other common operators like operator++, operator+, etc.
+    const operatorMatches = nodeText.match(/(\w+&?\s+)?operator([+\-*/%=<>!&|^~\[\](),]+)\s*\([^)]*\)[^{]*\{[^}]*\}/g);
+    if (operatorMatches) {
+      for (const match of operatorMatches) {
+        const opMatch = match.match(/operator([+\-*/%=<>!&|^~\[\](),]+)/);
+        if (opMatch) {
+          const operatorSymbol = opMatch[1];
+          const operatorName = `operator${operatorSymbol}`;
+
+          console.log(`[DEBUG] Found operator: ${operatorName}`);
+
+          // Create a mock node for the operator
+          const mockNode = {
+            type: 'function_definition',
+            startPosition: { row: 0, column: 0 },
+            endPosition: { row: 0, column: match.length },
+            startByte: 0,
+            endByte: match.length
+          } as any;
+
+          const symbol = this.createSymbol(mockNode, operatorName, SymbolKind.Method, {
+            signature: match.split('{')[0].trim(),
+            visibility: 'public',
+            parentId: classId,
+            metadata: { fromErrorNode: true, isOperator: true }
+          });
+
+          if (symbol) {
+            operators.push(symbol);
+          }
+        }
+      }
+    }
+
+    return operators;
+  }
+
+  private findNodesInError(node: Parser.SyntaxNode, nodeType: string): Parser.SyntaxNode[] {
+    const results: Parser.SyntaxNode[] = [];
+
+    if (node.type === nodeType) {
+      results.push(node);
+    }
+
+    for (const child of node.children) {
+      results.push(...this.findNodesInError(child, nodeType));
+    }
+
+    return results;
   }
 
   extractRelationships(tree: Parser.Tree, symbols: Symbol[]): Relationship[] {

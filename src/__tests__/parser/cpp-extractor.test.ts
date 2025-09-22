@@ -2806,6 +2806,11 @@ namespace EdgeCases {
       const templateCallOp = symbols.find(s => s.name === 'operator()' && s.signature?.includes('template'));
       expect(templateCallOp).toBeDefined();
 
+      // Debug: List all operator symbols
+      const allOperators = symbols.filter(s => s.name.includes('operator'));
+      console.log('[DEBUG] All operator symbols found:');
+      allOperators.forEach(op => console.log(`  - ${op.name}: ${op.signature || 'no signature'}`));
+
       const conversionOp = symbols.find(s => s.name === 'operator T');
       expect(conversionOp).toBeDefined();
 
