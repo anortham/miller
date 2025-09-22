@@ -37,6 +37,11 @@ export class CExtractor extends BaseExtractor {
           break;
         case 'enum_specifier':
           symbol = this.extractEnum(node, parentId);
+          // Also extract enum values as separate constant symbols
+          if (symbol) {
+            const enumValues = this.extractEnumValueSymbols(node, symbol.id);
+            symbols.push(...enumValues);
+          }
           break;
         case 'type_definition':
           symbol = this.extractTypeDefinition(node, parentId);
@@ -237,8 +242,8 @@ export class CExtractor extends BaseExtractor {
     const signature = this.getNodeText(node);
     const underlyingType = this.extractUnderlyingTypeFromTypeDefinition(node);
 
-    // If the typedef contains an anonymous struct, treat it as a Class
-    const symbolKind = this.containsAnonymousStruct(node) ? SymbolKind.Class : SymbolKind.Type;
+    // If the typedef contains any struct, treat it as a Class
+    const symbolKind = this.containsStruct(node) ? SymbolKind.Class : SymbolKind.Type;
 
     return this.createSymbol(node, typedefName, symbolKind, {
       signature,
@@ -248,7 +253,7 @@ export class CExtractor extends BaseExtractor {
         type: symbolKind === SymbolKind.Class ? 'struct' : 'typedef',
         name: typedefName,
         underlyingType: underlyingType,
-        isAnonymousStruct: symbolKind === SymbolKind.Class
+        isStruct: symbolKind === SymbolKind.Class
       }
     });
   }
@@ -460,22 +465,20 @@ export class CExtractor extends BaseExtractor {
   }
 
   private extractStorageClass(node: Parser.SyntaxNode): string | null {
-    const storageClasses = ['static', 'extern', 'auto', 'register'];
-    for (const child of node.children) {
-      if (storageClasses.includes(child.type)) {
-        return child.type;
-      }
+    // Look for storage_class_specifier node
+    const storageClassNode = node.children.find(c => c.type === 'storage_class_specifier');
+    if (storageClassNode) {
+      return this.getNodeText(storageClassNode);
     }
     return null;
   }
 
   private extractTypeQualifiers(node: Parser.SyntaxNode): string | null {
     const qualifiers: string[] = [];
-    const typeQualifiers = ['const', 'volatile', 'restrict'];
 
     for (const child of node.children) {
-      if (typeQualifiers.includes(child.type)) {
-        qualifiers.push(child.type);
+      if (child.type === 'type_qualifier') {
+        qualifiers.push(this.getNodeText(child));
       }
     }
 
@@ -506,8 +509,12 @@ export class CExtractor extends BaseExtractor {
   private extractInitializer(declarator: Parser.SyntaxNode): string | null {
     // Look for initializer in init_declarator
     if (declarator.type === 'init_declarator') {
-      const initNode = declarator.children.find(c => c.type !== 'declarator' && c.text !== '=');
-      return initNode ? this.getNodeText(initNode) : null;
+      // Find the initialization value after the '=' sign
+      const equalIndex = declarator.children.findIndex(c => c.text === '=');
+      if (equalIndex !== -1 && equalIndex + 1 < declarator.children.length) {
+        const initNode = declarator.children[equalIndex + 1];
+        return this.getNodeText(initNode);
+      }
     }
     return null;
   }
@@ -564,6 +571,45 @@ export class CExtractor extends BaseExtractor {
     return values;
   }
 
+  private extractEnumValueSymbols(node: Parser.SyntaxNode, parentEnumId: string): Symbol[] {
+    const enumValueSymbols: Symbol[] = [];
+    const enumList = node.children.find(c => c.type === 'enumerator_list');
+
+    if (enumList) {
+      for (const child of enumList.children) {
+        if (child.type === 'enumerator') {
+          const nameNode = child.children.find(c => c.type === 'identifier');
+          if (nameNode) {
+            const name = this.getNodeText(nameNode);
+            const valueNode = child.children.find(c => c.type === 'number_literal');
+            const value = valueNode ? this.getNodeText(valueNode) : undefined;
+
+            let signature = name;
+            if (value) {
+              signature += ` = ${value}`;
+            }
+
+            const enumValueSymbol = this.createSymbol(child, name, SymbolKind.Constant, {
+              signature,
+              visibility: 'public',
+              parentId: parentEnumId,
+              metadata: {
+                type: 'enum_value',
+                name,
+                value,
+                enumParent: parentEnumId
+              }
+            });
+
+            enumValueSymbols.push(enumValueSymbol);
+          }
+        }
+      }
+    }
+
+    return enumValueSymbols;
+  }
+
   private extractTypedefName(node: Parser.SyntaxNode): string {
     // Look for the type identifier in typedef
     const nameNode = node.children.find(c => c.type === 'type_identifier');
@@ -571,20 +617,36 @@ export class CExtractor extends BaseExtractor {
   }
 
   private extractTypedefNameFromTypeDefinition(node: Parser.SyntaxNode): string {
-    // For type_definition nodes, find the type name (last type_identifier or primitive_type)
-    const children = node.children;
+    // For type_definition nodes, find the typedef name
+    // The name can be a direct child type_identifier or nested inside declarators
 
-    // Look for the typedef name - it's typically the last identifier before semicolon
-    for (let i = children.length - 1; i >= 0; i--) {
-      const child = children[i];
-      if (child.type === 'type_identifier') {
-        const text = this.getNodeText(child);
+    // First, try to find type_identifier nodes recursively (for pointer types, arrays, etc.)
+    const typeIdentifiers: string[] = [];
+
+    const findTypeIdentifiers = (n: Parser.SyntaxNode) => {
+      if (n.type === 'type_identifier') {
+        const text = this.getNodeText(n);
         // Skip known attributes
         if (!['PACKED', 'ALIGNED', '__packed__', '__aligned__'].includes(text)) {
-          return text;
+          typeIdentifiers.push(text);
         }
-      } else if (child.type === 'primitive_type') {
-        // Handle cases like "typedef unsigned long long uint64_t" where uint64_t is primitive_type
+      }
+      for (const child of n.children) {
+        findTypeIdentifiers(child);
+      }
+    };
+
+    findTypeIdentifiers(node);
+
+    // Return the last type_identifier found (this is usually the typedef name)
+    if (typeIdentifiers.length > 0) {
+      return typeIdentifiers[typeIdentifiers.length - 1];
+    }
+
+    // Fallback: look for primitive_type in direct children (for simple typedefs)
+    for (let i = node.children.length - 1; i >= 0; i--) {
+      const child = node.children[i];
+      if (child.type === 'primitive_type') {
         return this.getNodeText(child);
       }
     }
@@ -612,15 +674,11 @@ export class CExtractor extends BaseExtractor {
     return typeNode ? this.getNodeText(typeNode) : 'unknown';
   }
 
-  private containsAnonymousStruct(node: Parser.SyntaxNode): boolean {
-    // Check if the typedef declaration contains an anonymous struct
+  private containsStruct(node: Parser.SyntaxNode): boolean {
+    // Check if the typedef declaration contains any struct (named or anonymous)
     for (const child of node.children) {
       if (child.type === 'struct_specifier') {
-        // Check if it's an anonymous struct (no type_identifier after 'struct' keyword)
-        const hasName = child.children.some(c => c.type === 'type_identifier');
-        if (!hasName) {
-          return true;
-        }
+        return true;
       }
     }
     return false;
