@@ -443,6 +443,13 @@ export class SqlExtractor extends BaseExtractor {
     this.traverseTree(tree.rootNode, (node) => {
       try {
         switch (node.type) {
+          case 'constraint':
+            // Check if this is a foreign key constraint
+            const hasForeign = this.findChildByType(node, 'keyword_foreign');
+            if (hasForeign) {
+              this.extractForeignKeyRelationship(node, symbols, relationships);
+            }
+            break;
           case 'foreign_key_constraint':
           case 'references_clause':
             this.extractForeignKeyRelationship(node, symbols, relationships);
@@ -462,8 +469,14 @@ export class SqlExtractor extends BaseExtractor {
 
   private extractForeignKeyRelationship(node: Parser.SyntaxNode, symbols: Symbol[], relationships: Relationship[]): void {
     // Extract foreign key relationships between tables
-    const referencedTableNode = this.findChildByType(node, 'table_name') ||
-                               this.findChildByType(node, 'identifier');
+    // Look for object_reference after keyword_references
+    const referencesKeyword = this.findChildByType(node, 'keyword_references');
+    if (!referencesKeyword) return;
+
+    const objectRefNode = this.findChildByType(node, 'object_reference');
+    const referencedTableNode = objectRefNode ?
+      this.findChildByType(objectRefNode, 'identifier') :
+      (this.findChildByType(node, 'table_name') || this.findChildByType(node, 'identifier'));
 
     if (!referencedTableNode) return;
 
@@ -471,14 +484,17 @@ export class SqlExtractor extends BaseExtractor {
 
     // Find the source table (parent of this foreign key)
     let currentNode = node.parent;
-    while (currentNode && currentNode.type !== 'create_table_statement') {
+    while (currentNode && currentNode.type !== 'create_table') {
       currentNode = currentNode.parent;
     }
 
     if (!currentNode) return;
 
-    const sourceTableNode = this.findChildByType(currentNode, 'identifier') ||
-                           this.findChildByType(currentNode, 'table_name');
+    // Look for table name in object_reference (same pattern as extractTableDefinition)
+    const sourceObjectRefNode = this.findChildByType(currentNode, 'object_reference');
+    const sourceTableNode = sourceObjectRefNode ?
+      this.findChildByType(sourceObjectRefNode, 'identifier') :
+      (this.findChildByType(currentNode, 'identifier') || this.findChildByType(currentNode, 'table_name'));
 
     if (!sourceTableNode) return;
 
@@ -488,17 +504,22 @@ export class SqlExtractor extends BaseExtractor {
     const sourceSymbol = symbols.find(s => s.name === sourceTable && s.kind === SymbolKind.Class);
     const targetSymbol = symbols.find(s => s.name === referencedTable && s.kind === SymbolKind.Class);
 
-    if (sourceSymbol && targetSymbol) {
+    // Create relationship if we have at least the source symbol
+    // Target symbol might not exist if referencing external table
+    if (sourceSymbol) {
       relationships.push({
-        id: this.generateId(`fk_${sourceTable}_${referencedTable}`, node.startPosition),
-        sourceId: sourceSymbol.id,
-        targetId: targetSymbol.id,
+        fromSymbolId: sourceSymbol.id,
+        toSymbolId: targetSymbol?.id || `external_${referencedTable}`,
         kind: RelationshipKind.References, // Foreign key reference
         filePath: this.filePath,
-        startLine: node.startPosition.row,
-        startColumn: node.startPosition.column,
-        endLine: node.endPosition.row,
-        endColumn: node.endPosition.column
+        lineNumber: node.startPosition.row,
+        confidence: targetSymbol ? 1.0 : 0.8, // Lower confidence for external references
+        metadata: {
+          targetTable: referencedTable,
+          sourceTable: sourceTable,
+          relationshipType: 'foreign_key',
+          isExternal: !targetSymbol
+        }
       });
     }
   }
@@ -551,19 +572,19 @@ export class SqlExtractor extends BaseExtractor {
         const sqlTypePattern = /\b(INT|INTEGER|VARCHAR|TEXT|DECIMAL|FLOAT|BOOLEAN|DATE|TIMESTAMP|CHAR|BIGINT|SMALLINT)\b/gi;
         const typeMatch = symbol.signature.match(sqlTypePattern);
         if (typeMatch) {
-          types.set(symbol.name, typeMatch[0].toUpperCase());
+          types.set(symbol.id, typeMatch[0].toUpperCase());
         }
       }
 
       // Use metadata for SQL-specific types
       if (symbol.metadata?.isTable) {
-        types.set(symbol.name, 'TABLE');
+        types.set(symbol.id, 'TABLE');
       }
       if (symbol.metadata?.isView) {
-        types.set(symbol.name, 'VIEW');
+        types.set(symbol.id, 'VIEW');
       }
       if (symbol.metadata?.isStoredProcedure) {
-        types.set(symbol.name, 'PROCEDURE');
+        types.set(symbol.id, 'PROCEDURE');
       }
     }
 
