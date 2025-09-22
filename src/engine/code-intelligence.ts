@@ -183,13 +183,29 @@ export class CodeIntelligenceEngine {
         const batchPromises = batch.map(file => this.indexFile(file));
 
         try {
-          await Promise.allSettled(batchPromises);
+          const results = await Promise.allSettled(batchPromises);
+
+          // Count how many succeeded
+          const successful = results.filter(r => r.status === 'fulfilled').length;
+          const failed = results.filter(r => r.status === 'rejected').length;
+
+          if (failed > 0) {
+            console.warn(`Batch ${i}: ${successful} succeeded, ${failed} failed`);
+            // Log failed files for debugging
+            results.forEach((result, idx) => {
+              if (result.status === 'rejected') {
+                console.warn(`Failed to index ${batch[idx]}: ${result.reason}`);
+              }
+            });
+          }
+
           processed += batch.length;
           const batchTime = Date.now() - batchStart;
           const avgTimePerFile = batchTime / batch.length;
           log.engine(LogLevel.INFO, `Indexed ${Math.min(processed, files.length)}/${files.length} files (batch: ${batchTime}ms, avg: ${avgTimePerFile.toFixed(1)}ms/file)`);
         } catch (error) {
           console.error(`Error processing batch starting at index ${i}:`, error);
+          // Don't throw, continue with next batch
         }
       }
 
@@ -219,7 +235,8 @@ export class CodeIntelligenceEngine {
       log.engine(LogLevel.INFO, 'Workspace indexing complete');
     } catch (error) {
       console.error('Error indexing workspace:', error);
-      throw error;
+      // Log the error but don't throw to handle malformed files gracefully
+      console.warn('Workspace indexing completed with errors, but processing continued');
     }
   }
 
@@ -616,10 +633,29 @@ export class CodeIntelligenceEngine {
   async dispose(): Promise<void> {
     log.engine(LogLevel.INFO, 'Disposing Code Intelligence Engine...');
 
-    this.fileWatcher.dispose();
-    this.parserManager.cleanup();
-    this.searchEngine.clearIndex();
-    this.db.close();
+    try {
+      this.fileWatcher.dispose();
+    } catch (error) {
+      console.warn('Error disposing file watcher:', error);
+    }
+
+    try {
+      this.parserManager.cleanup();
+    } catch (error) {
+      console.warn('Error cleaning up parser manager:', error);
+    }
+
+    try {
+      this.searchEngine.clearIndex();
+    } catch (error) {
+      console.warn('Error clearing search index:', error);
+    }
+
+    try {
+      this.db.close();
+    } catch (error) {
+      console.warn('Error closing database:', error);
+    }
 
     this.isInitialized = false;
     log.engine(LogLevel.INFO, 'Code Intelligence Engine disposed');

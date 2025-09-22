@@ -340,7 +340,14 @@ export default {
       `);
 
       // Should not crash on malformed files
-      await expect(engine.indexWorkspace(testDir)).resolves.not.toThrow();
+      try {
+        await engine.indexWorkspace(testDir);
+        // If we get here, the method completed successfully
+        expect(true).toBe(true);
+      } catch (error) {
+        console.error('Unexpected error during indexing:', error);
+        expect(error).toBeUndefined(); // This will fail and show the actual error
+      }
     });
 
     it('should continue processing after parser errors', async () => {

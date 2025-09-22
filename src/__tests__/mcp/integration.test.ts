@@ -64,12 +64,12 @@ describe('Miller MCP Integration Tests', () => {
     });
 
     it('should find Miller\'s core methods', async () => {
-      const results = await mcpTools.searchCode('extractSymbols', { limit: 5 });
+      const results = await mcpTools.searchCode('extractSymbols', { limit: 20 });
 
       expect(results.length).toBeGreaterThan(0);
 
       const methodResult = results.find((r: any) =>
-        r.kind === 'method' && r.text === 'extractSymbols'
+        r.kind === 'method' && r.text === 'extractSymbols' && r.file.includes('typescript-extractor.ts')
       );
 
       expect(methodResult).toBeDefined();

@@ -61,7 +61,7 @@ export class ParserManager {
     { name: 'powershell', extensions: ['.ps1', '.psm1', '.psd1'] },
 
     // Utility parsers
-    { name: 'regex', extensions: [] }, // Regex patterns don't have file extensions - handled specially
+    { name: 'regex', extensions: ['.regex'] }, // Support .regex files for testing and standalone regex patterns
   ];
 
   async initialize() {

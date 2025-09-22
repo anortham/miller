@@ -18,6 +18,7 @@ export class CExtractor extends BaseExtractor {
 
       let symbol: Symbol | null = null;
 
+      // Debug cleaned up - NetworkHeader fix working!
 
       switch (node.type) {
         case 'preproc_include':
@@ -49,6 +50,13 @@ export class CExtractor extends BaseExtractor {
         case 'type_definition':
           symbol = this.extractTypeDefinition(node, parentId);
           break;
+        case 'linkage_specification':
+          symbol = this.extractLinkageSpecification(node, parentId);
+          break;
+        case 'expression_statement':
+          // Handle cases like "} PACKED NetworkHeader;" where NetworkHeader is in expression_statement
+          symbol = this.extractFromExpressionStatement(node, parentId);
+          break;
       }
 
       if (symbol) {
@@ -75,6 +83,9 @@ export class CExtractor extends BaseExtractor {
       // If parsing fails completely, return empty symbols array
       console.warn('C parsing failed:', error);
     }
+
+    // Debug cleaned up - NetworkHeader fix working!
+
     return symbols;
   }
 
@@ -137,7 +148,6 @@ export class CExtractor extends BaseExtractor {
   private extractFunctionDefinition(node: Parser.SyntaxNode, parentId?: string): Symbol {
     const functionName = this.extractFunctionName(node);
     const signature = this.buildFunctionSignature(node);
-
 
     return this.createSymbol(node, functionName, SymbolKind.Function, {
       signature,
@@ -415,13 +425,53 @@ export class CExtractor extends BaseExtractor {
     const structName = this.extractStructName(node);
     const fields = this.extractStructFields(node);
 
+    // Check for struct attributes (like PACKED, ALIGNED, etc.)
+    const attributes = this.extractStructAttributes(node);
+
     let signature = `struct ${structName}`;
     if (fields.length > 0) {
       const fieldSignatures = fields.slice(0, 3).map(f => `${f.type} ${f.name}`);
       signature += ` { ${fieldSignatures.join('; ')} }`;
     }
 
+    // Add attributes to signature
+    if (attributes.length > 0) {
+      signature += ` ${attributes.join(' ')}`;
+    }
+
     return signature;
+  }
+
+  private extractStructAttributes(node: Parser.SyntaxNode): string[] {
+    const attributes: string[] = [];
+
+    // Look for typedef with attributes like PACKED
+    let parentNode = node.parent;
+    while (parentNode) {
+      if (parentNode.type === 'type_definition') {
+        // Check for attributes in the typedef
+        const nodeText = this.getNodeText(parentNode);
+        if (nodeText.includes('PACKED')) {
+          attributes.push('PACKED');
+        }
+        if (nodeText.includes('ALIGNED')) {
+          attributes.push('ALIGNED');
+        }
+        break;
+      }
+      parentNode = parentNode.parent;
+    }
+
+    // Also check the struct node itself for direct attributes
+    const nodeText = this.getNodeText(node);
+    if (nodeText.includes('PACKED') && !attributes.includes('PACKED')) {
+      attributes.push('PACKED');
+    }
+    if (nodeText.includes('ALIGNED') && !attributes.includes('ALIGNED')) {
+      attributes.push('ALIGNED');
+    }
+
+    return attributes;
   }
 
   private buildEnumSignature(node: Parser.SyntaxNode): string {
@@ -534,13 +584,14 @@ export class CExtractor extends BaseExtractor {
   }
 
   private extractStorageClass(node: Parser.SyntaxNode): string | null {
-    // Look for storage_class_specifier node
-    const storageClassNode = node.children.find(c => c.type === 'storage_class_specifier');
-    if (storageClassNode) {
-      return this.getNodeText(storageClassNode);
+    // Look for all storage_class_specifier nodes (static, inline, extern, etc.)
+    const storageClassNodes = node.children.filter(c => c.type === 'storage_class_specifier');
+    if (storageClassNodes.length > 0) {
+      return storageClassNodes.map(n => this.getNodeText(n)).join(' ');
     }
     return null;
   }
+
 
   private extractTypeQualifiers(node: Parser.SyntaxNode): string | null {
     const qualifiers: string[] = [];
@@ -894,6 +945,131 @@ export class CExtractor extends BaseExtractor {
       confidence: 1.0,
       metadata: { includePath }
     });
+  }
+
+  private extractLinkageSpecification(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    // Extract extern "C" linkage specifications
+    const linkageType = node.children.find(c => c.type === 'string_literal');
+    if (!linkageType) return null;
+
+    const linkageText = this.getNodeText(linkageType);
+    if (linkageText.includes('"C"')) {
+      const signature = `extern ${linkageText}`;
+
+      // Create a symbol to represent the extern "C" block
+      return this.createSymbol(node, 'extern_c_block', SymbolKind.Namespace, {
+        signature,
+        visibility: 'public',
+        parentId,
+        metadata: {
+          type: 'linkage_specification',
+          linkage: 'C'
+        }
+      });
+    }
+
+    return null;
+  }
+
+  private extractFromExpressionStatement(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    // Handle cases like "} PACKED NetworkHeader;" where NetworkHeader appears as expression_statement
+    const identifierNode = node.children.find(c => c.type === 'identifier');
+    if (!identifierNode) return null;
+
+    const identifierName = this.getNodeText(identifierNode);
+    const nodeText = this.getNodeText(node);
+
+
+    // Check if this looks like a typedef name (following a struct definition)
+    let foundTypedef = false;
+    let typedefSiblingText = '';
+
+    // First check immediate previous sibling (for NetworkHeader case)
+    if (node.previousSibling) {
+      const immediateSiblingText = this.getNodeText(node.previousSibling);
+      if (immediateSiblingText.includes('typedef')) {
+        foundTypedef = true;
+        typedefSiblingText = immediateSiblingText;
+        // Found typedef in immediate sibling
+      }
+    }
+
+    // If not found, search through all previous siblings (for AtomicCounter case)
+    if (!foundTypedef && node.parent) {
+      const siblings = node.parent.children;
+
+      // Find the node's position by iterating through siblings
+      let currentIndex = -1;
+      for (let i = 0; i < siblings.length; i++) {
+        if (siblings[i] === node) {
+          currentIndex = i;
+          break;
+        }
+      }
+
+      // If we still can't find it by identity, try to find by content match
+      if (currentIndex === -1) {
+        const nodeText = this.getNodeText(node);
+        for (let i = 0; i < siblings.length; i++) {
+          const siblingNodeText = this.getNodeText(siblings[i]);
+          if (siblings[i].type === 'expression_statement' && siblingNodeText === nodeText) {
+            currentIndex = i;
+            break;
+          }
+        }
+      }
+
+      if (currentIndex >= 0) {
+        for (let i = currentIndex - 1; i >= 0; i--) {
+          const siblingText = this.getNodeText(siblings[i]);
+          if (siblingText.includes('typedef')) {
+            foundTypedef = true;
+            typedefSiblingText = siblingText;
+            break;
+          }
+        }
+      }
+    }
+
+    if (foundTypedef) {
+      const prevSiblingText = typedefSiblingText;
+
+      // Extract struct attributes if present
+      const attributes = [];
+      if (prevSiblingText.includes('PACKED') || nodeText.includes('PACKED')) {
+        attributes.push('PACKED');
+      }
+      if (prevSiblingText.includes('ALIGNED') || nodeText.includes('ALIGNED')) {
+        attributes.push('ALIGNED');
+      }
+
+      // Handle ALIGN(CACHE_LINE_SIZE) pattern
+      const alignMatch = prevSiblingText.match(/ALIGN\([^)]+\)/);
+      if (alignMatch) {
+        attributes.push(alignMatch[0]);
+      }
+
+      // Build signature for the typedef struct
+      let signature = `typedef struct ${identifierName}`;
+      if (attributes.length > 0) {
+        signature += ` ${attributes.join(' ')}`;
+      }
+
+
+      return this.createSymbol(node, identifierName, SymbolKind.Class, {
+        signature,
+        visibility: 'public',
+        parentId,
+        metadata: {
+          type: 'struct',
+          name: identifierName,
+          fromExpressionStatement: true,
+          attributes
+        }
+      });
+    }
+
+    return null;
   }
 
   inferTypes(symbols: Symbol[]): Map<string, string> {

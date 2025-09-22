@@ -567,7 +567,13 @@ export default {
 
     it('should not crash on any file type during indexing', async () => {
       // This test ensures WASM compatibility issues don't crash the engine
-      await expect(engine.indexWorkspace(testDir)).resolves.not.toThrow();
+      try {
+        await engine.indexWorkspace(testDir);
+        expect(true).toBe(true);
+      } catch (error) {
+        console.error('Unexpected error during WASM compatibility indexing:', error);
+        expect(error).toBeUndefined();
+      }
 
       const stats = await engine.getWorkspaceStats();
       expect(stats).toBeDefined();
@@ -623,7 +629,13 @@ class TestClass${i} {
       writeFileSync(join(testDir, 'LargeTest.kt'), largeKotlinContent);
 
       // Should handle large files without crashing
-      await expect(engine.indexWorkspace(testDir)).resolves.not.toThrow();
+      try {
+        await engine.indexWorkspace(testDir);
+        expect(true).toBe(true);
+      } catch (error) {
+        console.error('Unexpected error during large file handling:', error);
+        expect(error).toBeUndefined();
+      }
 
       const results = await engine.searchCode('TestClass', { limit: 100 });
       expect(results).toBeDefined();
