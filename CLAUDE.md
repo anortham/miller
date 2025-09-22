@@ -437,3 +437,4 @@ MIT License - see LICENSE file for details.
 ---
 
 For detailed implementation information, see `docs/mcp-code-intelligence-guide.md`.
+Always check the TODO.md doc for pending instructions.
