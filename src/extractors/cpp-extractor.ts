@@ -56,8 +56,11 @@ export class CppExtractor extends BaseExtractor {
        node.children.some(c =>
         c.type === 'function_declarator' &&
         c.children.some(d => d.type === 'destructor_name')
-      ))
+      )) ||
+      // Prevent duplicate class extraction from template_declaration and direct class_specifier processing
+      (node.type === 'class_specifier')
     );
+
     if (shouldTrack && this.processedNodes.has(nodeKey)) {
       return null;
     }
@@ -89,25 +92,16 @@ export class CppExtractor extends BaseExtractor {
         break;
       case 'function_definition':
         symbol = this.extractFunction(node, parentId);
-        if (symbol && symbol.name.startsWith('Factory')) {
-          console.log(`[DEBUG] C++ Factory function_definition: ${symbol.name} in ${symbol.filePath}`);
-        }
         break;
       case 'function_declarator':
         // Only extract standalone function declarators (not those inside function_definition)
         if (node.parent?.type !== 'function_definition') {
           symbol = this.extractFunction(node, parentId);
-          if (symbol && symbol.name.startsWith('Factory')) {
-            console.log(`[DEBUG] C++ Factory function_declarator: ${symbol.name} in ${symbol.filePath}`);
-          }
         }
         break;
       case 'declaration':
         // This can contain function declarations or variable declarations
         symbol = this.extractDeclaration(node, parentId);
-        if (symbol && symbol.name.startsWith('Factory')) {
-          console.log(`[DEBUG] C++ Factory declaration: ${symbol.name} in ${symbol.filePath}`);
-        }
         break;
       case 'template_declaration':
         symbol = this.extractTemplate(node, parentId);
@@ -120,11 +114,6 @@ export class CppExtractor extends BaseExtractor {
         break;
       default:
         return null;
-    }
-
-    // Debug for Factory symbols
-    if (symbol && symbol.name.startsWith('Factory')) {
-      console.log(`[DEBUG] C++ Factory symbol extracted: ${symbol.name} (type: ${node.type}) in ${symbol.filePath}`);
     }
 
     // Mark node as processed if we successfully extracted a symbol and should track this node type
@@ -469,9 +458,10 @@ export class CppExtractor extends BaseExtractor {
       // Extract the wrapped declaration
       const symbol = this.extractSymbol(declaration, parentId);
 
-      // Debug for Factory templates
-      if (symbol && symbol.name.startsWith('Factory')) {
-        console.log(`[DEBUG] extractTemplate processed: ${symbol.name}`);
+      // If the wrapped declaration was already processed (symbol is null),
+      // return null to prevent template_declaration from creating a duplicate count
+      if (symbol === null) {
+        return null;
       }
 
       return symbol;
