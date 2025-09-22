@@ -401,10 +401,14 @@ export class CppExtractor extends BaseExtractor {
     // Build signature
     let signature = this.buildFunctionSignature(node, funcNode, name);
 
-    // Handle template parameters
-    const templateParams = this.extractTemplateParameters(node.parent);
-    if (templateParams) {
-      signature = `${templateParams}\n${signature}`;
+    // Handle template parameters - only add if this method itself is a template
+    // Check if the direct parent is a template_declaration (method template)
+    // Don't inherit class template parameters for non-template methods
+    if (node.parent?.type === 'template_declaration') {
+      const templateParams = this.extractTemplateParameters(node.parent);
+      if (templateParams) {
+        signature = `${templateParams}\n${signature}`;
+      }
     }
 
     // Extract visibility for methods
