@@ -43,6 +43,10 @@ export class SqlExtractor extends BaseExtractor {
           case 'create_trigger':
             symbol = this.extractTrigger(node, parentId);
             break;
+          case 'ERROR':
+            // Handle DELIMITER syntax issues - extract procedures/functions from ERROR nodes
+            symbol = this.extractFromErrorNode(node, parentId);
+            break;
           default:
             // Handle other SQL constructs
             break;
@@ -57,6 +61,10 @@ export class SqlExtractor extends BaseExtractor {
         if (node.type === 'create_table') {
           this.extractTableColumns(node, symbols, symbol.id);
           this.extractTableConstraints(node, symbols, symbol.id);
+        }
+        // Extract parameters for procedures/functions from ERROR nodes
+        if (node.type === 'ERROR' && (symbol.metadata?.isStoredProcedure || symbol.metadata?.isFunction)) {
+          this.extractParametersFromErrorNode(node, symbols, symbol.id);
         }
         parentId = symbol.id;
       }
@@ -369,6 +377,82 @@ export class SqlExtractor extends BaseExtractor {
     });
 
     return symbol;
+  }
+
+  private extractFromErrorNode(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    const errorText = this.getNodeText(node);
+
+    // Extract stored procedures from DELIMITER syntax
+    const procedureMatch = errorText.match(/CREATE\s+PROCEDURE\s+([a-zA-Z_][a-zA-Z0-9_]*)/i);
+    if (procedureMatch) {
+      const procedureName = procedureMatch[1];
+
+      const procedureSymbol = this.createSymbol(node, procedureName, SymbolKind.Function, {
+        signature: `CREATE PROCEDURE ${procedureName}(...)`,
+        visibility: 'public',
+        parentId,
+        metadata: { isStoredProcedure: true, extractedFromError: true }
+      });
+
+      // Parameters will be extracted in the main loop
+
+      return procedureSymbol;
+    }
+
+    // Extract functions from DELIMITER syntax
+    const functionMatch = errorText.match(/CREATE\s+FUNCTION\s+([a-zA-Z_][a-zA-Z0-9_]*)/i);
+    if (functionMatch) {
+      const functionName = functionMatch[1];
+
+      const functionSymbol = this.createSymbol(node, functionName, SymbolKind.Function, {
+        signature: `CREATE FUNCTION ${functionName}(...)`,
+        visibility: 'public',
+        parentId,
+        metadata: { isFunction: true, extractedFromError: true }
+      });
+
+      // Parameters will be extracted in the main loop
+
+      return functionSymbol;
+    }
+
+    return null;
+  }
+
+  private extractParametersFromErrorNode(node: Parser.SyntaxNode, symbols: Symbol[], parentId: string): void {
+    const errorText = this.getNodeText(node);
+
+    // Extract parameters from procedure/function definitions
+    // Look for patterns like "IN p_user_id BIGINT", "OUT p_total_events INT"
+    const paramRegex = /(IN|OUT|INOUT)?\s*([a-zA-Z_][a-zA-Z0-9_]*)\s+(BIGINT|INT|VARCHAR|DECIMAL|DATE|BOOLEAN|TEXT)/gi;
+
+    let match;
+    while ((match = paramRegex.exec(errorText)) !== null) {
+      const direction = match[1] || 'IN'; // Default to IN if not specified
+      const paramName = match[2];
+      const paramType = match[3];
+
+      // Don't extract procedure/function names as parameters
+      if (!errorText.includes(`PROCEDURE ${paramName}`) && !errorText.includes(`FUNCTION ${paramName}`)) {
+        const paramSymbol: Symbol = {
+          id: this.generateId(`${paramName}_param`, node.startPosition),
+          name: paramName,
+          kind: SymbolKind.Variable,
+          signature: `${direction} ${paramName} ${paramType}`,
+          startLine: node.startPosition.row,
+          startColumn: node.startPosition.column,
+          endLine: node.endPosition.row,
+          endColumn: node.endPosition.column,
+          filePath: this.filePath,
+          language: this.language,
+          parentId,
+          visibility: 'public',
+          metadata: { isParameter: true, extractedFromError: true }
+        };
+
+        symbols.push(paramSymbol);
+      }
+    }
   }
 
   private extractTrigger(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
