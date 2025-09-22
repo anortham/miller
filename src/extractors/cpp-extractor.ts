@@ -219,6 +219,7 @@ export class CppExtractor extends BaseExtractor {
       signature = `${templateParams}\n${signature}`;
     }
 
+
     // Handle inheritance
     const baseClause = node.children.find(c => c.type === 'base_class_clause');
     if (baseClause) {
@@ -378,12 +379,18 @@ export class CppExtractor extends BaseExtractor {
     const isDestructor = name.startsWith('~');
     const isOperator = name.startsWith('operator');
 
+
+
     let kind = SymbolKind.Function;
     if (isMethod) {
       if (isConstructor) kind = SymbolKind.Constructor;
       else if (isDestructor) kind = SymbolKind.Destructor;
       else if (isOperator) kind = SymbolKind.Operator;
       else kind = SymbolKind.Method;
+    } else if (isDestructor) {
+      // Always treat destructors as Destructor kind, even if not detected as methods
+      // This handles template destructors that may not be properly nested in the AST
+      kind = SymbolKind.Destructor;
     } else if (isOperator) {
       kind = SymbolKind.Operator;
     }
@@ -979,6 +986,27 @@ export class CppExtractor extends BaseExtractor {
           return `template${this.getNodeText(paramList)}`;
         }
       }
+      // Handle ERROR nodes that might contain template syntax
+      if (current.type === 'ERROR') {
+        const currentText = this.getNodeText(current);
+        // Extract template parameters with nested angle brackets
+        const templateStart = currentText.indexOf('template');
+        if (templateStart !== -1) {
+          const angleStart = currentText.indexOf('<', templateStart);
+          if (angleStart !== -1) {
+            let depth = 1;
+            let pos = angleStart + 1;
+            while (pos < currentText.length && depth > 0) {
+              if (currentText[pos] === '<') depth++;
+              else if (currentText[pos] === '>') depth--;
+              pos++;
+            }
+            if (depth === 0) {
+              return currentText.substring(templateStart, pos);
+            }
+          }
+        }
+      }
       current = current.parent;
     }
     return null;
@@ -1073,6 +1101,14 @@ export class CppExtractor extends BaseExtractor {
     while (current) {
       if (current.type === 'class_specifier' || current.type === 'struct_specifier') {
         return true;
+      }
+      // Skip through template_declaration to find the actual class/struct
+      if (current.type === 'template_declaration') {
+        // Look for class_specifier or struct_specifier in template_declaration children
+        const classSpec = current.children.find(c => c.type === 'class_specifier' || c.type === 'struct_specifier');
+        if (classSpec) {
+          return true;
+        }
       }
       current = current.parent;
     }

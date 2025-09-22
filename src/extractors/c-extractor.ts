@@ -15,7 +15,9 @@ export class CExtractor extends BaseExtractor {
         return; // Skip invalid nodes
       }
 
+
       let symbol: Symbol | null = null;
+
 
       switch (node.type) {
         case 'preproc_include':
@@ -27,6 +29,7 @@ export class CExtractor extends BaseExtractor {
           break;
         case 'declaration':
           const declarationSymbols = this.extractDeclaration(node, parentId);
+          // Debug for missing functions
           symbols.push(...declarationSymbols);
           break;
         case 'function_definition':
@@ -121,6 +124,8 @@ export class CExtractor extends BaseExtractor {
 
     // Extract variable declarations
     const declarators = this.findVariableDeclarators(node);
+
+
     for (const declarator of declarators) {
       const variableSymbol = this.extractVariableDeclaration(node, declarator, parentId);
       if (variableSymbol) symbols.push(variableSymbol);
@@ -132,6 +137,7 @@ export class CExtractor extends BaseExtractor {
   private extractFunctionDefinition(node: Parser.SyntaxNode, parentId?: string): Symbol {
     const functionName = this.extractFunctionName(node);
     const signature = this.buildFunctionSignature(node);
+
 
     return this.createSymbol(node, functionName, SymbolKind.Function, {
       signature,
@@ -170,6 +176,7 @@ export class CExtractor extends BaseExtractor {
   private extractVariableDeclaration(node: Parser.SyntaxNode, declarator: Parser.SyntaxNode, parentId?: string): Symbol {
     const variableName = this.extractVariableName(declarator);
     const signature = this.buildVariableSignature(node, declarator);
+
 
     return this.createSymbol(node, variableName, SymbolKind.Variable, {
       signature,
@@ -238,9 +245,11 @@ export class CExtractor extends BaseExtractor {
   }
 
   private extractTypeDefinition(node: Parser.SyntaxNode, parentId?: string): Symbol {
-    const typedefName = this.extractTypedefNameFromTypeDefinition(node);
-    const signature = this.getNodeText(node);
+    let typedefName = this.extractTypedefNameFromTypeDefinition(node);
+    let signature = this.getNodeText(node);
     const underlyingType = this.extractUnderlyingTypeFromTypeDefinition(node);
+
+
 
     // If the typedef contains any struct, treat it as a Class
     const symbolKind = this.containsStruct(node) ? SymbolKind.Class : SymbolKind.Type;
@@ -298,6 +307,9 @@ export class CExtractor extends BaseExtractor {
         declarators.push(child);
       } else if (child.type === 'declarator' || child.type === 'identifier') {
         declarators.push(child);
+      } else if (child.type === 'array_declarator') {
+        // Handle array declarations like "char global_buffer[MAX_SIZE];"
+        declarators.push(child);
       }
     }
 
@@ -313,6 +325,19 @@ export class CExtractor extends BaseExtractor {
         return this.getNodeText(identifier);
       }
     }
+
+    // For pointer return types, the function_declarator might be nested in a pointer_declarator
+    const pointerDeclarator = node.children.find(c => c.type === 'pointer_declarator');
+    if (pointerDeclarator) {
+      const nestedFunctionDeclarator = pointerDeclarator.children.find(c => c.type === 'function_declarator');
+      if (nestedFunctionDeclarator) {
+        const identifier = nestedFunctionDeclarator.children.find(c => c.type === 'identifier');
+        if (identifier) {
+          return this.getNodeText(identifier);
+        }
+      }
+    }
+
     return 'unknown';
   }
 
@@ -351,11 +376,13 @@ export class CExtractor extends BaseExtractor {
   }
 
   private buildFunctionSignature(node: Parser.SyntaxNode): string {
+    const storageClass = this.extractStorageClass(node);
     const returnType = this.extractReturnType(node);
     const functionName = this.extractFunctionName(node);
     const parameters = this.extractFunctionParameters(node);
 
-    return `${returnType} ${functionName}(${parameters.join(', ')})`;
+    const storagePrefix = storageClass ? `${storageClass} ` : '';
+    return `${storagePrefix}${returnType} ${functionName}(${parameters.join(', ')})`;
   }
 
   private buildFunctionDeclarationSignature(node: Parser.SyntaxNode): string {
@@ -412,12 +439,37 @@ export class CExtractor extends BaseExtractor {
 
   private extractReturnType(node: Parser.SyntaxNode): string {
     // Extract return type from function definition
+    // First, look for simple types
     const typeNode = node.children.find(c =>
       c.type === 'primitive_type' ||
       c.type === 'type_identifier' ||
       c.type === 'sized_type_specifier'
     );
-    return typeNode ? this.getNodeText(typeNode) : 'void';
+
+    if (typeNode) {
+      // Check if there's a pointer declarator following the type
+      const typeIndex = node.children.indexOf(typeNode);
+      for (let i = typeIndex + 1; i < node.children.length; i++) {
+        const child = node.children[i];
+        if (child.type === 'function_declarator') {
+          // Found the function declarator, now check what comes before it
+          // Look for pointer declarators
+          if (i > typeIndex + 1) {
+            const between = node.children.slice(typeIndex + 1, i);
+            const hasPointer = between.some(n => this.getNodeText(n).includes('*'));
+            if (hasPointer) {
+              return this.getNodeText(typeNode) + '*';
+            }
+          }
+          break;
+        } else if (child.type === 'pointer_declarator') {
+          return this.getNodeText(typeNode) + '*';
+        }
+      }
+      return this.getNodeText(typeNode);
+    }
+
+    return 'void';
   }
 
   private extractReturnTypeFromDeclaration(node: Parser.SyntaxNode): string {
@@ -431,16 +483,30 @@ export class CExtractor extends BaseExtractor {
   }
 
   private extractFunctionParameters(node: Parser.SyntaxNode): string[] {
-    const declarator = node.children.find(c => c.type === 'function_declarator');
+    // First try direct function_declarator
+    let declarator = node.children.find(c => c.type === 'function_declarator');
+
+    // If not found, look in pointer_declarator (for pointer return types)
+    if (!declarator) {
+      const pointerDeclarator = node.children.find(c => c.type === 'pointer_declarator');
+      if (pointerDeclarator) {
+        declarator = pointerDeclarator.children.find(c => c.type === 'function_declarator');
+      }
+    }
+
     if (!declarator) return [];
 
     const paramList = declarator.children.find(c => c.type === 'parameter_list');
     if (!paramList) return [];
 
     const parameters: string[] = [];
+
     for (const child of paramList.children) {
       if (child.type === 'parameter_declaration') {
         parameters.push(this.getNodeText(child));
+      } else if (child.type === 'variadic_parameter') {
+        // Handle variadic parameters
+        parameters.push('...');
       }
     }
 
@@ -458,6 +524,9 @@ export class CExtractor extends BaseExtractor {
     for (const child of paramList.children) {
       if (child.type === 'parameter_declaration') {
         parameters.push(this.getNodeText(child));
+      } else if (child.type === 'variadic_parameter') {
+        // Handle variadic parameters
+        parameters.push('...');
       }
     }
 
@@ -500,8 +569,23 @@ export class CExtractor extends BaseExtractor {
     // Look for array declarator
     const arrayDecl = this.findNodeByType(declarator, 'array_declarator');
     if (arrayDecl) {
-      const sizeNode = arrayDecl.children.find(c => c.type !== 'identifier');
-      return sizeNode ? `[${this.getNodeText(sizeNode)}]` : '[]';
+      // Find the array size expression between the brackets
+      // Skip the first identifier (variable name), '[', and ']'
+      let foundFirstIdentifier = false;
+      const sizeExpressions = arrayDecl.children.filter(c => {
+        if (c.type === 'identifier' && !foundFirstIdentifier) {
+          foundFirstIdentifier = true;
+          return false; // Skip the variable name identifier
+        }
+        return c.type !== '[' && c.type !== ']';
+      });
+
+      if (sizeExpressions.length > 0) {
+        const sizes = sizeExpressions.map(expr => this.getNodeText(expr)).join(', ');
+        return `[${sizes}]`;
+      } else {
+        return '[]';
+      }
     }
     return null;
   }
@@ -622,10 +706,12 @@ export class CExtractor extends BaseExtractor {
 
     // First, try to find type_identifier nodes recursively (for pointer types, arrays, etc.)
     const typeIdentifiers: string[] = [];
+    const allIdentifiers: string[] = [];
 
     const findTypeIdentifiers = (n: Parser.SyntaxNode) => {
       if (n.type === 'type_identifier') {
         const text = this.getNodeText(n);
+        allIdentifiers.push(text);
         // Skip known attributes
         if (!['PACKED', 'ALIGNED', '__packed__', '__aligned__'].includes(text)) {
           typeIdentifiers.push(text);
@@ -637,6 +723,24 @@ export class CExtractor extends BaseExtractor {
     };
 
     findTypeIdentifiers(node);
+
+    // Special case: if this typedef ends with attribute and no valid identifiers found,
+    // look for the typedef name in the next sibling node
+    if (typeIdentifiers.length === 0 && (allIdentifiers.includes('PACKED') || allIdentifiers.includes('ALIGN')) && node.parent) {
+      const nodeIndex = node.parent.children.indexOf(node);
+      if (nodeIndex >= 0 && nodeIndex < node.parent.children.length - 1) {
+        const nextSibling = node.parent.children[nodeIndex + 1];
+        if (nextSibling && nextSibling.type === 'expression_statement') {
+          // Look for identifier in the next statement
+          for (const child of nextSibling.children) {
+            if (child.type === 'identifier') {
+              const name = this.getNodeText(child);
+              return name;
+            }
+          }
+        }
+      }
+    }
 
     // Return the last type_identifier found (this is usually the typedef name)
     if (typeIdentifiers.length > 0) {
