@@ -190,11 +190,11 @@ export class CodeIntelligenceEngine {
           const failed = results.filter(r => r.status === 'rejected').length;
 
           if (failed > 0) {
-            console.warn(`Batch ${i}: ${successful} succeeded, ${failed} failed`);
+            log.engine(LogLevel.WARN, `Batch ${i}: ${successful} succeeded, ${failed} failed`);
             // Log failed files for debugging
             results.forEach((result, idx) => {
               if (result.status === 'rejected') {
-                console.warn(`Failed to index ${batch[idx]}: ${result.reason}`);
+                log.engine(LogLevel.ERROR, `Failed to index ${batch[idx]}: ${result.reason}`);
               }
             });
           }
@@ -204,20 +204,20 @@ export class CodeIntelligenceEngine {
           const avgTimePerFile = batchTime / batch.length;
           log.engine(LogLevel.INFO, `Indexed ${Math.min(processed, files.length)}/${files.length} files (batch: ${batchTime}ms, avg: ${avgTimePerFile.toFixed(1)}ms/file)`);
         } catch (error) {
-          console.error(`Error processing batch starting at index ${i}:`, error);
+          log.engine(LogLevel.ERROR, `Error processing batch starting at index ${i}:`, error);
           // Don't throw, continue with next batch
         }
       }
 
       const extractionTime = Date.now() - extractionStart;
-      console.log(`Extraction phase completed in ${extractionTime}ms (${(extractionTime/files.length).toFixed(1)}ms per file)`);
+      log.engine(LogLevel.INFO, `Extraction phase completed in ${extractionTime}ms (${(extractionTime/files.length).toFixed(1)}ms per file)`);
 
       // Rebuild search index with all symbols
-      console.log('Starting search index rebuild...');
+      log.engine(LogLevel.INFO, 'Starting search index rebuild...');
       const indexStart = Date.now();
       await this.searchEngine.rebuildIndex();
       const indexTime = Date.now() - indexStart;
-      console.log(`Search index rebuild completed in ${indexTime}ms`);
+      log.engine(LogLevel.INFO, `Search index rebuild completed in ${indexTime}ms`);
 
       // Start watching for changes if enabled
       if (this.config.enableWatcher) {
@@ -225,7 +225,7 @@ export class CodeIntelligenceEngine {
       }
 
       const totalTime = Date.now() - startTime;
-      console.log(`Total workspace indexing completed in ${totalTime}ms (discovery: ${fileDiscoveryTime}ms, extraction: ${extractionTime}ms, search: ${indexTime}ms)`);
+      log.engine(LogLevel.INFO, `Total workspace indexing completed in ${totalTime}ms (discovery: ${fileDiscoveryTime}ms, extraction: ${extractionTime}ms, search: ${indexTime}ms)`);
 
       // Update workspace statistics
       const symbolCount = this.db.db.prepare('SELECT COUNT(*) as count FROM symbols WHERE file_path LIKE ?').get(`${absolutePath}%`) as { count: number };
@@ -234,9 +234,9 @@ export class CodeIntelligenceEngine {
 
       log.engine(LogLevel.INFO, 'Workspace indexing complete');
     } catch (error) {
-      console.error('Error indexing workspace:', error);
+      log.engine(LogLevel.ERROR, 'Error indexing workspace:', error);
       // Log the error but don't throw to handle malformed files gracefully
-      console.warn('Workspace indexing completed with errors, but processing continued');
+      log.engine(LogLevel.WARN, 'Workspace indexing completed with errors, but processing continued');
     }
   }
 
@@ -271,7 +271,7 @@ export class CodeIntelligenceEngine {
       // Check if file needs reindexing
       const stats = await stat(filePath);
       if (stats.size > this.config.maxFileSize) {
-        console.warn(`Skipping large file: ${filePath} (${stats.size} bytes)`);
+        log.engine(LogLevel.WARN, `Skipping large file: ${filePath} (${stats.size} bytes)`);
         return;
       }
 
@@ -288,7 +288,7 @@ export class CodeIntelligenceEngine {
       // Get appropriate extractor
       const ExtractorClass = this.extractors.get(parseResult.language);
       if (!ExtractorClass) {
-        console.warn(`No extractor for language: ${parseResult.language}`);
+        log.engine(LogLevel.WARN, `No extractor for language: ${parseResult.language}`);
         return;
       }
 
@@ -313,7 +313,7 @@ export class CodeIntelligenceEngine {
       await this.updateFileMetadata(filePath, parseResult.hash, parseResult.language);
 
     } catch (error) {
-      console.error(`Error indexing file ${filePath}:`, error);
+      log.engine(LogLevel.ERROR, `Error indexing file ${filePath}:`, error);
     }
   }
 
@@ -394,7 +394,7 @@ export class CodeIntelligenceEngine {
         await this.indexFile(event.filePath);
       }
     } catch (error) {
-      console.error(`Error handling file change for ${event.filePath}:`, error);
+      log.engine(LogLevel.ERROR, `Error handling file change for ${event.filePath}:`, error);
     }
   }
 
@@ -405,7 +405,7 @@ export class CodeIntelligenceEngine {
   }
 
   private handleWatcherError(error: Error, filePath?: string): void {
-    console.error(`File watcher error${filePath ? ` for ${filePath}` : ''}:`, error);
+    log.engine(LogLevel.ERROR, `File watcher error${filePath ? ` for ${filePath}` : ''}:`, error);
   }
 
   // LSP-like features
@@ -564,7 +564,7 @@ export class CodeIntelligenceEngine {
           }
         }
       } catch (error) {
-        console.warn(`Cannot read directory ${dir}:`, error);
+        log.engine(LogLevel.WARN, `Cannot read directory ${dir}:`, error);
       }
     }
 
@@ -636,25 +636,25 @@ export class CodeIntelligenceEngine {
     try {
       this.fileWatcher.dispose();
     } catch (error) {
-      console.warn('Error disposing file watcher:', error);
+      log.engine(LogLevel.WARN, 'Error disposing file watcher:', error);
     }
 
     try {
       this.parserManager.cleanup();
     } catch (error) {
-      console.warn('Error cleaning up parser manager:', error);
+      log.engine(LogLevel.WARN, 'Error cleaning up parser manager:', error);
     }
 
     try {
       this.searchEngine.clearIndex();
     } catch (error) {
-      console.warn('Error clearing search index:', error);
+      log.engine(LogLevel.WARN, 'Error clearing search index:', error);
     }
 
     try {
       this.db.close();
     } catch (error) {
-      console.warn('Error closing database:', error);
+      log.engine(LogLevel.WARN, 'Error closing database:', error);
     }
 
     this.isInitialized = false;

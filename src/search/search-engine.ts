@@ -2,6 +2,7 @@ import MiniSearch from 'minisearch';
 import { $ } from 'bun';
 import { Database } from 'bun:sqlite';
 import { Symbol } from '../extractors/base-extractor.js';
+import { log, LogLevel } from '../utils/logger.js';
 
 export interface SearchResult {
   file: string;
@@ -93,7 +94,7 @@ export class SearchEngine {
     const startTime = Date.now();
     const totalSymbols = this.db.prepare(`SELECT COUNT(*) as count FROM symbols`).get() as { count: number };
 
-    console.log(`Indexing ${totalSymbols.count} symbols for search...`); // Keep for startup visibility
+    // Indexing symbols for search - use logger to avoid stdio interference
 
     // Clear existing index first
     this.miniSearch.removeAll();
@@ -143,12 +144,12 @@ export class SearchEngine {
       processed += documents.length;
 
       if (processed % 5000 === 0 || processed === totalSymbols.count) {
-        console.log(`Search indexing progress: ${processed}/${totalSymbols.count} symbols`);
+        log.engine(LogLevel.INFO, `Search indexing progress: ${processed}/${totalSymbols.count} symbols`);
       }
     }
 
     const duration = Date.now() - startTime;
-    console.log(`Search index built with ${processed} documents in ${duration}ms`); // Keep for startup visibility
+    log.engine(LogLevel.INFO, `Search index built with ${processed} documents in ${duration}ms`);
   }
 
   /**
@@ -271,7 +272,7 @@ export class SearchEngine {
 
       return hits.slice(0, limit);
     } catch (error) {
-      console.warn('Ripgrep not available or failed, falling back to database search');
+      log.engine(LogLevel.WARN, 'Ripgrep not available or failed, falling back to database search');
       return this.searchDatabase(pattern, options);
     }
   }
@@ -575,16 +576,16 @@ export class SearchEngine {
   clearIndex() {
     this.miniSearch.removeAll();
     this.indexedDocuments.clear();
-    console.log('Search index cleared'); // Keep for debugging
+    // Search index cleared - avoiding stdio interference
   }
 
   /**
    * Rebuild the entire search index
    */
   async rebuildIndex() {
-    console.log('Rebuilding search index...'); // Keep for startup visibility
+    log.engine(LogLevel.INFO, 'Rebuilding search index...');
     this.clearIndex();
     await this.indexSymbols();
-    console.log('Search index rebuilt'); // Keep for startup visibility
+    log.engine(LogLevel.INFO, 'Search index rebuilt');
   }
 }
