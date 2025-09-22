@@ -60,6 +60,10 @@ export class ParserManager {
     { name: 'bash', extensions: ['.sh', '.bash', '.zsh'] },
     { name: 'powershell', extensions: ['.ps1', '.psm1', '.psd1'] },
 
+    // Game development languages
+    { name: 'lua', extensions: ['.lua'] },
+    { name: 'gdscript', extensions: ['.gd'] },
+
     // Utility parsers
     { name: 'regex', extensions: ['.regex'] }, // Support .regex files for testing and standalone regex patterns
   ];

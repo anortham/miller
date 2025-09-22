@@ -11,11 +11,13 @@
         "tree-sitter-c-sharp": "^0.23.0",
         "tree-sitter-cpp": "^0.23.1",
         "tree-sitter-css": "^0.23.0",
+        "tree-sitter-gdscript": "^5.0.1",
         "tree-sitter-go": "^0.23.4",
         "tree-sitter-html": "^0.23.2",
         "tree-sitter-java": "^0.23.5",
         "tree-sitter-javascript": "^0.25.0",
         "tree-sitter-kotlin": "^0.3.8",
+        "tree-sitter-lua": "^2.1.3",
         "tree-sitter-php": "^0.23.4",
         "tree-sitter-python": "^0.23.6",
         "tree-sitter-regex": "^0.23.0",
@@ -307,6 +309,8 @@
 
     "tree-sitter-css": ["tree-sitter-css@0.23.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-css/-/tree-sitter-css-0.23.2.tgz", { "dependencies": { "node-addon-api": "^8.2.2", "node-gyp-build": "^4.8.2" }, "peerDependencies": { "tree-sitter": "^0.22.4" }, "optionalPeers": ["tree-sitter"] }, "sha1-k9Fy9rFZYaympxeFYNP0+djsevU="],
 
+    "tree-sitter-gdscript": ["tree-sitter-gdscript@5.0.1", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-gdscript/-/tree-sitter-gdscript-5.0.1.tgz", { "dependencies": { "node-addon-api": "^8.3.1", "node-gyp-build": "^4.8.4" }, "peerDependencies": { "tree-sitter": "^0.21.1" }, "optionalPeers": ["tree-sitter"] }, "sha1-v2jk/DGfI8MvmzWEJU7OCO661i8="],
+
     "tree-sitter-go": ["tree-sitter-go@0.23.4", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-go/-/tree-sitter-go-0.23.4.tgz", { "dependencies": { "node-addon-api": "^8.2.1", "node-gyp-build": "^4.8.2" }, "peerDependencies": { "tree-sitter": "^0.21.1" }, "optionalPeers": ["tree-sitter"] }, "sha1-C+0U2ccefcUsB1fBBKpPvyFxOb8="],
 
     "tree-sitter-html": ["tree-sitter-html@0.23.2", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-html/-/tree-sitter-html-0.23.2.tgz", { "dependencies": { "node-addon-api": "^8.2.2", "node-gyp-build": "^4.8.2" }, "peerDependencies": { "tree-sitter": "^0.21.1" }, "optionalPeers": ["tree-sitter"] }, "sha1-fjIz7Jt1slTOV0R/u4IPhIUo5TY="],
@@ -316,6 +320,8 @@
     "tree-sitter-javascript": ["tree-sitter-javascript@0.25.0", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-javascript/-/tree-sitter-javascript-0.25.0.tgz", { "dependencies": { "node-addon-api": "^8.3.1", "node-gyp-build": "^4.8.4" }, "peerDependencies": { "tree-sitter": "^0.25.0" }, "optionalPeers": ["tree-sitter"] }, "sha1-LjNrjxKOboVAHrZ2Z9/YfPzxU+g="],
 
     "tree-sitter-kotlin": ["tree-sitter-kotlin@0.3.8", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-kotlin/-/tree-sitter-kotlin-0.3.8.tgz", { "dependencies": { "node-addon-api": "^7.1.0", "node-gyp-build": "^4.8.0" }, "peerDependencies": { "tree-sitter": "^0.21.0" } }, "sha1-nLP7yUde8WRcMoLOw75y/WMlwk4="],
+
+    "tree-sitter-lua": ["tree-sitter-lua@2.1.3", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-lua/-/tree-sitter-lua-2.1.3.tgz", { "dependencies": { "nan": "^2.15.0" } }, "sha1-5q+ZEMxEUu7fOVQ2SKlbPMd7YRw="],
 
     "tree-sitter-php": ["tree-sitter-php@0.23.12", "https://pkgs.dev.azure.com/childrensal/_packaging/COA-NPM-Packages/npm/registry/tree-sitter-php/-/tree-sitter-php-0.23.12.tgz", { "dependencies": { "node-addon-api": "^8.2.2", "node-gyp-build": "^4.8.2" }, "peerDependencies": { "tree-sitter": "^0.21.1" }, "optionalPeers": ["tree-sitter"] }, "sha1-+RrElpsw7EBuNh15yZN4SOLZeZs="],
 

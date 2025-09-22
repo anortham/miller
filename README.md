@@ -1,15 +1,15 @@
 # Miller - Multi-Language Code Intelligence MCP Server
 
-[![Language Support](https://img.shields.io/badge/languages-17-blue)](docs/implementation-checklist.md)
+[![Language Support](https://img.shields.io/badge/languages-20-blue)](docs/implementation-checklist.md)
 [![Tests](https://img.shields.io/badge/tests-passing-green)](src/__tests__)
 [![MCP](https://img.shields.io/badge/MCP-compatible-orange)](https://modelcontextprotocol.io/)
 [![Performance](https://img.shields.io/badge/search-<10ms-brightgreen)](#-performance-benchmarks)
 [![GitHub stars](https://img.shields.io/github/stars/anortham/miller?style=social)](https://github.com/anortham/miller)
 
 > **🚀 Production-grade code intelligence that rivals proprietary tools**
-> One server, 17 languages, lightning-fast search, zero configuration
+> One server, 20 languages, lightning-fast search, zero configuration
 
-Miller is a high-performance MCP (Model Context Protocol) server that provides **LSP-quality code intelligence across 17 programming languages** without the overhead of running multiple language servers. Built on Bun with Tree-sitter parsers, Miller delivers **sub-10ms search**, comprehensive symbol analysis, and cross-language relationship tracking.
+Miller is a high-performance MCP (Model Context Protocol) server that provides **LSP-quality code intelligence across 20 programming languages** without the overhead of running multiple language servers. Built on Bun with Tree-sitter parsers, Miller delivers **sub-10ms search**, comprehensive symbol analysis, and cross-language relationship tracking.
 
 ## 🎯 **Why Miller?**
 
@@ -26,11 +26,12 @@ Miller is a high-performance MCP (Model Context Protocol) server that provides *
 
 ## ✨ Features
 
-### 🌍 Multi-Language Support (17 Languages)
+### 🌍 Multi-Language Support (20 Languages)
 - **Web**: JavaScript, TypeScript, HTML, CSS, Vue
 - **Backend**: Python, Rust, Go, Java, C#, PHP, Ruby
 - **Systems**: C, C++
 - **Mobile**: Swift, Kotlin
+- **Game Development**: GDScript, Lua
 - **Web Frameworks**: Razor (Blazor)
 - **Utilities**: Regex patterns
 
@@ -233,7 +234,7 @@ Miller uses a modular architecture designed for performance and extensibility:
 
 - **MCP Server**: Handles Model Context Protocol communication
 - **Code Intelligence Engine**: Orchestrates all components
-- **Parser Manager**: Manages Tree-sitter WASM parsers for 17 languages
+- **Parser Manager**: Manages Tree-sitter WASM parsers for 20 languages
 - **Database Layer**: SQLite with optimized schema for symbols and relationships
 - **Search Engine**: Dual-mode search (fuzzy + exact) with performance optimization
 - **File Watcher**: Real-time workspace monitoring with intelligent debouncing
@@ -279,6 +280,8 @@ bun test src/__tests__/integration/
 | CSS         | Microsoft     | ✅ Basic | Selectors, properties |
 | PHP         | Microsoft     | ✅ Full | Functions, classes, namespaces |
 | Ruby        | Microsoft     | ✅ Full | Classes, methods, modules |
+| GDScript    | Custom WASM   | 🚧 Foundation | Classes, inheritance, constants, enums |
+| Lua         | Custom WASM   | 🚧 Foundation | Functions, variables, tables (basic) |
 | Regex       | Microsoft     | ✅ Basic | Pattern analysis |
 
 ## 🔧 Configuration
