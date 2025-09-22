@@ -22,6 +22,7 @@ export interface SearchOptions {
   filePattern?: string;
   language?: string;
   symbolKinds?: string[];
+  path?: string;
 }
 
 export class SearchEngine {
@@ -59,19 +60,33 @@ export class SearchEngine {
   private codeTokenizer(text: string): string[] {
     if (!text) return [];
 
-    return text
+    const tokens: string[] = [];
+
+    // First, extract and preserve generic type patterns like ILogger<T>, List<string>
+    const genericMatches = text.match(/\w+<[^>]+>/g) || [];
+    genericMatches.forEach(match => {
+      tokens.push(match.toLowerCase());
+      // Also add the base type without generics
+      const baseType = match.split('<')[0];
+      if (baseType) tokens.push(baseType.toLowerCase());
+    });
+
+    // Then do normal tokenization on the remaining text
+    const normalTokens = text
       // Split on camelCase boundaries
       .split(/(?=[A-Z])/)
       // Split on underscores and hyphens
       .flatMap(part => part.split(/[_\-\s]+/))
-      // Split on special characters but preserve them
-      .flatMap(part => part.split(/([^\w])/))
+      // Split on some special characters but preserve generics
+      .flatMap(part => part.split(/([^\w<>])/))
       // Filter out empty strings and very short tokens
       .filter(token => token.length > 1)
       // Convert to lowercase for better matching
       .map(token => token.toLowerCase())
       // Remove duplicates
       .filter((token, index, array) => array.indexOf(token) === index);
+
+    return [...tokens, ...normalTokens].filter((token, index, array) => array.indexOf(token) === index);
   }
 
   async indexSymbols() {
@@ -157,6 +172,17 @@ export class SearchEngine {
       };
     }
 
+    // Add path filtering - if path is specified, only include results from that path
+    if (options.path) {
+      const existingFilter = searchOptions.filter;
+      searchOptions.filter = (result: any) => {
+        const previousMatch = existingFilter ? existingFilter(result) : true;
+        const normalizedResultPath = result.file.replace(/\\/g, '/');
+        const normalizedFilterPath = options.path!.replace(/\\/g, '/');
+        return previousMatch && normalizedResultPath.startsWith(normalizedFilterPath);
+      };
+    }
+
     const results = this.miniSearch.search(query, searchOptions);
 
     const processedResults = await Promise.all(results.map(async (r: any) => {
@@ -189,7 +215,7 @@ export class SearchEngine {
    * Exact pattern search using ripgrep with fallback to database
    */
   async searchExact(pattern: string, options: SearchOptions = {}): Promise<SearchResult[]> {
-    const { limit = 100, filePattern } = options;
+    const { limit = 100, filePattern, path } = options;
 
     try {
       // Try ripgrep first for fast file content search
@@ -199,7 +225,9 @@ export class SearchEngine {
         rgCommand += ` --glob="${filePattern}"`;
       }
 
-      rgCommand += ` "${pattern}" .`;
+      // Add path filtering - search specific directory if path is provided
+      const searchPath = path ? path.replace(/\\/g, '/') : '.';
+      rgCommand += ` "${pattern}" ${searchPath}`;
 
       const result = await $`sh -c ${rgCommand}`.text();
 
@@ -233,7 +261,7 @@ export class SearchEngine {
    * Database-based search fallback
    */
   private async searchDatabase(pattern: string, options: SearchOptions = {}): Promise<SearchResult[]> {
-    const { limit = 100, language, symbolKinds } = options;
+    const { limit = 100, language, symbolKinds, path } = options;
 
     let query = `
       SELECT
@@ -261,6 +289,11 @@ export class SearchEngine {
       params.push(...symbolKinds);
     }
 
+    if (path) {
+      query += ` AND file_path LIKE ?`;
+      params.push(`${path.replace(/\\/g, '/')}%`);
+    }
+
     query += ` ORDER BY
       CASE
         WHEN name = ? THEN 1
@@ -280,7 +313,7 @@ export class SearchEngine {
    * Search by type information
    */
   async searchByType(typeName: string, options: SearchOptions = {}): Promise<SearchResult[]> {
-    const { limit = 100, language } = options;
+    const { limit = 100, language, path } = options;
 
     let query = `
       SELECT
@@ -304,6 +337,11 @@ export class SearchEngine {
       params.push(language);
     }
 
+    if (path) {
+      query += ` AND s.file_path LIKE ?`;
+      params.push(`${path.replace(/\\/g, '/')}%`);
+    }
+
     query += ` ORDER BY
       CASE
         WHEN t.resolved_type = ? THEN 1
@@ -323,7 +361,7 @@ export class SearchEngine {
    * Search symbols by name with advanced filtering
    */
   async searchSymbols(query: string, options: SearchOptions = {}): Promise<SearchResult[]> {
-    const { limit = 50, language, symbolKinds } = options;
+    const { limit = 50, language, symbolKinds, path } = options;
 
     // Use FTS5 if available, otherwise fall back to LIKE
     let sqlQuery = `
@@ -350,6 +388,11 @@ export class SearchEngine {
       const placeholders = symbolKinds.map(() => '?').join(',');
       sqlQuery += ` AND s.kind IN (${placeholders})`;
       params.push(...symbolKinds);
+    }
+
+    if (path) {
+      sqlQuery += ` AND s.file_path LIKE ?`;
+      params.push(`${path.replace(/\\/g, '/')}%`);
     }
 
     sqlQuery += ` ORDER BY

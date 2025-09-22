@@ -121,6 +121,10 @@ Miller automatically indexes supported files and provides intelligent code analy
                   type: "boolean",
                   description: "Include function/method signatures in results",
                   default: true
+                },
+                path: {
+                  type: "string",
+                  description: "Workspace path to search (default: current workspace, 'all' for all indexed workspaces)"
                 }
               },
               required: ["query"]
@@ -277,19 +281,23 @@ Miller automatically indexes supported files and provides intelligent code analy
       try {
         switch (name) {
           case "search_code": {
-            const { query, type = "fuzzy", limit = 50, language, symbolKinds, includeSignature = true } = args;
+            const { query, type = "fuzzy", limit = 50, language, symbolKinds, includeSignature = true, path } = args;
+
+            // Handle path filtering - default to current workspace
+            const searchPath = path === "all" ? undefined : path || this.workspacePath;
 
             let results;
             if (type === 'exact') {
-              results = await this.engine.searchExact(query, { limit, language, symbolKinds });
+              results = await this.engine.searchExact(query, { limit, language, symbolKinds, path: searchPath });
             } else if (type === 'type') {
-              results = await this.engine.searchByType(query, { limit, language });
+              results = await this.engine.searchByType(query, { limit, language, path: searchPath });
             } else {
               results = await this.engine.searchCode(query, {
                 limit,
                 language,
                 symbolKinds,
-                includeSignature
+                includeSignature,
+                path: searchPath
               });
             }
 
