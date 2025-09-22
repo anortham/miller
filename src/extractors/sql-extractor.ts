@@ -51,13 +51,16 @@ export class SqlExtractor extends BaseExtractor {
           case 'create_schema':
             symbol = this.extractSchema(node, parentId);
             break;
+          case 'alter_table':
+            this.extractConstraintsFromAlterTable(node, symbols, parentId);
+            break;
           case 'select':
             // Extract SELECT query aliases as fields
             this.extractSelectAliases(node, symbols, parentId);
             break;
           case 'ERROR':
-            // Handle DELIMITER syntax issues - extract procedures/functions from ERROR nodes
-            symbol = this.extractFromErrorNode(node, parentId);
+            // Handle DELIMITER syntax issues - extract multiple symbols from ERROR nodes
+            this.extractMultipleFromErrorNode(node, symbols, parentId);
             break;
           default:
             // Handle other SQL constructs
@@ -416,6 +419,61 @@ export class SqlExtractor extends BaseExtractor {
     return symbol;
   }
 
+  private extractConstraintsFromAlterTable(node: Parser.SyntaxNode, symbols: Symbol[], parentId?: string): void {
+    const nodeText = this.getNodeText(node);
+
+    // Extract ADD CONSTRAINT statements
+    const constraintMatch = nodeText.match(/ADD\s+CONSTRAINT\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+(CHECK|FOREIGN\s+KEY|UNIQUE|PRIMARY\s+KEY)/i);
+    if (constraintMatch) {
+      const constraintName = constraintMatch[1];
+      const constraintType = constraintMatch[2].toUpperCase();
+
+      let signature = `ALTER TABLE ADD CONSTRAINT ${constraintName} ${constraintType}`;
+
+      // Add more details based on constraint type
+      if (constraintType === 'CHECK') {
+        const checkMatch = nodeText.match(/CHECK\s*\(([^)]+(?:\([^)]*\)[^)]*)*)\)/i);
+        if (checkMatch) {
+          signature += ` (${checkMatch[1].trim()})`;
+        }
+      } else if (constraintType.includes('FOREIGN')) {
+        const fkMatch = nodeText.match(/FOREIGN\s+KEY\s*\(([^)]+)\)\s*REFERENCES\s+([a-zA-Z_][a-zA-Z0-9_]*)/i);
+        if (fkMatch) {
+          signature += ` (${fkMatch[1]}) REFERENCES ${fkMatch[2]}`;
+        }
+
+        // Add ON DELETE/UPDATE actions
+        const onDeleteMatch = nodeText.match(/ON\s+DELETE\s+(CASCADE|RESTRICT|SET\s+NULL|NO\s+ACTION)/i);
+        if (onDeleteMatch) {
+          signature += ` ON DELETE ${onDeleteMatch[1].toUpperCase()}`;
+        }
+
+        const onUpdateMatch = nodeText.match(/ON\s+UPDATE\s+(CASCADE|RESTRICT|SET\s+NULL|NO\s+ACTION)/i);
+        if (onUpdateMatch) {
+          signature += ` ON UPDATE ${onUpdateMatch[1].toUpperCase()}`;
+        }
+      }
+
+      const constraintSymbol: Symbol = {
+        id: this.generateId(`${constraintName}_constraint`, node.startPosition),
+        name: constraintName,
+        kind: SymbolKind.Property,
+        signature,
+        startLine: node.startPosition.row,
+        startColumn: node.startPosition.column,
+        endLine: node.endPosition.row,
+        endColumn: node.endPosition.column,
+        filePath: this.filePath,
+        language: this.language,
+        parentId,
+        visibility: 'public',
+        metadata: { isConstraint: true, constraintType }
+      };
+
+      symbols.push(constraintSymbol);
+    }
+  }
+
   private extractViewColumns(viewNode: Parser.SyntaxNode, symbols: Symbol[], parentViewId: string): void {
     // Look for the SELECT statement inside the view and extract its aliases
     this.traverseTree(viewNode, (node) => {
@@ -722,6 +780,162 @@ export class SqlExtractor extends BaseExtractor {
     }
 
     return null;
+  }
+
+  private extractMultipleFromErrorNode(node: Parser.SyntaxNode, symbols: Symbol[], parentId?: string): void {
+    const errorText = this.getNodeText(node);
+
+    // Try to extract each type of symbol from the ERROR node
+    // Extract stored procedures
+    const procedureMatch = errorText.match(/CREATE\s+PROCEDURE\s+([a-zA-Z_][a-zA-Z0-9_]*)/i);
+    if (procedureMatch) {
+      const procedureName = procedureMatch[1];
+      const procedureSymbol = this.createSymbol(node, procedureName, SymbolKind.Function, {
+        signature: `CREATE PROCEDURE ${procedureName}(...)`,
+        visibility: 'public',
+        parentId,
+        metadata: { isStoredProcedure: true, extractedFromError: true }
+      });
+      symbols.push(procedureSymbol);
+      // Extract parameters for this procedure
+      this.extractParametersFromErrorNode(node, symbols, procedureSymbol.id);
+    }
+
+    // Extract functions with RETURNS clause
+    const functionMatch = errorText.match(/CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\([^)]*\)\s*RETURNS?\s+([A-Z0-9(),\s]+)/i);
+    if (functionMatch) {
+      const functionName = functionMatch[1];
+      const returnType = functionMatch[2].trim();
+      const functionSymbol = this.createSymbol(node, functionName, SymbolKind.Function, {
+        signature: `CREATE FUNCTION ${functionName}(...) RETURNS ${returnType}`,
+        visibility: 'public',
+        parentId,
+        metadata: { isFunction: true, extractedFromError: true, returnType }
+      });
+      symbols.push(functionSymbol);
+      // Extract DECLARE variables from function body
+      this.extractDeclareVariables(node, symbols, functionSymbol.id);
+    } else {
+      // Fallback: Extract any CREATE FUNCTION
+      const simpleFunctionMatch = errorText.match(/CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([a-zA-Z_][a-zA-Z0-9_]*)/i);
+      if (simpleFunctionMatch) {
+        const functionName = simpleFunctionMatch[1];
+        const functionSymbol = this.createSymbol(node, functionName, SymbolKind.Function, {
+          signature: `CREATE FUNCTION ${functionName}(...)`,
+          visibility: 'public',
+          parentId,
+          metadata: { isFunction: true, extractedFromError: true }
+        });
+        symbols.push(functionSymbol);
+        // Extract DECLARE variables from function body
+        this.extractDeclareVariables(node, symbols, functionSymbol.id);
+      }
+    }
+
+    // Extract schemas
+    const schemaMatch = errorText.match(/CREATE\s+SCHEMA\s+([a-zA-Z_][a-zA-Z0-9_]*)/i);
+    if (schemaMatch) {
+      const schemaName = schemaMatch[1];
+      const schemaSymbol = this.createSymbol(node, schemaName, SymbolKind.Namespace, {
+        signature: `CREATE SCHEMA ${schemaName}`,
+        visibility: 'public',
+        parentId,
+        metadata: { isSchema: true, extractedFromError: true }
+      });
+      symbols.push(schemaSymbol);
+    }
+
+    // Extract views
+    const viewMatch = errorText.match(/CREATE\s+VIEW\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+AS/i);
+    if (viewMatch) {
+      const viewName = viewMatch[1];
+      const viewSymbol = this.createSymbol(node, viewName, SymbolKind.Interface, {
+        signature: `CREATE VIEW ${viewName}`,
+        visibility: 'public',
+        parentId,
+        metadata: { isView: true, extractedFromError: true }
+      });
+      symbols.push(viewSymbol);
+      // Extract view columns from this ERROR node
+      this.extractViewColumnsFromErrorNode(node, symbols, viewSymbol.id);
+    }
+
+    // Extract triggers
+    const triggerMatch = errorText.match(/CREATE\s+TRIGGER\s+([a-zA-Z_][a-zA-Z0-9_]*)/i);
+    if (triggerMatch) {
+      const triggerName = triggerMatch[1];
+
+      // Try to extract trigger details (BEFORE/AFTER, event, table)
+      const detailsMatch = errorText.match(/CREATE\s+TRIGGER\s+[a-zA-Z_][a-zA-Z0-9_]*\s+(BEFORE|AFTER)\s+(INSERT|UPDATE|DELETE)\s+ON\s+([a-zA-Z_][a-zA-Z0-9_]*)/i);
+
+      let signature = `CREATE TRIGGER ${triggerName}`;
+      if (detailsMatch) {
+        const timing = detailsMatch[1];
+        const event = detailsMatch[2];
+        const table = detailsMatch[3];
+        signature += ` ${timing} ${event} ON ${table}`;
+      }
+
+      const triggerSymbol = this.createSymbol(node, triggerName, SymbolKind.Method, {
+        signature,
+        visibility: 'public',
+        parentId,
+        docComment: this.extractDocumentation(node),
+        metadata: { isTrigger: true, extractedFromError: true }
+      });
+      symbols.push(triggerSymbol);
+    }
+
+    // Extract constraints from ALTER TABLE statements
+    const constraintMatch = errorText.match(/ALTER\s+TABLE\s+[a-zA-Z_][a-zA-Z0-9_]*\s+ADD\s+CONSTRAINT\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+(CHECK|FOREIGN\s+KEY|UNIQUE|PRIMARY\s+KEY)/i);
+    if (constraintMatch) {
+      const constraintName = constraintMatch[1];
+      const constraintType = constraintMatch[2].toUpperCase();
+
+      let signature = `ALTER TABLE ADD CONSTRAINT ${constraintName} ${constraintType}`;
+
+      // Add more details based on constraint type
+      if (constraintType === 'CHECK') {
+        const checkMatch = errorText.match(/CHECK\s*\(([^)]+(?:\([^)]*\)[^)]*)*)\)/i);
+        if (checkMatch) {
+          signature += ` (${checkMatch[1].trim()})`;
+        }
+      } else if (constraintType.includes('FOREIGN')) {
+        const fkMatch = errorText.match(/FOREIGN\s+KEY\s*\(([^)]+)\)\s*REFERENCES\s+([a-zA-Z_][a-zA-Z0-9_]*)/i);
+        if (fkMatch) {
+          signature += ` (${fkMatch[1]}) REFERENCES ${fkMatch[2]}`;
+        }
+
+        // Add ON DELETE/UPDATE actions
+        const onDeleteMatch = errorText.match(/ON\s+DELETE\s+(CASCADE|RESTRICT|SET\s+NULL|NO\s+ACTION)/i);
+        if (onDeleteMatch) {
+          signature += ` ON DELETE ${onDeleteMatch[1].toUpperCase()}`;
+        }
+
+        const onUpdateMatch = errorText.match(/ON\s+UPDATE\s+(CASCADE|RESTRICT|SET\s+NULL|NO\s+ACTION)/i);
+        if (onUpdateMatch) {
+          signature += ` ON UPDATE ${onUpdateMatch[1].toUpperCase()}`;
+        }
+      }
+
+      const constraintSymbol: Symbol = {
+        id: this.generateId(`${constraintName}_constraint`, node.startPosition),
+        name: constraintName,
+        kind: SymbolKind.Property,
+        signature,
+        startLine: node.startPosition.row,
+        startColumn: node.startPosition.column,
+        endLine: node.endPosition.row,
+        endColumn: node.endPosition.column,
+        filePath: this.filePath,
+        language: this.language,
+        parentId,
+        visibility: 'public',
+        metadata: { isConstraint: true, constraintType, extractedFromError: true }
+      };
+
+      symbols.push(constraintSymbol);
+    }
   }
 
   private extractDeclareVariables(functionNode: Parser.SyntaxNode, symbols: Symbol[], parentId: string): void {
