@@ -51,6 +51,15 @@ export class SqlExtractor extends BaseExtractor {
           case 'create_schema':
             symbol = this.extractSchema(node, parentId);
             break;
+          case 'create_sequence':
+            symbol = this.extractSequence(node, parentId);
+            break;
+          case 'create_domain':
+            symbol = this.extractDomain(node, parentId);
+            break;
+          case 'create_type':
+            symbol = this.extractType(node, parentId);
+            break;
           case 'alter_table':
             this.extractConstraintsFromAlterTable(node, symbols, parentId);
             break;
@@ -419,6 +428,146 @@ export class SqlExtractor extends BaseExtractor {
     return symbol;
   }
 
+  private extractSequence(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    // Look for sequence name - it may be inside an object_reference
+    const objectRefNode = this.findChildByType(node, 'object_reference');
+    const nameNode = objectRefNode ?
+      this.findChildByType(objectRefNode, 'identifier') :
+      (this.findChildByType(node, 'identifier') ||
+       this.findChildByType(node, 'sequence_name'));
+
+    if (!nameNode) return null;
+
+    const name = this.getNodeText(nameNode);
+
+    // Build sequence signature with options
+    const nodeText = this.getNodeText(node);
+    let signature = `CREATE SEQUENCE ${name}`;
+
+    // Add sequence options if present
+    const options = [];
+    if (nodeText.includes('START WITH')) {
+      const startMatch = nodeText.match(/START\s+WITH\s+(\d+)/i);
+      if (startMatch) options.push(`START WITH ${startMatch[1]}`);
+    }
+    if (nodeText.includes('INCREMENT BY')) {
+      const incMatch = nodeText.match(/INCREMENT\s+BY\s+(\d+)/i);
+      if (incMatch) options.push(`INCREMENT BY ${incMatch[1]}`);
+    }
+    if (nodeText.includes('MINVALUE')) {
+      const minMatch = nodeText.match(/MINVALUE\s+(\d+)/i);
+      if (minMatch) options.push(`MINVALUE ${minMatch[1]}`);
+    }
+    if (nodeText.includes('MAXVALUE')) {
+      const maxMatch = nodeText.match(/MAXVALUE\s+(\d+)/i);
+      if (maxMatch) options.push(`MAXVALUE ${maxMatch[1]}`);
+    }
+    if (nodeText.includes('CACHE')) {
+      const cacheMatch = nodeText.match(/CACHE\s+(\d+)/i);
+      if (cacheMatch) options.push(`CACHE ${cacheMatch[1]}`);
+    }
+
+    if (options.length > 0) {
+      signature += ` (${options.join(', ')})`;
+    }
+
+    const symbol = this.createSymbol(node, name, SymbolKind.Variable, {
+      signature,
+      visibility: 'public',
+      parentId,
+      docComment: this.extractDocumentation(node),
+      metadata: { isSequence: true }
+    });
+
+    return symbol;
+  }
+
+  private extractDomain(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    // Look for domain name - it may be inside an object_reference
+    const objectRefNode = this.findChildByType(node, 'object_reference');
+    const nameNode = objectRefNode ?
+      this.findChildByType(objectRefNode, 'identifier') :
+      (this.findChildByType(node, 'identifier') ||
+       this.findChildByType(node, 'domain_name'));
+
+    if (!nameNode) return null;
+
+    const name = this.getNodeText(nameNode);
+
+    // Build domain signature with base type and constraints
+    const nodeText = this.getNodeText(node);
+    let signature = `CREATE DOMAIN ${name}`;
+
+    // Extract the base type (AS datatype)
+    const asMatch = nodeText.match(/AS\s+([A-Z]+(?:\(\d+(?:,\s*\d+)?\))?)/i);
+    if (asMatch) {
+      signature += ` AS ${asMatch[1]}`;
+    }
+
+    // Add CHECK constraint if present
+    const checkMatch = nodeText.match(/CHECK\s*\(([^)]+(?:\([^)]*\)[^)]*)*)\)/i);
+    if (checkMatch) {
+      signature += ` CHECK (${checkMatch[1].trim()})`;
+    }
+
+    const symbol = this.createSymbol(node, name, SymbolKind.Class, {
+      signature,
+      visibility: 'public',
+      parentId,
+      docComment: this.extractDocumentation(node),
+      metadata: { isDomain: true }
+    });
+
+    return symbol;
+  }
+
+  private extractType(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    // Look for type name in object_reference
+    const objectRefNode = this.findChildByType(node, 'object_reference');
+    const nameNode = objectRefNode ?
+      this.findChildByType(objectRefNode, 'identifier') :
+      this.findChildByType(node, 'identifier');
+
+    if (!nameNode) return null;
+
+    const name = this.getNodeText(nameNode);
+
+    // Check if this is an ENUM type
+    const nodeText = this.getNodeText(node);
+    if (nodeText.includes('AS ENUM')) {
+      // Extract enum values from enum_elements
+      const enumElementsNode = this.findChildByType(node, 'enum_elements');
+      let enumValues = '';
+      if (enumElementsNode) {
+        enumValues = this.getNodeText(enumElementsNode);
+      }
+
+      const signature = `CREATE TYPE ${name} AS ENUM ${enumValues}`;
+
+      const symbol = this.createSymbol(node, name, SymbolKind.Class, {
+        signature,
+        visibility: 'public',
+        parentId,
+        docComment: this.extractDocumentation(node),
+        metadata: { isEnum: true, isType: true }
+      });
+
+      return symbol;
+    }
+
+    // Handle other types (non-enum)
+    const signature = `CREATE TYPE ${name}`;
+    const symbol = this.createSymbol(node, name, SymbolKind.Class, {
+      signature,
+      visibility: 'public',
+      parentId,
+      docComment: this.extractDocumentation(node),
+      metadata: { isType: true }
+    });
+
+    return symbol;
+  }
+
   private extractConstraintsFromAlterTable(node: Parser.SyntaxNode, symbols: Symbol[], parentId?: string): void {
     const nodeText = this.getNodeText(node);
 
@@ -497,37 +646,34 @@ export class SqlExtractor extends BaseExtractor {
     if (selectIndex === -1) return;
 
     // Find the FROM clause to limit our search to the SELECT list only
-    const fromIndex = errorText.indexOf('FROM', selectIndex);
+    // Use regex to find the table FROM clause, not FROM inside expressions
+    const fromMatch = errorText.match(/\bFROM\s+[a-zA-Z_][a-zA-Z0-9_]*\s+[a-zA-Z_]/i);
+    const fromIndex = fromMatch ? errorText.indexOf(fromMatch[0], selectIndex) : -1;
     const selectSection = fromIndex > selectIndex ?
       errorText.substring(selectIndex, fromIndex) :
       errorText.substring(selectIndex);
 
     // Extract SELECT aliases using regex patterns - only within SELECT section
-    // Pattern: expression AS alias_name or expression alias_name
-    const aliasRegex = /(?:COUNT|MIN|MAX|AVG|SUM|EXTRACT|[a-zA-Z_][a-zA-Z0-9_.]*(?:\([^)]*\))?(?:\s+OVER\s*\([^)]*\))?)\s+(?:AS\s+)?([a-zA-Z_][a-zA-Z0-9_]*)/gi;
+    // Pattern: any_expression AS alias_name (more flexible to catch complex expressions)
+    const aliasRegex = /(?:^|,|\s)\s*(.+?)\s+(?:AS\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:,|$)/gim;
 
     let match;
     while ((match = aliasRegex.exec(selectSection)) !== null) {
-      const aliasName = match[1];
+      const fullExpression = match[1].trim();
+      const aliasName = match[2];
 
       // Skip if this looks like a table alias or common SQL keywords
       if (['u', 'ae', 'users', 'analytics_events', 'id', 'username', 'email'].includes(aliasName)) {
         continue;
       }
 
-      // Find the full expression by looking backwards in the SELECT section
-      const aliasIndex = match.index + match[0].lastIndexOf(aliasName);
-      let expressionStart = match.index;
-
-      // Look for the start of the expression (after comma or SELECT keyword)
-      const beforeAlias = selectSection.substring(0, expressionStart);
-      const commaMatch = beforeAlias.lastIndexOf(',');
-      const selectMatch = beforeAlias.lastIndexOf('SELECT');
-
-      expressionStart = Math.max(commaMatch, selectMatch);
-      if (expressionStart > 0) expressionStart += (beforeAlias[expressionStart] === ',' ? 1 : 6); // Skip ',' or 'SELECT'
-
-      const fullExpression = selectSection.substring(expressionStart, aliasIndex).trim();
+      // Skip if the expression looks like a simple column reference (no functions/calculations)
+      if (!fullExpression.includes('(') && !fullExpression.includes('COUNT') && !fullExpression.includes('MIN') &&
+          !fullExpression.includes('MAX') && !fullExpression.includes('AVG') && !fullExpression.includes('SUM') &&
+          !fullExpression.includes('EXTRACT') && !fullExpression.includes('CASE') &&
+          fullExpression.split('.').length <= 2) {
+        continue;
+      }
 
       const aliasSymbol: Symbol = {
         id: this.generateId(`${aliasName}_alias`, node.startPosition),
@@ -935,6 +1081,63 @@ export class SqlExtractor extends BaseExtractor {
       };
 
       symbols.push(constraintSymbol);
+    }
+
+    // Extract domains
+    const domainMatch = errorText.match(/CREATE\s+DOMAIN\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+AS\s+([A-Z]+(?:\(\d+(?:,\s*\d+)?\))?)/i);
+    if (domainMatch) {
+      const domainName = domainMatch[1];
+      const baseType = domainMatch[2];
+
+      let signature = `CREATE DOMAIN ${domainName} AS ${baseType}`;
+
+      // Add CHECK constraint if present
+      const checkMatch = errorText.match(/CHECK\s*\(([^)]+(?:\([^)]*\)[^)]*)*)\)/i);
+      if (checkMatch) {
+        signature += ` CHECK (${checkMatch[1].trim()})`;
+      }
+
+      const domainSymbol = this.createSymbol(node, domainName, SymbolKind.Class, {
+        signature,
+        visibility: 'public',
+        parentId,
+        metadata: { isDomain: true, extractedFromError: true, baseType }
+      });
+      symbols.push(domainSymbol);
+    }
+
+    // Extract enum/custom types
+    const enumMatch = errorText.match(/CREATE\s+TYPE\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+AS\s+ENUM\s*\(([\s\S]*?)\)/i);
+    if (enumMatch) {
+      const enumName = enumMatch[1];
+      const enumValues = enumMatch[2];
+
+      const signature = `CREATE TYPE ${enumName} AS ENUM (${enumValues.trim()})`;
+
+      const enumSymbol = this.createSymbol(node, enumName, SymbolKind.Class, {
+        signature,
+        visibility: 'public',
+        parentId,
+        metadata: { isEnum: true, extractedFromError: true }
+      });
+      symbols.push(enumSymbol);
+    }
+
+    // Extract aggregate functions
+    const aggregateMatch = errorText.match(/CREATE\s+AGGREGATE\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(([^)]*)\)/i);
+    if (aggregateMatch) {
+      const aggregateName = aggregateMatch[1];
+      const parameters = aggregateMatch[2];
+
+      const signature = `CREATE AGGREGATE ${aggregateName}(${parameters})`;
+
+      const aggregateSymbol = this.createSymbol(node, aggregateName, SymbolKind.Function, {
+        signature,
+        visibility: 'public',
+        parentId,
+        metadata: { isAggregate: true, extractedFromError: true }
+      });
+      symbols.push(aggregateSymbol);
     }
   }
 
