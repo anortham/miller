@@ -434,7 +434,7 @@ describe('RazorExtractor', () => {
       const emailParam = symbols.find(s => s.name === 'Email' && s.signature?.includes('[Parameter]'));
       expect(emailParam).toBeDefined();
 
-      const childContentParam = symbols.find(s => s.name === 'ChildContent');
+      const childContentParam = symbols.find(s => s.name === 'ChildContent' && s.kind === SymbolKind.Property);
       expect(childContentParam).toBeDefined();
       expect(childContentParam?.signature).toContain('RenderFragment? ChildContent');
 
@@ -1072,7 +1072,7 @@ describe('RazorExtractor', () => {
       const validateForm = symbols.find(s => s.name === 'ValidateForm');
       expect(validateForm).toBeDefined();
 
-      const removeFile = symbols.find(s => s.name === 'RemoveFile');
+      const removeFile = symbols.find(s => s.name === 'RemoveFile' && s.kind === SymbolKind.Method);
       expect(removeFile).toBeDefined();
       expect(removeFile?.signature).toContain('private void RemoveFile(IBrowserFile file)');
 
@@ -1154,11 +1154,11 @@ describe('RazorExtractor', () => {
       expect(onInitialized).toBeDefined();
       expect(types.get(onInitialized!.id)).toBe('Task');
 
-      const loadUsers = symbols.find(s => s.name === 'LoadUsers');
+      const loadUsers = symbols.find(s => s.name === 'LoadUsers' && s.kind === SymbolKind.Method);
       expect(loadUsers).toBeDefined();
       expect(types.get(loadUsers!.id)).toBe('Task');
 
-      const startAutoRefresh = symbols.find(s => s.name === 'StartAutoRefresh');
+      const startAutoRefresh = symbols.find(s => s.name === 'StartAutoRefresh' && s.kind === SymbolKind.Method);
       expect(startAutoRefresh).toBeDefined();
       expect(types.get(startAutoRefresh!.id)).toBe('void');
     });

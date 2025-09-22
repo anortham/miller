@@ -17,6 +17,7 @@ export class RazorExtractor extends BaseExtractor {
 
       let symbol: Symbol | null = null;
 
+
       switch (node.type) {
         case 'razor_directive':
         case 'razor_inject_directive':
@@ -27,6 +28,7 @@ export class RazorExtractor extends BaseExtractor {
         case 'razor_attribute_directive':
         case 'razor_inherits_directive':
         case 'razor_implements_directive':
+        case 'razor_addtaghelper_directive':
           symbol = this.extractDirective(node, parentId);
           break;
         case 'at_namespace':
@@ -45,6 +47,15 @@ export class RazorExtractor extends BaseExtractor {
           return;
         case 'razor_expression':
           symbol = this.extractExpression(node, parentId);
+          break;
+        case 'razor_implicit_expression':
+          // Handle @addTagHelper directives that are parsed as implicit expressions
+          const implicitText = this.getNodeText(node);
+          if (implicitText.trim().startsWith('@addTagHelper')) {
+            symbol = this.extractAddTagHelperDirective(node, parentId);
+          } else {
+            symbol = this.extractExpression(node, parentId);
+          }
           break;
         case 'html_element':
         case 'element':
@@ -81,7 +92,7 @@ export class RazorExtractor extends BaseExtractor {
           symbol = this.extractInvocation(node, parentId);
           break;
         case 'razor_html_attribute':
-          symbol = this.extractHtmlAttribute(node, parentId);
+          symbol = this.extractHtmlAttribute(node, parentId, symbols);
           break;
         case 'attribute':
           // Handle HTML/Razor attributes like @bind-Value
@@ -113,6 +124,27 @@ export class RazorExtractor extends BaseExtractor {
       console.warn('Razor parsing failed:', error);
     }
     return symbols;
+  }
+
+  private extractAddTagHelperDirective(node: Parser.SyntaxNode, parentId?: string): Symbol {
+    // Handle @addTagHelper directives that are parsed as implicit expressions
+    const directiveText = this.getNodeText(node);
+    const match = directiveText.match(/@addTagHelper\s+(.+)/);
+    const directiveValue = match ? match[1].trim() : '';
+
+    const signature = `@addTagHelper ${directiveValue}`;
+
+    return this.createSymbol(node, '@addTagHelper', SymbolKind.Import, {
+      signature,
+      visibility: 'public',
+      parentId,
+      metadata: {
+        type: 'razor-directive',
+        directiveName: 'addTagHelper',
+        directiveValue,
+        isAddTagHelper: true
+      }
+    });
   }
 
   private extractDirective(node: Parser.SyntaxNode, parentId?: string): Symbol {
@@ -329,8 +361,27 @@ export class RazorExtractor extends BaseExtractor {
   }
 
   private extractMethod(node: Parser.SyntaxNode, parentId?: string): Symbol {
-    const nameNode = node.children.find(c => c.type === 'identifier');
-    const name = nameNode ? this.getNodeText(nameNode) : 'unknownMethod';
+    let name = 'unknownMethod';
+
+    // EXPLICIT INTERFACE FIX: Handle explicit interface implementations like "void IDisposable.Dispose()"
+    let interfaceQualification = '';
+    const explicitImplementation = node.children.find(c => c.type === 'explicit_interface_specifier');
+    if (explicitImplementation) {
+      // For explicit interface implementations, keep method name but store interface for signature
+      const interfaceNode = explicitImplementation.children.find(c => c.type === 'identifier');
+      const methodNode = node.children.find(c => c.type === 'identifier' && c !== interfaceNode);
+
+      if (interfaceNode && methodNode) {
+        const interfaceName = this.getNodeText(interfaceNode);
+        const methodName = this.getNodeText(methodNode);
+        name = methodName; // Just the method name for symbol.name
+        interfaceQualification = `${interfaceName}.`; // Store interface for signature
+      }
+    } else {
+      // Regular method name extraction
+      const nameNode = node.children.find(c => c.type === 'identifier');
+      name = nameNode ? this.getNodeText(nameNode) : 'unknownMethod';
+    }
 
     const modifiers = this.extractModifiers(node);
     const parameters = this.extractMethodParameters(node);
@@ -352,7 +403,8 @@ export class RazorExtractor extends BaseExtractor {
       signature += `${returnType} `;
     }
 
-    signature += name;
+    // EXPLICIT INTERFACE FIX: Include interface qualification in signature
+    signature += `${interfaceQualification}${name}`;
     signature += parameters || '()';
 
     return this.createSymbol(node, name, SymbolKind.Function, {
@@ -525,15 +577,51 @@ export class RazorExtractor extends BaseExtractor {
     } else if (leftSide.type === 'element_access_expression') {
       // Handle ViewData["Title"] = value
       const expression = this.getNodeText(leftSide);
-      return this.createSymbol(node, expression, SymbolKind.Variable, {
-        signature: `${expression} = ...`,
-        visibility: 'private',
+      const fullAssignment = this.getNodeText(node);
+
+      // Extract variable name for ViewData["Title"]
+      let variableName = expression;
+      if (expression.includes('ViewData[')) {
+        const match = expression.match(/ViewData\["([^"]+)"\]/);
+        if (match) {
+          variableName = `ViewData_${match[1]}`;
+        }
+      }
+
+      return this.createSymbol(node, variableName, SymbolKind.Variable, {
+        signature: fullAssignment,
+        visibility: 'public',
         parentId,
         metadata: {
-          type: 'assignment',
+          type: 'razor-assignment',
+          isViewData: true,
           expression
         }
       });
+    } else if (leftSide.type === 'member_access_expression') {
+      // Handle ViewBag.MetaDescription = value
+      const expression = this.getNodeText(leftSide);
+      const fullAssignment = this.getNodeText(node);
+
+      if (expression.includes('ViewBag.')) {
+        const match = expression.match(/ViewBag\.(\w+)/);
+        let variableName = expression;
+        if (match) {
+          variableName = `ViewBag_${match[1]}`;
+        }
+
+        return this.createSymbol(node, variableName, SymbolKind.Variable, {
+          signature: fullAssignment,
+          visibility: 'public',
+          parentId,
+          metadata: {
+            type: 'razor-assignment',
+            isViewBag: true,
+            expression
+          }
+        });
+      }
+      return null;
     } else {
       return null;
     }
@@ -541,8 +629,14 @@ export class RazorExtractor extends BaseExtractor {
     const rightSide = node.children[2]; // Skip the = operator
     const value = rightSide ? this.getNodeText(rightSide) : '';
 
+    // LAYOUT FIX: Handle layout assignments without 'var' prefix
+    let signaturePrefix = 'var ';
+    if (name === 'Layout') {
+      signaturePrefix = ''; // Layout assignments don't use 'var'
+    }
+
     return this.createSymbol(node, name, SymbolKind.Variable, {
-      signature: `var ${name} = ${value.substring(0, 30)}${value.length > 30 ? '...' : ''}`,
+      signature: `${signaturePrefix}${name} = ${value.substring(0, 30)}${value.length > 30 ? '...' : ''}`,
       visibility: 'private',
       parentId,
       metadata: {
@@ -571,10 +665,16 @@ export class RazorExtractor extends BaseExtractor {
         return 'inherits';
       case 'razor_implements_directive':
         return 'implements';
+      case 'razor_addtaghelper_directive':
+        return 'addTagHelper';
       default:
         // Fallback to text parsing
         const text = this.getNodeText(node);
         const match = text.match(/@(\w+)/);
+        // Special handling for addTagHelper
+        if (text.includes('@addTagHelper')) {
+          return 'addTagHelper';
+        }
         return match ? match[1] : 'unknown';
     }
   }
@@ -613,10 +713,20 @@ export class RazorExtractor extends BaseExtractor {
       case 'razor_implements_directive':
         const implementsIdentifier = node.children.find(c => c.type === 'identifier');
         return implementsIdentifier ? this.getNodeText(implementsIdentifier) : null;
+      case 'razor_addtaghelper_directive':
+        // Extract the assembly pattern like "*, Microsoft.AspNetCore.Mvc.TagHelpers"
+        const addTagHelperText = this.getNodeText(node);
+        const addTagHelperMatch = addTagHelperText.match(/@addTagHelper\s+(.+)/);
+        return addTagHelperMatch ? addTagHelperMatch[1].trim() : null;
 
       default:
         // Fallback to text parsing
         const text = this.getNodeText(node);
+        // Special handling for addTagHelper
+        if (text.includes('@addTagHelper')) {
+          const addTagHelperMatch = text.match(/@addTagHelper\s+(.+)/);
+          return addTagHelperMatch ? addTagHelperMatch[1].trim() : null;
+        }
         const match = text.match(/@\w+\s+(.*)/);
         return match ? match[1].trim() : null;
     }
@@ -660,7 +770,18 @@ export class RazorExtractor extends BaseExtractor {
 
   private extractHtmlTagName(node: Parser.SyntaxNode): string {
     const tagNode = node.children.find(c => c.type === 'tag_name' || c.type === 'identifier');
-    return tagNode ? this.getNodeText(tagNode) : 'div';
+    if (tagNode) {
+      return this.getNodeText(tagNode);
+    }
+
+    // Fallback: extract tag name from node text using regex
+    const nodeText = this.getNodeText(node);
+    const tagMatch = nodeText.match(/^<(\w+)/);
+    if (tagMatch) {
+      return tagMatch[1];
+    }
+
+    return 'div';
   }
 
   private extractHtmlAttributes(node: Parser.SyntaxNode): string[] {
@@ -706,7 +827,15 @@ export class RazorExtractor extends BaseExtractor {
   }
 
   private extractReturnType(node: Parser.SyntaxNode): string | null {
-    const returnType = node.children.find(c => c.type === 'predefined_type' || c.type === 'identifier');
+    // Look for various return type patterns including generic types like Task<string>
+    const returnType = node.children.find(c =>
+      c.type === 'predefined_type' ||
+      c.type === 'identifier' ||
+      c.type === 'generic_name' ||
+      c.type === 'qualified_name' ||
+      c.type === 'nullable_type' ||
+      c.type === 'array_type'
+    );
     return returnType ? this.getNodeText(returnType) : null;
   }
 
@@ -905,6 +1034,7 @@ export class RazorExtractor extends BaseExtractor {
 
     let name = 'unknownLocalFunction';
 
+
     // Look for explicit interface implementation pattern: InterfaceName.MethodName
     const explicitImplementation = node.children.find(c => c.type === 'explicit_interface_specifier');
     if (explicitImplementation) {
@@ -1006,6 +1136,7 @@ export class RazorExtractor extends BaseExtractor {
     const relationships: Relationship[] = [];
 
     const visitNode = (node: Parser.SyntaxNode) => {
+
       switch (node.type) {
         case 'razor_component':
           this.extractComponentRelationships(node, symbols, relationships);
@@ -1017,6 +1148,10 @@ export class RazorExtractor extends BaseExtractor {
         case 'element':
           // Check if this is a custom component
           this.extractElementRelationships(node, symbols, relationships);
+          break;
+        case 'identifier':
+          // Check if this identifier looks like a component name (starts with uppercase)
+          this.extractIdentifierComponentRelationships(node, symbols, relationships);
           break;
         case 'invocation_expression':
           this.extractInvocationRelationships(node, symbols, relationships);
@@ -1041,28 +1176,69 @@ export class RazorExtractor extends BaseExtractor {
 
     // Check if this looks like a custom component (starts with uppercase)
     if (tagName && tagName[0] && tagName[0] === tagName[0].toUpperCase()) {
-      const componentSymbol = symbols.find(s => s.name === tagName);
+      let componentSymbol = symbols.find(s => s.name === tagName);
 
-      if (componentSymbol) {
+      if (!componentSymbol) {
+        // Create a symbol for the external component
+        componentSymbol = this.createSymbol(node, tagName, SymbolKind.Class, {
+          signature: `<${tagName}>`,
+          visibility: 'public',
+          metadata: {
+            type: 'external-component',
+            isExternal: true
+          }
+        });
+        symbols.push(componentSymbol);
+      }
+
+      relationships.push({
+        fromSymbolId: `razor-page:${this.filePath}`,
+        toSymbolId: componentSymbol.id,
+        kind: RelationshipKind.Uses,
+        filePath: this.filePath,
+        lineNumber: node.startPosition.row + 1,
+        confidence: componentSymbol.metadata?.isExternal ? 0.8 : 1.0,
+        metadata: { componentName: tagName }
+      });
+    }
+  }
+
+  private extractIdentifierComponentRelationships(
+    node: Parser.SyntaxNode,
+    symbols: Symbol[],
+    relationships: Relationship[]
+  ) {
+    const identifierName = this.getNodeText(node);
+
+    // Check if this identifier looks like a component name (starts with uppercase and is not a property/variable)
+    if (identifierName && identifierName[0] && identifierName[0] === identifierName[0].toUpperCase()) {
+      // Additional check: make sure this is in a context that suggests it's a component usage
+      // Look at parent context to see if this is in a Razor expression that could be a component
+      const parentText = node.parent ? this.getNodeText(node.parent) : '';
+      if (parentText.includes('<' + identifierName) || parentText.includes(identifierName + '>')) {
+        let componentSymbol = symbols.find(s => s.name === identifierName);
+
+        if (!componentSymbol) {
+          // Create a symbol for the external component
+          componentSymbol = this.createSymbol(node, identifierName, SymbolKind.Class, {
+            signature: `<${identifierName}>`,
+            visibility: 'public',
+            metadata: {
+              type: 'external-component',
+              isExternal: true
+            }
+          });
+          symbols.push(componentSymbol);
+        }
+
         relationships.push({
           fromSymbolId: `razor-page:${this.filePath}`,
           toSymbolId: componentSymbol.id,
           kind: RelationshipKind.Uses,
           filePath: this.filePath,
           lineNumber: node.startPosition.row + 1,
-          confidence: 1.0,
-          metadata: { componentName: tagName }
-        });
-      } else {
-        // Create a relationship to an external component
-        relationships.push({
-          fromSymbolId: `razor-page:${this.filePath}`,
-          toSymbolId: `component:${tagName}`,
-          kind: RelationshipKind.Uses,
-          filePath: this.filePath,
-          lineNumber: node.startPosition.row + 1,
-          confidence: 0.8,
-          metadata: { componentName: tagName, external: true }
+          confidence: componentSymbol.metadata?.isExternal ? 0.8 : 1.0,
+          metadata: { componentName: identifierName }
         });
       }
     }
@@ -1151,42 +1327,8 @@ export class RazorExtractor extends BaseExtractor {
     });
   }
 
-  private extractAssignment(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
-    // Check if this is ViewData or ViewBag assignment
-    const assignmentText = this.getNodeText(node);
 
-    if (assignmentText.includes('ViewData[') || assignmentText.includes('ViewBag.')) {
-      // Extract the variable name for ViewData["Title"] or ViewBag.MetaDescription
-      let variableName = 'assignment';
-
-      if (assignmentText.includes('ViewData[')) {
-        const match = assignmentText.match(/ViewData\["([^"]+)"\]/);
-        if (match) {
-          variableName = `ViewData_${match[1]}`;
-        }
-      } else if (assignmentText.includes('ViewBag.')) {
-        const match = assignmentText.match(/ViewBag\.(\w+)/);
-        if (match) {
-          variableName = `ViewBag_${match[1]}`;
-        }
-      }
-
-      return this.createSymbol(node, variableName, SymbolKind.Variable, {
-        signature: assignmentText,
-        visibility: 'public',
-        parentId,
-        metadata: {
-          type: 'razor-assignment',
-          isViewData: assignmentText.includes('ViewData'),
-          isViewBag: assignmentText.includes('ViewBag')
-        }
-      });
-    }
-
-    return null;
-  }
-
-  private extractHtmlAttribute(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+  private extractHtmlAttribute(node: Parser.SyntaxNode, parentId?: string, symbols?: Symbol[]): Symbol | null {
     // Get the complete attribute text from the parent element or broader context
     let attributeText = this.getNodeText(node);
 
@@ -1203,7 +1345,45 @@ export class RazorExtractor extends BaseExtractor {
       let bindingName = 'bind';
       let signature = attributeText;
 
-      if (bindMatchWithEvent) {
+      // Handle both value and event bindings when they exist in the same element
+      if (bindMatch && bindMatchWithEvent && symbols) {
+        // Create both symbols when both patterns exist
+        const bindType = bindMatch[1] || ''; // e.g., "-Value"
+        const bindTarget = bindMatch[2]; // e.g., "Model.FirstName"
+        const eventType = bindMatchWithEvent[2]; // e.g., "oninput"
+
+        // Create value binding symbol
+        const valueSymbol = this.createSymbol(node, `bind${bindType}_${bindTarget.replace(/\./g, '_')}`, SymbolKind.Variable, {
+          signature: `@bind${bindType}="${bindTarget}"`,
+          visibility: 'public',
+          parentId,
+          metadata: {
+            type: 'razor-data-binding',
+            isDataBinding: true,
+            bindingExpression: `@bind${bindType}="${bindTarget}"`
+          }
+        });
+
+        // Create event binding symbol
+        const eventSymbol = this.createSymbol(node, `bind${bindType}_event_${eventType}`, SymbolKind.Variable, {
+          signature: `@bind${bindType}:event="${eventType}"`,
+          visibility: 'public',
+          parentId,
+          metadata: {
+            type: 'razor-event-binding',
+            isEventBinding: true,
+            bindingExpression: `@bind${bindType}:event="${eventType}"`
+          }
+        });
+
+        // Add the additional symbol to the array
+        symbols.push(eventSymbol);
+
+        // Return the value symbol as primary
+        return valueSymbol;
+      }
+      // Handle single patterns
+      else if (bindMatchWithEvent) {
         // Handle @bind-Value:event="oninput" pattern
         const bindType = bindMatchWithEvent[1] || ''; // e.g., "-Value"
         const eventType = bindMatchWithEvent[2]; // e.g., "oninput"
@@ -1349,6 +1529,7 @@ export class RazorExtractor extends BaseExtractor {
     const types = new Map<string, string>();
     for (const symbol of symbols) {
       let inferredType = 'unknown';
+
 
       // Use actual type information from metadata
       if (symbol.metadata?.propertyType) {
