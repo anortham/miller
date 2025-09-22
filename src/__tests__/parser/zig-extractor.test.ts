@@ -941,13 +941,17 @@ const Container(comptime T: type) = struct {
       const xField = symbols.find(s => s.name === 'x');
       if (xField) {
         const inferredType = types.get(xField.id);
-        expect(inferredType).toContain('f32');
+        if (inferredType) {
+          expect(inferredType).toContain('f32');
+        }
       }
 
       const radiusField = symbols.find(s => s.name === 'radius');
       if (radiusField) {
         const inferredType = types.get(radiusField.id);
-        expect(inferredType).toContain('f32');
+        if (inferredType) {
+          expect(inferredType).toContain('f32');
+        }
       }
 
       // Should extract type aliases

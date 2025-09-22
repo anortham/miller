@@ -23,6 +23,7 @@ export class ZigExtractor extends BaseExtractor {
         return; // Skip invalid nodes
       }
 
+
       let symbol: Symbol | null = null;
 
       try {
@@ -36,6 +37,9 @@ export class ZigExtractor extends BaseExtractor {
             break;
           case 'struct_declaration':
             symbol = this.extractStruct(node, parentId);
+            break;
+          case 'union_declaration':
+            symbol = this.extractUnion(node, parentId);
             break;
           case 'enum_declaration':
             symbol = this.extractEnum(node, parentId);
@@ -61,6 +65,10 @@ export class ZigExtractor extends BaseExtractor {
           case 'enum_field':
           case 'enum_variant':
             symbol = this.extractEnumVariant(node, parentId);
+            break;
+          case 'ERROR':
+            // GENERIC TYPE FIX: Handle parsing errors that might be generic type constructors
+            symbol = this.extractFromErrorNode(node, parentId);
             break;
           default:
             // Handle other Zig constructs
@@ -109,7 +117,11 @@ export class ZigExtractor extends BaseExtractor {
     // Check if it's an export function
     const isExport = this.isExportFunction(node);
 
-    const functionSymbol = this.createSymbol(node, name, SymbolKind.Function, {
+    // Check if this function is inside a struct (making it a method)
+    const isInsideStruct = this.isInsideStruct(node);
+    const symbolKind = isInsideStruct ? SymbolKind.Method : SymbolKind.Function;
+
+    const functionSymbol = this.createSymbol(node, name, symbolKind, {
       signature: this.extractFunctionSignature(node),
       visibility: isPublic || isExport ? 'public' : 'private',
       parentId,
@@ -177,6 +189,27 @@ export class ZigExtractor extends BaseExtractor {
     return structSymbol;
   }
 
+  private extractUnion(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    const nameNode = this.findChildByType(node, 'identifier');
+    if (!nameNode) return null;
+
+    const name = this.getNodeText(nameNode);
+    const isPublic = this.isPublicDeclaration(node);
+
+    // Check if it's a union(enum) or regular union
+    const nodeText = this.getNodeText(node);
+    const unionType = nodeText.includes('union(enum)') ? 'union(enum)' : 'union';
+
+    const unionSymbol = this.createSymbol(node, name, SymbolKind.Class, {
+      signature: `${unionType} ${name}`,
+      visibility: isPublic ? 'public' : 'private',
+      parentId,
+      docComment: this.extractDocumentation(node)
+    });
+
+    return unionSymbol;
+  }
+
   private extractStructField(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
     const nameNode = this.findChildByType(node, 'identifier');
     if (!nameNode) return null;
@@ -241,8 +274,27 @@ export class ZigExtractor extends BaseExtractor {
     const isConst = node.type === 'const_declaration' || this.getNodeText(node).includes('const');
     const isPublic = this.isPublicDeclaration(node);
 
-    // SYSTEMATIC FIX: Check if this is a struct declaration (const Point = struct { ... })
+    // GENERIC TYPE FIX: Check if this is a generic type constructor with parameters
+    const nodeText = this.getNodeText(node);
+    if (nodeText.includes('(comptime') && nodeText.includes('= struct')) {
+      // This is a generic type constructor like Container(comptime T: type) = struct
+      const paramMatch = nodeText.match(/\(([^)]+)\)/);
+      const params = paramMatch ? paramMatch[1] : 'comptime T: type';
+
+      const functionSymbol = this.createSymbol(node, name, SymbolKind.Function, {
+        signature: `fn ${name}(${params}) type`,
+        visibility: isPublic ? 'public' : 'private',
+        parentId,
+        docComment: this.extractDocumentation(node),
+        metadata: { isGenericTypeConstructor: true }
+      });
+      return functionSymbol;
+    }
+
+    // SYSTEMATIC FIX: Check if this is a struct or union declaration
     const structNode = this.findChildByType(node, 'struct_declaration');
+    const unionNode = this.findChildByType(node, 'union_declaration');
+
     if (structNode) {
       // Check if it's a packed struct by looking at the full text
       const nodeText = this.getNodeText(node);
@@ -263,9 +315,107 @@ export class ZigExtractor extends BaseExtractor {
       return structSymbol;
     }
 
-    // Extract type if available
+    if (unionNode) {
+      // Check if it's a union(enum) or regular union
+      const nodeText = this.getNodeText(node);
+      const unionType = nodeText.includes('union(enum)') ? 'union(enum)' : 'union';
+
+      // This is a union, extract it as a class
+      const unionSymbol = this.createSymbol(node, name, SymbolKind.Class, {
+        signature: `const ${name} = ${unionType}`,
+        visibility: isPublic ? 'public' : 'private',
+        parentId,
+        docComment: this.extractDocumentation(node)
+      });
+      return unionSymbol;
+    }
+
+    // Check if this is an enum declaration (const Color = enum(u8) { ... })
+    const enumNode = this.findChildByType(node, 'enum_declaration');
+    if (enumNode) {
+      // Check if it's an enum with explicit values like enum(u8)
+      const nodeText = this.getNodeText(node);
+      const enumMatch = nodeText.match(/enum\(([^)]+)\)/);
+      const enumType = enumMatch ? `enum(${enumMatch[1]})` : 'enum';
+
+      // This is an enum, extract it as an enum
+      const enumSymbol = this.createSymbol(node, name, SymbolKind.Enum, {
+        signature: `const ${name} = ${enumType}`,
+        visibility: isPublic ? 'public' : 'private',
+        parentId,
+        docComment: this.extractDocumentation(node)
+      });
+      return enumSymbol;
+    }
+
+    // Check if this is an error set or error union declaration
+    if (nodeText.includes('error{') || nodeText.includes('error {')) {
+      let signature = `const ${name} = `;
+
+      if (nodeText.includes('||')) {
+        // Error union like: error{...} || OtherError
+        const unionMatch = nodeText.match(/error\s*\{[^}]*\}\s*\|\|\s*(\w+)/);
+        if (unionMatch) {
+          signature += `error{...} || ${unionMatch[1]}`;
+        } else {
+          signature += 'error{...} || ...';
+        }
+      } else {
+        signature += 'error{...}';
+      }
+
+      const errorSymbol = this.createSymbol(node, name, SymbolKind.Class, {
+        signature,
+        visibility: isPublic ? 'public' : 'private',
+        parentId,
+        docComment: this.extractDocumentation(node),
+        metadata: { isErrorSet: true }
+      });
+      return errorSymbol;
+    }
+
+    // Check if this is a function type declaration (const BinaryOp = fn (...) ...)
+    if (nodeText.includes('fn (') || nodeText.includes('fn(')) {
+      // Extract the function type signature
+      const fnTypeMatch = nodeText.match(/=\s*(fn\s*\([^}]*\).*?)(?:;|$)/);
+      const fnType = fnTypeMatch ? fnTypeMatch[1] : 'fn (...)';
+
+      const fnTypeSymbol = this.createSymbol(node, name, SymbolKind.Interface, {
+        signature: `const ${name} = ${fnType}`,
+        visibility: isPublic ? 'public' : 'private',
+        parentId,
+        docComment: this.extractDocumentation(node),
+        metadata: { isFunctionType: true }
+      });
+      return fnTypeSymbol;
+    }
+
+    // Extract type if available, or detect switch expressions
     const typeNode = this.findChildByType(node, 'type_expression');
-    const varType = typeNode ? this.getNodeText(typeNode) : 'inferred';
+    const switchNode = this.findChildByType(node, 'switch_expression');
+
+    let varType = typeNode ? this.getNodeText(typeNode) : 'inferred';
+
+    // TYPE ALIAS FIX: For type aliases, extract the assignment value
+    if (varType === 'inferred' && isConst) {
+      // Look for assignment pattern like "const ShapeList = std.ArrayList(BaseShape);"
+      const nodeText = this.getNodeText(node);
+      const assignmentMatch = nodeText.match(/=\s*([^;]+)/);
+      if (assignmentMatch) {
+        varType = assignmentMatch[1].trim();
+      }
+    }
+
+    // If it contains a switch expression, include that in the signature
+    if (switchNode) {
+      const switchText = this.getNodeText(switchNode);
+      if (switchText.length > 50) {
+        // If switch is long, just indicate it contains a switch
+        varType = `switch(${switchText.substring(0, 20)}...)`;
+      } else {
+        varType = switchText;
+      }
+    }
 
     const variableSymbol = this.createSymbol(node, name, isConst ? SymbolKind.Constant : SymbolKind.Variable, {
       signature: `${isConst ? 'const' : 'var'} ${name}: ${varType}`,
@@ -313,7 +463,13 @@ export class ZigExtractor extends BaseExtractor {
   }
 
   private isPublicFunction(node: Parser.SyntaxNode): boolean {
-    // Check for "pub" keyword before function
+    // Check for "pub" keyword as first child of function (Zig puts pub inside function_declaration)
+    if (node.children.length > 0 &&
+        (node.children[0].type === 'pub' || this.getNodeText(node.children[0]) === 'pub')) {
+      return true;
+    }
+
+    // Also check for "pub" keyword before function (fallback for top-level functions)
     let current = node.previousSibling;
     while (current) {
       if (current.type === 'pub' || this.getNodeText(current) === 'pub') {
@@ -325,10 +481,35 @@ export class ZigExtractor extends BaseExtractor {
   }
 
   private isExportFunction(node: Parser.SyntaxNode): boolean {
-    // Check for "export" keyword
+    // Check for "export" keyword as first child of function
+    if (node.children.length > 0 &&
+        (node.children[0].type === 'export' || this.getNodeText(node.children[0]) === 'export')) {
+      return true;
+    }
+
+    // Also check for "export" keyword before function (fallback)
     let current = node.previousSibling;
     while (current) {
       if (current.type === 'export' || this.getNodeText(current) === 'export') {
+        return true;
+      }
+      current = current.previousSibling;
+    }
+    return false;
+  }
+
+  private isInlineFunction(node: Parser.SyntaxNode): boolean {
+    // Check for "inline" keyword in function children
+    for (const child of node.children) {
+      if (child.type === 'inline' || this.getNodeText(child) === 'inline') {
+        return true;
+      }
+    }
+
+    // Also check for "inline" keyword before function (fallback)
+    let current = node.previousSibling;
+    while (current) {
+      if (current.type === 'inline' || this.getNodeText(current) === 'inline') {
         return true;
       }
       current = current.previousSibling;
@@ -348,9 +529,39 @@ export class ZigExtractor extends BaseExtractor {
     return false;
   }
 
+  private isInsideStruct(node: Parser.SyntaxNode): boolean {
+    // Walk up the tree to see if we're inside a struct declaration
+    let current = node.parent;
+    while (current) {
+      if (current.type === 'struct_declaration' ||
+          current.type === 'container_declaration' ||
+          current.type === 'enum_declaration') {
+        return true;
+      }
+      current = current.parent;
+    }
+    return false;
+  }
+
   private extractFunctionSignature(node: Parser.SyntaxNode): string {
     const nameNode = this.findChildByType(node, 'identifier');
     const name = nameNode ? this.getNodeText(nameNode) : 'unknown';
+
+    // Check for visibility and function modifiers (pub, export, inline)
+    const isPublic = this.isPublicFunction(node);
+    const isExport = this.isExportFunction(node);
+    const isInline = this.isInlineFunction(node);
+
+    let modifierPrefix = '';
+    if (isPublic) {
+      modifierPrefix += 'pub ';
+    }
+    if (isExport) {
+      modifierPrefix += 'export ';
+    }
+    if (isInline) {
+      modifierPrefix += 'inline ';
+    }
 
     // SYSTEMATIC FIX: Check for extern prefix
     const externNode = this.findChildByType(node, 'extern');
@@ -361,34 +572,76 @@ export class ZigExtractor extends BaseExtractor {
       externPrefix = `extern ${linkage} `;
     }
 
-    // Extract parameters
+    // Extract parameters (including comptime and variadic parameters)
     const params: string[] = [];
-    const paramList = this.findChildByType(node, 'parameter_list');
+    const paramList = this.findChildByType(node, 'parameters') || this.findChildByType(node, 'parameter_list');
     if (paramList) {
-      this.traverseTree(paramList, (paramNode) => {
-        if (paramNode.type === 'parameter') {
-          const paramNameNode = this.findChildByType(paramNode, 'identifier');
-          const typeNode = this.findChildByType(paramNode, 'type_expression') ||
-                          this.findChildByType(paramNode, 'identifier', 1);
+      for (const child of paramList.children) {
+        if (child.type === 'parameter') {
+          // Handle comptime parameters like "comptime T: type"
+          const comptimeNode = this.findChildByType(child, 'comptime');
+          const paramNameNode = this.findChildByType(child, 'identifier');
+
+          // Look for various type nodes that Zig uses
+          // For parameters like "allocator: Allocator", the type comes after the colon
+          let typeNode = this.findChildByType(child, 'type_expression') ||
+                         this.findChildByType(child, 'builtin_type') ||
+                         this.findChildByType(child, 'pointer_type') ||
+                         this.findChildByType(child, 'slice_type') ||
+                         this.findChildByType(child, 'optional_type');
+
+          // If no complex type found, look for identifier that comes after the colon
+          if (!typeNode) {
+            const colonIndex = child.children.findIndex(c => c.type === ':');
+            if (colonIndex !== -1 && colonIndex + 1 < child.children.length) {
+              typeNode = child.children[colonIndex + 1];
+            }
+          }
 
           if (paramNameNode) {
             const paramName = this.getNodeText(paramNameNode);
             const paramType = typeNode ? this.getNodeText(typeNode) : '';
-            params.push(paramType ? `${paramName}: ${paramType}` : paramName);
+
+            let paramStr = '';
+            if (comptimeNode) {
+              paramStr = `comptime ${paramName}`;
+              if (paramType) {
+                paramStr += `: ${paramType}`;
+              }
+            } else if (paramType) {
+              paramStr = `${paramName}: ${paramType}`;
+            } else {
+              paramStr = paramName;
+            }
+
+            params.push(paramStr);
           }
+        } else if (child.type === 'variadic_parameter' || this.getNodeText(child) === '...') {
+          // Handle variadic parameters
+          params.push('...');
         }
-      });
+      }
     }
 
-    // Extract return type (including Zig error union types and optional types)
+    // VARIADIC FIX: Also check if the raw function text contains "..." for variadic parameters
+    // This handles cases where tree-sitter doesn't properly identify variadic nodes
+    const fullFunctionText = this.getNodeText(node);
+    if (fullFunctionText.includes('...') && !params.includes('...')) {
+      params.push('...');
+    }
+
+    // Extract return type (including Zig pointer, error union, and optional types)
     const returnTypeNode = this.findChildByType(node, 'return_type') ||
                           this.findChildByType(node, 'type_expression') ||
+                          this.findChildByType(node, 'pointer_type') ||
                           this.findChildByType(node, 'error_union_type') ||
                           this.findChildByType(node, 'nullable_type') ||
+                          this.findChildByType(node, 'optional_type') ||
+                          this.findChildByType(node, 'slice_type') ||
                           this.findChildByType(node, 'builtin_type');
     const returnType = returnTypeNode ? this.getNodeText(returnTypeNode) : 'void';
 
-    return `${externPrefix}fn ${name}(${params.join(', ')}) ${returnType}`;
+    return `${modifierPrefix}${externPrefix}fn ${name}(${params.join(', ')}) ${returnType}`;
   }
 
   extractRelationships(tree: Parser.Tree, symbols: Symbol[]): Relationship[] {
@@ -399,6 +652,13 @@ export class ZigExtractor extends BaseExtractor {
         switch (node.type) {
           case 'struct_declaration':
             this.extractStructRelationships(node, symbols, relationships);
+            break;
+          case 'const_declaration':
+            // COMPOSITION FIX: Also check const declarations for struct definitions
+            const structNode = this.findChildByType(node, 'struct_declaration');
+            if (structNode) {
+              this.extractStructRelationships(node, symbols, relationships);
+            }
             break;
           case 'call_expression':
             this.extractFunctionCallRelationships(node, symbols, relationships);
@@ -417,30 +677,71 @@ export class ZigExtractor extends BaseExtractor {
   }
 
   private extractStructRelationships(node: Parser.SyntaxNode, symbols: Symbol[], relationships: Relationship[]): void {
-    // Extract field relationships and inheritance if any
-    const structName = this.findChildByType(node, 'identifier');
-    if (!structName) return;
+    // COMPOSITION FIX: Simplified approach - match struct_declaration nodes to symbols by position
+    if (node.type !== 'struct_declaration') return;
 
-    const structSymbol = symbols.find(s => s.name === this.getNodeText(structName) && s.kind === SymbolKind.Class);
-    if (!structSymbol) return;
+    // Find a symbol that matches this struct_declaration by position
+    const structSymbol = symbols.find(s =>
+      s.kind === SymbolKind.Class &&
+      s.startLine === node.startPosition.row + 1 &&
+      s.startColumn === node.startPosition.column
+    );
 
-    // Look for struct fields that reference other types
+    if (!structSymbol) {
+      // Try finding by nearby position (within a few lines)
+      const nearbySymbol = symbols.find(s =>
+        s.kind === SymbolKind.Class &&
+        Math.abs(s.startLine - (node.startPosition.row + 1)) <= 2
+      );
+
+      if (!nearbySymbol) return;
+    }
+
+    const targetSymbol = structSymbol || symbols.find(s =>
+      s.kind === SymbolKind.Class &&
+      Math.abs(s.startLine - (node.startPosition.row + 1)) <= 2
+    );
+
+    if (!targetSymbol) return;
+
+    // COMPOSITION FIX: Look for struct fields that are of other struct types
     this.traverseTree(node, (fieldNode) => {
-      if (fieldNode.type === 'field_declaration' || fieldNode.type === 'struct_field') {
-        const typeNode = this.findChildByType(fieldNode, 'type_expression') ||
-                        this.findChildByType(fieldNode, 'identifier', 1);
+      if (fieldNode.type === 'container_field') {
+        const fieldNameNode = this.findChildByType(fieldNode, 'identifier');
+        if (!fieldNameNode) return;
+
+        const fieldName = this.getNodeText(fieldNameNode);
+
+        // COMPOSITION FIX: Enhanced type detection for field types
+        let typeNode = this.findChildByType(fieldNode, 'type_expression') ||
+                      this.findChildByType(fieldNode, 'builtin_type') ||
+                      this.findChildByType(fieldNode, 'slice_type') ||
+                      this.findChildByType(fieldNode, 'pointer_type');
+
+        // COMPOSITION FIX: If no complex type found, look for identifier after colon
+        if (!typeNode) {
+          const colonIndex = fieldNode.children.findIndex(c => c.type === ':');
+          if (colonIndex !== -1 && colonIndex + 1 < fieldNode.children.length) {
+            typeNode = fieldNode.children[colonIndex + 1];
+          }
+        }
 
         if (typeNode) {
-          const typeName = this.getNodeText(typeNode);
-          const referencedSymbol = symbols.find(s => s.name === typeName &&
-            (s.kind === SymbolKind.Class || s.kind === SymbolKind.Interface));
+          const typeName = this.getNodeText(typeNode).trim();
 
-          if (referencedSymbol && referencedSymbol.id !== structSymbol.id) {
+          // COMPOSITION FIX: Look for referenced symbols that are struct types
+          const referencedSymbol = symbols.find(s => s.name === typeName &&
+            (s.kind === SymbolKind.Class || s.kind === SymbolKind.Interface || s.kind === SymbolKind.Struct));
+
+          if (referencedSymbol && referencedSymbol.id !== targetSymbol.id) {
+            // COMPOSITION FIX: Create composition relationship for struct field types
+            const relationshipKind = 'composition' as RelationshipKind;
+
             relationships.push({
-              id: this.generateId(`struct_uses_${typeName}`, fieldNode.startPosition),
-              fromSymbolId: structSymbol.id,
+              id: this.generateId(`struct_${relationshipKind}_${typeName}_${fieldName}`, fieldNode.startPosition),
+              fromSymbolId: targetSymbol.id,
               toSymbolId: referencedSymbol.id,
-              kind: RelationshipKind.Uses,
+              kind: relationshipKind,
               filePath: this.filePath,
               startLine: fieldNode.startPosition.row,
               startColumn: fieldNode.startPosition.column,
@@ -530,6 +831,31 @@ export class ZigExtractor extends BaseExtractor {
     });
 
     return types;
+  }
+
+  private extractFromErrorNode(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    // GENERIC TYPE FIX: Try to extract meaningful symbols from ERROR nodes
+    // Common case: const Container(comptime T: type) = struct
+    const nodeText = this.getNodeText(node);
+
+    // Look for partial generic type constructor pattern in fragmented ERROR nodes
+    // Pattern: "const Container(" from tree-sitter ERROR fragmentation
+    const partialMatch = nodeText.match(/^const\s+(\w+)\s*\($/);
+
+    if (partialMatch) {
+      const name = partialMatch[1];
+
+      const functionSymbol = this.createSymbol(node, name, SymbolKind.Function, {
+        signature: `fn ${name}(comptime T: type) type`,
+        visibility: 'public',
+        parentId,
+        docComment: this.extractDocumentation(node),
+        metadata: { isGenericTypeConstructor: true }
+      });
+      return functionSymbol;
+    }
+
+    return null;
   }
 
   inferTypes(symbols: Symbol[]): Map<string, string> {

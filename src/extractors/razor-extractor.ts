@@ -29,6 +29,11 @@ export class RazorExtractor extends BaseExtractor {
         case 'razor_implements_directive':
           symbol = this.extractDirective(node, parentId);
           break;
+        case 'at_namespace':
+        case 'at_inherits':
+        case 'at_implements':
+          symbol = this.extractTokenDirective(node, parentId);
+          break;
         case 'razor_section':
           symbol = this.extractSection(node, parentId);
           break;
@@ -36,7 +41,8 @@ export class RazorExtractor extends BaseExtractor {
           symbol = this.extractCodeBlock(node, parentId);
           // Also extract C# symbols from within the block
           this.extractCSharpSymbols(node, symbols, symbol?.id || parentId);
-          break;
+          // Don't visit children of razor_block since we already extracted them
+          return;
         case 'razor_expression':
           symbol = this.extractExpression(node, parentId);
           break;
@@ -62,11 +68,24 @@ export class RazorExtractor extends BaseExtractor {
         case 'method_declaration':
           symbol = this.extractMethod(node, parentId);
           break;
+        case 'property_declaration':
+          symbol = this.extractProperty(node, parentId);
+          break;
+        case 'field_declaration':
+          symbol = this.extractField(node, parentId);
+          break;
         case 'assignment_expression':
           symbol = this.extractAssignment(node, parentId);
           break;
+        case 'invocation_expression':
+          symbol = this.extractInvocation(node, parentId);
+          break;
         case 'razor_html_attribute':
           symbol = this.extractHtmlAttribute(node, parentId);
+          break;
+        case 'attribute':
+          // Handle HTML/Razor attributes like @bind-Value
+          symbol = this.extractRazorAttribute(node, parentId);
           break;
       }
 
@@ -221,14 +240,28 @@ export class RazorExtractor extends BaseExtractor {
         case 'method_declaration':
           symbol = this.extractMethod(node, parentId);
           break;
+        case 'local_function_statement':
+          // Methods inside @code blocks are parsed as local functions
+          symbol = this.extractLocalFunction(node, parentId);
+          break;
         case 'property_declaration':
           symbol = this.extractProperty(node, parentId);
+          break;
+        case 'field_declaration':
+          symbol = this.extractField(node, parentId);
           break;
         case 'variable_declaration':
           symbol = this.extractVariableDeclaration(node, parentId);
           break;
         case 'assignment_expression':
           symbol = this.extractAssignment(node, parentId);
+          break;
+        case 'invocation_expression':
+          symbol = this.extractInvocation(node, parentId);
+          break;
+        case 'element_access_expression':
+          // Handle expressions like ViewData["Title"]
+          symbol = this.extractElementAccess(node, parentId);
           break;
       }
 
@@ -302,17 +335,24 @@ export class RazorExtractor extends BaseExtractor {
     const modifiers = this.extractModifiers(node);
     const parameters = this.extractMethodParameters(node);
     const returnType = this.extractReturnType(node);
+    const attributes = this.extractAttributes(node);
 
-    let signature = `${name}`;
+    let signature = ``;
+
+    // Build signature in correct order: [attributes] [modifiers] [returnType] [name] [parameters]
+    if (attributes.length > 0) {
+      signature += `${attributes.join(' ')} `;
+    }
 
     if (modifiers.length > 0) {
-      signature = `${modifiers.join(' ')} ${signature}`;
+      signature += `${modifiers.join(' ')} `;
     }
 
     if (returnType) {
-      signature = `${returnType} ${signature}`;
+      signature += `${returnType} `;
     }
 
+    signature += name;
     signature += parameters || '()';
 
     return this.createSymbol(node, name, SymbolKind.Function, {
@@ -323,26 +363,74 @@ export class RazorExtractor extends BaseExtractor {
         type: 'method',
         modifiers,
         parameters,
-        returnType
+        returnType,
+        attributes
       }
     });
   }
 
   private extractProperty(node: Parser.SyntaxNode, parentId?: string): Symbol {
-    const nameNode = node.children.find(c => c.type === 'identifier');
+    // Find the property name identifier (should be after the type but before accessors)
+    let nameNode: Parser.SyntaxNode | undefined;
+    for (let i = 0; i < node.children.length; i++) {
+      const child = node.children[i];
+      if (child.type === 'identifier') {
+        // Check if this identifier comes after a type node
+        const hasPrecedingType = node.children.slice(0, i).some(c =>
+          c.type === 'predefined_type' || c.type === 'nullable_type' ||
+          c.type === 'array_type' || c.type === 'generic_name' ||
+          (c.type === 'identifier' && node.children.slice(0, i).some(prev => prev.type === 'modifier'))
+        );
+
+        if (hasPrecedingType) {
+          nameNode = child;
+          break;
+        }
+      }
+    }
+
     const name = nameNode ? this.getNodeText(nameNode) : 'unknownProperty';
 
     const modifiers = this.extractModifiers(node);
     const type = this.extractPropertyType(node);
+    const attributes = this.extractAttributes(node);
 
-    let signature = `${name}`;
+    let signature = ``;
+
+    // Build signature in correct order: [attributes] [modifiers] [type] [name]
+    if (attributes.length > 0) {
+      signature += `${attributes.join(' ')} `;
+    }
 
     if (modifiers.length > 0) {
-      signature = `${modifiers.join(' ')} ${signature}`;
+      signature += `${modifiers.join(' ')} `;
     }
 
     if (type) {
-      signature = `${type} ${signature}`;
+      signature += `${type} `;
+    }
+
+    signature += name;
+
+    // Look for property accessor (get; set;)
+    const accessorList = node.children.find(c => c.type === 'accessor_list');
+    if (accessorList) {
+      const accessors = accessorList.children
+        .filter(c => c.type === 'get_accessor_declaration' || c.type === 'set_accessor_declaration')
+        .map(c => c.type === 'get_accessor_declaration' ? 'get' : 'set');
+      if (accessors.length > 0) {
+        signature += ` { ${accessors.join('; ')}; }`;
+      }
+    }
+
+    // Look for property initializer
+    const equalsNode = node.children.find(c => c.type === '=');
+    if (equalsNode) {
+      const initializerIndex = node.children.indexOf(equalsNode) + 1;
+      if (initializerIndex < node.children.length) {
+        const initializer = this.getNodeText(node.children[initializerIndex]);
+        signature += ` = ${initializer}`;
+      }
     }
 
     return this.createSymbol(node, name, SymbolKind.Property, {
@@ -352,7 +440,8 @@ export class RazorExtractor extends BaseExtractor {
       metadata: {
         type: 'property',
         modifiers,
-        propertyType: type
+        propertyType: type,
+        attributes
       }
     });
   }
@@ -602,8 +691,10 @@ export class RazorExtractor extends BaseExtractor {
   private extractModifiers(node: Parser.SyntaxNode): string[] {
     const modifiers: string[] = [];
     for (const child of node.children) {
-      if (['public', 'private', 'protected', 'internal', 'static', 'virtual', 'override', 'abstract', 'sealed'].includes(child.type)) {
-        modifiers.push(this.getNodeText(child));
+      const childText = this.getNodeText(child);
+      if (['public', 'private', 'protected', 'internal', 'static', 'virtual', 'override', 'abstract', 'sealed', 'async'].includes(child.type) ||
+          ['public', 'private', 'protected', 'internal', 'static', 'virtual', 'override', 'abstract', 'sealed', 'async'].includes(childText)) {
+        modifiers.push(childText);
       }
     }
     return modifiers;
@@ -620,13 +711,284 @@ export class RazorExtractor extends BaseExtractor {
   }
 
   private extractPropertyType(node: Parser.SyntaxNode): string | null {
-    const type = node.children.find(c => c.type === 'predefined_type' || c.type === 'identifier');
-    return type ? this.getNodeText(type) : null;
+    // Look for the type node, which comes after modifiers but before the property name
+    for (let i = 0; i < node.children.length; i++) {
+      const child = node.children[i];
+
+      // Skip attributes, modifiers
+      if (child.type === 'attribute_list' ||
+          ['public', 'private', 'protected', 'internal', 'static', 'virtual', 'override', 'abstract', 'sealed'].includes(child.type) ||
+          ['public', 'private', 'protected', 'internal', 'static', 'virtual', 'override', 'abstract', 'sealed'].includes(this.getNodeText(child))) {
+        continue;
+      }
+
+      // Look for type nodes
+      if (child.type === 'predefined_type' ||
+          child.type === 'nullable_type' ||
+          child.type === 'array_type' ||
+          child.type === 'generic_name' ||
+          (child.type === 'identifier' && i < node.children.length - 2)) { // Not the last identifier (which would be property name)
+        return this.getNodeText(child);
+      }
+    }
+
+    return null;
   }
 
   private extractVariableType(node: Parser.SyntaxNode): string | null {
     const type = node.children.find(c => c.type === 'predefined_type' || c.type === 'identifier');
     return type ? this.getNodeText(type) : null;
+  }
+
+  private extractAttributes(node: Parser.SyntaxNode): string[] {
+    const attributes: string[] = [];
+
+    // Look for attribute_list nodes
+    for (const child of node.children) {
+      if (child.type === 'attribute_list') {
+        const attributeText = this.getNodeText(child);
+        attributes.push(attributeText);
+      }
+    }
+
+    // Also check siblings for attributes that might be before the declaration
+    if (node.parent) {
+      const nodeIndex = node.parent.children.indexOf(node);
+      for (let i = nodeIndex - 1; i >= 0; i--) {
+        const sibling = node.parent.children[i];
+        if (sibling.type === 'attribute_list') {
+          const attributeText = this.getNodeText(sibling);
+          attributes.unshift(attributeText); // Add to beginning to maintain order
+        } else if (sibling.type !== 'newline' && sibling.type !== 'whitespace') {
+          // Stop if we hit a non-whitespace, non-attribute node
+          break;
+        }
+      }
+    }
+
+    return attributes;
+  }
+
+  private extractField(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    const variableDeclarator = node.children.find(c => c.type === 'variable_declarator');
+    if (!variableDeclarator) return null;
+
+    const nameNode = variableDeclarator.children.find(c => c.type === 'identifier');
+    const name = nameNode ? this.getNodeText(nameNode) : 'unknownField';
+
+    const modifiers = this.extractModifiers(node);
+    const type = this.extractFieldType(node);
+    const attributes = this.extractAttributes(node);
+
+    let signature = ``;
+
+    // Build signature in correct order: [attributes] [modifiers] [type] [name]
+    if (attributes.length > 0) {
+      signature += `${attributes.join(' ')} `;
+    }
+
+    if (modifiers.length > 0) {
+      signature += `${modifiers.join(' ')} `;
+    }
+
+    if (type) {
+      signature += `${type} `;
+    }
+
+    signature += name;
+
+    // Look for field initializer
+    const equalsNode = variableDeclarator.children.find(c => c.type === '=');
+    if (equalsNode) {
+      const initializerIndex = variableDeclarator.children.indexOf(equalsNode) + 1;
+      if (initializerIndex < variableDeclarator.children.length) {
+        const initializer = this.getNodeText(variableDeclarator.children[initializerIndex]);
+        signature += ` = ${initializer}`;
+      }
+    }
+
+    return this.createSymbol(node, name, SymbolKind.Variable, {
+      signature,
+      visibility: this.determineVisibility(modifiers),
+      parentId,
+      metadata: {
+        type: 'field',
+        modifiers,
+        fieldType: type,
+        attributes
+      }
+    });
+  }
+
+  private extractFieldType(node: Parser.SyntaxNode): string | null {
+    const variableDeclaration = node.children.find(c => c.type === 'variable_declaration');
+    if (!variableDeclaration) return null;
+
+    const type = variableDeclaration.children.find(c =>
+      c.type === 'predefined_type' ||
+      c.type === 'identifier' ||
+      c.type === 'generic_name' ||
+      c.type === 'nullable_type' ||
+      c.type === 'array_type'
+    );
+    return type ? this.getNodeText(type) : null;
+  }
+
+  private extractInvocation(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    const memberAccess = node.children.find(c => c.type === 'member_access_expression');
+    const identifier = node.children.find(c => c.type === 'identifier');
+
+    let methodName = '';
+    if (memberAccess) {
+      methodName = this.getNodeText(memberAccess);
+    } else if (identifier) {
+      methodName = this.getNodeText(identifier);
+    } else {
+      return null;
+    }
+
+    const argumentList = node.children.find(c => c.type === 'argument_list');
+    const args = argumentList ? this.getNodeText(argumentList) : '()';
+
+    const signature = `${methodName}${args}`;
+
+    return this.createSymbol(node, methodName, SymbolKind.Function, {
+      signature,
+      visibility: 'public',
+      parentId,
+      metadata: {
+        type: 'invocation',
+        methodName,
+        arguments: args
+      }
+    });
+  }
+
+  private extractElementAccess(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    const expression = this.getNodeText(node);
+
+    // Handle ViewData["key"] and ViewBag.property patterns
+    if (expression.includes('ViewData[') || expression.includes('ViewBag.')) {
+      let variableName = 'elementAccess';
+
+      if (expression.includes('ViewData[')) {
+        const match = expression.match(/ViewData\["([^"]+)"\]/);
+        if (match) {
+          variableName = `ViewData_${match[1]}`;
+        }
+      } else if (expression.includes('ViewBag.')) {
+        const match = expression.match(/ViewBag\.(\w+)/);
+        if (match) {
+          variableName = `ViewBag_${match[1]}`;
+        }
+      }
+
+      return this.createSymbol(node, variableName, SymbolKind.Variable, {
+        signature: expression,
+        visibility: 'public',
+        parentId,
+        metadata: {
+          type: 'element-access',
+          expression,
+          isViewData: expression.includes('ViewData'),
+          isViewBag: expression.includes('ViewBag')
+        }
+      });
+    }
+
+    return null;
+  }
+
+  private extractLocalFunction(node: Parser.SyntaxNode, parentId?: string): Symbol {
+    // Local functions inside @code blocks (like OnInitializedAsync)
+    // Handle explicit interface implementations like "void IDisposable.Dispose()"
+
+    let name = 'unknownLocalFunction';
+
+    // Look for explicit interface implementation pattern: InterfaceName.MethodName
+    const explicitImplementation = node.children.find(c => c.type === 'explicit_interface_specifier');
+    if (explicitImplementation) {
+      // For explicit interface implementations, combine interface + method name
+      const interfaceNode = explicitImplementation.children.find(c => c.type === 'identifier');
+      const methodNode = node.children.find(c => c.type === 'identifier' && c !== interfaceNode);
+
+      if (interfaceNode && methodNode) {
+        const interfaceName = this.getNodeText(interfaceNode);
+        const methodName = this.getNodeText(methodNode);
+        name = `${interfaceName}.${methodName}`;
+      }
+    } else {
+      // Regular method name extraction
+      let nameNode: Parser.SyntaxNode | undefined;
+      let foundReturnType = false;
+
+      for (const child of node.children) {
+        if (child.type === 'identifier') {
+          if (foundReturnType) {
+            // This is the method name, coming after the return type
+            nameNode = child;
+            break;
+          } else {
+            // Check if we've seen a type node (this could be the return type)
+            const hasModifiers = node.children.some(c => ['modifier', 'async'].includes(c.type) || ['protected', 'override', 'async', 'public', 'private'].includes(this.getNodeText(c)));
+            if (hasModifiers) {
+              foundReturnType = true; // This identifier is likely the return type
+            }
+          }
+        }
+      }
+
+      // Fallback: get the last identifier before parameter_list
+      if (!nameNode) {
+        const paramListIndex = node.children.findIndex(c => c.type === 'parameter_list');
+        if (paramListIndex > 0) {
+          for (let i = paramListIndex - 1; i >= 0; i--) {
+            if (node.children[i].type === 'identifier') {
+              nameNode = node.children[i];
+              break;
+            }
+          }
+        }
+      }
+
+      name = nameNode ? this.getNodeText(nameNode) : 'unknownLocalFunction';
+    }
+
+    const modifiers = this.extractModifiers(node);
+    const parameters = this.extractMethodParameters(node);
+    const returnType = this.extractReturnType(node);
+    const attributes = this.extractAttributes(node);
+
+    let signature = ``;
+
+    // Build signature in correct order: [attributes] [modifiers] [returnType] [name] [parameters]
+    if (attributes.length > 0) {
+      signature += `${attributes.join(' ')} `;
+    }
+
+    if (modifiers.length > 0) {
+      signature += `${modifiers.join(' ')} `;
+    }
+
+    if (returnType) {
+      signature += `${returnType} `;
+    }
+
+    signature += name;
+    signature += parameters || '()';
+
+    return this.createSymbol(node, name, SymbolKind.Method, {
+      signature,
+      visibility: this.determineVisibility(modifiers),
+      parentId,
+      metadata: {
+        type: 'local-function',
+        modifiers,
+        parameters,
+        returnType,
+        attributes
+      }
+    });
   }
 
   private extractNamespaceName(node: Parser.SyntaxNode): string {
@@ -651,6 +1013,14 @@ export class RazorExtractor extends BaseExtractor {
         case 'using_directive':
           this.extractUsingRelationships(node, symbols, relationships);
           break;
+        case 'html_element':
+        case 'element':
+          // Check if this is a custom component
+          this.extractElementRelationships(node, symbols, relationships);
+          break;
+        case 'invocation_expression':
+          this.extractInvocationRelationships(node, symbols, relationships);
+          break;
       }
 
       for (const child of node.children) {
@@ -660,6 +1030,67 @@ export class RazorExtractor extends BaseExtractor {
 
     visitNode(tree.rootNode);
     return relationships;
+  }
+
+  private extractElementRelationships(
+    node: Parser.SyntaxNode,
+    symbols: Symbol[],
+    relationships: Relationship[]
+  ) {
+    const tagName = this.extractHtmlTagName(node);
+
+    // Check if this looks like a custom component (starts with uppercase)
+    if (tagName && tagName[0] && tagName[0] === tagName[0].toUpperCase()) {
+      const componentSymbol = symbols.find(s => s.name === tagName);
+
+      if (componentSymbol) {
+        relationships.push({
+          fromSymbolId: `razor-page:${this.filePath}`,
+          toSymbolId: componentSymbol.id,
+          kind: RelationshipKind.Uses,
+          filePath: this.filePath,
+          lineNumber: node.startPosition.row + 1,
+          confidence: 1.0,
+          metadata: { componentName: tagName }
+        });
+      } else {
+        // Create a relationship to an external component
+        relationships.push({
+          fromSymbolId: `razor-page:${this.filePath}`,
+          toSymbolId: `component:${tagName}`,
+          kind: RelationshipKind.Uses,
+          filePath: this.filePath,
+          lineNumber: node.startPosition.row + 1,
+          confidence: 0.8,
+          metadata: { componentName: tagName, external: true }
+        });
+      }
+    }
+  }
+
+  private extractInvocationRelationships(
+    node: Parser.SyntaxNode,
+    symbols: Symbol[],
+    relationships: Relationship[]
+  ) {
+    const methodCall = this.getNodeText(node);
+
+    // Look for component invocations like Component.InvokeAsync("ComponentName")
+    if (methodCall.includes('Component.InvokeAsync')) {
+      const componentMatch = methodCall.match(/Component\.InvokeAsync\("([^"]+)"/);
+      if (componentMatch) {
+        const componentName = componentMatch[1];
+        relationships.push({
+          fromSymbolId: `razor-page:${this.filePath}`,
+          toSymbolId: `component:${componentName}`,
+          kind: RelationshipKind.Uses,
+          filePath: this.filePath,
+          lineNumber: node.startPosition.row + 1,
+          confidence: 1.0,
+          metadata: { componentName, invocationType: 'Component.InvokeAsync' }
+        });
+      }
+    }
   }
 
   private extractComponentRelationships(
@@ -756,12 +1187,41 @@ export class RazorExtractor extends BaseExtractor {
   }
 
   private extractHtmlAttribute(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
-    // Check for data binding attributes like @bind-Value
-    const attributeText = this.getNodeText(node);
+    // Get the complete attribute text from the parent element or broader context
+    let attributeText = this.getNodeText(node);
 
+    // If this is just the attribute name, try to get the parent's text for full attribute
+    if (node.parent && (attributeText.startsWith('@') || node.type === 'razor_attribute_name')) {
+      attributeText = this.getNodeText(node.parent);
+    }
+
+    // Handle data binding attributes like @bind-Value="Model.FirstName" or @bind-Value:event="oninput"
     if (attributeText.includes('@bind')) {
-      const bindingName = attributeText.includes('-Value') ? 'bind_Value' : 'bind';
-      const signature = attributeText;
+      // Extract the binding type and target, including custom event syntax
+      const bindMatchWithEvent = attributeText.match(/@bind(-\w+)?:event="([^"]+)"/);
+      const bindMatch = attributeText.match(/@bind(-\w+)?="([^"]+)"/);
+      let bindingName = 'bind';
+      let signature = attributeText;
+
+      if (bindMatchWithEvent) {
+        // Handle @bind-Value:event="oninput" pattern
+        const bindType = bindMatchWithEvent[1] || ''; // e.g., "-Value"
+        const eventType = bindMatchWithEvent[2]; // e.g., "oninput"
+        bindingName = `bind${bindType}_event_${eventType}`;
+        signature = `@bind${bindType}:event="${eventType}"`;
+      } else if (bindMatch) {
+        // Handle @bind-Value="Model.FirstName" pattern
+        const bindType = bindMatch[1] || ''; // e.g., "-Value"
+        const bindTarget = bindMatch[2]; // e.g., "Model.FirstName"
+        bindingName = `bind${bindType}_${bindTarget.replace(/\./g, '_')}`;
+        signature = `@bind${bindType}="${bindTarget}"`;
+      } else {
+        // Fallback for simpler patterns
+        const simpleMatch = attributeText.match(/@bind-(\w+)/);
+        if (simpleMatch) {
+          bindingName = `bind_${simpleMatch[1]}`;
+        }
+      }
 
       return this.createSymbol(node, bindingName, SymbolKind.Variable, {
         signature,
@@ -769,7 +1229,75 @@ export class RazorExtractor extends BaseExtractor {
         parentId,
         metadata: {
           type: 'razor-binding',
-          isDataBinding: true
+          isDataBinding: true,
+          bindingExpression: attributeText
+        }
+      });
+    }
+
+    // Handle event binding attributes like @onclick, @onchange
+    if (attributeText.match(/@on\w+/)) {
+      const signature = attributeText;
+      const eventMatch = attributeText.match(/@(on\w+)/);
+      const eventName = eventMatch ? eventMatch[1] : 'event';
+
+      return this.createSymbol(node, eventName, SymbolKind.Function, {
+        signature,
+        visibility: 'public',
+        parentId,
+        metadata: {
+          type: 'razor-event-binding',
+          isEventBinding: true,
+          eventExpression: attributeText
+        }
+      });
+    }
+
+    return null;
+  }
+
+  private extractRazorAttribute(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    const attributeText = this.getNodeText(node);
+
+    // Handle data binding attributes like @bind-Value="Model.FirstName"
+    if (attributeText.includes('@bind')) {
+      const signature = attributeText;
+      let attributeName = 'binding';
+
+      // Extract the binding target
+      const bindMatch = attributeText.match(/@bind(-\w+)?="([^"]+)"/);
+      if (bindMatch) {
+        const bindType = bindMatch[1] || '';
+        const bindTarget = bindMatch[2];
+        attributeName = `bind${bindType}_${bindTarget.replace(/\./g, '_')}`;
+      }
+
+      return this.createSymbol(node, attributeName, SymbolKind.Variable, {
+        signature,
+        visibility: 'public',
+        parentId,
+        metadata: {
+          type: 'razor-data-binding',
+          isDataBinding: true,
+          bindingExpression: attributeText
+        }
+      });
+    }
+
+    // Handle event binding attributes like @onclick, @onchange
+    if (attributeText.match(/@on\w+/)) {
+      const signature = attributeText;
+      const eventMatch = attributeText.match(/@(on\w+)/);
+      const eventName = eventMatch ? eventMatch[1] : 'event';
+
+      return this.createSymbol(node, eventName, SymbolKind.Function, {
+        signature,
+        visibility: 'public',
+        parentId,
+        metadata: {
+          type: 'razor-event-binding',
+          isEventBinding: true,
+          eventExpression: attributeText
         }
       });
     }
@@ -793,11 +1321,19 @@ export class RazorExtractor extends BaseExtractor {
 
     if (current && (current.type === 'identifier' || current.type === 'qualified_name')) {
       directiveValue = this.getNodeText(current);
+    } else {
+      // Look at the full text to extract the value
+      const fullText = this.getNodeText(node.parent || node);
+      const match = fullText.match(/@\w+\s+(\S+)/);
+      if (match) {
+        directiveValue = match[1];
+      }
     }
 
     const signature = directiveValue ? `${directiveName} ${directiveValue}` : directiveName;
+    const symbolKind = this.getDirectiveSymbolKind(directiveType);
 
-    return this.createSymbol(node, directiveName, SymbolKind.Import, {
+    return this.createSymbol(node, directiveName, symbolKind, {
       signature,
       visibility: 'public',
       parentId,
@@ -812,14 +1348,50 @@ export class RazorExtractor extends BaseExtractor {
   inferTypes(symbols: Symbol[]): Map<string, string> {
     const types = new Map<string, string>();
     for (const symbol of symbols) {
-      if (symbol.metadata?.type) {
-        types.set(symbol.id, symbol.metadata.type);
+      let inferredType = 'unknown';
+
+      // Use actual type information from metadata
+      if (symbol.metadata?.propertyType) {
+        inferredType = symbol.metadata.propertyType;
+      } else if (symbol.metadata?.fieldType) {
+        inferredType = symbol.metadata.fieldType;
+      } else if (symbol.metadata?.variableType) {
+        inferredType = symbol.metadata.variableType;
       } else if (symbol.metadata?.returnType) {
-        types.set(symbol.id, symbol.metadata.returnType);
-      } else if (symbol.metadata?.isDataBinding) {
-        // Improve type inference for properties
-        types.set(symbol.id, 'bool');
+        inferredType = symbol.metadata.returnType;
+      } else if (symbol.signature) {
+        // Try to extract type from signature - look for type before property/method name
+        // Match patterns like: "[Parameter] public string? PropertyName" or "private bool FieldName"
+        const typePatterns = [
+          // For properties/fields: [attributes] [modifiers] TYPE NAME
+          /(?:\[\w+.*?\]\s+)?(?:public|private|protected|internal|static)\s+(\w+(?:<[^>]+>)?(?:\?|\[\])?)\s+\w+/,
+          // For methods: [modifiers] RETURNTYPE NAME(params)
+          /(?:public|private|protected|internal|static|async)\s+(\w+(?:<[^>]+>)?)\s+\w+\s*\(/,
+          // For variables: TYPE NAME = value
+          /(\w+(?:<[^>]+>)?(?:\?|\[\])?)\s+\w+\s*=/,
+          // Simple type extraction - get the type that comes before the symbol name
+          new RegExp(`\\s+(\\w+(?:<[^>]+>)?(?:\\?|\\[\\])?)\\s+${symbol.name}\\b`)
+        ];
+
+        for (const pattern of typePatterns) {
+          const match = symbol.signature.match(pattern);
+          if (match && match[1] && match[1] !== symbol.name) {
+            inferredType = match[1];
+            break;
+          }
+        }
       }
+
+      // Handle special cases
+      if (symbol.metadata?.isDataBinding) {
+        inferredType = 'bool';
+      } else if (symbol.kind === SymbolKind.Method && symbol.signature?.includes('async Task')) {
+        inferredType = 'Task';
+      } else if (symbol.kind === SymbolKind.Method && symbol.signature?.includes('void')) {
+        inferredType = 'void';
+      }
+
+      types.set(symbol.id, inferredType);
     }
     return types;
   }

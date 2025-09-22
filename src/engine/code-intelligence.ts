@@ -29,7 +29,7 @@ import { SqlExtractor } from '../extractors/sql-extractor.js';
 import { ZigExtractor } from '../extractors/zig-extractor.js';
 import { DartExtractor } from '../extractors/dart-extractor.js';
 import { BashExtractor } from '../extractors/bash-extractor.js';
-import { PowershellExtractor } from '../extractors/powershell-extractor.js';
+import { PowerShellExtractor } from '../extractors/powershell-extractor.js';
 import { MillerPaths } from '../utils/miller-paths.js';
 import { log, LogLevel } from '../utils/logger.js';
 
@@ -123,7 +123,7 @@ export class CodeIntelligenceEngine {
     this.extractors.set('zig', ZigExtractor);
     this.extractors.set('dart', DartExtractor);
     this.extractors.set('bash', BashExtractor);
-    this.extractors.set('powershell', PowershellExtractor);
+    this.extractors.set('powershell', PowerShellExtractor);
     // Additional extractors can be registered here
   }
 
