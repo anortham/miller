@@ -25,20 +25,22 @@ export class SqlExtractor extends BaseExtractor {
 
       try {
         switch (node.type) {
-          case 'create_table_statement':
+          case 'create_table':
+            console.log('DEBUG: Found create_table node');
             symbol = this.extractTableDefinition(node, parentId);
+            console.log('DEBUG: extractTableDefinition returned:', symbol?.name);
             break;
-          case 'create_procedure_statement':
-          case 'create_function_statement':
+          case 'create_procedure':
+          case 'create_function':
             symbol = this.extractStoredProcedure(node, parentId);
             break;
-          case 'create_view_statement':
+          case 'create_view':
             symbol = this.extractView(node, parentId);
             break;
-          case 'create_index_statement':
+          case 'create_index':
             symbol = this.extractIndex(node, parentId);
             break;
-          case 'create_trigger_statement':
+          case 'create_trigger':
             symbol = this.extractTrigger(node, parentId);
             break;
           default:
@@ -51,6 +53,11 @@ export class SqlExtractor extends BaseExtractor {
 
       if (symbol) {
         symbols.push(symbol);
+        // Extract columns and constraints for tables
+        if (node.type === 'create_table') {
+          this.extractTableColumns(node, symbols, symbol.id);
+          this.extractTableConstraints(node, symbols, symbol.id);
+        }
         parentId = symbol.id;
       }
 
@@ -77,8 +84,11 @@ export class SqlExtractor extends BaseExtractor {
   }
 
   private extractTableDefinition(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
-    const tableNameNode = this.findChildByType(node, 'identifier') ||
-                         this.findChildByType(node, 'table_name');
+    // Look for table name inside object_reference node
+    const objectRefNode = this.findChildByType(node, 'object_reference');
+    const tableNameNode = objectRefNode ?
+      this.findChildByType(objectRefNode, 'identifier') :
+      (this.findChildByType(node, 'identifier') || this.findChildByType(node, 'table_name'));
 
     if (!tableNameNode) return null;
 
@@ -104,15 +114,35 @@ export class SqlExtractor extends BaseExtractor {
         if (!columnNameNode) return;
 
         const columnName = this.getNodeText(columnNameNode);
+
+        // Find SQL data type nodes (bigint, varchar, etc.)
         const dataTypeNode = this.findChildByType(node, 'data_type') ||
-                            this.findChildByType(node, 'type_name');
+                            this.findChildByType(node, 'type_name') ||
+                            this.findChildByType(node, 'bigint') ||
+                            this.findChildByType(node, 'varchar') ||
+                            this.findChildByType(node, 'int') ||
+                            this.findChildByType(node, 'text') ||
+                            this.findChildByType(node, 'char') ||
+                            this.findChildByType(node, 'decimal') ||
+                            this.findChildByType(node, 'boolean') ||
+                            this.findChildByType(node, 'keyword_boolean') ||
+                            this.findChildByType(node, 'keyword_bigint') ||
+                            this.findChildByType(node, 'keyword_varchar') ||
+                            this.findChildByType(node, 'keyword_int') ||
+                            this.findChildByType(node, 'keyword_text') ||
+                            this.findChildByType(node, 'keyword_json') ||
+                            this.findChildByType(node, 'json') ||
+                            this.findChildByType(node, 'keyword_jsonb') ||
+                            this.findChildByType(node, 'jsonb') ||
+                            this.findChildByType(node, 'date') ||
+                            this.findChildByType(node, 'timestamp');
         const dataType = dataTypeNode ? this.getNodeText(dataTypeNode) : 'unknown';
 
         const columnSymbol: Symbol = {
           id: this.generateId(`${columnName}_col`, node.startPosition),
           name: columnName,
-          kind: SymbolKind.Property, // Columns are like object properties
-          signature: `${columnName}: ${dataType}${this.extractColumnConstraints(node)}`,
+          kind: SymbolKind.Field, // Columns are fields within the table
+          signature: `${dataType}${this.extractColumnConstraints(node)}`,
           startLine: node.startPosition.row,
           startColumn: node.startPosition.column,
           endLine: node.endPosition.row,
@@ -128,14 +158,84 @@ export class SqlExtractor extends BaseExtractor {
     });
   }
 
+  private extractTableConstraints(tableNode: Parser.SyntaxNode, symbols: Symbol[], parentTableId: string): void {
+    this.traverseTree(tableNode, (node) => {
+      if (node.type === 'constraint') {
+        let constraintSymbol: Symbol | null = null;
+        let constraintType = 'unknown';
+        let constraintName = `constraint_${node.startPosition.row}`;
+
+        // Determine constraint type based on child nodes
+        const hasCheck = this.findChildByType(node, 'keyword_check');
+        const hasPrimary = this.findChildByType(node, 'keyword_primary');
+        const hasForeign = this.findChildByType(node, 'keyword_foreign');
+        const hasUnique = this.findChildByType(node, 'keyword_unique');
+        const hasIndex = this.findChildByType(node, 'keyword_index');
+        const namedConstraint = this.findChildByType(node, 'identifier');
+
+        if (namedConstraint) {
+          constraintName = this.getNodeText(namedConstraint);
+        }
+
+        if (hasCheck) {
+          constraintType = 'check';
+        } else if (hasPrimary) {
+          constraintType = 'primary_key';
+        } else if (hasForeign) {
+          constraintType = 'foreign_key';
+        } else if (hasUnique) {
+          constraintType = 'unique';
+        } else if (hasIndex) {
+          constraintType = 'index';
+        }
+
+        constraintSymbol = this.createConstraintSymbol(node, constraintType, parentTableId, constraintName);
+
+        if (constraintSymbol) {
+          symbols.push(constraintSymbol);
+        }
+      }
+    });
+  }
+
+  private createConstraintSymbol(node: Parser.SyntaxNode, constraintType: string, parentTableId: string, constraintName?: string): Symbol {
+    const name = constraintName || `${constraintType}_constraint_${node.startPosition.row}`;
+
+    return {
+      id: this.generateId(name, node.startPosition),
+      name: name,
+      kind: SymbolKind.Interface, // Constraints as Interface symbols
+      signature: constraintType === 'index' ? `INDEX ${name}` : `CONSTRAINT ${constraintType.toUpperCase()}`,
+      startLine: node.startPosition.row,
+      startColumn: node.startPosition.column,
+      endLine: node.endPosition.row,
+      endColumn: node.endPosition.column,
+      filePath: this.filePath,
+      language: this.language,
+      parentId: parentTableId,
+      visibility: 'public',
+      metadata: { isConstraint: true, constraintType }
+    };
+  }
+
   private extractColumnConstraints(columnNode: Parser.SyntaxNode): string {
     const constraints: string[] = [];
+
+    // Check for PRIMARY KEY (keyword_primary + keyword_key)
+    let hasPrimary = false;
+    let hasKey = false;
 
     this.traverseTree(columnNode, (node) => {
       switch (node.type) {
         case 'primary_key_constraint':
         case 'primary_key':
           constraints.push('PRIMARY KEY');
+          break;
+        case 'keyword_primary':
+          hasPrimary = true;
+          break;
+        case 'keyword_key':
+          hasKey = true;
           break;
         case 'foreign_key_constraint':
         case 'foreign_key':
@@ -145,6 +245,15 @@ export class SqlExtractor extends BaseExtractor {
         case 'not_null':
           constraints.push('NOT NULL');
           break;
+        case 'keyword_not':
+          // Check if followed by keyword_null
+          if (node.nextSibling && node.nextSibling.type === 'keyword_null') {
+            constraints.push('NOT NULL');
+          }
+          break;
+        case 'keyword_unique':
+          constraints.push('UNIQUE');
+          break;
         case 'unique_constraint':
         case 'unique':
           constraints.push('UNIQUE');
@@ -152,10 +261,22 @@ export class SqlExtractor extends BaseExtractor {
         case 'check_constraint':
           constraints.push('CHECK');
           break;
+        case 'keyword_default':
+          // Find the default value (next sibling or following nodes)
+          if (node.nextSibling) {
+            const defaultValue = node.nextSibling.text;
+            constraints.push(`DEFAULT ${defaultValue}`);
+          }
+          break;
       }
     });
 
-    return constraints.length > 0 ? ` (${constraints.join(', ')})` : '';
+    // Add PRIMARY KEY if both keywords found
+    if (hasPrimary && hasKey) {
+      constraints.push('PRIMARY KEY');
+    }
+
+    return constraints.length > 0 ? ` ${constraints.join(' ')}` : '';
   }
 
   private extractStoredProcedure(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
@@ -270,8 +391,11 @@ export class SqlExtractor extends BaseExtractor {
   }
 
   private extractTableSignature(node: Parser.SyntaxNode): string {
-    const nameNode = this.findChildByType(node, 'identifier') ||
-                    this.findChildByType(node, 'table_name');
+    // Look for table name inside object_reference node (same as extractTableDefinition)
+    const objectRefNode = this.findChildByType(node, 'object_reference');
+    const nameNode = objectRefNode ?
+      this.findChildByType(objectRefNode, 'identifier') :
+      (this.findChildByType(node, 'identifier') || this.findChildByType(node, 'table_name'));
     const tableName = nameNode ? this.getNodeText(nameNode) : 'unknown';
 
     // Count columns for a brief signature
@@ -282,7 +406,7 @@ export class SqlExtractor extends BaseExtractor {
       }
     });
 
-    return `TABLE ${tableName} (${columnCount} columns)`;
+    return `CREATE TABLE ${tableName} (${columnCount} columns)`;
   }
 
   private extractProcedureSignature(node: Parser.SyntaxNode): string {
