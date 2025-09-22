@@ -31,6 +31,9 @@ export class ZigExtractor extends BaseExtractor {
           case 'function_definition':
             symbol = this.extractFunction(node, parentId);
             break;
+          case 'test_declaration':
+            symbol = this.extractTest(node, parentId);
+            break;
           case 'struct_declaration':
             symbol = this.extractStruct(node, parentId);
             break;
@@ -52,6 +55,7 @@ export class ZigExtractor extends BaseExtractor {
             break;
           case 'field_declaration':
           case 'struct_field':
+          case 'container_field':
             symbol = this.extractStructField(node, parentId);
             break;
           case 'enum_field':
@@ -115,6 +119,28 @@ export class ZigExtractor extends BaseExtractor {
     return functionSymbol;
   }
 
+  private extractTest(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    // Extract test name from string node
+    const stringNode = this.findChildByType(node, 'string');
+    if (!stringNode) return null;
+
+    // Get the actual test name from string_content
+    const stringContentNode = this.findChildByType(stringNode, 'string_content');
+    if (!stringContentNode) return null;
+
+    const testName = this.getNodeText(stringContentNode);
+
+    const testSymbol = this.createSymbol(node, testName, SymbolKind.Function, {
+      signature: `test "${testName}"`,
+      visibility: 'public', // Test functions are generally public
+      parentId,
+      docComment: this.extractDocumentation(node),
+      metadata: { isTest: true }
+    });
+
+    return testSymbol;
+  }
+
   private extractParameter(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
     const nameNode = this.findChildByType(node, 'identifier');
     if (!nameNode) return null;
@@ -156,12 +182,17 @@ export class ZigExtractor extends BaseExtractor {
     if (!nameNode) return null;
 
     const fieldName = this.getNodeText(nameNode);
+
+    // SYSTEMATIC FIX: Zig uses builtin_type nodes (f32, i32, etc.) in container_field
     const typeNode = this.findChildByType(node, 'type_expression') ||
+                    this.findChildByType(node, 'builtin_type') ||
+                    this.findChildByType(node, 'slice_type') ||
                     this.findChildByType(node, 'identifier', 1);
 
     const fieldType = typeNode ? this.getNodeText(typeNode) : 'unknown';
 
-    const fieldSymbol = this.createSymbol(node, fieldName, SymbolKind.Property, {
+    // SYSTEMATIC FIX: Use SymbolKind.Field to match test expectations
+    const fieldSymbol = this.createSymbol(node, fieldName, SymbolKind.Field, {
       signature: `${fieldName}: ${fieldType}`,
       visibility: 'public', // Zig struct fields are generally public
       parentId
@@ -321,6 +352,15 @@ export class ZigExtractor extends BaseExtractor {
     const nameNode = this.findChildByType(node, 'identifier');
     const name = nameNode ? this.getNodeText(nameNode) : 'unknown';
 
+    // SYSTEMATIC FIX: Check for extern prefix
+    const externNode = this.findChildByType(node, 'extern');
+    const stringNode = this.findChildByType(node, 'string');
+    let externPrefix = '';
+    if (externNode && stringNode) {
+      const linkage = this.getNodeText(stringNode);
+      externPrefix = `extern ${linkage} `;
+    }
+
     // Extract parameters
     const params: string[] = [];
     const paramList = this.findChildByType(node, 'parameter_list');
@@ -340,14 +380,15 @@ export class ZigExtractor extends BaseExtractor {
       });
     }
 
-    // Extract return type (including Zig error union types)
+    // Extract return type (including Zig error union types and optional types)
     const returnTypeNode = this.findChildByType(node, 'return_type') ||
                           this.findChildByType(node, 'type_expression') ||
                           this.findChildByType(node, 'error_union_type') ||
+                          this.findChildByType(node, 'nullable_type') ||
                           this.findChildByType(node, 'builtin_type');
     const returnType = returnTypeNode ? this.getNodeText(returnTypeNode) : 'void';
 
-    return `fn ${name}(${params.join(', ')}) ${returnType}`;
+    return `${externPrefix}fn ${name}(${params.join(', ')}) ${returnType}`;
   }
 
   extractRelationships(tree: Parser.Tree, symbols: Symbol[]): Relationship[] {
@@ -359,7 +400,7 @@ export class ZigExtractor extends BaseExtractor {
           case 'struct_declaration':
             this.extractStructRelationships(node, symbols, relationships);
             break;
-          case 'function_call':
+          case 'call_expression':
             this.extractFunctionCallRelationships(node, symbols, relationships);
             break;
           case 'import_declaration':
@@ -414,10 +455,26 @@ export class ZigExtractor extends BaseExtractor {
 
   private extractFunctionCallRelationships(node: Parser.SyntaxNode, symbols: Symbol[], relationships: Relationship[]): void {
     // Extract function call relationships
-    const funcNameNode = this.findChildByType(node, 'identifier');
-    if (!funcNameNode) return;
+    let calledFuncName: string | null = null;
 
-    const calledFuncName = this.getNodeText(funcNameNode);
+    // Check for direct function call (identifier + arguments)
+    const funcNameNode = this.findChildByType(node, 'identifier');
+    if (funcNameNode) {
+      calledFuncName = this.getNodeText(funcNameNode);
+    } else {
+      // Check for method call (field_expression + arguments)
+      const fieldExprNode = this.findChildByType(node, 'field_expression');
+      if (fieldExprNode) {
+        const identifiers = this.findChildrenByType(fieldExprNode, 'identifier');
+        if (identifiers.length >= 2) {
+          const methodNameNode = identifiers[1]; // Second identifier is the method name
+          calledFuncName = this.getNodeText(methodNameNode);
+        }
+      }
+    }
+
+    if (!calledFuncName) return;
+
     const calledSymbol = symbols.find(s => s.name === calledFuncName && s.kind === SymbolKind.Function);
 
     if (calledSymbol) {

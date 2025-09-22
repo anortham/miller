@@ -68,7 +68,8 @@ export enum RelationshipKind {
   References = 'references',
   Defines = 'defines',
   Overrides = 'overrides',
-  Contains = 'contains'
+  Contains = 'contains',
+  Joins = 'joins'
 }
 
 export interface TypeInfo {

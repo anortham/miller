@@ -32,6 +32,7 @@ export class SqlExtractor extends BaseExtractor {
             break;
           case 'create_procedure':
           case 'create_function':
+          case 'create_function_statement':
             symbol = this.extractStoredProcedure(node, parentId);
             break;
           case 'create_view':
@@ -288,9 +289,13 @@ export class SqlExtractor extends BaseExtractor {
   }
 
   private extractStoredProcedure(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
-    const nameNode = this.findChildByType(node, 'identifier') ||
-                    this.findChildByType(node, 'procedure_name') ||
-                    this.findChildByType(node, 'function_name');
+    // Look for function/procedure name - it may be inside an object_reference
+    const objectRefNode = this.findChildByType(node, 'object_reference');
+    const nameNode = objectRefNode ?
+      this.findChildByType(objectRefNode, 'identifier') :
+      (this.findChildByType(node, 'identifier') ||
+       this.findChildByType(node, 'procedure_name') ||
+       this.findChildByType(node, 'function_name'));
 
     if (!nameNode) return null;
 
@@ -386,33 +391,39 @@ export class SqlExtractor extends BaseExtractor {
     const procedureMatch = errorText.match(/CREATE\s+PROCEDURE\s+([a-zA-Z_][a-zA-Z0-9_]*)/i);
     if (procedureMatch) {
       const procedureName = procedureMatch[1];
-
       const procedureSymbol = this.createSymbol(node, procedureName, SymbolKind.Function, {
         signature: `CREATE PROCEDURE ${procedureName}(...)`,
         visibility: 'public',
         parentId,
         metadata: { isStoredProcedure: true, extractedFromError: true }
       });
-
-      // Parameters will be extracted in the main loop
-
       return procedureSymbol;
     }
 
-    // Extract functions from DELIMITER syntax
-    const functionMatch = errorText.match(/CREATE\s+FUNCTION\s+([a-zA-Z_][a-zA-Z0-9_]*)/i);
+    // Extract functions with RETURNS clause
+    const functionMatch = errorText.match(/CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\([^)]*\)\s*RETURNS?\s+([A-Z0-9(),\s]+)/i);
     if (functionMatch) {
       const functionName = functionMatch[1];
+      const returnType = functionMatch[2].trim();
+      const functionSymbol = this.createSymbol(node, functionName, SymbolKind.Function, {
+        signature: `CREATE FUNCTION ${functionName}(...) RETURNS ${returnType}`,
+        visibility: 'public',
+        parentId,
+        metadata: { isFunction: true, extractedFromError: true, returnType }
+      });
+      return functionSymbol;
+    }
 
+    // Fallback: Extract any CREATE FUNCTION
+    const simpleFunctionMatch = errorText.match(/CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([a-zA-Z_][a-zA-Z0-9_]*)/i);
+    if (simpleFunctionMatch) {
+      const functionName = simpleFunctionMatch[1];
       const functionSymbol = this.createSymbol(node, functionName, SymbolKind.Function, {
         signature: `CREATE FUNCTION ${functionName}(...)`,
         visibility: 'public',
         parentId,
         metadata: { isFunction: true, extractedFromError: true }
       });
-
-      // Parameters will be extracted in the main loop
-
       return functionSymbol;
     }
 
@@ -494,9 +505,13 @@ export class SqlExtractor extends BaseExtractor {
   }
 
   private extractProcedureSignature(node: Parser.SyntaxNode): string {
-    const nameNode = this.findChildByType(node, 'identifier') ||
-                    this.findChildByType(node, 'procedure_name') ||
-                    this.findChildByType(node, 'function_name');
+    // Extract function/procedure name from object_reference if present
+    const objectRefNode = this.findChildByType(node, 'object_reference');
+    const nameNode = objectRefNode ?
+      this.findChildByType(objectRefNode, 'identifier') :
+      (this.findChildByType(node, 'identifier') ||
+       this.findChildByType(node, 'procedure_name') ||
+       this.findChildByType(node, 'function_name'));
     const name = nameNode ? this.getNodeText(nameNode) : 'unknown';
 
     // Extract parameter list
@@ -518,7 +533,37 @@ export class SqlExtractor extends BaseExtractor {
     const isFunction = node.type.includes('function');
     const keyword = isFunction ? 'FUNCTION' : 'PROCEDURE';
 
-    return `${keyword} ${name}(${params.join(', ')})`;
+    // For functions, try to extract the RETURNS clause and LANGUAGE
+    let returnClause = '';
+    let languageClause = '';
+    if (isFunction) {
+      // Look for decimal node for RETURNS DECIMAL(10,2) - search recursively
+      const decimalNodes = this.findNodesByType(node, 'decimal');
+      if (decimalNodes.length > 0) {
+        const decimalText = this.getNodeText(decimalNodes[0]);
+        returnClause = ` RETURNS ${decimalText}`;
+      } else {
+        // Look for other return types as direct children
+        const returnTypeNodes = ['keyword_boolean', 'keyword_bigint', 'keyword_int', 'keyword_varchar', 'keyword_text', 'keyword_jsonb'];
+        for (const typeStr of returnTypeNodes) {
+          const typeNode = this.findChildByType(node, typeStr);
+          if (typeNode) {
+            const typeText = this.getNodeText(typeNode).replace('keyword_', '').toUpperCase();
+            returnClause = ` RETURNS ${typeText}`;
+            break;
+          }
+        }
+      }
+
+      // Look for LANGUAGE clause (PostgreSQL functions)
+      const languageNode = this.findChildByType(node, 'function_language');
+      if (languageNode) {
+        const languageText = this.getNodeText(languageNode);
+        languageClause = ` ${languageText}`;
+      }
+    }
+
+    return `${keyword} ${name}(${params.join(', ')})${returnClause}${languageClause}`;
   }
 
   extractRelationships(tree: Parser.Tree, symbols: Symbol[]): Relationship[] {
@@ -541,6 +586,10 @@ export class SqlExtractor extends BaseExtractor {
           case 'select_statement':
           case 'from_clause':
             this.extractTableReferences(node, symbols, relationships);
+            break;
+          case 'join':
+          case 'join_clause':
+            this.extractJoinRelationships(node, symbols, relationships);
             break;
         }
       } catch (error) {
@@ -606,6 +655,34 @@ export class SqlExtractor extends BaseExtractor {
         }
       });
     }
+  }
+
+  private extractJoinRelationships(node: Parser.SyntaxNode, symbols: Symbol[], relationships: Relationship[]): void {
+    // Extract JOIN relationships from SQL queries
+    this.traverseTree(node, (childNode) => {
+      if (childNode.type === 'table_name' ||
+          (childNode.type === 'identifier' && childNode.parent?.type === 'object_reference')) {
+
+        const tableName = this.getNodeText(childNode);
+        const tableSymbol = symbols.find(s => s.name === tableName && s.kind === SymbolKind.Class);
+
+        if (tableSymbol) {
+          // Create a join relationship
+          relationships.push({
+            fromSymbolId: tableSymbol.id,
+            toSymbolId: tableSymbol.id, // Self-reference for joins
+            kind: RelationshipKind.Joins,
+            filePath: this.filePath,
+            lineNumber: node.startPosition.row,
+            confidence: 0.9,
+            metadata: {
+              joinType: 'join',
+              tableName: tableName
+            }
+          });
+        }
+      }
+    });
   }
 
   private extractTableReferences(node: Parser.SyntaxNode, symbols: Symbol[], relationships: Relationship[]): void {
