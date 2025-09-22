@@ -414,11 +414,14 @@ export class CppExtractor extends BaseExtractor {
     // Extract visibility for methods
     const visibility = isMethod ? this.extractVisibility(node) : 'public';
 
-    return this.createSymbol(node, name, kind, {
+    const symbol = this.createSymbol(node, name, kind, {
       signature,
       visibility,
       parentId
     });
+
+
+    return symbol;
   }
 
   private extractMethod(node: Parser.SyntaxNode, funcNode: Parser.SyntaxNode, name: string, parentId?: string): Symbol | null {
