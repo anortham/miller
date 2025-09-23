@@ -31,7 +31,6 @@
     "diff-match-patch": "^1.0.5",
     "glob": "^11.0.3",
     "minisearch": "^6.3.0",
-    "sqlite-vec": "0.1.7-alpha.2",
     "tree-sitter-c": "^0.23.0",
     "tree-sitter-c-sharp": "^0.23.0",
     "tree-sitter-cpp": "^0.23.1",

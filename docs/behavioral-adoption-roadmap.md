@@ -14,7 +14,7 @@ Miller transforms AI agents from tourists with phrase books into native speakers
 
 ### ✅ PHASE 2: COMPLETED
 - **Embedding Foundation**: MillerEmbedder with @huggingface/transformers and MiniLM model
-- **Vector Storage**: MillerVectorStore with sqlite-vec integration (custom SQLite setup for macOS)
+- **Vector Storage**: VectraVectorStore for reliable vector search
 - **Hybrid Search Architecture**: 30% name + 30% structure + 40% semantic scoring formula
 
 ### ✅ PHASE 3: COMPLETED
@@ -454,7 +454,7 @@ This isn't just better search. This is giving AI agents true code comprehension 
 
 ### ✅ Technical Achievements
 - **@huggingface/transformers**: Works excellently with Bun, native TypeScript support
-- **sqlite-vec**: High-performance vector search, requires custom SQLite on macOS
+- **Vectra**: Reliable vector search with local storage
 - **MiniLM Model**: Perfect balance of speed (50ms) and accuracy for code embeddings
 - **Hybrid Scoring Formula**: 30%/30%/40% weighting proves optimal for code search
 

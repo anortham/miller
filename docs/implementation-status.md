@@ -33,8 +33,7 @@ This document tracks implementation status of ALL features planned across Miller
 - ✅ **ONNX Model Support**: Xenova/all-MiniLM-L6-v2 for speed and portability
 
 ### ✅ Phase 2: SQLite Vector Integration (100% Complete)
-- ✅ **sqlite-vec Extension**: Successfully integrated with custom SQLite setup (macOS)
-- ✅ **MillerVectorStore**: Full vector storage with hybrid search capabilities
+- ✅ **Vectra Vector Store**: Full vector storage with hybrid search capabilities
 - ✅ **Performance Target**: <10ms similarity search with distance thresholding
 - ✅ **Batch Processing**: Efficient bulk embedding storage with transaction safety
 - ✅ **Vector Table Schema**: Optimized schema with 384-dim float vectors
@@ -57,7 +56,7 @@ This document tracks implementation status of ALL features planned across Miller
 
 ### 🏆 **Technical Achievements**
 - **Runtime**: Bun with native SQLite integration ✅
-- **Vector Storage**: sqlite-vec with custom SQLite for maximum compatibility ✅
+- **Vector Storage**: Vectra for reliable vector search and compatibility ✅
 - **Search Performance**: <10ms vector search, <50ms embedding generation ✅
 - **Memory Efficiency**: ~150MB for 100k symbols ✅
 - **Language Support**: Works across all 20+ Miller-supported languages ✅
@@ -78,7 +77,7 @@ This document tracks implementation status of ALL features planned across Miller
 - ❌ **`workflow` Tool**: Not implemented (4 planned checks: ready, impact, complete, optimize)
 
 ### ❌ Phase 2: Testing & Validation (15% Complete)
-- ✅ **Core Semantic Tests**: unique-constraint-fix.test.ts, semantic-search-integration.test.ts
+- ✅ **Core Semantic Tests**: semantic-search-integration.test.ts
 - ❌ **Automated Tool Tests**: explore/navigate/semantic tool testing
 - ❌ **Real-World Testing Scenarios**: Documented testing protocols
 - ❌ **Behavioral Adoption Metrics**: Usage tracking and success rates

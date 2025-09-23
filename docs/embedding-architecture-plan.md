@@ -5,13 +5,13 @@
 ### The Technology Landscape (2024-2025)
 1. **Transformers.js is now mature**: Officially under HuggingFace, works with Bun, WebGPU acceleration
 2. **Code-specific models exist**: CodeBERT, UniXcoder, CodeSage, Nomic Embed Code
-3. **SQLite vector search is ready**: sqlite-vec provides local, dependency-free vector search
+3. **Vector search is ready**: Multiple options evaluated (sqlite-vec, Vectra, Pinecone)
 4. **Multiple embedding options**: From lightweight (MiniLM) to powerful (Qwen3, Jina v4)
 
 ### The Perfect Stack for Miller
 - **Runtime**: Bun (built-in SQLite!)
 - **Embeddings**: @huggingface/transformers (native TypeScript)
-- **Vector Storage**: sqlite-vec (pure C extension, works with Bun)
+- **Vector Storage**: Vectra (reliable, local-first vector search)
 - **Models**: ONNX format for speed and portability
 
 ## 🎯 RECOMMENDED EMBEDDING ARCHITECTURE
@@ -42,7 +42,7 @@
 ### Phase 1: Core Infrastructure
 ```typescript
 // 1. Install dependencies
-bun add @huggingface/transformers sqlite-vec
+bun add @huggingface/transformers vectra
 
 // 2. Initialize embedding pipeline
 import { pipeline } from '@huggingface/transformers';
@@ -163,11 +163,11 @@ embed({
 })
 ```
 
-### 3. **Local-First with sqlite-vec**
-- No external dependencies
+### 3. **Local-First with Vectra**
+- Reliable vector search
 - Works offline
-- Microsecond query times
-- Built into Bun!
+- Fast query times
+- Node.js compatible
 
 ### 4. **Progressive Enhancement**
 - Start with fast MiniLM
@@ -322,8 +322,8 @@ This research-backed approach gives Miller a significant competitive advantage o
 - **Performance**: 50ms embedding generation, 384D vectors
 
 ### ✅ PHASE 2: COMPLETED (2025-09-22)
-- **sqlite-vec**: Successfully integrated with custom SQLite setup for macOS
-- **MillerVectorStore**: Full vector storage with hybrid search capabilities
+- **Vectra**: Successfully integrated for reliable vector storage
+- **VectraVectorStore**: Full vector storage with hybrid search capabilities
 - **Vector Search**: <10ms similarity search with distance thresholding
 - **Batch Processing**: Efficient bulk embedding storage
 
@@ -346,7 +346,7 @@ The Miller embedding architecture represents a **revolutionary breakthrough** in
 ### 🔥 Technical Specifications
 - **Runtime**: Bun with native SQLite integration
 - **Embeddings**: @huggingface/transformers with MiniLM-L6-v2 (384D)
-- **Vector Storage**: sqlite-vec with custom SQLite for maximum compatibility
+- **Vector Storage**: Vectra for reliable vector search and compatibility
 - **Search Performance**: <10ms vector search, <50ms embedding generation
 - **Memory Efficiency**: ~150MB for 100k symbols
 - **Language Support**: Works across all 20+ Miller-supported languages

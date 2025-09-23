@@ -25,7 +25,7 @@ Miller is a high-performance MCP (Model Context Protocol) server that provides L
 
 - **Runtime**: Bun (for speed and built-in SQLite)
 - **Parsing**: Tree-sitter WASM parsers
-- **Database**: SQLite with graph-like schema + sqlite-vec for embeddings
+- **Database**: SQLite with graph-like schema + Vectra for embeddings
 - **Search**: MiniSearch (fuzzy) + ripgrep (exact) + Semantic (AI embeddings)
 - **AI Models**: Xenova/all-MiniLM-L6-v2 for code embeddings
 - **File Watching**: Node.js fs.watch with debouncing
@@ -38,15 +38,12 @@ Miller is a high-performance MCP (Model Context Protocol) server that provides L
 - [Bun](https://bun.sh/) >= 1.0.0
 - Git
 
-#### Required for Semantic Search (macOS)
+#### Required for Semantic Search
 
-**SQLite with Extension Support:**
+**Vector Search Dependencies:**
 ```bash
-# Install homebrew SQLite (required for sqlite-vec extension)
-brew install sqlite3
-
-# Verify extension support
-/opt/homebrew/bin/sqlite3 -cmd ".load vec0" ":memory:" "SELECT vec_version();"
+# Vectra is automatically installed via npm/bun
+# No additional system dependencies required
 ```
 
 **Performance Optimization:**
@@ -88,9 +85,9 @@ bun run src/mcp-server.ts
 
 ### Common Setup Issues
 
-1. **"This build of sqlite3 does not support dynamic extension loading"**
-   - **Solution**: Install homebrew SQLite (above)
-   - **Cause**: macOS default SQLite doesn't support extensions
+1. **Vector search issues**
+   - **Solution**: Vectra handles vector storage automatically
+   - **Cause**: No system dependencies required
 
 2. **"Ripgrep not available or failed, falling back to database search"**
    - **Solution**: Install ripgrep (above)
@@ -98,9 +95,9 @@ bun run src/mcp-server.ts
 
 3. **"Semantic search returns 0% scores"** ✅ **FIXED**
    - **Status**: Semantic search now works with 38-39% relevance scores
-   - **Check**: Logs for "sqlite-vec loaded successfully"
+   - **Check**: Vectra index is properly initialized
    - **Check**: Database has >0 embeddings stored
-   - **Note**: Uses cosine distance threshold of 1.5 for optimal results
+   - **Note**: Uses optimized distance scoring for best results
 
 ### Project Structure
 
