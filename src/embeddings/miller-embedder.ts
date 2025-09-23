@@ -67,9 +67,9 @@ export class MillerEmbedder {
       speed: 'fast'
     },
     'code': {
-      name: 'Xenova/jina-embeddings-v2-base-code', // Will try this if available
-      dimensions: 768,
-      maxTokens: 8192,
+      name: 'Salesforce/codet5p-110m-embedding', // Public code-specialized model
+      dimensions: 256,
+      maxTokens: 512,
       specialization: 'code',
       speed: 'medium'
     },

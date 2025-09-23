@@ -1186,17 +1186,52 @@ export class EnhancedCodeIntelligenceEngine {
     // Terminate other components...
   }
 
-  // File change handlers (same as original)
+  // File change handlers with hash-based delta indexing
   private async handleFileChange(event: FileChangeEvent): Promise<void> {
-    // Implementation from original engine
+    log.watcher(LogLevel.INFO, `File ${event.type}: ${event.filePath}`);
+
+    // Skip file watcher updates during bulk indexing to prevent SQLITE_BUSY errors
+    if (this.isBulkIndexing) {
+      log.watcher(LogLevel.DEBUG, `Skipping file change during bulk indexing: ${event.filePath}`);
+      return;
+    }
+
+    try {
+      if (event.type === 'delete') {
+        await this.handleFileDelete(event.filePath);
+        return;
+      }
+
+      // For create/change events, check if file content actually changed using hash
+      if (event.content) {
+        // Hash-based delta indexing: only reindex if content actually changed
+        const needsReindex = await this.checkIfNeedsReindex(event.filePath, event.content);
+
+        if (needsReindex) {
+          log.watcher(LogLevel.DEBUG, `Content changed detected for ${event.filePath}, reindexing...`);
+
+          // Clear old data first
+          await this.clearFileData(event.filePath);
+
+          // Reindex with new content (enhanced version with semantic indexing)
+          await this.indexFile(event.filePath);
+        } else {
+          log.watcher(LogLevel.DEBUG, `⚡ Hash-based skip: No content change detected for ${event.filePath}`);
+        }
+      }
+    } catch (error) {
+      log.engine(LogLevel.ERROR, `Error handling file change for ${event.filePath}:`, error);
+    }
   }
 
   private async handleFileDelete(filePath: string): Promise<void> {
-    // Implementation from original engine
+    log.watcher(LogLevel.INFO, `File deleted: ${filePath}`);
+    await this.clearFileData(filePath);
+    await this.searchEngine.removeFromIndex(filePath);
   }
 
-  private async handleWatcherError(error: Error): Promise<void> {
-    // Implementation from original engine
+  private async handleWatcherError(error: Error, filePath?: string): Promise<void> {
+    log.watcher(LogLevel.ERROR, `File watcher error${filePath ? ` for ${filePath}` : ''}:`, error);
   }
 
 }

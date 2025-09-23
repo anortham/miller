@@ -408,13 +408,22 @@ export class CodeIntelligenceEngine {
         return;
       }
 
-      // For create/change events, reindex the file
+      // For create/change events, check if file content actually changed using hash
       if (event.content) {
-        // Clear new data first
-        await this.clearFileData(event.filePath);
+        // Hash-based delta indexing: only reindex if content actually changed
+        const needsReindex = await this.checkIfNeedsReindex(event.filePath, event.content);
 
-        // Reindex with new content
-        await this.indexFile(event.filePath);
+        if (needsReindex) {
+          log.watcher(LogLevel.DEBUG, `Content changed detected for ${event.filePath}, reindexing...`);
+
+          // Clear old data first
+          await this.clearFileData(event.filePath);
+
+          // Reindex with new content
+          await this.indexFile(event.filePath);
+        } else {
+          log.watcher(LogLevel.DEBUG, `⚡ Hash-based skip: No content change detected for ${event.filePath}`);
+        }
       }
     } catch (error) {
       log.engine(LogLevel.ERROR, `Error handling file change for ${event.filePath}:`, error);
