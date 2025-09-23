@@ -10,7 +10,7 @@
  * that makes AI agents "surgical, not fumbling" with code.
  */
 
-import type { Symbol, Relationship } from '../database/schema.js';
+import type { Symbol, Relationship, CodeIntelDB } from '../database/schema.js';
 import type { SearchEngine } from './search-engine.js';
 import MillerEmbedder, { type CodeContext, type EmbeddingResult } from '../embeddings/miller-embedder.js';
 import MillerVectorStore, { type VectorSearchResult, type EntityMapping } from '../embeddings/miller-vector-store.js';
@@ -52,6 +52,7 @@ export class HybridSearchEngine {
   private structuralSearch: SearchEngine;
   private embedder: MillerEmbedder;
   private vectorStore: MillerVectorStore;
+  private database: CodeIntelDB;
   private isInitialized = false;
 
   // Default hybrid scoring weights (research-backed optimal values)
@@ -64,11 +65,13 @@ export class HybridSearchEngine {
   constructor(
     structuralSearchEngine: SearchEngine,
     embedder: MillerEmbedder,
-    vectorStore: MillerVectorStore
+    vectorStore: MillerVectorStore,
+    database: CodeIntelDB
   ) {
     this.structuralSearch = structuralSearchEngine;
     this.embedder = embedder;
     this.vectorStore = vectorStore;
+    this.database = database;
   }
 
   /**
@@ -106,7 +109,7 @@ export class HybridSearchEngine {
       nameWeight: HybridSearchEngine.DEFAULT_WEIGHTS.name,
       structureWeight: HybridSearchEngine.DEFAULT_WEIGHTS.structure,
       semanticWeight: HybridSearchEngine.DEFAULT_WEIGHTS.semantic,
-      semanticThreshold: 0.7,
+      semanticThreshold: 1.5,
       maxResults: 20,
       enableCrossLayer: true,
       ...options
@@ -169,7 +172,7 @@ export class HybridSearchEngine {
               structureScore,
               semanticScore,
               semanticDistance: vectorResult.distance,
-              layer: this.detectLayer(symbol.file_path),
+              layer: this.detectLayer(symbol.filePath),
               confidence: semanticScore,
               searchMethod: 'semantic'
             });
@@ -284,25 +287,40 @@ export class HybridSearchEngine {
    */
   private async performStructuralSearch(query: string, limit: number): Promise<Symbol[]> {
     // Use existing Miller search engine for structural analysis
-    const fuzzyResults = await this.structuralSearch.searchCode({
-      query,
-      type: 'fuzzy',
+    const fuzzyResults = await this.structuralSearch.searchFuzzy(query, {
       limit: Math.ceil(limit * 0.7) // 70% from fuzzy search
     });
 
-    const exactResults = await this.structuralSearch.searchCode({
-      query,
-      type: 'exact',
+    const exactResults = await this.structuralSearch.searchExact(query, {
       limit: Math.ceil(limit * 0.3) // 30% from exact search
     });
 
+    // Convert SearchResult[] to Symbol[] format expected by hybrid search
+    const convertToSymbol = (searchResult: any): Symbol => ({
+      id: parseInt(searchResult.symbolId) || 0,
+      name: searchResult.text,
+      kind: searchResult.kind,
+      language: searchResult.language || 'unknown',
+      filePath: searchResult.file,
+      startLine: searchResult.line,
+      startColumn: searchResult.column,
+      endLine: searchResult.line,
+      endColumn: searchResult.column + (searchResult.text?.length || 0),
+      startByte: 0,
+      endByte: 0,
+      signature: searchResult.signature,
+      docComment: '',
+      visibility: 'public'
+    });
+
     // Combine and deduplicate
-    const allResults = [...fuzzyResults, ...exactResults];
+    const allSearchResults = [...fuzzyResults, ...exactResults];
     const uniqueResults = new Map<number, Symbol>();
 
-    for (const result of allResults) {
-      if (!uniqueResults.has(result.id)) {
-        uniqueResults.set(result.id, result);
+    for (const result of allSearchResults) {
+      const symbolId = parseInt(result.symbolId) || 0;
+      if (!uniqueResults.has(symbolId)) {
+        uniqueResults.set(symbolId, convertToSymbol(result));
       }
     }
 
@@ -352,43 +370,78 @@ export class HybridSearchEngine {
    * Calculate structural relevance score
    */
   private calculateStructuralScore(symbol: Symbol, query: string): number {
+    if (!symbol) return 0;
+
     let score = 0.5; // Base score for being found structurally
 
-    // Type relevance
-    if (query.toLowerCase().includes(symbol.type.toLowerCase())) {
+    // Kind relevance (symbol.kind, not symbol.type)
+    if (symbol.kind && query.toLowerCase().includes(symbol.kind.toLowerCase())) {
       score += 0.2;
     }
 
     // File path relevance
-    if (symbol.file_path.toLowerCase().includes(query.toLowerCase())) {
+    if (symbol.filePath && symbol.filePath.toLowerCase().includes(query.toLowerCase())) {
       score += 0.15;
     }
 
     // Language relevance
-    if (query.toLowerCase().includes(symbol.language.toLowerCase())) {
+    if (symbol.language && query.toLowerCase().includes(symbol.language.toLowerCase())) {
       score += 0.1;
     }
 
     // Symbol complexity (more complex = potentially more relevant)
-    const complexity = (symbol.end_line - symbol.start_line) / 100;
+    const complexity = (symbol.endLine - symbol.startLine) / 100;
     score += Math.min(0.05, complexity);
 
     return Math.min(1.0, score);
   }
 
   /**
-   * Get symbol by ID from structural search
+   * Get symbol by ID from database
    */
-  private async getSymbolById(symbolId: number): Promise<Symbol | null> {
-    // This would integrate with Miller's existing database
-    // For now, return null - this would be implemented with actual DB access
-    return null;
+  private async getSymbolById(symbolId: string | number): Promise<Symbol | null> {
+    try {
+      // Query database directly by symbol ID (not text search)
+      const stmt = this.database.db.prepare(`
+        SELECT id, name, kind, language, file_path, start_line, start_column,
+               end_line, end_column, start_byte, end_byte, signature, doc_comment, visibility
+        FROM symbols
+        WHERE id = ?
+      `);
+
+      const result = stmt.get(symbolId);
+
+      if (result) {
+        return {
+          id: result.id,
+          name: result.name,
+          kind: result.kind,
+          language: result.language,
+          filePath: result.file_path,
+          startLine: result.start_line,
+          startColumn: result.start_column,
+          endLine: result.end_line,
+          endColumn: result.end_column,
+          startByte: result.start_byte,
+          endByte: result.end_byte,
+          signature: result.signature || '',
+          docComment: result.doc_comment || '',
+          visibility: result.visibility || 'public'
+        };
+      }
+
+      return null;
+    } catch (error) {
+      // Log to file instead of console to avoid breaking stdio
+      return null;
+    }
   }
 
   /**
    * Detect architectural layer from file path
    */
-  private detectLayer(filePath: string): string {
+  private detectLayer(filePath: string | undefined): string {
+    if (!filePath) return 'unknown';
     const path = filePath.toLowerCase();
 
     if (path.includes('frontend') || path.includes('client') || path.includes('ui')) return 'frontend';

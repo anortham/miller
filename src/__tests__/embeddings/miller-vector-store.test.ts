@@ -7,6 +7,8 @@ import { Database } from 'bun:sqlite';
 import MillerEmbedder from '../../embeddings/miller-embedder.js';
 import MillerVectorStore from '../../embeddings/miller-vector-store.js';
 import type { Symbol } from '../../database/schema.js';
+import { initializeLogger, LogLevel } from '../../utils/logger.js';
+import { MillerPaths } from '../../utils/miller-paths.js';
 
 describe('MillerVectorStore', () => {
   let db: Database;
@@ -14,6 +16,10 @@ describe('MillerVectorStore', () => {
   let vectorStore: MillerVectorStore;
 
   beforeAll(async () => {
+    // Initialize logger for test environment using temporary directory
+    const testPaths = new MillerPaths('/tmp/miller-test');
+    initializeLogger(testPaths, LogLevel.ERROR); // Minimal logging for tests
+
     // Set up custom SQLite for extension support (macOS)
     MillerVectorStore.setupSQLiteExtensions();
 
@@ -338,5 +344,85 @@ describe('MillerVectorStore', () => {
     for (const table of stats.vectorTables) {
       expect(table.count).toBe(0);
     }
+  });
+
+  test('should handle UUID→integer conversion without UNIQUE constraint violations', async () => {
+    // Clear existing data
+    vectorStore.clearVectors();
+
+    // Create symbol IDs that are likely to cause hash collisions
+    // These UUID-like strings are designed to test the UUID→integer conversion
+    const problematicSymbolIds = [
+      'af150c7e-3729-b233-ad68-744976a0f703',  // Similar UUIDs that might hash to same value
+      'af150c7e-3729-b233-ad68-744976a0f704',
+      'af150c7e-3729-b233-ad68-744976a0f705',
+      'div-element-1',  // Short strings that might collide
+      'div-element-2',
+      'div-element-3',
+      'user-entity-typescript',  // Longer strings with patterns
+      'user-entity-csharp',
+      'user-entity-sql'
+    ];
+
+    // Generate test embeddings for each problematic ID
+    const testEmbeddings = [];
+    for (let i = 0; i < problematicSymbolIds.length; i++) {
+      const symbolId = problematicSymbolIds[i];
+
+      // Create a unique embedding (slight variations to ensure they're different)
+      const baseVector = new Float32Array(384).fill(0.1 + (i * 0.01));
+      const embedding = {
+        vector: baseVector,
+        content: `Test content for ${symbolId}`,
+        metadata: { symbolId, index: i }
+      };
+
+      testEmbeddings.push({ symbolId, embedding });
+    }
+
+    // Store all embeddings - this should NOT throw UNIQUE constraint violations
+    let successCount = 0;
+    let errorCount = 0;
+
+    for (const { symbolId, embedding } of testEmbeddings) {
+      try {
+        await vectorStore.storeSymbolEmbedding(symbolId, embedding);
+        successCount++;
+      } catch (error) {
+        errorCount++;
+        // If this fails with UNIQUE constraint, it means our fix didn't work
+        if (error.message?.includes('UNIQUE constraint failed')) {
+          throw new Error(
+            `UNIQUE constraint violation still occurring! ` +
+            `Symbol: ${symbolId}, Error: ${error.message}`
+          );
+        } else {
+          // Re-throw unexpected errors
+          throw error;
+        }
+      }
+    }
+
+    // All embeddings should be stored successfully
+    expect(successCount).toBe(problematicSymbolIds.length);
+    expect(errorCount).toBe(0);
+
+    // Verify all embeddings can be retrieved
+    const stats = vectorStore.getStats();
+    expect(stats.totalVectors).toBeGreaterThanOrEqual(problematicSymbolIds.length);
+
+    // Test retrieval of each stored embedding
+    for (let i = 0; i < testEmbeddings.length; i++) {
+      const { symbolId, embedding } = testEmbeddings[i];
+
+      // Search for the specific embedding
+      const searchResults = await vectorStore.search(embedding.vector, 1);
+
+      expect(searchResults.length).toBeGreaterThan(0);
+      expect(searchResults[0].distance).toBeLessThan(0.1); // Should be very similar
+      expect(searchResults[0].confidence).toBeGreaterThan(0.9);
+    }
+
+    console.log(`✅ Successfully stored and retrieved ${successCount} embeddings without UNIQUE constraint violations`);
   });
 });

@@ -16,6 +16,7 @@ Miller is a high-performance MCP (Model Context Protocol) server that provides L
   - **Utilities**: Regex patterns
 - **LSP-Like Features**: Go-to-definition, find-references, hover information, call hierarchy
 - **Fast Code Search**: Fuzzy search with MiniSearch, exact search with ripgrep
+- **Semantic Search**: AI-powered code understanding with cross-language concept matching
 - **Incremental Updates**: File watching with debounced reindexing
 - **Cross-Language Analysis**: Track API calls, FFI bindings, and cross-language references
 - **High Performance**: Built on Bun with SQLite for microsecond query times
@@ -24,8 +25,9 @@ Miller is a high-performance MCP (Model Context Protocol) server that provides L
 
 - **Runtime**: Bun (for speed and built-in SQLite)
 - **Parsing**: Tree-sitter WASM parsers
-- **Database**: SQLite with graph-like schema
-- **Search**: MiniSearch (fuzzy) + ripgrep (exact)
+- **Database**: SQLite with graph-like schema + sqlite-vec for embeddings
+- **Search**: MiniSearch (fuzzy) + ripgrep (exact) + Semantic (AI embeddings)
+- **AI Models**: Xenova/all-MiniLM-L6-v2 for code embeddings
 - **File Watching**: Node.js fs.watch with debouncing
 - **Protocol**: Model Context Protocol (MCP)
 
@@ -35,7 +37,26 @@ Miller is a high-performance MCP (Model Context Protocol) server that provides L
 
 - [Bun](https://bun.sh/) >= 1.0.0
 - Git
-- Optional: ripgrep (for exact search performance)
+
+#### Required for Semantic Search (macOS)
+
+**SQLite with Extension Support:**
+```bash
+# Install homebrew SQLite (required for sqlite-vec extension)
+brew install sqlite3
+
+# Verify extension support
+/opt/homebrew/bin/sqlite3 -cmd ".load vec0" ":memory:" "SELECT vec_version();"
+```
+
+**Performance Optimization:**
+```bash
+# Install ripgrep for fast exact search (recommended)
+brew install ripgrep
+
+# Verify installation
+rg --version
+```
 
 ### Installation
 
@@ -53,6 +74,33 @@ bun run dev
 # Or start the server
 bun start
 ```
+
+### Setup Verification
+
+**Check semantic search is working:**
+```bash
+# Index a workspace
+bun run src/mcp-server.ts
+
+# In another terminal, test semantic search
+# Should show >0% semantic scores if working properly
+```
+
+### Common Setup Issues
+
+1. **"This build of sqlite3 does not support dynamic extension loading"**
+   - **Solution**: Install homebrew SQLite (above)
+   - **Cause**: macOS default SQLite doesn't support extensions
+
+2. **"Ripgrep not available or failed, falling back to database search"**
+   - **Solution**: Install ripgrep (above)
+   - **Impact**: Slower exact searches, but semantic search unaffected
+
+3. **"Semantic search returns 0% scores"** ✅ **FIXED**
+   - **Status**: Semantic search now works with 38-39% relevance scores
+   - **Check**: Logs for "sqlite-vec loaded successfully"
+   - **Check**: Database has >0 embeddings stored
+   - **Note**: Uses cosine distance threshold of 1.5 for optimal results
 
 ### Project Structure
 
@@ -172,6 +220,9 @@ Add Miller to your MCP client configuration:
 7. **index_workspace** - Index a workspace directory
 8. **get_workspace_stats** - Get indexing statistics
 9. **health_check** - Check engine health
+10. **explore** - Advanced code exploration with semantic understanding
+11. **navigate** - Surgical navigation with 100% accuracy
+12. **semantic** - AI-powered semantic search across languages
 
 ### Example Usage
 
@@ -375,6 +426,28 @@ Enable verbose logging:
 DEBUG=1 bun run src/mcp-server.ts
 ```
 
+### Log Files
+
+Miller maintains detailed logs in the workspace directory:
+
+```bash
+# Log directory location
+.miller/logs/
+
+# Log file types
+- miller-YYYY-MM-DD.log     # General application logs
+- errors-YYYY-MM-DD.log     # Error-specific logs for debugging
+
+# Example usage
+tail -f .miller/logs/errors-$(date +%Y-%m-%d).log  # Follow current error log
+grep -i "semantic" .miller/logs/miller-$(date +%Y-%m-%d).log  # Search semantic logs
+```
+
+Common log locations for troubleshooting:
+- **Semantic indexing issues**: Check errors log for embedding/vector failures
+- **Performance problems**: Check miller log for timing and stats
+- **Database issues**: Look for SQLite constraint errors in errors log
+
 ### Performance Monitoring
 
 Check performance with stats:
@@ -407,7 +480,7 @@ await tools.health_check();
 
 - **New Extractors**: Add support for more programming languages
 - **Cross-Language Analysis**: Enhance API call detection
-- **Search Improvements**: Add semantic search capabilities
+- **Semantic Enhancements**: Improve embedding models and cross-layer entity mapping
 - **Performance**: Optimize for very large codebases
 - **Features**: Add code actions, refactoring suggestions
 
@@ -416,8 +489,9 @@ await tools.health_check();
 ### Typical Performance
 
 - **Parsing**: 100-500 files/second (depends on file size)
-- **Search**: < 10ms for fuzzy search, < 50ms for exact search
+- **Search**: < 10ms for fuzzy search, < 50ms for exact search, < 100ms for semantic search
 - **Queries**: < 1ms for go-to-definition, find-references
+- **Semantic Indexing**: 500 symbols with 10ms yield intervals to prevent UI lockup
 - **Memory**: ~100MB for 10,000 files, ~500MB for 50,000 files
 - **Startup**: 2-10 seconds for initial workspace indexing
 

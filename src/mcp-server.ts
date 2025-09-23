@@ -27,7 +27,9 @@ class MillerMCPServer {
       workspacePath: this.workspacePath,
       enableWatcher: true,
       watcherDebounceMs: 300,
-      batchSize: 50
+      batchSize: 50,
+      enableSemanticSearch: true,
+      embeddingModel: 'fast'
     });
 
     this.server = new Server({
@@ -818,7 +820,7 @@ ${implCount > 8 ? `\n**... ${implCount - 8} more implementations**` : ''}
           case "semantic": {
             const { mode = "hybrid", query, context = {}, options = {} } = args;
             const {
-              threshold = 0.7,
+              threshold = 1.5,
               max_results = 15,
               include_patterns = true,
               include_recommendations = true,
@@ -910,7 +912,7 @@ ${entityResult.recommendations.join('\n')}` : ''}
 
 **🎯 RESULTS** (${results.length} found):
 ${results.slice(0, 12).map(r =>
-  `**${r.name}** (${r.type}) - ${r.file_path.split('/').pop()}:${r.start_line}
+  `**${r.name}** (${r.kind}) - ${r.filePath.split('/').pop()}:${r.startLine}
   💯 Score: ${Math.round(r.hybridScore * 100)}% (name: ${Math.round(r.nameScore * 100)}%, structure: ${Math.round(r.structureScore * 100)}%, semantic: ${Math.round(r.semanticScore * 100)}%)
   🏷️  Method: ${r.searchMethod}${r.layer ? `, Layer: ${r.layer}` : ''}`
 ).join('\n\n')}
@@ -934,7 +936,7 @@ ${results.slice(0, 12).map(r =>
 
 **🎯 CONCEPTUAL MATCHES** (${results.length} found):
 ${results.slice(0, 10).map(r =>
-  `**${r.name}** (${r.type}) - ${r.file_path.split('/').pop()}:${r.start_line}
+  `**${r.name}** (${r.kind}) - ${r.filePath.split('/').pop()}:${r.startLine}
   🔬 Semantic Score: ${Math.round(r.semanticScore * 100)}%
   🌐 Language: ${r.language}${r.semanticDistance ? `, Distance: ${r.semanticDistance.toFixed(3)}` : ''}`
 ).join('\n\n')}

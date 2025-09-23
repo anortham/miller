@@ -8,6 +8,7 @@
 
 import { Database } from 'bun:sqlite';
 import * as sqliteVec from 'sqlite-vec';
+import { log, LogLevel } from '../utils/logger.js';
 import type { Symbol, EmbeddingResult } from '../database/schema.js';
 
 export interface VectorSearchResult {
@@ -60,7 +61,7 @@ export class MillerVectorStore {
     this.config = {
       enableQuantization: true,
       maxResults: 50,
-      distanceThreshold: 0.3, // Lower = more similar (cosine distance)
+      distanceThreshold: 1.5, // Lower = more similar (cosine distance) - increased for better recall
       batchSize: 100,
       ...config
     };
@@ -96,7 +97,7 @@ export class MillerVectorStore {
             const fs = require('fs');
             if (fs.existsSync(path)) {
               Database.setCustomSQLite(path);
-              console.log(`✅ Using custom SQLite: ${path}`);
+              log.engine(LogLevel.INFO, `Using custom SQLite`, { path });
               return;
             }
           } catch (e) {
@@ -104,11 +105,10 @@ export class MillerVectorStore {
           }
         }
 
-        console.log('⚠️  Warning: Could not find custom SQLite library. Extension loading may fail.');
-        console.log('   Install with: brew install sqlite3');
+        log.engine(LogLevel.WARN, 'Could not find custom SQLite library. Extension loading may fail. Install with: brew install sqlite3');
       }
     } catch (error) {
-      console.log('⚠️  Warning: Failed to set custom SQLite:', error);
+      log.engine(LogLevel.WARN, 'Failed to set custom SQLite', { error: error.message });
     }
   }
 
@@ -121,7 +121,7 @@ export class MillerVectorStore {
     }
 
     try {
-      console.log('🔄 Initializing Miller vector store with sqlite-vec...');
+      log.engine(LogLevel.INFO, 'Initializing Miller vector store with sqlite-vec');
 
       // Load sqlite-vec extension
       sqliteVec.load(this.db);
@@ -131,16 +131,16 @@ export class MillerVectorStore {
         .prepare("SELECT vec_version() as vec_version")
         .get() as { vec_version: string };
 
-      console.log(`✅ sqlite-vec loaded: v${vec_version}`);
+      log.engine(LogLevel.INFO, `sqlite-vec loaded successfully`, { version: vec_version });
 
       // Create vector tables
       await this.createVectorTables();
 
       this.isInitialized = true;
-      console.log('✅ Miller vector store ready!');
+      log.engine(LogLevel.INFO, 'Miller vector store ready');
 
     } catch (error) {
-      console.error('❌ Failed to initialize vector store:', error);
+      log.engine(LogLevel.ERROR, 'Failed to initialize vector store', { error: error.message });
       throw new Error(`Vector store initialization failed: ${error}`);
     }
   }
@@ -160,7 +160,7 @@ export class MillerVectorStore {
         )
       `);
 
-      console.log(`📊 Created vector table: ${table.name} (${table.dimensions}D)`);
+      log.engine(LogLevel.INFO, `Created vector table: ${table.name} (${table.dimensions}D)`);
     }
   }
 
@@ -176,53 +176,107 @@ export class MillerVectorStore {
     }
 
     try {
-      // Convert string UUID to integer for vec0 compatibility
+      // Get or create unique integer ID for vec0 compatibility
       const integerRowId = typeof symbolId === 'string'
-        ? this.stringToInteger(symbolId)
+        ? await this.getOrCreateIntegerId(symbolId)
         : symbolId;
 
       // Debug logging
-      console.log(`🔍 Storing embedding for symbol ${symbolId}:`);
-      console.log(`   Original ID: ${symbolId} (${typeof symbolId})`);
-      console.log(`   Integer ID: ${integerRowId}`);
-      console.log(`   Vector type: ${typeof embedding.vector}`);
-      console.log(`   Vector length: ${embedding.vector.length}`);
-      console.log(`   Sample values: [${Array.from(embedding.vector.slice(0, 3)).join(', ')}...]`);
+      log.engine(LogLevel.DEBUG, `Storing embedding for symbol ${symbolId}`, {
+        originalId: symbolId,
+        integerRowId,
+        vectorType: typeof embedding.vector,
+        vectorLength: embedding.vector.length,
+        sampleValues: Array.from(embedding.vector.slice(0, 3))
+      });
 
       // Store mapping for later retrieval
       await this.storeSymbolMapping(symbolId.toString(), integerRowId);
 
-      // Use integer rowid for the vector table
-      const stmt = this.db.prepare(`
-        INSERT OR REPLACE INTO symbol_vectors (rowid, embedding)
-        VALUES (?, ?)
+      // Check if vector already exists to avoid UNIQUE constraint violation
+      const existingStmt = this.db.prepare(`
+        SELECT rowid FROM symbol_vectors WHERE rowid = ?
       `);
+      const existingVector = existingStmt.get(integerRowId);
 
-      stmt.run(integerRowId, embedding.vector);
-      console.log(`✅ Successfully stored embedding for symbol ${symbolId} → ${integerRowId}`);
+      if (!existingVector) {
+        // Only insert if vector doesn't already exist
+        const stmt = this.db.prepare(`
+          INSERT INTO symbol_vectors (rowid, embedding)
+          VALUES (?, ?)
+        `);
+
+        // Convert Float32Array to JSON string format for sqlite-vec v0.1.6
+        const vectorString = JSON.stringify(Array.from(embedding.vector));
+        stmt.run(integerRowId, vectorString);
+      } else {
+        // Vector already exists, optionally update it
+        const updateStmt = this.db.prepare(`
+          UPDATE symbol_vectors SET embedding = ? WHERE rowid = ?
+        `);
+        const vectorString = JSON.stringify(Array.from(embedding.vector));
+        updateStmt.run(vectorString, integerRowId);
+      }
+      log.engine(LogLevel.DEBUG, `Successfully stored embedding for symbol ${symbolId} → ${integerRowId}`);
 
     } catch (error) {
-      console.error(`❌ Failed to store embedding for symbol ${symbolId}:`);
-      console.error(`   Error message: ${error.message}`);
-      console.error(`   Error code: ${error.code}`);
-      console.error(`   Error errno: ${error.errno}`);
-      console.error(`   Full error:`, error);
+      log.engine(LogLevel.ERROR, `Failed to store embedding for symbol ${symbolId}`, {
+        message: error.message,
+        code: error.code,
+        errno: error.errno
+      });
       throw error;
     }
   }
 
   /**
-   * Convert string UUID to consistent integer for vec0 primary key
+   * Get or create unique integer ID for vec0 primary key (no collisions)
+   * Uses sequential assignment to guarantee uniqueness
    */
-  private stringToInteger(str: string): number {
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-      const char = str.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash; // Convert to 32bit integer
+  private async getOrCreateIntegerId(symbolId: string): Promise<number> {
+    try {
+      // Use transaction to prevent race condition during concurrent ID generation
+      const transaction = this.db.transaction(() => {
+        // Check if mapping already exists
+        const existingStmt = this.db.prepare(`
+          SELECT integer_id FROM symbol_id_mapping WHERE original_id = ?
+        `);
+        const existing = existingStmt.get(symbolId) as { integer_id: number } | undefined;
+
+        if (existing) {
+          return existing.integer_id;
+        }
+
+        // Get next available integer ID atomically
+        const maxStmt = this.db.prepare(`
+          SELECT MAX(integer_id) as max_id FROM symbol_id_mapping
+        `);
+        const result = maxStmt.get() as { max_id: number | null };
+        const nextId = (result?.max_id || 0) + 1;
+
+        // Store new mapping in same transaction
+        const insertStmt = this.db.prepare(`
+          INSERT INTO symbol_id_mapping (original_id, integer_id)
+          VALUES (?, ?)
+        `);
+        insertStmt.run(symbolId, nextId);
+
+        return nextId;
+      });
+
+      return transaction();
+    } catch (error) {
+      // If mapping table doesn't exist, create it and retry
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS symbol_id_mapping (
+          original_id TEXT PRIMARY KEY,
+          integer_id INTEGER UNIQUE
+        )
+      `);
+
+      // Retry after table creation
+      return await this.getOrCreateIntegerId(symbolId);
     }
-    // Ensure positive integer (vec0 expects positive rowids)
-    return Math.abs(hash);
   }
 
   /**
@@ -248,6 +302,22 @@ export class MillerVectorStore {
         VALUES (?, ?)
       `);
       stmt.run(originalId, integerRowId);
+    }
+  }
+
+  /**
+   * Get original symbol ID from integer rowid
+   */
+  private getOriginalSymbolId(integerRowId: number): string | null {
+    try {
+      const stmt = this.db.prepare(`
+        SELECT original_id FROM symbol_id_mapping WHERE integer_id = ?
+      `);
+      const result = stmt.get(integerRowId) as { original_id: string } | undefined;
+      return result?.original_id || null;
+    } catch (error) {
+      log.engine(LogLevel.WARN, `Failed to get original symbol ID for ${integerRowId}`, error);
+      return null;
     }
   }
 
@@ -279,7 +349,7 @@ export class MillerVectorStore {
 
       transaction();
 
-      console.log(`📦 Stored batch ${Math.ceil((i + 1) / batchSize)}/${Math.ceil(embeddings.length / batchSize)}`);
+      log.engine(LogLevel.INFO, `Stored embedding batch ${Math.ceil((i + 1) / batchSize)}/${Math.ceil(embeddings.length / batchSize)}`);
     }
   }
 
@@ -299,6 +369,9 @@ export class MillerVectorStore {
     const searchThreshold = threshold || this.config.distanceThreshold || 0.3;
 
     try {
+      // Convert Float32Array to JSON string format for sqlite-vec v0.1.6
+      const vectorString = JSON.stringify(Array.from(queryEmbedding));
+
       const results = this.db.prepare(`
         SELECT
           rowid,
@@ -307,7 +380,7 @@ export class MillerVectorStore {
         WHERE embedding MATCH ?
         ORDER BY distance ASC
         LIMIT ?
-      `).all(queryEmbedding, maxResults) as Array<{
+      `).all(vectorString, maxResults) as Array<{
         rowid: number;
         distance: number;
       }>;
@@ -315,14 +388,56 @@ export class MillerVectorStore {
       // Filter by threshold after the query
       const filteredResults = results.filter(result => result.distance <= searchThreshold);
 
-      return filteredResults.map(result => ({
-        symbolId: result.rowid,
-        distance: result.distance,
-        confidence: this.distanceToConfidence(result.distance)
-      }));
+      return filteredResults.map(result => {
+        const originalId = this.getOriginalSymbolId(result.rowid);
+        return {
+          symbolId: originalId || result.rowid, // Use original ID or fallback to rowid
+          distance: result.distance,
+          confidence: this.distanceToConfidence(result.distance)
+        };
+      });
 
     } catch (error) {
-      console.error('❌ Vector search failed:', error);
+      log.engine(LogLevel.ERROR, 'Vector search failed', {
+        error: error.message,
+        code: error.code,
+        queryLength: queryEmbedding.length,
+        maxResults,
+        searchThreshold
+      });
+
+      // Try to reload extension and retry once
+      if (error.message?.includes('vec0') || error.message?.includes('MATCH')) {
+        log.engine(LogLevel.INFO, 'Attempting to reload sqlite-vec extension for vector search retry');
+        try {
+          sqliteVec.load(this.db);
+          log.engine(LogLevel.INFO, 'Extension reloaded, retrying vector search');
+
+          const retryResults = this.db.prepare(`
+            SELECT rowid, distance FROM symbol_vectors
+            WHERE embedding MATCH ?
+            ORDER BY distance ASC
+            LIMIT ?
+          `).all(vectorString, maxResults) as Array<{
+            rowid: number;
+            distance: number;
+          }>;
+
+          const filteredResults = retryResults.filter(result => result.distance <= searchThreshold);
+
+          log.engine(LogLevel.INFO, `Vector search retry successful: ${filteredResults.length} results`);
+
+          return filteredResults.map(result => ({
+            symbolId: result.rowid,
+            distance: result.distance,
+            confidence: this.distanceToConfidence(result.distance)
+          }));
+
+        } catch (retryError) {
+          log.engine(LogLevel.ERROR, 'Vector search retry also failed', { retryError: retryError.message });
+        }
+      }
+
       throw error;
     }
   }
@@ -386,7 +501,7 @@ export class MillerVectorStore {
       };
 
     } catch (error) {
-      console.error(`❌ Cross-layer entity search failed for "${entityName}":`, error);
+      log.engine(LogLevel.ERROR, `Cross-layer entity search failed for "${entityName}"`, { error: error.message });
       throw error;
     }
   }
@@ -519,7 +634,17 @@ export class MillerVectorStore {
       this.db.exec(`DELETE FROM ${table.name}`);
     }
 
-    console.log('🧹 All vector data cleared');
+    // Also clear the symbol ID mapping table to ensure clean sequential assignment
+    try {
+      this.db.exec(`DELETE FROM symbol_id_mapping`);
+    } catch (error) {
+      // Table might not exist yet - that's fine for clearing
+      if (!error.message?.includes('no such table')) {
+        throw error;
+      }
+    }
+
+    log.engine(LogLevel.INFO, 'All vector data and mappings cleared');
   }
 
   /**

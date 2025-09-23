@@ -49,10 +49,10 @@ import { GDScriptExtractor } from '../extractors/gdscript-extractor.js';
 import { LuaExtractor } from '../extractors/lua-extractor.js';
 
 // Import semantic components
-import MillerEmbedder from '../embeddings/miller-embedder.js';
+import MillerEmbedder, { type EmbeddingResult } from '../embeddings/miller-embedder.js';
 import MillerVectorStore from '../embeddings/miller-vector-store.js';
 import HybridSearchEngine from '../search/hybrid-search-engine.js';
-import EmbeddingWorkerPool from '../workers/embedding-worker-pool.js';
+import { EmbeddingProcessPool } from '../workers/embedding-process-pool.js';
 
 import { MillerPaths } from '../utils/miller-paths.js';
 import { log, LogLevel } from '../utils/logger.js';
@@ -66,7 +66,7 @@ export interface EnhancedCodeIntelligenceConfig {
 
   // Semantic enhancement options
   enableSemanticSearch?: boolean;
-  embeddingWorkerCount?: number;
+  embeddingProcessCount?: number;
   embeddingBatchSize?: number;
   semanticIndexingPriority?: 'background' | 'immediate' | 'on-demand';
   embeddingModel?: 'fast' | 'code' | 'advanced';
@@ -115,7 +115,7 @@ export class EnhancedCodeIntelligenceEngine {
   // Semantic components
   private embedder?: MillerEmbedder;
   private vectorStore?: MillerVectorStore;
-  private embeddingWorkerPool?: EmbeddingWorkerPool;
+  private embeddingProcessPool?: EmbeddingProcessPool;
   private _hybridSearch?: HybridSearchEngine;
   private semanticInitialized = false;
   private embeddingProgress = { completed: 0, total: 0 };
@@ -135,7 +135,7 @@ export class EnhancedCodeIntelligenceEngine {
 
       // Semantic defaults
       enableSemanticSearch: config.enableSemanticSearch ?? true,
-      embeddingWorkerCount: config.embeddingWorkerCount ?? Math.min(navigator.hardwareConcurrency || 4, 8),
+      embeddingProcessCount: config.embeddingProcessCount ?? Math.min(navigator?.hardwareConcurrency || 4, 4),
       embeddingBatchSize: config.embeddingBatchSize ?? 20,
       semanticIndexingPriority: config.semanticIndexingPriority ?? 'background',
       embeddingModel: config.embeddingModel ?? 'fast'
@@ -231,16 +231,39 @@ export class EnhancedCodeIntelligenceEngine {
       await this.vectorStore.initialize();
       log.engine(LogLevel.INFO, 'Vector store initialized successfully');
 
-      // Initialize embedder directly (worker pool disabled due to Bun/transformers compatibility)
-      this.embedder = new MillerEmbedder();
-      await this.embedder.initialize(this.config.embeddingModel);
-      log.engine(LogLevel.INFO, '📊 Direct embedder initialized (worker pool disabled for testing)');
+      // Try process pool first, fallback to direct embedder if needed
+      try {
+        log.engine(LogLevel.INFO, 'Attempting to initialize embedding process pool...');
+        this.embeddingProcessPool = new EmbeddingProcessPool({
+          processCount: this.config.embeddingProcessCount,
+          onEmbeddingComplete: async (symbolId: string, embedding: EmbeddingResult) => {
+            await this.vectorStore?.storeSymbolEmbedding(symbolId, embedding);
+            this.embeddingProgress.completed++;
+          },
+          onProgress: this.handleEmbeddingProgress.bind(this),
+          onError: (error: Error, task) => {
+            log.engine(LogLevel.ERROR, `Process pool embedding error:`, error);
+          }
+        });
+
+        await this.embeddingProcessPool.initialize();
+        log.engine(LogLevel.INFO, '🚀 Process pool initialized successfully! True background processing enabled.');
+      } catch (error) {
+        log.engine(LogLevel.WARN, `Process pool initialization failed: ${error.message}. Falling back to direct embedder.`);
+
+        // Fallback to direct embedder
+        this.embeddingProcessPool = undefined;
+        this.embedder = new MillerEmbedder();
+        await this.embedder.initialize(this.config.embeddingModel);
+        log.engine(LogLevel.INFO, '📊 Direct embedder initialized (process pool unavailable)');
+      }
 
       // Initialize hybrid search engine
       this._hybridSearch = new HybridSearchEngine(
         this.searchEngine,
         this.embedder,
-        this.vectorStore
+        this.vectorStore,
+        this.db
       );
 
       await this._hybridSearch.initialize();
@@ -284,12 +307,13 @@ export class EnhancedCodeIntelligenceEngine {
     try {
       // Phase 1: Structural indexing (fast, existing Miller functionality)
       const files = await this.getAllCodeFiles(absolutePath);
-      log.engine(LogLevel.INFO, `Found ${files.length} code files to index`);
+      const extCount = this.parserManager.getSupportedExtensions().length;
+      log.engine(LogLevel.INFO, `Found ${files.length} code files to index (${extCount} extensions supported)`);
 
       await this.performStructuralIndexing(files);
 
       // Phase 2: Semantic indexing (background with worker pool OR direct with embedder)
-      if (this.semanticInitialized && (this.embeddingWorkerPool || this.embedder)) {
+      if (this.semanticInitialized && (this.embeddingProcessPool || this.embedder)) {
         await this.startSemanticIndexing(absolutePath);
       }
 
@@ -333,7 +357,7 @@ export class EnhancedCodeIntelligenceEngine {
   }
 
   private async startSemanticIndexing(workspacePath: string): Promise<void> {
-    if (!this.vectorStore || (!this.embeddingWorkerPool && !this.embedder)) {
+    if (!this.vectorStore || (!this.embeddingProcessPool && !this.embedder)) {
       log.engine(LogLevel.WARN, 'Semantic indexing skipped: missing vector store or embedder');
       return;
     }
@@ -345,7 +369,7 @@ export class EnhancedCodeIntelligenceEngine {
         FROM symbols
         WHERE file_path LIKE ? AND (signature IS NOT NULL OR doc_comment IS NOT NULL)
         ORDER BY kind ASC, name ASC
-        LIMIT 100
+        LIMIT 500
       `).all(`${workspacePath}%`) as any[];
 
       // Map database fields to Symbol interface
@@ -369,62 +393,87 @@ export class EnhancedCodeIntelligenceEngine {
       this.embeddingProgress.total = symbols.length;
       this.embeddingProgress.completed = 0;
 
-      if (this.embeddingWorkerPool) {
-        // Use worker pool for background processing
+      if (this.embeddingProcessPool) {
+        // Use process pool for true background processing
         log.engine(LogLevel.INFO, `Starting background semantic indexing for ${symbols.length} symbols...`);
 
         const priorityBatches = this.categorizeSymbolsByPriority(symbols);
 
-        // Queue embeddings in batches based on priority
-        if (priorityBatches.high.length > 0) {
-          await this.embeddingWorkerPool.queueBatch(
-            priorityBatches.high.map(s => ({
-              symbolId: s.id,
-              code: [s.name, s.signature || '', s.doc_comment || ''].filter(Boolean).join(' '),
-              context: {
-                file: s.file_path,
-                language: s.language,
-                layer: this.detectLayer(s.file_path),
-                patterns: this.detectPatterns(s.name, s.type)
-              }
-            })),
-            'high'
-          );
+        // Process all symbols with proper priority ordering
+        const embeddingPromises: Promise<void>[] = [];
+
+        // High priority first
+        for (const symbol of priorityBatches.high) {
+          const content = [symbol.name, symbol.signature || '', symbol.doc_comment || ''].filter(Boolean).join(' ');
+
+          if (content.trim()) {
+            const embeddingPromise = this.embeddingProcessPool.embed(
+              symbol.id,
+              content,
+              {
+                file: symbol.file_path,
+                language: symbol.language,
+                layer: this.detectLayer(symbol.file_path),
+                patterns: this.detectPatterns(symbol.name, symbol.type)
+              },
+              'high'
+            ).catch(error => {
+              log.engine(LogLevel.ERROR, `Failed to embed high priority symbol ${symbol.name}:`, error);
+            });
+
+            embeddingPromises.push(embeddingPromise);
+          }
         }
 
-        if (priorityBatches.normal.length > 0) {
-          await this.embeddingWorkerPool.queueBatch(
-            priorityBatches.normal.map(s => ({
-              symbolId: s.id,
-              code: [s.name, s.signature || '', s.doc_comment || ''].filter(Boolean).join(' '),
-              context: {
-                file: s.file_path,
-                language: s.language,
-                layer: this.detectLayer(s.file_path),
-                patterns: this.detectPatterns(s.name, s.type)
-              }
-            })),
-            'normal'
-          );
+        // Normal priority
+        for (const symbol of priorityBatches.normal) {
+          const content = [symbol.name, symbol.signature || '', symbol.doc_comment || ''].filter(Boolean).join(' ');
+
+          if (content.trim()) {
+            const embeddingPromise = this.embeddingProcessPool.embed(
+              symbol.id,
+              content,
+              {
+                file: symbol.file_path,
+                language: symbol.language,
+                layer: this.detectLayer(symbol.file_path),
+                patterns: this.detectPatterns(symbol.name, symbol.type)
+              },
+              'normal'
+            ).catch(error => {
+              log.engine(LogLevel.ERROR, `Failed to embed normal priority symbol ${symbol.name}:`, error);
+            });
+
+            embeddingPromises.push(embeddingPromise);
+          }
         }
 
-        if (priorityBatches.low.length > 0) {
-          await this.embeddingWorkerPool.queueBatch(
-            priorityBatches.low.map(s => ({
-              symbolId: s.id,
-              code: [s.name, s.signature || '', s.doc_comment || ''].filter(Boolean).join(' '),
-              context: {
-                file: s.file_path,
-                language: s.language,
-                layer: this.detectLayer(s.file_path),
-                patterns: this.detectPatterns(s.name, s.type)
-              }
-            })),
-            'low'
-          );
+        // Low priority
+        for (const symbol of priorityBatches.low) {
+          const content = [symbol.name, symbol.signature || '', symbol.doc_comment || ''].filter(Boolean).join(' ');
+
+          if (content.trim()) {
+            const embeddingPromise = this.embeddingProcessPool.embed(
+              symbol.id,
+              content,
+              {
+                file: symbol.file_path,
+                language: symbol.language,
+                layer: this.detectLayer(symbol.file_path),
+                patterns: this.detectPatterns(symbol.name, symbol.type)
+              },
+              'low'
+            ).catch(error => {
+              log.engine(LogLevel.ERROR, `Failed to embed low priority symbol ${symbol.name}:`, error);
+            });
+
+            embeddingPromises.push(embeddingPromise);
+          }
         }
 
-        log.engine(LogLevel.INFO, `Queued ${symbols.length} symbols for background embedding generation`);
+        log.engine(LogLevel.INFO, `Queued ${embeddingPromises.length} symbols for background embedding generation`);
+
+        // Note: We don't await here - embeddings happen in background while main thread stays responsive
 
       } else if (this.embedder) {
         // Use direct embedder for synchronous processing
@@ -486,6 +535,11 @@ export class EnhancedCodeIntelligenceEngine {
           // Log progress periodically
           if (processed % 100 === 0 || processed === symbols.length) {
             log.engine(LogLevel.INFO, `Embedded ${processed}/${symbols.length} symbols (${Math.round(processed/symbols.length * 100)}%)`);
+          }
+
+          // Yield control to prevent UI lockup (every batch)
+          if (i + batchSize < symbols.length) {
+            await new Promise(resolve => setTimeout(resolve, 10)); // 10ms delay between batches
           }
         }
 
@@ -630,7 +684,7 @@ export class EnhancedCodeIntelligenceEngine {
       await this.updateFileMetadata(filePath, parseResult.hash, parseResult.language);
 
       // ENHANCEMENT: Queue symbols for embedding generation if semantic search is enabled
-      if (this.semanticInitialized && this.embeddingWorkerPool && !this.isBulkIndexing) {
+      if (this.semanticInitialized && this.embeddingProcessPool && !this.isBulkIndexing) {
         await this.queueSymbolsForEmbedding(symbols, filePath, parseResult.language);
       }
 
@@ -642,22 +696,36 @@ export class EnhancedCodeIntelligenceEngine {
   }
 
   private async queueSymbolsForEmbedding(symbols: Symbol[], filePath: string, language: string): Promise<void> {
-    if (!this.embeddingWorkerPool) return;
+    if (!this.embeddingProcessPool) return;
 
-    const embeddingTasks = symbols.map(symbol => ({
-      symbolId: symbol.id,
-      code: symbol.docComment || symbol.signature || `${symbol.kind} ${symbol.name}`,
-      context: {
-        file: filePath,
-        language,
-        layer: this.detectLayer(filePath),
-        patterns: this.detectPatterns(symbol.name, symbol.kind)
+    // Queue individual embedding tasks in background
+    const embeddingPromises = [];
+
+    for (const symbol of symbols) {
+      const content = symbol.docComment || symbol.signature || `${symbol.kind} ${symbol.name}`;
+
+      if (content.trim()) {
+        const embeddingPromise = this.embeddingProcessPool.embed(
+          symbol.id,
+          content,
+          {
+            file: filePath,
+            language,
+            layer: this.detectLayer(filePath),
+            patterns: this.detectPatterns(symbol.name, symbol.kind)
+          },
+          'normal'
+        ).catch(error => {
+          log.engine(LogLevel.ERROR, `Failed to embed symbol ${symbol.name} from ${filePath}:`, error);
+        });
+
+        embeddingPromises.push(embeddingPromise);
       }
-    }));
+    }
 
-    if (embeddingTasks.length > 0) {
-      await this.embeddingWorkerPool.queueBatch(embeddingTasks, 'normal');
-      log.engine(LogLevel.DEBUG, `Queued ${embeddingTasks.length} symbols for embedding from ${filePath}`);
+    if (embeddingPromises.length > 0) {
+      log.engine(LogLevel.DEBUG, `Queued ${embeddingPromises.length} symbols for embedding from ${filePath}`);
+      // Note: Don't await - let embeddings happen in background
     }
   }
 
@@ -822,11 +890,23 @@ export class EnhancedCodeIntelligenceEngine {
     // If semantic search is available and requested, use hybrid search
     if (this.hybridSearch && options.includeSemantics !== false) {
       try {
-        return await this.hybridSearch.search(query, {
+        const hybridResults = await this.hybridSearch.search(query, {
           maxResults: options.limit || 50,
           semanticThreshold: options.threshold || 0.7,
           enableCrossLayer: options.crossLayer !== false
         });
+
+        // Convert HybridSearchResult[] back to SearchResult[] format for MCP compatibility
+        return hybridResults.map(r => ({
+          file: r.filePath,
+          line: r.startLine,
+          column: r.startColumn,
+          text: r.name,
+          score: r.hybridScore,
+          symbolId: r.id.toString(),
+          kind: r.kind,
+          signature: r.signature
+        }));
       } catch (error) {
         log.engine(LogLevel.WARN, 'Hybrid search failed, falling back to structural search', error);
       }
@@ -893,6 +973,11 @@ export class EnhancedCodeIntelligenceEngine {
     const files: string[] = [];
     const supportedExtensions = this.parserManager.getSupportedExtensions();
 
+    console.log(`🔍 DEBUG: getAllCodeFiles called for: ${dirPath}`);
+    console.log(`📁 DEBUG: supportedExtensions.length = ${supportedExtensions.length}`);
+    log.engine(LogLevel.INFO, `🔍 getAllCodeFiles starting for: ${dirPath}`);
+    log.engine(LogLevel.INFO, `📁 Supported extensions: ${supportedExtensions.length} found`, { first10: supportedExtensions.slice(0, 10) });
+
     async function walk(dir: string) {
       try {
         const entries = await readdir(dir, { withFileTypes: true });
@@ -919,6 +1004,7 @@ export class EnhancedCodeIntelligenceEngine {
     }
 
     await walk(dirPath);
+    log.engine(LogLevel.INFO, `✅ getAllCodeFiles completed: ${files.length} files found`, { first5: files.slice(0, 5) });
     return files;
   }
 
@@ -967,14 +1053,14 @@ export class EnhancedCodeIntelligenceEngine {
     // Add semantic stats if components are initialized
     if (this.semanticInitialized && this.vectorStore) {
       const vectorStats = this.vectorStore.getStats();
-      const workerStats = this.embeddingWorkerPool ? this.embeddingWorkerPool.getStats() : null;
+      const processStats = this.embeddingProcessPool ? this.embeddingProcessPool.getStats() : null;
 
       (baseStats as any).semantic = {
         totalEmbeddings: vectorStats.totalVectors,
         embeddingProgress: this.embeddingProgress.total > 0
           ? Math.round((this.embeddingProgress.completed / this.embeddingProgress.total) * 100)
           : 0,
-        workerStats,
+        processStats,
         indexingComplete: this.embeddingProgress.completed >= this.embeddingProgress.total,
         semanticSearchAvailable: vectorStats.totalVectors > 0
       };
@@ -1034,8 +1120,8 @@ export class EnhancedCodeIntelligenceEngine {
   }
 
   async terminate(): Promise<void> {
-    if (this.embeddingWorkerPool) {
-      await this.embeddingWorkerPool.terminate();
+    if (this.embeddingProcessPool) {
+      await this.embeddingProcessPool.terminate();
     }
     if (this.fileWatcher) {
       this.fileWatcher.stopWatching();
@@ -1056,10 +1142,6 @@ export class EnhancedCodeIntelligenceEngine {
     // Implementation from original engine
   }
 
-  private async getAllCodeFiles(dirPath: string): Promise<string[]> {
-    // Implementation from original engine
-    return [];
-  }
 }
 
 export default EnhancedCodeIntelligenceEngine;
