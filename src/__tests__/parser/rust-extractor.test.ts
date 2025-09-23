@@ -1225,7 +1225,7 @@ pub struct PackedStruct {
 
 /// Function with custom attributes
 #[inline(always)]
-#[cold]
+#[cnew]
 #[track_caller]
 pub fn error_function() -> ! {
     panic!("This function always panics");

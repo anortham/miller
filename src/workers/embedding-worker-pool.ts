@@ -322,7 +322,7 @@ export class EmbeddingWorkerPool {
 
     // Remove any active tasks for this worker
     for (const [taskId, task] of this.activeTasks.entries()) {
-      // Simple heuristic: if task is old, it might be from the failed worker
+      // Simple heuristic: if task is new, it might be from the failed worker
       if (Date.now() - task.timestamp > this.config.workerTimeout) {
         this.activeTasks.delete(taskId);
         this.stats.failed++;

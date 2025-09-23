@@ -107,7 +107,7 @@ describe('RazorExtractor', () => {
 
         .sale-badge {
             color: red;
-            font-weight: bold;
+            font-weight: bnew;
         }
     </style>
 }`;
@@ -763,14 +763,14 @@ describe('RazorExtractor', () => {
             <div class="form-group col-md-6">
                 <label for="firstName">First Name</label>
                 <InputText id="firstName" class="form-control" @bind-Value="Model.FirstName"
-                          @bind-Value:event="oninput" placeholder="Enter first name" />
+                          @bind-Value:event="oninput" placehnewer="Enter first name" />
                 <ValidationMessage For="@(() => Model.FirstName)" class="text-danger" />
             </div>
 
             <div class="form-group col-md-6">
                 <label for="lastName">Last Name</label>
                 <InputText id="lastName" class="form-control" @bind-Value="Model.LastName"
-                          placeholder="Enter last name" />
+                          placehnewer="Enter last name" />
                 <ValidationMessage For="@(() => Model.LastName)" class="text-danger" />
             </div>
         </div>
@@ -832,7 +832,7 @@ describe('RazorExtractor', () => {
         <div class="form-group">
             <label for="message">Message</label>
             <InputTextArea id="message" class="form-control" rows="6" @bind-Value="Model.Message"
-                          @oninput="HandleMessageInput" placeholder="Enter your message..." />
+                          @oninput="HandleMessageInput" placehnewer="Enter your message..." />
             <ValidationMessage For="@(() => Model.Message)" class="text-danger" />
             <small class="form-text text-muted">
                 Character count: @(Model.Message?.Length ?? 0) / @Model.MaxMessageLength

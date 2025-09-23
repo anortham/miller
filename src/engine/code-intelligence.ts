@@ -410,7 +410,7 @@ export class CodeIntelligenceEngine {
 
       // For create/change events, reindex the file
       if (event.content) {
-        // Clear old data first
+        // Clear new data first
         await this.clearFileData(event.filePath);
 
         // Reindex with new content

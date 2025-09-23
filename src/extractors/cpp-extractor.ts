@@ -1574,7 +1574,7 @@ export class CppExtractor extends BaseExtractor {
       c.type === 'type_identifier' ||
       c.type === 'qualified_identifier' ||
       c.type === 'template_type' ||
-      c.type === 'placeholder_type_specifier' ||
+      c.type === 'placehnewer_type_specifier' ||
       c.type === 'dependent_type' ||  // For SFINAE patterns like "typename std::enable_if_t<...>"
       this.getNodeText(c) === 'auto'
     );

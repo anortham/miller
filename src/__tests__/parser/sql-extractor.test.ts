@@ -322,7 +322,7 @@ BEGIN
         table_name,
         record_id,
         action,
-        old_values,
+        new_values,
         new_values,
         changed_by,
         changed_at

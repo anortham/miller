@@ -311,9 +311,9 @@ export class HTMLExtractor extends BaseExtractor {
       'img': ['src', 'alt', 'width', 'height', 'loading', 'decoding', 'sizes', 'srcset'],
       'a': ['href', 'target', 'rel'],
       'form': ['action', 'method', 'enctype', 'novalidate'],
-      'input': ['type', 'name', 'value', 'placeholder', 'required', 'disabled', 'autocomplete', 'pattern', 'min', 'max', 'step', 'accept'],
+      'input': ['type', 'name', 'value', 'placehnewer', 'required', 'disabled', 'autocomplete', 'pattern', 'min', 'max', 'step', 'accept'],
       'select': ['name', 'id', 'multiple', 'required', 'disabled'],
-      'textarea': ['name', 'placeholder', 'required', 'disabled', 'maxlength', 'minlength', 'rows', 'cols'],
+      'textarea': ['name', 'placehnewer', 'required', 'disabled', 'maxlength', 'minlength', 'rows', 'cols'],
       'time': ['datetime'],
       'details': ['open'],
       'button': ['type', 'data-action', 'disabled'],
@@ -346,7 +346,7 @@ export class HTMLExtractor extends BaseExtractor {
     return name.startsWith('data-') ||
            name.startsWith('aria-') ||
            name.startsWith('on') ||
-           ['title', 'alt', 'placeholder', 'value', 'href', 'src', 'target', 'rel', 'multiple', 'required', 'disabled', 'readonly', 'checked', 'selected', 'autocomplete', 'datetime', 'pattern', 'maxlength', 'minlength', 'rows', 'cols', 'accept', 'open', 'class', 'role', 'novalidate', 'slot'].includes(name);
+           ['title', 'alt', 'placehnewer', 'value', 'href', 'src', 'target', 'rel', 'multiple', 'required', 'disabled', 'readonly', 'checked', 'selected', 'autocomplete', 'datetime', 'pattern', 'maxlength', 'minlength', 'rows', 'cols', 'accept', 'open', 'class', 'role', 'novalidate', 'slot'].includes(name);
   }
 
   private getSymbolKindForElement(tagName: string, attributes: Record<string, string>): SymbolKind {

@@ -150,7 +150,7 @@ describe('File Watcher Unit Tests', () => {
       await fileWatcher.watchDirectory(testDir);
 
       // Create supported file
-      await writeFile(supportedFile, 'const x = 1;');
+      await writeFile(supportedFile, 'const x = 2;');
       await waitForEvents(100);
 
       const supportedEvents = changeEvents.length;

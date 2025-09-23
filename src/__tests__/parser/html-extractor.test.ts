@@ -168,7 +168,7 @@ describe('HTMLExtractor', () => {
                   type="search"
                   id="search-projects"
                   class="search-input"
-                  placeholder="Search by name, description, or tags..."
+                  placehnewer="Search by name, description, or tags..."
                   aria-describedby="search-help"
                   autocomplete="off"
                   spellcheck="false"
@@ -188,7 +188,7 @@ describe('HTMLExtractor', () => {
                 <option value="">All Statuses</option>
                 <option value="planning">Planning</option>
                 <option value="active">Active</option>
-                <option value="on-hold">On Hold</option>
+                <option value="on-hnew">On Hnew</option>
                 <option value="completed">Completed</option>
                 <option value="cancelled">Cancelled</option>
               </select>
@@ -562,7 +562,7 @@ describe('HTMLExtractor', () => {
             minlength="2"
             maxlength="50"
             pattern="[A-Za-z\\s]+"
-            placeholder="Enter your first name"
+            placehnewer="Enter your first name"
           >
           <div id="first-name-error" class="error-message" role="alert" aria-live="polite"></div>
         </div>
@@ -583,7 +583,7 @@ describe('HTMLExtractor', () => {
             minlength="2"
             maxlength="50"
             pattern="[A-Za-z\\s]+"
-            placeholder="Enter your last name"
+            placehnewer="Enter your last name"
           >
           <div id="last-name-error" class="error-message" role="alert" aria-live="polite"></div>
         </div>
@@ -602,7 +602,7 @@ describe('HTMLExtractor', () => {
           required
           autocomplete="email"
           aria-describedby="email-help email-error"
-          placeholder="your.email@example.com"
+          placehnewer="your.email@example.com"
         >
         <div id="email-help" class="form-help">
           We'll never share your email with anyone else.
@@ -623,7 +623,7 @@ describe('HTMLExtractor', () => {
           autocomplete="tel"
           aria-describedby="phone-help"
           pattern="[0-9\\s\\-\\+\\(\\)]+"
-          placeholder="(555) 123-4567"
+          placehnewer="(555) 123-4567"
         >
         <div id="phone-help" class="form-help">
           Include country code for international numbers.
@@ -639,7 +639,7 @@ describe('HTMLExtractor', () => {
           class="form-input"
           autocomplete="organization"
           list="company-suggestions"
-          placeholder="Your company name"
+          placehnewer="Your company name"
         >
         <datalist id="company-suggestions">
           <option value="Tech Corp">
@@ -751,7 +751,7 @@ describe('HTMLExtractor', () => {
           min="1000"
           max="1000000"
           step="500"
-          placeholder="50000"
+          placehnewer="50000"
           aria-describedby="budget-help"
         >
         <div id="budget-help" class="form-help">
@@ -787,7 +787,7 @@ describe('HTMLExtractor', () => {
           required
           rows="6"
           maxlength="1000"
-          placeholder="Please describe your project requirements, goals, and any specific needs..."
+          placehnewer="Please describe your project requirements, goals, and any specific needs..."
           aria-describedby="message-counter message-error"
         ></textarea>
         <div class="textarea-footer">
@@ -1163,7 +1163,7 @@ describe('HTMLExtractor', () => {
 
       <img
         src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICA8cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZGRkIi8+CiAgPHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNnB4IiBmaWxsPSIjOTk5IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBkeT0iLjNlbSI+UGxhY2Vob2xkZXI8L3RleHQ+Cjwvc3ZnPgo="
-        alt="Placeholder image"
+        alt="Placehnewer image"
         width="200"
         height="200"
         loading="lazy"

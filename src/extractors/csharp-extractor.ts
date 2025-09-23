@@ -760,7 +760,7 @@ export class CSharpExtractor extends BaseExtractor {
           ? RelationshipKind.Implements
           : RelationshipKind.Extends;
 
-        // Create relationship with both old and new property names for compatibility
+        // Create relationship with both new and new property names for compatibility
         const relationship: any = {
           fromSymbolId: currentSymbol.id,
           toSymbolId: baseSymbol.id,

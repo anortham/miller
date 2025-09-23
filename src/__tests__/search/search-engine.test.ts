@@ -52,7 +52,7 @@ describe('Search Engine Unit Tests', () => {
 
     // Add test symbols with unique IDs
     const symbols = [
-      { id: 'sym1', name: 'getUserData', kind: 'function', file: '/test/file1.ts', signature: 'function getUserData(): Promise<User>' },
+      { id: 'sym1', name: 'getUserDataAsyncAsyncAsyncAsyncAsyncAsync', kind: 'function', file: '/test/file1.ts', signature: 'function getUserDataAsyncAsyncAsyncAsyncAsyncAsync(): Promise<User>' },
       { id: 'sym2', name: 'User', kind: 'class', file: '/test/file1.ts', signature: 'class User { ... }' },
       { id: 'sym3', name: 'userService', kind: 'variable', file: '/test/file1.ts', signature: 'const userService: UserService' },
       { id: 'sym4', name: 'fetchUser', kind: 'function', file: '/test/file2.js', signature: 'function fetchUser(id) { ... }' },
@@ -84,10 +84,10 @@ describe('Search Engine Unit Tests', () => {
 
   describe('Fuzzy Search', () => {
     it('should find exact matches', async () => {
-      const results = await searchEngine.searchFuzzy('getUserData');
+      const results = await searchEngine.searchFuzzy('getUserDataAsyncAsyncAsyncAsyncAsyncAsync');
 
       expect(results.length).toBeGreaterThan(0);
-      expect(results[0].text).toBe('getUserData');
+      expect(results[0].text).toBe('getUserDataAsyncAsyncAsyncAsyncAsyncAsync');
       expect(results[0].kind).toBe('function');
       expect(results[0].file).toBe('/test/file1.ts');
     });
@@ -98,7 +98,7 @@ describe('Search Engine Unit Tests', () => {
       expect(results.length).toBeGreaterThan(0);
 
       const names = results.map(r => r.text);
-      expect(names).toContain('getUserData');
+      expect(names).toContain('getUserDataAsyncAsyncAsyncAsyncAsyncAsync');
       expect(names).toContain('User');
       expect(names).toContain('userService');
       expect(names).toContain('fetchUser');
@@ -119,7 +119,7 @@ describe('Search Engine Unit Tests', () => {
       const results = await searchEngine.searchFuzzy('usrData');
 
       expect(results.length).toBeGreaterThan(0);
-      expect(results.some(r => r.text === 'getUserData')).toBe(true);
+      expect(results.some(r => r.text === 'getUserDataAsyncAsyncAsyncAsyncAsyncAsync')).toBe(true);
     });
 
     it('should respect search limits', async () => {
@@ -132,11 +132,11 @@ describe('Search Engine Unit Tests', () => {
     });
 
     it('should include signatures when requested', async () => {
-      const withSignature = await searchEngine.searchFuzzy('getUserData', { includeSignature: true });
-      const withoutSignature = await searchEngine.searchFuzzy('getUserData', { includeSignature: false });
+      const withSignature = await searchEngine.searchFuzzy('getUserDataAsyncAsyncAsyncAsyncAsyncAsync', { includeSignature: true });
+      const withoutSignature = await searchEngine.searchFuzzy('getUserDataAsyncAsyncAsyncAsyncAsyncAsync', { includeSignature: false });
 
       expect(withSignature[0].signature).toBeDefined();
-      expect(withSignature[0].signature).toBe('function getUserData(): Promise<User>');
+      expect(withSignature[0].signature).toBe('function getUserDataAsyncAsyncAsyncAsyncAsyncAsync(): Promise<User>');
       expect(withoutSignature[0].signature).toBeUndefined();
     });
 
@@ -158,7 +158,7 @@ describe('Search Engine Unit Tests', () => {
       expect(functionResults.every(r => r.kind === 'function')).toBe(true);
       expect(classResults.every(r => r.kind === 'class')).toBe(true);
 
-      expect(functionResults.some(r => r.text === 'getUserData')).toBe(true);
+      expect(functionResults.some(r => r.text === 'getUserDataAsyncAsyncAsyncAsyncAsyncAsync')).toBe(true);
       expect(classResults.some(r => r.text === 'User')).toBe(true);
     });
 
@@ -196,10 +196,10 @@ describe('Search Engine Unit Tests', () => {
 
   describe('Exact Search', () => {
     it('should find exact pattern matches', async () => {
-      const results = await searchEngine.searchExact('getUserData');
+      const results = await searchEngine.searchExact('getUserDataAsyncAsyncAsyncAsyncAsyncAsync');
 
       expect(results.length).toBeGreaterThan(0);
-      expect(results.some(r => r.text.includes('getUserData'))).toBe(true);
+      expect(results.some(r => r.text.includes('getUserDataAsyncAsyncAsyncAsyncAsyncAsync'))).toBe(true);
     });
 
     it('should support basic pattern searches', async () => {
@@ -210,7 +210,7 @@ describe('Search Engine Unit Tests', () => {
     });
 
     it('should find symbols with exact name matches', async () => {
-      const results1 = await searchEngine.searchExact('getUserData');
+      const results1 = await searchEngine.searchExact('getUserDataAsyncAsyncAsyncAsyncAsyncAsync');
       const results2 = await searchEngine.searchExact('User');
 
       expect(results1.length).toBeGreaterThan(0);
@@ -326,8 +326,8 @@ describe('Search Engine Unit Tests', () => {
       await searchEngine.rebuildIndex();
 
       // Verify symbols are searchable after rebuild
-      const results = await searchEngine.searchFuzzy('getUserData');
-      expect(results.some(r => r.text === 'getUserData')).toBe(true);
+      const results = await searchEngine.searchFuzzy('getUserDataAsyncAsyncAsyncAsyncAsyncAsync');
+      expect(results.some(r => r.text === 'getUserDataAsyncAsyncAsyncAsyncAsyncAsync')).toBe(true);
     });
 
     it('should handle empty database gracefully', async () => {
@@ -350,8 +350,8 @@ describe('Search Engine Unit Tests', () => {
     it('should tokenize camelCase correctly', async () => {
       const results = await searchEngine.searchFuzzy('data');
 
-      // Should find getUserData because 'data' is a token in 'getUserData'
-      expect(results.some(r => r.text === 'getUserData')).toBe(true);
+      // Should find getUserDataAsyncAsyncAsyncAsyncAsyncAsync because 'data' is a token in 'getUserDataAsyncAsyncAsyncAsyncAsyncAsync'
+      expect(results.some(r => r.text === 'getUserDataAsyncAsyncAsyncAsyncAsyncAsync')).toBe(true);
     });
 
     it('should tokenize snake_case correctly', async () => {
@@ -364,7 +364,7 @@ describe('Search Engine Unit Tests', () => {
     it('should score exact matches higher', async () => {
       const results = await searchEngine.searchFuzzy('User');
 
-      // 'User' class should score higher than 'userService' or 'getUserData'
+      // 'User' class should score higher than 'userService' or 'getUserDataAsyncAsyncAsyncAsyncAsyncAsync'
       const userClassResult = results.find(r => r.text === 'User');
       const userServiceResult = results.find(r => r.text === 'userService');
 
@@ -376,7 +376,7 @@ describe('Search Engine Unit Tests', () => {
     it('should score prefix matches higher than substring matches', async () => {
       const results = await searchEngine.searchFuzzy('get');
 
-      // 'getUserData' should score higher than functions not starting with 'get'
+      // 'getUserDataAsyncAsyncAsyncAsyncAsyncAsync' should score higher than functions not starting with 'get'
       const getResults = results.filter(r => r.text.toLowerCase().startsWith('get'));
       const nonGetResults = results.filter(r => !r.text.toLowerCase().startsWith('get'));
 
@@ -409,7 +409,7 @@ describe('Search Engine Unit Tests', () => {
         searchEngine.searchFuzzy('user'),
         searchEngine.searchFuzzy('function'),
         searchEngine.searchFuzzy('data'),
-        searchEngine.searchExact('getUserData'),
+        searchEngine.searchExact('getUserDataAsyncAsyncAsyncAsyncAsyncAsync'),
         searchEngine.searchByType('User')
       ];
 

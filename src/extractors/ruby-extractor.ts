@@ -548,24 +548,24 @@ export class RubyExtractor extends BaseExtractor {
   }
 
   private extractAlias(node: Parser.SyntaxNode, parentId?: string): Symbol | null {
-    const newNameNode = node.children.find(c => c.type === 'identifier' || c.type === 'simple_symbol');
-    const oldNameNode = node.children.find((c, i) =>
+    const firstNameNode = node.children.find(c => c.type === 'identifier' || c.type === 'simple_symbol');
+    const secondNameNode = node.children.find((c, i) =>
       (c.type === 'identifier' || c.type === 'simple_symbol') &&
-      i > node.children.indexOf(newNameNode!)
+      i > node.children.indexOf(firstNameNode!)
     );
 
-    if (!newNameNode || !oldNameNode) return null;
+    if (!firstNameNode || !secondNameNode) return null;
 
-    const newName = this.getNodeText(newNameNode).replace(':', '');
-    const oldName = this.getNodeText(oldNameNode).replace(':', '');
+    const firstName = this.getNodeText(firstNameNode).replace(':', '');
+    const secondName = this.getNodeText(secondNameNode).replace(':', '');
 
-    return this.createSymbol(node, newName, SymbolKind.Method, {
-      signature: `alias ${newName} ${oldName}`,
+    return this.createSymbol(node, firstName, SymbolKind.Method, {
+      signature: `alias ${firstName} ${secondName}`,
       visibility: 'public',
       parentId,
       metadata: {
         type: 'alias',
-        originalMethod: oldName
+        originalMethod: secondName
       }
     });
   }
@@ -1256,51 +1256,51 @@ export class RubyExtractor extends BaseExtractor {
         continue;
       }
 
-      // Extract alias statements (alias new_name old_name)
+      // Extract alias statements (alias new_name new_name)
       const aliasMatch = line.match(/^\s*alias\s+([a-zA-Z_]\w*[?!]?)\s+([a-zA-Z_]\w*[?!]?)/);
       if (aliasMatch) {
-        const newName = aliasMatch[1];
-        const oldName = aliasMatch[2];
+        const aliasName = aliasMatch[1];
+        const originalName = aliasMatch[2];
 
         // Find parent based on indentation
         const parent = this.findParentByIndentation(contextStack, indentLevel);
 
-        const symbol = this.createSymbol(tree.rootNode, newName, SymbolKind.Method, {
-          signature: `alias ${newName} ${oldName}`,
+        const symbol = this.createSymbol(tree.rootNode, aliasName, SymbolKind.Method, {
+          signature: `alias ${aliasName} ${originalName}`,
           visibility: currentVisibility,
           parentId: parent?.id,
           metadata: {
             type: 'alias',
-            originalMethod: oldName,
+            originalMethod: originalName,
             isFallback: true
           }
         });
         symbols.push(symbol);
-        symbolMap.set(`${parent?.name || 'global'}::${newName}`, symbol);
+        symbolMap.set(`${parent?.name || 'global'}::${aliasName}`, symbol);
         continue;
       }
 
       // Extract alias_method calls
       const aliasMethodMatch = line.match(/^\s*alias_method\s+[:'"]([^'"]+)['"]\s*,\s*[:'"]([^'"]+)['"]/);
       if (aliasMethodMatch) {
-        const newName = aliasMethodMatch[1];
-        const oldName = aliasMethodMatch[2];
+        const methodAlias = aliasMethodMatch[1];
+        const methodOriginal = aliasMethodMatch[2];
 
         // Find parent based on indentation
         const parent = this.findParentByIndentation(contextStack, indentLevel);
 
-        const symbol = this.createSymbol(tree.rootNode, newName, SymbolKind.Method, {
-          signature: `alias_method :${newName}, :${oldName}`,
+        const symbol = this.createSymbol(tree.rootNode, methodAlias, SymbolKind.Method, {
+          signature: `alias_method :${methodAlias}, :${methodOriginal}`,
           visibility: currentVisibility,
           parentId: parent?.id,
           metadata: {
             type: 'alias_method',
-            originalMethod: oldName,
+            originalMethod: methodOriginal,
             isFallback: true
           }
         });
         symbols.push(symbol);
-        symbolMap.set(`${parent?.name || 'global'}::${newName}`, symbol);
+        symbolMap.set(`${parent?.name || 'global'}::${methodAlias}`, symbol);
         continue;
       }
 

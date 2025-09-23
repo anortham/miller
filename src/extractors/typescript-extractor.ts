@@ -129,7 +129,7 @@ export class TypeScriptExtractor extends BaseExtractor {
 
     const signature = this.buildFunctionSignature(node, name);
 
-    return this.createSymbol(node, name, SymbolKind.Function, {
+    return this.createSymbol(nameNode || node, name, SymbolKind.Function, {
       signature,
       visibility: this.extractVisibility(node),
       parentId,
@@ -337,7 +337,7 @@ export class TypeScriptExtractor extends BaseExtractor {
     const calledSymbol = symbols.find(s => s.name === calleeName);
 
     if (calledSymbol) {
-      const callingSymbol = this.findContainingSymbol(node, symbols);
+      const callingSymbol = this.findContainingFunction(node, symbols);
       if (callingSymbol) {
         relationships.push(this.createRelationship(
           callingSymbol.id,
@@ -347,6 +347,33 @@ export class TypeScriptExtractor extends BaseExtractor {
         ));
       }
     }
+  }
+
+  private findContainingFunction(node: Parser.SyntaxNode, symbols: Symbol[]): Symbol | undefined {
+    // Traverse up the AST to find the containing function
+    let current = node.parent;
+    while (current) {
+      if (current.type === 'function_declaration' || current.type === 'function' ||
+          current.type === 'method_definition' || current.type === 'arrow_function') {
+        // Get the function name
+        const nameNode = current.childForFieldName('name');
+        const functionName = nameNode ? this.getNodeText(nameNode) : 'Anonymous';
+
+        // Find the symbol that matches this function
+        const functionSymbol = symbols.find(s =>
+          s.name === functionName &&
+          (s.kind === SymbolKind.Function || s.kind === SymbolKind.Method || s.kind === SymbolKind.Constructor)
+        );
+
+        if (functionSymbol) {
+          return functionSymbol;
+        }
+      }
+      current = current.parent;
+    }
+
+    // Fallback to the original method
+    return this.findContainingSymbol(node, symbols);
   }
 
   private extractExtendsRelationships(

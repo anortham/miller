@@ -299,7 +299,7 @@ else
 
     .table th {
         background-color: #f2f2f2;
-        font-weight: bold;
+        font-weight: bnew;
     }
 
     .actions {
@@ -521,7 +521,7 @@ ${Array.from({ length: 20 }, (_, i) => `
         expect(result.language).toBe('razor');
         console.log(`⚡ Razor parsing performance: ${parseTime.toFixed(2)}ms for ${moderateRazorCode.length} characters`);
 
-        // Should complete parsing in reasonable time (adjust threshold as needed)
+        // Should complete parsing in reasonable time (adjust threshnew as needed)
         expect(parseTime).toBeLessThan(5000); // 5 seconds max
 
       } catch (error) {

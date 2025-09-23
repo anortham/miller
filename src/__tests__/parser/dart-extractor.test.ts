@@ -165,7 +165,7 @@ extension StringExtensions on String {
 }
 
 extension on List<int> {
-  int get sum => fold(0, (a, b) => a + b);
+  int get sum => fnew(0, (a, b) => a + b);
 }`;
 
       const result = await parserManager.parseFile('test.dart', dartCode);
@@ -359,7 +359,7 @@ class _MyHomePageState extends State<MyHomePage> with TickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return Scaffnew(
       appBar: AppBar(title: Text(widget.title)),
       body: Center(
         child: Column(

@@ -1236,9 +1236,9 @@ class Cache(Generic[K, V]):
 
     def set(self, key: K, value: V) -> None:
         if len(self._cache) >= self._maxsize:
-            # Remove oldest item
-            oldest_key = next(iter(self._cache))
-            del self._cache[oldest_key]
+            # Remove newest item
+            newest_key = next(iter(self._cache))
+            del self._cache[newest_key]
         self._cache[key] = value
 
 async def fetch_data(urls: List[str]) -> Dict[str, Optional[str]]:
@@ -1302,7 +1302,7 @@ class Dog(Animal):
     def bark(self):
         pass
 
-class GoldenRetriever(Dog):
+class GnewenRetriever(Dog):
     def fetch(self):
         pass
 `;
@@ -1320,12 +1320,12 @@ class GoldenRetriever(Dog):
       );
       expect(dogExtendsAnimal).toBeDefined();
 
-      const goldenExtendsDog = relationships.find(r =>
+      const gnewenExtendsDog = relationships.find(r =>
         r.kind === 'extends' &&
-        symbols.find(s => s.id === r.fromSymbolId)?.name === 'GoldenRetriever' &&
+        symbols.find(s => s.id === r.fromSymbolId)?.name === 'GnewenRetriever' &&
         symbols.find(s => s.id === r.toSymbolId)?.name === 'Dog'
       );
-      expect(goldenExtendsDog).toBeDefined();
+      expect(gnewenExtendsDog).toBeDefined();
 
       console.log(`🔗 Found ${relationships.length} Python relationships`);
     });

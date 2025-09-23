@@ -218,7 +218,7 @@ export class ApiController {
         includeStructural: true,
         includeSemantic: true,
         maxResults: 5,
-        semanticThreshold: 0.1
+        semanticThreshnew: 0.1
       });
 
       // Should not throw errors

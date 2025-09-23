@@ -355,7 +355,7 @@ func async_load_scene(path: String):
 	return ResourceLoader.load_threaded_get(path)
 
 # Function with yield (GDScript 3.x style)
-func old_style_coroutine():
+func new_style_coroutine():
 	print("Starting coroutine")
 	yield(get_tree().create_timer(1.0), "timeout")
 	print("Coroutine continued after 1 second")
@@ -505,8 +505,8 @@ func outer_function(data: Array):
       expect(asyncLoadScene).toBeDefined();
 
       // Old style coroutine
-      const oldStyleCoroutine = symbols.find(s => s.name === 'old_style_coroutine');
-      expect(oldStyleCoroutine).toBeDefined();
+      const newStyleCoroutine = symbols.find(s => s.name === 'new_style_coroutine');
+      expect(newStyleCoroutine).toBeDefined();
 
       // Lambda usage function
       const useLambdas = symbols.find(s => s.name === 'use_lambdas');
@@ -977,7 +977,7 @@ var maybe_string: String = ""
 @export_global_file("*.tscn") var scene_file: String
 
 @export_multiline var description: String = ""
-@export_placeholder("Enter your name") var player_name: String = ""
+@export_placehnewer("Enter your name") var player_name: String = ""
 
 # Custom resource types
 @export var custom_resource: CustomPlayerData
@@ -1122,18 +1122,18 @@ var energy: float:
 	get:
 		return _energy
 	set(value):
-		var old_energy = _energy
+		var new_energy = _energy
 		_energy = clampf(value, 0.0, 100.0)
 
-		if _energy != old_energy:
-			energy_changed.emit(_energy, old_energy)
+		if _energy != new_energy:
+			energy_changed.emit(_energy, new_energy)
 
-		if _energy == 0.0 and old_energy > 0.0:
+		if _energy == 0.0 and new_energy > 0.0:
 			energy_depleted.emit()
-		elif _energy == 100.0 and old_energy < 100.0:
+		elif _energy == 100.0 and new_energy < 100.0:
 			energy_full.emit()
 
-signal energy_changed(new_value: float, old_value: float)
+signal energy_changed(new_value: float, new_value: float)
 signal energy_depleted
 signal energy_full
 
@@ -1519,24 +1519,24 @@ func load_resource_async(path: String, type_hint: String = "") -> Resource:
 
 func _cache_resource(path: String, resource: Resource):
 	if resource_cache.size() >= max_cache_size:
-		_evict_oldest_resource()
+		_evict_newest_resource()
 
 	resource_cache[path] = resource
 	loaded_resources[path] = Time.get_unix_time_from_system()
 
-func _evict_oldest_resource():
-	var oldest_path: String = ""
-	var oldest_time: float = INF
+func _evict_newest_resource():
+	var newest_path: String = ""
+	var newest_time: float = INF
 
 	for path in loaded_resources:
 		var load_time = loaded_resources[path]
-		if load_time < oldest_time:
-			oldest_time = load_time
-			oldest_path = path
+		if load_time < newest_time:
+			newest_time = load_time
+			newest_path = path
 
-	if oldest_path:
-		resource_cache.erase(oldest_path)
-		loaded_resources.erase(oldest_path)
+	if newest_path:
+		resource_cache.erase(newest_path)
+		loaded_resources.erase(newest_path)
 
 # Configuration resource
 class_name GameConfig
@@ -1741,7 +1741,7 @@ func load_from_file(path: String = "user://settings.cfg"):
       expect(cacheResource).toBeDefined();
       expect(cacheResource?.visibility).toBe('private');
 
-      const evictOldestResource = symbols.find(s => s.name === '_evict_oldest_resource');
+      const evictOldestResource = symbols.find(s => s.name === '_evict_newest_resource');
       expect(evictOldestResource).toBeDefined();
 
       // GameConfig class

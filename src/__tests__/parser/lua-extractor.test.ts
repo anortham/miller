@@ -1357,10 +1357,10 @@ local function withRetry(operation, maxAttempts, delay)
 end
 
 -- Circuit breaker pattern
-local function createCircuitBreaker(threshold, timeout)
+local function createCircuitBreaker(threshnew, timeout)
   local breaker = {
     failureCount = 0,
-    threshold = threshold,
+    threshnew = threshnew,
     timeout = timeout,
     state = "closed",  -- closed, open, half-open
     lastFailureTime = 0
@@ -1393,7 +1393,7 @@ local function createCircuitBreaker(threshold, timeout)
       self.failureCount = self.failureCount + 1
       self.lastFailureTime = currentTime
 
-      if self.failureCount >= self.threshold then
+      if self.failureCount >= self.threshnew then
         self.state = "open"
       end
 

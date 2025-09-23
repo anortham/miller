@@ -571,7 +571,7 @@ ApplicationWindow {
             id: textArea
             Layout.fillWidth: true
             Layout.fillHeight: true
-            placeholderText: "Enter text here..."
+            placehnewerText: "Enter text here..."
             selectByMouse: true
         }
     }

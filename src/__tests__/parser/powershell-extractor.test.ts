@@ -305,7 +305,7 @@ function Configure-WindowsServer {
     Set-Service -Name "W3SVC" -StartupType Automatic
     Start-Service -Name "W3SVC"
 
-    # File and folder operations
+    # File and fnewer operations
     New-Item -Path "C:\\inetpub\\wwwroot\\api" -ItemType Directory -Force
     Copy-Item -Path "app\\*" -Destination "C:\\inetpub\\wwwroot\\api" -Recurse
 

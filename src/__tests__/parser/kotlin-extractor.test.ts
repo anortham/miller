@@ -447,8 +447,8 @@ class LazyInitializer {
         "Expensive computation result"
     }
 
-    var observableProperty: String by Delegates.observable("initial") { prop, old, new ->
-        println("Property changed from $old to $new")
+    var observableProperty: String by Delegates.observable("initial") { prop, new, new ->
+        println("Property changed from $new to $new")
     }
 
     val notNullProperty: String by Delegates.notNull()
@@ -666,9 +666,9 @@ fun <T : Comparable<T>> findMax(items: List<T>): T? {
     return items.maxOrNull()
 }
 
-fun <T> copyWhenGreater(list: List<T>, threshold: T): List<T>
+fun <T> copyWhenGreater(list: List<T>, threshnew: T): List<T>
     where T : Comparable<T>, T : Number {
-    return list.filter { it > threshold }
+    return list.filter { it > threshnew }
 }
 
 inline fun <reified T> createArray(size: Int): Array<T?> {

@@ -516,7 +516,7 @@ namespace Constants {
     const char* const VERSION = "1.0.0";
 }
 
-class DataHolder {
+class DataHnewer {
 public:
     static const int CLASS_CONSTANT = 100;
     static constexpr double PRECISION = 1e-9;
@@ -1410,9 +1410,9 @@ namespace Concurrency {
         }
 
         ~LockFreeQueue() {
-            while (Node* old_head = head_.load()) {
-                head_.store(old_head->next.load());
-                delete old_head;
+            while (Node* new_head = head_.load()) {
+                head_.store(new_head->next.load());
+                delete new_head;
             }
         }
     };

@@ -5,6 +5,8 @@ import { PythonExtractor } from '../extractors/python-extractor.js';
 import { SwiftExtractor } from '../extractors/swift-extractor.js';
 import { KotlinExtractor } from '../extractors/kotlin-extractor.js';
 import { JavaExtractor } from '../extractors/java-extractor.js';
+import { initializeLogger, LogLevel } from '../utils/logger.js';
+import { MillerPaths } from '../utils/miller-paths.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -14,6 +16,11 @@ describe('Real-World Code Validation', () => {
   let parserManager: ParserManager;
 
   beforeAll(async () => {
+    // Initialize logger for tests
+    const tempPaths = new MillerPaths('/tmp/miller-real-world-test');
+    await tempPaths.ensureDirectories();
+    initializeLogger(tempPaths, LogLevel.WARN); // Quiet for tests
+
     parserManager = new ParserManager();
     await parserManager.initialize();
   });
@@ -123,6 +130,49 @@ describe('Real-World Code Validation', () => {
     }
   });
 
+  describe('TypeScript Real-World Files', () => {
+    const typescriptDir = path.join(REAL_WORLD_TEST_DIR, 'typescript');
+
+    if (fs.existsSync(typescriptDir)) {
+      const typescriptFiles = fs.readdirSync(typescriptDir).filter(f => f.endsWith('.ts') || f.endsWith('.tsx'));
+
+      for (const fileName of typescriptFiles) {
+        test(`should extract symbols from real-world TypeScript file: ${fileName}`, async () => {
+          const filePath = path.join(typescriptDir, fileName);
+          const content = fs.readFileSync(filePath, 'utf-8');
+
+          console.log(`🔷 Processing real TypeScript file: ${fileName} (${content.length} chars)`);
+
+          const result = await parserManager.parseFile(fileName, content);
+          expect(result.tree).toBeDefined();
+
+          const extractor = new TypeScriptExtractor('typescript', fileName, content);
+          const symbols = extractor.extractSymbols(result.tree);
+          const relationships = extractor.extractRelationships(result.tree, symbols);
+
+          // Validate meaningful extraction
+          expect(symbols.length).toBeGreaterThan(0);
+          console.log(`📊 Extracted ${symbols.length} symbols, ${relationships.length} relationships`);
+
+          // Log symbol types for validation
+          const symbolSummary = symbols.reduce((acc, s) => {
+            acc[s.kind] = (acc[s.kind] || 0) + 1;
+            return acc;
+          }, {} as Record<string, number>);
+          console.log(`🔍 Symbol breakdown:`, symbolSummary);
+
+          // Validate TypeScript-specific features
+          const functions = symbols.filter(s => s.kind === 'function');
+          const classes = symbols.filter(s => s.kind === 'class');
+          const interfaces = symbols.filter(s => s.kind === 'interface');
+          const variables = symbols.filter(s => s.kind === 'variable');
+
+          console.log(`🎯 TypeScript features: ${functions.length} functions, ${classes.length} classes, ${interfaces.length} interfaces, ${variables.length} variables`);
+        });
+      }
+    }
+  });
+
   describe('Vue Real-World Files', () => {
     const vueDir = path.join(REAL_WORLD_TEST_DIR, 'vue');
 
@@ -160,7 +210,8 @@ describe('Real-World Code Validation', () => {
         if (!fs.existsSync(langDir)) continue;
 
         const files = fs.readdirSync(langDir).filter(f =>
-          f.endsWith('.kt') || f.endsWith('.swift') || f.endsWith('.java') || f.endsWith('.ts') || f.endsWith('.vue')
+          f.endsWith('.kt') || f.endsWith('.swift') || f.endsWith('.java') ||
+          f.endsWith('.ts') || f.endsWith('.tsx') || f.endsWith('.vue')
         );
 
         for (const fileName of files) {
@@ -177,7 +228,7 @@ describe('Real-World Code Validation', () => {
             extractor = new SwiftExtractor('swift', fileName, content);
           } else if (fileName.endsWith('.java')) {
             extractor = new JavaExtractor('java', fileName, content);
-          } else if (fileName.endsWith('.ts')) {
+          } else if (fileName.endsWith('.ts') || fileName.endsWith('.tsx')) {
             extractor = new TypeScriptExtractor('typescript', fileName, content);
           } else if (fileName.endsWith('.vue')) {
             // Vue files use special SFC handling, just validate they can be parsed

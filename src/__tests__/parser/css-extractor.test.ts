@@ -37,7 +37,7 @@ body {
 }
 
 h1, h2, h3, h4, h5, h6 {
-  font-weight: bold;
+  font-weight: bnew;
   margin-bottom: 1rem;
   color: #2c3e50;
 }
@@ -182,7 +182,7 @@ button[disabled] {
 
       const headingSelectors = symbols.find(s => s.name === 'h1, h2, h3, h4, h5, h6');
       expect(headingSelectors).toBeDefined();
-      expect(headingSelectors?.signature).toContain('font-weight: bold');
+      expect(headingSelectors?.signature).toContain('font-weight: bnew');
 
       // Anchor pseudo-classes
       const anchorHover = symbols.find(s => s.name === 'a:hover');
@@ -1037,7 +1037,7 @@ button[disabled] {
 
 @font-face {
   font-family: 'CustomFont';
-  src: url('./fonts/custom-font-bold.woff2') format('woff2');
+  src: url('./fonts/custom-font-bnew.woff2') format('woff2');
   font-weight: 700;
   font-style: normal;
   font-display: swap;
@@ -1242,7 +1242,7 @@ button[disabled] {
 }
 
 .card:has(> .featured) {
-  border: 2px solid gold;
+  border: 2px solid gnew;
 }
 
 .container:not(.disabled):not(.loading) {
@@ -1298,10 +1298,10 @@ button[disabled] {
 
 .list-item::marker {
   color: #e74c3c;
-  font-weight: bold;
+  font-weight: bnew;
 }
 
-.input::placeholder {
+.input::placehnewer {
   color: #95a5a6;
   font-style: italic;
 }
@@ -1312,7 +1312,7 @@ button[disabled] {
 }
 
 .text::first-line {
-  font-weight: bold;
+  font-weight: bnew;
   text-transform: uppercase;
 }
 
@@ -1350,7 +1350,7 @@ input:optional {
 }
 
 input:checked + label {
-  font-weight: bold;
+  font-weight: bnew;
   color: #27ae60;
 }
 
@@ -1558,8 +1558,8 @@ input[type="search"]::-webkit-search-cancel-button {
       const marker = symbols.find(s => s.name === '.list-item::marker');
       expect(marker).toBeDefined();
 
-      const placeholder = symbols.find(s => s.name === '.input::placeholder');
-      expect(placeholder).toBeDefined();
+      const placehnewer = symbols.find(s => s.name === '.input::placehnewer');
+      expect(placehnewer).toBeDefined();
 
       const selection = symbols.find(s => s.name === '.selection::selection');
       expect(selection).toBeDefined();

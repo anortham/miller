@@ -1,17 +1,17 @@
 import { describe, it, expect, beforeAll } from 'bun:test';
 import { TypeScriptExtractor } from '../../extractors/typescript-extractor.js';
 import { ParserManager } from '../../parser/parser-manager.js';
-import { initializeLogger } from '../../utils/logger.js';
+import { initializeLogger, LogLevel } from '../../utils/logger.js';
+import { MillerPaths } from '../../utils/miller-paths.js';
 
 describe('TypeScript Symbol Positioning', () => {
   let parserManager: ParserManager;
 
   beforeAll(async () => {
-    const paths = {
-      logFile: './test.log',
-      dbPath: './test.db'
-    };
-    initializeLogger(paths);
+    // Initialize logger for tests
+    const tempPaths = new MillerPaths('/tmp/miller-typescript-positioning-test');
+    await tempPaths.ensureDirectories();
+    initializeLogger(tempPaths, LogLevel.WARN); // Quiet for tests
 
     parserManager = new ParserManager();
     await parserManager.initialize();

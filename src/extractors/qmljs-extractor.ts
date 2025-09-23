@@ -119,10 +119,16 @@ export class QMLJSExtractor extends BaseExtractor {
     // Parse multiple declarations from this ERROR node
     const symbols: Symbol[] = [];
 
-    // Extract ID first (for component association)
-    if (text.includes('id:')) {
-      const idSymbol = this.extractIdFromErrorText(text, node, parentId);
-      if (idSymbol) symbols.push(idSymbol);
+    // First, try to extract QML component with ID as a single unit
+    const componentWithIdSymbol = this.extractQmlComponentWithId(text, node, parentId);
+    if (componentWithIdSymbol) {
+      symbols.push(componentWithIdSymbol);
+    } else {
+      // Extract ID first (for component association)
+      if (text.includes('id:')) {
+        const idSymbol = this.extractIdFromErrorText(text, node, parentId);
+        if (idSymbol) symbols.push(idSymbol);
+      }
     }
 
     // Extract properties
@@ -226,6 +232,26 @@ export class QMLJSExtractor extends BaseExtractor {
       });
     }
 
+    return null;
+  }
+
+  private extractQmlComponentWithId(text: string, node: Parser.SyntaxNode, parentId?: string): Symbol | null {
+    // Look for patterns like "Text {\n    id: titleText" or "Button {\n    id: actionButton"
+    // Make the regex more flexible to handle newlines and whitespace
+    const componentWithIdMatch = text.match(/(Rectangle|Item|Text|Button|Column|Row|Window|ApplicationWindow)\s*\{[\s\S]*?id:\s*(\w+)/);
+    if (componentWithIdMatch) {
+      const [, componentType, idValue] = componentWithIdMatch;
+      return this.createSymbol(node, idValue, SymbolKind.Class, {
+        signature: `${componentType} { id: ${idValue} }`,
+        parentId,
+        metadata: {
+          qmlType: componentType,
+          isQmlComponent: true,
+          originalType: componentType,
+          hasExplicitId: true
+        }
+      });
+    }
     return null;
   }
 

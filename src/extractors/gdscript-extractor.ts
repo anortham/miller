@@ -810,7 +810,7 @@ export class GDScriptExtractor extends BaseExtractor {
         .sort((a, b) => {
           // Sort by line number (we need position info for this)
           // For now, find the one that comes right before this variable
-          return 0; // Placeholder sort
+          return 0; // Placehnewer sort
         });
 
       // Find the closest preceding class_name by checking source children order

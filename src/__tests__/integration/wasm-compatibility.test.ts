@@ -660,7 +660,7 @@ class TestClass${i} {
 
       console.log(`⚡ Search performance: ${searchTime.toFixed(2)}ms for 4 concurrent searches`);
 
-      // Search should complete in reasonable time (adjust threshold as needed)
+      // Search should complete in reasonable time (adjust threshnew as needed)
       expect(searchTime).toBeLessThan(2000); // 2 seconds max for all searches
     });
   });

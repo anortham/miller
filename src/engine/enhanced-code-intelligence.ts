@@ -51,7 +51,7 @@ import { QMLJSExtractor } from '../extractors/qmljs-extractor.js';
 
 // Import semantic components
 import MillerEmbedder, { type EmbeddingResult } from '../embeddings/miller-embedder.js';
-import MillerVectorStore from '../embeddings/miller-vector-store.js';
+import { VectraVectorStore } from '../embeddings/vectra-vector-store.js';
 import HybridSearchEngine from '../search/hybrid-search-engine.js';
 import { EmbeddingProcessPool } from '../workers/embedding-process-pool.js';
 
@@ -115,7 +115,7 @@ export class EnhancedCodeIntelligenceEngine {
 
   // Semantic components
   private embedder?: MillerEmbedder;
-  private vectorStore?: MillerVectorStore;
+  private vectorStore?: VectraVectorStore;
   private embeddingProcessPool?: EmbeddingProcessPool;
   private _hybridSearch?: HybridSearchEngine;
   private semanticInitialized = false;
@@ -124,7 +124,7 @@ export class EnhancedCodeIntelligenceEngine {
   constructor(config: EnhancedCodeIntelligenceConfig = {}) {
     // CRITICAL: Setup SQLite extensions BEFORE creating any Database instances
     if (config.enableSemanticSearch !== false) {
-      MillerVectorStore.setupSQLiteExtensions();
+      VectraVectorStore.setupSQLiteExtensions();
     }
 
     this.config = {
@@ -212,6 +212,9 @@ export class EnhancedCodeIntelligenceEngine {
         await this.initializeSemanticComponents();
       }
 
+      // Rebuild search index from existing database symbols if they exist
+      await this.rebuildSearchIndexIfNeeded();
+
       this.isInitialized = true;
       log.engine(LogLevel.INFO, 'Enhanced Code Intelligence Engine initialized successfully', {
         semanticEnabled: this.semanticInitialized
@@ -222,13 +225,50 @@ export class EnhancedCodeIntelligenceEngine {
     }
   }
 
+  /**
+   * Rebuild search index from existing database symbols if they exist
+   */
+  private async rebuildSearchIndexIfNeeded(): Promise<void> {
+    try {
+      log.engine(LogLevel.INFO, 'Checking for existing symbols to rebuild search index...');
+
+      // Check if we have existing symbols in the database
+      const symbolCount = this.db['db'].prepare(`SELECT COUNT(*) as count FROM symbols`).get() as { count: number };
+
+      log.engine(LogLevel.INFO, `Database check: found ${symbolCount.count} existing symbols`);
+
+      if (symbolCount.count > 0) {
+        log.engine(LogLevel.INFO, `Found ${symbolCount.count} existing symbols, rebuilding search index...`);
+        await this.searchEngine.rebuildIndex();
+
+        // Verify the search index was actually populated
+        const searchStats = this.searchEngine.getStats();
+        log.engine(LogLevel.INFO, `Search index rebuilt: ${searchStats.indexedDocuments} documents indexed`);
+
+        if (searchStats.indexedDocuments === 0) {
+          log.engine(LogLevel.WARN, 'Search index rebuild completed but no documents were indexed');
+        } else {
+          log.engine(LogLevel.INFO, `✅ Search index successfully populated with ${searchStats.indexedDocuments} documents`);
+        }
+      } else {
+        log.engine(LogLevel.INFO, 'No existing symbols found, search index will be populated during workspace indexing');
+      }
+    } catch (error) {
+      log.engine(LogLevel.ERROR, 'Failed to rebuild search index from existing symbols', {
+        error: error.message,
+        stack: error.stack
+      });
+      // Don't throw - this is not critical for engine initialization, but log the full error
+    }
+  }
+
   private async initializeSemanticComponents(): Promise<void> {
     try {
       log.engine(LogLevel.INFO, 'Initializing semantic search components...');
 
       // Set up vector store (SQLite extensions already configured in constructor)
       log.engine(LogLevel.INFO, 'Creating vector store...');
-      this.vectorStore = new MillerVectorStore(this.db['db']);
+      this.vectorStore = new VectraVectorStore(this.db['db']);
       log.engine(LogLevel.INFO, 'Initializing vector store...');
       await this.vectorStore.initialize();
       log.engine(LogLevel.INFO, 'Vector store initialized successfully');
@@ -299,8 +339,13 @@ export class EnhancedCodeIntelligenceEngine {
 
     const absolutePath = path.resolve(workspacePath);
     const startTime = Date.now();
-    log.engine(LogLevel.INFO, `Indexing workspace: ${absolutePath}`, {
-      semanticEnabled: this.semanticInitialized
+
+    // Log detailed info about what triggered this indexWorkspace call
+    const stack = new Error().stack;
+    log.engine(LogLevel.INFO, `🔍 INDEXWORKSPACE CALLED: ${absolutePath}`, {
+      semanticEnabled: this.semanticInitialized,
+      caller: stack?.split('\n')[2]?.trim() || 'unknown',
+      stackTrace: stack?.split('\n').slice(1, 5).map(line => line.trim())
     });
 
     this.isBulkIndexing = true;
@@ -353,9 +398,9 @@ export class EnhancedCodeIntelligenceEngine {
       log.engine(LogLevel.INFO, `Structural indexing: ${processed}/${files.length} files (${successful}/${batch.length} succeeded)`);
     }
 
-    // Rebuild search index
-    await this.searchEngine.rebuildIndex();
-    log.engine(LogLevel.INFO, 'Structural indexing complete - search index rebuilt');
+    // Search index should already be populated from rebuildSearchIndexIfNeeded() during initialization
+    // No need to rebuild again unless we're doing a fresh indexing operation
+    log.engine(LogLevel.INFO, 'Structural indexing complete - search index preserved');
   }
 
   private async startSemanticIndexing(workspacePath: string): Promise<void> {
@@ -894,7 +939,7 @@ export class EnhancedCodeIntelligenceEngine {
       try {
         const hybridResults = await this.hybridSearch.search(query, {
           maxResults: options.limit || 50,
-          semanticThreshold: options.threshold || 0.7,
+          semanticThreshnew: options.threshnew || 0.7,
           enableCrossLayer: options.crossLayer !== false
         });
 
@@ -1039,9 +1084,12 @@ export class EnhancedCodeIntelligenceEngine {
 
   getStats(): any & { semantic?: SemanticStats } {
     // Get stats from core components (same as original engine)
+    log.engine(LogLevel.DEBUG, 'EnhancedCodeIntelligenceEngine.getStats() called');
     const dbStats = this.db.getStats();
     const parserStats = this.parserManager.getStats();
+    log.engine(LogLevel.DEBUG, 'About to call searchEngine.getStats()');
     const searchStats = this.searchEngine.getStats();
+    log.engine(LogLevel.DEBUG, 'searchEngine.getStats() returned', searchStats);
     const watcherStats = this.fileWatcher.getStats();
 
     const baseStats = {
@@ -1073,7 +1121,14 @@ export class EnhancedCodeIntelligenceEngine {
 
   async healthCheck(): Promise<{ status: 'healthy' | 'unhealthy'; details: any }> {
     try {
+      log.engine(LogLevel.DEBUG, 'healthCheck() called, about to call getStats()');
       const stats = this.getStats();
+      log.engine(LogLevel.DEBUG, 'healthCheck() got stats', {
+        isInitialized: this.isInitialized,
+        parserInitialized: stats.parser.initialized,
+        searchIsIndexed: stats.search.isIndexed,
+        databaseSymbols: stats.database.symbols
+      });
 
       const isHealthy =
         this.isInitialized &&

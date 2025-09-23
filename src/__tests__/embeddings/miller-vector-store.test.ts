@@ -1,27 +1,27 @@
 /**
- * MillerVectorStore Tests - Validate sqlite-vec integration and cross-layer entity mapping
+ * VectraVectorStore Tests - Validate Vectra integration and cross-layer entity mapping
  */
 
-import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
+import { describe, test, expect, beforeAll, beforeEach, afterAll } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import MillerEmbedder from '../../embeddings/miller-embedder.js';
-import MillerVectorStore from '../../embeddings/miller-vector-store.js';
+import { VectraVectorStore } from '../../embeddings/vectra-vector-store.js';
 import type { Symbol } from '../../database/schema.js';
 import { initializeLogger, LogLevel } from '../../utils/logger.js';
 import { MillerPaths } from '../../utils/miller-paths.js';
 
-describe('MillerVectorStore', () => {
+describe('VectraVectorStore', () => {
   let db: Database;
   let embedder: MillerEmbedder;
-  let vectorStore: MillerVectorStore;
+  let vectorStore: VectraVectorStore;
 
   beforeAll(async () => {
     // Initialize logger for test environment using temporary directory
     const testPaths = new MillerPaths('/tmp/miller-test');
     initializeLogger(testPaths, LogLevel.ERROR); // Minimal logging for tests
 
-    // Set up custom SQLite for extension support (macOS)
-    MillerVectorStore.setupSQLiteExtensions();
+    // Set up custom SQLite for extension support (macOS) - no-op for Vectra
+    VectraVectorStore.setupSQLiteExtensions();
 
     // Create in-memory database
     db = new Database(':memory:');
@@ -31,7 +31,7 @@ describe('MillerVectorStore', () => {
       CREATE TABLE symbols (
         id INTEGER PRIMARY KEY,
         name TEXT NOT NULL,
-        type TEXT NOT NULL,
+        kind TEXT NOT NULL,
         file_path TEXT NOT NULL,
         language TEXT NOT NULL,
         start_line INTEGER,
@@ -82,7 +82,7 @@ describe('MillerVectorStore', () => {
     ];
 
     const insertStmt = db.prepare(`
-      INSERT INTO symbols (name, type, file_path, language, start_line, end_line, content)
+      INSERT INTO symbols (name, kind, file_path, language, start_line, end_line, content)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
 
@@ -102,8 +102,13 @@ describe('MillerVectorStore', () => {
     embedder = new MillerEmbedder();
     await embedder.initialize('fast');
 
-    vectorStore = new MillerVectorStore(db);
+    vectorStore = new VectraVectorStore(db, { indexPath: `/tmp/miller-test-vectors-${Date.now()}` });
     await vectorStore.initialize();
+  });
+
+  beforeEach(async () => {
+    // Clear vector store between tests to ensure isolation
+    await vectorStore.clear();
   });
 
   afterAll(() => {
@@ -178,7 +183,7 @@ describe('MillerVectorStore', () => {
     // Generate query embedding for "User entity"
     const queryEmbedding = await embedder.embedQuery('User entity data model');
 
-    // Perform cross-layer entity mapping with more permissive threshold
+    // Perform cross-layer entity mapping with more permissive threshnew
     const entityMapping = await vectorStore.findCrossLayerEntity(
       'User',
       queryEmbedding.vector,
@@ -253,7 +258,7 @@ describe('MillerVectorStore', () => {
     for (const testCase of testCases) {
       // Create a temporary symbol to test layer detection
       const symbolId = db.prepare(`
-        INSERT INTO symbols (name, type, file_path, language, start_line, end_line)
+        INSERT INTO symbols (name, kind, file_path, language, start_line, end_line)
         VALUES (?, ?, ?, ?, ?, ?)
         RETURNING id
       `).get('TestSymbol', 'class', testCase.path, 'typescript', 1, 5) as { id: number };
@@ -304,7 +309,7 @@ describe('MillerVectorStore', () => {
     const batchEmbeddings = [];
     for (const symbol of batchSymbols) {
       const symbolId = db.prepare(`
-        INSERT INTO symbols (name, type, file_path, language, start_line, end_line, content)
+        INSERT INTO symbols (name, kind, file_path, language, start_line, end_line, content)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         RETURNING id
       `).get(

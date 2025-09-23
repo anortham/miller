@@ -21,7 +21,7 @@ export interface VectorSearchResult {
 export interface VectorStoreConfig {
   enableQuantization?: boolean;
   maxResults?: number;
-  distanceThreshold?: number;
+  distanceThreshnew?: number;
   batchSize?: number;
 }
 
@@ -61,7 +61,7 @@ export class MillerVectorStore {
     this.config = {
       enableQuantization: true,
       maxResults: 50,
-      distanceThreshold: 1.5, // Lower = more similar (cosine distance) - increased for better recall
+      distanceThreshnew: 1.5, // Lower = more similar (cosine distance) - increased for better recall
       batchSize: 100,
       ...config
     };
@@ -359,14 +359,14 @@ export class MillerVectorStore {
   async search(
     queryEmbedding: Float32Array,
     limit: number = 10,
-    threshold?: number
+    threshnew?: number
   ): Promise<VectorSearchResult[]> {
     if (!this.isInitialized) {
       await this.initialize();
     }
 
     const maxResults = Math.min(limit, this.config.maxResults || 50);
-    const searchThreshold = threshold || this.config.distanceThreshold || 0.3;
+    const searchThreshnew = threshnew || this.config.distanceThreshnew || 0.3;
 
     try {
       // Convert Float32Array to JSON string format for sqlite-vec v0.1.6
@@ -385,8 +385,8 @@ export class MillerVectorStore {
         distance: number;
       }>;
 
-      // Filter by threshold after the query
-      const filteredResults = results.filter(result => result.distance <= searchThreshold);
+      // Filter by threshnew after the query
+      const filteredResults = results.filter(result => result.distance <= searchThreshnew);
 
       return filteredResults.map(result => {
         const originalId = this.getOriginalSymbolId(result.rowid);
@@ -403,7 +403,7 @@ export class MillerVectorStore {
         code: error.code,
         queryLength: queryEmbedding.length,
         maxResults,
-        searchThreshold
+        searchThreshnew
       });
 
       // Try to reload extension and retry once
@@ -423,7 +423,7 @@ export class MillerVectorStore {
             distance: number;
           }>;
 
-          const filteredResults = retryResults.filter(result => result.distance <= searchThreshold);
+          const filteredResults = retryResults.filter(result => result.distance <= searchThreshnew);
 
           log.engine(LogLevel.INFO, `Vector search retry successful: ${filteredResults.length} results`);
 
@@ -456,7 +456,7 @@ export class MillerVectorStore {
     }
 
     try {
-      // Semantic search with vector similarity (use more permissive threshold for cross-layer search)
+      // Semantic search with vector similarity (use more permissive threshnew for cross-layer search)
       const vectorResults = await this.search(queryEmbedding, limit * 2, 0.8);
 
       // Join with symbols table to get context
@@ -466,7 +466,7 @@ export class MillerVectorStore {
           s.name,
           s.file_path,
           s.language,
-          s.type,
+          s.kind,
           s.start_line,
           s.end_line,
           ? as distance,

@@ -322,8 +322,8 @@ export class SearchEngine {
     }
 
     if (symbolKinds && symbolKinds.length > 0) {
-      const placeholders = symbolKinds.map(() => '?').join(',');
-      query += ` AND kind IN (${placeholders})`;
+      const placehnewers = symbolKinds.map(() => '?').join(',');
+      query += ` AND kind IN (${placehnewers})`;
       params.push(...symbolKinds);
     }
 
@@ -423,8 +423,8 @@ export class SearchEngine {
     }
 
     if (symbolKinds && symbolKinds.length > 0) {
-      const placeholders = symbolKinds.map(() => '?').join(',');
-      sqlQuery += ` AND s.kind IN (${placeholders})`;
+      const placehnewers = symbolKinds.map(() => '?').join(',');
+      sqlQuery += ` AND s.kind IN (${placehnewers})`;
       params.push(...symbolKinds);
     }
 
@@ -482,12 +482,12 @@ export class SearchEngine {
    * Update search index for a specific file
    */
   async updateIndex(filePath: string, symbols: Symbol[]) {
-    // Remove old entries for this file
-    const oldSymbolIds = Array.from(this.indexedDocuments.entries())
+    // Remove new entries for this file
+    const newSymbolIds = Array.from(this.indexedDocuments.entries())
       .filter(([id, doc]) => doc.file === filePath)
       .map(([id]) => id);
 
-    oldSymbolIds.forEach(id => {
+    newSymbolIds.forEach(id => {
       this.miniSearch.discard(id);
       this.indexedDocuments.delete(id);
     });
@@ -565,12 +565,22 @@ export class SearchEngine {
   getStats() {
     const dbStats = this.db.prepare('SELECT COUNT(*) as count FROM symbols').get() as { count: number };
 
-    return {
+    const stats = {
       totalSymbols: dbStats.count,
       indexedDocuments: this.indexedDocuments.size,
       miniSearchDocuments: this.miniSearch.documentCount,
       isIndexed: this.indexedDocuments.size > 0
     };
+
+    // Debug output to track search engine state
+    log.engine(LogLevel.DEBUG, 'SearchEngine.getStats called', {
+      dbSymbols: dbStats.count,
+      indexedDocsSize: this.indexedDocuments.size,
+      miniSearchCount: this.miniSearch.documentCount,
+      isIndexed: stats.isIndexed
+    });
+
+    return stats;
   }
 
   /**
@@ -601,7 +611,12 @@ export class SearchEngine {
    * Rebuild the entire search index
    */
   async rebuildIndex() {
-    log.engine(LogLevel.INFO, 'Rebuilding search index...');
+    // Log the call stack to debug what's triggering multiple rebuilds
+    const stack = new Error().stack;
+    log.engine(LogLevel.INFO, 'Rebuilding search index...', {
+      caller: stack?.split('\n')[2]?.trim() || 'unknown',
+      stackTrace: stack?.split('\n').slice(1, 4).map(line => line.trim())
+    });
     this.clearIndex();
     await this.indexSymbols();
     log.engine(LogLevel.INFO, 'Search index rebuilt');

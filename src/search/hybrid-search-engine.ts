@@ -13,7 +13,7 @@
 import type { Symbol, Relationship, CodeIntelDB } from '../database/schema.js';
 import type { SearchEngine } from './search-engine.js';
 import MillerEmbedder, { type CodeContext, type EmbeddingResult } from '../embeddings/miller-embedder.js';
-import MillerVectorStore, { type VectorSearchResult, type EntityMapping } from '../embeddings/miller-vector-store.js';
+import { VectraVectorStore, type VectorSearchResult, type EntityMapping } from '../embeddings/vectra-vector-store.js';
 
 export interface HybridSearchOptions {
   includeStructural?: boolean;
@@ -21,7 +21,7 @@ export interface HybridSearchOptions {
   nameWeight?: number;
   structureWeight?: number;
   semanticWeight?: number;
-  semanticThreshold?: number;
+  semanticThreshnew?: number;
   maxResults?: number;
   enableCrossLayer?: boolean;
 }
@@ -51,7 +51,7 @@ export interface CrossLayerSearchResult {
 export class HybridSearchEngine {
   private structuralSearch: SearchEngine;
   private embedder: MillerEmbedder;
-  private vectorStore: MillerVectorStore;
+  private vectorStore: VectraVectorStore;
   private database: CodeIntelDB;
   private isInitialized = false;
 
@@ -65,7 +65,7 @@ export class HybridSearchEngine {
   constructor(
     structuralSearchEngine: SearchEngine,
     embedder: MillerEmbedder,
-    vectorStore: MillerVectorStore,
+    vectorStore: VectraVectorStore,
     database: CodeIntelDB
   ) {
     this.structuralSearch = structuralSearchEngine;
@@ -109,7 +109,7 @@ export class HybridSearchEngine {
       nameWeight: HybridSearchEngine.DEFAULT_WEIGHTS.name,
       structureWeight: HybridSearchEngine.DEFAULT_WEIGHTS.structure,
       semanticWeight: HybridSearchEngine.DEFAULT_WEIGHTS.semantic,
-      semanticThreshold: 1.5,
+      semanticThreshnew: 1.5,
       maxResults: 20,
       enableCrossLayer: true,
       ...options
@@ -141,7 +141,7 @@ export class HybridSearchEngine {
 
     // Phase 2: Semantic search (new embedding-powered capability)
     if (opts.includeSemantic) {
-      const semanticResults = await this.performSemanticSearch(query, opts.maxResults * 2, opts.semanticThreshold);
+      const semanticResults = await this.performSemanticSearch(query, opts.maxResults * 2, opts.semanticThreshnew);
 
       for (const vectorResult of semanticResults) {
         const existing = results.get(vectorResult.symbolId);
@@ -250,7 +250,7 @@ export class HybridSearchEngine {
   }> {
     const searchOptions: HybridSearchOptions = {
       maxResults: 15,
-      semanticThreshold: 0.6,
+      semanticThreshnew: 0.6,
       enableCrossLayer: true
     };
 
@@ -333,13 +333,13 @@ export class HybridSearchEngine {
   private async performSemanticSearch(
     query: string,
     limit: number,
-    threshold: number
+    threshnew: number
   ): Promise<VectorSearchResult[]> {
     // Generate query embedding
     const queryEmbedding = await this.embedder.embedQuery(query);
 
     // Search vector store
-    return await this.vectorStore.search(queryEmbedding.vector, limit, threshold);
+    return await this.vectorStore.search(queryEmbedding.vector, limit, threshnew);
   }
 
   /**
