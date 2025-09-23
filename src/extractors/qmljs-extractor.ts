@@ -252,6 +252,23 @@ export class QMLJSExtractor extends BaseExtractor {
         }
       });
     }
+
+    // Also try simpler patterns for nested components
+    const nestedComponentMatch = text.match(/(Text|Button)\s*\{[^}]*id:\s*(\w+)/);
+    if (nestedComponentMatch) {
+      const [, componentType, idValue] = nestedComponentMatch;
+      return this.createSymbol(node, idValue, SymbolKind.Class, {
+        signature: `${componentType} { id: ${idValue} }`,
+        parentId,
+        metadata: {
+          qmlType: componentType,
+          isQmlComponent: true,
+          originalType: componentType,
+          hasExplicitId: true
+        }
+      });
+    }
+
     return null;
   }
 
@@ -271,6 +288,12 @@ export class QMLJSExtractor extends BaseExtractor {
     const assignmentMatch = text.match(/(\w+)\s*:\s*([^,\n]+)/);
     if (assignmentMatch) {
       const [, name, value] = assignmentMatch;
+
+      // Don't extract IDs as property assignments - they should be handled by ID-specific methods
+      if (name === 'id') {
+        return null;
+      }
+
       const cleanValue = value.trim();
 
       return this.createSymbol(node, name, SymbolKind.Property, {
@@ -312,6 +335,7 @@ export class QMLJSExtractor extends BaseExtractor {
       const identifier = expressionStatement.children.find(child => child.type === 'identifier');
       if (identifier) {
         const idValue = this.getNodeText(identifier);
+
 
         // Store this ID for later component association
         this.componentIds.set('current', idValue);
@@ -550,6 +574,12 @@ export class QMLJSExtractor extends BaseExtractor {
     if (!parent) return null;
 
     const propertyName = this.getNodeText(node);
+
+    // Don't extract IDs as regular properties - they should be handled by ID-specific methods
+    if (propertyName === 'id') {
+      return null;
+    }
+
     let propertyValue = '';
 
     // Look for colon and value
@@ -583,11 +613,10 @@ export class QMLJSExtractor extends BaseExtractor {
   private extractQmlComponentFromIdentifier(node: Parser.SyntaxNode, parentId?: string): Symbol {
     const componentType = this.getNodeText(node);
 
-    // Check if we have a stored ID for this component
-    let componentName = this.componentIds.get('current') || `Anonymous${componentType}`;
+    // Look for an ID declaration in the component's context
+    const componentId = this.findComponentId(node);
+    let componentName = componentId || `Anonymous${componentType}`;
 
-    // Clear the stored ID after use
-    this.componentIds.delete('current');
 
     return this.createSymbol(node, componentName, SymbolKind.Class, {
       signature: `${componentType} { id: ${componentName} }`,
@@ -595,9 +624,80 @@ export class QMLJSExtractor extends BaseExtractor {
       metadata: {
         qmlType: componentType,
         isQmlComponent: true,
-        originalType: componentType
+        originalType: componentType,
+        hasExplicitId: !!componentId
       }
     });
+  }
+
+  private findComponentId(componentNode: Parser.SyntaxNode): string | null {
+    // Look in the component's parent context for id: declarations
+    let current = componentNode.parent;
+
+    // Traverse up to find a block or statement that might contain the ID
+    while (current) {
+      // Look for 'id' identifier followed by a value
+      for (const child of current.children) {
+        if (child.type === 'identifier' && this.getNodeText(child) === 'id') {
+          // Look for the next sibling that contains the ID value
+          const idValue = this.findIdValue(child);
+          if (idValue) {
+            return idValue;
+          }
+        }
+
+        // Also check ERROR nodes for id: patterns
+        if (child.type === 'ERROR') {
+          const errorText = this.getNodeText(child);
+          const idMatch = errorText.match(/id:\s*(\w+)/);
+          if (idMatch) {
+            return idMatch[1];
+          }
+        }
+
+        // Check labeled statements for ID declarations
+        if (child.type === 'labeled_statement') {
+          const labelNode = child.children.find(c => c.type === 'statement_identifier');
+          if (labelNode && this.getNodeText(labelNode) === 'id') {
+            const expressionStatement = child.children.find(c => c.type === 'expression_statement');
+            if (expressionStatement) {
+              const identifier = expressionStatement.children.find(c => c.type === 'identifier');
+              if (identifier) {
+                return this.getNodeText(identifier);
+              }
+            }
+          }
+        }
+      }
+
+      current = current.parent;
+
+      // Don't go too far up the tree
+      if (current && (current.type === 'program' || current.type === 'source_file')) {
+        break;
+      }
+    }
+
+    return null;
+  }
+
+  private findIdValue(idNode: Parser.SyntaxNode): string | null {
+    // Look for patterns after 'id' keyword
+    const parent = idNode.parent;
+    if (!parent) return null;
+
+    const siblings = parent.children;
+    const idIndex = siblings.indexOf(idNode);
+
+    // Look for the value after id (could be after colon or directly)
+    for (let i = idIndex + 1; i < siblings.length; i++) {
+      const sibling = siblings[i];
+      if (sibling.type === 'identifier') {
+        return this.getNodeText(sibling);
+      }
+    }
+
+    return null;
   }
 
   private extractPropertyFromIdentifier(node: Parser.SyntaxNode, parentId?: string): Symbol {

@@ -142,7 +142,7 @@ export class LuaExtractor extends BaseExtractor {
     const name = this.getNodeText(nameNode);
     const signature = this.getNodeText(node);
 
-    const symbol = this.createSymbol(node, name, SymbolKind.Function, {
+    const symbol = this.createSymbol(nameNode, name, SymbolKind.Function, {
       signature,
       parentId,
       visibility: 'private'
