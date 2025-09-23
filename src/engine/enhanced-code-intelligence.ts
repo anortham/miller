@@ -47,6 +47,7 @@ import { BashExtractor } from '../extractors/bash-extractor.js';
 import { PowerShellExtractor } from '../extractors/powershell-extractor.js';
 import { GDScriptExtractor } from '../extractors/gdscript-extractor.js';
 import { LuaExtractor } from '../extractors/lua-extractor.js';
+import { QMLJSExtractor } from '../extractors/qmljs-extractor.js';
 
 // Import semantic components
 import MillerEmbedder, { type EmbeddingResult } from '../embeddings/miller-embedder.js';
@@ -186,6 +187,7 @@ export class EnhancedCodeIntelligenceEngine {
     this.extractors.set('powershell', PowerShellExtractor);
     this.extractors.set('gdscript', GDScriptExtractor);
     this.extractors.set('lua', LuaExtractor);
+    this.extractors.set('qmljs', QMLJSExtractor);
   }
 
   async initialize(): Promise<void> {

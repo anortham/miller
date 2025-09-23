@@ -1,4 +1,4 @@
-* Add support for qmljq https://github.com/yuja/tree-sitter-qmljs
+* Add support for qmljs https://github.com/yuja/tree-sitter-qmljs
 
 * Web worker additions for performance: 
 

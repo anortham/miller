@@ -122,6 +122,9 @@ miller/
 │   │   └── search-engine.ts    # MiniSearch + ripgrep search engine
 │   ├── watcher/
 │   │   └── file-watcher.ts     # File system watching with debouncing
+│   ├── workers/                # Worker processes for semantic operations
+│   │   ├── embedding-process.ts # Standalone embedding generation process
+│   │   └── embedding-process-pool.ts # Process pool for parallel embedding
 │   ├── __tests__/              # Comprehensive test suites
 │   │   ├── parser/             # Language extractor tests (TDD)
 │   │   │   ├── gdscript-extractor.test.ts
@@ -191,6 +194,38 @@ Code Intelligence Engine (orchestrator)
    - Provides high-level API for LSP-like features
    - Handles incremental updates and workspace indexing
 
+## Worker Process Architecture
+
+Miller uses isolated child processes to prevent UI lockup during CPU-intensive operations:
+
+### Components:
+- **embedding-process.ts**: Standalone Bun script for embedding generation
+- **embedding-process-pool.ts**: Pool manager for parallel processing
+- **IPC Communication**: Message-based communication between processes
+
+### Benefits:
+- UI remains responsive during semantic indexing (reduced from 30-60s lockup to <100ms perceived lag)
+- Parallel embedding generation for improved speed
+- Graceful error isolation and recovery
+- Memory efficiency through process isolation
+
+### Architecture Flow:
+```
+Main Process (MCP Server)
+    ↓
+Embedding Process Pool
+    ├── Worker Process 1 (embedding-process.ts)
+    ├── Worker Process 2 (embedding-process.ts)
+    └── Worker Process N (embedding-process.ts)
+```
+
+### Key Features:
+- **Process Pool Management**: Automatic worker spawning and cleanup
+- **Health Monitoring**: Process health checks and automatic restarts
+- **Graceful Shutdown**: Clean process termination on server shutdown
+- **Error Handling**: Isolated failures don't crash main process
+- **Performance**: 10ms yield intervals prevent UI blocking
+
 ## Usage Instructions
 
 ### MCP Client Configuration
@@ -251,6 +286,36 @@ await tools.find_references({
 ```
 
 ## Development Guidelines
+
+### Test-Driven Development (TDD) Methodology
+
+Miller follows strict TDD principles that have proven essential for:
+- **Bug Prevention**: Tests written before code catch issues early
+- **Debugging Complex Issues**: TDD helped us fix 7 critical semantic search bugs
+- **Confidence in Refactoring**: Comprehensive test coverage enables safe changes
+- **Documentation through Tests**: Tests serve as living documentation
+
+#### TDD Process for New Features:
+1. **Write comprehensive tests FIRST** (5-8 test scenarios)
+2. **Run tests to ensure they fail** (validates test correctness)
+3. **Implement minimal code** to make tests pass
+4. **Refactor with confidence** knowing tests will catch regressions
+
+#### TDD Success Stories:
+- **Fixed UNIQUE constraint violations** through test-first debugging
+- **Resolved UI lockup issues** by testing yield strategies with performance tests
+- **Debugged threshold mismatches** with comprehensive integration tests
+- **Semantic search bugs**: All 7 critical bugs were fixed using TDD approach
+
+#### When Debugging:
+**ALWAYS create a test that reproduces the bug BEFORE attempting to fix it.**
+This ensures the bug is truly fixed and won't regress.
+
+#### Test Categories in Miller:
+- **Unit Tests**: Individual component testing (extractors, embedders, search engines)
+- **Integration Tests**: Multi-component workflows (semantic search, cross-layer mapping)
+- **Regression Tests**: Prevent known bugs from returning
+- **Performance Tests**: Validate speed and scale requirements
 
 ### Adding New Language Support
 

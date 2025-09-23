@@ -43,6 +43,7 @@ export class ParserManager {
     // Mobile development
     { name: 'swift', extensions: ['.swift'], wasmPath: './wasm/tree-sitter-swift.wasm' },
     { name: 'kotlin', extensions: ['.kt', '.kts'], wasmPath: './wasm/tree-sitter-kotlin.wasm' },
+    { name: 'qmljs', extensions: ['.qml', '.qmldir'], wasmPath: './wasm/tree-sitter-javascript.wasm' },
 
     // Web frameworks
     { name: 'vue', extensions: ['.vue'] }, // Special handling - no WASM needed
@@ -66,7 +67,7 @@ export class ParserManager {
     { name: 'gdscript', extensions: ['.gd'] },
 
     // Utility parsers
-    { name: 'regex', extensions: ['.regex'] }, // Support .regex files for testing and standalone regex patterns
+    { name: 'regex', extensions: ['.regex'], wasmPath: './wasm/tree-sitter-regex.wasm' }, // Support .regex files for testing and standalone regex patterns
   ];
 
   async initialize() {
@@ -137,6 +138,18 @@ export class ParserManager {
         log.engine(LogLevel.INFO, `Using JavaScript parser as fallback for TypeScript`);
         const jsParser = this.languages.get('javascript')!;
         this.languages.set('typescript', jsParser);
+        return jsParser;
+      }
+
+      // Fallback: Use JavaScript parser for QML/JS files (QML contains embedded JavaScript)
+      if (config.name === 'qmljs') {
+        log.engine(LogLevel.INFO, `Using JavaScript parser as fallback for QML/JS`);
+        // Load JavaScript parser if not already loaded
+        if (!this.languages.has('javascript')) {
+          await this.loadLanguageParser('javascript');
+        }
+        const jsParser = this.languages.get('javascript')!;
+        this.languages.set('qmljs', jsParser);
         return jsParser;
       }
 
@@ -220,9 +233,13 @@ export class ParserManager {
       throw new Error('Parser manager not initialized. Call initialize() first.');
     }
 
-    const languageObj = this.languages.get(language);
+    // Load language parser if not already loaded
+    let languageObj = this.languages.get(language);
     if (!languageObj) {
-      throw new Error(`Language parser not loaded: ${language}`);
+      languageObj = await this.loadLanguageParser(language);
+      if (!languageObj) {
+        throw new Error(`Failed to load parser for language: ${language}`);
+      }
     }
 
     const parser = new Parser();

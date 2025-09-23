@@ -129,10 +129,7 @@ export class TypeScriptExtractor extends BaseExtractor {
 
     const signature = this.buildFunctionSignature(node, name);
 
-    // Use nameNode for position if available, otherwise fall back to node
-    const positionNode = nameNode || node;
-
-    return this.createSymbol(positionNode, name, SymbolKind.Function, {
+    return this.createSymbol(node, name, SymbolKind.Function, {
       signature,
       visibility: this.extractVisibility(node),
       parentId,

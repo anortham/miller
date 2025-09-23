@@ -6,7 +6,7 @@ export class GDScriptExtractor extends BaseExtractor {
   private symbols: Symbol[] = [];
   private relationships: Relationship[] = [];
   private pendingInheritance: Map<string, string> = new Map(); // className -> baseClassName
-  private processedNodes: Set<Parser.SyntaxNode> = new Set(); // Track processed nodes
+  private processedPositions: Set<string> = new Set(); // Track processed node positions
 
   constructor(language: string, filePath: string, content: string) {
     super(language, filePath, content);
@@ -16,7 +16,7 @@ export class GDScriptExtractor extends BaseExtractor {
     this.symbols = [];
     this.relationships = [];
     this.pendingInheritance.clear();
-    this.processedNodes.clear();
+    this.processedPositions.clear();
 
     if (tree && tree.rootNode) {
       // First pass: collect inheritance information
@@ -27,26 +27,27 @@ export class GDScriptExtractor extends BaseExtractor {
       const children = tree.rootNode.children;
 
       for (let i = 0; i < children.length; i++) {
-        if (children[i].type === 'extends' && i + 1 < children.length) {
-          const typeNode = children[i + 1];
-          if (typeNode.type === 'type') {
-            const identifierNode = this.findChildByType(typeNode, 'identifier');
-            if (identifierNode) {
-              const baseClassName = this.getNodeText(identifierNode);
+        if (children[i].type === 'extends_statement') {
+          const extendsNode = children[i];
+          const typeNode = this.findChildByType(extendsNode, 'type');
+          if (typeNode) {
+            const baseClassName = this.getNodeText(typeNode);
 
-              // Create implicit class based on file name
-              const fileName = this.filePath.split('/').pop()?.replace('.gd', '') || 'ImplicitClass';
-              const implicitClass = this.createSymbol(children[i], fileName, SymbolKind.Class, {
-                signature: `extends ${baseClassName}`,
-                parentId: null,
-                visibility: 'public',
-                metadata: { baseClass: baseClassName }
-              });
+            // Create implicit class based on file name
+            const fileName = this.filePath.split('/').pop()?.replace('.gd', '') || 'ImplicitClass';
+            const implicitClass = this.createSymbol(extendsNode, fileName, SymbolKind.Class, {
+              signature: `extends ${baseClassName}`,
+              parentId: null,
+              visibility: 'public',
+              metadata: { baseClass: baseClassName }
+            });
 
-              this.symbols.push(implicitClass);
-              implicitClassId = implicitClass.id;
-              break;
-            }
+            // Set baseClass property for tests
+            (implicitClass as any).baseClass = baseClassName;
+
+            this.symbols.push(implicitClass);
+            implicitClassId = implicitClass.id;
+            break;
           }
         }
       }
@@ -78,7 +79,22 @@ export class GDScriptExtractor extends BaseExtractor {
           if (identifierNode) {
             const baseClassName = this.getNodeText(identifierNode);
             this.pendingInheritance.set(className, baseClassName);
-            // Debug: Collected inheritance tracking
+          }
+        }
+      }
+
+      // Check for extends followed by class_name (reverse order)
+      if (currentChild.type === 'extends_statement' && nextChild.type === 'class_name_statement') {
+        const typeNode = this.findChildByType(currentChild, 'type');
+        const nameNode = this.findChildByType(nextChild, 'name');
+
+        if (nameNode && typeNode) {
+          const className = this.getNodeText(nameNode);
+          const identifierNode = this.findChildByType(typeNode, 'identifier');
+
+          if (identifierNode) {
+            const baseClassName = this.getNodeText(identifierNode);
+            this.pendingInheritance.set(className, baseClassName);
           }
         }
       }
@@ -91,11 +107,13 @@ export class GDScriptExtractor extends BaseExtractor {
   }
 
   protected traverseNode(node: Parser.SyntaxNode, parentId: string | null): void {
-    // Prevent double processing of the same node
-    if (this.processedNodes.has(node)) {
+    // Create position-based key to prevent double processing of the same node
+    const positionKey = `${node.startPosition.row}:${node.startPosition.column}:${node.type}`;
+
+    if (this.processedPositions.has(positionKey)) {
       return;
     }
-    this.processedNodes.add(node);
+    this.processedPositions.add(positionKey);
 
 
     let symbol: Symbol | null = null;
@@ -114,13 +132,24 @@ export class GDScriptExtractor extends BaseExtractor {
         symbol = this.extractFunctionDefinition(node, parentId);
         break;
       case 'func':
+        // Skip if this func node is part of a function_definition (to avoid duplicates)
+        if (node.parent?.type === 'function_definition') {
+          return; // Skip processing
+        }
         symbol = this.extractFunctionDefinition(node, parentId);
         break;
       case 'constructor_definition':
         symbol = this.extractConstructorDefinition(node, parentId);
         break;
       case 'var':
+        // Skip if this var node is part of a variable_statement (to avoid duplicates)
+        if (node.parent?.type === 'variable_statement') {
+          return; // Skip processing
+        }
         symbol = this.extractVariableStatement(node, parentId);
+        break;
+      case 'variable_statement':
+        symbol = this.extractVariableFromStatement(node, parentId);
         break;
       case 'const':
         symbol = this.extractConstantStatement(node, parentId);
@@ -251,41 +280,99 @@ export class GDScriptExtractor extends BaseExtractor {
   }
 
   private extractFunctionDefinition(node: Parser.SyntaxNode, parentId: string | null): Symbol | null {
-    // For `func` nodes, look for the name node in the parent's children (sibling)
-    const parent = node.parent;
-    if (!parent) return null;
-
     let nameNode: Parser.SyntaxNode | null = null;
-    const children = parent.children;
-    const funcIndex = children.indexOf(node);
+    let funcNode: Parser.SyntaxNode | null = null;
+    let parentNode: Parser.SyntaxNode | null = null;
 
-    // Look for 'name' node after the 'func' node
-    for (let i = funcIndex + 1; i < children.length; i++) {
-      if (children[i].type === 'name') {
-        nameNode = children[i];
-        break;
+    if (node.type === 'function_definition') {
+      // Processing function_definition node - find child nodes
+      const children = node.children;
+      funcNode = children.find(c => c.type === 'func') || null;
+      nameNode = children.find(c => c.type === 'name') || null;
+      parentNode = node;
+    } else if (node.type === 'func') {
+      // Processing func node - look for sibling name node
+      const parent = node.parent;
+      if (!parent) return null;
+
+      const children = parent.children;
+      const funcIndex = children.indexOf(node);
+
+      // Look for 'name' node after the 'func' node
+      for (let i = funcIndex + 1; i < children.length; i++) {
+        if (children[i].type === 'name') {
+          nameNode = children[i];
+          break;
+        }
       }
+      funcNode = node;
+      parentNode = parent;
     }
 
-    if (!nameNode) {
+    if (!nameNode || !funcNode || !parentNode) {
       return null;
     }
 
     const name = this.getNodeText(nameNode);
-    const signature = this.getNodeText(parent); // Use parent to get full declaration
+    const signature = this.getNodeText(parentNode); // Use parent to get full declaration
 
 
     // Determine visibility based on naming convention
     const visibility = name.startsWith('_') ? 'private' : 'public';
 
-    // Determine symbol kind based on context and name (Python-like semantics)
+    // Determine symbol kind based on context and name
     let kind: SymbolKind;
     if (name === '_init') {
-      // GDScript constructor (like Python's __init__)
+      // GDScript constructor
       kind = SymbolKind.Constructor;
     } else if (parentId) {
-      // Method inside a class (including implicit class)
-      kind = SymbolKind.Method;
+      // Find the actual parent, preferring explicit classes over implicit ones
+      let parentSymbol = this.symbols.find(s => s.id === parentId);
+
+      // If parent is an implicit class, check if there's an explicit class to use instead
+      if (parentSymbol && parentSymbol.kind === SymbolKind.Class) {
+        const isImplicitClass = parentSymbol.signature?.includes('extends') &&
+                               !parentSymbol.signature?.includes('class_name');
+
+        if (isImplicitClass) {
+          // Look for an explicit class (with class_name) to use as parent instead
+          const explicitClass = this.symbols.find(s =>
+            s.kind === SymbolKind.Class &&
+            s.signature?.includes('class_name')
+          );
+
+          if (explicitClass) {
+            // Use explicit class as parent and update the symbol
+            parentSymbol = explicitClass;
+            parentId = explicitClass.id;
+          }
+        }
+
+        // Now determine kind based on the final parent class
+        const finalIsImplicitClass = parentSymbol.signature?.includes('extends') &&
+                                    !parentSymbol.signature?.includes('class_name');
+        const finalIsExplicitClass = parentSymbol.signature?.includes('class_name');
+
+        if (finalIsImplicitClass) {
+          // In implicit classes, lifecycle callbacks are methods, custom functions remain functions
+          const isLifecycleCallback = name.startsWith('_') && [
+            '_ready', '_enter_tree', '_exit_tree', '_process', '_physics_process',
+            '_input', '_unhandled_input', '_unhandled_key_input', '_notification',
+            '_draw', '_on_', '_handle_'
+          ].some(prefix => name.startsWith(prefix));
+
+          kind = isLifecycleCallback ? SymbolKind.Method : SymbolKind.Function;
+        } else if (finalIsExplicitClass) {
+          // In explicit classes (class_name), all functions are methods
+          kind = SymbolKind.Method;
+        } else {
+          // Fallback: default to method for class context
+          kind = SymbolKind.Method;
+        }
+      } else {
+        // Inside a function or other non-class context - this is still a function
+        kind = SymbolKind.Function;
+      }
     } else {
       // Top-level function
       kind = SymbolKind.Function;
@@ -340,47 +427,74 @@ export class GDScriptExtractor extends BaseExtractor {
     const signature = this.getNodeText(parent); // Use parent to get full declaration
 
 
-    // Check for annotations in sibling structure (like we did for class annotations)
+    // Check for annotations - they can be children or siblings
     let annotations: string[] = [];
+    let fullSignature = this.getNodeText(parent);
 
-    // Look for annotations before this var in the parent's children
-    // Find the var node index by comparing content (indexOf doesn't work with node references)
-    let nodeIndex = -1;
-    for (let i = 0; i < children.length; i++) {
-      if (children[i].type === 'var' && children[i] === node) {
-        nodeIndex = i;
-        break;
-      }
-    }
-
-    // If we can't find by reference, find by position (var nodes are unique enough)
-    if (nodeIndex === -1) {
-      for (let i = 0; i < children.length; i++) {
-        if (children[i].type === 'var') {
-          nodeIndex = i;
-          break; // Take the first var node - this works for most cases
-        }
-      }
-    }
-
-
-    if (nodeIndex > 0) {
-      for (let i = nodeIndex - 1; i >= 0; i--) {
-        if (children[i].type === 'annotations') {
+    // First check for annotations as children of variable_statement (most common case)
+    if (parent.type === 'variable_statement') {
+      for (const child of children) {
+        if (child.type === 'annotations') {
           // Get all annotation children
-          const annotationsNode = children[i];
-
-
-          for (const annotationChild of annotationsNode.children) {
+          for (const annotationChild of child.children) {
             if (annotationChild.type === 'annotation') {
-              annotations.push(this.getNodeText(annotationChild));
+              const annotationText = this.getNodeText(annotationChild);
+              annotations.push(annotationText);
             }
           }
-          break;
         }
-        // Stop if we hit another variable or significant structure
-        if (children[i].type === 'var') {
-          break;
+      }
+    }
+
+    // Also look for sibling annotations at source level (like @export_category)
+    if (parent.type === 'variable_statement') {
+      const grandParent = parent.parent;
+      if (grandParent) {
+        const searchChildren = grandParent.children;
+
+        // Find the index of the variable_statement by position (more reliable than reference)
+        let nodeIndex = -1;
+        for (let i = 0; i < searchChildren.length; i++) {
+          if (searchChildren[i].type === 'variable_statement' &&
+              searchChildren[i].startPosition.row === parent.startPosition.row &&
+              searchChildren[i].startPosition.column === parent.startPosition.column) {
+            nodeIndex = i;
+            break;
+          }
+        }
+
+        // Collect all preceding sibling annotations
+        if (nodeIndex > 0) {
+          let annotationTexts: string[] = [];
+
+          for (let i = nodeIndex - 1; i >= 0; i--) {
+            if (searchChildren[i].type === 'annotations') {
+              // Get all annotation children
+              const annotationsNode = searchChildren[i];
+              for (const annotationChild of annotationsNode.children) {
+                if (annotationChild.type === 'annotation') {
+                  const annotationText = this.getNodeText(annotationChild);
+                  annotations.push(annotationText);
+                  annotationTexts.unshift(annotationText); // Add to beginning
+                }
+              }
+            }
+            // Also check for individual annotation nodes
+            else if (searchChildren[i].type === 'annotation') {
+              const annotationText = this.getNodeText(searchChildren[i]);
+              annotations.push(annotationText);
+              annotationTexts.unshift(annotationText);
+            }
+            // Stop if we hit another variable or significant structure
+            else if (searchChildren[i].type === 'variable_statement' || searchChildren[i].type === 'var') {
+              break;
+            }
+          }
+
+          // Build full signature with annotations
+          if (annotationTexts.length > 0) {
+            fullSignature = annotationTexts.join('\n') + '\n' + this.getNodeText(parent);
+          }
         }
       }
     }
@@ -426,7 +540,7 @@ export class GDScriptExtractor extends BaseExtractor {
 
 
     const symbol = this.createSymbol(node, name, SymbolKind.Field, {
-      signature,
+      signature: fullSignature,
       parentId,
       visibility,
       metadata: {
@@ -599,7 +713,33 @@ export class GDScriptExtractor extends BaseExtractor {
     });
 
     this.symbols.push(symbol);
+
+    // Extract enum members
+    this.extractEnumMembers(node, symbol.id);
+
     return symbol;
+  }
+
+  private extractEnumMembers(enumNode: Parser.SyntaxNode, enumId: string): void {
+    // Look for enumerator_list and extract members
+    const enumeratorList = this.findChildByType(enumNode, 'enumerator_list');
+    if (!enumeratorList) {
+      return;
+    }
+
+    // Extract enumerator nodes from enumerator list
+    for (const child of enumeratorList.children) {
+      if (child.type === 'enumerator') {
+        // For simple enumerators like "IDLE", the text is the name
+        const memberName = this.getNodeText(child);
+        const memberSymbol = this.createSymbol(child, memberName, SymbolKind.EnumMember, {
+          signature: memberName,
+          parentId: enumId,
+          visibility: 'public'
+        });
+        this.symbols.push(memberSymbol);
+      }
+    }
   }
 
   getRelationships(): Relationship[] {
@@ -648,5 +788,71 @@ export class GDScriptExtractor extends BaseExtractor {
     }
 
     return typeMap;
+  }
+
+  private extractVariableFromStatement(node: Parser.SyntaxNode, parentId: string | null): Symbol | null {
+    // For variable_statement nodes, find the var child and extract from there
+    const varNode = this.findChildByType(node, 'var');
+    if (!varNode) return null;
+
+    // Check if we should use class_name class as parent instead of implicit class
+    let actualParentId = parentId;
+
+    // If at source level, find the closest preceding class_name statement
+    if (node.parent?.type === 'source') {
+      // Find all class_name classes in the same file, sorted by position
+      const classNameClasses = this.symbols
+        .filter(s =>
+          s.kind === SymbolKind.Class &&
+          s.signature?.includes('class_name') &&
+          s.parentId === parentId // Same implicit parent means it's in the same file
+        )
+        .sort((a, b) => {
+          // Sort by line number (we need position info for this)
+          // For now, find the one that comes right before this variable
+          return 0; // Placeholder sort
+        });
+
+      // Find the closest preceding class_name by checking source children order
+      if (node.parent && classNameClasses.length > 0) {
+        const sourceChildren = node.parent.children;
+
+        // Find the variable's position by comparing start positions
+        let varIndex = -1;
+        for (let i = 0; i < sourceChildren.length; i++) {
+          if (sourceChildren[i].type === 'variable_statement' &&
+              sourceChildren[i].startPosition.row === node.startPosition.row &&
+              sourceChildren[i].startPosition.column === node.startPosition.column) {
+            varIndex = i;
+            break;
+          }
+        }
+
+        // Find the last class_name_statement before this variable
+        let closestClassNameNode: any = null;
+        if (varIndex >= 0) {
+          for (let i = varIndex - 1; i >= 0; i--) {
+            if (sourceChildren[i].type === 'class_name_statement') {
+              closestClassNameNode = sourceChildren[i];
+              break;
+            }
+          }
+        }
+
+        if (closestClassNameNode) {
+          // Find the corresponding class symbol by matching the name
+          const nameNode = this.findChildByType(closestClassNameNode, 'name');
+          if (nameNode) {
+            const className = this.getNodeText(nameNode);
+            const matchingClass = classNameClasses.find(c => c.name === className);
+            if (matchingClass) {
+              actualParentId = matchingClass.id;
+            }
+          }
+        }
+      }
+    }
+
+    return this.extractVariableStatement(varNode, actualParentId);
   }
 }

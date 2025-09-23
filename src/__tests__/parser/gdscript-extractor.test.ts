@@ -7,6 +7,13 @@ describe('GDScriptExtractor', () => {
   let parserManager: ParserManager;
 
   beforeAll(async () => {
+    // Initialize logger for tests
+    const { initializeLogger } = await import('../../utils/logger.js');
+    const { MillerPaths } = await import('../../utils/miller-paths.js');
+    const paths = new MillerPaths(process.cwd());
+    await paths.ensureDirectories();
+    initializeLogger(paths);
+
     parserManager = new ParserManager();
     await parserManager.initialize();
   });

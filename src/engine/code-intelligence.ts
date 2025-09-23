@@ -32,6 +32,7 @@ import { BashExtractor } from '../extractors/bash-extractor.js';
 import { PowerShellExtractor } from '../extractors/powershell-extractor.js';
 import { GDScriptExtractor } from '../extractors/gdscript-extractor.js';
 import { LuaExtractor } from '../extractors/lua-extractor.js';
+import { QMLJSExtractor } from '../extractors/qmljs-extractor.js';
 import { MillerPaths } from '../utils/miller-paths.js';
 import { log, LogLevel } from '../utils/logger.js';
 
@@ -129,6 +130,7 @@ export class CodeIntelligenceEngine {
     this.extractors.set('powershell', PowerShellExtractor);
     this.extractors.set('gdscript', GDScriptExtractor);
     this.extractors.set('lua', LuaExtractor);
+    this.extractors.set('qmljs', QMLJSExtractor);
     // Additional extractors can be registered here
   }
 

@@ -6,7 +6,14 @@ import { SymbolKind } from '../../extractors/base-extractor.js';
 describe('RubyExtractor', () => {
   let parserManager: ParserManager;
 
-  beforeAll(async () => {
+    beforeAll(async () => {
+    // Initialize logger for tests
+    const { initializeLogger } = await import('../../utils/logger.js');
+    const { MillerPaths } = await import('../../utils/miller-paths.js');
+    const paths = new MillerPaths(process.cwd());
+    await paths.ensureDirectories();
+    initializeLogger(paths);
+
     parserManager = new ParserManager();
     await parserManager.initialize();
   });
