@@ -299,7 +299,7 @@ export class SearchEngine {
         try {
           // Use Bun.spawn directly for better control
           const proc = Bun.spawn([rgPath, ...rgArgs], {
-            cwd: searchPath,
+            cwd: this.workspacePath || process.cwd(),
             stdout: 'pipe',
             stderr: 'pipe'
           });

@@ -156,14 +156,14 @@ export class VectraVectorStore {
       let symbolMetadata = {};
       try {
         const symbolData = this.db.prepare(`
-          SELECT name, file_path, type FROM symbols WHERE id = ?
-        `).get(symbolId) as { name: string; file_path: string; type: string } | undefined;
+          SELECT name, file_path, kind FROM symbols WHERE id = ?
+        `).get(symbolId) as { name: string; file_path: string; kind: string } | undefined;
 
         if (symbolData) {
           symbolMetadata = {
             name: symbolData.name,
             file: symbolData.file_path,
-            type: symbolData.type
+            type: symbolData.kind
           };
         }
       } catch (e) {
@@ -174,7 +174,7 @@ export class VectraVectorStore {
       const item: VectraItem = {
         id: vectraId,
         metadata: {
-          symbolId: typeof symbolId === 'number' ? symbolId : parseInt(symbolId),
+          symbolId: symbolId,
           originalId,
           ...symbolMetadata
         },
@@ -193,7 +193,7 @@ export class VectraVectorStore {
       await this.index!.insertItem(item);
 
       // Store mapping for compatibility
-      await this.storeSymbolMapping(originalId, typeof symbolId === 'number' ? symbolId : parseInt(symbolId));
+      await this.storeSymbolMapping(originalId, symbolId);
 
       log.engine(LogLevel.DEBUG, `Successfully stored embedding for symbol ${symbolId}`);
 
@@ -213,13 +213,13 @@ export class VectraVectorStore {
   /**
    * Store mapping between original symbol ID and integer ID (for compatibility)
    */
-  private async storeSymbolMapping(originalId: string, integerRowId: number): Promise<void> {
+  private async storeSymbolMapping(originalId: string, symbolId: string | number): Promise<void> {
     try {
       const stmt = this.db.prepare(`
         INSERT OR REPLACE INTO symbol_id_mapping (original_id, integer_id)
         VALUES (?, ?)
       `);
-      stmt.run(originalId, integerRowId);
+      stmt.run(originalId, symbolId);
     } catch (error) {
       // Ignore mapping errors - they're not critical for Vectra
       log.engine(LogLevel.DEBUG, 'Symbol mapping storage failed (non-critical)', { error: error.message });

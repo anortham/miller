@@ -42,7 +42,7 @@ describe('Production Parser Debug', () => {
 
       // Test the exact production scenario
       const engine = new EnhancedCodeIntelligenceEngine(db, {
-        workspacePath: '/Users/murphy/Source/miller',
+        workspacePath: process.cwd(),
         enableWatcher: false,
         enableSemanticSearch: false
       });

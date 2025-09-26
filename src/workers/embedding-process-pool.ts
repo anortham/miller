@@ -76,7 +76,7 @@ export class EmbeddingProcessPool {
 
   constructor(config: ProcessPoolConfig = {}) {
     this.config = {
-      processCount: config.processCount || Math.min(navigator?.hardwareConcurrency || 4, 4), // Limit to 4 for stability
+      processCount: config.processCount || Math.min(typeof navigator !== 'undefined' ? navigator?.hardwareConcurrency || 4 : 4, 4), // Limit to 4 for stability
       maxQueueSize: config.maxQueueSize || 5000,
       processTimeout: config.processTimeout || 30000,
       retryAttempts: config.retryAttempts || 2,

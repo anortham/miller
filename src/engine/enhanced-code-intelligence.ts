@@ -136,7 +136,7 @@ export class EnhancedCodeIntelligenceEngine {
 
       // Semantic defaults
       enableSemanticSearch: config.enableSemanticSearch ?? true,
-      embeddingProcessCount: config.embeddingProcessCount ?? Math.min(navigator?.hardwareConcurrency || 4, 4),
+      embeddingProcessCount: config.embeddingProcessCount ?? Math.min(typeof navigator !== 'undefined' ? navigator?.hardwareConcurrency || 4 : 4, 4),
       embeddingBatchSize: config.embeddingBatchSize ?? 20,
       semanticIndexingPriority: config.semanticIndexingPriority ?? 'background',
       embeddingModel: config.embeddingModel ?? 'fast'
@@ -364,10 +364,17 @@ export class EnhancedCodeIntelligenceEngine {
         await this.fileWatcher.watchDirectory(absolutePath);
       }
 
+      // Update workspace stats
+      const symbolCount = this.db['db'].prepare('SELECT COUNT(*) as count FROM symbols WHERE file_path LIKE ?').get(`${absolutePath}%`) as { count: number };
+      const fileCount = this.db['db'].prepare('SELECT COUNT(DISTINCT file_path) as count FROM symbols WHERE file_path LIKE ?').get(`${absolutePath}%`) as { count: number };
+      this.db.updateWorkspaceStats(absolutePath, symbolCount.count, fileCount.count);
+
       const totalTime = Date.now() - startTime;
       log.engine(LogLevel.INFO, `Workspace indexing completed in ${totalTime}ms`, {
         structuralComplete: true,
-        semanticInProgress: this.semanticInitialized
+        semanticInProgress: this.semanticInitialized,
+        symbolCount: symbolCount.count,
+        fileCount: fileCount.count
       });
 
     } catch (error) {
@@ -409,9 +416,8 @@ export class EnhancedCodeIntelligenceEngine {
       const symbolRows = this.db['db'].prepare(`
         SELECT id, name, kind, file_path, signature, doc_comment, language, start_line, end_line
         FROM symbols
-        WHERE file_path LIKE ? AND (signature IS NOT NULL OR doc_comment IS NOT NULL)
+        WHERE file_path LIKE ? AND (signature IS NOT NULL OR doc_comment IS NOT NULL OR kind IN ('function', 'class', 'method', 'interface', 'enum', 'type'))
         ORDER BY kind ASC, name ASC
-        LIMIT 500
       `).all(`${workspacePath}%`) as any[];
 
       // Map database fields to Symbol interface
@@ -440,7 +446,6 @@ export class EnhancedCodeIntelligenceEngine {
         // Use direct embedder for vocabulary consistency
         log.engine(LogLevel.INFO, `Starting TF-IDF semantic indexing for ${symbols.length} symbols...`);
 
-        const priorityBatches = this.categorizeSymbolsByPriority(symbols);
 
         // Build vocabulary in direct embedder for query consistency
         if (this.embedder) {
@@ -552,30 +557,6 @@ export class EnhancedCodeIntelligenceEngine {
     }
   }
 
-  private categorizeSymbolsByPriority(symbols: Symbol[]): { high: Symbol[]; normal: Symbol[]; low: Symbol[] } {
-    const high: Symbol[] = [];
-    const normal: Symbol[] = [];
-    const low: Symbol[] = [];
-
-    for (const symbol of symbols) {
-      // High priority: classes, interfaces, main functions
-      if (['class', 'interface', 'enum', 'type'].includes(symbol.type) ||
-          symbol.name.toLowerCase().includes('main') ||
-          symbol.name.toLowerCase().includes('index')) {
-        high.push(symbol);
-      }
-      // Normal priority: functions, methods
-      else if (['function', 'method', 'procedure', 'constructor'].includes(symbol.type)) {
-        normal.push(symbol);
-      }
-      // Low priority: variables, constants, properties
-      else {
-        low.push(symbol);
-      }
-    }
-
-    return { high, normal, low };
-  }
 
   private detectLayer(filePath: string): string {
     const path = filePath.toLowerCase();
@@ -666,7 +647,7 @@ export class EnhancedCodeIntelligenceEngine {
       const types = extractor.inferTypes(symbols);
 
       // Store in database (within a transaction for consistency)
-      await this.storeExtractionResults(symbols, relationships, types);
+      await this.storeExtractionResults(symbols, relationships, types, parseResult.language);
 
       // Update search index (skip during bulk indexing to avoid duplicates)
       if (!this.isBulkIndexing) {
@@ -725,7 +706,8 @@ export class EnhancedCodeIntelligenceEngine {
   private async storeExtractionResults(
     symbols: Symbol[],
     relationships: Relationship[],
-    types: Map<string, string>
+    types: Map<string, string>,
+    language: string
   ): Promise<void> {
     this.db.transaction(() => {
       // Insert symbols
@@ -774,7 +756,7 @@ export class EnhancedCodeIntelligenceEngine {
           null, // generic_params
           null, // constraints
           true, // is_inferred
-          'typescript', // language
+          language, // language
           null // metadata
         );
       }
@@ -981,8 +963,6 @@ export class EnhancedCodeIntelligenceEngine {
     const files: string[] = [];
     const supportedExtensions = this.parserManager.getSupportedExtensions();
 
-    console.log(`🔍 DEBUG: getAllCodeFiles called for: ${dirPath}`);
-    console.log(`📁 DEBUG: supportedExtensions.length = ${supportedExtensions.length}`);
     log.engine(LogLevel.INFO, `🔍 getAllCodeFiles starting for: ${dirPath}`);
     log.engine(LogLevel.INFO, `📁 Supported extensions: ${supportedExtensions.length} found`, { first10: supportedExtensions.slice(0, 10) });
 

@@ -64,7 +64,7 @@ export class EmbeddingWorkerPool {
 
   constructor(config: WorkerPoolConfig = {}) {
     this.config = {
-      workerCount: config.workerCount || Math.min(navigator.hardwareConcurrency || 4, 8),
+      workerCount: config.workerCount || Math.min(typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 4 : 4, 8),
       maxQueueSize: config.maxQueueSize || 10000,
       batchSize: config.batchSize || 10,
       workerTimeout: config.workerTimeout || 30000,

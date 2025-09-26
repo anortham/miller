@@ -35,7 +35,7 @@ describe('File Discovery Debug Tests', () => {
   });
 
   test('Should detect TypeScript files in src directory', () => {
-    const testFile = '/Users/murphy/Source/miller/src/mcp-server.ts';
+    const testFile = path.join(process.cwd(), 'src/mcp-server.ts');
     const isSupported = parserManager.isFileSupported(testFile);
 
     console.log('Is mcp-server.ts supported?', isSupported);
@@ -46,7 +46,7 @@ describe('File Discovery Debug Tests', () => {
     const { readdir } = await import('node:fs/promises');
 
     // Manual check - should find .ts files in src/
-    const srcDir = '/Users/murphy/Source/miller/src';
+    const srcDir = path.join(process.cwd(), 'src');
     const entries = await readdir(srcDir, { withFileTypes: true });
 
     const tsFiles = entries.filter(entry =>
@@ -83,7 +83,7 @@ describe('File Discovery Debug Tests', () => {
     // Replicate the exact logic from getAllCodeFiles
     const files: string[] = [];
     const supportedExtensions = parserManager.getSupportedExtensions();
-    const dirPath = '/Users/murphy/Source/miller/src';
+    const dirPath = path.join(process.cwd(), 'src');
 
     console.log('Mock test - Supported extensions:', supportedExtensions.slice(0, 10));
 
