@@ -53,7 +53,7 @@ import { QMLJSExtractor } from '../extractors/qmljs-extractor.js';
 import MillerEmbedder, { type EmbeddingResult } from '../embeddings/miller-embedder.js';
 import { VectraVectorStore } from '../embeddings/vectra-vector-store.js';
 import HybridSearchEngine from '../search/hybrid-search-engine.js';
-import { EmbeddingProcessPool } from '../workers/embedding-process-pool.js';
+import { EmbeddingWorkerPool } from '../workers/embedding-worker-pool.js';
 
 import { MillerPaths } from '../utils/miller-paths.js';
 import { log, LogLevel } from '../utils/logger.js';
@@ -116,7 +116,7 @@ export class EnhancedCodeIntelligenceEngine {
   // Semantic components
   private embedder?: MillerEmbedder;
   private vectorStore?: VectraVectorStore;
-  private embeddingProcessPool?: EmbeddingProcessPool;
+  private embeddingWorkerPool?: EmbeddingWorkerPool;
   private _hybridSearch?: HybridSearchEngine;
   private semanticInitialized = false;
   private embeddingProgress = { completed: 0, total: 0 };
@@ -273,37 +273,26 @@ export class EnhancedCodeIntelligenceEngine {
       await this.vectorStore.initialize();
       log.engine(LogLevel.INFO, 'Vector store initialized successfully');
 
-      // Try process pool first, fallback to direct embedder if needed
-      try {
-        log.engine(LogLevel.INFO, 'Attempting to initialize embedding process pool...');
-        this.embeddingProcessPool = new EmbeddingProcessPool({
-          processCount: this.config.embeddingProcessCount,
-          onEmbeddingComplete: async (symbolId: string, embedding: EmbeddingResult) => {
-            await this.vectorStore?.storeSymbolEmbedding(symbolId, embedding);
-            this.embeddingProgress.completed++;
-          },
-          onProgress: this.handleEmbeddingProgress.bind(this),
-          onError: (error: Error, task) => {
-            log.engine(LogLevel.ERROR, `Process pool embedding error:`, error);
-          }
-        });
+      // Always initialize TF-IDF embedder for query consistency
+      log.engine(LogLevel.INFO, 'Initializing TF-IDF embedder for queries...');
+      const { TFIDFEmbedder } = await import('../embeddings/tfidf-embedder.js');
+      this.embedder = new TFIDFEmbedder({
+        maxFeatures: 1000,
+        minDocFreq: 1,  // Allow single-occurrence terms for better coverage
+        maxDocFreq: 0.9  // More permissive upper bound
+      });
+      log.engine(LogLevel.INFO, '✅ TF-IDF embedder initialized for queries');
 
-        await this.embeddingProcessPool.initialize();
-        log.engine(LogLevel.INFO, '🚀 Process pool initialized successfully! True background processing enabled.');
-      } catch (error) {
-        log.engine(LogLevel.WARN, `Process pool initialization failed: ${error.message}. Falling back to direct embedder.`);
-
-        // Fallback to direct embedder
-        this.embeddingProcessPool = undefined;
-        this.embedder = new MillerEmbedder();
-        await this.embedder.initialize(this.config.embeddingModel);
-        log.engine(LogLevel.INFO, '📊 Direct embedder initialized (process pool unavailable)');
-      }
+      // For TF-IDF consistency, skip worker pool and use direct embedder only
+      log.engine(LogLevel.INFO, 'Using direct TF-IDF embedder for vocabulary consistency (skipping worker pool)');
+      this.embeddingWorkerPool = undefined;
 
       // Initialize hybrid search engine
+      // For TF-IDF consistency, always use direct embedder for queries (shared vocabulary)
+      // Worker pool is used separately for background indexing
       this._hybridSearch = new HybridSearchEngine(
         this.searchEngine,
-        this.embedder,
+        this.embedder!, // Always use direct embedder for queries to ensure vocabulary consistency
         this.vectorStore,
         this.db
       );
@@ -313,7 +302,13 @@ export class EnhancedCodeIntelligenceEngine {
       this.semanticInitialized = true;
       log.engine(LogLevel.INFO, 'Semantic search components initialized successfully');
     } catch (error) {
-      log.engine(LogLevel.WARN, 'Failed to initialize semantic components, falling back to structural search only', error);
+      log.engine(LogLevel.ERROR, 'Failed to initialize semantic components, falling back to structural search only', {
+        message: error?.message || 'No message',
+        name: error?.name || 'No name',
+        stack: error?.stack || 'No stack',
+        toString: error?.toString() || 'No toString',
+        fullError: JSON.stringify(error, null, 2)
+      });
       this.semanticInitialized = false;
       // Don't throw - continue with structural search only
     }
@@ -360,7 +355,7 @@ export class EnhancedCodeIntelligenceEngine {
       await this.performStructuralIndexing(files);
 
       // Phase 2: Semantic indexing (background with worker pool OR direct with embedder)
-      if (this.semanticInitialized && (this.embeddingProcessPool || this.embedder)) {
+      if (this.semanticInitialized && (this.embeddingWorkerPool || this.embedder)) {
         await this.startSemanticIndexing(absolutePath);
       }
 
@@ -404,7 +399,7 @@ export class EnhancedCodeIntelligenceEngine {
   }
 
   private async startSemanticIndexing(workspacePath: string): Promise<void> {
-    if (!this.vectorStore || (!this.embeddingProcessPool && !this.embedder)) {
+    if (!this.vectorStore || (!this.embeddingWorkerPool && !this.embedder)) {
       log.engine(LogLevel.WARN, 'Semantic indexing skipped: missing vector store or embedder');
       return;
     }
@@ -440,91 +435,42 @@ export class EnhancedCodeIntelligenceEngine {
       this.embeddingProgress.total = symbols.length;
       this.embeddingProgress.completed = 0;
 
-      if (this.embeddingProcessPool) {
-        // Use process pool for true background processing
-        log.engine(LogLevel.INFO, `Starting background semantic indexing for ${symbols.length} symbols...`);
+      // For TF-IDF consistency, always use direct embedder (shared vocabulary)
+      if (this.embedder) {
+        // Use direct embedder for vocabulary consistency
+        log.engine(LogLevel.INFO, `Starting TF-IDF semantic indexing for ${symbols.length} symbols...`);
 
         const priorityBatches = this.categorizeSymbolsByPriority(symbols);
 
-        // Process all symbols with proper priority ordering
-        const embeddingPromises: Promise<void>[] = [];
+        // Build vocabulary in direct embedder for query consistency
+        if (this.embedder) {
+          log.engine(LogLevel.INFO, 'Building TF-IDF vocabulary for query embedding...');
+          log.engine(LogLevel.INFO, `🔧 DEBUG: embedder type: ${this.embedder.constructor.name}, has addDocument: ${typeof this.embedder.addDocument}`);
 
-        // High priority first
-        for (const symbol of priorityBatches.high) {
-          const content = [symbol.name, symbol.signature || '', symbol.doc_comment || ''].filter(Boolean).join(' ');
-
-          if (content.trim()) {
-            const embeddingPromise = this.embeddingProcessPool.embed(
-              symbol.id,
-              content,
-              {
-                file: symbol.file_path,
-                language: symbol.language,
-                layer: this.detectLayer(symbol.file_path),
-                patterns: this.detectPatterns(symbol.name, symbol.type)
-              },
-              'high'
-            ).catch(error => {
-              log.engine(LogLevel.ERROR, `Failed to embed high priority symbol ${symbol.name}:`, error);
-            });
-
-            embeddingPromises.push(embeddingPromise);
+          for (const symbol of symbols) {
+            const content = [symbol.name, symbol.signature || '', symbol.doc_comment || ''].filter(Boolean).join(' ');
+            if (content.trim()) {
+              // Add defensive check before calling addDocument
+              if (typeof this.embedder.addDocument !== 'function') {
+                log.engine(LogLevel.ERROR, `🐛 DEBUG: addDocument is not a function! embedder:`, {
+                  type: typeof this.embedder,
+                  constructor: this.embedder?.constructor?.name,
+                  keys: Object.keys(this.embedder || {}),
+                  hasAddDocument: 'addDocument' in (this.embedder || {})
+                });
+                throw new Error(`addDocument method not found on embedder of type ${this.embedder?.constructor?.name}`);
+              }
+              this.embedder.addDocument(symbol.id.toString(), content);
+            }
           }
+          this.embedder.buildVocabulary();
+          log.engine(LogLevel.INFO, `✅ TF-IDF vocabulary built from ${symbols.length} symbols`);
+        } else {
+          log.engine(LogLevel.WARN, '🐛 DEBUG: this.embedder is null/undefined during vocabulary building');
         }
 
-        // Normal priority
-        for (const symbol of priorityBatches.normal) {
-          const content = [symbol.name, symbol.signature || '', symbol.doc_comment || ''].filter(Boolean).join(' ');
-
-          if (content.trim()) {
-            const embeddingPromise = this.embeddingProcessPool.embed(
-              symbol.id,
-              content,
-              {
-                file: symbol.file_path,
-                language: symbol.language,
-                layer: this.detectLayer(symbol.file_path),
-                patterns: this.detectPatterns(symbol.name, symbol.type)
-              },
-              'normal'
-            ).catch(error => {
-              log.engine(LogLevel.ERROR, `Failed to embed normal priority symbol ${symbol.name}:`, error);
-            });
-
-            embeddingPromises.push(embeddingPromise);
-          }
-        }
-
-        // Low priority
-        for (const symbol of priorityBatches.low) {
-          const content = [symbol.name, symbol.signature || '', symbol.doc_comment || ''].filter(Boolean).join(' ');
-
-          if (content.trim()) {
-            const embeddingPromise = this.embeddingProcessPool.embed(
-              symbol.id,
-              content,
-              {
-                file: symbol.file_path,
-                language: symbol.language,
-                layer: this.detectLayer(symbol.file_path),
-                patterns: this.detectPatterns(symbol.name, symbol.type)
-              },
-              'low'
-            ).catch(error => {
-              log.engine(LogLevel.ERROR, `Failed to embed low priority symbol ${symbol.name}:`, error);
-            });
-
-            embeddingPromises.push(embeddingPromise);
-          }
-        }
-
-        log.engine(LogLevel.INFO, `Queued ${embeddingPromises.length} symbols for background embedding generation`);
-
-        // Note: We don't await here - embeddings happen in background while main thread stays responsive
-
-      } else if (this.embedder) {
-        // Use direct embedder for synchronous processing
-        log.engine(LogLevel.INFO, `Starting direct semantic indexing for ${symbols.length} symbols...`);
+        // Generate embeddings directly with shared vocabulary
+        log.engine(LogLevel.INFO, `Generating embeddings for ${symbols.length} symbols...`);
 
         let processed = 0;
         const batchSize = Math.min(20, symbols.length); // Process in smaller batches
@@ -731,7 +677,7 @@ export class EnhancedCodeIntelligenceEngine {
       await this.updateFileMetadata(filePath, parseResult.hash, parseResult.language);
 
       // ENHANCEMENT: Queue symbols for embedding generation if semantic search is enabled
-      if (this.semanticInitialized && this.embeddingProcessPool && !this.isBulkIndexing) {
+      if (this.semanticInitialized && this.embeddingWorkerPool && !this.isBulkIndexing) {
         await this.queueSymbolsForEmbedding(symbols, filePath, parseResult.language);
       }
 
@@ -743,7 +689,7 @@ export class EnhancedCodeIntelligenceEngine {
   }
 
   private async queueSymbolsForEmbedding(symbols: Symbol[], filePath: string, language: string): Promise<void> {
-    if (!this.embeddingProcessPool) return;
+    if (!this.embeddingWorkerPool) return;
 
     // Queue individual embedding tasks in background
     const embeddingPromises = [];
@@ -752,7 +698,7 @@ export class EnhancedCodeIntelligenceEngine {
       const content = symbol.docComment || symbol.signature || `${symbol.kind} ${symbol.name}`;
 
       if (content.trim()) {
-        const embeddingPromise = this.embeddingProcessPool.embed(
+        const embeddingPromise = this.embeddingWorkerPool.queueEmbedding(
           symbol.id,
           content,
           {
@@ -944,16 +890,31 @@ export class EnhancedCodeIntelligenceEngine {
         });
 
         // Convert HybridSearchResult[] back to SearchResult[] format for MCP compatibility
-        return hybridResults.map(r => ({
-          file: r.filePath,
-          line: r.startLine,
-          column: r.startColumn,
-          text: r.name,
-          score: r.hybridScore,
-          symbolId: r.id.toString(),
-          kind: r.kind,
-          signature: r.signature
-        }));
+        return hybridResults.map(r => {
+          // Debug logging to trace property mapping issue using Miller's logging system
+          if (!r.filePath) {
+            log.engine(LogLevel.ERROR, '🐛 DEBUG: Missing filePath in hybrid result', {
+              id: r.id,
+              name: r.name,
+              filePath: r.filePath,
+              file_path: (r as any).file_path,
+              startLine: r.startLine,
+              start_line: (r as any).start_line,
+              fullResult: JSON.stringify(r, null, 2)
+            });
+          }
+
+          return {
+            file: r.filePath,        // Symbol interface uses filePath (camelCase)
+            line: r.startLine,       // Symbol interface uses startLine (camelCase)
+            column: r.startColumn,   // Symbol interface uses startColumn (camelCase)
+            text: r.name,
+            score: r.hybridScore,
+            symbolId: r.id?.toString(),
+            kind: r.kind,            // Symbol interface uses kind, not type
+            signature: r.signature
+          };
+        });
       } catch (error) {
         log.engine(LogLevel.WARN, 'Hybrid search failed, falling back to structural search', error);
       }
@@ -1103,14 +1064,14 @@ export class EnhancedCodeIntelligenceEngine {
     // Add semantic stats if components are initialized
     if (this.semanticInitialized && this.vectorStore) {
       const vectorStats = this.vectorStore.getStats();
-      const processStats = this.embeddingProcessPool ? this.embeddingProcessPool.getStats() : null;
+      const workerStats = this.embeddingWorkerPool ? this.embeddingWorkerPool.getStats() : null;
 
       (baseStats as any).semantic = {
         totalEmbeddings: vectorStats.totalVectors,
         embeddingProgress: this.embeddingProgress.total > 0
           ? Math.round((this.embeddingProgress.completed / this.embeddingProgress.total) * 100)
           : 0,
-        processStats,
+        workerStats,
         indexingComplete: this.embeddingProgress.completed >= this.embeddingProgress.total,
         semanticSearchAvailable: vectorStats.totalVectors > 0
       };
@@ -1177,8 +1138,8 @@ export class EnhancedCodeIntelligenceEngine {
   }
 
   async terminate(): Promise<void> {
-    if (this.embeddingProcessPool) {
-      await this.embeddingProcessPool.terminate();
+    if (this.embeddingWorkerPool) {
+      await this.embeddingWorkerPool.terminate();
     }
     if (this.fileWatcher) {
       this.fileWatcher.stopWatching();

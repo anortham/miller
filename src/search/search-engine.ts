@@ -224,6 +224,18 @@ export class SearchEngine {
     const results = this.miniSearch.search(query, searchOptions);
 
     const processedResults = await Promise.all(results.map(async (r: any) => {
+      // Debug logging to trace missing file paths using Miller's logging system
+      if (!r.file) {
+        log.engine(LogLevel.ERROR, '🐛 DEBUG: Missing file in fuzzy search result', {
+          name: r.name,
+          file: r.file,
+          line: r.line,
+          symbolId: r.symbolId,
+          keys: Object.keys(r),
+          fullResult: JSON.stringify(r, null, 2)
+        });
+      }
+
       const result: SearchResult = {
         file: r.file,
         line: r.line,
@@ -256,18 +268,57 @@ export class SearchEngine {
     const { limit = 100, filePattern, path } = options;
 
     try {
-      // Try ripgrep first for fast file content search
-      let rgCommand = `rg --json --line-number --column --max-count=${limit}`;
+      // Build ripgrep arguments array
+      const rgArgs = [
+        '--json',
+        '--line-number',
+        '--column',
+        `--max-count=${limit}`
+      ];
 
       if (filePattern) {
-        rgCommand += ` --glob="${filePattern}"`;
+        rgArgs.push(`--glob=${filePattern}`);
       }
 
       // Add path filtering - search specific directory if path is provided
       const searchPath = path ? path.replace(/\\/g, '/') : '.';
-      rgCommand += ` "${pattern}" ${searchPath}`;
+      rgArgs.push(pattern, searchPath);
 
-      const result = await $`sh -c ${rgCommand}`.text();
+      // Try different possible ripgrep paths
+      const rgPaths = [
+        'rg',                          // System PATH
+        '/opt/homebrew/bin/rg',        // Homebrew on Apple Silicon
+        '/usr/local/bin/rg',           // Homebrew on Intel
+        '/usr/bin/rg'                  // System package manager
+      ];
+
+      let result: string = '';
+      let rgFound = false;
+
+      for (const rgPath of rgPaths) {
+        try {
+          // Use Bun.spawn directly for better control
+          const proc = Bun.spawn([rgPath, ...rgArgs], {
+            cwd: searchPath,
+            stdout: 'pipe',
+            stderr: 'pipe'
+          });
+
+          result = await new Response(proc.stdout).text();
+          await proc.exited; // Wait for process to complete
+
+          rgFound = true;
+          log.engine(LogLevel.INFO, `Successfully using ripgrep at: ${rgPath}`);
+          break;
+        } catch (err) {
+          log.engine(LogLevel.DEBUG, `Ripgrep not found at: ${rgPath} - ${err.message}`);
+          continue;
+        }
+      }
+
+      if (!rgFound) {
+        throw new Error('Ripgrep not found in any standard location');
+      }
 
       const hits: SearchResult[] = [];
       for (const line of result.split('\n')) {
@@ -290,7 +341,7 @@ export class SearchEngine {
 
       return hits.slice(0, limit);
     } catch (error) {
-      log.engine(LogLevel.WARN, 'Ripgrep not available or failed, falling back to database search');
+      log.engine(LogLevel.WARN, `Ripgrep failed: ${error.message}, falling back to database search`);
       return this.searchDatabase(pattern, options);
     }
   }

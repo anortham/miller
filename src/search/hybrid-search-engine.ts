@@ -13,7 +13,9 @@
 import type { Symbol, Relationship, CodeIntelDB } from '../database/schema.js';
 import type { SearchEngine } from './search-engine.js';
 import MillerEmbedder, { type CodeContext, type EmbeddingResult } from '../embeddings/miller-embedder.js';
+import { TFIDFEmbedder } from '../embeddings/tfidf-embedder.js';
 import { VectraVectorStore, type VectorSearchResult, type EntityMapping } from '../embeddings/vectra-vector-store.js';
+import type { EmbeddingWorkerPool } from '../workers/embedding-worker-pool.js';
 
 export interface HybridSearchOptions {
   includeStructural?: boolean;
@@ -50,7 +52,7 @@ export interface CrossLayerSearchResult {
 
 export class HybridSearchEngine {
   private structuralSearch: SearchEngine;
-  private embedder: MillerEmbedder;
+  private embedder: MillerEmbedder | TFIDFEmbedder | EmbeddingWorkerPool;
   private vectorStore: VectraVectorStore;
   private database: CodeIntelDB;
   private isInitialized = false;
@@ -64,7 +66,7 @@ export class HybridSearchEngine {
 
   constructor(
     structuralSearchEngine: SearchEngine,
-    embedder: MillerEmbedder,
+    embedder: MillerEmbedder | TFIDFEmbedder | EmbeddingWorkerPool,
     vectorStore: VectraVectorStore,
     database: CodeIntelDB
   ) {
@@ -82,14 +84,11 @@ export class HybridSearchEngine {
       return;
     }
 
-    console.log('🔄 Initializing Miller hybrid search engine...');
-
     // Ensure all components are ready
     await this.embedder.initialize();
     await this.vectorStore.initialize();
 
     this.isInitialized = true;
-    console.log('✅ Hybrid search engine ready! Structural + Semantic search enabled.');
   }
 
   /**
@@ -109,7 +108,7 @@ export class HybridSearchEngine {
       nameWeight: HybridSearchEngine.DEFAULT_WEIGHTS.name,
       structureWeight: HybridSearchEngine.DEFAULT_WEIGHTS.structure,
       semanticWeight: HybridSearchEngine.DEFAULT_WEIGHTS.semantic,
-      semanticThreshnew: 1.5,
+      semanticThreshnew: 0.3,
       maxResults: 20,
       enableCrossLayer: true,
       ...options
@@ -172,7 +171,7 @@ export class HybridSearchEngine {
               structureScore,
               semanticScore,
               semanticDistance: vectorResult.distance,
-              layer: this.detectLayer(symbol.filePath),
+              layer: this.detectLayer(symbol.file_path || symbol.filePath),
               confidence: semanticScore,
               searchMethod: 'semantic'
             });
@@ -296,22 +295,35 @@ export class HybridSearchEngine {
     });
 
     // Convert SearchResult[] to Symbol[] format expected by hybrid search
-    const convertToSymbol = (searchResult: any): Symbol => ({
-      id: parseInt(searchResult.symbolId) || 0,
-      name: searchResult.text,
-      kind: searchResult.kind,
-      language: searchResult.language || 'unknown',
-      filePath: searchResult.file,
-      startLine: searchResult.line,
-      startColumn: searchResult.column,
-      endLine: searchResult.line,
-      endColumn: searchResult.column + (searchResult.text?.length || 0),
-      startByte: 0,
-      endByte: 0,
-      signature: searchResult.signature,
-      docComment: '',
-      visibility: 'public'
-    });
+    const convertToSymbol = (searchResult: any): Symbol => {
+      // Debug logging to understand structural search results
+      if (!searchResult.file) {
+        console.log('🐛 DEBUG: Missing file in structural result:', {
+          text: searchResult.text,
+          file: searchResult.file,
+          line: searchResult.line,
+          symbolId: searchResult.symbolId,
+          keys: Object.keys(searchResult)
+        });
+      }
+
+      return {
+        id: parseInt(searchResult.symbolId) || 0,
+        name: searchResult.text,
+        kind: searchResult.kind,
+        language: searchResult.language || 'unknown',
+        filePath: searchResult.file,
+        startLine: searchResult.line,
+        startColumn: searchResult.column,
+        endLine: searchResult.line,
+        endColumn: searchResult.column + (searchResult.text?.length || 0),
+        startByte: 0,
+        endByte: 0,
+        signature: searchResult.signature,
+        docComment: '',
+        visibility: 'public'
+      };
+    };
 
     // Combine and deduplicate
     const allSearchResults = [...fuzzyResults, ...exactResults];
@@ -380,7 +392,8 @@ export class HybridSearchEngine {
     }
 
     // File path relevance
-    if (symbol.filePath && symbol.filePath.toLowerCase().includes(query.toLowerCase())) {
+    const filePath = symbol.file_path || symbol.filePath;
+    if (filePath && filePath.toLowerCase().includes(query.toLowerCase())) {
       score += 0.15;
     }
 
@@ -390,7 +403,9 @@ export class HybridSearchEngine {
     }
 
     // Symbol complexity (more complex = potentially more relevant)
-    const complexity = (symbol.endLine - symbol.startLine) / 100;
+    const startLine = symbol.start_line || symbol.startLine || 0;
+    const endLine = symbol.end_line || symbol.endLine || 0;
+    const complexity = (endLine - startLine) / 100;
     score += Math.min(0.05, complexity);
 
     return Math.min(1.0, score);

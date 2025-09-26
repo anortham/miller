@@ -138,7 +138,11 @@ export class EmbeddingWorkerPool {
         worker.postMessage({
           id: `init-${i}`,
           type: 'init',
-          payload: { modelType: 'fast' }
+          payload: {
+            maxFeatures: 1000,
+            minDocFreq: 2,
+            maxDocFreq: 0.8
+          }
         } as WorkerMessage);
       });
 
@@ -342,6 +346,72 @@ export class EmbeddingWorkerPool {
     if (this.stats.averageTime > 0) {
       this.stats.throughput = 1000 / this.stats.averageTime; // embeddings per second
     }
+  }
+
+  /**
+   * Embed a query immediately (for hybrid search)
+   * This provides synchronous query embedding for search operations
+   */
+  async embedQuery(query: string, context?: CodeContext): Promise<EmbeddingResult> {
+    if (!this.isInitialized) {
+      await this.initialize();
+    }
+
+    return new Promise<EmbeddingResult>((resolve, reject) => {
+      // Find an available worker
+      const availableWorkerIndex = this.workers.findIndex((_, index) => !this.workerBusy.get(index));
+
+      if (availableWorkerIndex === -1) {
+        // If no workers available, reject - queries should be fast
+        reject(new Error('No workers available for immediate query embedding'));
+        return;
+      }
+
+      const worker = this.workers[availableWorkerIndex];
+      const queryId = `query-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+      // Set up one-time message handler for this query
+      const messageHandler = (event: MessageEvent<WorkerResponse>) => {
+        if (event.data.id === queryId) {
+          worker.removeEventListener('message', messageHandler);
+
+          if (event.data.type === 'embedded') {
+            resolve(event.data.payload.embedding);
+          } else if (event.data.type === 'error') {
+            reject(new Error(event.data.payload.message));
+          }
+        }
+      };
+
+      // Add timeout for query
+      const timeout = setTimeout(() => {
+        worker.removeEventListener('message', messageHandler);
+        reject(new Error('Query embedding timeout'));
+      }, 10000);
+
+      worker.addEventListener('message', messageHandler);
+
+      // Send immediate embedding request
+      worker.postMessage({
+        id: queryId,
+        type: 'embed',
+        payload: {
+          code: query,
+          context: context
+        }
+      } as WorkerMessage);
+
+      // Clear timeout when resolved
+      resolve = ((originalResolve) => (result: EmbeddingResult) => {
+        clearTimeout(timeout);
+        originalResolve(result);
+      })(resolve);
+
+      reject = ((originalReject) => (error: Error) => {
+        clearTimeout(timeout);
+        originalReject(error);
+      })(reject);
+    });
   }
 
   /**

@@ -1,15 +1,19 @@
 /**
- * Embedding Worker - Runs MillerEmbedder in a Web Worker thread
+ * Embedding Worker - TF-IDF implementation for Web Workers
  *
- * This worker handles CPU-intensive embedding generation without blocking
- * the main thread, enabling Miller to maintain fast indexing performance
- * while building semantic search capabilities in the background.
+ * This worker handles CPU-intensive TF-IDF embedding generation without blocking
+ * the main thread. Uses pure JavaScript with no native dependencies, solving
+ * the transformers.js compatibility issues in Bun Web Workers.
  */
 
-// Import MillerEmbedder (using dynamic import for worker compatibility)
-let MillerEmbedder;
+// Import our TF-IDF embedder
+import { TFIDFEmbedder } from '../embeddings/tfidf-embedder.js';
+
+// Worker state
 let embedder = null;
 let isInitialized = false;
+
+// TF-IDF Embedding worker ready for initialization
 
 // Worker message handling
 self.onmessage = async function(event) {
@@ -29,6 +33,14 @@ self.onmessage = async function(event) {
         await handleBatch(id, payload);
         break;
 
+      case 'addDocument':
+        await handleAddDocument(id, payload);
+        break;
+
+      case 'buildVocabulary':
+        await handleBuildVocabulary(id, payload);
+        break;
+
       case 'health':
         handleHealth(id);
         break;
@@ -42,31 +54,40 @@ self.onmessage = async function(event) {
 };
 
 /**
- * Initialize the embedder with specified model
+ * Initialize the TF-IDF embedder
  */
 async function handleInit(id, payload) {
   try {
     if (isInitialized) {
-      sendResponse(id, 'initialized', { message: 'Already initialized' });
+      sendResponse(id, 'initialized', {
+        message: 'Already initialized',
+        stats: embedder.getStats()
+      });
       return;
     }
 
-    // Dynamic import for worker compatibility
-    const module = await import('../embeddings/miller-embedder.js');
-    MillerEmbedder = module.default || module.MillerEmbedder;
+    // Initializing TF-IDF embedder for code search
 
-    // Initialize embedder
-    embedder = new MillerEmbedder();
-    await embedder.initialize(payload.modelType || 'fast');
+    // Create embedder with configuration
+    const config = payload || {};
+    embedder = new TFIDFEmbedder({
+      maxFeatures: config.maxFeatures || 1000,
+      minDocFreq: config.minDocFreq || 2,
+      maxDocFreq: config.maxDocFreq || 0.8
+    });
 
     isInitialized = true;
 
     sendResponse(id, 'initialized', {
-      message: 'Embedder initialized successfully',
-      modelInfo: embedder.getModelInfo()
+      message: 'TF-IDF embedder initialized successfully',
+      model: 'tfidf-code-v1',
+      stats: embedder.getStats()
     });
 
+    // TF-IDF embedder ready for code embeddings
+
   } catch (error) {
+    console.error('❌ Failed to initialize TF-IDF embedder:', error);
     sendError(id, `Failed to initialize embedder: ${error.message}`, error);
   }
 }
@@ -88,17 +109,23 @@ async function handleEmbed(id, payload) {
       return;
     }
 
+    // Generating TF-IDF embedding
+
     const startTime = Date.now();
-    const embedding = await embedder.embedCode(code, context);
+    const embedding = embedder.embed(code);
     const duration = Date.now() - startTime;
 
     sendResponse(id, 'embedded', {
       embedding,
       duration,
-      codeLength: code.length
+      codeLength: code.length,
+      confidence: embedding.confidence
     });
 
+    // TF-IDF embedding generated
+
   } catch (error) {
+    console.error('❌ TF-IDF embedding generation failed:', error);
     sendError(id, `Embedding generation failed: ${error.message}`, error);
   }
 }
@@ -120,6 +147,8 @@ async function handleBatch(id, payload) {
       return;
     }
 
+    // Processing TF-IDF batch
+
     const startTime = Date.now();
     const results = [];
 
@@ -127,7 +156,7 @@ async function handleBatch(id, payload) {
       const { code, context } = codeSnippets[i];
 
       try {
-        const embedding = await embedder.embedCode(code, context);
+        const embedding = embedder.embed(code);
         results.push({
           index: i,
           embedding,
@@ -142,12 +171,17 @@ async function handleBatch(id, payload) {
       }
 
       // Send progress updates for large batches
-      if (i % 10 === 0 && i > 0) {
+      if (i % 50 === 0 && i > 0) {
         sendResponse(id, 'batch_progress', {
           completed: i,
           total: codeSnippets.length,
           percentage: Math.round((i / codeSnippets.length) * 100)
         });
+      }
+
+      // Yield periodically to prevent blocking
+      if (i % 10 === 0) {
+        await new Promise(resolve => setTimeout(resolve, 1));
       }
     }
 
@@ -158,11 +192,73 @@ async function handleBatch(id, payload) {
       duration,
       totalSnippets: codeSnippets.length,
       successful: results.filter(r => r.success).length,
-      failed: results.filter(r => !r.success).length
+      failed: results.filter(r => !r.success).length,
+      averageTime: duration / codeSnippets.length
+    });
+
+    // TF-IDF batch complete
+
+  } catch (error) {
+    console.error('❌ TF-IDF batch processing failed:', error);
+    sendError(id, `Batch processing failed: ${error.message}`, error);
+  }
+}
+
+/**
+ * Add document to corpus for vocabulary building
+ */
+async function handleAddDocument(id, payload) {
+  if (!isInitialized || !embedder) {
+    sendError(id, 'Embedder not initialized');
+    return;
+  }
+
+  try {
+    const { docId, code } = payload;
+
+    if (!docId || !code) {
+      sendError(id, 'Document ID and code are required');
+      return;
+    }
+
+    embedder.addDocument(docId, code);
+
+    sendResponse(id, 'document_added', {
+      docId,
+      stats: embedder.getStats()
     });
 
   } catch (error) {
-    sendError(id, `Batch processing failed: ${error.message}`, error);
+    console.error('❌ Failed to add document:', error);
+    sendError(id, `Failed to add document: ${error.message}`, error);
+  }
+}
+
+/**
+ * Build vocabulary from added documents
+ */
+async function handleBuildVocabulary(id, payload) {
+  if (!isInitialized || !embedder) {
+    sendError(id, 'Embedder not initialized');
+    return;
+  }
+
+  try {
+    const startTime = Date.now();
+    embedder.buildVocabulary();
+    const duration = Date.now() - startTime;
+
+    const stats = embedder.getStats();
+
+    sendResponse(id, 'vocabulary_built', {
+      stats,
+      duration,
+      message: `Vocabulary built: ${stats.vocabularySize} terms from ${stats.totalDocuments} documents`
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to build vocabulary:', error);
+    sendError(id, `Failed to build vocabulary: ${error.message}`, error);
   }
 }
 
@@ -170,10 +266,14 @@ async function handleBatch(id, payload) {
  * Health check - verify worker is responsive
  */
 function handleHealth(id) {
+  const stats = isInitialized && embedder ? embedder.getStats() : null;
+
   sendResponse(id, 'health_ok', {
     initialized: isInitialized,
-    modelInfo: isInitialized ? embedder?.getModelInfo() : null,
-    timestamp: Date.now()
+    model: 'tfidf-code-v1',
+    stats,
+    timestamp: Date.now(),
+    workerId: getWorkerId()
   });
 }
 
@@ -194,13 +294,16 @@ function sendResponse(id, type, payload) {
  * Send error response to main thread
  */
 function sendError(id, message, error = null) {
+  console.error(`❌ Worker error: ${message}`, error);
+
   self.postMessage({
     id,
     type: 'error',
     payload: {
       message,
       stack: error?.stack,
-      name: error?.name
+      name: error?.name,
+      workerId: getWorkerId()
     },
     workerId: getWorkerId(),
     timestamp: Date.now()
@@ -208,19 +311,17 @@ function sendError(id, message, error = null) {
 }
 
 /**
- * Get worker identifier (simple implementation)
+ * Get worker identifier
  */
 function getWorkerId() {
-  // In a real implementation, this could be passed during init
-  // For now, use a simple approach
-  return Math.floor(Math.random() * 1000);
+  return `tfidf-worker-${Math.floor(Math.random() * 1000)}`;
 }
 
 /**
  * Handle worker errors
  */
 self.onerror = function(error) {
-  console.error('Worker error:', error);
+  console.error('❌ Worker error:', error);
   sendError('worker-error', `Worker error: ${error.message}`, error);
 };
 
@@ -228,9 +329,8 @@ self.onerror = function(error) {
  * Handle unhandled promise rejections
  */
 self.onunhandledrejection = function(event) {
-  console.error('Worker unhandled rejection:', event.reason);
+  console.error('❌ Worker unhandled rejection:', event.reason);
   sendError('worker-rejection', `Unhandled rejection: ${event.reason}`, event.reason);
 };
 
-// Log that worker is ready
-console.log('🧵 Embedding worker ready for initialization');
+// TF-IDF Embedding worker initialized and ready

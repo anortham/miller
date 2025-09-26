@@ -498,4 +498,92 @@ export class EmbeddingProcessPool {
 
     log.engine(LogLevel.INFO, `✅ Process pool terminated`);
   }
+
+  /**
+   * Add document to all workers for vocabulary building
+   */
+  async addDocumentToAllWorkers(docId: string, code: string): Promise<void> {
+    if (!this.isInitialized) {
+      throw new Error('Process pool not initialized');
+    }
+
+    const promises = this.processes.map(async (processInfo) => {
+      return new Promise<void>((resolve, reject) => {
+        const requestId = `addDoc-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+        // Set up response handler
+        const messageHandler = (message: any) => {
+          if (message.id === requestId) {
+            processInfo.process.off('message', messageHandler);
+            if (message.type === 'document_added') {
+              resolve();
+            } else if (message.type === 'error') {
+              reject(new Error(message.payload.message));
+            }
+          }
+        };
+
+        processInfo.process.on('message', messageHandler);
+
+        // Send add document request
+        processInfo.process.send({
+          id: requestId,
+          type: 'addDocument',
+          payload: { docId, code }
+        });
+
+        // Add timeout
+        setTimeout(() => {
+          processInfo.process.off('message', messageHandler);
+          reject(new Error('Add document timeout'));
+        }, 10000);
+      });
+    });
+
+    await Promise.all(promises);
+  }
+
+  /**
+   * Build vocabulary in all workers
+   */
+  async buildVocabularyInAllWorkers(): Promise<void> {
+    if (!this.isInitialized) {
+      throw new Error('Process pool not initialized');
+    }
+
+    const promises = this.processes.map(async (processInfo) => {
+      return new Promise<void>((resolve, reject) => {
+        const requestId = `buildVocab-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+        // Set up response handler
+        const messageHandler = (message: any) => {
+          if (message.id === requestId) {
+            processInfo.process.off('message', messageHandler);
+            if (message.type === 'vocabulary_built') {
+              resolve();
+            } else if (message.type === 'error') {
+              reject(new Error(message.payload.message));
+            }
+          }
+        };
+
+        processInfo.process.on('message', messageHandler);
+
+        // Send build vocabulary request
+        processInfo.process.send({
+          id: requestId,
+          type: 'buildVocabulary',
+          payload: {}
+        });
+
+        // Add timeout
+        setTimeout(() => {
+          processInfo.process.off('message', messageHandler);
+          reject(new Error('Build vocabulary timeout'));
+        }, 30000);
+      });
+    });
+
+    await Promise.all(promises);
+  }
 }

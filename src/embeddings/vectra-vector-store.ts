@@ -65,7 +65,7 @@ export class VectraVectorStore {
     this.config = {
       indexPath: config.indexPath || './.miller/vectors',
       maxResults: config.maxResults || 50,
-      distanceThreshold: config.distanceThreshold || 0.8, // Higher threshold for cosine similarity
+      distanceThreshold: config.distanceThreshold || 0.2, // Default similarity threshold for TF-IDF
       batchSize: config.batchSize || 100,
       ...config
     };
@@ -268,7 +268,7 @@ export class VectraVectorStore {
    * Perform semantic similarity search
    */
   async search(
-    queryEmbedding: Float32Array,
+    queryEmbedding: Float32Array | number[],
     limit: number = 10,
     threshold?: number
   ): Promise<VectorSearchResult[]> {
@@ -280,17 +280,17 @@ export class VectraVectorStore {
     const searchThreshold = threshold || this.config.distanceThreshold || 0.8;
 
     try {
-      // Convert Float32Array to regular array for Vectra
-      const queryVector = Array.from(queryEmbedding);
+      // Convert to regular array for Vectra (handle both Float32Array and regular arrays)
+      const queryVector = Array.isArray(queryEmbedding) ? queryEmbedding : Array.from(queryEmbedding);
 
       // Perform vector search with Vectra
       const vectraResults = await this.index!.queryItems(queryVector, maxResults);
 
       // Filter by threshold and convert to our result format
       // Note: Vectra uses similarity score (0-1), higher is better
-      // We use distance threshold where lower is better
-      // Convert: if threshold is 0.8, we want similarity > 0.2
-      const minSimilarity = 1 - searchThreshold;
+      // We use similarity threshold directly - higher threshold = more selective
+      // e.g., threshold 0.3 means accept similarity >= 0.3
+      const minSimilarity = searchThreshold;
       const results = vectraResults
         .filter(result => result.score >= minSimilarity)
         .map(result => {

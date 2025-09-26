@@ -1029,7 +1029,7 @@ ${hoverInfo.documentation}` : '❌ **No documentation available**'}
           case "semantic": {
             const { mode = "hybrid", query, context = {}, options = {} } = args;
             const {
-              threshnew = 1.5,
+              threshnew = 0.3,
               max_results = 15,
               include_patterns = true,
               include_recommendations = true,
@@ -1130,11 +1130,27 @@ ${entityResult.recommendations.slice(0, 3).map(rec => `• ${rec}`).join('\n')}`
 ).join(', ')}
 
 📋 **Results** (ranked by relevance):
-${results.slice(0, 8).map((r, i) =>
-  `${i + 1}. **${r.name}** (${r.kind})
-   📍 ${r.filePath.split('/').pop()}:${r.startLine}
-   📊 ${Math.round(r.hybridScore * 100)}% relevance (🎯 ${r.searchMethod})${r.layer ? `\n   🏗️  Layer: ${r.layer}` : ''}`
-).join('\n\n')}
+${results.slice(0, 8).map((r, i) => {
+  // Debug: check what properties are available for file path
+  const fileName = r.file || r.filePath || (r as any).file_path || 'unknown';
+  if (!r.file && !r.filePath) {
+    console.log('🐛 DEBUG: Missing file properties in semantic result:', {
+      name: r.name,
+      file: r.file,
+      filePath: r.filePath,
+      file_path: (r as any).file_path,
+      keys: Object.keys(r),
+      fullResult: JSON.stringify(r, null, 2)
+    });
+  }
+
+  // Also handle different line number property names
+  const lineNumber = r.line || r.startLine || (r as any).start_line || 0;
+
+  return `${i + 1}. **${r.name || 'unknown'}** (${r.kind || 'symbol'})
+   📍 ${fileName !== 'unknown' ? fileName.split('/').pop() : fileName}:${lineNumber}
+   📊 ${Math.round((r.hybridScore || 0) * 100)}% relevance (🎯 ${r.searchMethod || 'structural'})${r.layer ? `\n   🏗️  Layer: ${r.layer}` : ''}`;
+}).join('\n\n')}
 
 ${results.length > 8 ? `\n... ${results.length - 8} more semantic matches` : ''}
 
