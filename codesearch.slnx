@@ -3,4 +3,7 @@
     <Project Path="src/Codesearch.Interop/Codesearch.Interop.csproj" />
     <Project Path="src/Codesearch.Server/Codesearch.Server.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Codesearch.Tests/Codesearch.Tests.csproj" />
+  </Folder>
 </Solution>

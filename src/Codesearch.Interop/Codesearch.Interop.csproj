@@ -3,4 +3,32 @@
     <OutputType>Library</OutputType>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
+
+  <!-- Make internals visible to test and server projects -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="Codesearch.Tests" />
+    <InternalsVisibleTo Include="Codesearch.Server" />
+  </ItemGroup>
+
+  <!-- Copy native library to output -->
+  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+    <None Include="../../rust/target/release/libcodesearch_ffi.dylib"
+          CopyToOutputDirectory="PreserveNewest"
+          Link="libcodesearch_ffi.dylib"
+          Condition="Exists('../../rust/target/release/libcodesearch_ffi.dylib')" />
+  </ItemGroup>
+
+  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Linux'))">
+    <None Include="../../rust/target/release/libcodesearch_ffi.so"
+          CopyToOutputDirectory="PreserveNewest"
+          Link="libcodesearch_ffi.so"
+          Condition="Exists('../../rust/target/release/libcodesearch_ffi.so')" />
+  </ItemGroup>
+
+  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
+    <None Include="../../rust/target/release/codesearch_ffi.dll"
+          CopyToOutputDirectory="PreserveNewest"
+          Link="codesearch_ffi.dll"
+          Condition="Exists('../../rust/target/release/codesearch_ffi.dll')" />
+  </ItemGroup>
 </Project>
