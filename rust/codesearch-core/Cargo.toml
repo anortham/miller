@@ -13,6 +13,7 @@ tracing.workspace = true
 lancedb.workspace = true
 blake3.workspace = true
 thiserror.workspace = true
+futures.workspace = true
 
 # LanceDB requires arrow
 arrow = { version = "53", default-features = false }
