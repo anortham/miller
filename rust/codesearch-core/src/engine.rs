@@ -9,6 +9,7 @@ use futures::TryStreamExt;
 use lancedb::index::scalar::{FtsIndexBuilder, FullTextSearchQuery, TokenizerConfig};
 use lancedb::index::Index;
 use lancedb::query::{ExecutableQuery, QueryBase};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -258,6 +259,96 @@ impl CodeEngine {
         results.truncate(limit);
 
         Ok(results)
+    }
+
+    /// Search for symbols using hybrid search combining FTS and vector search
+    ///
+    /// Uses Reciprocal Rank Fusion (RRF) to combine rankings from both search methods.
+    /// Results that appear in both rankings get boosted higher.
+    ///
+    /// # Arguments
+    /// * `query_text` - The text query for full-text search
+    /// * `query_vector` - The embedding vector for vector search (must be VECTOR_DIMENSION elements)
+    /// * `limit` - Maximum number of results to return
+    ///
+    /// # Returns
+    /// Vector of SearchResult ordered by RRF score (highest first), normalized to 0.0-1.0
+    pub async fn search_hybrid(
+        &self,
+        query_text: &str,
+        query_vector: &[f32],
+        limit: usize,
+    ) -> Result<Vec<SearchResult>> {
+        // Validate query vector dimensions
+        if query_vector.len() != VECTOR_DIMENSION {
+            return Err(Error::Validation(format!(
+                "query vector has {} dimensions, expected {}",
+                query_vector.len(),
+                VECTOR_DIMENSION
+            )));
+        }
+
+        // Over-fetch: 2x limit with minimum of 30 from each source
+        // Minimum 30 ensures enough candidates for meaningful RRF fusion
+        let fetch_limit = std::cmp::max(limit * 2, 30);
+
+        // Run both searches in parallel since they're independent
+        let (text_results, vector_results) = tokio::join!(
+            self.search_text(query_text, fetch_limit),
+            self.search_vector(query_vector, fetch_limit)
+        );
+        let text_results = text_results?;
+        let vector_results = vector_results?;
+
+        // If both are empty, return empty
+        if text_results.is_empty() && vector_results.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // RRF constant k=60 (standard value)
+        const RRF_K: f32 = 60.0;
+
+        // Track RRF scores and results by ID
+        let mut rrf_scores: HashMap<String, f32> = HashMap::new();
+        let mut results_by_id: HashMap<String, SearchResult> = HashMap::new();
+
+        // Calculate RRF scores for text results
+        for (rank, result) in text_results.into_iter().enumerate() {
+            let rrf_score = 1.0 / (RRF_K + rank as f32 + 1.0);
+            *rrf_scores.entry(result.id.clone()).or_insert(0.0) += rrf_score;
+            // First wins deduplication is safe: both sources return identical Symbol data for same ID
+            results_by_id.entry(result.id.clone()).or_insert(result);
+        }
+
+        // Calculate RRF scores for vector results
+        for (rank, result) in vector_results.into_iter().enumerate() {
+            let rrf_score = 1.0 / (RRF_K + rank as f32 + 1.0);
+            *rrf_scores.entry(result.id.clone()).or_insert(0.0) += rrf_score;
+            // First wins deduplication is safe: both sources return identical Symbol data for same ID
+            results_by_id.entry(result.id.clone()).or_insert(result);
+        }
+
+        // Convert to vector and sort by RRF score descending
+        let mut scored_results: Vec<(String, f32)> = rrf_scores.into_iter().collect();
+        scored_results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Normalize scores to 0.0-1.0 (divide by max)
+        let max_score = scored_results.first().map(|(_, s)| *s).unwrap_or(1.0);
+
+        // Build final results
+        let mut final_results: Vec<SearchResult> = Vec::new();
+        for (id, rrf_score) in scored_results.into_iter().take(limit) {
+            if let Some(mut result) = results_by_id.remove(&id) {
+                result.score = if max_score > 0.0 {
+                    rrf_score / max_score
+                } else {
+                    0.0
+                };
+                final_results.push(result);
+            }
+        }
+
+        Ok(final_results)
     }
 
     /// Helper to extract a required string column from a RecordBatch
@@ -875,5 +966,167 @@ mod tests {
         let results = engine.search_text("xyznonexistent", 10).await.unwrap();
 
         assert!(results.is_empty(), "Search for nonexistent term should return empty results");
+    }
+
+    #[tokio::test]
+    async fn test_search_hybrid_basic() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.lance");
+
+        let engine = CodeEngine::new(db_path.to_str().unwrap()).await.unwrap();
+
+        // Add symbols with distinct patterns and vectors
+        // sym1: matches BOTH text query "AuthService" and vector (all 0.1)
+        // sym2: matches only text query "AuthService"
+        // sym3: matches only vector (all 0.1)
+        let symbols = vec![
+            Symbol {
+                id: "sym1".to_string(),
+                name: "AuthService".to_string(),
+                kind: SymbolKind::Struct,
+                language: "rust".to_string(),
+                file_path: "src/auth.rs".to_string(),
+                signature: Some("struct AuthService".to_string()),
+                doc_comment: None,
+                start_line: Some(1),
+                end_line: Some(50),
+                code_pattern: "struct AuthService : BaseService implements IAuthService".to_string(),
+                content: None,
+            },
+            Symbol {
+                id: "sym2".to_string(),
+                name: "AuthValidator".to_string(),
+                kind: SymbolKind::Struct,
+                language: "rust".to_string(),
+                file_path: "src/auth_validator.rs".to_string(),
+                signature: Some("struct AuthValidator".to_string()),
+                doc_comment: None,
+                start_line: Some(1),
+                end_line: Some(30),
+                code_pattern: "struct AuthValidator for AuthService authentication".to_string(),
+                content: None,
+            },
+            Symbol {
+                id: "sym3".to_string(),
+                name: "DatabasePool".to_string(),
+                kind: SymbolKind::Struct,
+                language: "rust".to_string(),
+                file_path: "src/db.rs".to_string(),
+                signature: Some("struct DatabasePool".to_string()),
+                doc_comment: None,
+                start_line: Some(1),
+                end_line: Some(40),
+                code_pattern: "struct DatabasePool connection pooling".to_string(),
+                content: None,
+            },
+        ];
+
+        // sym1 vector is 0.1, sym2 is 0.9, sym3 is 0.1
+        // Query vector is 0.1, so sym1 and sym3 are similar by vector
+        let vectors = vec![
+            vec![0.1f32; VECTOR_DIMENSION],  // sym1 - matches vector query
+            vec![0.9f32; VECTOR_DIMENSION],  // sym2 - different from vector query
+            vec![0.1f32; VECTOR_DIMENSION],  // sym3 - matches vector query
+        ];
+
+        engine.add_symbols(symbols, vectors).await.unwrap();
+
+        // Create FTS index
+        engine.create_fts_index().await.unwrap();
+
+        // Search with text "AuthService" and vector [0.1, 0.1, ...]
+        // sym1 should rank highest (matches both)
+        let query_vector = vec![0.1f32; VECTOR_DIMENSION];
+        let results = engine.search_hybrid("AuthService", &query_vector, 10).await.unwrap();
+
+        assert!(!results.is_empty(), "Hybrid search should return results");
+
+        // sym1 should be first because it matches BOTH text and vector
+        assert_eq!(results[0].id, "sym1", "sym1 should rank highest (matches both text and vector)");
+
+        // All scores should be normalized (0.0-1.0)
+        for result in &results {
+            assert!(result.score >= 0.0 && result.score <= 1.0,
+                "Score {} should be normalized to 0.0-1.0", result.score);
+        }
+
+        // First result should have score 1.0 (max after normalization)
+        assert!((results[0].score - 1.0).abs() < 0.001, "Top result should have normalized score 1.0");
+    }
+
+    #[tokio::test]
+    async fn test_search_hybrid_empty_db() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.lance");
+
+        let engine = CodeEngine::new(db_path.to_str().unwrap()).await.unwrap();
+
+        // Search on empty DB should return empty results
+        let query_vector = vec![0.5f32; VECTOR_DIMENSION];
+        let results = engine.search_hybrid("anything", &query_vector, 10).await.unwrap();
+
+        assert!(results.is_empty(), "Hybrid search on empty DB should return empty results");
+    }
+
+    #[tokio::test]
+    async fn test_search_hybrid_text_only_match() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.lance");
+
+        let engine = CodeEngine::new(db_path.to_str().unwrap()).await.unwrap();
+
+        // Add symbols where text match is different from vector match
+        let symbols = vec![
+            Symbol {
+                id: "sym1".to_string(),
+                name: "UniqueTextMatch".to_string(),
+                kind: SymbolKind::Function,
+                language: "rust".to_string(),
+                file_path: "src/unique.rs".to_string(),
+                signature: Some("fn unique_text_match()".to_string()),
+                doc_comment: None,
+                start_line: Some(1),
+                end_line: Some(20),
+                code_pattern: "fn UniqueTextMatch special_keyword_xyz".to_string(),
+                content: None,
+            },
+            Symbol {
+                id: "sym2".to_string(),
+                name: "OtherFunction".to_string(),
+                kind: SymbolKind::Function,
+                language: "rust".to_string(),
+                file_path: "src/other.rs".to_string(),
+                signature: Some("fn other_function()".to_string()),
+                doc_comment: None,
+                start_line: Some(1),
+                end_line: Some(15),
+                code_pattern: "fn other_function different content".to_string(),
+                content: None,
+            },
+        ];
+
+        // sym1 has dissimilar vector (0.9), sym2 has similar vector (0.1)
+        // Text query "special_keyword_xyz" only matches sym1
+        let vectors = vec![
+            vec![0.9f32; VECTOR_DIMENSION],  // sym1 - dissimilar to query vector
+            vec![0.1f32; VECTOR_DIMENSION],  // sym2 - similar to query vector
+        ];
+
+        engine.add_symbols(symbols, vectors).await.unwrap();
+
+        // Create FTS index
+        engine.create_fts_index().await.unwrap();
+
+        // Search with text that only matches sym1, but vector that is closer to sym2
+        let query_vector = vec![0.1f32; VECTOR_DIMENSION];
+        let results = engine.search_hybrid("special_keyword_xyz", &query_vector, 10).await.unwrap();
+
+        // sym1 should be found even though its vector is dissimilar,
+        // because it matches the text query
+        let ids: Vec<&str> = results.iter().map(|r| r.id.as_str()).collect();
+        assert!(ids.contains(&"sym1"), "sym1 should be found via text match even with dissimilar vector");
+
+        // Both should be found (sym1 via text, sym2 via vector)
+        assert!(ids.contains(&"sym2"), "sym2 should be found via vector match");
     }
 }
