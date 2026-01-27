@@ -4,6 +4,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Codesearch.Embeddings\Codesearch.Embeddings.csproj" />
     <ProjectReference Include="..\Codesearch.Interop\Codesearch.Interop.csproj" />
   </ItemGroup>
 </Project>

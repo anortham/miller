@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/Codesearch.Embeddings/Codesearch.Embeddings.csproj" />
     <Project Path="src/Codesearch.Interop/Codesearch.Interop.csproj" />
     <Project Path="src/Codesearch.Server/Codesearch.Server.csproj" />
   </Folder>
