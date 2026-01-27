@@ -1,0 +1,17 @@
+namespace codesearch {};
+
+[Error]
+enum CodeSearchError {
+    "Database",
+    "Runtime",
+};
+
+interface CodeSearchEngine {
+    [Throws=CodeSearchError]
+    constructor(string db_path);
+
+    string db_path();
+
+    [Throws=CodeSearchError]
+    boolean health_check();
+};

@@ -1,0 +1,19 @@
+[package]
+name = "codesearch-ffi"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+name = "codesearch_ffi"
+
+[dependencies]
+codesearch-core = { path = "../codesearch-core" }
+uniffi.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+
+[build-dependencies]
+uniffi = { workspace = true, features = ["build"] }
