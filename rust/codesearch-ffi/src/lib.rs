@@ -1,6 +1,6 @@
 //! UniFFI bindings for codesearch-core
 
-use codesearch_core::{Symbol, SymbolKind};
+use codesearch_core::{SearchResult, Symbol, SymbolKind};
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
@@ -68,6 +68,38 @@ impl From<SymbolInput> for Symbol {
     }
 }
 
+/// FFI-safe search result output
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct SearchResultOutput {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub language: String,
+    pub file_path: String,
+    pub signature: Option<String>,
+    pub doc_comment: Option<String>,
+    pub start_line: Option<i32>,
+    pub end_line: Option<i32>,
+    pub score: f32,
+}
+
+impl From<SearchResult> for SearchResultOutput {
+    fn from(r: SearchResult) -> Self {
+        Self {
+            id: r.id,
+            name: r.name,
+            kind: r.kind,
+            language: r.language,
+            file_path: r.file_path,
+            signature: r.signature,
+            doc_comment: r.doc_comment,
+            start_line: r.start_line,
+            end_line: r.end_line,
+            score: r.score,
+        }
+    }
+}
+
 /// FFI-safe wrapper around CodeEngine
 #[derive(uniffi::Object)]
 pub struct CodeSearchEngine {
@@ -126,6 +158,93 @@ impl CodeSearchEngine {
                 .symbol_count()
                 .await
                 .map(|count| count as u64)
+                .map_err(CodeSearchError::from)
+        })
+    }
+
+    /// Create a full-text search index on the code_pattern field
+    pub fn create_fts_index(&self) -> Result<(), CodeSearchError> {
+        self.runtime.block_on(async {
+            self.inner
+                .create_fts_index()
+                .await
+                .map_err(CodeSearchError::from)
+        })
+    }
+
+    /// Search for symbols by vector similarity
+    pub fn search_vector(
+        &self,
+        query_vector: Vec<f32>,
+        limit: u32,
+    ) -> Result<Vec<SearchResultOutput>, CodeSearchError> {
+        self.runtime.block_on(async {
+            self.inner
+                .search_vector(&query_vector, limit as usize)
+                .await
+                .map(|results| results.into_iter().map(SearchResultOutput::from).collect())
+                .map_err(CodeSearchError::from)
+        })
+    }
+
+    /// Search for symbols using full-text search
+    pub fn search_text(
+        &self,
+        query: String,
+        limit: u32,
+    ) -> Result<Vec<SearchResultOutput>, CodeSearchError> {
+        self.runtime.block_on(async {
+            self.inner
+                .search_text(&query, limit as usize)
+                .await
+                .map(|results| results.into_iter().map(SearchResultOutput::from).collect())
+                .map_err(CodeSearchError::from)
+        })
+    }
+
+    /// Search for symbols using hybrid search (FTS + vector combined with RRF)
+    pub fn search_hybrid(
+        &self,
+        query: String,
+        query_vector: Vec<f32>,
+        limit: u32,
+    ) -> Result<Vec<SearchResultOutput>, CodeSearchError> {
+        self.runtime.block_on(async {
+            self.inner
+                .search_hybrid(&query, &query_vector, limit as usize)
+                .await
+                .map(|results| results.into_iter().map(SearchResultOutput::from).collect())
+                .map_err(CodeSearchError::from)
+        })
+    }
+
+    /// Search for symbols using full-text search with score boosting
+    pub fn search_text_boosted(
+        &self,
+        query: String,
+        limit: u32,
+    ) -> Result<Vec<SearchResultOutput>, CodeSearchError> {
+        self.runtime.block_on(async {
+            self.inner
+                .search_text_boosted(&query, limit as usize)
+                .await
+                .map(|results| results.into_iter().map(SearchResultOutput::from).collect())
+                .map_err(CodeSearchError::from)
+        })
+    }
+
+    /// Search for symbols using hybrid search with score boosting
+    pub fn search_hybrid_boosted(
+        &self,
+        query: String,
+        query_vector: Vec<f32>,
+        limit: u32,
+    ) -> Result<Vec<SearchResultOutput>, CodeSearchError> {
+        self.runtime.block_on(async {
+            self.inner
+                .search_hybrid_boosted(&query, &query_vector, limit as usize)
+                .await
+                .map(|results| results.into_iter().map(SearchResultOutput::from).collect())
                 .map_err(CodeSearchError::from)
         })
     }

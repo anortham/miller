@@ -751,6 +751,18 @@ static class _UniFFILib {
     
     
     
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
 
     static _UniFFILib() {
         _UniFFILib.uniffiCheckContractApiVersion();
@@ -775,11 +787,35 @@ static class _UniFFILib {
     );
 
     [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern void uniffi_codesearch_ffi_fn_method_codesearchengine_create_fts_index(IntPtr @ptr,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern RustBuffer uniffi_codesearch_ffi_fn_method_codesearchengine_db_path(IntPtr @ptr,ref UniffiRustCallStatus _uniffi_out_err
     );
 
     [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern sbyte uniffi_codesearch_ffi_fn_method_codesearchengine_health_check(IntPtr @ptr,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern RustBuffer uniffi_codesearch_ffi_fn_method_codesearchengine_search_hybrid(IntPtr @ptr,RustBuffer @query,RustBuffer @queryVector,uint @limit,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern RustBuffer uniffi_codesearch_ffi_fn_method_codesearchengine_search_hybrid_boosted(IntPtr @ptr,RustBuffer @query,RustBuffer @queryVector,uint @limit,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern RustBuffer uniffi_codesearch_ffi_fn_method_codesearchengine_search_text(IntPtr @ptr,RustBuffer @query,uint @limit,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern RustBuffer uniffi_codesearch_ffi_fn_method_codesearchengine_search_text_boosted(IntPtr @ptr,RustBuffer @query,uint @limit,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern RustBuffer uniffi_codesearch_ffi_fn_method_codesearchengine_search_vector(IntPtr @ptr,RustBuffer @queryVector,uint @limit,ref UniffiRustCallStatus _uniffi_out_err
     );
 
     [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
@@ -1015,11 +1051,35 @@ static class _UniFFILib {
     );
 
     [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern ushort uniffi_codesearch_ffi_checksum_method_codesearchengine_create_fts_index(
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern ushort uniffi_codesearch_ffi_checksum_method_codesearchengine_db_path(
     );
 
     [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern ushort uniffi_codesearch_ffi_checksum_method_codesearchengine_health_check(
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern ushort uniffi_codesearch_ffi_checksum_method_codesearchengine_search_hybrid(
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern ushort uniffi_codesearch_ffi_checksum_method_codesearchengine_search_hybrid_boosted(
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern ushort uniffi_codesearch_ffi_checksum_method_codesearchengine_search_text(
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern ushort uniffi_codesearch_ffi_checksum_method_codesearchengine_search_text_boosted(
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern ushort uniffi_codesearch_ffi_checksum_method_codesearchengine_search_vector(
     );
 
     [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
@@ -1051,6 +1111,12 @@ static class _UniFFILib {
             }
         }
         {
+            var checksum = _UniFFILib.uniffi_codesearch_ffi_checksum_method_codesearchengine_create_fts_index();
+            if (checksum != 54600) {
+                throw new UniffiContractChecksumException($"uniffi.codesearch_ffi: uniffi bindings expected function `uniffi_codesearch_ffi_checksum_method_codesearchengine_create_fts_index` checksum `54600`, library returned `{checksum}`");
+            }
+        }
+        {
             var checksum = _UniFFILib.uniffi_codesearch_ffi_checksum_method_codesearchengine_db_path();
             if (checksum != 16784) {
                 throw new UniffiContractChecksumException($"uniffi.codesearch_ffi: uniffi bindings expected function `uniffi_codesearch_ffi_checksum_method_codesearchengine_db_path` checksum `16784`, library returned `{checksum}`");
@@ -1060,6 +1126,36 @@ static class _UniFFILib {
             var checksum = _UniFFILib.uniffi_codesearch_ffi_checksum_method_codesearchengine_health_check();
             if (checksum != 31591) {
                 throw new UniffiContractChecksumException($"uniffi.codesearch_ffi: uniffi bindings expected function `uniffi_codesearch_ffi_checksum_method_codesearchengine_health_check` checksum `31591`, library returned `{checksum}`");
+            }
+        }
+        {
+            var checksum = _UniFFILib.uniffi_codesearch_ffi_checksum_method_codesearchengine_search_hybrid();
+            if (checksum != 16131) {
+                throw new UniffiContractChecksumException($"uniffi.codesearch_ffi: uniffi bindings expected function `uniffi_codesearch_ffi_checksum_method_codesearchengine_search_hybrid` checksum `16131`, library returned `{checksum}`");
+            }
+        }
+        {
+            var checksum = _UniFFILib.uniffi_codesearch_ffi_checksum_method_codesearchengine_search_hybrid_boosted();
+            if (checksum != 36999) {
+                throw new UniffiContractChecksumException($"uniffi.codesearch_ffi: uniffi bindings expected function `uniffi_codesearch_ffi_checksum_method_codesearchengine_search_hybrid_boosted` checksum `36999`, library returned `{checksum}`");
+            }
+        }
+        {
+            var checksum = _UniFFILib.uniffi_codesearch_ffi_checksum_method_codesearchengine_search_text();
+            if (checksum != 35555) {
+                throw new UniffiContractChecksumException($"uniffi.codesearch_ffi: uniffi bindings expected function `uniffi_codesearch_ffi_checksum_method_codesearchengine_search_text` checksum `35555`, library returned `{checksum}`");
+            }
+        }
+        {
+            var checksum = _UniFFILib.uniffi_codesearch_ffi_checksum_method_codesearchengine_search_text_boosted();
+            if (checksum != 48556) {
+                throw new UniffiContractChecksumException($"uniffi.codesearch_ffi: uniffi bindings expected function `uniffi_codesearch_ffi_checksum_method_codesearchengine_search_text_boosted` checksum `48556`, library returned `{checksum}`");
+            }
+        }
+        {
+            var checksum = _UniFFILib.uniffi_codesearch_ffi_checksum_method_codesearchengine_search_vector();
+            if (checksum != 54066) {
+                throw new UniffiContractChecksumException($"uniffi.codesearch_ffi: uniffi bindings expected function `uniffi_codesearch_ffi_checksum_method_codesearchengine_search_vector` checksum `54066`, library returned `{checksum}`");
             }
         }
         {
@@ -1081,6 +1177,32 @@ static class _UniFFILib {
 
 #pragma warning disable 8625
 
+
+
+
+class FfiConverterUInt32: FfiConverter<uint, uint> {
+    public static FfiConverterUInt32 INSTANCE = new FfiConverterUInt32();
+
+    public override uint Lift(uint value) {
+        return value;
+    }
+
+    public override uint Read(BigEndianStream stream) {
+        return stream.ReadUInt();
+    }
+
+    public override uint Lower(uint value) {
+        return value;
+    }
+
+    public override int AllocationSize(uint value) {
+        return 4;
+    }
+
+    public override void Write(uint value, BigEndianStream stream) {
+        stream.WriteUInt(value);
+    }
+}
 
 
 
@@ -1245,6 +1367,11 @@ internal interface ICodeSearchEngine {
     /// <exception cref="CodeSearchException"></exception>
     ulong AddSymbols(List<SymbolInput> @symbols, List<List<float>> @vectors);
     /// <summary>
+    /// Create a full-text search index on the code_pattern field
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    void CreateFtsIndex();
+    /// <summary>
     /// Get the database path
     /// </summary>
     string DbPath();
@@ -1253,6 +1380,31 @@ internal interface ICodeSearchEngine {
     /// </summary>
     /// <exception cref="CodeSearchException"></exception>
     bool HealthCheck();
+    /// <summary>
+    /// Search for symbols using hybrid search (FTS + vector combined with RRF)
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    List<SearchResultOutput> SearchHybrid(string @query, List<float> @queryVector, uint @limit);
+    /// <summary>
+    /// Search for symbols using hybrid search with score boosting
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    List<SearchResultOutput> SearchHybridBoosted(string @query, List<float> @queryVector, uint @limit);
+    /// <summary>
+    /// Search for symbols using full-text search
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    List<SearchResultOutput> SearchText(string @query, uint @limit);
+    /// <summary>
+    /// Search for symbols using full-text search with score boosting
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    List<SearchResultOutput> SearchTextBoosted(string @query, uint @limit);
+    /// <summary>
+    /// Search for symbols by vector similarity
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    List<SearchResultOutput> SearchVector(List<float> @queryVector, uint @limit);
     /// <summary>
     /// Get the count of symbols in the database
     /// </summary>
@@ -1372,6 +1524,19 @@ internal class CodeSearchEngine : ICodeSearchEngine, IDisposable {
     
     
     /// <summary>
+    /// Create a full-text search index on the code_pattern field
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    public void CreateFtsIndex() {
+        CallWithPointer(thisPtr =>
+    _UniffiHelpers.RustCallWithError(FfiConverterTypeCodeSearchError.INSTANCE, (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_codesearch_ffi_fn_method_codesearchengine_create_fts_index(thisPtr,  ref _status)
+));
+    }
+    
+    
+    
+    /// <summary>
     /// Get the database path
     /// </summary>
     public string DbPath() {
@@ -1390,6 +1555,66 @@ internal class CodeSearchEngine : ICodeSearchEngine, IDisposable {
         return CallWithPointer(thisPtr => FfiConverterBoolean.INSTANCE.Lift(
     _UniffiHelpers.RustCallWithError(FfiConverterTypeCodeSearchError.INSTANCE, (ref UniffiRustCallStatus _status) =>
     _UniFFILib.uniffi_codesearch_ffi_fn_method_codesearchengine_health_check(thisPtr,  ref _status)
+)));
+    }
+    
+    
+    /// <summary>
+    /// Search for symbols using hybrid search (FTS + vector combined with RRF)
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    public List<SearchResultOutput> SearchHybrid(string @query, List<float> @queryVector, uint @limit) {
+        return CallWithPointer(thisPtr => FfiConverterSequenceTypeSearchResultOutput.INSTANCE.Lift(
+    _UniffiHelpers.RustCallWithError(FfiConverterTypeCodeSearchError.INSTANCE, (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_codesearch_ffi_fn_method_codesearchengine_search_hybrid(thisPtr, FfiConverterString.INSTANCE.Lower(@query), FfiConverterSequenceFloat.INSTANCE.Lower(@queryVector), FfiConverterUInt32.INSTANCE.Lower(@limit), ref _status)
+)));
+    }
+    
+    
+    /// <summary>
+    /// Search for symbols using hybrid search with score boosting
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    public List<SearchResultOutput> SearchHybridBoosted(string @query, List<float> @queryVector, uint @limit) {
+        return CallWithPointer(thisPtr => FfiConverterSequenceTypeSearchResultOutput.INSTANCE.Lift(
+    _UniffiHelpers.RustCallWithError(FfiConverterTypeCodeSearchError.INSTANCE, (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_codesearch_ffi_fn_method_codesearchengine_search_hybrid_boosted(thisPtr, FfiConverterString.INSTANCE.Lower(@query), FfiConverterSequenceFloat.INSTANCE.Lower(@queryVector), FfiConverterUInt32.INSTANCE.Lower(@limit), ref _status)
+)));
+    }
+    
+    
+    /// <summary>
+    /// Search for symbols using full-text search
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    public List<SearchResultOutput> SearchText(string @query, uint @limit) {
+        return CallWithPointer(thisPtr => FfiConverterSequenceTypeSearchResultOutput.INSTANCE.Lift(
+    _UniffiHelpers.RustCallWithError(FfiConverterTypeCodeSearchError.INSTANCE, (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_codesearch_ffi_fn_method_codesearchengine_search_text(thisPtr, FfiConverterString.INSTANCE.Lower(@query), FfiConverterUInt32.INSTANCE.Lower(@limit), ref _status)
+)));
+    }
+    
+    
+    /// <summary>
+    /// Search for symbols using full-text search with score boosting
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    public List<SearchResultOutput> SearchTextBoosted(string @query, uint @limit) {
+        return CallWithPointer(thisPtr => FfiConverterSequenceTypeSearchResultOutput.INSTANCE.Lift(
+    _UniffiHelpers.RustCallWithError(FfiConverterTypeCodeSearchError.INSTANCE, (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_codesearch_ffi_fn_method_codesearchengine_search_text_boosted(thisPtr, FfiConverterString.INSTANCE.Lower(@query), FfiConverterUInt32.INSTANCE.Lower(@limit), ref _status)
+)));
+    }
+    
+    
+    /// <summary>
+    /// Search for symbols by vector similarity
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    public List<SearchResultOutput> SearchVector(List<float> @queryVector, uint @limit) {
+        return CallWithPointer(thisPtr => FfiConverterSequenceTypeSearchResultOutput.INSTANCE.Lift(
+    _UniffiHelpers.RustCallWithError(FfiConverterTypeCodeSearchError.INSTANCE, (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_codesearch_ffi_fn_method_codesearchengine_search_vector(thisPtr, FfiConverterSequenceFloat.INSTANCE.Lower(@queryVector), FfiConverterUInt32.INSTANCE.Lower(@limit), ref _status)
 )));
     }
     
@@ -1431,6 +1656,71 @@ class FfiConverterTypeCodeSearchEngine: FfiConverter<CodeSearchEngine, IntPtr> {
 
     public override void Write(CodeSearchEngine value, BigEndianStream stream) {
         stream.WriteLong(Lower(value).ToInt64());
+    }
+}
+
+
+
+/// <summary>
+/// FFI-safe search result output
+/// </summary>
+internal record SearchResultOutput (
+    string @id, 
+    string @name, 
+    string @kind, 
+    string @language, 
+    string @filePath, 
+    string? @signature, 
+    string? @docComment, 
+    int? @startLine, 
+    int? @endLine, 
+    float @score
+) {
+}
+
+class FfiConverterTypeSearchResultOutput: FfiConverterRustBuffer<SearchResultOutput> {
+    public static FfiConverterTypeSearchResultOutput INSTANCE = new FfiConverterTypeSearchResultOutput();
+
+    public override SearchResultOutput Read(BigEndianStream stream) {
+        return new SearchResultOutput(
+            @id: FfiConverterString.INSTANCE.Read(stream),
+            @name: FfiConverterString.INSTANCE.Read(stream),
+            @kind: FfiConverterString.INSTANCE.Read(stream),
+            @language: FfiConverterString.INSTANCE.Read(stream),
+            @filePath: FfiConverterString.INSTANCE.Read(stream),
+            @signature: FfiConverterOptionalString.INSTANCE.Read(stream),
+            @docComment: FfiConverterOptionalString.INSTANCE.Read(stream),
+            @startLine: FfiConverterOptionalInt32.INSTANCE.Read(stream),
+            @endLine: FfiConverterOptionalInt32.INSTANCE.Read(stream),
+            @score: FfiConverterFloat.INSTANCE.Read(stream)
+        );
+    }
+
+    public override int AllocationSize(SearchResultOutput value) {
+        return 0
+            + FfiConverterString.INSTANCE.AllocationSize(value.@id)
+            + FfiConverterString.INSTANCE.AllocationSize(value.@name)
+            + FfiConverterString.INSTANCE.AllocationSize(value.@kind)
+            + FfiConverterString.INSTANCE.AllocationSize(value.@language)
+            + FfiConverterString.INSTANCE.AllocationSize(value.@filePath)
+            + FfiConverterOptionalString.INSTANCE.AllocationSize(value.@signature)
+            + FfiConverterOptionalString.INSTANCE.AllocationSize(value.@docComment)
+            + FfiConverterOptionalInt32.INSTANCE.AllocationSize(value.@startLine)
+            + FfiConverterOptionalInt32.INSTANCE.AllocationSize(value.@endLine)
+            + FfiConverterFloat.INSTANCE.AllocationSize(value.@score);
+    }
+
+    public override void Write(SearchResultOutput value, BigEndianStream stream) {
+            FfiConverterString.INSTANCE.Write(value.@id, stream);
+            FfiConverterString.INSTANCE.Write(value.@name, stream);
+            FfiConverterString.INSTANCE.Write(value.@kind, stream);
+            FfiConverterString.INSTANCE.Write(value.@language, stream);
+            FfiConverterString.INSTANCE.Write(value.@filePath, stream);
+            FfiConverterOptionalString.INSTANCE.Write(value.@signature, stream);
+            FfiConverterOptionalString.INSTANCE.Write(value.@docComment, stream);
+            FfiConverterOptionalInt32.INSTANCE.Write(value.@startLine, stream);
+            FfiConverterOptionalInt32.INSTANCE.Write(value.@endLine, stream);
+            FfiConverterFloat.INSTANCE.Write(value.@score, stream);
     }
 }
 
@@ -1692,6 +1982,48 @@ class FfiConverterSequenceFloat: FfiConverterRustBuffer<List<float>> {
 
         stream.WriteInt(value.Count);
         var writerFn = FfiConverterFloat.INSTANCE.Write;
+        value.ForEach(item => writerFn(item, stream));
+    }
+}
+
+
+
+
+class FfiConverterSequenceTypeSearchResultOutput: FfiConverterRustBuffer<List<SearchResultOutput>> {
+    public static FfiConverterSequenceTypeSearchResultOutput INSTANCE = new FfiConverterSequenceTypeSearchResultOutput();
+
+    public override List<SearchResultOutput> Read(BigEndianStream stream) {
+        var length = stream.ReadInt();
+        var result = new List<SearchResultOutput>(length);
+        var readFn = FfiConverterTypeSearchResultOutput.INSTANCE.Read;
+        for (int i = 0; i < length; i++) {
+            result.Add(readFn(stream));
+        }
+        return result;
+    }
+
+    public override int AllocationSize(List<SearchResultOutput> value) {
+        var sizeForLength = 4;
+
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            return sizeForLength;
+        }
+
+        var allocationSizeFn = FfiConverterTypeSearchResultOutput.INSTANCE.AllocationSize;
+        var sizeForItems = value.Sum(item => allocationSizeFn(item));
+        return sizeForLength + sizeForItems;
+    }
+
+    public override void Write(List<SearchResultOutput> value, BigEndianStream stream) {
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            stream.WriteInt(0);
+            return;
+        }
+
+        stream.WriteInt(value.Count);
+        var writerFn = FfiConverterTypeSearchResultOutput.INSTANCE.Write;
         value.ForEach(item => writerFn(item, stream));
     }
 }
