@@ -15,6 +15,7 @@ builder.Logging.AddConsole(options =>
 // Register services
 builder.Services.AddSingleton<SearchService>();
 builder.Services.AddSingleton<IndexService>();
+builder.Services.AddHostedService<FileWatcherService>();
 
 // Configure MCP server
 builder.Services
