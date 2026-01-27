@@ -1,6 +1,10 @@
 //! Tree-sitter based symbol extraction for codesearch.
 
 pub mod base;
-// pub mod language;  // TODO: Task 3 - Copy Language Detection
+pub mod language;
 
-// Placeholder - will add re-exports after modules exist
+pub use base::{
+    ExtractionResults, Identifier, IdentifierKind, PendingRelationship,
+    Relationship, RelationshipKind, Symbol, SymbolKind, TypeInfo, Visibility,
+};
+pub use language::{detect_language, get_tree_sitter_language};
