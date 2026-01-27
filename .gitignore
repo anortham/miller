@@ -1,0 +1,30 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+*.DotSettings.user
+
+# Rust
+target/
+Cargo.lock
+
+# Models (downloaded on first run)
+models/*.onnx
+models/*.bin
+
+# Index data (per-project)
+.codesearch/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
