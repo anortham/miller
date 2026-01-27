@@ -1,0 +1,26 @@
+[package]
+name = "codesearch-extractors"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Tree-sitter core
+tree-sitter = "0.25"
+
+# Language parsers (start with 3 core languages)
+tree-sitter-rust = "0.24"
+tree-sitter-typescript = "0.23"
+tree-sitter-python = "0.23"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Utilities
+md5 = "0.7"
+regex = "1.11"
+anyhow = "1.0"
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"

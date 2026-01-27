@@ -1,5 +1,5 @@
 [workspace]
-members = ["codesearch-core", "codesearch-ffi"]
+members = ["codesearch-core", "codesearch-extractors", "codesearch-ffi"]
 resolver = "2"
 
 [workspace.package]
