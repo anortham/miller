@@ -7,11 +7,41 @@ edition = "2021"
 # Tree-sitter core
 tree-sitter = "0.25"
 
-# Language parsers (start with 3 core languages)
-tree-sitter-rust = "0.24"
-tree-sitter-typescript = "0.23"
+# Language parsers - ALL 31 languages
+tree-sitter-bash = "0.23"
+tree-sitter-c = "0.24"
+tree-sitter-cpp = "0.23"
+tree-sitter-c-sharp = "0.23"
+tree-sitter-css = "0.23"
+tree-sitter-go = "0.23"
+tree-sitter-html = "0.23"
+tree-sitter-java = "0.23"
 tree-sitter-javascript = "0.23"
+tree-sitter-kotlin-ng = "1.1.0"
+tree-sitter-lua = "0.2"
+tree-sitter-php = "0.24"
 tree-sitter-python = "0.23"
+tree-sitter-r = "1.2.0"
+tree-sitter-ruby = "0.23"
+tree-sitter-rust = "0.24"
+tree-sitter-swift = "0.7"
+tree-sitter-typescript = "0.23"
+
+tree-sitter-gdscript = "5.0"
+tree-sitter-qmljs = { git = "https://github.com/yuja/tree-sitter-qmljs" }
+tree-sitter-regex = "0.23"
+tree-sitter-razor = { git = "https://github.com/tris203/tree-sitter-razor" }
+tree-sitter-powershell = { git = "https://github.com/airbus-cert/tree-sitter-powershell" }
+
+harper-tree-sitter-dart = "0.0.5"
+tree-sitter-sequel = "0.3.10"
+tree-sitter-zig = "1.1.2"
+
+# Documentation and configuration languages
+tree-sitter-md = "0.5.1"
+tree-sitter-json = "0.24.8"
+tree-sitter-toml-ng = "0.7.0"
+tree-sitter-yaml = "0.7"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }

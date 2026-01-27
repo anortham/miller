@@ -251,12 +251,12 @@ impl BaseExtractor {
             // Format line with optional line numbers
             let formatted_line = if self.context_config.show_line_numbers {
                 if i >= start_row && i <= end_row {
-                    format!("  > {:3}: {}", line_num, line_content)
+                    format!("  ➤ {:3}: {}", line_num, line_content)
                 } else {
                     format!("    {:3}: {}", line_num, line_content)
                 }
             } else if i >= start_row && i <= end_row {
-                format!("  > {}", line_content)
+                format!("  ➤ {}", line_content)
             } else {
                 format!("    {}", line_content)
             };
