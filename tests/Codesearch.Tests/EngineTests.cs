@@ -3,8 +3,6 @@ using uniffi.codesearch_ffi;
 
 namespace Codesearch.Tests;
 
-#pragma warning disable CS8602 // Dereference of a possibly null reference
-
 public class EngineTests : IDisposable
 {
     private readonly string _tempDir;
@@ -115,8 +113,8 @@ public class EngineTests : IDisposable
         using var engine = new CodeSearchEngine(dbPath);
 
         // Create test vectors with different seeds
-        var vector1 = CreateTestVector(1.0f);
-        var vector2 = CreateTestVector(2.0f);
+        var vector1 = TestHelpers.CreateTestVector(1.0f);
+        var vector2 = TestHelpers.CreateTestVector(2.0f);
 
         var symbols = new List<SymbolInput>
         {
@@ -150,7 +148,7 @@ public class EngineTests : IDisposable
         engine.AddSymbols(symbols, vectors);
 
         // Search with a vector similar to vector1
-        var queryVector = CreateTestVector(1.0f);
+        var queryVector = TestHelpers.CreateTestVector(1.0f);
         var results = engine.SearchVector(queryVector, 10);
 
         Assert.NotEmpty(results);
@@ -183,7 +181,7 @@ public class EngineTests : IDisposable
             )
         };
 
-        var vector = CreateTestVector(1.0f);
+        var vector = TestHelpers.CreateTestVector(1.0f);
         var vectors = new List<List<float>> { vector };
 
         engine.AddSymbols(symbols, vectors);
@@ -230,15 +228,15 @@ public class EngineTests : IDisposable
             )
         };
 
-        var vector1 = CreateTestVector(1.0f);
-        var vector2 = CreateTestVector(2.0f);
+        var vector1 = TestHelpers.CreateTestVector(1.0f);
+        var vector2 = TestHelpers.CreateTestVector(2.0f);
         var vectors = new List<List<float>> { vector1, vector2 };
 
         engine.AddSymbols(symbols, vectors);
         engine.CreateFtsIndex();
 
         // Search with both text and vector
-        var queryVector = CreateTestVector(1.0f);
+        var queryVector = TestHelpers.CreateTestVector(1.0f);
         var results = engine.SearchHybrid("login", queryVector, 10);
 
         Assert.NotEmpty(results);
@@ -282,8 +280,8 @@ public class EngineTests : IDisposable
             )
         };
 
-        var vector1 = CreateTestVector(1.0f);
-        var vector2 = CreateTestVector(1.0f); // Same vector so only kind boosting matters
+        var vector1 = TestHelpers.CreateTestVector(1.0f);
+        var vector2 = TestHelpers.CreateTestVector(1.0f); // Same vector so only kind boosting matters
         var vectors = new List<List<float>> { vector1, vector2 };
 
         engine.AddSymbols(symbols, vectors);
@@ -303,19 +301,8 @@ public class EngineTests : IDisposable
         Assert.NotNull(importResult);
 
         // Function should rank higher (have higher score) than import due to kind boosting
-        Assert.True(functionResult.score > importResult.score,
+        Assert.True(functionResult!.score > importResult!.score,
             $"Expected function score ({functionResult.score}) > import score ({importResult.score})");
     }
 
-    private static List<float> CreateTestVector(float seed)
-    {
-        var vector = new List<float>(768);
-        for (int i = 0; i < 768; i++)
-        {
-            vector.Add((float)Math.Sin(seed + i * 0.001));
-        }
-        // L2 normalize
-        var norm = (float)Math.Sqrt(vector.Sum(x => x * x));
-        return vector.Select(x => x / norm).ToList();
-    }
 }
