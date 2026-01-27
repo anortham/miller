@@ -2,9 +2,11 @@
 
 pub mod base;
 pub mod language;
+pub mod utils;
 
 pub use base::{
-    ExtractionResults, Identifier, IdentifierKind, PendingRelationship,
-    Relationship, RelationshipKind, Symbol, SymbolKind, TypeInfo, Visibility,
+    BaseExtractor, ContextConfig, ExtractionResults, Identifier, IdentifierKind,
+    PendingRelationship, Relationship, RelationshipKind, Symbol, SymbolKind,
+    SymbolOptions, TypeInfo, Visibility,
 };
 pub use language::{detect_language, get_tree_sitter_language};
