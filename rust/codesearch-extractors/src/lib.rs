@@ -2,6 +2,7 @@
 
 pub mod base;
 pub mod language;
+pub mod rust;
 pub mod utils;
 
 pub use base::{
@@ -10,3 +11,4 @@ pub use base::{
     SymbolOptions, TypeInfo, Visibility,
 };
 pub use language::{detect_language, get_tree_sitter_language};
+pub use rust::RustExtractor;
