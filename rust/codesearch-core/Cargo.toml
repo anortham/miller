@@ -16,6 +16,8 @@ thiserror.workspace = true
 
 # LanceDB requires arrow
 arrow = { version = "53", default-features = false }
+arrow-array = { version = "53" }
+arrow-schema = { version = "53" }
 
 [dev-dependencies]
 tempfile = "3"

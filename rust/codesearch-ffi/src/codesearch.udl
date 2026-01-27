@@ -6,6 +6,19 @@ enum CodeSearchError {
     "Runtime",
 };
 
+dictionary SymbolInput {
+    string id;
+    string name;
+    string kind;
+    string language;
+    string file_path;
+    string? signature;
+    string? doc_comment;
+    i32? start_line;
+    i32? end_line;
+    string? content;
+};
+
 interface CodeSearchEngine {
     [Throws=CodeSearchError]
     constructor(string db_path);
@@ -14,4 +27,10 @@ interface CodeSearchEngine {
 
     [Throws=CodeSearchError]
     boolean health_check();
+
+    [Throws=CodeSearchError]
+    u64 add_symbols(sequence<SymbolInput> symbols, sequence<sequence<f32>> vectors);
+
+    [Throws=CodeSearchError]
+    u64 symbol_count();
 };
