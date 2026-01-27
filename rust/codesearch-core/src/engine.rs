@@ -1,5 +1,6 @@
 //! Core search engine wrapping LanceDB
 
+use crate::boosting::apply_boosts;
 use crate::schema::{symbols_schema, Symbol, TABLE_NAME, VECTOR_DIMENSION};
 use crate::search::{distance_to_score, SearchResult};
 use crate::{Error, Result};
@@ -349,6 +350,76 @@ impl CodeEngine {
         }
 
         Ok(final_results)
+    }
+
+    /// Search for symbols using full-text search with score boosting
+    ///
+    /// Fetches 3x the requested limit, applies boosts, then truncates.
+    ///
+    /// # Arguments
+    /// * `query` - The text query to search for
+    /// * `limit` - Maximum number of results to return
+    ///
+    /// # Returns
+    /// Vector of SearchResult ordered by boosted score (highest first)
+    pub async fn search_text_boosted(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>> {
+        let fetch_limit = limit * 3;
+        let mut results = self.search_text(query, fetch_limit).await?;
+        apply_boosts(&mut results, query);
+        results.truncate(limit);
+        Ok(results)
+    }
+
+    /// Search for symbols by vector similarity with score boosting
+    ///
+    /// Fetches 3x the requested limit, applies boosts, then truncates.
+    ///
+    /// # Arguments
+    /// * `query` - The text query for boosting (not used for vector search itself)
+    /// * `query_vector` - The query embedding vector (must be VECTOR_DIMENSION elements)
+    /// * `limit` - Maximum number of results to return
+    ///
+    /// # Returns
+    /// Vector of SearchResult ordered by boosted score (highest first)
+    pub async fn search_vector_boosted(
+        &self,
+        query: &str,
+        query_vector: &[f32],
+        limit: usize,
+    ) -> Result<Vec<SearchResult>> {
+        let fetch_limit = limit * 3;
+        let mut results = self.search_vector(query_vector, fetch_limit).await?;
+        apply_boosts(&mut results, query);
+        results.truncate(limit);
+        Ok(results)
+    }
+
+    /// Search for symbols using hybrid search with score boosting
+    ///
+    /// Fetches 3x the requested limit, applies boosts, then truncates.
+    ///
+    /// # Arguments
+    /// * `query` - The text query for FTS search and boosting
+    /// * `query_vector` - The embedding vector for vector search (must be VECTOR_DIMENSION elements)
+    /// * `limit` - Maximum number of results to return
+    ///
+    /// # Returns
+    /// Vector of SearchResult ordered by boosted score (highest first)
+    pub async fn search_hybrid_boosted(
+        &self,
+        query: &str,
+        query_vector: &[f32],
+        limit: usize,
+    ) -> Result<Vec<SearchResult>> {
+        let fetch_limit = limit * 3;
+        let mut results = self.search_hybrid(query, query_vector, fetch_limit).await?;
+        apply_boosts(&mut results, query);
+        results.truncate(limit);
+        Ok(results)
     }
 
     /// Helper to extract a required string column from a RecordBatch
@@ -1128,5 +1199,214 @@ mod tests {
 
         // Both should be found (sym1 via text, sym2 via vector)
         assert!(ids.contains(&"sym2"), "sym2 should be found via vector match");
+    }
+
+    #[tokio::test]
+    async fn test_search_with_boosting() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.lance");
+
+        let engine = CodeEngine::new(db_path.to_str().unwrap()).await.unwrap();
+
+        // Add a function and import with same name and same vector
+        // The function should rank higher after boosting
+        let symbols = vec![
+            Symbol {
+                id: "sym_function".to_string(),
+                name: "authenticate".to_string(),
+                kind: SymbolKind::Function,
+                language: "rust".to_string(),
+                file_path: "src/auth.rs".to_string(),
+                signature: Some("fn authenticate()".to_string()),
+                doc_comment: None,
+                start_line: Some(1),
+                end_line: Some(20),
+                code_pattern: "fn authenticate function authentication".to_string(),
+                content: None,
+            },
+            Symbol {
+                id: "sym_import".to_string(),
+                name: "authenticate".to_string(),
+                kind: SymbolKind::Import,
+                language: "rust".to_string(),
+                file_path: "src/main.rs".to_string(),
+                signature: Some("use auth::authenticate".to_string()),
+                doc_comment: None,
+                start_line: Some(1),
+                end_line: Some(1),
+                code_pattern: "use authenticate import".to_string(),
+                content: None,
+            },
+        ];
+
+        // Give both the same vector so vector similarity is identical
+        let vectors = vec![
+            vec![0.5f32; VECTOR_DIMENSION],
+            vec![0.5f32; VECTOR_DIMENSION],
+        ];
+
+        engine.add_symbols(symbols, vectors).await.unwrap();
+
+        // Create FTS index
+        engine.create_fts_index().await.unwrap();
+
+        // Search with boosting - function should rank higher than import
+        let results = engine.search_text_boosted("authenticate", 10).await.unwrap();
+
+        assert!(results.len() >= 2, "Should find at least 2 results");
+
+        // Function should be first due to kind boost (1.5 vs 0.4)
+        assert_eq!(
+            results[0].id, "sym_function",
+            "Function should rank higher than import after boosting"
+        );
+        assert_eq!(
+            results[1].id, "sym_import",
+            "Import should be second"
+        );
+
+        // Verify scores are normalized and sorted
+        assert!(results[0].score >= results[1].score);
+        assert!(results[0].score <= 1.0);
+        assert!(results[1].score >= 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_search_vector_boosted_ranks_correctly() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.lance");
+
+        let engine = CodeEngine::new(db_path.to_str().unwrap()).await.unwrap();
+
+        // Add a function and import with same name and same vector
+        // The function should rank higher after boosting
+        let symbols = vec![
+            Symbol {
+                id: "sym_function".to_string(),
+                name: "authenticate".to_string(),
+                kind: SymbolKind::Function,
+                language: "rust".to_string(),
+                file_path: "src/auth.rs".to_string(),
+                signature: Some("fn authenticate()".to_string()),
+                doc_comment: None,
+                start_line: Some(1),
+                end_line: Some(20),
+                code_pattern: "fn authenticate function authentication".to_string(),
+                content: None,
+            },
+            Symbol {
+                id: "sym_import".to_string(),
+                name: "authenticate".to_string(),
+                kind: SymbolKind::Import,
+                language: "rust".to_string(),
+                file_path: "src/main.rs".to_string(),
+                signature: Some("use auth::authenticate".to_string()),
+                doc_comment: None,
+                start_line: Some(1),
+                end_line: Some(1),
+                code_pattern: "use authenticate import".to_string(),
+                content: None,
+            },
+        ];
+
+        // Give both the same vector so vector similarity is identical
+        let vectors = vec![
+            vec![0.5f32; VECTOR_DIMENSION],
+            vec![0.5f32; VECTOR_DIMENSION],
+        ];
+
+        engine.add_symbols(symbols, vectors).await.unwrap();
+
+        // Search with vector boosting - function should rank higher than import
+        let query_vector = vec![0.5f32; VECTOR_DIMENSION];
+        let results = engine.search_vector_boosted("authenticate", &query_vector, 10).await.unwrap();
+
+        assert!(results.len() >= 2, "Should find at least 2 results");
+
+        // Function should be first due to kind boost (1.5 vs 0.4)
+        assert_eq!(
+            results[0].id, "sym_function",
+            "Function should rank higher than import after boosting"
+        );
+        assert_eq!(
+            results[1].id, "sym_import",
+            "Import should be second"
+        );
+
+        // Verify scores are normalized and sorted
+        assert!(results[0].score >= results[1].score);
+        assert!(results[0].score <= 1.0);
+        assert!(results[1].score >= 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_search_hybrid_boosted_ranks_correctly() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.lance");
+
+        let engine = CodeEngine::new(db_path.to_str().unwrap()).await.unwrap();
+
+        // Add a function and import with same name and same vector
+        // The function should rank higher after boosting
+        let symbols = vec![
+            Symbol {
+                id: "sym_function".to_string(),
+                name: "authenticate".to_string(),
+                kind: SymbolKind::Function,
+                language: "rust".to_string(),
+                file_path: "src/auth.rs".to_string(),
+                signature: Some("fn authenticate()".to_string()),
+                doc_comment: None,
+                start_line: Some(1),
+                end_line: Some(20),
+                code_pattern: "fn authenticate function authentication".to_string(),
+                content: None,
+            },
+            Symbol {
+                id: "sym_import".to_string(),
+                name: "authenticate".to_string(),
+                kind: SymbolKind::Import,
+                language: "rust".to_string(),
+                file_path: "src/main.rs".to_string(),
+                signature: Some("use auth::authenticate".to_string()),
+                doc_comment: None,
+                start_line: Some(1),
+                end_line: Some(1),
+                code_pattern: "use authenticate import".to_string(),
+                content: None,
+            },
+        ];
+
+        // Give both the same vector so vector similarity is identical
+        let vectors = vec![
+            vec![0.5f32; VECTOR_DIMENSION],
+            vec![0.5f32; VECTOR_DIMENSION],
+        ];
+
+        engine.add_symbols(symbols, vectors).await.unwrap();
+
+        // Create FTS index
+        engine.create_fts_index().await.unwrap();
+
+        // Search with hybrid boosting - function should rank higher than import
+        let query_vector = vec![0.5f32; VECTOR_DIMENSION];
+        let results = engine.search_hybrid_boosted("authenticate", &query_vector, 10).await.unwrap();
+
+        assert!(results.len() >= 2, "Should find at least 2 results");
+
+        // Function should be first due to kind boost (1.5 vs 0.4)
+        assert_eq!(
+            results[0].id, "sym_function",
+            "Function should rank higher than import after boosting"
+        );
+        assert_eq!(
+            results[1].id, "sym_import",
+            "Import should be second"
+        );
+
+        // Verify scores are normalized and sorted
+        assert!(results[0].score >= results[1].score);
+        assert!(results[0].score <= 1.0);
+        assert!(results[1].score >= 0.0);
     }
 }
