@@ -6,6 +6,8 @@ use crate::{Error, Result};
 use arrow::array::{Array, ArrayRef, FixedSizeListArray, Float32Array, Int32Array, StringBuilder};
 use arrow_array::{RecordBatch, RecordBatchIterator, StringArray};
 use futures::TryStreamExt;
+use lancedb::index::scalar::{FtsIndexBuilder, FullTextSearchQuery, TokenizerConfig};
+use lancedb::index::Index;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use std::path::Path;
 use std::sync::Arc;
@@ -170,6 +172,94 @@ impl CodeEngine {
         Ok(results)
     }
 
+    /// Create a full-text search index on the code_pattern field
+    ///
+    /// Uses whitespace tokenizer to preserve code patterns like `: BaseClass`
+    /// Note: The name field is already embedded in code_pattern, so searching
+    /// code_pattern also searches by symbol name.
+    pub async fn create_fts_index(&self) -> Result<()> {
+        // Return early if table doesn't exist
+        let table_names = self.db.table_names().execute().await?;
+        if !table_names.contains(&TABLE_NAME.to_string()) {
+            return Ok(());
+        }
+
+        let table = self.db.open_table(TABLE_NAME).execute().await?;
+
+        // Configure FTS index with whitespace tokenizer to preserve code patterns
+        let tokenizer_config = TokenizerConfig::default()
+            .base_tokenizer("whitespace".to_string());
+
+        let fts_builder = FtsIndexBuilder {
+            with_position: true,
+            tokenizer_configs: tokenizer_config,
+        };
+
+        // Create index on code_pattern field
+        // Note: LanceDB doesn't yet support multi-column FTS indices,
+        // but code_pattern includes the symbol name so this still enables name search
+        table
+            .create_index(&["code_pattern"], Index::FTS(fts_builder))
+            .execute()
+            .await?;
+
+        Ok(())
+    }
+
+    /// Search for symbols using full-text search
+    ///
+    /// # Arguments
+    /// * `query` - The text query to search for
+    /// * `limit` - Maximum number of results to return
+    ///
+    /// # Returns
+    /// Vector of SearchResult ordered by BM25 score (highest first), normalized to 0.0-1.0
+    pub async fn search_text(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
+        // Return empty if table doesn't exist
+        let table_names = self.db.table_names().execute().await?;
+        if !table_names.contains(&TABLE_NAME.to_string()) {
+            return Ok(Vec::new());
+        }
+
+        let table = self.db.open_table(TABLE_NAME).execute().await?;
+
+        // Over-fetch to allow re-ranking after score boosting (see search_text_boosted)
+        let fetch_limit = std::cmp::max(limit * 3, 50);
+
+        // Perform full-text search
+        let stream = table
+            .query()
+            .full_text_search(FullTextSearchQuery::new(query.to_string()))
+            .limit(fetch_limit)
+            .execute()
+            .await?;
+
+        // Collect all record batches
+        let batches: Vec<RecordBatch> = stream.try_collect().await?;
+
+        // Convert batches to SearchResults (with _score instead of _distance)
+        let mut results = Vec::new();
+        for batch in batches {
+            let batch_results = self.fts_record_batch_to_search_results(&batch)?;
+            results.extend(batch_results);
+        }
+
+        // Normalize scores to 0.0-1.0 (divide by max score)
+        if !results.is_empty() {
+            let max_score = results.iter().map(|r| r.score).fold(0.0f32, f32::max);
+            if max_score > 0.0 {
+                for result in &mut results {
+                    result.score /= max_score;
+                }
+            }
+        }
+
+        // Truncate to requested limit
+        results.truncate(limit);
+
+        Ok(results)
+    }
+
     /// Helper to extract a required string column from a RecordBatch
     fn get_required_string_column<'a>(
         batch: &'a RecordBatch,
@@ -216,8 +306,18 @@ impl CodeEngine {
             .ok_or_else(|| Error::Validation(format!("'{}' column is not a float array", name)))
     }
 
-    /// Convert a RecordBatch from vector search to SearchResults
-    fn record_batch_to_search_results(&self, batch: &RecordBatch) -> Result<Vec<SearchResult>> {
+    /// Convert a RecordBatch to SearchResults with configurable score extraction
+    ///
+    /// # Arguments
+    /// * `batch` - The RecordBatch to convert
+    /// * `score_column` - Name of the score column ("_distance" or "_score")
+    /// * `score_transform` - Function to transform the raw score value
+    fn batch_to_search_results(
+        &self,
+        batch: &RecordBatch,
+        score_column: &str,
+        score_transform: impl Fn(f32) -> f32,
+    ) -> Result<Vec<SearchResult>> {
         let num_rows = batch.num_rows();
         let mut results = Vec::with_capacity(num_rows);
 
@@ -227,7 +327,7 @@ impl CodeEngine {
         let kind_array = Self::get_required_string_column(batch, "kind")?;
         let language_array = Self::get_required_string_column(batch, "language")?;
         let file_path_array = Self::get_required_string_column(batch, "file_path")?;
-        let distance_array = Self::get_required_float_column(batch, "_distance")?;
+        let score_array = Self::get_required_float_column(batch, score_column)?;
 
         // Extract optional columns using helper functions
         let signature_array = Self::get_optional_string_column(batch, "signature");
@@ -236,8 +336,8 @@ impl CodeEngine {
         let end_line_array = Self::get_optional_int_column(batch, "end_line");
 
         for i in 0..num_rows {
-            let distance = distance_array.value(i);
-            let score = distance_to_score(distance);
+            let raw_score = score_array.value(i);
+            let score = score_transform(raw_score);
 
             let result = SearchResult {
                 id: id_array.value(i).to_string(),
@@ -280,6 +380,16 @@ impl CodeEngine {
         }
 
         Ok(results)
+    }
+
+    /// Convert a RecordBatch from vector search to SearchResults
+    fn record_batch_to_search_results(&self, batch: &RecordBatch) -> Result<Vec<SearchResult>> {
+        self.batch_to_search_results(batch, "_distance", distance_to_score)
+    }
+
+    /// Convert a RecordBatch from FTS search to SearchResults
+    fn fts_record_batch_to_search_results(&self, batch: &RecordBatch) -> Result<Vec<SearchResult>> {
+        self.batch_to_search_results(batch, "_score", |score| score)
     }
 
     /// Convert symbols and vectors to an Arrow RecordBatch
@@ -640,5 +750,130 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("768"), "Error should mention expected dimension 768: {}", err);
+    }
+
+    #[tokio::test]
+    async fn test_search_text_basic() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.lance");
+
+        let engine = CodeEngine::new(db_path.to_str().unwrap()).await.unwrap();
+
+        // Add symbols with distinct code patterns
+        let symbols = vec![
+            Symbol {
+                id: "sym1".to_string(),
+                name: "UserService".to_string(),
+                kind: SymbolKind::Struct,
+                language: "rust".to_string(),
+                file_path: "src/user.rs".to_string(),
+                signature: Some("struct UserService".to_string()),
+                doc_comment: None,
+                start_line: Some(1),
+                end_line: Some(50),
+                code_pattern: "struct UserService : BaseService implements IUserService".to_string(),
+                content: None,
+            },
+            Symbol {
+                id: "sym2".to_string(),
+                name: "ProductService".to_string(),
+                kind: SymbolKind::Struct,
+                language: "rust".to_string(),
+                file_path: "src/product.rs".to_string(),
+                signature: Some("struct ProductService".to_string()),
+                doc_comment: None,
+                start_line: Some(1),
+                end_line: Some(30),
+                code_pattern: "struct ProductService : BaseService implements IProductService".to_string(),
+                content: None,
+            },
+            Symbol {
+                id: "sym3".to_string(),
+                name: "OrderManager".to_string(),
+                kind: SymbolKind::Struct,
+                language: "rust".to_string(),
+                file_path: "src/order.rs".to_string(),
+                signature: Some("struct OrderManager".to_string()),
+                doc_comment: None,
+                start_line: Some(1),
+                end_line: Some(40),
+                code_pattern: "struct OrderManager implements IOrderManager".to_string(),
+                content: None,
+            },
+        ];
+
+        let vectors = vec![
+            vec![0.1f32; VECTOR_DIMENSION],
+            vec![0.2f32; VECTOR_DIMENSION],
+            vec![0.3f32; VECTOR_DIMENSION],
+        ];
+
+        engine.add_symbols(symbols, vectors).await.unwrap();
+
+        // Create FTS index
+        engine.create_fts_index().await.unwrap();
+
+        // Search for "BaseService" - should match sym1 and sym2
+        let results = engine.search_text("BaseService", 10).await.unwrap();
+
+        assert_eq!(results.len(), 2, "Should find 2 symbols with BaseService");
+
+        // Verify results contain the expected symbols
+        let ids: Vec<&str> = results.iter().map(|r| r.id.as_str()).collect();
+        assert!(ids.contains(&"sym1"), "Should find UserService");
+        assert!(ids.contains(&"sym2"), "Should find ProductService");
+
+        // All scores should be normalized (0.0-1.0)
+        for result in &results {
+            assert!(result.score >= 0.0 && result.score <= 1.0,
+                "Score {} should be normalized to 0.0-1.0", result.score);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_search_text_empty_db() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.lance");
+
+        let engine = CodeEngine::new(db_path.to_str().unwrap()).await.unwrap();
+
+        // Search on empty DB should return empty results (table doesn't exist)
+        let results = engine.search_text("anything", 10).await.unwrap();
+
+        assert!(results.is_empty(), "Search on empty DB should return empty results");
+    }
+
+    #[tokio::test]
+    async fn test_search_text_no_match() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.lance");
+
+        let engine = CodeEngine::new(db_path.to_str().unwrap()).await.unwrap();
+
+        // Add a symbol
+        let symbols = vec![Symbol {
+            id: "sym1".to_string(),
+            name: "UserService".to_string(),
+            kind: SymbolKind::Function,
+            language: "rust".to_string(),
+            file_path: "src/user.rs".to_string(),
+            signature: None,
+            doc_comment: None,
+            start_line: None,
+            end_line: None,
+            code_pattern: "fn user_service()".to_string(),
+            content: None,
+        }];
+
+        let vectors = vec![vec![0.1f32; VECTOR_DIMENSION]];
+        engine.add_symbols(symbols, vectors).await.unwrap();
+
+        // Create FTS index
+        engine.create_fts_index().await.unwrap();
+
+        // Search for nonexistent term
+        let results = engine.search_text("xyznonexistent", 10).await.unwrap();
+
+        assert!(results.is_empty(), "Search for nonexistent term should return empty results");
     }
 }
