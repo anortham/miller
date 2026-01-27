@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
+using Codesearch.Server.Memory;
 using Codesearch.Server.Services;
 
 var builder = Host.CreateApplicationBuilder(args);
@@ -15,6 +16,7 @@ builder.Logging.AddConsole(options =>
 // Register services
 builder.Services.AddSingleton<SearchService>();
 builder.Services.AddSingleton<IndexService>();
+builder.Services.AddSingleton<MemoryService>();
 builder.Services.AddHostedService<FileWatcherService>();
 
 // Configure MCP server
