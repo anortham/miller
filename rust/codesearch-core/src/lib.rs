@@ -3,6 +3,7 @@
 pub mod boosting;
 pub mod engine;
 pub mod error;
+pub mod indexer;
 pub mod schema;
 pub mod search;
 
