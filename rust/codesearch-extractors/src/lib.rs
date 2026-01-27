@@ -2,6 +2,7 @@
 
 pub mod base;
 pub mod language;
+pub mod python;
 pub mod rust;
 pub mod typescript;
 pub mod utils;
@@ -12,5 +13,6 @@ pub use base::{
     SymbolOptions, TypeInfo, Visibility,
 };
 pub use language::{detect_language, get_tree_sitter_language};
+pub use python::PythonExtractor;
 pub use rust::RustExtractor;
 pub use typescript::TypeScriptExtractor;
