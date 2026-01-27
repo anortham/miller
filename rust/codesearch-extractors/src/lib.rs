@@ -3,6 +3,7 @@
 pub mod base;
 pub mod language;
 pub mod rust;
+pub mod typescript;
 pub mod utils;
 
 pub use base::{
@@ -12,3 +13,4 @@ pub use base::{
 };
 pub use language::{detect_language, get_tree_sitter_language};
 pub use rust::RustExtractor;
+pub use typescript::TypeScriptExtractor;
