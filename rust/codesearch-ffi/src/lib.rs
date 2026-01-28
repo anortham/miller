@@ -1,6 +1,6 @@
 //! UniFFI bindings for codesearch-core
 
-use codesearch_core::{SearchResult, Symbol, SymbolKind, RelationshipInput as CoreRelationshipInput, RelationshipResult as CoreRelationshipResult};
+use codesearch_core::{SearchResult, Symbol, SymbolKind, RelationshipInput as CoreRelationshipInput, RelationshipResult as CoreRelationshipResult, ReferenceResult as CoreReferenceResult, SymbolInfo as CoreSymbolInfo};
 use julie_extractors::{
     ExtractorManager,
     Symbol as JulieSymbol,
@@ -196,6 +196,60 @@ pub struct ReachabilityEntry {
 pub struct ImpactResult {
     pub symbol_id: String,
     pub distance: u32,
+}
+
+/// FFI-safe reference result for navigation
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ReferenceResult {
+    pub name: String,
+    pub kind: String,
+    pub file_path: String,
+    pub line_number: u32,
+    pub column: u32,
+    pub source_symbol_id: Option<String>,
+}
+
+/// FFI-safe symbol info for navigation
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct SymbolInfo {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub language: String,
+    pub file_path: String,
+    pub start_line: i32,
+    pub end_line: i32,
+    pub signature: Option<String>,
+    pub doc_comment: Option<String>,
+}
+
+impl From<CoreReferenceResult> for ReferenceResult {
+    fn from(r: CoreReferenceResult) -> Self {
+        Self {
+            name: r.name,
+            kind: r.kind,
+            file_path: r.file_path,
+            line_number: r.line_number,
+            column: r.column,
+            source_symbol_id: r.source_symbol_id,
+        }
+    }
+}
+
+impl From<CoreSymbolInfo> for SymbolInfo {
+    fn from(s: CoreSymbolInfo) -> Self {
+        Self {
+            id: s.id,
+            name: s.name,
+            kind: s.kind,
+            language: s.language,
+            file_path: s.file_path,
+            start_line: s.start_line,
+            end_line: s.end_line,
+            signature: s.signature,
+            doc_comment: s.doc_comment,
+        }
+    }
 }
 
 // =============================================================================
@@ -676,6 +730,50 @@ impl CodeSearchEngine {
                     symbol_id: id,
                     distance: dist,
                 }).collect())
+                .map_err(CodeSearchError::from)
+        })
+    }
+
+    /// Get all references to a symbol
+    pub fn get_references(&self, symbol_id: String, limit: u32) -> Result<Vec<ReferenceResult>, CodeSearchError> {
+        self.runtime.block_on(async {
+            self.inner
+                .get_references(&symbol_id, limit as usize)
+                .await
+                .map(|results| results.into_iter().map(ReferenceResult::from).collect())
+                .map_err(CodeSearchError::from)
+        })
+    }
+
+    /// Get a symbol by ID
+    pub fn get_symbol_by_id(&self, symbol_id: String) -> Result<Option<SymbolInfo>, CodeSearchError> {
+        self.runtime.block_on(async {
+            self.inner
+                .get_symbol_by_id(&symbol_id)
+                .await
+                .map(|opt| opt.map(SymbolInfo::from))
+                .map_err(CodeSearchError::from)
+        })
+    }
+
+    /// Get symbols in a file
+    pub fn get_symbols_by_file(&self, file_path: String, limit: u32) -> Result<Vec<SymbolInfo>, CodeSearchError> {
+        self.runtime.block_on(async {
+            self.inner
+                .get_symbols_by_file(&file_path, limit as usize)
+                .await
+                .map(|results| results.into_iter().map(SymbolInfo::from).collect())
+                .map_err(CodeSearchError::from)
+        })
+    }
+
+    /// Get symbols by kind
+    pub fn get_symbols_by_kind(&self, kind: String, limit: u32) -> Result<Vec<SymbolInfo>, CodeSearchError> {
+        self.runtime.block_on(async {
+            self.inner
+                .get_symbols_by_kind(&kind, limit as usize)
+                .await
+                .map(|results| results.into_iter().map(SymbolInfo::from).collect())
                 .map_err(CodeSearchError::from)
         })
     }
