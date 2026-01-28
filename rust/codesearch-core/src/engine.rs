@@ -48,6 +48,17 @@ pub struct IdentifierInput {
     pub target_symbol_id: Option<String>,
 }
 
+/// Result of a reference query
+#[derive(Debug, Clone)]
+pub struct ReferenceResult {
+    pub name: String,
+    pub kind: String,
+    pub file_path: String,
+    pub line_number: u32,
+    pub column: u32,
+    pub source_symbol_id: Option<String>,
+}
+
 /// Input for reachability entry (transitive closure)
 #[derive(Debug, Clone)]
 pub struct ReachabilityEntry {
@@ -422,6 +433,63 @@ impl CodeEngine {
 
         let batches: Vec<RecordBatch> = stream.try_collect().await?;
         self.batches_to_relationships(batches)
+    }
+
+    /// Get all references to a symbol (where it's used)
+    pub async fn get_references(&self, symbol_id: &str, limit: usize) -> Result<Vec<ReferenceResult>> {
+        let table_names = self.db.table_names().execute().await?;
+        if !table_names.contains(&IDENTIFIERS_TABLE_NAME.to_string()) {
+            return Ok(Vec::new());
+        }
+
+        let table = self.db.open_table(IDENTIFIERS_TABLE_NAME).execute().await?;
+
+        let filter = format!(
+            "target_symbol_id = '{}'",
+            symbol_id.replace('\'', "''")
+        );
+
+        let stream = table
+            .query()
+            .only_if(filter)
+            .limit(limit)
+            .execute()
+            .await?;
+
+        let mut references = Vec::new();
+        let batches: Vec<RecordBatch> = stream.try_collect().await?;
+
+        for batch in batches {
+            let names = batch.column_by_name("name")
+                .unwrap().as_any().downcast_ref::<StringArray>().unwrap();
+            let kinds = batch.column_by_name("kind")
+                .unwrap().as_any().downcast_ref::<StringArray>().unwrap();
+            let paths = batch.column_by_name("file_path")
+                .unwrap().as_any().downcast_ref::<StringArray>().unwrap();
+            let lines = batch.column_by_name("line_number")
+                .unwrap().as_any().downcast_ref::<UInt32Array>().unwrap();
+            let cols = batch.column_by_name("column")
+                .unwrap().as_any().downcast_ref::<UInt32Array>().unwrap();
+            let source_ids = batch.column_by_name("source_symbol_id")
+                .unwrap().as_any().downcast_ref::<StringArray>().unwrap();
+
+            for i in 0..batch.num_rows() {
+                references.push(ReferenceResult {
+                    name: names.value(i).to_string(),
+                    kind: kinds.value(i).to_string(),
+                    file_path: paths.value(i).to_string(),
+                    line_number: lines.value(i),
+                    column: cols.value(i),
+                    source_symbol_id: if source_ids.is_null(i) {
+                        None
+                    } else {
+                        Some(source_ids.value(i).to_string())
+                    },
+                });
+            }
+        }
+
+        Ok(references)
     }
 
     /// Query relationships where symbol_id is the target (for callers)
