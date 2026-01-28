@@ -73,6 +73,22 @@ internal class SearchService : IDisposable
     }
 
     /// <summary>
+    /// Add identifiers to the database.
+    /// </summary>
+    public ulong AddIdentifiers(List<uniffi.codesearch_ffi.IdentifierInput> identifiers)
+    {
+        return _engine.AddIdentifiers(identifiers);
+    }
+
+    /// <summary>
+    /// Get identifier count.
+    /// </summary>
+    public ulong IdentifierCount()
+    {
+        return _engine.IdentifierCount();
+    }
+
+    /// <summary>
     /// Get symbols that call the given symbol.
     /// </summary>
     public List<uniffi.codesearch_ffi.RelationshipResult> GetCallers(string symbolId, uint limit = 50)

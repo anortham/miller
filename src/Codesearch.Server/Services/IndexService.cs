@@ -140,36 +140,55 @@ internal class IndexService
     private async Task IndexFileAsync(string absolutePath, string relativePath)
     {
         var content = await File.ReadAllTextAsync(absolutePath);
-        var extension = Path.GetExtension(relativePath).TrimStart('.');
-
-        string embedContent;
-        string name;
-        string kind;
+        var normalizedPath = relativePath.Replace('\\', '/');
 
         // Special handling for memory files - strip frontmatter, prepend tags
         if (IsMemoryFile(relativePath))
         {
+            IndexMemoryFile(content, normalizedPath);
+            return;
+        }
+
+        // Try extraction for supported languages
+        var language = CodesearchFfiMethods.DetectLanguage(normalizedPath);
+        if (language != null)
+        {
             try
             {
-                var (metadata, body) = FrontmatterParser.Parse(content);
-                var tagPrefix = metadata.Tags.Count > 0 ? string.Join(" ", metadata.Tags) + " " : "";
-                embedContent = tagPrefix + body;
-                name = Path.GetFileName(relativePath);
-                kind = metadata.Type.ToString().ToLowerInvariant();
+                var results = CodesearchFfiMethods.ExtractFile(content, normalizedPath, _workspaceRoot);
+                IndexExtractionResults(results, content);
+                return;
             }
             catch
             {
-                // Fallback if parsing fails
-                embedContent = content;
-                name = Path.GetFileName(relativePath);
-                kind = "memory";
+                // Fall through to file-level indexing on extraction failure
             }
         }
-        else
+
+        // Fallback: file-level indexing for unsupported languages or extraction failures
+        IndexFileLevel(content, normalizedPath);
+    }
+
+    private void IndexMemoryFile(string content, string normalizedPath)
+    {
+        string embedContent;
+        string name;
+        string kind;
+
+        try
         {
+            var (metadata, body) = FrontmatterParser.Parse(content);
+            var tagPrefix = metadata.Tags.Count > 0 ? string.Join(" ", metadata.Tags) + " " : "";
+            embedContent = tagPrefix + body;
+            name = Path.GetFileName(normalizedPath);
+            kind = metadata.Type.ToString().ToLowerInvariant();
+        }
+        catch
+        {
+            // Fallback if parsing fails
             embedContent = content;
-            name = Path.GetFileName(relativePath);
-            kind = "file";
+            name = Path.GetFileName(normalizedPath);
+            kind = "memory";
         }
 
         // Truncate content for embedding
@@ -179,11 +198,11 @@ internal class IndexService
         }
 
         var symbol = new SymbolInput(
-            id: $"file_{Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(relativePath)))[..16]}",
+            id: $"file_{Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(normalizedPath)))[..16]}",
             name: name,
             kind: kind,
-            language: extension,
-            filePath: relativePath.Replace('\\', '/'),
+            language: "md",
+            filePath: normalizedPath,
             signature: null,
             docComment: null,
             startLine: 1,
@@ -191,9 +210,112 @@ internal class IndexService
             content: embedContent
         );
 
-        // Placeholder vector (768 zeros)
         var vector = Enumerable.Repeat(0.0f, 768).ToList();
+        _searchService.AddSymbols(new List<SymbolInput> { symbol }, new List<List<float>> { vector });
+    }
 
+    private void IndexExtractionResults(ExtractionResults results, string content)
+    {
+        // Convert extracted symbols to SymbolInput
+        if (results.symbols.Count > 0)
+        {
+            var symbolInputs = new List<SymbolInput>();
+            var vectors = new List<List<float>>();
+
+            foreach (var sym in results.symbols)
+            {
+                // Extract symbol content from source
+                var symbolContent = ExtractSymbolContent(content, (int)sym.startLine, (int)sym.endLine);
+                if (symbolContent.Length > 4096)
+                {
+                    symbolContent = symbolContent[..4096];
+                }
+
+                var input = new SymbolInput(
+                    id: sym.id,
+                    name: sym.name,
+                    kind: sym.kind,
+                    language: sym.language,
+                    filePath: sym.filePath,
+                    signature: sym.signature,
+                    docComment: sym.docComment,
+                    startLine: (int)sym.startLine,
+                    endLine: (int)sym.endLine,
+                    content: symbolContent
+                );
+
+                symbolInputs.Add(input);
+                vectors.Add(Enumerable.Repeat(0.0f, 768).ToList());
+            }
+
+            _searchService.AddSymbols(symbolInputs, vectors);
+        }
+
+        // Convert and add identifiers
+        if (results.identifiers.Count > 0)
+        {
+            var identifierInputs = results.identifiers.Select(id => new IdentifierInput(
+                name: id.name,
+                kind: id.kind,
+                filePath: id.filePath,
+                lineNumber: id.lineNumber,
+                column: id.column,
+                sourceSymbolId: id.sourceSymbolId,
+                targetSymbolId: id.targetSymbolId
+            )).ToList();
+
+            _searchService.AddIdentifiers(identifierInputs);
+        }
+
+        // Convert and add relationships
+        if (results.relationships.Count > 0)
+        {
+            var relationshipInputs = results.relationships.Select(rel => new RelationshipInput(
+                fromSymbolId: rel.fromSymbolId,
+                toSymbolId: rel.toSymbolId,
+                kind: rel.kind,
+                filePath: rel.filePath,
+                lineNumber: rel.lineNumber,
+                confidence: rel.confidence
+            )).ToList();
+
+            _searchService.AddRelationships(relationshipInputs);
+        }
+    }
+
+    private static string ExtractSymbolContent(string content, int startLine, int endLine)
+    {
+        var lines = content.Split('\n');
+        var start = Math.Max(0, startLine - 1);
+        var end = Math.Min(lines.Length, endLine);
+        return string.Join('\n', lines.Skip(start).Take(end - start));
+    }
+
+    private void IndexFileLevel(string content, string normalizedPath)
+    {
+        var extension = Path.GetExtension(normalizedPath).TrimStart('.');
+        var embedContent = content;
+
+        // Truncate content for embedding
+        if (embedContent.Length > 4096)
+        {
+            embedContent = embedContent[..4096];
+        }
+
+        var symbol = new SymbolInput(
+            id: $"file_{Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(normalizedPath)))[..16]}",
+            name: Path.GetFileName(normalizedPath),
+            kind: "file",
+            language: extension,
+            filePath: normalizedPath,
+            signature: null,
+            docComment: null,
+            startLine: 1,
+            endLine: content.Split('\n').Length,
+            content: embedContent
+        );
+
+        var vector = Enumerable.Repeat(0.0f, 768).ToList();
         _searchService.AddSymbols(new List<SymbolInput> { symbol }, new List<List<float>> { vector });
     }
 }
