@@ -183,6 +183,21 @@ impl From<IdentifierInput> for codesearch_core::IdentifierInput {
     }
 }
 
+/// FFI-safe reachability entry
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ReachabilityEntry {
+    pub source_id: String,
+    pub target_id: String,
+    pub min_distance: u32,
+}
+
+/// FFI-safe impact result
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ImpactResult {
+    pub symbol_id: String,
+    pub distance: u32,
+}
+
 // =============================================================================
 // FFI Types for julie-extractors Integration
 // =============================================================================
@@ -617,6 +632,50 @@ impl CodeSearchEngine {
                 .identifier_count()
                 .await
                 .map(|n| n as u64)
+                .map_err(CodeSearchError::from)
+        })
+    }
+
+    /// Clear reachability table
+    pub fn clear_reachability(&self) -> Result<(), CodeSearchError> {
+        self.runtime.block_on(async {
+            self.inner
+                .clear_reachability()
+                .await
+                .map_err(CodeSearchError::from)
+        })
+    }
+
+    /// Add reachability entries in batch
+    pub fn add_reachability_batch(&self, entries: Vec<ReachabilityEntry>) -> Result<u64, CodeSearchError> {
+        let inputs: Vec<codesearch_core::ReachabilityEntry> = entries
+            .into_iter()
+            .map(|e| codesearch_core::ReachabilityEntry {
+                source_id: e.source_id,
+                target_id: e.target_id,
+                min_distance: e.min_distance,
+            })
+            .collect();
+
+        self.runtime.block_on(async {
+            self.inner
+                .add_reachability_batch(inputs)
+                .await
+                .map(|n| n as u64)
+                .map_err(CodeSearchError::from)
+        })
+    }
+
+    /// Get impacted symbols (what breaks if I change this?)
+    pub fn get_impacted(&self, symbol_id: String, max_distance: u32) -> Result<Vec<ImpactResult>, CodeSearchError> {
+        self.runtime.block_on(async {
+            self.inner
+                .get_impacted(&symbol_id, max_distance)
+                .await
+                .map(|results| results.into_iter().map(|(id, dist)| ImpactResult {
+                    symbol_id: id,
+                    distance: dist,
+                }).collect())
                 .map_err(CodeSearchError::from)
         })
     }
