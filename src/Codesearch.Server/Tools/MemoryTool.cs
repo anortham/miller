@@ -89,8 +89,10 @@ internal static class MemoryTool
         string? query)
     {
         // For now, use filesystem recall (semantic search requires embeddings integration)
+        // Only filter by type if a non-default type was explicitly specified
+        MemoryType? typeFilter = type != MemoryType.Checkpoint ? type : null;
         var result = await memoryService.RecallAsync(
-            type: null,  // Don't filter by type unless specifically requested
+            type: typeFilter,
             tags: tags.Count > 0 ? tags : null,
             days: days,
             limit: limit);

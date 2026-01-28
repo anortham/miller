@@ -34,8 +34,13 @@ internal static class FrontmatterParser
             throw new FormatException("Invalid memory file: unclosed frontmatter");
         }
 
-        var frontmatterText = fileContent[4..endMarker]; // Skip opening ---\n
-        var content = fileContent[(endMarker + 5)..].Trim(); // Skip closing ---\n
+        var openingLength = fileContent.IndexOf('\n') + 1; // Length of "---\n" or "---\r\n"
+        var frontmatterText = fileContent[openingLength..endMarker];
+        var closingEnd = endMarker + 1; // Skip \n in "\n---"
+        while (closingEnd < fileContent.Length && fileContent[closingEnd] == '-') closingEnd++;
+        if (closingEnd < fileContent.Length && fileContent[closingEnd] == '\r') closingEnd++;
+        if (closingEnd < fileContent.Length && fileContent[closingEnd] == '\n') closingEnd++;
+        var content = fileContent[closingEnd..].Trim();
 
         var rawMetadata = Deserializer.Deserialize<Dictionary<string, object?>>(frontmatterText);
         var metadata = ParseMetadata(rawMetadata);

@@ -218,12 +218,14 @@ internal partial class MemoryService
                 var refPath = Path.Combine(gitDir, "refs", "heads", branch);
                 if (File.Exists(refPath))
                 {
-                    commit = (await File.ReadAllTextAsync(refPath)).Trim()[..7];
+                    var commitHash = (await File.ReadAllTextAsync(refPath)).Trim();
+                    commit = commitHash.Length >= 7 ? commitHash[..7] : commitHash;
                 }
             }
             else
             {
-                commit = headContent.Trim()[..7];
+                var commitHash = headContent.Trim();
+                commit = commitHash.Length >= 7 ? commitHash[..7] : commitHash;
             }
 
             return new GitContext
