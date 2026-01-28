@@ -4,7 +4,8 @@
       "mcp__codesearch__search",
       "mcp__codesearch__index",
       "mcp__codesearch__memory",
-      "mcp__codesearch__relationships"
+      "mcp__codesearch__relationships",
+      "mcp__codesearch__impact"
     ],
     "deny": [],
     "ask": []

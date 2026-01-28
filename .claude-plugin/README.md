@@ -88,6 +88,21 @@ Operations:
 - **callees**: Find all symbols that the given symbol calls
 - **explain**: Get full context including definition, callers, and callees
 
+### impact
+
+Analyze impact of code changes using precomputed reachability.
+
+```
+impact(operation="impact", symbol="functionName", maxDistance=10)
+impact(operation="refresh-closure")
+impact(operation="status")
+```
+
+Operations:
+- **impact**: Find all symbols affected by changes to a symbol
+- **refresh-closure**: Recompute transitive closure after indexing
+- **status**: Show index statistics (symbols, relationships, identifiers)
+
 ## Memory Types
 
 - **checkpoint**: Regular progress snapshots
