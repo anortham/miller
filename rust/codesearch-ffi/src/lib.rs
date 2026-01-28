@@ -1,6 +1,6 @@
 //! UniFFI bindings for codesearch-core
 
-use codesearch_core::{SearchResult, Symbol, SymbolKind};
+use codesearch_core::{SearchResult, Symbol, SymbolKind, RelationshipInput as CoreRelationshipInput, RelationshipResult as CoreRelationshipResult};
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
@@ -96,6 +96,54 @@ impl From<SearchResult> for SearchResultOutput {
             start_line: r.start_line,
             end_line: r.end_line,
             score: r.score,
+        }
+    }
+}
+
+/// FFI-safe relationship input
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct RelationshipInput {
+    pub from_symbol_id: String,
+    pub to_symbol_id: String,
+    pub kind: String,
+    pub file_path: String,
+    pub line_number: u32,
+    pub confidence: f32,
+}
+
+impl From<RelationshipInput> for CoreRelationshipInput {
+    fn from(r: RelationshipInput) -> Self {
+        Self {
+            from_symbol_id: r.from_symbol_id,
+            to_symbol_id: r.to_symbol_id,
+            kind: r.kind,
+            file_path: r.file_path,
+            line_number: r.line_number,
+            confidence: r.confidence,
+        }
+    }
+}
+
+/// FFI-safe relationship result
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct RelationshipResult {
+    pub from_symbol_id: String,
+    pub to_symbol_id: String,
+    pub kind: String,
+    pub file_path: String,
+    pub line_number: u32,
+    pub confidence: f32,
+}
+
+impl From<CoreRelationshipResult> for RelationshipResult {
+    fn from(r: CoreRelationshipResult) -> Self {
+        Self {
+            from_symbol_id: r.from_symbol_id,
+            to_symbol_id: r.to_symbol_id,
+            kind: r.kind,
+            file_path: r.file_path,
+            line_number: r.line_number,
+            confidence: r.confidence,
         }
     }
 }
@@ -245,6 +293,77 @@ impl CodeSearchEngine {
                 .search_hybrid_boosted(&query, &query_vector, limit as usize)
                 .await
                 .map(|results| results.into_iter().map(SearchResultOutput::from).collect())
+                .map_err(CodeSearchError::from)
+        })
+    }
+
+    /// Add relationships to the database
+    pub fn add_relationships(
+        &self,
+        relationships: Vec<RelationshipInput>,
+    ) -> Result<u64, CodeSearchError> {
+        let relationships: Vec<CoreRelationshipInput> = relationships.into_iter().map(CoreRelationshipInput::from).collect();
+        self.runtime.block_on(async {
+            self.inner
+                .add_relationships(relationships)
+                .await
+                .map(|count| count as u64)
+                .map_err(CodeSearchError::from)
+        })
+    }
+
+    /// Get the count of relationships in the database
+    pub fn relationship_count(&self) -> Result<u64, CodeSearchError> {
+        self.runtime.block_on(async {
+            self.inner
+                .relationship_count()
+                .await
+                .map(|count| count as u64)
+                .map_err(CodeSearchError::from)
+        })
+    }
+
+    /// Get symbols that call the given symbol
+    pub fn get_callers(
+        &self,
+        symbol_id: String,
+        limit: u32,
+    ) -> Result<Vec<RelationshipResult>, CodeSearchError> {
+        self.runtime.block_on(async {
+            self.inner
+                .get_callers(&symbol_id, limit as usize)
+                .await
+                .map(|results| results.into_iter().map(RelationshipResult::from).collect())
+                .map_err(CodeSearchError::from)
+        })
+    }
+
+    /// Get symbols that the given symbol calls
+    pub fn get_callees(
+        &self,
+        symbol_id: String,
+        limit: u32,
+    ) -> Result<Vec<RelationshipResult>, CodeSearchError> {
+        self.runtime.block_on(async {
+            self.inner
+                .get_callees(&symbol_id, limit as usize)
+                .await
+                .map(|results| results.into_iter().map(RelationshipResult::from).collect())
+                .map_err(CodeSearchError::from)
+        })
+    }
+
+    /// Get all relationships for a symbol
+    pub fn get_relationships(
+        &self,
+        symbol_id: String,
+        limit: u32,
+    ) -> Result<Vec<RelationshipResult>, CodeSearchError> {
+        self.runtime.block_on(async {
+            self.inner
+                .get_relationships(&symbol_id, limit as usize)
+                .await
+                .map(|results| results.into_iter().map(RelationshipResult::from).collect())
                 .map_err(CodeSearchError::from)
         })
     }
