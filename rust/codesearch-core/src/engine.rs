@@ -67,6 +67,20 @@ pub struct ReachabilityEntry {
     pub min_distance: u32,
 }
 
+/// Detailed symbol information
+#[derive(Debug, Clone)]
+pub struct SymbolInfo {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub language: String,
+    pub file_path: String,
+    pub start_line: i32,
+    pub end_line: i32,
+    pub signature: Option<String>,
+    pub doc_comment: Option<String>,
+}
+
 /// The main search engine struct
 pub struct CodeEngine {
     db: Arc<lancedb::Connection>,
@@ -490,6 +504,112 @@ impl CodeEngine {
         }
 
         Ok(references)
+    }
+
+    /// Get a symbol by its ID
+    pub async fn get_symbol_by_id(&self, symbol_id: &str) -> Result<Option<SymbolInfo>> {
+        let table_names = self.db.table_names().execute().await?;
+        if !table_names.contains(&TABLE_NAME.to_string()) {
+            return Ok(None);
+        }
+
+        let table = self.db.open_table(TABLE_NAME).execute().await?;
+
+        let results = table
+            .query()
+            .only_if(format!("id = '{}'", symbol_id.replace("'", "''")))
+            .limit(1)
+            .execute()
+            .await?;
+
+        let batches: Vec<RecordBatch> = results.try_collect().await?;
+
+        if batches.is_empty() || batches[0].num_rows() == 0 {
+            return Ok(None);
+        }
+
+        Ok(Some(self.batch_to_symbol_info(&batches[0], 0)))
+    }
+
+    /// Get all symbols in a file
+    pub async fn get_symbols_by_file(&self, file_path: &str, limit: usize) -> Result<Vec<SymbolInfo>> {
+        let table_names = self.db.table_names().execute().await?;
+        if !table_names.contains(&TABLE_NAME.to_string()) {
+            return Ok(Vec::new());
+        }
+
+        let table = self.db.open_table(TABLE_NAME).execute().await?;
+
+        let results = table
+            .query()
+            .only_if(format!("file_path = '{}'", file_path.replace("'", "''")))
+            .limit(limit)
+            .execute()
+            .await?;
+
+        let mut symbols = Vec::new();
+        let batches: Vec<RecordBatch> = results.try_collect().await?;
+
+        for batch in batches {
+            for i in 0..batch.num_rows() {
+                symbols.push(self.batch_to_symbol_info(&batch, i));
+            }
+        }
+
+        Ok(symbols)
+    }
+
+    /// Get all symbols of a specific kind
+    pub async fn get_symbols_by_kind(&self, kind: &str, limit: usize) -> Result<Vec<SymbolInfo>> {
+        let table_names = self.db.table_names().execute().await?;
+        if !table_names.contains(&TABLE_NAME.to_string()) {
+            return Ok(Vec::new());
+        }
+
+        let table = self.db.open_table(TABLE_NAME).execute().await?;
+
+        let results = table
+            .query()
+            .only_if(format!("kind = '{}'", kind.replace("'", "''")))
+            .limit(limit)
+            .execute()
+            .await?;
+
+        let mut symbols = Vec::new();
+        let batches: Vec<RecordBatch> = results.try_collect().await?;
+
+        for batch in batches {
+            for i in 0..batch.num_rows() {
+                symbols.push(self.batch_to_symbol_info(&batch, i));
+            }
+        }
+
+        Ok(symbols)
+    }
+
+    /// Convert a record batch row to SymbolInfo
+    fn batch_to_symbol_info(&self, batch: &RecordBatch, idx: usize) -> SymbolInfo {
+        let ids = batch.column_by_name("id").unwrap().as_any().downcast_ref::<StringArray>().unwrap();
+        let names = batch.column_by_name("name").unwrap().as_any().downcast_ref::<StringArray>().unwrap();
+        let kinds = batch.column_by_name("kind").unwrap().as_any().downcast_ref::<StringArray>().unwrap();
+        let languages = batch.column_by_name("language").unwrap().as_any().downcast_ref::<StringArray>().unwrap();
+        let paths = batch.column_by_name("file_path").unwrap().as_any().downcast_ref::<StringArray>().unwrap();
+        let start_lines = batch.column_by_name("start_line").unwrap().as_any().downcast_ref::<Int32Array>().unwrap();
+        let end_lines = batch.column_by_name("end_line").unwrap().as_any().downcast_ref::<Int32Array>().unwrap();
+        let signatures = batch.column_by_name("signature").unwrap().as_any().downcast_ref::<StringArray>().unwrap();
+        let doc_comments = batch.column_by_name("doc_comment").unwrap().as_any().downcast_ref::<StringArray>().unwrap();
+
+        SymbolInfo {
+            id: ids.value(idx).to_string(),
+            name: names.value(idx).to_string(),
+            kind: kinds.value(idx).to_string(),
+            language: languages.value(idx).to_string(),
+            file_path: paths.value(idx).to_string(),
+            start_line: if start_lines.is_null(idx) { 0 } else { start_lines.value(idx) },
+            end_line: if end_lines.is_null(idx) { 0 } else { end_lines.value(idx) },
+            signature: if signatures.is_null(idx) { None } else { Some(signatures.value(idx).to_string()) },
+            doc_comment: if doc_comments.is_null(idx) { None } else { Some(doc_comments.value(idx).to_string()) },
+        }
     }
 
     /// Query relationships where symbol_id is the target (for callers)
