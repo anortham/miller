@@ -773,6 +773,14 @@ static class _UniFFILib {
     
     
     
+    
+    
+    
+    
+    
+    
+    
+    
 
     static _UniFFILib() {
         _UniFFILib.uniffiCheckContractApiVersion();
@@ -850,6 +858,22 @@ static class _UniFFILib {
 
     [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern ulong uniffi_codesearch_ffi_fn_method_codesearchengine_symbol_count(IntPtr @ptr,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern RustBuffer uniffi_codesearch_ffi_fn_func_detect_language(RustBuffer @filePath,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern RustBuffer uniffi_codesearch_ffi_fn_func_extract_file(RustBuffer @content,RustBuffer @filePath,RustBuffer @workspaceRoot,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern RustBuffer uniffi_codesearch_ffi_fn_func_extract_files_batch(RustBuffer @files,RustBuffer @workspaceRoot,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern RustBuffer uniffi_codesearch_ffi_fn_func_supported_languages(ref UniffiRustCallStatus _uniffi_out_err
     );
 
     [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
@@ -1077,6 +1101,22 @@ static class _UniFFILib {
     );
 
     [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern ushort uniffi_codesearch_ffi_checksum_func_detect_language(
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern ushort uniffi_codesearch_ffi_checksum_func_extract_file(
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern ushort uniffi_codesearch_ffi_checksum_func_extract_files_batch(
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern ushort uniffi_codesearch_ffi_checksum_func_supported_languages(
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern ushort uniffi_codesearch_ffi_checksum_method_codesearchengine_add_relationships(
     );
 
@@ -1154,6 +1194,30 @@ static class _UniFFILib {
     }
 
     static void uniffiCheckApiChecksums() {
+        {
+            var checksum = _UniFFILib.uniffi_codesearch_ffi_checksum_func_detect_language();
+            if (checksum != 63115) {
+                throw new UniffiContractChecksumException($"uniffi.codesearch_ffi: uniffi bindings expected function `uniffi_codesearch_ffi_checksum_func_detect_language` checksum `63115`, library returned `{checksum}`");
+            }
+        }
+        {
+            var checksum = _UniFFILib.uniffi_codesearch_ffi_checksum_func_extract_file();
+            if (checksum != 37938) {
+                throw new UniffiContractChecksumException($"uniffi.codesearch_ffi: uniffi bindings expected function `uniffi_codesearch_ffi_checksum_func_extract_file` checksum `37938`, library returned `{checksum}`");
+            }
+        }
+        {
+            var checksum = _UniFFILib.uniffi_codesearch_ffi_checksum_func_extract_files_batch();
+            if (checksum != 2685) {
+                throw new UniffiContractChecksumException($"uniffi.codesearch_ffi: uniffi bindings expected function `uniffi_codesearch_ffi_checksum_func_extract_files_batch` checksum `2685`, library returned `{checksum}`");
+            }
+        }
+        {
+            var checksum = _UniFFILib.uniffi_codesearch_ffi_checksum_func_supported_languages();
+            if (checksum != 9649) {
+                throw new UniffiContractChecksumException($"uniffi.codesearch_ffi: uniffi bindings expected function `uniffi_codesearch_ffi_checksum_func_supported_languages` checksum `9649`, library returned `{checksum}`");
+            }
+        }
         {
             var checksum = _UniFFILib.uniffi_codesearch_ffi_checksum_method_codesearchengine_add_relationships();
             if (checksum != 39538) {
@@ -1827,6 +1891,239 @@ class FfiConverterTypeCodeSearchEngine: FfiConverter<CodeSearchEngine, IntPtr> {
 
 
 /// <summary>
+/// FFI-safe identifier (usage/reference)
+/// </summary>
+internal record ExtractedIdentifier (
+    string @name, 
+    string @kind, 
+    string @filePath, 
+    uint @lineNumber, 
+    uint @column, 
+    string? @sourceSymbolId, 
+    string? @targetSymbolId
+) {
+}
+
+class FfiConverterTypeExtractedIdentifier: FfiConverterRustBuffer<ExtractedIdentifier> {
+    public static FfiConverterTypeExtractedIdentifier INSTANCE = new FfiConverterTypeExtractedIdentifier();
+
+    public override ExtractedIdentifier Read(BigEndianStream stream) {
+        return new ExtractedIdentifier(
+            @name: FfiConverterString.INSTANCE.Read(stream),
+            @kind: FfiConverterString.INSTANCE.Read(stream),
+            @filePath: FfiConverterString.INSTANCE.Read(stream),
+            @lineNumber: FfiConverterUInt32.INSTANCE.Read(stream),
+            @column: FfiConverterUInt32.INSTANCE.Read(stream),
+            @sourceSymbolId: FfiConverterOptionalString.INSTANCE.Read(stream),
+            @targetSymbolId: FfiConverterOptionalString.INSTANCE.Read(stream)
+        );
+    }
+
+    public override int AllocationSize(ExtractedIdentifier value) {
+        return 0
+            + FfiConverterString.INSTANCE.AllocationSize(value.@name)
+            + FfiConverterString.INSTANCE.AllocationSize(value.@kind)
+            + FfiConverterString.INSTANCE.AllocationSize(value.@filePath)
+            + FfiConverterUInt32.INSTANCE.AllocationSize(value.@lineNumber)
+            + FfiConverterUInt32.INSTANCE.AllocationSize(value.@column)
+            + FfiConverterOptionalString.INSTANCE.AllocationSize(value.@sourceSymbolId)
+            + FfiConverterOptionalString.INSTANCE.AllocationSize(value.@targetSymbolId);
+    }
+
+    public override void Write(ExtractedIdentifier value, BigEndianStream stream) {
+            FfiConverterString.INSTANCE.Write(value.@name, stream);
+            FfiConverterString.INSTANCE.Write(value.@kind, stream);
+            FfiConverterString.INSTANCE.Write(value.@filePath, stream);
+            FfiConverterUInt32.INSTANCE.Write(value.@lineNumber, stream);
+            FfiConverterUInt32.INSTANCE.Write(value.@column, stream);
+            FfiConverterOptionalString.INSTANCE.Write(value.@sourceSymbolId, stream);
+            FfiConverterOptionalString.INSTANCE.Write(value.@targetSymbolId, stream);
+    }
+}
+
+
+
+/// <summary>
+/// FFI-safe relationship from extraction
+/// </summary>
+internal record ExtractedRelationship (
+    string @fromSymbolId, 
+    string @toSymbolId, 
+    string @kind, 
+    string @filePath, 
+    uint @lineNumber, 
+    float @confidence
+) {
+}
+
+class FfiConverterTypeExtractedRelationship: FfiConverterRustBuffer<ExtractedRelationship> {
+    public static FfiConverterTypeExtractedRelationship INSTANCE = new FfiConverterTypeExtractedRelationship();
+
+    public override ExtractedRelationship Read(BigEndianStream stream) {
+        return new ExtractedRelationship(
+            @fromSymbolId: FfiConverterString.INSTANCE.Read(stream),
+            @toSymbolId: FfiConverterString.INSTANCE.Read(stream),
+            @kind: FfiConverterString.INSTANCE.Read(stream),
+            @filePath: FfiConverterString.INSTANCE.Read(stream),
+            @lineNumber: FfiConverterUInt32.INSTANCE.Read(stream),
+            @confidence: FfiConverterFloat.INSTANCE.Read(stream)
+        );
+    }
+
+    public override int AllocationSize(ExtractedRelationship value) {
+        return 0
+            + FfiConverterString.INSTANCE.AllocationSize(value.@fromSymbolId)
+            + FfiConverterString.INSTANCE.AllocationSize(value.@toSymbolId)
+            + FfiConverterString.INSTANCE.AllocationSize(value.@kind)
+            + FfiConverterString.INSTANCE.AllocationSize(value.@filePath)
+            + FfiConverterUInt32.INSTANCE.AllocationSize(value.@lineNumber)
+            + FfiConverterFloat.INSTANCE.AllocationSize(value.@confidence);
+    }
+
+    public override void Write(ExtractedRelationship value, BigEndianStream stream) {
+            FfiConverterString.INSTANCE.Write(value.@fromSymbolId, stream);
+            FfiConverterString.INSTANCE.Write(value.@toSymbolId, stream);
+            FfiConverterString.INSTANCE.Write(value.@kind, stream);
+            FfiConverterString.INSTANCE.Write(value.@filePath, stream);
+            FfiConverterUInt32.INSTANCE.Write(value.@lineNumber, stream);
+            FfiConverterFloat.INSTANCE.Write(value.@confidence, stream);
+    }
+}
+
+
+
+/// <summary>
+/// FFI-safe symbol from extraction
+/// </summary>
+internal record ExtractedSymbol (
+    string @id, 
+    string @name, 
+    string @kind, 
+    string @language, 
+    string @filePath, 
+    uint @startLine, 
+    uint @endLine, 
+    string? @signature, 
+    string? @docComment
+) {
+}
+
+class FfiConverterTypeExtractedSymbol: FfiConverterRustBuffer<ExtractedSymbol> {
+    public static FfiConverterTypeExtractedSymbol INSTANCE = new FfiConverterTypeExtractedSymbol();
+
+    public override ExtractedSymbol Read(BigEndianStream stream) {
+        return new ExtractedSymbol(
+            @id: FfiConverterString.INSTANCE.Read(stream),
+            @name: FfiConverterString.INSTANCE.Read(stream),
+            @kind: FfiConverterString.INSTANCE.Read(stream),
+            @language: FfiConverterString.INSTANCE.Read(stream),
+            @filePath: FfiConverterString.INSTANCE.Read(stream),
+            @startLine: FfiConverterUInt32.INSTANCE.Read(stream),
+            @endLine: FfiConverterUInt32.INSTANCE.Read(stream),
+            @signature: FfiConverterOptionalString.INSTANCE.Read(stream),
+            @docComment: FfiConverterOptionalString.INSTANCE.Read(stream)
+        );
+    }
+
+    public override int AllocationSize(ExtractedSymbol value) {
+        return 0
+            + FfiConverterString.INSTANCE.AllocationSize(value.@id)
+            + FfiConverterString.INSTANCE.AllocationSize(value.@name)
+            + FfiConverterString.INSTANCE.AllocationSize(value.@kind)
+            + FfiConverterString.INSTANCE.AllocationSize(value.@language)
+            + FfiConverterString.INSTANCE.AllocationSize(value.@filePath)
+            + FfiConverterUInt32.INSTANCE.AllocationSize(value.@startLine)
+            + FfiConverterUInt32.INSTANCE.AllocationSize(value.@endLine)
+            + FfiConverterOptionalString.INSTANCE.AllocationSize(value.@signature)
+            + FfiConverterOptionalString.INSTANCE.AllocationSize(value.@docComment);
+    }
+
+    public override void Write(ExtractedSymbol value, BigEndianStream stream) {
+            FfiConverterString.INSTANCE.Write(value.@id, stream);
+            FfiConverterString.INSTANCE.Write(value.@name, stream);
+            FfiConverterString.INSTANCE.Write(value.@kind, stream);
+            FfiConverterString.INSTANCE.Write(value.@language, stream);
+            FfiConverterString.INSTANCE.Write(value.@filePath, stream);
+            FfiConverterUInt32.INSTANCE.Write(value.@startLine, stream);
+            FfiConverterUInt32.INSTANCE.Write(value.@endLine, stream);
+            FfiConverterOptionalString.INSTANCE.Write(value.@signature, stream);
+            FfiConverterOptionalString.INSTANCE.Write(value.@docComment, stream);
+    }
+}
+
+
+
+/// <summary>
+/// FFI-safe extraction results from julie-extractors
+/// </summary>
+internal record ExtractionResults (
+    List<ExtractedSymbol> @symbols, 
+    List<ExtractedIdentifier> @identifiers, 
+    List<ExtractedRelationship> @relationships
+) {
+}
+
+class FfiConverterTypeExtractionResults: FfiConverterRustBuffer<ExtractionResults> {
+    public static FfiConverterTypeExtractionResults INSTANCE = new FfiConverterTypeExtractionResults();
+
+    public override ExtractionResults Read(BigEndianStream stream) {
+        return new ExtractionResults(
+            @symbols: FfiConverterSequenceTypeExtractedSymbol.INSTANCE.Read(stream),
+            @identifiers: FfiConverterSequenceTypeExtractedIdentifier.INSTANCE.Read(stream),
+            @relationships: FfiConverterSequenceTypeExtractedRelationship.INSTANCE.Read(stream)
+        );
+    }
+
+    public override int AllocationSize(ExtractionResults value) {
+        return 0
+            + FfiConverterSequenceTypeExtractedSymbol.INSTANCE.AllocationSize(value.@symbols)
+            + FfiConverterSequenceTypeExtractedIdentifier.INSTANCE.AllocationSize(value.@identifiers)
+            + FfiConverterSequenceTypeExtractedRelationship.INSTANCE.AllocationSize(value.@relationships);
+    }
+
+    public override void Write(ExtractionResults value, BigEndianStream stream) {
+            FfiConverterSequenceTypeExtractedSymbol.INSTANCE.Write(value.@symbols, stream);
+            FfiConverterSequenceTypeExtractedIdentifier.INSTANCE.Write(value.@identifiers, stream);
+            FfiConverterSequenceTypeExtractedRelationship.INSTANCE.Write(value.@relationships, stream);
+    }
+}
+
+
+
+/// <summary>
+/// FFI-safe file input for batch extraction
+/// </summary>
+internal record FileInput (
+    string @content, 
+    string @filePath
+) {
+}
+
+class FfiConverterTypeFileInput: FfiConverterRustBuffer<FileInput> {
+    public static FfiConverterTypeFileInput INSTANCE = new FfiConverterTypeFileInput();
+
+    public override FileInput Read(BigEndianStream stream) {
+        return new FileInput(
+            @content: FfiConverterString.INSTANCE.Read(stream),
+            @filePath: FfiConverterString.INSTANCE.Read(stream)
+        );
+    }
+
+    public override int AllocationSize(FileInput value) {
+        return 0
+            + FfiConverterString.INSTANCE.AllocationSize(value.@content)
+            + FfiConverterString.INSTANCE.AllocationSize(value.@filePath);
+    }
+
+    public override void Write(FileInput value, BigEndianStream stream) {
+            FfiConverterString.INSTANCE.Write(value.@content, stream);
+            FfiConverterString.INSTANCE.Write(value.@filePath, stream);
+    }
+}
+
+
+
+/// <summary>
 /// FFI-safe relationship input
 /// </summary>
 internal record RelationshipInput (
@@ -2252,6 +2549,258 @@ class FfiConverterSequenceFloat: FfiConverterRustBuffer<List<float>> {
 
 
 
+class FfiConverterSequenceString: FfiConverterRustBuffer<List<string>> {
+    public static FfiConverterSequenceString INSTANCE = new FfiConverterSequenceString();
+
+    public override List<string> Read(BigEndianStream stream) {
+        var length = stream.ReadInt();
+        var result = new List<string>(length);
+        var readFn = FfiConverterString.INSTANCE.Read;
+        for (int i = 0; i < length; i++) {
+            result.Add(readFn(stream));
+        }
+        return result;
+    }
+
+    public override int AllocationSize(List<string> value) {
+        var sizeForLength = 4;
+
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            return sizeForLength;
+        }
+
+        var allocationSizeFn = FfiConverterString.INSTANCE.AllocationSize;
+        var sizeForItems = value.Sum(item => allocationSizeFn(item));
+        return sizeForLength + sizeForItems;
+    }
+
+    public override void Write(List<string> value, BigEndianStream stream) {
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            stream.WriteInt(0);
+            return;
+        }
+
+        stream.WriteInt(value.Count);
+        var writerFn = FfiConverterString.INSTANCE.Write;
+        value.ForEach(item => writerFn(item, stream));
+    }
+}
+
+
+
+
+class FfiConverterSequenceTypeExtractedIdentifier: FfiConverterRustBuffer<List<ExtractedIdentifier>> {
+    public static FfiConverterSequenceTypeExtractedIdentifier INSTANCE = new FfiConverterSequenceTypeExtractedIdentifier();
+
+    public override List<ExtractedIdentifier> Read(BigEndianStream stream) {
+        var length = stream.ReadInt();
+        var result = new List<ExtractedIdentifier>(length);
+        var readFn = FfiConverterTypeExtractedIdentifier.INSTANCE.Read;
+        for (int i = 0; i < length; i++) {
+            result.Add(readFn(stream));
+        }
+        return result;
+    }
+
+    public override int AllocationSize(List<ExtractedIdentifier> value) {
+        var sizeForLength = 4;
+
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            return sizeForLength;
+        }
+
+        var allocationSizeFn = FfiConverterTypeExtractedIdentifier.INSTANCE.AllocationSize;
+        var sizeForItems = value.Sum(item => allocationSizeFn(item));
+        return sizeForLength + sizeForItems;
+    }
+
+    public override void Write(List<ExtractedIdentifier> value, BigEndianStream stream) {
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            stream.WriteInt(0);
+            return;
+        }
+
+        stream.WriteInt(value.Count);
+        var writerFn = FfiConverterTypeExtractedIdentifier.INSTANCE.Write;
+        value.ForEach(item => writerFn(item, stream));
+    }
+}
+
+
+
+
+class FfiConverterSequenceTypeExtractedRelationship: FfiConverterRustBuffer<List<ExtractedRelationship>> {
+    public static FfiConverterSequenceTypeExtractedRelationship INSTANCE = new FfiConverterSequenceTypeExtractedRelationship();
+
+    public override List<ExtractedRelationship> Read(BigEndianStream stream) {
+        var length = stream.ReadInt();
+        var result = new List<ExtractedRelationship>(length);
+        var readFn = FfiConverterTypeExtractedRelationship.INSTANCE.Read;
+        for (int i = 0; i < length; i++) {
+            result.Add(readFn(stream));
+        }
+        return result;
+    }
+
+    public override int AllocationSize(List<ExtractedRelationship> value) {
+        var sizeForLength = 4;
+
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            return sizeForLength;
+        }
+
+        var allocationSizeFn = FfiConverterTypeExtractedRelationship.INSTANCE.AllocationSize;
+        var sizeForItems = value.Sum(item => allocationSizeFn(item));
+        return sizeForLength + sizeForItems;
+    }
+
+    public override void Write(List<ExtractedRelationship> value, BigEndianStream stream) {
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            stream.WriteInt(0);
+            return;
+        }
+
+        stream.WriteInt(value.Count);
+        var writerFn = FfiConverterTypeExtractedRelationship.INSTANCE.Write;
+        value.ForEach(item => writerFn(item, stream));
+    }
+}
+
+
+
+
+class FfiConverterSequenceTypeExtractedSymbol: FfiConverterRustBuffer<List<ExtractedSymbol>> {
+    public static FfiConverterSequenceTypeExtractedSymbol INSTANCE = new FfiConverterSequenceTypeExtractedSymbol();
+
+    public override List<ExtractedSymbol> Read(BigEndianStream stream) {
+        var length = stream.ReadInt();
+        var result = new List<ExtractedSymbol>(length);
+        var readFn = FfiConverterTypeExtractedSymbol.INSTANCE.Read;
+        for (int i = 0; i < length; i++) {
+            result.Add(readFn(stream));
+        }
+        return result;
+    }
+
+    public override int AllocationSize(List<ExtractedSymbol> value) {
+        var sizeForLength = 4;
+
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            return sizeForLength;
+        }
+
+        var allocationSizeFn = FfiConverterTypeExtractedSymbol.INSTANCE.AllocationSize;
+        var sizeForItems = value.Sum(item => allocationSizeFn(item));
+        return sizeForLength + sizeForItems;
+    }
+
+    public override void Write(List<ExtractedSymbol> value, BigEndianStream stream) {
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            stream.WriteInt(0);
+            return;
+        }
+
+        stream.WriteInt(value.Count);
+        var writerFn = FfiConverterTypeExtractedSymbol.INSTANCE.Write;
+        value.ForEach(item => writerFn(item, stream));
+    }
+}
+
+
+
+
+class FfiConverterSequenceTypeExtractionResults: FfiConverterRustBuffer<List<ExtractionResults>> {
+    public static FfiConverterSequenceTypeExtractionResults INSTANCE = new FfiConverterSequenceTypeExtractionResults();
+
+    public override List<ExtractionResults> Read(BigEndianStream stream) {
+        var length = stream.ReadInt();
+        var result = new List<ExtractionResults>(length);
+        var readFn = FfiConverterTypeExtractionResults.INSTANCE.Read;
+        for (int i = 0; i < length; i++) {
+            result.Add(readFn(stream));
+        }
+        return result;
+    }
+
+    public override int AllocationSize(List<ExtractionResults> value) {
+        var sizeForLength = 4;
+
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            return sizeForLength;
+        }
+
+        var allocationSizeFn = FfiConverterTypeExtractionResults.INSTANCE.AllocationSize;
+        var sizeForItems = value.Sum(item => allocationSizeFn(item));
+        return sizeForLength + sizeForItems;
+    }
+
+    public override void Write(List<ExtractionResults> value, BigEndianStream stream) {
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            stream.WriteInt(0);
+            return;
+        }
+
+        stream.WriteInt(value.Count);
+        var writerFn = FfiConverterTypeExtractionResults.INSTANCE.Write;
+        value.ForEach(item => writerFn(item, stream));
+    }
+}
+
+
+
+
+class FfiConverterSequenceTypeFileInput: FfiConverterRustBuffer<List<FileInput>> {
+    public static FfiConverterSequenceTypeFileInput INSTANCE = new FfiConverterSequenceTypeFileInput();
+
+    public override List<FileInput> Read(BigEndianStream stream) {
+        var length = stream.ReadInt();
+        var result = new List<FileInput>(length);
+        var readFn = FfiConverterTypeFileInput.INSTANCE.Read;
+        for (int i = 0; i < length; i++) {
+            result.Add(readFn(stream));
+        }
+        return result;
+    }
+
+    public override int AllocationSize(List<FileInput> value) {
+        var sizeForLength = 4;
+
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            return sizeForLength;
+        }
+
+        var allocationSizeFn = FfiConverterTypeFileInput.INSTANCE.AllocationSize;
+        var sizeForItems = value.Sum(item => allocationSizeFn(item));
+        return sizeForLength + sizeForItems;
+    }
+
+    public override void Write(List<FileInput> value, BigEndianStream stream) {
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            stream.WriteInt(0);
+            return;
+        }
+
+        stream.WriteInt(value.Count);
+        var writerFn = FfiConverterTypeFileInput.INSTANCE.Write;
+        value.ForEach(item => writerFn(item, stream));
+    }
+}
+
+
+
+
 class FfiConverterSequenceTypeRelationshipInput: FfiConverterRustBuffer<List<RelationshipInput>> {
     public static FfiConverterSequenceTypeRelationshipInput INSTANCE = new FfiConverterSequenceTypeRelationshipInput();
 
@@ -2460,5 +3009,52 @@ class FfiConverterSequenceSequenceFloat: FfiConverterRustBuffer<List<List<float>
 }
 #pragma warning restore 8625
 internal static class CodesearchFfiMethods {
+    /// <summary>
+    /// Detect programming language from file extension
+    /// </summary>
+    public static string? DetectLanguage(string @filePath) {
+        return FfiConverterOptionalString.INSTANCE.Lift(
+    _UniffiHelpers.RustCall( (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_codesearch_ffi_fn_func_detect_language(FfiConverterString.INSTANCE.Lower(@filePath), ref _status)
+));
+    }
+
+
+    /// <summary>
+    /// Extract symbols, identifiers, and relationships from source code
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    public static ExtractionResults ExtractFile(string @content, string @filePath, string @workspaceRoot) {
+        return FfiConverterTypeExtractionResults.INSTANCE.Lift(
+    _UniffiHelpers.RustCallWithError(FfiConverterTypeCodeSearchError.INSTANCE, (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_codesearch_ffi_fn_func_extract_file(FfiConverterString.INSTANCE.Lower(@content), FfiConverterString.INSTANCE.Lower(@filePath), FfiConverterString.INSTANCE.Lower(@workspaceRoot), ref _status)
+));
+    }
+
+
+    /// <summary>
+    /// Extract from multiple files in parallel
+    ///
+    /// Returns results in same order as input files.
+    /// </summary>
+    public static List<ExtractionResults> ExtractFilesBatch(List<FileInput> @files, string @workspaceRoot) {
+        return FfiConverterSequenceTypeExtractionResults.INSTANCE.Lift(
+    _UniffiHelpers.RustCall( (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_codesearch_ffi_fn_func_extract_files_batch(FfiConverterSequenceTypeFileInput.INSTANCE.Lower(@files), FfiConverterString.INSTANCE.Lower(@workspaceRoot), ref _status)
+));
+    }
+
+
+    /// <summary>
+    /// Get list of supported programming languages
+    /// </summary>
+    public static List<string> SupportedLanguages() {
+        return FfiConverterSequenceString.INSTANCE.Lift(
+    _UniffiHelpers.RustCall( (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_codesearch_ffi_fn_func_supported_languages( ref _status)
+));
+    }
+
+
 }
 
