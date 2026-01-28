@@ -59,7 +59,7 @@ Manage the search index.
 ```
 index(operation="status")
 index(operation="full")
-index(operation="incremental")
+index(operation="refresh")
 ```
 
 ### memory
