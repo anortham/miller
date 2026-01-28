@@ -73,6 +73,21 @@ memory(operation="standup", days=1)
 memory(operation="status")
 ```
 
+### relationships
+
+Find callers, callees, and explain symbols.
+
+```
+relationships(operation="callers", symbol="functionName", limit=20)
+relationships(operation="callees", symbol="functionName", limit=20)
+relationships(operation="explain", symbol="functionName")
+```
+
+Operations:
+- **callers**: Find all symbols that call the given symbol
+- **callees**: Find all symbols that the given symbol calls
+- **explain**: Get full context including definition, callers, and callees
+
 ## Memory Types
 
 - **checkpoint**: Regular progress snapshots
