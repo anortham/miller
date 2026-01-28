@@ -12,6 +12,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../../src/Codesearch.Embeddings/Codesearch.Embeddings.csproj" />
     <ProjectReference Include="../../src/Codesearch.Interop/Codesearch.Interop.csproj" />
     <ProjectReference Include="../../src/Codesearch.Server/Codesearch.Server.csproj" />
   </ItemGroup>
