@@ -19,6 +19,7 @@ builder.Services.AddSingleton<SearchService>();
 builder.Services.AddSingleton<IndexService>();
 builder.Services.AddSingleton<MemoryService>();
 builder.Services.AddSingleton<RegistryService>();
+builder.Services.AddSingleton<CrossProjectService>();
 builder.Services.AddHostedService<FileWatcherService>();
 
 // Configure MCP server
