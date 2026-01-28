@@ -89,6 +89,14 @@ internal class SearchService : IDisposable
     }
 
     /// <summary>
+    /// Get relationship count.
+    /// </summary>
+    public ulong RelationshipCount()
+    {
+        return _engine.RelationshipCount();
+    }
+
+    /// <summary>
     /// Get symbols that call the given symbol.
     /// </summary>
     public List<uniffi.codesearch_ffi.RelationshipResult> GetCallers(string symbolId, uint limit = 50)

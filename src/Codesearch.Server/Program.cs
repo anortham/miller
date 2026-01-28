@@ -17,6 +17,7 @@ builder.Logging.AddConsole(options =>
 // Register services
 builder.Services.AddSingleton<SearchService>();
 builder.Services.AddSingleton<IndexService>();
+builder.Services.AddSingleton<ClosureService>();
 builder.Services.AddSingleton<MemoryService>();
 builder.Services.AddSingleton<RegistryService>();
 builder.Services.AddSingleton<CrossProjectService>();
