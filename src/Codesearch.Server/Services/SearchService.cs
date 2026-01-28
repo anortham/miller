@@ -1,4 +1,5 @@
 using uniffi.codesearch_ffi;
+using Codesearch.Embeddings;
 
 namespace Codesearch.Server.Services;
 
@@ -8,6 +9,7 @@ namespace Codesearch.Server.Services;
 internal class SearchService : IDisposable
 {
     private readonly CodeSearchEngine _engine;
+    private readonly EmbeddingService? _embeddingService;
     private readonly string _dbPath;
     private bool _disposed;
 
@@ -22,9 +24,10 @@ internal class SearchService : IDisposable
         _engine = new CodeSearchEngine(_dbPath);
     }
 
-    public SearchService(string dbPath)
+    public SearchService(string dbPath, EmbeddingService? embeddingService = null)
     {
         _dbPath = dbPath;
+        _embeddingService = embeddingService;
         var dir = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(dir))
         {
@@ -43,6 +46,41 @@ internal class SearchService : IDisposable
     {
         return _engine.SearchTextBoosted(query, limit);
     }
+
+    /// <summary>
+    /// Search using semantic similarity only.
+    /// </summary>
+    public List<SearchResultOutput> SearchSemantic(string query, int limit = 20)
+    {
+        if (_embeddingService == null || !_embeddingService.IsReady)
+        {
+            throw new InvalidOperationException("Embedding service not available. Use SearchText instead.");
+        }
+
+        var queryVector = _embeddingService.EmbedQuery(query).ToList();
+        return _engine.SearchVector(queryVector, (uint)limit);
+    }
+
+    /// <summary>
+    /// Search using hybrid mode (text + semantic with RRF fusion).
+    /// Falls back to text-only if embeddings unavailable.
+    /// </summary>
+    public List<SearchResultOutput> SearchHybrid(string query, int limit = 20)
+    {
+        if (_embeddingService == null || !_embeddingService.IsReady)
+        {
+            // Graceful fallback to text search
+            return SearchText(query, (uint)limit);
+        }
+
+        var queryVector = _embeddingService.EmbedQuery(query).ToList();
+        return _engine.SearchHybridBoosted(query, queryVector, (uint)limit);
+    }
+
+    /// <summary>
+    /// Check if semantic search is available.
+    /// </summary>
+    public bool IsSemanticSearchAvailable => _embeddingService?.IsReady ?? false;
 
     public List<SearchResultOutput> SearchVector(List<float> queryVector, uint limit = 20)
     {
