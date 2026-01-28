@@ -1,7 +1,7 @@
 //! Core search engine wrapping LanceDB
 
 use crate::boosting::apply_boosts;
-use crate::schema::{symbols_schema, Symbol, TABLE_NAME, VECTOR_DIMENSION};
+use crate::schema::{symbols_schema, relationships_schema, Symbol, TABLE_NAME, RELATIONSHIPS_TABLE_NAME, VECTOR_DIMENSION};
 use crate::search::{distance_to_score, SearchResult};
 use crate::{Error, Result};
 use arrow::array::{Array, ArrayRef, FixedSizeListArray, Float32Array, Int32Array, StringBuilder};
@@ -13,6 +13,17 @@ use lancedb::query::{ExecutableQuery, QueryBase};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+
+/// Input for adding a relationship to the database
+#[derive(Debug, Clone)]
+pub struct RelationshipInput {
+    pub from_symbol_id: String,
+    pub to_symbol_id: String,
+    pub kind: String,
+    pub file_path: String,
+    pub line_number: u32,
+    pub confidence: f32,
+}
 
 /// The main search engine struct
 pub struct CodeEngine {
@@ -120,6 +131,66 @@ impl CodeEngine {
         }
 
         let table = self.db.open_table(TABLE_NAME).execute().await?;
+        let count = table.count_rows(None).await?;
+        Ok(count)
+    }
+
+    /// Add relationships to the database
+    pub async fn add_relationships(&self, relationships: Vec<RelationshipInput>) -> Result<usize> {
+        if relationships.is_empty() {
+            return Ok(0);
+        }
+
+        let count = relationships.len();
+
+        // Build arrays
+        let from_ids: Vec<&str> = relationships.iter().map(|r| r.from_symbol_id.as_str()).collect();
+        let to_ids: Vec<&str> = relationships.iter().map(|r| r.to_symbol_id.as_str()).collect();
+        let kinds: Vec<&str> = relationships.iter().map(|r| r.kind.as_str()).collect();
+        let paths: Vec<&str> = relationships.iter().map(|r| r.file_path.as_str()).collect();
+        let lines: Vec<u32> = relationships.iter().map(|r| r.line_number).collect();
+        let confidences: Vec<f32> = relationships.iter().map(|r| r.confidence).collect();
+
+        let batch = RecordBatch::try_new(
+            relationships_schema(),
+            vec![
+                Arc::new(StringArray::from(from_ids)) as ArrayRef,
+                Arc::new(StringArray::from(to_ids)) as ArrayRef,
+                Arc::new(StringArray::from(kinds)) as ArrayRef,
+                Arc::new(StringArray::from(paths)) as ArrayRef,
+                Arc::new(arrow::array::UInt32Array::from(lines)) as ArrayRef,
+                Arc::new(Float32Array::from(confidences)) as ArrayRef,
+            ],
+        )?;
+
+        let schema = relationships_schema();
+        let batch_reader = RecordBatchIterator::new(vec![Ok(batch)], schema);
+
+        // Check if table exists
+        let table_names = self.db.table_names().execute().await?;
+
+        if table_names.contains(&RELATIONSHIPS_TABLE_NAME.to_string()) {
+            let table = self.db.open_table(RELATIONSHIPS_TABLE_NAME).execute().await?;
+            table.add(Box::new(batch_reader)).execute().await?;
+        } else {
+            self.db
+                .create_table(RELATIONSHIPS_TABLE_NAME, Box::new(batch_reader))
+                .execute()
+                .await?;
+        }
+
+        Ok(count)
+    }
+
+    /// Get the count of relationships in the database
+    pub async fn relationship_count(&self) -> Result<usize> {
+        let table_names = self.db.table_names().execute().await?;
+
+        if !table_names.contains(&RELATIONSHIPS_TABLE_NAME.to_string()) {
+            return Ok(0);
+        }
+
+        let table = self.db.open_table(RELATIONSHIPS_TABLE_NAME).execute().await?;
         let count = table.count_rows(None).await?;
         Ok(count)
     }
