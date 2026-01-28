@@ -153,6 +153,70 @@ internal partial class MemoryService
         };
     }
 
+    /// <summary>
+    /// Recall memories from a specific project path.
+    /// </summary>
+    public async Task<RecallResult> RecallFromPathAsync(
+        string projectPath,
+        MemoryType? type = null,
+        List<string>? tags = null,
+        int? days = null,
+        int limit = 20)
+    {
+        var memoriesDir = Path.Combine(projectPath, ".memories");
+        var entries = new List<MemoryEntry>();
+
+        if (!Directory.Exists(memoriesDir))
+        {
+            return new RecallResult { Entries = entries, TotalCount = 0 };
+        }
+
+        var sinceTimestamp = days.HasValue
+            ? DateTimeOffset.UtcNow.AddDays(-days.Value).ToUnixTimeSeconds()
+            : 0;
+        var untilTimestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+        var memoryFiles = Directory.EnumerateFiles(memoriesDir, "*.md", SearchOption.AllDirectories)
+            .OrderByDescending(f => File.GetLastWriteTimeUtc(f));
+
+        foreach (var file in memoryFiles)
+        {
+            try
+            {
+                var content = await File.ReadAllTextAsync(file);
+                var (metadata, body) = FrontmatterParser.Parse(content);
+
+                if (type.HasValue && metadata.Type != type.Value) continue;
+                if (metadata.Timestamp < sinceTimestamp || metadata.Timestamp > untilTimestamp) continue;
+                if (tags != null && tags.Count > 0)
+                {
+                    var normalizedTags = NormalizeTags(tags);
+                    if (!normalizedTags.Any(t => metadata.Tags.Contains(t))) continue;
+                }
+
+                var relativePath = Path.GetRelativePath(projectPath, file).Replace('\\', '/');
+                entries.Add(new MemoryEntry
+                {
+                    Metadata = metadata,
+                    Content = body,
+                    FilePath = relativePath
+                });
+
+                if (entries.Count >= limit) break;
+            }
+            catch
+            {
+                // Skip malformed files
+            }
+        }
+
+        return new RecallResult
+        {
+            Entries = entries,
+            TotalCount = entries.Count
+        };
+    }
+
     private string GenerateMemoryId(MemoryType type)
     {
         var rand1 = RandomNumberGenerator.GetHexString(8);
