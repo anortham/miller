@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__codesearch__search",
+      "mcp__codesearch__index",
+      "mcp__codesearch__memory"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
