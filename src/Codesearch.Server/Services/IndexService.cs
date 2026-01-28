@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using uniffi.codesearch_ffi;
+using Codesearch.Server.Memory;
 
 namespace Codesearch.Server.Services;
 
@@ -20,6 +21,11 @@ internal class IndexService
         ".sh", ".bash", ".ps1", ".zig", ".html", ".css", ".vue", ".qml",
         ".gd", ".cshtml", ".razor", ".sql", ".md", ".json", ".toml", ".yaml", ".yml"
     };
+
+    private static bool IsMemoryFile(string path)
+    {
+        return path.Contains(".memories") && path.EndsWith(".md");
+    }
 
     public IndexService(SearchService searchService)
     {
@@ -136,18 +142,53 @@ internal class IndexService
         var content = await File.ReadAllTextAsync(absolutePath);
         var extension = Path.GetExtension(relativePath).TrimStart('.');
 
-        // Create symbol with placeholder vector (real embeddings would come from ONNX model)
+        string embedContent;
+        string name;
+        string kind;
+
+        // Special handling for memory files - strip frontmatter, prepend tags
+        if (IsMemoryFile(relativePath))
+        {
+            try
+            {
+                var (metadata, body) = FrontmatterParser.Parse(content);
+                var tagPrefix = metadata.Tags.Count > 0 ? string.Join(" ", metadata.Tags) + " " : "";
+                embedContent = tagPrefix + body;
+                name = Path.GetFileName(relativePath);
+                kind = metadata.Type.ToString().ToLowerInvariant();
+            }
+            catch
+            {
+                // Fallback if parsing fails
+                embedContent = content;
+                name = Path.GetFileName(relativePath);
+                kind = "memory";
+            }
+        }
+        else
+        {
+            embedContent = content;
+            name = Path.GetFileName(relativePath);
+            kind = "file";
+        }
+
+        // Truncate content for embedding
+        if (embedContent.Length > 4096)
+        {
+            embedContent = embedContent[..4096];
+        }
+
         var symbol = new SymbolInput(
             id: $"file_{Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(relativePath)))[..16]}",
-            name: Path.GetFileName(relativePath),
-            kind: "file",
+            name: name,
+            kind: kind,
             language: extension,
             filePath: relativePath.Replace('\\', '/'),
             signature: null,
             docComment: null,
             startLine: 1,
             endLine: content.Split('\n').Length,
-            content: content.Length > 4096 ? content[..4096] : content
+            content: embedContent
         );
 
         // Placeholder vector (768 zeros)
