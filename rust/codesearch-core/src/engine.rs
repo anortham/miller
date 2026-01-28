@@ -25,6 +25,17 @@ pub struct RelationshipInput {
     pub confidence: f32,
 }
 
+/// Result of a relationship query
+#[derive(Debug, Clone)]
+pub struct RelationshipResult {
+    pub from_symbol_id: String,
+    pub to_symbol_id: String,
+    pub kind: String,
+    pub file_path: String,
+    pub line_number: u32,
+    pub confidence: f32,
+}
+
 /// The main search engine struct
 pub struct CodeEngine {
     db: Arc<lancedb::Connection>,
@@ -193,6 +204,144 @@ impl CodeEngine {
         let table = self.db.open_table(RELATIONSHIPS_TABLE_NAME).execute().await?;
         let count = table.count_rows(None).await?;
         Ok(count)
+    }
+
+    /// Get symbols that call the given symbol (reverse lookup)
+    pub async fn get_callers(&self, symbol_id: &str, limit: usize) -> Result<Vec<RelationshipResult>> {
+        self.query_relationships_by_target(symbol_id, "Calls", limit).await
+    }
+
+    /// Get symbols that the given symbol calls (forward lookup)
+    pub async fn get_callees(&self, symbol_id: &str, limit: usize) -> Result<Vec<RelationshipResult>> {
+        self.query_relationships_by_source(symbol_id, "Calls", limit).await
+    }
+
+    /// Get all relationships for a symbol (both directions)
+    pub async fn get_relationships(&self, symbol_id: &str, limit: usize) -> Result<Vec<RelationshipResult>> {
+        let table_names = self.db.table_names().execute().await?;
+
+        if !table_names.contains(&RELATIONSHIPS_TABLE_NAME.to_string()) {
+            return Ok(Vec::new());
+        }
+
+        let table = self.db.open_table(RELATIONSHIPS_TABLE_NAME).execute().await?;
+
+        // Query for relationships where symbol is source OR target
+        let escaped_id = symbol_id.replace('\'', "''");
+        let filter = format!(
+            "from_symbol_id = '{}' OR to_symbol_id = '{}'",
+            escaped_id, escaped_id
+        );
+
+        let stream = table
+            .query()
+            .only_if(filter)
+            .limit(limit)
+            .execute()
+            .await?;
+
+        let batches: Vec<RecordBatch> = stream.try_collect().await?;
+        self.batches_to_relationships(batches)
+    }
+
+    /// Query relationships where symbol_id is the target (for callers)
+    async fn query_relationships_by_target(
+        &self,
+        symbol_id: &str,
+        kind: &str,
+        limit: usize,
+    ) -> Result<Vec<RelationshipResult>> {
+        let table_names = self.db.table_names().execute().await?;
+
+        if !table_names.contains(&RELATIONSHIPS_TABLE_NAME.to_string()) {
+            return Ok(Vec::new());
+        }
+
+        let table = self.db.open_table(RELATIONSHIPS_TABLE_NAME).execute().await?;
+
+        let escaped_id = symbol_id.replace('\'', "''");
+        let escaped_kind = kind.replace('\'', "''");
+        let filter = format!(
+            "to_symbol_id = '{}' AND kind = '{}'",
+            escaped_id, escaped_kind
+        );
+
+        let stream = table
+            .query()
+            .only_if(filter)
+            .limit(limit)
+            .execute()
+            .await?;
+
+        let batches: Vec<RecordBatch> = stream.try_collect().await?;
+        self.batches_to_relationships(batches)
+    }
+
+    /// Query relationships where symbol_id is the source (for callees)
+    async fn query_relationships_by_source(
+        &self,
+        symbol_id: &str,
+        kind: &str,
+        limit: usize,
+    ) -> Result<Vec<RelationshipResult>> {
+        let table_names = self.db.table_names().execute().await?;
+
+        if !table_names.contains(&RELATIONSHIPS_TABLE_NAME.to_string()) {
+            return Ok(Vec::new());
+        }
+
+        let table = self.db.open_table(RELATIONSHIPS_TABLE_NAME).execute().await?;
+
+        let escaped_id = symbol_id.replace('\'', "''");
+        let escaped_kind = kind.replace('\'', "''");
+        let filter = format!(
+            "from_symbol_id = '{}' AND kind = '{}'",
+            escaped_id, escaped_kind
+        );
+
+        let stream = table
+            .query()
+            .only_if(filter)
+            .limit(limit)
+            .execute()
+            .await?;
+
+        let batches: Vec<RecordBatch> = stream.try_collect().await?;
+        self.batches_to_relationships(batches)
+    }
+
+    /// Convert record batches to RelationshipResult vector
+    fn batches_to_relationships(&self, batches: Vec<RecordBatch>) -> Result<Vec<RelationshipResult>> {
+        let mut results = Vec::new();
+
+        for batch in batches {
+            let from_ids = Self::get_required_string_column(&batch, "from_symbol_id")?;
+            let to_ids = Self::get_required_string_column(&batch, "to_symbol_id")?;
+            let kinds = Self::get_required_string_column(&batch, "kind")?;
+            let paths = Self::get_required_string_column(&batch, "file_path")?;
+
+            let lines = batch
+                .column_by_name("line_number")
+                .ok_or_else(|| Error::Validation("missing 'line_number' column".to_string()))?
+                .as_any()
+                .downcast_ref::<arrow::array::UInt32Array>()
+                .ok_or_else(|| Error::Validation("'line_number' column is not a uint32 array".to_string()))?;
+
+            let confidences = Self::get_required_float_column(&batch, "confidence")?;
+
+            for i in 0..batch.num_rows() {
+                results.push(RelationshipResult {
+                    from_symbol_id: from_ids.value(i).to_string(),
+                    to_symbol_id: to_ids.value(i).to_string(),
+                    kind: kinds.value(i).to_string(),
+                    file_path: paths.value(i).to_string(),
+                    line_number: lines.value(i),
+                    confidence: confidences.value(i),
+                });
+            }
+        }
+
+        Ok(results)
     }
 
     /// Search for symbols by vector similarity
