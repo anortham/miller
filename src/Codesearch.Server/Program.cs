@@ -34,4 +34,10 @@ builder.Services
     .WithStdioServerTransport()
     .WithToolsFromAssembly();
 
-await builder.Build().RunAsync();
+var host = builder.Build();
+
+// Register current project in central registry
+var registry = host.Services.GetRequiredService<RegistryService>();
+registry.RegisterProject(Environment.CurrentDirectory);
+
+await host.RunAsync();
