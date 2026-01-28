@@ -158,6 +158,38 @@ internal class SearchService : IDisposable
         return _engine.GetImpacted(symbolId, maxDistance);
     }
 
+    /// <summary>
+    /// Get all references to a symbol (find usages).
+    /// </summary>
+    public List<uniffi.codesearch_ffi.ReferenceResult> GetReferences(string symbolId, uint limit = 100)
+    {
+        return _engine.GetReferences(symbolId, limit);
+    }
+
+    /// <summary>
+    /// Get a symbol by its ID (go to definition).
+    /// </summary>
+    public uniffi.codesearch_ffi.SymbolInfo? GetSymbolById(string symbolId)
+    {
+        return _engine.GetSymbolById(symbolId);
+    }
+
+    /// <summary>
+    /// Get all symbols in a file.
+    /// </summary>
+    public List<uniffi.codesearch_ffi.SymbolInfo> GetSymbolsByFile(string filePath, uint limit = 1000)
+    {
+        return _engine.GetSymbolsByFile(filePath, limit);
+    }
+
+    /// <summary>
+    /// Get all symbols of a specific kind.
+    /// </summary>
+    public List<uniffi.codesearch_ffi.SymbolInfo> GetSymbolsByKind(string kind, uint limit = 1000)
+    {
+        return _engine.GetSymbolsByKind(kind, limit);
+    }
+
     public void Dispose()
     {
         if (!_disposed)
