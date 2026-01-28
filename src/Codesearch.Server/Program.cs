@@ -1,23 +1,31 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
+using Serilog;
 using Codesearch.Embeddings;
 using Codesearch.Server.Memory;
 using Codesearch.Server.Registry;
 using Codesearch.Server.Services;
 
-var builder = Host.CreateApplicationBuilder(args);
-
-// Log to stderr (MCP uses stdout for protocol)
-builder.Logging.AddConsole(options =>
-{
-    options.LogToStandardErrorThreshold = LogLevel.Trace;
-});
-
 // Get workspace path (current directory)
 var workspacePath = Environment.CurrentDirectory;
 var dbPath = Path.Combine(workspacePath, ".codesearch", "index.lance");
+var logsPath = Path.Combine(workspacePath, ".codesearch", "logs");
+Directory.CreateDirectory(logsPath);
+
+// Configure Serilog with daily rolling file + stderr console
+Log.Logger = new LoggerConfiguration()
+    .MinimumLevel.Information()
+    .WriteTo.Console(standardErrorFromLevel: Serilog.Events.LogEventLevel.Verbose)
+    .WriteTo.File(
+        Path.Combine(logsPath, "codesearch-.log"),
+        rollingInterval: RollingInterval.Day,
+        retainedFileCountLimit: 14,
+        outputTemplate: "{Timestamp:HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}")
+    .CreateLogger();
+
+var builder = Host.CreateApplicationBuilder(args);
+builder.Services.AddSerilog();
 
 // Register services with factory methods for non-DI parameters
 builder.Services.AddSingleton<EmbeddingService>(sp =>
