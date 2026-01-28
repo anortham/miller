@@ -252,6 +252,57 @@ impl From<JulieRelationship> for ExtractedRelationship {
     }
 }
 
+// =============================================================================
+// Extraction Functions (freestanding UniFFI exports)
+// =============================================================================
+
+/// Extract symbols, identifiers, and relationships from source code
+#[uniffi::export]
+pub fn extract_file(
+    content: String,
+    file_path: String,
+    workspace_root: String,
+) -> Result<ExtractionResults, CodeSearchError> {
+    let manager = ExtractorManager::new();
+    let workspace_path = Path::new(&workspace_root);
+
+    // Extract symbols
+    let symbols = manager
+        .extract_symbols(&file_path, &content, workspace_path)
+        .map_err(|e| CodeSearchError::Runtime(format!("Symbol extraction failed: {}", e)))?;
+
+    // Extract identifiers
+    let identifiers = manager
+        .extract_identifiers(&file_path, &content, &symbols)
+        .map_err(|e| CodeSearchError::Runtime(format!("Identifier extraction failed: {}", e)))?;
+
+    // Extract relationships
+    let relationships = manager
+        .extract_relationships(&file_path, &content, &symbols)
+        .map_err(|e| CodeSearchError::Runtime(format!("Relationship extraction failed: {}", e)))?;
+
+    Ok(ExtractionResults {
+        symbols: symbols.into_iter().map(ExtractedSymbol::from).collect(),
+        identifiers: identifiers.into_iter().map(ExtractedIdentifier::from).collect(),
+        relationships: relationships.into_iter().map(ExtractedRelationship::from).collect(),
+    })
+}
+
+/// Detect programming language from file extension
+#[uniffi::export]
+pub fn detect_language(file_path: String) -> Option<String> {
+    let path = Path::new(&file_path);
+    let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
+    detect_language_from_extension(extension).map(|s| s.to_string())
+}
+
+/// Get list of supported programming languages
+#[uniffi::export]
+pub fn supported_languages() -> Vec<String> {
+    let manager = ExtractorManager::new();
+    manager.supported_languages().iter().map(|&s| s.to_string()).collect()
+}
+
 /// FFI-safe wrapper around CodeEngine
 #[derive(uniffi::Object)]
 pub struct CodeSearchEngine {
