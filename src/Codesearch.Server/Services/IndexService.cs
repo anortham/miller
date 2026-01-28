@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using uniffi.codesearch_ffi;
 using Codesearch.Server.Memory;
+using Codesearch.Embeddings;
 
 namespace Codesearch.Server.Services;
 
@@ -10,6 +11,7 @@ namespace Codesearch.Server.Services;
 internal class IndexService
 {
     private readonly SearchService _searchService;
+    private readonly EmbeddingService _embeddingService;
     private readonly Dictionary<string, string> _fileHashes = new();
     private readonly string _workspaceRoot;
 
@@ -27,10 +29,11 @@ internal class IndexService
         return path.Contains(".memories") && path.EndsWith(".md");
     }
 
-    public IndexService(SearchService searchService)
+    public IndexService(SearchService searchService, EmbeddingService embeddingService, string workspacePath)
     {
         _searchService = searchService;
-        _workspaceRoot = Environment.CurrentDirectory;
+        _embeddingService = embeddingService;
+        _workspaceRoot = workspacePath;
     }
 
     /// <summary>
@@ -210,7 +213,9 @@ internal class IndexService
             content: embedContent
         );
 
-        var vector = Enumerable.Repeat(0.0f, 768).ToList();
+        // Generate embedding for memory file
+        var embeddingText = EmbeddingService.GetSymbolText(kind, name, null);
+        var vector = _embeddingService.EmbedDocument(embeddingText).ToList();
         _searchService.AddSymbols(new List<SymbolInput> { symbol }, new List<List<float>> { vector });
     }
 
@@ -220,7 +225,6 @@ internal class IndexService
         if (results.symbols.Count > 0)
         {
             var symbolInputs = new List<SymbolInput>();
-            var vectors = new List<List<float>>();
 
             foreach (var sym in results.symbols)
             {
@@ -245,9 +249,10 @@ internal class IndexService
                 );
 
                 symbolInputs.Add(input);
-                vectors.Add(Enumerable.Repeat(0.0f, 768).ToList());
             }
 
+            // Generate embeddings in batch
+            var vectors = GenerateEmbeddings(results.symbols);
             _searchService.AddSymbols(symbolInputs, vectors);
         }
 
@@ -291,6 +296,23 @@ internal class IndexService
         return string.Join('\n', lines.Skip(start).Take(end - start));
     }
 
+    private List<float> GenerateEmbedding(ExtractedSymbol symbol)
+    {
+        var text = EmbeddingService.GetSymbolText(symbol.kind, symbol.name, symbol.signature);
+        return _embeddingService.EmbedDocument(text).ToList();
+    }
+
+    private List<List<float>> GenerateEmbeddings(IReadOnlyList<ExtractedSymbol> symbols)
+    {
+        var texts = symbols
+            .Select(s => EmbeddingService.GetSymbolText(s.kind, s.name, s.signature))
+            .ToList();
+
+        return _embeddingService.EmbedDocuments(texts)
+            .Select(arr => arr.ToList())
+            .ToList();
+    }
+
     private void IndexFileLevel(string content, string normalizedPath)
     {
         var extension = Path.GetExtension(normalizedPath).TrimStart('.');
@@ -315,7 +337,9 @@ internal class IndexService
             content: embedContent
         );
 
-        var vector = Enumerable.Repeat(0.0f, 768).ToList();
+        // Generate embedding for file-level symbol
+        var embeddingText = EmbeddingService.GetSymbolText("file", Path.GetFileName(normalizedPath), null);
+        var vector = _embeddingService.EmbedDocument(embeddingText).ToList();
         _searchService.AddSymbols(new List<SymbolInput> { symbol }, new List<List<float>> { vector });
     }
 }
