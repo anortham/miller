@@ -763,6 +763,16 @@ static class _UniFFILib {
     
     
     
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
 
     static _UniFFILib() {
         _UniFFILib.uniffiCheckContractApiVersion();
@@ -783,6 +793,10 @@ static class _UniFFILib {
     );
 
     [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern ulong uniffi_codesearch_ffi_fn_method_codesearchengine_add_relationships(IntPtr @ptr,RustBuffer @relationships,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern ulong uniffi_codesearch_ffi_fn_method_codesearchengine_add_symbols(IntPtr @ptr,RustBuffer @symbols,RustBuffer @vectors,ref UniffiRustCallStatus _uniffi_out_err
     );
 
@@ -795,7 +809,23 @@ static class _UniFFILib {
     );
 
     [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern RustBuffer uniffi_codesearch_ffi_fn_method_codesearchengine_get_callees(IntPtr @ptr,RustBuffer @symbolId,uint @limit,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern RustBuffer uniffi_codesearch_ffi_fn_method_codesearchengine_get_callers(IntPtr @ptr,RustBuffer @symbolId,uint @limit,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern RustBuffer uniffi_codesearch_ffi_fn_method_codesearchengine_get_relationships(IntPtr @ptr,RustBuffer @symbolId,uint @limit,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern sbyte uniffi_codesearch_ffi_fn_method_codesearchengine_health_check(IntPtr @ptr,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern ulong uniffi_codesearch_ffi_fn_method_codesearchengine_relationship_count(IntPtr @ptr,ref UniffiRustCallStatus _uniffi_out_err
     );
 
     [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
@@ -1047,6 +1077,10 @@ static class _UniFFILib {
     );
 
     [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern ushort uniffi_codesearch_ffi_checksum_method_codesearchengine_add_relationships(
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern ushort uniffi_codesearch_ffi_checksum_method_codesearchengine_add_symbols(
     );
 
@@ -1059,7 +1093,23 @@ static class _UniFFILib {
     );
 
     [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern ushort uniffi_codesearch_ffi_checksum_method_codesearchengine_get_callees(
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern ushort uniffi_codesearch_ffi_checksum_method_codesearchengine_get_callers(
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern ushort uniffi_codesearch_ffi_checksum_method_codesearchengine_get_relationships(
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern ushort uniffi_codesearch_ffi_checksum_method_codesearchengine_health_check(
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern ushort uniffi_codesearch_ffi_checksum_method_codesearchengine_relationship_count(
     );
 
     [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
@@ -1105,6 +1155,12 @@ static class _UniFFILib {
 
     static void uniffiCheckApiChecksums() {
         {
+            var checksum = _UniFFILib.uniffi_codesearch_ffi_checksum_method_codesearchengine_add_relationships();
+            if (checksum != 39538) {
+                throw new UniffiContractChecksumException($"uniffi.codesearch_ffi: uniffi bindings expected function `uniffi_codesearch_ffi_checksum_method_codesearchengine_add_relationships` checksum `39538`, library returned `{checksum}`");
+            }
+        }
+        {
             var checksum = _UniFFILib.uniffi_codesearch_ffi_checksum_method_codesearchengine_add_symbols();
             if (checksum != 36398) {
                 throw new UniffiContractChecksumException($"uniffi.codesearch_ffi: uniffi bindings expected function `uniffi_codesearch_ffi_checksum_method_codesearchengine_add_symbols` checksum `36398`, library returned `{checksum}`");
@@ -1123,9 +1179,33 @@ static class _UniFFILib {
             }
         }
         {
+            var checksum = _UniFFILib.uniffi_codesearch_ffi_checksum_method_codesearchengine_get_callees();
+            if (checksum != 9095) {
+                throw new UniffiContractChecksumException($"uniffi.codesearch_ffi: uniffi bindings expected function `uniffi_codesearch_ffi_checksum_method_codesearchengine_get_callees` checksum `9095`, library returned `{checksum}`");
+            }
+        }
+        {
+            var checksum = _UniFFILib.uniffi_codesearch_ffi_checksum_method_codesearchengine_get_callers();
+            if (checksum != 6751) {
+                throw new UniffiContractChecksumException($"uniffi.codesearch_ffi: uniffi bindings expected function `uniffi_codesearch_ffi_checksum_method_codesearchengine_get_callers` checksum `6751`, library returned `{checksum}`");
+            }
+        }
+        {
+            var checksum = _UniFFILib.uniffi_codesearch_ffi_checksum_method_codesearchengine_get_relationships();
+            if (checksum != 15947) {
+                throw new UniffiContractChecksumException($"uniffi.codesearch_ffi: uniffi bindings expected function `uniffi_codesearch_ffi_checksum_method_codesearchengine_get_relationships` checksum `15947`, library returned `{checksum}`");
+            }
+        }
+        {
             var checksum = _UniFFILib.uniffi_codesearch_ffi_checksum_method_codesearchengine_health_check();
             if (checksum != 31591) {
                 throw new UniffiContractChecksumException($"uniffi.codesearch_ffi: uniffi bindings expected function `uniffi_codesearch_ffi_checksum_method_codesearchengine_health_check` checksum `31591`, library returned `{checksum}`");
+            }
+        }
+        {
+            var checksum = _UniFFILib.uniffi_codesearch_ffi_checksum_method_codesearchengine_relationship_count();
+            if (checksum != 40065) {
+                throw new UniffiContractChecksumException($"uniffi.codesearch_ffi: uniffi bindings expected function `uniffi_codesearch_ffi_checksum_method_codesearchengine_relationship_count` checksum `40065`, library returned `{checksum}`");
             }
         }
         {
@@ -1362,6 +1442,11 @@ class FfiConverterString: FfiConverter<string, RustBuffer> {
 /// </summary>
 internal interface ICodeSearchEngine {
     /// <summary>
+    /// Add relationships to the database
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    ulong AddRelationships(List<RelationshipInput> @relationships);
+    /// <summary>
     /// Add symbols with their embedding vectors to the database
     /// </summary>
     /// <exception cref="CodeSearchException"></exception>
@@ -1376,10 +1461,30 @@ internal interface ICodeSearchEngine {
     /// </summary>
     string DbPath();
     /// <summary>
+    /// Get symbols that the given symbol calls
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    List<RelationshipResult> GetCallees(string @symbolId, uint @limit);
+    /// <summary>
+    /// Get symbols that call the given symbol
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    List<RelationshipResult> GetCallers(string @symbolId, uint @limit);
+    /// <summary>
+    /// Get all relationships for a symbol
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    List<RelationshipResult> GetRelationships(string @symbolId, uint @limit);
+    /// <summary>
     /// Check if the engine is healthy
     /// </summary>
     /// <exception cref="CodeSearchException"></exception>
     bool HealthCheck();
+    /// <summary>
+    /// Get the count of relationships in the database
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    ulong RelationshipCount();
     /// <summary>
     /// Search for symbols using hybrid search (FTS + vector combined with RRF)
     /// </summary>
@@ -1512,6 +1617,18 @@ internal class CodeSearchEngine : ICodeSearchEngine, IDisposable {
 
     
     /// <summary>
+    /// Add relationships to the database
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    public ulong AddRelationships(List<RelationshipInput> @relationships) {
+        return CallWithPointer(thisPtr => FfiConverterUInt64.INSTANCE.Lift(
+    _UniffiHelpers.RustCallWithError(FfiConverterTypeCodeSearchError.INSTANCE, (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_codesearch_ffi_fn_method_codesearchengine_add_relationships(thisPtr, FfiConverterSequenceTypeRelationshipInput.INSTANCE.Lower(@relationships), ref _status)
+)));
+    }
+    
+    
+    /// <summary>
     /// Add symbols with their embedding vectors to the database
     /// </summary>
     /// <exception cref="CodeSearchException"></exception>
@@ -1548,6 +1665,42 @@ internal class CodeSearchEngine : ICodeSearchEngine, IDisposable {
     
     
     /// <summary>
+    /// Get symbols that the given symbol calls
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    public List<RelationshipResult> GetCallees(string @symbolId, uint @limit) {
+        return CallWithPointer(thisPtr => FfiConverterSequenceTypeRelationshipResult.INSTANCE.Lift(
+    _UniffiHelpers.RustCallWithError(FfiConverterTypeCodeSearchError.INSTANCE, (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_codesearch_ffi_fn_method_codesearchengine_get_callees(thisPtr, FfiConverterString.INSTANCE.Lower(@symbolId), FfiConverterUInt32.INSTANCE.Lower(@limit), ref _status)
+)));
+    }
+    
+    
+    /// <summary>
+    /// Get symbols that call the given symbol
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    public List<RelationshipResult> GetCallers(string @symbolId, uint @limit) {
+        return CallWithPointer(thisPtr => FfiConverterSequenceTypeRelationshipResult.INSTANCE.Lift(
+    _UniffiHelpers.RustCallWithError(FfiConverterTypeCodeSearchError.INSTANCE, (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_codesearch_ffi_fn_method_codesearchengine_get_callers(thisPtr, FfiConverterString.INSTANCE.Lower(@symbolId), FfiConverterUInt32.INSTANCE.Lower(@limit), ref _status)
+)));
+    }
+    
+    
+    /// <summary>
+    /// Get all relationships for a symbol
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    public List<RelationshipResult> GetRelationships(string @symbolId, uint @limit) {
+        return CallWithPointer(thisPtr => FfiConverterSequenceTypeRelationshipResult.INSTANCE.Lift(
+    _UniffiHelpers.RustCallWithError(FfiConverterTypeCodeSearchError.INSTANCE, (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_codesearch_ffi_fn_method_codesearchengine_get_relationships(thisPtr, FfiConverterString.INSTANCE.Lower(@symbolId), FfiConverterUInt32.INSTANCE.Lower(@limit), ref _status)
+)));
+    }
+    
+    
+    /// <summary>
     /// Check if the engine is healthy
     /// </summary>
     /// <exception cref="CodeSearchException"></exception>
@@ -1555,6 +1708,18 @@ internal class CodeSearchEngine : ICodeSearchEngine, IDisposable {
         return CallWithPointer(thisPtr => FfiConverterBoolean.INSTANCE.Lift(
     _UniffiHelpers.RustCallWithError(FfiConverterTypeCodeSearchError.INSTANCE, (ref UniffiRustCallStatus _status) =>
     _UniFFILib.uniffi_codesearch_ffi_fn_method_codesearchengine_health_check(thisPtr,  ref _status)
+)));
+    }
+    
+    
+    /// <summary>
+    /// Get the count of relationships in the database
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    public ulong RelationshipCount() {
+        return CallWithPointer(thisPtr => FfiConverterUInt64.INSTANCE.Lift(
+    _UniffiHelpers.RustCallWithError(FfiConverterTypeCodeSearchError.INSTANCE, (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_codesearch_ffi_fn_method_codesearchengine_relationship_count(thisPtr,  ref _status)
 )));
     }
     
@@ -1656,6 +1821,104 @@ class FfiConverterTypeCodeSearchEngine: FfiConverter<CodeSearchEngine, IntPtr> {
 
     public override void Write(CodeSearchEngine value, BigEndianStream stream) {
         stream.WriteLong(Lower(value).ToInt64());
+    }
+}
+
+
+
+/// <summary>
+/// FFI-safe relationship input
+/// </summary>
+internal record RelationshipInput (
+    string @fromSymbolId, 
+    string @toSymbolId, 
+    string @kind, 
+    string @filePath, 
+    uint @lineNumber, 
+    float @confidence
+) {
+}
+
+class FfiConverterTypeRelationshipInput: FfiConverterRustBuffer<RelationshipInput> {
+    public static FfiConverterTypeRelationshipInput INSTANCE = new FfiConverterTypeRelationshipInput();
+
+    public override RelationshipInput Read(BigEndianStream stream) {
+        return new RelationshipInput(
+            @fromSymbolId: FfiConverterString.INSTANCE.Read(stream),
+            @toSymbolId: FfiConverterString.INSTANCE.Read(stream),
+            @kind: FfiConverterString.INSTANCE.Read(stream),
+            @filePath: FfiConverterString.INSTANCE.Read(stream),
+            @lineNumber: FfiConverterUInt32.INSTANCE.Read(stream),
+            @confidence: FfiConverterFloat.INSTANCE.Read(stream)
+        );
+    }
+
+    public override int AllocationSize(RelationshipInput value) {
+        return 0
+            + FfiConverterString.INSTANCE.AllocationSize(value.@fromSymbolId)
+            + FfiConverterString.INSTANCE.AllocationSize(value.@toSymbolId)
+            + FfiConverterString.INSTANCE.AllocationSize(value.@kind)
+            + FfiConverterString.INSTANCE.AllocationSize(value.@filePath)
+            + FfiConverterUInt32.INSTANCE.AllocationSize(value.@lineNumber)
+            + FfiConverterFloat.INSTANCE.AllocationSize(value.@confidence);
+    }
+
+    public override void Write(RelationshipInput value, BigEndianStream stream) {
+            FfiConverterString.INSTANCE.Write(value.@fromSymbolId, stream);
+            FfiConverterString.INSTANCE.Write(value.@toSymbolId, stream);
+            FfiConverterString.INSTANCE.Write(value.@kind, stream);
+            FfiConverterString.INSTANCE.Write(value.@filePath, stream);
+            FfiConverterUInt32.INSTANCE.Write(value.@lineNumber, stream);
+            FfiConverterFloat.INSTANCE.Write(value.@confidence, stream);
+    }
+}
+
+
+
+/// <summary>
+/// FFI-safe relationship result
+/// </summary>
+internal record RelationshipResult (
+    string @fromSymbolId, 
+    string @toSymbolId, 
+    string @kind, 
+    string @filePath, 
+    uint @lineNumber, 
+    float @confidence
+) {
+}
+
+class FfiConverterTypeRelationshipResult: FfiConverterRustBuffer<RelationshipResult> {
+    public static FfiConverterTypeRelationshipResult INSTANCE = new FfiConverterTypeRelationshipResult();
+
+    public override RelationshipResult Read(BigEndianStream stream) {
+        return new RelationshipResult(
+            @fromSymbolId: FfiConverterString.INSTANCE.Read(stream),
+            @toSymbolId: FfiConverterString.INSTANCE.Read(stream),
+            @kind: FfiConverterString.INSTANCE.Read(stream),
+            @filePath: FfiConverterString.INSTANCE.Read(stream),
+            @lineNumber: FfiConverterUInt32.INSTANCE.Read(stream),
+            @confidence: FfiConverterFloat.INSTANCE.Read(stream)
+        );
+    }
+
+    public override int AllocationSize(RelationshipResult value) {
+        return 0
+            + FfiConverterString.INSTANCE.AllocationSize(value.@fromSymbolId)
+            + FfiConverterString.INSTANCE.AllocationSize(value.@toSymbolId)
+            + FfiConverterString.INSTANCE.AllocationSize(value.@kind)
+            + FfiConverterString.INSTANCE.AllocationSize(value.@filePath)
+            + FfiConverterUInt32.INSTANCE.AllocationSize(value.@lineNumber)
+            + FfiConverterFloat.INSTANCE.AllocationSize(value.@confidence);
+    }
+
+    public override void Write(RelationshipResult value, BigEndianStream stream) {
+            FfiConverterString.INSTANCE.Write(value.@fromSymbolId, stream);
+            FfiConverterString.INSTANCE.Write(value.@toSymbolId, stream);
+            FfiConverterString.INSTANCE.Write(value.@kind, stream);
+            FfiConverterString.INSTANCE.Write(value.@filePath, stream);
+            FfiConverterUInt32.INSTANCE.Write(value.@lineNumber, stream);
+            FfiConverterFloat.INSTANCE.Write(value.@confidence, stream);
     }
 }
 
@@ -1982,6 +2245,90 @@ class FfiConverterSequenceFloat: FfiConverterRustBuffer<List<float>> {
 
         stream.WriteInt(value.Count);
         var writerFn = FfiConverterFloat.INSTANCE.Write;
+        value.ForEach(item => writerFn(item, stream));
+    }
+}
+
+
+
+
+class FfiConverterSequenceTypeRelationshipInput: FfiConverterRustBuffer<List<RelationshipInput>> {
+    public static FfiConverterSequenceTypeRelationshipInput INSTANCE = new FfiConverterSequenceTypeRelationshipInput();
+
+    public override List<RelationshipInput> Read(BigEndianStream stream) {
+        var length = stream.ReadInt();
+        var result = new List<RelationshipInput>(length);
+        var readFn = FfiConverterTypeRelationshipInput.INSTANCE.Read;
+        for (int i = 0; i < length; i++) {
+            result.Add(readFn(stream));
+        }
+        return result;
+    }
+
+    public override int AllocationSize(List<RelationshipInput> value) {
+        var sizeForLength = 4;
+
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            return sizeForLength;
+        }
+
+        var allocationSizeFn = FfiConverterTypeRelationshipInput.INSTANCE.AllocationSize;
+        var sizeForItems = value.Sum(item => allocationSizeFn(item));
+        return sizeForLength + sizeForItems;
+    }
+
+    public override void Write(List<RelationshipInput> value, BigEndianStream stream) {
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            stream.WriteInt(0);
+            return;
+        }
+
+        stream.WriteInt(value.Count);
+        var writerFn = FfiConverterTypeRelationshipInput.INSTANCE.Write;
+        value.ForEach(item => writerFn(item, stream));
+    }
+}
+
+
+
+
+class FfiConverterSequenceTypeRelationshipResult: FfiConverterRustBuffer<List<RelationshipResult>> {
+    public static FfiConverterSequenceTypeRelationshipResult INSTANCE = new FfiConverterSequenceTypeRelationshipResult();
+
+    public override List<RelationshipResult> Read(BigEndianStream stream) {
+        var length = stream.ReadInt();
+        var result = new List<RelationshipResult>(length);
+        var readFn = FfiConverterTypeRelationshipResult.INSTANCE.Read;
+        for (int i = 0; i < length; i++) {
+            result.Add(readFn(stream));
+        }
+        return result;
+    }
+
+    public override int AllocationSize(List<RelationshipResult> value) {
+        var sizeForLength = 4;
+
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            return sizeForLength;
+        }
+
+        var allocationSizeFn = FfiConverterTypeRelationshipResult.INSTANCE.AllocationSize;
+        var sizeForItems = value.Sum(item => allocationSizeFn(item));
+        return sizeForLength + sizeForItems;
+    }
+
+    public override void Write(List<RelationshipResult> value, BigEndianStream stream) {
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            stream.WriteInt(0);
+            return;
+        }
+
+        stream.WriteInt(value.Count);
+        var writerFn = FfiConverterTypeRelationshipResult.INSTANCE.Write;
         value.ForEach(item => writerFn(item, stream));
     }
 }

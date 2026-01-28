@@ -64,6 +64,38 @@ internal class SearchService : IDisposable
         return _engine.AddSymbols(symbols, vectors);
     }
 
+    /// <summary>
+    /// Add relationships to the database.
+    /// </summary>
+    public ulong AddRelationships(List<uniffi.codesearch_ffi.RelationshipInput> relationships)
+    {
+        return _engine.AddRelationships(relationships);
+    }
+
+    /// <summary>
+    /// Get symbols that call the given symbol.
+    /// </summary>
+    public List<uniffi.codesearch_ffi.RelationshipResult> GetCallers(string symbolId, uint limit = 50)
+    {
+        return _engine.GetCallers(symbolId, limit);
+    }
+
+    /// <summary>
+    /// Get symbols that the given symbol calls.
+    /// </summary>
+    public List<uniffi.codesearch_ffi.RelationshipResult> GetCallees(string symbolId, uint limit = 50)
+    {
+        return _engine.GetCallees(symbolId, limit);
+    }
+
+    /// <summary>
+    /// Get all relationships for a symbol.
+    /// </summary>
+    public List<uniffi.codesearch_ffi.RelationshipResult> GetRelationships(string symbolId, uint limit = 100)
+    {
+        return _engine.GetRelationships(symbolId, limit);
+    }
+
     public void Dispose()
     {
         if (!_disposed)
