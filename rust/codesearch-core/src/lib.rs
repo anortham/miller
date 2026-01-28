@@ -8,7 +8,7 @@ pub mod schema;
 pub mod search;
 
 pub use boosting::{apply_boosts, boost_by_field_match, boost_by_kind, boost_by_position};
-pub use engine::{CodeEngine, RelationshipInput, RelationshipResult};
+pub use engine::{CodeEngine, IdentifierInput, RelationshipInput, RelationshipResult};
 pub use error::Error;
 pub use schema::{Symbol, SymbolKind, VECTOR_DIMENSION};
 pub use search::SearchResult;

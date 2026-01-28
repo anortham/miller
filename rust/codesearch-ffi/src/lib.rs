@@ -157,6 +157,32 @@ impl From<CoreRelationshipResult> for RelationshipResult {
     }
 }
 
+/// FFI-safe identifier input for storage
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct IdentifierInput {
+    pub name: String,
+    pub kind: String,
+    pub file_path: String,
+    pub line_number: u32,
+    pub column: u32,
+    pub source_symbol_id: Option<String>,
+    pub target_symbol_id: Option<String>,
+}
+
+impl From<IdentifierInput> for codesearch_core::IdentifierInput {
+    fn from(i: IdentifierInput) -> Self {
+        Self {
+            name: i.name,
+            kind: i.kind,
+            file_path: i.file_path,
+            line_number: i.line_number,
+            column: i.column,
+            source_symbol_id: i.source_symbol_id,
+            target_symbol_id: i.target_symbol_id,
+        }
+    }
+}
+
 // =============================================================================
 // FFI Types for julie-extractors Integration
 // =============================================================================
@@ -564,6 +590,33 @@ impl CodeSearchEngine {
                 .get_relationships(&symbol_id, limit as usize)
                 .await
                 .map(|results| results.into_iter().map(RelationshipResult::from).collect())
+                .map_err(CodeSearchError::from)
+        })
+    }
+
+    /// Add identifiers to the database
+    pub fn add_identifiers(&self, identifiers: Vec<IdentifierInput>) -> Result<u64, CodeSearchError> {
+        let inputs: Vec<codesearch_core::IdentifierInput> = identifiers
+            .into_iter()
+            .map(codesearch_core::IdentifierInput::from)
+            .collect();
+
+        self.runtime.block_on(async {
+            self.inner
+                .add_identifiers(inputs)
+                .await
+                .map(|n| n as u64)
+                .map_err(CodeSearchError::from)
+        })
+    }
+
+    /// Get identifier count
+    pub fn identifier_count(&self) -> Result<u64, CodeSearchError> {
+        self.runtime.block_on(async {
+            self.inner
+                .identifier_count()
+                .await
+                .map(|n| n as u64)
                 .map_err(CodeSearchError::from)
         })
     }
