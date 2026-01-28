@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
+using Codesearch.Embeddings;
 using Codesearch.Server.Memory;
 using Codesearch.Server.Registry;
 using Codesearch.Server.Services;
@@ -14,10 +15,50 @@ builder.Logging.AddConsole(options =>
     options.LogToStandardErrorThreshold = LogLevel.Trace;
 });
 
-// Register services
-builder.Services.AddSingleton<SearchService>();
-builder.Services.AddSingleton<IndexService>();
-builder.Services.AddSingleton<ClosureService>();
+// Get workspace path (current directory)
+var workspacePath = Environment.CurrentDirectory;
+var dbPath = Path.Combine(workspacePath, ".codesearch", "index.lance");
+
+// Register services with factory methods for non-DI parameters
+builder.Services.AddSingleton<EmbeddingService>(sp =>
+{
+    var service = new EmbeddingService();
+    // Start model download in background (non-blocking)
+    _ = Task.Run(async () =>
+    {
+        try
+        {
+            await service.EnsureReadyAsync();
+            Console.Error.WriteLine("Embedding model ready for semantic search.");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Warning: Could not load embedding model: {ex.Message}");
+            Console.Error.WriteLine("Semantic search unavailable. Text search still works.");
+        }
+    });
+    return service;
+});
+
+builder.Services.AddSingleton<SearchService>(sp =>
+{
+    var embeddingService = sp.GetRequiredService<EmbeddingService>();
+    return new SearchService(dbPath, embeddingService);
+});
+
+builder.Services.AddSingleton<IndexService>(sp =>
+{
+    var searchService = sp.GetRequiredService<SearchService>();
+    var embeddingService = sp.GetRequiredService<EmbeddingService>();
+    return new IndexService(searchService, embeddingService, workspacePath);
+});
+
+builder.Services.AddSingleton<ClosureService>(sp =>
+{
+    var searchService = sp.GetRequiredService<SearchService>();
+    return new ClosureService(searchService);
+});
+
 builder.Services.AddSingleton<MemoryService>();
 builder.Services.AddSingleton<RegistryService>();
 builder.Services.AddSingleton<CrossProjectService>();
