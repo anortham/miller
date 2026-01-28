@@ -46,11 +46,23 @@ Fast text search, semantic search, and persistent memory for AI coding assistant
 
 ### search
 
-Search for symbols in the codebase.
+Search for symbols in the codebase with text, semantic, or hybrid modes.
 
 ```
-search(query="functionName", limit=20)
+search(query="authenticate", mode="hybrid", limit=20)
+search(query="functions that handle user login", mode="semantic")
+search(query="AuthService", mode="text")
 ```
+
+Parameters:
+- **query**: Search query (required)
+- **mode**: Search mode (optional, default: "hybrid")
+  - `text`: Exact text matching (fast, precise)
+  - `semantic`: Meaning-based search (finds related concepts)
+  - `hybrid`: Combines both with rank fusion (recommended)
+- **limit**: Maximum results (optional, default: 20)
+
+Note: Semantic search requires the embedding model (~140MB, auto-downloaded on first use).
 
 ### index
 
