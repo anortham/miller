@@ -103,6 +103,22 @@ Operations:
 - **refresh-closure**: Recompute transitive closure after indexing
 - **status**: Show index statistics (symbols, relationships, identifiers)
 
+### navigate
+
+Navigate code: find references, go to definition, browse symbols.
+
+```
+navigate(operation="references", symbol="functionName", limit=50)
+navigate(operation="definition", symbol="functionName")
+navigate(operation="symbols", file="src/main.rs")
+navigate(operation="symbols", kind="function", limit=100)
+```
+
+Operations:
+- **references**: Find all places where a symbol is used
+- **definition**: Go to the definition of a symbol
+- **symbols**: Browse symbols by file or kind
+
 ## Memory Types
 
 - **checkpoint**: Regular progress snapshots
