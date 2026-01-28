@@ -112,6 +112,44 @@ internal class SearchService : IDisposable
         return _engine.GetRelationships(symbolId, limit);
     }
 
+    /// <summary>
+    /// Clear reachability table.
+    /// </summary>
+    public void ClearReachability()
+    {
+        _engine.ClearReachability();
+    }
+
+    /// <summary>
+    /// Add reachability entries in batch.
+    /// </summary>
+    public ulong AddReachabilityBatch(List<uniffi.codesearch_ffi.ReachabilityEntry> entries)
+    {
+        return _engine.AddReachabilityBatch(entries);
+    }
+
+    /// <summary>
+    /// Get all relationships of a specific kind.
+    /// </summary>
+    /// <remarks>
+    /// Note: This is a stub that returns empty - full implementation requires engine-level support
+    /// for querying all relationships without a specific symbol ID.
+    /// </remarks>
+    public List<uniffi.codesearch_ffi.RelationshipResult> GetAllRelationshipsByKind(string kind, int limit = 100000)
+    {
+        // Query relationships filtering by kind
+        // Note: This may need engine-level support. For now, return empty.
+        return new List<uniffi.codesearch_ffi.RelationshipResult>();
+    }
+
+    /// <summary>
+    /// Get impacted symbols (what breaks if I change this?).
+    /// </summary>
+    public List<uniffi.codesearch_ffi.ImpactResult> GetImpacted(string symbolId, uint maxDistance = 10)
+    {
+        return _engine.GetImpacted(symbolId, maxDistance);
+    }
+
     public void Dispose()
     {
         if (!_disposed)

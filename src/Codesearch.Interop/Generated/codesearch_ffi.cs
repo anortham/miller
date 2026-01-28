@@ -785,6 +785,12 @@ static class _UniFFILib {
     
     
     
+    
+    
+    
+    
+    
+    
 
     static _UniFFILib() {
         _UniFFILib.uniffiCheckContractApiVersion();
@@ -809,11 +815,19 @@ static class _UniFFILib {
     );
 
     [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern ulong uniffi_codesearch_ffi_fn_method_codesearchengine_add_reachability_batch(IntPtr @ptr,RustBuffer @entries,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern ulong uniffi_codesearch_ffi_fn_method_codesearchengine_add_relationships(IntPtr @ptr,RustBuffer @relationships,ref UniffiRustCallStatus _uniffi_out_err
     );
 
     [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern ulong uniffi_codesearch_ffi_fn_method_codesearchengine_add_symbols(IntPtr @ptr,RustBuffer @symbols,RustBuffer @vectors,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern void uniffi_codesearch_ffi_fn_method_codesearchengine_clear_reachability(IntPtr @ptr,ref UniffiRustCallStatus _uniffi_out_err
     );
 
     [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
@@ -830,6 +844,10 @@ static class _UniFFILib {
 
     [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern RustBuffer uniffi_codesearch_ffi_fn_method_codesearchengine_get_callers(IntPtr @ptr,RustBuffer @symbolId,uint @limit,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern RustBuffer uniffi_codesearch_ffi_fn_method_codesearchengine_get_impacted(IntPtr @ptr,RustBuffer @symbolId,uint @maxDistance,ref UniffiRustCallStatus _uniffi_out_err
     );
 
     [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
@@ -1133,11 +1151,19 @@ static class _UniFFILib {
     );
 
     [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern ushort uniffi_codesearch_ffi_checksum_method_codesearchengine_add_reachability_batch(
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern ushort uniffi_codesearch_ffi_checksum_method_codesearchengine_add_relationships(
     );
 
     [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern ushort uniffi_codesearch_ffi_checksum_method_codesearchengine_add_symbols(
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern ushort uniffi_codesearch_ffi_checksum_method_codesearchengine_clear_reachability(
     );
 
     [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
@@ -1154,6 +1180,10 @@ static class _UniFFILib {
 
     [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern ushort uniffi_codesearch_ffi_checksum_method_codesearchengine_get_callers(
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern ushort uniffi_codesearch_ffi_checksum_method_codesearchengine_get_impacted(
     );
 
     [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
@@ -1245,6 +1275,12 @@ static class _UniFFILib {
             }
         }
         {
+            var checksum = _UniFFILib.uniffi_codesearch_ffi_checksum_method_codesearchengine_add_reachability_batch();
+            if (checksum != 1875) {
+                throw new UniffiContractChecksumException($"uniffi.codesearch_ffi: uniffi bindings expected function `uniffi_codesearch_ffi_checksum_method_codesearchengine_add_reachability_batch` checksum `1875`, library returned `{checksum}`");
+            }
+        }
+        {
             var checksum = _UniFFILib.uniffi_codesearch_ffi_checksum_method_codesearchengine_add_relationships();
             if (checksum != 39538) {
                 throw new UniffiContractChecksumException($"uniffi.codesearch_ffi: uniffi bindings expected function `uniffi_codesearch_ffi_checksum_method_codesearchengine_add_relationships` checksum `39538`, library returned `{checksum}`");
@@ -1254,6 +1290,12 @@ static class _UniFFILib {
             var checksum = _UniFFILib.uniffi_codesearch_ffi_checksum_method_codesearchengine_add_symbols();
             if (checksum != 36398) {
                 throw new UniffiContractChecksumException($"uniffi.codesearch_ffi: uniffi bindings expected function `uniffi_codesearch_ffi_checksum_method_codesearchengine_add_symbols` checksum `36398`, library returned `{checksum}`");
+            }
+        }
+        {
+            var checksum = _UniFFILib.uniffi_codesearch_ffi_checksum_method_codesearchengine_clear_reachability();
+            if (checksum != 35684) {
+                throw new UniffiContractChecksumException($"uniffi.codesearch_ffi: uniffi bindings expected function `uniffi_codesearch_ffi_checksum_method_codesearchengine_clear_reachability` checksum `35684`, library returned `{checksum}`");
             }
         }
         {
@@ -1278,6 +1320,12 @@ static class _UniFFILib {
             var checksum = _UniFFILib.uniffi_codesearch_ffi_checksum_method_codesearchengine_get_callers();
             if (checksum != 6751) {
                 throw new UniffiContractChecksumException($"uniffi.codesearch_ffi: uniffi bindings expected function `uniffi_codesearch_ffi_checksum_method_codesearchengine_get_callers` checksum `6751`, library returned `{checksum}`");
+            }
+        }
+        {
+            var checksum = _UniFFILib.uniffi_codesearch_ffi_checksum_method_codesearchengine_get_impacted();
+            if (checksum != 31728) {
+                throw new UniffiContractChecksumException($"uniffi.codesearch_ffi: uniffi bindings expected function `uniffi_codesearch_ffi_checksum_method_codesearchengine_get_impacted` checksum `31728`, library returned `{checksum}`");
             }
         }
         {
@@ -1543,6 +1591,11 @@ internal interface ICodeSearchEngine {
     /// <exception cref="CodeSearchException"></exception>
     ulong AddIdentifiers(List<IdentifierInput> @identifiers);
     /// <summary>
+    /// Add reachability entries in batch
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    ulong AddReachabilityBatch(List<ReachabilityEntry> @entries);
+    /// <summary>
     /// Add relationships to the database
     /// </summary>
     /// <exception cref="CodeSearchException"></exception>
@@ -1552,6 +1605,11 @@ internal interface ICodeSearchEngine {
     /// </summary>
     /// <exception cref="CodeSearchException"></exception>
     ulong AddSymbols(List<SymbolInput> @symbols, List<List<float>> @vectors);
+    /// <summary>
+    /// Clear reachability table
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    void ClearReachability();
     /// <summary>
     /// Create a full-text search index on the code_pattern field
     /// </summary>
@@ -1571,6 +1629,11 @@ internal interface ICodeSearchEngine {
     /// </summary>
     /// <exception cref="CodeSearchException"></exception>
     List<RelationshipResult> GetCallers(string @symbolId, uint @limit);
+    /// <summary>
+    /// Get impacted symbols (what breaks if I change this?)
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    List<ImpactResult> GetImpacted(string @symbolId, uint @maxDistance);
     /// <summary>
     /// Get all relationships for a symbol
     /// </summary>
@@ -1735,6 +1798,18 @@ internal class CodeSearchEngine : ICodeSearchEngine, IDisposable {
     
     
     /// <summary>
+    /// Add reachability entries in batch
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    public ulong AddReachabilityBatch(List<ReachabilityEntry> @entries) {
+        return CallWithPointer(thisPtr => FfiConverterUInt64.INSTANCE.Lift(
+    _UniffiHelpers.RustCallWithError(FfiConverterTypeCodeSearchError.INSTANCE, (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_codesearch_ffi_fn_method_codesearchengine_add_reachability_batch(thisPtr, FfiConverterSequenceTypeReachabilityEntry.INSTANCE.Lower(@entries), ref _status)
+)));
+    }
+    
+    
+    /// <summary>
     /// Add relationships to the database
     /// </summary>
     /// <exception cref="CodeSearchException"></exception>
@@ -1756,6 +1831,19 @@ internal class CodeSearchEngine : ICodeSearchEngine, IDisposable {
     _UniFFILib.uniffi_codesearch_ffi_fn_method_codesearchengine_add_symbols(thisPtr, FfiConverterSequenceTypeSymbolInput.INSTANCE.Lower(@symbols), FfiConverterSequenceSequenceFloat.INSTANCE.Lower(@vectors), ref _status)
 )));
     }
+    
+    
+    /// <summary>
+    /// Clear reachability table
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    public void ClearReachability() {
+        CallWithPointer(thisPtr =>
+    _UniffiHelpers.RustCallWithError(FfiConverterTypeCodeSearchError.INSTANCE, (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_codesearch_ffi_fn_method_codesearchengine_clear_reachability(thisPtr,  ref _status)
+));
+    }
+    
     
     
     /// <summary>
@@ -1802,6 +1890,18 @@ internal class CodeSearchEngine : ICodeSearchEngine, IDisposable {
         return CallWithPointer(thisPtr => FfiConverterSequenceTypeRelationshipResult.INSTANCE.Lift(
     _UniffiHelpers.RustCallWithError(FfiConverterTypeCodeSearchError.INSTANCE, (ref UniffiRustCallStatus _status) =>
     _UniFFILib.uniffi_codesearch_ffi_fn_method_codesearchengine_get_callers(thisPtr, FfiConverterString.INSTANCE.Lower(@symbolId), FfiConverterUInt32.INSTANCE.Lower(@limit), ref _status)
+)));
+    }
+    
+    
+    /// <summary>
+    /// Get impacted symbols (what breaks if I change this?)
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    public List<ImpactResult> GetImpacted(string @symbolId, uint @maxDistance) {
+        return CallWithPointer(thisPtr => FfiConverterSequenceTypeImpactResult.INSTANCE.Lift(
+    _UniffiHelpers.RustCallWithError(FfiConverterTypeCodeSearchError.INSTANCE, (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_codesearch_ffi_fn_method_codesearchengine_get_impacted(thisPtr, FfiConverterString.INSTANCE.Lower(@symbolId), FfiConverterUInt32.INSTANCE.Lower(@maxDistance), ref _status)
 )));
     }
     
@@ -2237,6 +2337,76 @@ class FfiConverterTypeIdentifierInput: FfiConverterRustBuffer<IdentifierInput> {
             FfiConverterUInt32.INSTANCE.Write(value.@column, stream);
             FfiConverterOptionalString.INSTANCE.Write(value.@sourceSymbolId, stream);
             FfiConverterOptionalString.INSTANCE.Write(value.@targetSymbolId, stream);
+    }
+}
+
+
+
+/// <summary>
+/// FFI-safe impact result
+/// </summary>
+internal record ImpactResult (
+    string @symbolId, 
+    uint @distance
+) {
+}
+
+class FfiConverterTypeImpactResult: FfiConverterRustBuffer<ImpactResult> {
+    public static FfiConverterTypeImpactResult INSTANCE = new FfiConverterTypeImpactResult();
+
+    public override ImpactResult Read(BigEndianStream stream) {
+        return new ImpactResult(
+            @symbolId: FfiConverterString.INSTANCE.Read(stream),
+            @distance: FfiConverterUInt32.INSTANCE.Read(stream)
+        );
+    }
+
+    public override int AllocationSize(ImpactResult value) {
+        return 0
+            + FfiConverterString.INSTANCE.AllocationSize(value.@symbolId)
+            + FfiConverterUInt32.INSTANCE.AllocationSize(value.@distance);
+    }
+
+    public override void Write(ImpactResult value, BigEndianStream stream) {
+            FfiConverterString.INSTANCE.Write(value.@symbolId, stream);
+            FfiConverterUInt32.INSTANCE.Write(value.@distance, stream);
+    }
+}
+
+
+
+/// <summary>
+/// FFI-safe reachability entry
+/// </summary>
+internal record ReachabilityEntry (
+    string @sourceId, 
+    string @targetId, 
+    uint @minDistance
+) {
+}
+
+class FfiConverterTypeReachabilityEntry: FfiConverterRustBuffer<ReachabilityEntry> {
+    public static FfiConverterTypeReachabilityEntry INSTANCE = new FfiConverterTypeReachabilityEntry();
+
+    public override ReachabilityEntry Read(BigEndianStream stream) {
+        return new ReachabilityEntry(
+            @sourceId: FfiConverterString.INSTANCE.Read(stream),
+            @targetId: FfiConverterString.INSTANCE.Read(stream),
+            @minDistance: FfiConverterUInt32.INSTANCE.Read(stream)
+        );
+    }
+
+    public override int AllocationSize(ReachabilityEntry value) {
+        return 0
+            + FfiConverterString.INSTANCE.AllocationSize(value.@sourceId)
+            + FfiConverterString.INSTANCE.AllocationSize(value.@targetId)
+            + FfiConverterUInt32.INSTANCE.AllocationSize(value.@minDistance);
+    }
+
+    public override void Write(ReachabilityEntry value, BigEndianStream stream) {
+            FfiConverterString.INSTANCE.Write(value.@sourceId, stream);
+            FfiConverterString.INSTANCE.Write(value.@targetId, stream);
+            FfiConverterUInt32.INSTANCE.Write(value.@minDistance, stream);
     }
 }
 
@@ -2955,6 +3125,90 @@ class FfiConverterSequenceTypeIdentifierInput: FfiConverterRustBuffer<List<Ident
 
         stream.WriteInt(value.Count);
         var writerFn = FfiConverterTypeIdentifierInput.INSTANCE.Write;
+        value.ForEach(item => writerFn(item, stream));
+    }
+}
+
+
+
+
+class FfiConverterSequenceTypeImpactResult: FfiConverterRustBuffer<List<ImpactResult>> {
+    public static FfiConverterSequenceTypeImpactResult INSTANCE = new FfiConverterSequenceTypeImpactResult();
+
+    public override List<ImpactResult> Read(BigEndianStream stream) {
+        var length = stream.ReadInt();
+        var result = new List<ImpactResult>(length);
+        var readFn = FfiConverterTypeImpactResult.INSTANCE.Read;
+        for (int i = 0; i < length; i++) {
+            result.Add(readFn(stream));
+        }
+        return result;
+    }
+
+    public override int AllocationSize(List<ImpactResult> value) {
+        var sizeForLength = 4;
+
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            return sizeForLength;
+        }
+
+        var allocationSizeFn = FfiConverterTypeImpactResult.INSTANCE.AllocationSize;
+        var sizeForItems = value.Sum(item => allocationSizeFn(item));
+        return sizeForLength + sizeForItems;
+    }
+
+    public override void Write(List<ImpactResult> value, BigEndianStream stream) {
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            stream.WriteInt(0);
+            return;
+        }
+
+        stream.WriteInt(value.Count);
+        var writerFn = FfiConverterTypeImpactResult.INSTANCE.Write;
+        value.ForEach(item => writerFn(item, stream));
+    }
+}
+
+
+
+
+class FfiConverterSequenceTypeReachabilityEntry: FfiConverterRustBuffer<List<ReachabilityEntry>> {
+    public static FfiConverterSequenceTypeReachabilityEntry INSTANCE = new FfiConverterSequenceTypeReachabilityEntry();
+
+    public override List<ReachabilityEntry> Read(BigEndianStream stream) {
+        var length = stream.ReadInt();
+        var result = new List<ReachabilityEntry>(length);
+        var readFn = FfiConverterTypeReachabilityEntry.INSTANCE.Read;
+        for (int i = 0; i < length; i++) {
+            result.Add(readFn(stream));
+        }
+        return result;
+    }
+
+    public override int AllocationSize(List<ReachabilityEntry> value) {
+        var sizeForLength = 4;
+
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            return sizeForLength;
+        }
+
+        var allocationSizeFn = FfiConverterTypeReachabilityEntry.INSTANCE.AllocationSize;
+        var sizeForItems = value.Sum(item => allocationSizeFn(item));
+        return sizeForLength + sizeForItems;
+    }
+
+    public override void Write(List<ReachabilityEntry> value, BigEndianStream stream) {
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            stream.WriteInt(0);
+            return;
+        }
+
+        stream.WriteInt(value.Count);
+        var writerFn = FfiConverterTypeReachabilityEntry.INSTANCE.Write;
         value.ForEach(item => writerFn(item, stream));
     }
 }
