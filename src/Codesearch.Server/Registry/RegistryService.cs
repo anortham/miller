@@ -55,11 +55,12 @@ internal class RegistryService
         lock (_lock)
         {
             var registry = LoadRegistry();
-            var normalizedName = NormalizeName(Path.GetFileName(path));
 
-            if (registry.Projects.TryGetValue(normalizedName, out var entry))
+            // Find entry by path (not name) to handle custom-named projects
+            var match = registry.Projects.FirstOrDefault(kv => kv.Value.Path == path);
+            if (match.Key != null)
             {
-                registry.Projects[normalizedName] = entry with
+                registry.Projects[match.Key] = match.Value with
                 {
                     LastActive = DateTimeOffset.UtcNow
                 };

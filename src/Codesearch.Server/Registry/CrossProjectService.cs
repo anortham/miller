@@ -81,6 +81,9 @@ internal class CrossProjectService
             }
         }
 
+        // Track total before applying limit
+        var totalCount = allEntries.Count;
+
         // Sort by timestamp (newest first) and apply global limit
         allEntries = allEntries
             .OrderByDescending(e => e.Metadata.Timestamp)
@@ -91,7 +94,7 @@ internal class CrossProjectService
         {
             Entries = allEntries,
             Workspaces = workspaceSummaries.OrderByDescending(w => w.LastActivity).ToList(),
-            TotalCount = allEntries.Count
+            TotalCount = totalCount
         };
     }
 
