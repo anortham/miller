@@ -791,6 +791,14 @@ static class _UniFFILib {
     
     
     
+    
+    
+    
+    
+    
+    
+    
+    
 
     static _UniFFILib() {
         _UniFFILib.uniffiCheckContractApiVersion();
@@ -851,7 +859,23 @@ static class _UniFFILib {
     );
 
     [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern RustBuffer uniffi_codesearch_ffi_fn_method_codesearchengine_get_references(IntPtr @ptr,RustBuffer @symbolId,uint @limit,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern RustBuffer uniffi_codesearch_ffi_fn_method_codesearchengine_get_relationships(IntPtr @ptr,RustBuffer @symbolId,uint @limit,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern RustBuffer uniffi_codesearch_ffi_fn_method_codesearchengine_get_symbol_by_id(IntPtr @ptr,RustBuffer @symbolId,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern RustBuffer uniffi_codesearch_ffi_fn_method_codesearchengine_get_symbols_by_file(IntPtr @ptr,RustBuffer @filePath,uint @limit,ref UniffiRustCallStatus _uniffi_out_err
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern RustBuffer uniffi_codesearch_ffi_fn_method_codesearchengine_get_symbols_by_kind(IntPtr @ptr,RustBuffer @kind,uint @limit,ref UniffiRustCallStatus _uniffi_out_err
     );
 
     [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
@@ -1187,7 +1211,23 @@ static class _UniFFILib {
     );
 
     [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern ushort uniffi_codesearch_ffi_checksum_method_codesearchengine_get_references(
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
     public static extern ushort uniffi_codesearch_ffi_checksum_method_codesearchengine_get_relationships(
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern ushort uniffi_codesearch_ffi_checksum_method_codesearchengine_get_symbol_by_id(
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern ushort uniffi_codesearch_ffi_checksum_method_codesearchengine_get_symbols_by_file(
+    );
+
+    [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
+    public static extern ushort uniffi_codesearch_ffi_checksum_method_codesearchengine_get_symbols_by_kind(
     );
 
     [DllImport("codesearch_ffi", CallingConvention = CallingConvention.Cdecl)]
@@ -1329,9 +1369,33 @@ static class _UniFFILib {
             }
         }
         {
+            var checksum = _UniFFILib.uniffi_codesearch_ffi_checksum_method_codesearchengine_get_references();
+            if (checksum != 15011) {
+                throw new UniffiContractChecksumException($"uniffi.codesearch_ffi: uniffi bindings expected function `uniffi_codesearch_ffi_checksum_method_codesearchengine_get_references` checksum `15011`, library returned `{checksum}`");
+            }
+        }
+        {
             var checksum = _UniFFILib.uniffi_codesearch_ffi_checksum_method_codesearchengine_get_relationships();
             if (checksum != 15947) {
                 throw new UniffiContractChecksumException($"uniffi.codesearch_ffi: uniffi bindings expected function `uniffi_codesearch_ffi_checksum_method_codesearchengine_get_relationships` checksum `15947`, library returned `{checksum}`");
+            }
+        }
+        {
+            var checksum = _UniFFILib.uniffi_codesearch_ffi_checksum_method_codesearchengine_get_symbol_by_id();
+            if (checksum != 34517) {
+                throw new UniffiContractChecksumException($"uniffi.codesearch_ffi: uniffi bindings expected function `uniffi_codesearch_ffi_checksum_method_codesearchengine_get_symbol_by_id` checksum `34517`, library returned `{checksum}`");
+            }
+        }
+        {
+            var checksum = _UniFFILib.uniffi_codesearch_ffi_checksum_method_codesearchengine_get_symbols_by_file();
+            if (checksum != 10803) {
+                throw new UniffiContractChecksumException($"uniffi.codesearch_ffi: uniffi bindings expected function `uniffi_codesearch_ffi_checksum_method_codesearchengine_get_symbols_by_file` checksum `10803`, library returned `{checksum}`");
+            }
+        }
+        {
+            var checksum = _UniFFILib.uniffi_codesearch_ffi_checksum_method_codesearchengine_get_symbols_by_kind();
+            if (checksum != 36696) {
+                throw new UniffiContractChecksumException($"uniffi.codesearch_ffi: uniffi bindings expected function `uniffi_codesearch_ffi_checksum_method_codesearchengine_get_symbols_by_kind` checksum `36696`, library returned `{checksum}`");
             }
         }
         {
@@ -1635,10 +1699,30 @@ internal interface ICodeSearchEngine {
     /// <exception cref="CodeSearchException"></exception>
     List<ImpactResult> GetImpacted(string @symbolId, uint @maxDistance);
     /// <summary>
+    /// Get all references to a symbol
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    List<ReferenceResult> GetReferences(string @symbolId, uint @limit);
+    /// <summary>
     /// Get all relationships for a symbol
     /// </summary>
     /// <exception cref="CodeSearchException"></exception>
     List<RelationshipResult> GetRelationships(string @symbolId, uint @limit);
+    /// <summary>
+    /// Get a symbol by ID
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    SymbolInfo? GetSymbolById(string @symbolId);
+    /// <summary>
+    /// Get symbols in a file
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    List<SymbolInfo> GetSymbolsByFile(string @filePath, uint @limit);
+    /// <summary>
+    /// Get symbols by kind
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    List<SymbolInfo> GetSymbolsByKind(string @kind, uint @limit);
     /// <summary>
     /// Check if the engine is healthy
     /// </summary>
@@ -1907,6 +1991,18 @@ internal class CodeSearchEngine : ICodeSearchEngine, IDisposable {
     
     
     /// <summary>
+    /// Get all references to a symbol
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    public List<ReferenceResult> GetReferences(string @symbolId, uint @limit) {
+        return CallWithPointer(thisPtr => FfiConverterSequenceTypeReferenceResult.INSTANCE.Lift(
+    _UniffiHelpers.RustCallWithError(FfiConverterTypeCodeSearchError.INSTANCE, (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_codesearch_ffi_fn_method_codesearchengine_get_references(thisPtr, FfiConverterString.INSTANCE.Lower(@symbolId), FfiConverterUInt32.INSTANCE.Lower(@limit), ref _status)
+)));
+    }
+    
+    
+    /// <summary>
     /// Get all relationships for a symbol
     /// </summary>
     /// <exception cref="CodeSearchException"></exception>
@@ -1914,6 +2010,42 @@ internal class CodeSearchEngine : ICodeSearchEngine, IDisposable {
         return CallWithPointer(thisPtr => FfiConverterSequenceTypeRelationshipResult.INSTANCE.Lift(
     _UniffiHelpers.RustCallWithError(FfiConverterTypeCodeSearchError.INSTANCE, (ref UniffiRustCallStatus _status) =>
     _UniFFILib.uniffi_codesearch_ffi_fn_method_codesearchengine_get_relationships(thisPtr, FfiConverterString.INSTANCE.Lower(@symbolId), FfiConverterUInt32.INSTANCE.Lower(@limit), ref _status)
+)));
+    }
+    
+    
+    /// <summary>
+    /// Get a symbol by ID
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    public SymbolInfo? GetSymbolById(string @symbolId) {
+        return CallWithPointer(thisPtr => FfiConverterOptionalTypeSymbolInfo.INSTANCE.Lift(
+    _UniffiHelpers.RustCallWithError(FfiConverterTypeCodeSearchError.INSTANCE, (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_codesearch_ffi_fn_method_codesearchengine_get_symbol_by_id(thisPtr, FfiConverterString.INSTANCE.Lower(@symbolId), ref _status)
+)));
+    }
+    
+    
+    /// <summary>
+    /// Get symbols in a file
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    public List<SymbolInfo> GetSymbolsByFile(string @filePath, uint @limit) {
+        return CallWithPointer(thisPtr => FfiConverterSequenceTypeSymbolInfo.INSTANCE.Lift(
+    _UniffiHelpers.RustCallWithError(FfiConverterTypeCodeSearchError.INSTANCE, (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_codesearch_ffi_fn_method_codesearchengine_get_symbols_by_file(thisPtr, FfiConverterString.INSTANCE.Lower(@filePath), FfiConverterUInt32.INSTANCE.Lower(@limit), ref _status)
+)));
+    }
+    
+    
+    /// <summary>
+    /// Get symbols by kind
+    /// </summary>
+    /// <exception cref="CodeSearchException"></exception>
+    public List<SymbolInfo> GetSymbolsByKind(string @kind, uint @limit) {
+        return CallWithPointer(thisPtr => FfiConverterSequenceTypeSymbolInfo.INSTANCE.Lift(
+    _UniffiHelpers.RustCallWithError(FfiConverterTypeCodeSearchError.INSTANCE, (ref UniffiRustCallStatus _status) =>
+    _UniFFILib.uniffi_codesearch_ffi_fn_method_codesearchengine_get_symbols_by_kind(thisPtr, FfiConverterString.INSTANCE.Lower(@kind), FfiConverterUInt32.INSTANCE.Lower(@limit), ref _status)
 )));
     }
     
@@ -2413,6 +2545,55 @@ class FfiConverterTypeReachabilityEntry: FfiConverterRustBuffer<ReachabilityEntr
 
 
 /// <summary>
+/// FFI-safe reference result for navigation
+/// </summary>
+internal record ReferenceResult (
+    string @name, 
+    string @kind, 
+    string @filePath, 
+    uint @lineNumber, 
+    uint @column, 
+    string? @sourceSymbolId
+) {
+}
+
+class FfiConverterTypeReferenceResult: FfiConverterRustBuffer<ReferenceResult> {
+    public static FfiConverterTypeReferenceResult INSTANCE = new FfiConverterTypeReferenceResult();
+
+    public override ReferenceResult Read(BigEndianStream stream) {
+        return new ReferenceResult(
+            @name: FfiConverterString.INSTANCE.Read(stream),
+            @kind: FfiConverterString.INSTANCE.Read(stream),
+            @filePath: FfiConverterString.INSTANCE.Read(stream),
+            @lineNumber: FfiConverterUInt32.INSTANCE.Read(stream),
+            @column: FfiConverterUInt32.INSTANCE.Read(stream),
+            @sourceSymbolId: FfiConverterOptionalString.INSTANCE.Read(stream)
+        );
+    }
+
+    public override int AllocationSize(ReferenceResult value) {
+        return 0
+            + FfiConverterString.INSTANCE.AllocationSize(value.@name)
+            + FfiConverterString.INSTANCE.AllocationSize(value.@kind)
+            + FfiConverterString.INSTANCE.AllocationSize(value.@filePath)
+            + FfiConverterUInt32.INSTANCE.AllocationSize(value.@lineNumber)
+            + FfiConverterUInt32.INSTANCE.AllocationSize(value.@column)
+            + FfiConverterOptionalString.INSTANCE.AllocationSize(value.@sourceSymbolId);
+    }
+
+    public override void Write(ReferenceResult value, BigEndianStream stream) {
+            FfiConverterString.INSTANCE.Write(value.@name, stream);
+            FfiConverterString.INSTANCE.Write(value.@kind, stream);
+            FfiConverterString.INSTANCE.Write(value.@filePath, stream);
+            FfiConverterUInt32.INSTANCE.Write(value.@lineNumber, stream);
+            FfiConverterUInt32.INSTANCE.Write(value.@column, stream);
+            FfiConverterOptionalString.INSTANCE.Write(value.@sourceSymbolId, stream);
+    }
+}
+
+
+
+/// <summary>
 /// FFI-safe relationship input
 /// </summary>
 internal record RelationshipInput (
@@ -2570,6 +2751,67 @@ class FfiConverterTypeSearchResultOutput: FfiConverterRustBuffer<SearchResultOut
             FfiConverterOptionalInt32.INSTANCE.Write(value.@startLine, stream);
             FfiConverterOptionalInt32.INSTANCE.Write(value.@endLine, stream);
             FfiConverterFloat.INSTANCE.Write(value.@score, stream);
+    }
+}
+
+
+
+/// <summary>
+/// FFI-safe symbol info for navigation
+/// </summary>
+internal record SymbolInfo (
+    string @id, 
+    string @name, 
+    string @kind, 
+    string @language, 
+    string @filePath, 
+    int @startLine, 
+    int @endLine, 
+    string? @signature, 
+    string? @docComment
+) {
+}
+
+class FfiConverterTypeSymbolInfo: FfiConverterRustBuffer<SymbolInfo> {
+    public static FfiConverterTypeSymbolInfo INSTANCE = new FfiConverterTypeSymbolInfo();
+
+    public override SymbolInfo Read(BigEndianStream stream) {
+        return new SymbolInfo(
+            @id: FfiConverterString.INSTANCE.Read(stream),
+            @name: FfiConverterString.INSTANCE.Read(stream),
+            @kind: FfiConverterString.INSTANCE.Read(stream),
+            @language: FfiConverterString.INSTANCE.Read(stream),
+            @filePath: FfiConverterString.INSTANCE.Read(stream),
+            @startLine: FfiConverterInt32.INSTANCE.Read(stream),
+            @endLine: FfiConverterInt32.INSTANCE.Read(stream),
+            @signature: FfiConverterOptionalString.INSTANCE.Read(stream),
+            @docComment: FfiConverterOptionalString.INSTANCE.Read(stream)
+        );
+    }
+
+    public override int AllocationSize(SymbolInfo value) {
+        return 0
+            + FfiConverterString.INSTANCE.AllocationSize(value.@id)
+            + FfiConverterString.INSTANCE.AllocationSize(value.@name)
+            + FfiConverterString.INSTANCE.AllocationSize(value.@kind)
+            + FfiConverterString.INSTANCE.AllocationSize(value.@language)
+            + FfiConverterString.INSTANCE.AllocationSize(value.@filePath)
+            + FfiConverterInt32.INSTANCE.AllocationSize(value.@startLine)
+            + FfiConverterInt32.INSTANCE.AllocationSize(value.@endLine)
+            + FfiConverterOptionalString.INSTANCE.AllocationSize(value.@signature)
+            + FfiConverterOptionalString.INSTANCE.AllocationSize(value.@docComment);
+    }
+
+    public override void Write(SymbolInfo value, BigEndianStream stream) {
+            FfiConverterString.INSTANCE.Write(value.@id, stream);
+            FfiConverterString.INSTANCE.Write(value.@name, stream);
+            FfiConverterString.INSTANCE.Write(value.@kind, stream);
+            FfiConverterString.INSTANCE.Write(value.@language, stream);
+            FfiConverterString.INSTANCE.Write(value.@filePath, stream);
+            FfiConverterInt32.INSTANCE.Write(value.@startLine, stream);
+            FfiConverterInt32.INSTANCE.Write(value.@endLine, stream);
+            FfiConverterOptionalString.INSTANCE.Write(value.@signature, stream);
+            FfiConverterOptionalString.INSTANCE.Write(value.@docComment, stream);
     }
 }
 
@@ -2789,6 +3031,37 @@ class FfiConverterOptionalString: FfiConverterRustBuffer<string?> {
         } else {
             stream.WriteByte(1);
             FfiConverterString.INSTANCE.Write((string)value, stream);
+        }
+    }
+}
+
+
+
+
+class FfiConverterOptionalTypeSymbolInfo: FfiConverterRustBuffer<SymbolInfo?> {
+    public static FfiConverterOptionalTypeSymbolInfo INSTANCE = new FfiConverterOptionalTypeSymbolInfo();
+
+    public override SymbolInfo? Read(BigEndianStream stream) {
+        if (stream.ReadByte() == 0) {
+            return null;
+        }
+        return FfiConverterTypeSymbolInfo.INSTANCE.Read(stream);
+    }
+
+    public override int AllocationSize(SymbolInfo? value) {
+        if (value == null) {
+            return 1;
+        } else {
+            return 1 + FfiConverterTypeSymbolInfo.INSTANCE.AllocationSize((SymbolInfo)value);
+        }
+    }
+
+    public override void Write(SymbolInfo? value, BigEndianStream stream) {
+        if (value == null) {
+            stream.WriteByte(0);
+        } else {
+            stream.WriteByte(1);
+            FfiConverterTypeSymbolInfo.INSTANCE.Write((SymbolInfo)value, stream);
         }
     }
 }
@@ -3216,6 +3489,48 @@ class FfiConverterSequenceTypeReachabilityEntry: FfiConverterRustBuffer<List<Rea
 
 
 
+class FfiConverterSequenceTypeReferenceResult: FfiConverterRustBuffer<List<ReferenceResult>> {
+    public static FfiConverterSequenceTypeReferenceResult INSTANCE = new FfiConverterSequenceTypeReferenceResult();
+
+    public override List<ReferenceResult> Read(BigEndianStream stream) {
+        var length = stream.ReadInt();
+        var result = new List<ReferenceResult>(length);
+        var readFn = FfiConverterTypeReferenceResult.INSTANCE.Read;
+        for (int i = 0; i < length; i++) {
+            result.Add(readFn(stream));
+        }
+        return result;
+    }
+
+    public override int AllocationSize(List<ReferenceResult> value) {
+        var sizeForLength = 4;
+
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            return sizeForLength;
+        }
+
+        var allocationSizeFn = FfiConverterTypeReferenceResult.INSTANCE.AllocationSize;
+        var sizeForItems = value.Sum(item => allocationSizeFn(item));
+        return sizeForLength + sizeForItems;
+    }
+
+    public override void Write(List<ReferenceResult> value, BigEndianStream stream) {
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            stream.WriteInt(0);
+            return;
+        }
+
+        stream.WriteInt(value.Count);
+        var writerFn = FfiConverterTypeReferenceResult.INSTANCE.Write;
+        value.ForEach(item => writerFn(item, stream));
+    }
+}
+
+
+
+
 class FfiConverterSequenceTypeRelationshipInput: FfiConverterRustBuffer<List<RelationshipInput>> {
     public static FfiConverterSequenceTypeRelationshipInput INSTANCE = new FfiConverterSequenceTypeRelationshipInput();
 
@@ -3335,6 +3650,48 @@ class FfiConverterSequenceTypeSearchResultOutput: FfiConverterRustBuffer<List<Se
 
         stream.WriteInt(value.Count);
         var writerFn = FfiConverterTypeSearchResultOutput.INSTANCE.Write;
+        value.ForEach(item => writerFn(item, stream));
+    }
+}
+
+
+
+
+class FfiConverterSequenceTypeSymbolInfo: FfiConverterRustBuffer<List<SymbolInfo>> {
+    public static FfiConverterSequenceTypeSymbolInfo INSTANCE = new FfiConverterSequenceTypeSymbolInfo();
+
+    public override List<SymbolInfo> Read(BigEndianStream stream) {
+        var length = stream.ReadInt();
+        var result = new List<SymbolInfo>(length);
+        var readFn = FfiConverterTypeSymbolInfo.INSTANCE.Read;
+        for (int i = 0; i < length; i++) {
+            result.Add(readFn(stream));
+        }
+        return result;
+    }
+
+    public override int AllocationSize(List<SymbolInfo> value) {
+        var sizeForLength = 4;
+
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            return sizeForLength;
+        }
+
+        var allocationSizeFn = FfiConverterTypeSymbolInfo.INSTANCE.AllocationSize;
+        var sizeForItems = value.Sum(item => allocationSizeFn(item));
+        return sizeForLength + sizeForItems;
+    }
+
+    public override void Write(List<SymbolInfo> value, BigEndianStream stream) {
+        // details/1-empty-list-as-default-method-parameter.md
+        if (value == null) {
+            stream.WriteInt(0);
+            return;
+        }
+
+        stream.WriteInt(value.Count);
+        var writerFn = FfiConverterTypeSymbolInfo.INSTANCE.Write;
         value.ForEach(item => writerFn(item, stream));
     }
 }
