@@ -1,6 +1,14 @@
 //! UniFFI bindings for codesearch-core
 
 use codesearch_core::{SearchResult, Symbol, SymbolKind, RelationshipInput as CoreRelationshipInput, RelationshipResult as CoreRelationshipResult};
+use julie_extractors::{
+    ExtractorManager,
+    Symbol as JulieSymbol,
+    Identifier as JulieIdentifier,
+    Relationship as JulieRelationship,
+    detect_language_from_extension,
+};
+use std::path::Path;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
@@ -141,6 +149,102 @@ impl From<CoreRelationshipResult> for RelationshipResult {
             from_symbol_id: r.from_symbol_id,
             to_symbol_id: r.to_symbol_id,
             kind: r.kind,
+            file_path: r.file_path,
+            line_number: r.line_number,
+            confidence: r.confidence,
+        }
+    }
+}
+
+// =============================================================================
+// FFI Types for julie-extractors Integration
+// =============================================================================
+
+/// FFI-safe extraction results from julie-extractors
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ExtractionResults {
+    pub symbols: Vec<ExtractedSymbol>,
+    pub identifiers: Vec<ExtractedIdentifier>,
+    pub relationships: Vec<ExtractedRelationship>,
+}
+
+/// FFI-safe symbol from extraction
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ExtractedSymbol {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub language: String,
+    pub file_path: String,
+    pub start_line: u32,
+    pub end_line: u32,
+    pub signature: Option<String>,
+    pub doc_comment: Option<String>,
+}
+
+/// FFI-safe identifier (usage/reference)
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ExtractedIdentifier {
+    pub name: String,
+    pub kind: String,
+    pub file_path: String,
+    pub line_number: u32,
+    pub column: u32,
+    pub source_symbol_id: Option<String>,
+    pub target_symbol_id: Option<String>,
+}
+
+/// FFI-safe relationship from extraction
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ExtractedRelationship {
+    pub from_symbol_id: String,
+    pub to_symbol_id: String,
+    pub kind: String,
+    pub file_path: String,
+    pub line_number: u32,
+    pub confidence: f32,
+}
+
+// =============================================================================
+// Conversion implementations from julie-extractors types to FFI types
+// =============================================================================
+
+impl From<JulieSymbol> for ExtractedSymbol {
+    fn from(s: JulieSymbol) -> Self {
+        Self {
+            id: s.id,
+            name: s.name,
+            kind: s.kind.to_string(),
+            language: s.language,
+            file_path: s.file_path,
+            start_line: s.start_line,
+            end_line: s.end_line,
+            signature: s.signature,
+            doc_comment: s.doc_comment,
+        }
+    }
+}
+
+impl From<JulieIdentifier> for ExtractedIdentifier {
+    fn from(i: JulieIdentifier) -> Self {
+        Self {
+            name: i.name,
+            kind: i.kind.to_string(),
+            file_path: i.file_path,
+            line_number: i.start_line,
+            column: i.start_column,
+            source_symbol_id: i.containing_symbol_id,
+            target_symbol_id: i.target_symbol_id,
+        }
+    }
+}
+
+impl From<JulieRelationship> for ExtractedRelationship {
+    fn from(r: JulieRelationship) -> Self {
+        Self {
+            from_symbol_id: r.from_symbol_id,
+            to_symbol_id: r.to_symbol_id,
+            kind: r.kind.to_string(),
             file_path: r.file_path,
             line_number: r.line_number,
             confidence: r.confidence,
