@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text;
 using ModelContextProtocol.Server;
 using Codesearch.Server.Services;
 
@@ -8,79 +9,59 @@ namespace Codesearch.Server.Tools;
 internal static class SearchTool
 {
     [McpServerTool]
-    [Description("Search code and project knowledge. Returns symbols matching the query.")]
+    [Description("Search for symbols in the codebase. Modes: text (exact matching), semantic (meaning-based), hybrid (combined - default).")]
     internal static string Search(
         SearchService searchService,
-        [Description("Search query (natural language or code pattern)")] string query,
-        [Description("Search method: auto, text, semantic, hybrid, pattern")] string method = "auto",
-        [Description("Filter by symbol kind (function, class, etc.)")] string? kind = null,
-        [Description("Filter by language")] string? language = null,
-        [Description("Maximum results")] int limit = 20)
+        [Description("Search query")] string query,
+        [Description("Search mode: text, semantic, or hybrid")] string mode = "hybrid",
+        [Description("Maximum number of results")] int limit = 20)
     {
-        // Auto-detect method based on query
-        var effectiveMethod = method == "auto" ? DetectMethod(query) : method;
-
-        var results = effectiveMethod switch
+        if (string.IsNullOrWhiteSpace(query))
         {
-            "text" or "pattern" => searchService.SearchText(query, (uint)limit),
-            // For semantic-only, we'd need embeddings - fall back to text for now
-            "semantic" => searchService.SearchText(query, (uint)limit),
-            // Hybrid needs vector - use text for now until embeddings integrated
-            _ => searchService.SearchText(query, (uint)limit)
-        };
-
-        // Apply filters
-        if (!string.IsNullOrEmpty(kind))
-        {
-            results = results.Where(r => r.kind.Equals(kind, StringComparison.OrdinalIgnoreCase)).ToList();
+            return "Error: query parameter is required.";
         }
 
-        if (!string.IsNullOrEmpty(language))
+        List<uniffi.codesearch_ffi.SearchResultOutput> results;
+        string modeUsed;
+
+        try
         {
-            results = results.Where(r => r.language.Equals(language, StringComparison.OrdinalIgnoreCase)).ToList();
+            (results, modeUsed) = mode.ToLowerInvariant() switch
+            {
+                "text" => (searchService.SearchText(query, (uint)limit), "text"),
+                "semantic" => (searchService.SearchSemantic(query, limit), "semantic"),
+                "hybrid" => (searchService.SearchHybrid(query, limit),
+                            searchService.IsSemanticSearchAvailable ? "hybrid" : "text (fallback)"),
+                _ => (searchService.SearchHybrid(query, limit),
+                     searchService.IsSemanticSearchAvailable ? "hybrid" : "text (fallback)")
+            };
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("Embedding"))
+        {
+            // Semantic requested but not available
+            results = searchService.SearchText(query, (uint)limit);
+            modeUsed = "text (embeddings unavailable)";
         }
 
-        // Format results
-        return FormatResults(results);
-    }
-
-    private static string DetectMethod(string query)
-    {
-        // Pattern indicators: special characters common in code
-        if (query.Contains(':') || query.Contains('<') || query.Contains('>') ||
-            query.Contains('[') || query.Contains(']') || query.Contains('(') ||
-            query.Contains('{') || query.Contains("=>") || query.Contains("?."))
-        {
-            return "pattern";
-        }
-
-        // Default to hybrid for natural language
-        return "hybrid";
-    }
-
-    private static string FormatResults(List<uniffi.codesearch_ffi.SearchResultOutput> results)
-    {
         if (results.Count == 0)
         {
-            return "No results found.";
+            return $"No results found for '{query}' (mode: {modeUsed}).";
         }
 
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine($"Found {results.Count} result(s):\n");
+        var sb = new StringBuilder();
+        sb.AppendLine($"## Search Results for `{query}` ({results.Count} found, mode: {modeUsed})");
+        sb.AppendLine();
 
-        foreach (var r in results)
+        foreach (var result in results)
         {
-            sb.AppendLine($"**{r.kind}**: `{r.name}`");
-            sb.AppendLine($"  File: {r.filePath}:{r.startLine}");
-            if (!string.IsNullOrEmpty(r.signature))
+            var score = $" (score: {result.score:F3})";
+            sb.AppendLine($"### {result.name} ({result.kind}){score}");
+            sb.AppendLine($"- **File**: `{result.filePath}:{result.startLine}-{result.endLine}`");
+            sb.AppendLine($"- **Language**: {result.language}");
+            if (!string.IsNullOrEmpty(result.signature))
             {
-                sb.AppendLine($"  Signature: `{r.signature}`");
+                sb.AppendLine($"- **Signature**: `{result.signature}`");
             }
-            if (!string.IsNullOrEmpty(r.docComment))
-            {
-                sb.AppendLine($"  Doc: {r.docComment.Split('\n')[0]}");
-            }
-            sb.AppendLine($"  Score: {r.score:F3}");
             sb.AppendLine();
         }
 
