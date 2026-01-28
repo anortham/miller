@@ -55,6 +55,9 @@ internal class IndexService
     /// </summary>
     public async Task<IndexResult> RefreshAsync(string? path = null, CancellationToken ct = default)
     {
+        // Ensure embedding model is ready before indexing (may download on first use)
+        await _embeddingService.EnsureReadyAsync(ct: ct);
+
         var targetPath = path ?? _workspaceRoot;
         var files = GetIndexableFiles(targetPath);
 
