@@ -100,6 +100,21 @@ pub fn symbols_schema() -> Arc<Schema> {
 
 pub const TABLE_NAME: &str = "symbols";
 
+/// Table name for relationships
+pub const RELATIONSHIPS_TABLE_NAME: &str = "relationships";
+
+/// Create the Arrow schema for the relationships table
+pub fn relationships_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("from_symbol_id", DataType::Utf8, false),
+        Field::new("to_symbol_id", DataType::Utf8, false),
+        Field::new("kind", DataType::Utf8, false),
+        Field::new("file_path", DataType::Utf8, false),
+        Field::new("line_number", DataType::UInt32, false),
+        Field::new("confidence", DataType::Float32, false),
+    ]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,5 +153,15 @@ mod tests {
         assert_eq!(schema.fields().len(), 12);
         assert!(schema.field_with_name("id").is_ok());
         assert!(schema.field_with_name("vector").is_ok());
+    }
+
+    #[test]
+    fn test_relationships_schema_has_correct_fields() {
+        let schema = relationships_schema();
+        assert_eq!(schema.fields().len(), 6);
+        assert!(schema.field_with_name("from_symbol_id").is_ok());
+        assert!(schema.field_with_name("to_symbol_id").is_ok());
+        assert!(schema.field_with_name("kind").is_ok());
+        assert!(schema.field_with_name("confidence").is_ok());
     }
 }
