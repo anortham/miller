@@ -8,6 +8,7 @@ use julie_extractors::{
     Relationship as JulieRelationship,
     detect_language_from_extension,
 };
+use rayon::prelude::*;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
@@ -168,6 +169,13 @@ pub struct ExtractionResults {
     pub relationships: Vec<ExtractedRelationship>,
 }
 
+/// FFI-safe file input for batch extraction
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FileInput {
+    pub content: String,
+    pub file_path: String,
+}
+
 /// FFI-safe symbol from extraction
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct ExtractedSymbol {
@@ -286,6 +294,43 @@ pub fn extract_file(
         identifiers: identifiers.into_iter().map(ExtractedIdentifier::from).collect(),
         relationships: relationships.into_iter().map(ExtractedRelationship::from).collect(),
     })
+}
+
+/// Extract from multiple files in parallel
+///
+/// Returns results in same order as input files.
+#[uniffi::export]
+pub fn extract_files_batch(
+    files: Vec<FileInput>,
+    workspace_root: String,
+) -> Vec<ExtractionResults> {
+    let workspace_path_str = workspace_root;
+
+    files
+        .par_iter()
+        .map(|file| {
+            let workspace_path = Path::new(&workspace_path_str);
+            let manager = ExtractorManager::new();
+
+            let symbols = manager
+                .extract_symbols(&file.file_path, &file.content, workspace_path)
+                .unwrap_or_default();
+
+            let identifiers = manager
+                .extract_identifiers(&file.file_path, &file.content, &symbols)
+                .unwrap_or_default();
+
+            let relationships = manager
+                .extract_relationships(&file.file_path, &file.content, &symbols)
+                .unwrap_or_default();
+
+            ExtractionResults {
+                symbols: symbols.into_iter().map(ExtractedSymbol::from).collect(),
+                identifiers: identifiers.into_iter().map(ExtractedIdentifier::from).collect(),
+                relationships: relationships.into_iter().map(ExtractedRelationship::from).collect(),
+            }
+        })
+        .collect()
 }
 
 /// Detect programming language from file extension
