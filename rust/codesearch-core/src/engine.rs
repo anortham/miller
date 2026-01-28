@@ -1,7 +1,7 @@
 //! Core search engine wrapping LanceDB
 
 use crate::boosting::apply_boosts;
-use crate::schema::{symbols_schema, relationships_schema, Symbol, TABLE_NAME, RELATIONSHIPS_TABLE_NAME, VECTOR_DIMENSION};
+use crate::schema::{symbols_schema, relationships_schema, identifiers_schema, Symbol, TABLE_NAME, RELATIONSHIPS_TABLE_NAME, IDENTIFIERS_TABLE_NAME, VECTOR_DIMENSION};
 use crate::search::{distance_to_score, SearchResult};
 use crate::{Error, Result};
 use arrow::array::{Array, ArrayRef, FixedSizeListArray, Float32Array, Int32Array, StringBuilder};
@@ -34,6 +34,18 @@ pub struct RelationshipResult {
     pub file_path: String,
     pub line_number: u32,
     pub confidence: f32,
+}
+
+/// Input for adding an identifier to the database
+#[derive(Debug, Clone)]
+pub struct IdentifierInput {
+    pub name: String,
+    pub kind: String,
+    pub file_path: String,
+    pub line_number: u32,
+    pub column: u32,
+    pub source_symbol_id: Option<String>,
+    pub target_symbol_id: Option<String>,
 }
 
 /// The main search engine struct
@@ -202,6 +214,72 @@ impl CodeEngine {
         }
 
         let table = self.db.open_table(RELATIONSHIPS_TABLE_NAME).execute().await?;
+        let count = table.count_rows(None).await?;
+        Ok(count)
+    }
+
+    /// Add identifiers to the database
+    pub async fn add_identifiers(&self, identifiers: Vec<IdentifierInput>) -> Result<usize> {
+        if identifiers.is_empty() {
+            return Ok(0);
+        }
+
+        let count = identifiers.len();
+
+        // Build arrays
+        let names: Vec<&str> = identifiers.iter().map(|i| i.name.as_str()).collect();
+        let kinds: Vec<&str> = identifiers.iter().map(|i| i.kind.as_str()).collect();
+        let paths: Vec<&str> = identifiers.iter().map(|i| i.file_path.as_str()).collect();
+        let lines: Vec<u32> = identifiers.iter().map(|i| i.line_number).collect();
+        let cols: Vec<u32> = identifiers.iter().map(|i| i.column).collect();
+        let source_ids: Vec<Option<&str>> = identifiers.iter()
+            .map(|i| i.source_symbol_id.as_deref())
+            .collect();
+        let target_ids: Vec<Option<&str>> = identifiers.iter()
+            .map(|i| i.target_symbol_id.as_deref())
+            .collect();
+
+        let batch = RecordBatch::try_new(
+            identifiers_schema(),
+            vec![
+                Arc::new(StringArray::from(names)) as ArrayRef,
+                Arc::new(StringArray::from(kinds)) as ArrayRef,
+                Arc::new(StringArray::from(paths)) as ArrayRef,
+                Arc::new(arrow::array::UInt32Array::from(lines)) as ArrayRef,
+                Arc::new(arrow::array::UInt32Array::from(cols)) as ArrayRef,
+                Arc::new(StringArray::from(source_ids)) as ArrayRef,
+                Arc::new(StringArray::from(target_ids)) as ArrayRef,
+            ],
+        )?;
+
+        let schema = identifiers_schema();
+        let batch_reader = RecordBatchIterator::new(vec![Ok(batch)], schema);
+
+        // Check if table exists
+        let table_names = self.db.table_names().execute().await?;
+
+        if table_names.contains(&IDENTIFIERS_TABLE_NAME.to_string()) {
+            let table = self.db.open_table(IDENTIFIERS_TABLE_NAME).execute().await?;
+            table.add(Box::new(batch_reader)).execute().await?;
+        } else {
+            self.db
+                .create_table(IDENTIFIERS_TABLE_NAME, Box::new(batch_reader))
+                .execute()
+                .await?;
+        }
+
+        Ok(count)
+    }
+
+    /// Get the count of identifiers in the database
+    pub async fn identifier_count(&self) -> Result<usize> {
+        let table_names = self.db.table_names().execute().await?;
+
+        if !table_names.contains(&IDENTIFIERS_TABLE_NAME.to_string()) {
+            return Ok(0);
+        }
+
+        let table = self.db.open_table(IDENTIFIERS_TABLE_NAME).execute().await?;
         let count = table.count_rows(None).await?;
         Ok(count)
     }

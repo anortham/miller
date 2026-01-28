@@ -115,6 +115,22 @@ pub fn relationships_schema() -> Arc<Schema> {
     ]))
 }
 
+/// Table name for identifiers
+pub const IDENTIFIERS_TABLE_NAME: &str = "identifiers";
+
+/// Schema for the identifiers table (references/usages)
+pub fn identifiers_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("name", DataType::Utf8, false),
+        Field::new("kind", DataType::Utf8, false),
+        Field::new("file_path", DataType::Utf8, false),
+        Field::new("line_number", DataType::UInt32, false),
+        Field::new("column", DataType::UInt32, false),
+        Field::new("source_symbol_id", DataType::Utf8, true),
+        Field::new("target_symbol_id", DataType::Utf8, true),
+    ]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,5 +179,18 @@ mod tests {
         assert!(schema.field_with_name("to_symbol_id").is_ok());
         assert!(schema.field_with_name("kind").is_ok());
         assert!(schema.field_with_name("confidence").is_ok());
+    }
+
+    #[test]
+    fn test_identifiers_schema_has_correct_fields() {
+        let schema = identifiers_schema();
+        assert_eq!(schema.fields().len(), 7);
+        assert!(schema.field_with_name("name").is_ok());
+        assert!(schema.field_with_name("kind").is_ok());
+        assert!(schema.field_with_name("file_path").is_ok());
+        assert!(schema.field_with_name("line_number").is_ok());
+        assert!(schema.field_with_name("column").is_ok());
+        assert!(schema.field_with_name("source_symbol_id").is_ok());
+        assert!(schema.field_with_name("target_symbol_id").is_ok());
     }
 }
