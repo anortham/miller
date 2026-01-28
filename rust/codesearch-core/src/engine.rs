@@ -1,11 +1,11 @@
 //! Core search engine wrapping LanceDB
 
 use crate::boosting::apply_boosts;
-use crate::schema::{symbols_schema, relationships_schema, identifiers_schema, Symbol, TABLE_NAME, RELATIONSHIPS_TABLE_NAME, IDENTIFIERS_TABLE_NAME, VECTOR_DIMENSION};
+use crate::schema::{symbols_schema, relationships_schema, identifiers_schema, reachability_schema, Symbol, TABLE_NAME, RELATIONSHIPS_TABLE_NAME, IDENTIFIERS_TABLE_NAME, REACHABILITY_TABLE_NAME, VECTOR_DIMENSION};
 use crate::search::{distance_to_score, SearchResult};
 use crate::{Error, Result};
 use arrow::array::{Array, ArrayRef, FixedSizeListArray, Float32Array, Int32Array, StringBuilder};
-use arrow_array::{RecordBatch, RecordBatchIterator, StringArray};
+use arrow_array::{RecordBatch, RecordBatchIterator, StringArray, UInt32Array};
 use futures::TryStreamExt;
 use lancedb::index::scalar::{FtsIndexBuilder, FullTextSearchQuery, TokenizerConfig};
 use lancedb::index::Index;
@@ -46,6 +46,14 @@ pub struct IdentifierInput {
     pub column: u32,
     pub source_symbol_id: Option<String>,
     pub target_symbol_id: Option<String>,
+}
+
+/// Input for reachability entry (transitive closure)
+#[derive(Debug, Clone)]
+pub struct ReachabilityEntry {
+    pub source_id: String,
+    pub target_id: String,
+    pub min_distance: u32,
 }
 
 /// The main search engine struct
@@ -282,6 +290,100 @@ impl CodeEngine {
         let table = self.db.open_table(IDENTIFIERS_TABLE_NAME).execute().await?;
         let count = table.count_rows(None).await?;
         Ok(count)
+    }
+
+    /// Clear all reachability data
+    pub async fn clear_reachability(&self) -> Result<()> {
+        let table_names = self.db.table_names().execute().await?;
+        if table_names.contains(&REACHABILITY_TABLE_NAME.to_string()) {
+            let table = self.db.open_table(REACHABILITY_TABLE_NAME).execute().await?;
+            table.delete("true").await?;  // Delete all rows
+        }
+        Ok(())
+    }
+
+    /// Add reachability entries in batch
+    pub async fn add_reachability_batch(&self, entries: Vec<ReachabilityEntry>) -> Result<usize> {
+        if entries.is_empty() {
+            return Ok(0);
+        }
+
+        let count = entries.len();
+
+        // Ensure table exists (lazy creation)
+        let table_names = self.db.table_names().execute().await?;
+        if !table_names.contains(&REACHABILITY_TABLE_NAME.to_string()) {
+            let empty_batch = RecordBatch::try_new(
+                reachability_schema(),
+                vec![
+                    Arc::new(StringArray::from(Vec::<&str>::new())),
+                    Arc::new(StringArray::from(Vec::<&str>::new())),
+                    Arc::new(UInt32Array::from(Vec::<u32>::new())),
+                ],
+            )?;
+            let schema = reachability_schema();
+            let batch_reader = RecordBatchIterator::new(vec![Ok(empty_batch)], schema);
+            self.db.create_table(REACHABILITY_TABLE_NAME, Box::new(batch_reader)).execute().await?;
+        }
+
+        let sources: Vec<&str> = entries.iter().map(|e| e.source_id.as_str()).collect();
+        let targets: Vec<&str> = entries.iter().map(|e| e.target_id.as_str()).collect();
+        let distances: Vec<u32> = entries.iter().map(|e| e.min_distance).collect();
+
+        let batch = RecordBatch::try_new(
+            reachability_schema(),
+            vec![
+                Arc::new(StringArray::from(sources)),
+                Arc::new(StringArray::from(targets)),
+                Arc::new(UInt32Array::from(distances)),
+            ],
+        )?;
+
+        let schema = reachability_schema();
+        let batch_reader = RecordBatchIterator::new(vec![Ok(batch)], schema);
+
+        let table = self.db.open_table(REACHABILITY_TABLE_NAME).execute().await?;
+        table.add(Box::new(batch_reader)).execute().await?;
+
+        Ok(count)
+    }
+
+    /// Get all symbols reachable from source (impact analysis)
+    pub async fn get_impacted(&self, source_id: &str, max_distance: u32) -> Result<Vec<(String, u32)>> {
+        let table_names = self.db.table_names().execute().await?;
+        if !table_names.contains(&REACHABILITY_TABLE_NAME.to_string()) {
+            return Ok(Vec::new());
+        }
+
+        let table = self.db.open_table(REACHABILITY_TABLE_NAME).execute().await?;
+
+        let filter = format!(
+            "source_id = '{}' AND min_distance <= {}",
+            source_id.replace('\'', "''"),
+            max_distance
+        );
+
+        let stream = table
+            .query()
+            .only_if(filter)
+            .execute()
+            .await?;
+
+        let mut impacted = Vec::new();
+        let batches: Vec<RecordBatch> = stream.try_collect().await?;
+
+        for batch in batches {
+            let targets = batch.column_by_name("target_id")
+                .unwrap().as_any().downcast_ref::<StringArray>().unwrap();
+            let distances = batch.column_by_name("min_distance")
+                .unwrap().as_any().downcast_ref::<UInt32Array>().unwrap();
+
+            for i in 0..batch.num_rows() {
+                impacted.push((targets.value(i).to_string(), distances.value(i)));
+            }
+        }
+
+        Ok(impacted)
     }
 
     /// Get symbols that call the given symbol (reverse lookup)

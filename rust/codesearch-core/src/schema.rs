@@ -131,6 +131,18 @@ pub fn identifiers_schema() -> Arc<Schema> {
     ]))
 }
 
+/// Table name for reachability (transitive closure)
+pub const REACHABILITY_TABLE_NAME: &str = "reachability";
+
+/// Schema for the reachability table (transitive closure)
+pub fn reachability_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("source_id", DataType::Utf8, false),
+        Field::new("target_id", DataType::Utf8, false),
+        Field::new("min_distance", DataType::UInt32, false),
+    ]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,5 +204,14 @@ mod tests {
         assert!(schema.field_with_name("column").is_ok());
         assert!(schema.field_with_name("source_symbol_id").is_ok());
         assert!(schema.field_with_name("target_symbol_id").is_ok());
+    }
+
+    #[test]
+    fn test_reachability_schema_has_correct_fields() {
+        let schema = reachability_schema();
+        assert_eq!(schema.fields().len(), 3);
+        assert!(schema.field_with_name("source_id").is_ok());
+        assert!(schema.field_with_name("target_id").is_ok());
+        assert!(schema.field_with_name("min_distance").is_ok());
     }
 }
