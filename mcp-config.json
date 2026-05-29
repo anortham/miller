@@ -1,8 +1,8 @@
 {
   "mcpServers": {
-    "codesearch": {
+    "miller": {
       "command": "dotnet",
-      "args": ["run", "--project", "src/Codesearch.Server"],
+      "args": ["run", "--project", "src/Miller.Server", "-c", "Release"],
       "env": {}
     }
   }
