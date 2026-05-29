@@ -34,3 +34,11 @@ Thumbs.db
 
 # Claude Code local settings (contains user-specific config)
 .claude/settings.local.json
+
+# Generated julie extract index + logs (per-project, rebuildable)
+.julie/
+
+# SQLite transient sidecar files
+*.db-wal
+*.db-shm
+*.db-journal
