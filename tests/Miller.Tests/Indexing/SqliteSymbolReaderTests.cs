@@ -103,6 +103,52 @@ public sealed class SqliteSymbolReaderTests
     }
 
     [Fact]
+    public void Read_IsTest_FromMetadata_IsCrossLanguage()
+    {
+        // julie's test_detection.rs writes "is_test":true into symbols.metadata across all 34 languages, ONLY
+        // when true (compact serde JSON). Miller surfaces that as IndexedSymbol.IsTest. Verified here across
+        // go/python/csharp positives + the negative / false / NULL / substring-trap / malformed cases.
+        // (M2 decision-4 — the cross-language primary test signal.)
+        using var fx = JulieDbFixture.Create(26, "1", new[]
+        {
+            new JulieDbFixture.SymbolRow("a0000000000000000000000000000001", "TestAdd", "function", "go",
+                "math/add_test.go", "func TestAdd(t *testing.T)", 3, null) { Metadata = "{\"is_test\":true}" },
+            new JulieDbFixture.SymbolRow("a0000000000000000000000000000002", "test_add", "function", "python",
+                "calc/test_calc.py", "def test_add()", 2, null)
+                { Metadata = "{\"isAsync\":false,\"decorators\":[],\"is_test\":true,\"returnType\":\"\"}" },
+            new JulieDbFixture.SymbolRow("a0000000000000000000000000000003", "Adds", "method", "csharp",
+                "Tests/CalcTests.cs", "public void Adds()", 9, null) { Metadata = "{\"is_test\":true}" },
+            // Non-test: empty metadata object.
+            new JulieDbFixture.SymbolRow("b0000000000000000000000000000001", "Add", "function", "go",
+                "math/add.go", "func Add(a, b int) int", 5, null) { Metadata = "{}" },
+            // Non-test: explicit false (julie never writes this, but the BOOL must be read, not the substring).
+            new JulieDbFixture.SymbolRow("b0000000000000000000000000000002", "helper", "function", "python",
+                "calc/util.py", "def helper()", 1, null) { Metadata = "{\"is_test\":false}" },
+            // Non-test: no metadata at all (NULL column).
+            new JulieDbFixture.SymbolRow("b0000000000000000000000000000003", "Calc", "class", "csharp",
+                "src/Calc.cs", "public class Calc", 1, null),
+            // Trap: a different key that merely CONTAINS the substring "is_test" must NOT read as a test.
+            new JulieDbFixture.SymbolRow("b0000000000000000000000000000004", "this_test_helper", "function", "go",
+                "math/helpers.go", "func helper()", 7, null) { Metadata = "{\"this_test\":true}" },
+            // Malformed metadata that contains the token — must degrade to false, never throw.
+            new JulieDbFixture.SymbolRow("b0000000000000000000000000000005", "broken", "function", "rust",
+                "core/lib.rs", "fn broken()", 1, null) { Metadata = "{\"is_test\":tru" },
+        });
+
+        var symbols = SqliteSymbolReader.Read(fx.DbPath);
+        bool IsTestOf(string name) => symbols.Single(s => s.Name == name).IsTest;
+
+        Assert.True(IsTestOf("TestAdd"), "go test method should be is_test");
+        Assert.True(IsTestOf("test_add"), "python test (is_test among other keys) should be is_test");
+        Assert.True(IsTestOf("Adds"), "csharp [Fact] method should be is_test");
+        Assert.False(IsTestOf("Add"), "empty metadata → not a test");
+        Assert.False(IsTestOf("helper"), "is_test:false → not a test");
+        Assert.False(IsTestOf("Calc"), "NULL metadata → not a test");
+        Assert.False(IsTestOf("this_test_helper"), "substring 'is_test' in another key → not a test");
+        Assert.False(IsTestOf("broken"), "malformed metadata JSON → not a test (graceful)");
+    }
+
+    [Fact]
     public void ToSearchableDocument_ProjectsTheScoringFields_DroppingJoinKeys()
     {
         using var fx = JulieDbFixture.CreateDefault();

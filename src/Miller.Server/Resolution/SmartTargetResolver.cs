@@ -1,0 +1,128 @@
+using System.Text.RegularExpressions;
+using Miller.Indexing;
+
+namespace Miller.Server.Resolution;
+
+/// <summary>
+/// Resolves a single <c>target</c>/<c>query</c> string to a file, a symbol, candidates, or not-found
+/// (miller-toolbox.md L47-56). The agent types a NAME or a PATH (never an opaque MD5 id by hand), so the
+/// shapes are distinguished by cheap structural rules; ids appear only when chained from a prior call.
+///
+/// <b>Cross-language file detection (M2 §3 decision-4):</b> "is this a file?" is DERIVED from the indexed
+/// data — an exact/unique indexed path, or an extension julie actually emitted for this repo
+/// (<see cref="MillerRepositoryIndex.KnownExtensions"/>) — NOT a hardcoded code-extension whitelist. That set
+/// is precisely the languages julie supports here, all-language and self-updating, honouring the principle
+/// that a feature scopes to every capable language rather than a hand-picked few.
+///
+/// Overrides: <c>scope</c> constrains a name to a file before disambiguating; <c>as</c> forces the kind.
+/// Pure over the in-memory index (no I/O) — a process-wide singleton.
+/// </summary>
+public sealed partial class SmartTargetResolver
+{
+    private readonly MillerRepositoryIndex _index;
+
+    public SmartTargetResolver(MillerRepositoryIndex index)
+    {
+        ArgumentNullException.ThrowIfNull(index);
+        _index = index;
+    }
+
+    /// <summary>
+    /// Resolve <paramref name="target"/>. <paramref name="scope"/> (a file path) constrains a name lookup to
+    /// that file before disambiguating; <paramref name="asKind"/> forces FILE or SYMBOL interpretation.
+    /// </summary>
+    /// <exception cref="ArgumentException"><paramref name="target"/> is null/empty/whitespace.</exception>
+    public TargetResolution Resolve(string target, string? scope = null, TargetKind asKind = TargetKind.Auto)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(target);
+
+        switch (asKind)
+        {
+            case TargetKind.File:
+                // Forced file: canonicalize a bare basename to its indexed path when unambiguous.
+                return new TargetResolution.File(_index.ResolveIndexedFilePath(target) ?? target);
+            case TargetKind.Symbol:
+                return ResolveAsSymbol(target, scope);
+            default:
+                break; // Auto — infer below.
+        }
+
+        // Rule 1: explicit path separators → file (language-agnostic).
+        if (target.Contains('/') || target.Contains('\\'))
+            return new TargetResolution.File(_index.ResolveIndexedFilePath(target) ?? target);
+
+        // Rule 2: id shape (32-hex MD5 | contains '::' | starts 'file_') → use directly, no name search.
+        if (LooksLikeSymbolId(target))
+        {
+            var byId = _index.FindBySymbolId(target);
+            return byId is not null
+                ? new TargetResolution.Symbol(byId)
+                : new TargetResolution.NotFound(target);
+        }
+
+        // Rule 3: a bare string that names an indexed file (exact, or unique basename) → that file.
+        string? indexedPath = _index.ResolveIndexedFilePath(target);
+        if (indexedPath is not null)
+            return new TargetResolution.File(indexedPath);
+
+        // Rule 4: an extension julie actually indexed → a (possibly not-yet-indexed) file, not a name.
+        if (HasKnownExtension(target))
+            return new TargetResolution.File(target);
+
+        // Rule 5: otherwise a symbol NAME.
+        return ResolveByName(target, scope);
+    }
+
+    private TargetResolution ResolveAsSymbol(string target, string? scope)
+    {
+        // as=symbol: an id shape is still used directly; anything else is a NAME lookup (bypassing the
+        // file-path heuristic so a path-shaped string is treated as a name).
+        if (LooksLikeSymbolId(target))
+        {
+            var byId = _index.FindBySymbolId(target);
+            return byId is not null
+                ? new TargetResolution.Symbol(byId)
+                : new TargetResolution.NotFound(target);
+        }
+        return ResolveByName(target, scope);
+    }
+
+    private TargetResolution ResolveByName(string name, string? scope)
+    {
+        IReadOnlyList<IndexedSymbol> matches = _index.FindByName(name);
+
+        if (!string.IsNullOrWhiteSpace(scope))
+        {
+            // Constrain to the scoped file before counting (ordinal — file paths are case-sensitive on the
+            // platforms julie targets and the extract stores them verbatim).
+            matches = matches.Where(s => string.Equals(s.FilePath, scope, StringComparison.Ordinal)).ToList();
+        }
+
+        return matches.Count switch
+        {
+            0 => new TargetResolution.NotFound(name),
+            1 => new TargetResolution.Symbol(matches[0]),
+            _ => new TargetResolution.Candidates(matches),
+        };
+    }
+
+    // A non-empty extension (beyond the dot) that appears among the indexed file paths. Derived, not hardcoded.
+    private bool HasKnownExtension(string s)
+    {
+        string ext = Path.GetExtension(s);
+        return ext.Length > 1 && _index.KnownExtensions.Contains(ext);
+    }
+
+    private static bool LooksLikeSymbolId(string s)
+    {
+        if (s.StartsWith("file_", StringComparison.Ordinal))
+            return true;
+        if (s.Contains("::", StringComparison.Ordinal))
+            return true;
+        return Md5HexPattern().IsMatch(s);
+    }
+
+    // julie symbol ids are 32 lowercase hex chars (MD5). Anchored so a longer/shorter string is not an id.
+    [GeneratedRegex("^[0-9a-f]{32}$", RegexOptions.CultureInvariant)]
+    private static partial Regex Md5HexPattern();
+}

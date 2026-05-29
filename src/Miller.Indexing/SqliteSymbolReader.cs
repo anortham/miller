@@ -61,7 +61,7 @@ public static class SqliteSymbolReader
         using var command = connection.CreateCommand();
         // Deterministic DocId ordering. SELECT column order is LOCKED to the GetX ordinals below.
         command.CommandText = """
-            SELECT id, name, signature, kind, language, file_path, start_line, parent_id
+            SELECT id, name, signature, kind, language, file_path, start_line, parent_id, metadata
             FROM symbols
             WHERE name IS NOT NULL
             ORDER BY file_path, start_line, id;
@@ -80,6 +80,7 @@ public static class SqliteSymbolReader
             string filePath = reader.GetString(5);                              // file_path   NOT NULL
             int startLine = reader.IsDBNull(6) ? 0 : reader.GetInt32(6);        // start_line  nullable -> 0
             string? parentId = reader.IsDBNull(7) ? null : reader.GetString(7); // parent_id   nullable
+            string? metadata = reader.IsDBNull(8) ? null : reader.GetString(8); // metadata    nullable (JSON)
 
             results.Add(new IndexedSymbol(
                 DocId: docId++,
@@ -90,10 +91,40 @@ public static class SqliteSymbolReader
                 Language: language,
                 FilePath: filePath,
                 StartLine: startLine,
-                ParentId: parentId));
+                ParentId: parentId,
+                IsTest: ParseIsTest(metadata)));
         }
 
         return results;
+    }
+
+    /// <summary>
+    /// Read the cross-language test signal from julie's <c>symbols.metadata</c> JSON (decision-4). julie's
+    /// <c>test_detection.rs</c> writes <c>"is_test": true</c> into the metadata of test symbols across all 34
+    /// languages, ONLY when true (compact serde JSON). We parse just the <c>is_test</c> boolean.
+    ///
+    /// Perf: ~90% of symbols are not tests and carry no <c>is_test</c> key, so we skip JSON parsing entirely
+    /// unless a cheap ordinal substring check matches — over ~565k startup rows that avoids ~half a million
+    /// parses. A malformed/absent/false value is <c>false</c> (the signal is advisory, never throws).
+    /// </summary>
+    private static bool ParseIsTest(string? metadataJson)
+    {
+        if (string.IsNullOrEmpty(metadataJson)
+            || !metadataJson.Contains("\"is_test\"", StringComparison.Ordinal))
+            return false;
+
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(metadataJson);
+            return doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("is_test", out var v)
+                && v.ValueKind == System.Text.Json.JsonValueKind.True;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            // julie writes well-formed JSON; tolerate a corrupt/hand-mangled value as "not a test".
+            return false;
+        }
     }
 
     // Probe writability by creating + deleting a temp file in the DB directory. A pure FileMode check is
