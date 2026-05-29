@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Miller.Core/Miller.Core.csproj" />
+    <Project Path="src/Miller.Indexing/Miller.Indexing.csproj" />
+    <Project Path="src/Miller.Server/Miller.Server.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Miller.Tests/Miller.Tests.csproj" />
+  </Folder>
+</Solution>

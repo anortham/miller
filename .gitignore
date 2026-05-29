@@ -14,8 +14,9 @@ Cargo.lock
 models/*.onnx
 models/*.bin
 
-# Index data (per-project)
+# Index data (per-project, rebuildable)
 .codesearch/
+.miller/
 
 # IDE
 .idea/

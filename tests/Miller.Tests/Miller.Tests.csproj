@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- xUnit v3 test projects are self-executing standalone apps, so they require OutputType=Exe.
+         dotnet test still drives them via Microsoft.NET.Test.Sdk + xunit.runner.visualstudio (VSTest mode). -->
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="10.0.1" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.6.0" />
+    <PackageReference Include="xunit.v3" Version="3.2.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Miller.Core/Miller.Core.csproj" />
+    <ProjectReference Include="../../src/Miller.Indexing/Miller.Indexing.csproj" />
+    <ProjectReference Include="../../src/Miller.Server/Miller.Server.csproj" />
+  </ItemGroup>
+</Project>

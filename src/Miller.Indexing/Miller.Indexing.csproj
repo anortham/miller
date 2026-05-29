@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Miller.Indexing — infrastructure. The julie-server extract subprocess wrapper, the SQLite (WAL) read layer,
+    and the file watcher / single-writer indexer. Populates Miller.Core's types from the extract DB.
+    Microsoft.Data.Sqlite is added in M1.
+  -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\Miller.Core\Miller.Core.csproj" />
+  </ItemGroup>
+
+</Project>

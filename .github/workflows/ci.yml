@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore Miller.slnx
+
+      - name: Build (warnings are errors via Directory.Build.props)
+        run: dotnet build Miller.slnx --no-restore -c Release
+
+      # Default suite = unit + contract. Scale/integration tests are [Trait("Category","Scale")] and excluded here;
+      # they run in a separate scheduled job. Local dev-loop target is <10s; the CI ceiling below is generous to
+      # absorb runner variance while still catching the runaway-suite death spiral that nearly killed julie
+      # (julie-eros-audit §4). Tighten the ceiling as the real suite grows.
+      - name: Test (default suite, time-budgeted)
+        run: |
+          start=$(date +%s)
+          dotnet test Miller.slnx --no-build -c Release --filter "Category!=Scale"
+          elapsed=$(( $(date +%s) - start ))
+          echo "Default suite wall time: ${elapsed}s (local target <10s, CI ceiling 30s)"
+          if [ "$elapsed" -gt 30 ]; then
+            echo "::error::Default test suite took ${elapsed}s (>30s CI ceiling). Investigate slow tests or tag them [Trait(\"Category\",\"Scale\")]."
+            exit 1
+          fi

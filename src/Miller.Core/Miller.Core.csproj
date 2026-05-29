@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Miller.Core — pure logic ONLY. Zero infrastructure dependencies (no SQLite, no subprocess, no MCP, no file I/O).
+    Houses the extract-contract record types, the in-memory inverted index + BM25 ranking, and the structural
+    cross-reference resolver. This isolation is the rule that keeps the test suite fast: Core is unit-tested in
+    milliseconds with no live components. Real types arrive in M1 (index/ranking) and M4 (resolver).
+  -->
+
+</Project>
