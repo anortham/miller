@@ -56,6 +56,13 @@ internal sealed class JulieDbFixture : IDisposable
         public string? CodeContext { get; init; }
 
         /// <summary>
+        /// The symbol's WHOLE-span end line (julie's <c>end_line</c>, 1-based). NULL by default so M1/M2 rows
+        /// are unaffected. M5's D7 reads this so the diff→symbol mapping can intersect <c>[start_line, end_line]</c>
+        /// against a changed range; a NULL here reads as 0 (the same nullable-INTEGER discipline as start_line).
+        /// </summary>
+        public int? EndLine { get; init; }
+
+        /// <summary>
         /// The symbol's WHOLE-span start/end byte offsets (julie's <c>start_byte</c>/<c>end_byte</c>). NULL by
         /// default so M1/M2 rows are unaffected. M6's <c>ReadEditSpan</c> reads these for signature/insert ops:
         /// signature span = <c>[start_byte, body_start_byte)</c>, insert_after at <c>end_byte</c>.
@@ -94,6 +101,19 @@ internal sealed class JulieDbFixture : IDisposable
         public int? StartByte { get; init; }
         public int? EndByte { get; init; }
     }
+
+    /// <summary>
+    /// A row as written into the synthesized <c>relationships</c> table (M5 D2 precise edge source,
+    /// verified-fact 1). <see cref="FromSymbolId"/> → <see cref="ToSymbolId"/> are BOTH resolved symbol ids
+    /// (julie's <c>from_symbol_id</c>/<c>to_symbol_id</c>, NOT NULL); <see cref="Kind"/> is the edge label
+    /// (<c>calls</c>/<c>uses</c>/...). Sparse: only the directly-extracted edges (the analyze pass does not run
+    /// under <c>extract scan</c>).
+    /// </summary>
+    internal sealed record RelationshipRow(
+        string Id,
+        string FromSymbolId,
+        string ToSymbolId,
+        string Kind);
 
     /// <summary>
     /// A row as written into the synthesized <c>canonical_revisions</c> table (M3 freshness cursor,
@@ -136,7 +156,8 @@ internal sealed class JulieDbFixture : IDisposable
         IReadOnlyDictionary<string, string>? fileContent = null,
         string? workspaceId = null,
         IReadOnlyList<RevisionRow>? revisions = null,
-        IReadOnlyList<RevisionFileChangeRow>? fileChanges = null)
+        IReadOnlyList<RevisionFileChangeRow>? fileChanges = null,
+        IReadOnlyList<RelationshipRow>? relationships = null)
     {
         string dir = Path.Combine(Path.GetTempPath(), "miller-julie-fixture-" + Guid.NewGuid().ToString("N"));
         System.IO.Directory.CreateDirectory(dir);
@@ -159,6 +180,9 @@ internal sealed class JulieDbFixture : IDisposable
             Exec(conn, FilesDdl);
             Exec(conn, SymbolsDdl);
             Exec(conn, IdentifiersDdl);
+            // The relationships table is always created (harmless to existing tests; they query
+            // symbols/identifiers only) so a SymbolGraphReader can open against any fixture.
+            Exec(conn, RelationshipsDdl);
             // The M3 freshness tables are always created (harmless to existing tests; they query
             // symbols/identifiers only) so a FreshnessReader can open against any fixture.
             Exec(conn, CanonicalRevisionsDdl);
@@ -186,11 +210,11 @@ internal sealed class JulieDbFixture : IDisposable
             {
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText =
-                    "INSERT INTO symbols (id, name, kind, language, file_path, signature, start_line, parent_id, " +
+                    "INSERT INTO symbols (id, name, kind, language, file_path, signature, start_line, end_line, parent_id, " +
                     "metadata, doc_comment, visibility, code_context, " +
                     "start_byte, end_byte, " +
                     "body_start_byte, body_end_byte, body_start_line, body_end_line) " +
-                    "VALUES ($id, $name, $kind, $lang, $fp, $sig, $sl, $pid, " +
+                    "VALUES ($id, $name, $kind, $lang, $fp, $sig, $sl, $el, $pid, " +
                     "$meta, $doc, $vis, $ctx, $sb, $eb, $bsb, $beb, $bsl, $bel);";
                 cmd.Parameters.AddWithValue("$id", r.Id);
                 cmd.Parameters.AddWithValue("$name", r.Name);
@@ -199,6 +223,7 @@ internal sealed class JulieDbFixture : IDisposable
                 cmd.Parameters.AddWithValue("$fp", r.FilePath);
                 cmd.Parameters.AddWithValue("$sig", (object?)r.Signature ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$sl", (object?)r.StartLine ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$el", (object?)r.EndLine ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$pid", (object?)r.ParentId ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$meta", (object?)r.Metadata ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$doc", (object?)r.DocComment ?? DBNull.Value);
@@ -233,6 +258,24 @@ internal sealed class JulieDbFixture : IDisposable
                     cmd.Parameters.AddWithValue("$sb", (object?)ident.StartByte ?? DBNull.Value);
                     cmd.Parameters.AddWithValue("$eb", (object?)ident.EndByte ?? DBNull.Value);
                     cmd.Parameters.AddWithValue("$cid", (object?)ident.ContainingSymbolId ?? DBNull.Value);
+                    cmd.ExecuteNonQuery();
+                }
+            }
+
+            // relationships rows (M5 D2 precise edges). from_symbol_id/to_symbol_id FK to symbols(id), which
+            // are already inserted above, so FK enforcement is satisfied.
+            if (relationships is not null)
+            {
+                foreach (var rel in relationships)
+                {
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText =
+                        "INSERT INTO relationships (id, from_symbol_id, to_symbol_id, kind) " +
+                        "VALUES ($id, $from, $to, $kind);";
+                    cmd.Parameters.AddWithValue("$id", rel.Id);
+                    cmd.Parameters.AddWithValue("$from", rel.FromSymbolId);
+                    cmd.Parameters.AddWithValue("$to", rel.ToSymbolId);
+                    cmd.Parameters.AddWithValue("$kind", rel.Kind);
                     cmd.ExecuteNonQuery();
                 }
             }
@@ -654,6 +697,20 @@ internal sealed class JulieDbFixture : IDisposable
             confidence REAL DEFAULT 1.0,
             code_context TEXT,
             last_indexed INTEGER DEFAULT 0
+        );
+        """;
+
+    private const string RelationshipsDdl = """
+        CREATE TABLE IF NOT EXISTS relationships (
+            id TEXT PRIMARY KEY,
+            from_symbol_id TEXT NOT NULL REFERENCES symbols(id) ON DELETE CASCADE,
+            to_symbol_id TEXT NOT NULL REFERENCES symbols(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL,
+            file_path TEXT NOT NULL DEFAULT '',
+            line_number INTEGER NOT NULL DEFAULT 0,
+            confidence REAL DEFAULT 1.0,
+            metadata TEXT,
+            created_at INTEGER DEFAULT 0
         );
         """;
 

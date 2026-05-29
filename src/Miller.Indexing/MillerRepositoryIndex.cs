@@ -1,3 +1,4 @@
+using Miller.Core.Graph;
 using Miller.Core.Search;
 
 namespace Miller.Indexing;
@@ -28,6 +29,11 @@ public sealed class MillerRepositoryIndex
     // emitted for THIS repo — precisely the supported languages, self-updating as julie adds more.
     private readonly Dictionary<string, List<string>> _byFileName;
 
+    // The M5 dependency graph (D9): built as ONE immutable unit with the index so it is published atomically by
+    // the holder's reference swap (symbol ids churn on edit; a graph keyed on stale ids must never outlive its
+    // index). Always non-null — Build(symbols) installs an edge-less graph (back-compat for search/inspect).
+    private readonly SymbolGraph _graph;
+
     private MillerRepositoryIndex(
         MillerSearchIndex index,
         IndexedSymbol[] byDocId,
@@ -36,7 +42,8 @@ public sealed class MillerRepositoryIndex
         Dictionary<string, List<IndexedSymbol>> byFilePath,
         Dictionary<string, List<IndexedSymbol>> byParentId,
         Dictionary<string, List<string>> byFileName,
-        IReadOnlySet<string> knownExtensions)
+        IReadOnlySet<string> knownExtensions,
+        SymbolGraph graph)
     {
         _index = index;
         _byDocId = byDocId;
@@ -46,7 +53,17 @@ public sealed class MillerRepositoryIndex
         _byParentId = byParentId;
         _byFileName = byFileName;
         KnownExtensions = knownExtensions;
+        _graph = graph;
     }
+
+    /// <summary>
+    /// The M5 dependency graph travelling with this index (D9). Forward + reverse adjacency over the indexed
+    /// symbols; built once at <see cref="Build(IReadOnlyList{IndexedSymbol},IReadOnlyList{GraphEdge})"/> time.
+    /// An index built via <see cref="Build(IReadOnlyList{IndexedSymbol})"/> carries every symbol as a node but
+    /// no edges (an empty graph). Prefer the hydrating <see cref="Dependents"/>/<see cref="Dependencies"/>
+    /// pass-throughs over the raw id graph when you need full <see cref="IndexedSymbol"/>s.
+    /// </summary>
+    public SymbolGraph Graph => _graph;
 
     /// <summary>Total number of indexed symbols.</summary>
     public int DocumentCount => _byDocId.Length;
@@ -60,16 +77,37 @@ public sealed class MillerRepositoryIndex
     public IReadOnlySet<string> KnownExtensions { get; }
 
     /// <summary>
-    /// Build the repository index from symbols produced by <see cref="SqliteSymbolReader.Read"/>. The reader
-    /// assigns contiguous 0-based DocIds in deterministic order, so the hydration array is indexed directly by
-    /// DocId for O(1) <see cref="Resolve"/>. This contract is validated, not assumed.
+    /// Build the repository index from symbols produced by <see cref="SqliteSymbolReader.Read"/>, with an EMPTY
+    /// dependency graph. Back-compat for the search/inspect/edit paths that do not need edges — every symbol is a
+    /// graph node, but there are no dependency edges. Delegates to
+    /// <see cref="Build(IReadOnlyList{IndexedSymbol},IReadOnlyList{GraphEdge})"/>.
     /// </summary>
     /// <exception cref="ArgumentException">
     /// DocIds are not the contiguous 0..n-1 ordinals this facade requires (a reader regression).
     /// </exception>
-    public static MillerRepositoryIndex Build(IReadOnlyList<IndexedSymbol> symbols)
+    public static MillerRepositoryIndex Build(IReadOnlyList<IndexedSymbol> symbols) =>
+        Build(symbols, Array.Empty<GraphEdge>());
+
+    /// <summary>
+    /// Build the repository index AND its dependency graph (D9) from symbols produced by
+    /// <see cref="SqliteSymbolReader.Read"/> and the resolved edges produced by
+    /// <see cref="SymbolGraphReader.Read"/>, as ONE immutable unit. The reader assigns contiguous 0-based DocIds
+    /// in deterministic order, so the hydration array is indexed directly by DocId for O(1) <see cref="Resolve"/>;
+    /// this contract is validated, not assumed. Each symbol becomes a graph node carrying its
+    /// <see cref="IndexedSymbol.IsTest"/> flag (so <c>impact</c> can partition likely tests without a second
+    /// lookup); the graph applies its own edge hygiene (unknown-endpoint / self-loop drop, per-direction dedup).
+    /// </summary>
+    /// <param name="symbols">The indexed symbols (contiguous 0-based DocIds).</param>
+    /// <param name="edges">The resolved dependency edges (<see cref="SymbolGraphReader.Read"/>'s output).</param>
+    /// <exception cref="ArgumentNullException"><paramref name="symbols"/> or <paramref name="edges"/> is null.</exception>
+    /// <exception cref="ArgumentException">
+    /// DocIds are not the contiguous 0..n-1 ordinals this facade requires (a reader regression).
+    /// </exception>
+    public static MillerRepositoryIndex Build(
+        IReadOnlyList<IndexedSymbol> symbols, IReadOnlyList<GraphEdge> edges)
     {
         ArgumentNullException.ThrowIfNull(symbols);
+        ArgumentNullException.ThrowIfNull(edges);
 
         var byDocId = new IndexedSymbol[symbols.Count];
         var documents = new SearchableDocument[symbols.Count];
@@ -78,6 +116,9 @@ public sealed class MillerRepositoryIndex
         var byName = new Dictionary<string, List<IndexedSymbol>>(StringComparer.Ordinal);
         var byFilePath = new Dictionary<string, List<IndexedSymbol>>(StringComparer.Ordinal);
         var byParentId = new Dictionary<string, List<IndexedSymbol>>(StringComparer.Ordinal);
+        // Graph nodes: one per indexed symbol, carrying its id + cross-language IsTest flag (D9). The graph
+        // bounds its edges to these nodes (unknown-endpoint drop), so edges to non-indexed ids fall out.
+        var nodes = new GraphNode[symbols.Count];
 
         for (int i = 0; i < symbols.Count; i++)
         {
@@ -91,6 +132,7 @@ public sealed class MillerRepositoryIndex
 
             byDocId[i] = symbol;
             documents[i] = symbol.ToSearchableDocument();
+            nodes[i] = new GraphNode(symbol.SymbolId, symbol.IsTest);
 
             // symbol id is julie's PK — unique. A duplicate would mean a corrupt extract; last-wins is
             // harmless here (the reader already enforces uniqueness via the PK), so just index it.
@@ -120,7 +162,7 @@ public sealed class MillerRepositoryIndex
 
         return new MillerRepositoryIndex(
             MillerSearchIndex.Build(documents), byDocId, bySymbolId, byName, byFilePath, byParentId,
-            byFileName, knownExtensions);
+            byFileName, knownExtensions, SymbolGraph.Build(nodes, edges));
 
         static void Add(Dictionary<string, List<IndexedSymbol>> map, string key, IndexedSymbol value)
         {
@@ -201,6 +243,52 @@ public sealed class MillerRepositoryIndex
     {
         ArgumentNullException.ThrowIfNull(parentId);
         return _byParentId.TryGetValue(parentId, out var list) ? list : Empty;
+    }
+
+    /// <summary>
+    /// The symbols that directly depend on <paramref name="symbolId"/> (its one-hop callers — the
+    /// <c>impact</c> blast-radius adjacency), hydrated to full <see cref="IndexedSymbol"/>s in the graph's id
+    /// order. A hydrating pass-through over <see cref="Graph"/>'s <see cref="SymbolGraph.Dependents"/>: each
+    /// neighbour id is resolved via the symbol-id map; an id absent from the index is skipped (defensive — the
+    /// graph already bounds edges to indexed nodes, so this only fires on an inconsistent build). Empty when the
+    /// id is unknown or nothing depends on it.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="symbolId"/> is null.</exception>
+    public IReadOnlyList<IndexedSymbol> Dependents(string symbolId)
+    {
+        ArgumentNullException.ThrowIfNull(symbolId);
+        return Hydrate(_graph.Dependents(symbolId));
+    }
+
+    /// <summary>
+    /// The symbols <paramref name="symbolId"/> directly depends on (its one-hop callees / used types), hydrated
+    /// to full <see cref="IndexedSymbol"/>s in the graph's id order. A hydrating pass-through over
+    /// <see cref="Graph"/>'s <see cref="SymbolGraph.Dependencies"/> with the same skip-unknown discipline as
+    /// <see cref="Dependents"/>. Empty when the id is unknown or it depends on nothing indexed.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="symbolId"/> is null.</exception>
+    public IReadOnlyList<IndexedSymbol> Dependencies(string symbolId)
+    {
+        ArgumentNullException.ThrowIfNull(symbolId);
+        return Hydrate(_graph.Dependencies(symbolId));
+    }
+
+    // Resolve a list of graph neighbour ids to full IndexedSymbols via FindBySymbolId, preserving the graph's
+    // id order and skipping any id not present in the index (the graph already bounds edges to indexed nodes, so
+    // a missing id signals an inconsistent build rather than an expected case — drop it rather than NRE).
+    private IReadOnlyList<IndexedSymbol> Hydrate(IReadOnlyList<string> ids)
+    {
+        if (ids.Count == 0)
+            return Empty;
+
+        var hydrated = new List<IndexedSymbol>(ids.Count);
+        foreach (var id in ids)
+        {
+            var symbol = FindBySymbolId(id);
+            if (symbol is not null)
+                hydrated.Add(symbol);
+        }
+        return hydrated;
     }
 
     /// <summary>Search the index (delegates to <see cref="MillerSearchIndex.Search"/>; see its semantics).</summary>

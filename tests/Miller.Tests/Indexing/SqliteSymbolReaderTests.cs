@@ -76,6 +76,30 @@ public sealed class SqliteSymbolReaderTests
     }
 
     [Fact]
+    public void Read_EndLine_PopulatedRetained_NullMapsToZero()
+    {
+        // D7: the reader projects symbols.end_line (the whole-symbol span end) so the diff→symbol line-precise
+        // mapping (D5) can intersect [StartLine, EndLine] against a changed range — without a per-call DB hop.
+        // NULL end_line (the same nullable-INTEGER trap as start_line) must read as 0, not throw.
+        using var fx = JulieDbFixture.Create(26, "1", new[]
+        {
+            new JulieDbFixture.SymbolRow("c0000000000000000000000000000001", "Spanned", "method", "csharp",
+                "src/Spanned.cs", "public void Spanned()", 10, null) { EndLine = 42 },
+            // NULL end_line → 0 (no whole-span recorded; the diff path degrades to whole-file at the caller).
+            new JulieDbFixture.SymbolRow("c0000000000000000000000000000002", "NoEnd", "method", "csharp",
+                "src/NoEnd.cs", "public void NoEnd()", 3, null),
+        });
+
+        var symbols = SqliteSymbolReader.Read(fx.DbPath);
+
+        var spanned = symbols.Single(s => s.Name == "Spanned");
+        Assert.Equal(10, spanned.StartLine);
+        Assert.Equal(42, spanned.EndLine);
+        // NULL end_line maps to 0 (the nullable-INTEGER discipline, identical to start_line).
+        Assert.Equal(0, symbols.Single(s => s.Name == "NoEnd").EndLine);
+    }
+
+    [Fact]
     public void Read_NullParentId_MapsToNull_PopulatedParentRetained()
     {
         using var fx = JulieDbFixture.CreateDefault();

@@ -43,6 +43,7 @@ public sealed class RebuildLatencyTests
                 Language: langs[i % langs.Length],
                 FilePath: $"src/module{i % 200}/File{i % 1000}.cs",
                 StartLine: (i % 500) + 1,
+                EndLine: (i % 500) + 5,
                 ParentId: i % 7 == 0 ? null : (i - 1).ToString("x32").PadLeft(32, '0')[..32]);
         }
         return symbols;

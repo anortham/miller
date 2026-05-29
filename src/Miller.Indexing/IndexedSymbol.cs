@@ -18,6 +18,7 @@ public sealed record IndexedSymbol(
     string Language,
     string FilePath,    // relative-unix to root_path
     int StartLine,      // 1-based (NULL start_line in the DB maps to 0)
+    int EndLine,        // whole-symbol span end, 1-based (NULL end_line maps to 0); enables D5 diff→symbol mapping
     string? ParentId,   // julie parent_id (containment; M4)
     bool IsTest = false) // julie's persisted symbols.metadata.is_test (cross-language, all 34 langs); see M2 §2 decision-4
 {

@@ -110,9 +110,10 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                     _logger.LogInformation("Reusing existing extract DB at {Db}.", canonicalDbPath);
                 }
 
-                // Read → build the in-memory index (read-path opens the same DB file; canonical is fine).
-                var symbols = SqliteSymbolReader.Read(canonicalDbPath);
-                var index = MillerRepositoryIndex.Build(symbols);
+                // Read → build the in-memory index + dependency graph as one unit via the single production path
+                // (M5 D9; read-path opens the same DB file; canonical is fine). The bootstrap and the freshness
+                // rebuild both route through RepositoryIndexLoader so each gets the graph identically.
+                var index = RepositoryIndexLoader.Load(canonicalDbPath);
 
                 // Resolve the workspace id (for telemetry scoping + the freshness poll) and finalize the context.
                 string? workspaceId = ExtractReader.ReadWorkspaceId(canonicalDbPath);

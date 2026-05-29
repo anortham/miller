@@ -1,0 +1,439 @@
+using System.Text.Json;
+using Miller.Core.Graph;
+using Miller.Indexing;
+using Miller.Server.Resolution;
+using Miller.Server.Tools;
+using Xunit;
+
+namespace Miller.Tests.Server;
+
+/// <summary>
+/// Pins the <c>impact</c> tool (M5 D5/D1/D8/D10) against an in-memory synth index built from symbols + edges via
+/// <see cref="MillerRepositoryIndex.Build(IReadOnlyList{IndexedSymbol},IReadOnlyList{GraphEdge})"/> — pure, no
+/// SQLite (the Server <c>Run</c> core never touches the DB for impact). Exercises
+/// <see cref="ImpactTool.Run"/> directly: reverse-closure correctness, the likely-test partition (julie's
+/// cross-language <c>IsTest</c> flag), the exactly-one-input guard (zero → a usage note, not an error), both
+/// render formats, a not-found target, the changed_paths seed leg, and the diff seed leg with line-precise
+/// intersection + whole-file degradation.
+///
+/// <para>Graph convention (D2): an edge <c>From → To</c> means "From depends on To". So a reverse-reachability
+/// query from a seed returns its <b>dependents</b> (the callers up the chain) — the blast radius of editing the
+/// seed. The fixture wires <c>Validate ← Process ← Handle</c> and a test <c>ProcessWorks → Process</c>, so the
+/// impact of editing <c>Validate</c> is {Process, Handle, ProcessWorks}, with ProcessWorks a likely test.</para>
+/// </summary>
+public sealed class ImpactToolTests
+{
+    private const string ValidateId = "00000000000000000000000000000001";
+    private const string ProcessId = "00000000000000000000000000000002";
+    private const string HandleId = "00000000000000000000000000000003";
+    private const string ProcessWorksId = "00000000000000000000000000000004";
+    private const string LonelyId = "00000000000000000000000000000005";
+
+    // A small dependency graph:
+    //   Process   depends on Validate   (Process → Validate)
+    //   Handle    depends on Process    (Handle  → Process)
+    //   ProcessWorks (a TEST) depends on Process (ProcessWorks → Process)
+    //   Lonely depends on nothing and nothing depends on it.
+    // Reverse-reachability from Validate therefore reaches Process (hop 1), then Handle + ProcessWorks (hop 2).
+    private static (MillerRepositoryIndex index, SmartTargetResolver resolver) BuildFixture()
+    {
+        var symbols = new List<IndexedSymbol>
+        {
+            new(0, ValidateId, "Validate", "void Validate()", "method", "csharp", "src/Service.cs", 10, 14, null),
+            new(1, ProcessId, "Process", "void Process()", "method", "csharp", "src/Service.cs", 20, 30, null),
+            new(2, HandleId, "Handle", "void Handle()", "method", "csharp", "web/Controller.cs", 5, 9, null),
+            new(3, ProcessWorksId, "ProcessWorks", "void ProcessWorks()", "method", "csharp",
+                "tests/ServiceTests.cs", 8, 12, null, IsTest: true),
+            new(4, LonelyId, "Lonely", "void Lonely()", "method", "csharp", "src/Other.cs", 1, 3, null),
+        };
+        var edges = new[]
+        {
+            new GraphEdge(ProcessId, ValidateId, "calls"),
+            new GraphEdge(HandleId, ProcessId, "calls"),
+            new GraphEdge(ProcessWorksId, ProcessId, "calls"),
+        };
+        var index = MillerRepositoryIndex.Build(symbols, edges);
+        return (index, new SmartTargetResolver(index));
+    }
+
+    // ---- reverse-closure correctness + test partition ----
+
+    [Fact]
+    public void Run_TargetSymbol_ReturnsReverseClosure_PartitionsLikelyTests()
+    {
+        var (index, resolver) = BuildFixture();
+
+        string output = ImpactTool.Run(index, resolver,
+            target: "Validate", changedPaths: null, diff: null, maxDepth: 2, limit: 100, json: false,
+            out int impactedCount, out _);
+
+        // Process (hop 1), Handle (hop 2) are impacted; ProcessWorks is partitioned into the tests section.
+        Assert.Contains("Process", output);
+        Assert.Contains("Handle", output);
+        Assert.Contains("ProcessWorks", output);
+        // Lonely depends on nothing in the closure → never listed.
+        Assert.DoesNotContain("Lonely", output);
+        // Impacted count excludes the likely-test (Process + Handle = 2).
+        Assert.Equal(2, impactedCount);
+    }
+
+    [Fact]
+    public void Run_PartitionsTestsIntoTheirOwnSection()
+    {
+        var (index, resolver) = BuildFixture();
+
+        string output = ImpactTool.Run(index, resolver,
+            target: "Validate", changedPaths: null, diff: null, maxDepth: 2, limit: 100, json: true,
+            out _, out _);
+
+        using var doc = JsonDocument.Parse(output);
+        var root = doc.RootElement;
+
+        var impacted = root.GetProperty("impacted");
+        var impactedNames = impacted.EnumerateArray().Select(e => e.GetProperty("name").GetString()).ToList();
+        Assert.Contains("Process", impactedNames);
+        Assert.Contains("Handle", impactedNames);
+        Assert.DoesNotContain("ProcessWorks", impactedNames); // tests are NOT in impacted
+
+        var tests = root.GetProperty("tests");
+        var testNames = tests.EnumerateArray().Select(e => e.GetProperty("name").GetString()).ToList();
+        Assert.Contains("ProcessWorks", testNames);
+    }
+
+    [Fact]
+    public void Run_Compact_CarriesProvenance_NameKindFileLineAndHop()
+    {
+        var (index, resolver) = BuildFixture();
+
+        string output = ImpactTool.Run(index, resolver,
+            target: "Validate", changedPaths: null, diff: null, maxDepth: 2, limit: 100, json: false, out _, out _);
+
+        // Process is reached at hop 1, in src/Service.cs:20.
+        Assert.Contains("Process", output);
+        Assert.Contains("method", output);
+        Assert.Contains("src/Service.cs:20", output);
+        Assert.Contains("hop", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Run_MaxDepthOne_StopsAtDirectDependents()
+    {
+        var (index, resolver) = BuildFixture();
+
+        string output = ImpactTool.Run(index, resolver,
+            target: "Validate", changedPaths: null, diff: null, maxDepth: 1, limit: 100, json: false,
+            out int impactedCount, out _);
+
+        // Only Process (the direct dependent) at depth 1; Handle/ProcessWorks are two hops away.
+        Assert.Contains("Process", output);
+        Assert.DoesNotContain("Handle", output);
+        Assert.DoesNotContain("ProcessWorks", output);
+        Assert.Equal(1, impactedCount);
+    }
+
+    [Fact]
+    public void Run_NothingDependsOnTheTarget_ReportsEmptyImpact()
+    {
+        var (index, resolver) = BuildFixture();
+
+        // Lonely has no dependents → the impact set is empty.
+        string output = ImpactTool.Run(index, resolver,
+            target: "Lonely", changedPaths: null, diff: null, maxDepth: 2, limit: 100, json: false,
+            out int impactedCount, out _);
+
+        Assert.Equal(0, impactedCount);
+        Assert.Contains("nothing", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // ---- exactly-one-input guard ----
+
+    [Fact]
+    public void Run_ZeroInputs_ReturnsUsageNote_NotError()
+    {
+        var (index, resolver) = BuildFixture();
+
+        string output = ImpactTool.Run(index, resolver,
+            target: null, changedPaths: null, diff: null, maxDepth: 2, limit: 100, json: false,
+            out int impactedCount, out _);
+
+        Assert.Equal(0, impactedCount);
+        // A clear usage message naming the three mutually-exclusive inputs.
+        Assert.Contains("target", output);
+        Assert.Contains("changed_paths", output);
+        Assert.Contains("diff", output);
+    }
+
+    [Fact]
+    public void Run_MoreThanOneInput_ReturnsUsageNote()
+    {
+        var (index, resolver) = BuildFixture();
+
+        string output = ImpactTool.Run(index, resolver,
+            target: "Validate", changedPaths: new[] { "src/Service.cs" }, diff: null,
+            maxDepth: 2, limit: 100, json: false, out int impactedCount, out _);
+
+        Assert.Equal(0, impactedCount);
+        Assert.Contains("exactly one", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Run_UsageGuardJson_UsesNoteKey_NotErrorKey()
+    {
+        var (index, resolver) = BuildFixture();
+
+        // The usage guard (zero inputs here) is guidance, NOT a failure: the wrapper records it as the Empty
+        // outcome, never Error. A JSON consumer keying off "error" must therefore NOT see a failure shape — the
+        // guidance must carry the SAME "note" key the not-found path uses (intra-tool + repo convention: an
+        // "error" key is paired with the error outcome only). Pins finding 2.
+        string output = ImpactTool.Run(index, resolver,
+            target: null, changedPaths: null, diff: null, maxDepth: 2, limit: 100, json: true,
+            out int impactedCount, out _);
+
+        Assert.Equal(0, impactedCount);
+        using var doc = JsonDocument.Parse(output);
+        var root = doc.RootElement;
+        Assert.False(root.TryGetProperty("error", out _), "usage guidance must not emit an 'error' key at an Empty outcome.");
+        Assert.True(root.TryGetProperty("note", out var note), "usage guidance must use the 'note' key (the Empty-outcome convention).");
+        // The message still names the three mutually-exclusive inputs so the hint is actionable.
+        string? message = note.GetString();
+        Assert.Contains("target", message);
+        Assert.Contains("changed_paths", message);
+        Assert.Contains("diff", message);
+    }
+
+    // ---- not found ----
+
+    [Fact]
+    public void Run_TargetNotFound_ReturnsNote_NotError()
+    {
+        var (index, resolver) = BuildFixture();
+
+        string output = ImpactTool.Run(index, resolver,
+            target: "NoSuchSymbol", changedPaths: null, diff: null, maxDepth: 2, limit: 100, json: false,
+            out int impactedCount, out _);
+
+        Assert.Equal(0, impactedCount);
+        Assert.Contains("not found", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Run_TargetFile_SeedsAllSymbolsInTheFile()
+    {
+        var (index, resolver) = BuildFixture();
+
+        // src/Service.cs holds Validate + Process. Their union of dependents: Handle + ProcessWorks (depend on
+        // Process) + Process (depends on Validate). The starts are excluded from the closure, so impacted =
+        // {Handle}; ProcessWorks is the test. (Process and Validate are seeds, not impacted.)
+        string output = ImpactTool.Run(index, resolver,
+            target: "src/Service.cs", changedPaths: null, diff: null, maxDepth: 2, limit: 100, json: false,
+            out int impactedCount, out _);
+
+        Assert.Contains("Handle", output);
+        Assert.Contains("ProcessWorks", output);
+        Assert.DoesNotContain("Lonely", output);
+        Assert.Equal(1, impactedCount); // only Handle (Process/Validate are seeds; ProcessWorks is a test)
+    }
+
+    // ---- changed_paths leg ----
+
+    [Fact]
+    public void Run_ChangedPaths_SeedsSymbolsInEachFile()
+    {
+        var (index, resolver) = BuildFixture();
+
+        string output = ImpactTool.Run(index, resolver,
+            target: null, changedPaths: new[] { "src/Service.cs" }, diff: null,
+            maxDepth: 2, limit: 100, json: false, out int impactedCount, out _);
+
+        // Same seeds as the file target → Handle impacted, ProcessWorks a test.
+        Assert.Contains("Handle", output);
+        Assert.Contains("ProcessWorks", output);
+        Assert.Equal(1, impactedCount);
+    }
+
+    [Fact]
+    public void Run_ChangedPaths_UnknownFile_IsEmptyNotError()
+    {
+        var (index, resolver) = BuildFixture();
+
+        string output = ImpactTool.Run(index, resolver,
+            target: null, changedPaths: new[] { "does/not/exist.cs" }, diff: null,
+            maxDepth: 2, limit: 100, json: false, out int impactedCount, out _);
+
+        Assert.Equal(0, impactedCount);
+        Assert.Contains("nothing", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // ---- diff leg ----
+
+    [Fact]
+    public void Run_Diff_LinePreciseIntersection_SeedsOnlyTheTouchedSymbol()
+    {
+        var (index, resolver) = BuildFixture();
+
+        // A hunk touching new-side line 11 (inside Validate's [10,14], NOT inside Process's [20,30]). So only
+        // Validate is seeded → impacted closure is {Process, Handle} with ProcessWorks the test.
+        string diff = """
+            --- a/src/Service.cs
+            +++ b/src/Service.cs
+            @@ -11,1 +11,1 @@
+            -    old
+            +    new
+            """;
+
+        string output = ImpactTool.Run(index, resolver,
+            target: null, changedPaths: null, diff: diff, maxDepth: 2, limit: 100, json: false,
+            out int impactedCount, out _);
+
+        Assert.Contains("Process", output);
+        Assert.Contains("Handle", output);
+        Assert.Contains("ProcessWorks", output);
+        Assert.Equal(2, impactedCount); // Process + Handle
+    }
+
+    [Fact]
+    public void Run_Diff_NoIntersectingSymbol_DegradesToWholeFile_WithNote()
+    {
+        var (index, resolver) = BuildFixture();
+
+        // A hunk on line 99 — past every symbol's span in src/Service.cs. No symbol intersects, so the parser
+        // degrades to ALL symbols in the file (Validate + Process) and notes the degradation.
+        string diff = """
+            --- a/src/Service.cs
+            +++ b/src/Service.cs
+            @@ -99,1 +99,1 @@
+            -    old
+            +    new
+            """;
+
+        string output = ImpactTool.Run(index, resolver,
+            target: null, changedPaths: null, diff: diff, maxDepth: 2, limit: 100, json: false,
+            out int impactedCount, out _);
+
+        // Whole-file degradation seeds Validate + Process → impacted = {Handle}; ProcessWorks the test.
+        Assert.Contains("Handle", output);
+        Assert.Equal(1, impactedCount);
+        Assert.Contains("whole file", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Run_Diff_PlusPlusAdditionBody_DoesNotOverwriteThePathToPhantom_StillSeedsRealFile()
+    {
+        var (index, resolver) = BuildFixture();
+
+        // A single-file diff to src/Service.cs whose hunk adds a "++"-prefixed line (e.g. a C++ "++x" / a doc
+        // bullet). On the diff line that addition reads "+++ bullet added".
+        //
+        // With the pre-fix prefix-only parser, that body line was misread as a NEW-side file header and
+        // OVERWROTE the current path from "src/Service.cs" to "bullet added". impact then resolved "bullet added"
+        // to no indexed symbols and reported "No impact" for a file that genuinely changed Validate (line 11) —
+        // a silently EMPTY result from valid input. With the hunk-body fix, the "+++ bullet added" line stays a
+        // body line, the path stays src/Service.cs, Validate is seeded → impacted = {Process, Handle}.
+        string diff =
+            "--- a/src/Service.cs\n" +
+            "+++ b/src/Service.cs\n" +
+            "@@ -11,1 +11,2 @@\n" +
+            "-    legacy\n" +
+            "+    updated\n" +
+            "+++ bullet added\n";
+
+        string output = ImpactTool.Run(index, resolver,
+            target: null, changedPaths: null, diff: diff, maxDepth: 2, limit: 100, json: false,
+            out int impactedCount, out _);
+
+        // Validate seeded (line 11 ∈ [10,14]) → dependents Process (hop 1), Handle + ProcessWorks (hop 2).
+        Assert.Contains("Process", output);
+        Assert.Contains("Handle", output);
+        Assert.Contains("ProcessWorks", output);
+        Assert.Equal(2, impactedCount); // Process + Handle (ProcessWorks is the test)
+        // The phantom path must never have been adopted.
+        Assert.DoesNotContain("bullet added", output);
+    }
+
+    // ---- both formats well-formed ----
+
+    [Fact]
+    public void Run_Json_IsWellFormedWithImpactedAndTestsArrays()
+    {
+        var (index, resolver) = BuildFixture();
+
+        string output = ImpactTool.Run(index, resolver,
+            target: "Validate", changedPaths: null, diff: null, maxDepth: 2, limit: 100, json: true, out _, out _);
+
+        using var doc = JsonDocument.Parse(output);
+        var root = doc.RootElement;
+        Assert.Equal(JsonValueKind.Array, root.GetProperty("impacted").ValueKind);
+        Assert.Equal(JsonValueKind.Array, root.GetProperty("tests").ValueKind);
+        // Provenance on each impacted item.
+        var first = root.GetProperty("impacted")[0];
+        Assert.True(first.TryGetProperty("name", out _));
+        Assert.True(first.TryGetProperty("kind", out _));
+        Assert.True(first.TryGetProperty("file", out _));
+        Assert.True(first.TryGetProperty("line", out _));
+        Assert.True(first.TryGetProperty("hop", out _));
+    }
+
+    // ---- D10 telemetry work-proxy (nodes visited) ----
+
+    [Fact]
+    public void Run_SurfacesNodesVisited_EqualToTheReverseClosureSize()
+    {
+        var (index, resolver) = BuildFixture();
+
+        // Reverse closure from Validate at depth 2 reaches Process (hop 1), Handle + ProcessWorks (hop 2) = 3
+        // nodes (impacted + tests, before partition). nodesVisited is the D10 bytes_examined work proxy. Pins
+        // finding 4: the count must be surfaced (was silently left 0).
+        ImpactTool.Run(index, resolver,
+            target: "Validate", changedPaths: null, diff: null, maxDepth: 2, limit: 100, json: false,
+            out int impactedCount, out int nodesVisited);
+
+        Assert.Equal(2, impactedCount);   // Process + Handle (ProcessWorks is the test)
+        Assert.Equal(3, nodesVisited);    // Process + Handle + ProcessWorks (the whole reached set)
+    }
+
+    [Fact]
+    public void Run_NodesVisited_IsZero_WhenNothingDependsOnTheTarget()
+    {
+        var (index, resolver) = BuildFixture();
+
+        ImpactTool.Run(index, resolver,
+            target: "Lonely", changedPaths: null, diff: null, maxDepth: 2, limit: 100, json: false,
+            out _, out int nodesVisited);
+
+        Assert.Equal(0, nodesVisited); // no dependents → no work beyond the seed
+    }
+
+    [Fact]
+    public void Run_LimitCapsTheImpactedSet()
+    {
+        var (index, resolver) = BuildFixture();
+
+        // limit 1 caps the reverse closure to a single reached node (Process, the nearest). The graph's Reach
+        // applies the cap BEFORE the test partition, so with limit 1 only Process is reached.
+        string output = ImpactTool.Run(index, resolver,
+            target: "Validate", changedPaths: null, diff: null, maxDepth: 2, limit: 1, json: false,
+            out int impactedCount, out _);
+
+        Assert.Contains("Process", output);
+        Assert.DoesNotContain("Handle", output);
+        Assert.Equal(1, impactedCount);
+    }
+
+    // ---- ctor shape (finding 3): impact needs only the holder + resolver; no WorkspaceContext dependency ----
+
+    [Fact]
+    public void Ctor_RequiresOnlyHolderAndResolver_NoWorkspaceDependency()
+    {
+        var (index, _) = BuildFixture();
+        var holder = new IndexHolder(index, builtRevision: 1);
+        var resolver = new SmartTargetResolver(holder);
+
+        // The M5 Run core is DB-free (index + resolver only), so the tool must NOT carry a dead WorkspaceContext.
+        // This compiles only against the two-arg ctor (the fix); it also pins the null-guards.
+        var tool = new ImpactTool(holder, resolver);
+        Assert.NotNull(tool);
+
+        Assert.Throws<ArgumentNullException>(() => new ImpactTool(null!, resolver));
+        Assert.Throws<ArgumentNullException>(() => new ImpactTool(holder, null!));
+    }
+}

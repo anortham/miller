@@ -37,7 +37,7 @@ public static class SqliteSymbolReader
         using var command = connection.CreateCommand();
         // Deterministic DocId ordering. SELECT column order is LOCKED to the GetX ordinals below.
         command.CommandText = """
-            SELECT id, name, signature, kind, language, file_path, start_line, parent_id, metadata
+            SELECT id, name, signature, kind, language, file_path, start_line, end_line, parent_id, metadata
             FROM symbols
             WHERE name IS NOT NULL
             ORDER BY file_path, start_line, id;
@@ -55,8 +55,9 @@ public static class SqliteSymbolReader
             string language = reader.GetString(4);                              // language    NOT NULL
             string filePath = reader.GetString(5);                              // file_path   NOT NULL
             int startLine = reader.IsDBNull(6) ? 0 : reader.GetInt32(6);        // start_line  nullable -> 0
-            string? parentId = reader.IsDBNull(7) ? null : reader.GetString(7); // parent_id   nullable
-            string? metadata = reader.IsDBNull(8) ? null : reader.GetString(8); // metadata    nullable (JSON)
+            int endLine = reader.IsDBNull(7) ? 0 : reader.GetInt32(7);          // end_line    nullable -> 0
+            string? parentId = reader.IsDBNull(8) ? null : reader.GetString(8); // parent_id   nullable
+            string? metadata = reader.IsDBNull(9) ? null : reader.GetString(9); // metadata    nullable (JSON)
 
             results.Add(new IndexedSymbol(
                 DocId: docId++,
@@ -67,6 +68,7 @@ public static class SqliteSymbolReader
                 Language: language,
                 FilePath: filePath,
                 StartLine: startLine,
+                EndLine: endLine,
                 ParentId: parentId,
                 IsTest: ParseIsTest(metadata)));
         }

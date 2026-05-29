@@ -8,8 +8,11 @@ namespace Miller.Tests.Server;
 /// <see cref="RebuildLatencyTests"/>. Unlike <see cref="Miller.Tests.Indexing.JulieDbFixture"/> (which inserts
 /// row-by-row for fidelity on small fixtures), this inserts tens of thousands of symbols inside ONE transaction
 /// with prepared, reused commands — so building the latency fixture is itself fast. The schema is the minimal
-/// subset <see cref="SqliteSymbolReader.Read"/> + the schema gate require (files + symbols + schema_version +
-/// external_extract_metadata), at the pinned schema 26 / contract 1.
+/// subset the production build path (<see cref="RepositoryIndexLoader.Load"/> → <see cref="SqliteSymbolReader.Read"/>
+/// + <see cref="SymbolGraphReader.Read"/>) + the schema gate require (files + symbols [incl. <c>end_line</c>, D7]
+/// + the <c>relationships</c>/<c>identifiers</c> edge tables [D2] + schema_version + external_extract_metadata),
+/// at the pinned schema 26 / contract 1. The edge tables are created empty here — the rebuild latency this
+/// measures is the read+build path, and empty edge reads still exercise the loader's two extra SELECTs.
 /// </summary>
 internal static class LargeDbWriter
 {
@@ -33,7 +36,20 @@ internal static class LargeDbWriter
         Exec(conn, """
             CREATE TABLE symbols (
                 id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, language TEXT NOT NULL,
-                file_path TEXT NOT NULL, signature TEXT, start_line INTEGER, parent_id TEXT, metadata TEXT);
+                file_path TEXT NOT NULL, signature TEXT, start_line INTEGER, end_line INTEGER,
+                parent_id TEXT, metadata TEXT);
+            """);
+        // D2 edge tables — the production build path (RepositoryIndexLoader) reads both. Minimal column subset
+        // the readers SELECT (relationships: from/to/kind; identifiers: name/kind/containing_symbol_id).
+        Exec(conn, """
+            CREATE TABLE relationships (
+                id TEXT PRIMARY KEY, from_symbol_id TEXT NOT NULL, to_symbol_id TEXT NOT NULL, kind TEXT NOT NULL);
+            """);
+        Exec(conn, """
+            CREATE TABLE identifiers (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, language TEXT NOT NULL,
+                file_path TEXT NOT NULL, start_line INTEGER NOT NULL, start_col INTEGER NOT NULL,
+                end_line INTEGER NOT NULL, end_col INTEGER NOT NULL, containing_symbol_id TEXT, target_symbol_id TEXT);
             """);
         Exec(conn, "CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL, description TEXT NOT NULL);");
         Exec(conn, "CREATE TABLE external_extract_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL);");
@@ -64,8 +80,8 @@ internal static class LargeDbWriter
         {
             cmd.Transaction = tx;
             cmd.CommandText =
-                "INSERT INTO symbols (id, name, kind, language, file_path, signature, start_line, parent_id, metadata) " +
-                "VALUES ($id, $name, $kind, $lang, $fp, $sig, $sl, $pid, NULL);";
+                "INSERT INTO symbols (id, name, kind, language, file_path, signature, start_line, end_line, parent_id, metadata) " +
+                "VALUES ($id, $name, $kind, $lang, $fp, $sig, $sl, $el, $pid, NULL);";
             var pId = Add(cmd, "$id");
             var pName = Add(cmd, "$name");
             var pKind = Add(cmd, "$kind");
@@ -73,6 +89,7 @@ internal static class LargeDbWriter
             var pFp = Add(cmd, "$fp");
             var pSig = Add(cmd, "$sig");
             var pSl = Add(cmd, "$sl");
+            var pEl = Add(cmd, "$el");
             var pPid = Add(cmd, "$pid");
             cmd.Prepare();
 
@@ -85,8 +102,32 @@ internal static class LargeDbWriter
                 pFp.Value = s.FilePath;
                 pSig.Value = (object?)s.Signature ?? DBNull.Value;
                 pSl.Value = s.StartLine;
+                pEl.Value = s.EndLine;
                 pPid.Value = (object?)s.ParentId ?? DBNull.Value;
                 cmd.ExecuteNonQuery();
+            }
+        }
+
+        // A realistic edge population so the rebuild latency includes the graph build cost (D11). One precise
+        // relationships edge per symbol → the next symbol's id (a deterministic chain), so the graph build over
+        // ~50k edges is measured, not skipped. The last symbol points back to the first (a single cycle, which
+        // the BFS visited-set tolerates) so every symbol has exactly one out-edge.
+        if (symbols.Count > 1)
+        {
+            using var rcmd = conn.CreateCommand();
+            rcmd.Transaction = tx;
+            rcmd.CommandText =
+                "INSERT INTO relationships (id, from_symbol_id, to_symbol_id, kind) VALUES ($id, $from, $to, 'calls');";
+            var rId = Add(rcmd, "$id");
+            var rFrom = Add(rcmd, "$from");
+            var rTo = Add(rcmd, "$to");
+            rcmd.Prepare();
+            for (int i = 0; i < symbols.Count; i++)
+            {
+                rId.Value = "rel" + i.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                rFrom.Value = symbols[i].SymbolId;
+                rTo.Value = symbols[(i + 1) % symbols.Count].SymbolId;
+                rcmd.ExecuteNonQuery();
             }
         }
 

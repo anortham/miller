@@ -11,9 +11,11 @@ using Serilog;
 
 // Miller MCP server host bootstrap (M2).
 // IndexBootstrapService (an IHostedService registered BEFORE the MCP host) builds the in-memory index from
-// the julie extract and opens the telemetry ledger before the stdio transport accepts any tools/call. The
-// search/inspect tools are auto-discovered from this assembly via WithToolsFromAssembly(); the ONE central
-// telemetry CallToolFilter wraps every call.
+// the julie extract and opens the telemetry ledger before the stdio transport accepts any tools/call. Every
+// [McpServerToolType] tool — search, inspect, context, impact, edit — is auto-discovered from this assembly via
+// WithToolsFromAssembly() (each ctor's deps resolve from DI: all take IndexHolder + SmartTargetResolver; the
+// DB-backed inspect + edit also take WorkspaceContext, while the in-memory context + impact do not); the
+// ONE central telemetry CallToolFilter wraps every call.
 //
 // STDIO PURITY: nothing may touch stdout except the MCP protocol. Serilog Console is routed to stderr; never
 // Console.WriteLine anywhere in this process.

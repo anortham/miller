@@ -20,7 +20,7 @@ public sealed class IndexHolderTests
             symbols.Add(new IndexedSymbol(
                 DocId: i, SymbolId: "id-" + names[i], Name: names[i], Signature: null,
                 Kind: "function", Language: "csharp", FilePath: "f.cs", StartLine: i + 1,
-                ParentId: null, IsTest: false));
+                EndLine: i + 1, ParentId: null, IsTest: false));
         return MillerRepositoryIndex.Build(symbols);
     }
 

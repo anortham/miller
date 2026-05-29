@@ -119,4 +119,119 @@ public sealed class MillerRepositoryIndexTests
     {
         Assert.Throws<ArgumentNullException>(() => MillerRepositoryIndex.Build(null!));
     }
+
+    // ---------- D9: graph travels with the index ----------
+
+    // Three symbols forming Process → Validate and Handle → Validate (Validate has two dependents).
+    private const string ProcessId = "00000000000000000000000000000001";
+    private const string ValidateId = "00000000000000000000000000000002";
+    private const string HandleId = "00000000000000000000000000000003";
+
+    private static IReadOnlyList<IndexedSymbol> ThreeSymbols(bool processIsTest = false) => new[]
+    {
+        new IndexedSymbol(0, ProcessId, "Process", "public void Process()", "method", "csharp",
+            "src/A.cs", 1, 3, null, IsTest: processIsTest),
+        new IndexedSymbol(1, ValidateId, "Validate", "public void Validate()", "method", "csharp",
+            "src/A.cs", 5, 7, null),
+        new IndexedSymbol(2, HandleId, "Handle", "public void Handle()", "method", "csharp",
+            "src/B.cs", 1, 3, null),
+    };
+
+    [Fact]
+    public void Build_WithEdges_ExposesAGraphWhoseDependentsHydrate()
+    {
+        var symbols = ThreeSymbols();
+        var edges = new[]
+        {
+            new Miller.Core.Graph.GraphEdge(ProcessId, ValidateId, "calls"),
+            new Miller.Core.Graph.GraphEdge(HandleId, ValidateId, "calls"),
+        };
+
+        var repo = MillerRepositoryIndex.Build(symbols, edges);
+
+        // The graph is published on the index and carries the edges.
+        Assert.True(repo.Graph.Contains(ProcessId));
+        // Dependents(Validate) = {Process, Handle}, hydrated to IndexedSymbols. The graph returns neighbours in
+        // id order (ProcessId=…01 < HandleId=…03), so the hydrated order is [Process, Handle].
+        var dependents = repo.Dependents(ValidateId);
+        Assert.Equal(new[] { ProcessId, HandleId }, dependents.Select(s => s.SymbolId).ToArray());
+        Assert.Equal(new[] { "Process", "Handle" }, dependents.Select(s => s.Name).ToArray());
+    }
+
+    [Fact]
+    public void Build_WithEdges_DependenciesHydrate()
+    {
+        var symbols = ThreeSymbols();
+        var edges = new[]
+        {
+            new Miller.Core.Graph.GraphEdge(ProcessId, ValidateId, "calls"),
+        };
+
+        var repo = MillerRepositoryIndex.Build(symbols, edges);
+
+        // Dependencies(Process) = {Validate}, hydrated.
+        var deps = repo.Dependencies(ProcessId);
+        Assert.Single(deps);
+        Assert.Equal("Validate", deps[0].Name);
+        Assert.Equal(ValidateId, deps[0].SymbolId);
+    }
+
+    [Fact]
+    public void Build_WithEdges_PreservesIsTestOnGraphNodes()
+    {
+        // The graph nodes carry IsTest so impact can partition "likely tests" without a second lookup.
+        var repo = MillerRepositoryIndex.Build(ThreeSymbols(processIsTest: true), Array.Empty<Miller.Core.Graph.GraphEdge>());
+
+        Assert.True(repo.Graph.IsTest(ProcessId));
+        Assert.False(repo.Graph.IsTest(ValidateId));
+    }
+
+    [Fact]
+    public void Build_WithoutEdges_YieldsAnEmptyGraph_BackCompat()
+    {
+        // The existing Build(symbols) keeps working: every symbol is a node, but there are no edges.
+        using var fx = JulieDbFixture.CreateDefault();
+        var repo = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath));
+
+        // A node exists for an indexed symbol, but it has no dependencies/dependents.
+        var anyId = SqliteSymbolReader.Read(fx.DbPath)[0].SymbolId;
+        Assert.True(repo.Graph.Contains(anyId));
+        Assert.Empty(repo.Dependents(anyId));
+        Assert.Empty(repo.Dependencies(anyId));
+    }
+
+    [Fact]
+    public void Dependents_SkipsIdsNotInTheIndex()
+    {
+        // An edge whose endpoint is not an indexed symbol is dropped by the graph build (edge hygiene), so the
+        // hydration never sees an id absent from the index. This pins the contract end to end.
+        var symbols = ThreeSymbols();
+        var edges = new[]
+        {
+            new Miller.Core.Graph.GraphEdge(ProcessId, ValidateId, "calls"),
+            // An edge to a non-indexed id — the graph drops it (unknown endpoint), so Validate gains no phantom dependent.
+            new Miller.Core.Graph.GraphEdge("ffffffffffffffffffffffffffffffff", ValidateId, "calls"),
+        };
+
+        var repo = MillerRepositoryIndex.Build(symbols, edges);
+
+        var dependents = repo.Dependents(ValidateId);
+        Assert.Equal(new[] { ProcessId }, dependents.Select(s => s.SymbolId).ToArray());
+    }
+
+    [Fact]
+    public void Build_WithEdges_NullEdges_Throws()
+    {
+        Assert.Throws<ArgumentNullException>(
+            () => MillerRepositoryIndex.Build(ThreeSymbols(), null!));
+    }
+
+    [Fact]
+    public void Dependents_UnknownId_ReturnsEmpty()
+    {
+        var repo = MillerRepositoryIndex.Build(ThreeSymbols(), Array.Empty<Miller.Core.Graph.GraphEdge>());
+
+        Assert.Empty(repo.Dependents("ffffffffffffffffffffffffffffffff"));
+        Assert.Empty(repo.Dependencies("ffffffffffffffffffffffffffffffff"));
+    }
 }
