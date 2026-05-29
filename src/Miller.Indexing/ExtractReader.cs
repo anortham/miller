@@ -191,19 +191,13 @@ public sealed class ExtractReader
         return string.Join('\n', lines[from..(toInclusive + 1)]);
     }
 
+    // Share the single D4 read discipline used by SqliteSymbolReader + FreshnessReader: file-exists check +
+    // WAL-sidecar writable-dir probe + Mode=ReadOnly + SQLITE_READONLY→InvalidOperationException mapping. This
+    // keeps every read path consistent and surfaces a clear, actionable error (a missing file or a non-writable
+    // DB directory) instead of a cryptic SQLITE_READONLY (code 8) mid-stream (finding-2).
     private static SqliteConnection Open(string dbPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
-        string absDbPath = Path.GetFullPath(dbPath);
-        if (!File.Exists(absDbPath))
-            throw new FileNotFoundException(
-                $"julie extract DB not found at '{absDbPath}'.", absDbPath);
-
-        var connectionString =
-            new SqliteConnectionStringBuilder { DataSource = absDbPath, Mode = SqliteOpenMode.ReadOnly }
-                .ToString();
-        var connection = new SqliteConnection(connectionString);
-        connection.Open();
-        return connection;
+        return SqliteReadOnlyAccess.Open(dbPath);
     }
 }

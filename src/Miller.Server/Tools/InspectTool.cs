@@ -21,16 +21,20 @@ namespace Miller.Server.Tools;
 [McpServerToolType]
 public sealed class InspectTool
 {
-    private readonly MillerRepositoryIndex _index;
+    // Depend on the holder, not a fixed index (M3 step 10): read holder.Current per call so a freshness Swap is
+    // reflected on the next inspect. The resolver is likewise holder-backed (it reads the live index per call).
+    private readonly IndexHolder _holder;
     private readonly SmartTargetResolver _resolver;
     private readonly WorkspaceContext _workspace;
 
-    public InspectTool(MillerRepositoryIndex index, SmartTargetResolver resolver, WorkspaceContext workspace)
+    /// <summary>Construct over the live index holder (production / freshness-aware).</summary>
+    /// <exception cref="ArgumentNullException">Any argument is null.</exception>
+    public InspectTool(IndexHolder holder, SmartTargetResolver resolver, WorkspaceContext workspace)
     {
-        ArgumentNullException.ThrowIfNull(index);
+        ArgumentNullException.ThrowIfNull(holder);
         ArgumentNullException.ThrowIfNull(resolver);
         ArgumentNullException.ThrowIfNull(workspace);
-        _index = index;
+        _holder = holder;
         _resolver = resolver;
         _workspace = workspace;
     }
@@ -53,7 +57,7 @@ public sealed class InspectTool
         try
         {
             bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
-            string output = Run(_index, _resolver, _workspace.ExtractDbPath,
+            string output = Run(_holder.Current, _resolver, _workspace.ExtractDbPath,
                 target, depth, kind, scope, limit, json, out int count);
 
             if (telemetry is not null)

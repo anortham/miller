@@ -78,6 +78,30 @@ internal sealed class JulieDbFixture : IDisposable
         string? ContainingSymbolId); // POPULATED (enclosing symbol). target_symbol_id is ALWAYS NULL.
 
     /// <summary>
+    /// A row as written into the synthesized <c>canonical_revisions</c> table (M3 freshness cursor,
+    /// verified-fact 1). <see cref="Revision"/> is the PK the <see cref="FreshnessReader"/> takes MAX of per
+    /// workspace; <see cref="Kind"/> is <c>fresh|incremental</c> (CHECK-constrained, like julie's schema 26).
+    /// </summary>
+    internal sealed record RevisionRow(long Revision, string WorkspaceId, string Kind = "incremental")
+    {
+        public long CreatedAt { get; init; }
+    }
+
+    /// <summary>
+    /// A row as written into the synthesized <c>revision_file_changes</c> table (M3 changed-file delta,
+    /// verified-fact 5). <see cref="ChangeKind"/> is <c>added|modified|deleted</c> (CHECK-constrained).
+    /// </summary>
+    internal sealed record RevisionFileChangeRow(
+        long Revision,
+        string WorkspaceId,
+        string FilePath,
+        string ChangeKind)
+    {
+        public string? OldHash { get; init; }
+        public string? NewHash { get; init; }
+    }
+
+    /// <summary>
     /// Build a fixture with the given schema/contract version rows and the supplied symbol rows.
     /// <paramref name="schemaVersion"/> is written to <c>schema_version</c>; <paramref name="contractValue"/>
     /// is written to <c>external_extract_metadata['extract_contract_version']</c> as TEXT (julie stores all
@@ -92,7 +116,9 @@ internal sealed class JulieDbFixture : IDisposable
         bool createMetadataTable = true,
         IReadOnlyList<IdentifierRow>? identifiers = null,
         IReadOnlyDictionary<string, string>? fileContent = null,
-        string? workspaceId = null)
+        string? workspaceId = null,
+        IReadOnlyList<RevisionRow>? revisions = null,
+        IReadOnlyList<RevisionFileChangeRow>? fileChanges = null)
     {
         string dir = Path.Combine(Path.GetTempPath(), "miller-julie-fixture-" + Guid.NewGuid().ToString("N"));
         System.IO.Directory.CreateDirectory(dir);
@@ -115,6 +141,10 @@ internal sealed class JulieDbFixture : IDisposable
             Exec(conn, FilesDdl);
             Exec(conn, SymbolsDdl);
             Exec(conn, IdentifiersDdl);
+            // The M3 freshness tables are always created (harmless to existing tests; they query
+            // symbols/identifiers only) so a FreshnessReader can open against any fixture.
+            Exec(conn, CanonicalRevisionsDdl);
+            Exec(conn, RevisionFileChangesDdl);
             if (createSchemaVersionTable) Exec(conn, SchemaVersionDdl);
             if (createMetadataTable) Exec(conn, MetadataDdl);
 
@@ -179,6 +209,46 @@ internal sealed class JulieDbFixture : IDisposable
                     cmd.Parameters.AddWithValue("$fp", ident.FilePath);
                     cmd.Parameters.AddWithValue("$sl", ident.StartLine);
                     cmd.Parameters.AddWithValue("$cid", (object?)ident.ContainingSymbolId ?? DBNull.Value);
+                    cmd.ExecuteNonQuery();
+                }
+            }
+
+            // canonical_revisions rows (M3 freshness cursor). revision is an explicit PK here (the test
+            // controls the values), so we insert the column directly rather than relying on AUTOINCREMENT.
+            if (revisions is not null)
+            {
+                foreach (var rev in revisions)
+                {
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText =
+                        "INSERT INTO canonical_revisions " +
+                        "(revision, workspace_id, kind, cleaned_file_count, file_count, symbol_count, " +
+                        "relationship_count, identifier_count, type_count, created_at) " +
+                        "VALUES ($rev, $ws, $kind, 0, 0, 0, 0, 0, 0, $created);";
+                    cmd.Parameters.AddWithValue("$rev", rev.Revision);
+                    cmd.Parameters.AddWithValue("$ws", rev.WorkspaceId);
+                    cmd.Parameters.AddWithValue("$kind", rev.Kind);
+                    cmd.Parameters.AddWithValue("$created", rev.CreatedAt);
+                    cmd.ExecuteNonQuery();
+                }
+            }
+
+            // revision_file_changes rows (M3 changed-file delta).
+            if (fileChanges is not null)
+            {
+                foreach (var fc in fileChanges)
+                {
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText =
+                        "INSERT INTO revision_file_changes " +
+                        "(revision, workspace_id, file_path, change_kind, old_hash, new_hash) " +
+                        "VALUES ($rev, $ws, $fp, $ck, $oh, $nh);";
+                    cmd.Parameters.AddWithValue("$rev", fc.Revision);
+                    cmd.Parameters.AddWithValue("$ws", fc.WorkspaceId);
+                    cmd.Parameters.AddWithValue("$fp", fc.FilePath);
+                    cmd.Parameters.AddWithValue("$ck", fc.ChangeKind);
+                    cmd.Parameters.AddWithValue("$oh", (object?)fc.OldHash ?? DBNull.Value);
+                    cmd.Parameters.AddWithValue("$nh", (object?)fc.NewHash ?? DBNull.Value);
                     cmd.ExecuteNonQuery();
                 }
             }
@@ -466,6 +536,36 @@ internal sealed class JulieDbFixture : IDisposable
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL,
             updated_at INTEGER NOT NULL
+        );
+        """;
+
+    // --- M3 freshness DDL transcribed verbatim from the PINNED julie-server v7.12.2 (schema 26) live DB ---
+    // (dumped via `.schema` against a real `extract scan` output; see m3-design.md verified-fact 1/5).
+
+    private const string CanonicalRevisionsDdl = """
+        CREATE TABLE IF NOT EXISTS canonical_revisions (
+            revision INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK(kind IN ('fresh', 'incremental')),
+            cleaned_file_count INTEGER NOT NULL DEFAULT 0,
+            file_count INTEGER NOT NULL DEFAULT 0,
+            symbol_count INTEGER NOT NULL DEFAULT 0,
+            relationship_count INTEGER NOT NULL DEFAULT 0,
+            identifier_count INTEGER NOT NULL DEFAULT 0,
+            type_count INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL
+        );
+        """;
+
+    private const string RevisionFileChangesDdl = """
+        CREATE TABLE IF NOT EXISTS revision_file_changes (
+            revision INTEGER NOT NULL,
+            workspace_id TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            change_kind TEXT NOT NULL CHECK(change_kind IN ('added', 'modified', 'deleted')),
+            old_hash TEXT,
+            new_hash TEXT,
+            PRIMARY KEY (revision, workspace_id, file_path)
         );
         """;
 }

@@ -19,12 +19,26 @@ namespace Miller.Server.Resolution;
 /// </summary>
 public sealed partial class SmartTargetResolver
 {
-    private readonly MillerRepositoryIndex _index;
+    // The resolver reads the index PER CALL through the holder (M3 step 10), so a freshness Swap behind a live
+    // resolver is observed on the next Resolve without reconstructing it. A fixed-index constructor (used by the
+    // unit tests and any pure-over-one-index caller) wraps the index in a never-swapped holder.
+    private readonly IndexHolder _holder;
 
-    public SmartTargetResolver(MillerRepositoryIndex index)
+    private MillerRepositoryIndex Index => _holder.Current;
+
+    /// <summary>Resolve against whatever index <paramref name="holder"/> currently holds (live, per call).</summary>
+    /// <exception cref="ArgumentNullException"><paramref name="holder"/> is null.</exception>
+    public SmartTargetResolver(IndexHolder holder)
     {
-        ArgumentNullException.ThrowIfNull(index);
-        _index = index;
+        ArgumentNullException.ThrowIfNull(holder);
+        _holder = holder;
+    }
+
+    /// <summary>Resolve against a fixed index (wrapped in a never-swapped holder). For tests / single-index callers.</summary>
+    /// <exception cref="ArgumentNullException"><paramref name="index"/> is null.</exception>
+    public SmartTargetResolver(MillerRepositoryIndex index)
+        : this(new IndexHolder(index ?? throw new ArgumentNullException(nameof(index)), builtRevision: 0))
+    {
     }
 
     /// <summary>
@@ -40,7 +54,7 @@ public sealed partial class SmartTargetResolver
         {
             case TargetKind.File:
                 // Forced file: canonicalize a bare basename to its indexed path when unambiguous.
-                return new TargetResolution.File(_index.ResolveIndexedFilePath(target) ?? target);
+                return new TargetResolution.File(Index.ResolveIndexedFilePath(target) ?? target);
             case TargetKind.Symbol:
                 return ResolveAsSymbol(target, scope);
             default:
@@ -49,19 +63,19 @@ public sealed partial class SmartTargetResolver
 
         // Rule 1: explicit path separators → file (language-agnostic).
         if (target.Contains('/') || target.Contains('\\'))
-            return new TargetResolution.File(_index.ResolveIndexedFilePath(target) ?? target);
+            return new TargetResolution.File(Index.ResolveIndexedFilePath(target) ?? target);
 
         // Rule 2: id shape (32-hex MD5 | contains '::' | starts 'file_') → use directly, no name search.
         if (LooksLikeSymbolId(target))
         {
-            var byId = _index.FindBySymbolId(target);
+            var byId = Index.FindBySymbolId(target);
             return byId is not null
                 ? new TargetResolution.Symbol(byId)
                 : new TargetResolution.NotFound(target);
         }
 
         // Rule 3: a bare string that names an indexed file (exact, or unique basename) → that file.
-        string? indexedPath = _index.ResolveIndexedFilePath(target);
+        string? indexedPath = Index.ResolveIndexedFilePath(target);
         if (indexedPath is not null)
             return new TargetResolution.File(indexedPath);
 
@@ -79,7 +93,7 @@ public sealed partial class SmartTargetResolver
         // file-path heuristic so a path-shaped string is treated as a name).
         if (LooksLikeSymbolId(target))
         {
-            var byId = _index.FindBySymbolId(target);
+            var byId = Index.FindBySymbolId(target);
             return byId is not null
                 ? new TargetResolution.Symbol(byId)
                 : new TargetResolution.NotFound(target);
@@ -89,7 +103,7 @@ public sealed partial class SmartTargetResolver
 
     private TargetResolution ResolveByName(string name, string? scope)
     {
-        IReadOnlyList<IndexedSymbol> matches = _index.FindByName(name);
+        IReadOnlyList<IndexedSymbol> matches = Index.FindByName(name);
 
         if (!string.IsNullOrWhiteSpace(scope))
         {
@@ -110,7 +124,7 @@ public sealed partial class SmartTargetResolver
     private bool HasKnownExtension(string s)
     {
         string ext = Path.GetExtension(s);
-        return ext.Length > 1 && _index.KnownExtensions.Contains(ext);
+        return ext.Length > 1 && Index.KnownExtensions.Contains(ext);
     }
 
     private static bool LooksLikeSymbolId(string s)

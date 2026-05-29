@@ -37,12 +37,16 @@ public enum SearchToolMode
 [McpServerToolType]
 public sealed class SearchTool
 {
-    private readonly MillerRepositoryIndex _index;
+    // Depend on the holder, not a fixed index (M3 step 10): read holder.Current per call so a freshness Swap is
+    // reflected on the next search without reconstructing the tool.
+    private readonly IndexHolder _holder;
 
-    public SearchTool(MillerRepositoryIndex index)
+    /// <summary>Construct over the live index holder (production / freshness-aware).</summary>
+    /// <exception cref="ArgumentNullException"><paramref name="holder"/> is null.</exception>
+    public SearchTool(IndexHolder holder)
     {
-        ArgumentNullException.ThrowIfNull(index);
-        _index = index;
+        ArgumentNullException.ThrowIfNull(holder);
+        _holder = holder;
     }
 
     [McpServerTool(Name = "search")]
@@ -64,7 +68,7 @@ public sealed class SearchTool
         {
             var parsedMode = ParseMode(mode);
             bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
-            string output = Run(_index, query, parsedMode, limit, exclude_tests, json, out int count);
+            string output = Run(_holder.Current, query, parsedMode, limit, exclude_tests, json, out int count);
 
             if (scope is not null)
             {

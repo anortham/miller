@@ -24,7 +24,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     private readonly ILogger<IndexBootstrapService> _logger;
     private readonly object _gate = new();
 
-    private MillerRepositoryIndex? _index;
+    private IndexHolder? _holder;
     private SmartTargetResolver? _resolver;
     private WorkspaceContext? _workspace;
     private TelemetryLedger? _ledger;
@@ -35,9 +35,15 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         _logger = logger;
     }
 
-    /// <summary>The built repository index. Throws if accessed before <see cref="StartAsync"/> completes.</summary>
-    public MillerRepositoryIndex Index =>
-        _index ?? throw new InvalidOperationException("Index requested before bootstrap completed.");
+    /// <summary>
+    /// The live index holder (M3): seeded with the initial index + its built revision; the freshness service
+    /// swaps a fresh index in as the writer advances. Throws if accessed before <see cref="StartAsync"/> completes.
+    /// </summary>
+    public IndexHolder Holder =>
+        _holder ?? throw new InvalidOperationException("Holder requested before bootstrap completed.");
+
+    /// <summary>The initially-built repository index. Prefer <see cref="Holder"/> for live freshness.</summary>
+    public MillerRepositoryIndex Index => Holder.Current;
 
     public SmartTargetResolver Resolver =>
         _resolver ?? throw new InvalidOperationException("Resolver requested before bootstrap completed.");
@@ -60,55 +66,158 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     {
         lock (_gate)
         {
-            if (_index is not null)
+            if (_holder is not null)
                 return; // idempotent
 
-            var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
-            var ctx = WorkspaceContext.Create(Environment.CurrentDirectory, AppContext.BaseDirectory);
-
-            string millerDir = Path.GetDirectoryName(ctx.ExtractDbPath)!;
-            Directory.CreateDirectory(millerDir);
-
-            // Locate the pinned julie-server under the tools root (NOT the repo cwd). Absent → fail loudly
-            // (FileNotFoundException carrying the restore-script message) — Miller cannot index without it.
-            var runner = JulieExtractRunner.Locate(ctx.ToolsRoot);
-
-            // One-time initial scan ONLY if the extract DB does not yet exist. File.Exists (NOT FileInfo) per
-            // the spec — a re-scan/watcher is M3.
-            if (!File.Exists(ctx.ExtractDbPath))
+            // The telemetry ledger is opened late but must be disposed if ANY later step throws (otherwise the
+            // ledger stays open + the telemetry DB locked, but is never assigned to _ledger so Dispose() misses
+            // it). Track it in a local and dispose on failure before the exception propagates.
+            TelemetryLedger? ledger = null;
+            try
             {
-                _logger.LogInformation("No extract DB at {Db}; scanning {Root}…", ctx.ExtractDbPath, ctx.WorkspaceRoot);
-                var report = runner.Scan(ctx.WorkspaceRoot, ctx.ExtractDbPath);
+                var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+                var ctx = WorkspaceContext.Create(Environment.CurrentDirectory, AppContext.BaseDirectory);
+
+                string millerDir = Path.GetDirectoryName(ctx.ExtractDbPath)!;
+                Directory.CreateDirectory(millerDir);
+
+                // The canonical (symlink-resolved) root for the watcher + extract calls (verified-fact 4).
+                // Resolved BEFORE the scan so the very first `extract` already receives canonical paths. The
+                // canonical DB path is the canonical root composed with the M2 .miller/symbols.db convention —
+                // a non-canonical --db under a symlinked workspace trips the same outside-root family as --file.
+                string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(ctx.WorkspaceRoot);
+                string canonicalDbPath = Path.Combine(canonicalRoot, ".miller", "symbols.db");
+
+                // Locate the pinned julie-server under the tools root (NOT the repo cwd). Absent → fail loudly
+                // (FileNotFoundException carrying the restore-script message) — Miller cannot index without it.
+                var runner = JulieExtractRunner.Locate(ctx.ToolsRoot);
+
+                // One-time initial scan ONLY if the extract DB does not yet exist. File.Exists (NOT FileInfo) per
+                // the spec — the watcher (M3) keeps it fresh thereafter. The scan report's revision seeds the
+                // holder. The scan receives the CANONICAL root + db (verified-fact 4).
+                long? scanRevision = null;
+                if (!File.Exists(canonicalDbPath))
+                {
+                    _logger.LogInformation("No extract DB at {Db}; scanning {Root}…", canonicalDbPath, canonicalRoot);
+                    var report = runner.Scan(canonicalRoot, canonicalDbPath);
+                    scanRevision = report.Revision;
+                    _logger.LogInformation(
+                        "Scan complete: {Symbols} symbols extracted (revision {Rev}).",
+                        report.SymbolsExtracted, report.Revision);
+                }
+                else
+                {
+                    _logger.LogInformation("Reusing existing extract DB at {Db}.", canonicalDbPath);
+                }
+
+                // Read → build the in-memory index (read-path opens the same DB file; canonical is fine).
+                var symbols = SqliteSymbolReader.Read(canonicalDbPath);
+                var index = MillerRepositoryIndex.Build(symbols);
+
+                // Resolve the workspace id (for telemetry scoping + the freshness poll) and finalize the context.
+                string? workspaceId = ExtractReader.ReadWorkspaceId(canonicalDbPath);
+
+                var workspace = ctx with
+                {
+                    WorkspaceId = workspaceId,
+                    CanonicalRoot = canonicalRoot,
+                    CanonicalExtractDbPath = canonicalDbPath,
+                };
+
+                // Seed the holder's BuiltRevision: the scan report's revision when we just scanned, else the
+                // latest persisted revision (a reused DB) so the freshness poll does not rebuild on first tick.
+                long builtRevision = scanRevision
+                    ?? ReadLatestRevisionOrZero(canonicalDbPath, workspaceId);
+
+                // Open the SEPARATE, writable telemetry ledger (never the read-only extract) + prune old rows.
+                // OpenAndPrune disposes the just-opened ledger if Prune throws, so a prune failure cannot leak
+                // the open connection (the outer catch covers every OTHER post-open step the same way).
+                ledger = OpenAndPrune(workspace.TelemetryDbPath, workspaceId, retentionDays: 30, out int pruned);
+
+                var holder = new IndexHolder(index, builtRevision);
+                _holder = holder;
+                _resolver = new SmartTargetResolver(holder); // holder-backed: live freshness per call (M3 step 10)
+                _workspace = workspace;
+                _ledger = ledger; // only published once every preceding step succeeded
+
+                var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(startedAt);
                 _logger.LogInformation(
-                    "Scan complete: {Symbols} symbols extracted.", report.SymbolsExtracted);
+                    "Bootstrap ready: {Count} symbols indexed at revision {Rev}, workspace_id={Ws}, " +
+                    "{Pruned} telemetry rows pruned, in {Ms}ms.",
+                    index.DocumentCount, builtRevision, workspaceId ?? "(unknown)", pruned,
+                    (long)elapsed.TotalMilliseconds);
             }
-            else
+            catch
             {
-                _logger.LogInformation("Reusing existing extract DB at {Db}.", ctx.ExtractDbPath);
+                // Partial-initialization cleanup: if the ledger was opened but a later step threw, dispose it so
+                // the telemetry DB is not left locked / its WAL in an indeterminate state. _ledger was not yet
+                // assigned, so Dispose() would otherwise leak it.
+                ledger?.Dispose();
+                throw;
             }
-
-            // Read → build the in-memory index.
-            var symbols = SqliteSymbolReader.Read(ctx.ExtractDbPath);
-            var index = MillerRepositoryIndex.Build(symbols);
-
-            // Resolve the workspace id (for telemetry scoping) and finalize the context.
-            string? workspaceId = ExtractReader.ReadWorkspaceId(ctx.ExtractDbPath);
-            var workspace = ctx with { WorkspaceId = workspaceId };
-
-            // Open the SEPARATE, writable telemetry ledger (never the read-only extract) + prune old rows.
-            var ledger = TelemetryLedger.Open(workspace.TelemetryDbPath, workspaceId);
-            int pruned = ledger.Prune(retentionDays: 30);
-
-            _index = index;
-            _resolver = new SmartTargetResolver(index);
-            _workspace = workspace;
-            _ledger = ledger;
-
-            var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(startedAt);
-            _logger.LogInformation(
-                "Bootstrap ready: {Count} symbols indexed, workspace_id={Ws}, {Pruned} telemetry rows pruned, in {Ms}ms.",
-                index.DocumentCount, workspaceId ?? "(unknown)", pruned, (long)elapsed.TotalMilliseconds);
         }
+    }
+
+    /// <summary>
+    /// Open the telemetry ledger and prune in one step, GUARANTEEING the just-opened ledger is disposed if the
+    /// prune throws (finding-4: an opened-but-unpublished ledger must never leak — it would hold the telemetry
+    /// DB open with its WAL in an indeterminate state). On success returns the live ledger (the caller owns it);
+    /// on failure disposes it and rethrows. The outer bootstrap try/catch covers every other post-open step.
+    /// </summary>
+    internal static TelemetryLedger OpenAndPrune(
+        string telemetryDbPath, string? workspaceId, int retentionDays, out int pruned)
+    {
+        int prunedLocal = 0;
+        var ledger = PrimeOrDispose(
+            TelemetryLedger.Open(telemetryDbPath, workspaceId),
+            l => prunedLocal = l.Prune(retentionDays));
+        pruned = prunedLocal;
+        return ledger;
+    }
+
+    /// <summary>
+    /// Run a priming action against a freshly-acquired disposable resource, disposing it if priming throws so a
+    /// half-initialized resource never leaks (finding-4). Returns the live resource on success (the caller owns
+    /// disposal); rethrows on failure after disposing.
+    /// </summary>
+    internal static T PrimeOrDispose<T>(T resource, Action<T> prime) where T : IDisposable
+    {
+        ArgumentNullException.ThrowIfNull(resource);
+        ArgumentNullException.ThrowIfNull(prime);
+        try
+        {
+            prime(resource);
+            return resource;
+        }
+        catch
+        {
+            resource.Dispose();
+            throw;
+        }
+    }
+
+    // The latest persisted revision for a reused DB. A MISSING DB file is the only safe degrade-to-0 case
+    // (the workspace genuinely has no revision yet → start fresh). A present-but-unreadable DB (corruption,
+    // permission denied, the WAL-sidecar writable-dir violation, a lock) is an operator/config error: surface
+    // it loudly (decision-10) rather than silently seeding revision 0, which would mask the problem and trigger
+    // a spurious rebuild on the first freshness tick. So only FileNotFoundException degrades; InvalidOperationException
+    // (the D4 writable-dir guard) and SqliteException (corruption/lock) propagate and fail the bootstrap.
+    internal static long ReadLatestRevisionOrZero(string dbPath, string? workspaceId)
+    {
+        if (workspaceId is null)
+            return 0;
+        try
+        {
+            using var reader = new FreshnessReader(dbPath);
+            return reader.LatestRevision(workspaceId);
+        }
+        catch (FileNotFoundException)
+        {
+            // The DB file does not exist → the workspace has no persisted revision yet; safe to start fresh.
+            return 0;
+        }
+        // InvalidOperationException (D4 writable-dir guard) and SqliteException (corruption/lock/permission)
+        // propagate loudly per decision-10 — a misconfigured DB must fail bootstrap, not degrade to revision 0.
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;

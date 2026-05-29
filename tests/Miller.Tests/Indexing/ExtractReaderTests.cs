@@ -163,4 +163,48 @@ public sealed class ExtractReaderTests
         using var fx = JulieDbFixture.CreateDefault(); // no workspace_id written
         Assert.Null(ExtractReader.ReadWorkspaceId(fx.DbPath));
     }
+
+    // ---- D4 read discipline (finding-2): ExtractReader shares SqliteReadOnlyAccess's guards ----
+
+    [Fact]
+    public void ReadDetail_MissingDbFile_ThrowsFileNotFound()
+    {
+        // The DB file does not exist → a clear FileNotFoundException (the shared D4 read discipline), not a
+        // cryptic SQLite open error.
+        string missing = Path.Combine(
+            Path.GetTempPath(), "miller-extractreader-missing-" + Guid.NewGuid().ToString("N"), "symbols.db");
+        Assert.Throws<FileNotFoundException>(() => ExtractReader.ReadDetail(missing, "anyid"));
+    }
+
+    [Fact]
+    public void ReadDetail_NonWritableDbDirectory_ThrowsActionableError()
+    {
+        // The WAL -shm/-wal sidecar trap (D4): under Mode=ReadOnly SQLite still needs to write the wal-index
+        // into the DB's directory. ExtractReader must share SqliteReadOnlyAccess's up-front writable-dir probe
+        // (consistent with SqliteSymbolReader/FreshnessReader) and surface a clear InvalidOperationException
+        // instead of a cryptic SQLITE_READONLY mid-read. Simulate by chmod 0o555 on the dir (POSIX only).
+        if (OperatingSystem.IsWindows())
+            return; // POSIX dir-permission semantics don't apply; the live probe is exercised on Unix CI.
+
+        using var fx = JulieDbFixture.CreateForInspect();
+        string dir = fx.Directory;
+        var original = File.GetUnixFileMode(dir);
+        try
+        {
+            // r-x r-x r-x: traversable + readable, but NOT writable → the temp-file probe must fail.
+            File.SetUnixFileMode(dir,
+                UnixFileMode.UserRead | UnixFileMode.UserExecute |
+                UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
+                UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+
+            var ex = Assert.Throws<InvalidOperationException>(
+                () => ExtractReader.ReadDetail(fx.DbPath, JulieDbFixture.GetUserId));
+            Assert.Contains("writable", ex.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(dir, ex.Message);
+        }
+        finally
+        {
+            File.SetUnixFileMode(dir, original); // restore so the fixture can clean up
+        }
+    }
 }

@@ -29,32 +29,8 @@ public static class SqliteSymbolReader
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
 
-        string absDbPath = Path.GetFullPath(dbPath);
-        if (!File.Exists(absDbPath))
-            throw new FileNotFoundException(
-                $"julie extract DB not found at '{absDbPath}'. Run `julie-server extract ... scan` first " +
-                "(see scripts/restore-julie-server.sh to obtain the binary).", absDbPath);
-
-        string? dir = Path.GetDirectoryName(absDbPath);
-        if (string.IsNullOrEmpty(dir))
-            throw new InvalidOperationException($"Cannot determine the directory of DB path '{absDbPath}'.");
-        EnsureDirectoryWritable(dir, absDbPath);
-
-        var connectionString =
-            new SqliteConnectionStringBuilder { DataSource = absDbPath, Mode = SqliteOpenMode.ReadOnly }
-                .ToString();
-
-        using var connection = new SqliteConnection(connectionString);
-        try
-        {
-            connection.Open();
-        }
-        catch (SqliteException ex) when (ex.SqliteErrorCode == 8 /* SQLITE_READONLY */)
-        {
-            throw new InvalidOperationException(
-                $"Cannot open '{absDbPath}' read-only: the DB directory '{dir}' must be writable for the WAL " +
-                "wal-index sidecar. Move the extract under a Miller-owned writable directory.", ex);
-        }
+        // Shared D4 read discipline (file-exists + writable-dir probe + Mode=ReadOnly + SQLITE_READONLY map).
+        using var connection = SqliteReadOnlyAccess.Open(dbPath);
 
         JulieSchemaGate.Verify(connection);
 
@@ -127,22 +103,4 @@ public static class SqliteSymbolReader
         }
     }
 
-    // Probe writability by creating + deleting a temp file in the DB directory. A pure FileMode check is
-    // insufficient (ACLs, read-only mounts); the create+delete round-trip is the honest test.
-    private static void EnsureDirectoryWritable(string dir, string absDbPath)
-    {
-        string probe = Path.Combine(dir, ".miller-write-probe-" + Guid.NewGuid().ToString("N"));
-        try
-        {
-            using (File.Create(probe)) { }
-            File.Delete(probe);
-        }
-        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
-        {
-            throw new InvalidOperationException(
-                $"The directory '{dir}' of julie extract DB '{absDbPath}' is not writable. A Mode=ReadOnly " +
-                "reader of a WAL DB still needs to write the wal-index sidecar there; move the extract under a " +
-                "Miller-owned writable directory.", ex);
-        }
-    }
 }

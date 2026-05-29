@@ -21,6 +21,7 @@ public sealed class JulieExtractRunner
 {
     // info opens read-only, takes no flock — `extract --db <ABS_DB> --json info` (NO --root).
     // scan binds the workspace/root — `extract --db <ABS_DB> --root <ABS_ROOT> --json scan [--force]`.
+    // update/delete touch one canonical file — `... --json update|delete --file <ABS_CANON_FILE>` (M3).
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -112,6 +113,35 @@ public sealed class JulieExtractRunner
         return new[] { "extract", "--db", absDb, "--json", "info" };
     }
 
+    /// <summary>
+    /// Build the argv for a single-file <c>update</c>:
+    /// <c>extract --db &lt;absDb&gt; --root &lt;absRoot&gt; --json update --file &lt;absFile&gt;</c>. All three
+    /// paths must be CANONICAL (absolute + symlink-resolved — see <see cref="PathCanonicalizer"/>) so julie's
+    /// inside-root check passes (verified-fact 4). The builder is a pure seam: it does NOT re-normalize, so the
+    /// caller's canonical paths reach julie verbatim.
+    /// </summary>
+    public static IReadOnlyList<string> BuildUpdateArgs(string absDb, string absRoot, string absFile) =>
+        BuildFileOpArgs("update", absDb, absRoot, absFile);
+
+    /// <summary>
+    /// Build the argv for a single-file <c>delete</c>:
+    /// <c>extract --db &lt;absDb&gt; --root &lt;absRoot&gt; --json delete --file &lt;absFile&gt;</c>. Same
+    /// canonical-path contract as <see cref="BuildUpdateArgs"/> — this is the exact call the path gotcha
+    /// (verified-fact 4) governs: a non-canonical <c>--file</c> under a symlinked root is rejected.
+    /// </summary>
+    public static IReadOnlyList<string> BuildDeleteArgs(string absDb, string absRoot, string absFile) =>
+        BuildFileOpArgs("delete", absDb, absRoot, absFile);
+
+    // Shared shape for the two single-file ops (the only difference is the subcommand token).
+    private static IReadOnlyList<string> BuildFileOpArgs(
+        string subcommand, string absDb, string absRoot, string absFile)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(absDb);
+        ArgumentException.ThrowIfNullOrWhiteSpace(absRoot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(absFile);
+        return new[] { "extract", "--db", absDb, "--root", absRoot, "--json", subcommand, "--file", absFile };
+    }
+
     /// <summary>Parse a julie extract report from stdout JSON.</summary>
     /// <exception cref="JsonException">The text is not a valid <see cref="ExtractReport"/>.</exception>
     public static ExtractReport ParseReport(string json)
@@ -191,6 +221,50 @@ public sealed class JulieExtractRunner
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(db);
         return Run(BuildInfoArgs(Path.GetFullPath(db)));
+    }
+
+    /// <summary>
+    /// Run <c>extract update --file</c> on a single CHANGED file. julie blake3-checks the content and no-ops
+    /// (<c>status=unchanged</c>, no revision bump) if it is identical, so this is safe to call on any event.
+    /// ALL THREE paths (<paramref name="canonicalDb"/>, <paramref name="canonicalRoot"/>,
+    /// <paramref name="canonicalFile"/>) MUST already be canonical (absolute + symlink-resolved via
+    /// <see cref="PathCanonicalizer"/>) — this method does NOT re-canonicalize (and deliberately does not even
+    /// lexically <see cref="Path.GetFullPath(string)"/> the db, which would not resolve symlinks anyway), to
+    /// preserve the verified-fact-4 fix: a non-canonical <c>--db</c>/<c>--root</c>/<c>--file</c> under a
+    /// symlinked workspace trips julie's outside-root validation. The bootstrap canonicalizes the db ONCE and
+    /// passes it here verbatim. Routes through the same <see cref="Run"/> → <see cref="Interpret"/> → version
+    /// cross-check as <see cref="Scan"/>; the exit-code contract is identical.
+    /// </summary>
+    /// <exception cref="ArgumentException"><paramref name="canonicalDb"/> is null/blank or not an absolute path.</exception>
+    public ExtractReport Update(string canonicalRoot, string canonicalDb, string canonicalFile)
+    {
+        RequireCanonicalDb(canonicalDb);
+        return Run(BuildUpdateArgs(canonicalDb, canonicalRoot, canonicalFile));
+    }
+
+    /// <summary>
+    /// Run <c>extract delete --file</c> on a single REMOVED file. Idempotent: a second delete reports
+    /// <c>status=not_found</c> (exit 0), not a failure. Same canonical-path contract and exit-code routing as
+    /// <see cref="Update"/>. This is the exact call verified-fact-4 governs — the db, root, AND file MUST all be
+    /// symlink-resolved, passed through verbatim (no <see cref="Path.GetFullPath(string)"/> re-mangling).
+    /// </summary>
+    /// <exception cref="ArgumentException"><paramref name="canonicalDb"/> is null/blank or not an absolute path.</exception>
+    public ExtractReport Delete(string canonicalRoot, string canonicalDb, string canonicalFile)
+    {
+        RequireCanonicalDb(canonicalDb);
+        return Run(BuildDeleteArgs(canonicalDb, canonicalRoot, canonicalFile));
+    }
+
+    // The single-file ops (verified-fact 4) take an ALREADY-canonical db. We guard that it is at least an
+    // absolute path here — a relative db would be resolved against the ambient CWD by julie, defeating the
+    // canonicalization the bootstrap performed. (BuildUpdateArgs/BuildDeleteArgs reject null/blank.)
+    private static void RequireCanonicalDb(string canonicalDb)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(canonicalDb);
+        if (!Path.IsPathRooted(canonicalDb))
+            throw new ArgumentException(
+                $"The extract db path '{canonicalDb}' must be an absolute, canonical path (the bootstrap " +
+                "canonicalizes it once under the symlink-resolved root — verified-fact 4).", nameof(canonicalDb));
     }
 
     private ExtractReport Run(IReadOnlyList<string> args)

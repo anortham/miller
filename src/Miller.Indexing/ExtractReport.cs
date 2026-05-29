@@ -25,7 +25,12 @@ public sealed record ExtractReport(
     [property: JsonPropertyName("relationships_total")] ulong RelationshipsTotal,
     [property: JsonPropertyName("identifiers_total")] ulong IdentifiersTotal,
     [property: JsonPropertyName("types_total")] ulong TypesTotal,
-    [property: JsonPropertyName("errors")] IReadOnlyList<ExtractError> Errors);
+    [property: JsonPropertyName("errors")] IReadOnlyList<ExtractError> Errors,
+    // ----- M3 freshness fields (verified-fact 7); absent on scan/info reports → null/0 defaults. -----
+    [property: JsonPropertyName("workspace_id")] string? WorkspaceId = null,        // the poll's WHERE-clause id
+    [property: JsonPropertyName("revision")] long? Revision = null,                 // the canonical_revisions cursor
+    [property: JsonPropertyName("files_updated")] ulong FilesUpdated = 0,           // `update` outcome counter
+    [property: JsonPropertyName("files_deleted")] ulong FilesDeleted = 0);          // `delete` outcome counter
 
 /// <summary>One entry in an <see cref="ExtractReport.Errors"/> array (julie's per-operation error record).</summary>
 public sealed record ExtractError(

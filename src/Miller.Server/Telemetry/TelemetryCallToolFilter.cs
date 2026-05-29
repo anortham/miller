@@ -32,11 +32,15 @@ public static class TelemetryCallToolFilter
 
             string tool = request.Params?.Name ?? "(unknown)";
             using var scope = ledger.Measure(tool, op: null);
-            // index_fresh stays UNKNOWN (null) for M2 (spec L238-239): the real signal is a touched file's disk
-            // mtime vs files.last_modified, and a search/inspect call has no single touched file to compare. The
-            // in-memory index is "fresh by construction" only at startup; once the user edits a file it may be
-            // stale, so asserting true would be a fabricated freshness. NULL honestly records "not measured".
-            // A future tool with a touched-file context may set this on the scope.
+
+            // index_fresh (M3, decision-8): the coarse boolean "the held index is at the latest revision AND the
+            // indexer queue is empty", computed by the IndexFreshProbe singleton when registered. It is resolved
+            // optionally — when absent (a test harness with no freshness wiring) index_fresh stays NULL, honestly
+            // recording "not measured" rather than a fabricated value. Set once up front so every outcome branch
+            // (ok/empty/error/throw) carries it.
+            var freshProbe = request.Services?.GetService<Hosting.IndexFreshProbe>();
+            if (freshProbe is not null)
+                scope.IndexFresh = freshProbe.Compute();
 
             try
             {

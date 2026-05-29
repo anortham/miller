@@ -35,6 +35,49 @@ public sealed class WorkspaceContextTests
     }
 
     [Fact]
+    public void Create_CanonicalRootStartsNull_UntilResolvedAgainstARealTree()
+    {
+        // M3: the symlink-resolved canonical root requires a real filesystem walk (verified-fact 4), so Create
+        // leaves it null; the bootstrap fills it via PathCanonicalizer.CanonicalizeRoot at startup.
+        Assert.Null(WorkspaceContext.Create("/repo/work", "/app/base").CanonicalRoot);
+    }
+
+    [Fact]
+    public void With_SetsCanonicalRoot_WithoutTouchingOtherPaths()
+    {
+        var ctx = WorkspaceContext.Create("/repo/work", "/app/base");
+        var updated = ctx with { CanonicalRoot = "/private/repo/work" };
+
+        Assert.Equal("/private/repo/work", updated.CanonicalRoot);
+        Assert.Equal(ctx.WorkspaceRoot, updated.WorkspaceRoot);
+        Assert.Equal(ctx.ExtractDbPath, updated.ExtractDbPath);
+    }
+
+    [Fact]
+    public void Create_CanonicalExtractDbPathStartsNull_UntilComposedUnderTheCanonicalRoot()
+    {
+        // M3 verified-fact 4: the DB path julie receives must be CANONICAL too (a non-canonical --db under a
+        // symlinked root trips the same outside-root family of validation as --file). Canonicalization needs a
+        // real filesystem walk, so Create leaves it null; the bootstrap composes it under the canonical root.
+        Assert.Null(WorkspaceContext.Create("/repo/work", "/app/base").CanonicalExtractDbPath);
+    }
+
+    [Fact]
+    public void With_SetsCanonicalExtractDbPath_WithoutTouchingTheNonCanonicalExtractDbPath()
+    {
+        var ctx = WorkspaceContext.Create("/repo/work", "/app/base");
+        var updated = ctx with
+        {
+            CanonicalRoot = "/private/repo/work",
+            CanonicalExtractDbPath = "/private/repo/work/.miller/symbols.db",
+        };
+
+        Assert.Equal("/private/repo/work/.miller/symbols.db", updated.CanonicalExtractDbPath);
+        // The original non-canonical path is preserved (it is what File.Exists/the gate keys on at bootstrap).
+        Assert.Equal(ctx.ExtractDbPath, updated.ExtractDbPath);
+    }
+
+    [Fact]
     public void With_SetsWorkspaceId_WithoutTouchingPaths()
     {
         var ctx = WorkspaceContext.Create("/repo/work", "/app/base");

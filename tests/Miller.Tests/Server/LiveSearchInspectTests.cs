@@ -79,9 +79,10 @@ public sealed class LiveSearchInspectTests
             Assert.NotEqual("failed", report.Status);
             Assert.True(report.SymbolsExtracted > 0);
 
-            // --- read → build → resolver ---
+            // --- read → build → holder → resolver (M3: tools depend on the live IndexHolder) ---
             var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(db));
-            var resolver = new SmartTargetResolver(index);
+            var holder = new IndexHolder(index, builtRevision: 0);
+            var resolver = new SmartTargetResolver(holder);
             string? workspaceId = ExtractReader.ReadWorkspaceId(db);
 
             // --- pure-core sanity: search + inspect return correct results ---
@@ -115,7 +116,7 @@ public sealed class LiveSearchInspectTests
             var services = new ServiceCollection();
             services.AddLogging();
             services.AddSingleton(ledger);
-            services.AddSingleton(index);
+            services.AddSingleton(holder); // M3: SearchTool/InspectTool resolve IndexHolder, not the bare index
             services.AddSingleton(resolver);
             services.AddSingleton(workspace);
             services
