@@ -38,6 +38,13 @@ public sealed class IndexerService : BackgroundService
     private FileSystemWatcher? _gitHeadWatcher;
     private IndexerCore? _core;
 
+    // The leader's extract ops, set once leadership is won (null on a non-leader). M6 write-through reaches
+    // through TryReindexAsLeader to converge the index inline after an apply; guarded by _opsGate so an edit on
+    // the MCP thread never races the debounce-loop drain (julie tolerates one in-flight subprocess, but we keep
+    // Miller's own calls serialized regardless).
+    private IExtractOps? _ops;
+    private readonly object _opsGate = new();
+
     // .git/HEAD changes (branch switch / checkout) are folded into ONE forced scan per drain rather than
     // drowning in the per-file storm a checkout produces (decision-7). Set by the HEAD watcher, read+reset on
     // the next drain under the lock below.
@@ -98,6 +105,8 @@ public sealed class IndexerService : BackgroundService
             // Pass the CANONICAL db (verified-fact 4): the single-file update/delete ops require an
             // already-canonical --db (the runner no longer GetFullPath-mangles it).
             IExtractOps ops = JulieExtractOps.Create(canonicalRoot, canonicalDbPath, runner);
+            lock (_opsGate)
+                _ops = ops; // publish for M6 write-through (TryReindexAsLeader)
             _core = new IndexerCore(
                 new WatchEventQueue(), ops, File.Exists,
                 _loggerFactory.CreateLogger<IndexerCore>());
@@ -136,8 +145,39 @@ public sealed class IndexerService : BackgroundService
         finally
         {
             DisposeWatchers();
+            lock (_opsGate)
+                _ops = null; // stop offering inline write-through once we step down
             _lease?.Dispose();
             _lease = null;
+        }
+    }
+
+    /// <summary>
+    /// M6 write-through (decision-6): if THIS instance is the indexer leader, reindex <paramref name="path"/>
+    /// inline (<c>extract update --file</c>) so its FreshnessService bumps the revision and swaps the index for
+    /// the next edit's gate. Returns true if the leader performed the reindex; false if this instance is not the
+    /// leader (the caller then relies on the leader's watcher reconciling the file write — the backstop). The
+    /// reindex is best-effort: an extract failure is logged and reported as not-converged-inline, never thrown,
+    /// because the edit is already committed to disk and the freshness gate is the ultimate safety net.
+    /// </summary>
+    public bool TryReindexAsLeader(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        lock (_opsGate)
+        {
+            if (_ops is not { } ops)
+                return false; // not the leader — the watcher event from the file write converges instead
+            try
+            {
+                ops.Update(path);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Inline write-through reindex of {Path} failed; the freshness gate will catch it.", path);
+                return false;
+            }
         }
     }
 

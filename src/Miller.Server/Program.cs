@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Miller.Indexing;
 using Miller.Server;
 using Miller.Server.Hosting;
@@ -69,6 +70,23 @@ builder.Services.AddSingleton(sp =>
         latestRevision: () => freshness.LatestObservedRevision,
         queueEmpty: () => indexer.QueueEmpty);
 });
+
+// M6 edit tool dependencies:
+//  - EditApplier: the atomic apply transaction (writer-lock + TOCTOU + rollback). Its writer-lock seam binds to
+//    the dedicated EditWriteLock on <.miller>/edit.lock (separate from the indexer lock so an edit never
+//    deadlocks against the running indexer leader — see EditWriteLock).
+//  - IEditWriteThrough: post-apply convergence — the leader reindexes inline, else the watcher reconciles.
+// EditTool itself is auto-discovered via WithToolsFromAssembly() ([McpServerToolType]); it resolves these.
+builder.Services.AddSingleton(sp =>
+{
+    var workspace = sp.GetRequiredService<WorkspaceContext>();
+    string millerDir = Path.GetDirectoryName(workspace.ExtractDbPath)!;
+    return new EditApplier(() => EditWriteLock.TryAcquire(millerDir));
+});
+builder.Services.AddSingleton<IEditWriteThrough>(sp =>
+    new LeaderWriteThrough(
+        sp.GetRequiredService<IndexerService>(),
+        sp.GetRequiredService<ILoggerFactory>().CreateLogger<LeaderWriteThrough>()));
 
 builder.Services
     .AddMcpServer(options =>

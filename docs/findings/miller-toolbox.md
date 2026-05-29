@@ -164,6 +164,7 @@ reachability on demand. Miller must keep a **precomputed transitive-closure** in
 | `dry_run` | | `true` | bool | **preview by default** |
 | `apply` | | `false` | bool | must flip true to write |
 | `allow_stale` | | `false` | bool | bypass freshness gate |
+| `scope` | | `null` | string? | disambiguate an ambiguous symbol name to a file (the cross-tool §2 override) |
 | `format` | | `compact` | `compact\|json` | |
 
 **80% call:** `edit("replace_symbol_body", "OrderService.Process", new_text="...")` → returns a diff preview; re-call

@@ -54,6 +54,15 @@ internal sealed class JulieDbFixture : IDisposable
         public string? DocComment { get; init; }
         public string? Visibility { get; init; }
         public string? CodeContext { get; init; }
+
+        /// <summary>
+        /// The symbol's WHOLE-span start/end byte offsets (julie's <c>start_byte</c>/<c>end_byte</c>). NULL by
+        /// default so M1/M2 rows are unaffected. M6's <c>ReadEditSpan</c> reads these for signature/insert ops:
+        /// signature span = <c>[start_byte, body_start_byte)</c>, insert_after at <c>end_byte</c>.
+        /// </summary>
+        public int? StartByte { get; init; }
+        public int? EndByte { get; init; }
+
         public int? BodyStartByte { get; init; }
         public int? BodyEndByte { get; init; }
         public int? BodyStartLine { get; init; }
@@ -75,7 +84,16 @@ internal sealed class JulieDbFixture : IDisposable
         string Language,
         string FilePath,
         int StartLine,
-        string? ContainingSymbolId); // POPULATED (enclosing symbol). target_symbol_id is ALWAYS NULL.
+        string? ContainingSymbolId) // POPULATED (enclosing symbol). target_symbol_id is ALWAYS NULL.
+    {
+        /// <summary>
+        /// The exact per-occurrence byte token span (julie's <c>identifiers.start_byte</c>/<c>end_byte</c>),
+        /// e.g. a 5-char <c>Total</c> call at <c>start_byte=120, end_byte=125</c>. NULL by default so the M2
+        /// reference rows are unaffected; M6's <c>ReadIdentifierSites</c> reads these for exact-span rename.
+        /// </summary>
+        public int? StartByte { get; init; }
+        public int? EndByte { get; init; }
+    }
 
     /// <summary>
     /// A row as written into the synthesized <c>canonical_revisions</c> table (M3 freshness cursor,
@@ -170,9 +188,10 @@ internal sealed class JulieDbFixture : IDisposable
                 cmd.CommandText =
                     "INSERT INTO symbols (id, name, kind, language, file_path, signature, start_line, parent_id, " +
                     "metadata, doc_comment, visibility, code_context, " +
+                    "start_byte, end_byte, " +
                     "body_start_byte, body_end_byte, body_start_line, body_end_line) " +
                     "VALUES ($id, $name, $kind, $lang, $fp, $sig, $sl, $pid, " +
-                    "$meta, $doc, $vis, $ctx, $bsb, $beb, $bsl, $bel);";
+                    "$meta, $doc, $vis, $ctx, $sb, $eb, $bsb, $beb, $bsl, $bel);";
                 cmd.Parameters.AddWithValue("$id", r.Id);
                 cmd.Parameters.AddWithValue("$name", r.Name);
                 cmd.Parameters.AddWithValue("$kind", r.Kind);
@@ -185,6 +204,8 @@ internal sealed class JulieDbFixture : IDisposable
                 cmd.Parameters.AddWithValue("$doc", (object?)r.DocComment ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$vis", (object?)r.Visibility ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$ctx", (object?)r.CodeContext ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$sb", (object?)r.StartByte ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$eb", (object?)r.EndByte ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$bsb", (object?)r.BodyStartByte ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$beb", (object?)r.BodyEndByte ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$bsl", (object?)r.BodyStartLine ?? DBNull.Value);
@@ -200,14 +221,17 @@ internal sealed class JulieDbFixture : IDisposable
                     using var cmd = conn.CreateCommand();
                     cmd.CommandText =
                         "INSERT INTO identifiers (id, name, kind, language, file_path, " +
-                        "start_line, start_col, end_line, end_col, containing_symbol_id, target_symbol_id) " +
-                        "VALUES ($id, $name, $kind, $lang, $fp, $sl, 0, $sl, 0, $cid, NULL);";
+                        "start_line, start_col, end_line, end_col, start_byte, end_byte, " +
+                        "containing_symbol_id, target_symbol_id) " +
+                        "VALUES ($id, $name, $kind, $lang, $fp, $sl, 0, $sl, 0, $sb, $eb, $cid, NULL);";
                     cmd.Parameters.AddWithValue("$id", ident.Id);
                     cmd.Parameters.AddWithValue("$name", ident.Name);
                     cmd.Parameters.AddWithValue("$kind", ident.Kind);
                     cmd.Parameters.AddWithValue("$lang", ident.Language);
                     cmd.Parameters.AddWithValue("$fp", ident.FilePath);
                     cmd.Parameters.AddWithValue("$sl", ident.StartLine);
+                    cmd.Parameters.AddWithValue("$sb", (object?)ident.StartByte ?? DBNull.Value);
+                    cmd.Parameters.AddWithValue("$eb", (object?)ident.EndByte ?? DBNull.Value);
                     cmd.Parameters.AddWithValue("$cid", (object?)ident.ContainingSymbolId ?? DBNull.Value);
                     cmd.ExecuteNonQuery();
                 }
@@ -374,6 +398,116 @@ internal sealed class JulieDbFixture : IDisposable
         };
 
         return Create(26, "1", rows, identifiers: identifiers, fileContent: content, workspaceId: "ws-inspect-001");
+    }
+
+    // ----- M6 edit/ReadEditSpan + ReadIdentifierSites fixture -----
+    //
+    // Byte offsets below are computed against the ASCII literals (byte index == char index) and verified
+    // (docs/m6-design.md verified-fact 1/2: symbols carry start_byte/end_byte AND body_start_byte/end_byte;
+    // identifiers carry exact per-occurrence byte tokens). The one UTF-8 file (Café.cs) proves the reader
+    // returns absolute UTF-8 byte offsets, not UTF-16 char indices.
+
+    /// <summary>The ASCII content of <c>orders/OrderService.cs</c> in <see cref="CreateForEdit"/> (116 bytes).</summary>
+    public const string OrderServiceContent =
+        "public class OrderService {\n" +          // line 1  bytes 0..27
+        "  public int Total() {\n" +               // line 2
+        "    return _items.Sum(i => i.Total);\n" + // line 3
+        "  }\n" +                                  // line 4
+        "  private int _count;\n" +                // line 5
+        "}\n";                                     // line 6
+
+    /// <summary>The ASCII content of <c>billing/Invoice.cs</c> in <see cref="CreateForEdit"/> (a call to Total + a HOMONYM Total def).</summary>
+    public const string InvoiceContent =
+        "public class Invoice {\n" +               // line 1
+        "  public int Sum(OrderService o) {\n" +   // line 2
+        "    return o.Total();\n" +                // line 3  -> a genuine ref to OrderService.Total
+        "  }\n" +                                  // line 4
+        "  public int Total() { return 0; }\n" +   // line 5  -> a HOMONYM (unrelated same-named def)
+        "}\n";                                     // line 6
+
+    /// <summary>The UTF-8 content of <c>unicode/Café.cs</c> in <see cref="CreateForEdit"/> — the accent shifts byte vs char offsets.</summary>
+    public const string CafeContent =
+        "// café configuration\n" +           // line 1: 'é' is 2 UTF-8 bytes (byte 6..7)
+        "var x = Total();\n";                      // line 2
+
+    /// <summary>The id of <c>OrderService.Total</c> — the method carrying full byte + body spans in <see cref="CreateForEdit"/>.</summary>
+    public const string TotalMethodId = "10ade1ade1ade1ade1ade1ade1ade100";
+
+    /// <summary>The id of the <c>OrderService</c> class (whole-span 0..116, body 26..115).</summary>
+    public const string OrderServiceId = "0c1a550c1a550c1a550c1a550c1a5500";
+
+    /// <summary>The id of the <c>_count</c> field — NULL body spans (the body/signature-op-reject case).</summary>
+    public const string CountFieldId = "f1e1df1e1df1e1df1e1df1e1df1e1d00";
+
+    /// <summary>
+    /// A fixture wired for the M6 edit read-layer tests (<c>ReadEditSpan</c> / <c>ReadIdentifierSites</c> /
+    /// <c>ReadIndexedFileText</c>). <c>OrderService.Total</c> carries the full whole-span + body byte offsets;
+    /// the <c>_count</c> field carries NULL body spans (body/signature ops reject it). The name <c>Total</c>
+    /// occurs at four identifier sites across three files: two in OrderService.cs (the method-header name token
+    /// and the <c>i.Total</c> property access), one genuine call <c>o.Total()</c> in Invoice.cs, and one in the
+    /// UTF-8 Café.cs (byte offset 31, NOT char offset 30 — proves UTF-8 byte addressing). Invoice.cs also
+    /// defines a HOMONYM <c>Total</c> method; its def is a symbol, not an identifier, so it surfaces via
+    /// <c>ReadEditSpan</c>, while the name-based identifier sites are what <c>ReadIdentifierSites</c> returns.
+    /// </summary>
+    public static JulieDbFixture CreateForEdit()
+    {
+        var rows = new[]
+        {
+            // OrderService class: whole span [0,116), body [26,115).
+            new SymbolRow(OrderServiceId, "OrderService", "class", "csharp",
+                "orders/OrderService.cs", "public class OrderService", 1, null)
+            { Visibility = "public", StartByte = 0, EndByte = 116, BodyStartByte = 26, BodyEndByte = 115,
+              BodyStartLine = 1, BodyEndLine = 6 },
+
+            // Total method: signature span [30,49), body span [49,91). end_byte = body_end = 91.
+            new SymbolRow(TotalMethodId, "Total", "method", "csharp",
+                "orders/OrderService.cs", "public int Total()", 2, OrderServiceId)
+            { Visibility = "public", StartByte = 30, EndByte = 91, BodyStartByte = 49, BodyEndByte = 91,
+              BodyStartLine = 2, BodyEndLine = 4 },
+
+            // _count field: whole span [94,113), NULL body spans (graceful reject for body/signature ops).
+            new SymbolRow(CountFieldId, "_count", "field", "csharp",
+                "orders/OrderService.cs", "private int _count;", 5, OrderServiceId)
+            { Visibility = "private", StartByte = 94, EndByte = 113 /* body spans left NULL */ },
+
+            // The HOMONYM Total def in another file — an unrelated symbol that happens to share the name.
+            new SymbolRow("ab1ab1ab1ab1ab1ab1ab1ab1ab1ab100", "Total", "method", "csharp",
+                "billing/Invoice.cs", "public int Total()", 5, null)
+            { Visibility = "public", StartByte = 86, EndByte = 118, BodyStartByte = 105, BodyEndByte = 118,
+              BodyStartLine = 5, BodyEndLine = 5 },
+
+            // A symbol in Invoice.cs whose body holds the genuine o.Total() call site.
+            new SymbolRow("5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c00", "Sum", "method", "csharp",
+                "billing/Invoice.cs", "public int Sum(OrderService o)", 2, null)
+            { Visibility = "public" },
+        };
+
+        // Four 'Total' identifier sites across three files. ReadIdentifierSites must return all of them,
+        // ordered by file_path then start_byte. The Café.cs site's start_byte (31) differs from its char
+        // index (30) — the UTF-8 proof. A homonym call site (Invoice.cs:3) is INCLUDED — name-based matching.
+        var identifiers = new[]
+        {
+            // orders/OrderService.cs: the method-header name token [41,46) and the i.Total access [80,85).
+            new IdentifierRow("d100000000000000000000000000000a", "Total", "member_access", "csharp",
+                "orders/OrderService.cs", 2, TotalMethodId) { StartByte = 41, EndByte = 46 },
+            new IdentifierRow("d100000000000000000000000000000b", "Total", "member_access", "csharp",
+                "orders/OrderService.cs", 3, TotalMethodId) { StartByte = 80, EndByte = 85 },
+            // billing/Invoice.cs: the genuine o.Total() call [71,76).
+            new IdentifierRow("d100000000000000000000000000000c", "Total", "call", "csharp",
+                "billing/Invoice.cs", 3, "5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c00") { StartByte = 71, EndByte = 76 },
+            // unicode/Café.cs: a call at BYTE offset 31 (char offset would be 30 — the é shifts it).
+            new IdentifierRow("d100000000000000000000000000000d", "Total", "call", "csharp",
+                "unicode/Café.cs", 2, null) { StartByte = 31, EndByte = 36 },
+        };
+
+        var content = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["orders/OrderService.cs"] = OrderServiceContent,
+            ["billing/Invoice.cs"] = InvoiceContent,
+            ["unicode/Café.cs"] = CafeContent,
+        };
+
+        return Create(26, "1", rows, identifiers: identifiers, fileContent: content, workspaceId: "ws-edit-001");
     }
 
     /// <summary>Realistic MD5-hex symbol ids (32 lowercase hex chars), per julie's id scheme (treated as opaque).</summary>
