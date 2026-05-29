@@ -3,8 +3,19 @@
   <!--
     Miller.Indexing — infrastructure. The julie-server extract subprocess wrapper, the SQLite (WAL) read layer,
     and the file watcher / single-writer indexer. Populates Miller.Core's types from the extract DB.
-    Microsoft.Data.Sqlite is added in M1.
+    Microsoft.Data.Sqlite (bundled, not .Core) auto-initializes the e_sqlite3 provider — do NOT call
+    SQLitePCLRaw.Batteries_V2.Init().
   -->
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.8" />
+  </ItemGroup>
+
+  <!-- The contract gate (JulieSchemaGate) and version constants are internal; the contract test suite
+       drives them directly. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="Miller.Tests" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Miller.Core\Miller.Core.csproj" />

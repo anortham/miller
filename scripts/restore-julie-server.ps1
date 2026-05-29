@@ -1,0 +1,91 @@
+<#
+.SYNOPSIS
+  restore-julie-server.ps1 — download the pinned julie-server.exe into .tools\ (Windows mirror of the .sh).
+
+.DESCRIPTION
+  Reads scripts\julie-pins.json for the version, per-triple asset name + sha256, and the URL template.
+  Detects the host platform (x86_64-pc-windows-msvc is the only Windows asset), downloads the matching
+  release archive from anortham/julie, VERIFIES its sha256 against the pin (julie publishes no checksum
+  assets — these were download-verified and committed), extracts ONLY julie-server.exe from the flat
+  multi-binary archive, and removes the archive. Fails loudly on unsupported platforms (no windows-arm64).
+#>
+$ErrorActionPreference = 'Stop'
+
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$RepoRoot  = Split-Path -Parent $ScriptDir
+$Pins      = Join-Path $ScriptDir 'julie-pins.json'
+$ToolsDir  = Join-Path $RepoRoot '.tools'
+
+if (-not (Test-Path $Pins)) {
+    Write-Error "pins file not found at $Pins"
+    exit 1
+}
+
+$config = Get-Content $Pins -Raw | ConvertFrom-Json
+
+# --- detect platform -> triple (only x64 Windows is published) ---
+$arch = $env:PROCESSOR_ARCHITECTURE
+$triple = $null
+switch ($arch) {
+    'AMD64' { $triple = 'x86_64-pc-windows-msvc' }
+    'x86'   { $triple = 'x86_64-pc-windows-msvc' }  # 32-bit host running the x64 asset is not supported; flagged below
+}
+
+if ($null -eq $triple -or $arch -ne 'AMD64') {
+    Write-Error @"
+unsupported platform 'windows/$arch'. julie v$($config.version) publishes only x86_64-pc-windows-msvc on
+Windows. No windows-arm64 prebuilt asset exists; build from source with cargo, or use a supported host.
+"@
+    exit 1
+}
+
+$asset  = $config.assets.$triple.name
+$sha256 = $config.assets.$triple.sha256
+if ([string]::IsNullOrEmpty($asset) -or [string]::IsNullOrEmpty($sha256)) {
+    Write-Error "no pin entry for triple '$triple' in $Pins"
+    exit 1
+}
+
+$url = $config.urlTemplate.Replace('{VER}', $config.version).Replace('{asset}', $asset)
+
+New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
+$archive = Join-Path $ToolsDir $asset
+$binary  = Join-Path $ToolsDir 'julie-server.exe'
+
+Write-Host "Restoring julie-server v$($config.version) for $triple"
+Write-Host "  url:    $url"
+Write-Host "  sha256: $sha256"
+
+# --- download ---
+Invoke-WebRequest -Uri $url -OutFile $archive -UseBasicParsing
+
+# --- verify sha256 ---
+$actual = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actual -ne $sha256.ToLowerInvariant()) {
+    Remove-Item $archive -Force -ErrorAction SilentlyContinue
+    Write-Error "sha256 mismatch for $archive`n  expected: $sha256`n  actual:   $actual"
+    exit 1
+}
+Write-Host "  sha256 OK"
+
+# --- extract ONLY julie-server.exe (archive also bundles julie-adapter + julie-daemon) ---
+$staging = Join-Path $ToolsDir ('julie-extract-' + [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force -Path $staging | Out-Null
+try {
+    Expand-Archive -Path $archive -DestinationPath $staging -Force
+    $found = Get-ChildItem -Path $staging -Recurse -Filter 'julie-server.exe' | Select-Object -First 1
+    if ($null -eq $found) {
+        Write-Error "julie-server.exe not found inside $asset"
+        exit 1
+    }
+    Copy-Item -Path $found.FullName -Destination $binary -Force
+}
+finally {
+    Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# --- cleanup ---
+Remove-Item $archive -Force -ErrorAction SilentlyContinue
+
+Write-Host "Installed: $binary"
+& $binary --version 2>$null
