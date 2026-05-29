@@ -109,6 +109,15 @@ concurrent readers don't corrupt.
   Entity↔DTO (`CreateMap`, `ToDto(this X)`, inline `new XDto{}` projections), Entity↔table (EF `DbSet` pluralization,
   `ToTable`, Dapper `FROM` literals), TS↔C# DTO (affix-fold + typed call `axios<T>`/`useApi<T>` ↔ `[Route]`),
   field-set Jaccard as corroborator only. Re-resolution pass after file updates (IDs churn).
+- **DEPENDS ON julie extraction enrichment** (plan: `~/source/julie/docs/plans/2026-05-29-extraction-enrichments-for-miller-bridge.md`):
+  the resolver's strongest anchors require three additions to julie's extract that ship as one contract epoch —
+  (1) C# type-level `[Table]`/`[Route]`/`[Column]` annotations on class/property (not just method); (2) a `type_arguments`
+  table (ordered, nested, per-use-site generic args for `CreateMap<A,B>`/`DbSet<E>`/`axios<T>`); (3) a `literals` table
+  (TS URL call-args + inline C# Dapper `FROM` SQL). When that lands, Miller **re-pins `julie-server`** to the new release
+  and **moves the D5 gate in lockstep**: `schema_version 26→28`, `extract_contract_version 1→2`, plus read-layer SELECTs
+  for the new tables. The `derive-in-miller` gaps (record positional params, per-param structs, framework base-list) stay
+  Miller-side via `signature` parsing — they are NOT in the julie plan. Until the enrichment lands, the resolver runs on
+  today's extract (attribute + name/affix legs work; generic-arg + body-literal legs degrade to signature/code_context parsing).
 - `trace` tool: default = refs + callers + callees; `to=` → shortest path; `mode=bridge` → cross-language path.
 **Verify:** heavy Core unit tests (this is where TDD pays) on in-memory contract fixtures; bridge trace correct on a
 polyglot fixture (MyraNext/Lab/Tycho-style, extracted on demand); refs/call-path correct.
