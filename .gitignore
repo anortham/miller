@@ -18,6 +18,9 @@ models/*.bin
 .codesearch/
 .miller/
 
+# Downloaded tool binaries (julie-server etc.) — fetched from julie releases at restore time, never committed
+.tools/
+
 # IDE
 .idea/
 .vscode/

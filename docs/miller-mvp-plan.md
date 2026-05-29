@@ -29,8 +29,8 @@ Miller.Core       pure logic, ZERO I/O deps: contract record types, the in-memor
 Miller.Indexing   infrastructure: julie-server extract subprocess wrapper, SQLite (WAL) read layer, file watcher
                   + single-writer indexer. Populates Core's types from the extract DB.
 Miller.Server     MCP host (ModelContextProtocol SDK, already in use), the 7 tools, the telemetry interceptor + ledger.
-Miller.Tests      unit (Core, fast) + contract (against the committed julie-snapshot fixture DB) + a tagged,
-                  excluded-by-default scale/integration set.
+Miller.Tests      unit (Core, fast, in-memory contract objects) + contract (Indexing read layer, against a tiny
+                  schema DB synthesized in test setup) + a tagged, excluded-by-default scale/integration set.
 ```
 Core depends on nothing; Indexing/Server depend on Core; tests hit Core directly and the infra via the snapshot
 fixture. This seam is what keeps the default suite < 10s.
@@ -65,15 +65,18 @@ fixture. This seam is what keeps the default suite < 10s.
 ### M1 — Extract subprocess + SQLite read layer + in-memory index (host scaffold)
 **Deliverable:** index a repo and answer a ranked query in-process, no MCP yet.
 - `Miller.Indexing`: wrapper over `julie-server extract scan|update|delete` (subprocess: locate binary, invoke,
-  parse exit, surface errors). **DECIDED:** vendor a **version-pinned** `julie-server` build per target platform
-  (committed under `tools/`, via Git LFS if size warrants), version pinned in repo config so extraction is
-  reproducible and the cargo/cdylib build is fully escaped. Pull the pinned binary from julie's GitHub release.
+  parse exit, surface errors). **DECIDED:** do NOT commit the binary (keeps git lean — no LFS, no large blobs).
+  A restore step downloads a **version-pinned** per-platform `julie-server` build from julie's GitHub release into a
+  gitignored local path (`.tools/`), version pinned in repo config so extraction is reproducible and the
+  cargo/cdylib build is fully escaped.
 - SQLite (WAL, read-only) layer over the verified schema (`symbols`, `identifiers`, `files`, `relationships`,
   `types` — [julie-eros-audit](findings/julie-eros-audit.md) §1).
 - `Miller.Core` in-memory inverted index: `FrozenDictionary` postings rebuilt from SQLite at startup (~35 MB, <1s
   per the bench), BM25 ranking — port from `spike/Codesearch.Spike/SearchBench.cs`.
-**Verify:** contract tests against the committed `fixtures/databases/julie-snapshot/symbols.db` (no live extractor
-needed); ranked queries return correct ordering on the snapshot + one small live repo.
+**Verify:** contract tests against a tiny SQLite DB synthesized in test setup (julie's schema + a dozen known rows
+via Microsoft.Data.Sqlite) — this is Miller's read-layer contract, NOT a re-test of julie's extraction (julie owns
+that). No committed snapshot, no live extractor. Ranked queries return correct ordering on those rows + one small
+live repo (extracted on demand).
 **Exit:** the read core works and is fast.
 
 ### M2 — MCP host + `search` + `inspect` + telemetry  ← FIRST DOGFOOD MILESTONE
@@ -107,8 +110,8 @@ concurrent readers don't corrupt.
   `ToTable`, Dapper `FROM` literals), TS↔C# DTO (affix-fold + typed call `axios<T>`/`useApi<T>` ↔ `[Route]`),
   field-set Jaccard as corroborator only. Re-resolution pass after file updates (IDs churn).
 - `trace` tool: default = refs + callers + callees; `to=` → shortest path; `mode=bridge` → cross-language path.
-**Verify:** heavy Core unit tests (this is where TDD pays) on snapshot fixtures; bridge trace correct on a polyglot
-fixture (MyraNext/Lab/Tycho-style); refs/call-path correct.
+**Verify:** heavy Core unit tests (this is where TDD pays) on in-memory contract fixtures; bridge trace correct on a
+polyglot fixture (MyraNext/Lab/Tycho-style, extracted on demand); refs/call-path correct.
 **Exit:** the sellable capability works.
 
 ### M5 — `context` + `impact` (fast, or vestigial)
@@ -138,9 +141,9 @@ fixture (MyraNext/Lab/Tycho-style); refs/call-path correct.
 ---
 
 ## Open items to resolve before/within their milestone
-1. ~~`julie-server` binary sourcing~~ **DECIDED**: vendor a version-pinned per-platform `julie-server` build (under
-   `tools/`, Git LFS if needed), version pinned in repo config. M1 sub-detail: confirm binary size to choose
-   commit-direct vs Git LFS.
+1. ~~`julie-server` binary sourcing~~ **DECIDED**: fetch a version-pinned per-platform `julie-server` build from
+   julie's GitHub release at restore time into a gitignored path (`.tools/`); do NOT commit it (no LFS, no large
+   blobs). M1 sub-detail: the restore script (platform detection, pinned version/URL, checksum verify, local cache).
 2. **MCP C# SDK tool-invocation filter hook** for the telemetry interceptor (M2); fallback is a per-tool `Measure()` scope.
 3. **NativeAOT posture** (M0 project setup): don't adopt patterns that foreclose AOT later, but AOT itself is a
    distribution-phase (post-MVP) CI concern, not a build blocker now.
