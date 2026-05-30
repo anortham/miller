@@ -221,6 +221,26 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         // propagate loudly per decision-10 — a misconfigured DB must fail bootstrap, not degrade to revision 0.
     }
 
+    /// <summary>
+    /// Test seam: publish a workspace + holder directly, as if <see cref="StartAsync"/> had run, WITHOUT the
+    /// SQLite reads / subprocess scan / ledger open. Lets a unit test exercise a collaborator that reads
+    /// <see cref="Workspace"/> / <see cref="Holder"/> off the bootstrap (e.g. <see cref="FreshnessService.PollNow"/>)
+    /// over a synthesized DB, with no live host. Idempotent like <see cref="Run"/>: a second call is ignored.
+    /// Not used in production.
+    /// </summary>
+    internal void SeedForTest(WorkspaceContext workspace, IndexHolder holder)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        ArgumentNullException.ThrowIfNull(holder);
+        lock (_gate)
+        {
+            if (_holder is not null)
+                return; // already seeded / bootstrapped
+            _workspace = workspace;
+            _holder = holder;
+        }
+    }
+
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
     public void Dispose() => _ledger?.Dispose();

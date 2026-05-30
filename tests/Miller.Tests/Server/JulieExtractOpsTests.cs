@@ -13,7 +13,7 @@ namespace Miller.Tests.Server;
 /// </summary>
 public sealed class JulieExtractOpsTests
 {
-    private sealed record Recorded(string Op, string Root, string Db, string File);
+    private sealed record Recorded(string Op, string Root, string Db, string File, bool Force = false);
 
     private static (JulieExtractOps ops, List<Recorded> calls) NewOps(string canonicalRoot, string db)
     {
@@ -29,7 +29,7 @@ public sealed class JulieExtractOpsTests
             canonicalRoot, db,
             update: (root, db2, file) => { calls.Add(new Recorded("update", root, db2, file)); return Stub(); },
             delete: (root, db2, file) => { calls.Add(new Recorded("delete", root, db2, file)); return Stub(); },
-            scan: (root, db2) => { calls.Add(new Recorded("scan", root, db2, "")); return Stub(); });
+            scan: (root, db2, force) => { calls.Add(new Recorded("scan", root, db2, "", force)); return Stub(); });
         return (ops, calls);
     }
 
@@ -91,7 +91,7 @@ public sealed class JulieExtractOpsTests
     }
 
     [Fact]
-    public void Scan_PassesTheCanonicalRoot_NoFileArg()
+    public void Scan_PassesTheCanonicalRoot_NoFileArg_DefaultsToDeltaNotForce()
     {
         string real = Path.Combine(Path.GetTempPath(), "miller-ops-scan-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(real);
@@ -106,6 +106,31 @@ public sealed class JulieExtractOpsTests
             var rec = Assert.Single(calls);
             Assert.Equal("scan", rec.Op);
             Assert.Equal(canonicalReal, rec.Root);
+            Assert.False(rec.Force); // the M3 delta reconcile default is a hash-delta scan, never --force
+        }
+        finally
+        {
+            try { Directory.Delete(real, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void Scan_ForceTrue_ThreadsForceThroughToTheRunner()
+    {
+        string real = Path.Combine(Path.GetTempPath(), "miller-ops-scanf-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(real);
+        string canonicalReal = PathCanonicalizer.CanonicalizeRoot(real);
+
+        try
+        {
+            var (ops, calls) = NewOps(canonicalReal, Path.Combine(canonicalReal, ".miller", "symbols.db"));
+
+            ops.Scan(force: true); // a `workspace full` from-scratch rebuild (M7 D3)
+
+            var rec = Assert.Single(calls);
+            Assert.Equal("scan", rec.Op);
+            Assert.Equal(canonicalReal, rec.Root);
+            Assert.True(rec.Force); // --force must reach the runner so julie rebuilds from scratch
         }
         finally
         {

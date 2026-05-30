@@ -90,6 +90,19 @@ builder.Services.AddSingleton<IEditWriteThrough>(sp =>
         sp.GetRequiredService<IndexerService>(),
         sp.GetRequiredService<ILoggerFactory>().CreateLogger<LeaderWriteThrough>()));
 
+// Soft budgets (M7 decision-4): per-tool latency + est-token warn thresholds the central telemetry filter
+// evaluates after each call, logging a WARN per breach (warn-only — never blocks or errors the call). The
+// production defaults live on SoftBudgets.Default.
+builder.Services.AddSingleton(SoftBudgets.Default);
+
+// M7 workspace tool (decision-1): the admin/index-lifecycle tool. Auto-discovered via WithToolsFromAssembly()
+// ([McpServerToolType]); it resolves the holder/workspace/indexer/freshness/probe/ledger singletons above plus a
+// JulieExtractRunner for the open(path) prime scan. The runner is located under the SAME tools root the
+// bootstrap + indexer use (the pinned julie-server ships there, NOT the repo cwd), so a missing binary fails
+// loudly via JulieExtractRunner.Locate's restore-script message rather than silently degrading.
+builder.Services.AddSingleton(sp =>
+    JulieExtractRunner.Locate(sp.GetRequiredService<WorkspaceContext>().ToolsRoot));
+
 builder.Services
     .AddMcpServer(options =>
     {

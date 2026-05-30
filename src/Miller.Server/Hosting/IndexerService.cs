@@ -128,7 +128,14 @@ public sealed class IndexerService : BackgroundService
 
                 try
                 {
-                    _core.DrainAndProcess(headChanged);
+                    // Hold _opsGate across the drain so the debounce-loop drain and the on-demand Try* scans
+                    // (TryScanAsLeader / TryReindexAsLeader) share ONE serialization: two julie `extract`
+                    // subprocesses must never run against the same .miller DB at once (the M3 single-writer
+                    // corruption guard, D3). DrainAndProcess additionally serializes the queue on IndexerCore's
+                    // own gate; the lock order is always _opsGate -> _core gate (the Try* methods never take the
+                    // core gate, and the watcher enqueue only takes the core gate), so there is no inversion.
+                    lock (_opsGate)
+                        _core.DrainAndProcess(headChanged);
                 }
                 catch (Exception ex)
                 {
@@ -179,6 +186,87 @@ public sealed class IndexerService : BackgroundService
                 return false;
             }
         }
+    }
+
+    /// <summary>
+    /// M7 workspace refresh/full (decision-3): if THIS instance is the indexer leader, run a whole-repo
+    /// <c>extract scan</c> through its <see cref="IExtractOps"/> — <paramref name="force"/> <c>false</c> is the
+    /// delta reconcile behind <c>workspace refresh</c>, <c>true</c> the from-scratch rebuild behind
+    /// <c>workspace full</c> — and return <see cref="ScanOutcome.Scanned(ExtractReport)"/> carrying julie's
+    /// report (the revision the freshness poll then converges on). If this instance does NOT hold the writer lock
+    /// it returns <see cref="ScanOutcome.NotLeader"/> WITHOUT scanning: two miller instances must never both
+    /// <c>extract scan</c> (the M3 single-writer corruption guard), so a non-leader honestly reports it cannot
+    /// force a scan here and relies on the leader's watcher + the freshness poll. The scan runs under
+    /// <see cref="_opsGate"/> — the same serialization as the debounce-loop drain and the M6 write-through — so
+    /// an on-demand scan never races a concurrent <c>extract</c>. Best-effort: an extract failure is logged and
+    /// returned as <see cref="ScanOutcome.Failed"/>, never thrown into the caller (the tool), because the prior
+    /// index stays valid and the next scan/poll reconciles.
+    /// </summary>
+    public ScanOutcome TryScanAsLeader(bool force)
+    {
+        lock (_opsGate)
+        {
+            if (_ops is not { } ops)
+                return ScanOutcome.NotLeader; // not the leader — must not write (M3 single-writer guard)
+            try
+            {
+                ExtractReport report = ops.Scan(force);
+                return ScanOutcome.Scanned(report);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "On-demand {Kind} scan failed; keeping the prior index (the next scan/poll reconciles).",
+                    force ? "full (force)" : "refresh (delta)");
+                return ScanOutcome.Failed;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Test seam: publish a fake <see cref="IExtractOps"/> as THIS instance's leader ops AND build the dispatch
+    /// <see cref="IndexerCore"/> over the SAME ops, exactly as the production <see cref="ExecuteAsync"/> does once
+    /// leadership is won (one ops instance driven by both the Try* methods and the debounce drain). Lets a unit
+    /// test exercise the <see cref="TryScanAsLeader"/> / <see cref="TryReindexAsLeader"/> leader branch, and the
+    /// drain-vs-Try* serialization (<see cref="DrainForTest"/>), without acquiring the cross-process writer lock
+    /// or spawning julie. Not used in production.
+    /// </summary>
+    internal void PublishOpsForTest(IExtractOps ops)
+    {
+        ArgumentNullException.ThrowIfNull(ops);
+        lock (_opsGate)
+        {
+            _ops = ops;
+            _core = new IndexerCore(
+                new WatchEventQueue(), ops, _ => true, _loggerFactory.CreateLogger<IndexerCore>());
+        }
+    }
+
+    /// <summary>
+    /// Test seam: enqueue a watcher event into the published core's queue so <see cref="DrainForTest"/> has work
+    /// to dispatch. Requires <see cref="PublishOpsForTest"/> to have built the core. Not used in production.
+    /// </summary>
+    internal void EnqueueForTest(WatchEvent ev)
+    {
+        ArgumentNullException.ThrowIfNull(ev);
+        IndexerCore core = _core
+            ?? throw new InvalidOperationException("PublishOpsForTest must run before EnqueueForTest.");
+        core.Enqueue(ev);
+    }
+
+    /// <summary>
+    /// Test seam: run ONE debounce drain exactly as the production loop does — under <see cref="_opsGate"/>, the
+    /// same lock the on-demand <see cref="TryScanAsLeader"/> / <see cref="TryReindexAsLeader"/> take — so a test
+    /// can drive a drain concurrently with a Try* call and assert they never run two extracts at once (the M3
+    /// single-writer guard, D3). Requires <see cref="PublishOpsForTest"/> to have built the core. Not used in
+    /// production.
+    /// </summary>
+    internal void DrainForTest(bool headChanged)
+    {
+        IndexerCore core = _core
+            ?? throw new InvalidOperationException("PublishOpsForTest must run before DrainForTest.");
+        lock (_opsGate)
+            core.DrainAndProcess(headChanged);
     }
 
     private void AttachWatchers(string canonicalRoot)

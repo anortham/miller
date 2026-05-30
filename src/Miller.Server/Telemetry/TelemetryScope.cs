@@ -22,7 +22,7 @@ public sealed class TelemetryScope : IDisposable
     {
         _ledger = ledger;
         Tool = tool;
-        Op = op;
+        _op = op;
         _startTimestamp = Stopwatch.GetTimestamp();
 
         // Publish as the ambient current scope so the tool body can enrich result_count / bytes_examined
@@ -34,8 +34,19 @@ public sealed class TelemetryScope : IDisposable
     /// <summary>The tool name (grouping key).</summary>
     public string Tool { get; }
 
-    /// <summary>The operation / mode sub-axis, if any.</summary>
-    public string? Op { get; }
+    private string? _op;
+
+    /// <summary>
+    /// The operation / mode sub-axis (D7), if any. Seeded from the <see cref="TelemetryLedger.Measure"/> call (the
+    /// central filter passes null — it does not know the operation) and overridable by the tool body via the
+    /// ambient <see cref="TelemetryContext.Current"/>, so a multi-operation tool (e.g. <c>workspace</c>) records
+    /// its operation (status/refresh/full/list/open/remove) in the row's <c>op</c> column instead of NULL.
+    /// </summary>
+    public string? Op
+    {
+        get => _op;
+        set => _op = value;
+    }
 
     private TelemetryOutcome _outcome = TelemetryOutcome.Ok;
 

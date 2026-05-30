@@ -25,6 +25,12 @@ public interface IExtractOps
     /// </summary>
     ExtractReport Delete(string path);
 
-    /// <summary>Force a whole-repo hash-delta reconcile (julie <c>extract scan</c>) over the canonical root.</summary>
-    ExtractReport Scan();
+    /// <summary>
+    /// Run a whole-repo <c>extract scan</c> over the canonical root. With <paramref name="force"/> <c>false</c>
+    /// (the M3 default) julie does a hash-delta reconcile — only changed files are re-extracted; with
+    /// <paramref name="force"/> <c>true</c> it rebuilds the workspace from scratch (julie <c>scan --force</c>),
+    /// the <c>workspace full</c> operation (M7 decision-3). The indexer's own overflow/HEAD reconcile path stays
+    /// on the delta default; only an explicit operator <c>full</c> passes <c>force</c>.
+    /// </summary>
+    ExtractReport Scan(bool force = false);
 }

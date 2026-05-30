@@ -42,9 +42,9 @@ public sealed class IndexerCoreTests
             return Stub("deleted");
         }
 
-        public ExtractReport Scan()
+        public ExtractReport Scan(bool force = false)
         {
-            Calls.Add("scan");
+            Calls.Add(force ? "scan:force" : "scan");
             return Stub("scanned");
         }
 

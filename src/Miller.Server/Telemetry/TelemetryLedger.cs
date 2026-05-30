@@ -193,6 +193,95 @@ public sealed class TelemetryLedger : IDisposable
     }
 
     /// <summary>
+    /// Roll the append-only ledger into a per-tool breakdown (M7 decision-5) — the read path the
+    /// <c>workspace</c> status surfaces. Queries this ledger's OWN connection under <see cref="_gate"/> (the
+    /// same lock as <see cref="Record"/>), so it sees every committed row with no second connection and no
+    /// WAL-visibility question; admin calls are rare, so the brief lock-out of the write path is negligible.
+    /// <para>
+    /// Per-tool count/avg/max/error_count/sum(est_tokens) come from ONE <c>GROUP BY tool</c>. p95 is computed
+    /// per tool by a separate ordered query (<c>ORDER BY duration_ms LIMIT 1 OFFSET floor((count-1)*0.95)</c>) —
+    /// the nearest-rank method, since SQLite has no PERCENTILE/window-percentile builtin. <c>NULL</c> est_tokens
+    /// rows sum to 0 (<c>COALESCE</c>). The window is min/max(ts); <see cref="DroppedWrites"/> is carried
+    /// straight through. Best-effort: a disposed ledger returns <see cref="TelemetrySummary.Empty"/> rather than
+    /// throwing (an admin read must never fault).
+    /// </para>
+    /// </summary>
+    public TelemetrySummary Summarize()
+    {
+        lock (_gate)
+        {
+            if (_disposed)
+                return TelemetrySummary.Empty;
+
+            // One GROUP BY for the cheap aggregates; p95 needs a per-tool ordered offset query (below).
+            var stats = new List<ToolStat>();
+            using (var group = _connection.CreateCommand())
+            {
+                group.CommandText = """
+                    SELECT tool,
+                           COUNT(*)                              AS calls,
+                           AVG(duration_ms)                      AS avg_ms,
+                           MAX(duration_ms)                      AS max_ms,
+                           SUM(CASE WHEN outcome = 'error' THEN 1 ELSE 0 END) AS errors,
+                           COALESCE(SUM(est_tokens), 0)          AS sum_tokens
+                    FROM tool_telemetry
+                    GROUP BY tool
+                    ORDER BY tool;
+                    """;
+                using var reader = group.ExecuteReader();
+                while (reader.Read())
+                {
+                    string tool = reader.GetString(0);
+                    long calls = reader.GetInt64(1);
+                    // AVG returns REAL; it is non-null because the group has at least one row.
+                    double avgMs = reader.GetDouble(2);
+                    long maxMs = reader.GetInt64(3);
+                    long errors = reader.GetInt64(4);
+                    long sumTokens = reader.GetInt64(5);
+                    long p95Ms = ComputeP95(tool, calls);
+                    stats.Add(new ToolStat(tool, calls, avgMs, p95Ms, maxMs, errors, sumTokens));
+                }
+            }
+
+            long totalCalls = 0;
+            string? windowStart = null;
+            string? windowEnd = null;
+            using (var totals = _connection.CreateCommand())
+            {
+                totals.CommandText = "SELECT COUNT(*), MIN(ts), MAX(ts) FROM tool_telemetry;";
+                using var reader = totals.ExecuteReader();
+                if (reader.Read())
+                {
+                    totalCalls = reader.GetInt64(0);
+                    windowStart = reader.IsDBNull(1) ? null : reader.GetString(1);
+                    windowEnd = reader.IsDBNull(2) ? null : reader.GetString(2);
+                }
+            }
+
+            return new TelemetrySummary(stats, totalCalls, windowStart, windowEnd, DroppedWrites);
+        }
+    }
+
+    /// <summary>
+    /// Nearest-rank p95 latency for one tool. The row at 0-based offset <c>floor((count-1)*0.95)</c> of the
+    /// ascending-duration ordering is the 95th-percentile value (so a single row yields its own duration, and
+    /// the max row is never skipped). Caller holds <see cref="_gate"/>.
+    /// </summary>
+    private long ComputeP95(string tool, long count)
+    {
+        // floor((count-1)*0.95): integer math on count>=1. count is the GROUP BY count, always >= 1 here.
+        long offset = (long)Math.Floor((count - 1) * 0.95);
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText =
+            "SELECT duration_ms FROM tool_telemetry WHERE tool = $tool " +
+            "ORDER BY duration_ms ASC LIMIT 1 OFFSET $offset;";
+        cmd.Parameters.AddWithValue("$tool", tool);
+        cmd.Parameters.AddWithValue("$offset", offset);
+        object? value = cmd.ExecuteScalar();
+        return value is null or DBNull ? 0 : Convert.ToInt64(value, CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
     /// Test-only: insert a minimal valid row with an explicit timestamp so <see cref="Prune"/> can be
     /// exercised against rows of a known age. Not part of the production write path.
     /// </summary>

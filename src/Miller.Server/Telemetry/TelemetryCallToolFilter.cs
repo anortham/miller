@@ -1,4 +1,7 @@
+using System.Diagnostics;
+using System.Globalization;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
@@ -14,9 +17,21 @@ namespace Miller.Server.Telemetry;
 /// outcome (IsError → error; else, only when the tool did NOT classify it, empty if zero results else ok),
 /// bytes_returned, and est_tokens before the scope disposes and persists the row. index_fresh is left null
 /// (unknown) for M2 — there is no per-call mtime comparison until M3 (spec L238-239).
+/// <para>
+/// M7 decision-4 (soft budgets): after the inner handler the filter also evaluates the call against
+/// <see cref="SoftBudgets"/> (resolved optionally from DI) and logs a Serilog/ILogger WARN per breach —
+/// WARN-ONLY: it never blocks, never turns the call into an error, never throws. The budget check times the
+/// call with its OWN local <see cref="Stopwatch.GetTimestamp"/> taken at filter entry (independent of the
+/// <see cref="TelemetryScope"/>'s own dispose-timing, which remains the ledger's record of truth); est_tokens
+/// is read from the scope. If <see cref="SoftBudgets"/> or a logger is absent (a bare test harness) the check
+/// is skipped silently.
+/// </para>
 /// </summary>
 public static class TelemetryCallToolFilter
 {
+    /// <summary>The ILogger category for soft-budget WARN lines.</summary>
+    private const string BudgetLoggerCategory = "Miller.Server.Telemetry.SoftBudgets";
+
     /// <summary>
     /// Build the filter delegate. The <see cref="TelemetryLedger"/> is resolved per-call from the request's
     /// service provider, so the filter works regardless of registration order. If no ledger is registered
@@ -32,6 +47,13 @@ public static class TelemetryCallToolFilter
 
             string tool = request.Params?.Name ?? "(unknown)";
             using var scope = ledger.Measure(tool, op: null);
+
+            // Soft budgets (M7 decision-4): time the call with the filter's OWN timestamp, independent of the
+            // scope's dispose-timing. The budget WARN is diagnostic; the ledger row is the record of truth.
+            // Both deps are resolved optionally — a bare harness without them simply skips the check.
+            long budgetStart = Stopwatch.GetTimestamp();
+            var budgets = request.Services?.GetService<SoftBudgets>();
+            var loggerFactory = request.Services?.GetService<ILoggerFactory>();
 
             // index_fresh (M3, decision-8): the coarse boolean "the held index is at the latest revision AND the
             // indexer queue is empty", computed by the IndexFreshProbe singleton when registered. It is resolved
@@ -67,17 +89,64 @@ public static class TelemetryCallToolFilter
                 long bytes = MeasureBytes(result);
                 scope.BytesReturned = bytes;
                 scope.EstTokens = TokenEstimator.CountFromBytes(bytes);
+
+                EvaluateBudgets(budgets, loggerFactory, tool, budgetStart, scope.EstTokens ?? 0);
                 return result;
             }
             catch (Exception ex)
             {
                 // A tool threw past its own catch. Record an error row, then rethrow so the SDK does its
-                // standard redaction to the client.
+                // standard redaction to the client. Still run the budget check on the throw path: a slow call
+                // that ALSO threw is exactly the kind of pathology a latency WARN should surface. est_tokens is
+                // 0 here (no result payload was produced), so only the latency dimension can breach.
                 scope.Outcome = TelemetryOutcome.Error;
                 scope.ErrorKind = ex.GetType().Name;
+                EvaluateBudgets(budgets, loggerFactory, tool, budgetStart, scope.EstTokens ?? 0);
                 throw;
             }
         };
+    }
+
+    /// <summary>
+    /// Evaluate the just-completed call against its soft budget and log a WARN per breach. WARN-ONLY and
+    /// fully best-effort: any failure (a logging fault, etc.) is swallowed so the budget check can NEVER affect
+    /// the call. Skips silently when budgets or a logger are not registered.
+    /// </summary>
+    private static void EvaluateBudgets(
+        SoftBudgets? budgets, ILoggerFactory? loggerFactory, string tool, long budgetStart, long estTokens)
+    {
+        if (budgets is null || loggerFactory is null)
+            return;
+
+        try
+        {
+            long durationMs = Math.Max(0, (long)Stopwatch.GetElapsedTime(budgetStart).TotalMilliseconds);
+            var breaches = budgets.Evaluate(tool, durationMs, estTokens);
+            if (breaches.Count == 0)
+                return;
+
+            var logger = loggerFactory.CreateLogger(BudgetLoggerCategory);
+            foreach (var breach in breaches)
+            {
+                string dimension = breach.Dimension switch
+                {
+                    BudgetDimension.Latency => "latency",
+                    BudgetDimension.EstTokens => "est_tokens",
+                    _ => breach.Dimension.ToString(),
+                };
+                string units = breach.Dimension == BudgetDimension.Latency ? "ms" : " tokens";
+                // e.g. "tool 'context' exceeded latency budget: 820ms > 500ms".
+                logger.LogWarning(
+                    "tool '{Tool}' exceeded {Dimension} budget: {Actual}{Units} > {Limit}{Units}",
+                    tool, dimension,
+                    breach.Actual.ToString(CultureInfo.InvariantCulture), units,
+                    breach.Limit.ToString(CultureInfo.InvariantCulture), units);
+            }
+        }
+        catch (Exception)
+        {
+            // The budget WARN is purely diagnostic; a fault here must never surface to the agent or the call.
+        }
     }
 
     private static long MeasureBytes(CallToolResult result)
