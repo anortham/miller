@@ -19,21 +19,6 @@ namespace Miller.Tests.Server;
 [Trait("Category", "Scale")]
 public sealed class LiveEditTests
 {
-    private static string RepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Miller.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName ?? throw new InvalidOperationException("Could not locate repo root (Miller.slnx).");
-    }
-
-    private static string? LocateJulieServer()
-    {
-        string name = OperatingSystem.IsWindows() ? "julie-server.exe" : "julie-server";
-        string candidate = Path.Combine(RepoRoot(), ".tools", name);
-        return File.Exists(candidate) ? candidate : null;
-    }
-
     // A write-through that canonicalizes + reindexes each changed file through the real binary (what the leader
     // does inline) and records the converged paths so the test can assert it ran.
     private sealed class LiveWriteThrough(JulieExtractOps ops) : IEditWriteThrough
@@ -54,9 +39,7 @@ public sealed class LiveEditTests
     [Fact]
     public void Live_ScanEditApplyAndConverge_AcrossFiles_WithStaleGate()
     {
-        string? binary = LocateJulieServer();
-        Assert.SkipWhen(binary is null,
-            "julie-server not found in .tools/. Run scripts/restore-julie-server.sh to enable the Scale test.");
+        string binary = ScaleTestSupport.RequireJulieServer();
 
         string work = Path.Combine(Path.GetTempPath(), "miller-m6live-" + Guid.NewGuid().ToString("N"));
         string repo = Path.Combine(work, "repo");

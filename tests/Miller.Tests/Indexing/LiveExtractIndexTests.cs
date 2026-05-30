@@ -13,28 +13,10 @@ namespace Miller.Tests.Indexing;
 [Trait("Category", "Scale")]
 public sealed class LiveExtractIndexTests
 {
-    private static string RepoRoot()
-    {
-        // Walk up from the test assembly to the repo root (the dir holding Miller.slnx).
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Miller.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName ?? throw new InvalidOperationException("Could not locate repo root (Miller.slnx).");
-    }
-
-    private static string? LocateJulieServer()
-    {
-        string binaryName = OperatingSystem.IsWindows() ? "julie-server.exe" : "julie-server";
-        string candidate = Path.Combine(RepoRoot(), ".tools", binaryName);
-        return File.Exists(candidate) ? candidate : null;
-    }
-
     [Fact]
     public void LiveExtract_ScanReadBuildQuery_FindsKnownSymbol()
     {
-        string? binary = LocateJulieServer();
-        Assert.SkipWhen(binary is null,
-            "julie-server not found in .tools/. Run scripts/restore-julie-server.sh to enable the Scale test.");
+        string binary = ScaleTestSupport.RequireJulieServer();
 
         // --- create a tiny throwaway fixture repo under a temp dir ---
         string work = Path.Combine(Path.GetTempPath(), "miller-live-" + Guid.NewGuid().ToString("N"));

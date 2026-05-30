@@ -39,21 +39,6 @@ public sealed class LiveWorkspaceTests : IDisposable
         }
     }
 
-    private static string RepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Miller.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName ?? throw new InvalidOperationException("Could not locate repo root (Miller.slnx).");
-    }
-
-    private static string? LocateJulieServer()
-    {
-        string name = OperatingSystem.IsWindows() ? "julie-server.exe" : "julie-server";
-        string candidate = Path.Combine(RepoRoot(), ".tools", name);
-        return File.Exists(candidate) ? candidate : null;
-    }
-
     private string NewTempDir(string label)
     {
         string dir = Path.Combine(Path.GetTempPath(), $"miller-live-ws-{label}-" + Guid.NewGuid().ToString("N"));
@@ -118,9 +103,7 @@ public sealed class LiveWorkspaceTests : IDisposable
     [Fact]
     public void Status_OverRealExtract_RendersIndexFactsAndTelemetryBreakdown()
     {
-        string? binary = LocateJulieServer();
-        Assert.SkipWhen(binary is null,
-            "julie-server not found in .tools/. Run scripts/restore-julie-server.sh to enable the Scale test.");
+        string binary = ScaleTestSupport.RequireJulieServer();
 
         var (tool, _, holder, ledger, root, _, _) = BuildLiveTool(binary!);
         Assert.True(holder.Current.DocumentCount > 0); // the real scan extracted symbols
@@ -142,9 +125,7 @@ public sealed class LiveWorkspaceTests : IDisposable
     [Fact]
     public void Full_AsLeader_ForceScans_AndIndexSwapsToTheAdvancedRevision()
     {
-        string? binary = LocateJulieServer();
-        Assert.SkipWhen(binary is null,
-            "julie-server not found in .tools/. Run scripts/restore-julie-server.sh to enable the Scale test.");
+        string binary = ScaleTestSupport.RequireJulieServer();
 
         var (tool, indexer, holder, _, root, dbPath, runner) = BuildLiveTool(binary!);
 
@@ -169,9 +150,7 @@ public sealed class LiveWorkspaceTests : IDisposable
     [Fact]
     public void Open_OnASecondRepo_PrimesItsMillerSymbolsDb()
     {
-        string? binary = LocateJulieServer();
-        Assert.SkipWhen(binary is null,
-            "julie-server not found in .tools/. Run scripts/restore-julie-server.sh to enable the Scale test.");
+        string binary = ScaleTestSupport.RequireJulieServer();
 
         var (tool, _, _, _, _, _, _) = BuildLiveTool(binary!);
 
@@ -192,9 +171,7 @@ public sealed class LiveWorkspaceTests : IDisposable
     [Fact]
     public void Remove_DeletesNonLiveMillerDir_ButRefusesTheLiveOne()
     {
-        string? binary = LocateJulieServer();
-        Assert.SkipWhen(binary is null,
-            "julie-server not found in .tools/. Run scripts/restore-julie-server.sh to enable the Scale test.");
+        string binary = ScaleTestSupport.RequireJulieServer();
 
         var (tool, _, _, _, root, _, _) = BuildLiveTool(binary!);
 

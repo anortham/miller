@@ -76,7 +76,34 @@ Seven tools, each with smart defaults so the common path is the simplest call: `
 
 ```bash
 dotnet build Miller.slnx -c Release
-dotnet test  Miller.slnx -c Release --filter "Category!=Scale"   # default suite (scale tests excluded)
+dotnet test  Miller.slnx -c Release           # fast suite only — Scale tests excluded by default
+```
+
+The test suite is split in two so the dev loop stays fast (the lesson from julie, whose suite grew to
+30+ minutes once slow integration tests ran on every change):
+
+- **fast** (`Category!=Scale`) — pure logic + contract tests, no `julie-server` subprocess. Target <10s.
+  This is the default: a bare `dotnet test` runs only this suite (the test project sets
+  `VSTestTestCaseFilter=Category!=Scale`, the MSBuild default for `--filter`; a command-line `--filter`
+  overrides it).
+- **scale** (`Category=Scale`) — live tests that spawn the real pinned `julie-server` or build large
+  fixtures. Run before a commit/PR. They **skip** (not fail) if `.tools/julie-server` is absent.
+
+The friendly wrapper sets a wall-clock budget tripwire on the fast suite and handles the filters:
+
+```bash
+scripts/test.sh            # fast suite (default), with a <30s budget tripwire
+scripts/test.sh scale      # scale suite only (needs .tools/julie-server — see restore script)
+scripts/test.sh all        # both suites
+```
+
+Two guards keep the split honest: a convention test
+([`ScaleTraitConventionTests`](tests/Miller.Tests/Conventions/ScaleTraitConventionTests.cs)) fails the
+build if any julie-spawning test is missing `[Trait("Category","Scale")]`, and CI time-budgets the fast
+suite. To enable the scale suite locally:
+
+```bash
+bash scripts/restore-julie-server.sh   # downloads the pinned julie-server into .tools/
 ```
 
 Requires the .NET 10 SDK. Warnings are errors (`Directory.Build.props`).
