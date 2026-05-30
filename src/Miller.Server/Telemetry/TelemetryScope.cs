@@ -18,11 +18,17 @@ public sealed class TelemetryScope : IDisposable
     private readonly TelemetryScope? _previousCurrent;
     private bool _disposed;
 
-    internal TelemetryScope(TelemetryLedger ledger, string tool, string? op)
+    internal TelemetryScope(TelemetryLedger ledger, string tool, string? op, string? correlationId = null)
     {
         _ledger = ledger;
         Tool = tool;
         _op = op;
+        // The correlation id is BOTH this row's persisted id and the Serilog 'cid' on the call's log lines (M8
+        // decision-2). The central filter supplies it; a direct Measure() caller (or a test) passes null and we
+        // self-generate the same UUIDv7 the ledger would have, so direct callers keep a valid unique id unchanged.
+        CorrelationId = string.IsNullOrWhiteSpace(correlationId)
+            ? Guid.CreateVersion7().ToString()
+            : correlationId;
         _startTimestamp = Stopwatch.GetTimestamp();
 
         // Publish as the ambient current scope so the tool body can enrich result_count / bytes_examined
@@ -33,6 +39,14 @@ public sealed class TelemetryScope : IDisposable
 
     /// <summary>The tool name (grouping key).</summary>
     public string Tool { get; }
+
+    /// <summary>
+    /// The correlation id used as this row's persisted <c>id</c> (M8 decision-2). The central
+    /// <see cref="TelemetryCallToolFilter"/> generates it once per <c>tools/call</c> and also pushes it onto
+    /// Serilog's <c>cid</c> log property, so the ledger row and every log line of that one call share an id. When
+    /// no id is supplied (a direct <see cref="TelemetryLedger.Measure"/> caller) it is self-generated as a UUIDv7.
+    /// </summary>
+    public string CorrelationId { get; }
 
     private string? _op;
 
@@ -141,7 +155,7 @@ public sealed class TelemetryScope : IDisposable
             TargetHash: TargetHash,
             MetadataJson: MetadataJson);
 
-        _ledger.Record(in record); // best-effort; never throws
+        _ledger.Record(in record, CorrelationId); // best-effort; never throws
     }
 }
 

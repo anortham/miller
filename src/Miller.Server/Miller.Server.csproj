@@ -17,6 +17,9 @@
     <PackageReference Include="Serilog.Extensions.Hosting" Version="10.0.0" />
     <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
     <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
+    <!-- The machine-readable JSONL sink's compact formatter (M8 §D5). Referenced explicitly rather than relied on
+         transitively via Serilog.Sinks.File so the M9 log-viewer input never depends on a transitive accident. -->
+    <PackageReference Include="Serilog.Formatting.Compact" Version="3.0.0" />
   </ItemGroup>
 
   <ItemGroup>

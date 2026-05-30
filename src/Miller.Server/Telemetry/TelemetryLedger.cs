@@ -118,18 +118,23 @@ public sealed class TelemetryLedger : IDisposable
     /// <summary>
     /// Begin measuring a tool call. The returned scope is enriched by the caller/filter and persists one row
     /// on dispose. <paramref name="op"/> is the operation/mode sub-axis (null when the tool has none).
+    /// <paramref name="correlationId"/> (M8 decision-2) is reused as the persisted row's <c>id</c> so the ledger
+    /// row and the call's log lines share an id; when null the scope self-generates a UUIDv7.
     /// </summary>
-    public TelemetryScope Measure(string tool, string? op)
+    public TelemetryScope Measure(string tool, string? op, string? correlationId = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(tool);
-        return new TelemetryScope(this, tool, op);
+        return new TelemetryScope(this, tool, op, correlationId);
     }
 
     /// <summary>
     /// Persist one row. Best-effort: ANY failure (a CHECK violation, a locked DB, a disposed ledger) is
     /// swallowed and counted in <see cref="DroppedWrites"/>. Telemetry must NEVER break a tool call.
+    /// <paramref name="id"/> (M8 decision-2) is the row's primary key; the central filter supplies the call's
+    /// correlation id so the row and its log lines share an id. When null/blank — direct callers and tests that
+    /// do not correlate — a UUIDv7 is self-generated, preserving the original behavior.
     /// </summary>
-    public void Record(in TelemetryRecord record)
+    public void Record(in TelemetryRecord record, string? id = null)
     {
         try
         {
@@ -141,7 +146,8 @@ public sealed class TelemetryLedger : IDisposable
                     return;
                 }
 
-                _insert.Parameters["$id"].Value = Guid.CreateVersion7().ToString();
+                _insert.Parameters["$id"].Value =
+                    string.IsNullOrWhiteSpace(id) ? Guid.CreateVersion7().ToString() : id;
                 _insert.Parameters["$tool"].Value = record.Tool;
                 _insert.Parameters["$op"].Value = (object?)record.Op ?? DBNull.Value;
                 _insert.Parameters["$ws"].Value = (object?)record.WorkspaceId ?? DBNull.Value;

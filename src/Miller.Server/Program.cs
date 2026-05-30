@@ -4,10 +4,12 @@ using Microsoft.Extensions.Logging;
 using Miller.Indexing;
 using Miller.Server;
 using Miller.Server.Hosting;
+using Miller.Server.Logging;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
 using ModelContextProtocol.Server;
 using Serilog;
+using Serilog.Core;
 
 // Miller MCP server host bootstrap (M2).
 // IndexBootstrapService (an IHostedService registered BEFORE the MCP host) builds the in-memory index from
@@ -24,15 +26,39 @@ var workspacePath = Environment.CurrentDirectory;
 var logsPath = Path.Combine(workspacePath, ".miller", "logs");
 Directory.CreateDirectory(logsPath);
 
-Log.Logger = new LoggerConfiguration()
-    .MinimumLevel.Information()
-    .WriteTo.Console(standardErrorFromLevel: Serilog.Events.LogEventLevel.Verbose)
-    .WriteTo.File(
-        Path.Combine(logsPath, "miller-.log"),
-        rollingInterval: RollingInterval.Day,
-        retainedFileCountLimit: 14,
-        outputTemplate: "{Timestamp:HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}")
+int processId = Environment.ProcessId;
+
+// M8 §D6: sweep stale per-pid log files (pids that have since exited) BEFORE this process opens its own sink, so
+// the current pid's about-to-be-created files are never candidates. Best-effort; never fails startup. The logger
+// does not exist yet, so a discovery/plan fault is returned as a deferred message logged once below (finding-6).
+string? reapDeferredWarning = MillerLoggingSetup.ReapStaleLogs(logsPath, processId);
+
+// M8 §D4: the minimum level is dialed from MILLER_LOG_LEVEL at startup (no recompile). An unrecognized value
+// falls back to Information and is warned ONCE after the logger is built (so the warning is itself logged).
+string? logLevelEnv = Environment.GetEnvironmentVariable("MILLER_LOG_LEVEL");
+var levelSwitch = new LoggingLevelSwitch(LogLevelParse.ToLevel(logLevelEnv));
+
+// M8 §D1/§D5: per-pid human .log + machine .jsonl sinks, the level switch, and cid/pid enrichment — all wired in
+// the ONE shared MillerLoggingSetup so this host and the sink test exercise the same configuration. Console stays
+// on stderr (STDIO purity: nothing but the MCP protocol may touch stdout).
+Log.Logger = MillerLoggingSetup
+    .Configure(new LoggerConfiguration(), logsPath, processId, levelSwitch)
     .CreateLogger();
+
+// One-time warn for a typo'd level (the logger is built, so this line itself is captured). A recognized value or
+// an absent variable is silent — Information is the honest default.
+if (!string.IsNullOrEmpty(logLevelEnv) && !LogLevelParse.WasRecognized(logLevelEnv))
+{
+    Log.Warning(
+        "unknown MILLER_LOG_LEVEL '{Value}', defaulting to Information.", logLevelEnv);
+}
+
+// M8 §D6 (finding-6): the startup log sweep ran before the logger existed; if its discovery/plan faulted (a
+// hostile logs dir) it returned a deferred message we surface now, so a broken reap is visible rather than silent.
+if (!string.IsNullOrEmpty(reapDeferredWarning))
+{
+    Log.Warning("startup log sweep skipped: {Reason}", reapDeferredWarning);
+}
 
 var builder = Host.CreateApplicationBuilder(args);
 builder.Services.AddSerilog();

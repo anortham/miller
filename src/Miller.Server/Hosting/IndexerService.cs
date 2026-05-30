@@ -2,6 +2,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Miller.Core.Freshness;
 using Miller.Indexing;
+using Miller.Server.Logging;
 
 // IndexBootstrapService + WorkspaceContext live in the Miller.Server namespace (M2).
 using Miller.Server;
@@ -86,13 +87,27 @@ public sealed class IndexerService : BackgroundService
         try
         {
             // --- leader election: poll until we win the lock (or are asked to stop) ---
+            // M8 §D4: log the transition into the reader role ONCE at Information (the meaningful state change),
+            // then each subsequent failed re-try at Debug ("still a reader") so the 5s failover poll does not spam
+            // Information forever. Becoming the leader below is the other transition, logged at Information.
+            bool announcedReader = false;
             while (!stoppingToken.IsCancellationRequested && _lease is null)
             {
                 _lease = SingleWriterLock.TryAcquire(millerDir);
                 if (_lease is null)
                 {
-                    _logger.LogInformation(
-                        "Not the indexer leader (another miller holds the lock); idling as a reader.");
+                    if (!announcedReader)
+                    {
+                        _logger.LogInformation(
+                            "Not the indexer leader (another miller holds the lock); idling as a reader.");
+                        announcedReader = true;
+                    }
+                    else
+                    {
+                        _logger.LogDebug(
+                            "Still a reader (the writer lock is still held); will re-try in {RetrySeconds}s.",
+                            LeaderRetryInterval.TotalSeconds);
+                    }
                     await Task.Delay(LeaderRetryInterval, stoppingToken).ConfigureAwait(false);
                 }
             }
@@ -112,6 +127,10 @@ public sealed class IndexerService : BackgroundService
                 _loggerFactory.CreateLogger<IndexerCore>());
 
             AttachWatchers(canonicalRoot);
+            // M8 §D2: this instance won the lease — flip the live log role to leader so every subsequent log line
+            // (human + jsonl) is tagged role=leader, distinguishing it from the reader instances sharing the logs
+            // directory. Readers leave the startup default (reader) untouched.
+            MillerRole.SetLeader();
             _logger.LogInformation("Indexer leader: watching {Root} (recursive) + .git/HEAD.", canonicalRoot);
 
             // --- debounce loop: drain on each tick (collects bursts into a single coalesced batch) ---
@@ -154,6 +173,15 @@ public sealed class IndexerService : BackgroundService
             DisposeWatchers();
             lock (_opsGate)
                 _ops = null; // stop offering inline write-through once we step down
+            // M8 §D4: the leadership-loss transition at Debug (the inverse of the "Indexer leader: watching ..."
+            // Information line above). On a normal shutdown the host is stopping anyway; if a future failover ever
+            // releases the lease while running, this records the role change. M8 §D2: flip the live log role back
+            // to reader so any line emitted after step-down is tagged honestly (no stale role=leader).
+            if (_lease is not null)
+            {
+                _logger.LogDebug("Indexer stepping down: releasing the writer lock.");
+                MillerRole.SetReader();
+            }
             _lease?.Dispose();
             _lease = null;
         }

@@ -250,11 +250,13 @@ public sealed class IndexerCoreTests
         // All three ops ran (the failure was isolated, the batch continued).
         Assert.Equal(
             new[] { "update:/repo/good1.cs", "update:/repo/bad.cs", "update:/repo/good2.cs" }, ops.Calls);
-        // Exactly one log entry, at Information, naming the transient code.
-        var entry = Assert.Single(logger.Entries);
+        // Exactly ONE failure entry (the two successes now also log a per-file outcome at Debug, M8 §D4), at
+        // Information, carrying the failed exception and naming the transient code.
+        var entry = Assert.Single(logger.Entries, e => e.Exception is JulieExtractFailedException);
         Assert.Equal(LogLevel.Information, entry.Level);
         Assert.Contains(transientCode, entry.Message, StringComparison.Ordinal);
-        Assert.IsType<JulieExtractFailedException>(entry.Exception);
+        // The successful siblings' Debug outcome lines are the only OTHER entries — no stray failure/warn lines.
+        Assert.Equal(2, logger.Entries.Count(e => e.Level == LogLevel.Debug));
     }
 
     [Theory]
@@ -328,5 +330,109 @@ public sealed class IndexerCoreTests
 
         var entry = Assert.Single(logger.Entries);
         Assert.Equal(LogLevel.Warning, entry.Level);
+    }
+
+    // ---- M8 §D3: surface julie's raw stderr tail next to the codes at the catch sites ----
+
+    [Fact]
+    public void ExecuteIsolated_AbnormalFailure_LogsCodes_AndJuliesStderrTail()
+    {
+        // The abnormal (Error) branch must now render BOTH the structured codes AND julie's raw stderr (which
+        // Exception.ToString() drops) — the daemon-debugging payoff of D3.
+        var failed = new JulieExtractFailedException(
+            "exit 1: outside_root",
+            new[] { new ExtractError("outside_root", "the path is outside the extract root", "/repo/x.cs") },
+            standardError: "ERROR julie::extract: path '/repo/x.cs' is outside root '/repo'");
+        var ops = new RecordingOps();
+        ops.ThrowExceptionOnUpdatePath["/repo/bad.cs"] = failed;
+        var logger = new RecordingLogger();
+        var core = NewCore(ops, _ => true, logger);
+        core.Queue.Enqueue(new WatchEvent("/repo/bad.cs", WatchEventKind.Modified));
+
+        core.DrainAndProcess(headChanged: false);
+
+        var entry = Assert.Single(logger.Entries);
+        Assert.Equal(LogLevel.Error, entry.Level);
+        Assert.Contains("outside_root", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("is outside root", entry.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExecuteIsolated_TransientFailure_LogsCodes_AndJuliesStderrTail_AtInformation()
+    {
+        // The transient (Info) branch also surfaces the stderr tail so a "retry later" still shows julie's words.
+        var failed = new JulieExtractFailedException(
+            "exit 1: flock_timeout",
+            new[] { new ExtractError("flock_timeout", "another writer held the lock", "/repo/x.cs") },
+            standardError: "WARN julie::flock: timed out waiting for the write lock after 5s");
+        var ops = new RecordingOps();
+        ops.ThrowExceptionOnUpdatePath["/repo/bad.cs"] = failed;
+        var logger = new RecordingLogger();
+        var core = NewCore(ops, _ => true, logger);
+        core.Queue.Enqueue(new WatchEvent("/repo/bad.cs", WatchEventKind.Modified));
+
+        core.DrainAndProcess(headChanged: false);
+
+        var entry = Assert.Single(logger.Entries);
+        Assert.Equal(LogLevel.Information, entry.Level);
+        Assert.Contains("flock_timeout", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("timed out waiting for the write lock", entry.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExecuteIsolated_UnexpectedJulieException_LogsItsStderrTail_AtWarning()
+    {
+        // The generic catch routes through the helper too: a base JulieExtractException's stderr (a Rust panic)
+        // is surfaced even though it carries no structured codes.
+        var ops = new RecordingOps();
+        ops.ThrowExceptionOnUpdatePath["/repo/bad.cs"] =
+            new JulieExtractException("crashed (exit 134)", standardError: "thread 'main' panicked at index.rs:42");
+        var logger = new RecordingLogger();
+        var core = NewCore(ops, _ => true, logger);
+        core.Queue.Enqueue(new WatchEvent("/repo/bad.cs", WatchEventKind.Modified));
+
+        core.DrainAndProcess(headChanged: false);
+
+        var entry = Assert.Single(logger.Entries);
+        Assert.Equal(LogLevel.Warning, entry.Level);
+        Assert.Contains("panicked at index.rs:42", entry.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExecuteIsolated_GenericNonJulieException_DoesNotEmitADanglingJulieStderrLabel()
+    {
+        // finding-7: the generic catch fires for non-julie exceptions too (a JSON parse error, an exec failure).
+        // For those, the helper returns an EMPTY stderr tail, so a hardcoded "julie stderr:" label would render
+        // as a dangling "julie stderr:" with nothing after it — asserting a julie context that is false. The label
+        // must only appear when there IS a stderr tail to show.
+        var ops = new RecordingOps();
+        ops.ThrowExceptionOnUpdatePath["/repo/bad.cs"] =
+            new InvalidOperationException("the extract report JSON was unparseable");
+        var logger = new RecordingLogger();
+        var core = NewCore(ops, _ => true, logger);
+        core.Queue.Enqueue(new WatchEvent("/repo/bad.cs", WatchEventKind.Modified));
+
+        core.DrainAndProcess(headChanged: false);
+
+        var entry = Assert.Single(logger.Entries);
+        Assert.Equal(LogLevel.Warning, entry.Level);
+        // No stderr to show for a non-julie exception => the "julie stderr" label must be absent entirely.
+        Assert.DoesNotContain("julie stderr", entry.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ExecuteIsolated_PerFileOutcome_IsLoggedAtDebug_OnTheSuccessPath()
+    {
+        // M8 §D4: a successful per-file extract emits a Debug outcome line (path + resulting revision/status),
+        // silent at the default Information level but invaluable when MILLER_LOG_LEVEL=Debug.
+        var ops = new RecordingOps();
+        var logger = new RecordingLogger(); // IsEnabled(Debug)==true, so the Debug line is captured here
+        var core = NewCore(ops, _ => true, logger);
+        core.Queue.Enqueue(new WatchEvent("/repo/a.cs", WatchEventKind.Modified));
+
+        core.DrainAndProcess(headChanged: false);
+
+        var debug = Assert.Single(logger.Entries, e => e.Level == LogLevel.Debug);
+        Assert.Contains("/repo/a.cs", debug.Message, StringComparison.Ordinal);
     }
 }

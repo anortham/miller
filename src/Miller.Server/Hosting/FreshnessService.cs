@@ -223,8 +223,15 @@ public sealed class FreshnessService : BackgroundService
     // typed outcome. Callers hold _pollGate; exceptions propagate to the caller's own keep-prior-index handling.
     private PollResult PollThenSwap(FreshnessReader reader, IndexRebuilder rebuilder, string workspaceId)
     {
+        long built = _holder.BuiltRevision;
         long latest = reader.LatestRevision(workspaceId);
         Interlocked.Exchange(ref _lastObservedRevision, latest);
+
+        // M8 §D4: the observed-vs-built comparison every poll makes — at Debug so it costs nothing at the default
+        // level, but it is exactly the line that explains why a poll did (or did not) swap.
+        _logger.LogDebug(
+            "Freshness poll: observed revision {Observed} vs built revision {Built}.", latest, built);
+
         bool swapped = FreshnessPoller.PollOnce(_holder, latest, rebuilder.Rebuild);
         if (swapped)
             _logger.LogInformation("Freshness: rebuilt + swapped index to revision {Revision}.", latest);

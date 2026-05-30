@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
+using Serilog.Context;
 
 namespace Miller.Server.Telemetry;
 
@@ -46,7 +47,14 @@ public static class TelemetryCallToolFilter
                 return await next(request, cancellationToken);
 
             string tool = request.Params?.Name ?? "(unknown)";
-            using var scope = ledger.Measure(tool, op: null);
+
+            // Correlation id (M8 decision-2): ONE id per tools/call, generated here at the single choke point.
+            // It is BOTH the telemetry row id (passed to the scope, which hands it to Record) AND the Serilog
+            // 'cid' log property pushed for the duration of the inner handler — so every log line emitted on this
+            // call's async flow (the tool body and the readers it calls) carries the same id as the ledger row.
+            string cid = Guid.CreateVersion7().ToString();
+            using var scope = ledger.Measure(tool, op: null, correlationId: cid);
+            using var cidContext = LogContext.PushProperty("cid", cid);
 
             // Soft budgets (M7 decision-4): time the call with the filter's OWN timestamp, independent of the
             // scope's dispose-timing. The budget WARN is diagnostic; the ledger row is the record of truth.

@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Miller.Core.Freshness;
 using Miller.Indexing;
+using Miller.Server.Logging;
 
 namespace Miller.Server.Hosting;
 
@@ -123,20 +124,20 @@ public sealed class IndexerCore
     {
         try
         {
-            switch (op)
+            ExtractReport report = op switch
             {
-                case UpdateOp u:
-                    _ops.Update(u.Path);
-                    break;
-                case DeleteOp d:
-                    _ops.Delete(d.Path);
-                    break;
-                case ScanOp:
-                    _ops.Scan();
-                    break;
-                default:
-                    throw new InvalidOperationException($"Unhandled ExtractOp '{op.GetType().Name}'.");
-            }
+                UpdateOp u => _ops.Update(u.Path),
+                DeleteOp d => _ops.Delete(d.Path),
+                ScanOp => _ops.Scan(),
+                _ => throw new InvalidOperationException($"Unhandled ExtractOp '{op.GetType().Name}'."),
+            };
+
+            // M8 §D4: a per-file extract outcome at Debug — silent at the default Information level, but the line
+            // an operator running MILLER_LOG_LEVEL=Debug needs to follow which file moved the index to which
+            // revision. Cheap: the template is not rendered unless Debug is enabled.
+            _logger?.LogDebug(
+                "extract op {Op} succeeded (status {Status}, revision {Revision}).",
+                Describe(op), report.Status, report.Revision);
         }
         catch (JulieExtractFailedException ex)
         {
@@ -145,31 +146,49 @@ public sealed class IndexerCore
             // prior index, retry later" at INFO; everything else (usage, outside-root, operator errors, or a
             // failure with NO structured code) is abnormal and must surface LOUDLY at Error. In all cases the
             // prior index is kept and the batch continues — the next scan reconciles the failed file.
-            string codes = ex.Errors.Count == 0
-                ? "(no structured errors)"
-                : string.Join(", ", ex.Errors.Select(e => e.Code));
+            // M8 §D3: source codes + julie's raw stderr tail from the pure helper (the codes wording is
+            // behavior-preserving; the stderr tail is the missing piece Exception.ToString() drops).
+            var described = ExtractErrorLog.Describe(ex);
             bool isTransient = ex.Errors.Count > 0 && ex.Errors.Any(e => TransientErrorCodes.Contains(e.Code));
 
             if (isTransient)
             {
                 _logger?.LogInformation(ex,
                     "extract op {Op} hit a transient/expected failure ({Codes}); keeping the prior index and " +
-                    "retrying on the next scan.", Describe(op), codes);
+                    "retrying on the next scan. julie stderr: {ExtractStderrTail}",
+                    Describe(op), described.Codes, described.StderrTail);
             }
             else
             {
                 _logger?.LogError(ex,
                     "extract op {Op} failed with an abnormal error ({Codes}); keeping the prior index and " +
-                    "continuing the batch.", Describe(op), codes);
+                    "continuing the batch. julie stderr: {ExtractStderrTail}",
+                    Describe(op), described.Codes, described.StderrTail);
             }
         }
         catch (Exception ex)
         {
             // Truly unexpected (an unexpected exit code, an exec failure, a JSON parse error): keep the prior
-            // index, flag a repair, move on. The next scan reconciles the failed file.
-            _logger?.LogWarning(ex,
-                "extract op {Op} failed with an unexpected exception; keeping the prior index and " +
-                "continuing the batch.", Describe(op));
+            // index, flag a repair, move on. The next scan reconciles the failed file. M8 §D3: route through the
+            // helper too so a base JulieExtractException's stderr (a Rust panic) is surfaced. finding-7: this
+            // branch ALSO fires for non-julie exceptions (a JSON parse error), whose stderr tail is empty — only
+            // attach the "julie stderr:" label when there is actually a tail, so a non-julie failure does not log
+            // a dangling label asserting a julie context that is false.
+            var described = ExtractErrorLog.Describe(ex);
+            if (described.StderrTail.Length == 0)
+            {
+                _logger?.LogWarning(ex,
+                    "extract op {Op} failed with an unexpected exception; keeping the prior index and " +
+                    "continuing the batch.",
+                    Describe(op));
+            }
+            else
+            {
+                _logger?.LogWarning(ex,
+                    "extract op {Op} failed with an unexpected exception; keeping the prior index and " +
+                    "continuing the batch. julie stderr: {ExtractStderrTail}",
+                    Describe(op), described.StderrTail);
+            }
         }
     }
 
