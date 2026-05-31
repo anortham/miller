@@ -29,8 +29,13 @@ public sealed class TelemetrySummaryTests : IDisposable
         try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }
     }
 
-    /// <summary>Insert one fully-specified row directly (bypasses the prepared INSERT to control duration/tokens).</summary>
-    private void InsertRow(string tool, long durationMs, string outcome, long? estTokens, string ts)
+    /// <summary>
+    /// Insert one fully-specified row directly (bypasses the prepared INSERT to control duration/tokens).
+    /// <paramref name="workspaceId"/> stamps the row's <c>workspace_id</c> — the shared ledger is scoped by it,
+    /// so it defaults to the <c>ws1</c> id the tests open the ledger with (rows must match to be summarised).
+    /// </summary>
+    private void InsertRow(string tool, long durationMs, string outcome, long? estTokens, string ts,
+        string workspaceId = "ws1")
     {
         using var c = new SqliteConnection(new SqliteConnectionStringBuilder
         {
@@ -39,11 +44,12 @@ public sealed class TelemetrySummaryTests : IDisposable
         c.Open();
         using var cmd = c.CreateCommand();
         cmd.CommandText =
-            "INSERT INTO tool_telemetry (id, ts, tool, duration_ms, outcome, est_tokens) " +
-            "VALUES ($id, $ts, $tool, $dur, $outcome, $est);";
+            "INSERT INTO tool_telemetry (id, ts, tool, workspace_id, duration_ms, outcome, est_tokens) " +
+            "VALUES ($id, $ts, $tool, $ws, $dur, $outcome, $est);";
         cmd.Parameters.AddWithValue("$id", Guid.CreateVersion7().ToString());
         cmd.Parameters.AddWithValue("$ts", ts);
         cmd.Parameters.AddWithValue("$tool", tool);
+        cmd.Parameters.AddWithValue("$ws", workspaceId);
         cmd.Parameters.AddWithValue("$dur", durationMs);
         cmd.Parameters.AddWithValue("$outcome", outcome);
         cmd.Parameters.AddWithValue("$est", (object?)estTokens ?? DBNull.Value);
@@ -92,6 +98,29 @@ public sealed class TelemetrySummaryTests : IDisposable
         Assert.Equal(50, inspect.MaxMs);
         Assert.Equal(0, inspect.ErrorCount);
         Assert.Equal(0, inspect.SumEstTokens); // null est_tokens sum to 0, not null
+    }
+
+    [Fact]
+    public void Summarize_ScopesToThisWorkspace_ExcludingOtherWorkspacesRows()
+    {
+        // The telemetry DB is now machine-global (one shared file across workspaces). A per-workspace status view
+        // must report ONLY this workspace's rows, not the whole machine's — Summarize scopes to the ledger's id.
+        using var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ws1");
+        InsertRow("search", 100, "ok", 10, "2026-05-01T00:00:00.000Z", workspaceId: "ws1");
+        InsertRow("search", 200, "ok", 20, "2026-05-01T00:00:01.000Z", workspaceId: "ws1");
+        // Rows from a DIFFERENT workspace sharing the same ledger file must NOT leak into ws1's summary.
+        InsertRow("search", 999, "error", 500, "2026-05-01T00:00:02.000Z", workspaceId: "ws2");
+        InsertRow("inspect", 999, "ok", 500, "2026-05-01T00:00:03.000Z", workspaceId: "ws2");
+
+        var summary = ledger.Summarize();
+
+        Assert.Equal(2, summary.TotalCalls);                 // only ws1's two rows
+        var search = Assert.Single(summary.Tools);           // ws2's 'inspect' tool is absent entirely
+        Assert.Equal("search", search.Tool);
+        Assert.Equal(2, search.Calls);
+        Assert.Equal(200, search.MaxMs);                     // ws2's 999ms row excluded from max
+        Assert.Equal(0, search.ErrorCount);                  // ws2's error excluded
+        Assert.Equal(30, search.SumEstTokens);               // 10 + 20, not ws2's 500
     }
 
     [Fact]

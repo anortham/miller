@@ -87,7 +87,7 @@ public sealed class IndexBootstrapServiceTests
         string dbPath = Path.Combine(dir, "telemetry.db");
         try
         {
-            var ledger = IndexBootstrapService.OpenAndPrune(dbPath, "ws-1", retentionDays: 30, out int pruned);
+            var ledger = IndexBootstrapService.OpenAndPrune(dbPath, "ws-1", "/repo/work", retentionDays: 30, out int pruned);
             using (ledger)
             {
                 Assert.Equal(0, pruned); // empty DB → nothing to prune
@@ -117,7 +117,7 @@ public sealed class IndexBootstrapServiceTests
         try
         {
             Assert.Throws<ArgumentOutOfRangeException>(
-                () => IndexBootstrapService.OpenAndPrune(dbPath, "ws-1", retentionDays: -1, out _));
+                () => IndexBootstrapService.OpenAndPrune(dbPath, "ws-1", "/repo/work", retentionDays: -1, out _));
         }
         finally
         {

@@ -141,9 +141,14 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                     ?? ReadLatestRevisionOrZero(canonicalDbPath, workspaceId);
 
                 // Open the SEPARATE, writable telemetry ledger (never the read-only extract) + prune old rows.
+                // The ledger is MACHINE-GLOBAL (shared <home>/.miller/telemetry.db across every workspace), so its
+                // directory is NOT the per-repo .miller created above — ensure it exists before opening. Each row
+                // is stamped with this workspace's id + root so the shared ledger stays attributable.
                 // OpenAndPrune disposes the just-opened ledger if Prune throws, so a prune failure cannot leak
                 // the open connection (the outer catch covers every OTHER post-open step the same way).
-                ledger = OpenAndPrune(workspace.TelemetryDbPath, workspaceId, retentionDays: 30, out int pruned);
+                Directory.CreateDirectory(Path.GetDirectoryName(workspace.TelemetryDbPath)!);
+                ledger = OpenAndPrune(
+                    workspace.TelemetryDbPath, workspaceId, workspace.WorkspaceRoot, retentionDays: 30, out int pruned);
 
                 var holder = new IndexHolder(index, builtRevision);
                 _holder = holder;
@@ -176,11 +181,11 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     /// on failure disposes it and rethrows. The outer bootstrap try/catch covers every other post-open step.
     /// </summary>
     internal static TelemetryLedger OpenAndPrune(
-        string telemetryDbPath, string? workspaceId, int retentionDays, out int pruned)
+        string telemetryDbPath, string? workspaceId, string? workspaceRoot, int retentionDays, out int pruned)
     {
         int prunedLocal = 0;
         var ledger = PrimeOrDispose(
-            TelemetryLedger.Open(telemetryDbPath, workspaceId),
+            TelemetryLedger.Open(telemetryDbPath, workspaceId, workspaceRoot),
             l => prunedLocal = l.Prune(retentionDays));
         pruned = prunedLocal;
         return ledger;

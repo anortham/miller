@@ -18,7 +18,7 @@ public sealed class TelemetryLedger : IDisposable
     private const string CreateTableDdl = """
         CREATE TABLE IF NOT EXISTS tool_telemetry (
             id TEXT PRIMARY KEY, ts TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-            tool TEXT NOT NULL, op TEXT, workspace_id TEXT,
+            tool TEXT NOT NULL, op TEXT, workspace_id TEXT, workspace_root TEXT,
             duration_ms INTEGER NOT NULL CHECK (duration_ms >= 0),
             outcome TEXT NOT NULL CHECK (outcome IN ('ok','empty','error')), error_kind TEXT,
             result_count INTEGER,
@@ -30,11 +30,13 @@ public sealed class TelemetryLedger : IDisposable
         ) STRICT;
         CREATE INDEX IF NOT EXISTS idx_tool_telemetry_ts ON tool_telemetry(ts);
         CREATE INDEX IF NOT EXISTS idx_tool_telemetry_tool ON tool_telemetry(tool);
+        CREATE INDEX IF NOT EXISTS idx_tool_telemetry_ws ON tool_telemetry(workspace_id);
         """;
 
     private readonly object _gate = new();
     private readonly SqliteConnection _connection;
     private readonly SqliteCommand _insert;
+    private readonly string? _workspaceRoot;
     private bool _disposed;
 
     /// <summary>The workspace id stamped onto every row, or null if unknown at open time.</summary>
@@ -43,18 +45,19 @@ public sealed class TelemetryLedger : IDisposable
     /// <summary>Count of telemetry rows that failed to persist and were swallowed (never throws).</summary>
     public long DroppedWrites { get; private set; }
 
-    private TelemetryLedger(SqliteConnection connection, string? workspaceId)
+    private TelemetryLedger(SqliteConnection connection, string? workspaceId, string? workspaceRoot)
     {
         _connection = connection;
         WorkspaceId = workspaceId;
+        _workspaceRoot = workspaceRoot;
 
         _insert = _connection.CreateCommand();
         _insert.CommandText = """
             INSERT INTO tool_telemetry
-                (id, tool, op, workspace_id, duration_ms, outcome, error_kind, result_count,
+                (id, tool, op, workspace_id, workspace_root, duration_ms, outcome, error_kind, result_count,
                  bytes_examined, bytes_returned, source_bytes, est_tokens, index_fresh, target_hash, metadata_json)
             VALUES
-                ($id, $tool, $op, $ws, $dur, $outcome, $errkind, $rc,
+                ($id, $tool, $op, $ws, $wsroot, $dur, $outcome, $errkind, $rc,
                  $bex, $bret, $src, $est, $fresh, $hash, $meta);
             """;
         // Declare parameters once; values are set per Record() call. Prepared and reused on the hot path.
@@ -62,6 +65,7 @@ public sealed class TelemetryLedger : IDisposable
         _insert.Parameters.Add("$tool", SqliteType.Text);
         _insert.Parameters.Add("$op", SqliteType.Text);
         _insert.Parameters.Add("$ws", SqliteType.Text);
+        _insert.Parameters.Add("$wsroot", SqliteType.Text);
         _insert.Parameters.Add("$dur", SqliteType.Integer);
         _insert.Parameters.Add("$outcome", SqliteType.Text);
         _insert.Parameters.Add("$errkind", SqliteType.Text);
@@ -78,9 +82,12 @@ public sealed class TelemetryLedger : IDisposable
 
     /// <summary>
     /// Open (creating if needed) the writable telemetry DB at <paramref name="dbPath"/> and ensure the table.
-    /// The parent directory must already exist (startup creates <c>&lt;root&gt;/.miller</c>).
+    /// The parent directory must already exist (startup creates <c>&lt;home&gt;/.miller</c>). The DB is
+    /// machine-global — every workspace's miller process opens this same file — so each row is stamped with
+    /// <paramref name="workspaceId"/> + <paramref name="workspaceRoot"/> and <see cref="Summarize"/> scopes back
+    /// to <paramref name="workspaceId"/> so a per-workspace view never reports another workspace's rows.
     /// </summary>
-    public static TelemetryLedger Open(string dbPath, string? workspaceId)
+    public static TelemetryLedger Open(string dbPath, string? workspaceId, string? workspaceRoot = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
 
@@ -112,7 +119,7 @@ public sealed class TelemetryLedger : IDisposable
             ddl.ExecuteNonQuery();
         }
 
-        return new TelemetryLedger(connection, workspaceId);
+        return new TelemetryLedger(connection, workspaceId, workspaceRoot);
     }
 
     /// <summary>
@@ -151,6 +158,9 @@ public sealed class TelemetryLedger : IDisposable
                 _insert.Parameters["$tool"].Value = record.Tool;
                 _insert.Parameters["$op"].Value = (object?)record.Op ?? DBNull.Value;
                 _insert.Parameters["$ws"].Value = (object?)record.WorkspaceId ?? DBNull.Value;
+                // workspace_root is a per-ledger constant (this process serves one workspace), stamped from the
+                // ledger so the shared cross-workspace DB stays human-readable without threading it per-record.
+                _insert.Parameters["$wsroot"].Value = (object?)_workspaceRoot ?? DBNull.Value;
                 _insert.Parameters["$dur"].Value = record.DurationMs;
                 _insert.Parameters["$outcome"].Value = record.Outcome;
                 _insert.Parameters["$errkind"].Value = (object?)record.ErrorKind ?? DBNull.Value;
@@ -223,6 +233,8 @@ public sealed class TelemetryLedger : IDisposable
             var stats = new List<ToolStat>();
             using (var group = _connection.CreateCommand())
             {
+                // Scoped to THIS workspace: the DB is shared across workspaces, so an unscoped GROUP BY would
+                // report machine-wide totals in a per-workspace status view. `IS` matches a null id to null rows.
                 group.CommandText = """
                     SELECT tool,
                            COUNT(*)                              AS calls,
@@ -231,9 +243,11 @@ public sealed class TelemetryLedger : IDisposable
                            SUM(CASE WHEN outcome = 'error' THEN 1 ELSE 0 END) AS errors,
                            COALESCE(SUM(est_tokens), 0)          AS sum_tokens
                     FROM tool_telemetry
+                    WHERE workspace_id IS $ws
                     GROUP BY tool
                     ORDER BY tool;
                     """;
+                group.Parameters.AddWithValue("$ws", (object?)WorkspaceId ?? DBNull.Value);
                 using var reader = group.ExecuteReader();
                 while (reader.Read())
                 {
@@ -254,7 +268,8 @@ public sealed class TelemetryLedger : IDisposable
             string? windowEnd = null;
             using (var totals = _connection.CreateCommand())
             {
-                totals.CommandText = "SELECT COUNT(*), MIN(ts), MAX(ts) FROM tool_telemetry;";
+                totals.CommandText = "SELECT COUNT(*), MIN(ts), MAX(ts) FROM tool_telemetry WHERE workspace_id IS $ws;";
+                totals.Parameters.AddWithValue("$ws", (object?)WorkspaceId ?? DBNull.Value);
                 using var reader = totals.ExecuteReader();
                 if (reader.Read())
                 {
@@ -279,9 +294,10 @@ public sealed class TelemetryLedger : IDisposable
         long offset = (long)Math.Floor((count - 1) * 0.95);
         using var cmd = _connection.CreateCommand();
         cmd.CommandText =
-            "SELECT duration_ms FROM tool_telemetry WHERE tool = $tool " +
+            "SELECT duration_ms FROM tool_telemetry WHERE tool = $tool AND workspace_id IS $ws " +
             "ORDER BY duration_ms ASC LIMIT 1 OFFSET $offset;";
         cmd.Parameters.AddWithValue("$tool", tool);
+        cmd.Parameters.AddWithValue("$ws", (object?)WorkspaceId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$offset", offset);
         object? value = cmd.ExecuteScalar();
         return value is null or DBNull ? 0 : Convert.ToInt64(value, CultureInfo.InvariantCulture);
@@ -289,7 +305,9 @@ public sealed class TelemetryLedger : IDisposable
 
     /// <summary>
     /// Test-only: insert a minimal valid row with an explicit timestamp so <see cref="Prune"/> can be
-    /// exercised against rows of a known age. Not part of the production write path.
+    /// exercised against rows of a known age. Stamps this ledger's <see cref="WorkspaceId"/> (as the production
+    /// <see cref="TelemetryScope"/> write path does), so the row is visible to the workspace-scoped
+    /// <see cref="Summarize"/>. Not part of the production write path.
     /// </summary>
     internal void InsertRawForTest(string id, DateTime tsUtc, string tool)
     {
@@ -297,12 +315,13 @@ public sealed class TelemetryLedger : IDisposable
         {
             using var cmd = _connection.CreateCommand();
             cmd.CommandText =
-                "INSERT INTO tool_telemetry (id, ts, tool, duration_ms, outcome) " +
-                "VALUES ($id, $ts, $tool, 0, 'ok');";
+                "INSERT INTO tool_telemetry (id, ts, tool, workspace_id, duration_ms, outcome) " +
+                "VALUES ($id, $ts, $tool, $ws, 0, 'ok');";
             cmd.Parameters.AddWithValue("$id", id);
             cmd.Parameters.AddWithValue("$ts",
                 tsUtc.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture));
             cmd.Parameters.AddWithValue("$tool", tool);
+            cmd.Parameters.AddWithValue("$ws", (object?)WorkspaceId ?? DBNull.Value);
             cmd.ExecuteNonQuery();
         }
     }
