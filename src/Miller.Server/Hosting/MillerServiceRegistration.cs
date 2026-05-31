@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Miller.Indexing;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
+using Miller.Server.Workspaces;
 
 namespace Miller.Server.Hosting;
 
@@ -94,6 +95,13 @@ public static class MillerServiceRegistration
         // silently degrading.
         services.AddSingleton(sp =>
             JulieExtractRunner.Locate(sp.GetRequiredService<WorkspaceContext>().ToolsRoot));
+
+        // Task 5 cross-workspace read seam. The registry is machine-global (<home>/.miller/workspaces.db); target
+        // indexes remain local to their owning workspace and are loaded through WorkspaceIndexProvider only.
+        services.AddSingleton(sp =>
+            WorkspaceRegistry.Open(sp.GetRequiredService<WorkspaceContext>().RegistryDbPath));
+        services.AddSingleton<CrossWorkspaceRefreshService>();
+        services.AddSingleton<IWorkspaceIndexProvider, WorkspaceIndexProvider>();
 
         return services;
     }

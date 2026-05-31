@@ -1,0 +1,196 @@
+using Miller.Indexing;
+using Miller.Server.Resolution;
+using Miller.Server.Tools;
+
+namespace Miller.Server.Workspaces;
+
+public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider
+{
+    private readonly IndexHolder _holder;
+    private readonly WorkspaceContext _currentWorkspace;
+    private readonly WorkspaceRegistry _registry;
+    private readonly Func<string, WorkspaceRefreshResult> _refresh;
+    private readonly Func<string, MillerRepositoryIndex> _loadIndex;
+    private readonly Func<long, bool?> _currentIndexFresh;
+    private readonly object _cacheGate = new();
+    private readonly Dictionary<CacheKey, CachedIndex> _cache = new();
+
+    public WorkspaceIndexProvider(
+        IndexHolder holder,
+        WorkspaceContext currentWorkspace,
+        WorkspaceRegistry registry,
+        CrossWorkspaceRefreshService refreshService)
+        : this(
+            holder,
+            currentWorkspace,
+            registry,
+            refreshService.Refresh,
+            dbPath => RepositoryIndexLoader.Load(dbPath),
+            currentIndexFresh: _ => null)
+    {
+    }
+
+    internal WorkspaceIndexProvider(
+        IndexHolder holder,
+        WorkspaceContext currentWorkspace,
+        WorkspaceRegistry registry,
+        Func<string, WorkspaceRefreshResult> refresh,
+        Func<string, MillerRepositoryIndex> loadIndex,
+        Func<long, bool?> currentIndexFresh)
+    {
+        ArgumentNullException.ThrowIfNull(holder);
+        ArgumentNullException.ThrowIfNull(currentWorkspace);
+        ArgumentNullException.ThrowIfNull(registry);
+        ArgumentNullException.ThrowIfNull(refresh);
+        ArgumentNullException.ThrowIfNull(loadIndex);
+        ArgumentNullException.ThrowIfNull(currentIndexFresh);
+        _holder = holder;
+        _currentWorkspace = currentWorkspace;
+        _registry = registry;
+        _refresh = refresh;
+        _loadIndex = loadIndex;
+        _currentIndexFresh = currentIndexFresh;
+    }
+
+    public WorkspaceReadContext Resolve(string? workspaceId, bool ensureFresh)
+    {
+        if (workspaceId is null)
+            return ResolveCurrent();
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
+        if (string.Equals(workspaceId, _currentWorkspace.WorkspaceId, StringComparison.Ordinal))
+            return ResolveCurrent();
+
+        return ResolveRegistered(workspaceId, ensureFresh);
+    }
+
+    private WorkspaceReadContext ResolveCurrent()
+    {
+        (MillerRepositoryIndex index, long revision) = _holder.Snapshot();
+        var resolver = new SmartTargetResolver(index);
+        return new WorkspaceReadContext(
+            index,
+            resolver,
+            _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath,
+            _currentWorkspace.WorkspaceId,
+            _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
+            revision,
+            _currentIndexFresh(revision),
+            "current",
+            WarningText: null);
+    }
+
+    private WorkspaceReadContext ResolveRegistered(string workspaceId, bool ensureFresh)
+    {
+        WorkspaceRegistryRow row = GetRequiredRow(workspaceId);
+        VerifyRegisteredRoot(row);
+
+        WorkspaceRefreshResult? refreshResult = null;
+        if (ensureFresh)
+        {
+            refreshResult = _refresh(workspaceId);
+            if (refreshResult.Status == WorkspaceRefreshStatus.MissingRoot)
+                throw new DirectoryNotFoundException(refreshResult.Error ?? $"Workspace root not found: {row.CanonicalRoot}");
+            if (refreshResult.Status == WorkspaceRefreshStatus.MissingIndex)
+                throw new FileNotFoundException(
+                    refreshResult.Error ?? $"Workspace index DB not found: {row.IndexDbPath}",
+                    refreshResult.IndexDbPath);
+            if (refreshResult.Status == WorkspaceRefreshStatus.Failed)
+                throw new InvalidOperationException(
+                    refreshResult.Error ?? $"Workspace '{workspaceId}' refresh failed.");
+
+            row = GetRequiredRow(workspaceId);
+            VerifyRegisteredRoot(row);
+        }
+
+        long revision = row.LastRevision ?? 0;
+        CachedIndex cached = GetOrLoad(row, revision);
+        return new WorkspaceReadContext(
+            cached.Index,
+            cached.Resolver,
+            row.IndexDbPath,
+            row.WorkspaceId,
+            row.CanonicalRoot,
+            revision,
+            IndexFreshFor(refreshResult, row),
+            FreshnessStatusFor(refreshResult, row),
+            WarningTextFor(refreshResult));
+    }
+
+    private CachedIndex GetOrLoad(WorkspaceRegistryRow row, long revision)
+    {
+        var key = new CacheKey(row.WorkspaceId, row.IndexDbPath, revision);
+        lock (_cacheGate)
+        {
+            if (_cache.TryGetValue(key, out CachedIndex? cached))
+                return cached;
+        }
+
+        MillerRepositoryIndex index = _loadIndex(row.IndexDbPath);
+        var loaded = new CachedIndex(index, new SmartTargetResolver(index));
+
+        lock (_cacheGate)
+        {
+            if (_cache.TryGetValue(key, out CachedIndex? cached))
+                return cached;
+
+            _cache[key] = loaded;
+            return loaded;
+        }
+    }
+
+    private void VerifyRegisteredRoot(WorkspaceRegistryRow row)
+    {
+        if (!Directory.Exists(row.CanonicalRoot))
+        {
+            string error = $"Workspace root not found: {row.CanonicalRoot}";
+            _registry.MarkMissing(row.WorkspaceId, error);
+            throw new DirectoryNotFoundException(error);
+        }
+
+        try
+        {
+            WorkspaceRootSafety.RejectSensitiveRoot(row.CanonicalRoot, fromCwd: false);
+        }
+        catch (InvalidOperationException ex)
+        {
+            _registry.MarkError(row.WorkspaceId, ex.Message);
+            throw;
+        }
+    }
+
+    private WorkspaceRegistryRow GetRequiredRow(string workspaceId) =>
+        _registry.Get(workspaceId) ?? throw new KeyNotFoundException(
+            $"Workspace registry row '{workspaceId}' was not found.");
+
+    private static bool? IndexFreshFor(WorkspaceRefreshResult? refreshResult, WorkspaceRegistryRow row) =>
+        refreshResult?.Status switch
+        {
+            WorkspaceRefreshStatus.Refreshed => true,
+            WorkspaceRefreshStatus.Unchanged => true,
+            WorkspaceRefreshStatus.LockBusy => false,
+            WorkspaceRefreshStatus.MissingRoot => false,
+            WorkspaceRefreshStatus.MissingIndex => false,
+            WorkspaceRefreshStatus.Failed => false,
+            null => row.State is WorkspaceRegistryState.Current
+                or WorkspaceRegistryState.Ready,
+            _ => false,
+        };
+
+    private static string FreshnessStatusFor(WorkspaceRefreshResult? refreshResult, WorkspaceRegistryRow row) =>
+        refreshResult?.Status switch
+        {
+            WorkspaceRefreshStatus.LockBusy => "unconfirmed_lock_busy",
+            null => row.StateText,
+            _ => refreshResult.StatusText,
+        };
+
+    private static string? WarningTextFor(WorkspaceRefreshResult? refreshResult) =>
+        refreshResult?.Status == WorkspaceRefreshStatus.LockBusy
+            ? refreshResult.WarningText
+            : refreshResult?.WarningText;
+
+    private readonly record struct CacheKey(string WorkspaceId, string IndexDbPath, long Revision);
+
+    private sealed record CachedIndex(MillerRepositoryIndex Index, SmartTargetResolver Resolver);
+}
