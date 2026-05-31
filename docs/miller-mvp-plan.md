@@ -139,12 +139,14 @@ polyglot fixture (MyraNext/Lab/Tycho-style, extracted on demand); refs/call-path
 **Verify:** preview diffs correct; apply writes + triggers reindex; stale gate blocks; rename updates all sites.
 **Exit:** the full 6 read/write tools complete.
 
-### M7 — `workspace` + polish (+ optional dashboard)
+### M7 — `workspace` + polish + registry-backed dashboard
 **Deliverable:** admin tool and operational hygiene.
-- `workspace` (operation=status default | refresh | full | list | open | remove).
+- `workspace` (operation=status default | refresh | full | list | open | remove), backed by the central
+  `~/.miller/workspaces.db` registry. `status`, `refresh`, `full`, and `remove` accept `workspace_id` or `path`.
+- Read tools accept `workspace_id`; explicit cross-workspace reads default `ensure_fresh=true`.
 - Soft budgets: warn-on-overage for latency + tokens per tool (cheap early-warning for refinement).
-- Optional: minimal Kestrel dashboard reproducing the tool-breakdown telemetry view, decoupled (reads SQLite, runs
-  standalone) — defer if it threatens focus.
+- Minimal Kestrel dashboard reproducing the tool-breakdown telemetry view, decoupled from MCP and the indexer.
+  It discovers workspaces from the registry and reads the shared telemetry DB.
 **Exit:** 7-tool surface complete; telemetry-driven and self-monitoring.
 
 ---

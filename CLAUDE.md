@@ -55,7 +55,8 @@ scripts/test.sh all     # both
 - The build COPIES `.tools/julie-server` next to the output binary (`<out>/.tools/`, via a `Content`
   item in [`Miller.Server.csproj`](src/Miller.Server/Miller.Server.csproj)) because production locates it
   at `AppContext.BaseDirectory/.tools` (`WorkspaceContext.ToolsRoot`), NOT the repo. A no-restore machine
-  still builds; the runtime then fails loudly with the restore-script message.
+  still builds; the runtime then fails loudly with the restore-script message. Before Julie v7.13.2 release
+  assets publish, use `MILLER_JULIE_SOURCE=/path/to/julie scripts/restore-julie-server.sh --from-source`.
 
 ## Server host & startup
 
@@ -75,6 +76,12 @@ scripts/test.sh all     # both
   `.jsonl`, Serilog `shared:true`); `pid`/`role`/`cid` are line properties, not file-name segments. There
   is no per-pid file and no startup reaper (both removed 2026-05-31; see the superseded D1/D6 notes in
   [`docs/m8-design.md`](docs/m8-design.md)).
+- **Workspace registry.** Index DBs stay local at `<workspace>/.miller/symbols.db`; the central discovery
+  surface is `~/.miller/workspaces.db`. Read tools accept `workspace_id` and `ensure_fresh`; explicit
+  `workspace_id` defaults to refresh-first. The dashboard reads the registry and shared telemetry DB, not
+  the filesystem.
+- **Hash split.** Stable `workspace_id` is SHA-256 of the canonical root. File freshness is Julie's raw-byte
+  BLAKE3 `files.hash` guarded by `external_extract_metadata.hash_algorithm=blake3`.
 - **Agent instructions.** The MCP server-level guidance is
   [`MILLER_AGENT_INSTRUCTIONS.md`](src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md), embedded in the binary
   and set as `ServerInstructions`. Edit the markdown; `AgentInstructionsTests` guards that every tool stays
