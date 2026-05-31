@@ -18,10 +18,11 @@ namespace Miller.Server;
 /// may read them (the M3 services take only this bootstrap and read its getters lazily inside <c>ExecuteAsync</c>).
 /// Tools are built per-call, well after <see cref="StartAsync"/>, so the holder is always populated for them.
 ///
-/// Sequence: resolve the <see cref="WorkspaceContext"/> → create <c>&lt;root&gt;/.miller</c> → locate the
-/// pinned julie-server (fail loudly if absent) → one-time scan ONLY if the extract DB does not already exist
-/// (<see cref="File.Exists(string)"/>, not <c>FileInfo</c>) → read symbols → build the index → read the
-/// workspace id → open the telemetry ledger + prune. Re-scan / watcher / incremental freshness is M3.
+/// Sequence: resolve the <see cref="WorkspaceContext"/> → create <c>&lt;root&gt;/.miller</c> → compute the stable
+/// workspace id from the canonical root → locate the pinned julie-server (fail loudly if absent) → scan when the
+/// DB is missing or must be force-rebound to the stable id → read symbols → build the index → register the
+/// workspace row → open the telemetry ledger + prune. The leader-only startup delta scan lives in
+/// <see cref="Hosting.IndexerService"/>.
 /// </summary>
 public sealed class IndexBootstrapService : IHostedService, IDisposable
 {
@@ -57,6 +58,11 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
 
     public TelemetryLedger Ledger =>
         _ledger ?? throw new InvalidOperationException("TelemetryLedger requested before bootstrap completed.");
+
+    internal sealed record BootstrapScanDecision(
+        bool ShouldScan,
+        bool Force,
+        WorkspaceRegistryState RegistryStateAfterLoad);
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -97,19 +103,34 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 // a non-canonical --db under a symlinked workspace trips the same outside-root family as --file.
                 string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(ctx.WorkspaceRoot);
                 string canonicalDbPath = Path.Combine(canonicalRoot, ".miller", "symbols.db");
+                string stableWorkspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot);
 
                 // Locate the pinned julie-server under the tools root (NOT the repo cwd). Absent → fail loudly
                 // (FileNotFoundException carrying the restore-script message) — Miller cannot index without it.
                 var runner = JulieExtractRunner.Locate(ctx.ToolsRoot);
 
-                // One-time initial scan ONLY if the extract DB does not yet exist. File.Exists (NOT FileInfo) per
-                // the spec — the watcher (M3) keeps it fresh thereafter. The scan report's revision seeds the
-                // holder. The scan receives the CANONICAL root + db (verified-fact 4).
+                // Initial bootstrap scan decision. A missing DB gets the first delta scan. An existing DB with a
+                // missing/legacy/mismatched workspace_id is force-rebound before Miller loads it, so the in-memory
+                // index, freshness cursor, registry row, and julie metadata all converge on the stable root hash.
                 long? scanRevision = null;
-                if (!File.Exists(canonicalDbPath))
+                bool dbExists = File.Exists(canonicalDbPath);
+                string? existingWorkspaceId = dbExists ? ExtractReader.ReadWorkspaceId(canonicalDbPath) : null;
+                var scanDecision = DecideBootstrapScan(dbExists, existingWorkspaceId, stableWorkspaceId);
+                if (scanDecision.ShouldScan)
                 {
-                    _logger.LogInformation("No extract DB at {Db}; scanning {Root}…", canonicalDbPath, canonicalRoot);
-                    var report = runner.Scan(canonicalRoot, canonicalDbPath);
+                    if (scanDecision.Force)
+                    {
+                        _logger.LogInformation(
+                            "Extract DB at {Db} has workspace_id={ExistingWorkspaceId}; force-scanning {Root} with stable workspace_id={StableWorkspaceId}.",
+                            canonicalDbPath, existingWorkspaceId ?? "(missing)", canonicalRoot, stableWorkspaceId);
+                    }
+                    else
+                    {
+                        _logger.LogInformation(
+                            "No extract DB at {Db}; scanning {Root} with stable workspace_id={StableWorkspaceId}.",
+                            canonicalDbPath, canonicalRoot, stableWorkspaceId);
+                    }
+                    var report = runner.Scan(canonicalRoot, canonicalDbPath, scanDecision.Force);
                     scanRevision = report.Revision;
                     _logger.LogInformation(
                         "Scan complete: {Symbols} symbols extracted (revision {Rev}).",
@@ -126,11 +147,14 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 var index = RepositoryIndexLoader.Load(canonicalDbPath);
 
                 // Resolve the workspace id (for telemetry scoping + the freshness poll) and finalize the context.
-                string? workspaceId = ExtractReader.ReadWorkspaceId(canonicalDbPath);
+                string? persistedWorkspaceId = ExtractReader.ReadWorkspaceId(canonicalDbPath);
+                if (!string.Equals(persistedWorkspaceId, stableWorkspaceId, StringComparison.Ordinal))
+                    throw new InvalidOperationException(
+                        $"Extract DB workspace_id '{persistedWorkspaceId ?? "(missing)"}' does not match stable workspace id '{stableWorkspaceId}' for canonical root '{canonicalRoot}'.");
 
                 var workspace = ctx with
                 {
-                    WorkspaceId = workspaceId,
+                    WorkspaceId = stableWorkspaceId,
                     CanonicalRoot = canonicalRoot,
                     CanonicalExtractDbPath = canonicalDbPath,
                 };
@@ -138,7 +162,13 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 // Seed the holder's BuiltRevision: the scan report's revision when we just scanned, else the
                 // latest persisted revision (a reused DB) so the freshness poll does not rebuild on first tick.
                 long builtRevision = scanRevision
-                    ?? ReadLatestRevisionOrZero(canonicalDbPath, workspaceId);
+                    ?? ReadLatestRevisionOrZero(canonicalDbPath, stableWorkspaceId);
+
+                if (scanDecision.ShouldScan)
+                    MarkRegistryScanned(workspace, stableWorkspaceId, scanRevision ?? builtRevision);
+                else
+                    RegisterBootstrapWorkspace(
+                        workspace, stableWorkspaceId, scanDecision.RegistryStateAfterLoad, builtRevision);
 
                 // Open the SEPARATE, writable telemetry ledger (never the read-only extract) + prune old rows.
                 // The ledger is MACHINE-GLOBAL (shared <home>/.miller/telemetry.db across every workspace), so its
@@ -148,7 +178,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 // the open connection (the outer catch covers every OTHER post-open step the same way).
                 Directory.CreateDirectory(Path.GetDirectoryName(workspace.TelemetryDbPath)!);
                 ledger = OpenAndPrune(
-                    workspace.TelemetryDbPath, workspaceId, workspace.WorkspaceRoot, retentionDays: 30, out int pruned);
+                    workspace.TelemetryDbPath, stableWorkspaceId, workspace.WorkspaceRoot, retentionDays: 30, out int pruned);
 
                 var holder = new IndexHolder(index, builtRevision);
                 _holder = holder;
@@ -160,7 +190,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 _logger.LogInformation(
                     "Bootstrap ready: {Count} symbols indexed at revision {Rev}, workspace_id={Ws}, " +
                     "{Pruned} telemetry rows pruned, in {Ms}ms.",
-                    index.DocumentCount, builtRevision, workspaceId ?? "(unknown)", pruned,
+                    index.DocumentCount, builtRevision, stableWorkspaceId, pruned,
                     (long)elapsed.TotalMilliseconds);
             }
             catch
@@ -210,6 +240,100 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             resource.Dispose();
             throw;
         }
+    }
+
+    internal static BootstrapScanDecision DecideBootstrapScan(
+        bool dbExists, string? existingWorkspaceId, string stableWorkspaceId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(stableWorkspaceId);
+
+        if (!dbExists)
+            return new BootstrapScanDecision(
+                ShouldScan: true, Force: false, WorkspaceRegistryState.Ready);
+
+        if (!string.Equals(existingWorkspaceId, stableWorkspaceId, StringComparison.Ordinal))
+            return new BootstrapScanDecision(
+                ShouldScan: true, Force: true, WorkspaceRegistryState.Ready);
+
+        return new BootstrapScanDecision(
+            ShouldScan: false, Force: false, WorkspaceRegistryState.LoadedExisting);
+    }
+
+    internal static WorkspaceRegistryRow RegisterBootstrapWorkspace(
+        WorkspaceContext workspace,
+        string stableWorkspaceId,
+        WorkspaceRegistryState state,
+        long? revision)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        ArgumentException.ThrowIfNullOrWhiteSpace(stableWorkspaceId);
+        if (revision is < 0)
+            throw new ArgumentOutOfRangeException(nameof(revision), revision, "Revision must be non-negative.");
+
+        var (canonicalRoot, canonicalDbPath) = RequireCanonicalWorkspacePaths(workspace);
+        using (var registry = WorkspaceRegistry.Open(workspace.RegistryDbPath))
+        {
+            var row = registry.UpsertSeen(
+                stableWorkspaceId,
+                WorkspaceId.Display(canonicalRoot, stableWorkspaceId),
+                canonicalRoot,
+                canonicalDbPath,
+                state);
+            if (revision is null)
+                return row;
+
+            if (state == WorkspaceRegistryState.LoadedExisting)
+                return registry.MarkLoadedExisting(stableWorkspaceId, revision.Value);
+
+            return row;
+        }
+    }
+
+    internal static WorkspaceRegistryRow MarkRegistryScanned(
+        WorkspaceContext workspace, string stableWorkspaceId, long? revision)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        ArgumentException.ThrowIfNullOrWhiteSpace(stableWorkspaceId);
+        if (revision is < 0)
+            throw new ArgumentOutOfRangeException(nameof(revision), revision, "Revision must be non-negative.");
+
+        var (canonicalRoot, canonicalDbPath) = RequireCanonicalWorkspacePaths(workspace);
+        using var registry = WorkspaceRegistry.Open(workspace.RegistryDbPath);
+        var row = registry.UpsertSeen(
+            stableWorkspaceId,
+            WorkspaceId.Display(canonicalRoot, stableWorkspaceId),
+            canonicalRoot,
+            canonicalDbPath,
+            WorkspaceRegistryState.Ready);
+        return revision is { } rev ? registry.MarkScanned(stableWorkspaceId, rev) : row;
+    }
+
+    internal static WorkspaceRegistryRow MarkRegistryError(
+        WorkspaceContext workspace, string stableWorkspaceId, string error)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        ArgumentException.ThrowIfNullOrWhiteSpace(stableWorkspaceId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(error);
+
+        var (canonicalRoot, canonicalDbPath) = RequireCanonicalWorkspacePaths(workspace);
+        using var registry = WorkspaceRegistry.Open(workspace.RegistryDbPath);
+        registry.UpsertSeen(
+            stableWorkspaceId,
+            WorkspaceId.Display(canonicalRoot, stableWorkspaceId),
+            canonicalRoot,
+            canonicalDbPath,
+            WorkspaceRegistryState.Ready);
+        return registry.MarkError(stableWorkspaceId, error);
+    }
+
+    private static (string CanonicalRoot, string CanonicalDbPath) RequireCanonicalWorkspacePaths(
+        WorkspaceContext workspace)
+    {
+        string canonicalRoot = workspace.CanonicalRoot
+            ?? throw new InvalidOperationException("Workspace canonical root is required before registry update.");
+        string canonicalDbPath = workspace.CanonicalExtractDbPath
+            ?? throw new InvalidOperationException("Workspace canonical extract DB path is required before registry update.");
+        return (canonicalRoot, canonicalDbPath);
     }
 
     // The latest persisted revision for a reused DB. A MISSING DB file is the only safe degrade-to-0 case

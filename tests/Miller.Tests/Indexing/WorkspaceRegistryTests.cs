@@ -186,6 +186,29 @@ public sealed class WorkspaceRegistryTests : IDisposable
     }
 
     [Fact]
+    public void MarkLoadedExisting_RecordsRevisionWithoutScanTimestamp()
+    {
+        using var registry = WorkspaceRegistry.Open(_dbPath);
+        registry.UpsertSeen(
+            "ws-loaded",
+            "loaded-11111111",
+            "/work/loaded",
+            "/work/loaded/.miller/symbols.db",
+            WorkspaceRegistryState.LoadedExisting,
+            Utc(1));
+
+        var row = registry.MarkLoadedExisting("ws-loaded", revision: 42, seenAtUtc: Utc(2));
+
+        Assert.Equal(WorkspaceRegistryState.LoadedExisting, row.State);
+        Assert.Equal("loaded_existing", row.StateText);
+        Assert.Equal(42, row.LastRevision);
+        Assert.Equal(Utc(2), row.LastSeenAt);
+        Assert.Null(row.LastScanAt);
+        Assert.Null(row.LastError);
+        Assert.Equal("loaded_existing", ReadState("ws-loaded"));
+    }
+
+    [Fact]
     public void List_OrdersCurrentAndReadyRowsBeforeUnhealthyRowsThenByDisplayId()
     {
         using var registry = WorkspaceRegistry.Open(_dbPath);

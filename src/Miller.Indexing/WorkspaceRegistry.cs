@@ -146,6 +146,36 @@ public sealed class WorkspaceRegistry : IDisposable
         }
     }
 
+    public WorkspaceRegistryRow MarkLoadedExisting(
+        string workspaceId,
+        long revision,
+        DateTimeOffset? seenAtUtc = null)
+    {
+        ThrowIfDisposed();
+        ValidateRequired(workspaceId, nameof(workspaceId));
+        if (revision < 0)
+            throw new ArgumentOutOfRangeException(nameof(revision), revision, "Revision must be non-negative.");
+
+        DateTimeOffset seen = NormalizeUtc(seenAtUtc ?? DateTimeOffset.UtcNow);
+        lock (_gate)
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = """
+                UPDATE workspaces
+                SET last_seen_at = $last_seen_at,
+                    last_revision = $last_revision,
+                    state = 'loaded_existing',
+                    last_error = NULL
+                WHERE workspace_id = $workspace_id;
+                """;
+            cmd.Parameters.AddWithValue("$workspace_id", workspaceId);
+            cmd.Parameters.AddWithValue("$last_seen_at", FormatTimestamp(seen));
+            cmd.Parameters.AddWithValue("$last_revision", revision);
+            ExecuteExistingRowUpdate(cmd, workspaceId);
+            return GetRequiredUnderLock(workspaceId);
+        }
+    }
+
     public WorkspaceRegistryRow MarkMissing(
         string workspaceId,
         string? error = null,
