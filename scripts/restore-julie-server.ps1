@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  restore-julie-server.ps1 — download the pinned julie-server.exe into .tools\ (Windows mirror of the .sh).
+  restore-julie-server.ps1 — restore the pinned julie-server.exe into .tools\ (Windows mirror of the .sh).
 
 .DESCRIPTION
   Reads scripts\julie-pins.json for the version, per-triple asset name + sha256, and the URL template.
@@ -8,7 +8,15 @@
   release archive from anortham/julie, VERIFIES its sha256 against the pin (julie publishes no checksum
   assets — these were download-verified and committed), extracts ONLY julie-server.exe from the flat
   multi-binary archive, and removes the archive. Fails loudly on unsupported platforms (no windows-arm64).
+  While a contract bump is staged before release assets publish, pass -FromSource or set
+  MILLER_JULIE_SOURCE to build julie-server from a local Julie checkout.
 #>
+[CmdletBinding()]
+param(
+    [switch]$FromSource,
+    [string]$SourcePath
+)
+
 $ErrorActionPreference = 'Stop'
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -22,6 +30,51 @@ if (-not (Test-Path $Pins)) {
 }
 
 $config = Get-Content $Pins -Raw | ConvertFrom-Json
+
+function Restore-FromSource {
+    param([string]$SourceRoot)
+
+    if ([string]::IsNullOrWhiteSpace($SourceRoot)) {
+        throw "from-source restore requires -SourcePath or MILLER_JULIE_SOURCE"
+    }
+    $sourceFull = (Resolve-Path $SourceRoot).Path
+    $manifest = Join-Path $sourceFull 'Cargo.toml'
+    if (-not (Test-Path $manifest)) {
+        throw "from-source path is not a Julie checkout: $sourceFull"
+    }
+    if ($null -eq (Get-Command cargo -ErrorAction SilentlyContinue)) {
+        throw "cargo is required for -FromSource restore"
+    }
+
+    New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
+    $binary = Join-Path $ToolsDir 'julie-server.exe'
+    $sourceBinary = Join-Path $sourceFull 'target\release\julie-server.exe'
+
+    Write-Host "Building julie-server v$($config.version) from source: $sourceFull"
+    & cargo build --manifest-path $manifest --bin julie-server --release
+    if ($LASTEXITCODE -ne 0) {
+        throw "cargo build failed"
+    }
+    if (-not (Test-Path $sourceBinary)) {
+        throw "expected build output not found: $sourceBinary"
+    }
+
+    Copy-Item -Path $sourceBinary -Destination $binary -Force
+    $versionOutput = (& $binary --version 2>$null)
+    if ($versionOutput -notlike "* $($config.version)*") {
+        throw "restored julie-server has wrong version; expected $($config.version), actual '$versionOutput'"
+    }
+
+    Write-Host "Installed: $binary"
+    & $binary --version 2>$null
+}
+
+$sourceFromEnv = $env:MILLER_JULIE_SOURCE
+if ($FromSource -or -not [string]::IsNullOrWhiteSpace($sourceFromEnv)) {
+    $source = if (-not [string]::IsNullOrWhiteSpace($SourcePath)) { $SourcePath } else { $sourceFromEnv }
+    Restore-FromSource -SourceRoot $source
+    exit 0
+}
 
 # --- detect platform -> triple (only x64 Windows is published) ---
 $arch = $env:PROCESSOR_ARCHITECTURE
@@ -42,7 +95,11 @@ Windows. No windows-arm64 prebuilt asset exists; build from source with cargo, o
 $asset  = $config.assets.$triple.name
 $sha256 = $config.assets.$triple.sha256
 if ([string]::IsNullOrEmpty($asset) -or [string]::IsNullOrEmpty($sha256)) {
-    Write-Error "no pin entry for triple '$triple' in $Pins"
+    Write-Error @"
+no published asset pin for julie-server v$($config.version) / $triple in $Pins.
+Until release assets publish, run:
+  `$env:MILLER_JULIE_SOURCE='C:\path\to\julie'; scripts\restore-julie-server.ps1 -FromSource
+"@
     exit 1
 }
 

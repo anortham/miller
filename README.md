@@ -103,7 +103,8 @@ build if any julie-spawning test is missing `[Trait("Category","Scale")]`, and C
 suite. To enable the scale suite locally:
 
 ```bash
-bash scripts/restore-julie-server.sh   # downloads the pinned julie-server into .tools/
+bash scripts/restore-julie-server.sh   # downloads the pinned julie-server into .tools/ after release assets publish
+MILLER_JULIE_SOURCE=~/source/julie bash scripts/restore-julie-server.sh --from-source
 ```
 
 Requires the .NET 10 SDK. Warnings are errors (`Directory.Build.props`).

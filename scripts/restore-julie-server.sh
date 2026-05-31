@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# restore-julie-server.sh — download the pinned julie-server binary into .tools/.
+# restore-julie-server.sh — restore the pinned julie-server binary into .tools/.
 #
 # Reads scripts/julie-pins.json for the version, per-triple asset name + sha256, and the URL template.
 # Detects the host platform, downloads the matching release archive from anortham/julie, VERIFIES its
@@ -8,10 +8,15 @@
 # extracts ONLY the julie-server binary from the flat multi-binary archive, sets the exec bit, clears the
 # macOS quarantine xattr, and removes the archive. Fails loudly on unsupported platforms.
 #
+# While a contract bump is staged before GitHub release assets publish, pass --from-source or set
+# MILLER_JULIE_SOURCE=/path/to/julie to build julie-server from that checkout and copy it into .tools/.
+#
 # Only four triples exist upstream: aarch64-apple-darwin, x86_64-apple-darwin, x86_64-unknown-linux-gnu,
 # x86_64-pc-windows-msvc. There is NO linux-arm64 and NO windows-arm64 asset.
 #
-# Usage: bash scripts/restore-julie-server.sh
+# Usage:
+#   bash scripts/restore-julie-server.sh
+#   MILLER_JULIE_SOURCE=~/source/julie bash scripts/restore-julie-server.sh --from-source
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -56,6 +61,64 @@ PY
   fi
 }
 
+VERSION="$(read_pin .version)"
+
+FROM_SOURCE=""
+SOURCE_REQUESTED=0
+if [[ "${1:-}" == "--from-source" ]]; then
+  SOURCE_REQUESTED=1
+  shift
+  FROM_SOURCE="${1:-${MILLER_JULIE_SOURCE:-}}"
+  if [[ $# -gt 0 ]]; then
+    shift
+  fi
+elif [[ -n "${MILLER_JULIE_SOURCE:-}" ]]; then
+  FROM_SOURCE="${MILLER_JULIE_SOURCE}"
+fi
+
+if [[ "${SOURCE_REQUESTED}" == "1" && -z "${FROM_SOURCE}" ]]; then
+  echo "error: --from-source requires a path argument or MILLER_JULIE_SOURCE" >&2
+  exit 1
+fi
+
+if [[ -n "${FROM_SOURCE}" ]]; then
+  SOURCE_ROOT="$(cd "${FROM_SOURCE}" && pwd)"
+  SOURCE_MANIFEST="${SOURCE_ROOT}/Cargo.toml"
+  if [[ ! -f "${SOURCE_MANIFEST}" ]]; then
+    echo "error: from-source path is not a Julie checkout: ${SOURCE_ROOT}" >&2
+    exit 1
+  fi
+  if ! command -v cargo >/dev/null 2>&1; then
+    echo "error: cargo is required for --from-source restore" >&2
+    exit 1
+  fi
+
+  mkdir -p "${TOOLS_DIR}"
+  BINARY="${TOOLS_DIR}/julie-server"
+  SOURCE_BINARY="${SOURCE_ROOT}/target/release/julie-server"
+
+  echo "Building julie-server v${VERSION} from source: ${SOURCE_ROOT}"
+  cargo build --manifest-path "${SOURCE_MANIFEST}" --bin julie-server --release
+  if [[ ! -f "${SOURCE_BINARY}" ]]; then
+    echo "error: expected build output not found: ${SOURCE_BINARY}" >&2
+    exit 1
+  fi
+
+  cp "${SOURCE_BINARY}" "${BINARY}"
+  chmod +x "${BINARY}"
+  VERSION_OUTPUT="$("${BINARY}" --version 2>/dev/null || true)"
+  if ! grep -F " ${VERSION}" <<<"${VERSION_OUTPUT}" >/dev/null; then
+    echo "error: restored julie-server has wrong version" >&2
+    echo "  expected: ${VERSION}" >&2
+    echo "  actual:   ${VERSION_OUTPUT:-"(no --version output)"}" >&2
+    exit 1
+  fi
+
+  echo "Installed: ${BINARY}"
+  "${BINARY}" --version 2>/dev/null || true
+  exit 0
+fi
+
 # --- detect platform -> triple ---
 OS="$(uname -s)"
 ARCH="$(uname -m)"
@@ -83,13 +146,14 @@ if [[ -z "${TRIPLE}" ]]; then
   exit 1
 fi
 
-VERSION="$(read_pin .version)"
 ASSET="$(read_pin ".assets[\"${TRIPLE}\"].name")"
 SHA256="$(read_pin ".assets[\"${TRIPLE}\"].sha256")"
 URL_TEMPLATE="$(read_pin .urlTemplate)"
 
 if [[ -z "${ASSET}" || -z "${SHA256}" ]]; then
-  echo "error: no pin entry for triple '${TRIPLE}' in ${PINS}" >&2
+  echo "error: no published asset pin for julie-server v${VERSION} / ${TRIPLE} in ${PINS}" >&2
+  echo "  Until release assets publish, run:" >&2
+  echo "  MILLER_JULIE_SOURCE=/path/to/julie bash scripts/restore-julie-server.sh --from-source" >&2
   exit 1
 fi
 
