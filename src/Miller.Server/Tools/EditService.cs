@@ -203,7 +203,7 @@ public sealed class EditService
             return Preview(diff, json, renameSummary: null, siteCount: 0);
 
         // --- apply path: freshness gate, then atomic write, then write-through ---
-        var gate = FreshnessGate.Check(_dbPath, relativePath, planned.OldContent);
+        var gate = FreshnessGate.Check(_dbPath, relativePath, planned.FilePath, planned.OldContent);
         bool fresh = gate.Result == FreshnessResult.Fresh;
         if (!fresh && !request.AllowStale)
             return StaleBlocked(relativePath, gate.IndexedContentFound, json);
@@ -267,7 +267,7 @@ public sealed class EditService
         foreach (var pe in plan.PlannedEdits)
         {
             string rel = ToRelative(pe.FilePath);
-            var gate = FreshnessGate.Check(_dbPath, rel, pe.OldContent);
+            var gate = FreshnessGate.Check(_dbPath, rel, pe.FilePath, pe.OldContent);
             if (gate.Result != FreshnessResult.Fresh)
             {
                 if (!request.AllowStale)

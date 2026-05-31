@@ -222,11 +222,13 @@ internal sealed class JulieDbFixture : IDisposable
             foreach (var path in DistinctPaths(rows, identifiers))
             {
                 string content = fileContent is not null && fileContent.TryGetValue(path, out var c) ? c : "";
+                string hash = ContentHasher.Blake3Hex(System.Text.Encoding.UTF8.GetBytes(content));
                 using var fcmd = conn.CreateCommand();
                 fcmd.CommandText =
                     "INSERT INTO files (path, language, hash, size, last_modified, content, line_count) " +
-                    "VALUES ($p, 'csharp', 'blake3hexstub', 100, 0, $content, 0);";
+                    "VALUES ($p, 'csharp', $hash, 100, 0, $content, 0);";
                 fcmd.Parameters.AddWithValue("$p", path);
+                fcmd.Parameters.AddWithValue("$hash", hash);
                 fcmd.Parameters.AddWithValue("$content", content);
                 fcmd.ExecuteNonQuery();
             }
