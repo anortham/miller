@@ -21,6 +21,9 @@ models/*.bin
 # Downloaded tool binaries (julie-server etc.) — fetched from julie releases at restore time, never committed
 .tools/
 
+# Local implementation worktrees
+.worktrees/
+
 # IDE
 .idea/
 .vscode/
