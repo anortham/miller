@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+#
+# pre-commit — enforce that AGENTS.md stays a byte-for-byte mirror of CLAUDE.md.
+#
+# Installed by scripts/install-hooks.sh (which sets core.hooksPath=.githooks so this tracked hook is used).
+# CLAUDE.md is the source of truth; edit it and run scripts/sync-agents.sh to regenerate AGENTS.md.
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+SRC="${REPO_ROOT}/CLAUDE.md"
+DST="${REPO_ROOT}/AGENTS.md"
+
+if [[ ! -f "${DST}" ]]; then
+  echo "pre-commit: AGENTS.md is missing. Run scripts/sync-agents.sh to create it from CLAUDE.md." >&2
+  exit 1
+fi
+
+if ! diff -q "${SRC}" "${DST}" >/dev/null 2>&1; then
+  echo "pre-commit: AGENTS.md is out of sync with CLAUDE.md." >&2
+  echo "  Run: scripts/sync-agents.sh   (then 'git add AGENTS.md' and re-commit)" >&2
+  exit 1
+fi
