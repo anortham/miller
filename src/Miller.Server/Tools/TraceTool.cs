@@ -8,6 +8,7 @@ using Miller.Core.Resolver;
 using Miller.Indexing;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
+using Miller.Server.Workspaces;
 using ModelContextProtocol.Server;
 
 namespace Miller.Server.Tools;
@@ -39,18 +40,15 @@ namespace Miller.Server.Tools;
 [McpServerToolType]
 public sealed class TraceTool
 {
-    private readonly IndexHolder _holder;
-    private readonly SmartTargetResolver _resolver;
+    private readonly IWorkspaceIndexProvider _workspaceProvider;
 
     /// <summary>Construct over the live index holder (production / freshness-aware). The <see cref="Run"/> core is
     /// DB-free (it traverses the in-memory graphs), so it takes no WorkspaceContext.</summary>
     /// <exception cref="ArgumentNullException">Any argument is null.</exception>
-    public TraceTool(IndexHolder holder, SmartTargetResolver resolver)
+    public TraceTool(IWorkspaceIndexProvider workspaceProvider)
     {
-        ArgumentNullException.ThrowIfNull(holder);
-        ArgumentNullException.ThrowIfNull(resolver);
-        _holder = holder;
-        _resolver = resolver;
+        ArgumentNullException.ThrowIfNull(workspaceProvider);
+        _workspaceProvider = workspaceProvider;
     }
 
     [McpServerTool(Name = "trace")]
@@ -70,18 +68,26 @@ public sealed class TraceTool
         [Description("How many hops to follow. Default 3.")] int depth = 3,
         [Description("Max links/neighbours to return. Default 20.")] int limit = 20,
         [Description("Output format: compact|full. full adds the firing signals per bridge link. Default compact.")]
-        string format = "compact")
+        string format = "compact",
+        [Description("Registered workspace id to query. Omit for the current workspace.")] string? workspace_id = null,
+        [Description("Refresh a registered workspace before reading. Defaults true when workspace_id is supplied.")]
+        bool? ensure_fresh = null)
     {
         var telemetry = TelemetryContext.Current;
         try
         {
             bool full = string.Equals(format, "full", StringComparison.OrdinalIgnoreCase);
-            string output = Run(_holder.Current, _resolver,
+            bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
+            WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
+            string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json: false);
+            string output = Run(context.Index, context.Resolver,
                 target, mode, to, depth, limit, full,
                 out int emitted, out int nodesVisited);
+            output = ReadToolWorkspaceRouting.PrefixCompact(output, compactBanner);
 
             if (telemetry is not null)
             {
+                ReadToolWorkspaceRouting.ApplyTelemetry(telemetry, context);
                 telemetry.SetTarget(target);
                 telemetry.ResultCount = emitted;
                 // D10 work proxy (bytes_examined ≈ nodes visited): the edges/neighbours the walk produced.

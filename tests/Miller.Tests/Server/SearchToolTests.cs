@@ -1,6 +1,9 @@
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 using Miller.Indexing;
+using Miller.Server.Telemetry;
 using Miller.Server.Tools;
+using Miller.Tests;
 using Miller.Tests.Indexing;
 using Xunit;
 
@@ -17,6 +20,39 @@ public sealed class SearchToolTests
 {
     private static MillerRepositoryIndex BuildIndex(JulieDbFixture fx) =>
         MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath));
+
+    private static JulieDbFixture FixtureWithSymbol(string workspaceId, string symbolName) =>
+        JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
+        {
+            new JulieDbFixture.SymbolRow(
+                Guid.NewGuid().ToString("N"),
+                symbolName,
+                "class",
+                "csharp",
+                $"src/{symbolName}.cs",
+                $"public class {symbolName}",
+                1,
+                ParentId: null),
+        }, workspaceId: workspaceId);
+
+    private static (string? WorkspaceId, string? WorkspaceRoot, bool? IndexFresh) ReadTelemetryRow(string dbPath)
+    {
+        using var c = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        c.Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT workspace_id, workspace_root, index_fresh FROM tool_telemetry LIMIT 1;";
+        using var r = cmd.ExecuteReader();
+        Assert.True(r.Read(), "expected one telemetry row");
+        return (
+            r.IsDBNull(0) ? null : r.GetString(0),
+            r.IsDBNull(1) ? null : r.GetString(1),
+            r.IsDBNull(2) ? null : r.GetInt64(2) == 1);
+    }
 
     // A fixture proving the FULL cross-language predicate (decision-4): exclude_tests must hide BOTH a
     // path-flagged test row (tests/auth/AuthServiceTests.cs — no metadata) AND a julie-is_test row whose path
@@ -213,5 +249,71 @@ public sealed class SearchToolTests
             .ToList();
 
         Assert.Equal(rawOrder, renderedNames);
+    }
+
+    [Fact]
+    public void Search_ExplicitWorkspaceId_DefaultsEnsureFreshTrue_AndRoutesToTargetIndex()
+    {
+        using var current = FixtureWithSymbol("current-ws", "CurrentOnly");
+        using var target = FixtureWithSymbol("target-ws", "TargetOnly");
+        string currentRoot = Path.Combine(Path.GetTempPath(), "miller-current-" + Guid.NewGuid().ToString("N"));
+        string targetRoot = Path.Combine(Path.GetTempPath(), "miller-target-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(BuildIndex(current), current.DbPath, "current-ws", currentRoot),
+            ("target-ws", ReadToolRoutingTestSupport.ContextFor(BuildIndex(target), target.DbPath, "target-ws", targetRoot)));
+        var tool = new SearchTool(provider);
+
+        string output = tool.Search("TargetOnly", workspace_id: "target-ws");
+
+        Assert.Equal("target-ws", provider.LastWorkspaceId);
+        Assert.True(provider.LastEnsureFresh);
+        Assert.StartsWith("workspace: target-ws ", output);
+        Assert.Contains(targetRoot, output);
+        Assert.Contains("TargetOnly", output);
+    }
+
+    [Fact]
+    public void Search_EnsureFreshFalse_PassesThrough_AndTelemetryUsesProviderWorkspaceAndFreshness()
+    {
+        using var current = FixtureWithSymbol("current-ws", "CurrentOnly");
+        using var target = FixtureWithSymbol("target-ws", "TargetOnly");
+        string dir = Path.Combine(Path.GetTempPath(), "miller-search-routing-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string telemetryDb = Path.Combine(dir, "telemetry.db");
+        string currentRoot = Path.Combine(dir, "current");
+        string targetRoot = Path.Combine(dir, "target");
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(BuildIndex(current), current.DbPath, "current-ws", currentRoot),
+            ("target-ws", ReadToolRoutingTestSupport.ContextFor(
+                BuildIndex(target),
+                target.DbPath,
+                "target-ws",
+                targetRoot,
+                indexFresh: false,
+                freshnessStatus: "loaded_existing")));
+        var tool = new SearchTool(provider);
+
+        try
+        {
+            using (var ledger = TelemetryLedger.Open(telemetryDb, workspaceId: "current-ws", currentRoot))
+            {
+                using var scope = ledger.Measure("search", op: "auto");
+                string output = tool.Search("TargetOnly", workspace_id: "target-ws", ensure_fresh: false);
+
+                Assert.Equal("target-ws", provider.LastWorkspaceId);
+                Assert.False(provider.LastEnsureFresh);
+                Assert.Contains("freshness: loaded_existing", output);
+                Assert.Contains("TargetOnly", output);
+            }
+
+            var row = ReadTelemetryRow(telemetryDb);
+            Assert.Equal("target-ws", row.WorkspaceId);
+            Assert.Equal(targetRoot, row.WorkspaceRoot);
+            Assert.False(row.IndexFresh);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+        }
     }
 }

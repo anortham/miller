@@ -4,6 +4,7 @@ using Miller.Core.Resolver;
 using Miller.Indexing;
 using Miller.Server.Resolution;
 using Miller.Server.Tools;
+using Miller.Tests;
 using Xunit;
 
 namespace Miller.Tests.Tools;
@@ -35,6 +36,9 @@ public sealed class TraceToolTests
         var graphEdges = edges.Select(e => new GraphEdge(e.from, e.to, "calls")).ToList();
         return MillerRepositoryIndex.Build(indexed, graphEdges);
     }
+
+    private static MillerRepositoryIndex EmptyIndex() =>
+        MillerRepositoryIndex.Build(Array.Empty<IndexedSymbol>(), Array.Empty<GraphEdge>());
 
     // A trivially-resolved NameResolution for a symbol-backed endpoint.
     private static NameResolution Resolved(string symbolId) =>
@@ -431,6 +435,45 @@ public sealed class TraceToolTests
     }
 
     // ---------- dispatch / guards ----------
+
+    [Fact]
+    public void Trace_ExplicitWorkspaceId_DefaultsEnsureFreshTrue_AndRoutesToTargetIndex()
+    {
+        var currentIndex = EmptyIndex();
+        var targetIndex = BuildSymbolIndex(
+            new[]
+            {
+                ("a", "Alpha", "method", "src/A.cs", 10),
+                ("b", "Beta", "method", "src/B.cs", 20),
+            },
+            new[] { ("a", "b") });
+        string currentRoot = Path.Combine(Path.GetTempPath(), "miller-current-" + Guid.NewGuid().ToString("N"));
+        string targetRoot = Path.Combine(Path.GetTempPath(), "miller-target-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(currentIndex, "current.db", "current-ws", currentRoot),
+            ("target-ws", ReadToolRoutingTestSupport.ContextFor(targetIndex, "target.db", "target-ws", targetRoot)));
+        var tool = new TraceTool(provider);
+
+        string output = tool.Trace("Alpha", workspace_id: "target-ws");
+
+        Assert.Equal("target-ws", provider.LastWorkspaceId);
+        Assert.True(provider.LastEnsureFresh);
+        Assert.StartsWith("workspace: target-ws ", output);
+        Assert.Contains(targetRoot, output);
+        Assert.Contains("Beta", output);
+    }
+
+    [Fact]
+    public void Ctor_RequiresWorkspaceIndexProvider()
+    {
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(EmptyIndex(), "current.db", "current-ws", "/current"));
+
+        var tool = new TraceTool(provider);
+        Assert.NotNull(tool);
+
+        Assert.Throws<ArgumentNullException>(() => new TraceTool(null!));
+    }
 
     [Fact]
     public void UnknownMode_CleanMessage()

@@ -8,6 +8,7 @@ using Miller.Core.Graph;
 using Miller.Indexing;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
+using Miller.Server.Workspaces;
 using ModelContextProtocol.Server;
 
 namespace Miller.Server.Tools;
@@ -33,18 +34,15 @@ namespace Miller.Server.Tools;
 [McpServerToolType]
 public sealed class ImpactTool
 {
-    private readonly IndexHolder _holder;
-    private readonly SmartTargetResolver _resolver;
+    private readonly IWorkspaceIndexProvider _workspaceProvider;
 
     /// <summary>Construct over the live index holder (production / freshness-aware). Unlike inspect, impact's
     /// <see cref="Run"/> core is DB-free (it traverses the in-memory graph), so it takes no WorkspaceContext.</summary>
     /// <exception cref="ArgumentNullException">Any argument is null.</exception>
-    public ImpactTool(IndexHolder holder, SmartTargetResolver resolver)
+    public ImpactTool(IWorkspaceIndexProvider workspaceProvider)
     {
-        ArgumentNullException.ThrowIfNull(holder);
-        ArgumentNullException.ThrowIfNull(resolver);
-        _holder = holder;
-        _resolver = resolver;
+        ArgumentNullException.ThrowIfNull(workspaceProvider);
+        _workspaceProvider = workspaceProvider;
     }
 
     [McpServerTool(Name = "impact")]
@@ -63,18 +61,26 @@ public sealed class ImpactTool
         [Description("Reverse-reachability radius (how many hops of dependents to follow). Default 2.")]
         int max_depth = 2,
         [Description("Max impacted symbols to return. Default 100.")] int limit = 100,
-        [Description("Output format: compact|json. Default compact.")] string format = "compact")
+        [Description("Output format: compact|json. Default compact.")] string format = "compact",
+        [Description("Registered workspace id to query. Omit for the current workspace.")] string? workspace_id = null,
+        [Description("Refresh a registered workspace before reading. Defaults true when workspace_id is supplied.")]
+        bool? ensure_fresh = null)
     {
         var telemetry = TelemetryContext.Current;
         try
         {
             bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
-            string output = Run(_holder.Current, _resolver,
+            bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
+            WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
+            string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
+            string output = Run(context.Index, context.Resolver,
                 target, changed_paths, diff, max_depth, limit, json,
                 out int impactedCount, out int nodesVisited);
+            output = ReadToolWorkspaceRouting.PrefixCompact(output, compactBanner);
 
             if (telemetry is not null)
             {
+                ReadToolWorkspaceRouting.ApplyTelemetry(telemetry, context);
                 // The target axis is whichever input was supplied (target wins, else the first changed path,
                 // else a diff marker) — privacy-hashed by SetTarget.
                 telemetry.SetTarget(TargetForTelemetry(target, changed_paths, diff));

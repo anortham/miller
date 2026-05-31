@@ -2,6 +2,7 @@ using System.Text.Json;
 using Miller.Indexing;
 using Miller.Server.Resolution;
 using Miller.Server.Tools;
+using Miller.Tests;
 using Miller.Tests.Indexing;
 using Xunit;
 
@@ -20,6 +21,13 @@ public sealed class InspectToolTests
         var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath));
         return (index, new SmartTargetResolver(index));
     }
+
+    private static JulieDbFixture EmptyFixture(string workspaceId) =>
+        JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            Array.Empty<JulieDbFixture.SymbolRow>(),
+            workspaceId: workspaceId);
 
     // ---- File listing ----
 
@@ -214,5 +222,39 @@ public sealed class InspectToolTests
         var children = root.GetProperty("children");
         Assert.Equal(JsonValueKind.Array, children.ValueKind);
         Assert.True(children.GetArrayLength() >= 3);
+    }
+
+    [Fact]
+    public void Inspect_ExplicitWorkspaceId_UsesTargetIndexResolverAndDbPath_AndPrefixesFreshness()
+    {
+        using var current = EmptyFixture("current-ws");
+        using var target = JulieDbFixture.CreateForInspect();
+        var (currentIndex, _) = Build(current);
+        var (targetIndex, _) = Build(target);
+        string currentRoot = Path.Combine(Path.GetTempPath(), "miller-current-" + Guid.NewGuid().ToString("N"));
+        string targetRoot = Path.Combine(Path.GetTempPath(), "miller-target-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(currentIndex, current.DbPath, "current-ws", currentRoot),
+            ("target-ws", ReadToolRoutingTestSupport.ContextFor(
+                targetIndex,
+                target.DbPath,
+                "target-ws",
+                targetRoot,
+                indexFresh: false,
+                freshnessStatus: "unconfirmed_lock_busy")));
+        var tool = new InspectTool(provider);
+
+        string output = tool.Inspect(
+            "GetUser",
+            depth: "summary",
+            workspace_id: "target-ws",
+            ensure_fresh: false);
+
+        Assert.Equal("target-ws", provider.LastWorkspaceId);
+        Assert.False(provider.LastEnsureFresh);
+        Assert.StartsWith("workspace: target-ws ", output);
+        Assert.Contains(targetRoot, output);
+        Assert.Contains("freshness: unconfirmed_lock_busy", output);
+        Assert.Contains("Gets a user by id.", output);
     }
 }

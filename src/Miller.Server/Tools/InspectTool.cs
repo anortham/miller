@@ -6,6 +6,7 @@ using System.Text.Json;
 using Miller.Indexing;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
+using Miller.Server.Workspaces;
 using ModelContextProtocol.Server;
 
 namespace Miller.Server.Tools;
@@ -21,22 +22,14 @@ namespace Miller.Server.Tools;
 [McpServerToolType]
 public sealed class InspectTool
 {
-    // Depend on the holder, not a fixed index (M3 step 10): read holder.Current per call so a freshness Swap is
-    // reflected on the next inspect. The resolver is likewise holder-backed (it reads the live index per call).
-    private readonly IndexHolder _holder;
-    private readonly SmartTargetResolver _resolver;
-    private readonly WorkspaceContext _workspace;
+    private readonly IWorkspaceIndexProvider _workspaceProvider;
 
     /// <summary>Construct over the live index holder (production / freshness-aware).</summary>
     /// <exception cref="ArgumentNullException">Any argument is null.</exception>
-    public InspectTool(IndexHolder holder, SmartTargetResolver resolver, WorkspaceContext workspace)
+    public InspectTool(IWorkspaceIndexProvider workspaceProvider)
     {
-        ArgumentNullException.ThrowIfNull(holder);
-        ArgumentNullException.ThrowIfNull(resolver);
-        ArgumentNullException.ThrowIfNull(workspace);
-        _holder = holder;
-        _resolver = resolver;
-        _workspace = workspace;
+        ArgumentNullException.ThrowIfNull(workspaceProvider);
+        _workspaceProvider = workspaceProvider;
     }
 
     [McpServerTool(Name = "inspect")]
@@ -51,17 +44,24 @@ public sealed class InspectTool
         [Description("Filter a file listing to one kind (function/class/...). Optional.")] string? kind = null,
         [Description("Disambiguate an ambiguous symbol name to a file. Optional.")] string? scope = null,
         [Description("Max symbols when listing a file. Default 50.")] int limit = 50,
-        [Description("Output format: compact|json. Default compact.")] string format = "compact")
+        [Description("Output format: compact|json. Default compact.")] string format = "compact",
+        [Description("Registered workspace id to query. Omit for the current workspace.")] string? workspace_id = null,
+        [Description("Refresh a registered workspace before reading. Defaults true when workspace_id is supplied.")]
+        bool? ensure_fresh = null)
     {
         var telemetry = TelemetryContext.Current;
         try
         {
             bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
-            string output = Run(_holder.Current, _resolver, _workspace.ExtractDbPath,
-                target, depth, kind, scope, limit, json, out int count);
+            bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
+            WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
+            string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
+            string output = Run(context.Index, context.Resolver, context.IndexDbPath,
+                target, depth, kind, scope, limit, json, out int count, compactBanner);
 
             if (telemetry is not null)
             {
+                ReadToolWorkspaceRouting.ApplyTelemetry(telemetry, context);
                 telemetry.SetTarget(target);
                 telemetry.ResultCount = count;
                 telemetry.Outcome = count == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
@@ -89,7 +89,8 @@ public sealed class InspectTool
     public static string Run(
         MillerRepositoryIndex index, SmartTargetResolver resolver, string dbPath,
         string target, string depth, string? kind, string? scope, int limit, bool json,
-        out int resultCount)
+        out int resultCount,
+        string? compactBanner = null)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentNullException.ThrowIfNull(resolver);
@@ -101,27 +102,34 @@ public sealed class InspectTool
         switch (resolution)
         {
             case TargetResolution.File file:
-                return RenderFile(index, file.Path, kind, limit, json, out resultCount);
+                return ReadToolWorkspaceRouting.PrefixCompact(
+                    RenderFile(index, file.Path, kind, limit, json, out resultCount),
+                    json ? null : compactBanner);
 
             case TargetResolution.Symbol sym:
                 resultCount = 1;
-                return json
+                string symbolOutput = json
                     ? RenderSymbolJson(index, dbPath, sym.Value, full)
                     : RenderSymbolCompact(index, dbPath, sym.Value, full);
+                return ReadToolWorkspaceRouting.PrefixCompact(symbolOutput, json ? null : compactBanner);
 
             case TargetResolution.Candidates cands:
                 resultCount = cands.Matches.Count;
-                return json ? RenderCandidatesJson(cands.Matches) : RenderCandidatesCompact(cands.Matches);
+                string candidatesOutput = json ? RenderCandidatesJson(cands.Matches) : RenderCandidatesCompact(cands.Matches);
+                return ReadToolWorkspaceRouting.PrefixCompact(candidatesOutput, json ? null : compactBanner);
 
             case TargetResolution.NotFound nf:
                 resultCount = 0;
-                return json
+                string notFoundOutput = json
                     ? $"{{\"not_found\":{JsonString(nf.Target)}}}"
                     : $"'{nf.Target}' not found. Try search to locate it.";
+                return ReadToolWorkspaceRouting.PrefixCompact(notFoundOutput, json ? null : compactBanner);
 
             default:
                 resultCount = 0;
-                return "inspect: unrecognized resolution.";
+                return ReadToolWorkspaceRouting.PrefixCompact(
+                    "inspect: unrecognized resolution.",
+                    json ? null : compactBanner);
         }
     }
 

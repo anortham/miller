@@ -3,6 +3,7 @@ using Miller.Core.Graph;
 using Miller.Indexing;
 using Miller.Server.Resolution;
 using Miller.Server.Tools;
+using Miller.Tests;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -51,6 +52,9 @@ public sealed class ContextToolTests
         var index = MillerRepositoryIndex.Build(symbols, edges);
         return (index, new SmartTargetResolver(index));
     }
+
+    private static MillerRepositoryIndex EmptyIndex() =>
+        MillerRepositoryIndex.Build(Array.Empty<IndexedSymbol>(), Array.Empty<GraphEdge>());
 
     // ---- seeds + expansion ----
 
@@ -314,21 +318,39 @@ public sealed class ContextToolTests
         Assert.Contains("hop", output, StringComparison.OrdinalIgnoreCase);
     }
 
-    // ---- ctor shape (finding 3): context needs only the holder + resolver; no WorkspaceContext dependency ----
+    // ---- routed wrapper / ctor shape ----
 
     [Fact]
-    public void Ctor_RequiresOnlyHolderAndResolver_NoWorkspaceDependency()
+    public void Context_ExplicitWorkspaceId_DefaultsEnsureFreshTrue_AndRoutesToTargetIndex()
+    {
+        var currentIndex = EmptyIndex();
+        var (targetIndex, _) = BuildFixture();
+        string currentRoot = Path.Combine(Path.GetTempPath(), "miller-current-" + Guid.NewGuid().ToString("N"));
+        string targetRoot = Path.Combine(Path.GetTempPath(), "miller-target-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(currentIndex, "current.db", "current-ws", currentRoot),
+            ("target-ws", ReadToolRoutingTestSupport.ContextFor(targetIndex, "target.db", "target-ws", targetRoot)));
+        var tool = new ContextTool(provider);
+
+        string output = tool.Context("OrderService", workspace_id: "target-ws");
+
+        Assert.Equal("target-ws", provider.LastWorkspaceId);
+        Assert.True(provider.LastEnsureFresh);
+        Assert.StartsWith("workspace: target-ws ", output);
+        Assert.Contains(targetRoot, output);
+        Assert.Contains("OrderService", output);
+    }
+
+    [Fact]
+    public void Ctor_RequiresWorkspaceIndexProvider()
     {
         var (index, _) = BuildFixture();
-        var holder = new IndexHolder(index, builtRevision: 1);
-        var resolver = new SmartTargetResolver(holder);
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "current.db", "current-ws", "/current"));
 
-        // The M5 Run core is DB-free (search + graph over the in-memory index), so the tool must NOT carry a dead
-        // WorkspaceContext. This compiles only against the two-arg ctor (the fix); it also pins the null-guards.
-        var tool = new ContextTool(holder, resolver);
+        var tool = new ContextTool(provider);
         Assert.NotNull(tool);
 
-        Assert.Throws<ArgumentNullException>(() => new ContextTool(null!, resolver));
-        Assert.Throws<ArgumentNullException>(() => new ContextTool(holder, null!));
+        Assert.Throws<ArgumentNullException>(() => new ContextTool(null!));
     }
 }

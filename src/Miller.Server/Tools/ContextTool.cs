@@ -9,6 +9,7 @@ using Miller.Core.Search;
 using Miller.Indexing;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
+using Miller.Server.Workspaces;
 using ModelContextProtocol.Server;
 
 namespace Miller.Server.Tools;
@@ -31,19 +32,16 @@ namespace Miller.Server.Tools;
 [McpServerToolType]
 public sealed partial class ContextTool
 {
-    private readonly IndexHolder _holder;
-    private readonly SmartTargetResolver _resolver;
+    private readonly IWorkspaceIndexProvider _workspaceProvider;
 
     /// <summary>Construct over the live index holder (production / freshness-aware). Unlike inspect, context's
     /// <see cref="Run"/> core is DB-free (search + graph over the in-memory index), so it takes no
     /// WorkspaceContext.</summary>
     /// <exception cref="ArgumentNullException">Any argument is null.</exception>
-    public ContextTool(IndexHolder holder, SmartTargetResolver resolver)
+    public ContextTool(IWorkspaceIndexProvider workspaceProvider)
     {
-        ArgumentNullException.ThrowIfNull(holder);
-        ArgumentNullException.ThrowIfNull(resolver);
-        _holder = holder;
-        _resolver = resolver;
+        ArgumentNullException.ThrowIfNull(workspaceProvider);
+        _workspaceProvider = workspaceProvider;
     }
 
     [McpServerTool(Name = "context")]
@@ -62,18 +60,26 @@ public sealed partial class ContextTool
         string? failing_test = null,
         [Description("A stack trace; its symbol tokens are folded into the seeds. Optional.")]
         string? stack_trace = null,
-        [Description("Output format: compact|json. Default compact.")] string format = "compact")
+        [Description("Output format: compact|json. Default compact.")] string format = "compact",
+        [Description("Registered workspace id to query. Omit for the current workspace.")] string? workspace_id = null,
+        [Description("Refresh a registered workspace before reading. Defaults true when workspace_id is supplied.")]
+        bool? ensure_fresh = null)
     {
         var telemetry = TelemetryContext.Current;
         try
         {
             bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
-            string output = Run(_holder.Current, _resolver,
+            bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
+            WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
+            string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
+            string output = Run(context.Index, context.Resolver,
                 query, token_budget, max_hops, entry_symbols, failing_test, stack_trace, json,
                 out int selectedCount, out int candidatesExamined);
+            output = ReadToolWorkspaceRouting.PrefixCompact(output, compactBanner);
 
             if (telemetry is not null)
             {
+                ReadToolWorkspaceRouting.ApplyTelemetry(telemetry, context);
                 telemetry.SetTarget(query);
                 telemetry.ResultCount = selectedCount;
                 // D10 work proxy (bytes_examined ≈ nodes visited): the candidate set (seeds + reached) the packer
