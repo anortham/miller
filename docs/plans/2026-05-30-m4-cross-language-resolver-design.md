@@ -347,5 +347,110 @@ Fast suite stays < 10s (`Category!=Scale`).
       `SymbolResolver` ambiguity policy enforced; `SymbolGraph.ShortestPath` deterministic.
 - [ ] `trace` tool: all three modes, token-thrifty `compact`/`full`, verb-unknown + ambiguous flags shown; telemetry.
 - [ ] Fast suite < 10s and pure; Scale tests tagged + gated on `RequireJulieServer()`; build 0 warnings / 0 errors.
-- [ ] **Honesty probe run; precision recorded; recall measured on the contract PER LEG; numbers written into this doc.**
-      The "shippable to unknown users" gate — without it, M4 is not done.
+- [x] **Honesty probe run; precision recorded; recall measured on the contract PER LEG; numbers written into this doc.**
+      The "shippable to unknown users" gate — without it, M4 is not done. _(See Appendix: Phase D
+      honesty-probe results [measured 2026-05-31]. Precision 6/6 = 1.00; per-leg recall 1.00/1.00/1.00;
+      Dapper-FROM excluded. Scale gate `LiveBridgeTraceTests` green; fast suite 1050/1050 with Scale
+      excluded.)_
+
+---
+
+## Appendix: Phase D honesty-probe results [measured 2026-05-31]
+
+These numbers are the actual output of the Scale gate
+[`LiveBridgeTraceTests`](../../tests/Miller.Tests/Indexing/LiveBridgeTraceTests.cs), run end-to-end
+against the pinned `julie-server` extractor (`scripts/test.sh scale` /
+`dotnet test --filter "FullyQualifiedName~LiveBridgeTraceTests"`). Both Facts pass. The figures are
+emitted by the tests themselves (xUnit `ITestOutputHelper`) and copied verbatim from the run; they are
+not hand-computed.
+
+### Precision (undisciplined fixture)
+
+`HonestyProbe_UndisciplinedFixture_GuardsHold_PrecisionAndRecall` enumerates every surviving scored
+edge on a deliberately messy polyglot fixture and classifies each as TP/FP against a fixed oracle.
+
+| Metric | Value | Floor |
+| --- | --- | --- |
+| Precision (all legs) | **6/6 = 1.00** | 0.75 |
+
+Per-edge verdicts (all TP, copied verbatim from the run):
+
+| Edge | Band | Score | Ambiguous | VerbUnknown | Why |
+| --- | --- | --- | --- | --- | --- |
+| `Account --MapsTo--> AccountDto` | Medium | 0.75 | yes | no | Leg2 CreateMap; ambiguity capped, not High |
+| `Customer --MapsTo--> CustomerDto` | High | 0.95 | no | no | Leg2 Customer↔CustomerDto |
+| `UpdateCustomerRequest --MapsTo--> Customer` | High | 0.90 | no | no | Leg2 inbound CreateMap; Request not mislabeled as entity |
+| `Customer --StoredIn--> Customers` | High | 0.95 | no | no | Leg3 Customer→Customers |
+| `api/orders --Hits--> CreateOrder` | High | 0.90 | no | no | Leg1 POST /api/orders → CreateOrder |
+| `api/reports --Hits--> GetReports` | Medium | 0.70 | no | yes | Leg1 route-only /api/reports → GetReports (verb-unknown, honest Medium) |
+
+**Read this number as a floor-check, not a discriminating detector.** `ClassifyHonesty` labels every
+edge shape this fixture can produce as a TP, so 6/6 = 1.00 is the *designed* outcome of a passing run,
+not a sensitive measurement — a regression that, say, promoted the ambiguous `Account` edge to High
+would still count as a precision TP. The discriminating power lives in the four hard guards below
+(corroborator-only, ambiguous-name-never-High, test-literal-excluded, verb-unknown-not-assumed-GET),
+which assert on the scored payload directly and *would* fail on such a regression. Precision here proves
+"no surviving edge is an outright phantom"; the guards prove "the edges that survive are correctly
+bounded."
+
+### Recall (per leg)
+
+Reported per leg against the known bridge set on the same fixture. Dapper-FROM is **excluded from the
+denominator**: it is not buildable on the lean extract contract (`DapperFromCandidates` is always empty
+in `BridgeGraphBuilder.Build`), so counting it would understate recall against a capability the contract
+does not currently expose.
+
+| Leg | Recall | Detected | Notes |
+| --- | --- | --- | --- |
+| Leg 1 — route (`Hits`) | **1.00** | 1/1 | verb+route and route-only both recovered |
+| Leg 2 — DTO↔entity (`MapsTo`) | **1.00** | 1/1 | Customer↔CustomerDto (probe denominator); Account + inbound Request also detected |
+| Leg 3 — entity↔table (`StoredIn`) | **1.00** | 1/1 | Customer→Customers via `DbSet<T>` |
+| Dapper-FROM | EXCLUDED | — | not buildable on lean contract; `DapperFromCandidates` always empty |
+
+### Guards proven (honesty probe)
+
+Each guard is asserted by the probe, not merely described:
+
+- **Corroborator-only / 1-field-never-anchors** — the 1-field wrapper never anchored a `MapsTo` edge
+  (`MinAnchoringFieldCount = 2`).
+- **Ambiguous-name-never-High** — `Account` (a duplicated type name) caps at Medium, never High.
+- **Test-literal-excluded** — the C# test `HttpClient` url literal produced no `Hits` edge
+  (`IsRealClientCall` filters `csharp` + test-role url refs).
+- **Verb-unknown-not-assumed-GET** — the `/api/reports` route-only edge is Medium with
+  `IsVerbUnknown = true`, not silently promoted to a High assumed-GET.
+- **Inbound-CreateMap-not-mislabeled** — `CreateMap<UpdateCustomerRequest, Customer>` keeps the Request
+  as the source side; it is not relabeled as an entity.
+
+### Disciplined fixture (known bridge set)
+
+`DisciplinedFixture_AllThreeLegs_KnownBridgeSet` asserts the canonical three-leg set with real values
+(copied verbatim from the run):
+
+```
+Leg3 StoredIn: AppSetting -> AppSettings        band=High score=0.95
+Leg2 MapsTo:   AppSetting <-> AppSettingDto      band=High score=0.95
+Leg1 Hits:     api/appsettings/{} -> GetById     band=High score=0.90 verbUnknown=False
+```
+
+It also renders `trace --mode bridge` for `AppSetting` and asserts the rendered hop
+`AppSetting  --DbSet-->  AppSettings  (High)`.
+
+### Production fix landed alongside the gate
+
+The gate surfaced a real trace-output bug, now fixed in
+[`BridgeGraphBuilder.AddNode`](../../src/Miller.Core/Graph/BridgeGraphBuilder.cs): a symbol-backed node
+was rendered with `edgeRef.Display`, which for a `Hits` endpoint carries the **normalized route**
+(`RouteBridge` sets the endpoint `EdgeRef.Display` to `endpointRoute.Route`). The trace therefore showed
+the controller action as `api/appsettings/{}` instead of `GetById`. The node now renders the resolved
+**symbol name** (`symbol.Name`). This is user-facing (`TraceTool.EndpointDisplay` returns
+`node.Display`), not test-only.
+
+### Run evidence (verbatim)
+
+```
+LiveBridgeTraceTests: Passed!  - Failed: 0, Passed: 2, Skipped: 0, Total: 2, Duration: 150 ms
+ScaleTraitConvention:  Passed!  - Failed: 0, Passed: 1, Skipped: 0, Total: 1
+Fast suite (Category!=Scale): Passed!  - Failed: 0, Passed: 1050, Skipped: 0, Total: 1050, Duration: 1 s
+  fast suite wall time: 3s (local target <10s, ceiling 30s)
+Build: 0 Warning(s) / 0 Error(s)
+```

@@ -425,8 +425,10 @@ public static class BridgeGraphBuilder
 
     /// <summary>
     /// Build a <see cref="BridgeNode"/> for every endpoint of a surviving scored edge, keyed by the same node id
-    /// <see cref="BridgeGraph"/> uses (resolved symbol id, or a kind+display synthesis). A symbol-backed node is
-    /// enriched with the symbol's file:line; a non-symbol node (table / route) carries the edge ref's display + file.
+    /// <see cref="BridgeGraph"/> uses (resolved symbol id, or a kind+display synthesis). A symbol-backed node renders
+    /// with the resolved symbol's NAME (so a route endpoint shows its action method, e.g. GetById, not the route text
+    /// its <see cref="EdgeRef.Display"/> carries) and is enriched with the symbol's file:line; a non-symbol node
+    /// (table / route) carries the edge ref's display + file.
     /// </summary>
     private static IReadOnlyDictionary<string, BridgeNode> BuildNodes(
         IReadOnlyList<ScoredEdge> scored, IReadOnlyDictionary<string, SymbolDetail> symbolsById)
@@ -453,10 +455,13 @@ public static class BridgeGraphBuilder
 
         var kind = BridgeGraph.NodeKindFor(edgeKind, side);
 
-        // A symbol-backed side: enrich with the symbol's own file (the edge ref file is the use-site, not the decl).
+        // A symbol-backed side: render with the symbol's own NAME and enrich with its declaration file (the edge ref
+        // file is the use-site, not the decl). The display MUST be the symbol name, not edgeRef.Display: a Hits edge's
+        // endpoint EdgeRef.Display carries the normalized ROUTE (RouteBridge sets it to endpointRoute.Route), so using
+        // it would render the controller action as "api/appsettings/{}" instead of "GetById" in the trace output.
         if (!string.IsNullOrEmpty(edgeRef.SymbolId) && symbolsById.TryGetValue(edgeRef.SymbolId, out var symbol))
         {
-            nodes[id] = new BridgeNode(id, kind, edgeRef.Display, symbol.FilePath, Line: 0);
+            nodes[id] = new BridgeNode(id, kind, symbol.Name, symbol.FilePath, Line: 0);
             return;
         }
 
