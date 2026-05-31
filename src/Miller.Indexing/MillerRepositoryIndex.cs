@@ -1,4 +1,5 @@
 using Miller.Core.Graph;
+using Miller.Core.Resolver;
 using Miller.Core.Search;
 
 namespace Miller.Indexing;
@@ -34,6 +35,15 @@ public sealed class MillerRepositoryIndex
     // index). Always non-null — Build(symbols) installs an edge-less graph (back-compat for search/inspect).
     private readonly SymbolGraph _graph;
 
+    // The M4 cross-language bridge graph (Task 8/9): built as part of the same immutable unit and published
+    // atomically alongside _graph (same churn argument — a bridge graph keyed on stale ids must never outlive its
+    // index). Always non-null — the search/inspect/edit Build paths install the empty bridge graph.
+    private readonly BridgeGraph _bridgeGraph;
+
+    // The empty bridge graph the non-M4 Build overloads install (no scored edges, no nodes). Shared + immutable.
+    private static readonly BridgeGraph EmptyBridgeGraph =
+        BridgeGraph.Build(Array.Empty<ScoredEdge>(), new Dictionary<string, BridgeNode>(StringComparer.Ordinal));
+
     private MillerRepositoryIndex(
         MillerSearchIndex index,
         IndexedSymbol[] byDocId,
@@ -43,7 +53,8 @@ public sealed class MillerRepositoryIndex
         Dictionary<string, List<IndexedSymbol>> byParentId,
         Dictionary<string, List<string>> byFileName,
         IReadOnlySet<string> knownExtensions,
-        SymbolGraph graph)
+        SymbolGraph graph,
+        BridgeGraph bridgeGraph)
     {
         _index = index;
         _byDocId = byDocId;
@@ -54,6 +65,7 @@ public sealed class MillerRepositoryIndex
         _byFileName = byFileName;
         KnownExtensions = knownExtensions;
         _graph = graph;
+        _bridgeGraph = bridgeGraph;
     }
 
     /// <summary>
@@ -64,6 +76,16 @@ public sealed class MillerRepositoryIndex
     /// pass-throughs over the raw id graph when you need full <see cref="IndexedSymbol"/>s.
     /// </summary>
     public SymbolGraph Graph => _graph;
+
+    /// <summary>
+    /// The M4 cross-language bridge graph travelling with this index (plan Task 8/9; design §3/§4). The undirected
+    /// scored-edge graph over TS/DTO/entity/table/endpoint nodes, built once as part of the same immutable unit so
+    /// it is published atomically by the holder's reference swap. An index built via a non-M4 <c>Build</c> overload
+    /// carries the EMPTY bridge graph (no edges, no nodes); only
+    /// <see cref="Build(IReadOnlyList{IndexedSymbol},IReadOnlyList{GraphEdge},BridgeGraph)"/> installs a populated
+    /// one (the production loader, Task 9).
+    /// </summary>
+    public BridgeGraph BridgeGraph => _bridgeGraph;
 
     /// <summary>Total number of indexed symbols.</summary>
     public int DocumentCount => _byDocId.Length;
@@ -86,16 +108,12 @@ public sealed class MillerRepositoryIndex
     /// DocIds are not the contiguous 0..n-1 ordinals this facade requires (a reader regression).
     /// </exception>
     public static MillerRepositoryIndex Build(IReadOnlyList<IndexedSymbol> symbols) =>
-        Build(symbols, Array.Empty<GraphEdge>());
+        Build(symbols, Array.Empty<GraphEdge>(), EmptyBridgeGraph);
 
     /// <summary>
-    /// Build the repository index AND its dependency graph (D9) from symbols produced by
-    /// <see cref="SqliteSymbolReader.Read"/> and the resolved edges produced by
-    /// <see cref="SymbolGraphReader.Read"/>, as ONE immutable unit. The reader assigns contiguous 0-based DocIds
-    /// in deterministic order, so the hydration array is indexed directly by DocId for O(1) <see cref="Resolve"/>;
-    /// this contract is validated, not assumed. Each symbol becomes a graph node carrying its
-    /// <see cref="IndexedSymbol.IsTest"/> flag (so <c>impact</c> can partition likely tests without a second
-    /// lookup); the graph applies its own edge hygiene (unknown-endpoint / self-loop drop, per-direction dedup).
+    /// Build the repository index AND its dependency graph (D9), with the EMPTY cross-language bridge graph.
+    /// Back-compat for the M1–M3/M5 build sites (search/inspect/edit/impact) that do not need the M4 bridge.
+    /// Delegates to <see cref="Build(IReadOnlyList{IndexedSymbol},IReadOnlyList{GraphEdge},BridgeGraph)"/>.
     /// </summary>
     /// <param name="symbols">The indexed symbols (contiguous 0-based DocIds).</param>
     /// <param name="edges">The resolved dependency edges (<see cref="SymbolGraphReader.Read"/>'s output).</param>
@@ -104,10 +122,32 @@ public sealed class MillerRepositoryIndex
     /// DocIds are not the contiguous 0..n-1 ordinals this facade requires (a reader regression).
     /// </exception>
     public static MillerRepositoryIndex Build(
-        IReadOnlyList<IndexedSymbol> symbols, IReadOnlyList<GraphEdge> edges)
+        IReadOnlyList<IndexedSymbol> symbols, IReadOnlyList<GraphEdge> edges) =>
+        Build(symbols, edges, EmptyBridgeGraph);
+
+    /// <summary>
+    /// Build the repository index, its dependency graph (D9), AND the M4 cross-language bridge graph (Task 8/9) as
+    /// ONE immutable unit. The reader assigns contiguous 0-based DocIds in deterministic order, so the hydration
+    /// array is indexed directly by DocId for O(1) <see cref="Resolve"/>; this contract is validated, not assumed.
+    /// Each symbol becomes a dependency-graph node carrying its <see cref="IndexedSymbol.IsTest"/> flag (so
+    /// <c>impact</c> can partition likely tests without a second lookup); the graph applies its own edge hygiene
+    /// (unknown-endpoint / self-loop drop, per-direction dedup). The supplied <paramref name="bridgeGraph"/> (built
+    /// by <see cref="Miller.Core.Graph.BridgeGraphBuilder"/> in the loader, Task 9) travels with the index and is
+    /// published atomically by the holder's reference swap.
+    /// </summary>
+    /// <param name="symbols">The indexed symbols (contiguous 0-based DocIds).</param>
+    /// <param name="edges">The resolved dependency edges (<see cref="SymbolGraphReader.Read"/>'s output).</param>
+    /// <param name="bridgeGraph">The M4 cross-language bridge graph to publish with this index.</param>
+    /// <exception cref="ArgumentNullException">Any argument is null.</exception>
+    /// <exception cref="ArgumentException">
+    /// DocIds are not the contiguous 0..n-1 ordinals this facade requires (a reader regression).
+    /// </exception>
+    public static MillerRepositoryIndex Build(
+        IReadOnlyList<IndexedSymbol> symbols, IReadOnlyList<GraphEdge> edges, BridgeGraph bridgeGraph)
     {
         ArgumentNullException.ThrowIfNull(symbols);
         ArgumentNullException.ThrowIfNull(edges);
+        ArgumentNullException.ThrowIfNull(bridgeGraph);
 
         var byDocId = new IndexedSymbol[symbols.Count];
         var documents = new SearchableDocument[symbols.Count];
@@ -162,7 +202,7 @@ public sealed class MillerRepositoryIndex
 
         return new MillerRepositoryIndex(
             MillerSearchIndex.Build(documents), byDocId, bySymbolId, byName, byFilePath, byParentId,
-            byFileName, knownExtensions, SymbolGraph.Build(nodes, edges));
+            byFileName, knownExtensions, SymbolGraph.Build(nodes, edges), bridgeGraph);
 
         static void Add(Dictionary<string, List<IndexedSymbol>> map, string key, IndexedSymbol value)
         {

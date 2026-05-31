@@ -1,10 +1,22 @@
 {
-  "version": "7.12.2",
+  "version": "7.13.0",
   "urlTemplate": "https://github.com/anortham/julie/releases/download/v{VER}/{asset}",
   "assets": {
-    "aarch64-apple-darwin":    { "name": "julie-v7.12.2-aarch64-apple-darwin.tar.gz",    "sha256": "5113bac946a66dceda1508b075b410c14f5480c2b24422a571e13c67ce9eb034" },
-    "x86_64-apple-darwin":     { "name": "julie-v7.12.2-x86_64-apple-darwin.tar.gz",     "sha256": "39122a57545fec313d1072775fe52596c017516269a1ee12c78170b466383381" },
-    "x86_64-unknown-linux-gnu":{ "name": "julie-v7.12.2-x86_64-unknown-linux-gnu.tar.gz","sha256": "e2b8528e72c3ea549bad1b764df00134224f915c3e5811eb67dbaf2e80c995c1" },
-    "x86_64-pc-windows-msvc":  { "name": "julie-v7.12.2-x86_64-pc-windows-msvc.zip",     "sha256": "fb5b5c1432a05a6b6073719db4227c08029be4b0a4d09e22b2828350e6d5c1d9" }
+    "aarch64-apple-darwin": {
+      "name": "julie-v7.13.0-aarch64-apple-darwin.tar.gz",
+      "sha256": "3d312f06eea9d43555bced1f1689adf3e6b6bab33f79ba916c98257cb067cc97"
+    },
+    "x86_64-apple-darwin": {
+      "name": "julie-v7.13.0-x86_64-apple-darwin.tar.gz",
+      "sha256": "5aa29121f748b37c798bd4d309a6383cb10e2b8bf810956db2dcc74af63e762e"
+    },
+    "x86_64-unknown-linux-gnu": {
+      "name": "julie-v7.13.0-x86_64-unknown-linux-gnu.tar.gz",
+      "sha256": "e038495bddf5bddc4b1a718704e8cbfffea7a0daffd2301ea95fad0277df7c88"
+    },
+    "x86_64-pc-windows-msvc": {
+      "name": "julie-v7.13.0-x86_64-pc-windows-msvc.zip",
+      "sha256": "c6cec8e3b2c2e5e9872b2afdb5c1c053e3369ca59912dbb87e0bcd06cdb7d809"
+    }
   }
 }

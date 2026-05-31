@@ -33,7 +33,7 @@ public sealed class RepositoryIndexLoaderTests
         {
             new JulieDbFixture.IdentifierRow("i1", "Validate", "call", "csharp", "src/A.cs", 2, ProcessId),
         };
-        return JulieDbFixture.Create(26, "1", rows, identifiers: identifiers, relationships: relationships);
+        return JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, rows, identifiers: identifiers, relationships: relationships);
     }
 
     [Fact]

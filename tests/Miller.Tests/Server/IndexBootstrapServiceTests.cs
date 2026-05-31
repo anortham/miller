@@ -39,7 +39,7 @@ public sealed class IndexBootstrapServiceTests
         // The happy path: a reused DB with persisted revisions seeds the holder from the MAX (so the freshness
         // poll does not rebuild on the first tick).
         using var fx = JulieDbFixture.Create(
-            schemaVersion: 26, contractValue: "1",
+            schemaVersion: JulieDbFixture.PinnedSchema, contractValue: JulieDbFixture.PinnedContract,
             rows: System.Array.Empty<JulieDbFixture.SymbolRow>(),
             workspaceId: "ws-seed",
             revisions: new[]
@@ -174,7 +174,7 @@ public sealed class IndexBootstrapServiceTests
             return;
 
         using var fx = JulieDbFixture.Create(
-            schemaVersion: 26, contractValue: "1",
+            schemaVersion: JulieDbFixture.PinnedSchema, contractValue: JulieDbFixture.PinnedContract,
             rows: System.Array.Empty<JulieDbFixture.SymbolRow>(),
             workspaceId: "ws-1",
             revisions: new[] { new JulieDbFixture.RevisionRow(2, "ws-1") });

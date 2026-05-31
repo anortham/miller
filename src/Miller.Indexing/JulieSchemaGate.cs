@@ -81,7 +81,7 @@ internal static class JulieSchemaGate
         if (result is null || result is DBNull)
             throw new IncompatibleExtractException(
                 "DB is missing the 'extract_contract_version' key in external_extract_metadata; it is not a " +
-                $"v7.12.2 julie extract. Re-run restore + `extract scan` with the pinned julie-server " +
+                $"v{MillerExtractContract.PinnedJulieServerVersion} julie extract. Re-run restore + `extract scan` with the pinned julie-server " +
                 $"(v{MillerExtractContract.PinnedJulieServerVersion}).");
 
         string text = result.ToString() ?? string.Empty;

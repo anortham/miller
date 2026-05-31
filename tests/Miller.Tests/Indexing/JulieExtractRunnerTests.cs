@@ -56,9 +56,9 @@ public sealed class JulieExtractRunnerTests
           "operation": "scan",
           "db_path": "/abs/work/.miller/symbols.db",
           "root": "/abs/work/repo",
-          "schema_version": 26,
+          "schema_version": 28,
           "schema_state": "current",
-          "extract_contract_version": 1,
+          "extract_contract_version": 2,
           "analysis_state": "missing",
           "files_scanned": 12,
           "symbols_extracted": 134,
@@ -80,9 +80,9 @@ public sealed class JulieExtractRunnerTests
         Assert.Equal("scan", report.Operation);
         Assert.Equal("/abs/work/.miller/symbols.db", report.DbPath); // serde renamed `db` -> `db_path`
         Assert.Equal("/abs/work/repo", report.Root);
-        Assert.Equal(26, report.SchemaVersion);
+        Assert.Equal(28, report.SchemaVersion);
         Assert.Equal("current", report.SchemaState);
-        Assert.Equal(1, report.ExtractContractVersion);
+        Assert.Equal(2, report.ExtractContractVersion);
         Assert.Equal(12u, report.FilesScanned);
         Assert.Equal(134u, report.SymbolsExtracted);
         Assert.Empty(report.Errors);
@@ -94,9 +94,9 @@ public sealed class JulieExtractRunnerTests
           "operation": "info",
           "db_path": "/abs/work/.miller/symbols.db",
           "root": null,
-          "schema_version": 26,
+          "schema_version": 28,
           "schema_state": "current",
-          "extract_contract_version": 1,
+          "extract_contract_version": 2,
           "analysis_state": "missing",
           "files_scanned": 0,
           "symbols_extracted": 0,
@@ -131,9 +131,9 @@ public sealed class JulieExtractRunnerTests
           "operation": "scan",
           "db_path": "/abs/work/.miller/symbols.db",
           "root": "/abs/work/repo",
-          "schema_version": 26,
+          "schema_version": 28,
           "schema_state": "current",
-          "extract_contract_version": 1,
+          "extract_contract_version": 2,
           "analysis_state": "missing",
           "files_scanned": 0,
           "symbols_extracted": 0,
@@ -213,7 +213,7 @@ public sealed class JulieExtractRunnerTests
         // `delete` of an absent file → status "not_found", exit 0. Tolerant, NOT a failure.
         const string notFound = """
             { "status": "not_found", "operation": "delete", "db_path": "/abs/db", "root": "/abs/r",
-              "schema_version": 26, "extract_contract_version": 1,
+              "schema_version": 28, "extract_contract_version": 2,
               "files_scanned": 0, "symbols_extracted": 0, "files_total": 0, "symbols_total": 0,
               "relationships_total": 0, "identifiers_total": 0, "types_total": 0, "errors": [] }
             """;
@@ -254,8 +254,8 @@ public sealed class JulieExtractRunnerTests
               "operation": "scan",
               "DB_Path": "/abs/work/.miller/symbols.db",
               "root": "/abs/work/repo",
-              "Schema_Version": 26,
-              "Extract_Contract_Version": 1,
+              "Schema_Version": 28,
+              "Extract_Contract_Version": 2,
               "files_scanned": 0,
               "symbols_extracted": 0,
               "files_total": 0,
@@ -271,8 +271,8 @@ public sealed class JulieExtractRunnerTests
 
         Assert.Equal("scanned", report.Status);                       // "Status" bound case-insensitively
         Assert.Equal("/abs/work/.miller/symbols.db", report.DbPath);  // "DB_Path" bound to db_path
-        Assert.Equal(26, report.SchemaVersion);                       // "Schema_Version" bound to schema_version
-        Assert.Equal(1, report.ExtractContractVersion);               // "Extract_Contract_Version" bound
+        Assert.Equal(28, report.SchemaVersion);                       // "Schema_Version" bound to schema_version
+        Assert.Equal(2, report.ExtractContractVersion);               // "Extract_Contract_Version" bound
     }
 
     // ---- (4) post-extract version cross-check (D5; julie self-rejects only a NEWER DB, so Miller gates) ----
@@ -287,16 +287,16 @@ public sealed class JulieExtractRunnerTests
     public void VerifyReport_AtPinnedSchemaAndContract_DoesNotThrow()
     {
         // No throw == compatible. A throw fails the test.
-        ExtractVersionMismatch.VerifyReport(ReportWith(26, 1));
+        ExtractVersionMismatch.VerifyReport(ReportWith((int)MillerExtractContract.ExpectedSchemaVersion, (int)MillerExtractContract.ExpectedExtractContractVersion));
     }
 
     [Fact]
     public void VerifyReport_NewerSchema_ThrowsNamingValueAndPointingAtUpgrade()
     {
         var ex = Assert.Throws<IncompatibleExtractException>(() =>
-            ExtractVersionMismatch.VerifyReport(ReportWith(27, 1)));
-        Assert.Contains("27", ex.Message);
-        Assert.Contains("26", ex.Message);
+            ExtractVersionMismatch.VerifyReport(ReportWith((int)MillerExtractContract.ExpectedSchemaVersion + 1, (int)MillerExtractContract.ExpectedExtractContractVersion)));
+        Assert.Contains(JulieDbFixture.SchemaText(1), ex.Message);
+        Assert.Contains(JulieDbFixture.SchemaText(), ex.Message);
         Assert.Contains("newer", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("upgrade Miller", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
@@ -306,7 +306,7 @@ public sealed class JulieExtractRunnerTests
     {
         // Contract 0 < expected 1: julie would NOT self-reject this; Miller's cross-check must.
         var ex = Assert.Throws<IncompatibleExtractException>(() =>
-            ExtractVersionMismatch.VerifyReport(ReportWith(26, 0)));
+            ExtractVersionMismatch.VerifyReport(ReportWith((int)MillerExtractContract.ExpectedSchemaVersion, (int)MillerExtractContract.ExpectedExtractContractVersion - 1)));
         Assert.Contains("extract_contract_version", ex.Message);
         Assert.Contains("restore", ex.Message, StringComparison.OrdinalIgnoreCase);
     }

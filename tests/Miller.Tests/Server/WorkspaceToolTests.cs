@@ -97,7 +97,7 @@ public sealed class WorkspaceToolTests : IDisposable
 
     private static JulieDbFixture CreateSynth(long revision, string? workspaceId) =>
         JulieDbFixture.Create(
-            26, "1", JulieDbFixture.DefaultRows, workspaceId: workspaceId,
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, JulieDbFixture.DefaultRows, workspaceId: workspaceId,
             revisions: workspaceId is null
                 ? null
                 : new[] { new JulieDbFixture.RevisionRow(revision, workspaceId) });
@@ -112,8 +112,8 @@ public sealed class WorkspaceToolTests : IDisposable
         {
             ScanForce.Add(force);
             return new ExtractReport(
-                Status: "changed", Operation: "scan", DbPath: "x", Root: null, SchemaVersion: 26,
-                SchemaState: "current", ExtractContractVersion: 1, AnalysisState: null,
+                Status: "changed", Operation: "scan", DbPath: "x", Root: null, SchemaVersion: (int)MillerExtractContract.ExpectedSchemaVersion,
+                SchemaState: "current", ExtractContractVersion: (int)MillerExtractContract.ExpectedExtractContractVersion, AnalysisState: null,
                 FilesScanned: 0, SymbolsExtracted: 0, FilesTotal: 0, SymbolsTotal: 0,
                 RelationshipsTotal: 0, IdentifiersTotal: 0, TypesTotal: 0, Errors: [],
                 Revision: 99, FilesUpdated: 0, FilesDeleted: 0);
