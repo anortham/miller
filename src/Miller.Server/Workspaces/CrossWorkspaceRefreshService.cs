@@ -73,7 +73,7 @@ public sealed class CrossWorkspaceRefreshService
             string error = $"Workspace root not found: {row.CanonicalRoot}";
             _registry.MarkMissing(workspaceId, error, _utcNow());
             return new WorkspaceRefreshResult(
-                WorkspaceRefreshStatus.Missing,
+                WorkspaceRefreshStatus.MissingRoot,
                 row.WorkspaceId,
                 row.CanonicalRoot,
                 row.IndexDbPath,
@@ -90,7 +90,7 @@ public sealed class CrossWorkspaceRefreshService
         {
             _registry.MarkError(workspaceId, ex.Message, _utcNow());
             return new WorkspaceRefreshResult(
-                WorkspaceRefreshStatus.Error,
+                WorkspaceRefreshStatus.Failed,
                 row.WorkspaceId,
                 row.CanonicalRoot,
                 row.IndexDbPath,
@@ -117,7 +117,7 @@ public sealed class CrossWorkspaceRefreshService
                     $"Refresh for workspace '{row.WorkspaceId}' returned workspace_id '{reportedWorkspaceId}'.";
                 _registry.MarkError(row.WorkspaceId, error, _utcNow());
                 return new WorkspaceRefreshResult(
-                    WorkspaceRefreshStatus.Error,
+                    WorkspaceRefreshStatus.Failed,
                     row.WorkspaceId,
                     row.CanonicalRoot,
                     row.IndexDbPath,
@@ -128,8 +128,11 @@ public sealed class CrossWorkspaceRefreshService
 
             long revision = report.Revision ?? _readLatestRevision(row.IndexDbPath, row.WorkspaceId);
             _registry.MarkScanned(row.WorkspaceId, revision, _utcNow());
+            WorkspaceRefreshStatus status = revision > (row.LastRevision ?? 0)
+                ? WorkspaceRefreshStatus.Refreshed
+                : WorkspaceRefreshStatus.Unchanged;
             return new WorkspaceRefreshResult(
-                WorkspaceRefreshStatus.Refreshed,
+                status,
                 row.WorkspaceId,
                 row.CanonicalRoot,
                 row.IndexDbPath,
@@ -140,7 +143,7 @@ public sealed class CrossWorkspaceRefreshService
         {
             _registry.MarkError(row.WorkspaceId, ex.Message, _utcNow());
             return new WorkspaceRefreshResult(
-                WorkspaceRefreshStatus.Error,
+                WorkspaceRefreshStatus.Failed,
                 row.WorkspaceId,
                 row.CanonicalRoot,
                 row.IndexDbPath,
@@ -165,7 +168,7 @@ public sealed class CrossWorkspaceRefreshService
                 {
                     _registry.MarkScanned(row.WorkspaceId, latest, _utcNow());
                     return new WorkspaceRefreshResult(
-                        WorkspaceRefreshStatus.ObservedRevision,
+                        WorkspaceRefreshStatus.Refreshed,
                         row.WorkspaceId,
                         row.CanonicalRoot,
                         row.IndexDbPath,
@@ -175,6 +178,19 @@ public sealed class CrossWorkspaceRefreshService
             }
 
             _sleep(_lockBusyPollInterval);
+        }
+
+        if (!File.Exists(row.IndexDbPath))
+        {
+            string error = $"Workspace index DB not found: {row.IndexDbPath}";
+            return new WorkspaceRefreshResult(
+                WorkspaceRefreshStatus.MissingIndex,
+                row.WorkspaceId,
+                row.CanonicalRoot,
+                row.IndexDbPath,
+                Revision: null,
+                Scanned: false,
+                Error: error);
         }
 
         string warning =

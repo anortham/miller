@@ -21,6 +21,22 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }
     }
 
+    [Theory]
+    [InlineData(WorkspaceRefreshStatus.Refreshed, "refreshed")]
+    [InlineData(WorkspaceRefreshStatus.Unchanged, "unchanged")]
+    [InlineData(WorkspaceRefreshStatus.LockBusy, "lock_busy")]
+    [InlineData(WorkspaceRefreshStatus.MissingRoot, "missing_root")]
+    [InlineData(WorkspaceRefreshStatus.MissingIndex, "missing_index")]
+    [InlineData(WorkspaceRefreshStatus.Failed, "failed")]
+    public void StatusText_ExposesTheApprovedStableRefreshContract(
+        WorkspaceRefreshStatus status,
+        string expected)
+    {
+        var result = new WorkspaceRefreshResult(status, "ws", "/work", "/work/.miller/symbols.db");
+
+        Assert.Equal(expected, result.StatusText);
+    }
+
     [Fact]
     public void Refresh_UnlockedTarget_AcquiresIndexerLockScansAndMarksScanned()
     {
@@ -57,11 +73,42 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
     }
 
     [Fact]
+    public void Refresh_UnlockedTargetWithNoNewRevision_ReturnsUnchangedButStillReportsThatItScanned()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("unchanged");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 7);
+        int scanCount = 0;
+        var service = NewService(
+            registry,
+            scan: (_, _, force) =>
+            {
+                scanCount++;
+                Assert.False(force);
+                return Report(root, dbPath, "target-ws", revision: 7);
+            },
+            acquireLock: _ => new NoopLease());
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws");
+
+        Assert.Equal(WorkspaceRefreshStatus.Unchanged, result.Status);
+        Assert.Equal("unchanged", result.StatusText);
+        Assert.True(result.Scanned);
+        Assert.Equal(7, result.Revision);
+        Assert.Equal(1, scanCount);
+        Assert.Equal(7, registry.Get("target-ws")?.LastRevision);
+    }
+
+    [Fact]
     public void Refresh_LockBusy_DoesNotScanAndReturnsUnconfirmedWhenNoRevisionChangeAppears()
     {
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
         string root = NewRoot("busy");
         string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        File.WriteAllText(dbPath, "readable index placeholder");
         registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
         registry.MarkScanned("target-ws", revision: 7);
         int scanCount = 0;
@@ -88,6 +135,36 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
     }
 
     [Fact]
+    public void Refresh_LockBusyWithMissingDb_ReturnsMissingIndexBecauseNothingReadableCanBeServed()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("busy-missing-index");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        int scanCount = 0;
+        var clock = new FakeClock();
+        var service = NewService(
+            registry,
+            scan: (_, _, _) =>
+            {
+                scanCount++;
+                throw new InvalidOperationException("scan should not run while the lock is busy");
+            },
+            acquireLock: _ => null,
+            readLatestRevision: (_, _) => throw new FileNotFoundException("index db missing"),
+            clock: clock);
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws");
+
+        Assert.Equal(WorkspaceRefreshStatus.MissingIndex, result.Status);
+        Assert.Equal("missing_index", result.StatusText);
+        Assert.False(result.Scanned);
+        Assert.Null(result.Revision);
+        Assert.Equal(0, scanCount);
+        Assert.False(File.Exists(dbPath));
+    }
+
+    [Fact]
     public void Refresh_LockBusy_PollsForAVisibleRevisionChangeWithoutScanning()
     {
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
@@ -111,7 +188,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
 
         WorkspaceRefreshResult result = service.Refresh("target-ws");
 
-        Assert.Equal(WorkspaceRefreshStatus.ObservedRevision, result.Status);
+        Assert.Equal(WorkspaceRefreshStatus.Refreshed, result.Status);
         Assert.False(result.Scanned);
         Assert.Equal(8, result.Revision);
         Assert.Equal(0, scanCount);
@@ -132,7 +209,8 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
 
         WorkspaceRefreshResult result = service.Refresh("target-ws");
 
-        Assert.Equal(WorkspaceRefreshStatus.Missing, result.Status);
+        Assert.Equal(WorkspaceRefreshStatus.MissingRoot, result.Status);
+        Assert.Equal("missing_root", result.StatusText);
         Assert.False(result.Scanned);
         Assert.Equal(WorkspaceRegistryState.Missing, registry.Get("target-ws")?.State);
         Assert.Contains(missingRoot, registry.Get("target-ws")?.LastError, StringComparison.Ordinal);
@@ -153,7 +231,8 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
 
         WorkspaceRefreshResult result = service.Refresh("target-ws");
 
-        Assert.Equal(WorkspaceRefreshStatus.Error, result.Status);
+        Assert.Equal(WorkspaceRefreshStatus.Failed, result.Status);
+        Assert.Equal("failed", result.StatusText);
         Assert.False(result.Scanned);
         Assert.Equal(WorkspaceRegistryState.Error, registry.Get("target-ws")?.State);
         Assert.Contains("sensitive system path", registry.Get("target-ws")?.LastError, StringComparison.Ordinal);

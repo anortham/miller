@@ -155,6 +155,116 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     }
 
     [Fact]
+    public void Resolve_RegisteredWorkspace_UnchangedRefreshLoadsReadableDbAndReportsFresh()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 4, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-unchanged");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 4);
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            refresh: workspaceId => new WorkspaceRefreshResult(
+                WorkspaceRefreshStatus.Unchanged,
+                workspaceId,
+                root,
+                target.DbPath,
+                Revision: 4,
+                Scanned: true));
+
+        WorkspaceReadContext context = provider.Resolve("target-ws", ensureFresh: true);
+
+        Assert.Equal("unchanged", context.FreshnessStatus);
+        Assert.True(context.IndexFresh);
+        Assert.IsType<TargetResolution.Symbol>(context.Resolver.Resolve("TargetType"));
+    }
+
+    [Fact]
+    public void Resolve_RegisteredWorkspace_LockBusyWithReadableDbReportsUnconfirmedContext()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 4, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-lock-busy");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 4);
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            refresh: workspaceId => new WorkspaceRefreshResult(
+                WorkspaceRefreshStatus.LockBusy,
+                workspaceId,
+                root,
+                target.DbPath,
+                Revision: 4,
+                WarningText: "busy but readable"));
+
+        WorkspaceReadContext context = provider.Resolve("target-ws", ensureFresh: true);
+
+        Assert.Equal("unconfirmed_lock_busy", context.FreshnessStatus);
+        Assert.False(context.IndexFresh);
+        Assert.Equal("busy but readable", context.WarningText);
+        Assert.IsType<TargetResolution.Symbol>(context.Resolver.Resolve("TargetType"));
+    }
+
+    [Fact]
+    public void Resolve_RegisteredWorkspace_MissingIndexRefreshDoesNotLoadOrPresentFreshContext()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-missing-index");
+        string missingDb = Path.Combine(root, ".miller", "symbols.db");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, missingDb);
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            refresh: workspaceId => new WorkspaceRefreshResult(
+                WorkspaceRefreshStatus.MissingIndex,
+                workspaceId,
+                root,
+                missingDb,
+                Error: "index db missing"),
+            loadIndex: _ => throw new InvalidOperationException("provider should not load a missing index"));
+
+        var ex = Assert.Throws<FileNotFoundException>(() =>
+            provider.Resolve("target-ws", ensureFresh: true));
+
+        Assert.Contains("index db missing", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Resolve_RegisteredWorkspace_FailedRefreshDoesNotLoadOrPresentFreshContext()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 4, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-failed");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 4);
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            refresh: workspaceId => new WorkspaceRefreshResult(
+                WorkspaceRefreshStatus.Failed,
+                workspaceId,
+                root,
+                target.DbPath,
+                Error: "scan failed"),
+            loadIndex: _ => throw new InvalidOperationException("provider should not load after failed refresh"));
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            provider.Resolve("target-ws", ensureFresh: true));
+
+        Assert.Contains("scan failed", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Resolve_RegisteredWorkspace_MissingRootMarksTheRegistryRowMissing()
     {
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");

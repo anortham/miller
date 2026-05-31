@@ -89,9 +89,13 @@ public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider
         if (ensureFresh)
         {
             refreshResult = _refresh(workspaceId);
-            if (refreshResult.Status == WorkspaceRefreshStatus.Missing)
+            if (refreshResult.Status == WorkspaceRefreshStatus.MissingRoot)
                 throw new DirectoryNotFoundException(refreshResult.Error ?? $"Workspace root not found: {row.CanonicalRoot}");
-            if (refreshResult.Status == WorkspaceRefreshStatus.Error)
+            if (refreshResult.Status == WorkspaceRefreshStatus.MissingIndex)
+                throw new FileNotFoundException(
+                    refreshResult.Error ?? $"Workspace index DB not found: {row.IndexDbPath}",
+                    refreshResult.IndexDbPath);
+            if (refreshResult.Status == WorkspaceRefreshStatus.Failed)
                 throw new InvalidOperationException(
                     refreshResult.Error ?? $"Workspace '{workspaceId}' refresh failed.");
 
@@ -163,10 +167,11 @@ public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider
         refreshResult?.Status switch
         {
             WorkspaceRefreshStatus.Refreshed => true,
-            WorkspaceRefreshStatus.ObservedRevision => true,
+            WorkspaceRefreshStatus.Unchanged => true,
             WorkspaceRefreshStatus.LockBusy => false,
-            WorkspaceRefreshStatus.Missing => false,
-            WorkspaceRefreshStatus.Error => false,
+            WorkspaceRefreshStatus.MissingRoot => false,
+            WorkspaceRefreshStatus.MissingIndex => false,
+            WorkspaceRefreshStatus.Failed => false,
             null => row.State is WorkspaceRegistryState.Current
                 or WorkspaceRegistryState.Ready
                 or WorkspaceRegistryState.LoadedExisting,

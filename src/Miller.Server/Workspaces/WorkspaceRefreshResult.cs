@@ -3,10 +3,11 @@ namespace Miller.Server.Workspaces;
 public enum WorkspaceRefreshStatus
 {
     Refreshed,
-    ObservedRevision,
-    Missing,
+    Unchanged,
     LockBusy,
-    Error,
+    MissingRoot,
+    MissingIndex,
+    Failed,
 }
 
 public sealed record WorkspaceRefreshResult(
@@ -23,10 +24,11 @@ public sealed record WorkspaceRefreshResult(
         Status switch
         {
             WorkspaceRefreshStatus.Refreshed => "refreshed",
-            WorkspaceRefreshStatus.ObservedRevision => "observed_revision",
-            WorkspaceRefreshStatus.Missing => "missing",
+            WorkspaceRefreshStatus.Unchanged => "unchanged",
             WorkspaceRefreshStatus.LockBusy => "lock_busy",
-            WorkspaceRefreshStatus.Error => "error",
+            WorkspaceRefreshStatus.MissingRoot => "missing_root",
+            WorkspaceRefreshStatus.MissingIndex => "missing_index",
+            WorkspaceRefreshStatus.Failed => "failed",
             _ => throw new ArgumentOutOfRangeException(nameof(Status), Status, "Unknown workspace refresh status."),
         };
 }
