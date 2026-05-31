@@ -7,6 +7,8 @@ using Miller.Server;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
+using Miller.Server.Workspaces;
+using Miller.Tests;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
@@ -99,8 +101,8 @@ public sealed class LiveSearchInspectTests
             var services = new ServiceCollection();
             services.AddLogging();
             services.AddSingleton(ledger);
-            services.AddSingleton(holder); // M3: SearchTool/InspectTool resolve IndexHolder, not the bare index
-            services.AddSingleton(resolver);
+            services.AddSingleton<IWorkspaceIndexProvider>(
+                new HolderWorkspaceIndexProvider(holder, db, workspaceId, repo));
             services.AddSingleton(workspace);
             services
                 .AddMcpServer(o => { o.ServerInfo = new() { Name = "miller-live", Version = "0" }; })
