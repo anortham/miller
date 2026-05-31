@@ -21,9 +21,19 @@ public sealed class MillerExtractContractTests
         string pinsPath = Path.Combine(ScaleTestSupport.RepoRoot(), "scripts", "julie-pins.json");
         using var doc = JsonDocument.Parse(File.ReadAllText(pinsPath));
 
+        string pinnedVersion = MillerExtractContract.PinnedJulieServerVersion;
         Assert.Equal(
-            MillerExtractContract.PinnedJulieServerVersion,
+            pinnedVersion,
             doc.RootElement.GetProperty("version").GetString());
+
+        foreach (JsonProperty asset in doc.RootElement.GetProperty("assets").EnumerateObject())
+        {
+            string? name = asset.Value.GetProperty("name").GetString();
+            string? sha256 = asset.Value.GetProperty("sha256").GetString();
+
+            Assert.Contains($"v{pinnedVersion}", name, StringComparison.Ordinal);
+            Assert.True(IsSha256Hex(sha256), $"missing or invalid sha256 pin for {asset.Name}");
+        }
     }
 
     [Theory]
@@ -35,5 +45,24 @@ public sealed class MillerExtractContractTests
 
         Assert.Contains("MILLER_JULIE_SOURCE", script, StringComparison.Ordinal);
         Assert.Contains("from-source", script, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsSha256Hex(string? value)
+    {
+        if (value is not { Length: 64 })
+        {
+            return false;
+        }
+
+        foreach (char c in value)
+        {
+            bool isHex = c is >= '0' and <= '9' or >= 'a' and <= 'f';
+            if (!isHex)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }
