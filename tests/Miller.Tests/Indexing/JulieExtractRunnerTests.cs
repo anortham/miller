@@ -14,27 +14,28 @@ public sealed class JulieExtractRunnerTests
 {
     private const string AbsDb = "/abs/work/.miller/symbols.db";
     private const string AbsRoot = "/abs/work/repo";
+    private const string WorkspaceId = "a0efc97f7ea34ca9673db9e8a54459b869b3de0f386f8140de8177c6b947a311";
 
     // ---- (1) argv builder ----
 
     [Fact]
     public void BuildScanArgs_ProducesVerifiedArgv_WithAbsolutePathsAndMandatoryJson()
     {
-        var args = JulieExtractRunner.BuildScanArgs(AbsDb, AbsRoot, force: false);
+        var args = JulieExtractRunner.BuildScanArgs(AbsDb, AbsRoot, WorkspaceId, force: false);
 
-        // Verified contract: extract --db <ABS_DB> --root <ABS_ROOT> --json scan
+        // Verified contract: extract --db <ABS_DB> --root <ABS_ROOT> --workspace-id <ID> --json scan
         Assert.Equal(
-            new[] { "extract", "--db", AbsDb, "--root", AbsRoot, "--json", "scan" },
+            new[] { "extract", "--db", AbsDb, "--root", AbsRoot, "--workspace-id", WorkspaceId, "--json", "scan" },
             args);
     }
 
     [Fact]
     public void BuildScanArgs_Force_AppendsForceFlagAfterSubcommand()
     {
-        var args = JulieExtractRunner.BuildScanArgs(AbsDb, AbsRoot, force: true);
+        var args = JulieExtractRunner.BuildScanArgs(AbsDb, AbsRoot, WorkspaceId, force: true);
 
         Assert.Equal(
-            new[] { "extract", "--db", AbsDb, "--root", AbsRoot, "--json", "scan", "--force" },
+            new[] { "extract", "--db", AbsDb, "--root", AbsRoot, "--workspace-id", WorkspaceId, "--json", "scan", "--force" },
             args);
     }
 
@@ -58,7 +59,8 @@ public sealed class JulieExtractRunnerTests
           "root": "/abs/work/repo",
           "schema_version": 28,
           "schema_state": "current",
-          "extract_contract_version": 2,
+          "extract_contract_version": 3,
+          "hash_algorithm": "blake3",
           "analysis_state": "missing",
           "files_scanned": 12,
           "symbols_extracted": 134,
@@ -82,7 +84,8 @@ public sealed class JulieExtractRunnerTests
         Assert.Equal("/abs/work/repo", report.Root);
         Assert.Equal(28, report.SchemaVersion);
         Assert.Equal("current", report.SchemaState);
-        Assert.Equal(2, report.ExtractContractVersion);
+        Assert.Equal(3, report.ExtractContractVersion);
+        Assert.Equal("blake3", report.HashAlgorithm);
         Assert.Equal(12u, report.FilesScanned);
         Assert.Equal(134u, report.SymbolsExtracted);
         Assert.Empty(report.Errors);
@@ -96,7 +99,8 @@ public sealed class JulieExtractRunnerTests
           "root": null,
           "schema_version": 28,
           "schema_state": "current",
-          "extract_contract_version": 2,
+          "extract_contract_version": 3,
+          "hash_algorithm": "blake3",
           "analysis_state": "missing",
           "files_scanned": 0,
           "symbols_extracted": 0,
@@ -133,7 +137,8 @@ public sealed class JulieExtractRunnerTests
           "root": "/abs/work/repo",
           "schema_version": 28,
           "schema_state": "current",
-          "extract_contract_version": 2,
+          "extract_contract_version": 3,
+          "hash_algorithm": "blake3",
           "analysis_state": "missing",
           "files_scanned": 0,
           "symbols_extracted": 0,
@@ -213,7 +218,7 @@ public sealed class JulieExtractRunnerTests
         // `delete` of an absent file → status "not_found", exit 0. Tolerant, NOT a failure.
         const string notFound = """
             { "status": "not_found", "operation": "delete", "db_path": "/abs/db", "root": "/abs/r",
-              "schema_version": 28, "extract_contract_version": 2,
+              "schema_version": 28, "extract_contract_version": 3, "hash_algorithm": "blake3",
               "files_scanned": 0, "symbols_extracted": 0, "files_total": 0, "symbols_total": 0,
               "relationships_total": 0, "identifiers_total": 0, "types_total": 0, "errors": [] }
             """;
@@ -255,7 +260,8 @@ public sealed class JulieExtractRunnerTests
               "DB_Path": "/abs/work/.miller/symbols.db",
               "root": "/abs/work/repo",
               "Schema_Version": 28,
-              "Extract_Contract_Version": 2,
+              "Extract_Contract_Version": 3,
+              "Hash_Algorithm": "blake3",
               "files_scanned": 0,
               "symbols_extracted": 0,
               "files_total": 0,
@@ -272,15 +278,19 @@ public sealed class JulieExtractRunnerTests
         Assert.Equal("scanned", report.Status);                       // "Status" bound case-insensitively
         Assert.Equal("/abs/work/.miller/symbols.db", report.DbPath);  // "DB_Path" bound to db_path
         Assert.Equal(28, report.SchemaVersion);                       // "Schema_Version" bound to schema_version
-        Assert.Equal(2, report.ExtractContractVersion);               // "Extract_Contract_Version" bound
+        Assert.Equal(3, report.ExtractContractVersion);               // "Extract_Contract_Version" bound
+        Assert.Equal("blake3", report.HashAlgorithm);                 // "Hash_Algorithm" bound
     }
 
     // ---- (4) post-extract version cross-check (D5; julie self-rejects only a NEWER DB, so Miller gates) ----
 
-    private static ExtractReport ReportWith(int? schemaVersion, int? contractVersion) => new(
+    private static ExtractReport ReportWith(
+        int? schemaVersion,
+        int? contractVersion,
+        string? hashAlgorithm = MillerExtractContract.ExpectedHashAlgorithm) => new(
         Status: "scanned", Operation: "scan", DbPath: AbsDb, Root: AbsRoot,
         SchemaVersion: schemaVersion, SchemaState: "current", ExtractContractVersion: contractVersion,
-        AnalysisState: "missing", FilesScanned: 0, SymbolsExtracted: 0, FilesTotal: 0, SymbolsTotal: 0,
+        HashAlgorithm: hashAlgorithm, AnalysisState: "missing", FilesScanned: 0, SymbolsExtracted: 0, FilesTotal: 0, SymbolsTotal: 0,
         RelationshipsTotal: 0, IdentifiersTotal: 0, TypesTotal: 0, Errors: Array.Empty<ExtractError>());
 
     [Fact]
@@ -308,6 +318,36 @@ public sealed class JulieExtractRunnerTests
         var ex = Assert.Throws<IncompatibleExtractException>(() =>
             ExtractVersionMismatch.VerifyReport(ReportWith((int)MillerExtractContract.ExpectedSchemaVersion, (int)MillerExtractContract.ExpectedExtractContractVersion - 1)));
         Assert.Contains("extract_contract_version", ex.Message);
+        Assert.Contains("restore", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void VerifyReport_NullHashAlgorithm_ThrowsNamingKeyAndExpectedValue()
+    {
+        var ex = Assert.Throws<IncompatibleExtractException>(() =>
+            ExtractVersionMismatch.VerifyReport(ReportWith(
+                (int)MillerExtractContract.ExpectedSchemaVersion,
+                (int)MillerExtractContract.ExpectedExtractContractVersion,
+                hashAlgorithm: null)));
+
+        Assert.Contains("hash_algorithm", ex.Message);
+        Assert.Contains("missing", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("blake3", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("restore", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void VerifyReport_WrongHashAlgorithm_ThrowsNamingValueAndExpectedValue()
+    {
+        var ex = Assert.Throws<IncompatibleExtractException>(() =>
+            ExtractVersionMismatch.VerifyReport(ReportWith(
+                (int)MillerExtractContract.ExpectedSchemaVersion,
+                (int)MillerExtractContract.ExpectedExtractContractVersion,
+                hashAlgorithm: "sha256")));
+
+        Assert.Contains("hash_algorithm", ex.Message);
+        Assert.Contains("sha256", ex.Message);
+        Assert.Contains("blake3", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("restore", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 

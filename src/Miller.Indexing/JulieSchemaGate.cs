@@ -5,10 +5,11 @@ namespace Miller.Indexing;
 
 /// <summary>
 /// The D5 compatibility gate. Runs on an open read-only connection BEFORE any read to confirm the DB is a
-/// compatible julie extract (schema <see cref="MillerExtractContract.ExpectedSchemaVersion"/> /
-/// contract <see cref="MillerExtractContract.ExpectedExtractContractVersion"/>). Gating on the tables'
-/// existence also fails fast on a non-julie / corrupt DB. Throws <see cref="IncompatibleExtractException"/>
-/// with an actionable message on any mismatch.
+/// compatible julie extract (schema <see cref="MillerExtractContract.ExpectedSchemaVersion"/>, contract
+/// <see cref="MillerExtractContract.ExpectedExtractContractVersion"/>, and hash algorithm
+/// <see cref="MillerExtractContract.ExpectedHashAlgorithm"/>). Gating on the tables' existence also fails fast
+/// on a non-julie / corrupt DB. Throws <see cref="IncompatibleExtractException"/> with an actionable message on
+/// any mismatch.
 /// </summary>
 internal static class JulieSchemaGate
 {
@@ -17,8 +18,8 @@ internal static class JulieSchemaGate
 
     /// <summary>
     /// Verify the DB on <paramref name="connection"/> is a compatible julie extract. The connection must be
-    /// open. Throws <see cref="IncompatibleExtractException"/> if the schema/contract version differs or a
-    /// required table/key is missing.
+    /// open. Throws <see cref="IncompatibleExtractException"/> if the schema/contract/hash contract differs or
+    /// a required table/key is missing.
     /// </summary>
     public static void Verify(SqliteConnection connection)
     {
@@ -43,6 +44,14 @@ internal static class JulieSchemaGate
                 isNewer: contractVersion > MillerExtractContract.ExpectedExtractContractVersion,
                 schemaVersion,
                 contractVersionForMessage: contractVersion));
+
+        string hashAlgorithm = ReadRequiredMetadataValue(
+            connection, "hash_algorithm", $"'{MillerExtractContract.ExpectedHashAlgorithm}'");
+        if (!StringComparer.Ordinal.Equals(hashAlgorithm, MillerExtractContract.ExpectedHashAlgorithm))
+            throw new IncompatibleExtractException(
+                $"DB has hash_algorithm value '{hashAlgorithm}', expected '{MillerExtractContract.ExpectedHashAlgorithm}'; " +
+                $"it is not a v{MillerExtractContract.PinnedJulieServerVersion} julie extract. Re-run restore + `extract scan` " +
+                $"with the pinned julie-server (v{MillerExtractContract.PinnedJulieServerVersion}).");
     }
 
     // julie's own liveness query. COALESCE handles an empty (but present) schema_version table.
@@ -61,13 +70,27 @@ internal static class JulieSchemaGate
         }
     }
 
-    // All metadata values are stored as TEXT; the contract value is the string '1' today. A missing row
+    // All metadata values are stored as TEXT. A missing row
     // (no result) is incompatible (older / corrupt extract), reported against the key name.
     private static long ReadContractVersion(SqliteConnection connection)
     {
+        string text = ReadRequiredMetadataValue(
+            connection,
+            "extract_contract_version",
+            MillerExtractContract.ExpectedExtractContractVersion.ToString(CultureInfo.InvariantCulture));
+        if (!long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out long value))
+            throw new IncompatibleExtractException(
+                $"DB has a non-integer extract_contract_version value '{text}'; it is not a valid " +
+                $"v{MillerExtractContract.PinnedJulieServerVersion} julie extract.");
+
+        return value;
+    }
+
+    private static string ReadRequiredMetadataValue(SqliteConnection connection, string key, string expected)
+    {
         using var cmd = connection.CreateCommand();
-        cmd.CommandText =
-            "SELECT value FROM external_extract_metadata WHERE key = 'extract_contract_version';";
+        cmd.CommandText = "SELECT value FROM external_extract_metadata WHERE key = $key;";
+        cmd.Parameters.AddWithValue("$key", key);
         object? result;
         try
         {
@@ -80,17 +103,11 @@ internal static class JulieSchemaGate
 
         if (result is null || result is DBNull)
             throw new IncompatibleExtractException(
-                "DB is missing the 'extract_contract_version' key in external_extract_metadata; it is not a " +
-                $"v{MillerExtractContract.PinnedJulieServerVersion} julie extract. Re-run restore + `extract scan` with the pinned julie-server " +
-                $"(v{MillerExtractContract.PinnedJulieServerVersion}).");
+                $"DB is missing the '{key}' key in external_extract_metadata; expected {expected} " +
+                $"metadata from a v{MillerExtractContract.PinnedJulieServerVersion} julie extract. Re-run restore + `extract scan` " +
+                $"with the pinned julie-server (v{MillerExtractContract.PinnedJulieServerVersion}).");
 
-        string text = result.ToString() ?? string.Empty;
-        if (!long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out long value))
-            throw new IncompatibleExtractException(
-                $"DB has a non-integer extract_contract_version value '{text}'; it is not a valid " +
-                $"v{MillerExtractContract.PinnedJulieServerVersion} julie extract.");
-
-        return value;
+        return result.ToString() ?? string.Empty;
     }
 
     private static bool IsMissingTable(SqliteException ex, string table) =>

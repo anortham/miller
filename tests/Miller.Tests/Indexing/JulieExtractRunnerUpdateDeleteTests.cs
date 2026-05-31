@@ -75,7 +75,7 @@ public sealed class JulieExtractRunnerUpdateDeleteTests
 
     private const string ChangedJson = """
         { "status": "changed", "operation": "update", "workspace_id": "ws-1",
-          "db_path": "/abs/db", "root": "/abs/r", "schema_version": 28, "extract_contract_version": 2,
+          "db_path": "/abs/db", "root": "/abs/r", "schema_version": 28, "extract_contract_version": 3, "hash_algorithm": "blake3",
           "revision": 5, "files_scanned": 0, "files_updated": 1, "files_deleted": 0,
           "symbols_extracted": 3, "files_total": 2, "symbols_total": 8,
           "relationships_total": 0, "identifiers_total": 0, "types_total": 0, "errors": [] }
@@ -93,7 +93,7 @@ public sealed class JulieExtractRunnerUpdateDeleteTests
 
     private const string FailedUpdateJson = """
         { "status": "failed", "operation": "update", "workspace_id": "ws-1",
-          "db_path": "/abs/db", "root": "/abs/r", "schema_version": 28, "extract_contract_version": 2,
+          "db_path": "/abs/db", "root": "/abs/r", "schema_version": 28, "extract_contract_version": 3, "hash_algorithm": "blake3",
           "revision": 4, "files_scanned": 0, "files_updated": 0, "files_deleted": 0,
           "symbols_extracted": 0, "files_total": 0, "symbols_total": 0,
           "relationships_total": 0, "identifiers_total": 0, "types_total": 0,

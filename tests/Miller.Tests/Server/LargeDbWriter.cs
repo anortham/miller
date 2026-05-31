@@ -11,7 +11,7 @@ namespace Miller.Tests.Server;
 /// subset the production build path (<see cref="RepositoryIndexLoader.Load"/> → <see cref="SqliteSymbolReader.Read"/>
 /// + <see cref="SymbolGraphReader.Read"/>) + the schema gate require (files + symbols [incl. <c>end_line</c>, D7]
 /// + the <c>relationships</c>/<c>identifiers</c> edge tables [D2] + schema_version + external_extract_metadata),
-/// at the pinned schema 28 / contract 2. The edge tables are created empty here — the rebuild latency this
+/// at the pinned schema 28 / contract 3. The edge tables are created empty here — the rebuild latency this
 /// measures is the read+build path, and empty edge reads still exercise the loader's two extra SELECTs.
 /// </summary>
 internal static class LargeDbWriter
@@ -51,7 +51,7 @@ internal static class LargeDbWriter
                 file_path TEXT NOT NULL, start_line INTEGER NOT NULL, start_col INTEGER NOT NULL,
                 end_line INTEGER NOT NULL, end_col INTEGER NOT NULL, containing_symbol_id TEXT, target_symbol_id TEXT);
             """);
-        // M4 bridge tables (verbatim from julie v7.13.0 schema.rs). SqliteBridgeReader is on the single production
+        // M4 bridge tables (verbatim from julie v7.13.1 schema.rs). SqliteBridgeReader is on the single production
         // RepositoryIndexLoader.Load path (D9), so IndexRebuilder.Rebuild over this DB SELECTs all three — created
         // empty here, exactly as JulieDbFixture does, so the rebuild/latency path does not crash on
         // "no such table: type_arguments".
@@ -76,6 +76,7 @@ internal static class LargeDbWriter
         Exec(conn, "CREATE TABLE external_extract_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL);");
         Exec(conn, $"INSERT INTO schema_version (version, applied_at, description) VALUES ({MillerExtractContract.ExpectedSchemaVersion}, 0, 'test');");
         Exec(conn, $"INSERT INTO external_extract_metadata (key, value, updated_at) VALUES ('extract_contract_version', '{MillerExtractContract.ExpectedExtractContractVersion}', 0);");
+        Exec(conn, $"INSERT INTO external_extract_metadata (key, value, updated_at) VALUES ('hash_algorithm', '{MillerExtractContract.ExpectedHashAlgorithm}', 0);");
 
         using var tx = conn.BeginTransaction();
 
