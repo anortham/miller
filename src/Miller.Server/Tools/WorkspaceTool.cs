@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Miller.Indexing;
 using Miller.Server.Hosting;
 using Miller.Server.Telemetry;
+using Miller.Server.Workspaces;
 using ModelContextProtocol.Server;
 
 namespace Miller.Server.Tools;
@@ -33,7 +34,11 @@ public sealed class WorkspaceTool
     private readonly FreshnessService _freshness;
     private readonly IndexFreshProbe _freshProbe;
     private readonly TelemetryLedger _ledger;
-    private readonly JulieExtractRunner _runner;
+    private readonly WorkspaceRegistry _registry;
+    private readonly IWorkspaceIndexProvider _workspaceIndexProvider;
+    private readonly CrossWorkspaceRefreshService _crossWorkspaceRefresh;
+    private readonly Func<string, string, bool, ExtractReport> _scanForOpen;
+    private readonly Func<string, IDisposable?> _acquireWriterLock;
     private readonly ILogger<WorkspaceTool> _logger;
 
     /// <summary>Construct over the live admin singletons (production).</summary>
@@ -46,6 +51,40 @@ public sealed class WorkspaceTool
         IndexFreshProbe freshProbe,
         TelemetryLedger ledger,
         JulieExtractRunner runner,
+        WorkspaceRegistry registry,
+        IWorkspaceIndexProvider workspaceIndexProvider,
+        CrossWorkspaceRefreshService crossWorkspaceRefresh,
+        ILogger<WorkspaceTool> logger)
+        : this(
+            holder,
+            workspace,
+            indexer,
+            freshness,
+            freshProbe,
+            ledger,
+            runner,
+            registry,
+            workspaceIndexProvider,
+            crossWorkspaceRefresh,
+            (root, db, force) => runner.Scan(root, db, force),
+            millerDir => SingleWriterLock.TryAcquire(millerDir),
+            logger)
+    {
+    }
+
+    internal WorkspaceTool(
+        IndexHolder holder,
+        WorkspaceContext workspace,
+        IndexerService indexer,
+        FreshnessService freshness,
+        IndexFreshProbe freshProbe,
+        TelemetryLedger ledger,
+        JulieExtractRunner runner,
+        WorkspaceRegistry registry,
+        IWorkspaceIndexProvider workspaceIndexProvider,
+        CrossWorkspaceRefreshService crossWorkspaceRefresh,
+        Func<string, string, bool, ExtractReport> scanForOpen,
+        Func<string, IDisposable?> acquireWriterLock,
         ILogger<WorkspaceTool> logger)
     {
         ArgumentNullException.ThrowIfNull(holder);
@@ -55,6 +94,11 @@ public sealed class WorkspaceTool
         ArgumentNullException.ThrowIfNull(freshProbe);
         ArgumentNullException.ThrowIfNull(ledger);
         ArgumentNullException.ThrowIfNull(runner);
+        ArgumentNullException.ThrowIfNull(registry);
+        ArgumentNullException.ThrowIfNull(workspaceIndexProvider);
+        ArgumentNullException.ThrowIfNull(crossWorkspaceRefresh);
+        ArgumentNullException.ThrowIfNull(scanForOpen);
+        ArgumentNullException.ThrowIfNull(acquireWriterLock);
         ArgumentNullException.ThrowIfNull(logger);
         _holder = holder;
         _workspace = workspace;
@@ -62,7 +106,11 @@ public sealed class WorkspaceTool
         _freshness = freshness;
         _freshProbe = freshProbe;
         _ledger = ledger;
-        _runner = runner;
+        _registry = registry;
+        _workspaceIndexProvider = workspaceIndexProvider;
+        _crossWorkspaceRefresh = crossWorkspaceRefresh;
+        _scanForOpen = scanForOpen;
+        _acquireWriterLock = acquireWriterLock;
         _logger = logger;
     }
 
@@ -72,7 +120,10 @@ public sealed class WorkspaceTool
         "from scratch, list to see registered workspaces.")]
     public string Workspace(
         [Description("status|refresh|full|list|open|remove. Default status.")] string operation = "status",
-        [Description("A workspace root path. Required for open/remove; ignored by status/list.")] string? path = null,
+        [Description("Registered workspace id. Optional for status/refresh/full/remove; ignored by list/open.")]
+        string? workspace_id = null,
+        [Description("A workspace root path. Required for open; optional for status/refresh/full/remove.")]
+        string? path = null,
         [Description("Output format: compact|json. Default compact.")] string format = "compact")
     {
         var telemetry = TelemetryContext.Current;
@@ -85,7 +136,7 @@ public sealed class WorkspaceTool
         {
             bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
 
-            (string output, int resultCount, TelemetryOutcome outcome) = Dispatch(operation, path, json);
+            (string output, int resultCount, TelemetryOutcome outcome) = Dispatch(operation, workspace_id, path, json);
 
             if (telemetry is not null)
             {
@@ -109,22 +160,22 @@ public sealed class WorkspaceTool
     // The pure-ish dispatch: route the operation to its handler, returning the rendered output, a result count
     // (for the telemetry KPI), and the outcome. An unknown operation is a usage note (Empty, not an error).
     private (string output, int resultCount, TelemetryOutcome outcome) Dispatch(
-        string? operation, string? path, bool json)
+        string? operation, string? workspaceId, string? path, bool json)
     {
         switch (operation?.ToLowerInvariant())
         {
             case null or "" or "status":
-                return (RenderStatus(json), 1, TelemetryOutcome.Ok);
+                return RenderTargetStatus(workspaceId, path, json);
             case "list":
-                return (WorkspaceRender.List(AssembleFacts(), json), 1, TelemetryOutcome.Ok);
+                return (RenderRegistryList(json), _registry.List().Count, TelemetryOutcome.Ok);
             case "refresh":
-                return (RenderAction("refresh", force: false, json), 1, TelemetryOutcome.Ok);
+                return RenderTargetAction("refresh", workspaceId, path, force: false, json);
             case "full":
-                return (RenderAction("full", force: true, json), 1, TelemetryOutcome.Ok);
+                return RenderTargetAction("full", workspaceId, path, force: true, json);
             case "open":
                 return Open(path, json);
             case "remove":
-                return Remove(path, json);
+                return Remove(workspaceId, path, json);
             default:
                 return (UsageNote(operation!, json), 0, TelemetryOutcome.Empty);
         }
@@ -134,6 +185,52 @@ public sealed class WorkspaceTool
 
     private string RenderStatus(bool json) =>
         WorkspaceRender.Status(AssembleFacts(), _ledger.Summarize(), json);
+
+    private (string output, int resultCount, TelemetryOutcome outcome) RenderTargetStatus(
+        string? workspaceId, string? path, bool json)
+    {
+        TargetWorkspace target = ResolveTarget(workspaceId, path);
+        if (target.UnknownNote is { } note)
+            return (Note(note, json), 0, TelemetryOutcome.Empty);
+
+        if (target.IsCurrent)
+            return (RenderStatus(json), 1, TelemetryOutcome.Ok);
+
+        WorkspaceReadContext context = _workspaceIndexProvider.Resolve(target.WorkspaceId, ensureFresh: false);
+        var facts = new WorkspaceFacts(
+            Root: context.WorkspaceRoot,
+            WorkspaceId: context.WorkspaceId,
+            DbPath: context.IndexDbPath,
+            IsLeader: false,
+            DocumentCount: context.Index.DocumentCount,
+            KnownExtensionsCount: context.Index.KnownExtensions.Count,
+            BuiltRevision: context.Revision,
+            LatestObservedRevision: context.Revision,
+            IndexFresh: context.IndexFresh,
+            QueueEmpty: true,
+            FreshnessStatus: context.FreshnessStatus,
+            WarningText: context.WarningText);
+        return (WorkspaceRender.Status(facts, _ledger.Summarize(), json), 1, TelemetryOutcome.Ok);
+    }
+
+    private string RenderRegistryList(bool json)
+    {
+        IReadOnlyList<WorkspaceRegistryRow> rows = _registry.List();
+        var entries = new List<WorkspaceListEntry>(rows.Count);
+        foreach (WorkspaceRegistryRow row in rows)
+        {
+            entries.Add(new WorkspaceListEntry(
+                WorkspaceId: row.WorkspaceId,
+                DisplayId: row.DisplayId,
+                Root: row.CanonicalRoot,
+                DbPath: row.IndexDbPath,
+                State: row.StateText,
+                LastRevision: row.LastRevision,
+                Current: IsCurrentWorkspace(row),
+                LastError: row.LastError));
+        }
+        return WorkspaceRender.List(entries, json);
+    }
 
     // Gather the live facts the status/list views render. Reads the holder (index facts), the workspace context
     // (identity), the indexer (leadership + queue), and the freshness service / probe (revision + freshness).
@@ -150,7 +247,8 @@ public sealed class WorkspaceTool
             BuiltRevision: builtRevision,
             LatestObservedRevision: _freshness.LatestObservedRevision,
             IndexFresh: _freshProbe.Compute(),
-            QueueEmpty: _indexer.QueueEmpty);
+            QueueEmpty: _indexer.QueueEmpty,
+            FreshnessStatus: "current");
     }
 
     // ---------- refresh / full ----------
@@ -185,6 +283,30 @@ public sealed class WorkspaceTool
         bool scanned = scan.Result == ScanOutcome.Kind.Scanned;
         var result = new WorkspaceActionResult(operation, scanned, poll.Swapped, poll.Revision, note);
         return WorkspaceRender.Action(result, json);
+    }
+
+    private (string output, int resultCount, TelemetryOutcome outcome) RenderTargetAction(
+        string operation, string? workspaceId, string? path, bool force, bool json)
+    {
+        TargetWorkspace target = ResolveTarget(workspaceId, path);
+        if (target.UnknownNote is { } note)
+            return (Note(note, json), 0, TelemetryOutcome.Empty);
+
+        if (target.IsCurrent)
+            return (RenderAction(operation, force, json), 1, TelemetryOutcome.Ok);
+
+        WorkspaceRefreshResult refresh = _crossWorkspaceRefresh.Refresh(target.WorkspaceId, force);
+        string? noteText = refresh.Error ?? refresh.WarningText;
+        var result = new WorkspaceActionResult(
+            operation,
+            Scanned: refresh.Scanned,
+            Swapped: false,
+            Revision: refresh.Revision ?? 0,
+            Note: noteText,
+            WorkspaceId: refresh.WorkspaceId,
+            Root: refresh.WorkspaceRoot,
+            Status: refresh.StatusText);
+        return (WorkspaceRender.Action(result, json), 1, TelemetryOutcome.Ok);
     }
 
     // ---------- open (prime) ----------
@@ -240,6 +362,8 @@ public sealed class WorkspaceTool
         string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(path);
         string millerDir = Path.Combine(canonicalRoot, ".miller");
         string dbPath = Path.Combine(millerDir, "symbols.db");
+        string stableWorkspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot);
+        string displayId = WorkspaceId.Display(canonicalRoot, stableWorkspaceId);
 
         // SAFETY (decision-3, the M3 single-writer guard): another live Miller may ALREADY be the leader of this
         // (cold-to-us) target path, keeping its index fresh. Best-effort try-acquire the target's cross-process
@@ -247,7 +371,7 @@ public sealed class WorkspaceTool
         // owns. If we cannot acquire it, that path is already served — report it HONESTLY (no faked prime) and do
         // NOT scan; the existing leader's watcher keeps it warm. We hold the lease only for the duration of the
         // prime scan, then release it so a Miller launched there later can take leadership.
-        using SingleWriterLock? lease = SingleWriterLock.TryAcquire(millerDir);
+        using IDisposable? lease = _acquireWriterLock(millerDir);
         if (lease is null)
         {
             string note =
@@ -259,13 +383,33 @@ public sealed class WorkspaceTool
 
         // force:false — a prime is a from-current scan (julie creates the DB on the first scan of a fresh root,
         // or delta-reconciles an existing one); --force is reserved for the live workspace's `full` rebuild.
-        ExtractReport report = _runner.Scan(canonicalRoot, dbPath, force: false);
+        ExtractReport report = _scanForOpen(canonicalRoot, dbPath, false);
+        if (report.WorkspaceId is { } reportedWorkspaceId
+            && !string.Equals(reportedWorkspaceId, stableWorkspaceId, StringComparison.Ordinal))
+        {
+            _registry.UpsertSeen(stableWorkspaceId, displayId, canonicalRoot, dbPath, WorkspaceRegistryState.Error);
+            _registry.MarkError(
+                stableWorkspaceId,
+                $"open scan returned workspace_id '{reportedWorkspaceId}', expected stable id '{stableWorkspaceId}'.");
+            string note =
+                $"cannot register '{canonicalRoot}': scan returned workspace_id '{reportedWorkspaceId}', " +
+                $"expected stable id '{stableWorkspaceId}'.";
+            return (Note(note, json), 0, TelemetryOutcome.Empty);
+        }
+
+        long revision = report.Revision
+            ?? IndexBootstrapService.ReadLatestRevisionOrZero(dbPath, stableWorkspaceId);
+        _registry.UpsertSeen(stableWorkspaceId, displayId, canonicalRoot, dbPath, WorkspaceRegistryState.Ready);
+        _registry.MarkScanned(stableWorkspaceId, revision);
 
         var result = new WorkspaceOpenResult(
             Path: canonicalRoot, DbPath: dbPath,
             // SymbolsExtracted is julie's unsigned count; Revision is null when the scan produced no cursor bump
             // (an unchanged delta) — report 0 honestly rather than fabricate a revision.
-            SymbolsExtracted: (long)report.SymbolsExtracted, Revision: report.Revision ?? 0);
+            SymbolsExtracted: (long)report.SymbolsExtracted,
+            Revision: revision,
+            WorkspaceId: stableWorkspaceId,
+            DisplayId: displayId);
         return (WorkspaceRender.Open(result, json), 1, TelemetryOutcome.Ok);
     }
 
@@ -274,33 +418,166 @@ public sealed class WorkspaceTool
     // Delete a workspace's `.miller` index dir (decision-1/8). SAFETY: refuse the live workspace (it is in use —
     // a half-delete would corrupt the index this process is serving). A path with no `.miller` dir is a clean
     // not-found (not an error). The is-live decision is the pure WorkspaceSafety predicate (unit-tested).
-    private (string output, int resultCount, TelemetryOutcome outcome) Remove(string? path, bool json)
+    private (string output, int resultCount, TelemetryOutcome outcome) Remove(
+        string? workspaceId, string? path, bool json)
     {
-        if (string.IsNullOrWhiteSpace(path))
+        if (string.IsNullOrWhiteSpace(workspaceId) && string.IsNullOrWhiteSpace(path))
             return (UsageNote("remove", json), 0, TelemetryOutcome.Empty);
 
-        // The .miller dir under the requested path. We do NOT canonicalize the path here (it may not exist, and
-        // we must report a faithful not-found); WorkspaceSafety canonicalizes both sides for the live compare.
-        string millerDir = Path.Combine(Path.GetFullPath(path), ".miller");
-
-        if (WorkspaceSafety.IsLiveWorkspace(path, _workspace.WorkspaceRoot))
+        if (!string.IsNullOrWhiteSpace(workspaceId))
         {
-            // Refuse — the live index is in use. Report the LIVE .miller path so the refusal is unambiguous.
-            string liveMillerDir = Path.GetDirectoryName(_workspace.ExtractDbPath)!;
-            var refused = WorkspaceRemoveResult.RefusedLive(liveMillerDir);
-            return (WorkspaceRender.Remove(refused, json), 0, TelemetryOutcome.Empty);
+            TargetWorkspace target = ResolveTarget(workspaceId, path: null);
+            if (target.UnknownNote is { } note)
+                return (Note(note, json), 0, TelemetryOutcome.Empty);
+
+            return RemoveResolvedTarget(target, json);
         }
 
+        if (WorkspaceSafety.IsLiveWorkspace(path!, _workspace.WorkspaceRoot))
+            return RefuseLiveRemove(json);
+
+        TargetWorkspace pathTarget = ResolveTarget(workspaceId: null, path);
+        if (pathTarget.UnknownNote is null)
+            return RemoveResolvedTarget(pathTarget, json);
+
+        // Backward-compatible cleanup path: allow deleting an unregistered local .miller dir by path. Unknown
+        // workspace guidance still applies to targeted registry operations; remove can clean stale local indexes.
+        string millerDir = Path.Combine(Path.GetFullPath(path!), ".miller");
         if (!Directory.Exists(millerDir))
         {
             var notFound = WorkspaceRemoveResult.NotFound(millerDir);
             return (WorkspaceRender.Remove(notFound, json), 0, TelemetryOutcome.Empty);
         }
 
+        using IDisposable? lease = _acquireWriterLock(millerDir);
+        if (lease is null)
+        {
+            var refused = WorkspaceRemoveResult.RefusedInUse(millerDir);
+            return (WorkspaceRender.Remove(refused, json), 0, TelemetryOutcome.Empty);
+        }
+
         Directory.Delete(millerDir, recursive: true);
         _logger.LogInformation("workspace remove: deleted index dir {Dir}.", millerDir);
         var removed = WorkspaceRemoveResult.Removed(millerDir);
         return (WorkspaceRender.Remove(removed, json), 1, TelemetryOutcome.Ok);
+    }
+
+    private (string output, int resultCount, TelemetryOutcome outcome) RemoveResolvedTarget(
+        TargetWorkspace target, bool json)
+    {
+        if (target.IsCurrent)
+            return RefuseLiveRemove(json);
+
+        WorkspaceRegistryRow row = target.Row
+            ?? throw new InvalidOperationException("Registered workspace target is missing its registry row.");
+        string millerDir = Path.GetDirectoryName(row.IndexDbPath)
+            ?? throw new InvalidOperationException(
+                $"Cannot determine the .miller directory for index DB path '{row.IndexDbPath}'.");
+
+        if (!Directory.Exists(millerDir))
+        {
+            _registry.Remove(row.WorkspaceId);
+            var notFound = WorkspaceRemoveResult.NotFound(millerDir, row.WorkspaceId, row.CanonicalRoot);
+            return (WorkspaceRender.Remove(notFound, json), 0, TelemetryOutcome.Empty);
+        }
+
+        using IDisposable? lease = _acquireWriterLock(millerDir);
+        if (lease is null)
+        {
+            var refused = WorkspaceRemoveResult.RefusedInUse(millerDir, row.WorkspaceId, row.CanonicalRoot);
+            return (WorkspaceRender.Remove(refused, json), 0, TelemetryOutcome.Empty);
+        }
+
+        Directory.Delete(millerDir, recursive: true);
+        _registry.Remove(row.WorkspaceId);
+        _logger.LogInformation(
+            "workspace remove: unregistered {WorkspaceId} and deleted index dir {Dir}.",
+            row.WorkspaceId, millerDir);
+        var removed = WorkspaceRemoveResult.Removed(millerDir, row.WorkspaceId, row.CanonicalRoot);
+        return (WorkspaceRender.Remove(removed, json), 1, TelemetryOutcome.Ok);
+    }
+
+    private (string output, int resultCount, TelemetryOutcome outcome) RefuseLiveRemove(bool json)
+    {
+        string liveMillerDir = Path.GetDirectoryName(_workspace.ExtractDbPath)!;
+        var refused = WorkspaceRemoveResult.RefusedLive(
+            liveMillerDir,
+            _workspace.WorkspaceId,
+            _workspace.CanonicalRoot ?? _workspace.WorkspaceRoot);
+        return (WorkspaceRender.Remove(refused, json), 0, TelemetryOutcome.Empty);
+    }
+
+    private TargetWorkspace ResolveTarget(string? workspaceId, string? path)
+    {
+        if (!string.IsNullOrWhiteSpace(workspaceId))
+        {
+            if (string.Equals(workspaceId, _workspace.WorkspaceId, StringComparison.Ordinal))
+                return TargetWorkspace.Current(_workspace.WorkspaceId);
+
+            WorkspaceRegistryRow? row = _registry.Get(workspaceId);
+            return row is null
+                ? TargetWorkspace.Unknown(UnknownWorkspaceIdNote(workspaceId))
+                : TargetWorkspace.Registered(row, IsCurrentWorkspace(row));
+        }
+
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            if (WorkspaceSafety.IsLiveWorkspace(path, _workspace.WorkspaceRoot))
+                return TargetWorkspace.Current(_workspace.WorkspaceId);
+
+            if (!Directory.Exists(path))
+                return TargetWorkspace.Unknown(UnknownWorkspacePathNote(path));
+
+            string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(path);
+            WorkspaceRegistryRow? row = FindByCanonicalRoot(canonicalRoot);
+            return row is null
+                ? TargetWorkspace.Unknown(UnknownWorkspacePathNote(canonicalRoot))
+                : TargetWorkspace.Registered(row, IsCurrentWorkspace(row));
+        }
+
+        return TargetWorkspace.Current(_workspace.WorkspaceId);
+    }
+
+    private WorkspaceRegistryRow? FindByCanonicalRoot(string canonicalRoot)
+    {
+        IReadOnlyList<WorkspaceRegistryRow> rows = _registry.List();
+        WorkspaceRegistryRow? exact = rows.FirstOrDefault(row =>
+            string.Equals(row.CanonicalRoot, canonicalRoot, StringComparison.Ordinal));
+        if (exact is not null)
+            return exact;
+
+        return rows.FirstOrDefault(row => WorkspaceSafety.IsLiveWorkspace(row.CanonicalRoot, canonicalRoot));
+    }
+
+    private bool IsCurrentWorkspace(WorkspaceRegistryRow row) =>
+        string.Equals(row.WorkspaceId, _workspace.WorkspaceId, StringComparison.Ordinal)
+        || WorkspaceSafety.IsLiveWorkspace(row.CanonicalRoot, _workspace.WorkspaceRoot);
+
+    private static string UnknownWorkspaceIdNote(string workspaceId) =>
+        $"unknown workspace_id '{workspaceId}'. Run workspace(operation=\"open\", path=\"/repo\") " +
+        "to register a workspace, then retry with workspace_id.";
+
+    private static string UnknownWorkspacePathNote(string path) =>
+        $"unknown workspace path '{path}'. Run workspace(operation=\"open\", path=\"{path}\") " +
+        "to register it first.";
+
+    private static string Note(string message, bool json) =>
+        json ? $"{{\"note\":{System.Text.Json.JsonSerializer.Serialize(message)}}}" : message;
+
+    private sealed record TargetWorkspace(
+        bool IsCurrent,
+        string WorkspaceId,
+        WorkspaceRegistryRow? Row,
+        string? UnknownNote)
+    {
+        public static TargetWorkspace Current(string? workspaceId) =>
+            new(IsCurrent: true, workspaceId ?? string.Empty, Row: null, UnknownNote: null);
+
+        public static TargetWorkspace Registered(WorkspaceRegistryRow row, bool isCurrent) =>
+            new(isCurrent, row.WorkspaceId, row, UnknownNote: null);
+
+        public static TargetWorkspace Unknown(string note) =>
+            new(IsCurrent: false, WorkspaceId: string.Empty, Row: null, UnknownNote: note);
     }
 
     // ---------- usage ----------

@@ -102,6 +102,33 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
     }
 
     [Fact]
+    public void Refresh_ForceTrue_ThreadsForceThroughTheLockBasedScan()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("force");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 2);
+        bool? observedForce = null;
+        var service = NewService(
+            registry,
+            scan: (_, _, force) =>
+            {
+                observedForce = force;
+                return Report(root, dbPath, "target-ws", revision: 9);
+            },
+            acquireLock: _ => new NoopLease());
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws", force: true);
+
+        Assert.True(observedForce);
+        Assert.Equal(WorkspaceRefreshStatus.Refreshed, result.Status);
+        Assert.True(result.Scanned);
+        Assert.Equal(9, result.Revision);
+        Assert.Equal(9, registry.Get("target-ws")?.LastRevision);
+    }
+
+    [Fact]
     public void Refresh_LockBusy_DoesNotScanAndReturnsUnconfirmedWhenNoRevisionChangeAppears()
     {
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
