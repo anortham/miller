@@ -40,7 +40,8 @@ public sealed class HolderRepointTests
         using var before = WithoutMarker();
         using var after = WithMarker();
         var holder = new IndexHolder(BuildIndex(before), builtRevision: 1);
-        var tool = new SearchTool(holder);
+        var tool = new SearchTool(new HolderWorkspaceIndexProvider(
+            holder, before.DbPath, workspaceId: "test-ws", workspaceRoot: Path.GetTempPath()));
 
         Assert.Equal("No results.", tool.Search("Zebraphone").Trim());
 
@@ -71,10 +72,8 @@ public sealed class HolderRepointTests
         using var after = WithMarker();
         var holder = new IndexHolder(BuildIndex(before), builtRevision: 1);
         // InspectTool reads the extract DB for detail; point it at the "after" DB (where the symbol's file lives).
-        var workspace = WorkspaceContext.Create(Path.GetTempPath(), AppContext.BaseDirectory)
-            with { ExtractDbPath = after.DbPath };
-        var resolver = new SmartTargetResolver(holder);
-        var tool = new InspectTool(holder, resolver, workspace);
+        var tool = new InspectTool(new HolderWorkspaceIndexProvider(
+            holder, after.DbPath, workspaceId: "test-ws", workspaceRoot: Path.GetTempPath()));
 
         string beforeOut = tool.Inspect("Zebraphone");
         Assert.Contains("not found", beforeOut);

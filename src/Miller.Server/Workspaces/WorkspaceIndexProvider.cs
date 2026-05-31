@@ -77,7 +77,8 @@ public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider
             revision,
             _currentIndexFresh(revision),
             "current",
-            WarningText: null);
+            WarningText: null,
+            DisplayId: CurrentDisplayId());
     }
 
     private WorkspaceReadContext ResolveRegistered(string workspaceId, bool ensureFresh)
@@ -114,7 +115,8 @@ public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider
             revision,
             IndexFreshFor(refreshResult, row),
             FreshnessStatusFor(refreshResult, row),
-            WarningTextFor(refreshResult));
+            WarningTextFor(refreshResult),
+            row.DisplayId);
     }
 
     private CachedIndex GetOrLoad(WorkspaceRegistryRow row, long revision)
@@ -162,6 +164,22 @@ public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider
     private WorkspaceRegistryRow GetRequiredRow(string workspaceId) =>
         _registry.Get(workspaceId) ?? throw new KeyNotFoundException(
             $"Workspace registry row '{workspaceId}' was not found.");
+
+    private string? CurrentDisplayId()
+    {
+        if (string.IsNullOrWhiteSpace(_currentWorkspace.WorkspaceId))
+            return null;
+
+        string root = _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot;
+        try
+        {
+            return WorkspaceId.Display(root, _currentWorkspace.WorkspaceId);
+        }
+        catch (ArgumentException)
+        {
+            return _currentWorkspace.WorkspaceId;
+        }
+    }
 
     private static bool? IndexFreshFor(WorkspaceRefreshResult? refreshResult, WorkspaceRegistryRow row) =>
         refreshResult?.Status switch

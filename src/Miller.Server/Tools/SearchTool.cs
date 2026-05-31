@@ -7,6 +7,7 @@ using Miller.Core.Search;
 using Miller.Indexing;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
+using Miller.Server.Workspaces;
 using ModelContextProtocol.Server;
 
 namespace Miller.Server.Tools;
@@ -37,16 +38,14 @@ public enum SearchToolMode
 [McpServerToolType]
 public sealed class SearchTool
 {
-    // Depend on the holder, not a fixed index (M3 step 10): read holder.Current per call so a freshness Swap is
-    // reflected on the next search without reconstructing the tool.
-    private readonly IndexHolder _holder;
+    private readonly IWorkspaceIndexProvider _workspaceProvider;
 
-    /// <summary>Construct over the live index holder (production / freshness-aware).</summary>
-    /// <exception cref="ArgumentNullException"><paramref name="holder"/> is null.</exception>
-    public SearchTool(IndexHolder holder)
+    /// <summary>Construct over the workspace read provider (production / freshness-aware).</summary>
+    /// <exception cref="ArgumentNullException"><paramref name="workspaceProvider"/> is null.</exception>
+    public SearchTool(IWorkspaceIndexProvider workspaceProvider)
     {
-        ArgumentNullException.ThrowIfNull(holder);
-        _holder = holder;
+        ArgumentNullException.ThrowIfNull(workspaceProvider);
+        _workspaceProvider = workspaceProvider;
     }
 
     [McpServerTool(Name = "search")]
@@ -61,17 +60,24 @@ public sealed class SearchTool
         [Description("Max results to return. Default 10.")] int limit = 10,
         [Description("Hide test code: leave unset to auto-hide for natural-language queries; true/false to force.")]
         bool? exclude_tests = null,
-        [Description("Output format: compact|json. Default compact.")] string format = "compact")
+        [Description("Output format: compact|json. Default compact.")] string format = "compact",
+        [Description("Registered workspace id to query. Omit for the current workspace.")] string? workspace_id = null,
+        [Description("Refresh a registered workspace before reading. Defaults true when workspace_id is supplied.")]
+        bool? ensure_fresh = null)
     {
         var scope = TelemetryContext.Current;
         try
         {
             var parsedMode = ParseMode(mode);
             bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
-            string output = Run(_holder.Current, query, parsedMode, limit, exclude_tests, json, out int count);
+            bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
+            WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
+            string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
+            string output = Run(context.Index, query, parsedMode, limit, exclude_tests, json, out int count, compactBanner);
 
             if (scope is not null)
             {
+                ReadToolWorkspaceRouting.ApplyTelemetry(scope, context);
                 scope.SetTarget(query);
                 scope.ResultCount = count;
                 scope.Outcome = count == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
@@ -106,7 +112,7 @@ public sealed class SearchTool
     /// </summary>
     public static string Run(
         MillerRepositoryIndex index, string query, SearchToolMode mode, int limit,
-        bool? excludeTests, bool json, out int renderedCount)
+        bool? excludeTests, bool json, out int renderedCount, string? compactBanner = null)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
@@ -138,11 +144,11 @@ public sealed class SearchTool
         renderedCount = page;
 
         if (total == 0)
-            return json ? "[]" : "No results.";
+            return json ? "[]" : ReadToolWorkspaceRouting.PrefixCompact("No results.", compactBanner);
 
         return json
             ? RenderJson(kept, scores, page)
-            : RenderCompact(kept, page, total);
+            : RenderCompact(kept, page, total, compactBanner);
     }
 
     // tri-state: null → hide only for NL phrases lacking test/def intent; true → always; false → never.
@@ -177,9 +183,11 @@ public sealed class SearchTool
         return false;
     }
 
-    private static string RenderCompact(IReadOnlyList<IndexedSymbol> kept, int page, int total)
+    private static string RenderCompact(IReadOnlyList<IndexedSymbol> kept, int page, int total, string? compactBanner)
     {
         var sb = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(compactBanner))
+            sb.Append(compactBanner).Append('\n');
         for (int i = 0; i < page; i++)
         {
             var s = kept[i];

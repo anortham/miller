@@ -16,4 +16,5 @@ public sealed record WorkspaceReadContext(
     long Revision,
     bool? IndexFresh,
     string FreshnessStatus,
-    string? WarningText);
+    string? WarningText,
+    string? DisplayId = null);

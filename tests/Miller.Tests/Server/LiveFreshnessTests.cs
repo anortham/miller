@@ -68,7 +68,8 @@ public sealed class LiveFreshnessTests
             var holder = new IndexHolder(
                 MillerRepositoryIndex.Build(SqliteSymbolReader.Read(db)), initialRevision);
             var rebuilder = new IndexRebuilder(db);
-            var searchTool = new SearchTool(holder);
+            var searchTool = new SearchTool(new HolderWorkspaceIndexProvider(
+                holder, db, workspaceId, canonicalRoot));
             var ops = JulieExtractOps.Create(canonicalRoot, db, runner);
             var core = new IndexerCore(new WatchEventQueue(), ops, File.Exists);
 
