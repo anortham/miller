@@ -10,7 +10,7 @@ namespace Miller.Tests.Indexing;
 /// Pins the M4 bridge wiring through the SINGLE production build path (plan Task 9): after
 /// <see cref="RepositoryIndexLoader.Load"/> runs <see cref="SqliteBridgeReader"/> + <see cref="BridgeGraphBuilder"/>,
 /// the resulting <see cref="MillerRepositoryIndex.BridgeGraph"/> is populated and the existing index features still
-/// work. Builds a temp 28/2 DB carrying the <c>UserDto → ApplicationUser → ApplicationUsers</c> chain (a CreateMap
+/// work. Builds a temp 28/3 DB carrying the <c>UserDto → ApplicationUser → ApplicationUsers</c> chain (a CreateMap
 /// type-argument pair + a DbSet&lt;T&gt; property) plus the entity/DTO symbols the resolver needs. Fast suite.
 /// </summary>
 public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
@@ -68,7 +68,8 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
                 CREATE TABLE external_extract_metadata (key TEXT, value TEXT);
 
                 INSERT INTO schema_version(version) VALUES (28);
-                INSERT INTO external_extract_metadata(key, value) VALUES ('extract_contract_version', '2');
+                INSERT INTO external_extract_metadata(key, value) VALUES ('extract_contract_version', '3');
+                INSERT INTO external_extract_metadata(key, value) VALUES ('hash_algorithm', 'blake3');
 
                 -- The entity, the DTO, and a DbContext exposing DbSet<ApplicationUser> ApplicationUsers.
                 INSERT INTO symbols(id, name, signature, kind, language, file_path, start_line, end_line, parent_id, metadata)
@@ -184,7 +185,8 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
                     CREATE TABLE schema_version (version INTEGER);
                     CREATE TABLE external_extract_metadata (key TEXT, value TEXT);
                     INSERT INTO schema_version(version) VALUES (28);
-                    INSERT INTO external_extract_metadata(key, value) VALUES ('extract_contract_version', '2');
+                    INSERT INTO external_extract_metadata(key, value) VALUES ('extract_contract_version', '3');
+                    INSERT INTO external_extract_metadata(key, value) VALUES ('hash_algorithm', 'blake3');
                     INSERT INTO symbols(id, name, signature, kind, language, file_path, start_line, end_line, parent_id, metadata)
                     VALUES ('s1', 'Foo', 'public class Foo', 'class', 'csharp', 'Foo.cs', 1, 3, NULL, NULL);
                     """;

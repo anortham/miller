@@ -4,7 +4,7 @@ namespace Miller.Indexing;
 
 /// <summary>
 /// The flat JSON report julie-server emits on stdout for an <c>extract</c> operation (verified against
-/// julie v7.13.0's <c>report.rs</c>). <c>info</c> reuses the same shape: its counts arrive in the
+/// julie v7.13.1's <c>report.rs</c>). <c>info</c> reuses the same shape: its counts arrive in the
 /// <c>*_total</c> fields, not the scan counters. Note serde renames the Rust field <c>db</c> to
 /// <c>db_path</c> in the JSON, captured by the <see cref="JsonPropertyNameAttribute"/> on
 /// <see cref="DbPath"/>. Counts are unsigned (julie emits them as non-negative).
@@ -16,7 +16,7 @@ public sealed record ExtractReport(
     [property: JsonPropertyName("root")] string? Root,
     [property: JsonPropertyName("schema_version")] int? SchemaVersion,              // expect MillerExtractContract.ExpectedSchemaVersion (28)
     [property: JsonPropertyName("schema_state")] string? SchemaState,               // missing|older|current|newer
-    [property: JsonPropertyName("extract_contract_version")] int? ExtractContractVersion, // expect MillerExtractContract.ExpectedExtractContractVersion (2)
+    [property: JsonPropertyName("extract_contract_version")] int? ExtractContractVersion, // expect MillerExtractContract.ExpectedExtractContractVersion (3)
     [property: JsonPropertyName("analysis_state")] string? AnalysisState,
     [property: JsonPropertyName("files_scanned")] ulong FilesScanned,
     [property: JsonPropertyName("symbols_extracted")] ulong SymbolsExtracted,
@@ -30,7 +30,8 @@ public sealed record ExtractReport(
     [property: JsonPropertyName("workspace_id")] string? WorkspaceId = null,        // the poll's WHERE-clause id
     [property: JsonPropertyName("revision")] long? Revision = null,                 // the canonical_revisions cursor
     [property: JsonPropertyName("files_updated")] ulong FilesUpdated = 0,           // `update` outcome counter
-    [property: JsonPropertyName("files_deleted")] ulong FilesDeleted = 0);          // `delete` outcome counter
+    [property: JsonPropertyName("files_deleted")] ulong FilesDeleted = 0,           // `delete` outcome counter
+    [property: JsonPropertyName("hash_algorithm")] string? HashAlgorithm = null);   // expect MillerExtractContract.ExpectedHashAlgorithm
 
 /// <summary>One entry in an <see cref="ExtractReport.Errors"/> array (julie's per-operation error record).</summary>
 public sealed record ExtractError(

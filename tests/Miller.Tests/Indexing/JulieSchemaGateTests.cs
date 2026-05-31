@@ -71,6 +71,18 @@ public sealed class JulieSchemaGateTests
     }
 
     [Fact]
+    public void Verify_OlderContract_ThrowsNamingTheValueAndPointsAtRestore()
+    {
+        using var fx = JulieDbFixture.Create(PinSchema, S(PinContract - 1), NoRows);
+        using var conn = OpenReadOnly(fx.DbPath);
+
+        var ex = Assert.Throws<IncompatibleExtractException>(() => JulieSchemaGate.Verify(conn));
+        Assert.Contains(S(PinContract - 1), ex.Message);
+        Assert.Contains(PinContractStr, ex.Message);
+        Assert.Contains("restore", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Verify_OlderSchema_ThrowsPointingAtRestore()
     {
         using var fx = JulieDbFixture.Create(PinSchema - 1, PinContractStr, NoRows);
@@ -131,5 +143,28 @@ public sealed class JulieSchemaGateTests
         var ex = Assert.Throws<IncompatibleExtractException>(() => JulieSchemaGate.Verify(conn));
         Assert.Contains("abc", ex.Message);              // names the offending value
         Assert.Contains("non-integer", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Verify_MissingHashAlgorithmKey_ThrowsNamingTheKey()
+    {
+        using var fx = JulieDbFixture.Create(PinSchema, PinContractStr, NoRows, hashAlgorithm: null);
+        using var conn = OpenReadOnly(fx.DbPath);
+
+        var ex = Assert.Throws<IncompatibleExtractException>(() => JulieSchemaGate.Verify(conn));
+        Assert.Contains("hash_algorithm", ex.Message);
+        Assert.Contains("blake3", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Verify_WrongHashAlgorithm_ThrowsNamingTheValueAndExpectedAlgorithm()
+    {
+        using var fx = JulieDbFixture.Create(PinSchema, PinContractStr, NoRows, hashAlgorithm: "sha256");
+        using var conn = OpenReadOnly(fx.DbPath);
+
+        var ex = Assert.Throws<IncompatibleExtractException>(() => JulieSchemaGate.Verify(conn));
+        Assert.Contains("sha256", ex.Message);
+        Assert.Contains("blake3", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("hash_algorithm", ex.Message);
     }
 }
