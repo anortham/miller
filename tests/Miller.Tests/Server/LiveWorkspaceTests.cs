@@ -86,7 +86,7 @@ public sealed class LiveWorkspaceTests : IDisposable
         var indexer = new IndexerService(
             new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance),
             NullLogger<IndexerService>.Instance, NullLoggerFactory.Instance);
-        var freshness = new FreshnessService(bootstrap, holder, NullLogger<FreshnessService>.Instance);
+        var freshness = new FreshnessService(bootstrap, NullLogger<FreshnessService>.Instance);
         var probe = new IndexFreshProbe(
             holder,
             latestRevision: () => freshness.LatestObservedRevision,

@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Miller.Indexing;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
+using Miller.Server.Tools;
 
 namespace Miller.Server;
 
@@ -11,8 +12,11 @@ namespace Miller.Server;
 /// <see cref="StartAsync"/> runs to completion — building the in-memory index and opening the telemetry
 /// ledger — before <c>WithStdioServerTransport</c>'s own hosted service starts accepting <c>tools/call</c>.
 /// It also holds the built singletons (index, resolver, workspace context, ledger) which the DI container
-/// resolves through factory delegates; because the generic host runs hosted services in registration order,
-/// the holder is populated before any tool is constructed.
+/// resolves through factory delegates. NOTE: the generic host CONSTRUCTS every hosted service before calling
+/// <c>StartAsync</c> on any of them — registration order orders <c>StartAsync</c>, NOT construction. So the
+/// getters below throw if read before this <see cref="StartAsync"/> completes, and no hosted-service constructor
+/// may read them (the M3 services take only this bootstrap and read its getters lazily inside <c>ExecuteAsync</c>).
+/// Tools are built per-call, well after <see cref="StartAsync"/>, so the holder is always populated for them.
 ///
 /// Sequence: resolve the <see cref="WorkspaceContext"/> → create <c>&lt;root&gt;/.miller</c> → locate the
 /// pinned julie-server (fail loudly if absent) → one-time scan ONLY if the extract DB does not already exist
@@ -77,6 +81,12 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             {
                 var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
                 var ctx = WorkspaceContext.Create(Environment.CurrentDirectory, AppContext.BaseDirectory);
+
+                // SAFETY: refuse to index a sensitive system root (the home dir, a filesystem/drive root, a
+                // platform system dir). A launcher that starts the MCP server with cwd set to '/' or '~' must not
+                // trigger a full julie scan of the home/system tree — fail loudly BEFORE creating .miller or
+                // scanning, with a message telling the operator to launch from a project directory.
+                WorkspaceRootSafety.RejectSensitiveRoot(ctx.WorkspaceRoot, fromCwd: true);
 
                 string millerDir = Path.GetDirectoryName(ctx.ExtractDbPath)!;
                 Directory.CreateDirectory(millerDir);

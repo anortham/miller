@@ -37,7 +37,7 @@ public sealed class FreshnessServicePollNowTests
             WorkspaceId = workspaceId,
         };
         bootstrap.SeedForTest(workspace, holder);
-        return new FreshnessService(bootstrap, holder, NullLogger<FreshnessService>.Instance);
+        return new FreshnessService(bootstrap, NullLogger<FreshnessService>.Instance);
     }
 
     private static IndexHolder HolderAt(JulieDbFixture fx, long builtRevision) =>

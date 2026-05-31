@@ -25,7 +25,6 @@ public sealed class FreshnessService : BackgroundService
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2);
 
     private readonly IndexBootstrapService _bootstrap;
-    private readonly IndexHolder _holder;
     private readonly ILogger<FreshnessService> _logger;
 
     private FreshnessReader? _reader;
@@ -41,16 +40,19 @@ public sealed class FreshnessService : BackgroundService
     // probe does not run its own SQLite query on the hot path; refreshed every poll tick. -1 = not yet polled.
     private long _lastObservedRevision = -1;
 
-    public FreshnessService(
-        IndexBootstrapService bootstrap, IndexHolder holder, ILogger<FreshnessService> logger)
+    public FreshnessService(IndexBootstrapService bootstrap, ILogger<FreshnessService> logger)
     {
         ArgumentNullException.ThrowIfNull(bootstrap);
-        ArgumentNullException.ThrowIfNull(holder);
         ArgumentNullException.ThrowIfNull(logger);
         _bootstrap = bootstrap;
-        _holder = holder;
         _logger = logger;
     }
+
+    // The live holder, read LAZILY off the bootstrap. The host constructs this hosted service before
+    // IndexBootstrapService.StartAsync runs, so the holder must NOT be injected in the constructor (that
+    // resolves the holder-backed singleton eagerly and throws "Holder requested before bootstrap completed").
+    // Every read below happens from ExecuteAsync's loop / PollNow / the probe — all after StartAsync seeded it.
+    private IndexHolder Holder => _bootstrap.Holder;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -112,7 +114,7 @@ public sealed class FreshnessService : BackgroundService
     /// the per-call <see cref="IndexFreshProbe"/> — no SQLite on the tool hot path.
     /// </summary>
     public long LatestObservedRevision =>
-        Interlocked.Read(ref _lastObservedRevision) is var rev && rev >= 0 ? rev : _holder.BuiltRevision;
+        Interlocked.Read(ref _lastObservedRevision) is var rev && rev >= 0 ? rev : Holder.BuiltRevision;
 
     /// <summary>
     /// Run the poll-then-swap ONCE on demand and return the typed outcome immediately (M7 decision-3) — the
@@ -128,7 +130,7 @@ public sealed class FreshnessService : BackgroundService
     /// </summary>
     public PollResult PollNow()
     {
-        long held = _holder.BuiltRevision;
+        long held = Holder.BuiltRevision;
 
         // The workspace id is the poll's WHERE-clause key. Resolve from the loop's cached id if running, else
         // from the bootstrap workspace (the loop may never have started — a non-leader, or a pre-first-tick call).
@@ -159,7 +161,7 @@ public sealed class FreshnessService : BackgroundService
                 // On-demand poll is best-effort: keep the prior index and report not-swapped at the held
                 // revision; never throw into the tool (the loop/next poll reconciles).
                 _logger.LogWarning(ex, "On-demand freshness poll failed; keeping the prior index.");
-                return new PollResult(Swapped: false, Revision: _holder.BuiltRevision);
+                return new PollResult(Swapped: false, Revision: Holder.BuiltRevision);
             }
         }
     }
@@ -223,7 +225,8 @@ public sealed class FreshnessService : BackgroundService
     // typed outcome. Callers hold _pollGate; exceptions propagate to the caller's own keep-prior-index handling.
     private PollResult PollThenSwap(FreshnessReader reader, IndexRebuilder rebuilder, string workspaceId)
     {
-        long built = _holder.BuiltRevision;
+        var holder = Holder;
+        long built = holder.BuiltRevision;
         long latest = reader.LatestRevision(workspaceId);
         Interlocked.Exchange(ref _lastObservedRevision, latest);
 
@@ -232,7 +235,7 @@ public sealed class FreshnessService : BackgroundService
         _logger.LogDebug(
             "Freshness poll: observed revision {Observed} vs built revision {Built}.", latest, built);
 
-        bool swapped = FreshnessPoller.PollOnce(_holder, latest, rebuilder.Rebuild);
+        bool swapped = FreshnessPoller.PollOnce(holder, latest, rebuilder.Rebuild);
         if (swapped)
             _logger.LogInformation("Freshness: rebuilt + swapped index to revision {Revision}.", latest);
         return new PollResult(swapped, latest);

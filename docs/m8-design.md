@@ -34,6 +34,16 @@ startup sweep — D6).
 Rejected alt: `shared:true` on one file. It works (Serilog's cross-process mutex) but interleaves all processes
 into one stream with no per-process separation — the opposite of "organized for debugging," and slower.
 
+> **SUPERSEDED 2026-05-31 — reverted to the rejected alt (`shared:true`, one daily pair).** In practice the
+> per-pid scheme created two files per process *launch*; ordinary dogfooding (and Claude Code restarts) piled up
+> dozens of `miller-<pid>-<date>.{log,jsonl}` quickly, which was the actual complaint. We now write ONE shared
+> daily pair (`miller-<YYYYMMDD>.log`/`.jsonl`, Serilog `shared:true`). Per-process separation is preserved by
+> the `pid` + `role` line PROPERTIES (already enriched on every line — see D2), so "which process wrote this" is
+> still answerable without a file-per-process. The interleaving the original note worried about is sorted by
+> filtering on `pid`/`cid` in the `.jsonl`. This also DELETES the D6 startup reaper and all per-pid file-name
+> parsing (LogFileReaper) — retention is now just `retainedFileCountLimit` days on the two shared files. An
+> upgraded workspace can delete leftover `miller-<pid>-*` files once; nothing recreates them.
+
 ### D2 — Correlation id threaded through every line of one operation (gap #2)
 - Generate the id ONCE at the start of each `tools/call`, in the central `TelemetryCallToolFilter` (the single
   choke point every call already passes through).
@@ -81,6 +91,11 @@ decision only ADDS the missing raw-stderr tail and removes the duplication that 
   toDelete` (testable, no I/O) + a thin delete. Never deletes the current pid's files.
 - Pure ↔ infra seam held: `ExtractErrorLog.Describe`, the `MILLER_LOG_LEVEL` parser, and `LogFileReaper.Plan`
   are pure + unit-tested; the sink config + the actual file delete + `LogContext` push are thin infra.
+
+> **SUPERSEDED 2026-05-31 — the startup sweep is removed.** It existed only to bound per-pid file growth; with
+> the shared daily pair (see the D1 note) there is nothing to sweep — `retainedFileCountLimit` days on the two
+> files is the whole retention story. `LogFileReaper` (+ its tests) and all per-pid name parsing are deleted. The
+> pure↔infra seam now covers `ExtractErrorLog.Describe` and the `MILLER_LOG_LEVEL` parser only.
 
 ## Components
 - **Program.cs:** per-pid file path (D1); `LoggingLevelSwitch` from `MILLER_LOG_LEVEL` (D4); JSONL sink (D5);

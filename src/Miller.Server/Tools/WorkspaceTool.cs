@@ -208,6 +208,18 @@ public sealed class WorkspaceTool
             return (output, 0, TelemetryOutcome.Empty);
         }
 
+        // SAFETY: refuse to prime a sensitive system root (home, a filesystem/drive root, a system dir) — the
+        // same guard the bootstrap applies to its cwd, here for an agent-supplied path. Return an honest note
+        // (symmetric with the live-workspace / already-served guards below) rather than scanning the home tree.
+        if (WorkspaceRootSafety.IsSensitiveRoot(path, WorkspaceRootSafety.SensitiveRootCandidates()))
+        {
+            string note =
+                $"refusing to prime sensitive system path '{Path.GetFullPath(path)}': choose a project " +
+                "directory or pass a narrower path.";
+            string output = json ? $"{{\"note\":{System.Text.Json.JsonSerializer.Serialize(note)}}}" : note;
+            return (output, 0, TelemetryOutcome.Empty);
+        }
+
         // SAFETY (decision-2/3/8): refuse to prime the LIVE workspace. open() runs a direct `extract scan`
         // outside the leader's _opsGate serialization (it is meant to prime a DIFFERENT, cold path so a Miller
         // launched there later starts warm). Spawning that scan against the in-use `.miller/symbols.db` would be

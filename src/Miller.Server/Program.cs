@@ -23,24 +23,28 @@ using Serilog.Core;
 // Console.WriteLine anywhere in this process.
 
 var workspacePath = Environment.CurrentDirectory;
+
+// SAFETY (must precede ANY filesystem touch): refuse to run in a sensitive system root — the home dir, a
+// filesystem/drive root, or a platform system dir. A launcher that starts the MCP server with cwd set to '/' or
+// '~' must not get so much as a .miller/logs dir written there, let alone a full julie scan of the home/system
+// tree. This runs BEFORE the logs dir is created and before the host is built, so a misconfigured launch fails
+// loudly on stderr (the MCP client sees the connect error + this message) instead of indexing the world.
+Miller.Server.Tools.WorkspaceRootSafety.RejectSensitiveRoot(workspacePath, fromCwd: true);
+
 var logsPath = Path.Combine(workspacePath, ".miller", "logs");
 Directory.CreateDirectory(logsPath);
 
 int processId = Environment.ProcessId;
-
-// M8 §D6: sweep stale per-pid log files (pids that have since exited) BEFORE this process opens its own sink, so
-// the current pid's about-to-be-created files are never candidates. Best-effort; never fails startup. The logger
-// does not exist yet, so a discovery/plan fault is returned as a deferred message logged once below (finding-6).
-string? reapDeferredWarning = MillerLoggingSetup.ReapStaleLogs(logsPath, processId);
 
 // M8 §D4: the minimum level is dialed from MILLER_LOG_LEVEL at startup (no recompile). An unrecognized value
 // falls back to Information and is warned ONCE after the logger is built (so the warning is itself logged).
 string? logLevelEnv = Environment.GetEnvironmentVariable("MILLER_LOG_LEVEL");
 var levelSwitch = new LoggingLevelSwitch(LogLevelParse.ToLevel(logLevelEnv));
 
-// M8 §D1/§D5: per-pid human .log + machine .jsonl sinks, the level switch, and cid/pid enrichment — all wired in
-// the ONE shared MillerLoggingSetup so this host and the sink test exercise the same configuration. Console stays
-// on stderr (STDIO purity: nothing but the MCP protocol may touch stdout).
+// Shared daily .log + .jsonl sinks, the level switch, and cid/pid/role enrichment — all wired in the ONE shared
+// MillerLoggingSetup so this host and the sink test exercise the same configuration. Console stays on stderr
+// (STDIO purity: nothing but the MCP protocol may touch stdout). One daily pair is shared across all processes,
+// so there is no per-pid file pile-up and no startup sweep to run.
 Log.Logger = MillerLoggingSetup
     .Configure(new LoggerConfiguration(), logsPath, processId, levelSwitch)
     .CreateLogger();
@@ -53,86 +57,24 @@ if (!string.IsNullOrEmpty(logLevelEnv) && !LogLevelParse.WasRecognized(logLevelE
         "unknown MILLER_LOG_LEVEL '{Value}', defaulting to Information.", logLevelEnv);
 }
 
-// M8 §D6 (finding-6): the startup log sweep ran before the logger existed; if its discovery/plan faulted (a
-// hostile logs dir) it returned a deferred message we surface now, so a broken reap is visible rather than silent.
-if (!string.IsNullOrEmpty(reapDeferredWarning))
-{
-    Log.Warning("startup log sweep skipped: {Reason}", reapDeferredWarning);
-}
-
 var builder = Host.CreateApplicationBuilder(args);
 builder.Services.AddSerilog();
 
-// The bootstrap holds the built singletons. Registered as a singleton AND as the FIRST hosted service so its
-// StartAsync (index build + ledger open + holder seed + canonical-root resolve) completes before any other
-// hosted service (the indexer, the freshness poller, the MCP transport) starts.
-builder.Services.AddSingleton<IndexBootstrapService>();
-builder.Services.AddHostedService(sp => sp.GetRequiredService<IndexBootstrapService>());
-
-// The tool dependencies are resolved from the bootstrap holder. The generic host runs hosted services in
-// registration order, so the holder is always populated before a tool (constructed per-call) reads it. Tools
-// depend on the live IndexHolder (M3 step 10) and read holder.Current per call so a freshness Swap is seen.
-builder.Services.AddSingleton(sp => sp.GetRequiredService<IndexBootstrapService>().Holder);
-builder.Services.AddSingleton(sp => sp.GetRequiredService<IndexBootstrapService>().Resolver);
-builder.Services.AddSingleton(sp => sp.GetRequiredService<IndexBootstrapService>().Workspace);
-builder.Services.AddSingleton(sp => sp.GetRequiredService<IndexBootstrapService>().Ledger);
-
-// M3 hosted services (registered AFTER the bootstrap so its StartAsync seeds the holder + canonical root first):
-//  - IndexerService: leader-gated FileSystemWatcher -> extract update/delete/scan (the writer side).
-//  - FreshnessService: poll canonical_revisions -> rebuild + atomic swap (how every instance picks up writes).
-// Both are registered as singletons too so the index_fresh probe can read their live state.
-builder.Services.AddSingleton<FreshnessService>();
-builder.Services.AddSingleton<IndexerService>();
-builder.Services.AddHostedService(sp => sp.GetRequiredService<FreshnessService>());
-builder.Services.AddHostedService(sp => sp.GetRequiredService<IndexerService>());
-
-// The index_fresh probe (decision-8) the telemetry filter reads per call: built revision vs. the freshness
-// service's last-observed revision AND the indexer's queue-empty state. Cheap — no SQLite on the tool hot path.
-builder.Services.AddSingleton(sp =>
-{
-    var holder = sp.GetRequiredService<IndexHolder>();
-    var freshness = sp.GetRequiredService<FreshnessService>();
-    var indexer = sp.GetRequiredService<IndexerService>();
-    return new IndexFreshProbe(
-        holder,
-        latestRevision: () => freshness.LatestObservedRevision,
-        queueEmpty: () => indexer.QueueEmpty);
-});
-
-// M6 edit tool dependencies:
-//  - EditApplier: the atomic apply transaction (writer-lock + TOCTOU + rollback). Its writer-lock seam binds to
-//    the dedicated EditWriteLock on <.miller>/edit.lock (separate from the indexer lock so an edit never
-//    deadlocks against the running indexer leader — see EditWriteLock).
-//  - IEditWriteThrough: post-apply convergence — the leader reindexes inline, else the watcher reconciles.
-// EditTool itself is auto-discovered via WithToolsFromAssembly() ([McpServerToolType]); it resolves these.
-builder.Services.AddSingleton(sp =>
-{
-    var workspace = sp.GetRequiredService<WorkspaceContext>();
-    string millerDir = Path.GetDirectoryName(workspace.ExtractDbPath)!;
-    return new EditApplier(() => EditWriteLock.TryAcquire(millerDir));
-});
-builder.Services.AddSingleton<IEditWriteThrough>(sp =>
-    new LeaderWriteThrough(
-        sp.GetRequiredService<IndexerService>(),
-        sp.GetRequiredService<ILoggerFactory>().CreateLogger<LeaderWriteThrough>()));
-
-// Soft budgets (M7 decision-4): per-tool latency + est-token warn thresholds the central telemetry filter
-// evaluates after each call, logging a WARN per breach (warn-only — never blocks or errors the call). The
-// production defaults live on SoftBudgets.Default.
-builder.Services.AddSingleton(SoftBudgets.Default);
-
-// M7 workspace tool (decision-1): the admin/index-lifecycle tool. Auto-discovered via WithToolsFromAssembly()
-// ([McpServerToolType]); it resolves the holder/workspace/indexer/freshness/probe/ledger singletons above plus a
-// JulieExtractRunner for the open(path) prime scan. The runner is located under the SAME tools root the
-// bootstrap + indexer use (the pinned julie-server ships there, NOT the repo cwd), so a missing binary fails
-// loudly via JulieExtractRunner.Locate's restore-script message rather than silently degrading.
-builder.Services.AddSingleton(sp =>
-    JulieExtractRunner.Locate(sp.GetRequiredService<WorkspaceContext>().ToolsRoot));
+// The full host service graph (bootstrap + holder-backed singletons + the M3 background services + the edit/
+// workspace tool deps) lives in ONE testable place so the startup graph cannot drift from what the tests pin.
+// LIFECYCLE NOTE: the generic host CONSTRUCTS every hosted service before calling StartAsync on any of them, so
+// registration order orders StartAsync, NOT construction — no hosted-service constructor may read a bootstrap
+// getter (see MillerServiceRegistration's contract + HostStartupRegistrationTests). The MCP transport is wired
+// LAST below so it starts only after the bootstrap's StartAsync has seeded the holder/workspace.
+builder.Services.AddMillerServices();
 
 builder.Services
     .AddMcpServer(options =>
     {
         options.ServerInfo = new() { Name = "miller", Version = "0.1.0" };
+        // Server-level behavioral-adoption guidance (search-before-read, per-tool one-liners, workflows) the
+        // client surfaces to the agent. Embedded in the binary; see AgentInstructions + MILLER_AGENT_INSTRUCTIONS.md.
+        options.ServerInstructions = AgentInstructions.Load();
     })
     .WithStdioServerTransport()
     .WithToolsFromAssembly()

@@ -9,6 +9,13 @@
     <InternalsVisibleTo Include="Miller.Tests" />
   </ItemGroup>
 
+  <!-- The MCP server-level agent instructions (behavioral-adoption guidance) shipped INSIDE the binary, so the
+       server always has them regardless of cwd. Read at startup and set as McpServerOptions.ServerInstructions
+       (see Program.cs). Mirrors julie's include_str! of JULIE_AGENT_INSTRUCTIONS.md. -->
+  <ItemGroup>
+    <EmbeddedResource Include="MILLER_AGENT_INSTRUCTIONS.md" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="ModelContextProtocol" Version="1.3.0" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.8" />
@@ -26,4 +33,27 @@
     <ProjectReference Include="..\Miller.Core\Miller.Core.csproj" />
     <ProjectReference Include="..\Miller.Indexing\Miller.Indexing.csproj" />
   </ItemGroup>
+
+  <!-- The pinned julie-server is restored (gitignored) to the repo-root .tools/ by scripts/restore-julie-server.sh.
+       Production locates it at AppContext.BaseDirectory/.tools (WorkspaceContext.ToolsRoot), so it must sit next to
+       the built binary — the claim that it "ships under the app base dir" is only true because of this copy. Link
+       places it at <out>/.tools/julie-server; PreserveNewest skips the ~77MB recopy when unchanged; `dotnet publish`
+       picks it up too. Conditioned on Exists so a machine that has not run restore (e.g. a fast-suite-only CI lane)
+       still builds — the runtime then fails loudly with the restore-script message, the correct behavior for a
+       genuinely missing binary. The exec bit is reasserted below (MSBuild Copy drops it). -->
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)/../../.tools/julie-server')">
+    <Content Include="$(MSBuildProjectDirectory)/../../.tools/julie-server">
+      <Link>.tools/julie-server</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Visible>false</Visible>
+    </Content>
+  </ItemGroup>
+
+  <!-- MSBuild's Copy does not preserve the unix exec bit, so the copied julie-server lands non-executable and
+       Process.Start would fail with EACCES. Reassert +x on the output copy after build (silent on Windows / when the
+       binary was not copied). Keyed off the same Exists condition so it is a no-op on a no-restore machine. -->
+  <Target Name="EnsureJulieServerExecutable" AfterTargets="Build;Publish"
+          Condition="!$([MSBuild]::IsOSPlatform('Windows')) And Exists('$(OutDir).tools/julie-server')">
+    <Exec Command="chmod +x &quot;$(OutDir).tools/julie-server&quot;" />
+  </Target>
 </Project>

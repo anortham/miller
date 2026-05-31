@@ -51,6 +51,27 @@ internal static class LargeDbWriter
                 file_path TEXT NOT NULL, start_line INTEGER NOT NULL, start_col INTEGER NOT NULL,
                 end_line INTEGER NOT NULL, end_col INTEGER NOT NULL, containing_symbol_id TEXT, target_symbol_id TEXT);
             """);
+        // M4 bridge tables (verbatim from julie v7.13.0 schema.rs). SqliteBridgeReader is on the single production
+        // RepositoryIndexLoader.Load path (D9), so IndexRebuilder.Rebuild over this DB SELECTs all three — created
+        // empty here, exactly as JulieDbFixture does, so the rebuild/latency path does not crash on
+        // "no such table: type_arguments".
+        Exec(conn, """
+            CREATE TABLE type_arguments (
+                id TEXT PRIMARY KEY, identifier_id TEXT NOT NULL, parent_arg_id TEXT, ordinal INTEGER NOT NULL,
+                type_name TEXT NOT NULL, target_symbol_id TEXT, file_path TEXT NOT NULL, language TEXT NOT NULL,
+                last_indexed INTEGER);
+            """);
+        Exec(conn, """
+            CREATE TABLE literals (
+                id TEXT PRIMARY KEY, literal_text TEXT NOT NULL, kind TEXT NOT NULL, carrier TEXT,
+                arg_position INTEGER NOT NULL, language TEXT NOT NULL, file_path TEXT NOT NULL, start_line INTEGER,
+                end_line INTEGER, start_byte INTEGER, end_byte INTEGER, containing_symbol_id TEXT, confidence REAL);
+            """);
+        Exec(conn, """
+            CREATE TABLE symbol_annotations (
+                id TEXT PRIMARY KEY, symbol_id TEXT NOT NULL, ordinal INTEGER NOT NULL, annotation TEXT NOT NULL,
+                annotation_key TEXT, raw_text TEXT, carrier TEXT, UNIQUE (symbol_id, ordinal));
+            """);
         Exec(conn, "CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL, description TEXT NOT NULL);");
         Exec(conn, "CREATE TABLE external_extract_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL);");
         Exec(conn, $"INSERT INTO schema_version (version, applied_at, description) VALUES ({MillerExtractContract.ExpectedSchemaVersion}, 0, 'test');");
