@@ -63,7 +63,7 @@ public sealed class CrossWorkspaceRefreshService
         _utcNow = utcNow;
     }
 
-    public WorkspaceRefreshResult Refresh(string workspaceId)
+    public WorkspaceRefreshResult Refresh(string workspaceId, bool force = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
         WorkspaceRegistryRow row = GetRequiredRow(workspaceId);
@@ -109,7 +109,7 @@ public sealed class CrossWorkspaceRefreshService
 
         try
         {
-            ExtractReport report = _scan(row.CanonicalRoot, row.IndexDbPath, false);
+            ExtractReport report = _scan(row.CanonicalRoot, row.IndexDbPath, force);
             if (report.WorkspaceId is { } reportedWorkspaceId
                 && !string.Equals(reportedWorkspaceId, row.WorkspaceId, StringComparison.Ordinal))
             {

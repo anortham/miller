@@ -24,7 +24,7 @@ public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider
             holder,
             currentWorkspace,
             registry,
-            refreshService.Refresh,
+            workspaceId => refreshService.Refresh(workspaceId),
             dbPath => RepositoryIndexLoader.Load(dbPath),
             currentIndexFresh: _ => null)
     {

@@ -4,6 +4,7 @@ using Miller.Server;
 using Miller.Server.Hosting;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
+using Miller.Server.Workspaces;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -69,7 +70,8 @@ public sealed class LiveWorkspaceTests : IDisposable
         Assert.NotEqual("failed", scan.Status);
         string? workspaceId = ExtractReader.ReadWorkspaceId(dbPath);
 
-        var workspace = WorkspaceContext.Create(root, AppContext.BaseDirectory) with
+        string home = NewTempDir("home");
+        var workspace = WorkspaceContext.Create(root, AppContext.BaseDirectory, home) with
         {
             ExtractDbPath = dbPath,
             WorkspaceId = workspaceId,
@@ -94,9 +96,24 @@ public sealed class LiveWorkspaceTests : IDisposable
 
         var ledger = TelemetryLedger.Open(Path.Combine(NewTempDir("ledger"), "telemetry.db"), workspaceId);
         _disposables.Add(ledger);
+        var registry = WorkspaceRegistry.Open(workspace.RegistryDbPath);
+        _disposables.Add(registry);
+        if (workspaceId is not null)
+        {
+            registry.UpsertSeen(
+                workspaceId,
+                WorkspaceId.Display(canonicalRoot, workspaceId),
+                canonicalRoot,
+                dbPath,
+                WorkspaceRegistryState.Current);
+            registry.MarkScanned(workspaceId, scan.Revision ?? 0);
+        }
+        var crossRefresh = new CrossWorkspaceRefreshService(registry, runner);
+        var provider = new WorkspaceIndexProvider(holder, workspace, registry, crossRefresh);
 
         var tool = new WorkspaceTool(
-            holder, workspace, indexer, freshness, probe, ledger, runner, NullLogger<WorkspaceTool>.Instance);
+            holder, workspace, indexer, freshness, probe, ledger, runner, registry, provider, crossRefresh,
+            NullLogger<WorkspaceTool>.Instance);
         return (tool, indexer, holder, ledger, root, dbPath, runner);
     }
 
