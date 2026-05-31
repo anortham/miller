@@ -1,4 +1,3 @@
-using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Miller.Indexing;
@@ -282,9 +281,12 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 state);
             if (revision is null)
                 return row;
-        }
 
-        return SetRegistryRevisionOnly(workspace.RegistryDbPath, stableWorkspaceId, revision.Value);
+            if (state == WorkspaceRegistryState.LoadedExisting)
+                return registry.MarkLoadedExisting(stableWorkspaceId, revision.Value);
+
+            return row;
+        }
     }
 
     internal static WorkspaceRegistryRow MarkRegistryScanned(
@@ -332,42 +334,6 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         string canonicalDbPath = workspace.CanonicalExtractDbPath
             ?? throw new InvalidOperationException("Workspace canonical extract DB path is required before registry update.");
         return (canonicalRoot, canonicalDbPath);
-    }
-
-    private static WorkspaceRegistryRow SetRegistryRevisionOnly(
-        string registryDbPath, string workspaceId, long revision)
-    {
-        var connectionString = new SqliteConnectionStringBuilder
-        {
-            DataSource = Path.GetFullPath(registryDbPath),
-            Mode = SqliteOpenMode.ReadWrite,
-            Pooling = false,
-        }.ToString();
-
-        using (var connection = new SqliteConnection(connectionString))
-        {
-            connection.Open();
-            using (var pragma = connection.CreateCommand())
-            {
-                pragma.CommandText = "PRAGMA busy_timeout=3000;";
-                pragma.ExecuteNonQuery();
-            }
-
-            using var cmd = connection.CreateCommand();
-            cmd.CommandText = """
-                UPDATE workspaces
-                SET last_revision = $last_revision
-                WHERE workspace_id = $workspace_id;
-                """;
-            cmd.Parameters.AddWithValue("$workspace_id", workspaceId);
-            cmd.Parameters.AddWithValue("$last_revision", revision);
-            if (cmd.ExecuteNonQuery() == 0)
-                throw new KeyNotFoundException($"Workspace registry row '{workspaceId}' was not found.");
-        }
-
-        using var registry = WorkspaceRegistry.Open(registryDbPath);
-        return registry.Get(workspaceId)
-            ?? throw new KeyNotFoundException($"Workspace registry row '{workspaceId}' was not found.");
     }
 
     // The latest persisted revision for a reused DB. A MISSING DB file is the only safe degrade-to-0 case
