@@ -32,6 +32,15 @@ public sealed class WorkspaceContextTests
     }
 
     [Fact]
+    public void Create_PutsTheRegistryDbUnderTheUserHomeMillerDir_NotTheRepo()
+    {
+        var ctx = WorkspaceContext.Create("/repo/work", "/app/base", "/home/me");
+
+        Assert.Equal(Path.Combine(Path.GetFullPath("/home/me"), ".miller", "workspaces.db"), ctx.RegistryDbPath);
+        Assert.DoesNotContain(Path.GetFullPath("/repo/work"), ctx.RegistryDbPath);
+    }
+
+    [Fact]
     public void Create_PutsToolsRootUnderTheAppBaseDir_NotTheRepo()
     {
         var ctx = WorkspaceContext.Create("/repo/work", "/app/base");
