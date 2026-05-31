@@ -31,6 +31,7 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/Miller.Core/Miller.Core.csproj" />
+    <ProjectReference Include="../../src/Miller.Dashboard/Miller.Dashboard.csproj" />
     <ProjectReference Include="../../src/Miller.Indexing/Miller.Indexing.csproj" />
     <ProjectReference Include="../../src/Miller.Server/Miller.Server.csproj" />
   </ItemGroup>

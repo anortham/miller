@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/Miller.Core/Miller.Core.csproj" />
+    <Project Path="src/Miller.Dashboard/Miller.Dashboard.csproj" />
     <Project Path="src/Miller.Indexing/Miller.Indexing.csproj" />
     <Project Path="src/Miller.Server/Miller.Server.csproj" />
   </Folder>
