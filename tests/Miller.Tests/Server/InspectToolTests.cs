@@ -148,7 +148,7 @@ public sealed class InspectToolTests
     [Fact]
     public void Run_AmbiguousName_ReturnsCandidates_NeverPicksFirst()
     {
-        using var fx = JulieDbFixture.Create(26, "1", new[]
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
         {
             new JulieDbFixture.SymbolRow("aa11223344556677889900aabbccddee", "Handle", "method", "csharp",
                 "a/First.cs", "void Handle()", 3, null),

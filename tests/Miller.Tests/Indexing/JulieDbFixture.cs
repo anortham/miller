@@ -1,11 +1,12 @@
 using System.Globalization;
 using Microsoft.Data.Sqlite;
+using Miller.Indexing;
 
 namespace Miller.Tests.Indexing;
 
 /// <summary>
-/// Synthesizes a tiny SQLite file matching julie v7.12.2's verified extract schema (schema_version 26,
-/// extract_contract_version 1). This is Miller's READ-CONTRACT harness — it is NOT a re-test of julie's
+/// Synthesizes a tiny SQLite file matching julie v7.13.0's verified extract schema (schema_version 28,
+/// extract_contract_version 2). This is Miller's READ-CONTRACT harness — it is NOT a re-test of julie's
 /// extraction (julie owns that). The DDL is transcribed verbatim from julie's <c>src/database/schema.rs</c>
 /// (see docs/findings/julie-contract-verified.md §1), so the reader is exercised against the real column
 /// set, NULL discipline, and self-FK that a live extract produces.
@@ -15,6 +16,24 @@ namespace Miller.Tests.Indexing;
 internal sealed class JulieDbFixture : IDisposable
 {
     private readonly string _dir;
+
+    /// <summary>
+    /// The schema_version / extract_contract_version this Miller build is pinned to, sourced from
+    /// <see cref="MillerExtractContract"/>. Fixtures that just need a *valid* extract pass these (NOT
+    /// literals) so a julie re-pin needs no per-test edits — only the one constants file changes.
+    /// </summary>
+    public static readonly long PinnedSchema = MillerExtractContract.ExpectedSchemaVersion;
+
+    /// <summary>The pinned contract version as the TEXT julie stores in external_extract_metadata.</summary>
+    public static readonly string PinnedContract =
+        MillerExtractContract.ExpectedExtractContractVersion.ToString(CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// Pin-relative schema version as a string for "names the value" assertions: delta 0 == the pin,
+    /// +1 == a future (newer) schema, -1 == an older one.
+    /// </summary>
+    public static string SchemaText(long delta = 0) =>
+        (PinnedSchema + delta).ToString(CultureInfo.InvariantCulture);
 
     /// <summary>Absolute path to the synthesized julie extract <c>.db</c> file.</summary>
     public string DbPath { get; }
@@ -356,10 +375,10 @@ internal sealed class JulieDbFixture : IDisposable
     }
 
     /// <summary>
-    /// The canonical fixture: schema 26 / contract '1' with ~12 realistic rows — mixed kinds/languages,
+    /// The canonical fixture: schema 28 / contract '2' with ~12 realistic rows — mixed kinds/languages,
     /// some NULL signatures, at least one NULL start_line, parent/child pairs via parent_id, distinct files.
     /// </summary>
-    public static JulieDbFixture CreateDefault() => Create(26, "1", DefaultRows);
+    public static JulieDbFixture CreateDefault() => Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, DefaultRows);
 
     // ----- M2 inspect/ExtractReader fixture -----
 
@@ -440,7 +459,7 @@ internal sealed class JulieDbFixture : IDisposable
             ["auth/UserService.cs"] = UserServiceContent,
         };
 
-        return Create(26, "1", rows, identifiers: identifiers, fileContent: content, workspaceId: "ws-inspect-001");
+        return Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, rows, identifiers: identifiers, fileContent: content, workspaceId: "ws-inspect-001");
     }
 
     // ----- M6 edit/ReadEditSpan + ReadIdentifierSites fixture -----
@@ -550,7 +569,7 @@ internal sealed class JulieDbFixture : IDisposable
             ["unicode/Café.cs"] = CafeContent,
         };
 
-        return Create(26, "1", rows, identifiers: identifiers, fileContent: content, workspaceId: "ws-edit-001");
+        return Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, rows, identifiers: identifiers, fileContent: content, workspaceId: "ws-edit-001");
     }
 
     /// <summary>Realistic MD5-hex symbol ids (32 lowercase hex chars), per julie's id scheme (treated as opaque).</summary>
@@ -730,7 +749,7 @@ internal sealed class JulieDbFixture : IDisposable
         );
         """;
 
-    // --- M3 freshness DDL transcribed verbatim from the PINNED julie-server v7.12.2 (schema 26) live DB ---
+    // --- M3 freshness DDL transcribed verbatim from the PINNED julie-server v7.13.0 (schema 28) live DB ---
     // (dumped via `.schema` against a real `extract scan` output; see m3-design.md verified-fact 1/5).
 
     private const string CanonicalRevisionsDdl = """

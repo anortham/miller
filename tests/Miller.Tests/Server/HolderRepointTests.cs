@@ -20,13 +20,13 @@ public sealed class HolderRepointTests
         MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath));
 
     // An index WITHOUT the marker symbol, and one WITH it — the swap moves between them.
-    private static JulieDbFixture WithoutMarker() => JulieDbFixture.Create(26, "1", new[]
+    private static JulieDbFixture WithoutMarker() => JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
     {
         new JulieDbFixture.SymbolRow("a0001122334455667788990a1b2c3d4e", "ExistingType", "class", "csharp",
             "src/Existing.cs", "public class ExistingType", 1, null),
     });
 
-    private static JulieDbFixture WithMarker() => JulieDbFixture.Create(26, "1", new[]
+    private static JulieDbFixture WithMarker() => JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
     {
         new JulieDbFixture.SymbolRow("a0001122334455667788990a1b2c3d4e", "ExistingType", "class", "csharp",
             "src/Existing.cs", "public class ExistingType", 1, null),

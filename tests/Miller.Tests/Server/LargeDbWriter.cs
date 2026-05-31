@@ -11,7 +11,7 @@ namespace Miller.Tests.Server;
 /// subset the production build path (<see cref="RepositoryIndexLoader.Load"/> → <see cref="SqliteSymbolReader.Read"/>
 /// + <see cref="SymbolGraphReader.Read"/>) + the schema gate require (files + symbols [incl. <c>end_line</c>, D7]
 /// + the <c>relationships</c>/<c>identifiers</c> edge tables [D2] + schema_version + external_extract_metadata),
-/// at the pinned schema 26 / contract 1. The edge tables are created empty here — the rebuild latency this
+/// at the pinned schema 28 / contract 2. The edge tables are created empty here — the rebuild latency this
 /// measures is the read+build path, and empty edge reads still exercise the loader's two extra SELECTs.
 /// </summary>
 internal static class LargeDbWriter
@@ -53,8 +53,8 @@ internal static class LargeDbWriter
             """);
         Exec(conn, "CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL, description TEXT NOT NULL);");
         Exec(conn, "CREATE TABLE external_extract_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL);");
-        Exec(conn, "INSERT INTO schema_version (version, applied_at, description) VALUES (26, 0, 'test');");
-        Exec(conn, "INSERT INTO external_extract_metadata (key, value, updated_at) VALUES ('extract_contract_version', '1', 0);");
+        Exec(conn, $"INSERT INTO schema_version (version, applied_at, description) VALUES ({MillerExtractContract.ExpectedSchemaVersion}, 0, 'test');");
+        Exec(conn, $"INSERT INTO external_extract_metadata (key, value, updated_at) VALUES ('extract_contract_version', '{MillerExtractContract.ExpectedExtractContractVersion}', 0);");
 
         using var tx = conn.BeginTransaction();
 

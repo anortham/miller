@@ -8,9 +8,9 @@ namespace Miller.Indexing;
 /// </summary>
 internal static class MillerExtractContract
 {
-    // Miller pins julie-server v7.12.2 → schema 26 / extract_contract_version 1.
-    // Bumps to (28, 2) at M4 when the bridge-anchor extraction enrichment is consumed.
-    public const long ExpectedSchemaVersion = 26;
-    public const long ExpectedExtractContractVersion = 1;
-    public const string PinnedJulieServerVersion = "7.12.2";
+    // Miller pins julie-server v7.13.0 → schema 28 / extract_contract_version 2.
+    // Bumped to (28, 2) at M4 to consume the bridge-anchor extraction enrichment (type_arguments / literals).
+    public const long ExpectedSchemaVersion = 28;
+    public const long ExpectedExtractContractVersion = 2;
+    public const string PinnedJulieServerVersion = "7.13.0";
 }

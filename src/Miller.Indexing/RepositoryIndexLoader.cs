@@ -26,7 +26,7 @@ public static class RepositoryIndexLoader
     /// <exception cref="ArgumentException"><paramref name="dbPath"/> is null/empty/whitespace.</exception>
     /// <exception cref="FileNotFoundException">The DB file does not exist.</exception>
     /// <exception cref="InvalidOperationException">The DB's directory is not writable (WAL sidecar trap).</exception>
-    /// <exception cref="IncompatibleExtractException">The DB is not a compatible v7.12.2 julie extract.</exception>
+    /// <exception cref="IncompatibleExtractException">The DB is not a compatible v7.13.0 julie extract.</exception>
     public static MillerRepositoryIndex Load(string dbPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);

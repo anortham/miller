@@ -22,7 +22,7 @@ public sealed class SearchToolTests
     // path-flagged test row (tests/auth/AuthServiceTests.cs — no metadata) AND a julie-is_test row whose path
     // is NOT test-shaped (src/auth/AuthHelper.cs carrying {"is_test":true}, a [Fact] method julie flagged).
     // The third row is the one the path-only filter would miss; it pins the sym.IsTest branch of the predicate.
-    private static JulieDbFixture FixtureWithTestPaths() => JulieDbFixture.Create(26, "1", new[]
+    private static JulieDbFixture FixtureWithTestPaths() => JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
     {
         new JulieDbFixture.SymbolRow("a0001122334455667788990a1b2c3d4e", "AuthService", "class", "csharp",
             "src/auth/AuthService.cs", "public class AuthService", 1, null),
@@ -94,7 +94,7 @@ public sealed class SearchToolTests
         var rows = Enumerable.Range(0, 5).Select(i => new JulieDbFixture.SymbolRow(
             $"{i:x32}".PadLeft(32, '0')[..32], $"Widget{i}", "class", "csharp",
             $"src/Widget{i}.cs", $"public class Widget{i}", 1, null)).ToArray();
-        using var fx = JulieDbFixture.Create(26, "1", rows);
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, rows);
         var index = BuildIndex(fx);
 
         string output = SearchTool.Run(index, "widget", SearchToolMode.Auto, limit: 2,

@@ -52,7 +52,7 @@ public sealed class SmartTargetResolverTests
         // decision-4: a target is a file because julie INDEXED that extension here — not because the extension
         // is on a hand-picked allowlist. Seed languages the old 22-entry whitelist omitted (.vue, .ex, .zig)
         // and assert they resolve as files purely from the indexed data.
-        using var fx = JulieDbFixture.Create(26, "1", new[]
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
         {
             new JulieDbFixture.SymbolRow("a0112233445566778899aabbccddee01", "App", "class", "vue",
                 "ui/App.vue", "App", 1, null),
@@ -156,7 +156,7 @@ public sealed class SmartTargetResolverTests
     public void Resolve_AmbiguousName_ReturnsAllCandidates()
     {
         // Two distinct symbols share the name "Handle" across two files.
-        using var fx = JulieDbFixture.Create(26, "1", new[]
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
         {
             new JulieDbFixture.SymbolRow("aa11223344556677889900aabbccddee", "Handle", "method", "csharp",
                 "a/First.cs", "void Handle()", 3, null),
@@ -179,7 +179,7 @@ public sealed class SmartTargetResolverTests
     [Fact]
     public void Resolve_Scope_DisambiguatesAmbiguousNameToOneFile()
     {
-        using var fx = JulieDbFixture.Create(26, "1", new[]
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
         {
             new JulieDbFixture.SymbolRow("aa11223344556677889900aabbccddee", "Handle", "method", "csharp",
                 "a/First.cs", "void Handle()", 3, null),

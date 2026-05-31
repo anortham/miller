@@ -25,7 +25,7 @@ public sealed class FreshnessReaderTests
     [Fact]
     public void LatestRevision_ReturnsMaxForTheWorkspace()
     {
-        using var fx = JulieDbFixture.Create(26, "1", NoSymbols, workspaceId: Ws,
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, NoSymbols, workspaceId: Ws,
             revisions: new[] { new Rev(1, Ws), new Rev(2, Ws), new Rev(3, Ws) });
         using var reader = new FreshnessReader(fx.DbPath);
 
@@ -36,7 +36,7 @@ public sealed class FreshnessReaderTests
     public void LatestRevision_IsScopedByWorkspaceId_DoesNotLeakAcrossWorkspaces()
     {
         // Two workspaces in one DB: each must see only its own MAX, never the other's higher revision.
-        using var fx = JulieDbFixture.Create(26, "1", NoSymbols, workspaceId: Ws,
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, NoSymbols, workspaceId: Ws,
             revisions: new[] { new Rev(2, Ws), new Rev(9, Other) });
         using var reader = new FreshnessReader(fx.DbPath);
 
@@ -47,7 +47,7 @@ public sealed class FreshnessReaderTests
     [Fact]
     public void LatestRevision_UnknownWorkspace_ReturnsZero()
     {
-        using var fx = JulieDbFixture.Create(26, "1", NoSymbols, workspaceId: Ws,
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, NoSymbols, workspaceId: Ws,
             revisions: new[] { new Rev(5, Ws) });
         using var reader = new FreshnessReader(fx.DbPath);
 
@@ -59,7 +59,7 @@ public sealed class FreshnessReaderTests
     [Fact]
     public void LatestRevision_EmptyTable_ReturnsZero()
     {
-        using var fx = JulieDbFixture.Create(26, "1", NoSymbols, workspaceId: Ws); // no revision rows
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, NoSymbols, workspaceId: Ws); // no revision rows
         using var reader = new FreshnessReader(fx.DbPath);
 
         Assert.Equal(0, reader.LatestRevision(Ws));
@@ -68,7 +68,7 @@ public sealed class FreshnessReaderTests
     [Fact]
     public void ChangedSince_ReturnsOnlyRowsAfterTheGivenRevision_ForTheWorkspace()
     {
-        using var fx = JulieDbFixture.Create(26, "1", NoSymbols, workspaceId: Ws,
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, NoSymbols, workspaceId: Ws,
             revisions: new[] { new Rev(1, Ws), new Rev(2, Ws), new Rev(3, Ws) },
             fileChanges: new[]
             {
@@ -90,7 +90,7 @@ public sealed class FreshnessReaderTests
     [Fact]
     public void ChangedSince_AtLatestRevision_ReturnsEmpty()
     {
-        using var fx = JulieDbFixture.Create(26, "1", NoSymbols, workspaceId: Ws,
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, NoSymbols, workspaceId: Ws,
             revisions: new[] { new Rev(1, Ws), new Rev(2, Ws) },
             fileChanges: new[] { new Fc(1, Ws, "a.cs", "added"), new Fc(2, Ws, "b.cs", "modified") });
         using var reader = new FreshnessReader(fx.DbPath);
@@ -101,7 +101,7 @@ public sealed class FreshnessReaderTests
     [Fact]
     public void ChangedSince_ParsesAllThreeChangeKinds()
     {
-        using var fx = JulieDbFixture.Create(26, "1", NoSymbols, workspaceId: Ws,
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, NoSymbols, workspaceId: Ws,
             revisions: new[] { new Rev(1, Ws) },
             fileChanges: new[]
             {
@@ -125,7 +125,7 @@ public sealed class FreshnessReaderTests
         // Mode=ReadOnly connection with NO open explicit transaction. A separate writer connection commits a
         // brand-new revision row; the reader's NEXT LatestRevision call on its EXISTING connection observes the
         // bump. If the reader pinned a transaction snapshot (or required a reopen), this would still read 1.
-        using var fx = JulieDbFixture.Create(26, "1", NoSymbols, workspaceId: Ws,
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, NoSymbols, workspaceId: Ws,
             revisions: new[] { new Rev(1, Ws) });
         using var reader = new FreshnessReader(fx.DbPath);
 
@@ -161,7 +161,7 @@ public sealed class FreshnessReaderTests
     [Fact]
     public void LatestRevision_NullWorkspaceId_Throws()
     {
-        using var fx = JulieDbFixture.Create(26, "1", NoSymbols, workspaceId: Ws);
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, NoSymbols, workspaceId: Ws);
         using var reader = new FreshnessReader(fx.DbPath);
         Assert.Throws<ArgumentNullException>(() => reader.LatestRevision(null!));
     }

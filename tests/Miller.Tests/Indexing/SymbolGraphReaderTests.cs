@@ -62,7 +62,7 @@ public sealed class SymbolGraphReaderTests
             new JulieDbFixture.SymbolRow(LogBId, "Log", "method", "csharp", "src/D.cs",
                 "public void Log()", 1, null),
         };
-        return JulieDbFixture.Create(26, "1", rows, identifiers: identifiers, relationships: relationships);
+        return JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, rows, identifiers: identifiers, relationships: relationships);
     }
 
     [Fact]

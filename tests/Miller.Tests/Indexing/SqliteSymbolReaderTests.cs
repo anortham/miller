@@ -81,7 +81,7 @@ public sealed class SqliteSymbolReaderTests
         // D7: the reader projects symbols.end_line (the whole-symbol span end) so the diff→symbol line-precise
         // mapping (D5) can intersect [StartLine, EndLine] against a changed range — without a per-call DB hop.
         // NULL end_line (the same nullable-INTEGER trap as start_line) must read as 0, not throw.
-        using var fx = JulieDbFixture.Create(26, "1", new[]
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
         {
             new JulieDbFixture.SymbolRow("c0000000000000000000000000000001", "Spanned", "method", "csharp",
                 "src/Spanned.cs", "public void Spanned()", 10, null) { EndLine = 42 },
@@ -133,7 +133,7 @@ public sealed class SqliteSymbolReaderTests
         // when true (compact serde JSON). Miller surfaces that as IndexedSymbol.IsTest. Verified here across
         // go/python/csharp positives + the negative / false / NULL / substring-trap / malformed cases.
         // (M2 decision-4 — the cross-language primary test signal.)
-        using var fx = JulieDbFixture.Create(26, "1", new[]
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
         {
             new JulieDbFixture.SymbolRow("a0000000000000000000000000000001", "TestAdd", "function", "go",
                 "math/add_test.go", "func TestAdd(t *testing.T)", 3, null) { Metadata = "{\"is_test\":true}" },
@@ -195,10 +195,10 @@ public sealed class SqliteSymbolReaderTests
     {
         // The gate must run before the SELECT: a schema-27 DB (with rows) throws the typed gate error,
         // it does not return rows.
-        using var fx = JulieDbFixture.Create(27, "1", JulieDbFixture.DefaultRows);
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema + 1, JulieDbFixture.PinnedContract, JulieDbFixture.DefaultRows);
 
         var ex = Assert.Throws<IncompatibleExtractException>(() => SqliteSymbolReader.Read(fx.DbPath));
-        Assert.Contains("27", ex.Message);
+        Assert.Contains(JulieDbFixture.SchemaText(1), ex.Message);
     }
 
     [Fact]

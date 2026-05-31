@@ -49,8 +49,8 @@ public sealed class IndexerCoreTests
         }
 
         private static ExtractReport Stub(string status) => new(
-            Status: status, Operation: "test", DbPath: "x", Root: null, SchemaVersion: 26,
-            SchemaState: "current", ExtractContractVersion: 1, AnalysisState: null,
+            Status: status, Operation: "test", DbPath: "x", Root: null, SchemaVersion: (int)MillerExtractContract.ExpectedSchemaVersion,
+            SchemaState: "current", ExtractContractVersion: (int)MillerExtractContract.ExpectedExtractContractVersion, AnalysisState: null,
             FilesScanned: 0, SymbolsExtracted: 0, FilesTotal: 0, SymbolsTotal: 0,
             RelationshipsTotal: 0, IdentifiersTotal: 0, TypesTotal: 0, Errors: System.Array.Empty<ExtractError>(),
             Revision: 2, FilesUpdated: 1, FilesDeleted: 0);

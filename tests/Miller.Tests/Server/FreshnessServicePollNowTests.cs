@@ -47,7 +47,7 @@ public sealed class FreshnessServicePollNowTests
     public void PollNow_NewerRevisionPersisted_SwapsAndReportsTheNewRevision()
     {
         using var fx = JulieDbFixture.Create(
-            26, "1", JulieDbFixture.DefaultRows, workspaceId: Ws,
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, JulieDbFixture.DefaultRows, workspaceId: Ws,
             revisions: new[] { new JulieDbFixture.RevisionRow(5, Ws) });
         var holder = HolderAt(fx, builtRevision: 1); // the writer has moved to 5, the held index is at 1
         var service = NewServiceOverDb(fx.DbPath, Ws, holder);
@@ -63,7 +63,7 @@ public sealed class FreshnessServicePollNowTests
     public void PollNow_EqualRevision_IsANoOp()
     {
         using var fx = JulieDbFixture.Create(
-            26, "1", JulieDbFixture.DefaultRows, workspaceId: Ws,
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, JulieDbFixture.DefaultRows, workspaceId: Ws,
             revisions: new[] { new JulieDbFixture.RevisionRow(4, Ws) });
         var holder = HolderAt(fx, builtRevision: 4); // already current
         var service = NewServiceOverDb(fx.DbPath, Ws, holder);
@@ -82,7 +82,7 @@ public sealed class FreshnessServicePollNowTests
         // The host loop's ExecuteAsync never ran (so _reader/_rebuilder are null). PollNow must build a transient
         // reader/rebuilder from the workspace and still converge — never throw into the tool.
         using var fx = JulieDbFixture.Create(
-            26, "1", JulieDbFixture.DefaultRows, workspaceId: Ws,
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, JulieDbFixture.DefaultRows, workspaceId: Ws,
             revisions: new[] { new JulieDbFixture.RevisionRow(9, Ws) });
         var holder = HolderAt(fx, builtRevision: 2);
         var service = NewServiceOverDb(fx.DbPath, Ws, holder);
@@ -102,7 +102,7 @@ public sealed class FreshnessServicePollNowTests
         // the SqliteConnection out from under an in-flight query. We stand in for an in-flight poll by holding the
         // gate (RunUnderPollGateForTest) and assert a concurrent disposal cannot complete until the gate releases.
         using var fx = JulieDbFixture.Create(
-            26, "1", JulieDbFixture.DefaultRows, workspaceId: Ws,
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, JulieDbFixture.DefaultRows, workspaceId: Ws,
             revisions: new[] { new JulieDbFixture.RevisionRow(1, Ws) });
         var holder = HolderAt(fx, builtRevision: 1);
         var service = NewServiceOverDb(fx.DbPath, Ws, holder);
@@ -151,7 +151,7 @@ public sealed class FreshnessServicePollNowTests
     {
         // No workspace_id => no canonical_revisions cursor to poll (a never-scanned/static extract). PollNow must
         // honestly report not-swapped at the held revision rather than fabricate a convergence.
-        using var fx = JulieDbFixture.Create(26, "1", JulieDbFixture.DefaultRows); // no workspaceId, no revisions
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, JulieDbFixture.DefaultRows); // no workspaceId, no revisions
         var holder = HolderAt(fx, builtRevision: 3);
         var service = NewServiceOverDb(fx.DbPath, workspaceId: null, holder);
         var beforeIndex = holder.Current;
