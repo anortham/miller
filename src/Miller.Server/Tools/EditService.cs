@@ -117,6 +117,18 @@ public sealed class EditService
         {
             case TargetResolution.Symbol sym:
             {
+                // add_doc onto an already-documented symbol would stack a second doc block above the first.
+                // julie persists doc_comment for every language, so consume that signal and refuse with guidance
+                // rather than re-deriving per-language comment syntax to detect the existing doc.
+                if (op == EditOperation.AddDoc &&
+                    !string.IsNullOrWhiteSpace(ExtractReader.ReadDetail(_dbPath, sym.Value.SymbolId)?.DocComment))
+                {
+                    return Error(
+                        $"symbol '{sym.Value.Name}' already has a doc comment. Use replace_text to modify the " +
+                        "existing doc, or insert_before to prepend lines — add_doc only documents an undocumented symbol.",
+                        json);
+                }
+
                 var span = ExtractReader.ReadEditSpan(_dbPath, sym.Value.SymbolId);
                 if (span is null)
                     return Error(

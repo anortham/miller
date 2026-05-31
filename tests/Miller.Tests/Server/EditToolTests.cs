@@ -222,6 +222,25 @@ public sealed class EditToolTests : IDisposable
     }
 
     [Fact]
+    public void Execute_AddDoc_SymbolAlreadyDocumented_Refuses_WithGuidance()
+    {
+        // add_doc onto a symbol julie already extracted a doc_comment for would stack a SECOND doc block above
+        // the first (the dogfood bug). Refuse using julie's cross-language doc_comment signal, with guidance.
+        using var fx = JulieDbFixture.CreateForInspect(); // GetUser carries DocComment = "Gets a user by id."
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("add_doc", "GetUser") with
+        {
+            NewText = "/// <summary>Fetches a user.</summary>",
+            Apply = true,
+        });
+
+        Assert.False(result.Applied);
+        Assert.Contains("already has a doc comment", result.Output, StringComparison.Ordinal);
+        Assert.Contains("replace_text", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_ReplaceText_Apply_ReplacesFirstOccurrenceByDefault()
     {
         using var fx = JulieDbFixture.CreateForEdit();

@@ -120,8 +120,10 @@ public static class EditPlanner
     /// <summary>
     /// Plan a documentation insert: a zero-width insertion at the byte offset where the symbol's start line
     /// begins (line→byte mapped on <paramref name="content"/>), of the caller's text followed by one newline.
-    /// The planner adds NO comment prefix — <paramref name="newText"/> is inserted verbatim, so this works for
-    /// every language (the caller supplies "///", "#", "--", etc.). Decision log #7.
+    /// The planner adds NO comment prefix — the caller supplies "///", "#", "--", etc., so this works for every
+    /// language. It DOES align the inserted block to the symbol's own indentation: the doc is dedented to its
+    /// common leading whitespace then re-indented to the indent of the symbol's start line, so an un-indented
+    /// "/// ..." lands flush with an indented member instead of at column 0. Decision log #7.
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="content"/>, <paramref name="span"/>, or <paramref name="newText"/> is null.</exception>
     public static EditPlan AddDoc(string content, SymbolEditSpan span, string newText)
@@ -136,7 +138,64 @@ public static class EditPlanner
             return EmptyNewText("add_doc");
 
         var lineStartByte = ByteOffsetOfLineStart(content, span.StartLine);
-        return EditPlan.Success([new TextEdit(lineStartByte, lineStartByte, newText + "\n")]);
+        var aligned = AlignDocToSymbolIndent(newText, IndentOfLine(content, span.StartLine));
+        return EditPlan.Success([new TextEdit(lineStartByte, lineStartByte, aligned + "\n")]);
+    }
+
+    /// <summary>
+    /// Re-indent a (possibly multi-line) doc block to <paramref name="symbolIndent"/>: strip the block's common
+    /// leading whitespace (dedent) then prefix every non-blank line with the symbol's indent. Blank lines are
+    /// emitted empty (no trailing whitespace). No comment prefix is synthesised — only whitespace is touched.
+    /// </summary>
+    private static string AlignDocToSymbolIndent(string doc, string symbolIndent)
+    {
+        var lines = doc.Split('\n');
+
+        string? common = null;
+        foreach (var line in lines)
+        {
+            if (IsBlank(line))
+                continue;
+            var lead = LeadingWhitespace(line);
+            common = common is null ? lead : CommonPrefix(common, lead);
+        }
+        common ??= string.Empty;
+
+        for (var i = 0; i < lines.Length; i++)
+            lines[i] = IsBlank(lines[i]) ? string.Empty : symbolIndent + lines[i][common.Length..];
+
+        return string.Join('\n', lines);
+    }
+
+    /// <summary>The leading run of spaces/tabs on the 1-based <paramref name="line"/> of <paramref name="content"/> (empty if none/out of range).</summary>
+    private static string IndentOfLine(string content, int line)
+    {
+        var lines = content.Split('\n');
+        if (line < 1 || line > lines.Length)
+            return string.Empty;
+        return LeadingWhitespace(lines[line - 1]);
+    }
+
+    /// <summary>The leading run of spaces/tabs of <paramref name="line"/> (a trailing '\r' is not whitespace we indent with).</summary>
+    private static string LeadingWhitespace(string line)
+    {
+        var i = 0;
+        while (i < line.Length && (line[i] == ' ' || line[i] == '\t'))
+            i++;
+        return line[..i];
+    }
+
+    /// <summary>True when <paramref name="line"/> is empty or only whitespace.</summary>
+    private static bool IsBlank(string line) => line.AsSpan().Trim().IsEmpty;
+
+    /// <summary>The shared character prefix of <paramref name="a"/> and <paramref name="b"/>.</summary>
+    private static string CommonPrefix(string a, string b)
+    {
+        var n = Math.Min(a.Length, b.Length);
+        var i = 0;
+        while (i < n && a[i] == b[i])
+            i++;
+        return a[..i];
     }
 
     // ---- helpers --------------------------------------------------------------------------------

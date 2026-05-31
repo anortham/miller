@@ -335,6 +335,38 @@ public sealed class EditPlannerTests
     }
 
     [Fact]
+    public void AddDoc_IndentsInsertedDoc_ToMatchSymbolIndentation()
+    {
+        // The symbol is indented 4 spaces; an un-indented caller doc must be re-indented to align with the
+        // member, not land at column 0 (the dogfood bug: "/// ..." rendered flush-left against an indented def).
+        const string content = "class C\n{\n    void M() { }\n}\n";
+        var line3Start = ByteLen("class C\n{\n");
+        var span = new SymbolEditSpan(line3Start, ByteLen(content) - 1, null, null, StartLine: 3, Name: "M");
+
+        var plan = EditPlanner.AddDoc(content, span, "/// <summary>does M</summary>");
+
+        Assert.True(plan.IsSuccess);
+        Assert.Equal("    /// <summary>does M</summary>\n", Assert.Single(plan.Edits).Replacement);
+    }
+
+    [Fact]
+    public void AddDoc_MultiLineDoc_AlignsBlockToSymbol_PreservingRelativeIndent()
+    {
+        // A multi-line doc is aligned as a BLOCK to the symbol's indent; relative indentation WITHIN the doc
+        // (here the leading whitespace the caller put before each line) is normalised away, content kept intact.
+        const string content = "class C\n{\n    void M() { }\n}\n";
+        var line3Start = ByteLen("class C\n{\n");
+        var span = new SymbolEditSpan(line3Start, ByteLen(content) - 1, null, null, StartLine: 3, Name: "M");
+
+        var plan = EditPlanner.AddDoc(content, span, "/// <summary>\n/// detail\n/// </summary>");
+
+        Assert.True(plan.IsSuccess);
+        Assert.Equal(
+            "    /// <summary>\n    /// detail\n    /// </summary>\n",
+            Assert.Single(plan.Edits).Replacement);
+    }
+
+    [Fact]
     public void AddDoc_EmptyNewText_ReturnsMissingArgument()
     {
         const string content = "class Foo { }\n";
