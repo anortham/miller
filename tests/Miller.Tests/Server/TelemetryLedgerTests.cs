@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Data.Sqlite;
 using Miller.Server.Telemetry;
 using Xunit;
@@ -37,6 +39,9 @@ public sealed class TelemetryLedgerTests : IDisposable
             DataSource = dbPath, Mode = SqliteOpenMode.ReadOnly, Pooling = false,
         }.ToString();
 
+    private static string Sha256Hex(string raw) =>
+        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(raw)));
+
     private int RowCount()
     {
         using var c = new SqliteConnection(ReadOnlyUnpooled(_dbPath));
@@ -46,13 +51,24 @@ public sealed class TelemetryLedgerTests : IDisposable
         return Convert.ToInt32(cmd.ExecuteScalar());
     }
 
-    private (string tool, string outcome, long duration, long? estTokens, string? hash, int? resultCount) ReadOnlyRow()
+    private (
+        string tool,
+        string outcome,
+        long duration,
+        long? estTokens,
+        string? hash,
+        int? resultCount,
+        string? workspaceId,
+        string? workspaceRoot) ReadOnlyRow()
     {
         using var c = new SqliteConnection(ReadOnlyUnpooled(_dbPath));
         c.Open();
         using var cmd = c.CreateCommand();
         cmd.CommandText =
-            "SELECT tool, outcome, duration_ms, est_tokens, target_hash, result_count FROM tool_telemetry LIMIT 1;";
+            """
+            SELECT tool, outcome, duration_ms, est_tokens, target_hash, result_count, workspace_id, workspace_root
+            FROM tool_telemetry LIMIT 1;
+            """;
         using var r = cmd.ExecuteReader();
         Assert.True(r.Read());
         return (
@@ -61,7 +77,9 @@ public sealed class TelemetryLedgerTests : IDisposable
             r.GetInt64(2),
             r.IsDBNull(3) ? null : r.GetInt64(3),
             r.IsDBNull(4) ? null : r.GetString(4),
-            r.IsDBNull(5) ? null : r.GetInt32(5));
+            r.IsDBNull(5) ? null : r.GetInt32(5),
+            r.IsDBNull(6) ? null : r.GetString(6),
+            r.IsDBNull(7) ? null : r.GetString(7));
     }
 
     [Fact]
@@ -74,6 +92,7 @@ public sealed class TelemetryLedgerTests : IDisposable
     [Fact]
     public void Measure_WritesOneRow_WithOkOutcome_AndHashedTarget()
     {
+        const string target = "retry handler";
         using (var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ws1"))
         {
             using var scope = ledger.Measure("search", op: "auto");
@@ -81,7 +100,7 @@ public sealed class TelemetryLedgerTests : IDisposable
             scope.BytesReturned = 120;
             scope.EstTokens = 30;
             scope.IndexFresh = true;
-            scope.SetTarget("retry handler"); // hashed, not stored raw
+            scope.SetTarget(target); // hashed, not stored raw
             scope.Outcome = TelemetryOutcome.Ok;
         }
 
@@ -93,9 +112,85 @@ public sealed class TelemetryLedgerTests : IDisposable
         Assert.Equal(30, row.estTokens);
         Assert.Equal(3, row.resultCount);
         Assert.NotNull(row.hash);
-        // SHA256 hex is 64 chars and must NOT be the raw query.
-        Assert.Equal(64, row.hash!.Length);
+        Assert.Equal(Sha256Hex(target), row.hash);
         Assert.DoesNotContain("retry", row.hash, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Measure_WithoutWorkspaceOverride_UsesLedgerWorkspaceAndRoot()
+    {
+        string workspaceRoot = Path.Combine(_dir, "current-workspace");
+        using (var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "current-ws", workspaceRoot))
+        {
+            using var scope = ledger.Measure("search", op: "auto");
+            scope.Outcome = TelemetryOutcome.Ok;
+        }
+
+        var row = ReadOnlyRow();
+        Assert.Equal("current-ws", row.workspaceId);
+        Assert.Equal(workspaceRoot, row.workspaceRoot);
+    }
+
+    [Fact]
+    public void Measure_WithWorkspaceOverride_UsesTargetWorkspaceAndRoot_AndStillHashesTarget()
+    {
+        const string target = "workspace override query";
+        string currentRoot = Path.Combine(_dir, "current-workspace");
+        string targetRoot = Path.Combine(_dir, "target-workspace");
+        using (var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "current-ws", currentRoot))
+        {
+            using var scope = ledger.Measure("search", op: "auto");
+            scope.SetWorkspace("target-ws", targetRoot);
+            scope.SetTarget(target);
+            scope.Outcome = TelemetryOutcome.Ok;
+        }
+
+        var row = ReadOnlyRow();
+        Assert.Equal("target-ws", row.workspaceId);
+        Assert.Equal(targetRoot, row.workspaceRoot);
+        Assert.NotNull(row.hash);
+        Assert.Equal(Sha256Hex(target), row.hash);
+        Assert.DoesNotContain(target, row.hash, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Record_UsesRecordWorkspaceRoot_WhenProvided_AndFallsBackToLedgerRoot_WhenMissing()
+    {
+        string ledgerRoot = Path.Combine(_dir, "ledger-workspace");
+        string targetRoot = Path.Combine(_dir, "target-workspace");
+        using (var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ledger-ws", ledgerRoot))
+        {
+            var target = new TelemetryRecord(
+                Tool: "search", Op: "auto", WorkspaceId: "target-ws", WorkspaceRoot: targetRoot,
+                DurationMs: 1, Outcome: "ok", ErrorKind: null,
+                ResultCount: null, BytesExamined: 0, BytesReturned: 0, SourceBytes: 0,
+                EstTokens: null, IndexFresh: null, TargetHash: null, MetadataJson: "{}");
+            ledger.Record(in target, id: "target-row");
+
+            var fallback = new TelemetryRecord(
+                Tool: "inspect", Op: "summary", WorkspaceId: "legacy-ws", WorkspaceRoot: null,
+                DurationMs: 1, Outcome: "ok", ErrorKind: null,
+                ResultCount: null, BytesExamined: 0, BytesReturned: 0, SourceBytes: 0,
+                EstTokens: null, IndexFresh: null, TargetHash: null, MetadataJson: "{}");
+            ledger.Record(in fallback, id: "fallback-row");
+        }
+
+        using var c = new SqliteConnection(ReadOnlyUnpooled(_dbPath));
+        c.Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText =
+            """
+            SELECT id, workspace_id, workspace_root
+            FROM tool_telemetry
+            ORDER BY id;
+            """;
+        var rows = new List<(string id, string? workspaceId, string? workspaceRoot)>();
+        using (var r = cmd.ExecuteReader())
+            while (r.Read())
+                rows.Add((r.GetString(0), r.IsDBNull(1) ? null : r.GetString(1), r.IsDBNull(2) ? null : r.GetString(2)));
+
+        Assert.Equal(("fallback-row", "legacy-ws", ledgerRoot), Assert.Single(rows, row => row.id == "fallback-row"));
+        Assert.Equal(("target-row", "target-ws", targetRoot), Assert.Single(rows, row => row.id == "target-row"));
     }
 
     [Theory]
@@ -132,7 +227,7 @@ public sealed class TelemetryLedgerTests : IDisposable
 
         // A negative duration violates the CHECK (duration_ms >= 0). Record must swallow + count, not throw.
         var bad = new TelemetryRecord(
-            Tool: "search", Op: null, WorkspaceId: "ws1",
+            Tool: "search", Op: null, WorkspaceId: "ws1", WorkspaceRoot: null,
             DurationMs: -5, Outcome: "ok", ErrorKind: null,
             ResultCount: null, BytesExamined: 0, BytesReturned: 0, SourceBytes: 0,
             EstTokens: null, IndexFresh: null, TargetHash: null, MetadataJson: "{}");

@@ -49,6 +49,8 @@ public sealed class TelemetryScope : IDisposable
     public string CorrelationId { get; }
 
     private string? _op;
+    private string? _workspaceId;
+    private string? _workspaceRoot;
 
     /// <summary>
     /// The operation / mode sub-axis (D7), if any. Seeded from the <see cref="TelemetryLedger.Measure"/> call (the
@@ -115,6 +117,19 @@ public sealed class TelemetryScope : IDisposable
     public string MetadataJson { get; set; } = "{}";
 
     /// <summary>
+    /// Override the workspace attributed to this telemetry row. Cross-workspace tools call this when they serve
+    /// data from a target workspace different from the process workspace.
+    /// </summary>
+    public void SetWorkspace(string workspaceId, string workspaceRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
+
+        _workspaceId = workspaceId;
+        _workspaceRoot = workspaceRoot;
+    }
+
+    /// <summary>
     /// Hash the raw target/query into <see cref="TargetHash"/> (SHA256 hex). Privacy: the raw string is
     /// NEVER persisted (it can carry secrets and bloats the ledger). Null/empty clears the hash.
     /// </summary>
@@ -142,7 +157,8 @@ public sealed class TelemetryScope : IDisposable
         var record = new TelemetryRecord(
             Tool: Tool,
             Op: Op,
-            WorkspaceId: _ledger.WorkspaceId,
+            WorkspaceId: _workspaceId ?? _ledger.WorkspaceId,
+            WorkspaceRoot: _workspaceRoot,
             DurationMs: durationMs,
             Outcome: Outcome.ToStorageString(),
             ErrorKind: ErrorKind,
