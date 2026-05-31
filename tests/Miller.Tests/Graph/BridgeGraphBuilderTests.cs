@@ -1,0 +1,301 @@
+using Miller.Core.Contracts;
+using Miller.Core.Graph;
+using Miller.Core.Resolver;
+using Xunit;
+
+namespace Miller.Tests.Graph;
+
+/// <summary>
+/// Tests for <see cref="BridgeGraphBuilder"/> (plan Task 8): the per-leg reductions (CreateMap grouping with ordinal
+/// direction, controller-endpoint reduction with the [FromBody] honesty guard, TsClientCall reduction) plus the
+/// end-to-end run legs to scorer to graph. Pure, in-memory fixtures; no DB.
+///
+/// <para>Every fixture uses ONLY the verified lean contracts:
+/// <c>TypeArgument(IdentifierId, Ordinal, ParentArgId, TypeName, FilePath)</c> and
+/// <c>SymbolDetail(Id, Name, Kind, FilePath, Signature, Namespace, TestRole, ParentClassName)</c>. The endpoint
+/// class <c>[Route]</c> join is by <see cref="SymbolDetail.ParentClassName"/> (the contract carries no parent symbol
+/// id), and the Dapper-FROM secondary anchor is not expressible (the contract carries no per-arg containing-symbol id
+/// or span), so the entity-table edge here is exercised via the <c>DbSet&lt;T&gt;</c> PRIMARY breadcrumb.</para>
+/// </summary>
+public sealed class BridgeGraphBuilderTests
+{
+    private static SymbolDetail Type(string id, string name, string kind = "class", string? ns = null, string file = "src/X.cs") =>
+        new(id, name, kind, file, Signature: name, Namespace: ns, TestRole: null, ParentClassName: null);
+
+    private static SymbolDetail Method(string id, string name, string signature, string parentClassName, string file) =>
+        new(id, name, "method", file, signature, Namespace: "Api.Controllers", TestRole: null, ParentClassName: parentClassName);
+
+    private static TypeArgument Arg(string identifierId, int ordinal, string typeName, string file = "src/Profile.cs") =>
+        new(IdentifierId: identifierId, Ordinal: ordinal, ParentArgId: null, TypeName: typeName, FilePath: file);
+
+    private static DbSetProperty DbSet(string table, string entity, string file = "src/Db.cs", int line = 10) =>
+        new("prop:" + table, table, entity, file, line);
+
+    [Fact]
+    public void CreateMap_chain_resolves_UserDto_to_ApplicationUser_to_table_with_High_edges()
+    {
+        var symbols = new List<SymbolDetail>
+        {
+            Type("sym-userdto", "UserDto", "class", "Api.Dtos", "src/Dtos/UserDto.cs"),
+            Type("sym-appuser", "ApplicationUser", "class", "Domain", "src/Domain/User.cs"),
+        };
+
+        var typeArgs = new List<TypeArgument>
+        {
+            Arg("cm1", 0, "UserDto"),
+            Arg("cm1", 1, "ApplicationUser"),
+        };
+
+        var dbSets = new List<DbSetProperty> { DbSet("ApplicationUsers", "ApplicationUser") };
+
+        var graph = BridgeGraphBuilder.Build(symbols, typeArgs, literals: [], annotations: [], dbSetProperties: dbSets);
+
+        var fromDto = graph.Walk("sym-userdto", maxDepth: 5);
+        Assert.Contains(fromDto, e => e.Edge.Kind == BridgeKind.MapsTo && e.Band == ConfidenceBand.High);
+
+        var fromEntity = graph.Walk("sym-appuser", maxDepth: 5);
+        Assert.Contains(fromEntity, e => e.Edge.Kind == BridgeKind.StoredIn && e.Band == ConfidenceBand.High);
+
+        Assert.Equal(2, graph.Walk("sym-userdto", maxDepth: 5).Count);
+    }
+
+    [Fact]
+    public void CreateMap_edge_direction_is_source_to_dest_not_flipped()
+    {
+        var symbols = new List<SymbolDetail>
+        {
+            Type("sym-req", "CreateOrderRequest", "class", "Api.Requests"),
+            Type("sym-order", "Order", "class", "Domain"),
+        };
+
+        var typeArgs = new List<TypeArgument>
+        {
+            Arg("cm1", 0, "CreateOrderRequest"),
+            Arg("cm1", 1, "Order"),
+        };
+
+        var graph = BridgeGraphBuilder.Build(symbols, typeArgs, [], [], []);
+
+        var edge = graph.Incident("sym-req").Single(e => e.Edge.Kind == BridgeKind.MapsTo);
+        Assert.Equal("sym-req", edge.Edge.SourceRef.SymbolId);
+        Assert.Equal("sym-order", edge.Edge.TargetRef.SymbolId);
+    }
+
+    [Fact]
+    public void CreateMap_ignores_nested_generic_args_and_partial_and_oversized_groups()
+    {
+        var symbols = new List<SymbolDetail>
+        {
+            Type("sym-a", "A"),
+            Type("sym-b", "B"),
+        };
+
+        var typeArgs = new List<TypeArgument>
+        {
+            Arg("cm1", 0, "A"),
+            Arg("cm1", 1, "B"),
+            new(IdentifierId: "cm1", Ordinal: 0, ParentArgId: "outer", TypeName: "Nested", FilePath: "src/Profile.cs"),
+            Arg("cm2", 0, "OnlySource"),
+            Arg("cm3", 0, "K"),
+            Arg("cm3", 1, "V"),
+            Arg("cm3", 2, "W"),
+        };
+
+        var graph = BridgeGraphBuilder.Build(symbols, typeArgs, [], [], []);
+
+        Assert.Single(graph.Incident("sym-a"), e => e.Edge.Kind == BridgeKind.MapsTo);
+    }
+
+    [Fact]
+    public void Ambiguous_entity_name_yields_no_High_edge()
+    {
+        var symbols = new List<SymbolDetail>
+        {
+            Type("sym-userdto", "UserDto", "class", "Api.Dtos", "api/Dtos/UserDto.cs"),
+            Type("sym-appuser-1", "ApplicationUser", "class", "Domain.A", "domainA/User.cs"),
+            Type("sym-appuser-2", "ApplicationUser", "class", "Domain.B", "domainB/User.cs"),
+        };
+
+        var typeArgs = new List<TypeArgument>
+        {
+            Arg("cm1", 0, "UserDto", "shared/Profile.cs"),
+            Arg("cm1", 1, "ApplicationUser", "shared/Profile.cs"),
+        };
+
+        var graph = BridgeGraphBuilder.Build(symbols, typeArgs, [], [], []);
+
+        var dtoEdges = graph.Incident("sym-userdto");
+        Assert.All(dtoEdges, e => Assert.NotEqual(ConfidenceBand.High, e.Band));
+    }
+
+    [Fact]
+    public void DbSet_property_resolves_an_entity_to_table_StoredIn_edge()
+    {
+        var symbols = new List<SymbolDetail> { Type("sym-appsetting", "AppSetting", "class", "Domain") };
+        var dbSets = new List<DbSetProperty> { DbSet("AppSettings", "AppSetting") };
+
+        var graph = BridgeGraphBuilder.Build(symbols, typeArguments: [], literals: [], annotations: [], dbSetProperties: dbSets);
+
+        Assert.Contains(graph.Incident("sym-appsetting"), e => e.Edge.Kind == BridgeKind.StoredIn);
+    }
+
+    [Fact]
+    public void DbSet_entity_is_taken_from_the_generic_arg_not_the_property_name()
+    {
+        var symbols = new List<SymbolDetail>
+        {
+            Type("sym-appsetting", "AppSetting", "class", "Domain"),
+            Type("sym-plural", "AppSettings", "class", "Domain"),
+        };
+        var dbSets = new List<DbSetProperty> { DbSet("AppSettings", "AppSetting") };
+
+        var graph = BridgeGraphBuilder.Build(symbols, [], [], [], dbSets);
+
+        Assert.Contains(graph.Incident("sym-appsetting"), e => e.Edge.Kind == BridgeKind.StoredIn);
+        Assert.DoesNotContain(graph.Incident("sym-plural"), e => e.Edge.Kind == BridgeKind.StoredIn);
+    }
+
+    [Fact]
+    public void Controller_endpoint_reduction_builds_the_expanded_route_and_hits_edge()
+    {
+        var classSym = Type("sym-class", "AppSettingsController", "class", "Api.Controllers", "api/AppSettingsController.cs");
+        var methodSym = Method("sym-get", "Get", "Task<ActionResult<AppSetting>> Get(int id)",
+            "AppSettingsController", "api/AppSettingsController.cs");
+        var dto = Type("sym-appsetting", "AppSetting", "class", "Domain");
+        var tsFn = Type("sym-tsfn", "fetchAppSetting", "function", file: "web/api.ts");
+
+        var symbols = new List<SymbolDetail> { classSym, methodSym, dto, tsFn };
+
+        var annotations = new List<SymbolAnnotation>
+        {
+            new(SymbolId: "sym-class", Ordinal: 0, Annotation: "Route", AnnotationKey: "route",
+                RawText: "Route(\"api/[controller]\")", Carrier: "Route"),
+            new(SymbolId: "sym-get", Ordinal: 0, Annotation: "HttpGet", AnnotationKey: "httpget",
+                RawText: "HttpGet(\"{id}\")", Carrier: "HttpGet"),
+        };
+
+        var literal = MakeLiteral("/api/appsettings/{}", kind: "url", language: "typescript",
+            carrier: "axios.get", containingSymbolId: "sym-tsfn", spanStart: 0);
+
+        var graph = BridgeGraphBuilder.Build(symbols, typeArguments: [], literals: [literal], annotations: annotations, dbSetProperties: []);
+
+        var endpointEdges = graph.Incident("sym-get");
+        Assert.Contains(endpointEdges, e => e.Edge.Kind == BridgeKind.Hits && e.Band == ConfidenceBand.High);
+        Assert.Contains(endpointEdges, e => e.Edge.Kind == BridgeKind.Responds);
+    }
+
+    [Fact]
+    public void FromBody_honesty_a_route_primitive_param_does_not_produce_a_Consumes_edge()
+    {
+        var classSym = Type("sym-class", "ItemsController", "class", "Api.Controllers", "api/ItemsController.cs");
+        var methodSym = Method("sym-get", "GetById", "Task<ActionResult<Item>> GetById(int id)",
+            "ItemsController", "api/ItemsController.cs");
+        var dto = Type("sym-item", "Item", "class", "Domain");
+
+        var symbols = new List<SymbolDetail> { classSym, methodSym, dto };
+
+        var annotations = new List<SymbolAnnotation>
+        {
+            new("sym-class", 0, "Route", "route", "Route(\"api/[controller]\")", "Route"),
+            new("sym-get", 0, "HttpGet", "httpget", "HttpGet(\"{id}\")", "HttpGet"),
+        };
+
+        var graph = BridgeGraphBuilder.Build(symbols, [], [], annotations, []);
+
+        Assert.DoesNotContain(graph.Incident("sym-get"), e => e.Edge.Kind == BridgeKind.Consumes);
+    }
+
+    [Fact]
+    public void FromBody_a_complex_param_on_a_POST_produces_a_Consumes_edge()
+    {
+        var classSym = Type("sym-class", "ItemsController", "class", "Api.Controllers", "api/ItemsController.cs");
+        var methodSym = Method("sym-post", "Create", "Task<ActionResult<Item>> Create(CreateItemRequest request)",
+            "ItemsController", "api/ItemsController.cs");
+        var dto = Type("sym-item", "Item", "class", "Domain");
+        var req = Type("sym-req", "CreateItemRequest", "class", "Api.Requests");
+
+        var symbols = new List<SymbolDetail> { classSym, methodSym, dto, req };
+
+        var annotations = new List<SymbolAnnotation>
+        {
+            new("sym-class", 0, "Route", "route", "Route(\"api/[controller]\")", "Route"),
+            new("sym-post", 0, "HttpPost", "httppost", "HttpPost", "HttpPost"),
+        };
+
+        var graph = BridgeGraphBuilder.Build(symbols, [], [], annotations, []);
+
+        var consumes = graph.Incident("sym-post").Single(e => e.Edge.Kind == BridgeKind.Consumes);
+        Assert.Equal("sym-req", consumes.Edge.TargetRef.SymbolId);
+    }
+
+    [Fact]
+    public void Csharp_test_httpclient_literal_does_not_produce_a_hits_edge()
+    {
+        var classSym = Type("sym-class", "AppSettingsController", "class", "Api.Controllers", "api/AppSettingsController.cs");
+        var methodSym = Method("sym-get", "Get", "Task<ActionResult<AppSetting>> Get()",
+            "AppSettingsController", "api/AppSettingsController.cs");
+        var dto = Type("sym-appsetting", "AppSetting", "class", "Domain");
+        var symbols = new List<SymbolDetail> { classSym, methodSym, dto };
+
+        var annotations = new List<SymbolAnnotation>
+        {
+            new("sym-class", 0, "Route", "route", "Route(\"api/[controller]\")", "Route"),
+            new("sym-get", 0, "HttpGet", "httpget", "HttpGet", "HttpGet"),
+        };
+
+        var literal = MakeLiteral("/api/appsettings", kind: "url", language: "csharp",
+            carrier: "GetAsync", containingSymbolId: "sym-test", spanStart: 0);
+
+        var graph = BridgeGraphBuilder.Build(symbols, [], [literal], annotations, []);
+
+        Assert.DoesNotContain(graph.Incident("sym-get"), e => e.Edge.Kind == BridgeKind.Hits);
+    }
+
+    [Fact]
+    public void Builder_accepts_a_reader_supplied_literal_site_lookup()
+    {
+        var classSym = Type("sym-class", "AppSettingsController", "class", "Api.Controllers", "api/AppSettingsController.cs");
+        var methodSym = Method("sym-get", "Get", "Task<ActionResult<AppSetting>> Get()",
+            "AppSettingsController", "api/AppSettingsController.cs");
+        var dto = Type("sym-appsetting", "AppSetting", "class", "Domain");
+        var tsFn = Type("sym-tsfn", "fetchAppSettings", "function", file: "web/api.ts");
+        var symbols = new List<SymbolDetail> { classSym, methodSym, dto, tsFn };
+
+        var annotations = new List<SymbolAnnotation>
+        {
+            new("sym-class", 0, "Route", "route", "Route(\"api/[controller]\")", "Route"),
+            new("sym-get", 0, "HttpGet", "httpget", "HttpGet", "HttpGet"),
+        };
+
+        var literal = MakeLiteral("/api/appsettings", kind: "url", language: "typescript",
+            carrier: "axios.get", containingSymbolId: "sym-tsfn", spanStart: 0);
+
+        var sites = new Dictionary<LiteralRecord, LiteralSite> { [literal] = new("web/api.ts", 42) };
+
+        var graph = BridgeGraphBuilder.Build(symbols, [], [literal], annotations, [], sites);
+
+        Assert.Contains(graph.Incident("sym-get"), e => e.Edge.Kind == BridgeKind.Hits);
+    }
+
+    [Fact]
+    public void Build_null_collections_throw()
+    {
+        Assert.Throws<ArgumentNullException>(() => BridgeGraphBuilder.Build(null!, [], [], [], []));
+        Assert.Throws<ArgumentNullException>(() => BridgeGraphBuilder.Build([], null!, [], [], []));
+        Assert.Throws<ArgumentNullException>(() => BridgeGraphBuilder.Build([], [], null!, [], []));
+        Assert.Throws<ArgumentNullException>(() => BridgeGraphBuilder.Build([], [], [], null!, []));
+        Assert.Throws<ArgumentNullException>(() => BridgeGraphBuilder.Build([], [], [], [], null!));
+    }
+
+    private static LiteralRecord MakeLiteral(
+        string text, string kind, string language = "csharp", string carrier = "axios.get",
+        string containingSymbolId = "sym", int spanStart = 0)
+        => new(
+            LiteralText: text,
+            Kind: kind,
+            Carrier: carrier,
+            ArgPosition: 0,
+            Language: language,
+            ContainingSymbolId: containingSymbolId,
+            Span: new SourceSpan(spanStart, spanStart + text.Length));
+}

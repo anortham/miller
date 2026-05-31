@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Miller.Core.Contracts;
 
 namespace Miller.Indexing;
 
@@ -59,6 +60,8 @@ public static class SqliteSymbolReader
             string? parentId = reader.IsDBNull(8) ? null : reader.GetString(8); // parent_id   nullable
             string? metadata = reader.IsDBNull(9) ? null : reader.GetString(9); // metadata    nullable (JSON)
 
+            var (isTest, testRole) = ParseTestSignals(metadata);
+
             results.Add(new IndexedSymbol(
                 DocId: docId++,
                 SymbolId: symbolId,
@@ -70,38 +73,56 @@ public static class SqliteSymbolReader
                 StartLine: startLine,
                 EndLine: endLine,
                 ParentId: parentId,
-                IsTest: ParseIsTest(metadata)));
+                IsTest: isTest,
+                TestRole: testRole));
         }
 
         return results;
     }
 
     /// <summary>
-    /// Read the cross-language test signal from julie's <c>symbols.metadata</c> JSON (decision-4). julie's
-    /// <c>test_detection.rs</c> writes <c>"is_test": true</c> into the metadata of test symbols across all 34
-    /// languages, ONLY when true (compact serde JSON). We parse just the <c>is_test</c> boolean.
+    /// Read the cross-language test signals from julie's <c>symbols.metadata</c> JSON (decision-4; M4 Task 9).
+    /// julie's <c>test_detection.rs</c> writes <c>"is_test": true</c> (only when true) AND, when known, a
+    /// <c>"test_role"</c> string (e.g. <c>unit</c>/<c>integration</c>/<c>e2e</c>) into the metadata of test symbols
+    /// across all 34+ languages (compact serde JSON). We parse both in ONE pass and surface the boolean plus the
+    /// optional <see cref="TestRole"/>.
     ///
-    /// Perf: ~90% of symbols are not tests and carry no <c>is_test</c> key, so we skip JSON parsing entirely
-    /// unless a cheap ordinal substring check matches — over ~565k startup rows that avoids ~half a million
-    /// parses. A malformed/absent/false value is <c>false</c> (the signal is advisory, never throws).
+    /// <para>Perf: ~90% of symbols are not tests and carry NEITHER key, so we skip JSON parsing entirely unless a
+    /// cheap ordinal substring check matches one of them — over ~565k startup rows that avoids ~half a million
+    /// parses. A malformed/absent value yields <c>(false, null)</c> (the signals are advisory, never throw).</para>
     /// </summary>
-    private static bool ParseIsTest(string? metadataJson)
+    private static (bool IsTest, TestRole? TestRole) ParseTestSignals(string? metadataJson)
     {
         if (string.IsNullOrEmpty(metadataJson)
-            || !metadataJson.Contains("\"is_test\"", StringComparison.Ordinal))
-            return false;
+            || (!metadataJson.Contains("\"is_test\"", StringComparison.Ordinal)
+                && !metadataJson.Contains("\"test_role\"", StringComparison.Ordinal)))
+            return (false, null);
 
         try
         {
             using var doc = System.Text.Json.JsonDocument.Parse(metadataJson);
-            return doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object
-                && doc.RootElement.TryGetProperty("is_test", out var v)
-                && v.ValueKind == System.Text.Json.JsonValueKind.True;
+            var root = doc.RootElement;
+            if (root.ValueKind != System.Text.Json.JsonValueKind.Object)
+                return (false, null);
+
+            bool isTest = root.TryGetProperty("is_test", out var isTestEl)
+                && isTestEl.ValueKind == System.Text.Json.JsonValueKind.True;
+
+            TestRole? testRole = null;
+            if (root.TryGetProperty("test_role", out var roleEl)
+                && roleEl.ValueKind == System.Text.Json.JsonValueKind.String)
+            {
+                string? role = roleEl.GetString();
+                if (!string.IsNullOrWhiteSpace(role))
+                    testRole = new TestRole(role);
+            }
+
+            return (isTest, testRole);
         }
         catch (System.Text.Json.JsonException)
         {
             // julie writes well-formed JSON; tolerate a corrupt/hand-mangled value as "not a test".
-            return false;
+            return (false, null);
         }
     }
 

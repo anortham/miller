@@ -206,6 +206,79 @@ public sealed class SymbolGraph
             .ToArray();
     }
 
+    /// <summary>
+    /// The shortest dependency path from <paramref name="from"/> to <paramref name="to"/> as an ordered id list
+    /// (<c>from … to</c>, inclusive of both endpoints), or null when <paramref name="to"/> is unreachable from
+    /// <paramref name="from"/> within <paramref name="maxDepth"/> hops or either endpoint is not a vertex of the graph.
+    /// Follows the forward (<see cref="Dependencies"/>) adjacency — "what does <c>from</c> reach". Breadth-first with
+    /// parent reconstruction; ties are broken by visiting neighbours in id order (consistent with <see cref="Reach"/>),
+    /// so the returned path is deterministic across runs. <c>from == to</c> (a known vertex) yields the single-node
+    /// path <c>[from]</c>.
+    /// </summary>
+    /// <param name="from">The start vertex id; null/unknown yields null.</param>
+    /// <param name="to">The goal vertex id; null/unknown yields null.</param>
+    /// <param name="maxDepth">Maximum hop distance to explore; <c>≤ 0</c> yields null unless <c>from == to</c>.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="from"/> or <paramref name="to"/> is null.</exception>
+    public IReadOnlyList<string>? ShortestPath(string from, string to, int maxDepth)
+    {
+        ArgumentNullException.ThrowIfNull(from);
+        ArgumentNullException.ThrowIfNull(to);
+
+        if (!_isTest.ContainsKey(from) || !_isTest.ContainsKey(to))
+            return null; // an endpoint not in the graph: no path
+
+        if (string.Equals(from, to, StringComparison.Ordinal))
+            return [from]; // a vertex always reaches itself at distance 0 (even when maxDepth <= 0)
+
+        if (maxDepth <= 0)
+            return null;
+
+        // BFS over the forward adjacency, recording the parent each node was first discovered from (BFS guarantees the
+        // first discovery is along a shortest path). Neighbours are already id-sorted, so the parent chain is stable.
+        var parent = new Dictionary<string, string>(StringComparer.Ordinal);
+        var depth = new Dictionary<string, int>(StringComparer.Ordinal) { [from] = 0 };
+        var frontier = new Queue<string>();
+        frontier.Enqueue(from);
+
+        while (frontier.Count > 0)
+        {
+            var current = frontier.Dequeue();
+            var currentDepth = depth[current];
+            if (currentDepth >= maxDepth)
+                continue; // its neighbours would exceed the depth cap
+
+            foreach (var neighbour in Dependencies(current)) // id-sorted; deterministic tie-break
+            {
+                if (depth.ContainsKey(neighbour))
+                    continue; // already discovered at an equal-or-shorter distance
+
+                depth[neighbour] = currentDepth + 1;
+                parent[neighbour] = current;
+
+                if (string.Equals(neighbour, to, StringComparison.Ordinal))
+                    return Reconstruct(parent, from, to);
+
+                frontier.Enqueue(neighbour);
+            }
+        }
+
+        return null; // to was never reached within maxDepth
+    }
+
+    /// <summary>Rebuild the from→to path by walking the parent chain back from <paramref name="to"/> and reversing.</summary>
+    private static IReadOnlyList<string> Reconstruct(IReadOnlyDictionary<string, string> parent, string from, string to)
+    {
+        var reversed = new List<string> { to };
+        var node = to;
+        while (!string.Equals(node, from, StringComparison.Ordinal))
+        {
+            node = parent[node];
+            reversed.Add(node);
+        }
+        reversed.Reverse();
+        return reversed;
+    }
+
     /// <summary>The neighbour ids of <paramref name="id"/> in the requested direction (Both = forward ∪ reverse).</summary>
     private IEnumerable<string> Neighbours(string id, Direction dir) => dir switch
     {

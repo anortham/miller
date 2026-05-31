@@ -206,6 +206,13 @@ internal sealed class JulieDbFixture : IDisposable
             // symbols/identifiers only) so a FreshnessReader can open against any fixture.
             Exec(conn, CanonicalRevisionsDdl);
             Exec(conn, RevisionFileChangesDdl);
+            // The M4 bridge tables are always created so the SqliteBridgeReader — now on the single production
+            // RepositoryIndexLoader.Load path (D9) — can open against ANY fixture. Without them every loader /
+            // rebuilder / freshness-swap test that routes through Load crashes on "no such table: type_arguments".
+            // Empty by default (no bridge breadcrumbs) → an empty bridge graph, exactly like a scan-only extract.
+            Exec(conn, TypeArgumentsDdl);
+            Exec(conn, LiteralsDdl);
+            Exec(conn, SymbolAnnotationsDdl);
             if (createSchemaVersionTable) Exec(conn, SchemaVersionDdl);
             if (createMetadataTable) Exec(conn, MetadataDdl);
 
@@ -730,6 +737,59 @@ internal sealed class JulieDbFixture : IDisposable
             confidence REAL DEFAULT 1.0,
             metadata TEXT,
             created_at INTEGER DEFAULT 0
+        );
+        """;
+
+    // ---- M4 bridge tables (verbatim from julie v7.13.0 schema.rs; findings 28-2) ------------------------
+    // The SqliteBridgeReader is now on the single production RepositoryIndexLoader.Load path (D9), so these are
+    // always created — empty by default — and every loader/rebuilder/freshness-swap test that routes through Load
+    // can open against ANY fixture (without them: "no such table: type_arguments"). The reader selects:
+    //   type_arguments(identifier_id, ordinal, parent_arg_id, type_name, file_path, id);
+    //   literals(literal_text, kind, carrier, arg_position, language, containing_symbol_id, start_byte, end_byte, file_path, start_line, id);
+    //   symbol_annotations(symbol_id, ordinal, annotation, annotation_key, raw_text, carrier, id).
+
+    private const string TypeArgumentsDdl = """
+        CREATE TABLE IF NOT EXISTS type_arguments (
+            id TEXT PRIMARY KEY,
+            identifier_id TEXT NOT NULL,
+            parent_arg_id TEXT,
+            ordinal INTEGER NOT NULL,
+            type_name TEXT NOT NULL,
+            target_symbol_id TEXT,
+            file_path TEXT NOT NULL,
+            language TEXT NOT NULL,
+            last_indexed INTEGER
+        );
+        """;
+
+    private const string LiteralsDdl = """
+        CREATE TABLE IF NOT EXISTS literals (
+            id TEXT PRIMARY KEY,
+            literal_text TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            carrier TEXT,
+            arg_position INTEGER NOT NULL,
+            language TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            start_line INTEGER,
+            end_line INTEGER,
+            start_byte INTEGER,
+            end_byte INTEGER,
+            containing_symbol_id TEXT,
+            confidence REAL
+        );
+        """;
+
+    private const string SymbolAnnotationsDdl = """
+        CREATE TABLE IF NOT EXISTS symbol_annotations (
+            id TEXT PRIMARY KEY,
+            symbol_id TEXT NOT NULL,
+            ordinal INTEGER NOT NULL,
+            annotation TEXT NOT NULL,
+            annotation_key TEXT,
+            raw_text TEXT,
+            carrier TEXT,
+            UNIQUE (symbol_id, ordinal)
         );
         """;
 

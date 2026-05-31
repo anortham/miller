@@ -173,6 +173,58 @@ public sealed class SqliteSymbolReaderTests
     }
 
     [Fact]
+    public void Read_TestRole_FromMetadata_PopulatesRoleAndIsTest_CrossLanguage()
+    {
+        // M4 Task 9: julie's test_detection writes a "test_role" string (cross-language) into symbols.metadata for
+        // test symbols. Miller surfaces it as IndexedSymbol.TestRole (the raw role value) ALONGSIDE the existing
+        // is_test boolean. A fixture_setup carries a role WITHOUT is_test:true — TestRole.IsTest must still be true
+        // for it (presence of a non-blank role is the test signal), so this is parsed independently of is_test.
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
+        {
+            // is_test true + an explicit test_role: both populated.
+            new JulieDbFixture.SymbolRow("d0000000000000000000000000000001", "TestAdd", "function", "go",
+                "math/add_test.go", "func TestAdd(t *testing.T)", 3, null)
+                { Metadata = "{\"is_test\":true,\"test_role\":\"test_case\"}" },
+            // A fixture: test_role present WITHOUT is_test:true (julie may emit role-only). Role IS the test signal.
+            new JulieDbFixture.SymbolRow("d0000000000000000000000000000002", "SetUp", "method", "csharp",
+                "Tests/Fixtures.cs", "public void SetUp()", 5, null)
+                { Metadata = "{\"test_role\":\"fixture_setup\"}" },
+            // Production code: neither key → TestRole null, IsTest false.
+            new JulieDbFixture.SymbolRow("e0000000000000000000000000000001", "Add", "function", "go",
+                "math/add.go", "func Add(a, b int) int", 5, null) { Metadata = "{}" },
+            // is_test true but NO test_role key → IsTest true, TestRole null (the two signals are independent).
+            new JulieDbFixture.SymbolRow("e0000000000000000000000000000002", "Adds", "method", "csharp",
+                "Tests/CalcTests.cs", "public void Adds()", 9, null) { Metadata = "{\"is_test\":true}" },
+        });
+
+        var symbols = SqliteSymbolReader.Read(fx.DbPath);
+        IndexedSymbol Of(string name) => symbols.Single(s => s.Name == name);
+
+        var testAdd = Of("TestAdd");
+        Assert.True(testAdd.IsTest);
+        Assert.NotNull(testAdd.TestRole);
+        Assert.Equal("test_case", testAdd.TestRole!.Value);
+        Assert.True(testAdd.TestRole.IsTest);
+
+        // Role-only (no is_test:true): the role is still parsed and IsTest on the role is true.
+        var setUp = Of("SetUp");
+        Assert.False(setUp.IsTest); // is_test boolean absent
+        Assert.NotNull(setUp.TestRole);
+        Assert.Equal("fixture_setup", setUp.TestRole!.Value);
+        Assert.True(setUp.TestRole.IsTest); // presence of a non-blank role IS the test signal
+
+        // Production code: both null/false.
+        var add = Of("Add");
+        Assert.False(add.IsTest);
+        Assert.Null(add.TestRole);
+
+        // is_test true, no role key: is_test honored, role null.
+        var adds = Of("Adds");
+        Assert.True(adds.IsTest);
+        Assert.Null(adds.TestRole);
+    }
+
+    [Fact]
     public void ToSearchableDocument_ProjectsTheScoringFields_DroppingJoinKeys()
     {
         using var fx = JulieDbFixture.CreateDefault();

@@ -181,9 +181,14 @@ All legs emit **typed, evidence-carrying candidate edges**; `BridgeScorer` (§5)
   **Guard:** if a symbol reached via `containing_symbol_id` has `kind!='property'`, never use its name as the table.
 - **`[Table("X")]` (when present):** `symbol_annotations` `annotation_key=table`, arg from `raw_text`. `ToTable` is
   not captured. Pluralizer is a last resort only (would mis-map `Preferences`/`AppSettings`).
-- **Dapper `FROM` (opportunistic only):** a `kind=sql` literal whose text contains `FROM` (rare on stored-proc repos —
-  MyraNext: 2/15), paired to its `T` by span-proximity within `containing_symbol_id`. FROM-table only, never JOINs or
-  multi-map. Never the primary anchor.
+- **Dapper `FROM` (opportunistic only) — NOT BUILT in Phase C [v3.2 corrected].** The plan was: a `kind=sql` literal
+  whose text contains `FROM`, paired to its `T` by span-proximity within `containing_symbol_id`. **This is unbuildable
+  under the lean 28/2 contract** — `TypeArgument` carries no containing-symbol id and no span, and `LiteralRecord` has
+  no `identifier_id`, so a SQL literal cannot be co-located to its entity type-argument. `BridgeGraphBuilder` therefore
+  passes an **empty `DapperFromCandidates`** list; the `EntityTableBridge` Dapper code path (built + unit-tested in
+  Phase B) is forward-ready but unfed. **EF `DbSet<T>` is the sole entity↔table anchor.** Re-enabling Dapper-FROM is a
+  **julie-side** change (add `containing_symbol_id` + span to `type_arguments`, and/or `identifier_id` to `literals`),
+  not a Miller fix. Low live impact (MyraNext: 2/15 sql literals had a real FROM); larger on inline-SQL/Dapper repos.
 
 ### The TS↔C# DTO finisher (name leg)
 - `NameNormalizer`: strip `I`/`_`; strip `Dto/Model/Request/Response/View/VM/Entity`; singular↔plural. Exact-then-affix.
@@ -303,6 +308,20 @@ Fast suite stays < 10s (`Category!=Scale`).
    breadcrumb set. Measure at `Swap()`; persist (full cache key) only if over budget; monorepo unvalidated.
 8. **Symbol-ID churn / single workspace / read-only.** Always rebuilt from the fresh index; cross-repo out of scope;
    no new process, no writes to julie's DB.
+9. **Lean-contract gaps surfaced building Phase C [v3.2].** Three places where julie 28/2's lean rows force a weaker
+   build than the design assumed. All bounded; none emit confident-wrong High edges.
+   - **Dapper-FROM is unbuildable → dropped** (see Leg 3 above). EF `DbSet<T>` is the sole entity↔table anchor;
+     restoring Dapper needs a julie-side `type_arguments` widening. Highest-impact of the three.
+   - **CreateMap detection is name-blind.** `TypeArgument` has no use-site name/kind discriminator, so the builder
+     admits *every* un-nested exactly-2-top-level-arg generic group as a copy A→B (ordinal 0=source, 1=dest, never
+     flipped). Over-production is bounded by the 2-arg rule and filtered downstream by `SymbolResolver` (unresolvable
+     name → no edge) + `BridgeScorer`. `ReverseMap` is unobservable on the lean contract → `HasReverseMap` always false.
+   - **Endpoint→class `[Route]` join is by name.** The lean contract has no parent-symbol id, so the class route is
+     joined via `SymbolDetail.ParentClassName` (first class with that name in id order). Mis-join risk on duplicate
+     class names across namespaces; the verb-known route match still anchors the `Hits` edge when the class route is
+     loose/missing. The `[FromBody]` honesty holds: `RequestBodyType` is populated only from a plausible complex
+     request-body param on a body-bearing verb, never an arbitrary first parameter (findings 28-2: `[FromBody]` not
+     persisted).
 
 ---
 
@@ -314,7 +333,8 @@ Fast suite stays < 10s (`Category!=Scale`).
       and `test_role`; contract tests on a synthesized 28/2 DB pass.
 - [ ] `Miller.Core` resolver is pure (zero I/O); table-driven tests for every normalizer, `SymbolResolver`, and every
       §5 hardening rule.
-- [ ] **Leg 3 resolves table = DbSet property name (not the DbContext class).**
+- [ ] **Leg 3 resolves table = DbSet property name (not the DbContext class); DbSet is the SOLE entity↔table anchor
+      (Dapper-FROM dropped — unbuildable on the lean contract, see §4/§8).**
 - [ ] **Leg 1: `[controller]`/`[action]` tokens expanded via parent class name; route collisions stay distinct;
       bare-return endpoints emit no `responds→`; `[FromBody]` emits `consumes→`; url literals filtered to
       frontend-language + non-test; verb-less carriers are verb-unknown (never assumed GET).**
