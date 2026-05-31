@@ -213,7 +213,8 @@ public sealed class IndexBootstrapServiceTests
                 Assert.Equal(0, pruned); // empty DB → nothing to prune
                 // A live (undisposed) ledger records without dropping (a disposed one would increment Dropped).
                 ledger.Record(new TelemetryRecord(
-                    Tool: "probe", Op: null, WorkspaceId: "ws-1", DurationMs: 0, Outcome: "ok",
+                    Tool: "probe", Op: null, WorkspaceId: "ws-1", WorkspaceRoot: null,
+                    DurationMs: 0, Outcome: "ok",
                     ErrorKind: null, ResultCount: null, BytesExamined: 0, BytesReturned: 0, SourceBytes: 0,
                     EstTokens: null, IndexFresh: null, TargetHash: null, MetadataJson: "{}"));
                 Assert.Equal(0, ledger.DroppedWrites);

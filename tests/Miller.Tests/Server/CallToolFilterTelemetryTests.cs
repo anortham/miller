@@ -1,5 +1,7 @@
 using System.ComponentModel;
 using System.IO.Pipelines;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -58,6 +60,18 @@ public static class PinProbeTool
         }
         return "no results";
     }
+
+    [McpServerTool(Name = "pin_workspace_override"), Description("Sets target workspace telemetry fields.")]
+    public static string WorkspaceOverride(string workspaceId, string workspaceRoot)
+    {
+        var scope = TelemetryContext.Current;
+        if (scope is not null)
+        {
+            scope.SetWorkspace(workspaceId, workspaceRoot);
+            scope.SetTarget("workspace override query");
+        }
+        return "workspace override recorded";
+    }
 }
 
 /// <summary>
@@ -88,11 +102,15 @@ public sealed class CallToolFilterTelemetryTests : IDisposable
         try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }
     }
 
+    private static string Sha256Hex(string raw) =>
+        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(raw)));
+
     [Fact]
     public async Task CentralFilter_Fires_ForReflectionDiscoveredTool_AndRecordsARow()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var ledger = TelemetryLedger.Open(_telemetryDb, workspaceId: "pin-ws");
+        string currentRoot = Path.Combine(_dir, "current-workspace");
+        using var ledger = TelemetryLedger.Open(_telemetryDb, workspaceId: "pin-ws", currentRoot);
 
         // Crossed pipes: client writes → server reads; server writes → client reads.
         var clientToServer = new Pipe();
@@ -138,13 +156,16 @@ public sealed class CallToolFilterTelemetryTests : IDisposable
         }.ToString());
         conn.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT tool, outcome, est_tokens, duration_ms FROM tool_telemetry;";
+        cmd.CommandText =
+            "SELECT tool, outcome, est_tokens, duration_ms, workspace_id, workspace_root FROM tool_telemetry;";
         using var reader = cmd.ExecuteReader();
         Assert.True(reader.Read(), "the central CallToolFilter did not record a telemetry row");
         Assert.Equal("pin_greet", reader.GetString(0));
         Assert.Equal("ok", reader.GetString(1));
         Assert.True(reader.GetInt64(2) > 0, "est_tokens should reflect the returned bytes");
         Assert.True(reader.GetInt64(3) >= 0);
+        Assert.Equal("pin-ws", reader.GetString(4));
+        Assert.Equal(currentRoot, reader.GetString(5));
         Assert.False(reader.Read(), "exactly one row expected (the filter must fire once per call)");
     }
 
@@ -211,6 +232,62 @@ public sealed class CallToolFilterTelemetryTests : IDisposable
 
         var emptyRow = Assert.Single(rows, x => x.tool == "pin_empty");
         Assert.Equal("empty", emptyRow.outcome);
+    }
+
+    [Fact]
+    public async Task CentralFilter_PersistsWorkspaceOverride_FromToolScope()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        string currentRoot = Path.Combine(_dir, "current-workspace");
+        string targetRoot = Path.Combine(_dir, "target-workspace");
+        using var ledger = TelemetryLedger.Open(_telemetryDb, workspaceId: "current-ws", currentRoot);
+
+        var clientToServer = new Pipe();
+        var serverToClient = new Pipe();
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton(ledger);
+        services
+            .AddMcpServer(o => { o.ServerInfo = new() { Name = "pin", Version = "0" }; })
+            .WithStreamServerTransport(clientToServer.Reader.AsStream(), serverToClient.Writer.AsStream())
+            .WithToolsFromAssembly(typeof(PinProbeTool).Assembly)
+            .WithRequestFilters(f => f.AddCallToolFilter(TelemetryCallToolFilter.Create()));
+
+        await using var provider = services.BuildServiceProvider();
+        var server = provider.GetRequiredService<McpServer>();
+        var serverTask = server.RunAsync(ct);
+
+        var clientTransport = new StreamClientTransport(
+            clientToServer.Writer.AsStream(), serverToClient.Reader.AsStream(), NullLoggerFactory.Instance);
+        await using var client = await McpClient.CreateAsync(clientTransport, cancellationToken: ct);
+
+        var result = await client.CallToolAsync(
+            "pin_workspace_override",
+            new Dictionary<string, object?> { ["workspaceId"] = "target-ws", ["workspaceRoot"] = targetRoot }!,
+            cancellationToken: ct);
+        Assert.Equal("workspace override recorded", Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text);
+
+        await client.DisposeAsync();
+        await clientToServer.Writer.CompleteAsync();
+        await serverToClient.Writer.CompleteAsync();
+        try { await serverTask.WaitAsync(TimeSpan.FromSeconds(5), ct); } catch (Exception) { }
+
+        using var conn = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _telemetryDb, Mode = SqliteOpenMode.ReadOnly, Pooling = false,
+        }.ToString());
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT workspace_id, workspace_root, target_hash FROM tool_telemetry;";
+        using var reader = cmd.ExecuteReader();
+        Assert.True(reader.Read(), "the central CallToolFilter did not record a telemetry row");
+        Assert.Equal("target-ws", reader.GetString(0));
+        Assert.Equal(targetRoot, reader.GetString(1));
+        string targetHash = reader.GetString(2);
+        Assert.Equal(Sha256Hex("workspace override query"), targetHash);
+        Assert.DoesNotContain("workspace override query", targetHash, StringComparison.OrdinalIgnoreCase);
+        Assert.False(reader.Read(), "exactly one row expected (the filter must fire once per call)");
     }
 }
 

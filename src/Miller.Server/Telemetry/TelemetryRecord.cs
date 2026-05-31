@@ -9,6 +9,7 @@ public readonly record struct TelemetryRecord(
     string Tool,
     string? Op,
     string? WorkspaceId,
+    string? WorkspaceRoot,
     long DurationMs,
     string Outcome,        // 'ok' | 'empty' | 'error' — the storage token
     string? ErrorKind,
