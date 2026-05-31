@@ -173,8 +173,7 @@ public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider
             WorkspaceRefreshStatus.MissingIndex => false,
             WorkspaceRefreshStatus.Failed => false,
             null => row.State is WorkspaceRegistryState.Current
-                or WorkspaceRegistryState.Ready
-                or WorkspaceRegistryState.LoadedExisting,
+                or WorkspaceRegistryState.Ready,
             _ => false,
         };
 

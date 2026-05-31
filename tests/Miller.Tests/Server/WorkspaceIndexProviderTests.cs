@@ -212,6 +212,31 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     }
 
     [Fact]
+    public void Resolve_RegisteredLoadedExistingWithoutRefreshLoadsReadableDbButReportsUnconfirmedFreshness()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 4, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-loaded-existing");
+        registry.UpsertSeen(
+            "target-ws",
+            "target-111111111111",
+            root,
+            target.DbPath,
+            WorkspaceRegistryState.LoadedExisting);
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry);
+
+        WorkspaceReadContext context = provider.Resolve("target-ws", ensureFresh: false);
+
+        Assert.Equal("loaded_existing", context.FreshnessStatus);
+        Assert.False(context.IndexFresh);
+        Assert.IsType<TargetResolution.Symbol>(context.Resolver.Resolve("TargetType"));
+    }
+
+    [Fact]
     public void Resolve_RegisteredWorkspace_MissingIndexRefreshDoesNotLoadOrPresentFreshContext()
     {
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
