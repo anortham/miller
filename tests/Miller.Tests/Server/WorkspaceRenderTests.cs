@@ -116,6 +116,81 @@ public sealed class WorkspaceRenderTests
         Assert.True(only.GetProperty("current").GetBoolean());
     }
 
+    [Fact]
+    public void List_Compact_RendersRegistryRowsAndMarksOnlyTheCurrentWorkspace()
+    {
+        var rows = new[]
+        {
+            new WorkspaceListEntry(
+                WorkspaceId: "ws-current",
+                DisplayId: "current-111111111111",
+                Root: "/repo/current",
+                DbPath: "/repo/current/.miller/symbols.db",
+                State: "current",
+                LastRevision: 12,
+                Current: true,
+                LastError: null),
+            new WorkspaceListEntry(
+                WorkspaceId: "ws-other",
+                DisplayId: "other-222222222222",
+                Root: "/repo/other",
+                DbPath: "/repo/other/.miller/symbols.db",
+                State: "ready",
+                LastRevision: 7,
+                Current: false,
+                LastError: null),
+        };
+
+        string text = WorkspaceRender.List(rows, json: false);
+
+        Assert.Contains("# workspaces (2)", text);
+        Assert.Contains("ws-current", text);
+        Assert.Contains("ws-other", text);
+        Assert.Contains("[current]", text);
+        Assert.Contains("state: ready", text);
+    }
+
+    [Fact]
+    public void List_Json_RendersStableRegistryRowShape()
+    {
+        var rows = new[]
+        {
+            new WorkspaceListEntry(
+                WorkspaceId: "ws-current",
+                DisplayId: "current-111111111111",
+                Root: "/repo/current",
+                DbPath: "/repo/current/.miller/symbols.db",
+                State: "current",
+                LastRevision: 12,
+                Current: true,
+                LastError: null),
+            new WorkspaceListEntry(
+                WorkspaceId: "ws-missing",
+                DisplayId: "missing-222222222222",
+                Root: "/repo/missing",
+                DbPath: "/repo/missing/.miller/symbols.db",
+                State: "missing",
+                LastRevision: null,
+                Current: false,
+                LastError: "root missing"),
+        };
+
+        using var doc = JsonDocument.Parse(WorkspaceRender.List(rows, json: true));
+        var workspaces = doc.RootElement.GetProperty("workspaces");
+
+        Assert.Equal(2, workspaces.GetArrayLength());
+        Assert.Equal("ws-current", workspaces[0].GetProperty("workspace_id").GetString());
+        Assert.Equal("current-111111111111", workspaces[0].GetProperty("display_id").GetString());
+        Assert.Equal("/repo/current", workspaces[0].GetProperty("root").GetString());
+        Assert.Equal("/repo/current/.miller/symbols.db", workspaces[0].GetProperty("index_db_path").GetString());
+        Assert.Equal("current", workspaces[0].GetProperty("state").GetString());
+        Assert.Equal(12, workspaces[0].GetProperty("last_revision").GetInt64());
+        Assert.True(workspaces[0].GetProperty("current").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, workspaces[0].GetProperty("last_error").ValueKind);
+        Assert.Equal(JsonValueKind.Null, workspaces[1].GetProperty("last_revision").ValueKind);
+        Assert.Equal("root missing", workspaces[1].GetProperty("last_error").GetString());
+    }
+
     // ---- refresh / full action ----
 
     [Fact]

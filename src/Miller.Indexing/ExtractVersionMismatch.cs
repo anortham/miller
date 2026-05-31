@@ -6,7 +6,7 @@ namespace Miller.Indexing;
 /// Shared builder for the version-mismatch message used by BOTH the post-extract cross-check in
 /// <see cref="JulieExtractRunner"/> and the read-path gate <see cref="JulieSchemaGate"/>, so the runner and the
 /// DB gate emit identical, actionable text for the same mismatch. julie only self-rejects a DB that is *newer*
-/// than its binary, so detecting an older/drifted schema or contract is Miller's job — see D5
+/// than its binary, so detecting an older/drifted schema, contract, or report hash algorithm is Miller's job — see D5
 /// (docs/findings/julie-contract-verified.md) and m1-indexing-design.md.
 /// </summary>
 internal static class ExtractVersionMismatch
@@ -41,11 +41,12 @@ internal static class ExtractVersionMismatch
     private static string Str(long value) => value.ToString(CultureInfo.InvariantCulture);
 
     /// <summary>
-    /// Cross-check a successfully-parsed extract report's schema/contract versions against
+    /// Cross-check a successfully-parsed extract report's schema/contract/hash algorithm against
     /// <see cref="MillerExtractContract"/>. julie only self-rejects a *newer* DB, so an older/drifted DB that
     /// julie tolerated must be caught here. Throws <see cref="IncompatibleExtractException"/> with the same
     /// wording <see cref="JulieSchemaGate"/> uses. Null versions (julie omitted them) are not cross-checked
-    /// here — the read-path gate enforces presence before any read.
+    /// here — the read-path gate enforces presence before any read. <c>hash_algorithm</c> is part of the report
+    /// contract and must be present.
     /// </summary>
     public static void VerifyReport(ExtractReport report)
     {
@@ -69,5 +70,18 @@ internal static class ExtractVersionMismatch
                 isNewer: contract > MillerExtractContract.ExpectedExtractContractVersion,
                 schemaVersion: report.SchemaVersion ?? 0,
                 contractVersionForMessage: contract));
+
+        if (string.IsNullOrWhiteSpace(report.HashAlgorithm))
+            throw new IncompatibleExtractException(
+                "Extract report is missing hash_algorithm; expected " +
+                $"'{MillerExtractContract.ExpectedHashAlgorithm}' from a v{MillerExtractContract.PinnedJulieServerVersion} " +
+                "julie extract. Re-run restore + `extract scan` with the pinned julie-server.");
+
+        if (!StringComparer.Ordinal.Equals(report.HashAlgorithm, MillerExtractContract.ExpectedHashAlgorithm))
+            throw new IncompatibleExtractException(
+                $"Extract report hash_algorithm is '{report.HashAlgorithm}' but this Miller build expects " +
+                $"'{MillerExtractContract.ExpectedHashAlgorithm}': report is not from a " +
+                $"v{MillerExtractContract.PinnedJulieServerVersion} julie extract; re-run restore + `extract scan` " +
+                "with the pinned julie-server.");
     }
 }

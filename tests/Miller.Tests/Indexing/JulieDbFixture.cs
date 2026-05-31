@@ -5,8 +5,8 @@ using Miller.Indexing;
 namespace Miller.Tests.Indexing;
 
 /// <summary>
-/// Synthesizes a tiny SQLite file matching julie v7.13.0's verified extract schema (schema_version 28,
-/// extract_contract_version 2). This is Miller's READ-CONTRACT harness — it is NOT a re-test of julie's
+/// Synthesizes a tiny SQLite file matching julie v7.13.1's verified extract schema (schema_version 28,
+/// extract_contract_version 3). This is Miller's READ-CONTRACT harness — it is NOT a re-test of julie's
 /// extraction (julie owns that). The DDL is transcribed verbatim from julie's <c>src/database/schema.rs</c>
 /// (see docs/findings/julie-contract-verified.md §1), so the reader is exercised against the real column
 /// set, NULL discipline, and self-FK that a live extract produces.
@@ -161,9 +161,9 @@ internal sealed class JulieDbFixture : IDisposable
     /// <summary>
     /// Build a fixture with the given schema/contract version rows and the supplied symbol rows.
     /// <paramref name="schemaVersion"/> is written to <c>schema_version</c>; <paramref name="contractValue"/>
-    /// is written to <c>external_extract_metadata['extract_contract_version']</c> as TEXT (julie stores all
-    /// metadata values as strings). Passing <c>null</c> for either skips creating that table entirely — used
-    /// by the gate's missing-table tests.
+    /// and <paramref name="hashAlgorithm"/> are written to <c>external_extract_metadata</c> as TEXT (julie
+    /// stores all metadata values as strings). Passing <c>null</c> for schema/contract skips that row or table
+    /// as before; passing <c>null</c> for hashAlgorithm omits only that metadata key.
     /// </summary>
     public static JulieDbFixture Create(
         long? schemaVersion,
@@ -176,7 +176,8 @@ internal sealed class JulieDbFixture : IDisposable
         string? workspaceId = null,
         IReadOnlyList<RevisionRow>? revisions = null,
         IReadOnlyList<RevisionFileChangeRow>? fileChanges = null,
-        IReadOnlyList<RelationshipRow>? relationships = null)
+        IReadOnlyList<RelationshipRow>? relationships = null,
+        string? hashAlgorithm = MillerExtractContract.ExpectedHashAlgorithm)
     {
         string dir = Path.Combine(Path.GetTempPath(), "miller-julie-fixture-" + Guid.NewGuid().ToString("N"));
         System.IO.Directory.CreateDirectory(dir);
@@ -221,11 +222,13 @@ internal sealed class JulieDbFixture : IDisposable
             foreach (var path in DistinctPaths(rows, identifiers))
             {
                 string content = fileContent is not null && fileContent.TryGetValue(path, out var c) ? c : "";
+                string hash = ContentHasher.Blake3Hex(System.Text.Encoding.UTF8.GetBytes(content));
                 using var fcmd = conn.CreateCommand();
                 fcmd.CommandText =
                     "INSERT INTO files (path, language, hash, size, last_modified, content, line_count) " +
-                    "VALUES ($p, 'csharp', 'blake3hexstub', 100, 0, $content, 0);";
+                    "VALUES ($p, 'csharp', $hash, 100, 0, $content, 0);";
                 fcmd.Parameters.AddWithValue("$p", path);
+                fcmd.Parameters.AddWithValue("$hash", hash);
                 fcmd.Parameters.AddWithValue("$content", content);
                 fcmd.ExecuteNonQuery();
             }
@@ -365,6 +368,16 @@ internal sealed class JulieDbFixture : IDisposable
                 cmd.ExecuteNonQuery();
             }
 
+            if (createMetadataTable && hashAlgorithm is not null)
+            {
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText =
+                    "INSERT INTO external_extract_metadata (key, value, updated_at) " +
+                    "VALUES ('hash_algorithm', $val, 0);";
+                cmd.Parameters.AddWithValue("$val", hashAlgorithm);
+                cmd.ExecuteNonQuery();
+            }
+
             if (createMetadataTable && workspaceId is not null)
             {
                 using var cmd = conn.CreateCommand();
@@ -382,7 +395,7 @@ internal sealed class JulieDbFixture : IDisposable
     }
 
     /// <summary>
-    /// The canonical fixture: schema 28 / contract '2' with ~12 realistic rows — mixed kinds/languages,
+    /// The canonical fixture: schema 28 / contract '3' with ~12 realistic rows — mixed kinds/languages,
     /// some NULL signatures, at least one NULL start_line, parent/child pairs via parent_id, distinct files.
     /// </summary>
     public static JulieDbFixture CreateDefault() => Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, DefaultRows);
@@ -740,7 +753,7 @@ internal sealed class JulieDbFixture : IDisposable
         );
         """;
 
-    // ---- M4 bridge tables (verbatim from julie v7.13.0 schema.rs; findings 28-2) ------------------------
+    // ---- M4 bridge tables (verbatim from julie v7.13.1 schema.rs; findings 28-3) ------------------------
     // The SqliteBridgeReader is now on the single production RepositoryIndexLoader.Load path (D9), so these are
     // always created — empty by default — and every loader/rebuilder/freshness-swap test that routes through Load
     // can open against ANY fixture (without them: "no such table: type_arguments"). The reader selects:
@@ -809,7 +822,7 @@ internal sealed class JulieDbFixture : IDisposable
         );
         """;
 
-    // --- M3 freshness DDL transcribed verbatim from the PINNED julie-server v7.13.0 (schema 28) live DB ---
+    // --- M3 freshness DDL transcribed verbatim from the PINNED julie-server v7.13.1 (schema 28) live DB ---
     // (dumped via `.schema` against a real `extract scan` output; see m3-design.md verified-fact 1/5).
 
     private const string CanonicalRevisionsDdl = """

@@ -8,9 +8,9 @@ re-reading files. Its differentiator is a **deterministic cross-language structu
 across language boundaries (e.g. a C# entity to its EF table, a TypeScript call to the C# route that serves it)
 without embeddings.
 
-> **Status: early.** This repo is at milestone **M0** (solution scaffold + CI). The read core (M1), the MCP tool
-> surface (M2), freshness (M3), and the cross-language resolver (M4) are being built per
-> [docs/miller-mvp-plan.md](docs/miller-mvp-plan.md). It is not yet usable day-to-day; first dogfood lands at M2.
+> **Status: WIP replacement for Julie.** The core MCP tool surface, freshness path, workspace registry, and
+> registry-backed dashboard are implemented on the active development branch. See
+> [docs/miller-mvp-plan.md](docs/miller-mvp-plan.md) for the milestone line and remaining hardening work.
 
 ## How it works
 
@@ -59,6 +59,7 @@ src/
   Miller.Core/       pure logic, ZERO I/O deps: contract record types, in-memory index + BM25, the resolver
   Miller.Indexing/   infrastructure: julie-server extract subprocess, SQLite (WAL) read layer, watcher/indexer
   Miller.Server/     MCP stdio host, the 7 tools, the telemetry interceptor + ledger
+  Miller.Dashboard/  loopback dashboard reading the registry + telemetry DB
 tests/
   Miller.Tests/      unit (Core, fast) + contract (against a committed extract-DB fixture) + tagged scale set
 docs/
@@ -69,7 +70,8 @@ docs/
 ## The tool surface (target)
 
 Seven tools, each with smart defaults so the common path is the simplest call: `search`, `inspect`, `context`,
-`trace`, `impact`, `edit`, `workspace`. Targets are smart strings, not JSON objects. See
+`trace`, `impact`, `edit`, `workspace`. Read tools accept `workspace_id` for registered workspaces; explicit
+`workspace_id` defaults `ensure_fresh=true`. Targets are smart strings, not JSON objects. See
 [docs/findings/miller-toolbox.md](docs/findings/miller-toolbox.md).
 
 ## Build & test
@@ -104,6 +106,7 @@ suite. To enable the scale suite locally:
 
 ```bash
 bash scripts/restore-julie-server.sh   # downloads the pinned julie-server into .tools/
+MILLER_JULIE_SOURCE=~/source/julie bash scripts/restore-julie-server.sh --from-source
 ```
 
 Requires the .NET 10 SDK. Warnings are errors (`Directory.Build.props`).

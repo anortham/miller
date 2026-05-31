@@ -17,7 +17,7 @@ public sealed class ExtractReportParsingTests
           "status": "changed", "operation": "update",
           "workspace_id": "ws-abc-123",
           "db_path": "/abs/.miller/symbols.db", "root": "/abs/repo",
-          "schema_version": 28, "schema_state": "current", "extract_contract_version": 2,
+          "schema_version": 28, "schema_state": "current", "extract_contract_version": 3, "hash_algorithm": "blake3",
           "revision": 7, "analyzed_revision": 6, "analysis_state": "stale",
           "files_scanned": 0, "files_updated": 1, "files_deleted": 0,
           "symbols_extracted": 5, "files_total": 12, "symbols_total": 134,
@@ -32,7 +32,7 @@ public sealed class ExtractReportParsingTests
           "status": "unchanged", "operation": "update",
           "workspace_id": "ws-abc-123",
           "db_path": "/abs/.miller/symbols.db", "root": "/abs/repo",
-          "schema_version": 28, "extract_contract_version": 2,
+          "schema_version": 28, "extract_contract_version": 3, "hash_algorithm": "blake3",
           "revision": 6, "files_scanned": 0, "files_updated": 0, "files_deleted": 0,
           "symbols_extracted": 0, "files_total": 12, "symbols_total": 134,
           "relationships_total": 40, "identifiers_total": 512, "types_total": 9,
@@ -46,7 +46,7 @@ public sealed class ExtractReportParsingTests
           "status": "deleted", "operation": "delete",
           "workspace_id": "ws-abc-123",
           "db_path": "/abs/.miller/symbols.db", "root": "/abs/repo",
-          "schema_version": 28, "extract_contract_version": 2,
+          "schema_version": 28, "extract_contract_version": 3, "hash_algorithm": "blake3",
           "revision": 8, "files_scanned": 0, "files_updated": 0, "files_deleted": 1,
           "symbols_extracted": 0, "files_total": 11, "symbols_total": 129,
           "relationships_total": 38, "identifiers_total": 500, "types_total": 9,
@@ -60,7 +60,7 @@ public sealed class ExtractReportParsingTests
           "status": "not_found", "operation": "delete",
           "workspace_id": "ws-abc-123",
           "db_path": "/abs/.miller/symbols.db", "root": "/abs/repo",
-          "schema_version": 28, "extract_contract_version": 2,
+          "schema_version": 28, "extract_contract_version": 3, "hash_algorithm": "blake3",
           "revision": 8, "files_scanned": 0, "files_updated": 0, "files_deleted": 0,
           "symbols_extracted": 0, "files_total": 11, "symbols_total": 129,
           "relationships_total": 38, "identifiers_total": 500, "types_total": 9,
@@ -73,7 +73,7 @@ public sealed class ExtractReportParsingTests
           "status": "failed", "operation": "update",
           "workspace_id": "ws-abc-123",
           "db_path": "/abs/.miller/symbols.db", "root": "/abs/repo",
-          "schema_version": 28, "extract_contract_version": 2,
+          "schema_version": 28, "extract_contract_version": 3, "hash_algorithm": "blake3",
           "revision": 6, "files_scanned": 0, "files_updated": 0, "files_deleted": 0,
           "symbols_extracted": 0, "files_total": 12, "symbols_total": 134,
           "relationships_total": 40, "identifiers_total": 512, "types_total": 9,
@@ -88,6 +88,7 @@ public sealed class ExtractReportParsingTests
 
         Assert.Equal("changed", r.Status);
         Assert.Equal("ws-abc-123", r.WorkspaceId);
+        Assert.Equal("blake3", r.HashAlgorithm);
         Assert.Equal(7L, r.Revision);
         Assert.Equal(1u, r.FilesUpdated);
         Assert.Equal(0u, r.FilesDeleted);
@@ -141,7 +142,7 @@ public sealed class ExtractReportParsingTests
         // must default gracefully so the existing scan parse path is unaffected.
         const string scanJson = """
             { "status": "scanned", "operation": "scan", "db_path": "/abs/db", "root": "/abs/r",
-              "schema_version": 28, "extract_contract_version": 2,
+              "schema_version": 28, "extract_contract_version": 3,
               "files_scanned": 3, "symbols_extracted": 9, "files_total": 3, "symbols_total": 9,
               "relationships_total": 0, "identifiers_total": 0, "types_total": 0, "errors": [] }
             """;
@@ -149,6 +150,7 @@ public sealed class ExtractReportParsingTests
         var r = JulieExtractRunner.ParseReport(scanJson);
 
         Assert.Null(r.WorkspaceId);
+        Assert.Null(r.HashAlgorithm);
         Assert.Null(r.Revision);
         Assert.Equal(0u, r.FilesUpdated);
         Assert.Equal(0u, r.FilesDeleted);

@@ -158,9 +158,12 @@ public sealed class TelemetryLedger : IDisposable
                 _insert.Parameters["$tool"].Value = record.Tool;
                 _insert.Parameters["$op"].Value = (object?)record.Op ?? DBNull.Value;
                 _insert.Parameters["$ws"].Value = (object?)record.WorkspaceId ?? DBNull.Value;
-                // workspace_root is a per-ledger constant (this process serves one workspace), stamped from the
-                // ledger so the shared cross-workspace DB stays human-readable without threading it per-record.
-                _insert.Parameters["$wsroot"].Value = (object?)_workspaceRoot ?? DBNull.Value;
+                // workspace_root normally falls back to the process workspace root. Cross-workspace calls may
+                // override it per-record so shared ledger rows attribute reads to the target workspace.
+                string? workspaceRoot = string.IsNullOrWhiteSpace(record.WorkspaceRoot)
+                    ? _workspaceRoot
+                    : record.WorkspaceRoot;
+                _insert.Parameters["$wsroot"].Value = (object?)workspaceRoot ?? DBNull.Value;
                 _insert.Parameters["$dur"].Value = record.DurationMs;
                 _insert.Parameters["$outcome"].Value = record.Outcome;
                 _insert.Parameters["$errkind"].Value = (object?)record.ErrorKind ?? DBNull.Value;

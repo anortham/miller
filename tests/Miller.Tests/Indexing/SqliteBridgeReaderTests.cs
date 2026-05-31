@@ -6,7 +6,7 @@ using Xunit;
 namespace Miller.Tests.Indexing;
 
 /// <summary>
-/// Pins <see cref="SqliteBridgeReader"/> (plan Task 9) against a hand-written 28/2 bridge DB. These are
+/// Pins <see cref="SqliteBridgeReader"/> (plan Task 9) against a hand-written 28/3 bridge DB. These are
 /// read-CONTRACT tests: they assert the exact <see cref="Miller.Core.Contracts.TypeArgument"/> /
 /// <see cref="Miller.Core.Contracts.LiteralRecord"/> / <see cref="Miller.Core.Contracts.SymbolAnnotation"/> /
 /// <see cref="Miller.Core.Contracts.DbSetProperty"/> mapping (ordering, NULL discipline, the DbSet&lt;T&gt;
@@ -41,7 +41,7 @@ public sealed class SqliteBridgeReaderTests : IDisposable
         return connection;
     }
 
-    // Create the 28/2 bridge-relevant schema (the four tables the reader reads + the gate tables) and seed the gate.
+    // Create the 28/3 bridge-relevant schema (the four tables the reader reads + the gate tables) and seed the gate.
     private void CreateSchemaAndGate(SqliteConnection connection)
     {
         using var command = connection.CreateCommand();
@@ -69,9 +69,10 @@ public sealed class SqliteBridgeReaderTests : IDisposable
         command.ExecuteNonQuery();
 
         using var seed = connection.CreateCommand();
-        seed.CommandText = """
+        seed.CommandText = $"""
             INSERT INTO schema_version(version) VALUES (28);
-            INSERT INTO external_extract_metadata(key, value) VALUES ('extract_contract_version', '2');
+            INSERT INTO external_extract_metadata(key, value) VALUES ('extract_contract_version', '{MillerExtractContract.ExpectedExtractContractVersion}');
+            INSERT INTO external_extract_metadata(key, value) VALUES ('hash_algorithm', '{MillerExtractContract.ExpectedHashAlgorithm}');
             """;
         seed.ExecuteNonQuery();
     }
@@ -255,7 +256,7 @@ public sealed class SqliteBridgeReaderTests : IDisposable
         {
             // Build the schema but seed a WRONG schema_version so the gate rejects it before any bridge read.
             using var command = c.CreateCommand();
-            command.CommandText = """
+            command.CommandText = $"""
                 CREATE TABLE type_arguments (id TEXT PRIMARY KEY, identifier_id TEXT, parent_arg_id TEXT, ordinal INTEGER, type_name TEXT, target_symbol_id TEXT, file_path TEXT, language TEXT, last_indexed TEXT);
                 CREATE TABLE literals (id TEXT PRIMARY KEY, literal_text TEXT, kind TEXT, carrier TEXT, arg_position INTEGER, language TEXT, file_path TEXT, start_line INTEGER, end_line INTEGER, start_byte INTEGER, end_byte INTEGER, containing_symbol_id TEXT, confidence REAL);
                 CREATE TABLE symbol_annotations (id TEXT PRIMARY KEY, symbol_id TEXT, ordinal INTEGER, annotation TEXT, annotation_key TEXT, raw_text TEXT, carrier TEXT);
@@ -263,7 +264,8 @@ public sealed class SqliteBridgeReaderTests : IDisposable
                 CREATE TABLE schema_version (version INTEGER);
                 CREATE TABLE external_extract_metadata (key TEXT, value TEXT);
                 INSERT INTO schema_version(version) VALUES (27);
-                INSERT INTO external_extract_metadata(key, value) VALUES ('extract_contract_version', '2');
+                INSERT INTO external_extract_metadata(key, value) VALUES ('extract_contract_version', '{MillerExtractContract.ExpectedExtractContractVersion}');
+                INSERT INTO external_extract_metadata(key, value) VALUES ('hash_algorithm', '{MillerExtractContract.ExpectedHashAlgorithm}');
                 """;
             command.ExecuteNonQuery();
         }

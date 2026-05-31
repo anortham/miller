@@ -169,7 +169,8 @@ public sealed class TelemetrySummaryTests : IDisposable
 
         // Force a drop: a negative duration violates the CHECK and is swallowed + counted.
         var bad = new TelemetryRecord(
-            Tool: "search", Op: null, WorkspaceId: "ws1", DurationMs: -1, Outcome: "ok", ErrorKind: null,
+            Tool: "search", Op: null, WorkspaceId: "ws1", WorkspaceRoot: null,
+            DurationMs: -1, Outcome: "ok", ErrorKind: null,
             ResultCount: null, BytesExamined: 0, BytesReturned: 0, SourceBytes: 0,
             EstTokens: null, IndexFresh: null, TargetHash: null, MetadataJson: "{}");
         ledger.Record(in bad);

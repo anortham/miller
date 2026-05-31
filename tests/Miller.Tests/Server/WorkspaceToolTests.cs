@@ -5,6 +5,7 @@ using Miller.Server;
 using Miller.Server.Hosting;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
+using Miller.Server.Workspaces;
 using Miller.Tests.Indexing;
 using Xunit;
 
@@ -24,6 +25,7 @@ namespace Miller.Tests.Server;
 public sealed class WorkspaceToolTests : IDisposable
 {
     private const string Ws = "ws-tool-001";
+    private const string OtherWs = "ws-tool-other-001";
 
     private readonly List<IDisposable> _disposables = [];
     private readonly List<string> _tempDirs = [];
@@ -55,11 +57,28 @@ public sealed class WorkspaceToolTests : IDisposable
     private (WorkspaceTool tool, IndexerService indexer, TelemetryLedger ledger, string root) BuildTool(
         JulieDbFixture fx, long builtRevision, string? workspaceId)
     {
+        WorkspaceToolHarness harness = BuildHarness(fx, builtRevision, workspaceId);
+        return (harness.Tool, harness.Indexer, harness.Ledger, harness.Root);
+    }
+
+    private WorkspaceToolHarness BuildHarness(
+        JulieDbFixture fx,
+        long builtRevision,
+        string? workspaceId,
+        Func<string, string, bool, ExtractReport>? crossWorkspaceScan = null,
+        Func<string, string, bool, ExtractReport>? openScan = null,
+        Func<string, IDisposable?>? acquireLock = null,
+        Func<string, string, long>? readLatestRevision = null)
+    {
         // The served workspace root is the fixture dir's parent of .miller; point ExtractDbPath at the fixture DB.
         string root = Path.GetDirectoryName(fx.DbPath)!;
-        var workspace = WorkspaceContext.Create(root, AppContext.BaseDirectory) with
+        string home = NewTempDir("home");
+        string canonicalRoot = Path.GetFullPath(root);
+        var workspace = WorkspaceContext.Create(root, AppContext.BaseDirectory, home) with
         {
             ExtractDbPath = fx.DbPath,
+            CanonicalRoot = canonicalRoot,
+            CanonicalExtractDbPath = fx.DbPath,
             WorkspaceId = workspaceId,
         };
 
@@ -81,6 +100,19 @@ public sealed class WorkspaceToolTests : IDisposable
         var ledger = TelemetryLedger.Open(Path.Combine(NewTempDir("ledger"), "telemetry.db"), workspaceId);
         _disposables.Add(ledger);
 
+        var registry = WorkspaceRegistry.Open(workspace.RegistryDbPath);
+        _disposables.Add(registry);
+        if (!string.IsNullOrWhiteSpace(workspaceId))
+        {
+            registry.UpsertSeen(
+                workspaceId,
+                DisplayFor(canonicalRoot, workspaceId),
+                canonicalRoot,
+                fx.DbPath,
+                WorkspaceRegistryState.Current);
+            registry.MarkScanned(workspaceId, builtRevision);
+        }
+
         // The runner is needed only by open()'s prime scan (a Scale path). The default-suite tests never invoke
         // the spawning path, so construct it against a STUB file (JulieExtractRunner only File.Exists-validates at
         // construction) — keeping this suite pure + binary-independent (no pinned julie-server required to run it).
@@ -89,11 +121,41 @@ public sealed class WorkspaceToolTests : IDisposable
         File.WriteAllText(stubBinary, "#!/bin/sh\n");
         var runner = new JulieExtractRunner(stubBinary);
 
+        var crossRefresh = new CrossWorkspaceRefreshService(
+            registry,
+            crossWorkspaceScan ?? ((_, _, _) => throw new InvalidOperationException("cross-workspace scan was not expected")),
+            acquireLock ?? (millerDir => SingleWriterLock.TryAcquire(millerDir)),
+            readLatestRevision ?? ((_, _) => 0),
+            lockBusyWait: TimeSpan.Zero,
+            lockBusyPollInterval: TimeSpan.FromMilliseconds(1),
+            sleep: _ => { },
+            utcNow: () => DateTimeOffset.UtcNow);
+        var provider = new WorkspaceIndexProvider(
+            holder,
+            workspace,
+            registry,
+            refresh: workspaceIdToRefresh => crossRefresh.Refresh(workspaceIdToRefresh),
+            loadIndex: dbPath => RepositoryIndexLoader.Load(dbPath),
+            currentIndexFresh: _ => true);
+
         var tool = new WorkspaceTool(
-            holder, workspace, indexer, freshness, probe, ledger, runner,
+            holder, workspace, indexer, freshness, probe, ledger, runner, registry, provider, crossRefresh,
+            openScan ?? ((scanRoot, scanDb, force) => runner.Scan(scanRoot, scanDb, force)),
+            acquireLock ?? (millerDir => SingleWriterLock.TryAcquire(millerDir)),
             NullLogger<WorkspaceTool>.Instance);
-        return (tool, indexer, ledger, root);
+        return new WorkspaceToolHarness(tool, indexer, ledger, root, workspace, registry);
     }
+
+    private static string DisplayFor(string canonicalRoot, string workspaceId) =>
+        workspaceId.Length >= 12 ? WorkspaceId.Display(canonicalRoot, workspaceId) : workspaceId;
+
+    private sealed record WorkspaceToolHarness(
+        WorkspaceTool Tool,
+        IndexerService Indexer,
+        TelemetryLedger Ledger,
+        string Root,
+        WorkspaceContext Workspace,
+        WorkspaceRegistry Registry);
 
     private static JulieDbFixture CreateSynth(long revision, string? workspaceId) =>
         JulieDbFixture.Create(
@@ -117,6 +179,35 @@ public sealed class WorkspaceToolTests : IDisposable
                 FilesScanned: 0, SymbolsExtracted: 0, FilesTotal: 0, SymbolsTotal: 0,
                 RelationshipsTotal: 0, IdentifiersTotal: 0, TypesTotal: 0, Errors: [],
                 Revision: 99, FilesUpdated: 0, FilesDeleted: 0);
+        }
+    }
+
+    private static ExtractReport Report(string root, string dbPath, string workspaceId, long revision) =>
+        new(
+            Status: "changed",
+            Operation: "scan",
+            DbPath: dbPath,
+            Root: root,
+            SchemaVersion: (int)MillerExtractContract.ExpectedSchemaVersion,
+            SchemaState: "current",
+            ExtractContractVersion: (int)MillerExtractContract.ExpectedExtractContractVersion,
+            AnalysisState: "current",
+            FilesScanned: 1,
+            SymbolsExtracted: 1,
+            FilesTotal: 1,
+            SymbolsTotal: 1,
+            RelationshipsTotal: 0,
+            IdentifiersTotal: 0,
+            TypesTotal: 0,
+            Errors: Array.Empty<ExtractError>(),
+            WorkspaceId: workspaceId,
+            Revision: revision,
+            HashAlgorithm: MillerExtractContract.ExpectedHashAlgorithm);
+
+    private sealed class NoopLease : IDisposable
+    {
+        public void Dispose()
+        {
         }
     }
 
@@ -167,6 +258,69 @@ public sealed class WorkspaceToolTests : IDisposable
         string output = tool.Workspace(operation: "list");
         Assert.Contains(root, output);
         Assert.Contains("current", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void List_ReadsRegistryRowsAndMarksOnlyTheServedWorkspaceCurrent()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(fx, builtRevision: 4, workspaceId: Ws);
+        string otherRoot = NewTempDir("registered-other");
+        string otherDb = Path.Combine(otherRoot, ".miller", "symbols.db");
+        harness.Registry.UpsertSeen(OtherWs, "other-111111111111", otherRoot, otherDb, WorkspaceRegistryState.Ready);
+        harness.Registry.MarkScanned(OtherWs, revision: 9);
+
+        using var doc = JsonDocument.Parse(harness.Tool.Workspace(operation: "list", format: "json"));
+        var rows = doc.RootElement.GetProperty("workspaces").EnumerateArray().ToArray();
+
+        Assert.Equal(2, rows.Length);
+        Assert.Contains(rows, row =>
+            row.GetProperty("workspace_id").GetString() == Ws
+            && row.GetProperty("current").GetBoolean());
+        Assert.Contains(rows, row =>
+            row.GetProperty("workspace_id").GetString() == OtherWs
+            && !row.GetProperty("current").GetBoolean()
+            && row.GetProperty("state").GetString() == "ready"
+            && row.GetProperty("last_revision").GetInt64() == 9);
+    }
+
+    [Fact]
+    public void Status_ByWorkspaceId_LoadsRegisteredWorkspaceThroughProvider()
+    {
+        using var current = CreateSynth(revision: 4, workspaceId: Ws);
+        using var other = CreateSynth(revision: 9, workspaceId: OtherWs);
+        WorkspaceToolHarness harness = BuildHarness(current, builtRevision: 4, workspaceId: Ws);
+        string otherRoot = Path.GetDirectoryName(other.DbPath)!;
+        harness.Registry.UpsertSeen(OtherWs, "other-111111111111", otherRoot, other.DbPath, WorkspaceRegistryState.Ready);
+        harness.Registry.MarkScanned(OtherWs, revision: 9);
+
+        using var doc = JsonDocument.Parse(harness.Tool.Workspace(
+            operation: "status",
+            workspace_id: OtherWs,
+            format: "json"));
+
+        Assert.Equal(OtherWs, doc.RootElement.GetProperty("workspace").GetProperty("workspace_id").GetString());
+        Assert.Equal(otherRoot, doc.RootElement.GetProperty("workspace").GetProperty("root").GetString());
+        Assert.Equal(other.DbPath, doc.RootElement.GetProperty("workspace").GetProperty("db").GetString());
+        Assert.Equal(9, doc.RootElement.GetProperty("index").GetProperty("built_revision").GetInt64());
+        Assert.Equal("ready", doc.RootElement.GetProperty("index").GetProperty("freshness_status").GetString());
+    }
+
+    [Fact]
+    public void Status_ByPath_ResolvesRegisteredWorkspaceByCanonicalRoot()
+    {
+        using var current = CreateSynth(revision: 4, workspaceId: Ws);
+        using var other = CreateSynth(revision: 9, workspaceId: OtherWs);
+        WorkspaceToolHarness harness = BuildHarness(current, builtRevision: 4, workspaceId: Ws);
+        string otherRoot = Path.GetDirectoryName(other.DbPath)!;
+        harness.Registry.UpsertSeen(OtherWs, "other-111111111111", otherRoot, other.DbPath, WorkspaceRegistryState.Ready);
+        harness.Registry.MarkScanned(OtherWs, revision: 9);
+
+        string output = harness.Tool.Workspace(operation: "status", path: otherRoot);
+
+        Assert.Contains(otherRoot, output);
+        Assert.Contains(OtherWs, output);
+        Assert.Contains("freshness_status: ready", output, StringComparison.OrdinalIgnoreCase);
     }
 
     // ---- open / remove arg guards ----
@@ -248,6 +402,37 @@ public sealed class WorkspaceToolTests : IDisposable
         Assert.Contains("already serving", output, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void Open_PrimesAndRegistersTheStableWorkspaceId()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(
+            fx,
+            builtRevision: 4,
+            workspaceId: Ws,
+            openScan: (root, db, force) =>
+            {
+                Assert.False(force);
+                Directory.CreateDirectory(Path.GetDirectoryName(db)!);
+                File.WriteAllText(db, "created by fake scan");
+                return Report(root, db, WorkspaceId.FromCanonicalRoot(root), revision: 13);
+            },
+            acquireLock: _ => new NoopLease());
+        string target = NewTempDir("open-registers");
+        string canonicalTarget = PathCanonicalizer.CanonicalizeRoot(target);
+        string stableWorkspaceId = WorkspaceId.FromCanonicalRoot(canonicalTarget);
+
+        using var doc = JsonDocument.Parse(harness.Tool.Workspace(operation: "open", path: target, format: "json"));
+
+        Assert.Equal(stableWorkspaceId, doc.RootElement.GetProperty("workspace_id").GetString());
+        WorkspaceRegistryRow? row = harness.Registry.Get(stableWorkspaceId);
+        Assert.NotNull(row);
+        Assert.Equal(canonicalTarget, row.CanonicalRoot);
+        Assert.Equal(Path.Combine(canonicalTarget, ".miller", "symbols.db"), row.IndexDbPath);
+        Assert.Equal(13, row.LastRevision);
+        Assert.Equal(WorkspaceRegistryState.Ready, row.State);
+    }
+
     // ---- telemetry op sub-axis (decision-7) ----
 
     [Fact]
@@ -313,6 +498,67 @@ public sealed class WorkspaceToolTests : IDisposable
         Assert.False(Directory.Exists(otherMiller)); // actually deleted
     }
 
+    [Fact]
+    public void Remove_RegisteredWorkspaceId_UnregistersAndDeletesItsIndexDirWhenUnlocked()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(
+            fx,
+            builtRevision: 4,
+            workspaceId: Ws,
+            acquireLock: _ => new NoopLease());
+        string other = NewTempDir("remove-registered");
+        string otherMiller = Path.Combine(other, ".miller");
+        string otherDb = Path.Combine(otherMiller, "symbols.db");
+        Directory.CreateDirectory(otherMiller);
+        File.WriteAllText(otherDb, "stub");
+        harness.Registry.UpsertSeen(OtherWs, "other-111111111111", other, otherDb, WorkspaceRegistryState.Ready);
+        harness.Registry.MarkScanned(OtherWs, revision: 9);
+
+        string output = harness.Tool.Workspace(operation: "remove", workspace_id: OtherWs);
+
+        Assert.Contains("removed", output, StringComparison.OrdinalIgnoreCase);
+        Assert.False(Directory.Exists(otherMiller));
+        Assert.Null(harness.Registry.Get(OtherWs));
+    }
+
+    [Fact]
+    public void Remove_CurrentWorkspaceId_IsRefusedAndKeepsRegistryRow()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(fx, builtRevision: 4, workspaceId: Ws);
+        string liveMiller = Path.Combine(harness.Root, ".miller");
+        Directory.CreateDirectory(liveMiller);
+        File.WriteAllText(Path.Combine(liveMiller, "sentinel.txt"), "live");
+
+        string output = harness.Tool.Workspace(operation: "remove", workspace_id: Ws);
+
+        Assert.Contains("refus", output, StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(Path.Combine(liveMiller, "sentinel.txt")));
+        Assert.NotNull(harness.Registry.Get(Ws));
+    }
+
+    [Fact]
+    public void Remove_RegisteredWorkspaceId_IsRefusedWhenAnotherWriterLockIsHeld()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(fx, builtRevision: 4, workspaceId: Ws);
+        string other = NewTempDir("remove-busy");
+        string otherMiller = Path.Combine(other, ".miller");
+        string otherDb = Path.Combine(otherMiller, "symbols.db");
+        Directory.CreateDirectory(otherMiller);
+        File.WriteAllText(otherDb, "stub");
+        harness.Registry.UpsertSeen(OtherWs, "other-111111111111", other, otherDb, WorkspaceRegistryState.Ready);
+        using SingleWriterLock? heldLease = SingleWriterLock.TryAcquire(otherMiller);
+        Assert.NotNull(heldLease);
+
+        string output = harness.Tool.Workspace(operation: "remove", workspace_id: OtherWs);
+
+        Assert.Contains("in use", output, StringComparison.OrdinalIgnoreCase);
+        Assert.True(Directory.Exists(otherMiller));
+        Assert.NotNull(harness.Registry.Get(OtherWs));
+    }
+
     // ---- refresh / full: non-leader path (poll only, honest note) ----
 
     [Fact]
@@ -329,6 +575,78 @@ public sealed class WorkspaceToolTests : IDisposable
         Assert.Contains("scanned: no", output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("swapped: yes", output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("9", output);
+    }
+
+    [Fact]
+    public void Refresh_CurrentWorkspaceId_StillUsesIndexerLeaderPath()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(
+            fx,
+            builtRevision: 4,
+            workspaceId: Ws,
+            crossWorkspaceScan: (_, _, _) => throw new InvalidOperationException("current refresh must not use cross-workspace scan"));
+        var ops = new RecordingScanOps();
+        harness.Indexer.PublishOpsForTest(ops);
+
+        string output = harness.Tool.Workspace(operation: "refresh", workspace_id: Ws);
+
+        Assert.Equal(new[] { false }, ops.ScanForce);
+        Assert.Contains("scanned: yes", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Refresh_RegisteredWorkspaceId_UsesCrossWorkspaceRefreshService()
+    {
+        using var current = CreateSynth(revision: 4, workspaceId: Ws);
+        using var other = CreateSynth(revision: 9, workspaceId: OtherWs);
+        bool? observedForce = null;
+        WorkspaceToolHarness harness = BuildHarness(
+            current,
+            builtRevision: 4,
+            workspaceId: Ws,
+            crossWorkspaceScan: (root, db, force) =>
+            {
+                observedForce = force;
+                return Report(root, db, OtherWs, revision: 10);
+            });
+        string otherRoot = Path.GetDirectoryName(other.DbPath)!;
+        harness.Registry.UpsertSeen(OtherWs, "other-111111111111", otherRoot, other.DbPath, WorkspaceRegistryState.Ready);
+        harness.Registry.MarkScanned(OtherWs, revision: 9);
+
+        string output = harness.Tool.Workspace(operation: "refresh", workspace_id: OtherWs);
+
+        Assert.False(observedForce);
+        Assert.Contains("scanned: yes", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("status: refreshed", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("10", output);
+    }
+
+    [Fact]
+    public void Full_RegisteredWorkspacePath_UsesForceScanThroughCrossWorkspaceRefreshService()
+    {
+        using var current = CreateSynth(revision: 4, workspaceId: Ws);
+        using var other = CreateSynth(revision: 9, workspaceId: OtherWs);
+        bool? observedForce = null;
+        WorkspaceToolHarness harness = BuildHarness(
+            current,
+            builtRevision: 4,
+            workspaceId: Ws,
+            crossWorkspaceScan: (root, db, force) =>
+            {
+                observedForce = force;
+                return Report(root, db, OtherWs, revision: 11);
+            });
+        string otherRoot = Path.GetDirectoryName(other.DbPath)!;
+        harness.Registry.UpsertSeen(OtherWs, "other-111111111111", otherRoot, other.DbPath, WorkspaceRegistryState.Ready);
+        harness.Registry.MarkScanned(OtherWs, revision: 9);
+
+        string output = harness.Tool.Workspace(operation: "full", path: otherRoot);
+
+        Assert.True(observedForce);
+        Assert.Contains("scanned: yes", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("status: refreshed", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("11", output);
     }
 
     [Fact]
@@ -389,6 +707,33 @@ public sealed class WorkspaceToolTests : IDisposable
 
         string output = tool.Workspace(operation: "frobnicate");
         Assert.Contains("unknown workspace operation", output, StringComparison.OrdinalIgnoreCase);
+        Assert.False(output.StartsWith("workspace failed", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void UnknownWorkspaceId_GuidesToWorkspaceOpenPath()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        var (tool, _, _, _) = BuildTool(fx, builtRevision: 4, workspaceId: Ws);
+
+        string output = tool.Workspace(operation: "status", workspace_id: "missing-workspace-id");
+
+        Assert.Contains("unknown workspace_id", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("workspace(operation=\"open\"", output, StringComparison.OrdinalIgnoreCase);
+        Assert.False(output.StartsWith("workspace failed", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void UnknownWorkspacePath_GuidesToWorkspaceOpenPath()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        var (tool, _, _, _) = BuildTool(fx, builtRevision: 4, workspaceId: Ws);
+        string unregistered = NewTempDir("unregistered");
+
+        string output = tool.Workspace(operation: "refresh", path: unregistered);
+
+        Assert.Contains("unknown workspace path", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("workspace(operation=\"open\"", output, StringComparison.OrdinalIgnoreCase);
         Assert.False(output.StartsWith("workspace failed", StringComparison.Ordinal));
     }
 }

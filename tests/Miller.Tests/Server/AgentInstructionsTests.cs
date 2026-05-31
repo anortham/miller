@@ -32,4 +32,13 @@ public sealed class AgentInstructionsTests
         string instructions = AgentInstructions.Load();
         Assert.Contains("`" + toolName + "`", instructions);
     }
+
+    [Theory]
+    [InlineData("`workspace_id`")]
+    [InlineData("`ensure_fresh`")]
+    public void Load_DocumentsCrossWorkspaceReadParameters(string parameterName)
+    {
+        string instructions = AgentInstructions.Load();
+        Assert.Contains(parameterName, instructions);
+    }
 }

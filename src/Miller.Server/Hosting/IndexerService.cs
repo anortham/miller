@@ -28,13 +28,16 @@ public sealed class IndexerService : BackgroundService
     private static readonly TimeSpan DebounceInterval = TimeSpan.FromSeconds(1);
 
     // How often a non-leader re-tries the writer lock so it can take over after the leader exits (failover).
-    private static readonly TimeSpan LeaderRetryInterval = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan DefaultLeaderRetryInterval = TimeSpan.FromSeconds(5);
 
     private readonly IndexBootstrapService _bootstrap;
     private readonly ILogger<IndexerService> _logger;
     private readonly ILoggerFactory _loggerFactory;
+    private readonly Func<string, IDisposable?> _tryAcquireLeadership;
+    private readonly Func<WorkspaceContext, string, string, IExtractOps> _createOps;
+    private readonly TimeSpan _leaderRetryInterval;
 
-    private SingleWriterLock? _lease;
+    private IDisposable? _lease;
     private FileSystemWatcher? _watcher;
     private FileSystemWatcher? _gitHeadWatcher;
     private IndexerCore? _core;
@@ -54,13 +57,42 @@ public sealed class IndexerService : BackgroundService
 
     public IndexerService(
         IndexBootstrapService bootstrap, ILogger<IndexerService> logger, ILoggerFactory loggerFactory)
+        : this(
+            bootstrap,
+            logger,
+            loggerFactory,
+            static millerDir => SingleWriterLock.TryAcquire(millerDir),
+            static (workspace, canonicalRoot, canonicalDbPath) =>
+            {
+                var runner = JulieExtractRunner.Locate(workspace.ToolsRoot);
+                return JulieExtractOps.Create(canonicalRoot, canonicalDbPath, runner);
+            },
+            DefaultLeaderRetryInterval)
+    {
+    }
+
+    internal IndexerService(
+        IndexBootstrapService bootstrap,
+        ILogger<IndexerService> logger,
+        ILoggerFactory loggerFactory,
+        Func<string, IDisposable?> tryAcquireLeadership,
+        Func<WorkspaceContext, string, string, IExtractOps> createOps,
+        TimeSpan leaderRetryInterval)
     {
         ArgumentNullException.ThrowIfNull(bootstrap);
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(loggerFactory);
+        ArgumentNullException.ThrowIfNull(tryAcquireLeadership);
+        ArgumentNullException.ThrowIfNull(createOps);
+        if (leaderRetryInterval <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(
+                nameof(leaderRetryInterval), leaderRetryInterval, "Leader retry interval must be positive.");
         _bootstrap = bootstrap;
         _logger = logger;
         _loggerFactory = loggerFactory;
+        _tryAcquireLeadership = tryAcquireLeadership;
+        _createOps = createOps;
+        _leaderRetryInterval = leaderRetryInterval;
     }
 
     /// <summary>True once this instance holds the writer lock and is running the watcher. For diagnostics/tests.</summary>
@@ -93,7 +125,7 @@ public sealed class IndexerService : BackgroundService
             bool announcedReader = false;
             while (!stoppingToken.IsCancellationRequested && _lease is null)
             {
-                _lease = SingleWriterLock.TryAcquire(millerDir);
+                _lease = _tryAcquireLeadership(millerDir);
                 if (_lease is null)
                 {
                     if (!announcedReader)
@@ -106,9 +138,9 @@ public sealed class IndexerService : BackgroundService
                     {
                         _logger.LogDebug(
                             "Still a reader (the writer lock is still held); will re-try in {RetrySeconds}s.",
-                            LeaderRetryInterval.TotalSeconds);
+                            _leaderRetryInterval.TotalSeconds);
                     }
-                    await Task.Delay(LeaderRetryInterval, stoppingToken).ConfigureAwait(false);
+                    await Task.Delay(_leaderRetryInterval, stoppingToken).ConfigureAwait(false);
                 }
             }
 
@@ -116,10 +148,9 @@ public sealed class IndexerService : BackgroundService
                 return;
 
             // --- leader: build the dispatch core + attach the watchers ---
-            var runner = JulieExtractRunner.Locate(workspace.ToolsRoot);
             // Pass the CANONICAL db (verified-fact 4): the single-file update/delete ops require an
             // already-canonical --db (the runner no longer GetFullPath-mangles it).
-            IExtractOps ops = JulieExtractOps.Create(canonicalRoot, canonicalDbPath, runner);
+            IExtractOps ops = _createOps(workspace, canonicalRoot, canonicalDbPath);
             lock (_opsGate)
                 _ops = ops; // publish for M6 write-through (TryReindexAsLeader)
             _core = new IndexerCore(
@@ -132,6 +163,15 @@ public sealed class IndexerService : BackgroundService
             // directory. Readers leave the startup default (reader) untouched.
             MillerRole.SetLeader();
             _logger.LogInformation("Indexer leader: watching {Root} (recursive) + .git/HEAD.", canonicalRoot);
+
+            // Yield once so BackgroundService.StartAsync can return after the watcher is attached: existing DBs
+            // are available immediately as loaded_existing, while this leader reconciles missed downtime edits in
+            // the background before the first debounce tick.
+            await Task.Yield();
+            if (stoppingToken.IsCancellationRequested)
+                return;
+
+            RunStartupDeltaScan(workspace);
 
             // --- debounce loop: drain on each tick (collects bursts into a single coalesced batch) ---
             while (!stoppingToken.IsCancellationRequested)
@@ -184,6 +224,41 @@ public sealed class IndexerService : BackgroundService
             }
             _lease?.Dispose();
             _lease = null;
+        }
+    }
+
+    private void RunStartupDeltaScan(WorkspaceContext workspace)
+    {
+        string stableWorkspaceId = workspace.WorkspaceId
+            ?? throw new InvalidOperationException(
+                "IndexerService cannot run startup scan before bootstrap resolves the stable workspace id.");
+
+        try
+        {
+            ExtractReport report;
+            lock (_opsGate)
+            {
+                IExtractOps ops = _ops
+                    ?? throw new InvalidOperationException("Indexer leader startup scan requested before ops were published.");
+                report = ops.Scan(force: false);
+            }
+
+            IndexBootstrapService.MarkRegistryScanned(workspace, stableWorkspaceId, report.Revision);
+            _logger.LogInformation(
+                "Startup delta scan complete: revision {Revision}, {Updated} files updated, {Deleted} files deleted.",
+                report.Revision, report.FilesUpdated, report.FilesDeleted);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Startup delta scan failed; keeping the loaded index until a later scan converges.");
+            try
+            {
+                IndexBootstrapService.MarkRegistryError(workspace, stableWorkspaceId, ex.Message);
+            }
+            catch (Exception registryEx)
+            {
+                _logger.LogWarning(registryEx, "Failed to record startup scan failure in the workspace registry.");
+            }
         }
     }
 

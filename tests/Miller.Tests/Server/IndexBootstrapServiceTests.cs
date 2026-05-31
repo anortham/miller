@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Miller.Indexing;
 using Miller.Server;
 using Miller.Server.Telemetry;
 using Miller.Tests.Indexing;
@@ -16,6 +17,125 @@ namespace Miller.Tests.Server;
 /// </summary>
 public sealed class IndexBootstrapServiceTests
 {
+    [Fact]
+    public void DecideBootstrapScan_MissingDb_DeltaScansBeforeFirstLoad()
+    {
+        var decision = IndexBootstrapService.DecideBootstrapScan(
+            dbExists: false,
+            existingWorkspaceId: null,
+            stableWorkspaceId: WorkspaceId.FromCanonicalRoot("/work/repo"));
+
+        Assert.True(decision.ShouldScan);
+        Assert.False(decision.Force);
+        Assert.Equal(WorkspaceRegistryState.Ready, decision.RegistryStateAfterLoad);
+    }
+
+    [Fact]
+    public void DecideBootstrapScan_ExistingDbWithStableId_LoadsExistingWithoutScan()
+    {
+        string stable = WorkspaceId.FromCanonicalRoot("/work/repo");
+
+        var decision = IndexBootstrapService.DecideBootstrapScan(
+            dbExists: true,
+            existingWorkspaceId: stable,
+            stableWorkspaceId: stable);
+
+        Assert.False(decision.ShouldScan);
+        Assert.False(decision.Force);
+        Assert.Equal(WorkspaceRegistryState.LoadedExisting, decision.RegistryStateAfterLoad);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("550e8400-e29b-41d4-a716-446655440000")]
+    [InlineData("legacy-non-stable-id")]
+    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
+    public void DecideBootstrapScan_ExistingDbWithMissingLegacyOrMismatchedId_ForceScansBeforeLoad(string? existingWorkspaceId)
+    {
+        string stable = WorkspaceId.FromCanonicalRoot("/work/repo");
+
+        var decision = IndexBootstrapService.DecideBootstrapScan(
+            dbExists: true,
+            existingWorkspaceId: existingWorkspaceId,
+            stableWorkspaceId: stable);
+
+        Assert.True(decision.ShouldScan);
+        Assert.True(decision.Force);
+        Assert.Equal(WorkspaceRegistryState.Ready, decision.RegistryStateAfterLoad);
+    }
+
+    [Fact]
+    public void RegisterBootstrapWorkspace_LoadedExisting_RecordsStableIdentityAndRevisionWithoutScanTimestamp()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "miller-bootstrap-registry-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Combine(dir, "repo");
+        string home = Path.Combine(dir, "home");
+        Directory.CreateDirectory(root);
+        try
+        {
+            string canonicalRoot = Path.GetFullPath(root);
+            string stable = WorkspaceId.FromCanonicalRoot(canonicalRoot);
+            string canonicalDb = Path.Combine(canonicalRoot, ".miller", "symbols.db");
+            var workspace = WorkspaceContext.Create(root, AppContext.BaseDirectory, home) with
+            {
+                WorkspaceId = stable,
+                CanonicalRoot = canonicalRoot,
+                CanonicalExtractDbPath = canonicalDb,
+            };
+
+            var row = IndexBootstrapService.RegisterBootstrapWorkspace(
+                workspace, stable, WorkspaceRegistryState.LoadedExisting, revision: 42);
+
+            Assert.Equal(stable, row.WorkspaceId);
+            Assert.Equal(WorkspaceId.Display(canonicalRoot, stable), row.DisplayId);
+            Assert.Equal(canonicalRoot, row.CanonicalRoot);
+            Assert.Equal(canonicalDb, row.IndexDbPath);
+            Assert.Equal(WorkspaceRegistryState.LoadedExisting, row.State);
+            Assert.Equal("loaded_existing", row.StateText);
+            Assert.Equal(42, row.LastRevision);
+            Assert.Null(row.LastScanAt);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void MarkRegistryScanned_RecordsReadyScanRevision()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "miller-bootstrap-scanned-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Combine(dir, "repo");
+        string home = Path.Combine(dir, "home");
+        Directory.CreateDirectory(root);
+        try
+        {
+            string canonicalRoot = Path.GetFullPath(root);
+            string stable = WorkspaceId.FromCanonicalRoot(canonicalRoot);
+            string canonicalDb = Path.Combine(canonicalRoot, ".miller", "symbols.db");
+            var workspace = WorkspaceContext.Create(root, AppContext.BaseDirectory, home) with
+            {
+                WorkspaceId = stable,
+                CanonicalRoot = canonicalRoot,
+                CanonicalExtractDbPath = canonicalDb,
+            };
+
+            var row = IndexBootstrapService.MarkRegistryScanned(workspace, stable, revision: 9);
+
+            Assert.Equal(WorkspaceRegistryState.Ready, row.State);
+            Assert.Equal(9, row.LastRevision);
+            Assert.NotNull(row.LastScanAt);
+            Assert.Equal(canonicalRoot, row.CanonicalRoot);
+            Assert.Equal(canonicalDb, row.IndexDbPath);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+        }
+    }
+
     [Fact]
     public void ReadLatestRevisionOrZero_NullWorkspaceId_ReturnsZero()
     {
@@ -93,7 +213,8 @@ public sealed class IndexBootstrapServiceTests
                 Assert.Equal(0, pruned); // empty DB → nothing to prune
                 // A live (undisposed) ledger records without dropping (a disposed one would increment Dropped).
                 ledger.Record(new TelemetryRecord(
-                    Tool: "probe", Op: null, WorkspaceId: "ws-1", DurationMs: 0, Outcome: "ok",
+                    Tool: "probe", Op: null, WorkspaceId: "ws-1", WorkspaceRoot: null,
+                    DurationMs: 0, Outcome: "ok",
                     ErrorKind: null, ResultCount: null, BytesExamined: 0, BytesReturned: 0, SourceBytes: 0,
                     EstTokens: null, IndexFresh: null, TargetHash: null, MetadataJson: "{}"));
                 Assert.Equal(0, ledger.DroppedWrites);

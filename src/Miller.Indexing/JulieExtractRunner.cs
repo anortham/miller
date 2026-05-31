@@ -20,7 +20,7 @@ namespace Miller.Indexing;
 public sealed class JulieExtractRunner
 {
     // info opens read-only, takes no flock — `extract --db <ABS_DB> --json info` (NO --root).
-    // scan binds the workspace/root — `extract --db <ABS_DB> --root <ABS_ROOT> --json scan [--force]`.
+    // scan binds the workspace/root — `extract --db <ABS_DB> --root <ABS_ROOT> --workspace-id <ID> --json scan [--force]`.
     // update/delete touch one canonical file — `... --json update|delete --file <ABS_CANON_FILE>` (M3).
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -90,14 +90,17 @@ public sealed class JulieExtractRunner
     // ---------- pure seams (testable without a process) ----------
 
     /// <summary>
-    /// Build the argv for a <c>scan</c>: <c>extract --db &lt;absDb&gt; --root &lt;absRoot&gt; --json scan [--force]</c>.
+    /// Build the argv for a <c>scan</c>:
+    /// <c>extract --db &lt;absDb&gt; --root &lt;absRoot&gt; --workspace-id &lt;workspaceId&gt; --json scan [--force]</c>.
     /// Paths must already be absolute (caller's responsibility for relative-CWD safety).
     /// </summary>
-    public static IReadOnlyList<string> BuildScanArgs(string absDb, string absRoot, bool force)
+    public static IReadOnlyList<string> BuildScanArgs(string absDb, string absRoot, string workspaceId, bool force)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(absDb);
         ArgumentException.ThrowIfNullOrWhiteSpace(absRoot);
-        var args = new List<string> { "extract", "--db", absDb, "--root", absRoot, "--json", "scan" };
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
+        var args = new List<string>
+            { "extract", "--db", absDb, "--root", absRoot, "--workspace-id", workspaceId, "--json", "scan" };
         if (force)
             args.Add("--force");
         return args;
@@ -213,7 +216,8 @@ public sealed class JulieExtractRunner
         if (!string.IsNullOrEmpty(dbDir))
             Directory.CreateDirectory(dbDir); // no mkdir in julie's path; the .db itself may be absent (fresh)
 
-        return Run(BuildScanArgs(absDb, absRoot, force));
+        string workspaceId = WorkspaceId.FromCanonicalRoot(absRoot);
+        return Run(BuildScanArgs(absDb, absRoot, workspaceId, force));
     }
 
     /// <summary>Run <c>extract info</c> (read-only, no flock) and return the parsed report.</summary>
