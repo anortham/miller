@@ -196,4 +196,88 @@ public sealed class ExtractReaderEditTests
             Path.GetTempPath(), "miller-indexedtext-missing-" + Guid.NewGuid().ToString("N"), "symbols.db");
         Assert.Throws<FileNotFoundException>(() => ExtractReader.ReadIndexedFileText(missing, "any/path.cs"));
     }
+
+    // ---- files.hash + hash_algorithm (BLAKE3 freshness baseline) ----
+
+    [Fact]
+    public void ReadFileHash_ReturnsTheFilesTableHashForThePath()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+
+        string? hash = ExtractFileHashReader.ReadFileHash(fx.DbPath, "orders/OrderService.cs");
+
+        Assert.NotNull(hash);
+        Assert.NotEmpty(hash);
+        Assert.Equal(hash, hash!.ToLowerInvariant());
+    }
+
+    [Fact]
+    public void ReadFileHash_UnknownPath_ReturnsNull()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+
+        Assert.Null(ExtractFileHashReader.ReadFileHash(fx.DbPath, "no/such/file.cs"));
+    }
+
+    [Fact]
+    public void ReadHashAlgorithm_ReturnsTheExtractMetadataValue()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+
+        Assert.Equal("blake3", ExtractFileHashReader.ReadHashAlgorithm(fx.DbPath));
+    }
+
+    [Fact]
+    public void ReadHashAlgorithm_AbsentKey_ReturnsNull()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            JulieDbFixture.DefaultRows,
+            hashAlgorithm: null);
+
+        Assert.Null(ExtractFileHashReader.ReadHashAlgorithm(fx.DbPath));
+    }
+
+    [Fact]
+    public void ReadFileHash_MissingDbFile_ThrowsFileNotFound()
+    {
+        string missing = Path.Combine(
+            Path.GetTempPath(), "miller-filehash-missing-" + Guid.NewGuid().ToString("N"), "symbols.db");
+
+        Assert.Throws<FileNotFoundException>(
+            () => ExtractFileHashReader.ReadFileHash(missing, "any/path.cs"));
+    }
+
+    [Fact]
+    public void Blake3Hex_MatchesKnownVectorAndUsesLowercaseHex()
+    {
+        byte[] bytes = System.Text.Encoding.ASCII.GetBytes("abc");
+
+        string hash = ContentHasher.Blake3Hex(bytes);
+
+        Assert.Equal("6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85", hash);
+        Assert.Equal(hash, hash.ToLowerInvariant());
+    }
+
+    [Fact]
+    public void Blake3FileHex_HashesRawBytes_NotDecodedText()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "miller-blake3-file-" + Guid.NewGuid().ToString("N"));
+        System.IO.Directory.CreateDirectory(dir);
+        string path = Path.Combine(dir, "bom.txt");
+        try
+        {
+            File.WriteAllBytes(path, [0xEF, 0xBB, 0xBF, (byte)'a', (byte)'b', (byte)'c']);
+
+            string hash = ContentHasher.Blake3FileHex(path);
+
+            Assert.Equal("0a91544c7362490cd13702885400daca0aef30ce3534427046e68798b1ba3425", hash);
+        }
+        finally
+        {
+            if (System.IO.Directory.Exists(dir))
+                System.IO.Directory.Delete(dir, recursive: true);
+        }
+    }
 }
