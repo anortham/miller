@@ -45,11 +45,16 @@ The design doc §10 labels subsystems where **§10E = search-widen** and **§10D
 From the plan critique (verdict: needs-fixes). Where a subsystem task below contradicts one of these, the reconciliation wins:
 
 1. **One hash helper, one name:** `ContentHasher.NormalizeHash(string)` (subsystem D1). Subsystem C3's body references `ContentHashNormalizer.StripPrefix` — that symbol does not exist; C3 must call `ContentHasher.NormalizeHash`. This helper is **blake3-only** (see #9).
-2. **`FreshnessReader.LatestRevision` drops `workspaceId`:** v1 `extraction_revisions` has no workspace_id, so D3's signature becomes `LatestRevision()` (no param). Subsystem E2/E4 call sites and `IndexBootstrapService.ReadLatestRevisionOrZero` MUST update to the param-less call — E2's "comment-only change" claim is void. D3 + the E call-sites change in lockstep.
+2. **`FreshnessReader.LatestRevision`/`ChangedSince` drop `workspaceId`:** v1 `extraction_revisions` has no workspace_id, so D3/D4's signatures become `LatestRevision()` / `ChangedSince(long sinceRevision)` (no workspace param). This is build-red until **every** call site updates in the SAME D3/D4+E batch. The COMPLETE call-site set (verified by grep, 2026-06-01) — E2/E4's "comment-only / keep the param" wording is **void**:
+   - `src/Miller.Indexing/FreshnessReader.cs:68,90` (the definitions — D3/D4)
+   - `src/Miller.Server/Hosting/IndexBootstrapService.cs:352` inside `ReadLatestRevisionOrZero` (E2) — the outer `workspaceId` param may stay only as a null-sentinel guard, but the inner call becomes `reader.LatestRevision()`
+   - `src/Miller.Server/Workspaces/CrossWorkspaceRefreshService.cs:230` AND the delegate type `Func<string,string,long> _readLatestRevision` (:15,:38) → `Func<string,long>`, plus call sites :129,:212 (E4)
+   - `src/Miller.Server/Hosting/FreshnessService.cs:230` in `PollThenSwap` + its XML-doc cref :13 — **not currently owned by any E task; fold into E2** (was orphaned, codex F8 / workflow C7)
+   - Scale tests: `LiveFreshnessTests.cs:65,88,97,105,119`, `LiveEditTests.cs:90`, `IndexBootstrapServiceTests.cs` (`ReadLatestRevisionOrZero` cases), `MultiProcessWalTests.cs:66-70`
 3. **Disk-root fixture seam (C3 ↔ H3):** subsystem H must expose `WorkspaceRoot` on the fixture AND write each file's bytes to disk under that root (not just a `FileContents` dictionary). C3's `inspect(full)`/edit disk-slice tests consume `fx.WorkspaceRoot` + the on-disk bytes. Pin this exact surface in H3 before C3 implements.
 4. **A2 diagnostic fixture is honest:** `data_loss_guard` is `recoverable: false` in real julie (`commands.rs:1099-1116`). A2's `Parse_Failed_NullArtifact` fixture must assert `recoverable == false` (or use a genuinely-recoverable code) — never ship a fixture that contradicts the contract.
 5. **A6 timeout test is deterministic:** make the deterministic variant (large fixture, or a "completed-or-timed-out, never hung" assertion) the PRIMARY test. A "1ms timeout always trips before the child exits" assumption is flaky.
-6. **Atomic build-red window:** `B1` (IndexedSymbol `TestRole`→`IsTest`) + `F1` (delete `TestRole.cs`) + `F4` (`RepositoryIndexLoader.ProjectToSymbolDetails`) MUST land in ONE commit — each compile-breaks the others' files — paired with the `H1` fixture-DDL spine so the fast suite greens at phase end.
+6. **Atomic build-red window (CORRECTED — the original `B1+F1+F4+H1` does NOT compile):** deleting the `TestRole` type touches SEVEN src files + their tests. The minimal set that compiles AND greens together is **`B1 + B2 + B4 + F1 + F2 + F3 + F4 + F5 + H1` (+ `H4` for the typed `is_test` column writer)** — i.e. the *entire* TestRole→IsTest graph in one commit. Verified `TestRole` references (grep, 2026-06-01): `src/Miller.Core/Contracts/TestRole.cs` (the type, F1 deletes), `src/Miller.Core/Contracts/SymbolDetail.cs:37`, `src/Miller.Core/Resolver/RouteBridge.cs:33`, `src/Miller.Core/Graph/BridgeGraphBuilder.cs:411`, `src/Miller.Indexing/IndexedSymbol.cs:25` (B1), `src/Miller.Indexing/SqliteSymbolReader.cs:63,77,111,117` (B2), `src/Miller.Indexing/RepositoryIndexLoader.cs:124` (F4) — plus test files (`TestRoleTests.cs`, `BridgeGraphBuilderTests.cs`, `SqliteSymbolReaderTests.cs`, `RouteBridgeTests.cs:203`, `SymbolResolverTests.cs`, `DtoEntityBridgeTests.cs`, `EntityTableBridgeTests.cs`, `FieldSetExtractorTests.cs`). **Acceptance gate:** `rg -n "TestRole" src tests` returns empty after the commit. The Phase-3 sequencing is corrected to fold these into the first commit, not list `B2` as a later step.
 7. **Two unowned report-fixture test files** migrate to the nested ctor in the A/E window (assigned to subsystem **A**, which owns the report record): `tests/Miller.Tests/Server/IndexerServiceScanTests.cs:57` and `tests/Miller.Tests/Server/JulieExtractOpsTests.cs:23` (both construct the flat `ExtractReport`).
 8. **Metadata keys retained:** `created_at` AND `updated_at` are artifact_metadata KEYS in v1 (not dropped columns). Miller doesn't read them, but H's synthetic fixture should write both keys for fidelity.
 9. **Three hash domains — never conflate (verified against julie-extractors README §Artifact Contract + `docs/contracts/{sqlite-schema-v1,reports}.md`):** v1 uses hashing in **three** distinct, non-interchangeable ways:
@@ -57,6 +62,29 @@ From the plan critique (verdict: needs-fixes). Where a subsystem task below cont
    - **(b) Parser/capability fingerprints** — `parser_inventory_fingerprint` / `capability_snapshot_fingerprint` are **`sha256:<hex>`**-prefixed. `ExtractReport` (A2) deserializes them as opaque strings and Miller does NOT compare them; if any future task ever does, it needs a SEPARATE sha256-aware normalizer, never `NormalizeHash`.
    - **(c) Release-asset integrity** — `julie-pins.json` `sha256` digests (G2) verify the downloaded ARCHIVE bytes. Plain SHA-256 hex (no scheme prefix), validated by `IsSha256Hex` in `MillerExtractContractTests` (A1) and the restore script's `verify_sha`. Wholly unrelated to (a)/(b); shares nothing but the algorithm name.
    The plan keeps these in separate code paths today; the risk is a future refactor "unifying" them. Do not. A blake3 file hash fed through a sha256 check (or vice versa) silently reads every file as stale or every download as corrupt.
+
+### Round-2 corrections (from the codex + multi-agent review, all verified against source — AUTHORITATIVE)
+
+10. **`partial` status is NOT a hard failure.** v1 `scan` returns exit 1 with `status:"partial"` AND a fully consistent artifact (`.with_artifact(...)` + `rows_written` + `revision`) when some files fail to parse (`commands.rs:217-251`; README "Reports And Exit Status"). A5's `Interpret()` must special-case `status=="partial"`: **parse and RETURN the report** (let bootstrap load the consistent artifact), logging `counts.files_failed` + `errors[]` as a WARNING. Only `status=="failed"` on exit 1 throws `JulieExtractFailedException`. Aborting the whole index build because one file failed is wrong. (Behavior addition vs a naive port — flagged for Alan.)
+11. **`code_context` is DROPPED from the v1 `symbols` table** (it now lives only on `identifiers`: `schema.rs:128` is inside `CREATE TABLE identifiers`, lines 112-131; `symbols` is 66-100). Miller's `ExtractReader.ReadDetail` (`ExtractReader.cs:32`) selects `code_context FROM symbols` and projects `SymbolDetail.CodeContext` (`:44`, `SymbolDetail.cs:11`). Task C2 MUST drop `code_context` from that SELECT and remove the now-dead `Indexing.SymbolDetail.CodeContext` field (only consumers are the assignment + two test asserts in `ExtractReaderTests.cs:26,43` and the fixture column `JulieDbFixture.cs:75,260,446` — H drops the fixture column). Otherwise: runtime `no such column: code_context`, breaking inspect-detail + EditService.
+12. **`report_schema_version` must actually be gated.** A1 adds `ExpectedReportSchemaVersion=1` but A3's `VerifyReport` only checks artifact fields — the constant is dead. Add `report.ReportSchemaVersion == MillerExtractContract.ExpectedReportSchemaVersion` to `VerifyReport` (throw `IncompatibleExtractException` naming the value), with tests for missing/null and `2`. `REPORT_SCHEMA_VERSION=1` is real (`reports.rs:5,50`). Keep `tool.binary_version` OUT of the gate (D7).
+13. **`SymbolsExtracted` = `counts.rows_written.symbols` (per-operation), NOT `totals.symbols`.** A2's record is correct; E1 (line ~2348) and E3 (line ~2503) wrongly say "A maps to `counts.totals.symbols`". Fix the E1/E3 prose to `rows_written.symbols` (matches current Miller "symbols extracted this op" semantics — `WorkspaceRender.cs:78`, `IndexBootstrapService.cs:135-137`). `SymbolsTotal` ⇒ `totals.symbols` stays for whole-artifact size.
+14. **`ExtractReader.ReadRootPath` is C-owned, not B.** E1 replaces `ReadWorkspaceId` with `ReadRootPath(dbPath)` (`SELECT value FROM artifact_metadata WHERE key='root_path'`) and twice calls it "B-provided". `ExtractReader.cs` is subsystem **C** (Task C2). Add `ReadRootPath` to C2's scope (with a test); fix E1's "B-provided" → "C-provided (C2)"; C2 (Phase 3) sequences before E1 (Phase 4) — already satisfied.
+15. **Fixture revision-row shape: DROP `WorkspaceId` (end state), via a two-step to bound blast radius.** v1 `extraction_revisions` has no workspace_id (verified schema.rs:28-50), so the END-STATE `JulieDbFixture.RevisionRow`/`RevisionFileChangeRow` drop their `WorkspaceId` field (and `RevisionFileChangeRow` also drops the v1-less `OldHash`/`NewHash` and renames `FilePath`→`Path`). **Canonical end shapes:** `RevisionRow(long Revision, string Kind = "full")` and `RevisionFileChangeRow(long Revision, string Path, string ChangeKind)`. The NOT-NULL `revision_file_changes.file_id` (TEXT, PK component, **no FK** — schema.rs:48) is **derived**, not a record field: the fixture synthesizes it via the shared `FileId(path)` helper from H1 (`"file:" + path`). Do NOT add an explicit `file_id` ctor arg (it would be call-site noise and is the bug in any 4-arg `Fc(rev, "file-x", path, kind)` snippet — those must be 3-arg `Fc(rev, path, kind)`). `Kind` default is `"full"` everywhere (aligns the fixture default with a scan-produced revision; supersedes the old `"incremental"` default).
+
+   **Two-step sequencing (load-bearing — the field drop is a cross-phase break).** Dropping the field is a compile break for every call site. Those call sites span Phase 3 (H2 owns the records) AND Phase 4 (the consumer tests are rewritten in D3/D4/E2/E3). To avoid a multi-phase red window: **(step 1, H2 / Phase 3)** migrate only the DDL + INSERTs to the v1 `extraction_revisions`/`revision_file_changes` tables and **keep the record fields in place as carried-but-not-written** (the INSERT ignores `WorkspaceId`/`OldHash`/`NewHash`; the emitted artifact is already faithful v1 — no workspace_id column). All call sites compile unchanged through Phase 3. **(step 2, Phase 4)** the field drop + `FilePath`→`Path` + file_id-derivation edit to `JulieDbFixture.cs` is the FIRST edit of the Phase-4 freshness/bootstrap atomic commit, landing together with every call-site update below — this is where the scoping-premise tests are rewritten anyway.
+
+   **Authoritative call-site inventory (step 2 must update ALL of these in one commit; the compiler enforces it, this list assigns ownership so nothing is orphaned):**
+   - `tests/Miller.Tests/Indexing/FreshnessReaderTests.cs` — uses BOTH a `Rev` and an `Fc` alias (`using Rev = …RevisionRow; using Fc = …RevisionFileChangeRow;` at lines 4-5 — these aliases DO exist; do not claim otherwise). `Rev` sites: lines 29, 40, 51, 72, 94, 105, 129. `Fc` sites: lines 75-78, 95, 108-110. Owned by **D3** (Rev / LatestRevision) + **D4** (Fc / ChangedSince). The workspace-leak tests (`Rev(9, Other)` :40, `Fc(3, Other, "leak.cs", …)` :78) are REWRITTEN, not arg-dropped — their per-workspace-scoping premise is gone in v1 (one DB = one root); D3/D4 replace them with separate-DB-no-leak coverage.
+   - `tests/Miller.Tests/Server/IndexBootstrapServiceTests.cs` — `RevisionRow(3/7/5, "ws-…")` at :167-169 (owned by **E2**, lines 140-172; the `RevisionRow(5,"ws-other")` "must not leak in" premise is rewritten — v1 cannot hold two roots in one DB) AND `RevisionRow(2,"ws-1")` at :301 (the non-writable-dir test — **previously unowned; fold into E2**).
+   - `tests/Miller.Tests/Server/WorkspaceToolTests.cs` — `RevisionRow(revision, workspaceId)` in the `CreateSynth` helper at :157 (**fold into E3**; E3 already rebuilds this file's `Report`/`RecordingScanOps` helpers).
+   - `tests/Miller.Tests/Server/FreshnessServicePollNowTests.cs` — `RevisionRow(N, Ws)` at :51, :67, :86, :106 (**previously UNOWNED — fold into E2**'s freshness-caller batch).
+   - `tests/Miller.Tests/Server/WorkspaceIndexProviderTests.cs` — `RevisionRow(revision, workspaceId, "fresh")` at :500 → `RevisionRow(revision, "fresh")` (**previously UNOWNED — fold into E2**).
+   - `tests/Miller.Tests/Indexing/JulieDbFixtureV1SchemaTests.cs` — H2/H3's OWN lock tests construct `RevisionRow(1, "ws-x")` / `RevisionFileChangeRow(1, "ws-x", …)` in Phase 3 (where the field still exists). Step 2 drops the arg there too (`RevisionRow(1)` / `RevisionFileChangeRow(1, "a.cs", "inserted")`); the assertions (workspace_id column absent, MAX, vocab) are unchanged. This is the expected churn of the two-step (write-with-ws in Phase 3, drop-ws in Phase 4) — it keeps Phase 3's fast suite green while the un-migrated Server tests still pass against the carried field.
+   - Note: `JulieDbFixture.Create(…, workspaceId:)` is a SEPARATE, surviving parameter — it feeds `artifact_metadata.artifact_id`/`root_path` identity (H1) and stays (optional, defaulted). Only the revision-row *record field* is dropped; tests that pass `Create(workspaceId: …)` keep doing so.
+
+   **Acceptance gate:** after the Phase-4 commit, `rg -n "RevisionRow\(|RevisionFileChangeRow\(|new Rev\(|new Fc\(" src tests` shows zero constructions passing a workspace-id argument, and the build is 0 warnings (the field is gone, so any stray ws arg is a compile error, not a silent pass).
+16. **Single-owner + letter hygiene:** (a) `FreshnessGateTests.SetFileHash`/`SetHashAlgorithm` are owned by **D5** (the file is in D5's Files block); H3 only guarantees the fixture writes the `blake3:`-prefixed `content_hash` — H3's line referencing this helper becomes a cross-dep note, not an edit. (b) Freshness (`FreshnessReader`/`ChangedSince`/`ContentHasher`/`FreshnessGate`) is **subsystem D** in THIS plan; scrub the stray "subsystem C" references to freshness in E2/E4/H2/H3 (they're the design-doc letter). (c) `H3` is scheduled into **Phase 5** (it was orphaned — see corrected sequencing). (d) FreshnessGate v1 design: there is no independent stored snapshot (`files.content` is gone), so the gate relies on the `content_hash` compare ALONE and passes `indexedText: null` to `IndexedSnapshot` (the exact-text tiebreaker is honestly skipped — `StalenessCheck.cs:83` only tiebreaks when text is present on BOTH sides, so null is safe, NOT auto-Stale). **D5 (Phase 4) deletes `FreshnessGate.cs:70`'s `ReadIndexedFileText` call**, leaving the method with no `src/` caller; **C3 (Phase 5) then DELETES `ReadIndexedFileText` itself + its `ExtractReaderEditTests.cs:143-171` tests** (it is not migrated to a 3-arg disk reader — that would be dead code). The method survives intact through Phase 4 (reads the still-present `files.content`, exercised by its tests) and is removed in the same Phase-5 commit that drops the `files.content` column (H3). Acceptance: `grep -rn "ReadIndexedFileText" src tests` empty after Phase 5. (Resolves the C3↔D5 2-arg/3-arg break, the degenerate-tiebreaker, and the dead-code question in one stroke.)
 
 ---
 
@@ -143,7 +171,9 @@ public sealed class MillerExtractContractTests
         {
             string? name = asset.Value.GetProperty("name").GetString();
             string? sha256 = asset.Value.GetProperty("sha256").GetString();
-            Assert.Contains(pinnedVersion, name, StringComparison.Ordinal);
+            // The pins 'name' carries a literal {VER} placeholder; substitute before asserting (reconciliation #4).
+            string? resolvedName = name?.Replace("{VER}", pinnedVersion);
+            Assert.Contains($"v{pinnedVersion}", resolvedName, StringComparison.Ordinal); // published assets carry the leading 'v'
             Assert.True(IsSha256Hex(sha256), $"missing or invalid sha256 pin for {asset.Name}");
         }
     }
@@ -168,7 +198,7 @@ public sealed class MillerExtractContractTests
 }
 ```
 
-   **CROSS-DEP FLAG:** `JuliePinsJsonMatchesContractVersion` and `RestoreScriptsSupportLocalSourceBuildUntilReleaseAssetsPublish` read **subsystem G**'s `scripts/julie-pins.json` and `scripts/restore-julie-extract.{sh,ps1}`. The old `julie-pins.json` asset-name assertion was `Assert.Contains($"v{pinnedVersion}", name)`; v1 asset names may not carry a leading `v` (§9 unconfirmed), so the rewrite asserts the bare `pinnedVersion` substring — **G must confirm the asset-name shape**; if assets carry `v`, keep `$"v{pinnedVersion}"`. This test will fail until G renames the scripts and repoints the pins JSON. These two tests are tagged `Category!=Scale` today (they only read files via `ScaleTestSupport.RepoRoot()`, no spawn) — leave them in the fast suite.
+   **CROSS-DEP FLAG (sequencing — corrected per reconciliation #4/#16c):** `JuliePinsJsonMatchesContractVersion` and `RestoreScriptsSupportLocalSourceBuildUntilReleaseAssetsPublish` read `scripts/julie-pins.json` and `scripts/restore-julie-extract.{sh,ps1}`. To avoid a fast-suite red window from A1 (Phase 2) until G2 (Phase 7), the **`julie-pins.json` DATA repoint** (version `2.0.0` + slug `anortham/julie-extractors` + the four real sha256 + `{VER}`-templated names) and the **script rename** move into **G1 (Phase 1)** — they are a pure data file + a `git mv`, no build dependency. Only G2's download-branch logic rework (nested extract) stays in Phase 7. Published v1 asset names DO carry the leading `v` (`julie-extract-v2.0.0-…`, README:27 / workflow:94), so the test asserts `$"v{pinnedVersion}"` after `{VER}` substitution — no hedge. These two tests are tagged `Category!=Scale` (they only read files via `ScaleTestSupport.RepoRoot()`, no spawn) — leave them in the fast suite.
 
 2. **Run** `scripts/test.sh` — expect `MillerExtractContractTests` red (missing `ExpectedSqliteSchemaVersion`/`ExpectedReportSchemaVersion`/`PinnedJulieExtractVersion`), and a compile break everywhere `PinnedJulieServerVersion` is referenced.
 
@@ -548,7 +578,18 @@ public void VerifyReport_WrongHashAlgorithm_ThrowsNamingValueAndExpectedValue()
     Assert.Contains("sha256", ex.Message);
     Assert.Contains("blake3", ex.Message, StringComparison.OrdinalIgnoreCase);
 }
+
+[Theory]
+[InlineData(2)]      // a future/incompatible report envelope
+[InlineData(null)]   // absent report_schema_version
+public void VerifyReport_WrongOrMissingReportSchemaVersion_Throws(int? reportSchemaVersion)
+{
+    var ex = Assert.Throws<IncompatibleExtractException>(() =>
+        ExtractVersionMismatch.VerifyReport(ReportWith(1, 1, reportSchemaVersion: reportSchemaVersion)));
+    Assert.Contains("report_schema_version", ex.Message);
+}
 ```
+   (`ReportWith` gains an optional `int? reportSchemaVersion = 1` param threaded onto the top-level `ExtractReport.ReportSchemaVersion`; the existing happy-path tests keep the default `1`.)
 
    **Note:** the old `VerifyReport_NullVersions_DoesNotThrow` test (skip-null) is **deleted** — in v1 a present artifact always carries the versions (`ArtifactReport` fields are non-`Option` except `jsonl_schema_version`), so the new gate failure mode is "null artifact", not "null versions". The old `JulieDbFixture.SchemaText(1)`/`SchemaText()` message-substring assertions are replaced by the `newer`/`upgrade`/`restore` keyword assertions (those still survive in `BuildMessage`).
 
@@ -560,6 +601,15 @@ public void VerifyReport_WrongHashAlgorithm_ThrowsNamingValueAndExpectedValue()
 public static void VerifyReport(ExtractReport report)
 {
     ArgumentNullException.ThrowIfNull(report);
+
+    // The report envelope must be a v1 report. report_schema_version frames artifact/counts/revision; a
+    // missing or different value means the producer's report contract changed (reports.rs:5,50). Gate it
+    // alongside schema/contract/hash; keep tool.binary_version OUT of the gate (D7). (reconciliation #12)
+    if (report.ReportSchemaVersion != MillerExtractContract.ExpectedReportSchemaVersion)
+        throw new IncompatibleExtractException(
+            $"Extract report_schema_version is '{report.ReportSchemaVersion?.ToString() ?? "(absent)"}' but this " +
+            $"Miller build expects {MillerExtractContract.ExpectedReportSchemaVersion}: incompatible julie-extract " +
+            "report contract. Re-run restore + `julie-extract scan` with the pinned binary.");
 
     // A v1 artifact-producing op MUST carry the artifact block. Its absence means the report is not a
     // julie-extract v1 artifact report — fail loud, never a silent pass.
@@ -828,11 +878,20 @@ public static ExtractReport Interpret(int exitCode, string stdout, string stderr
             return ParseReport(stdout);
 
         case 1:
-            // stdout STILL holds a failed report; recover its diagnostics. Path errors
-            // (file_outside_root/invalid_path/file_not_found) land here, NOT on exit 3.
+            // stdout STILL holds a report. Two sub-cases (reconciliation #10):
+            //  - status=="partial": some files failed to parse but the artifact is CONSISTENT
+            //    (.with_artifact + rows_written + revision; commands.rs:217-251). RETURN it so bootstrap
+            //    loads the usable rows; the caller logs counts.files_failed + errors[] as a WARNING.
+            //    Aborting the whole index build because one file failed is wrong (README "Reports And Exit Status").
+            //  - status=="failed" (or unparseable): a real failure → throw with the structured diagnostics.
+            //    Path errors (file_outside_root/invalid_path/file_not_found) are status=="failed" here, NOT exit 3.
+            ExtractReport? report1 = null;
             IReadOnlyList<ReportDiagnostic> errors;
-            try { errors = ParseReport(stdout).Errors; }
+            try { report1 = ParseReport(stdout); errors = report1.Errors; }
             catch (JsonException) { errors = Array.Empty<ReportDiagnostic>(); }
+
+            if (report1 is { Status: "partial" })
+                return report1; // consistent artifact; caller WARN-logs files_failed + errors[]
 
             string codes = errors.Count == 0
                 ? "(no structured errors)"
@@ -877,7 +936,7 @@ public static ExtractReport Interpret(int exitCode, string stdout, string stderr
 
 **Acceptance:**
 - `Interpret(3, ...)` throws `IncompatibleExtractException` carrying `errors[0].code` (or stderr/unparseable fallback — never a silent pass).
-- Exit 1 path errors (`file_outside_root` etc.) stay `JulieExtractFailedException` with the structured `ReportDiagnostic` list.
+- `Interpret(1, ...)` with `status=="partial"` **RETURNS the report** (consistent artifact preserved); with `status=="failed"` (or unparseable stdout) it throws `JulieExtractFailedException` with the structured `ReportDiagnostic` list. Tests cover both exit-1 sub-cases. The bootstrap caller WARN-logs `counts.files_failed` + `errors[]` on a returned partial.
 - Exit 2 stays `JulieExtractUsageException` (no stdout parse); unexpected codes stay base `JulieExtractException`.
 - Error wording says `julie-extract` (no `julie-server extract`).
 
@@ -1351,18 +1410,19 @@ This subsystem ports the four remaining SQLite readers and the schema gate onto 
 
 ### Task C2 — ExtractReader column/table renames + drop `ReadWorkspaceId` (mechanical, by-name reads)
 
-**Files:** `src/Miller.Indexing/ExtractReader.cs`; tests `tests/Miller.Tests/Indexing/ExtractReaderTests.cs`.
+**Files:** `src/Miller.Indexing/ExtractReader.cs`; `src/Miller.Indexing/SymbolDetail.cs` (drop the dead `CodeContext` field — #11); tests `tests/Miller.Tests/Indexing/ExtractReaderTests.cs`.
 
-**What:** Rename every `symbols`/`identifiers`/`artifact_metadata` column the reader touches to v1 names, switch positional reads to by-name reads (D6), and DROP `ReadWorkspaceId` (`:235-243`) — v1 has no `workspace_id` metadata key (verified absent in metadata.rs). The body-slice methods (`ReadBody`/`ReadIndexedFileText`/`ReadFileContent`) are handled in C3, not here — C2 leaves them temporarily compiling against the old `files.content` (the suite still has the old fixture only until H lands; sequence C2 to NOT touch the content path).
+**What:** Rename every `symbols`/`identifiers`/`artifact_metadata` column the reader touches to v1 names, switch positional reads to by-name reads (D6), DROP `ReadWorkspaceId` (`:235-243`) — v1 has no `workspace_id` metadata key (verified absent in metadata.rs) — and ADD `ReadRootPath` (reconciliation #14, consumed by E1). Also DROP the `code_context` column from `ReadDetail`'s SELECT and remove the now-dead `Indexing.SymbolDetail.CodeContext` field: v1's `symbols` table has no `code_context` (it moved to `identifiers`), and the only consumers are the `ReadDetail` projection + two test asserts (`ExtractReaderTests.cs:26,43`) + the fixture column (H drops it) — reconciliation #11. The body-slice methods (`ReadBody`/`ReadFileContent`) and the deletion of `ReadIndexedFileText` are handled in C3, not here — C2 leaves them temporarily compiling against the old `files.content` (the suite still has the old fixture only until H lands; sequence C2 to NOT touch the content path).
 
-**Scope boundary:** C2 covers `ReadDetail`, `ReadEditSpan`, `ReadReferences`, `ReadCallees`, `ReadIdentifierSites`, and removing `ReadWorkspaceId`. C3 covers `ReadBody`/`ReadIndexedFileText`/`ReadFileContent`.
+**Scope boundary:** C2 covers `ReadDetail` (incl. the `code_context` drop), `ReadEditSpan`, `ReadReferences`, `ReadCallees`, `ReadIdentifierSites`, removing `ReadWorkspaceId`, and adding `ReadRootPath`. C3 covers `ReadBody`/`ReadFileContent` (disk re-source) and the deletion of `ReadIndexedFileText`.
 
 **Exact rename map (file:line → old → new):**
 
 | Method | line | OLD column / clause | NEW (v1) | by-name read change |
 |---|---|---|---|---|
-| `ReadDetail` SELECT | 33 | `WHERE id = $id` | `WHERE symbol_id = $id` | columns by name via `GetOrdinal` |
+| `ReadDetail` SELECT | 31-33 | selects `code_context` + `WHERE id = $id` | **DROP `code_context`** (gone from v1 `symbols` — it lives only on `identifiers` now; reconciliation #11) + `WHERE symbol_id = $id` | columns by name via `GetOrdinal`; also remove the `CodeContext:` projection at `:44` |
 | `ReadEditSpan` SELECT | 71 | `WHERE id = $id` | `WHERE symbol_id = $id` | by name |
+| `ReadRootPath` (NEW) | n/a | — (replaces the deleted `ReadWorkspaceId` for E1's identity compare, #14) | `SELECT value FROM artifact_metadata WHERE key='root_path'` → bare string or `null` if absent | by name; C-owned, consumed by E1 |
 | `ReadReferences` SELECT | 98-101 | `file_path`, `ORDER BY file_path, start_line, id` | `path`, `ORDER BY path, start_line, identifier_id` | by name |
 | `ReadCallees` SELECT | 117-120 | `file_path`, `ORDER BY file_path, start_line, id` | `path`, `ORDER BY path, start_line, identifier_id` | by name |
 | `ReadIdentifierSites` SELECT | 157-161 | `file_path`, `ORDER BY file_path, start_byte` | `path`, `ORDER BY path, start_byte` (no `id` tiebreaker needed; already absent) | by name |
@@ -1411,7 +1471,7 @@ while (reader.Read())
 
 2. **Run** `scripts/test.sh` — fails (old SQL hits `no such column: file_path`/`id` against the v1 fixture; `ReadWorkspaceId` test references a deleted method). Expected red.
 
-3. **Implement** the rename map + by-name reads in `ExtractReader.cs`. Delete `ReadWorkspaceId`. Leave `ReadFileContent`/`ReadBody`/`ReadIndexedFileText` for C3 (they still reference `files.content`; C3 replaces them and removes the temporary breakage — sequence C3 immediately after).
+3. **Implement** the rename map + by-name reads in `ExtractReader.cs`. Delete `ReadWorkspaceId`. Leave `ReadFileContent`/`ReadBody`/`ReadIndexedFileText` for C3 (they still reference `files.content`; C3 re-sources `ReadBody`/`ReadFileContent` from disk and deletes `ReadIndexedFileText`, removing the temporary breakage — sequence C3 immediately after).
 
 4. **Run** `scripts/test.sh` — C2 reader tests green (C3 body tests may be red until C3 lands; that is expected within the atomic migration — do not declare C2 "done" in isolation if `ReadBody` tests fail, note they are C3's).
 
@@ -1424,11 +1484,11 @@ while (reader.Read())
 
 ---
 
-### Task C3 — ExtractReader disk re-source of body / indexed text with the hard freshness invariant
+### Task C3 — ExtractReader disk re-source of body text with the hard freshness invariant (+ delete dead `ReadIndexedFileText`)
 
-**Files:** `src/Miller.Indexing/ExtractReader.cs`; tests `tests/Miller.Tests/Indexing/ExtractReaderTests.cs`. Depends on subsystem D (`ContentHasher`, content_hash prefix normalizer) and subsystem H (fixture writes files to disk + exposes root + blake3-prefixed `content_hash`).
+**Files:** `src/Miller.Indexing/ExtractReader.cs`; tests `tests/Miller.Tests/Indexing/ExtractReaderTests.cs` and `tests/Miller.Tests/Indexing/ExtractReaderEditTests.cs` (the latter only to DELETE the `ReadIndexedFileText_*` cases at `:143-171`). Depends on subsystem D (`ContentHasher`, content_hash prefix normalizer) and subsystem H (fixture writes files to disk + exposes root + blake3-prefixed `content_hash`).
 
-**What:** `files.content` is GONE in v1 (verified: `files` has `content_hash`/`content_bytes`, no `content` — schema.rs:52-64). `ReadFileContent` (`:245-253`), `ReadBody` (`:201-229`), and `ReadIndexedFileText` (`:189-193`) must re-source body text from DISK by the symbol's byte span, and BEFORE slicing must hash the on-disk file with BLAKE3, strip the `blake3:` prefix from the stored `content_hash`, and compare. On mismatch they MUST NOT slice stale bytes (design §7 hard invariant) — return a staleness signal instead.
+**What:** `files.content` is GONE in v1 (verified: `files` has `content_hash`/`content_bytes`, no `content` — schema.rs:52-64). `ReadFileContent` (`:245-253`) and `ReadBody` (`:201-229`) must re-source body text from DISK by the symbol's byte span, and BEFORE slicing must hash the on-disk file with BLAKE3, strip the `blake3:` prefix from the stored `content_hash`, and compare. On mismatch they MUST NOT slice stale bytes (design §7 hard invariant) — return a staleness signal instead. **`ReadIndexedFileText` (`:189-193`) is DELETED, not migrated (reconciliation #16d).** Its sole production caller is `FreshnessGate.cs:70`, which D5 stops calling (v1 has no stored snapshot text, so the gate's exact-text tiebreaker is gone — freshness is a pure `content_hash` compare). After D5, `ReadIndexedFileText` has zero `src/` callers (verified: `grep -rn ReadIndexedFileText src` → only `FreshnessGate.cs:70` + the definition), so migrating it to a 3-arg disk reader would be migrating dead code. Delete the method and its tests instead.
 
 **Why non-mechanical:** the data source moves from SQLite TEXT to the filesystem; the methods need the workspace root (relative paths resolve against it); and a new freshness guard sits in front of every slice. The signatures change.
 
@@ -1447,17 +1507,14 @@ while (reader.Read())
       int? startByte, int? endByte, int? startLine, int? endLine);
   ```
   When the file drifted (`content_hash` mismatch), `ReadBody` returns `null` (the InspectTool then renders "(body unavailable — file changed since index; run workspace refresh)"). When fresh, slice by byte span exactly as today (the `SliceByBytes`/`SliceByLines` helpers are reused verbatim — they operate on the now-disk text).
-- `ReadIndexedFileText` gains `workspaceRoot`:
-  ```csharp
-  public static string? ReadIndexedFileText(string dbPath, string workspaceRoot, string filePath);
-  ```
-  This is the edit baseline's "indexed side". With v1 there is no stored snapshot text; the edit-freshness semantics shift to "is disk still at the indexed `content_hash`" (design §7, D2). Return the verified on-disk text when fresh, `null` when drifted — `FreshnessGate` already treats a null indexed text as "no trustworthy snapshot → Stale" (`FreshnessGate.cs:70-74`, see C4/D coordination). **Note:** subsystem D's `FreshnessGate.Check` separately hashes disk vs `content_hash`; `ReadIndexedFileText` returning verified text keeps the existing exact-text tiebreaker (`StalenessCheck.cs:83`) working. Coordinate with D so the prefix-strip is done ONCE in a shared helper (`ExtractFileHashReader`/D's normalizer), not duplicated here.
+- `ReadIndexedFileText` (`:189-193`) is **DELETED** (reconciliation #16d). It existed only to feed `FreshnessGate`'s exact-text tiebreaker, which v1 cannot support (no stored snapshot text) — D5 drops the gate's call and the gate becomes a pure `content_hash` compare (`indexedText: null`; `StalenessCheck.cs:83` only tiebreaks when text is on BOTH sides, so null is safe, not auto-Stale). With the gate call gone there are no `src/` callers, so the method is removed rather than migrated to a 3-arg disk reader. The prefix-strip lives ONCE in the shared `ContentHasher.NormalizeHash` (D1, reconciliation #1), used by `ReadVerifiedFileContent` (for `ReadBody`) and `FreshnessGate` (D5).
 
 **Freshness invariant implementation (the load-bearing part):**
 ```csharp
 private static FileContentResult ReadVerifiedFileContent(string dbPath, string workspaceRoot, string relPath)
 {
-    string? storedHash = ExtractFileHashReader.ReadFileHash(dbPath, relPath); // v1 'blake3:<hex>' (C-uses D)
+    // D2's ReadFileHash already returns BARE hex (it strips julie's "blake3:" prefix via ContentHasher.NormalizeHash).
+    string? storedHash = ExtractFileHashReader.ReadFileHash(dbPath, relPath); // bare hex (reconciliation #1/#20)
     if (string.IsNullOrWhiteSpace(storedHash))
         return new FileContentResult(Text: null, Stale: true); // no manifest entry -> treat as not-readable
 
@@ -1467,14 +1524,14 @@ private static FileContentResult ReadVerifiedFileContent(string dbPath, string w
 
     byte[] bytes = File.ReadAllBytes(abs);
     string diskHash = ContentHasher.Blake3Hex(bytes);                 // bare hex (ContentHasher, subsystem D)
-    string storedBare = ContentHashNormalizer.StripPrefix(storedHash); // 'blake3:' -> hex (subsystem D helper)
-    if (!StringComparer.OrdinalIgnoreCase.Equals(diskHash, storedBare))
+    // Idempotent belt-and-suspenders in case a caller ever passes a still-prefixed hash; blake3-only (reconciliation #9).
+    if (!StringComparer.OrdinalIgnoreCase.Equals(diskHash, ContentHasher.NormalizeHash(storedHash)))
         return new FileContentResult(Text: null, Stale: true);        // HARD INVARIANT: never slice drifted bytes
 
     return new FileContentResult(Text: Encoding.UTF8.GetString(bytes), Stale: false);
 }
 ```
-(`ContentHashNormalizer.StripPrefix` is owned by subsystem D; if D names it differently, consume that name. Do NOT inline a second `Substring("blake3:".Length)` here.)
+(The single normalizer is `ContentHasher.NormalizeHash` — subsystem D1, reconciliation #1. It strips `blake3:` ONLY; never feed it a `sha256:` value. Do NOT inline a second `Substring("blake3:".Length)` here, and do NOT reference a non-existent `ContentHashNormalizer`.)
 
 **Steps (TDD):**
 
@@ -1536,22 +1593,11 @@ private static FileContentResult ReadVerifiedFileContent(string dbPath, string w
            startByte: null, endByte: null, startLine: null, endLine: null));
    }
 
-   [Fact]
-   public void ReadIndexedFileText_FreshFile_ReturnsDiskText()
-   {
-       using var fx = JulieDbFixture.CreateForInspect();
-       string? text = ExtractReader.ReadIndexedFileText(fx.DbPath, fx.WorkspaceRoot, "auth/UserService.cs");
-       Assert.Equal(JulieDbFixture.UserServiceContent, text);
-   }
-
-   [Fact]
-   public void ReadIndexedFileText_DriftedFile_ReturnsNull()
-   {
-       using var fx = JulieDbFixture.CreateForInspect();
-       File.WriteAllText(Path.Combine(fx.WorkspaceRoot, "auth/UserService.cs"), "changed\n");
-       Assert.Null(ExtractReader.ReadIndexedFileText(fx.DbPath, fx.WorkspaceRoot, "auth/UserService.cs"));
-   }
    ```
+   (No `ReadIndexedFileText` tests are added — the method is deleted, reconciliation #16d. The existing
+   `ExtractReaderEditTests.cs` `ReadIndexedFileText_*` cases at `:143-171` are REMOVED in this task; the
+   disk-read + freshness-guard logic they would have covered is exercised by the `ReadBody_*` cases above,
+   which share the `ReadVerifiedFileContent` path.)
    Delete `ReadBody_NullByteSpans_FallsBackToLineSlice`/`ReadBody_EmptyFileContent_ReturnsNull` only if H's fixture no longer produces an empty-content file; KEEP a null-byte-span line-fallback test against a fresh disk file (the line-slice path must still work when byte spans are NULL but the file is fresh):
    ```csharp
    [Fact]
@@ -1572,7 +1618,7 @@ private static FileContentResult ReadVerifiedFileContent(string dbPath, string w
 3. **Implement.** In `ExtractReader.cs`:
    - Replace `ReadFileContent` (`:245-253`) with `ReadVerifiedFileContent` (above), reading `files.content_hash` via `ExtractFileHashReader.ReadFileHash` (subsystem D renames its SQL to `content_hash`) and hashing disk bytes via `ContentHasher`.
    - Rewrite `ReadBody` to take `workspaceRoot`, call `ReadVerifiedFileContent`, and on `Stale` (or null text) return `null`; on fresh text reuse `SliceByBytes`/`SliceByLines` unchanged (`:257-283`).
-   - Rewrite `ReadIndexedFileText` to take `workspaceRoot` and return `ReadVerifiedFileContent(...).Text` (null when drifted).
+   - DELETE `ReadIndexedFileText` (`:189-193`) and its `ExtractReaderEditTests.cs:143-171` cases (reconciliation #16d — no caller remains once D5 drops the gate's use). Verify with `grep -rn "ReadIndexedFileText" src tests` returning empty after this task + D5 land.
    - Add `using Miller.Core.Freshness;` only if needed; otherwise no new deps beyond `ContentHasher` (already in `Miller.Indexing`).
 
 4. **Run** `scripts/test.sh` — C3 tests green (requires H's fixture; if H not yet landed, this stays red and C3 is blocked — flag in the PR).
@@ -1581,8 +1627,9 @@ private static FileContentResult ReadVerifiedFileContent(string dbPath, string w
 
 **Acceptance:**
 - No SELECT in `ExtractReader` reads `files.content` (the column is gone).
-- `ReadBody`/`ReadIndexedFileText` hash the disk file and compare to the prefix-stripped `content_hash` before slicing; a drifted file yields `null`, never sliced stale bytes (the `ReadBody_DriftedFile` test proves it).
-- `ReadBody`/`ReadIndexedFileText` resolve relative paths against `workspaceRoot`.
+- `ReadBody` hashes the disk file and compares to the prefix-stripped `content_hash` before slicing; a drifted file yields `null`, never sliced stale bytes (the `ReadBody_DriftedFile` test proves it).
+- `ReadBody` resolves relative paths against `workspaceRoot`.
+- `ReadIndexedFileText` is gone: `grep -rn "ReadIndexedFileText" src tests` is empty (after D5 also lands).
 - Prefix stripping is done via subsystem D's shared normalizer, not duplicated.
 - Build 0 warnings; `scripts/test.sh` green.
 
@@ -2007,7 +2054,7 @@ v1's `extraction_revisions` has no `workspace_id` (one DB = one root). `LatestRe
 - The two existing scoping tests (`LatestRevision_IsScopedByWorkspaceId_DoesNotLeakAcrossWorkspaces` :36, `LatestRevision_UnknownWorkspace_ReturnsZero` :48) are now **semantically wrong** (v1 has no per-workspace scoping). Replace them with v1-appropriate tests rather than deleting coverage: one DB returns its own single MAX; two separate DB files do not leak.
 
 **Steps (TDD)**
-1. Rewrite the `FreshnessReaderTests` `LatestRevision` cases against the v1 fixture (after H migrates `JulieDbFixture` to `extraction_revisions`). The `Create` call loses `workspaceId:` and the `RevisionRow` loses its workspace field (H owns that record reshape; D consumes it):
+1. Rewrite the `FreshnessReaderTests` `LatestRevision` cases against the v1 fixture (after H1/H2 migrate `JulieDbFixture` to `extraction_revisions`). These rewrites **omit** the now-optional `Create(workspaceId:)` arg (the param survives — it feeds `artifact_metadata` identity — but `LatestRevision` no longer depends on workspace, so identity is irrelevant here) and use the dropped-`WorkspaceId` `Rev` shape. The record reshape (step 2) lands in THIS Phase-4 commit per reconciliation #15:
 ```csharp
 [Fact]
 public void LatestRevision_ReturnsMaxRevisionId()
@@ -2088,7 +2135,7 @@ Re-key `revision_file_changes` reads to v1 columns (`revision_id`, `path`, `chan
 - `ParseChangeKind`: switch on the 4 v1 values; throw `InvalidOperationException` on anything else with a corrected message and a corrected comment.
 
 **Steps (TDD)**
-1. Rewrite the `ChangedSince_*` tests against the v1 fixture (after H migrates `RevisionFileChangeRow` to `(revision_id, file_id, path, change_kind)` and the vocab). Note `revision_file_changes` PK in v1 is `(revision_id, file_id)`, so the fixture must supply a `file_id` per row (H owns that):
+1. Rewrite the `ChangedSince_*` tests against the v1 fixture (this is the Phase-4 step-2 commit that also drops the record's `WorkspaceId` and renames `FilePath`→`Path` per reconciliation #15). The v1 `revision_file_changes` PK is `(revision_id, file_id)`, but `file_id` is **derived inside the fixture** via the shared `FileId(path)` helper — it is NOT a `RevisionFileChangeRow` ctor arg — so the rewritten `Fc(...)` calls are 3-arg `Fc(revision, path, change_kind)` (reconciliation #15: do not pass an explicit `"file-x"`):
 ```csharp
 [Fact]
 public void ChangedSince_ReturnsOnlyRowsAfterTheGivenRevision()
@@ -2097,9 +2144,9 @@ public void ChangedSince_ReturnsOnlyRowsAfterTheGivenRevision()
         revisions: new[] { new Rev(1), new Rev(2), new Rev(3) },
         fileChanges: new[]
         {
-            new Fc(1, "file-a", "a.cs", "inserted"),
-            new Fc(2, "file-b", "b.cs", "updated"),
-            new Fc(3, "file-a", "a.cs", "deleted"),
+            new Fc(1, "a.cs", "inserted"),
+            new Fc(2, "b.cs", "updated"),
+            new Fc(3, "a.cs", "deleted"),
         });
     using var reader = new FreshnessReader(fx.DbPath);
 
@@ -2117,10 +2164,10 @@ public void ChangedSince_ParsesAllFourV1ChangeKinds()
         revisions: new[] { new Rev(1) },
         fileChanges: new[]
         {
-            new Fc(1, "f-ins", "inserted.cs", "inserted"),
-            new Fc(1, "f-upd", "updated.cs", "updated"),
-            new Fc(1, "f-del", "deleted.cs", "deleted"),
-            new Fc(1, "f-uns", "unsupported.cs", "unsupported"),
+            new Fc(1, "inserted.cs", "inserted"),
+            new Fc(1, "updated.cs", "updated"),
+            new Fc(1, "deleted.cs", "deleted"),
+            new Fc(1, "unsupported.cs", "unsupported"),
         });
     using var reader = new FreshnessReader(fx.DbPath);
 
@@ -2226,8 +2273,9 @@ private static RevisionChangeKind ParseChangeKind(string changeKind) => changeKi
 `FreshnessGate.Check` compares julie's stored hash (now `content_hash`, prefixed `blake3:`) against a disk hash from `ContentHasher.Blake3FileHex` (bare hex). The two must be normalized to the same canonical form before `StalenessCheck` (which is a pure ordinal comparator) sees them — otherwise every file reads stale (prefixed != bare). Since D2 makes `ExtractFileHashReader.ReadFileHash` return the already-normalized bare hex, the gate's stored side is canonical the moment it leaves the reader; D5 verifies that end-to-end and removes any residual prefix assumption. The gate also references `external_extract_metadata` indirectly via `ReadHashAlgorithm` (handled in D2) — no SQL change in the gate file itself.
 
 **Approach**
-- `FreshnessGate.cs:66` already calls `ExtractFileHashReader.ReadFileHash(dbPath, indexedFilePath)`, which after D2 returns bare hex. `currentHash` at line 71 is `ContentHasher.Blake3FileHex(diskPath)` (bare hex). So both sides are bare hex and `StalenessCheck.Check` compares like-for-like. The gate needs **no structural change** beyond confirming the contract — but to be defensive against a caller passing a still-prefixed indexed hash (and to make the normalization explicit at the comparison boundary per the design's "one canonical form applied consistently"), wrap `indexedHash` through `ContentHasher.NormalizeHash` at the point of `IndexedSnapshot` construction (line 72). This is idempotent on already-bare hashes (D1 guarantee) and self-documents the invariant.
-- Update the class XML doc (FreshnessGate.cs:9) from "reads julie's BLAKE3 snapshot from `files.hash`" to `files.content_hash` (normalized).
+- `FreshnessGate.cs:66` already calls `ExtractFileHashReader.ReadFileHash(dbPath, indexedFilePath)`, which after D2 returns bare hex. `currentHash` at line 71 is `ContentHasher.Blake3FileHex(diskPath)` (bare hex). So both sides are bare hex and `StalenessCheck.Check` compares like-for-like. To be defensive against a caller passing a still-prefixed indexed hash (and to make the normalization explicit at the comparison boundary per the design's "one canonical form applied consistently"), wrap `indexedHash` through `ContentHasher.NormalizeHash` at the point of `IndexedSnapshot` construction. This is idempotent on already-bare hashes (D1 guarantee) and self-documents the invariant.
+- **DELETE `FreshnessGate.cs:70`'s `ReadIndexedFileText` call — reconciliation #16d.** v1 stores no snapshot text, so there is nothing for the gate to read as an indexed-side baseline. The gate stops reading indexed text and passes `indexedText: null` (verified safe: `StalenessCheck.cs:83` runs the exact-text tiebreaker only when text is on BOTH sides; null falls through to the hash verdict, not auto-Stale). Dropping this call removes the method's last `src/` caller, which is why C3 (Phase 5) can then delete `ReadIndexedFileText` outright. This is the resolution of the "C3↔D5 2-arg/3-arg break" — the gate's freshness is now a pure `content_hash` compare. (Ordering: D5 lands in Phase 4 and removes the call; the method still compiles against `files.content` until C3+H3 in Phase 5 delete it and the column together.)
+- Update the class XML doc (FreshnessGate.cs:9-11): "reads julie's BLAKE3 snapshot from `files.hash`" → `files.content_hash` (normalized), and DROP the "Exact text is still supplied when available as the collision/normalization guard" sentence (no stored text in v1; the tiebreaker is honestly skipped).
 
 **Steps (TDD)**
 1. Add a gate-level test proving a `blake3:`-prefixed stored hash still reads Fresh against a byte-identical disk file. The `FreshnessGateTests.SetFileHash` helper (currently `UPDATE files SET hash = …` at FreshnessGateTests.cs:192) must target `content_hash` (H/B migrate the column; D updates this helper since it lives in D's test file). Store the **prefixed** value to mirror what julie writes:
@@ -2259,12 +2307,15 @@ string? indexedHash = ExtractFileHashReader.ReadFileHash(dbPath, indexedFilePath
 if (string.IsNullOrWhiteSpace(indexedHash))
     return new GateResult(FreshnessResult.Stale, IndexedContentFound: false);
 
-string? indexedText = ExtractReader.ReadIndexedFileText(dbPath, indexedFilePath);
 string currentHash = ContentHasher.Blake3FileHex(diskPath);
-// Both sides canonical bare hex: ReadFileHash already strips julie's "blake3:" prefix (D2), and
-// NormalizeHash here is the idempotent belt-and-suspenders at the comparison boundary so StalenessCheck —
-// a pure ordinal comparator — never sees mixed forms.
-var indexed = new IndexedSnapshot(ContentHasher.NormalizeHash(indexedHash), indexedText);
+// v1 artifacts store NO snapshot text (files.content is gone), so the indexed side is hash-only:
+// DROP the old `ExtractReader.ReadIndexedFileText(dbPath, indexedFilePath)` call (reconciliation #16d) — it
+// is now 3-arg (needs a workspaceRoot the gate doesn't have) and there is no stored text to read anyway.
+// Pass indexedText: null. StalenessCheck then decides on the hash compare ALONE: it runs the exact-text
+// tiebreaker only when text is present on BOTH sides (StalenessCheck.cs:83), so null indexedText is NOT
+// auto-Stale — it just skips the tiebreaker. NormalizeHash is the idempotent belt-and-suspenders at the
+// comparison boundary (D2's reader already returns bare hex; this guards a still-prefixed caller).
+var indexed = new IndexedSnapshot(ContentHasher.NormalizeHash(indexedHash), indexedText: null);
 var current = new CurrentProbe(currentHash, diskText);
 return new GateResult(StalenessCheck.Check(indexed, current), IndexedContentFound: true);
 ```
@@ -2337,15 +2388,15 @@ This is the cheapest task: confirm `WorkspaceId.cs` needs no edit and add one re
 
 **What**
 Today the bootstrap (lines 112-153) does three workspace_id-coupled things that v1 makes obsolete:
-1. **Force-rebind decision** (`DecideBootstrapScan`, lines 245-260): if the existing DB's `external_extract_metadata.workspace_id` != Miller's stable id, force a `--force` scan to "rebind" the DB to the stable id. v1 has no echoed workspace_id and the `--workspace-id` flag is gone (design §4.1), so there is nothing to rebind TO. Worse, v1's `scan` itself returns **exit 3 `RootMismatch`** (verified: julie-extractors `commands.rs:1239`, `if artifact.report.root_path != display_path(root)`, recoverable:false) when the DB at `--db` was built for a different `--root`. So the producer now enforces DB-belongs-to-root; Miller must not pre-empt it with a guessed rebind.
+1. **Force-rebind decision** (`DecideBootstrapScan`, lines 245-260): if the existing DB's `external_extract_metadata.workspace_id` != Miller's stable id, force a `--force` scan to "rebind" the DB to the stable id. v1 has no echoed workspace_id and the `--workspace-id` flag is gone (design §4.1), so there is nothing to rebind TO. Worse, v1's `scan` itself returns **exit 3 `RootMismatch`** (verified: `scan`→`open_artifact_for_root` guard at julie-extractors `commands.rs:1266-1279`, recoverable:false; the `update`/`delete` path enforces the same at `commands.rs:1239`) when the DB at `--db` was built for a different `--root`. So the producer now enforces DB-belongs-to-root; Miller must not pre-empt it with a guessed rebind.
 2. **`ExtractReader.ReadWorkspaceId(canonicalDbPath)`** (line 117) to feed that decision — the key is gone in v1.
 3. **The hard post-load assertion** (lines 150-153): re-reads `ReadWorkspaceId` and throws if it != stable id. The signal is gone; the assertion must be replaced by a `root_path` compare (the producer-aligned identity) or removed entirely in favor of relying on exit-3.
 
 **Approach (design §10D)**
-- Replace the workspace_id-mismatch branch in `DecideBootstrapScan` with a **root_path** comparison. On an existing DB, read `artifact_metadata.root_path` via a new B-provided `ExtractReader.ReadRootPath(dbPath)` and compare (canonicalized) against `canonicalRoot`. A mismatch means the DB at `<root>/.miller/symbols.db` was built for a different root (a moved/symlinked/copied checkout) — force a `--force` scan to rebuild it for THIS root. This preserves the existing "an existing DB bound to the wrong identity gets force-rebuilt before load" behavior, keyed on the signal v1 actually has.
+- Replace the workspace_id-mismatch branch in `DecideBootstrapScan` with a **root_path** comparison. On an existing DB, read `artifact_metadata.root_path` via the C-provided (C2, reconciliation #14) `ExtractReader.ReadRootPath(dbPath)` and compare (canonicalized) against `canonicalRoot`. A mismatch means the DB at `<root>/.miller/symbols.db` was built for a different root (a moved/symlinked/copied checkout) — force a `--force` scan to rebuild it for THIS root. This preserves the existing "an existing DB bound to the wrong identity gets force-rebuilt before load" behavior, keyed on the signal v1 actually has.
 - A missing/unreadable `root_path` key (a legacy/pre-v1 DB) ALSO forces a scan — same as the old missing-workspace_id case.
 - Drop the post-load hard assertion (old lines 150-153). The producer already guaranteed root match: either the scan succeeded with the right root, or (for a reused DB we did NOT scan) the `DecideBootstrapScan` root_path compare already passed. A belt-and-suspenders re-read adds no signal v1 provides. Keep the bootstrap failing loud on a genuine scan exit-3 (that propagates as `IncompatibleExtractException` from A's `Interpret`, which the existing `catch`/cleanup at line 196 already handles by disposing the ledger and rethrowing).
-- `scanRevision = report.Revision` (line 134) stays, but now resolves through A's accessor mapping `revision.latest_revision_id` (null on a no-op scan). The log line at 135-137 reads `report.SymbolsExtracted` (A maps to `counts.totals.symbols`) and `report.Revision` — unchanged call shape.
+- `scanRevision = report.Revision` (line 134) stays, but now resolves through A's accessor mapping `revision.latest_revision_id` (null on a no-op scan). The log line at 135-137 reads `report.SymbolsExtracted` (A maps to `counts.rows_written.symbols` — the per-operation count, matching today's "symbols extracted this scan" semantics; reconciliation #13) and `report.Revision` — unchanged call shape.
 - Rename the `existingWorkspaceId` parameter/locals to `existingRootPath` and the `BootstrapScanDecision` semantics comment to root-path language.
 
 **Steps (TDD)**
@@ -2415,7 +2466,7 @@ Today the bootstrap (lines 112-153) does three workspace_id-coupled things that 
              PathCanonicalizer.CanonicalizeRoot(existingRootPath), canonicalRoot, StringComparison.Ordinal);
      ```
      Note: `CanonicalizeRoot` of a non-existent path throws; guard by only canonicalizing when the dir exists, else treat as not-equal (force). Use a try/`Directory.Exists` check inside `RootPathsEqual` so a stale root_path pointing at a deleted dir forces a rebuild rather than crashing bootstrap.
-   - In `Run()` (lines 116-118): replace `ReadWorkspaceId` with `ReadRootPath` (B-provided), feeding the decision:
+   - In `Run()` (lines 116-118): replace `ReadWorkspaceId` with `ReadRootPath` (C-provided, C2 — reconciliation #14), feeding the decision:
      ```csharp
      bool dbExists = File.Exists(canonicalDbPath);
      string? existingRootPath = dbExists ? ExtractReader.ReadRootPath(canonicalDbPath) : null;
@@ -2443,7 +2494,7 @@ Today the bootstrap (lines 112-153) does three workspace_id-coupled things that 
 - `tests/Miller.Tests/Server/IndexBootstrapServiceTests.cs` (lines 140-172: the `ReadLatestRevisionOrZero` happy-path tests)
 
 **What**
-`ReadLatestRevisionOrZero(dbPath, workspaceId)` (lines 345-361) is the DB-fallback cursor read used when a reused DB had no scan report. It delegates to `FreshnessReader.LatestRevision(workspaceId)`. In v1, `FreshnessReader.LatestRevision` (subsystem C) changes to `SELECT MAX(revision_id) FROM extraction_revisions` with **no workspace filter** (design §4.4: "one DB = one root"). So the `workspaceId` argument is no longer a SQL filter — it survives ONLY as the null-sentinel guard (line 347-348: `if (workspaceId is null) return 0;`) and for the existing degrade/propagate discipline.
+`ReadLatestRevisionOrZero(dbPath, workspaceId)` (lines 345-361) is the DB-fallback cursor read used when a reused DB had no scan report. It delegates to `FreshnessReader.LatestRevision(workspaceId)`. In v1, `FreshnessReader.LatestRevision` (subsystem **D**, Task D3) changes to `SELECT MAX(revision_id) FROM extraction_revisions` with **no workspace filter** (design §4.4: "one DB = one root"). So the `workspaceId` argument is no longer a SQL filter — it survives ONLY as the null-sentinel guard (line 347-348: `if (workspaceId is null) return 0;`) and for the existing degrade/propagate discipline.
 
 **Approach**
 - Keep the `ReadLatestRevisionOrZero(string dbPath, string? workspaceId)` signature (callers in `WorkspaceTool.cs:399`, `CrossWorkspaceRefreshService` and `IndexerService` pass a workspaceId; keeping the param avoids a wider ripple). Internally it still passes `workspaceId` to `FreshnessReader.LatestRevision`, which C makes ignore it in SQL. The null-sentinel guard (workspaceId null → 0, "no workspace yet") is preserved verbatim.
@@ -2500,7 +2551,7 @@ Today the bootstrap (lines 112-153) does three workspace_id-coupled things that 
 `WorkspaceTool.Open` runs a prime scan (line 384) then:
 1. **Cross-checks `report.WorkspaceId` against `stableWorkspaceId`** (lines 385-396): if julie's echoed id != Miller's stable id, it marks the registry row `Error` and returns a "cannot register" note. v1 has NO `report.WorkspaceId` (subsystem A removes the field), so this entire block is dead/uncompilable and must be removed. The producer-side root guarantee (exit-3 RootMismatch) replaces it: a scan against the wrong DB fails the scan itself, surfacing through the outer try/catch as `workspace failed: ...`.
 2. **Maps revision** (lines 398-399): `report.Revision ?? IndexBootstrapService.ReadLatestRevisionOrZero(dbPath, stableWorkspaceId)`. A's accessor maps `report.Revision` to `revision.latest_revision_id` (null on a no-op delta scan). The `?? ReadLatestRevisionOrZero` DB fallback is the design-mandated behavior (§4.2: "Preserve the existing `report.Revision ?? <read latest from DB>` fallback") and STAYS — but now reads `extraction_revisions` via E2.
-3. **Reads `report.SymbolsExtracted`** (line 407) for the open result — A maps to `counts.totals.symbols`; call shape unchanged.
+3. **Reads `report.SymbolsExtracted`** (line 407) for the open result — A maps to `counts.rows_written.symbols` (per-operation; reconciliation #13), call shape unchanged.
 
 **Approach**
 - Delete lines 385-396 (the whole `if (report.WorkspaceId is { } reportedWorkspaceId ...)` block including the registry `Error`/`MarkError` and the early-return note). The `_registry.UpsertSeen(... Ready)` + `MarkScanned` (lines 400-401) become unconditional after the scan.
@@ -2717,7 +2768,7 @@ Structurally identical to E3 for the cross-workspace refresh path. After acquiri
    }
 
    [Theory]
-   [InlineData("outside_root")]   // file_outside_root family, recoverable:false, NOT keep-prior
+   [InlineData("file_outside_root")]   // real v1 wire code (ReportCode::FileOutsideRoot, snake_case); recoverable:false, NOT keep-prior
    [InlineData("usage_error")]
    [InlineData("root_mismatch")]
    public void ExecuteIsolated_NonRecoverableFailure_LogsAtError(string abnormalCode)
@@ -2772,7 +2823,7 @@ Structurally identical to E3 for the cross-workspace refresh path. After acquiri
 **Acceptance**
 - `IndexerCore` reads `ReportDiagnostic.Recoverable` as the primary keep-prior signal; `KeepPriorCodes` is the minimal `{ data_loss_guard }` carve-out (NOT a re-listing of every transient code).
 - `flock_timeout` no longer appears in `IndexerCore.cs` (replaced by `lock_timeout`/the recoverable flag).
-- A `data_loss_guard` failure (recoverable:false) still logs Info/keep-prior; an `outside_root`/`root_mismatch`/`usage_error` (recoverable:false, not carved in) logs Error; a no-diagnostic failure logs Error; an unexpected exception logs Warning.
+- A `data_loss_guard` failure (recoverable:false) still logs Info/keep-prior; a `file_outside_root`/`root_mismatch`/`usage_error` (recoverable:false, not carved in) logs Error; a no-diagnostic failure logs Error; an unexpected exception logs Warning.
 - Mixed-diagnostic failure with any recoverable diagnostic logs Info. Fast suite green; build 0 warnings.
 
 
@@ -3445,7 +3496,7 @@ These two files are a SECOND implementation of the julie schema that the **fast 
 
 **Design conformance note (read before starting).** §10H of the design doc names exactly these two files and says they "MUST migrate to v1 schema **in lockstep** with the readers (subsystem B)" and "also defines the canonical v1 synthetic schema the fast suite asserts against." The plan below conforms. One **plan-mismatch flag**: §10H lists only `JulieDbFixture.cs` + `LargeDbWriter.cs`, but two further test files build the old schema inline (`tests/Miller.Tests/Indexing/SqliteBridgeReaderTests.cs`, `tests/Miller.Tests/Indexing/RepositoryIndexLoaderBridgeTests.cs`). They are NOT in this subsystem's ownership (they belong with subsystem B's `SqliteBridgeReader`/`RepositoryIndexLoader` work) — surfaced here as a cross-dependency so they are not missed.
 
-**Shared API-stability rule for all H tasks.** Keep the public helper surface of `JulieDbFixture` (the `Create(...)` signature, `CreateDefault`/`CreateForInspect`/`CreateForEdit`, the `SymbolRow`/`IdentifierRow`/`RelationshipRow`/`RevisionRow`/`RevisionFileChangeRow` records, the `PinnedSchema`/`PinnedContract`/`SchemaText` statics, and the `*Content`/`*Id` constants) **byte-for-byte where possible**, so the ~25 consumer test files compile with zero call-site edits. Where v1 forces a record-field change (e.g. dropping `workspace_id` from the revision tables), retain the **field name on the C# record** even though the SQL INSERT drops the column — that is what keeps the ~6 `RevisionRow(rev, ws)` call-sites in subsystem-C/D tests compiling. Any field that genuinely cannot survive is called out per task.
+**Shared API-stability rule for all H tasks.** Keep the public helper surface of `JulieDbFixture` (the `Create(...)` signature including its surviving optional `workspaceId:` param, `CreateDefault`/`CreateForInspect`/`CreateForEdit`, the `SymbolRow`/`IdentifierRow`/`RelationshipRow`/`RevisionRow`/`RevisionFileChangeRow` records, the `PinnedSchema`/`PinnedContract`/`SchemaText` statics, and the `*Content`/`*Id` constants) **byte-for-byte where possible**, so the ~25 consumer test files compile with minimal call-site edits. **One end-state exception (reconciliation #15):** the revision-row records eventually drop `WorkspaceId` (and `RevisionFileChangeRow` drops `OldHash`/`NewHash` and renames `FilePath`→`Path`), because v1 `extraction_revisions` has no workspace concept. That drop is a cross-phase compile break, so it is staged: **H2 (Phase 3) keeps the fields as carried-but-not-written** while migrating the DDL/INSERTs (Phase 3 stays green; the emitted artifact is already workspace_id-free), and the field drop + every call-site update lands in the **Phase-4 freshness commit** per the authoritative inventory in reconciliation #15. The `Rev`/`Fc` aliases in `FreshnessReaderTests.cs:4-5` DO exist — the inventory enumerates them; do not assume full record names everywhere. Any other field that genuinely cannot survive is called out per task.
 
 ---
 
@@ -3469,7 +3520,7 @@ Replace the old-schema DDL constants and the `files`/`symbols`/`identifiers`/`re
 
 Column→GetX ordinal contract: subsystem B switches readers to **by-name** reads (`GetOrdinal`), so the fixture's INSERT column order no longer has to match a positional SELECT — but the **names** must match exactly. Verify against the post-migration reader SELECTs: `SqliteSymbolReader` selects `symbol_id, name, signature, kind, language, path, start_line, end_line, parent_symbol_id, is_test, (test_container, test_lifecycle)` (was `id, …, file_path, …, parent_id, metadata`); `ExtractReader.ReadReferences/ReadCallees/ReadIdentifierSites` select identifier `name, kind, path, start_line, containing_symbol_id` and `path, start_byte, end_byte, start_line`; `WorkspaceIndexFactsReader` selects `symbols.path` (was `file_path`); `SymbolGraphReader` selects `from_symbol_id, to_symbol_id, kind` (unchanged).
 
-**Metadata keys to write** (replacing the three `external_extract_metadata` upserts at 361-389). Write into `artifact_metadata`: `schema_version`, `sqlite_schema_version`, `extract_contract_version` (all `MillerExtractContract` values, written as TEXT), `hash_algorithm`, plus identity keys `artifact_id` and `root_path` (driven by the existing `workspaceId:` param — see H2/cross-deps). Subsystem B's `JulieSchemaGate` now reads the version from `artifact_metadata` keys (`sqlite_schema_version`/`schema_version`) instead of `MAX(version)` on a `schema_version` table.
+**Metadata keys to write** (replacing the three `external_extract_metadata` upserts at 361-389). Write **all 11 `REQUIRED_METADATA_KEYS`** the real producer emits (`metadata.rs:7-19`), so the synthetic fixture is a faithful v1 artifact (reconciliation #3/#23): `schema_version`, `sqlite_schema_version`, `extract_contract_version` (all `MillerExtractContract` values, written as TEXT), `hash_algorithm` (`"blake3"`), `binary_version` (`"2.0.0"`), `parser_inventory_fingerprint` and `capability_snapshot_fingerprint` (deterministic **`sha256:`-prefixed** 64-hex synthetic values — exercises the hash-domain distinction in #9; Miller stores but never compares them), `created_at` and `updated_at` (deterministic ISO-8601 strings), plus identity keys `artifact_id` and `root_path` (driven by the existing `workspaceId:` param — see H2/cross-deps). Subsystem B's `JulieSchemaGate` only reads `sqlite_schema_version`/`schema_version`/`extract_contract_version`/`hash_algorithm`, but the full key set keeps the fixture honest and lets a future fingerprint consumer test against real-shaped values. Extend `Fixture_ArtifactMetadata_*` to assert the fingerprint keys carry the `sha256:` prefix (never `blake3:`).
 
 **Approach**
 Open the v1 schema in `schema.rs` side-by-side. Rewrite each DDL const and its matching INSERT together. Add a private `FileId(path)` helper (e.g. `"file:" + path`) and thread `file_id` into the `files`, `symbols`, `identifiers`, `relationships`, and `literals` INSERTs. Insert a single seed revision row (`revision_id = 0`, see H2) BEFORE the `files` loop so the `files.last_revision_id` FK resolves under `PRAGMA foreign_keys=ON`. Keep the symbol position columns **nullable** in the synthetic DDL (deviation from julie's strict NOT NULL — see open_notes) so the existing NULL-discipline tests keep their coverage; map the `SymbolRow.StartByte/EndByte/StartLine/EndLine` init-props straight through as today.
@@ -3586,7 +3637,7 @@ Open the v1 schema in `schema.rs` side-by-side. Rewrite each DDL const and its m
 - `tests/Miller.Tests/Indexing/JulieDbFixture.cs`: `RevisionRow` record (142-145), `RevisionFileChangeRow` record (151-159), `CanonicalRevisionsDdl` (828-841), `RevisionFileChangesDdl` (843-853), the revisions INSERT (314-330) and fileChanges INSERT (333-350)
 
 **What**
-Replace the `canonical_revisions`/`revision_file_changes` tables (which carry `workspace_id` + a CHECK constraint) with v1's `extraction_revisions`/`revision_file_changes` (no `workspace_id`, no CHECK on `change_kind`, `revision_id` PK, new vocabulary). **Keep the `RevisionRow`/`RevisionFileChangeRow` record field names stable** (including `WorkspaceId`) so ~6 call-sites in `FreshnessReaderTests`, `IndexBootstrapServiceTests`, `WorkspaceToolTests` compile unchanged — but the SQL INSERTs drop the `workspace_id` column. This is non-mechanical (the freshness contract changes shape and the subsystem-C reader loses its workspace filter), so full TDD.
+Replace the `canonical_revisions`/`revision_file_changes` tables (which carry `workspace_id` + a CHECK constraint) with v1's `extraction_revisions`/`revision_file_changes` (no `workspace_id`, no CHECK on `change_kind`, `revision_id` PK, new vocabulary). **This is step 1 of reconciliation #15's two-step.** H2 changes ONLY the DDL + INSERTs and **keeps the `RevisionRow`/`RevisionFileChangeRow` record field names in place as carried-but-not-written** (including `WorkspaceId`) so that every call site across the ~6 consumer files in reconciliation #15's inventory (`FreshnessReaderTests` via the `Rev`/`Fc` aliases, `IndexBootstrapServiceTests`, `WorkspaceToolTests`, `FreshnessServicePollNowTests`, `WorkspaceIndexProviderTests`) compiles unchanged through Phase 3 — but the SQL INSERTs drop the `workspace_id` column, so the emitted artifact is already faithful v1. The record-field DROP itself (and `FilePath`→`Path`, file_id-derivation) is **step 2**, landing in the Phase-4 freshness commit alongside the consumer rewrites — do NOT drop the fields here. This is non-mechanical (the freshness contract changes shape and the subsystem-**D** reader loses its workspace filter), so full TDD.
 
 **v1 facts (verified)**
 - `extraction_revisions(revision_id INTEGER PRIMARY KEY, parent_revision_id, operation NOT NULL, mode, started_at NOT NULL, completed_at NOT NULL, binary_version NOT NULL, extract_contract_version NOT NULL, sqlite_schema_version NOT NULL, input_root, counts_json NOT NULL)` — schema.rs:28-41. NOT autoincrement; explicit `revision_id` inserts are valid.
@@ -3594,10 +3645,10 @@ Replace the `canonical_revisions`/`revision_file_changes` tables (which carry `w
 - `change_kind` vocabulary `{inserted, updated, deleted, unsupported}` — model.rs:54-67.
 
 **Approach**
-- `RevisionRow`: keep `(long Revision, string WorkspaceId, string Kind = "incremental")` + `CreatedAt`. The INSERT maps `Revision`→`revision_id`, `Kind`→`mode` (or `operation`), `CreatedAt`→`completed_at`/`started_at` as TEXT; supply the NOT NULL `operation='scan'`, `started_at='' `, `completed_at=''`, `binary_version='1.0.0'`, `extract_contract_version=MillerExtractContract.ExpectedExtractContractVersion`, `sqlite_schema_version=MillerExtractContract.ExpectedSchemaVersion`, `counts_json='{}'`. **Drop `workspace_id` from the SQL.** `WorkspaceId` on the record becomes carried-but-not-written for the revision table; it still feeds `artifact_metadata.artifact_id`/`root_path` identity via H1.
-- `RevisionFileChangeRow`: keep `(long Revision, string WorkspaceId, string FilePath, string ChangeKind)` + `OldHash`/`NewHash`. INSERT maps `Revision`→`revision_id`, `FilePath`→`path`, `ChangeKind`→`change_kind`, plus a synthetic NOT NULL `file_id` (`FileId(FilePath)`). **Drop `workspace_id`, `old_hash`, `new_hash`** (v1 has no such columns). `OldHash`/`NewHash` become carried-but-not-written (kept only for call-site compat; no current consumer reads them off the DB).
+- `RevisionRow` (Phase-3 shape): keep `(long Revision, string WorkspaceId, string Kind = "full")` + `CreatedAt` — the `Kind` default flips from the old `"incremental"` to `"full"` now (reconciliation #15: a scan-produced revision is a full extraction), so step 2 only removes the `WorkspaceId` positional and does not also churn the default. The INSERT maps `Revision`→`revision_id`, `Kind`→`mode`, `CreatedAt`→`completed_at`/`started_at` as TEXT; supply the NOT NULL `operation='scan'`, `started_at=''`, `completed_at=''`, `binary_version='2.0.0'` (match H1's `artifact_metadata.binary_version`), `extract_contract_version=MillerExtractContract.ExpectedExtractContractVersion`, `sqlite_schema_version=MillerExtractContract.ExpectedSchemaVersion`, `counts_json='{}'`. **Drop `workspace_id` from the SQL.** `WorkspaceId` on the record is carried-but-not-written for the revision table through Phase 3 (Step 2 / Phase 4 removes the field); it still feeds `artifact_metadata.artifact_id`/`root_path` identity via H1's separate `Create(workspaceId:)` param.
+- `RevisionFileChangeRow` (Phase-3 shape): keep `(long Revision, string WorkspaceId, string FilePath, string ChangeKind)` + `OldHash`/`NewHash`. INSERT maps `Revision`→`revision_id`, `FilePath`→`path`, `ChangeKind`→`change_kind`, plus the synthetic NOT NULL `file_id = FileId(FilePath)` (the shared `"file:" + path` helper from H1; `file_id` has no FK, so a path-derived value is valid and PK-unique within a revision). **Drop `workspace_id`, `old_hash`, `new_hash` from the SQL** (v1 has no such columns). `WorkspaceId`/`OldHash`/`NewHash` are carried-but-not-written through Phase 3; Step 2 / Phase 4 removes them and renames `FilePath`→`Path` (no consumer reads `OldHash`/`NewHash` off the DB — verified: the only `.OldHash`/`.NewHash` reads are the fixture's own INSERT params at JulieDbFixture.cs:346-347).
 - Add the seed-revision row (`revision_id=0`) used by H1's `files.last_revision_id` FK; do it inside `Create` whenever `files` rows exist and no explicit `revisions` were supplied, so existing fixtures with FK-on still satisfy the FK.
-- **Update the change_kind values the freshness tests use.** This is the coordination seam with subsystem C's `ParseChangeKind`. The fixture itself does not parse, but H2 updates the fixture's DDL/INSERT to accept the new vocab; the `FreshnessReaderTests` literals (`"added"/"modified"/"deleted"` at C-owned lines 75-78, 95, 108-110, 116-118) must move to `"inserted"/"updated"/"deleted"/"unsupported"` in subsystem C's TDD. Flag in cross-deps; the fixture must not CHECK-reject the new vocab (drop the CHECK).
+- **Update the change_kind values the freshness tests use.** This is the coordination seam with subsystem **D**'s `ParseChangeKind` (Task D4, `FreshnessReader.cs`). The fixture itself does not parse, but H2 updates the fixture's DDL/INSERT to accept the new vocab; the `FreshnessReaderTests` literals (`"added"/"modified"/"deleted"` at **D4**-owned lines 75-78, 95, 108-110, 116-118) move to `"inserted"/"updated"/"deleted"/"unsupported"` in subsystem **D**'s TDD. Flag in cross-deps; the fixture must not CHECK-reject the new vocab (drop the CHECK).
 
 **Steps (TDD)**
 1. **Add a failing freshness-shape test** to `JulieDbFixtureV1SchemaTests.cs`:
@@ -3643,13 +3694,13 @@ Replace the `canonical_revisions`/`revision_file_changes` tables (which carry `w
    ```
    Run `scripts/test.sh` — fails (old `canonical_revisions` + workspace_id column + CHECK).
 2. **Implement** the two DDL constants, the two records' INSERT mappings, and the seed-revision logic per Approach.
-3. Run `scripts/test.sh`. The H2 lock tests go green. `FreshnessReaderTests` (subsystem C) must land in the SAME commit with its reader + vocab updates — verify together.
+3. Run `scripts/test.sh`. The H2 lock tests go green. `FreshnessReaderTests` (subsystem **D**, D3/D4) must land in the SAME commit with its reader + vocab updates — verify together.
 4. `dotnet build Miller.slnx -c Release` — 0 warnings.
 
 **Acceptance**
 - `extraction_revisions`/`revision_file_changes` exist, have NO `workspace_id`, and accept the v1 `{inserted,updated,deleted,unsupported}` vocab with no CHECK rejection.
 - `RevisionRow`/`RevisionFileChangeRow` record signatures are unchanged → the ~6 call-sites in C/D tests compile with no edits.
-- `FreshnessReaderTests` (subsystem C, same commit) passes against `MAX(revision_id)` (no workspace filter) and the new vocab.
+- `FreshnessReaderTests` (subsystem **D**, same commit) passes against `MAX(revision_id)` (no workspace filter) and the new vocab.
 - Build 0 warnings.
 
 ---
@@ -3660,13 +3711,13 @@ Replace the `canonical_revisions`/`revision_file_changes` tables (which carry `w
 - `tests/Miller.Tests/Indexing/JulieDbFixture.cs`: the `files` INSERT (224-234), the `fileContent:` parameter (175), the `*Content` constants (406-411, 493-513)
 
 **What**
-v1 `files` has **no `content` column** (D2: Miller reads body text from disk) and stores `content_hash` as `blake3:<hex>` (prefixed) plus `content_bytes` (a count). The fixture must (a) stop writing `files.content`, (b) write `content_bytes` = UTF-8 byte length and `content_hash` = `"blake3:" + ContentHasher.Blake3Hex(bytes)`, and (c) still expose the per-file text so the inspect/edit tests (subsystem D2) can write it to **disk** for the disk-slice path. Non-mechanical (value-format change + a consumer-contract shift), so full TDD.
+v1 `files` has **no `content` column** (D2: Miller reads body text from disk) and stores `content_hash` as `blake3:<hex>` (prefixed) plus `content_bytes` (a count). The fixture must (a) stop writing `files.content`, (b) write `content_bytes` = UTF-8 byte length and `content_hash` = `"blake3:" + ContentHasher.Blake3Hex(bytes)`, and (c) **materialize each file's bytes to disk under a fixture-owned `WorkspaceRoot`** and expose that root, so the inspect/edit/freshness tests (subsystem D2/C3) can read and mutate the real on-disk bytes for the disk-slice path (reconciliation #3). The on-disk bytes are the exact UTF-8 of the `*Content` source, so their blake3 matches the stored `content_hash` by construction — a fresh `ReadBody` succeeds with no test-side write. Non-mechanical (value-format change + a consumer-contract shift), so full TDD.
 
 **Approach**
 - Keep the `fileContent:` parameter and the `UserServiceContent`/`OrderServiceContent`/`InvoiceContent`/`CafeContent`/`GetUserId`/`TotalMethodId`/… constants exactly as-is (the inspect/edit tests reference them by name).
 - In the `files` INSERT: replace `content, line_count` columns with v1's `content_hash, content_bytes, …`. Compute `byte[] bytes = Encoding.UTF8.GetBytes(content)`, `content_bytes = bytes.Length`, `content_hash = "blake3:" + ContentHasher.Blake3Hex(bytes)`. Supply the NOT NULL `indexed_at=''`, `last_revision_id=0` (the seed revision from H2), `status='indexed'`.
-- The current default-fixture behavior of `content=""` (used by `ReadBody_EmptyFileContent_ReturnsNull` at ExtractReaderTests:142-151) shifts: under D2 `ReadBody` reads disk, so that test is rewritten by subsystem D2 to assert "no on-disk file → null". The fixture's job here is only to stop carrying `files.content` and to expose a content accessor. **Add a public accessor** `public IReadOnlyDictionary<string,string> FileContents { get; }` to the fixture (populated from the `fileContent:` param, plus the `*Content` constants for `CreateForInspect`/`CreateForEdit`) so the D2-rewritten inspect/edit/freshness tests can materialize the bytes to a temp workspace. This is the explicit seam the design's §7 disk-slice path needs.
-- Coordinate the `blake3:` prefix with subsystem C: `FreshnessGate`/`StalenessCheck` strip the prefix before comparing to a bare-hex disk hash. The fixture writes the prefixed form (matching real julie); C normalizes. `FreshnessGateTests.SetFileHash` (C-owned, line 192) writes `files.hash` → must become `files.content_hash` and prefix the value (or the gate strips). Flag in cross-deps.
+- The current default-fixture behavior of `content=""` (used by `ReadBody_EmptyFileContent_ReturnsNull` at ExtractReaderTests:142-151) shifts: under D2 `ReadBody` reads disk, so that test is rewritten by subsystem D2 to assert "no on-disk file → null". **Expose the workspace root and pre-materialize the bytes.** Add `public string WorkspaceRoot => _dir;` (the fixture's existing temp dir at JulieDbFixture.cs:182-184, which already holds `symbols.db` and is already deleted recursively in `Dispose` at :672-673 — so no new cleanup is needed). In `Create`, for every fixture file (the `fileContent:` entries plus the `*Content` files baked into `CreateForInspect`/`CreateForEdit`), write the exact UTF-8 bytes to `Path.Combine(_dir, relativePath)`, creating parent directories first (e.g. `auth/`, `unicode/`). Because the same bytes feed both the disk write and the stored `content_hash`, a fresh disk read matches the stored hash with no test-side setup — the C3/D2 tests just call `ReadBody(fx.DbPath, fx.WorkspaceRoot, relPath, …)` and only the drift/missing-file cases do their own `File.WriteAllText`/`File.Delete`. This (not a `FileContents` dictionary) is the explicit seam the design's §7 disk-slice path needs; there is no in-memory content accessor because no consumer reads one — they read disk.
+- Coordinate the `blake3:` prefix with subsystem **D** (cross-dep note, not an H3 edit — reconciliation #16a/#16d): `FreshnessGate` normalizes via `ContentHasher.NormalizeHash` (strips `blake3:`) before comparing to a bare-hex disk hash. The fixture writes the prefixed `content_hash` (matching real julie); **D5** normalizes. `FreshnessGateTests.SetFileHash`/`SetHashAlgorithm` are **owned by D5** (that file is in D5's Files block) — D5 retargets them from `files.hash` to `files.content_hash` with the `blake3:` prefix; H3 only guarantees the fixture emits the prefixed value. Flag in cross-deps.
 
 **Steps (TDD)**
 1. **Add a failing content-format test** to `JulieDbFixtureV1SchemaTests.cs`:
@@ -3690,21 +3741,38 @@ v1 `files` has **no `content` column** (D2: Miller reads body text from disk) an
    }
 
    [Fact]
-   public void Fixture_ExposesFileContents_ForDiskMaterialization()
+   public void Fixture_MaterializesFilesUnderWorkspaceRoot_MatchingStoredHash()
    {
        using var fx = JulieDbFixture.CreateForEdit();
-       Assert.Equal(JulieDbFixture.OrderServiceContent, fx.FileContents["orders/OrderService.cs"]);
-       Assert.Equal(JulieDbFixture.CafeContent, fx.FileContents["unicode/Café.cs"]);
+
+       // Bytes are on disk under WorkspaceRoot (no test-side write), and their blake3 equals the stored content_hash.
+       foreach (var (rel, content) in new[]
+       {
+           ("orders/OrderService.cs", JulieDbFixture.OrderServiceContent),
+           ("unicode/Café.cs", JulieDbFixture.CafeContent),
+       })
+       {
+           string abs = Path.Combine(fx.WorkspaceRoot, rel);
+           Assert.True(File.Exists(abs), $"{rel} must be materialized under WorkspaceRoot");
+           var bytes = File.ReadAllBytes(abs);
+           Assert.Equal(content, System.Text.Encoding.UTF8.GetString(bytes));
+
+           using var c = Open(fx.DbPath);
+           using var cmd = c.CreateCommand();
+           cmd.CommandText = "SELECT content_hash FROM files WHERE path=$p;";
+           cmd.Parameters.AddWithValue("$p", rel);
+           Assert.Equal("blake3:" + Miller.Indexing.ContentHasher.Blake3Hex(bytes), (string)cmd.ExecuteScalar()!);
+       }
    }
    ```
-   Run `scripts/test.sh` — fails (old `content` column; no `FileContents` accessor; bare-hex hash).
-2. **Implement** the `files` INSERT change + `FileContents` accessor + `content_hash`/`content_bytes` write.
+   Run `scripts/test.sh` — fails (old `content` column; no `WorkspaceRoot`/on-disk bytes; bare-hex hash).
+2. **Implement** the `files` INSERT change + `WorkspaceRoot` accessor + on-disk materialization + `content_hash`/`content_bytes` write.
 3. Run `scripts/test.sh`. H3 lock tests green. The D2-owned rewrites of `ExtractReaderTests.ReadBody*`/inspect-full and `FreshnessGateTests` land in the same commit — verify together.
 4. `dotnet build Miller.slnx -c Release` — 0 warnings.
 
 **Acceptance**
 - `files` has `content_hash` (`blake3:`-prefixed) + `content_bytes`, no `content` column.
-- `fx.FileContents` returns the per-file text for disk materialization by D2 tests.
+- `fx.WorkspaceRoot` exists; every fixture file's bytes are present on disk under it (parent dirs created), with blake3 matching the stored `content_hash`, and are removed when the fixture is disposed (no temp leak).
 - The `content_hash` value equals `"blake3:" + ContentHasher.Blake3Hex(utf8 bytes)` exactly.
 - Build 0 warnings.
 
@@ -3968,13 +4036,13 @@ cmd.CommandText =
 
 Document order is A–H for readability; EXECUTE in these phases (from the critique, aligned to design §12). Each phase compiles/greens only where noted.
 
-- **Phase 1 — unblock with a real v1 DB:** `G1` (from-source restore: `cargo build --release -p julie-extract-cli --bin julie-extract`, plus binary-name plumbing in `JulieExtractRunner.Locate`, `WorkspaceContext.ToolsRoot`, `ScaleTestSupport`, and the `WorkspaceToolTests` literals).
+- **Phase 1 — unblock with a real v1 DB:** `G1` (from-source restore: `cargo build --release -p julie-extract-cli --bin julie-extract`, plus binary-name plumbing in `JulieExtractRunner.Locate`, `WorkspaceContext.ToolsRoot`, `ScaleTestSupport`, and the `WorkspaceToolTests` literals) **and the `julie-pins.json` DATA repoint + script rename** (version `2.0.0`, slug `anortham/julie-extractors`, four real sha256, `{VER}`-templated names — pure data, lands now so A1's pins-test greens in Phase 2; reconciliation #4/#16c).
 - **Phase 2 — contract gate + report:** `A1 → A2 → A3 → A4 → A5 → A6` (one red→green arc; A2+A3 break the build until both land).
-- **Phase 3 — read layer + fixtures (ONE phase; compiles/greens only at the end):** begin with the atomic commit **`B1 + F1 + F4 + H1`** (record/consumer/projection + fixture-DDL spine), then `B2`, `C1` (schema gate first), `C2`, `C6`, `C7`, `C5`, `B3`, `B4`, `H2`/`H4`/`H5`/`H6`, `F2`, `F3`, `F5`, `H7`.
-- **Phase 4 — freshness + bootstrap + services:** `D1 → D2 → D3 → D4 → D5`, then `E5 → E1 + E2 → E3 + E4 → E6`, and migrate the two report-fixture files (reconciliation #7) to the nested ctor here.
-- **Phase 5 — file-content disk re-source:** `C3 + C4` (disk slice + InspectTool root) — gated on H3 exposing `WorkspaceRoot` + on-disk bytes (reconciliation #3) and D1's `ContentHasher.NormalizeHash` (reconciliation #1).
+- **Phase 3 — read layer + fixtures (ONE phase; compiles/greens only at the end):** begin with the **TestRole→IsTest atomic commit `B1 + B2 + B4 + F1 + F2 + F3 + F4 + H1 + H4`** (record + reader + bridge/Core consumers + projection + fixture-DDL spine + typed `is_test` writer — reconciliation #6; gate `rg -n "TestRole" src tests` empty), then `C1` (schema gate first), `C2` (incl. drop `code_context` per #11 + add `ReadRootPath` per #14), `C6`, `C7`, `C5`, `B3`, `H2`/`H5`/`H6`, `F5`, `H7`.
+- **Phase 4 — freshness + bootstrap + services (one atomic commit):** the FIRST edit is reconciliation #15 **step 2** — drop `WorkspaceId` from `JulieDbFixture.RevisionRow`/`RevisionFileChangeRow` (also drop `OldHash`/`NewHash`, rename `FilePath`→`Path`, derive `file_id` via `FileId(path)`); the compiler then forces every call site in #15's inventory to update in THIS commit (D3/D4 rewrite `FreshnessReaderTests` incl. the now-invalid leak tests; E2 also takes `FreshnessServicePollNowTests`, `WorkspaceIndexProviderTests:500`, `IndexBootstrapServiceTests:301`; E3 takes `WorkspaceToolTests` `CreateSynth:157`). Then `D1 → D2 → D3 → D4 → D5` (D3/D4 drop the `workspaceId` param — reconciliation #2), then `E5 → E1 + E2 → E3 + E4 → E6`, all `LatestRevision`/`ChangedSince` call sites (incl. `FreshnessService.cs:230`) updated, and migrate the two report-fixture files (reconciliation #7) to the nested ctor here. Acceptance: `rg -n "RevisionRow\(|RevisionFileChangeRow\(|new Rev\(|new Fc\(" src tests` shows zero workspace-id args (reconciliation #15).
+- **Phase 5 — file-content disk re-source (one atomic unit):** **`H3 + C3 + C4`** — H3 first adds `WorkspaceRoot` + materializes file bytes to disk (reconciliation #3/#16); then C3 (disk slice for `ReadBody` with the hard `content_hash` freshness invariant, calling `ContentHasher.NormalizeHash` per #1, AND deletion of the now-dead `ReadIndexedFileText` — reconciliation #16d) + C4 (InspectTool root). The FreshnessGate (D5, Phase 4) relies on `content_hash` alone and passes `indexedText:null`, so it no longer calls `ReadIndexedFileText` at all — which is why C3 can delete it. Gated on D1/D2/D5 (Phase 4).
 - **Phase 6 — OUT by default:** the design §10E / D3a search-widen is excluded (pure parity). Include only if Alan opts in (design §16); it would add a subsystem here.
-- **Phase 7 — download restore + docs (after §9 upstream confirmed):** `G2` (pins repoint + asset extract), `G3` (csproj Content/Link/Exec), `G4` (CLAUDE.md edit + regenerate AGENTS.md via `scripts/sync-agents.sh`).
+- **Phase 7 — download restore + docs:** `G2` (download-branch nested-extract logic only — the pins DATA + script rename already landed in Phase 1), `G3` (csproj Content/Link/Exec), `G4` (CLAUDE.md edit + regenerate AGENTS.md via `scripts/sync-agents.sh`).
 
 Critical inter-phase gates: G1 before anything needing a real DB; A before D/E consume the nested report; the schema gate (C1) before reads; the `is_test` column (B1) before its consumers (F); G2 last.
 
