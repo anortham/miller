@@ -27,6 +27,8 @@ namespace Miller.Indexing;
 /// </summary>
 public static class RepositoryIndexLoader
 {
+    private const int MaxIdentifierFallbackTargets = 16;
+
     /// <summary>
     /// Read the julie extract at <paramref name="dbPath"/> and build the index + dependency graph + bridge graph as
     /// one immutable unit.
@@ -66,7 +68,8 @@ public static class RepositoryIndexLoader
             dbPath,
             name => nameToIds.TryGetValue(name, out var ids)
                 ? ids
-                : (IReadOnlyList<string>)Array.Empty<string>());
+                : (IReadOnlyList<string>)Array.Empty<string>(),
+            maxNameResolutionTargets: MaxIdentifierFallbackTargets);
 
         // 4) Read the bridge breadcrumbs (type_arguments, literals, annotations, DbSet<T> properties) and build the
         //    M4 cross-language bridge graph. Project the symbols to Core SymbolDetails first (the legs + resolver

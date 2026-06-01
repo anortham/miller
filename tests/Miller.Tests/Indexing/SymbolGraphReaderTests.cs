@@ -14,6 +14,7 @@ namespace Miller.Tests.Indexing;
 ///   <c>containing → each id</c> (homonyms over-approximate — both ids, D2 honesty clause);</item>
 /// <item>a NULL <c>containing_symbol_id</c> identifier is dropped (no source node);</item>
 /// <item>a name that resolves to NO indexed symbol (external/library ref) is dropped (bounds the graph);</item>
+/// <item>a name whose fallback resolution is too ambiguous is dropped (bounds explosive homonym fan-out);</item>
 /// <item>a self-edge (a name resolving back to its own container) is dropped defensively.</item>
 /// </list>
 /// The name resolver is supplied by the caller (the index name map in production); these tests pass a small
@@ -145,6 +146,26 @@ public sealed class SymbolGraphReaderTests
 
         Assert.Contains(edges, e => e.From == ProcessId && e.To == LogAId && e.Kind == "call");
         Assert.Contains(edges, e => e.From == ProcessId && e.To == LogBId && e.Kind == "call");
+    }
+
+    [Fact]
+    public void Read_NameResolvingAboveFanoutLimit_IsDropped()
+    {
+        // Without target_symbol_id from julie, name fallback is an approximation. Very high homonym counts are not
+        // useful dependency evidence and can explode into millions of edges on large TS repos.
+        using var fx = FixtureWith(
+            relationships: null,
+            identifiers: new[]
+            {
+                new JulieDbFixture.IdentifierRow("i1", "Log", "call", "csharp", "src/A.cs", 2, ProcessId),
+            });
+
+        var edges = SymbolGraphReader.Read(
+            fx.DbPath,
+            ResolverFor(NameMap),
+            maxNameResolutionTargets: 1);
+
+        Assert.Empty(edges);
     }
 
     [Fact]

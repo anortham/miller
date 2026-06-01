@@ -13,7 +13,7 @@ public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider
     private readonly Func<string, MillerRepositoryIndex> _loadIndex;
     private readonly Func<long, bool?> _currentIndexFresh;
     private readonly object _cacheGate = new();
-    private readonly Dictionary<CacheKey, CachedIndex> _cache = new();
+    private readonly Dictionary<CacheKey, Lazy<CachedIndex>> _cache = new();
 
     public WorkspaceIndexProvider(
         IndexHolder holder,
@@ -113,31 +113,55 @@ public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider
             row.WorkspaceId,
             row.CanonicalRoot,
             revision,
-            IndexFreshFor(refreshResult, row),
-            FreshnessStatusFor(refreshResult, row),
-            WarningTextFor(refreshResult),
+            WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
+            WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
+            WorkspaceFreshnessView.WarningTextFor(refreshResult),
             row.DisplayId);
     }
 
     private CachedIndex GetOrLoad(WorkspaceRegistryRow row, long revision)
     {
         var key = new CacheKey(row.WorkspaceId, row.IndexDbPath, revision);
+        Lazy<CachedIndex> lazy;
         lock (_cacheGate)
         {
-            if (_cache.TryGetValue(key, out CachedIndex? cached))
-                return cached;
+            if (!_cache.TryGetValue(key, out lazy!))
+            {
+                lazy = new Lazy<CachedIndex>(
+                    () =>
+                    {
+                        MillerRepositoryIndex index = _loadIndex(row.IndexDbPath);
+                        return new CachedIndex(index, new SmartTargetResolver(index));
+                    },
+                    LazyThreadSafetyMode.ExecutionAndPublication);
+                _cache[key] = lazy;
+                EvictOtherEntriesForWorkspaceUnderLock(key);
+            }
         }
 
-        MillerRepositoryIndex index = _loadIndex(row.IndexDbPath);
-        var loaded = new CachedIndex(index, new SmartTargetResolver(index));
-
-        lock (_cacheGate)
+        try
         {
-            if (_cache.TryGetValue(key, out CachedIndex? cached))
-                return cached;
+            return lazy.Value;
+        }
+        catch
+        {
+            lock (_cacheGate)
+            {
+                if (_cache.TryGetValue(key, out Lazy<CachedIndex>? cachedLazy) && ReferenceEquals(cachedLazy, lazy))
+                    _cache.Remove(key);
+            }
+            throw;
+        }
+    }
 
-            _cache[key] = loaded;
-            return loaded;
+    private void EvictOtherEntriesForWorkspaceUnderLock(CacheKey keep)
+    {
+        foreach (CacheKey key in _cache.Keys
+                     .Where(key => string.Equals(key.WorkspaceId, keep.WorkspaceId, StringComparison.Ordinal)
+                                   && !key.Equals(keep))
+                     .ToArray())
+        {
+            _cache.Remove(key);
         }
     }
 
@@ -180,33 +204,6 @@ public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider
             return _currentWorkspace.WorkspaceId;
         }
     }
-
-    private static bool? IndexFreshFor(WorkspaceRefreshResult? refreshResult, WorkspaceRegistryRow row) =>
-        refreshResult?.Status switch
-        {
-            WorkspaceRefreshStatus.Refreshed => true,
-            WorkspaceRefreshStatus.Unchanged => true,
-            WorkspaceRefreshStatus.LockBusy => false,
-            WorkspaceRefreshStatus.MissingRoot => false,
-            WorkspaceRefreshStatus.MissingIndex => false,
-            WorkspaceRefreshStatus.Failed => false,
-            null => row.State is WorkspaceRegistryState.Current
-                or WorkspaceRegistryState.Ready,
-            _ => false,
-        };
-
-    private static string FreshnessStatusFor(WorkspaceRefreshResult? refreshResult, WorkspaceRegistryRow row) =>
-        refreshResult?.Status switch
-        {
-            WorkspaceRefreshStatus.LockBusy => "unconfirmed_lock_busy",
-            null => row.StateText,
-            _ => refreshResult.StatusText,
-        };
-
-    private static string? WarningTextFor(WorkspaceRefreshResult? refreshResult) =>
-        refreshResult?.Status == WorkspaceRefreshStatus.LockBusy
-            ? refreshResult.WarningText
-            : refreshResult?.WarningText;
 
     private readonly record struct CacheKey(string WorkspaceId, string IndexDbPath, long Revision);
 

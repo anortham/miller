@@ -87,6 +87,42 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     }
 
     [Fact]
+    public async Task Resolve_RegisteredWorkspace_ConcurrentCacheMissesShareOneLoad()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-single-flight");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+
+        int loadCount = 0;
+        var loadStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            loadIndex: path =>
+            {
+                Interlocked.Increment(ref loadCount);
+                loadStarted.TrySetResult();
+                Thread.Sleep(200);
+                return RepositoryIndexLoader.Load(path);
+            });
+
+        Task<WorkspaceReadContext> first = Task.Run(() => provider.Resolve("target-ws", ensureFresh: false));
+        Task timeout = Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.Same(loadStarted.Task, await Task.WhenAny(loadStarted.Task, timeout));
+        Task<WorkspaceReadContext> second = Task.Run(() => provider.Resolve("target-ws", ensureFresh: false));
+
+        WorkspaceReadContext[] contexts = await Task.WhenAll(first, second);
+
+        Assert.Equal(1, loadCount);
+        Assert.Same(contexts[0].Index, contexts[1].Index);
+        Assert.Same(contexts[0].Resolver, contexts[1].Resolver);
+    }
+
+    [Fact]
     public void Resolve_RegisteredWorkspace_ReloadsWhenDbPathChangesEvenAtTheSameRevision()
     {
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
@@ -115,6 +151,104 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Assert.NotSame(first.Index, second.Index);
         Assert.IsType<TargetResolution.NotFound>(first.Resolver.Resolve("TargetB"));
         Assert.IsType<TargetResolution.Symbol>(second.Resolver.Resolve("TargetB"));
+        Assert.Equal(2, loadCount);
+    }
+
+    [Fact]
+    public void Resolve_RegisteredWorkspace_EvictsOlderCacheEntryAfterRevisionChange()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var targetA = DbWithSymbol("target-ws", revision: 1, "TargetA");
+        using var targetB = DbWithSymbol("target-ws", revision: 2, "TargetB");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-evict");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, targetA.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+
+        string activeDbPath = targetA.DbPath;
+        int loadCount = 0;
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            loadIndex: _ =>
+            {
+                loadCount++;
+                return RepositoryIndexLoader.Load(activeDbPath);
+            });
+
+        WorkspaceReadContext first = provider.Resolve("target-ws", ensureFresh: false);
+        registry.UpsertSeen("target-ws", "target-111111111111", root, targetB.DbPath);
+        registry.MarkScanned("target-ws", revision: 2);
+        activeDbPath = targetB.DbPath;
+        WorkspaceReadContext second = provider.Resolve("target-ws", ensureFresh: false);
+        registry.UpsertSeen("target-ws", "target-111111111111", root, targetA.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        activeDbPath = targetA.DbPath;
+        WorkspaceReadContext third = provider.Resolve("target-ws", ensureFresh: false);
+
+        Assert.IsType<TargetResolution.Symbol>(first.Resolver.Resolve("TargetA"));
+        Assert.IsType<TargetResolution.Symbol>(second.Resolver.Resolve("TargetB"));
+        Assert.IsType<TargetResolution.Symbol>(third.Resolver.Resolve("TargetA"));
+        Assert.Equal(3, loadCount);
+    }
+
+    [Fact]
+    public async Task Resolve_RegisteredWorkspace_InFlightStaleLoadCannotEvictNewerCacheEntry()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var targetA = DbWithSymbol("target-ws", revision: 1, "TargetA");
+        using var targetB = DbWithSymbol("target-ws", revision: 2, "TargetB");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-inflight-evict");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, targetA.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+
+        int loadCount = 0;
+        var startedA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var startedB = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseA = new ManualResetEventSlim();
+        using var releaseB = new ManualResetEventSlim();
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            loadIndex: path =>
+            {
+                Interlocked.Increment(ref loadCount);
+                if (path == targetA.DbPath)
+                {
+                    startedA.TrySetResult();
+                    releaseA.Wait(TestContext.Current.CancellationToken);
+                }
+                else if (path == targetB.DbPath)
+                {
+                    startedB.TrySetResult();
+                    releaseB.Wait(TestContext.Current.CancellationToken);
+                }
+                return RepositoryIndexLoader.Load(path);
+            });
+
+        Task<WorkspaceReadContext> first = Task.Run(() => provider.Resolve("target-ws", ensureFresh: false));
+        Task timeout = Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.Same(startedA.Task, await Task.WhenAny(startedA.Task, timeout));
+
+        registry.UpsertSeen("target-ws", "target-111111111111", root, targetB.DbPath);
+        registry.MarkScanned("target-ws", revision: 2);
+
+        Task<WorkspaceReadContext> second = Task.Run(() => provider.Resolve("target-ws", ensureFresh: false));
+        Assert.Same(startedB.Task, await Task.WhenAny(startedB.Task, timeout));
+
+        releaseA.Set();
+        WorkspaceReadContext stale = await first;
+        releaseB.Set();
+        WorkspaceReadContext fresh = await second;
+        WorkspaceReadContext freshAgain = provider.Resolve("target-ws", ensureFresh: false);
+
+        Assert.IsType<TargetResolution.Symbol>(stale.Resolver.Resolve("TargetA"));
+        Assert.IsType<TargetResolution.Symbol>(fresh.Resolver.Resolve("TargetB"));
+        Assert.Same(fresh.Index, freshAgain.Index);
+        Assert.Same(fresh.Resolver, freshAgain.Resolver);
         Assert.Equal(2, loadCount);
     }
 

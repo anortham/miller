@@ -1,53 +1,73 @@
 ---
 id: miller-project-direction-amp-milestone-state
-title: Miller — project direction &amp; milestone state
+title: Miller — project direction & milestone state
 status: active
 created: 2026-05-30T16:32:42.067Z
-updated: 2026-05-31T11:25:58.276Z
-tags: []
+updated: 2026-06-01T00:43:07.839Z
+tags:
+  - miller
+  - project-direction
+  - status
+  - dogfood
 ---
 
-## What Miller is
+## What Miller Is
 
-A read-only **.NET 10** SQLite/MCP server that consumes `julie-server extract` output to answer structural code-intelligence questions (search, inspect, context, trace, impact, edit, workspace) for AI coding agents — token-thrifty, no embeddings, no source parsing of its own. Lineage: **Julie** (Rust, shipping, the extractor) → **Miller** (.NET, building, this repo) → **Eros** (commercial, future). Miller is a **product for unknown users**, not a personal tool — hold tests + error handling to product bar.
+Miller is the intended replacement for Julie's daemon-heavy code intelligence path: a read-only .NET 10 SQLite/MCP server that consumes pinned `julie-server extract` output instead of parsing source itself or running embeddings.
 
-Repo: `github.com/anortham/miller`, branch `main`. julie pins: **schema 28, contract 2, julie-server v7.13.0** (binary fetched into `.tools/`, gitignored; `MillerExtractContract` is the one-line source of truth).
+Current architecture contracts:
+- Index DBs stay local at `<workspace>/.miller/symbols.db`.
+- Central discovery lives at `~/.miller/workspaces.db`.
+- Read tools accept `workspace_id` and `ensure_fresh`; explicit `workspace_id` defaults refresh-first.
+- Stable `workspace_id` is SHA-256 of canonical workspace root.
+- File freshness uses Julie's raw-byte BLAKE3 in `files.hash`, guarded by `external_extract_metadata.hash_algorithm=blake3`.
+- Current Julie extract line for Miller is v7.13.2 / extract contract 3 / schema 28.
 
-## The differentiator (why Miller exists)
+## Current State - 2026-05-31
 
-A **deterministic cross-language structural resolver** — links code across language boundaries (C# entity ↔ EF table, TS call ↔ the C# route that serves it) **without embeddings**. This is M4 and it's the whole point; everything before it is table stakes. **NOW BUILT.**
+- M0-M8 are done on `main`, including registry, freshness, and dashboard foundations.
+- Dashboard is intended and should query the central registry plus shared telemetry, not discover workspaces by crawling arbitrary filesystem roots.
+- Workspace registry/freshness work is merged. The old PR/branch state in this brief was stale.
+- M9/ad-hoc content and SQLite FTS5 remain product candidates, but symbol search should stay in-memory BM25 unless profiling proves a real need to move it.
+- Live-test engine remains parked behind a spike; do not let it distract from registry/read-path correctness.
 
-## Milestone state (as of 2026-05-31)
+## Large Repo Dogfood
 
-- **M0-M8: DONE & pushed.** Scaffold, read core, MCP host + search/inspect/telemetry, freshness, context + impact, edit, workspace, logging polish.
-- **M4 trace + cross-language resolver: DONE.** Shipped as 4 phases on branch `feature/m4-cross-language-resolver`, **PR #1 OPEN, CI green (build-test pass), MERGEABLE/CLEAN** — awaiting human merge. The two julie blockers (bridge anchors, `test_role`) landed in julie 7.13.0; re-pin done.
-  - Phase A `152eb99` resolver foundation (normalizers, SymbolResolver, BridgeScorer trust contract).
-  - Phase B `a5d9de1` three legs: entity↔table (EF `DbSet<T>`), DTO↔entity (`CreateMap`), route (TS↔C# endpoint).
-  - Phase C `6efcb7b` `trace` tool (auto/path/bridge) + in-memory `BridgeGraph` + `SymbolGraph.ShortestPath`.
-  - Phase D `0ecab17` live Scale gate + honesty probe — the shippable gate. Precision 6/6=1.00 (floor 0.75), recall 1.00/buildable leg, measured live against real julie-server; 4 hard guards on scored payload. Numbers in design-doc appendix.
-  - **Honest limits:** Dapper-FROM entity↔table is DROPPED — unbuildable on julie's lean 28/2 contract (no use-site name/kind on `type_arguments`); EF `DbSet<T>` is sole entity↔table anchor; restoring needs a julie-side `type_arguments` widening. STRONG grades are single-repo (MyraNext); cross-repo generalization (Tycho/LabHandbookV2 + fetch/manual-mapping fixtures) is explicitly out of scope (Task 1, not done).
-- **M9 ad-hoc big-file/log-viewer: PARKED** (spec only). Build deferred until julie's full-content-into-SQLite ingest cost on a multi-GB log is measured. Real competitor is grep/rg/jq. Don't build without running the gating experiments in the M9 design doc.
+Dogfood repos registered under `~/source`:
+- OpenClaw: `/Users/murphy/source/openclaw`, workspace id `36c53da0da7dca5eb5931da951a0abde79068f6d1a8cd68ef062fcdb5681d12e`, 565,828 symbols, `.miller/symbols.db` about 1.9 GB.
+- Hermes Agent: `/Users/murphy/source/hermes-agent`, workspace id `a3a86f07956e0f8dbf1d2019dfdaae4158b564299909c2ca92d663ddbe9244a3`, 237,385 symbols, `.miller/symbols.db` about 673 MB.
 
-## Next real work (post-merge)
+Large-workspace issues found and fixed in the current working tree:
+- `workspace status` for external workspaces loaded the full index. Added `WorkspaceIndexFactsReader` so status reads cheap metadata instead.
+- Identifier fallback name resolution could fan out catastrophically. OpenClaw had about 1.09M identifier rows, and global fallback could produce hundreds of millions of speculative edges. `SymbolGraphReader` now caps fallback targets; precise relationship rows are still preserved.
+- `WorkspaceIndexProvider` cache could duplicate large loads and retain stale revisions. It now uses single-flight loading, evicts failed loads, and evicts older entries for the same workspace when revision/path changes.
 
-- Merge PR #1 (human gate).
-- If cross-repo STRONG claims are wanted: **Task 1** — extract Tycho + LabHandbookV2 + a fetch-based and a manual-mapping fixture, measure recall per leg across repos, write into design §9. Until then every STRONG grade is MyraNext-only.
-- Optional julie-side ask: widen `type_arguments` so Dapper-FROM becomes buildable (would restore the second entity↔table anchor).
+Dogfood after fixes:
+- OpenClaw external status: about 153 ms.
+- OpenClaw first cross-workspace search: about 6.2 s / 1.2 GB peak RSS; pre-fix runaway exceeded 36 GB and was killed.
+- Hermes first cross-workspace search: about 3.1 s / 327 MB peak RSS.
 
-## Guardrails that are now load-bearing (don't erode)
+Verification after fixes:
+- `dotnet build Miller.slnx -c Release`: passed, 0 warnings/errors.
+- Focused workspace/indexing tests: 59/59 passed.
+- `scripts/test.sh`: 1159/1159 fast tests passed.
+- `scripts/test.sh scale`: 14/14 scale tests passed.
+- `git diff --check`: clean.
 
-- **Two test suites.** Default (`Category!=Scale`) must stay <10s and pure (currently 1050 tests, ~3s). Scale (`Category=Scale`) spawns real julie-server / builds big fixtures and is opt-in. A bare `dotnet test` runs ONLY fast (csproj `VSTestTestCaseFilter`).
-- **Any julie-spawning test MUST** be `[Trait("Category","Scale")]` at class level AND obtain the binary via `ScaleTestSupport.RequireJulieServer()`. The `ScaleTraitConventionTests` guard fails the build otherwise — add the trait, don't weaken the guard.
-- **Build is 0 warnings / 0 errors** (`TreatWarningsAsErrors`); analyzer warnings (CA1416, xUnit1051) are build errors.
-- **Never trust a workflow/test self-report.** Independently rebuild + run both suites via TRX counters before claiming green.
-- `Miller.Core` stays pure (zero I/O deps).
+## Next Work
 
-## Cross-language principle (project-wide)
+1. Rebuild/restart Codex/Miller MCP so the tool transport picks up the patched binary. The current thread's Miller MCP transport was intentionally killed during dogfood cleanup.
+2. Review and commit the current dogfood fixes.
+3. Attack the remaining first-read cost: cross-workspace `search`/`inspect` still hydrate too much of the index on first use. Likely direction is projection-specific loading or a persisted read/search model, not moving all symbol search to SQLite FTS5 by default.
+4. Dogfood the dashboard against the registry with Miller, Julie, OpenClaw, and Hermes registered.
+5. Revisit M9/ad-hoc content and FTS5 for file/content search after the symbol read-path is stable.
 
-Features ship for **every capable language**, not just C#/TS. Consume julie's all-language signals (e.g. `is_test` in `symbols.metadata`, computed across 34+ langs by julie's `test_detection.rs`); never hardcode a "languages I care about" list. This directly governs how M4's resolver is built.
+## Guardrails
 
-## Working norms
-
-- Commit/push only when asked (pushes to anortham/miller are pre-authorized; M4 pushed at user request as PR #1).
-- Redirect noisy bash to /tmp logfiles and Read back; never parallel-batch shell calls where one grep/find exit-1 cascades-cancels the batch.
-- ADHD-friendly replies: lead with the answer, concise bullets, plain words.
+- Keep Miller daemon-light: no Julie-style filewatcher/resource sink.
+- Do not reintroduce full-index loads into `workspace status` or dashboard list/read paths.
+- Do not allow unbounded global identifier fallback unless Julie emits stable `target_symbol_id` relationships that make fallback unnecessary.
+- Keep the test split: `scripts/test.sh` for fast suite every change; `scripts/test.sh scale` when indexing/extract behavior changes.
+- Build must stay warning-clean: `dotnet build Miller.slnx -c Release`.
+- `Miller.Core` stays pure logic with no I/O dependencies.
+- `AGENTS.md` is generated from `CLAUDE.md`; edit `CLAUDE.md` then run `scripts/sync-agents.sh`.

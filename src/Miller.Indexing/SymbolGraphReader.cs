@@ -11,13 +11,15 @@ namespace Miller.Indexing;
 ///   carrying <c>kind</c>. No name resolution — both endpoints are already resolved symbol ids.</item>
 /// <item><b><c>identifiers</c></b> (dense): for each row with a non-NULL <c>containing_symbol_id</c> C and a
 ///   <c>name</c> N, resolve N to <b>every</b> indexed symbol of that name <c>{T₁…Tₖ}</c> (via the supplied
-///   resolver) and emit <c>C → Tᵢ</c>, carrying <c>kind</c>.</item>
+///   resolver) and emit <c>C → Tᵢ</c>, carrying <c>kind</c>, only while K stays under the caller's ambiguity
+///   cap.</item>
 /// </list>
 ///
 /// <para>Drop discipline (D2): a NULL <c>containing_symbol_id</c> row has no source node and is dropped; a name
 /// that resolves to no indexed symbol (an external/library ref — <c>Assert.Equal</c>, an import) is dropped,
-/// bounding the graph to indexed symbols; a self-edge (a name resolving back to its own container) is dropped
-/// defensively — a symbol is never its own dependency. <b>De-duplication is the graph's job</b>
+/// bounding the graph to indexed symbols; a fallback name that resolves above <c>maxNameResolutionTargets</c> is
+/// dropped as too ambiguous to be useful dependency evidence; a self-edge (a name resolving back to its own
+/// container) is dropped defensively — a symbol is never its own dependency. <b>De-duplication is the graph's job</b>
 /// (<see cref="SymbolGraph.Build"/> collapses duplicate <c>(from, to)</c> pairs per direction), so this reader
 /// emits the union as-is, including the same <c>(from, to)</c> appearing in both sources.</para>
 ///
@@ -46,17 +48,25 @@ public static class SymbolGraphReader
     /// <exception cref="ArgumentNullException"><paramref name="resolveName"/> is null.</exception>
     /// <exception cref="FileNotFoundException">The DB file does not exist.</exception>
     /// <exception cref="InvalidOperationException">The DB's directory is not writable (WAL sidecar trap).</exception>
-    public static IReadOnlyList<GraphEdge> Read(string dbPath, Func<string, IReadOnlyList<string>> resolveName)
+    public static IReadOnlyList<GraphEdge> Read(
+        string dbPath,
+        Func<string, IReadOnlyList<string>> resolveName,
+        int maxNameResolutionTargets = int.MaxValue)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
         ArgumentNullException.ThrowIfNull(resolveName);
+        if (maxNameResolutionTargets < 1)
+            throw new ArgumentOutOfRangeException(
+                nameof(maxNameResolutionTargets),
+                maxNameResolutionTargets,
+                "The fallback name-resolution target cap must be positive.");
 
         // Shared D4 read discipline (file-exists + writable-dir probe + Mode=ReadOnly + SQLITE_READONLY map).
         using var connection = SqliteReadOnlyAccess.Open(dbPath);
 
         var edges = new List<GraphEdge>();
         ReadRelationships(connection, edges);
-        ReadIdentifiers(connection, resolveName, edges);
+        ReadIdentifiers(connection, resolveName, edges, maxNameResolutionTargets);
         return edges;
     }
 
@@ -88,7 +98,8 @@ public static class SymbolGraphReader
     private static void ReadIdentifiers(
         Microsoft.Data.Sqlite.SqliteConnection connection,
         Func<string, IReadOnlyList<string>> resolveName,
-        List<GraphEdge> edges)
+        List<GraphEdge> edges,
+        int maxNameResolutionTargets)
     {
         using var command = connection.CreateCommand();
         // WHERE containing_symbol_id IS NOT NULL: a NULL source node (namespace ref) yields no edge, so we never
@@ -111,6 +122,8 @@ public static class SymbolGraphReader
             var targets = resolveName(name);
             if (targets is null)
                 continue; // a misbehaving resolver returned null; treat as "no indexed target"
+            if (targets.Count > maxNameResolutionTargets)
+                continue; // too ambiguous to be useful, and explosive on large repos without target_symbol_id
 
             foreach (var to in targets)
             {

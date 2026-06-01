@@ -88,6 +88,42 @@ public sealed class RepositoryIndexLoaderTests
     }
 
     [Fact]
+    public void Load_DropsIdentifierFallbackWhenNameIsTooAmbiguous()
+    {
+        var rows = new List<JulieDbFixture.SymbolRow>
+        {
+            new(ProcessId, "Process", "method", "csharp", "src/A.cs", "public void Process()", 1, null),
+        };
+        for (int i = 0; i < 17; i++)
+        {
+            rows.Add(new JulieDbFixture.SymbolRow(
+                $"000000000000000000000000000001{i:x2}",
+                "Shared",
+                "method",
+                "csharp",
+                $"src/Shared{i}.cs",
+                "public void Shared()",
+                1,
+                null));
+        }
+
+        var identifiers = new[]
+        {
+            new JulieDbFixture.IdentifierRow("i1", "Shared", "call", "csharp", "src/A.cs", 2, ProcessId),
+        };
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            rows,
+            identifiers: identifiers);
+
+        var index = RepositoryIndexLoader.Load(fx.DbPath);
+
+        Assert.True(index.Graph.Contains(ProcessId));
+        Assert.Empty(index.Dependencies(ProcessId));
+    }
+
+    [Fact]
     public void Load_MissingDbFile_ThrowsFileNotFound()
     {
         string missing = Path.Combine(

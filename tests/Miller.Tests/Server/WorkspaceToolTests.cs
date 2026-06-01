@@ -130,16 +130,8 @@ public sealed class WorkspaceToolTests : IDisposable
             lockBusyPollInterval: TimeSpan.FromMilliseconds(1),
             sleep: _ => { },
             utcNow: () => DateTimeOffset.UtcNow);
-        var provider = new WorkspaceIndexProvider(
-            holder,
-            workspace,
-            registry,
-            refresh: workspaceIdToRefresh => crossRefresh.Refresh(workspaceIdToRefresh),
-            loadIndex: dbPath => RepositoryIndexLoader.Load(dbPath),
-            currentIndexFresh: _ => true);
-
         var tool = new WorkspaceTool(
-            holder, workspace, indexer, freshness, probe, ledger, runner, registry, provider, crossRefresh,
+            holder, workspace, indexer, freshness, probe, ledger, runner, registry, crossRefresh,
             openScan ?? ((scanRoot, scanDb, force) => runner.Scan(scanRoot, scanDb, force)),
             acquireLock ?? (millerDir => SingleWriterLock.TryAcquire(millerDir)),
             NullLogger<WorkspaceTool>.Instance);
@@ -285,10 +277,11 @@ public sealed class WorkspaceToolTests : IDisposable
     }
 
     [Fact]
-    public void Status_ByWorkspaceId_LoadsRegisteredWorkspaceThroughProvider()
+    public void Status_ByWorkspaceId_ReadsRegisteredFactsWithoutRequiringFullIndexTables()
     {
         using var current = CreateSynth(revision: 4, workspaceId: Ws);
         using var other = CreateSynth(revision: 9, workspaceId: OtherWs);
+        SqliteFixtureMutator.DropRelationshipsTable(other.DbPath);
         WorkspaceToolHarness harness = BuildHarness(current, builtRevision: 4, workspaceId: Ws);
         string otherRoot = Path.GetDirectoryName(other.DbPath)!;
         harness.Registry.UpsertSeen(OtherWs, "other-111111111111", otherRoot, other.DbPath, WorkspaceRegistryState.Ready);
@@ -302,6 +295,7 @@ public sealed class WorkspaceToolTests : IDisposable
         Assert.Equal(OtherWs, doc.RootElement.GetProperty("workspace").GetProperty("workspace_id").GetString());
         Assert.Equal(otherRoot, doc.RootElement.GetProperty("workspace").GetProperty("root").GetString());
         Assert.Equal(other.DbPath, doc.RootElement.GetProperty("workspace").GetProperty("db").GetString());
+        Assert.True(doc.RootElement.GetProperty("index").GetProperty("document_count").GetInt64() > 0);
         Assert.Equal(9, doc.RootElement.GetProperty("index").GetProperty("built_revision").GetInt64());
         Assert.Equal("ready", doc.RootElement.GetProperty("index").GetProperty("freshness_status").GetString());
     }

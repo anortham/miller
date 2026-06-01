@@ -109,10 +109,9 @@ public sealed class LiveWorkspaceTests : IDisposable
             registry.MarkScanned(workspaceId, scan.Revision ?? 0);
         }
         var crossRefresh = new CrossWorkspaceRefreshService(registry, runner);
-        var provider = new WorkspaceIndexProvider(holder, workspace, registry, crossRefresh);
 
         var tool = new WorkspaceTool(
-            holder, workspace, indexer, freshness, probe, ledger, runner, registry, provider, crossRefresh,
+            holder, workspace, indexer, freshness, probe, ledger, runner, registry, crossRefresh,
             NullLogger<WorkspaceTool>.Instance);
         return (tool, indexer, holder, ledger, root, dbPath, runner);
     }

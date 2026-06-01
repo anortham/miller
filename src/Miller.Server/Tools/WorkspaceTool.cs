@@ -35,7 +35,6 @@ public sealed class WorkspaceTool
     private readonly IndexFreshProbe _freshProbe;
     private readonly TelemetryLedger _ledger;
     private readonly WorkspaceRegistry _registry;
-    private readonly IWorkspaceIndexProvider _workspaceIndexProvider;
     private readonly CrossWorkspaceRefreshService _crossWorkspaceRefresh;
     private readonly Func<string, string, bool, ExtractReport> _scanForOpen;
     private readonly Func<string, IDisposable?> _acquireWriterLock;
@@ -52,7 +51,6 @@ public sealed class WorkspaceTool
         TelemetryLedger ledger,
         JulieExtractRunner runner,
         WorkspaceRegistry registry,
-        IWorkspaceIndexProvider workspaceIndexProvider,
         CrossWorkspaceRefreshService crossWorkspaceRefresh,
         ILogger<WorkspaceTool> logger)
         : this(
@@ -64,7 +62,6 @@ public sealed class WorkspaceTool
             ledger,
             runner,
             registry,
-            workspaceIndexProvider,
             crossWorkspaceRefresh,
             (root, db, force) => runner.Scan(root, db, force),
             millerDir => SingleWriterLock.TryAcquire(millerDir),
@@ -81,7 +78,6 @@ public sealed class WorkspaceTool
         TelemetryLedger ledger,
         JulieExtractRunner runner,
         WorkspaceRegistry registry,
-        IWorkspaceIndexProvider workspaceIndexProvider,
         CrossWorkspaceRefreshService crossWorkspaceRefresh,
         Func<string, string, bool, ExtractReport> scanForOpen,
         Func<string, IDisposable?> acquireWriterLock,
@@ -95,7 +91,6 @@ public sealed class WorkspaceTool
         ArgumentNullException.ThrowIfNull(ledger);
         ArgumentNullException.ThrowIfNull(runner);
         ArgumentNullException.ThrowIfNull(registry);
-        ArgumentNullException.ThrowIfNull(workspaceIndexProvider);
         ArgumentNullException.ThrowIfNull(crossWorkspaceRefresh);
         ArgumentNullException.ThrowIfNull(scanForOpen);
         ArgumentNullException.ThrowIfNull(acquireWriterLock);
@@ -107,7 +102,6 @@ public sealed class WorkspaceTool
         _freshProbe = freshProbe;
         _ledger = ledger;
         _registry = registry;
-        _workspaceIndexProvider = workspaceIndexProvider;
         _crossWorkspaceRefresh = crossWorkspaceRefresh;
         _scanForOpen = scanForOpen;
         _acquireWriterLock = acquireWriterLock;
@@ -196,20 +190,24 @@ public sealed class WorkspaceTool
         if (target.IsCurrent)
             return (RenderStatus(json), 1, TelemetryOutcome.Ok);
 
-        WorkspaceReadContext context = _workspaceIndexProvider.Resolve(target.WorkspaceId, ensureFresh: false);
+        WorkspaceRegistryRow row = target.Row
+            ?? throw new InvalidOperationException($"Workspace registry row '{target.WorkspaceId}' was not resolved.");
+        VerifyRegisteredRoot(row);
+        WorkspaceIndexFacts indexFacts = WorkspaceIndexFactsReader.Read(row.IndexDbPath);
+        long revision = row.LastRevision ?? 0;
         var facts = new WorkspaceFacts(
-            Root: context.WorkspaceRoot,
-            WorkspaceId: context.WorkspaceId,
-            DbPath: context.IndexDbPath,
+            Root: row.CanonicalRoot,
+            WorkspaceId: row.WorkspaceId,
+            DbPath: row.IndexDbPath,
             IsLeader: false,
-            DocumentCount: context.Index.DocumentCount,
-            KnownExtensionsCount: context.Index.KnownExtensions.Count,
-            BuiltRevision: context.Revision,
-            LatestObservedRevision: context.Revision,
-            IndexFresh: context.IndexFresh,
+            DocumentCount: indexFacts.DocumentCount,
+            KnownExtensionsCount: indexFacts.KnownExtensionsCount,
+            BuiltRevision: revision,
+            LatestObservedRevision: revision,
+            IndexFresh: WorkspaceFreshnessView.IndexFreshFor(refreshResult: null, row),
             QueueEmpty: true,
-            FreshnessStatus: context.FreshnessStatus,
-            WarningText: context.WarningText);
+            FreshnessStatus: WorkspaceFreshnessView.FreshnessStatusFor(refreshResult: null, row),
+            WarningText: WorkspaceFreshnessView.WarningTextFor(refreshResult: null));
         return (WorkspaceRender.Status(facts, _ledger.Summarize(), json), 1, TelemetryOutcome.Ok);
     }
 
@@ -552,6 +550,26 @@ public sealed class WorkspaceTool
     private bool IsCurrentWorkspace(WorkspaceRegistryRow row) =>
         string.Equals(row.WorkspaceId, _workspace.WorkspaceId, StringComparison.Ordinal)
         || WorkspaceSafety.IsLiveWorkspace(row.CanonicalRoot, _workspace.WorkspaceRoot);
+
+    private void VerifyRegisteredRoot(WorkspaceRegistryRow row)
+    {
+        if (!Directory.Exists(row.CanonicalRoot))
+        {
+            string error = $"Workspace root not found: {row.CanonicalRoot}";
+            _registry.MarkMissing(row.WorkspaceId, error);
+            throw new DirectoryNotFoundException(error);
+        }
+
+        try
+        {
+            WorkspaceRootSafety.RejectSensitiveRoot(row.CanonicalRoot, fromCwd: false);
+        }
+        catch (InvalidOperationException ex)
+        {
+            _registry.MarkError(row.WorkspaceId, ex.Message);
+            throw;
+        }
+    }
 
     private static string UnknownWorkspaceIdNote(string workspaceId) =>
         $"unknown workspace_id '{workspaceId}'. Run workspace(operation=\"open\", path=\"/repo\") " +
