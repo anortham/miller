@@ -4,155 +4,145 @@ using Xunit;
 namespace Miller.Tests.Indexing;
 
 /// <summary>
-/// Pins the M3 additions to <see cref="ExtractReport"/> (verified-fact 7): <c>revision</c>, <c>files_updated</c>,
-/// <c>files_deleted</c>, <c>workspace_id</c> — the fields the freshness path branches on. Each outcome the
-/// runner must distinguish (<c>changed</c> / <c>unchanged</c> / <c>deleted</c> / <c>not_found</c> / <c>failed</c>)
-/// is parsed from a representative report and asserted on the new fields, NOT just "does it deserialize".
+/// Pins ExtractReport's v1 nested parse: revision.latest_revision_id is the freshness cursor;
+/// created_revision_id is null on a no-op; counts/rows_written carry the per-op outcome; a null artifact
+/// block is preserved (not invented). Each outcome the freshness path branches on (changed / no-op /
+/// deleted / not_found / failed) is parsed from a representative report and asserted on the accessors.
 /// </summary>
 public sealed class ExtractReportParsingTests
 {
-    // `extract update --file` of a CHANGED file → status=changed, files_updated=1, revision bumps (verified-fact 2).
+    // update of a CHANGED file -> status=ok, files_changed=1, revision bumps (created==latest).
     private const string ChangedJson = """
-        {
-          "status": "changed", "operation": "update",
-          "workspace_id": "ws-abc-123",
-          "db_path": "/abs/.miller/symbols.db", "root": "/abs/repo",
-          "schema_version": 28, "schema_state": "current", "extract_contract_version": 3, "hash_algorithm": "blake3",
-          "revision": 7, "analyzed_revision": 6, "analysis_state": "stale",
-          "files_scanned": 0, "files_updated": 1, "files_deleted": 0,
-          "symbols_extracted": 5, "files_total": 12, "symbols_total": 134,
-          "relationships_total": 40, "identifiers_total": 512, "types_total": 9,
-          "errors": []
-        }
+        { "report_schema_version": 1, "status": "ok", "operation": "update", "mode": "single_file",
+          "input": { "db_path": "/abs/.miller/symbols.db", "root_path": "/abs/repo", "file_path": "/abs/repo/src/a.cs",
+                     "root_relative_path": "src/a.cs", "format": null, "output_path": null },
+          "artifact": { "db_path": "/abs/.miller/symbols.db", "root_path": "/abs/repo", "artifact_id": "art-1",
+                        "schema_version": 1, "extract_contract_version": 1, "sqlite_schema_version": 1,
+                        "jsonl_schema_version": 1, "hash_algorithm": "blake3",
+                        "parser_inventory_fingerprint": "sha256:pi", "capability_snapshot_fingerprint": "sha256:cs" },
+          "tool": { "binary_name": "julie-extract", "binary_version": "2.0.0" },
+          "revision": { "latest_revision_id": 7, "created_revision_id": 7 },
+          "counts": { "files_scanned": 0, "files_changed": 1, "files_unchanged": 0, "files_unsupported": 0,
+                      "files_deleted": 0, "files_failed": 0,
+                      "rows_written": { "symbols": 5 }, "totals": { "files": 12, "symbols": 134 } },
+          "errors": [], "warnings": [] }
         """;
 
-    // A NO-OP update (content hash unchanged) → status=unchanged, files_updated=0, revision does NOT bump.
-    private const string UnchangedJson = """
-        {
-          "status": "unchanged", "operation": "update",
-          "workspace_id": "ws-abc-123",
-          "db_path": "/abs/.miller/symbols.db", "root": "/abs/repo",
-          "schema_version": 28, "extract_contract_version": 3, "hash_algorithm": "blake3",
-          "revision": 6, "files_scanned": 0, "files_updated": 0, "files_deleted": 0,
-          "symbols_extracted": 0, "files_total": 12, "symbols_total": 134,
-          "relationships_total": 40, "identifiers_total": 512, "types_total": 9,
-          "errors": []
-        }
+    // no-op update -> status=no_change, created_revision_id null, latest carries the prior cursor.
+    private const string NoChangeJson = """
+        { "report_schema_version": 1, "status": "no_change", "operation": "update", "mode": "single_file",
+          "input": { "db_path": "/abs/db", "root_path": "/abs/r", "file_path": "/abs/r/a.cs",
+                     "root_relative_path": "a.cs", "format": null, "output_path": null },
+          "artifact": { "db_path": "/abs/db", "root_path": "/abs/r", "artifact_id": "a", "schema_version": 1,
+                        "extract_contract_version": 1, "sqlite_schema_version": 1, "jsonl_schema_version": null,
+                        "hash_algorithm": "blake3", "parser_inventory_fingerprint": "sha256:p",
+                        "capability_snapshot_fingerprint": "sha256:c" },
+          "tool": { "binary_name": "julie-extract", "binary_version": "2.0.0" },
+          "revision": { "latest_revision_id": 6, "created_revision_id": null },
+          "counts": { "files_scanned": 0, "files_changed": 0, "files_unchanged": 1, "files_unsupported": 0,
+                      "files_deleted": 0, "files_failed": 0, "rows_written": {}, "totals": { "files": 12 } },
+          "errors": [], "warnings": [] }
         """;
 
-    // `extract delete --file` of a removed file → status=deleted, files_deleted=1, revision bumps.
+    // delete of a removed file -> status=ok, files_deleted=1, revision bumps.
     private const string DeletedJson = """
-        {
-          "status": "deleted", "operation": "delete",
-          "workspace_id": "ws-abc-123",
-          "db_path": "/abs/.miller/symbols.db", "root": "/abs/repo",
-          "schema_version": 28, "extract_contract_version": 3, "hash_algorithm": "blake3",
-          "revision": 8, "files_scanned": 0, "files_updated": 0, "files_deleted": 1,
-          "symbols_extracted": 0, "files_total": 11, "symbols_total": 129,
-          "relationships_total": 38, "identifiers_total": 500, "types_total": 9,
-          "errors": []
-        }
+        { "report_schema_version": 1, "status": "ok", "operation": "delete", "mode": "single_file",
+          "input": { "db_path": "/abs/db", "root_path": "/abs/r", "file_path": "/abs/r/a.cs",
+                     "root_relative_path": "a.cs", "format": null, "output_path": null },
+          "artifact": { "db_path": "/abs/db", "root_path": "/abs/r", "artifact_id": "a", "schema_version": 1,
+                        "extract_contract_version": 1, "sqlite_schema_version": 1, "jsonl_schema_version": 1,
+                        "hash_algorithm": "blake3", "parser_inventory_fingerprint": "sha256:p",
+                        "capability_snapshot_fingerprint": "sha256:c" },
+          "tool": { "binary_name": "julie-extract", "binary_version": "2.0.0" },
+          "revision": { "latest_revision_id": 8, "created_revision_id": 8 },
+          "counts": { "files_scanned": 0, "files_changed": 0, "files_unchanged": 0, "files_unsupported": 0,
+                      "files_deleted": 1, "files_failed": 0, "rows_written": {}, "totals": { "files": 11 } },
+          "errors": [], "warnings": [] }
         """;
 
-    // A SECOND delete → status=not_found, files_deleted=0 (idempotent), revision unchanged.
+    // a SECOND delete -> status=not_found, files_deleted=0 (idempotent), created_revision_id null.
     private const string NotFoundJson = """
-        {
-          "status": "not_found", "operation": "delete",
-          "workspace_id": "ws-abc-123",
-          "db_path": "/abs/.miller/symbols.db", "root": "/abs/repo",
-          "schema_version": 28, "extract_contract_version": 3, "hash_algorithm": "blake3",
-          "revision": 8, "files_scanned": 0, "files_updated": 0, "files_deleted": 0,
-          "symbols_extracted": 0, "files_total": 11, "symbols_total": 129,
-          "relationships_total": 38, "identifiers_total": 500, "types_total": 9,
-          "errors": []
-        }
+        { "report_schema_version": 1, "status": "not_found", "operation": "delete", "mode": "single_file",
+          "input": { "db_path": "/abs/db", "root_path": "/abs/r", "file_path": "/abs/r/a.cs",
+                     "root_relative_path": "a.cs", "format": null, "output_path": null },
+          "artifact": { "db_path": "/abs/db", "root_path": "/abs/r", "artifact_id": "a", "schema_version": 1,
+                        "extract_contract_version": 1, "sqlite_schema_version": 1, "jsonl_schema_version": 1,
+                        "hash_algorithm": "blake3", "parser_inventory_fingerprint": "sha256:p",
+                        "capability_snapshot_fingerprint": "sha256:c" },
+          "tool": { "binary_name": "julie-extract", "binary_version": "2.0.0" },
+          "revision": { "latest_revision_id": 8, "created_revision_id": null },
+          "counts": { "files_scanned": 0, "files_changed": 0, "files_unchanged": 0, "files_unsupported": 0,
+                      "files_deleted": 0, "files_failed": 0, "rows_written": {}, "totals": { "files": 11 } },
+          "errors": [], "warnings": [] }
         """;
 
     private const string FailedJson = """
-        {
-          "status": "failed", "operation": "update",
-          "workspace_id": "ws-abc-123",
-          "db_path": "/abs/.miller/symbols.db", "root": "/abs/repo",
-          "schema_version": 28, "extract_contract_version": 3, "hash_algorithm": "blake3",
-          "revision": 6, "files_scanned": 0, "files_updated": 0, "files_deleted": 0,
-          "symbols_extracted": 0, "files_total": 12, "symbols_total": 134,
-          "relationships_total": 40, "identifiers_total": 512, "types_total": 9,
-          "errors": [ { "code": "empty_reparse_guard", "message": "refusing to wipe a populated file", "path": "/abs/repo/src/a.cs" } ]
-        }
+        { "report_schema_version": 1, "status": "failed", "operation": "update", "mode": "single_file",
+          "input": { "db_path": "/abs/db", "root_path": "/abs/r", "file_path": "/abs/r/a.cs",
+                     "root_relative_path": "a.cs", "format": null, "output_path": null },
+          "artifact": null,
+          "tool": { "binary_name": "julie-extract", "binary_version": "2.0.0" },
+          "revision": null,
+          "counts": { "files_scanned": 0, "files_changed": 0, "files_unchanged": 0, "files_unsupported": 0,
+                      "files_deleted": 0, "files_failed": 1, "rows_written": {}, "totals": {} },
+          "errors": [ { "code": "data_loss_guard", "message": "refusing to wipe a populated file",
+                        "path": "/abs/r/a.cs", "root_relative_path": "a.cs", "recoverable": false, "details": {} } ],
+          "warnings": [] }
         """;
 
     [Fact]
-    public void Parse_Changed_PopulatesRevisionAndFilesUpdated()
+    public void Parse_Changed_CursorIsLatestRevision_AndCreatedSignalsMutation()
     {
         var r = JulieExtractRunner.ParseReport(ChangedJson);
-
-        Assert.Equal("changed", r.Status);
-        Assert.Equal("ws-abc-123", r.WorkspaceId);
-        Assert.Equal("blake3", r.HashAlgorithm);
-        Assert.Equal(7L, r.Revision);
-        Assert.Equal(1u, r.FilesUpdated);
+        Assert.Equal("ok", r.Status);
+        Assert.Equal("blake3", r.HashAlgorithm);   // sourced from artifact.hash_algorithm
+        Assert.Equal(7L, r.Revision);              // latest_revision_id
+        Assert.Equal(7L, r.CreatedRevision);       // this call mutated
+        Assert.Equal(1u, r.FilesUpdated);          // counts.files_changed
         Assert.Equal(0u, r.FilesDeleted);
+        Assert.Equal(5u, r.SymbolsExtracted);      // counts.rows_written.symbols
     }
 
     [Fact]
-    public void Parse_Unchanged_FilesUpdatedZero_RevisionUnbumped()
+    public void Parse_NoChange_CreatedRevisionNull_CursorStillPresent()
     {
-        var r = JulieExtractRunner.ParseReport(UnchangedJson);
-
-        Assert.Equal("unchanged", r.Status);
+        var r = JulieExtractRunner.ParseReport(NoChangeJson);
+        Assert.Equal("no_change", r.Status);
+        Assert.Equal(6L, r.Revision);              // latest_revision_id still present after a no-op
+        Assert.Null(r.CreatedRevision);            // no mutation -> created_revision_id null
         Assert.Equal(0u, r.FilesUpdated);
-        Assert.Equal(6L, r.Revision);
     }
 
     [Fact]
     public void Parse_Deleted_PopulatesFilesDeleted_AndBumpsRevision()
     {
         var r = JulieExtractRunner.ParseReport(DeletedJson);
-
-        Assert.Equal("deleted", r.Status);
-        Assert.Equal(1u, r.FilesDeleted);
+        Assert.Equal("ok", r.Status);
+        Assert.Equal(1u, r.FilesDeleted);          // counts.files_deleted
         Assert.Equal(8L, r.Revision);
+        Assert.Equal(8L, r.CreatedRevision);       // the delete mutated
     }
 
     [Fact]
-    public void Parse_NotFound_IsIdempotent_FilesDeletedZero()
+    public void Parse_NotFound_IsIdempotent_FilesDeletedZero_CreatedRevisionNull()
     {
         var r = JulieExtractRunner.ParseReport(NotFoundJson);
-
         Assert.Equal("not_found", r.Status);
         Assert.Equal(0u, r.FilesDeleted);
-        Assert.Equal(8L, r.Revision); // unchanged from the prior delete
+        Assert.Equal(8L, r.Revision);              // cursor unchanged from the prior delete
+        Assert.Null(r.CreatedRevision);            // a no-op delete did not mutate
     }
 
     [Fact]
-    public void Parse_Failed_CarriesErrorsAndWorkspaceId()
+    public void Parse_Failed_NullArtifact_AndCarriesDiagnostics()
     {
         var r = JulieExtractRunner.ParseReport(FailedJson);
-
         Assert.Equal("failed", r.Status);
-        Assert.Equal("ws-abc-123", r.WorkspaceId);
-        var err = Assert.Single(r.Errors);
-        Assert.Equal("empty_reparse_guard", err.Code);
-    }
-
-    [Fact]
-    public void Parse_MissingNewFields_DefaultToNullOrZero_NotAFailure()
-    {
-        // A scan report (the M1 shape) omits revision/files_updated/files_deleted/workspace_id. The new fields
-        // must default gracefully so the existing scan parse path is unaffected.
-        const string scanJson = """
-            { "status": "scanned", "operation": "scan", "db_path": "/abs/db", "root": "/abs/r",
-              "schema_version": 28, "extract_contract_version": 3,
-              "files_scanned": 3, "symbols_extracted": 9, "files_total": 3, "symbols_total": 9,
-              "relationships_total": 0, "identifiers_total": 0, "types_total": 0, "errors": [] }
-            """;
-
-        var r = JulieExtractRunner.ParseReport(scanJson);
-
-        Assert.Null(r.WorkspaceId);
-        Assert.Null(r.HashAlgorithm);
+        Assert.Null(r.Artifact);                   // null artifact preserved, not invented
+        Assert.Null(r.HashAlgorithm);              // no artifact => null accessor (gate fail in A3)
         Assert.Null(r.Revision);
-        Assert.Equal(0u, r.FilesUpdated);
-        Assert.Equal(0u, r.FilesDeleted);
+        var d = Assert.Single(r.Errors);
+        Assert.Equal("data_loss_guard", d.Code);
+        Assert.False(d.Recoverable);               // data_loss_guard is non-recoverable in v1 (commands.rs:1099-1116); the per-diagnostic flag replaces the hardcoded transient set
     }
 }

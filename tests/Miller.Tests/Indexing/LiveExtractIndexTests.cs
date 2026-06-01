@@ -43,8 +43,9 @@ public sealed class LiveExtractIndexTests
 
             Assert.Equal("scan", report.Operation);
             Assert.NotEqual("failed", report.Status);
-            Assert.Equal((int)MillerExtractContract.ExpectedSchemaVersion, report.SchemaVersion);                 // pinned schema
-            Assert.Equal((int)MillerExtractContract.ExpectedExtractContractVersion, report.ExtractContractVersion);         // pinned contract
+            Assert.NotNull(report.Artifact);                                                                      // a successful scan carries the artifact block
+            Assert.Equal(MillerExtractContract.ExpectedSqliteSchemaVersion, report.Artifact!.SqliteSchemaVersion); // pinned schema
+            Assert.Equal(MillerExtractContract.ExpectedExtractContractVersion, report.Artifact.ExtractContractVersion); // pinned contract
             Assert.True(report.SymbolsExtracted > 0, "scan should extract at least one symbol");
 
             // --- read -> build -> query ---

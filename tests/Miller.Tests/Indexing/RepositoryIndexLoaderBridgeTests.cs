@@ -67,10 +67,6 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
                 CREATE TABLE schema_version (version INTEGER);
                 CREATE TABLE external_extract_metadata (key TEXT, value TEXT);
 
-                INSERT INTO schema_version(version) VALUES (28);
-                INSERT INTO external_extract_metadata(key, value) VALUES ('extract_contract_version', '3');
-                INSERT INTO external_extract_metadata(key, value) VALUES ('hash_algorithm', 'blake3');
-
                 -- The entity, the DTO, and a DbContext exposing DbSet<ApplicationUser> ApplicationUsers.
                 INSERT INTO symbols(id, name, signature, kind, language, file_path, start_line, end_line, parent_id, metadata)
                 VALUES
@@ -87,7 +83,25 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
                   ('ta-1', 'id-map', NULL, 1, 'UserDto',         NULL, 'map/MapProfile.cs', 'csharp', NULL);
                 """;
             command.ExecuteNonQuery();
+
+            // Seed the gate version from the pinned constant (not a literal) so a julie re-pin needs no edit here;
+            // C1/H rewrite this onto v1 artifact_metadata (Phase 3). (Was a hardcoded schema 28; A1 flipped the
+            // pin to 1, so a literal would now fail JulieSchemaGate.) Kept as a separate interpolated command to
+            // leave the brace-bearing DDL above a plain raw string.
+            SeedGate(command);
         }
+    }
+
+    // Seed schema_version + external_extract_metadata from the pinned contract so JulieSchemaGate.Verify accepts
+    // the fixture (Phase 2). C1/H migrate this onto v1 artifact_metadata in Phase 3.
+    private static void SeedGate(SqliteCommand command)
+    {
+        command.CommandText = $"""
+            INSERT INTO schema_version(version) VALUES ({MillerExtractContract.ExpectedSchemaVersion});
+            INSERT INTO external_extract_metadata(key, value) VALUES ('extract_contract_version', '{MillerExtractContract.ExpectedExtractContractVersion}');
+            INSERT INTO external_extract_metadata(key, value) VALUES ('hash_algorithm', '{MillerExtractContract.ExpectedHashAlgorithm}');
+            """;
+        command.ExecuteNonQuery();
     }
 
     [Fact]
@@ -175,7 +189,7 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
             {
                 connection.Open();
                 using var command = connection.CreateCommand();
-                command.CommandText = """
+                command.CommandText = $"""
                     CREATE TABLE symbols (id TEXT PRIMARY KEY, name TEXT, signature TEXT, kind TEXT, language TEXT, file_path TEXT, start_line INTEGER, end_line INTEGER, parent_id TEXT, metadata TEXT);
                     CREATE TABLE identifiers (id TEXT PRIMARY KEY, name TEXT, kind TEXT, file_path TEXT, start_line INTEGER, containing_symbol_id TEXT);
                     CREATE TABLE relationships (id TEXT PRIMARY KEY, from_symbol_id TEXT, to_symbol_id TEXT, kind TEXT);
@@ -184,9 +198,9 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
                     CREATE TABLE symbol_annotations (id TEXT PRIMARY KEY, symbol_id TEXT, ordinal INTEGER, annotation TEXT, annotation_key TEXT, raw_text TEXT, carrier TEXT);
                     CREATE TABLE schema_version (version INTEGER);
                     CREATE TABLE external_extract_metadata (key TEXT, value TEXT);
-                    INSERT INTO schema_version(version) VALUES (28);
-                    INSERT INTO external_extract_metadata(key, value) VALUES ('extract_contract_version', '3');
-                    INSERT INTO external_extract_metadata(key, value) VALUES ('hash_algorithm', 'blake3');
+                    INSERT INTO schema_version(version) VALUES ({MillerExtractContract.ExpectedSchemaVersion});
+                    INSERT INTO external_extract_metadata(key, value) VALUES ('extract_contract_version', '{MillerExtractContract.ExpectedExtractContractVersion}');
+                    INSERT INTO external_extract_metadata(key, value) VALUES ('hash_algorithm', '{MillerExtractContract.ExpectedHashAlgorithm}');
                     INSERT INTO symbols(id, name, signature, kind, language, file_path, start_line, end_line, parent_id, metadata)
                     VALUES ('s1', 'Foo', 'public class Foo', 'class', 'csharp', 'Foo.cs', 1, 3, NULL, NULL);
                     """;

@@ -4,11 +4,12 @@ using Xunit;
 namespace Miller.Tests.Indexing;
 
 /// <summary>
-/// Pins the M3 <c>update</c>/<c>delete</c> seams WITHOUT spawning julie-server (the live path is the Scale
-/// suite). Two arg-builders produce the exact verified argv — <c>extract --db &lt;db&gt; --root &lt;root&gt;
-/// --json update --file &lt;file&gt;</c> (and <c>delete</c>) — and reuse the same <see cref="JulieExtractRunner.Interpret"/>
-/// exit-code contract as scan. All paths the builders receive are already canonical (see
-/// <see cref="PathCanonicalizerTests"/>); these tests assert the builder passes them through verbatim, in order.
+/// Pins the M3 <c>update</c>/<c>delete</c> seams WITHOUT spawning julie-extract (the live path is the Scale
+/// suite). Two arg-builders produce the exact verified v1 argv — <c>update --root &lt;root&gt; --db &lt;db&gt;
+/// --file &lt;file&gt; --strict-schema --json</c> (and <c>delete</c>) — and reuse the same
+/// <see cref="JulieExtractRunner.Interpret"/> exit-code contract as scan. All paths the builders receive are
+/// already canonical (see <see cref="PathCanonicalizerTests"/>); these tests assert the builder passes them
+/// through verbatim, in order.
 /// </summary>
 public sealed class JulieExtractRunnerUpdateDeleteTests
 {
@@ -17,23 +18,25 @@ public sealed class JulieExtractRunnerUpdateDeleteTests
     private const string AbsFile = "/abs/work/repo/src/a.cs";
 
     [Fact]
-    public void BuildUpdateArgs_ProducesVerifiedArgv_WithFileAfterSubcommand()
+    public void BuildUpdateArgs_ProducesV1Argv_FileBeforeStrictSchema()
     {
         var args = JulieExtractRunner.BuildUpdateArgs(AbsDb, AbsRoot, AbsFile);
 
         Assert.Equal(
-            new[] { "extract", "--db", AbsDb, "--root", AbsRoot, "--json", "update", "--file", AbsFile },
+            new[] { "update", "--root", AbsRoot, "--db", AbsDb, "--file", AbsFile, "--strict-schema", "--json" },
             args);
+        Assert.DoesNotContain("extract", args);
     }
 
     [Fact]
-    public void BuildDeleteArgs_ProducesVerifiedArgv_WithFileAfterSubcommand()
+    public void BuildDeleteArgs_ProducesV1Argv_FileBeforeStrictSchema()
     {
         var args = JulieExtractRunner.BuildDeleteArgs(AbsDb, AbsRoot, AbsFile);
 
         Assert.Equal(
-            new[] { "extract", "--db", AbsDb, "--root", AbsRoot, "--json", "delete", "--file", AbsFile },
+            new[] { "delete", "--root", AbsRoot, "--db", AbsDb, "--file", AbsFile, "--strict-schema", "--json" },
             args);
+        Assert.DoesNotContain("extract", args);
     }
 
     [Fact]
@@ -44,7 +47,9 @@ public sealed class JulieExtractRunnerUpdateDeleteTests
         // path with a redundant segment and prove it survives untouched into the argv.
         const string oddButCanonicalShaped = "/abs/work/repo/src/a.cs";
         var args = JulieExtractRunner.BuildUpdateArgs(AbsDb, AbsRoot, oddButCanonicalShaped);
-        Assert.Equal(oddButCanonicalShaped, args[^1]);
+        // --file is the argument immediately after the "--file" token.
+        int fileIdx = args.ToList().IndexOf("--file");
+        Assert.Equal(oddButCanonicalShaped, args[fileIdx + 1]);
     }
 
     [Theory]
@@ -71,14 +76,21 @@ public sealed class JulieExtractRunnerUpdateDeleteTests
         Assert.ThrowsAny<ArgumentException>(() => JulieExtractRunner.BuildDeleteArgs(db!, root!, file!));
     }
 
-    // ---- exit-code contract reuse: update/delete share scan's Interpret mapping (verified-fact 2/3). ----
+    // ---- exit-code contract reuse: update/delete share scan's Interpret mapping (nested v1 shape). ----
 
     private const string ChangedJson = """
-        { "status": "changed", "operation": "update", "workspace_id": "ws-1",
-          "db_path": "/abs/db", "root": "/abs/r", "schema_version": 28, "extract_contract_version": 3, "hash_algorithm": "blake3",
-          "revision": 5, "files_scanned": 0, "files_updated": 1, "files_deleted": 0,
-          "symbols_extracted": 3, "files_total": 2, "symbols_total": 8,
-          "relationships_total": 0, "identifiers_total": 0, "types_total": 0, "errors": [] }
+        { "report_schema_version": 1, "status": "ok", "operation": "update", "mode": "single_file",
+          "input": { "db_path": "/abs/db", "root_path": "/abs/r", "file_path": "/abs/r/a.cs",
+                     "root_relative_path": "a.cs", "format": null, "output_path": null },
+          "artifact": { "db_path": "/abs/db", "root_path": "/abs/r", "artifact_id": "a", "schema_version": 1,
+                        "extract_contract_version": 1, "sqlite_schema_version": 1, "jsonl_schema_version": 1,
+                        "hash_algorithm": "blake3", "parser_inventory_fingerprint": "sha256:p",
+                        "capability_snapshot_fingerprint": "sha256:c" },
+          "tool": { "binary_name": "julie-extract", "binary_version": "2.0.0" },
+          "revision": { "latest_revision_id": 5, "created_revision_id": 5 },
+          "counts": { "files_scanned": 0, "files_changed": 1, "files_unchanged": 0, "files_unsupported": 0,
+                      "files_deleted": 0, "files_failed": 0, "rows_written": { "symbols": 3 }, "totals": { "files": 2, "symbols": 8 } },
+          "errors": [], "warnings": [] }
         """;
 
     [Fact]
@@ -86,30 +98,34 @@ public sealed class JulieExtractRunnerUpdateDeleteTests
     {
         var report = JulieExtractRunner.Interpret(exitCode: 0, stdout: ChangedJson, stderr: "");
 
-        Assert.Equal("changed", report.Status);
+        Assert.Equal("ok", report.Status);
         Assert.Equal(1u, report.FilesUpdated);
         Assert.Equal(5L, report.Revision);
     }
 
     private const string FailedUpdateJson = """
-        { "status": "failed", "operation": "update", "workspace_id": "ws-1",
-          "db_path": "/abs/db", "root": "/abs/r", "schema_version": 28, "extract_contract_version": 3, "hash_algorithm": "blake3",
-          "revision": 4, "files_scanned": 0, "files_updated": 0, "files_deleted": 0,
-          "symbols_extracted": 0, "files_total": 0, "symbols_total": 0,
-          "relationships_total": 0, "identifiers_total": 0, "types_total": 0,
-          "errors": [ { "code": "outside_root", "message": "file is outside external extract root", "path": "/x" } ] }
+        { "report_schema_version": 1, "status": "failed", "operation": "update", "mode": "single_file",
+          "input": { "db_path": "/abs/db", "root_path": "/abs/r", "file_path": "/x",
+                     "root_relative_path": null, "format": null, "output_path": null },
+          "artifact": null, "tool": { "binary_name": "julie-extract", "binary_version": "2.0.0" },
+          "revision": null,
+          "counts": { "files_scanned": 0, "files_changed": 0, "files_unchanged": 0, "files_unsupported": 0,
+                      "files_deleted": 0, "files_failed": 1, "rows_written": {}, "totals": {} },
+          "errors": [ { "code": "file_outside_root", "message": "file is outside external extract root",
+                        "path": "/x", "root_relative_path": null, "recoverable": false, "details": {} } ],
+          "warnings": [] }
         """;
 
     [Fact]
     public void Interpret_UpdateFailed_Exit1_ThrowsFailed_CarryingOutcomeAwareErrors()
     {
-        // Decision-10: an update failure (e.g. the outside-root trap, the empty-reparse guard) surfaces as a
-        // typed failure carrying the structured errors so the service can branch (keep-prior vs surface-loudly).
+        // Decision-10: an update failure (e.g. the outside-root trap, the data-loss guard) surfaces as a typed
+        // failure carrying the structured diagnostics so the service can branch (keep-prior vs surface-loudly).
         var ex = Assert.Throws<JulieExtractFailedException>(() =>
             JulieExtractRunner.Interpret(exitCode: 1, stdout: FailedUpdateJson, stderr: "extract: outside root"));
 
         var err = Assert.Single(ex.Errors);
-        Assert.Equal("outside_root", err.Code);
+        Assert.Equal("file_outside_root", err.Code);
         Assert.Equal("extract: outside root", ex.StandardError);
     }
 
@@ -127,7 +143,7 @@ public sealed class JulieExtractRunnerUpdateDeleteTests
     private static JulieExtractRunner RealRunner()
     {
         // Point at THIS test assembly (any real file) so the constructor's File.Exists passes without needing
-        // the pinned julie-server binary — we only exercise the pre-spawn db guard, which throws BEFORE exec.
+        // the pinned julie-extract binary — we only exercise the pre-spawn db guard, which throws BEFORE exec.
         string self = typeof(JulieExtractRunnerUpdateDeleteTests).Assembly.Location;
         return new JulieExtractRunner(self);
     }
@@ -138,8 +154,8 @@ public sealed class JulieExtractRunnerUpdateDeleteTests
     [InlineData("symbols.db")]
     public void Update_RejectsARelativeDbPath_BeforeSpawning(string relativeDb)
     {
-        // verified-fact 4: a relative --db would be resolved by julie against its ambient CWD, defeating the
-        // canonicalization the bootstrap performed. The runner must reject it up front (no process spawned).
+        // verified-fact 4: a relative --db would be resolved by julie-extract against its ambient CWD, defeating
+        // the canonicalization the bootstrap performed. The runner must reject it up front (no process spawned).
         var runner = RealRunner();
         Assert.Throws<ArgumentException>(() => runner.Update(AbsRoot, relativeDb, AbsFile));
     }

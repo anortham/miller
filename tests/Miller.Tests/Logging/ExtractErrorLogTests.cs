@@ -13,7 +13,8 @@ namespace Miller.Tests.Logging;
 /// </summary>
 public sealed class ExtractErrorLogTests
 {
-    private static ExtractError Err(string code) => new(code, $"message for {code}", Path: null);
+    private static ReportDiagnostic Err(string code) =>
+        new(code, $"message for {code}", Path: null, RootRelativePath: null, Recoverable: false);
 
     [Fact]
     public void FailedException_WithCodesAndLongStderr_JoinsCodes_AndTruncatesTail()
@@ -40,7 +41,7 @@ public sealed class ExtractErrorLogTests
     [Fact]
     public void FailedException_WithEmptyErrors_ReportsNoStructuredErrors_ButKeepsStderr()
     {
-        var ex = new JulieExtractFailedException("extract failed", Array.Empty<ExtractError>(), "short stderr");
+        var ex = new JulieExtractFailedException("extract failed", Array.Empty<ReportDiagnostic>(), "short stderr");
 
         var result = ExtractErrorLog.Describe(ex);
 

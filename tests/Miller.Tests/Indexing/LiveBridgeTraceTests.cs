@@ -604,8 +604,9 @@ public sealed class LiveBridgeTraceTests
         ExtractReport report = runner.Scan(work.Repo, work.Db, force: true);
         Assert.Equal("scan", report.Operation);
         Assert.NotEqual("failed", report.Status);
-        Assert.Equal((int)MillerExtractContract.ExpectedSchemaVersion, report.SchemaVersion);
-        Assert.Equal((int)MillerExtractContract.ExpectedExtractContractVersion, report.ExtractContractVersion);
+        Assert.NotNull(report.Artifact);
+        Assert.Equal(MillerExtractContract.ExpectedSqliteSchemaVersion, report.Artifact!.SqliteSchemaVersion);
+        Assert.Equal(MillerExtractContract.ExpectedExtractContractVersion, report.Artifact.ExtractContractVersion);
         Assert.True(report.SymbolsExtracted > 0, "scan should extract at least one symbol");
 
         return RepositoryIndexLoader.Load(work.Db);

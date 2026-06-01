@@ -23,7 +23,7 @@ public sealed class JulieSchemaGateTests
     private static readonly long PinSchema = MillerExtractContract.ExpectedSchemaVersion;
     private static readonly long PinContract = MillerExtractContract.ExpectedExtractContractVersion;
     private static readonly string PinContractStr = S(PinContract);
-    private static readonly string PinnedVer = MillerExtractContract.PinnedJulieServerVersion;
+    private static readonly string PinnedVer = MillerExtractContract.PinnedJulieExtractVersion;
 
     private static string S(long v) => v.ToString(CultureInfo.InvariantCulture);
 

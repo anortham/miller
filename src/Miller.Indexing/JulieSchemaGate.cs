@@ -50,8 +50,8 @@ internal static class JulieSchemaGate
         if (!StringComparer.Ordinal.Equals(hashAlgorithm, MillerExtractContract.ExpectedHashAlgorithm))
             throw new IncompatibleExtractException(
                 $"DB has hash_algorithm value '{hashAlgorithm}', expected '{MillerExtractContract.ExpectedHashAlgorithm}'; " +
-                $"it is not a v{MillerExtractContract.PinnedJulieServerVersion} julie extract. Re-run restore + `extract scan` " +
-                $"with the pinned julie-server (v{MillerExtractContract.PinnedJulieServerVersion}).");
+                $"it is not a v{MillerExtractContract.PinnedJulieExtractVersion} julie extract. Re-run restore + `extract scan` " +
+                $"with the pinned julie-server (v{MillerExtractContract.PinnedJulieExtractVersion}).");
     }
 
     // julie's own liveness query. COALESCE handles an empty (but present) schema_version table.
@@ -81,7 +81,7 @@ internal static class JulieSchemaGate
         if (!long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out long value))
             throw new IncompatibleExtractException(
                 $"DB has a non-integer extract_contract_version value '{text}'; it is not a valid " +
-                $"v{MillerExtractContract.PinnedJulieServerVersion} julie extract.");
+                $"v{MillerExtractContract.PinnedJulieExtractVersion} julie extract.");
 
         return value;
     }
@@ -104,8 +104,8 @@ internal static class JulieSchemaGate
         if (result is null || result is DBNull)
             throw new IncompatibleExtractException(
                 $"DB is missing the '{key}' key in external_extract_metadata; expected {expected} " +
-                $"metadata from a v{MillerExtractContract.PinnedJulieServerVersion} julie extract. Re-run restore + `extract scan` " +
-                $"with the pinned julie-server (v{MillerExtractContract.PinnedJulieServerVersion}).");
+                $"metadata from a v{MillerExtractContract.PinnedJulieExtractVersion} julie extract. Re-run restore + `extract scan` " +
+                $"with the pinned julie-server (v{MillerExtractContract.PinnedJulieExtractVersion}).");
 
         return result.ToString() ?? string.Empty;
     }
@@ -116,6 +116,6 @@ internal static class JulieSchemaGate
         ex.Message.Contains(table, StringComparison.Ordinal);
 
     private static IncompatibleExtractException MissingTable(string table, SqliteException inner) =>
-        new($"DB has no '{table}' table; it is not a v{MillerExtractContract.PinnedJulieServerVersion} julie " +
+        new($"DB has no '{table}' table; it is not a v{MillerExtractContract.PinnedJulieExtractVersion} julie " +
             $"extract. Re-run restore + `extract scan` with the pinned julie-server.", inner);
 }

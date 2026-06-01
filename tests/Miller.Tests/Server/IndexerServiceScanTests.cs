@@ -53,11 +53,18 @@ public sealed class IndexerServiceScanTests
         }
 
         private static ExtractReport Stub(long? revision) => new(
-            Status: "changed", Operation: "scan", DbPath: "x", Root: null, SchemaVersion: (int)MillerExtractContract.ExpectedSchemaVersion,
-            SchemaState: "current", ExtractContractVersion: (int)MillerExtractContract.ExpectedExtractContractVersion, AnalysisState: null,
-            FilesScanned: 0, SymbolsExtracted: 0, FilesTotal: 0, SymbolsTotal: 0,
-            RelationshipsTotal: 0, IdentifiersTotal: 0, TypesTotal: 0, Errors: System.Array.Empty<ExtractError>(),
-            Revision: revision, FilesUpdated: 0, FilesDeleted: 0);
+            ReportSchemaVersion: 1, Status: "ok", Operation: "scan", Mode: "incremental", Input: null,
+            Artifact: new ExtractArtifact(
+                DbPath: "x", RootPath: "/abs/r", ArtifactId: "a",
+                SchemaVersion: MillerExtractContract.ExpectedSchemaVersion,
+                ExtractContractVersion: MillerExtractContract.ExpectedExtractContractVersion,
+                SqliteSchemaVersion: MillerExtractContract.ExpectedSqliteSchemaVersion,
+                JsonlSchemaVersion: 1, HashAlgorithm: MillerExtractContract.ExpectedHashAlgorithm,
+                ParserInventoryFingerprint: "p", CapabilitySnapshotFingerprint: "c"),
+            Tool: new ExtractTool("julie-extract", "2.0.0"),
+            RevisionBlock: new ExtractRevision(revision, revision),
+            Counts: null,
+            Errors: System.Array.Empty<ReportDiagnostic>(), Warnings: System.Array.Empty<ReportDiagnostic>());
     }
 
     private sealed class TestLease : IDisposable

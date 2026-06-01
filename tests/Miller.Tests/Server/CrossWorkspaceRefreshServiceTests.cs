@@ -318,27 +318,24 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         return root;
     }
 
+    // workspaceId is retained for caller readability/registry setup; the nested v1 report carries no
+    // workspace_id (the echo cross-check in CrossWorkspaceRefreshService goes inert until E4 removes it in Phase 4).
     private static ExtractReport Report(string root, string dbPath, string workspaceId, long revision) =>
         new(
-            Status: "changed",
-            Operation: "scan",
-            DbPath: dbPath,
-            Root: root,
-            SchemaVersion: (int)MillerExtractContract.ExpectedSchemaVersion,
-            SchemaState: "current",
-            ExtractContractVersion: (int)MillerExtractContract.ExpectedExtractContractVersion,
-            AnalysisState: "current",
-            FilesScanned: 1,
-            SymbolsExtracted: 1,
-            FilesTotal: 1,
-            SymbolsTotal: 1,
-            RelationshipsTotal: 0,
-            IdentifiersTotal: 0,
-            TypesTotal: 0,
-            Errors: Array.Empty<ExtractError>(),
-            WorkspaceId: workspaceId,
-            Revision: revision,
-            HashAlgorithm: MillerExtractContract.ExpectedHashAlgorithm);
+            ReportSchemaVersion: 1, Status: "ok", Operation: "scan", Mode: "incremental", Input: null,
+            Artifact: new ExtractArtifact(
+                DbPath: dbPath, RootPath: root, ArtifactId: "a",
+                SchemaVersion: MillerExtractContract.ExpectedSchemaVersion,
+                ExtractContractVersion: MillerExtractContract.ExpectedExtractContractVersion,
+                SqliteSchemaVersion: MillerExtractContract.ExpectedSqliteSchemaVersion,
+                JsonlSchemaVersion: 1, HashAlgorithm: MillerExtractContract.ExpectedHashAlgorithm,
+                ParserInventoryFingerprint: "p", CapabilitySnapshotFingerprint: "c"),
+            Tool: new ExtractTool("julie-extract", "2.0.0"),
+            RevisionBlock: new ExtractRevision(revision, revision),
+            Counts: new ExtractCounts(1, 1, 0, 0, 0, 0,
+                RowsWritten: new ExtractRowCounts(null, 1, null, null, null, null, null, null, null, null),
+                Totals: new ExtractRowCounts(1, 1, null, null, null, null, null, null, null, null)),
+            Errors: Array.Empty<ReportDiagnostic>(), Warnings: Array.Empty<ReportDiagnostic>());
 
     private sealed class NoopLease : IDisposable
     {

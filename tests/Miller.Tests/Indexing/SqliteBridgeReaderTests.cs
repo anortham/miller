@@ -69,8 +69,11 @@ public sealed class SqliteBridgeReaderTests : IDisposable
         command.ExecuteNonQuery();
 
         using var seed = connection.CreateCommand();
+        // Seed the gate version from the pinned constant (not a literal) so a julie re-pin needs no edit here;
+        // C5/C1 will rewrite this seed onto v1 artifact_metadata (Phase 3). (Was a hardcoded 28; A1 flipped the
+        // pin to 1, so the literal would now fail JulieSchemaGate — derive it like the contract line already does.)
         seed.CommandText = $"""
-            INSERT INTO schema_version(version) VALUES (28);
+            INSERT INTO schema_version(version) VALUES ({MillerExtractContract.ExpectedSchemaVersion});
             INSERT INTO external_extract_metadata(key, value) VALUES ('extract_contract_version', '{MillerExtractContract.ExpectedExtractContractVersion}');
             INSERT INTO external_extract_metadata(key, value) VALUES ('hash_algorithm', '{MillerExtractContract.ExpectedHashAlgorithm}');
             """;

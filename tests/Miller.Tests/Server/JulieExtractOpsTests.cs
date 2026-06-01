@@ -19,11 +19,18 @@ public sealed class JulieExtractOpsTests
     {
         var calls = new List<Recorded>();
         ExtractReport Stub() => new(
-            Status: "changed", Operation: "test", DbPath: db, Root: canonicalRoot, SchemaVersion: (int)MillerExtractContract.ExpectedSchemaVersion,
-            SchemaState: "current", ExtractContractVersion: (int)MillerExtractContract.ExpectedExtractContractVersion, AnalysisState: null,
-            FilesScanned: 0, SymbolsExtracted: 0, FilesTotal: 0, SymbolsTotal: 0,
-            RelationshipsTotal: 0, IdentifiersTotal: 0, TypesTotal: 0,
-            Errors: System.Array.Empty<ExtractError>(), Revision: 2, FilesUpdated: 1, FilesDeleted: 0);
+            ReportSchemaVersion: 1, Status: "ok", Operation: "test", Mode: "single_file", Input: null,
+            Artifact: new ExtractArtifact(
+                DbPath: db, RootPath: canonicalRoot, ArtifactId: "a",
+                SchemaVersion: MillerExtractContract.ExpectedSchemaVersion,
+                ExtractContractVersion: MillerExtractContract.ExpectedExtractContractVersion,
+                SqliteSchemaVersion: MillerExtractContract.ExpectedSqliteSchemaVersion,
+                JsonlSchemaVersion: 1, HashAlgorithm: MillerExtractContract.ExpectedHashAlgorithm,
+                ParserInventoryFingerprint: "p", CapabilitySnapshotFingerprint: "c"),
+            Tool: new ExtractTool("julie-extract", "2.0.0"),
+            RevisionBlock: new ExtractRevision(2, 2),
+            Counts: new ExtractCounts(0, 1, 0, 0, 0, 0, RowsWritten: null, Totals: null),
+            Errors: System.Array.Empty<ReportDiagnostic>(), Warnings: System.Array.Empty<ReportDiagnostic>());
 
         var ops = JulieExtractOps.CreateForTest(
             canonicalRoot, db,

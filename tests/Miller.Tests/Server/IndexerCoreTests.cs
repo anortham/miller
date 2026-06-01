@@ -49,11 +49,18 @@ public sealed class IndexerCoreTests
         }
 
         private static ExtractReport Stub(string status) => new(
-            Status: status, Operation: "test", DbPath: "x", Root: null, SchemaVersion: (int)MillerExtractContract.ExpectedSchemaVersion,
-            SchemaState: "current", ExtractContractVersion: (int)MillerExtractContract.ExpectedExtractContractVersion, AnalysisState: null,
-            FilesScanned: 0, SymbolsExtracted: 0, FilesTotal: 0, SymbolsTotal: 0,
-            RelationshipsTotal: 0, IdentifiersTotal: 0, TypesTotal: 0, Errors: System.Array.Empty<ExtractError>(),
-            Revision: 2, FilesUpdated: 1, FilesDeleted: 0);
+            ReportSchemaVersion: 1, Status: status, Operation: "test", Mode: "single_file", Input: null,
+            Artifact: new ExtractArtifact(
+                DbPath: "x", RootPath: "/abs/r", ArtifactId: "a",
+                SchemaVersion: MillerExtractContract.ExpectedSchemaVersion,
+                ExtractContractVersion: MillerExtractContract.ExpectedExtractContractVersion,
+                SqliteSchemaVersion: MillerExtractContract.ExpectedSqliteSchemaVersion,
+                JsonlSchemaVersion: 1, HashAlgorithm: MillerExtractContract.ExpectedHashAlgorithm,
+                ParserInventoryFingerprint: "p", CapabilitySnapshotFingerprint: "c"),
+            Tool: new ExtractTool("julie-extract", "2.0.0"),
+            RevisionBlock: new ExtractRevision(2, 2),
+            Counts: new ExtractCounts(0, 1, 0, 0, 0, 0, RowsWritten: null, Totals: null),
+            Errors: System.Array.Empty<ReportDiagnostic>(), Warnings: System.Array.Empty<ReportDiagnostic>());
     }
 
     /// <summary>One captured log call (the level + the formatted message + the exception, if any).</summary>
@@ -225,7 +232,8 @@ public sealed class IndexerCoreTests
     private static JulieExtractFailedException Failed(params string[] codes)
     {
         var errors = codes
-            .Select(c => new ExtractError(Code: c, Message: $"{c} happened", Path: "/repo/x.cs"))
+            .Select(c => new ReportDiagnostic(Code: c, Message: $"{c} happened", Path: "/repo/x.cs",
+                RootRelativePath: null, Recoverable: false))
             .ToArray();
         return new JulieExtractFailedException($"exit 1: {string.Join(",", codes)}", errors, standardError: "");
     }
@@ -341,7 +349,8 @@ public sealed class IndexerCoreTests
         // Exception.ToString() drops) — the daemon-debugging payoff of D3.
         var failed = new JulieExtractFailedException(
             "exit 1: outside_root",
-            new[] { new ExtractError("outside_root", "the path is outside the extract root", "/repo/x.cs") },
+            new[] { new ReportDiagnostic("outside_root", "the path is outside the extract root", "/repo/x.cs",
+                RootRelativePath: null, Recoverable: false) },
             standardError: "ERROR julie::extract: path '/repo/x.cs' is outside root '/repo'");
         var ops = new RecordingOps();
         ops.ThrowExceptionOnUpdatePath["/repo/bad.cs"] = failed;
@@ -363,7 +372,8 @@ public sealed class IndexerCoreTests
         // The transient (Info) branch also surfaces the stderr tail so a "retry later" still shows julie's words.
         var failed = new JulieExtractFailedException(
             "exit 1: flock_timeout",
-            new[] { new ExtractError("flock_timeout", "another writer held the lock", "/repo/x.cs") },
+            new[] { new ReportDiagnostic("flock_timeout", "another writer held the lock", "/repo/x.cs",
+                RootRelativePath: null, Recoverable: false) },
             standardError: "WARN julie::flock: timed out waiting for the write lock after 5s");
         var ops = new RecordingOps();
         ops.ThrowExceptionOnUpdatePath["/repo/bad.cs"] = failed;
