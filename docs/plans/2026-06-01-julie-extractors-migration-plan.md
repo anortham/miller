@@ -6,7 +6,7 @@
 
 **Architecture:** Miller stays a read-only consumer. This reshapes one seam: subprocess invocation (julie-extract top-level subcommands), the nested JSON report, the v1 SQLite read layer (renames + by-name reads), freshness (`extraction_revisions`), bootstrap/workspace identity, and the test fixtures that synthesize the artifact. File content moves to on-disk re-sourcing. No new subsystems.
 
-**Tech Stack:** .NET 10, C#, Microsoft.Data.Sqlite, xUnit; Rust `julie-extract` v1 binary (consumed, not built here); BLAKE3 hashing.
+**Tech Stack:** .NET 10, C#, Microsoft.Data.Sqlite, xUnit; Rust `julie-extract` (product `v2.0.0`, shipping SQLite **schema/contract v1** — product version and schema version are orthogonal) consumed as a spawned binary, not built here. Two distinct hash algorithms: **BLAKE3** for source-file `content_hash` (freshness) and **SHA-256** for capability fingerprints + release-asset integrity — never interchanged (reconciliation #9).
 
 **Architecture Quality:** Approved shape — `Miller.Core` stays zero-I/O; `Miller.Indexing` owns the SQLite read + row→model mapping; the seam records keep their public accessor NAMES (`Revision`/`SymbolsExtracted`/`Status`/`Errors`/`Code`) so report-consumers keep compiling while their *semantics* are remapped. Main architecture risk: the read-layer (B/C) and test-fixture (H) rewrites must land in lockstep — the fixtures are a second implementation of the julie schema. No new module boundaries.
 
@@ -44,7 +44,7 @@ The design doc §10 labels subsystems where **§10E = search-widen** and **§10D
 
 From the plan critique (verdict: needs-fixes). Where a subsystem task below contradicts one of these, the reconciliation wins:
 
-1. **One hash helper, one name:** `ContentHasher.NormalizeHash(string)` (subsystem D1). Subsystem C3's body references `ContentHashNormalizer.StripPrefix` — that symbol does not exist; C3 must call `ContentHasher.NormalizeHash`.
+1. **One hash helper, one name:** `ContentHasher.NormalizeHash(string)` (subsystem D1). Subsystem C3's body references `ContentHashNormalizer.StripPrefix` — that symbol does not exist; C3 must call `ContentHasher.NormalizeHash`. This helper is **blake3-only** (see #9).
 2. **`FreshnessReader.LatestRevision` drops `workspaceId`:** v1 `extraction_revisions` has no workspace_id, so D3's signature becomes `LatestRevision()` (no param). Subsystem E2/E4 call sites and `IndexBootstrapService.ReadLatestRevisionOrZero` MUST update to the param-less call — E2's "comment-only change" claim is void. D3 + the E call-sites change in lockstep.
 3. **Disk-root fixture seam (C3 ↔ H3):** subsystem H must expose `WorkspaceRoot` on the fixture AND write each file's bytes to disk under that root (not just a `FileContents` dictionary). C3's `inspect(full)`/edit disk-slice tests consume `fx.WorkspaceRoot` + the on-disk bytes. Pin this exact surface in H3 before C3 implements.
 4. **A2 diagnostic fixture is honest:** `data_loss_guard` is `recoverable: false` in real julie (`commands.rs:1099-1116`). A2's `Parse_Failed_NullArtifact` fixture must assert `recoverable == false` (or use a genuinely-recoverable code) — never ship a fixture that contradicts the contract.
@@ -52,6 +52,11 @@ From the plan critique (verdict: needs-fixes). Where a subsystem task below cont
 6. **Atomic build-red window:** `B1` (IndexedSymbol `TestRole`→`IsTest`) + `F1` (delete `TestRole.cs`) + `F4` (`RepositoryIndexLoader.ProjectToSymbolDetails`) MUST land in ONE commit — each compile-breaks the others' files — paired with the `H1` fixture-DDL spine so the fast suite greens at phase end.
 7. **Two unowned report-fixture test files** migrate to the nested ctor in the A/E window (assigned to subsystem **A**, which owns the report record): `tests/Miller.Tests/Server/IndexerServiceScanTests.cs:57` and `tests/Miller.Tests/Server/JulieExtractOpsTests.cs:23` (both construct the flat `ExtractReport`).
 8. **Metadata keys retained:** `created_at` AND `updated_at` are artifact_metadata KEYS in v1 (not dropped columns). Miller doesn't read them, but H's synthetic fixture should write both keys for fidelity.
+9. **Three hash domains — never conflate (verified against julie-extractors README §Artifact Contract + `docs/contracts/{sqlite-schema-v1,reports}.md`):** v1 uses hashing in **three** distinct, non-interchangeable ways:
+   - **(a) Source-file freshness** — `files.content_hash` is **`blake3:<hex>`**, and `artifact_metadata.hash_algorithm == "blake3"` (gated by `ExpectedHashAlgorithm`). This is the ONLY domain `ContentHasher.NormalizeHash` and `FreshnessGate`/`StalenessCheck` touch. `NormalizeHash` strips a `blake3:` scheme token ONLY; it must NOT be reused to strip a `sha256:` prefix, and the freshness path must never accept a non-blake3 content hash (the schema gate already rejects a non-`blake3` `hash_algorithm`).
+   - **(b) Parser/capability fingerprints** — `parser_inventory_fingerprint` / `capability_snapshot_fingerprint` are **`sha256:<hex>`**-prefixed. `ExtractReport` (A2) deserializes them as opaque strings and Miller does NOT compare them; if any future task ever does, it needs a SEPARATE sha256-aware normalizer, never `NormalizeHash`.
+   - **(c) Release-asset integrity** — `julie-pins.json` `sha256` digests (G2) verify the downloaded ARCHIVE bytes. Plain SHA-256 hex (no scheme prefix), validated by `IsSha256Hex` in `MillerExtractContractTests` (A1) and the restore script's `verify_sha`. Wholly unrelated to (a)/(b); shares nothing but the algorithm name.
+   The plan keeps these in separate code paths today; the risk is a future refactor "unifying" them. Do not. A blake3 file hash fed through a sha256 check (or vice versa) silently reads every file as stale or every download as corrupt.
 
 ---
 
@@ -98,7 +103,7 @@ All paths under `/Users/murphy/source/miller/`. This subsystem owns the four jul
 | `ExpectedExtractContractVersion = 3` | `ExpectedExtractContractVersion = 1` (NAME KEPT) |
 | (none) | `ExpectedSqliteSchemaVersion = 1` (NEW; alias of `ExpectedSchemaVersion`, named to match `report.artifact.sqlite_schema_version`) |
 | (none) | `ExpectedReportSchemaVersion = 1` (NEW; gates `report.report_schema_version`) |
-| `PinnedJulieServerVersion = "7.13.2"` | `PinnedJulieExtractVersion = "<§9 pin>"` (RENAME; value is the download pin, separate from the runtime gate — D7) |
+| `PinnedJulieServerVersion = "7.13.2"` | `PinnedJulieExtractVersion = "2.0.0"` (RENAME; PRODUCT version / download pin, orthogonal to the schema-contract runtime gate — D7) |
 | `ExpectedHashAlgorithm = "blake3"` | unchanged |
 
 **Steps (TDD):**
@@ -176,8 +181,9 @@ namespace Miller.Indexing;
 /// The single source of truth for the julie-extract versions Miller is built against. Both
 /// <see cref="JulieSchemaGate"/> (reading the DB's artifact_metadata) and <see cref="ExtractVersionMismatch"/>
 /// (cross-checking the extract report's artifact block) gate on these constants. The runtime gate is the
-/// schema/contract versions, NOT the binary_version (D7 — binary_version is unreliable in v1);
-/// <see cref="PinnedJulieExtractVersion"/> is the download pin only.
+/// schema/contract versions, NOT the product binary_version (D7 — product version and schema/contract version
+/// are orthogonal: julie-extract 2.0.0 ships schema/contract 1, and a future product bump that keeps the
+/// contract must not break Miller); <see cref="PinnedJulieExtractVersion"/> is the download pin only.
 /// </summary>
 internal static class MillerExtractContract
 {
@@ -189,14 +195,15 @@ internal static class MillerExtractContract
     public const long ExpectedReportSchemaVersion = 1;
     public const string ExpectedHashAlgorithm = "blake3";
 
-    // Download pin only (restore script target); separate from the runtime schema/contract gate (D7).
-    public const string PinnedJulieExtractVersion = "0.1.0"; // TODO(G/§9): confirm the published release tag.
+    // Download pin only (restore-script + julie-pins.json target). This is the PRODUCT version,
+    // orthogonal to the runtime schema/contract gate above (D7): product 2.0.0 ships schema/contract 1.
+    public const string PinnedJulieExtractVersion = "2.0.0"; // julie-extractors release tag v2.0.0 (README "Current Release", 2026-06-01).
 }
 ```
 
-   The `"0.1.0"` placeholder is the only unconfirmed value (§9 open item). It must match `scripts/julie-pins.json` `version` (G). If the real pin is not known at A1 time, this is a hard dependency on G/§9 — leave the value and flag it; the `JuliePinsJsonMatchesContractVersion` test cross-locks it.
+   `PinnedJulieExtractVersion = "2.0.0"` is confirmed against the published release (`anortham/julie-extractors` tag `v2.0.0`, README "Current Release" table). It is the PRODUCT version, NOT the schema/contract version — those stay `1` and gate compatibility (D7). It must equal `scripts/julie-pins.json` `version` (G2); the `JuliePinsJsonMatchesContractVersion` test cross-locks the two so a future product bump can't drift the pin from the download URL silently.
 
-4. **Run** `scripts/test.sh` — `MillerExtractContractTests.ContractPinsJulieExtractV1Versions` green; the pins/script tests stay red until G lands (note that as the cross-dependency, do not weaken the test).
+4. **Run** `scripts/test.sh` — `MillerExtractContractTests.ContractPinsJulieExtractV1Versions` green; the `JuliePinsJsonMatchesContractVersion` cross-lock goes green once G2 writes the real pins (both land this branch; the release is published, so neither is blocked).
 
 **Acceptance:**
 - `ExpectedSchemaVersion == ExpectedSqliteSchemaVersion == ExpectedExtractContractVersion == ExpectedReportSchemaVersion == 1`; `ExpectedHashAlgorithm == "blake3"`.
@@ -256,7 +263,7 @@ public sealed class ExtractReportParsingTests
                         "schema_version": 1, "extract_contract_version": 1, "sqlite_schema_version": 1,
                         "jsonl_schema_version": 1, "hash_algorithm": "blake3",
                         "parser_inventory_fingerprint": "pi", "capability_snapshot_fingerprint": "cs" },
-          "tool": { "binary_name": "julie-extract", "binary_version": "0.1.0" },
+          "tool": { "binary_name": "julie-extract", "binary_version": "2.0.0" },
           "revision": { "latest_revision_id": 7, "created_revision_id": 7 },
           "counts": { "files_scanned": 0, "files_changed": 1, "files_unchanged": 0, "files_unsupported": 0,
                       "files_deleted": 0, "files_failed": 0,
@@ -273,7 +280,7 @@ public sealed class ExtractReportParsingTests
                         "extract_contract_version": 1, "sqlite_schema_version": 1, "jsonl_schema_version": null,
                         "hash_algorithm": "blake3", "parser_inventory_fingerprint": "p",
                         "capability_snapshot_fingerprint": "c" },
-          "tool": { "binary_name": "julie-extract", "binary_version": "0.1.0" },
+          "tool": { "binary_name": "julie-extract", "binary_version": "2.0.0" },
           "revision": { "latest_revision_id": 6, "created_revision_id": null },
           "counts": { "files_scanned": 0, "files_changed": 0, "files_unchanged": 1, "files_unsupported": 0,
                       "files_deleted": 0, "files_failed": 0, "rows_written": {}, "totals": { "files": 12 } },
@@ -285,7 +292,7 @@ public sealed class ExtractReportParsingTests
           "input": { "db_path": "/abs/db", "root_path": "/abs/r", "file_path": "/abs/r/a.cs",
                      "root_relative_path": "a.cs", "format": null, "output_path": null },
           "artifact": null,
-          "tool": { "binary_name": "julie-extract", "binary_version": "0.1.0" },
+          "tool": { "binary_name": "julie-extract", "binary_version": "2.0.0" },
           "revision": null,
           "counts": { "files_scanned": 0, "files_changed": 0, "files_unchanged": 0, "files_unsupported": 0,
                       "files_deleted": 0, "files_failed": 1, "rows_written": {}, "totals": {} },
@@ -492,7 +499,7 @@ private static ExtractReport ReportWith(
     return new ExtractReport(
         ReportSchemaVersion: 1, Status: "ok", Operation: "scan", Mode: "force",
         Input: null, Artifact: artifact,
-        Tool: new ExtractTool("julie-extract", "0.1.0"),
+        Tool: new ExtractTool("julie-extract", "2.0.0"),
         RevisionBlock: new ExtractRevision(1, 1),
         Counts: null,
         Errors: Array.Empty<ReportDiagnostic>(), Warnings: Array.Empty<ReportDiagnostic>());
@@ -730,7 +737,7 @@ public void Interpret_Exit3_SchemaIncompatible_ThrowsIncompatibleExtract_FromErr
         { "report_schema_version": 1, "status": "failed", "operation": "info", "mode": "read_only",
           "input": { "db_path": "/abs/db", "root_path": null, "file_path": null,
                      "root_relative_path": null, "format": null, "output_path": null },
-          "artifact": null, "tool": { "binary_name": "julie-extract", "binary_version": "0.1.0" },
+          "artifact": null, "tool": { "binary_name": "julie-extract", "binary_version": "2.0.0" },
           "revision": null,
           "counts": { "files_scanned": 0, "files_changed": 0, "files_unchanged": 0, "files_unsupported": 0,
                       "files_deleted": 0, "files_failed": 0, "rows_written": {}, "totals": {} },
@@ -750,7 +757,7 @@ public void Interpret_Exit3_RootMismatch_ThrowsIncompatibleExtract()
         { "report_schema_version": 1, "status": "failed", "operation": "scan", "mode": "incremental",
           "input": { "db_path": "/abs/db", "root_path": "/abs/r", "file_path": null,
                      "root_relative_path": null, "format": null, "output_path": null },
-          "artifact": null, "tool": { "binary_name": "julie-extract", "binary_version": "0.1.0" },
+          "artifact": null, "tool": { "binary_name": "julie-extract", "binary_version": "2.0.0" },
           "revision": null,
           "counts": { "files_scanned": 0, "files_changed": 0, "files_unchanged": 0, "files_unsupported": 0,
                       "files_deleted": 0, "files_failed": 0, "rows_written": {}, "totals": {} },
@@ -780,7 +787,7 @@ public void Interpret_Exit1_PathError_StaysOperationFailure_NotIncompatible()
         { "report_schema_version": 1, "status": "failed", "operation": "update", "mode": "single_file",
           "input": { "db_path": "/abs/db", "root_path": "/abs/r", "file_path": "/x",
                      "root_relative_path": null, "format": null, "output_path": null },
-          "artifact": null, "tool": { "binary_name": "julie-extract", "binary_version": "0.1.0" },
+          "artifact": null, "tool": { "binary_name": "julie-extract", "binary_version": "2.0.0" },
           "revision": null,
           "counts": { "files_scanned": 0, "files_changed": 0, "files_unchanged": 0, "files_unsupported": 0,
                       "files_deleted": 0, "files_failed": 1, "rows_written": {}, "totals": {} },
@@ -3151,11 +3158,11 @@ grep -rn "TestRole" src tests | grep -v "/obj/" | grep -v "/bin/"
 
 ## Subsystem G: Packaging / restore / docs
 
-This subsystem moves Miller's acquisition + packaging seam off `julie-server` 7.13.2 and onto `julie-extract` v1. It is **download-based** (the design's D1 — assets ship today; their exact shape is now fully verified from the julie-extractors release workflow, resolving design §9.1-9.3) with a **validated from-source path as the early unblocker** so subsystems B/C/D/H can build and read a real v1 DB before the download is wired. Per design §12 step 1 and §12 step 7, **G1 lands first**; the download repoint (G2) lands last once the repo slug (§9, the only remaining unknown) is confirmed.
+This subsystem moves Miller's acquisition + packaging seam off `julie-server` 7.13.2 and onto `julie-extract` v1. It is **download-based** (the design's D1 — the release is **published** as `v2.0.0`, repo `anortham/julie-extractors`, with the four asset names + SHA-256 digests confirmed, fully resolving design §9.1-9.3) with a **validated from-source path as the early unblocker** so subsystems B/C/D/H can build and read a real v1 DB without waiting on the network. Per design §12 step 1 and §12 step 7, **G1 lands first**; the download repoint (G2) lands last — but G2 is **no longer blocked**, since every §9 unknown is now resolved.
 
 **Verified upstream facts (read, not guessed):**
-- From-source target: `cargo build --release -p julie-extract-cli --bin julie-extract` against a julie-extractors checkout (workspace root manifest) emits `target/release/julie-extract`. Confirmed: `crates/julie-extract-cli/Cargo.toml` `name = "julie-extract-cli"`, `[[bin]] name = "julie-extract"`; it is a `[workspace] members` entry (`Cargo.toml:2-7`).
-- `julie-extract --version` prints `julie-extract 0.1.0` (on-disk) while the crate is `2.0.0` — **binary_version is unreliable** (design D7). The current restore script's hard version-equality assert would fail on both. G1 replaces it with a name-only smoke assert.
+- From-source target: `cargo build --release -p julie-extract-cli --bin julie-extract` against a julie-extractors checkout (workspace root manifest) emits `target/release/julie-extract`. Confirmed: `crates/julie-extract-cli/Cargo.toml` `name = "julie-extract-cli"`, `[[bin]] name = "julie-extract"`; it is a `[workspace] members` entry.
+- `julie-extract --version` self-identifies via clap's default (`CARGO_PKG_VERSION`); the crate is `version = "2.0.0"`, so a **fresh from-source build and the published v2.0.0 assets both print `julie-extract 2.0.0`**. (A locally-cached pre-bump binary may still print `0.1.0` — irrelevant once rebuilt.) The restore script must **not** hard-compare the product version: the from-source path legitimately builds whatever the checkout holds, and the real compatibility contract is the schema/contract version enforced at runtime by the gate (D7), not the product-version string. G1 therefore replaces the old version-equality assert with a name-only smoke assert (binary runs and self-identifies as `julie-extract`).
 - Download asset shape (`.github/workflows/release-binaries.yml` + `xtask/src/release.rs:91-100`): archives named `julie-extract-v{VER}-{triple}.tar.gz` (`.zip` for `x86_64-pc-windows-msvc`); inside, the binary is **nested at `./dist/{triple}/julie-extract[.exe]`** (the workflow does `tar -czf -C $PACKAGE_DIR .`), NOT flat at the archive root like old julie. A per-binary `.sha256` sidecar is published. All four triples build.
 
 ### Task G1 — From-source restore + binary-name plumbing (EARLY UNBLOCKER)
@@ -3175,7 +3182,7 @@ Get a runnable `julie-extract` binary into `.tools/` via the from-source path (`
 - Bash + PowerShell restore from-source change is **not a pure literal swap** — the build invocation and the version-assert semantics change:
   - Build: old `cargo build --manifest-path "${SOURCE_MANIFEST}" --bin julie-server --release` (`.sh:101`) → `cargo build --manifest-path "${SOURCE_MANIFEST}" --release -p julie-extract-cli --bin julie-extract`. `SOURCE_MANIFEST` stays the workspace-root `Cargo.toml`; `-p julie-extract-cli` selects the member crate. (Equivalent `.ps1:54`.)
   - Output path: `SOURCE_BINARY="${SOURCE_ROOT}/target/release/julie-server"` (`.sh:98`) → `.../target/release/julie-extract`. (`.ps1:51` → `target\release\julie-extract.exe`.)
-  - **Version assert (load-bearing correctness fix):** the current `.sh:109-115` greps `--version` output for the pin string and exits 1 on mismatch; against `julie-extract 0.1.0` with any pinned version this ALWAYS fails. Replace with a name-only smoke assert: run `"${BINARY}" --version`, require the output to be non-empty AND start with `julie-extract` (i.e. the binary executes and self-identifies). Do **not** compare the numeric version — the contract gate is schema/contract version (subsystem B/A), per design D7. Same change in `.ps1:63-66` (`-notlike "* $($config.version)*"` → `-notlike "julie-extract*"`).
+  - **Version assert (load-bearing correctness fix):** the current `.sh:109-115` greps `--version` output for the pin string and exits 1 on mismatch. That couples the restore to an exact product-version string, which is wrong for the from-source path (it builds whatever version the checkout holds — e.g. a dev on a newer julie-extractors) and is a brittle proxy for compatibility. Replace with a name-only smoke assert: run `"${BINARY}" --version`, require the output to be non-empty AND start with `julie-extract` (i.e. the binary executes and self-identifies). Do **not** compare the numeric version — the compatibility gate is the schema/contract version (subsystem A/B/C), per design D7. Same change in `.ps1:63-66` (`-notlike "* $($config.version)*"` → `-notlike "julie-extract*"`).
   - The `--from-source path is not a Julie checkout` guard (`.sh:87-90`, `.ps1:42-44`) still checks `Cargo.toml` at the source root — correct, since julie-extractors' workspace root has one.
   - Rename every in-script self-reference: header comment `restore-julie-server.sh` → `restore-julie-extract.sh`, the `--from-source` usage hints (`.sh:18-19,156`, `.ps1:11-12,101`), and all `julie-server`/`julie-server.exe` literals → `julie-extract`/`julie-extract.exe`. The `.ps1` temp staging dir already coincidentally named `julie-extract-<guid>` (`.ps1:129`) — rename it to avoid confusion with the real binary, e.g. `julie-extract-stage-<guid>`.
 - `JulieExtractRunner.cs`: `Locate` `:61` `string binaryName = OperatingSystem.IsWindows() ? "julie-server.exe" : "julie-server";` → `"julie-extract.exe" : "julie-extract"`. Update the ctor `:47-49` and `Locate` `:71-73` error strings: `julie-server binary not found` → `julie-extract binary not found`; `scripts/restore-julie-server.sh`/`.ps1` → `scripts/restore-julie-extract.sh`/`.ps1`. The `PinnedJulieServerVersion` reference in those strings is **A's rename** — coordinate: if A lands `MillerExtractContract.PinnedJulieExtractVersion` first, use the new name; otherwise leave the symbol untouched and let A flip it in the contract task (the string interpolation site moves with the constant rename). Do NOT touch `BuildScanArgs`/`BuildInfoArgs`/`Interpret` (A owns those).
@@ -3200,10 +3207,12 @@ Get a runnable `julie-extract` binary into `.tools/` via the from-source path (`
 
 **Representative snippet (the load-bearing semantic change — `.sh` version assert):**
 ```bash
-# OLD (.sh:109-115): hard-fails because julie-extract --version prints "julie-extract 0.1.0", not the pin.
+# OLD (.sh:109-115): couples restore to an exact product-version string; wrong for the from-source path
+# (builds whatever the checkout holds) and a brittle proxy for the real schema/contract compatibility gate.
 # VERSION_OUTPUT="$("${BINARY}" --version 2>/dev/null || true)"
 # if ! grep -F " ${VERSION}" <<<"${VERSION_OUTPUT}" >/dev/null; then ... exit 1; fi
-# NEW: binary_version is unreliable (design D7); assert only that the binary runs and self-identifies.
+# NEW: compatibility is gated on schema/contract version at runtime (design D7); here assert only that
+# the binary runs and self-identifies as julie-extract.
 VERSION_OUTPUT="$("${BINARY}" --version 2>/dev/null || true)"
 if [[ "${VERSION_OUTPUT}" != julie-extract* ]]; then
   echo "error: restored binary does not self-identify as julie-extract" >&2
@@ -3266,7 +3275,7 @@ fi
 3. **Rename the scripts** (`git mv`) and apply the `.sh`/`.ps1` body edits per the map (build cmd, output path, install dest, version-assert semantics, self-references). There is no unit harness for shell; **manually validate the from-source path end-to-end** (this is the unblocker, so it must actually run):
    ```bash
    MILLER_JULIE_SOURCE=/Users/murphy/source/julie-extractors bash scripts/restore-julie-extract.sh --from-source
-   .tools/julie-extract --version    # expect: julie-extract 0.1.0
+   .tools/julie-extract --version    # expect: julie-extract 2.0.0 (a stale pre-bump local build may show 0.1.0; rebuild)
    .tools/julie-extract scan --root /tmp/probe-repo --db /tmp/probe/symbols.db --strict-schema --json  # smoke: produces a v1 DB
    ```
    The script must exit 0, install `.tools/julie-extract`, and the smoke scan must write a SQLite file. (A pre-made tiny `/tmp/probe-repo` with one source file suffices.)
@@ -3275,8 +3284,8 @@ fi
 6. **Commit** (the user must request it; if requested: branch first, include the renamed scripts + the new test).
 
 **Acceptance**
-- `scripts/restore-julie-extract.sh --from-source` (and `.ps1 -FromSource`) build `julie-extract` via `-p julie-extract-cli --bin julie-extract` and install `.tools/julie-extract[.exe]`, exiting 0 against the real julie-extractors checkout despite `--version` reading `0.1.0`.
-- The version assert is name-based, never numeric (does not regress when the on-disk version differs from the crate version).
+- `scripts/restore-julie-extract.sh --from-source` (and `.ps1 -FromSource`) build `julie-extract` via `-p julie-extract-cli --bin julie-extract` and install `.tools/julie-extract[.exe]`, exiting 0 against the real julie-extractors checkout (a fresh build self-identifies as `julie-extract 2.0.0`).
+- The version assert is name-based, never numeric (does not regress when the built/on-disk product version differs from `julie-pins.json` `version` — e.g. a dev building a newer checkout from source).
 - `JulieExtractRunner.Locate` resolves `julie-extract[.exe]`; `JulieExtractBinaryNameTests` is green and the absent-binary error names `restore-julie-extract`.
 - No `julie-server` literal remains in either restore script, `JulieExtractRunner.Locate`/ctor, `WorkspaceContext.cs`, `ScaleTestSupport.cs:33,47`, or `WorkspaceToolTests.cs:120`.
 - Fast suite green (`scripts/test.sh`); `dotnet build Miller.slnx -c Release` 0 warnings.
@@ -3289,26 +3298,26 @@ fi
 - `scripts/restore-julie-extract.ps1` (download branch `:79-148`)
 
 **What**
-Repoint the pins (repo slug + version + binary name + per-triple asset names + checksums) and rework the download/extract logic for the **nested** v1 archive layout (`./dist/{triple}/julie-extract[.exe]` inside the tarball, vs old julie's flat `julie-server` at root). The exact per-triple `sha256` values stay **TBD until the release publishes under the confirmed repo slug** (design §9.1/§9.2) — but the schema of the pins file and the extraction code are concrete and land now; only the four hex strings are filled at publish time.
+Repoint the pins (repo slug + version + binary name + per-triple asset names + checksums) and rework the download/extract logic for the **nested** v1 archive layout (`./dist/{triple}/julie-extract[.exe]` inside the tarball, vs old julie's flat `julie-server` at root). **All §9 unknowns are resolved**: the release is published as `v2.0.0` under `anortham/julie-extractors` with the four asset names + SHA-256 digests confirmed from the README "Current Release" table and `docs/release-evidence/2026-06-01-v2-0-0-release.md`. The pins below are concrete, not placeholders.
 
 **Approach**
-- `julie-pins.json` new shape (verified asset names from `release-binaries.yml`):
+- `julie-pins.json` new shape (verified asset names + digests from the published v2.0.0 release):
   ```json
   {
-    "version": "<TBD-from-§9.2; e.g. 2.0.0 — the published release tag minus the v>",
+    "version": "2.0.0",
     "binary": "julie-extract",
     "archiveInnerPathTemplate": "dist/{triple}/julie-extract{exe}",
-    "urlTemplate": "https://github.com/<TBD-slug-§9.1>/releases/download/v{VER}/{asset}",
+    "urlTemplate": "https://github.com/anortham/julie-extractors/releases/download/v{VER}/{asset}",
     "assets": {
-      "aarch64-apple-darwin":    { "name": "julie-extract-v{VER}-aarch64-apple-darwin.tar.gz",    "sha256": "<TBD>" },
-      "x86_64-apple-darwin":     { "name": "julie-extract-v{VER}-x86_64-apple-darwin.tar.gz",     "sha256": "<TBD>" },
-      "x86_64-unknown-linux-gnu":{ "name": "julie-extract-v{VER}-x86_64-unknown-linux-gnu.tar.gz","sha256": "<TBD>" },
-      "x86_64-pc-windows-msvc":  { "name": "julie-extract-v{VER}-x86_64-pc-windows-msvc.zip",     "sha256": "<TBD>" }
+      "aarch64-apple-darwin":    { "name": "julie-extract-v{VER}-aarch64-apple-darwin.tar.gz",    "sha256": "bc9e21ef0b119bb9ab9bc2eb8a7260990244d8c9912047166beeae5ee51ea6bb" },
+      "x86_64-apple-darwin":     { "name": "julie-extract-v{VER}-x86_64-apple-darwin.tar.gz",     "sha256": "2f06df2731639bcb0153c2b4e5f8d858ffda664f9f1f42b9e8558c10f9cd0988" },
+      "x86_64-unknown-linux-gnu":{ "name": "julie-extract-v{VER}-x86_64-unknown-linux-gnu.tar.gz","sha256": "582febb8c7f6dda99df6e8aa219a9437640535c4751515925858fda87363e07b" },
+      "x86_64-pc-windows-msvc":  { "name": "julie-extract-v{VER}-x86_64-pc-windows-msvc.zip",     "sha256": "ee2a3c52e1b6972ef67ea267458b75d7f7b289585f51bb70424c1bd44657112e" }
     }
   }
   ```
   - The asset `name` is **templated on `{VER}`** in the new scheme (old pins hardcoded `7.13.2` into the name). Both `urlTemplate` and `assets[].name` substitute `{VER}` so a version bump touches only the top-level `version`. The script's `read_pin`/`ConvertFrom-Json` reader must substitute `{VER}` in the asset name too (old code only substituted it in the URL template at `.sh:160`). Add an `archiveInnerPathTemplate` so the nested extract is data-driven, not hardcoded.
-  - Repo slug: design §9 expects `anortham/julie-extractors`; Cargo.toml `[workspace.package].repository` says `murphy/julie-extractors`. **Confirm the actual publishing slug before filling** — this is the one genuine §9 unknown. Until confirmed, leave `urlTemplate` with the placeholder slug and keep the from-source path (G1) as the working acquisition route; the download branch already fails loudly with the from-source hint when the asset pin is empty (`.sh:153-158`).
+  - **These four `sha256` values pin the v2.0.0 archives and are the tamper-evidence record.** They MUST stay in lockstep with `MillerExtractContract.PinnedJulieExtractVersion` (`2.0.0`); the `JuliePinsJsonMatchesContractVersion` test enforces it. The publishing slug is `anortham/julie-extractors` per the working release URLs — note that Cargo.toml `[workspace.package].repository` reads `murphy/julie-extractors`, which is stale/internal and is NOT where assets are served; trust the release evidence, not the manifest field.
 - Download/extract changes (`.sh` download branch):
   - Asset-name read must apply `{VER}`: after `ASSET="$(read_pin ".assets[\"${TRIPLE}\"].name")"` (`.sh:149`), add `ASSET="${ASSET/\{VER\}/${VERSION}}"`. The `BINARY` install dest is `.tools/julie-extract` (renamed in G1).
   - **Nested extract (the layout change):** old code `tar -xzf "${ARCHIVE}" -C "${TOOLS_DIR}" julie-server` (`.sh:197`) extracted a flat root member. New archives nest the binary at `dist/${TRIPLE}/julie-extract`. Replace with an extract-then-move that does not assume cwd layout:
@@ -3325,13 +3334,14 @@ Repoint the pins (repo slug + version + binary name + per-triple asset names + c
 - Update the unsupported-platform + missing-pin error messages (`.sh:142-146,154-157`; `.ps1:88-92,98-103`) to name `julie-extract` and `restore-julie-extract.{sh,ps1}`.
 
 **Steps**
-1. Apply the `julie-pins.json` reshape (slug/version/sha256 as TBD placeholders; asset names + binary + inner-path-template concrete).
+1. Apply the `julie-pins.json` reshape with the **concrete published values** (slug `anortham/julie-extractors`, version `2.0.0`, the four real `sha256` digests above, asset names + binary + inner-path-template).
 2. Apply the `.sh`/`.ps1` download-branch edits (asset-name `{VER}` substitution, nested extract+move, error strings, `.ps1` filter rename).
-3. **Validate against a real published artifact once §9.1 lands:** with the slug + four `sha256` filled, run `bash scripts/restore-julie-extract.sh` on macOS arm64; it must download, verify sha256, extract `.tools/julie-extract` from the nested path, smoke `--version`. Until publish, this step is blocked ONLY on the upstream release; the from-source path (G1) covers all other subsystems' needs. Mark the download path "ready, pending §9 publish" in the script header.
+3. **Validate against the real published artifact** (the release is live): run `bash scripts/restore-julie-extract.sh` on macOS arm64; it must download `julie-extract-v2.0.0-aarch64-apple-darwin.tar.gz`, verify it against the pinned `sha256`, extract `.tools/julie-extract` from the nested `dist/aarch64-apple-darwin/` path, and smoke `--version` (expect `julie-extract 2.0.0`). This is no longer blocked — do it as the closing validation of the migration.
 4. `dotnet build Miller.slnx -c Release` — unaffected (pins/scripts are not compiled). Run `scripts/test.sh` — green (no test depends on the download path; Scale tests use from-source-installed `.tools/julie-extract`).
 
 **Acceptance**
-- `julie-pins.json` names `julie-extract` archives per the verified workflow scheme (`julie-extract-v{VER}-{triple}.{tar.gz|zip}`), templates `{VER}` into both URL and asset name, and carries the nested-path template. The four `sha256` + repo slug are the only TBD fields, explicitly marked.
+- `julie-pins.json` names `julie-extract` archives per the verified workflow scheme (`julie-extract-v{VER}-{triple}.{tar.gz|zip}`), templates `{VER}` into both URL and asset name, carries the nested-path template, and pins the four published v2.0.0 `sha256` digests + slug `anortham/julie-extractors`. No TBD fields remain.
+- A real `bash scripts/restore-julie-extract.sh` download on macOS arm64 verifies sha256, extracts from the nested path, and installs a `--version`-able `.tools/julie-extract` (`julie-extract 2.0.0`).
 - The download branch extracts the binary from the nested `dist/{triple}/julie-extract[.exe]` archive layout (not a flat root member) and installs `.tools/julie-extract[.exe]`.
 - `.ps1` finds `julie-extract.exe` (not `julie-server.exe`) inside the `.zip`.
 - All download-branch error/usage strings name `julie-extract` / `restore-julie-extract`.
@@ -3968,11 +3978,14 @@ Document order is A–H for readability; EXECUTE in these phases (from the criti
 
 Critical inter-phase gates: G1 before anything needing a real DB; A before D/E consume the nested report; the schema gate (C1) before reads; the `is_test` column (B1) before its consumers (F); G2 last.
 
-## Upstream dependencies (design §9) — what keeps this runnable now
+## Upstream status (design §9) — RESOLVED
 
-- **Runnable today via from-source (Phase 1, G1).** The entire plan executes against a from-source `julie-extract` build; nothing blocks on the published release.
-- **Pending on the julie-extractors release (Phase 7 only):** exact repo slug, release tag / `version`, per-triple asset names + sha256, and archive shape. Until those land, the `julie-pins.json` download fields and `MillerExtractContract.PinnedJulieExtractVersion` carry explicitly-marked placeholder values and the download path (G2) is the only deferred work. `MillerExtractContractTests`' pins-match assertion is gated to skip until G2 lands. **These placeholders are blocked on an unpublished upstream artifact, not deferred effort** — the from-source path makes every other task fully testable now.
-- Confirm the `change_kind` vocabulary `{inserted,updated,deleted,unsupported}` is final (no CHECK constraint enforces it in v1).
+All design §9 unknowns closed by the published julie-extractors release (README "Current Release" + `docs/release-evidence/2026-06-01-v2-0-0-release.md`):
+
+- **Release is published:** `v2.0.0`, repo `anortham/julie-extractors`, commit `a1f5069`, published `2026-06-01T21:08:05Z`. The four asset names + SHA-256 digests are confirmed and pinned in G2 (no TBDs remain). The download path (G2) is **no longer blocked** — it runs as the migration's closing validation.
+- **From-source still leads (Phase 1, G1)** for fast local iteration; the published assets are the production acquisition route. Both produce a `--version`-able `julie-extract 2.0.0`.
+- **Product version ≠ schema/contract version.** Product `2.0.0` ships SQLite **schema 1 / extract-contract 1 / report-schema 1**. The plan pins schema/contract = 1 (the compatibility gate); `PinnedJulieExtractVersion = 2.0.0` is only the download/product pin. Do not collapse the two.
+- `change_kind` vocabulary `{inserted,updated,deleted,unsupported}` confirmed final in v1 (no CHECK constraint enforces it; Miller's parser must accept all four and fail loud on anything else).
 
 ## Scope
 
@@ -3982,8 +3995,9 @@ Pure parity with today's Miller behavior on the new contract. **OUT:** the D3a s
 
 Inherits the design doc's §14 checklist. Additionally, this plan is complete when:
 
-- [ ] All 8 reconciliations above are honored in the landed code.
+- [ ] All 9 reconciliations above are honored in the landed code (including #9: blake3 freshness and sha256 fingerprint/asset paths stay separate).
 - [ ] `IndexerServiceScanTests` and `JulieExtractOpsTests` construct the nested report and pass.
+- [ ] `julie-pins.json` carries the published v2.0.0 slug/version/sha256 (no TBD); `JuliePinsJsonMatchesContractVersion` is a hard assert, not skipped.
 - [ ] `scripts/test.sh` (fast) is green and <30s; `scripts/test.sh scale` is green against a from-source `julie-extract`; `dotnet build Miller.slnx -c Release` is 0 warnings / 0 errors.
 - [ ] `ScaleTraitConventionTests` still passes (no julie-spawning test left untagged).
 - [ ] `MillerExtractContract` pins schema 1 / extract-contract 1 / `blake3`; no `schema_version` table read remains.
