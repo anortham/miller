@@ -1,14 +1,15 @@
 ---
 id: miller-project-direction-amp-milestone-state
-title: Miller — project direction & milestone state
+title: Miller — product direction & milestone state
 status: active
 created: 2026-05-30T16:32:42.067Z
-updated: 2026-06-01T00:54:03.755Z
+updated: 2026-06-01T12:51:22.299Z
 tags:
   - miller
   - project-direction
   - status
   - dogfood
+  - read-path
 ---
 
 ## What Miller Is
@@ -27,6 +28,9 @@ Current architecture contracts:
 
 - M0-M8 are done on `main`, including registry, freshness, and dashboard foundations.
 - Large-workspace dogfood fixes are committed on `main` as `afffbd2 fix: bound large workspace read costs`.
+- Brief/state update is committed as `a75e702 docs: update miller dogfood brief`.
+- User rebuilt/restarted the Miller MCP server after those commits; current MCP tools are responding.
+- MCP hot-reload/restart smoothing was discussed and intentionally deferred to avoid sidetracking.
 - Dashboard is intended and should query the central registry plus shared telemetry, not discover workspaces by crawling arbitrary filesystem roots.
 - M9/ad-hoc content and SQLite FTS5 remain product candidates, but symbol search should stay in-memory BM25 unless profiling proves a real need to move it.
 - Live-test engine remains parked behind a spike; do not let it distract from registry/read-path correctness.
@@ -56,17 +60,35 @@ Verification after fixes:
 - `git diff --check`: clean.
 - External reviewer agent: no material findings.
 
-MCP restart note:
-- The Release binary was rebuilt.
-- Current Codex CLI Miller children were killed to force a restart, but this active session's `miller` MCP transport stayed closed instead of auto-respawning. A fresh Codex session should pick up the rebuilt binary from `~/.codex/config.toml`; current app-server/subagent Miller processes were intentionally left alone.
+## Next Product Work
 
-## Next Work
+Primary next work: design and implement large-workspace read projections for first-read `search` / `inspect` performance.
 
-1. Start a fresh Codex session or otherwise restart the MCP client so `miller` tools attach to the rebuilt `afffbd2` binary.
-2. Attack the remaining first-read cost: cross-workspace `search`/`inspect` still hydrate too much of the index on first use. Likely direction is projection-specific loading or a persisted read/search model, not moving all symbol search to SQLite FTS5 by default.
-3. Dogfood the dashboard against the registry with Miller, Julie, OpenClaw, and Hermes registered.
-4. Revisit M9/ad-hoc content and FTS5 for file/content search after the symbol read-path is stable.
-5. Review `TODO.md` questions about Miller CLI coverage and smoother MCP rebuild/reconnect workflow.
+Problem:
+- Cross-workspace `search` / `inspect` still route through `WorkspaceIndexProvider` to `RepositoryIndexLoader.Load`.
+- That hydrates the full `MillerRepositoryIndex`: symbols, BM25, graph, bridge data, resolver.
+- On OpenClaw this still costs about 6.2s and 1.2 GB RSS on first cross-workspace search.
+
+Recommended direction:
+- Add projection-specific loading rather than using one full repository index for every read surface.
+- `search` projection: load only the symbol/text fields needed for BM25 search results.
+- `inspect` projection: support targeted symbol/file detail lookup without preloading full graph/bridge structures.
+- `trace` / `impact`: lazy-load graph and bridge projections only when needed.
+- Keep `workspace status` and dashboard metadata on cheap facts readers.
+- Keep SQLite FTS5 parked unless profiling proves BM25 itself is the bottleneck.
+
+Expected design acceptance criteria:
+- External `workspace status` remains cheap and does not hydrate full indexes.
+- First cross-workspace `search` avoids graph/bridge hydration.
+- First cross-workspace `inspect` avoids loading the whole repo unless the request genuinely needs broader graph context.
+- Projection cache invalidation still keys off workspace id, DB path, and revision.
+- Fast suite remains fast; scale/dogfood harness captures large-workspace first-read cost.
+
+Secondary work after read projections:
+1. Dogfood dashboard against registry with Miller, Julie, OpenClaw, and Hermes registered.
+2. Review `TODO.md` question about fuller Miller CLI coverage for CI/testing.
+3. Revisit M9/ad-hoc content and FTS5 after symbol read path is stable.
+4. Reconsider MCP restart smoothing only if it keeps interrupting work.
 
 ## Guardrails
 
@@ -74,6 +96,7 @@ MCP restart note:
 - Do not reintroduce full-index loads into `workspace status` or dashboard list/read paths.
 - Do not allow unbounded global identifier fallback unless Julie emits stable `target_symbol_id` relationships that make fallback unnecessary.
 - Keep provider cache eviction tied to insertion of the currently selected registry key, not load completion order.
+- Do not jump to SQLite FTS5 before proving BM25/search computation, rather than hydration breadth, is the bottleneck.
 - Keep the test split: `scripts/test.sh` for fast suite every change; `scripts/test.sh scale` when indexing/extract behavior changes.
 - Build must stay warning-clean: `dotnet build Miller.slnx -c Release`.
 - `Miller.Core` stays pure logic with no I/O dependencies.

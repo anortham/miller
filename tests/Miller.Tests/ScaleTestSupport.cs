@@ -4,7 +4,7 @@ namespace Miller.Tests;
 
 /// <summary>
 /// Shared scaffolding for the Scale suite's live-binary tests. Centralizes the ONE thing every
-/// julie-spawning test needs — locating the pinned <c>.tools/julie-server</c> and skipping (never
+/// julie-spawning test needs — locating the pinned <c>.tools/julie-extract</c> and skipping (never
 /// failing) when restore has not been run — so the launch signal lives in exactly one place.
 ///
 /// That single signal is what the <see cref="Conventions.ScaleTraitConventionTests"/> drift guard
@@ -25,18 +25,18 @@ public static class ScaleTestSupport
     }
 
     /// <summary>
-    /// The pinned julie-server binary under <c>.tools/</c>, or <c>null</c> if restore has not been run.
+    /// The pinned julie-extract binary under <c>.tools/</c>, or <c>null</c> if restore has not been run.
     /// Referencing this method marks a test as julie-spawning (see the class remarks).
     /// </summary>
     public static string? LocateJulieServer()
     {
-        string name = OperatingSystem.IsWindows() ? "julie-server.exe" : "julie-server";
+        string name = OperatingSystem.IsWindows() ? "julie-extract.exe" : "julie-extract";
         string candidate = Path.Combine(RepoRoot(), ".tools", name);
         return File.Exists(candidate) ? candidate : null;
     }
 
     /// <summary>
-    /// Locate the pinned julie-server, or SKIP the calling test (never fail) when restore has not run.
+    /// Locate the pinned julie-extract, or SKIP the calling test (never fail) when restore has not run.
     /// This is THE launch signal every live test funnels through: the returned path is non-null, and a
     /// missing binary short-circuits via <see cref="Assert.SkipWhen"/> with an actionable message.
     /// </summary>
@@ -44,7 +44,7 @@ public static class ScaleTestSupport
     {
         string? binary = LocateJulieServer();
         Assert.SkipWhen(binary is null,
-            "julie-server not found in .tools/. Run scripts/restore-julie-server.sh to enable the Scale test.");
+            "julie-extract not found in .tools/. Run scripts/restore-julie-extract.sh to enable the Scale test.");
         return binary!;
     }
 }

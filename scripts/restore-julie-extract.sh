@@ -1,22 +1,24 @@
 #!/usr/bin/env bash
 #
-# restore-julie-server.sh — restore the pinned julie-server binary into .tools/.
+# restore-julie-extract.sh — restore the pinned julie-extract binary into .tools/.
 #
 # Reads scripts/julie-pins.json for the version, per-triple asset name + sha256, and the URL template.
-# Detects the host platform, downloads the matching release archive from anortham/julie, VERIFIES its
-# sha256 against the pin (julie publishes no checksum assets — these were download-verified and committed),
-# extracts ONLY the julie-server binary from the flat multi-binary archive, sets the exec bit, clears the
-# macOS quarantine xattr, and removes the archive. Fails loudly on unsupported platforms.
+# Detects the host platform, downloads the matching release archive from anortham/julie-extractors,
+# VERIFIES its sha256 against the pin (julie-extractors publishes no checksum assets — these were
+# download-verified and committed), extracts ONLY the julie-extract binary from the archive, sets the
+# exec bit, clears the macOS quarantine xattr, and removes the archive. Fails loudly on unsupported
+# platforms.
 #
 # While a contract bump is staged before GitHub release assets publish, pass --from-source or set
-# MILLER_JULIE_SOURCE=/path/to/julie to build julie-server from that checkout and copy it into .tools/.
+# MILLER_JULIE_SOURCE=/path/to/julie-extractors to build julie-extract from that checkout and copy it
+# into .tools/.
 #
 # Only four triples exist upstream: aarch64-apple-darwin, x86_64-apple-darwin, x86_64-unknown-linux-gnu,
 # x86_64-pc-windows-msvc. There is NO linux-arm64 and NO windows-arm64 asset.
 #
 # Usage:
-#   bash scripts/restore-julie-server.sh
-#   MILLER_JULIE_SOURCE=~/source/julie bash scripts/restore-julie-server.sh --from-source
+#   bash scripts/restore-julie-extract.sh
+#   MILLER_JULIE_SOURCE=~/source/julie-extractors bash scripts/restore-julie-extract.sh --from-source
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -94,11 +96,11 @@ if [[ -n "${FROM_SOURCE}" ]]; then
   fi
 
   mkdir -p "${TOOLS_DIR}"
-  BINARY="${TOOLS_DIR}/julie-server"
-  SOURCE_BINARY="${SOURCE_ROOT}/target/release/julie-server"
+  BINARY="${TOOLS_DIR}/julie-extract"
+  SOURCE_BINARY="${SOURCE_ROOT}/target/release/julie-extract"
 
-  echo "Building julie-server v${VERSION} from source: ${SOURCE_ROOT}"
-  cargo build --manifest-path "${SOURCE_MANIFEST}" --bin julie-server --release
+  echo "Building julie-extract v${VERSION} from source: ${SOURCE_ROOT}"
+  cargo build --manifest-path "${SOURCE_MANIFEST}" --release -p julie-extract-cli --bin julie-extract
   if [[ ! -f "${SOURCE_BINARY}" ]]; then
     echo "error: expected build output not found: ${SOURCE_BINARY}" >&2
     exit 1
@@ -107,10 +109,9 @@ if [[ -n "${FROM_SOURCE}" ]]; then
   cp "${SOURCE_BINARY}" "${BINARY}"
   chmod +x "${BINARY}"
   VERSION_OUTPUT="$("${BINARY}" --version 2>/dev/null || true)"
-  if ! grep -F " ${VERSION}" <<<"${VERSION_OUTPUT}" >/dev/null; then
-    echo "error: restored julie-server has wrong version" >&2
-    echo "  expected: ${VERSION}" >&2
-    echo "  actual:   ${VERSION_OUTPUT:-"(no --version output)"}" >&2
+  if [[ "${VERSION_OUTPUT}" != julie-extract* ]]; then
+    echo "error: restored binary does not self-identify as julie-extract" >&2
+    echo "  actual: ${VERSION_OUTPUT:-"(no --version output)"}" >&2
     exit 1
   fi
 
@@ -139,7 +140,7 @@ case "${OS}" in
 esac
 
 if [[ -z "${TRIPLE}" ]]; then
-  echo "error: unsupported platform '${OS}/${ARCH}'. julie v$(read_pin .version) publishes only:" >&2
+  echo "error: unsupported platform '${OS}/${ARCH}'. julie-extract v$(read_pin .version) publishes only:" >&2
   echo "  macOS arm64 (aarch64-apple-darwin), macOS x64 (x86_64-apple-darwin)," >&2
   echo "  Linux x64 (x86_64-unknown-linux-gnu), Windows x64 (x86_64-pc-windows-msvc, via the .ps1 script)." >&2
   echo "  No linux-arm64 / windows-arm64 prebuilt asset exists; build from source with cargo." >&2
@@ -151,9 +152,9 @@ SHA256="$(read_pin ".assets[\"${TRIPLE}\"].sha256")"
 URL_TEMPLATE="$(read_pin .urlTemplate)"
 
 if [[ -z "${ASSET}" || -z "${SHA256}" ]]; then
-  echo "error: no published asset pin for julie-server v${VERSION} / ${TRIPLE} in ${PINS}" >&2
+  echo "error: no published asset pin for julie-extract v${VERSION} / ${TRIPLE} in ${PINS}" >&2
   echo "  Until release assets publish, run:" >&2
-  echo "  MILLER_JULIE_SOURCE=/path/to/julie bash scripts/restore-julie-server.sh --from-source" >&2
+  echo "  MILLER_JULIE_SOURCE=/path/to/julie-extractors bash scripts/restore-julie-extract.sh --from-source" >&2
   exit 1
 fi
 
@@ -162,9 +163,9 @@ URL="${URL/\{asset\}/${ASSET}}"
 
 mkdir -p "${TOOLS_DIR}"
 ARCHIVE="${TOOLS_DIR}/${ASSET}"
-BINARY="${TOOLS_DIR}/julie-server"
+BINARY="${TOOLS_DIR}/julie-extract"
 
-echo "Restoring julie-server v${VERSION} for ${TRIPLE}"
+echo "Restoring julie-extract v${VERSION} for ${TRIPLE}"
 echo "  url:    ${URL}"
 echo "  sha256: ${SHA256}"
 
@@ -193,8 +194,8 @@ verify_sha() {
 verify_sha "${ARCHIVE}" "${SHA256}"
 echo "  sha256 OK"
 
-# --- extract ONLY julie-server (the archive also bundles julie-adapter + julie-daemon) ---
-tar -xzf "${ARCHIVE}" -C "${TOOLS_DIR}" julie-server
+# --- extract ONLY julie-extract from the archive ---
+tar -xzf "${ARCHIVE}" -C "${TOOLS_DIR}" julie-extract
 
 # --- exec bit + clear macOS quarantine (ignore if absent) ---
 chmod +x "${BINARY}"

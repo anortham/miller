@@ -1,15 +1,16 @@
 <#
 .SYNOPSIS
-  restore-julie-server.ps1 — restore the pinned julie-server.exe into .tools\ (Windows mirror of the .sh).
+  restore-julie-extract.ps1 — restore the pinned julie-extract.exe into .tools\ (Windows mirror of the .sh).
 
 .DESCRIPTION
   Reads scripts\julie-pins.json for the version, per-triple asset name + sha256, and the URL template.
   Detects the host platform (x86_64-pc-windows-msvc is the only Windows asset), downloads the matching
-  release archive from anortham/julie, VERIFIES its sha256 against the pin (julie publishes no checksum
-  assets — these were download-verified and committed), extracts ONLY julie-server.exe from the flat
-  multi-binary archive, and removes the archive. Fails loudly on unsupported platforms (no windows-arm64).
+  release archive from anortham/julie-extractors, VERIFIES its sha256 against the pin (julie-extractors
+  publishes no checksum assets — these were download-verified and committed), extracts ONLY
+  julie-extract.exe from the archive, and removes the archive. Fails loudly on unsupported platforms
+  (no windows-arm64).
   While a contract bump is staged before release assets publish, pass -FromSource or set
-  MILLER_JULIE_SOURCE to build julie-server from a local Julie checkout.
+  MILLER_JULIE_SOURCE to build julie-extract from a local julie-extractors checkout.
 #>
 [CmdletBinding()]
 param(
@@ -47,11 +48,11 @@ function Restore-FromSource {
     }
 
     New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
-    $binary = Join-Path $ToolsDir 'julie-server.exe'
-    $sourceBinary = Join-Path $sourceFull 'target\release\julie-server.exe'
+    $binary = Join-Path $ToolsDir 'julie-extract.exe'
+    $sourceBinary = Join-Path $sourceFull 'target\release\julie-extract.exe'
 
-    Write-Host "Building julie-server v$($config.version) from source: $sourceFull"
-    & cargo build --manifest-path $manifest --bin julie-server --release
+    Write-Host "Building julie-extract v$($config.version) from source: $sourceFull"
+    & cargo build --manifest-path $manifest --release -p julie-extract-cli --bin julie-extract
     if ($LASTEXITCODE -ne 0) {
         throw "cargo build failed"
     }
@@ -61,8 +62,8 @@ function Restore-FromSource {
 
     Copy-Item -Path $sourceBinary -Destination $binary -Force
     $versionOutput = (& $binary --version 2>$null)
-    if ($versionOutput -notlike "* $($config.version)*") {
-        throw "restored julie-server has wrong version; expected $($config.version), actual '$versionOutput'"
+    if ($versionOutput -notlike "julie-extract*") {
+        throw "restored binary does not self-identify as julie-extract; actual '$versionOutput'"
     }
 
     Write-Host "Installed: $binary"
@@ -86,7 +87,7 @@ switch ($arch) {
 
 if ($null -eq $triple -or $arch -ne 'AMD64') {
     Write-Error @"
-unsupported platform 'windows/$arch'. julie v$($config.version) publishes only x86_64-pc-windows-msvc on
+unsupported platform 'windows/$arch'. julie-extract v$($config.version) publishes only x86_64-pc-windows-msvc on
 Windows. No windows-arm64 prebuilt asset exists; build from source with cargo, or use a supported host.
 "@
     exit 1
@@ -96,9 +97,9 @@ $asset  = $config.assets.$triple.name
 $sha256 = $config.assets.$triple.sha256
 if ([string]::IsNullOrEmpty($asset) -or [string]::IsNullOrEmpty($sha256)) {
     Write-Error @"
-no published asset pin for julie-server v$($config.version) / $triple in $Pins.
+no published asset pin for julie-extract v$($config.version) / $triple in $Pins.
 Until release assets publish, run:
-  `$env:MILLER_JULIE_SOURCE='C:\path\to\julie'; scripts\restore-julie-server.ps1 -FromSource
+  `$env:MILLER_JULIE_SOURCE='C:\path\to\julie-extractors'; scripts\restore-julie-extract.ps1 -FromSource
 "@
     exit 1
 }
@@ -107,9 +108,9 @@ $url = $config.urlTemplate.Replace('{VER}', $config.version).Replace('{asset}', 
 
 New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
 $archive = Join-Path $ToolsDir $asset
-$binary  = Join-Path $ToolsDir 'julie-server.exe'
+$binary  = Join-Path $ToolsDir 'julie-extract.exe'
 
-Write-Host "Restoring julie-server v$($config.version) for $triple"
+Write-Host "Restoring julie-extract v$($config.version) for $triple"
 Write-Host "  url:    $url"
 Write-Host "  sha256: $sha256"
 
@@ -125,14 +126,14 @@ if ($actual -ne $sha256.ToLowerInvariant()) {
 }
 Write-Host "  sha256 OK"
 
-# --- extract ONLY julie-server.exe (archive also bundles julie-adapter + julie-daemon) ---
-$staging = Join-Path $ToolsDir ('julie-extract-' + [Guid]::NewGuid().ToString('N'))
+# --- extract ONLY julie-extract.exe from the archive ---
+$staging = Join-Path $ToolsDir ('julie-extract-stage-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $staging | Out-Null
 try {
     Expand-Archive -Path $archive -DestinationPath $staging -Force
-    $found = Get-ChildItem -Path $staging -Recurse -Filter 'julie-server.exe' | Select-Object -First 1
+    $found = Get-ChildItem -Path $staging -Recurse -Filter 'julie-extract.exe' | Select-Object -First 1
     if ($null -eq $found) {
-        Write-Error "julie-server.exe not found inside $asset"
+        Write-Error "julie-extract.exe not found inside $asset"
         exit 1
     }
     Copy-Item -Path $found.FullName -Destination $binary -Force

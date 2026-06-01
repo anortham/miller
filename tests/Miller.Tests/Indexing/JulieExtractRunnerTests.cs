@@ -242,9 +242,9 @@ public sealed class JulieExtractRunnerTests
     [Fact]
     public void Constructor_BinaryNotFound_ThrowsPointingAtRestoreScript()
     {
-        string missing = Path.Combine(Path.GetTempPath(), "miller-no-julie-" + Guid.NewGuid().ToString("N"), "julie-server");
+        string missing = Path.Combine(Path.GetTempPath(), "miller-no-julie-" + Guid.NewGuid().ToString("N"), "julie-extract");
         var ex = Assert.Throws<FileNotFoundException>(() => new JulieExtractRunner(missing));
-        Assert.Contains("restore-julie-server", ex.Message);
+        Assert.Contains("restore-julie-extract", ex.Message);
     }
 
     [Fact]

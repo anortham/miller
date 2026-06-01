@@ -30,7 +30,7 @@ public sealed class JulieExtractRunner
 
     private readonly string _binaryPath;
 
-    /// <summary>The resolved absolute path to the julie-server binary this runner invokes.</summary>
+    /// <summary>The resolved absolute path to the julie-extract binary this runner invokes.</summary>
     public string BinaryPath => _binaryPath;
 
     /// <summary>
@@ -44,41 +44,46 @@ public sealed class JulieExtractRunner
         string abs = Path.GetFullPath(binaryPath);
         if (!File.Exists(abs))
             throw new FileNotFoundException(
-                $"julie-server binary not found at '{abs}'. Run scripts/restore-julie-server.sh " +
-                "(or restore-julie-server.ps1 on Windows) to download the pinned " +
+                $"julie-extract binary not found at '{abs}'. Run scripts/restore-julie-extract.sh " +
+                "(or restore-julie-extract.ps1 on Windows) to download the pinned " +
                 $"v{MillerExtractContract.PinnedJulieServerVersion} binary into .tools/.", abs);
         _binaryPath = abs;
     }
 
     /// <summary>
-    /// Resolve the julie-server binary: <c>.tools/julie-server[.exe]</c> under <paramref name="toolsRoot"/>
+    /// Resolve the julie-extract binary: <c>.tools/julie-extract[.exe]</c> under <paramref name="toolsRoot"/>
     /// first, then PATH. Returns a constructed runner, or throws <see cref="FileNotFoundException"/> pointing at
     /// the restore script if absent.
     /// </summary>
-    public static JulieExtractRunner Locate(string toolsRoot)
+    public static JulieExtractRunner Locate(string toolsRoot) =>
+        Locate(toolsRoot, (Environment.GetEnvironmentVariable("PATH") ?? "")
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries));
+
+    /// <summary>
+    /// Resolve the julie-extract binary using <paramref name="pathDirs"/> as the PATH search list (test seam —
+    /// avoids ambient PATH flakiness when <c>julie-extract</c> is installed on a dev or CI machine).
+    /// </summary>
+    internal static JulieExtractRunner Locate(string toolsRoot, IReadOnlyList<string> pathDirs)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(toolsRoot);
-        string binaryName = OperatingSystem.IsWindows() ? "julie-server.exe" : "julie-server";
+        string binaryName = OperatingSystem.IsWindows() ? "julie-extract.exe" : "julie-extract";
         string toolsCandidate = Path.Combine(toolsRoot, binaryName);
         if (File.Exists(toolsCandidate))
             return new JulieExtractRunner(toolsCandidate);
 
-        string? onPath = FindOnPath(binaryName);
+        string? onPath = FindOnPath(binaryName, pathDirs);
         if (onPath is not null)
             return new JulieExtractRunner(onPath);
 
         throw new FileNotFoundException(
-            $"julie-server not found in '{toolsRoot}' or on PATH. Run scripts/restore-julie-server.sh " +
-            "(or restore-julie-server.ps1 on Windows) to download the pinned " +
+            $"julie-extract not found in '{toolsRoot}' or on PATH. Run scripts/restore-julie-extract.sh " +
+            "(or restore-julie-extract.ps1 on Windows) to download the pinned " +
             $"v{MillerExtractContract.PinnedJulieServerVersion} binary into .tools/.", toolsCandidate);
     }
 
-    private static string? FindOnPath(string binaryName)
+    private static string? FindOnPath(string binaryName, IReadOnlyList<string> pathDirs)
     {
-        string? pathEnv = Environment.GetEnvironmentVariable("PATH");
-        if (string.IsNullOrEmpty(pathEnv))
-            return null;
-        foreach (var dir in pathEnv.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        foreach (var dir in pathDirs)
         {
             string candidate = Path.Combine(dir, binaryName);
             if (File.Exists(candidate))

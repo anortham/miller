@@ -117,7 +117,7 @@ public sealed class WorkspaceToolTests : IDisposable
         // the spawning path, so construct it against a STUB file (JulieExtractRunner only File.Exists-validates at
         // construction) — keeping this suite pure + binary-independent (no pinned julie-server required to run it).
         string stubBinary = Path.Combine(NewTempDir("toolstub"),
-            OperatingSystem.IsWindows() ? "julie-server.exe" : "julie-server");
+            OperatingSystem.IsWindows() ? "julie-extract.exe" : "julie-extract");
         File.WriteAllText(stubBinary, "#!/bin/sh\n");
         var runner = new JulieExtractRunner(stubBinary);
 
