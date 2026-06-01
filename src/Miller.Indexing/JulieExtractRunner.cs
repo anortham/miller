@@ -119,8 +119,8 @@ public sealed class JulieExtractRunner
     /// <summary>
     /// Build the argv for a <c>scan</c>:
     /// <c>scan --root &lt;absRoot&gt; --db &lt;absDb&gt; --strict-schema --json [--force]</c>.
-    /// v1 has no <c>extract</c> parent token and no <c>--workspace-id</c> (the artifact binds the root itself).
-    /// Paths must already be absolute (caller's responsibility for relative-CWD safety).
+    /// v1 is a top-level subcommand with no parent verb and no workspace-id flag (the artifact binds the root
+    /// itself). Paths must already be absolute (caller's responsibility for relative-CWD safety).
     /// </summary>
     public static IReadOnlyList<string> BuildScanArgs(string absDb, string absRoot, bool force)
     {
