@@ -124,6 +124,21 @@ public sealed class TelemetrySummaryTests : IDisposable
     }
 
     [Fact]
+    public void SummarizeForWorkspace_ReadsRequestedWorkspaceInsteadOfLedgerWorkspace()
+    {
+        using var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ws1");
+        InsertRow("current-search", 100, "ok", 10, "2026-05-01T00:00:00.000Z", workspaceId: "ws1");
+        InsertRow("target-search", 200, "ok", 20, "2026-05-01T00:00:01.000Z", workspaceId: "ws2");
+
+        var summary = ledger.SummarizeForWorkspace("ws2");
+
+        Assert.Equal(1, summary.TotalCalls);
+        var stat = Assert.Single(summary.Tools);
+        Assert.Equal("target-search", stat.Tool);
+        Assert.Equal(200, stat.MaxMs);
+    }
+
+    [Fact]
     public void Summarize_P95_UsesDocumentedOffset_OnAKnownDistribution()
     {
         using var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ws1");

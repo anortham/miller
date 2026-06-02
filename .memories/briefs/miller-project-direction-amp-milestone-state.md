@@ -3,7 +3,7 @@ id: miller-project-direction-amp-milestone-state
 title: Miller — product direction & milestone state
 status: active
 created: 2026-05-30T16:32:42.067Z
-updated: 2026-06-01T12:51:22.299Z
+updated: 2026-06-02T11:05:29Z
 tags:
   - miller
   - project-direction
@@ -14,18 +14,21 @@ tags:
 
 ## What Miller Is
 
-Miller is the intended replacement for Julie's daemon-heavy code intelligence path: a read-only .NET 10 SQLite/MCP server that consumes pinned `julie-server extract` output instead of parsing source itself or running embeddings.
+Miller is the intended replacement for Julie's daemon-heavy code intelligence path: a read-only .NET 10 SQLite/MCP server that consumes `julie-extract` output from the standalone `julie-extractors` product instead of parsing source itself or running embeddings.
 
 Current architecture contracts:
 - Index DBs stay local at `<workspace>/.miller/symbols.db`.
 - Central discovery lives at `~/.miller/workspaces.db`.
 - Read tools accept `workspace_id` and `ensure_fresh`; explicit `workspace_id` defaults refresh-first.
 - Stable `workspace_id` is SHA-256 of canonical workspace root.
-- File freshness uses Julie's raw-byte BLAKE3 in `files.hash`, guarded by `external_extract_metadata.hash_algorithm=blake3`.
-- Current Julie extract line for Miller is v7.13.2 / extract contract 3 / schema 28.
+- Extraction integration is CLI-first through the pinned `julie-extract` binary.
+- Current product pin is `julie-extract` v2.0.0 from `julie-extractors`; compatibility gates are SQLite schema 1, extract contract 1, and report schema 1.
+- File freshness uses `files.content_hash` (`blake3:<hex>`, normalized before comparison) and is guarded by `artifact_metadata.hash_algorithm=blake3`.
+- `artifact_metadata` is the artifact metadata surface for schema/contract/hash/root keys.
 
-## Current State - 2026-06-01
+## Current State - 2026-06-02
 
+- Julie-extractors migration is now the active extract contract line in Miller's handoff docs: `julie-extract` v2.0.0, SQLite schema 1, extract contract 1, report schema 1.
 - M0-M8 are done on `main`, including registry, freshness, and dashboard foundations.
 - Large-workspace dogfood fixes are committed on `main` as `afffbd2 fix: bound large workspace read costs`.
 - Brief/state update is committed as `a75e702 docs: update miller dogfood brief`.

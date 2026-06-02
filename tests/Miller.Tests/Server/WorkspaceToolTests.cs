@@ -180,6 +180,18 @@ public sealed class WorkspaceToolTests : IDisposable
         }
     }
 
+    private sealed class RecordingPartialScanOps(string root, string dbPath) : IExtractOps
+    {
+        public List<bool> ScanForce { get; } = [];
+        public ExtractReport Update(string path) => throw new NotSupportedException();
+        public ExtractReport Delete(string path) => throw new NotSupportedException();
+        public ExtractReport Scan(bool force = false)
+        {
+            ScanForce.Add(force);
+            return PartialReport(root, dbPath, Ws, revision: 99);
+        }
+    }
+
     // workspaceId is retained only for caller readability/registry setup; the nested v1 report carries no
     // workspace_id and WorkspaceTool no longer cross-checks one (E3 removed the echo check).
     private static ExtractReport Report(string root, string dbPath, string workspaceId, long revision) =>
@@ -198,6 +210,24 @@ public sealed class WorkspaceToolTests : IDisposable
                 RowsWritten: new ExtractRowCounts(null, 1, null, null, null, null, null, null, null, null),
                 Totals: new ExtractRowCounts(1, 1, null, null, null, null, null, null, null, null)),
             Errors: Array.Empty<ReportDiagnostic>(), Warnings: Array.Empty<ReportDiagnostic>());
+
+    private static ExtractReport PartialReport(string root, string dbPath, string workspaceId, long revision) =>
+        Report(root, dbPath, workspaceId, revision) with
+        {
+            Status = "partial",
+            Counts = new ExtractCounts(2, 2, 0, 0, 0, 1,
+                RowsWritten: new ExtractRowCounts(null, 1, null, null, null, null, null, null, null, null),
+                Totals: new ExtractRowCounts(1, 1, null, null, null, null, null, null, null, null)),
+            Errors = new[]
+            {
+                new ReportDiagnostic(
+                    "parse_error",
+                    "syntax error",
+                    Path.Combine(root, "Controllers", "Broken.cs"),
+                    "Controllers/Broken.cs",
+                    Recoverable: true),
+            },
+        };
 
     private sealed class NoopLease : IDisposable
     {
@@ -301,6 +331,84 @@ public sealed class WorkspaceToolTests : IDisposable
         Assert.True(doc.RootElement.GetProperty("index").GetProperty("document_count").GetInt64() > 0);
         Assert.Equal(9, doc.RootElement.GetProperty("index").GetProperty("built_revision").GetInt64());
         Assert.Equal("ready", doc.RootElement.GetProperty("index").GetProperty("freshness_status").GetString());
+    }
+
+    [Fact]
+    public void Status_ByWorkspaceId_DoesNotRenderCurrentWorkspaceTelemetry()
+    {
+        using var current = CreateSynth(revision: 4, workspaceId: Ws);
+        using var other = CreateSynth(revision: 9, workspaceId: OtherWs);
+        WorkspaceToolHarness harness = BuildHarness(current, builtRevision: 4, workspaceId: Ws);
+        harness.Ledger.Record(new TelemetryRecord(
+            Tool: "current-search",
+            Op: null,
+            WorkspaceId: Ws,
+            WorkspaceRoot: harness.Root,
+            DurationMs: 10,
+            Outcome: "ok",
+            ErrorKind: null,
+            ResultCount: 1,
+            BytesExamined: 0,
+            BytesReturned: 0,
+            SourceBytes: 0,
+            EstTokens: 1,
+            IndexFresh: true,
+            TargetHash: null,
+            MetadataJson: "{}"));
+        string otherRoot = Path.GetDirectoryName(other.DbPath)!;
+        harness.Registry.UpsertSeen(OtherWs, "other-111111111111", otherRoot, other.DbPath, WorkspaceRegistryState.Ready);
+        harness.Registry.MarkScanned(OtherWs, revision: 9);
+        harness.Ledger.Record(new TelemetryRecord(
+            Tool: "target-search",
+            Op: null,
+            WorkspaceId: OtherWs,
+            WorkspaceRoot: otherRoot,
+            DurationMs: 20,
+            Outcome: "ok",
+            ErrorKind: null,
+            ResultCount: 2,
+            BytesExamined: 0,
+            BytesReturned: 0,
+            SourceBytes: 0,
+            EstTokens: 2,
+            IndexFresh: true,
+            TargetHash: null,
+            MetadataJson: "{}"));
+
+        using var doc = JsonDocument.Parse(harness.Tool.Workspace(
+            operation: "status",
+            workspace_id: OtherWs,
+            format: "json"));
+        string[] tools = doc.RootElement
+            .GetProperty("telemetry")
+            .GetProperty("tools")
+            .EnumerateArray()
+            .Select(tool => tool.GetProperty("tool").GetString()!)
+            .ToArray();
+
+        Assert.Contains("target-search", tools);
+        Assert.DoesNotContain("current-search", tools);
+    }
+
+    [Fact]
+    public void Status_ByWorkspaceId_MissingIndexDbRendersTypedMissingIndexAndMarksRegistry()
+    {
+        using var current = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(current, builtRevision: 4, workspaceId: Ws);
+        string otherRoot = NewTempDir("status-missing-db");
+        string missingDb = Path.Combine(otherRoot, ".miller", "symbols.db");
+        harness.Registry.UpsertSeen(OtherWs, "other-111111111111", otherRoot, missingDb, WorkspaceRegistryState.Ready);
+        harness.Registry.MarkScanned(OtherWs, revision: 9);
+
+        string output = harness.Tool.Workspace(operation: "status", workspace_id: OtherWs);
+
+        Assert.DoesNotContain("workspace failed", output, StringComparison.Ordinal);
+        Assert.Contains("missing_index", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(missingDb, output, StringComparison.Ordinal);
+        WorkspaceRegistryRow? row = harness.Registry.Get(OtherWs);
+        Assert.NotNull(row);
+        Assert.Equal(WorkspaceRegistryState.Missing, row.State);
+        Assert.Contains(missingDb, row.LastError, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -428,6 +536,30 @@ public sealed class WorkspaceToolTests : IDisposable
         Assert.Equal(Path.Combine(canonicalTarget, ".miller", "symbols.db"), row.IndexDbPath);
         Assert.Equal(13, row.LastRevision);
         Assert.Equal(WorkspaceRegistryState.Ready, row.State);
+    }
+
+    [Fact]
+    public void Open_PartialPrimeScanSurfacesWarningInOutput()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(
+            fx,
+            builtRevision: 4,
+            workspaceId: Ws,
+            openScan: (root, db, _) =>
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(db)!);
+                File.WriteAllText(db, "created by fake scan");
+                return PartialReport(root, db, WorkspaceId.FromCanonicalRoot(root), revision: 13);
+            },
+            acquireLock: _ => new NoopLease());
+        string target = NewTempDir("open-partial");
+
+        string output = harness.Tool.Workspace(operation: "open", path: target);
+
+        Assert.Contains("PARTIAL artifact", output, StringComparison.Ordinal);
+        Assert.Contains("Controllers/Broken.cs", output, StringComparison.Ordinal);
+        Assert.Contains("primed", output, StringComparison.OrdinalIgnoreCase);
     }
 
     // ---- telemetry op sub-axis (decision-7) ----
@@ -620,6 +752,27 @@ public sealed class WorkspaceToolTests : IDisposable
     }
 
     [Fact]
+    public void Refresh_RegisteredWorkspaceId_PartialScanSurfacesWarningInOutput()
+    {
+        using var current = CreateSynth(revision: 4, workspaceId: Ws);
+        using var other = CreateSynth(revision: 9, workspaceId: OtherWs);
+        WorkspaceToolHarness harness = BuildHarness(
+            current,
+            builtRevision: 4,
+            workspaceId: Ws,
+            crossWorkspaceScan: (root, db, _) => PartialReport(root, db, OtherWs, revision: 10));
+        string otherRoot = Path.GetDirectoryName(other.DbPath)!;
+        harness.Registry.UpsertSeen(OtherWs, "other-111111111111", otherRoot, other.DbPath, WorkspaceRegistryState.Ready);
+        harness.Registry.MarkScanned(OtherWs, revision: 9);
+
+        string output = harness.Tool.Workspace(operation: "refresh", workspace_id: OtherWs);
+
+        Assert.Contains("status: refreshed", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("PARTIAL artifact", output, StringComparison.Ordinal);
+        Assert.Contains("Controllers/Broken.cs", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Full_RegisteredWorkspacePath_UsesForceScanThroughCrossWorkspaceRefreshService()
     {
         using var current = CreateSynth(revision: 4, workspaceId: Ws);
@@ -692,6 +845,21 @@ public sealed class WorkspaceToolTests : IDisposable
 
         Assert.Equal(new[] { false }, ops.ScanForce);  // refresh = delta reconcile (no --force)
         Assert.Contains("scanned: yes", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Refresh_AsLeader_PartialScanSurfacesWarningInOutput()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        var (tool, indexer, _, root) = BuildTool(fx, builtRevision: 4, workspaceId: Ws);
+        var ops = new RecordingPartialScanOps(root, fx.DbPath);
+        indexer.PublishOpsForTest(ops);
+
+        string output = tool.Workspace(operation: "refresh");
+
+        Assert.Equal(new[] { false }, ops.ScanForce);
+        Assert.Contains("PARTIAL artifact", output, StringComparison.Ordinal);
+        Assert.Contains("Controllers/Broken.cs", output, StringComparison.Ordinal);
     }
 
     // ---- unknown operation ----

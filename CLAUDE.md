@@ -80,8 +80,9 @@ scripts/test.sh all     # both
   surface is `~/.miller/workspaces.db`. Read tools accept `workspace_id` and `ensure_fresh`; explicit
   `workspace_id` defaults to refresh-first. The dashboard reads the registry and shared telemetry DB, not
   the filesystem.
-- **Hash split.** Stable `workspace_id` is SHA-256 of the canonical root. File freshness is Julie's raw-byte
-  BLAKE3 `files.hash` guarded by `external_extract_metadata.hash_algorithm=blake3`.
+- **Hash split.** Stable `workspace_id` is SHA-256 of the canonical root. File freshness uses
+  `files.content_hash` (`blake3:<hex>`, normalized before comparison) and is guarded by
+  `artifact_metadata.hash_algorithm=blake3`.
 - **Agent instructions.** The MCP server-level guidance is
   [`MILLER_AGENT_INSTRUCTIONS.md`](src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md), embedded in the binary
   and set as `ServerInstructions`. Edit the markdown; `AgentInstructionsTests` guards that every tool stays

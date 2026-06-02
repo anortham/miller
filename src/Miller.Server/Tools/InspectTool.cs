@@ -235,11 +235,11 @@ public sealed class InspectTool
 
         // body (graceful NULL degradation)
         sb.Append("\n## body\n");
-        string? body = detail is null
-            ? null
+        var body = detail is null
+            ? ExtractReader.BodyReadResult.Unavailable(ExtractReader.BodyUnavailableReason.NoSpanRecorded)
             : ExtractReader.ReadBody(dbPath, workspaceRoot, sym.FilePath,
                 detail.BodyStartByte, detail.BodyEndByte, detail.BodyStartLine, detail.BodyEndLine);
-        sb.Append(body ?? "(body unavailable — no span recorded)");
+        sb.Append(body.Text ?? RenderBodyUnavailableNote(body.UnavailableReason));
 
         return sb.ToString().TrimEnd('\n');
     }
@@ -292,12 +292,19 @@ public sealed class InspectTool
                 }
                 w.WriteEndArray();
 
-                string? body = detail is null
-                    ? null
+                var body = detail is null
+                    ? ExtractReader.BodyReadResult.Unavailable(ExtractReader.BodyUnavailableReason.NoSpanRecorded)
                     : ExtractReader.ReadBody(dbPath, workspaceRoot, sym.FilePath,
                         detail.BodyStartByte, detail.BodyEndByte, detail.BodyStartLine, detail.BodyEndLine);
-                if (body is null) w.WriteNull("body");
-                else w.WriteString("body", body);
+                if (body.Text is null)
+                {
+                    w.WriteNull("body");
+                    w.WriteString("body_unavailable_reason", BodyUnavailableReasonJson(body.UnavailableReason));
+                }
+                else
+                {
+                    w.WriteString("body", body.Text);
+                }
             }
 
             w.WriteEndObject();
@@ -389,6 +396,35 @@ public sealed class InspectTool
     private static string Utf8(ArrayBufferWriter<byte> buffer) => Encoding.UTF8.GetString(buffer.WrittenSpan);
 
     private static string JsonString(string value) => JsonSerializer.Serialize(value);
+
+    private static string RenderBodyUnavailableNote(ExtractReader.BodyUnavailableReason? reason) =>
+        "(body unavailable — " + BodyUnavailableReasonCompact(reason) + ")";
+
+    private static string BodyUnavailableReasonCompact(ExtractReader.BodyUnavailableReason? reason) =>
+        reason switch
+        {
+            ExtractReader.BodyUnavailableReason.NoSpanRecorded => "no span recorded",
+            ExtractReader.BodyUnavailableReason.FileHashUnavailable => "file hash unavailable",
+            ExtractReader.BodyUnavailableReason.UnsafePath => "unsafe path",
+            ExtractReader.BodyUnavailableReason.MissingFile => "missing file",
+            ExtractReader.BodyUnavailableReason.StaleFile => "stale file",
+            ExtractReader.BodyUnavailableReason.EmptyFile => "empty file",
+            ExtractReader.BodyUnavailableReason.InvalidSpan => "invalid span",
+            _ => "unknown reason",
+        };
+
+    private static string BodyUnavailableReasonJson(ExtractReader.BodyUnavailableReason? reason) =>
+        reason switch
+        {
+            ExtractReader.BodyUnavailableReason.NoSpanRecorded => "no_span_recorded",
+            ExtractReader.BodyUnavailableReason.FileHashUnavailable => "file_hash_unavailable",
+            ExtractReader.BodyUnavailableReason.UnsafePath => "unsafe_path",
+            ExtractReader.BodyUnavailableReason.MissingFile => "missing_file",
+            ExtractReader.BodyUnavailableReason.StaleFile => "stale_file",
+            ExtractReader.BodyUnavailableReason.EmptyFile => "empty_file",
+            ExtractReader.BodyUnavailableReason.InvalidSpan => "invalid_span",
+            _ => "unknown",
+        };
 
     internal static string Truncate(string value, int max) =>
         value.Length <= max ? value : value[..(max - 1)] + "…";

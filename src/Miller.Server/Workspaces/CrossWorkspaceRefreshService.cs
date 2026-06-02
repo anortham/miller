@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
+using Miller.Server.Logging;
 using Miller.Server.Tools;
 
 namespace Miller.Server.Workspaces;
@@ -114,6 +115,7 @@ public sealed class CrossWorkspaceRefreshService
             // No workspace_id echo to cross-check in v1: julie-extract self-rejects a DB built for a different
             // root (exit 3 RootMismatch, design §4.1), so a wrong-DB scan throws and is handled by the catch below.
             long revision = report.Revision ?? _readLatestRevision(row.IndexDbPath);
+            string? warning = PartialExtractLog.DescribePartial(report);
             _registry.MarkScanned(row.WorkspaceId, revision, _utcNow());
             WorkspaceRefreshStatus status = revision > (row.LastRevision ?? 0)
                 ? WorkspaceRefreshStatus.Refreshed
@@ -124,7 +126,8 @@ public sealed class CrossWorkspaceRefreshService
                 row.CanonicalRoot,
                 row.IndexDbPath,
                 revision,
-                Scanned: true);
+                Scanned: true,
+                WarningText: warning);
         }
         catch (Exception ex)
         {
@@ -170,6 +173,7 @@ public sealed class CrossWorkspaceRefreshService
         if (!File.Exists(row.IndexDbPath))
         {
             string error = $"Workspace index DB not found: {row.IndexDbPath}";
+            _registry.MarkMissing(row.WorkspaceId, error, _utcNow());
             return new WorkspaceRefreshResult(
                 WorkspaceRefreshStatus.MissingIndex,
                 row.WorkspaceId,

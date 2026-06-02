@@ -225,7 +225,11 @@ public sealed class TelemetryLedger : IDisposable
     /// throwing (an admin read must never fault).
     /// </para>
     /// </summary>
-    public TelemetrySummary Summarize()
+    public TelemetrySummary Summarize() => Summarize(WorkspaceId);
+
+    public TelemetrySummary SummarizeForWorkspace(string? workspaceId) => Summarize(workspaceId);
+
+    private TelemetrySummary Summarize(string? workspaceId)
     {
         lock (_gate)
         {
@@ -250,7 +254,7 @@ public sealed class TelemetryLedger : IDisposable
                     GROUP BY tool
                     ORDER BY tool;
                     """;
-                group.Parameters.AddWithValue("$ws", (object?)WorkspaceId ?? DBNull.Value);
+                group.Parameters.AddWithValue("$ws", (object?)workspaceId ?? DBNull.Value);
                 using var reader = group.ExecuteReader();
                 while (reader.Read())
                 {
@@ -261,7 +265,7 @@ public sealed class TelemetryLedger : IDisposable
                     long maxMs = reader.GetInt64(3);
                     long errors = reader.GetInt64(4);
                     long sumTokens = reader.GetInt64(5);
-                    long p95Ms = ComputeP95(tool, calls);
+                    long p95Ms = ComputeP95(tool, calls, workspaceId);
                     stats.Add(new ToolStat(tool, calls, avgMs, p95Ms, maxMs, errors, sumTokens));
                 }
             }
@@ -272,7 +276,7 @@ public sealed class TelemetryLedger : IDisposable
             using (var totals = _connection.CreateCommand())
             {
                 totals.CommandText = "SELECT COUNT(*), MIN(ts), MAX(ts) FROM tool_telemetry WHERE workspace_id IS $ws;";
-                totals.Parameters.AddWithValue("$ws", (object?)WorkspaceId ?? DBNull.Value);
+                totals.Parameters.AddWithValue("$ws", (object?)workspaceId ?? DBNull.Value);
                 using var reader = totals.ExecuteReader();
                 if (reader.Read())
                 {
@@ -291,7 +295,7 @@ public sealed class TelemetryLedger : IDisposable
     /// ascending-duration ordering is the 95th-percentile value (so a single row yields its own duration, and
     /// the max row is never skipped). Caller holds <see cref="_gate"/>.
     /// </summary>
-    private long ComputeP95(string tool, long count)
+    private long ComputeP95(string tool, long count, string? workspaceId)
     {
         // floor((count-1)*0.95): integer math on count>=1. count is the GROUP BY count, always >= 1 here.
         long offset = (long)Math.Floor((count - 1) * 0.95);
@@ -300,7 +304,7 @@ public sealed class TelemetryLedger : IDisposable
             "SELECT duration_ms FROM tool_telemetry WHERE tool = $tool AND workspace_id IS $ws " +
             "ORDER BY duration_ms ASC LIMIT 1 OFFSET $offset;";
         cmd.Parameters.AddWithValue("$tool", tool);
-        cmd.Parameters.AddWithValue("$ws", (object?)WorkspaceId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$ws", (object?)workspaceId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$offset", offset);
         object? value = cmd.ExecuteScalar();
         return value is null or DBNull ? 0 : Convert.ToInt64(value, CultureInfo.InvariantCulture);

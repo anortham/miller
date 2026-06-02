@@ -100,18 +100,19 @@ public sealed class ExtractReaderTests
         using var fx = JulieDbFixture.CreateForInspect();
         var detail = ExtractReader.ReadDetail(fx.DbPath, JulieDbFixture.GetUserId)!;
 
-        string? body = ExtractReader.ReadBody(
+        var body = ExtractReader.ReadBody(
             fx.DbPath, fx.WorkspaceRoot, "auth/UserService.cs",
             detail.BodyStartByte, detail.BodyEndByte, detail.BodyStartLine, detail.BodyEndLine);
 
-        Assert.NotNull(body);
-        Assert.StartsWith("public User GetUser(int id)", body);
-        Assert.Contains("return _repo.Find(id);", body!);
-        Assert.EndsWith("}", body.TrimEnd());
+        Assert.NotNull(body.Text);
+        Assert.Null(body.UnavailableReason);
+        Assert.StartsWith("public User GetUser(int id)", body.Text);
+        Assert.Contains("return _repo.Find(id);", body.Text!);
+        Assert.EndsWith("}", body.Text.TrimEnd());
     }
 
     [Fact]
-    public void ReadBody_DriftedFile_ReturnsNull_NeverSlicesStaleBytes()
+    public void ReadBody_DriftedFile_ReturnsStaleFileReason_NeverSlicesStaleBytes()
     {
         using var fx = JulieDbFixture.CreateForInspect();
         var detail = ExtractReader.ReadDetail(fx.DbPath, JulieDbFixture.GetUserId)!;
@@ -120,26 +121,44 @@ public sealed class ExtractReaderTests
         string abs = Path.Combine(fx.WorkspaceRoot, "auth/UserService.cs");
         File.WriteAllText(abs, "// completely different file\nclass X {}\n");
 
-        string? body = ExtractReader.ReadBody(
+        var body = ExtractReader.ReadBody(
             fx.DbPath, fx.WorkspaceRoot, "auth/UserService.cs",
             detail.BodyStartByte, detail.BodyEndByte, detail.BodyStartLine, detail.BodyEndLine);
 
         // Hard invariant (design §7): the stored byte offsets address the INDEXED content; slicing them out of
         // the drifted file would return the WRONG bytes. The reader must refuse and signal staleness.
-        Assert.Null(body);
+        Assert.Null(body.Text);
+        Assert.Equal(ExtractReader.BodyUnavailableReason.StaleFile, body.UnavailableReason);
     }
 
     [Fact]
-    public void ReadBody_MissingDiskFile_ReturnsNull()
+    public void ReadBody_MissingDiskFile_ReturnsMissingFileReason()
     {
         using var fx = JulieDbFixture.CreateForInspect();
         File.Delete(Path.Combine(fx.WorkspaceRoot, "auth/UserService.cs"));
 
-        string? body = ExtractReader.ReadBody(
+        var body = ExtractReader.ReadBody(
             fx.DbPath, fx.WorkspaceRoot, "auth/UserService.cs",
             startByte: 0, endByte: 10, startLine: 1, endLine: 1);
 
-        Assert.Null(body);
+        Assert.Null(body.Text);
+        Assert.Equal(ExtractReader.BodyUnavailableReason.MissingFile, body.UnavailableReason);
+    }
+
+    [Fact]
+    public void ReadBody_MissingFileHash_ReturnsUnavailableReason()
+    {
+        string root = NewTempDir();
+        string db = Path.Combine(root, "symbols.db");
+        BuildFilesOnlyDb(db, "other.cs", "blake3:" + ContentHasher.Blake3Hex(Array.Empty<byte>()));
+        File.WriteAllText(Path.Combine(root, "auth.cs"), "class Auth {}\n");
+
+        var body = ExtractReader.ReadBody(
+            db, root, "auth.cs",
+            startByte: 0, endByte: 5, startLine: 1, endLine: 1);
+
+        Assert.Null(body.Text);
+        Assert.Equal(ExtractReader.BodyUnavailableReason.FileHashUnavailable, body.UnavailableReason);
     }
 
     [Fact]
@@ -148,25 +167,27 @@ public sealed class ExtractReaderTests
         using var fx = JulieDbFixture.CreateForInspect();
 
         // No byte spans, but line range 2..4 → line-based fallback slice of the FRESH on-disk content.
-        string? body = ExtractReader.ReadBody(
+        var body = ExtractReader.ReadBody(
             fx.DbPath, fx.WorkspaceRoot, "auth/UserService.cs",
             startByte: null, endByte: null, startLine: 2, endLine: 4);
 
-        Assert.NotNull(body);
-        Assert.Contains("GetUser", body!);
-        Assert.Contains("return _repo.Find(id);", body);
+        Assert.NotNull(body.Text);
+        Assert.Null(body.UnavailableReason);
+        Assert.Contains("GetUser", body.Text!);
+        Assert.Contains("return _repo.Find(id);", body.Text);
     }
 
     [Fact]
-    public void ReadBody_NoByteAndNoLineSpans_ReturnsNull()
+    public void ReadBody_NoByteAndNoLineSpans_ReturnsNoSpanReason()
     {
         using var fx = JulieDbFixture.CreateForInspect();
 
-        string? body = ExtractReader.ReadBody(
+        var body = ExtractReader.ReadBody(
             fx.DbPath, fx.WorkspaceRoot, "auth/UserService.cs",
             startByte: null, endByte: null, startLine: null, endLine: null);
 
-        Assert.Null(body);
+        Assert.Null(body.Text);
+        Assert.Equal(ExtractReader.BodyUnavailableReason.NoSpanRecorded, body.UnavailableReason);
     }
 
     // ---- ReadRootPath (v1 artifact identity — reconciliation #14) ----
@@ -202,7 +223,7 @@ public sealed class ExtractReaderTests
     // reader fails CLOSED (null) on an out-of-root path even when the hash would otherwise match.
 
     [Fact]
-    public void ReadBody_AbsoluteSymbolPath_ReturnsNull_EvenWhenHashMatches()
+    public void ReadBody_AbsoluteSymbolPath_ReturnsUnsafePathReason_EvenWhenHashMatches()
     {
         string root = NewTempDir();
         string secretAbs = Path.Combine(NewTempDir(), "secret.txt");
@@ -213,15 +234,16 @@ public sealed class ExtractReaderTests
         string db = Path.Combine(root, "symbols.db");
         BuildFilesOnlyDb(db, secretAbs, "blake3:" + ContentHasher.Blake3Hex(secret));
 
-        string? body = ExtractReader.ReadBody(
+        var body = ExtractReader.ReadBody(
             db, workspaceRoot: root, filePath: secretAbs,
             startByte: 0, endByte: secret.Length, startLine: 1, endLine: 1);
 
-        Assert.Null(body);
+        Assert.Null(body.Text);
+        Assert.Equal(ExtractReader.BodyUnavailableReason.UnsafePath, body.UnavailableReason);
     }
 
     [Fact]
-    public void ReadBody_ParentEscapingSymbolPath_ReturnsNull_EvenWhenHashMatches()
+    public void ReadBody_ParentEscapingSymbolPath_ReturnsUnsafePathReason_EvenWhenHashMatches()
     {
         string parent = NewTempDir();
         string root = Path.Combine(parent, "ws");
@@ -234,11 +256,12 @@ public sealed class ExtractReaderTests
         string db = Path.Combine(root, "symbols.db");
         BuildFilesOnlyDb(db, escaping, "blake3:" + ContentHasher.Blake3Hex(secret));
 
-        string? body = ExtractReader.ReadBody(
+        var body = ExtractReader.ReadBody(
             db, workspaceRoot: root, filePath: escaping,
             startByte: 0, endByte: secret.Length, startLine: 1, endLine: 1);
 
-        Assert.Null(body);
+        Assert.Null(body.Text);
+        Assert.Equal(ExtractReader.BodyUnavailableReason.UnsafePath, body.UnavailableReason);
     }
 
     // A fresh temp directory (left for the OS temp reaper — tests must not depend on cleanup ordering).

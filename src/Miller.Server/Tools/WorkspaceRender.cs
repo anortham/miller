@@ -83,7 +83,8 @@ public readonly record struct WorkspaceOpenResult(
     long SymbolsExtracted,
     long Revision,
     string? WorkspaceId = null,
-    string? DisplayId = null);
+    string? DisplayId = null,
+    string? WarningText = null);
 
 /// <summary>
 /// The result of a <c>remove(path)</c> (M7 decision-1/8): the <c>.miller</c> index dir was deleted, the deletion
@@ -392,6 +393,8 @@ public static class WorkspaceRender
         sb.Append("revision: ").Append(result.Revision).Append('\n');
         sb.Append("note: primed this path's index (extract scan) — NOT a live switch. ");
         sb.Append("This Miller keeps serving its launch directory; start a new Miller in that path to use it.");
+        if (!string.IsNullOrEmpty(result.WarningText))
+            sb.Append('\n').Append("warning: ").Append(result.WarningText);
         return sb.ToString();
     }
 
@@ -412,6 +415,8 @@ public static class WorkspaceRender
             w.WriteBoolean("live_switch", false);
             w.WriteString("note",
                 "primed this path's index (extract scan) — not a live switch; start a new Miller in that path to use it.");
+            if (result.WarningText is null) w.WriteNull("warning");
+            else w.WriteString("warning", result.WarningText);
             w.WriteEndObject();
         }
         return Utf8(buffer);

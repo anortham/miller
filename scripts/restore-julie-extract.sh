@@ -49,6 +49,8 @@ if expr == "version":
     val = data["version"]
 elif expr == "urlTemplate":
     val = data["urlTemplate"]
+elif expr == "archiveInnerPathTemplate":
+    val = data.get("archiveInnerPathTemplate", "")
 elif expr.startswith('assets["'):
     triple = expr[len('assets["'):].split('"]')[0]
     field = expr.rsplit(".", 1)[1]

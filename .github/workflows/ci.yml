@@ -4,9 +4,13 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: '17 9 * * *'
+  workflow_dispatch:
 
 jobs:
   build-test:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -36,3 +40,20 @@ jobs:
             echo "::error::Default test suite took ${elapsed}s (>30s CI ceiling). Investigate slow tests or tag them [Trait(\"Category\",\"Scale\")]."
             exit 1
           fi
+
+  scale-test:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore julie-extract
+        run: bash scripts/restore-julie-extract.sh
+
+      - name: Test (Scale suite)
+        run: scripts/test.sh scale

@@ -215,14 +215,14 @@ public sealed class ExtractReader
     /// re-sourced from disk: <paramref name="filePath"/> (a julie-relative path) is resolved against
     /// <paramref name="workspaceRoot"/>, and BEFORE any slice the disk file's BLAKE3 is compared to the stored
     /// <c>files.content_hash</c>. On a mismatch — or a missing manifest entry, missing/unreadable file — this
-    /// returns <c>null</c> rather than slicing stale bytes (the design §7 hard invariant: the stored byte offsets
+    /// returns an unavailable result rather than slicing stale bytes (the design §7 hard invariant: the stored byte offsets
     /// address the INDEXED content, so slicing a drifted file would return the WRONG bytes). When fresh, prefers
     /// the absolute UTF-8 byte span [<paramref name="startByte"/>, <paramref name="endByte"/>); if either byte
     /// offset is NULL, falls back to a 1-based line slice [<paramref name="startLine"/>, <paramref name="endLine"/>].
-    /// Also returns <c>null</c> when no usable span is supplied or the span is degenerate.
+    /// Also returns an unavailable result when no usable span is supplied or the span is degenerate.
     /// </summary>
     /// <exception cref="FileNotFoundException">The DB file does not exist.</exception>
-    public static string? ReadBody(
+    public static BodyReadResult ReadBody(
         string dbPath, string workspaceRoot, string filePath,
         int? startByte, int? endByte, int? startLine, int? endLine)
     {
@@ -233,29 +233,35 @@ public sealed class ExtractReader
         bool hasByteSpan = startByte is not null && endByte is not null;
         bool hasLineSpan = startLine is not null && endLine is not null;
         if (!hasByteSpan && !hasLineSpan)
-            return null;
+            return BodyReadResult.Unavailable(BodyUnavailableReason.NoSpanRecorded);
 
-        // Re-source from disk WITH the hard freshness invariant: a drifted (or missing) file yields null, never
-        // a slice of stale bytes.
+        // Re-source from disk WITH the hard freshness invariant: a drifted (or missing) file yields an
+        // unavailable result, never a slice of stale bytes.
         FileContentResult verified = ReadVerifiedFileContent(dbPath, workspaceRoot, filePath);
-        if (verified.Stale || verified.Text is null)
-            return null;
+        if (verified.UnavailableReason is { } unavailableReason)
+            return BodyReadResult.Unavailable(unavailableReason);
+        if (verified.Text is null)
+            return BodyReadResult.Unavailable(BodyUnavailableReason.InvalidSpan);
         string content = verified.Text;
         if (content.Length == 0)
-            return null;
+            return BodyReadResult.Unavailable(BodyUnavailableReason.EmptyFile);
 
         if (hasByteSpan)
         {
             string? sliced = SliceByBytes(content, startByte!.Value, endByte!.Value);
             if (sliced is not null)
-                return sliced;
+                return BodyReadResult.Available(sliced);
             // A byte span that fell outside the content degrades to the line slice.
         }
 
         if (hasLineSpan)
-            return SliceByLines(content, startLine!.Value, endLine!.Value);
+        {
+            string? sliced = SliceByLines(content, startLine!.Value, endLine!.Value);
+            if (sliced is not null)
+                return BodyReadResult.Available(sliced);
+        }
 
-        return null;
+        return BodyReadResult.Unavailable(BodyUnavailableReason.InvalidSpan);
     }
 
     /// <summary>
@@ -288,12 +294,31 @@ public sealed class ExtractReader
         }
     }
 
-    /// <summary>The verified on-disk file text, or a staleness sentinel telling the caller the file drifted.</summary>
-    internal readonly record struct FileContentResult(string? Text, bool Stale);
+    /// <summary>The result of reading a symbol body from the verified on-disk file.</summary>
+    public readonly record struct BodyReadResult(string? Text, BodyUnavailableReason? UnavailableReason)
+    {
+        public static BodyReadResult Available(string text) => new(text, null);
+
+        public static BodyReadResult Unavailable(BodyUnavailableReason reason) => new(null, reason);
+    }
+
+    public enum BodyUnavailableReason
+    {
+        NoSpanRecorded,
+        FileHashUnavailable,
+        UnsafePath,
+        MissingFile,
+        StaleFile,
+        EmptyFile,
+        InvalidSpan,
+    }
+
+    /// <summary>The verified on-disk file text, or the reason the file cannot be trusted for body slicing.</summary>
+    internal readonly record struct FileContentResult(string? Text, BodyUnavailableReason? UnavailableReason);
 
     // Re-source the on-disk file for <paramref name="relPath"/> (resolved against <paramref name="workspaceRoot"/>),
     // returning its UTF-8 text ONLY if the disk bytes' BLAKE3 still matches the stored files.content_hash. On a
-    // missing manifest entry, missing file, or hash mismatch, returns Stale (Text=null) so the caller never
+    // missing manifest entry, missing file, or hash mismatch, returns an unavailable reason so the caller never
     // slices drifted bytes (the §7 hard invariant). The hash compare is blake3-only (hash-domain split,
     // reconciliation #9): NormalizeHash strips a blake3: scheme token ONLY.
     private static FileContentResult ReadVerifiedFileContent(string dbPath, string workspaceRoot, string relPath)
@@ -301,7 +326,7 @@ public sealed class ExtractReader
         // D2's ReadFileHash already returns BARE hex (it strips julie's "blake3:" prefix via NormalizeHash).
         string? storedHash = ExtractFileHashReader.ReadFileHash(dbPath, relPath);
         if (string.IsNullOrWhiteSpace(storedHash))
-            return new FileContentResult(Text: null, Stale: true); // no manifest entry → not-readable
+            return new FileContentResult(Text: null, UnavailableReason: BodyUnavailableReason.FileHashUnavailable);
 
         // Trust boundary (finding 3): julie-extract records ROOT-RELATIVE paths. A rooted path, or one that
         // escapes the workspace root via "..", must never reach File.ReadAllBytes — a corrupt or tampered artifact
@@ -311,21 +336,21 @@ public sealed class ExtractReader
         // stays under the root, so this never rejects a real read. Same under-canonical-root discipline the
         // bootstrap enforces for julie's --db/--file (verified-fact 4).
         if (Path.IsPathRooted(relPath))
-            return new FileContentResult(Text: null, Stale: true);
+            return new FileContentResult(Text: null, UnavailableReason: BodyUnavailableReason.UnsafePath);
         string root = Path.GetFullPath(workspaceRoot);
         string abs = Path.GetFullPath(Path.Combine(root, relPath));
         if (!IsUnderRoot(root, abs))
-            return new FileContentResult(Text: null, Stale: true);
+            return new FileContentResult(Text: null, UnavailableReason: BodyUnavailableReason.UnsafePath);
         if (!File.Exists(abs))
-            return new FileContentResult(Text: null, Stale: true);
+            return new FileContentResult(Text: null, UnavailableReason: BodyUnavailableReason.MissingFile);
 
         byte[] bytes = File.ReadAllBytes(abs);
         string diskHash = ContentHasher.Blake3Hex(bytes); // bare hex
         // Idempotent belt-and-suspenders in case a caller ever passes a still-prefixed hash; blake3-only.
         if (!StringComparer.OrdinalIgnoreCase.Equals(diskHash, ContentHasher.NormalizeHash(storedHash)))
-            return new FileContentResult(Text: null, Stale: true); // HARD INVARIANT: never slice drifted bytes
+            return new FileContentResult(Text: null, UnavailableReason: BodyUnavailableReason.StaleFile);
 
-        return new FileContentResult(Text: Encoding.UTF8.GetString(bytes), Stale: false);
+        return new FileContentResult(Text: Encoding.UTF8.GetString(bytes), UnavailableReason: null);
     }
 
     // Whether <paramref name="candidate"/> (an absolute, normalized path) is the root itself or lies beneath it.

@@ -73,6 +73,29 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
     }
 
     [Fact]
+    public void Refresh_UnlockedTargetWithPartialReport_SurfacesWarningText()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("partial");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        var service = NewService(
+            registry,
+            scan: (_, _, _) => PartialReport(root, dbPath, "target-ws", revision: 5),
+            acquireLock: _ => new NoopLease());
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws");
+
+        Assert.Equal(WorkspaceRefreshStatus.Refreshed, result.Status);
+        Assert.True(result.Scanned);
+        Assert.Equal(5, result.Revision);
+        Assert.Contains("PARTIAL artifact", result.WarningText, StringComparison.Ordinal);
+        Assert.Contains("Controllers/Broken.cs", result.WarningText, StringComparison.Ordinal);
+        Assert.Equal(5, registry.Get("target-ws")?.LastRevision);
+    }
+
+    [Fact]
     public void Refresh_UnlockedTargetWithNoNewRevision_ReturnsUnchangedButStillReportsThatItScanned()
     {
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
@@ -336,6 +359,24 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
                 RowsWritten: new ExtractRowCounts(null, 1, null, null, null, null, null, null, null, null),
                 Totals: new ExtractRowCounts(1, 1, null, null, null, null, null, null, null, null)),
             Errors: Array.Empty<ReportDiagnostic>(), Warnings: Array.Empty<ReportDiagnostic>());
+
+    private static ExtractReport PartialReport(string root, string dbPath, string workspaceId, long revision) =>
+        Report(root, dbPath, workspaceId, revision) with
+        {
+            Status = "partial",
+            Counts = new ExtractCounts(2, 2, 0, 0, 0, 1,
+                RowsWritten: new ExtractRowCounts(null, 1, null, null, null, null, null, null, null, null),
+                Totals: new ExtractRowCounts(1, 1, null, null, null, null, null, null, null, null)),
+            Errors = new[]
+            {
+                new ReportDiagnostic(
+                    "parse_error",
+                    "syntax error",
+                    Path.Combine(root, "Controllers", "Broken.cs"),
+                    "Controllers/Broken.cs",
+                    Recoverable: true),
+            },
+        };
 
     private sealed class NoopLease : IDisposable
     {

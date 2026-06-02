@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Miller.Server.Resolution;
 using Miller.Server.Tools;
@@ -152,7 +153,7 @@ public sealed class InspectToolTests
     }
 
     [Fact]
-    public void Run_FullDepth_DriftedFile_DegradesBodyGracefully()
+    public void Run_FullDepth_DriftedFile_RendersStaleFileReason()
     {
         using var fx = JulieDbFixture.CreateForInspect();
         // Mutate the on-disk file so its blake3 no longer matches the stored content_hash.
@@ -163,11 +164,89 @@ public sealed class InspectToolTests
             "GetUser", depth: "full", kind: null, scope: null, limit: 50, json: false, out _);
 
         Assert.Contains("body unavailable", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("stale file", output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("no span recorded", output, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("changed", output); // never slices the drifted file
     }
 
     [Fact]
-    public void Run_SymbolFull_NullBodySpans_DegradesGracefullyWithNote()
+    public void Run_FullDepth_MissingDiskFile_RendersMissingFileReason()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        File.Delete(Path.Combine(fx.WorkspaceRoot, "auth/UserService.cs"));
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "GetUser", depth: "full", kind: null, scope: null, limit: 50, json: false, out _);
+
+        Assert.Contains("body unavailable", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("missing file", output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("no span recorded", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Run_FullDepth_MissingFileHash_RendersMissingHashReason()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        DeleteFileRow(fx.DbPath, "auth/UserService.cs");
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "GetUser", depth: "full", kind: null, scope: null, limit: 50, json: false, out _);
+
+        Assert.Contains("body unavailable", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("file hash unavailable", output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("no span recorded", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Run_FullDepth_UnsafeSymbolPath_RendersUnsafePathReason()
+    {
+        string escapedName = "miller-inspect-escape-" + Guid.NewGuid().ToString("N") + ".cs";
+        string escapingPath = Path.Combine("..", escapedName);
+        string content = "void UnsafeBody() {}\n";
+        string? escapedAbs = null;
+
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow(
+                    "ab000000000000000000000000000001", "UnsafeBody", "method", "csharp",
+                    escapingPath, "void UnsafeBody()", 1, null)
+                {
+                    BodyStartByte = 0, BodyEndByte = content.Length,
+                    BodyStartLine = 1, BodyEndLine = 1,
+                },
+            },
+            fileContent: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [escapingPath] = content,
+            });
+
+        try
+        {
+            escapedAbs = Path.GetFullPath(Path.Combine(fx.WorkspaceRoot, escapingPath));
+            var (index, resolver) = Build(fx);
+
+            string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+                "UnsafeBody", depth: "full", kind: null, scope: null, limit: 50, json: false, out _);
+
+            Assert.Contains("body unavailable", output, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("unsafe path", output, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("no span recorded", output, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(content, output);
+        }
+        finally
+        {
+            if (escapedAbs is not null)
+                File.Delete(escapedAbs);
+        }
+    }
+
+    [Fact]
+    public void Run_SymbolFull_NullBodySpans_DegradesGracefullyWithNoSpanNote()
     {
         using var fx = JulieDbFixture.CreateForInspect();
         var (index, resolver) = Build(fx);
@@ -178,6 +257,7 @@ public sealed class InspectToolTests
 
         Assert.Contains("DeleteUser", output);
         Assert.Contains("body unavailable", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("no span recorded", output, StringComparison.OrdinalIgnoreCase);
     }
 
     // ---- Ambiguity ----
@@ -234,6 +314,23 @@ public sealed class InspectToolTests
         Assert.True(root.TryGetProperty("callees", out _));
         Assert.True(root.TryGetProperty("callers", out _));
         Assert.True(root.TryGetProperty("body", out _));
+        Assert.False(root.TryGetProperty("body_unavailable_reason", out _));
+    }
+
+    [Fact]
+    public void Run_SymbolFull_Json_DriftedFile_ExposesBodyUnavailableReason()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        File.WriteAllText(Path.Combine(fx.WorkspaceRoot, "auth/UserService.cs"), "changed\n");
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "GetUser", depth: "full", kind: null, scope: null, limit: 50, json: true, out _);
+
+        using var doc = JsonDocument.Parse(output);
+        var root = doc.RootElement;
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("body").ValueKind);
+        Assert.Equal("stale_file", root.GetProperty("body_unavailable_reason").GetString());
     }
 
     [Fact]
@@ -285,5 +382,22 @@ public sealed class InspectToolTests
         Assert.Contains(targetRoot, output);
         Assert.Contains("freshness: unconfirmed_lock_busy", output);
         Assert.Contains("Gets a user by id.", output);
+    }
+
+    private static void DeleteFileRow(string dbPath, string filePath)
+    {
+        var csb = new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        };
+
+        using var conn = new SqliteConnection(csb.ToString());
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM files WHERE path = $path;";
+        cmd.Parameters.AddWithValue("$path", filePath);
+        Assert.Equal(1, cmd.ExecuteNonQuery());
     }
 }

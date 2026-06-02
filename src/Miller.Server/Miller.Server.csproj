@@ -34,16 +34,24 @@
     <ProjectReference Include="..\Miller.Indexing\Miller.Indexing.csproj" />
   </ItemGroup>
 
-  <!-- The pinned julie-extract is restored (gitignored) to the repo-root .tools/ by scripts/restore-julie-extract.sh.
+  <!-- The pinned julie-extract is restored (gitignored) to the repo-root .tools/ by the restore scripts.
        Production locates it at AppContext.BaseDirectory/.tools (WorkspaceContext.ToolsRoot), so it must sit next to
        the built binary — the claim that it "ships under the app base dir" is only true because of this copy. Link
-       places it at <out>/.tools/julie-extract; PreserveNewest skips the recopy when unchanged; `dotnet publish`
+       places it at <out>/.tools/julie-extract[.exe]; PreserveNewest skips the recopy when unchanged; `dotnet publish`
        picks it up too. Conditioned on Exists so a machine that has not run restore (e.g. a fast-suite-only CI lane)
        still builds — the runtime then fails loudly with the restore-script message, the correct behavior for a
-       genuinely missing binary. The exec bit is reasserted below (MSBuild Copy drops it). -->
+       genuinely missing binary. The exec bit is reasserted below for the Unix binary (MSBuild Copy drops it). -->
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)/../../.tools/julie-extract')">
     <Content Include="$(MSBuildProjectDirectory)/../../.tools/julie-extract">
       <Link>.tools/julie-extract</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Visible>false</Visible>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)/../../.tools/julie-extract.exe')">
+    <Content Include="$(MSBuildProjectDirectory)/../../.tools/julie-extract.exe">
+      <Link>.tools/julie-extract.exe</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Visible>false</Visible>
     </Content>

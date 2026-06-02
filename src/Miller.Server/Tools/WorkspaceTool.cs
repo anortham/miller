@@ -2,6 +2,7 @@ using System.ComponentModel;
 using Microsoft.Extensions.Logging;
 using Miller.Indexing;
 using Miller.Server.Hosting;
+using Miller.Server.Logging;
 using Miller.Server.Telemetry;
 using Miller.Server.Workspaces;
 using ModelContextProtocol.Server;
@@ -193,7 +194,31 @@ public sealed class WorkspaceTool
         WorkspaceRegistryRow row = target.Row
             ?? throw new InvalidOperationException($"Workspace registry row '{target.WorkspaceId}' was not resolved.");
         VerifyRegisteredRoot(row);
-        WorkspaceIndexFacts indexFacts = WorkspaceIndexFactsReader.Read(row.IndexDbPath);
+        WorkspaceIndexFacts indexFacts;
+        try
+        {
+            indexFacts = WorkspaceIndexFactsReader.Read(row.IndexDbPath);
+        }
+        catch (FileNotFoundException)
+        {
+            string error = $"Workspace index DB not found: {row.IndexDbPath}";
+            _registry.MarkMissing(row.WorkspaceId, error);
+            var missingFacts = new WorkspaceFacts(
+                Root: row.CanonicalRoot,
+                WorkspaceId: row.WorkspaceId,
+                DbPath: row.IndexDbPath,
+                IsLeader: false,
+                DocumentCount: 0,
+                KnownExtensionsCount: 0,
+                BuiltRevision: row.LastRevision ?? 0,
+                LatestObservedRevision: row.LastRevision ?? 0,
+                IndexFresh: false,
+                QueueEmpty: true,
+                FreshnessStatus: "missing_index",
+                WarningText: error);
+            return (WorkspaceRender.Status(missingFacts, _ledger.SummarizeForWorkspace(row.WorkspaceId), json),
+                1, TelemetryOutcome.Empty);
+        }
         long revision = row.LastRevision ?? 0;
         var facts = new WorkspaceFacts(
             Root: row.CanonicalRoot,
@@ -208,7 +233,8 @@ public sealed class WorkspaceTool
             QueueEmpty: true,
             FreshnessStatus: WorkspaceFreshnessView.FreshnessStatusFor(refreshResult: null, row),
             WarningText: WorkspaceFreshnessView.WarningTextFor(refreshResult: null));
-        return (WorkspaceRender.Status(facts, _ledger.Summarize(), json), 1, TelemetryOutcome.Ok);
+        return (WorkspaceRender.Status(facts, _ledger.SummarizeForWorkspace(row.WorkspaceId), json),
+            1, TelemetryOutcome.Ok);
     }
 
     private string RenderRegistryList(bool json)
@@ -273,6 +299,8 @@ public sealed class WorkspaceTool
                 "The leader's watcher keeps the index fresh — polled + swapped to pick up its latest writes.",
             _ => null,
         };
+        if (note is null && scan.Report is { } report)
+            note = PartialExtractLog.DescribePartial(report);
 
         // Always poll+swap after the scan attempt so the held index reflects the newest persisted revision NOW
         // (a leader's own scan, or a non-leader picking up the leader's writes). Best-effort; never throws.
@@ -398,7 +426,8 @@ public sealed class WorkspaceTool
             SymbolsExtracted: (long)report.SymbolsExtracted,
             Revision: revision,
             WorkspaceId: stableWorkspaceId,
-            DisplayId: displayId);
+            DisplayId: displayId,
+            WarningText: PartialExtractLog.DescribePartial(report));
         return (WorkspaceRender.Open(result, json), 1, TelemetryOutcome.Ok);
     }
 
