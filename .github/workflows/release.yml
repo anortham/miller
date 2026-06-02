@@ -1,0 +1,195 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version, with or without leading v'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            rid: osx-arm64
+            runner: macos-14
+          - target: x86_64-apple-darwin
+            rid: osx-x64
+            runner: macos-15-intel
+          - target: x86_64-unknown-linux-gnu
+            rid: linux-x64
+            runner: ubuntu-24.04
+          - target: x86_64-pc-windows-msvc
+            rid: win-x64
+            runner: windows-2025
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Resolve release version
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "push") {
+            $tag = "${{ github.ref_name }}"
+            $version = $tag.TrimStart("v")
+          } else {
+            $raw = "${{ inputs.version }}"
+            if ([string]::IsNullOrWhiteSpace($raw)) {
+              throw "workflow_dispatch input 'version' is required"
+            }
+            $version = $raw.TrimStart("v")
+            $tag = "v$version"
+          }
+
+          "RELEASE_TAG=$tag" >> $env:GITHUB_ENV
+          "RELEASE_VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Restore
+        run: dotnet restore Miller.slnx
+
+      - name: Restore julie-extract (Unix)
+        if: runner.os != 'Windows'
+        run: bash scripts/restore-julie-extract.sh
+
+      - name: Restore julie-extract (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/restore-julie-extract.ps1
+
+      - name: Publish
+        shell: pwsh
+        run: |
+          $publishDir = Join-Path $env:GITHUB_WORKSPACE "artifacts/publish/${{ matrix.target }}"
+          dotnet publish src/Miller.Server/Miller.Server.csproj `
+            -c Release `
+            -r "${{ matrix.rid }}" `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:PublishTrimmed=false `
+            -o $publishDir
+
+      - name: Verify packaged Unix extractor
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          publish_dir="${GITHUB_WORKSPACE}/artifacts/publish/${{ matrix.target }}"
+          test -x "${publish_dir}/.tools/julie-extract"
+          test ! -e "${publish_dir}/.tools/julie-extract.exe"
+          "${publish_dir}/.tools/julie-extract" --version
+
+      - name: Verify packaged Windows extractor
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $publishDir = Join-Path $env:GITHUB_WORKSPACE "artifacts/publish/${{ matrix.target }}"
+          $windowsBinary = Join-Path $publishDir ".tools/julie-extract.exe"
+          $unixBinary = Join-Path $publishDir ".tools/julie-extract"
+          if (-not (Test-Path $windowsBinary)) {
+            throw "missing packaged Windows julie-extract.exe"
+          }
+          if (Test-Path $unixBinary) {
+            throw "Windows package must not include Unix julie-extract"
+          }
+          & $windowsBinary --version
+
+      - name: Package Unix artifact
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          publish_dir="${GITHUB_WORKSPACE}/artifacts/publish/${{ matrix.target }}"
+          package_name="miller-${RELEASE_VERSION}-${{ matrix.target }}"
+          package_root="${GITHUB_WORKSPACE}/artifacts/package"
+          package_dir="${package_root}/${package_name}"
+          release_dir="${GITHUB_WORKSPACE}/artifacts/release"
+
+          rm -rf "${package_root}" "${release_dir}"
+          mkdir -p "${package_dir}" "${release_dir}"
+          rsync -a "${publish_dir}/" "${package_dir}/"
+          find "${package_dir}" -type f \( -name '*.pdb' -o -name '*.dbg' \) -delete
+          chmod +x "${package_dir}/miller" "${package_dir}/.tools/julie-extract"
+          tar -czf "${release_dir}/${package_name}.tar.gz" -C "${package_root}" "${package_name}"
+          ls -lh "${release_dir}"
+
+      - name: Package Windows artifact
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $publishDir = Join-Path $env:GITHUB_WORKSPACE "artifacts/publish/${{ matrix.target }}"
+          $packageName = "miller-$env:RELEASE_VERSION-${{ matrix.target }}"
+          $packageRoot = Join-Path $env:GITHUB_WORKSPACE "artifacts/package"
+          $packageDir = Join-Path $packageRoot $packageName
+          $releaseDir = Join-Path $env:GITHUB_WORKSPACE "artifacts/release"
+
+          Remove-Item $packageRoot, $releaseDir -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $packageDir, $releaseDir | Out-Null
+          Get-ChildItem -Path $publishDir -Force | Copy-Item -Destination $packageDir -Recurse -Force
+          Get-ChildItem -Path $packageDir -Recurse -Filter *.pdb | Remove-Item -Force
+          Compress-Archive -Path $packageDir -DestinationPath (Join-Path $releaseDir "$packageName.zip") -Force
+          Get-ChildItem $releaseDir | Format-Table Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: miller-${{ matrix.target }}
+          path: artifacts/release/*
+          if-no-files-found: error
+
+  github-release:
+    name: publish GitHub release
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: miller-*
+          path: artifacts/release
+          merge-multiple: true
+
+      - name: Resolve release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            raw="${{ inputs.version }}"
+            version="${raw#v}"
+            tag="v${version}"
+          fi
+          echo "RELEASE_TAG=${tag}" >> "${GITHUB_ENV}"
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -lh artifacts/release
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" artifacts/release/* --clobber
+          else
+            gh release create "${RELEASE_TAG}" artifacts/release/* \
+              --target "${GITHUB_SHA}" \
+              --title "Miller ${RELEASE_TAG}" \
+              --notes "Miller ${RELEASE_TAG}"
+          fi

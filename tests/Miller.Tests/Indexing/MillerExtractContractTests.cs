@@ -75,6 +75,50 @@ public sealed class MillerExtractContractTests
     }
 
     [Fact]
+    public void ReleaseWorkflowBuildMatrixMatchesPinnedJulieExtractPlatforms()
+    {
+        string repoRoot = ScaleTestSupport.RepoRoot();
+        string pinsPath = Path.Combine(repoRoot, "scripts", "julie-pins.json");
+        string workflowPath = Path.Combine(repoRoot, ".github", "workflows", "release.yml");
+
+        using JsonDocument pins = JsonDocument.Parse(File.ReadAllText(pinsPath));
+        string[] pinnedTriples = pins.RootElement.GetProperty("assets")
+            .EnumerateObject()
+            .Select(asset => asset.Name)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.True(File.Exists(workflowPath),
+            "release.yml must publish one Miller artifact for each pinned julie-extract platform.");
+        string workflow = File.ReadAllText(workflowPath);
+
+        string[] matrixTriples = Regex.Matches(
+                workflow,
+                @"^\s*-\s+target:\s+(?<target>[a-zA-Z0-9_.-]+)\s*$",
+                RegexOptions.Multiline)
+            .Select(match => match.Groups["target"].Value)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(pinnedTriples, matrixTriples);
+
+        var expectedNativeRunners = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["aarch64-apple-darwin"] = "macos-14",
+            ["x86_64-apple-darwin"] = "macos-15-intel",
+            ["x86_64-unknown-linux-gnu"] = "ubuntu-24.04",
+            ["x86_64-pc-windows-msvc"] = "windows-2025",
+        };
+
+        foreach ((string triple, string runner) in expectedNativeRunners)
+        {
+            Assert.Matches(
+                $@"-\s+target:\s+{Regex.Escape(triple)}\s*\n\s+rid:\s+\S+\s*\n\s+runner:\s+{Regex.Escape(runner)}",
+                workflow);
+        }
+    }
+
+    [Fact]
     public void RestoreScriptPythonFallbackReadsArchiveInnerPathTemplate()
     {
         string scriptPath = Path.Combine(ScaleTestSupport.RepoRoot(), "scripts", "restore-julie-extract.sh");
