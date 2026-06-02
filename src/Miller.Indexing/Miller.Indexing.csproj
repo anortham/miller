@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    Miller.Indexing — infrastructure. The julie-server extract subprocess wrapper, the SQLite (WAL) read layer,
+    Miller.Indexing — infrastructure. The julie-extract subprocess wrapper, the SQLite (WAL) read layer,
     and the file watcher / single-writer indexer. Populates Miller.Core's types from the extract DB.
     Microsoft.Data.Sqlite (bundled, not .Core) auto-initializes the e_sqlite3 provider — do NOT call
     SQLitePCLRaw.Batteries_V2.Init().

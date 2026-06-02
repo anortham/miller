@@ -13,7 +13,7 @@ namespace Miller.Tests.Server;
 
 /// <summary>
 /// Pins the <c>workspace</c> tool dispatch (M7 decision-1/2/3/7/8) over fakes + a synth index — no live
-/// julie-server, no FileSystemWatcher, no timer-driven hosted loop. The tool's collaborators are real classes
+/// julie-extract, no FileSystemWatcher, no timer-driven hosted loop. The tool's collaborators are real classes
 /// driven through their unit seams: a never-started <see cref="IndexerService"/> reports NotLeader (so refresh/
 /// full take the non-leader poll-only path), the publish seam makes it the leader; a <see cref="FreshnessService"/>
 /// over a synthesized extract DB does a real on-demand poll+swap; a temp <see cref="TelemetryLedger"/> with seeded
@@ -115,7 +115,7 @@ public sealed class WorkspaceToolTests : IDisposable
 
         // The runner is needed only by open()'s prime scan (a Scale path). The default-suite tests never invoke
         // the spawning path, so construct it against a STUB file (JulieExtractRunner only File.Exists-validates at
-        // construction) — keeping this suite pure + binary-independent (no pinned julie-server required to run it).
+        // construction) — keeping this suite pure + binary-independent (no pinned julie-extract required to run it).
         string stubBinary = Path.Combine(NewTempDir("toolstub"),
             OperatingSystem.IsWindows() ? "julie-extract.exe" : "julie-extract");
         File.WriteAllText(stubBinary, "#!/bin/sh\n");

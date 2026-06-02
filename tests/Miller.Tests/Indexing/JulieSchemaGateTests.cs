@@ -90,7 +90,7 @@ public sealed class JulieSchemaGateTests
 
         var ex = Assert.Throws<IncompatibleExtractException>(() => JulieSchemaGate.Verify(conn));
         Assert.Contains(S(PinSchema - 1), ex.Message);
-        Assert.Contains($"v{PinnedVer}", ex.Message);      // older path names the pinned julie-server
+        Assert.Contains($"v{PinnedVer}", ex.Message);      // error message names the pinned julie-extract version
         Assert.Contains("restore", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 

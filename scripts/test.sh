@@ -5,13 +5,13 @@
 # Miller splits tests into two suites to keep the dev loop fast (the lesson from julie, whose suite grew
 # to 30+ minutes because slow integration tests ran on every change):
 #
-#   fast  — the default suite (Category!=Scale): pure logic + contract tests, no julie-server subprocess.
+#   fast  — the default suite (Category!=Scale): pure logic + contract tests, no julie-extract subprocess.
 #           Target <10s. This is what you run on every change. It is ALSO the bare `dotnet test` default
 #           (the test csproj sets VSTestTestCaseFilter=Category!=Scale), so this wrapper just adds a
 #           wall-clock budget tripwire on top.
-#   scale — the Scale suite (Category=Scale): live tests that spawn the real pinned julie-server or build
+#   scale — the Scale suite (Category=Scale): live tests that spawn the real pinned julie-extract or build
 #           large fixtures. Slower; run before a commit/PR or when touching the indexing/extract path.
-#           Skips (does not fail) if .tools/julie-server is absent — run scripts/restore-julie-server.sh.
+#           Skips (does not fail) if .tools/julie-extract is absent — run scripts/restore-julie-extract.sh.
 #   all   — both suites.
 #
 # Usage:
@@ -54,10 +54,10 @@ run_fast() {
 }
 
 run_scale() {
-  echo "==> scale suite (Category=Scale) — spawns the real julie-server"
-  if [ ! -x "${REPO_ROOT}/.tools/julie-server" ] && [ ! -f "${REPO_ROOT}/.tools/julie-server.exe" ]; then
-    echo "    note: .tools/julie-server not found — these tests will SKIP (not fail)."
-    echo "    run scripts/restore-julie-server.sh to enable them."
+  echo "==> scale suite (Category=Scale) — spawns the real julie-extract"
+  if [ ! -x "${REPO_ROOT}/.tools/julie-extract" ] && [ ! -f "${REPO_ROOT}/.tools/julie-extract.exe" ]; then
+    echo "    note: .tools/julie-extract not found — these tests will SKIP (not fail)."
+    echo "    run scripts/restore-julie-extract.sh to enable them."
   fi
   dotnet test "${SOLUTION}" -c "${CONFIG}" --filter "Category=Scale" "$@"
 }

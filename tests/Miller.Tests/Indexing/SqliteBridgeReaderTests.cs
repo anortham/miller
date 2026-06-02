@@ -12,7 +12,7 @@ namespace Miller.Tests.Indexing;
 /// <see cref="Miller.Core.Contracts.DbSetProperty"/> mapping (ordering, NULL discipline, the DbSet&lt;T&gt;
 /// signature parse, and the literal→file:line seam the <see cref="BridgeGraphBuilder"/> requires). The reader
 /// performs NO leg transformation — that is Task 8's job — so these assert raw rows only. Fast suite: a temp
-/// SQLite DB, no julie-server.
+/// SQLite DB, no julie-extract.
 /// </summary>
 public sealed class SqliteBridgeReaderTests : IDisposable
 {

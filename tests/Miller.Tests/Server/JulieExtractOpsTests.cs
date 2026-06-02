@@ -6,7 +6,7 @@ namespace Miller.Tests.Server;
 
 /// <summary>
 /// Pins <see cref="JulieExtractOps"/>'s canonicalization contract (verified-fact 4) WITHOUT spawning
-/// julie-server: the production ops must hand julie symlink-resolved canonical paths for the file argument so
+/// julie-extract: the production ops must hand julie symlink-resolved canonical paths for the file argument so
 /// <c>delete</c>/<c>update</c> never trip the "outside external extract root" trap. We inject a recording
 /// runner seam (a delegate trio) so the exact <c>(root, db, file)</c> the ops would pass to the binary is
 /// asserted directly. The live subprocess path is the Scale suite.

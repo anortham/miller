@@ -12,7 +12,7 @@ namespace Miller.Tests.Conventions;
 ///
 /// The launch signal is <see cref="ScaleTestSupport.RequireJulieServer"/> /
 /// <see cref="ScaleTestSupport.LocateJulieServer"/> — the one place a test obtains the real
-/// <c>.tools/julie-server</c> binary to spawn it. The guard scans the test sources and asserts:
+/// <c>.tools/julie-extract</c> binary to spawn it. The guard scans the test sources and asserts:
 /// every file that references that signal also carries the Scale trait. It is intentionally
 /// ONE-directional (spawns julie ⟹ Scale), not the converse: a test can be Scale for other reasons
 /// (e.g. <c>RebuildLatencyTests</c> builds a 50k-symbol fixture, no julie), and that is fine.
@@ -78,7 +78,7 @@ public sealed class ScaleTraitConventionTests
             "renamed without updating this guard. Refusing to pass with zero coverage.");
 
         Assert.True(violations.Count == 0,
-            "These tests spawn the real julie-server but are MISSING [Trait(\"Category\",\"Scale\")], so a " +
+            "These tests spawn the real julie-extract but are MISSING [Trait(\"Category\",\"Scale\")], so a " +
             "bare `dotnet test` would run them in the default fast suite (the julie 30-min trap). Tag each " +
             "with [Trait(\"Category\",\"Scale\")] at the class level:\n  " +
             string.Join("\n  ", violations));

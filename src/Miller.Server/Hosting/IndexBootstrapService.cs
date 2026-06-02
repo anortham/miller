@@ -19,7 +19,7 @@ namespace Miller.Server;
 /// Tools are built per-call, well after <see cref="StartAsync"/>, so the holder is always populated for them.
 ///
 /// Sequence: resolve the <see cref="WorkspaceContext"/> → create <c>&lt;root&gt;/.miller</c> → compute the stable
-/// workspace id from the canonical root → locate the pinned julie-server (fail loudly if absent) → scan when the
+/// workspace id from the canonical root → locate the pinned julie-extract (fail loudly if absent) → scan when the
 /// DB is missing or must be force-rebound to the stable id → read symbols → build the index → register the
 /// workspace row → open the telemetry ledger + prune. The leader-only startup delta scan lives in
 /// <see cref="Hosting.IndexerService"/>.
@@ -105,7 +105,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 string canonicalDbPath = Path.Combine(canonicalRoot, ".miller", "symbols.db");
                 string stableWorkspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot);
 
-                // Locate the pinned julie-server under the tools root (NOT the repo cwd). Absent → fail loudly
+                // Locate the pinned julie-extract under the tools root (NOT the repo cwd). Absent → fail loudly
                 // (FileNotFoundException carrying the restore-script message) — Miller cannot index without it.
                 var runner = JulieExtractRunner.Locate(ctx.ToolsRoot);
 

@@ -10,7 +10,7 @@ namespace Miller.Tests.Indexing;
 /// The pre-v1 column was <c>file_path</c>; a reader that still selected it (or crossed path with another string
 /// column under positional reads) would render the wrong file or a 0 line. This asserts the precise
 /// <c>path:line</c> pair per known row, so a column rename/reorder cannot silently corrupt the coordinate.
-/// Fast suite (no julie-server binary).
+/// Fast suite (no julie-extract binary).
 /// </summary>
 public sealed class SymbolReaderPathLineFixtureTests
 {

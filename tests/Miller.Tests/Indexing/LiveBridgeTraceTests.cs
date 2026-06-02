@@ -9,7 +9,7 @@ namespace Miller.Tests.Indexing;
 
 /// <summary>
 /// M4 Phase D SHIPPABLE GATE (design §7 layers 5+6, §9 final two checkboxes). Drives the REAL
-/// <c>julie-server extract</c> over throwaway polyglot fixtures, builds the index + cross-language bridge
+/// <c>julie-extract</c> over throwaway polyglot fixtures, builds the index + cross-language bridge
 /// graph through the single production path (<see cref="RepositoryIndexLoader.Load"/>), and asserts against
 /// the actual <see cref="BridgeGraph"/> — not a mock.
 ///
@@ -27,7 +27,7 @@ namespace Miller.Tests.Indexing;
 ///
 /// <para>Subprocess + extraction will not fit the &lt;10s default budget, so this is
 /// <c>[Trait("Category","Scale")]</c> and EXCLUDED by the default fast suite. The single launch signal is
-/// <see cref="ScaleTestSupport.RequireJulieServer"/>: if <c>.tools/julie-server</c> is absent the test SKIPS
+/// <see cref="ScaleTestSupport.RequireJulieServer"/>: if <c>.tools/julie-extract</c> is absent the test SKIPS
 /// (never fails) with an actionable message. No private locator — the
 /// <see cref="Conventions.ScaleTraitConventionTests"/> drift guard keys on this one signal.</para>
 /// </summary>
@@ -195,7 +195,7 @@ public sealed class LiveBridgeTraceTests
                 Assert.NotEqual(ConfidenceBand.High, edge.Band);
         }
         // ANTI-VACUITY: the guard above is only meaningful if the ambiguity actually fired this run. If a future
-        // julie-server build stopped resolving "Account" to >1 symbol (e.g. emitted fully-qualified names), every
+        // julie-extract build stopped resolving "Account" to >1 symbol (e.g. emitted fully-qualified names), every
         // edge would be unambiguous and the guard would pass while testing nothing. Pin that at least one surviving
         // edge really carries an ambiguous signal, so the guard cannot silently lose its teeth.
         int ambiguousEdgeCount = allEdges.Count(e =>
@@ -204,7 +204,7 @@ public sealed class LiveBridgeTraceTests
         Assert.True(ambiguousEdgeCount >= 1,
             "the ambiguous-name guard is vacuous: no surviving edge carried an ambiguous signal. The Account "
             + "collision (Billing.Account/Crm.Account) must produce at least one ambiguous-flagged edge for Guard 2 "
-            + "to mean anything — if julie-server stopped flagging it, this fixture no longer exercises the guard.");
+            + "to mean anything — if julie-extract stopped flagging it, this fixture no longer exercises the guard.");
 
         // ── GUARD 3: the C# test HttpClient literal "/api/secret" must NOT form a route bridge (language + test filter).
         Assert.DoesNotContain(allEdges, e =>

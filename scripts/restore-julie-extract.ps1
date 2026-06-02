@@ -93,7 +93,7 @@ Windows. No windows-arm64 prebuilt asset exists; build from source with cargo, o
     exit 1
 }
 
-$asset  = $config.assets.$triple.name
+$asset  = $config.assets.$triple.name -replace '\{VER\}', $config.version
 $sha256 = $config.assets.$triple.sha256
 if ([string]::IsNullOrEmpty($asset) -or [string]::IsNullOrEmpty($sha256)) {
     Write-Error @"

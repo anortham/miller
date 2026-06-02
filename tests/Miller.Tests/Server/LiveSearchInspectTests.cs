@@ -17,12 +17,12 @@ using Xunit;
 namespace Miller.Tests.Server;
 
 /// <summary>
-/// The M2 end-to-end Scale proof (m2-design L228-229): restore julie-server → scan a tiny throwaway repo →
+/// The M2 end-to-end Scale proof (m2-design L228-229): restore julie-extract → scan a tiny throwaway repo →
 /// build the real index → drive <c>search</c> + <c>inspect</c> (summary AND full) THROUGH the SDK with the
 /// production tool types + the central telemetry CallToolFilter, and assert the results are correct AND a
 /// <c>tool_telemetry</c> row landed per call. This depends on the binary + a real extract, so it is
 /// <c>[Trait("Category","Scale")]</c> and EXCLUDED from the default suite; it <see cref="Assert.Skip"/>s if
-/// <c>.tools/julie-server</c> is absent rather than failing.
+/// <c>.tools/julie-extract</c> is absent rather than failing.
 /// </summary>
 [Trait("Category", "Scale")]
 public sealed class LiveSearchInspectTests

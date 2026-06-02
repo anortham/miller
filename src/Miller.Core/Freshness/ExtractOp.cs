@@ -4,7 +4,7 @@ namespace Miller.Core.Freshness;
 /// A single instruction the <see cref="WatchEventRouter"/> hands the indexer: the closed set of
 /// <c>extract</c> sub-operations Miller can perform. Sealed hierarchy — exactly
 /// <see cref="UpdateOp"/>, <see cref="DeleteOp"/>, <see cref="ScanOp"/>. Pure value types (record equality),
-/// no I/O; the hosted indexer maps each to a <c>julie-server extract update|delete|scan</c> call.
+/// no I/O; the hosted indexer maps each to a <c>julie-extract update|delete|scan</c> call.
 /// </summary>
 public abstract record ExtractOp
 {

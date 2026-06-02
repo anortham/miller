@@ -10,9 +10,9 @@ using Xunit;
 namespace Miller.Tests.Server;
 
 /// <summary>
-/// The M7 end-to-end Scale proof: restore julie-server → scan a temp repo with the REAL pinned binary → drive
+/// The M7 end-to-end Scale proof: restore julie-extract → scan a temp repo with the REAL pinned binary → drive
 /// the <c>workspace</c> tool over genuine extracts + the real freshness path. <c>[Trait("Category","Scale")]</c>
-/// so it is EXCLUDED from the default fast suite; it <see cref="Assert.SkipWhen"/>s if <c>.tools/julie-server</c>
+/// so it is EXCLUDED from the default fast suite; it <see cref="Assert.SkipWhen"/>s if <c>.tools/julie-extract</c>
 /// is absent rather than failing. Covers the four operations whose correctness only the real subprocess + the
 /// real rebuild/swap can prove:
 /// <list type="bullet">

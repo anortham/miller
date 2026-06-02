@@ -15,7 +15,7 @@ without embeddings.
 ## How it works
 
 Miller does **not** parse source code itself and does **not** use embeddings. Extraction is delegated to a
-prebuilt `julie-server extract` binary (Rust + tree-sitter) that writes symbols, identifiers, files, and
+prebuilt `julie-extract` binary (Rust + tree-sitter) that writes symbols, identifiers, files, and
 relationships into a SQLite database. Miller is the pure-.NET host on top:
 
 ```
@@ -31,15 +31,15 @@ relationships into a SQLite database. Miller is the pure-.NET host on top:
               ┌──────────────────────┐                        ┌──────────────────────┐
               │     Miller.Core       │                        │   Miller.Indexing     │
               │  (pure logic, no I/O) │                        │  (infrastructure)     │
-              │  • in-memory index    │                        │  • julie-server       │
-              │    + BM25 ranking     │◀──── populated from ───│    extract subprocess │
+              │  • in-memory index    │                        │  • julie-extract      │
+              │    + BM25 ranking     │◀──── populated from ───│    subprocess         │
               │  • cross-lang resolver│                        │  • SQLite (WAL) read  │
               └──────────────────────┘                        │  • watcher / indexer  │
                                                                └──────────────────────┘
                                                                           │
                                                               ┌──────────────────────┐
                                                               │  SQLite extract DB    │
-                                                              │  (from julie-server)  │
+                                                              │  (from julie-extract) │
                                                               └──────────────────────┘
 ```
 
@@ -57,7 +57,7 @@ Design choices that follow from this:
 ```
 src/
   Miller.Core/       pure logic, ZERO I/O deps: contract record types, in-memory index + BM25, the resolver
-  Miller.Indexing/   infrastructure: julie-server extract subprocess, SQLite (WAL) read layer, watcher/indexer
+  Miller.Indexing/   infrastructure: julie-extract subprocess, SQLite (WAL) read layer, watcher/indexer
   Miller.Server/     MCP stdio host, the 7 tools, the telemetry interceptor + ledger
   Miller.Dashboard/  loopback dashboard reading the registry + telemetry DB
 tests/
@@ -84,18 +84,18 @@ dotnet test  Miller.slnx -c Release           # fast suite only — Scale tests 
 The test suite is split in two so the dev loop stays fast (the lesson from julie, whose suite grew to
 30+ minutes once slow integration tests ran on every change):
 
-- **fast** (`Category!=Scale`) — pure logic + contract tests, no `julie-server` subprocess. Target <10s.
+- **fast** (`Category!=Scale`) — pure logic + contract tests, no `julie-extract` subprocess. Target <10s.
   This is the default: a bare `dotnet test` runs only this suite (the test project sets
   `VSTestTestCaseFilter=Category!=Scale`, the MSBuild default for `--filter`; a command-line `--filter`
   overrides it).
-- **scale** (`Category=Scale`) — live tests that spawn the real pinned `julie-server` or build large
-  fixtures. Run before a commit/PR. They **skip** (not fail) if `.tools/julie-server` is absent.
+- **scale** (`Category=Scale`) — live tests that spawn the real pinned `julie-extract` or build large
+  fixtures. Run before a commit/PR. They **skip** (not fail) if `.tools/julie-extract` is absent.
 
 The friendly wrapper sets a wall-clock budget tripwire on the fast suite and handles the filters:
 
 ```bash
 scripts/test.sh            # fast suite (default), with a <30s budget tripwire
-scripts/test.sh scale      # scale suite only (needs .tools/julie-server — see restore script)
+scripts/test.sh scale      # scale suite only (needs .tools/julie-extract — see restore script)
 scripts/test.sh all        # both suites
 ```
 
@@ -105,8 +105,8 @@ build if any julie-spawning test is missing `[Trait("Category","Scale")]`, and C
 suite. To enable the scale suite locally:
 
 ```bash
-bash scripts/restore-julie-server.sh   # downloads the pinned julie-server into .tools/
-MILLER_JULIE_SOURCE=~/source/julie bash scripts/restore-julie-server.sh --from-source
+bash scripts/restore-julie-extract.sh   # downloads the pinned julie-extract into .tools/
+MILLER_JULIE_SOURCE=~/source/julie-extractors bash scripts/restore-julie-extract.sh --from-source
 ```
 
 Requires the .NET 10 SDK. Warnings are errors (`Directory.Build.props`).

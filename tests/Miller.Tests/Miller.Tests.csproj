@@ -7,7 +7,7 @@
     <IsTestProject>true</IsTestProject>
 
     <!-- Default the test run to the FAST suite: exclude [Trait("Category","Scale")] tests (which spawn the
-         real julie-server or build large fixtures). VSTestTestCaseFilter is the MSBuild equivalent of the
+         real julie-extract or build large fixtures). VSTestTestCaseFilter is the MSBuild equivalent of the
          test runner's filter flag, so a bare run executes ONLY the fast suite (the dev-loop default), while
          passing an explicit filter on the command line OVERRIDES this (e.g. "Category=Scale" runs the Scale
          suite). This is the primary defense against the slow-suite-by-default trap that left julie's suite at

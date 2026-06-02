@@ -31,8 +31,8 @@ internal static class SqliteReadOnlyAccess
         string absDbPath = Path.GetFullPath(dbPath);
         if (!File.Exists(absDbPath))
             throw new FileNotFoundException(
-                $"julie extract DB not found at '{absDbPath}'. Run `julie-server extract ... scan` first " +
-                "(see scripts/restore-julie-server.sh to obtain the binary).", absDbPath);
+                $"julie extract DB not found at '{absDbPath}'. Run `julie-extract scan` first " +
+                "(see scripts/restore-julie-extract.sh to obtain the binary).", absDbPath);
 
         string? dir = Path.GetDirectoryName(absDbPath);
         if (string.IsNullOrEmpty(dir))

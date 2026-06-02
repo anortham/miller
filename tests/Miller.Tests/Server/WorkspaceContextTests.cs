@@ -7,7 +7,7 @@ namespace Miller.Tests.Server;
 /// Pins the M2 §1 path conventions: the per-repo julie extract lives under <c>&lt;root&gt;/.miller</c>, the
 /// machine-global telemetry ledger lives under <c>&lt;home&gt;/.miller</c> (one shared DB across all
 /// workspaces), the tools root is under the APP BASE DIRECTORY (NOT the repo cwd — that is where the pinned
-/// julie-server ships), and workspace_id starts null (the bootstrap fills it after the scan).
+/// julie-extract ships), and workspace_id starts null (the bootstrap fills it after the scan).
 /// </summary>
 public sealed class WorkspaceContextTests
 {

@@ -7,7 +7,7 @@ namespace Miller.Server.Tools;
 /// filesystem/drive root, or a platform system directory (Windows\System32, Program Files, /var/root, …). This
 /// is the guard against a launcher (an IDE, a GUI agent, a misconfigured shell) starting the MCP server with its
 /// cwd set to <c>/</c>, <c>~</c>, or <c>C:\Windows\System32</c> — which would otherwise kick off a full
-/// julie-server scan of the entire home/system tree. Ported from julie's <c>workspace/root_safety.rs</c> (the
+/// julie-extract scan of the entire home/system tree. Ported from julie's <c>workspace/root_safety.rs</c> (the
 /// product family's authoritative behavior; see CLAUDE.md "consume julie's signals") so Miller, julie, and eros
 /// reject the same set.
 ///

@@ -18,7 +18,7 @@ models/*.bin
 .codesearch/
 .miller/
 
-# Downloaded tool binaries (julie-server etc.) — fetched from julie releases at restore time, never committed
+# Downloaded tool binaries (julie-extract etc.) — fetched from julie-extractors releases at restore time, never committed
 .tools/
 
 # Local implementation worktrees

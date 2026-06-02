@@ -9,7 +9,7 @@ namespace Miller.Tests.Indexing;
 /// impl-order step 5): <c>ReadEditSpan</c> (the symbol's whole + body byte spans, NULL body preserved) and
 /// <c>ReadIdentifierSites</c> (every exact per-occurrence byte token for a name, ordered, including homonyms,
 /// UTF-8 byte offsets). Driven against the synthesized <see cref="JulieDbFixture.CreateForEdit"/>; opens
-/// Mode=ReadOnly via the shared <see cref="SqliteReadOnlyAccess"/>. Fast suite (no julie-server binary).
+/// Mode=ReadOnly via the shared <see cref="SqliteReadOnlyAccess"/>. Fast suite (no julie-extract binary).
 /// </summary>
 public sealed class ExtractReaderEditTests
 {

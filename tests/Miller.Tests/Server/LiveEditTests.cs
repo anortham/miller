@@ -8,13 +8,13 @@ using Xunit;
 namespace Miller.Tests.Server;
 
 /// <summary>
-/// The M6 end-to-end Scale proof (m6-design impl-order step 10): restore julie-server → scan a temp repo →
+/// The M6 end-to-end Scale proof (m6-design impl-order step 10): restore julie-extract → scan a temp repo →
 /// drive the REAL <see cref="EditService"/> with <c>apply=true</c> for a symbol body-replace + an add-doc + a
 /// cross-file rename → the files on disk are correct → write-through reindexes (the canonical revision bumps) →
 /// a re-read of the extract reflects the rename → an externally-modified file trips the freshness gate (refused
 /// without <c>allow_stale</c>). Depends on the binary + a real extract, so it is
 /// <c>[Trait("Category","Scale")]</c> and EXCLUDED from the default suite; it <see cref="Assert.Skip"/>s if
-/// <c>.tools/julie-server</c> is absent rather than failing.
+/// <c>.tools/julie-extract</c> is absent rather than failing.
 /// </summary>
 [Trait("Category", "Scale")]
 public sealed class LiveEditTests

@@ -4,7 +4,7 @@ using Xunit;
 namespace Miller.Tests.Server;
 
 /// <summary>
-/// The WAL durability proof (m3-design verified-fact 8, decision-2; Scale): ONE writer (the live julie-server
+/// The WAL durability proof (m3-design verified-fact 8, decision-2; Scale): ONE writer (the live julie-extract
 /// doing repeated <c>extract update</c>) while N long-lived <c>Mode=ReadOnly</c> <see cref="FreshnessReader"/>s
 /// poll the revision cursor concurrently. Asserts: no corruption / no exception under contention, and every
 /// reader OBSERVES the writer's revision bumps WITHOUT reopening its connection (the no-lingering-transaction

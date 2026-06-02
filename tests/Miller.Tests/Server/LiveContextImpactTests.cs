@@ -8,7 +8,7 @@ using Xunit;
 namespace Miller.Tests.Server;
 
 /// <summary>
-/// The M5 D11 end-to-end Scale proof: restore julie-server → scan a temp polyglot repo with a real dependency
+/// The M5 D11 end-to-end Scale proof: restore julie-extract → scan a temp polyglot repo with a real dependency
 /// chain (<c>OrderController → OrderService → OrderRepo</c>) plus an xUnit test that calls <c>OrderService</c> →
 /// <see cref="RepositoryIndexLoader.Load"/> the extract (graph included) → drive the REAL
 /// <see cref="ImpactTool.Run"/> / <see cref="ContextTool.Run"/> cores and assert:
@@ -20,7 +20,7 @@ namespace Miller.Tests.Server;
 ///   blast_radius was 5s p95 — the founding adoption thesis), and the graph build stays within the rebuild budget.</item>
 /// </list>
 /// Depends on the pinned binary + a real extract, so it is <c>[Trait("Category","Scale")]</c> and EXCLUDED from
-/// the default suite; it <see cref="Assert.Skip"/>s if <c>.tools/julie-server</c> is absent rather than failing.
+/// the default suite; it <see cref="Assert.Skip"/>s if <c>.tools/julie-extract</c> is absent rather than failing.
 /// </summary>
 [Trait("Category", "Scale")]
 public sealed class LiveContextImpactTests

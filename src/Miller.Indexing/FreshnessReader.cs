@@ -33,7 +33,7 @@ public sealed record RevisionFileChange(long RevisionId, string Path, RevisionCh
 ///
 /// <para><b>The no-lingering-transaction contract (verified-fact 8).</b> The connection holds NO open explicit
 /// transaction between polls: each query auto-commits, so the next <see cref="LatestRevision"/> command sees a
-/// fresh snapshot of the WAL at its latest committed state — picking up a separate writer's (julie-server's)
+/// fresh snapshot of the WAL at its latest committed state — picking up a separate writer's (julie-extract's)
 /// commits WITHOUT reopening the connection. An open transaction (or an undisposed reader) would pin a stale
 /// snapshot and silently freeze freshness; this type therefore never opens one and disposes every command/reader
 /// promptly.</para>

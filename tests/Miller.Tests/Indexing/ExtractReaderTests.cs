@@ -8,7 +8,7 @@ namespace Miller.Tests.Indexing;
 /// spans), name-based references (identifiers — <c>target_symbol_id</c> is always NULL), and the body slice
 /// re-sourced from DISK under the fixture's <c>WorkspaceRoot</c> with the hard content_hash freshness invariant
 /// (a drifted file is never sliced) and graceful NULL-span degradation. Driven against the inspect fixture;
-/// opens the DB Mode=ReadOnly like the M1 reader. Fast suite (no julie-server binary).
+/// opens the DB Mode=ReadOnly like the M1 reader. Fast suite (no julie-extract binary).
 /// </summary>
 public sealed class ExtractReaderTests
 {

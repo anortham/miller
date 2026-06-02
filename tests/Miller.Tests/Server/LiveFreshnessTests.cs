@@ -7,7 +7,7 @@ using Xunit;
 namespace Miller.Tests.Server;
 
 /// <summary>
-/// The M3 end-to-end freshness proof (m3-design §Test strategy, Scale): with the real pinned julie-server,
+/// The M3 end-to-end freshness proof (m3-design §Test strategy, Scale): with the real pinned julie-extract,
 /// scan a tiny throwaway repo → build + hold the index → MODIFY a file → drain/route through the production
 /// dispatch (<see cref="IndexerCore"/> + <see cref="JulieExtractOps"/>, real subprocess) → the revision bumps →
 /// the freshness poll (<see cref="FreshnessReader"/> + <see cref="FreshnessPoller"/>, real SQLite) rebuilds +
@@ -16,7 +16,7 @@ namespace Miller.Tests.Server;
 /// PRODUCTION cores against the live binary (not the timer-driven hosted shell, which is non-deterministic), so
 /// every M3 link — extract update/delete/scan, revision cursor, rebuild, atomic swap, holder-backed search — is
 /// exercised against real julie output. <c>[Trait("Category","Scale")]</c>, EXCLUDED by default;
-/// <see cref="Assert.Skip"/>s if <c>.tools/julie-server</c> is absent.
+/// <see cref="Assert.Skip"/>s if <c>.tools/julie-extract</c> is absent.
 /// </summary>
 [Trait("Category", "Scale")]
 public sealed class LiveFreshnessTests

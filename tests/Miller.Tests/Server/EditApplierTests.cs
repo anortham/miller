@@ -11,7 +11,7 @@ namespace Miller.Tests.Server;
 /// temp directory (never the repo) and asserts the on-disk bytes. Covers: single-file atomic write; the TOCTOU
 /// re-check (the file changed between plan and apply → abort, original intact — enforced EVEN with allow_stale);
 /// multi-file reverse-order rollback (the 2nd write fails → the 1st is restored); temp cleanup in finally; and
-/// the missing-target-file abort. Fast suite (no julie-server binary, no SQLite).
+/// the missing-target-file abort. Fast suite (no julie-extract binary, no SQLite).
 /// </summary>
 public sealed class EditApplierTests : IDisposable
 {

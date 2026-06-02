@@ -4,10 +4,10 @@ using Xunit;
 namespace Miller.Tests.Indexing;
 
 /// <summary>
-/// The live end-to-end path (D6): drive the real <c>julie-server extract</c> over a tiny throwaway repo,
+/// The live end-to-end path (D6): drive the real <c>julie-extract</c> over a tiny throwaway repo,
 /// read the produced DB, build the index, and assert a known symbol is found. Subprocess + extraction won't
 /// fit the &lt;10s default budget, so this is <c>[Trait("Category","Scale")]</c> and EXCLUDED by the default
-/// suite (<c>--filter "Category!=Scale"</c>). It is network/binary dependent: if <c>.tools/julie-server</c>
+/// suite (<c>--filter "Category!=Scale"</c>). It is network/binary dependent: if <c>.tools/julie-extract</c>
 /// is absent (restore not run) it <see cref="Assert.Skip"/>s with an actionable message rather than failing.
 /// </summary>
 [Trait("Category", "Scale")]

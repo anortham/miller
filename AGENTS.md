@@ -1,7 +1,7 @@
 # Miller — agent working notes
 
-Miller is a read-only .NET 10 SQLite/MCP consumer of `julie-server extract` output. It does not parse
-source or use embeddings; extraction is delegated to the pinned `julie-server` binary. See
+Miller is a read-only .NET 10 SQLite/MCP consumer of `julie-extract` output. It does not parse
+source or use embeddings; extraction is delegated to the pinned `julie-extract` binary. See
 [README.md](README.md) for the architecture and [docs/miller-mvp-plan.md](docs/miller-mvp-plan.md) for
 the milestone plan.
 
@@ -17,9 +17,9 @@ that, and there are guards that will fail the build if the split erodes.
   command-line `--filter` overrides it). Target <10s. **Run this on every change.** (A well-formed
   `.runsettings` `<TestCaseFilter>` works too; the csproj property is preferred because it needs no extra
   file and fails the build loudly on a typo instead of silently running everything.)
-- **Scale suite is opt-in.** `Category=Scale` tests spawn the real `julie-server` or build large
+- **Scale suite is opt-in.** `Category=Scale` tests spawn the real `julie-extract` or build large
   fixtures. Run them with `scripts/test.sh scale` (or `all`) before a commit/PR, or when you touch the
-  indexing/extract path. They **skip** (not fail) if `.tools/julie-server` is missing.
+  indexing/extract path. They **skip** (not fail) if `.tools/julie-extract` is missing.
 
 Use the wrapper, not raw `dotnet test`, unless you have a reason:
 
@@ -31,7 +31,7 @@ scripts/test.sh all     # both
 
 ### Rules when adding or changing tests
 
-- **A test that spawns `julie-server` MUST be tagged `[Trait("Category","Scale")]`** at the class level,
+- **A test that spawns `julie-extract` MUST be tagged `[Trait("Category","Scale")]`** at the class level,
   and MUST obtain the binary via `ScaleTestSupport.RequireJulieServer()` (the single launch signal). Do
   not re-add a private `LocateJulieServer()`/`RepoRoot()` copy — those were deduplicated into
   [`ScaleTestSupport`](tests/Miller.Tests/ScaleTestSupport.cs) precisely so the guard has one signal to
@@ -52,11 +52,11 @@ scripts/test.sh all     # both
   xUnit1051) are build errors.
 - Project seam: `Miller.Core` is pure logic with ZERO I/O deps. Keep it that way — it's why the core is
   unit-tested in milliseconds.
-- The build COPIES `.tools/julie-server` next to the output binary (`<out>/.tools/`, via a `Content`
+- The build COPIES `.tools/julie-extract` next to the output binary (`<out>/.tools/`, via a `Content`
   item in [`Miller.Server.csproj`](src/Miller.Server/Miller.Server.csproj)) because production locates it
   at `AppContext.BaseDirectory/.tools` (`WorkspaceContext.ToolsRoot`), NOT the repo. A no-restore machine
-  still builds; the runtime then fails loudly with the restore-script message. Before Julie v7.13.2 release
-  assets publish, use `MILLER_JULIE_SOURCE=/path/to/julie scripts/restore-julie-server.sh --from-source`.
+  still builds; the runtime then fails loudly with the restore-script message. To build from source, use
+  `MILLER_JULIE_SOURCE=/path/to/julie-extractors scripts/restore-julie-extract.sh --from-source`.
 
 ## Server host & startup
 

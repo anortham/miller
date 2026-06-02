@@ -14,7 +14,7 @@ namespace Miller.Tests.Server;
 /// so the disk content matches the indexed snapshot (Fresh gate) unless a test deliberately mutates it. Covers
 /// every operation, dry_run-writes-nothing, apply-writes-and-converges (recorded write-through), the stale gate
 /// (+ allow_stale escape), ambiguous→candidates, not-found→message, NULL-body reject, and the cross-file rename
-/// including the homonym site. Fast suite (synthesized fixture + temp files; no julie-server binary).
+/// including the homonym site. Fast suite (synthesized fixture + temp files; no julie-extract binary).
 /// </summary>
 public sealed class EditToolTests : IDisposable
 {

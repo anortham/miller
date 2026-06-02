@@ -148,6 +148,7 @@ if [[ -z "${TRIPLE}" ]]; then
 fi
 
 ASSET="$(read_pin ".assets[\"${TRIPLE}\"].name")"
+ASSET="${ASSET/\{VER\}/${VERSION}}"
 SHA256="$(read_pin ".assets[\"${TRIPLE}\"].sha256")"
 URL_TEMPLATE="$(read_pin .urlTemplate)"
 
@@ -194,8 +195,12 @@ verify_sha() {
 verify_sha "${ARCHIVE}" "${SHA256}"
 echo "  sha256 OK"
 
-# --- extract ONLY julie-extract from the archive ---
-tar -xzf "${ARCHIVE}" -C "${TOOLS_DIR}" julie-extract
+# --- extract ONLY julie-extract from the archive (v1 archives nest under dist/{triple}/) ---
+INNER="$(read_pin .archiveInnerPathTemplate)"
+INNER="${INNER/\{triple\}/${TRIPLE}}"; INNER="${INNER/\{exe\}/}"   # no exe suffix on unix
+tar -xzf "${ARCHIVE}" -C "${TOOLS_DIR}" "${INNER}"
+mv "${TOOLS_DIR}/${INNER}" "${BINARY}"
+rm -rf "${TOOLS_DIR}/dist"
 
 # --- exec bit + clear macOS quarantine (ignore if absent) ---
 chmod +x "${BINARY}"

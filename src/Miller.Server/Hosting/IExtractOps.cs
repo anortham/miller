@@ -4,7 +4,7 @@ namespace Miller.Server.Hosting;
 
 /// <summary>
 /// The three <c>extract</c> sub-operations the indexer can perform, abstracted so the indexer's dispatch loop
-/// (<see cref="IndexerCore"/>) is unit-testable without spawning <c>julie-server</c>. The production
+/// (<see cref="IndexerCore"/>) is unit-testable without spawning <c>julie-extract</c>. The production
 /// implementation (<see cref="JulieExtractOps"/>) canonicalizes the supplied path under the workspace root
 /// (verified-fact 4) and routes through <see cref="JulieExtractRunner"/>; tests substitute a recorder.
 ///
