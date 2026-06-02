@@ -4,7 +4,7 @@ namespace Miller.Server.Hosting;
 /// The pure computation behind the coarse <c>index_fresh</c> telemetry signal (m3-design decision-8). The
 /// in-memory index served to a tool call is "fresh" iff:
 /// <list type="number">
-/// <item>its built revision equals the latest persisted <c>canonical_revisions</c> revision (this instance has
+/// <item>its built revision equals the latest persisted <c>extraction_revisions</c> revision (this instance has
 ///   rebuilt up to the writer's most recent commit), AND</item>
 /// <item>the indexer's coalescing queue is empty (no observed-but-not-yet-applied file event is pending).</item>
 /// </list>

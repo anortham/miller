@@ -19,7 +19,7 @@ namespace Miller.Server.Tools;
 /// <param name="IsLeader">Whether THIS instance holds the writer lock (runs the watcher/extract writes).</param>
 /// <param name="DocumentCount">Indexed symbol count of the live index.</param>
 /// <param name="KnownExtensionsCount">Distinct file-extension count (the cross-language "languages indexed" proxy).</param>
-/// <param name="BuiltRevision">The <c>canonical_revisions</c> revision the held index was built from.</param>
+/// <param name="BuiltRevision">The <c>extraction_revisions</c> revision the held index was built from.</param>
 /// <param name="LatestObservedRevision">The latest revision the freshness poll has observed.</param>
 /// <param name="IndexFresh">The coarse <c>index_fresh</c> probe (built==latest AND queue empty); null = unknown.</param>
 /// <param name="QueueEmpty">Whether the leader's watcher queue holds no pending events (vacuously true on a reader).</param>

@@ -5,7 +5,7 @@ namespace Miller.Server.Hosting;
 /// <summary>
 /// The pure poll-then-swap decision behind <see cref="FreshnessService"/> (m3-design decision-2/-5): the
 /// testable seam with no SQLite, no timer, and no subprocess. Given the index holder, the latest persisted
-/// revision (read by the service from <c>canonical_revisions</c>), and a rebuild factory, it rebuilds and
+/// revision (read by the service from <c>extraction_revisions</c>), and a rebuild factory, it rebuilds and
 /// atomically swaps the index ONLY when the writer has moved ahead of the held index — so a reader instance
 /// converges on the leader's writes without churning while the writer is idle.
 /// </summary>

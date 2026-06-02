@@ -3,7 +3,7 @@ namespace Miller.Indexing;
 /// <summary>
 /// The single seam the read tools (search/inspect/resolver) depend on so the in-memory index can be replaced
 /// behind live readers (decision-5). It holds a <see cref="MillerRepositoryIndex"/> — a frozen, immutable index
-/// — paired with the julie <c>canonical_revisions</c> revision it was built from. The freshness service rebuilds
+/// — paired with the julie <c>extraction_revisions</c> revision it was built from. The freshness service rebuilds
 /// a new index from a fresh read and publishes it with <see cref="Swap"/>; tools read <see cref="Current"/>
 /// per call.
 ///
@@ -37,7 +37,7 @@ public sealed class IndexHolder
     /// <summary>The current frozen index. Read per tool call; never null.</summary>
     public MillerRepositoryIndex Current => _snapshot.Index;
 
-    /// <summary>The revision the <see cref="Current"/> index was built from (its <c>canonical_revisions</c> cursor).</summary>
+    /// <summary>The revision the <see cref="Current"/> index was built from (its <c>extraction_revisions</c> cursor).</summary>
     public long BuiltRevision => _snapshot.Revision;
 
     /// <summary>

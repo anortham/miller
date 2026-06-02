@@ -9,7 +9,8 @@ namespace Miller.Server;
 /// so cross-repo usage aggregates in one place and a per-repo index rebuild (<c>rm -rf .miller</c>) never wipes it.
 /// <see cref="RegistryDbPath"/> is the shared workspace metadata registry under the same machine-global Miller dir.
 /// <see cref="ToolsRoot"/> is where the pinned julie-extract ships (under the app base dir, NOT the repo cwd).
-/// <see cref="WorkspaceId"/> is read from the extract metadata after the scan (null until known).
+/// <see cref="WorkspaceId"/> is Miller's stable id (SHA-256 of the canonical root), set by the bootstrap after
+/// the scan (v1 carries no echoed workspace_id; null until the bootstrap computes it).
 /// </summary>
 public sealed record WorkspaceContext(
     string WorkspaceRoot,    // Environment.CurrentDirectory (the repo Claude Code launched us in)
@@ -17,7 +18,7 @@ public sealed record WorkspaceContext(
     string TelemetryDbPath,  // <home>/.miller/telemetry.db (Miller-owned, writable; machine-global, shared across workspaces)
     string RegistryDbPath,   // <home>/.miller/workspaces.db (Miller-owned metadata registry; machine-global)
     string ToolsRoot,        // AppContext.BaseDirectory/.tools (where pinned julie-extract ships — NOT the repo)
-    string? WorkspaceId,     // from external_extract_metadata after scan (nullable until known)
+    string? WorkspaceId,     // Miller's stable id (SHA-256 of canonical root); set by bootstrap after scan (v1 has no echoed workspace_id; nullable until known)
     string? CanonicalRoot = null,          // symlink-resolved WorkspaceRoot (verified-fact 4); set by bootstrap (M3)
     string? CanonicalExtractDbPath = null) // ExtractDbPath composed under CanonicalRoot (verified-fact 4); set by bootstrap (M3)
 {
@@ -27,9 +28,9 @@ public sealed record WorkspaceContext(
     /// ledger lives under <paramref name="homeDirectory"/> (the user profile — pass null in production to resolve
     /// it from <see cref="Environment.SpecialFolder.UserProfile"/>; tests inject a temp dir).
     /// <see cref="WorkspaceId"/>, <see cref="CanonicalRoot"/>, and <see cref="CanonicalExtractDbPath"/> start
-    /// null; the bootstrap sets the workspace id after reading the extract, the canonical root via
-    /// <c>PathCanonicalizer.CanonicalizeRoot</c>, and the canonical DB path composed under that root (M3) —
-    /// symlink resolution needs a real filesystem walk.
+    /// null; the bootstrap resolves the canonical root via <c>PathCanonicalizer.CanonicalizeRoot</c>, derives the
+    /// workspace id from it (SHA-256 of the canonical root — v1 stores no workspace_id to read back), and composes
+    /// the canonical DB path under that root (M3) — symlink resolution needs a real filesystem walk.
     /// </summary>
     public static WorkspaceContext Create(string workspaceRoot, string appBaseDirectory, string? homeDirectory = null)
     {
