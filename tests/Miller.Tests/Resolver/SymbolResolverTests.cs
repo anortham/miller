@@ -16,7 +16,7 @@ public sealed class SymbolResolverTests
     private static SymbolDetail Sym(string id, string name, string file, string? ns = null, string kind = "class")
         => new(
             Id: id, Name: name, Kind: kind, FilePath: file, Signature: "",
-            Namespace: ns, TestRole: null, ParentClassName: null);
+            Namespace: ns, IsTest: false, ParentClassName: null);
 
     [Fact]
     public void Resolve_UniqueName_ResolvesToThatSymbol()

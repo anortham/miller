@@ -33,13 +33,13 @@ public sealed class ContextToolTests
         var symbols = new List<IndexedSymbol>
         {
             new(0, ControllerId, "OrderController", "class OrderController", "class", "csharp",
-                "web/OrderController.cs", 1, 40, null),
+                "web/OrderController.cs", 1, 40, null, false),
             new(1, ServiceId, "OrderService", "class OrderService", "class", "csharp",
-                "src/OrderService.cs", 1, 60, null),
+                "src/OrderService.cs", 1, 60, null, false),
             new(2, RepoId, "OrderRepo", "class OrderRepo", "class", "csharp",
-                "src/OrderRepo.cs", 1, 30, null),
+                "src/OrderRepo.cs", 1, 30, null, false),
             new(3, UnrelatedId, "UnrelatedHelper", "class UnrelatedHelper", "class", "csharp",
-                "util/Helper.cs", 1, 10, null),
+                "util/Helper.cs", 1, 10, null, false),
             new(4, TestId, "OrderServiceTests", "class OrderServiceTests", "class", "csharp",
                 "tests/OrderServiceTests.cs", 1, 20, null, IsTest: true),
         };

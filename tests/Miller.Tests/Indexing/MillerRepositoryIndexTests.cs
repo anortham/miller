@@ -132,9 +132,9 @@ public sealed class MillerRepositoryIndexTests
         new IndexedSymbol(0, ProcessId, "Process", "public void Process()", "method", "csharp",
             "src/A.cs", 1, 3, null, IsTest: processIsTest),
         new IndexedSymbol(1, ValidateId, "Validate", "public void Validate()", "method", "csharp",
-            "src/A.cs", 5, 7, null),
+            "src/A.cs", 5, 7, null, IsTest: false),
         new IndexedSymbol(2, HandleId, "Handle", "public void Handle()", "method", "csharp",
-            "src/B.cs", 1, 3, null),
+            "src/B.cs", 1, 3, null, IsTest: false),
     };
 
     [Fact]

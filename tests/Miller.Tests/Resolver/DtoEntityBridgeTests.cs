@@ -25,7 +25,7 @@ public sealed class DtoEntityBridgeTests
     // ---- in-memory fixture builders ----------------------------------------------------------------------------
     // A type owner plus its property children: the test seeds these into BOTH the SymbolResolver (so the name resolves)
     // and the FieldSources map (so the leg can build the field-set via FieldSetExtractor), exactly as a Task-8 builder
-    // would. SymbolDetail ctor order: (Id, Name, Kind, FilePath, Signature, Namespace, TestRole, ParentClassName).
+    // would. SymbolDetail ctor order: (Id, Name, Kind, FilePath, Signature, Namespace, IsTest, ParentClassName).
 
     private sealed record OwnerSpec(
         string Id, string Name, string? Namespace, string Kind, string? Signature, string File,
@@ -37,10 +37,10 @@ public sealed class DtoEntityBridgeTests
         new(id, name, ns, kind, signature, file, props);
 
     private static SymbolDetail OwnerSymbol(OwnerSpec o) =>
-        new(o.Id, o.Name, o.Kind, o.File, o.Signature ?? $"public {o.Kind} {o.Name}", o.Namespace, null, null);
+        new(o.Id, o.Name, o.Kind, o.File, o.Signature ?? $"public {o.Kind} {o.Name}", o.Namespace, false, null);
 
     private static SymbolDetail PropSymbol(OwnerSpec o, (string Name, string Type) p) =>
-        new($"{o.Id}.{p.Name}", p.Name, "property", o.File, $"{p.Type} {p.Name}", o.Namespace, null, null);
+        new($"{o.Id}.{p.Name}", p.Name, "property", o.File, $"{p.Type} {p.Name}", o.Namespace, false, null);
 
     // Build the (resolver, input) pair from owner specs + the CreateMap/projection candidates. Every owner and its
     // properties go into the resolver's symbol set; each owner with properties gets a TypeFieldSource entry.
@@ -414,8 +414,8 @@ public sealed class DtoEntityBridgeTests
         // name match — never sole — so the scorer drops it. The leg emits the name signal but no field-set signal.
         var resolver = new SymbolResolver(
         [
-            new SymbolDetail("e1", "Account", "class", "Domain/Account.cs", "public class Account", "Domain", null, null),
-            new SymbolDetail("d1", "AccountDto", "class", "Dtos/AccountDto.cs", "public class AccountDto", "Dtos", null, null),
+            new SymbolDetail("e1", "Account", "class", "Domain/Account.cs", "public class Account", "Domain", false, null),
+            new SymbolDetail("d1", "AccountDto", "class", "Dtos/AccountDto.cs", "public class AccountDto", "Dtos", false, null),
         ]);
         var input = new DtoEntityInput([], [Projection("Account", "AccountDto")], FieldSources: null);
 

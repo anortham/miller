@@ -6,7 +6,7 @@ namespace Miller.Tests.Indexing;
 /// <summary>
 /// Pins the D4 read layer against the synthesized julie schema. These are Miller's read-CONTRACT tests, NOT
 /// a re-test of julie extraction. They assert the exact <see cref="IndexedSymbol"/> projection: deterministic
-/// DocId ordinals (0..n-1 over the file_path,start_line,id ordering), opaque ids retained verbatim, and the
+/// DocId ordinals (0..n-1 over the path,start_line,symbol_id ordering), opaque ids retained verbatim, and the
 /// NULL discipline (NULL signature/parent_id → null; NULL start_line → 0). Error paths covered: the gate
 /// fires before any read, and a non-writable DB directory surfaces a clear error (the WAL -shm/-wal trap).
 /// </summary>
@@ -127,101 +127,34 @@ public sealed class SqliteSymbolReaderTests
     }
 
     [Fact]
-    public void Read_IsTest_FromMetadata_IsCrossLanguage()
+    public void Read_IsTest_FromTypedColumn_IsCrossLanguage()
     {
-        // julie's test_detection.rs writes "is_test":true into symbols.metadata across all 34 languages, ONLY
-        // when true (compact serde JSON). Miller surfaces that as IndexedSymbol.IsTest. Verified here across
-        // go/python/csharp positives + the negative / false / NULL / substring-trap / malformed cases.
-        // (M2 decision-4 — the cross-language primary test signal.)
+        // v1 promotes the cross-language test signal to a typed symbols.is_test column (INTEGER NOT NULL).
+        // Miller reads it directly (no metadata JSON parse). Verified across go/python/csharp positives + a
+        // negative; the old JSON substring-trap/malformed cases are gone with ParseTestSignals (D4).
         using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
         {
             new JulieDbFixture.SymbolRow("a0000000000000000000000000000001", "TestAdd", "function", "go",
-                "math/add_test.go", "func TestAdd(t *testing.T)", 3, null) { Metadata = "{\"is_test\":true}" },
+                "math/add_test.go", "func TestAdd(t *testing.T)", 3, null) { IsTest = true },
             new JulieDbFixture.SymbolRow("a0000000000000000000000000000002", "test_add", "function", "python",
-                "calc/test_calc.py", "def test_add()", 2, null)
-                { Metadata = "{\"isAsync\":false,\"decorators\":[],\"is_test\":true,\"returnType\":\"\"}" },
+                "calc/test_calc.py", "def test_add()", 2, null) { IsTest = true },
             new JulieDbFixture.SymbolRow("a0000000000000000000000000000003", "Adds", "method", "csharp",
-                "Tests/CalcTests.cs", "public void Adds()", 9, null) { Metadata = "{\"is_test\":true}" },
-            // Non-test: empty metadata object.
+                "Tests/CalcTests.cs", "public void Adds()", 9, null) { IsTest = true },
+            // Non-test: column defaults to 0/false.
             new JulieDbFixture.SymbolRow("b0000000000000000000000000000001", "Add", "function", "go",
-                "math/add.go", "func Add(a, b int) int", 5, null) { Metadata = "{}" },
-            // Non-test: explicit false (julie never writes this, but the BOOL must be read, not the substring).
+                "math/add.go", "func Add(a, b int) int", 5, null),
             new JulieDbFixture.SymbolRow("b0000000000000000000000000000002", "helper", "function", "python",
-                "calc/util.py", "def helper()", 1, null) { Metadata = "{\"is_test\":false}" },
-            // Non-test: no metadata at all (NULL column).
-            new JulieDbFixture.SymbolRow("b0000000000000000000000000000003", "Calc", "class", "csharp",
-                "src/Calc.cs", "public class Calc", 1, null),
-            // Trap: a different key that merely CONTAINS the substring "is_test" must NOT read as a test.
-            new JulieDbFixture.SymbolRow("b0000000000000000000000000000004", "this_test_helper", "function", "go",
-                "math/helpers.go", "func helper()", 7, null) { Metadata = "{\"this_test\":true}" },
-            // Malformed metadata that contains the token — must degrade to false, never throw.
-            new JulieDbFixture.SymbolRow("b0000000000000000000000000000005", "broken", "function", "rust",
-                "core/lib.rs", "fn broken()", 1, null) { Metadata = "{\"is_test\":tru" },
+                "calc/util.py", "def helper()", 1, null) { IsTest = false },
         });
 
         var symbols = SqliteSymbolReader.Read(fx.DbPath);
         bool IsTestOf(string name) => symbols.Single(s => s.Name == name).IsTest;
 
-        Assert.True(IsTestOf("TestAdd"), "go test method should be is_test");
-        Assert.True(IsTestOf("test_add"), "python test (is_test among other keys) should be is_test");
-        Assert.True(IsTestOf("Adds"), "csharp [Fact] method should be is_test");
-        Assert.False(IsTestOf("Add"), "empty metadata → not a test");
-        Assert.False(IsTestOf("helper"), "is_test:false → not a test");
-        Assert.False(IsTestOf("Calc"), "NULL metadata → not a test");
-        Assert.False(IsTestOf("this_test_helper"), "substring 'is_test' in another key → not a test");
-        Assert.False(IsTestOf("broken"), "malformed metadata JSON → not a test (graceful)");
-    }
-
-    [Fact]
-    public void Read_TestRole_FromMetadata_PopulatesRoleAndIsTest_CrossLanguage()
-    {
-        // M4 Task 9: julie's test_detection writes a "test_role" string (cross-language) into symbols.metadata for
-        // test symbols. Miller surfaces it as IndexedSymbol.TestRole (the raw role value) ALONGSIDE the existing
-        // is_test boolean. A fixture_setup carries a role WITHOUT is_test:true — TestRole.IsTest must still be true
-        // for it (presence of a non-blank role is the test signal), so this is parsed independently of is_test.
-        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
-        {
-            // is_test true + an explicit test_role: both populated.
-            new JulieDbFixture.SymbolRow("d0000000000000000000000000000001", "TestAdd", "function", "go",
-                "math/add_test.go", "func TestAdd(t *testing.T)", 3, null)
-                { Metadata = "{\"is_test\":true,\"test_role\":\"test_case\"}" },
-            // A fixture: test_role present WITHOUT is_test:true (julie may emit role-only). Role IS the test signal.
-            new JulieDbFixture.SymbolRow("d0000000000000000000000000000002", "SetUp", "method", "csharp",
-                "Tests/Fixtures.cs", "public void SetUp()", 5, null)
-                { Metadata = "{\"test_role\":\"fixture_setup\"}" },
-            // Production code: neither key → TestRole null, IsTest false.
-            new JulieDbFixture.SymbolRow("e0000000000000000000000000000001", "Add", "function", "go",
-                "math/add.go", "func Add(a, b int) int", 5, null) { Metadata = "{}" },
-            // is_test true but NO test_role key → IsTest true, TestRole null (the two signals are independent).
-            new JulieDbFixture.SymbolRow("e0000000000000000000000000000002", "Adds", "method", "csharp",
-                "Tests/CalcTests.cs", "public void Adds()", 9, null) { Metadata = "{\"is_test\":true}" },
-        });
-
-        var symbols = SqliteSymbolReader.Read(fx.DbPath);
-        IndexedSymbol Of(string name) => symbols.Single(s => s.Name == name);
-
-        var testAdd = Of("TestAdd");
-        Assert.True(testAdd.IsTest);
-        Assert.NotNull(testAdd.TestRole);
-        Assert.Equal("test_case", testAdd.TestRole!.Value);
-        Assert.True(testAdd.TestRole.IsTest);
-
-        // Role-only (no is_test:true): the role is still parsed and IsTest on the role is true.
-        var setUp = Of("SetUp");
-        Assert.False(setUp.IsTest); // is_test boolean absent
-        Assert.NotNull(setUp.TestRole);
-        Assert.Equal("fixture_setup", setUp.TestRole!.Value);
-        Assert.True(setUp.TestRole.IsTest); // presence of a non-blank role IS the test signal
-
-        // Production code: both null/false.
-        var add = Of("Add");
-        Assert.False(add.IsTest);
-        Assert.Null(add.TestRole);
-
-        // is_test true, no role key: is_test honored, role null.
-        var adds = Of("Adds");
-        Assert.True(adds.IsTest);
-        Assert.Null(adds.TestRole);
+        Assert.True(IsTestOf("TestAdd"), "go test → is_test column true");
+        Assert.True(IsTestOf("test_add"), "python test → is_test column true");
+        Assert.True(IsTestOf("Adds"), "csharp test → is_test column true");
+        Assert.False(IsTestOf("Add"), "default column 0 → not a test");
+        Assert.False(IsTestOf("helper"), "explicit is_test=0 → not a test");
     }
 
     [Fact]

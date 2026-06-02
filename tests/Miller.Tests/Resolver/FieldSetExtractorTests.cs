@@ -16,7 +16,7 @@ public sealed class FieldSetExtractorTests
     private static SymbolDetail Sym(string id, string name, string kind, string signature = "")
         => new(
             Id: id, Name: name, Kind: kind, FilePath: "x.cs", Signature: signature,
-            Namespace: null, TestRole: null, ParentClassName: null);
+            Namespace: null, IsTest: false, ParentClassName: null);
 
     [Fact]
     public void ExtractFields_ClassProperties_FromChildren_InDeclarationOrder()

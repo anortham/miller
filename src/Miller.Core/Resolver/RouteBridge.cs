@@ -7,7 +7,7 @@ namespace Miller.Core.Resolver;
 /// <c>literals</c> row carries the route text, the kind, the verbatim <c>carrier</c>, the language, the
 /// <c>containing_symbol_id</c> and a byte span — but NO file/line columns and no <c>identifier_id</c>. The graph
 /// builder (plan Task 8) is what selects the <c>kind=url</c> literals, resolves each one's use-site file:line for
-/// evidence, and reads the containing TS function's <c>test_role</c>; this record is the already-located input the
+/// evidence, and reads the containing TS function's <c>is_test</c> flag; this record is the already-located input the
 /// pure leg consumes.
 ///
 /// <para><b>The leg filters this to a real client call</b> (design §4 Leg 1): the literal must be <c>kind=url</c>,
@@ -22,15 +22,15 @@ namespace Miller.Core.Resolver;
 /// The url literal: <see cref="LiteralRecord.LiteralText"/> is the route ({}-folded), <see cref="LiteralRecord.Carrier"/>
 /// is the verb source, <see cref="LiteralRecord.Language"/> drives the frontend-language filter.
 /// </param>
-/// <param name="TestRole">
-/// The containing TS function's <c>test_role</c> (from <c>symbols.metadata</c>), or null for production code. A present
-/// (test) role excludes the literal from the route bridge — it is a test HttpClient call, not a real client call.
+/// <param name="IsTest">
+/// The containing TS function's julie-extractors v1 typed <c>is_test</c> flag. A present test flag excludes the
+/// literal from the route bridge — it is a test HttpClient call, not a real client call.
 /// </param>
 /// <param name="FilePath">The call's use-site file (workspace-relative), for the edge evidence.</param>
 /// <param name="Line">The 1-based use-site line, for the edge evidence (file:line).</param>
 public sealed record TsClientCall(
     LiteralRecord Literal,
-    TestRole? TestRole,
+    bool IsTest,
     string FilePath,
     int Line);
 
@@ -195,7 +195,7 @@ public static class RouteBridge
 
     /// <summary>
     /// A real client call is a <c>kind=url</c> literal in a frontend/client language (NOT the C# endpoint language) and
-    /// NOT a <c>test_role</c> HttpClient call (design §4 Leg 1; findings 28-2). The language-agnostic phrasing of the
+    /// NOT an <c>is_test</c> HttpClient call (design §4 Leg 1; findings 28-2). The language-agnostic phrasing of the
     /// design's filter ("literal.language != the endpoint language") is implemented as "not the C# endpoint language":
     /// the route bridge's endpoints are C#, so a <c>csharp</c> url literal is a test HttpClient call, never a client call.
     /// </summary>
@@ -203,7 +203,7 @@ public static class RouteBridge
     {
         if (!string.Equals(call.Literal.Kind, "url", StringComparison.OrdinalIgnoreCase))
             return false;
-        if (call.TestRole is { IsTest: true })
+        if (call.IsTest)
             return false;
         // The endpoint side is C#; a url literal in the endpoint language is a (test) HttpClient call, not a client call.
         if (string.Equals(call.Literal.Language, "csharp", StringComparison.OrdinalIgnoreCase))

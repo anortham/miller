@@ -1,4 +1,3 @@
-using Miller.Core.Contracts;
 using Miller.Core.Search;
 
 namespace Miller.Indexing;
@@ -21,8 +20,7 @@ public sealed record IndexedSymbol(
     int StartLine,      // 1-based (NULL start_line in the DB maps to 0)
     int EndLine,        // whole-symbol span end, 1-based (NULL end_line maps to 0); enables D5 diff→symbol mapping
     string? ParentId,   // julie parent_id (containment; M4)
-    bool IsTest = false,  // julie's persisted symbols.metadata.is_test (cross-language, all 34 langs); see M2 §2 decision-4
-    TestRole? TestRole = null) // julie's persisted symbols.metadata.test_role (cross-language); null = not a test (M4 Task 9)
+    bool IsTest)   // julie's typed symbols.is_test column (INTEGER NOT NULL, all 34 langs); see design D4
 {
     /// <summary>
     /// Project to the Core scoring document. Drops the join keys (<see cref="SymbolId"/>/<see cref="ParentId"/>)

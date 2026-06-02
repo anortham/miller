@@ -31,7 +31,7 @@ public sealed class TraceToolTests
             var (id, name, kind, file, line) = symbols[i];
             indexed.Add(new IndexedSymbol(
                 DocId: i, SymbolId: id, Name: name, Signature: $"{kind} {name}()",
-                Kind: kind, Language: "csharp", FilePath: file, StartLine: line, EndLine: line, ParentId: null));
+                Kind: kind, Language: "csharp", FilePath: file, StartLine: line, EndLine: line, ParentId: null, IsTest: false));
         }
         var graphEdges = edges.Select(e => new GraphEdge(e.from, e.to, "calls")).ToList();
         return MillerRepositoryIndex.Build(indexed, graphEdges);
@@ -78,7 +78,7 @@ public sealed class TraceToolTests
             var (symbolId, name, file, line) = symbols[i];
             indexed.Add(new IndexedSymbol(
                 DocId: i, SymbolId: symbolId, Name: name, Signature: $"class {name}", Kind: "class",
-                Language: "csharp", FilePath: file, StartLine: line, EndLine: line, ParentId: null));
+                Language: "csharp", FilePath: file, StartLine: line, EndLine: line, ParentId: null, IsTest: false));
             nodes[symbolId] = new BridgeNode(symbolId, BridgeNodeKind.CsDto, name, file, line);
         }
         foreach (var (id, node) in extraNodes)

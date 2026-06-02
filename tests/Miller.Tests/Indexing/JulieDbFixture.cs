@@ -5,11 +5,18 @@ using Miller.Indexing;
 namespace Miller.Tests.Indexing;
 
 /// <summary>
-/// Synthesizes a tiny SQLite file matching julie v7.13.1's verified extract schema (schema_version 28,
-/// extract_contract_version 3). This is Miller's READ-CONTRACT harness — it is NOT a re-test of julie's
-/// extraction (julie owns that). The DDL is transcribed verbatim from julie's <c>src/database/schema.rs</c>
-/// (see docs/findings/julie-contract-verified.md §1), so the reader is exercised against the real column
-/// set, NULL discipline, and self-FK that a live extract produces.
+/// Synthesizes a tiny SQLite file matching the julie-extractors v1 artifact schema
+/// (<c>sqlite_schema_version = 1</c>, <c>extract_contract_version = 1</c>). This is Miller's READ-CONTRACT
+/// harness — it is NOT a re-test of julie's extraction (julie owns that). The DDL is transcribed from
+/// <c>julie-extractors/crates/julie-extract-artifact/src/schema.rs</c>, so the reader is exercised against the
+/// real v1 column set, NULL discipline, and self-FK that a live extract produces.
+///
+/// <para>Phase-3 deviations from the strict v1 schema (called out where they apply):
+/// (a) <c>files.last_revision_id</c> is a plain column with NO FK — the revision tables (extraction_revisions)
+/// are a Phase-4 migration; (b) a TRANSITIONAL <c>files.content</c> column is kept so the OLD
+/// <c>ExtractReader.ReadBody</c> can slice bodies until Phase 5 moves body reads to disk; (c) the OLD M3
+/// freshness tables (<c>canonical_revisions</c>/<c>revision_file_changes</c>) are kept untouched so the OLD
+/// FreshnessReader stays green through Phase 3 (Phase 4 flips them to extraction_revisions).</para>
 ///
 /// Disposable: deletes the temp directory (and -wal/-shm sidecars) on <see cref="Dispose"/>.
 /// </summary>
@@ -18,13 +25,14 @@ internal sealed class JulieDbFixture : IDisposable
     private readonly string _dir;
 
     /// <summary>
-    /// The schema_version / extract_contract_version this Miller build is pinned to, sourced from
-    /// <see cref="MillerExtractContract"/>. Fixtures that just need a *valid* extract pass these (NOT
-    /// literals) so a julie re-pin needs no per-test edits — only the one constants file changes.
+    /// The schema / extract_contract version this Miller build is pinned to, sourced from
+    /// <see cref="MillerExtractContract"/>. Fixtures that just need a *valid* artifact pass these (NOT
+    /// literals) so a julie re-pin needs no per-test edits — only the one constants file changes. In v1 the
+    /// version is an <c>artifact_metadata</c> KEY, not a separate table row.
     /// </summary>
     public static readonly long PinnedSchema = MillerExtractContract.ExpectedSchemaVersion;
 
-    /// <summary>The pinned contract version as the TEXT julie stores in external_extract_metadata.</summary>
+    /// <summary>The pinned contract version as the TEXT julie stores in artifact_metadata.</summary>
     public static readonly string PinnedContract =
         MillerExtractContract.ExpectedExtractContractVersion.ToString(CultureInfo.InvariantCulture);
 
@@ -43,7 +51,7 @@ internal sealed class JulieDbFixture : IDisposable
 
     /// <summary>
     /// The known rows inserted by <see cref="CreateDefault"/>, in INSERT order. Tests assert the reader's
-    /// output against the subset/ordering these imply (the reader's SELECT re-orders by file_path,start_line,id).
+    /// output against the subset/ordering these imply (the reader's SELECT re-orders by path,start_line,symbol_id).
     /// </summary>
     public IReadOnlyList<SymbolRow> Rows { get; }
 
@@ -55,10 +63,10 @@ internal sealed class JulieDbFixture : IDisposable
     }
 
     /// <summary>
-    /// A row as written into the synthesized <c>symbols</c> table. The first eight fields are the M1 read
-    /// projection; the remaining detail/body columns (M2 <c>ReadDetail</c>/<c>ReadBody</c>) are optional
-    /// init-properties that default to NULL, so every existing positional construction stays valid and the
-    /// 90 M1 tests are unaffected.
+    /// A row as written into the synthesized v1 <c>symbols</c> table. The first eight fields are the M1 read
+    /// projection; the remaining detail/body columns (M2 <c>ReadDetail</c>/<c>ReadBody</c>) and the typed test
+    /// columns are optional init-properties that default to NULL/false, so every existing positional
+    /// construction stays valid.
     /// </summary>
     internal sealed record SymbolRow(
         string Id,
@@ -72,7 +80,6 @@ internal sealed class JulieDbFixture : IDisposable
     {
         public string? DocComment { get; init; }
         public string? Visibility { get; init; }
-        public string? CodeContext { get; init; }
 
         /// <summary>
         /// The symbol's WHOLE-span end line (julie's <c>end_line</c>, 1-based). NULL by default so M1/M2 rows
@@ -95,14 +102,23 @@ internal sealed class JulieDbFixture : IDisposable
         public int? BodyEndLine { get; init; }
 
         /// <summary>
-        /// Raw <c>symbols.metadata</c> JSON (julie's per-language extractor output). NULL by default so
-        /// existing rows are unaffected. Seed e.g. <c>{"is_test":true}</c> to exercise the cross-language
-        /// <c>is_test</c> read path (M2 decision-4).
+        /// Raw <c>symbols.metadata_json</c> (julie's per-language extractor output). NULL by default. Kept
+        /// seedable for any consumer asserting on the JSON mirror; in v1 the test signal is the typed
+        /// <see cref="IsTest"/>/<see cref="TestContainer"/>/<see cref="TestLifecycle"/> columns, NOT this JSON.
         /// </summary>
         public string? Metadata { get; init; }
+
+        /// <summary>v1 typed <c>symbols.is_test</c> column (INTEGER NOT NULL DEFAULT 0). The cross-language signal.</summary>
+        public bool IsTest { get; init; }
+
+        /// <summary>v1 typed <c>symbols.test_container</c> column (INTEGER NOT NULL DEFAULT 0).</summary>
+        public bool TestContainer { get; init; }
+
+        /// <summary>v1 typed <c>symbols.test_lifecycle</c> column (INTEGER NOT NULL DEFAULT 0).</summary>
+        public bool TestLifecycle { get; init; }
     }
 
-    /// <summary>A row as written into the synthesized <c>identifiers</c> table (M2 <c>ReadReferences</c>).</summary>
+    /// <summary>A row as written into the synthesized v1 <c>identifiers</c> table (M2 <c>ReadReferences</c>).</summary>
     internal sealed record IdentifierRow(
         string Id,
         string Name,
@@ -122,8 +138,8 @@ internal sealed class JulieDbFixture : IDisposable
     }
 
     /// <summary>
-    /// A row as written into the synthesized <c>relationships</c> table (M5 D2 precise edge source,
-    /// verified-fact 1). <see cref="FromSymbolId"/> → <see cref="ToSymbolId"/> are BOTH resolved symbol ids
+    /// A row as written into the synthesized v1 <c>relationships</c> table (M5 D2 precise edge source).
+    /// <see cref="FromSymbolId"/> → <see cref="ToSymbolId"/> are BOTH resolved symbol ids
     /// (julie's <c>from_symbol_id</c>/<c>to_symbol_id</c>, NOT NULL); <see cref="Kind"/> is the edge label
     /// (<c>calls</c>/<c>uses</c>/...). Sparse: only the directly-extracted edges (the analyze pass does not run
     /// under <c>extract scan</c>).
@@ -135,9 +151,10 @@ internal sealed class JulieDbFixture : IDisposable
         string Kind);
 
     /// <summary>
-    /// A row as written into the synthesized <c>canonical_revisions</c> table (M3 freshness cursor,
-    /// verified-fact 1). <see cref="Revision"/> is the PK the <see cref="FreshnessReader"/> takes MAX of per
-    /// workspace; <see cref="Kind"/> is <c>fresh|incremental</c> (CHECK-constrained, like julie's schema 26).
+    /// A row as written into the OLD <c>canonical_revisions</c> table (M3 freshness cursor, Phase-3
+    /// transitional — the OLD FreshnessReader still reads this; Phase 4 flips to extraction_revisions).
+    /// <see cref="Revision"/> is the PK the FreshnessReader takes MAX of per workspace; <see cref="Kind"/> is
+    /// <c>fresh|incremental</c> (CHECK-constrained).
     /// </summary>
     internal sealed record RevisionRow(long Revision, string WorkspaceId, string Kind = "incremental")
     {
@@ -145,8 +162,8 @@ internal sealed class JulieDbFixture : IDisposable
     }
 
     /// <summary>
-    /// A row as written into the synthesized <c>revision_file_changes</c> table (M3 changed-file delta,
-    /// verified-fact 5). <see cref="ChangeKind"/> is <c>added|modified|deleted</c> (CHECK-constrained).
+    /// A row as written into the OLD <c>revision_file_changes</c> table (M3 changed-file delta, Phase-3
+    /// transitional). <see cref="ChangeKind"/> is <c>added|modified|deleted</c> (CHECK-constrained).
     /// </summary>
     internal sealed record RevisionFileChangeRow(
         long Revision,
@@ -159,11 +176,14 @@ internal sealed class JulieDbFixture : IDisposable
     }
 
     /// <summary>
-    /// Build a fixture with the given schema/contract version rows and the supplied symbol rows.
-    /// <paramref name="schemaVersion"/> is written to <c>schema_version</c>; <paramref name="contractValue"/>
-    /// and <paramref name="hashAlgorithm"/> are written to <c>external_extract_metadata</c> as TEXT (julie
-    /// stores all metadata values as strings). Passing <c>null</c> for schema/contract skips that row or table
-    /// as before; passing <c>null</c> for hashAlgorithm omits only that metadata key.
+    /// Build a fixture with the given schema/contract version values and the supplied symbol rows.
+    /// In v1 the versions are <c>artifact_metadata</c> KEYS, not a separate table: <paramref name="schemaVersion"/>
+    /// is written to the <c>sqlite_schema_version</c> (and mirrored <c>schema_version</c>) key,
+    /// <paramref name="contractValue"/> to <c>extract_contract_version</c>, and <paramref name="hashAlgorithm"/>
+    /// to <c>hash_algorithm</c> — all as TEXT. Passing <c>null</c> for schema/contract/hash omits that key;
+    /// passing <c>createMetadataTable: false</c> omits the whole <c>artifact_metadata</c> table (a non-julie DB).
+    /// <paramref name="createSchemaVersionTable"/> is retained for call-site API stability but no longer creates
+    /// a separate table (v1 has none); it gates only whether the version keys are written.
     /// </summary>
     public static JulieDbFixture Create(
         long? schemaVersion,
@@ -193,77 +213,93 @@ internal sealed class JulieDbFixture : IDisposable
         using (var conn = new SqliteConnection(csb.ToString()))
         {
             conn.Open();
-            // Match julie: WAL + FK enforcement ON. Exercises the WAL sidecar path the reader must tolerate.
+            // Match julie: WAL. FK enforcement is left OFF here so the Phase-3 transitional
+            // files.last_revision_id (no extraction_revisions table) and the synthetic position-nullable
+            // columns can be seeded freely; the real artifact enforces FKs, but Miller only READS.
             Exec(conn, "PRAGMA journal_mode=WAL;");
-            Exec(conn, "PRAGMA foreign_keys=ON;");
+            Exec(conn, "PRAGMA foreign_keys=OFF;");
 
             Exec(conn, FilesDdl);
             Exec(conn, SymbolsDdl);
             Exec(conn, IdentifiersDdl);
-            // The relationships table is always created (harmless to existing tests; they query
-            // symbols/identifiers only) so a SymbolGraphReader can open against any fixture.
+            // The relationships table is always created so a SymbolGraphReader can open against any fixture.
             Exec(conn, RelationshipsDdl);
-            // The M3 freshness tables are always created (harmless to existing tests; they query
-            // symbols/identifiers only) so a FreshnessReader can open against any fixture.
+            // The OLD M3 freshness tables (Phase-3 transitional) so the OLD FreshnessReader can open.
             Exec(conn, CanonicalRevisionsDdl);
             Exec(conn, RevisionFileChangesDdl);
-            // The M4 bridge tables are always created so the SqliteBridgeReader — now on the single production
-            // RepositoryIndexLoader.Load path (D9) — can open against ANY fixture. Without them every loader /
-            // rebuilder / freshness-swap test that routes through Load crashes on "no such table: type_arguments".
-            // Empty by default (no bridge breadcrumbs) → an empty bridge graph, exactly like a scan-only extract.
+            // The M4 bridge tables are always created (empty by default) so the SqliteBridgeReader — on the single
+            // production RepositoryIndexLoader.Load path (D9) — can open against ANY fixture.
+            Exec(conn, TypeArgumentUsagesDdl);
             Exec(conn, TypeArgumentsDdl);
             Exec(conn, LiteralsDdl);
             Exec(conn, SymbolAnnotationsDdl);
-            if (createSchemaVersionTable) Exec(conn, SchemaVersionDdl);
+            // v1-only tables (created empty) so the synthetic artifact is a faithful v1 shape.
+            Exec(conn, ParserInventoryDdl);
+            Exec(conn, ParseDiagnosticsDdl);
+            Exec(conn, LanguageCapabilitiesDdl);
+            Exec(conn, LanguageCapabilityFixturesDdl);
+            Exec(conn, LanguageCapabilityGapsDdl);
+            Exec(conn, PendingRelationshipsDdl);
+            Exec(conn, TypeFactsDdl);
             if (createMetadataTable) Exec(conn, MetadataDdl);
 
-            // files rows (symbols.file_path REFERENCES files(path) — FK is ON, so parents must exist).
-            // identifiers also FK to files(path), so union both sources of paths.
+            // files rows (v1: file_id PK, path UNIQUE, content_hash/content_bytes; PLUS the transitional `content`).
+            // identifiers also carry path, so union both sources of paths.
             foreach (var path in DistinctPaths(rows, identifiers))
             {
                 string content = fileContent is not null && fileContent.TryGetValue(path, out var c) ? c : "";
-                string hash = ContentHasher.Blake3Hex(System.Text.Encoding.UTF8.GetBytes(content));
+                byte[] bytes = System.Text.Encoding.UTF8.GetBytes(content);
+                string hash = "blake3:" + ContentHasher.Blake3Hex(bytes);
                 using var fcmd = conn.CreateCommand();
                 fcmd.CommandText =
-                    "INSERT INTO files (path, language, hash, size, last_modified, content, line_count) " +
-                    "VALUES ($p, 'csharp', $hash, 100, 0, $content, 0);";
+                    "INSERT INTO files (file_id, path, language, content_hash, content_bytes, line_count, " +
+                    "indexed_at, last_revision_id, status, metadata_json, content) " +
+                    "VALUES ($fid, $p, 'csharp', $hash, $bytes, 0, '1970-01-01T00:00:00Z', 0, 'indexed', NULL, $content);";
+                fcmd.Parameters.AddWithValue("$fid", FileId(path));
                 fcmd.Parameters.AddWithValue("$p", path);
                 fcmd.Parameters.AddWithValue("$hash", hash);
+                fcmd.Parameters.AddWithValue("$bytes", bytes.Length);
                 fcmd.Parameters.AddWithValue("$content", content);
                 fcmd.ExecuteNonQuery();
             }
 
-            // symbols rows — parents first so self-FK parent_id resolves under FK enforcement. The detail/body
-            // columns are written from the row's optional init-props (NULL by default — M1 behavior preserved).
+            // symbols rows — parents first so self-FK parent_symbol_id resolves. The detail/body/typed-test
+            // columns are written from the row's optional init-props (NULL/0 by default — M1 behavior preserved).
             foreach (var r in OrderParentsFirst(rows))
             {
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText =
-                    "INSERT INTO symbols (id, name, kind, language, file_path, signature, start_line, end_line, parent_id, " +
-                    "metadata, doc_comment, visibility, code_context, " +
-                    "start_byte, end_byte, " +
-                    "body_start_byte, body_end_byte, body_start_line, body_end_line) " +
-                    "VALUES ($id, $name, $kind, $lang, $fp, $sig, $sl, $el, $pid, " +
-                    "$meta, $doc, $vis, $ctx, $sb, $eb, $bsb, $beb, $bsl, $bel);";
+                    "INSERT INTO symbols (symbol_id, file_id, path, language, name, kind, signature, " +
+                    "start_line, start_column, end_line, end_column, start_byte, end_byte, parent_symbol_id, " +
+                    "doc_comment, visibility, " +
+                    "body_start_byte, body_end_byte, body_start_line, body_end_line, " +
+                    "is_test, test_container, test_lifecycle, metadata_json) " +
+                    "VALUES ($id, $fid, $fp, $lang, $name, $kind, $sig, " +
+                    "$sl, 0, $el, 0, $sb, $eb, $pid, " +
+                    "$doc, $vis, $bsb, $beb, $bsl, $bel, " +
+                    "$istest, $tcont, $tlife, $meta);";
                 cmd.Parameters.AddWithValue("$id", r.Id);
+                cmd.Parameters.AddWithValue("$fid", FileId(r.FilePath));
+                cmd.Parameters.AddWithValue("$fp", r.FilePath);
+                cmd.Parameters.AddWithValue("$lang", r.Language);
                 cmd.Parameters.AddWithValue("$name", r.Name);
                 cmd.Parameters.AddWithValue("$kind", r.Kind);
-                cmd.Parameters.AddWithValue("$lang", r.Language);
-                cmd.Parameters.AddWithValue("$fp", r.FilePath);
                 cmd.Parameters.AddWithValue("$sig", (object?)r.Signature ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$sl", (object?)r.StartLine ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$el", (object?)r.EndLine ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$pid", (object?)r.ParentId ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$meta", (object?)r.Metadata ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$doc", (object?)r.DocComment ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$vis", (object?)r.Visibility ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$ctx", (object?)r.CodeContext ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$sb", (object?)r.StartByte ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$eb", (object?)r.EndByte ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$pid", (object?)r.ParentId ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$doc", (object?)r.DocComment ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$vis", (object?)r.Visibility ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$bsb", (object?)r.BodyStartByte ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$beb", (object?)r.BodyEndByte ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$bsl", (object?)r.BodyStartLine ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$bel", (object?)r.BodyEndLine ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$istest", r.IsTest ? 1 : 0);
+                cmd.Parameters.AddWithValue("$tcont", r.TestContainer ? 1 : 0);
+                cmd.Parameters.AddWithValue("$tlife", r.TestLifecycle ? 1 : 0);
+                cmd.Parameters.AddWithValue("$meta", (object?)r.Metadata ?? DBNull.Value);
                 cmd.ExecuteNonQuery();
             }
 
@@ -274,15 +310,16 @@ internal sealed class JulieDbFixture : IDisposable
                 {
                     using var cmd = conn.CreateCommand();
                     cmd.CommandText =
-                        "INSERT INTO identifiers (id, name, kind, language, file_path, " +
-                        "start_line, start_col, end_line, end_col, start_byte, end_byte, " +
+                        "INSERT INTO identifiers (identifier_id, file_id, path, language, name, kind, " +
+                        "start_line, start_column, end_line, end_column, start_byte, end_byte, confidence, " +
                         "containing_symbol_id, target_symbol_id) " +
-                        "VALUES ($id, $name, $kind, $lang, $fp, $sl, 0, $sl, 0, $sb, $eb, $cid, NULL);";
+                        "VALUES ($id, $fid, $fp, $lang, $name, $kind, $sl, 0, $sl, 0, $sb, $eb, 1.0, $cid, NULL);";
                     cmd.Parameters.AddWithValue("$id", ident.Id);
+                    cmd.Parameters.AddWithValue("$fid", FileId(ident.FilePath));
+                    cmd.Parameters.AddWithValue("$fp", ident.FilePath);
+                    cmd.Parameters.AddWithValue("$lang", ident.Language);
                     cmd.Parameters.AddWithValue("$name", ident.Name);
                     cmd.Parameters.AddWithValue("$kind", ident.Kind);
-                    cmd.Parameters.AddWithValue("$lang", ident.Language);
-                    cmd.Parameters.AddWithValue("$fp", ident.FilePath);
                     cmd.Parameters.AddWithValue("$sl", ident.StartLine);
                     cmd.Parameters.AddWithValue("$sb", (object?)ident.StartByte ?? DBNull.Value);
                     cmd.Parameters.AddWithValue("$eb", (object?)ident.EndByte ?? DBNull.Value);
@@ -291,16 +328,15 @@ internal sealed class JulieDbFixture : IDisposable
                 }
             }
 
-            // relationships rows (M5 D2 precise edges). from_symbol_id/to_symbol_id FK to symbols(id), which
-            // are already inserted above, so FK enforcement is satisfied.
+            // relationships rows (M5 D2 precise edges). v1 columns; from/to FK to symbols(symbol_id).
             if (relationships is not null)
             {
                 foreach (var rel in relationships)
                 {
                     using var cmd = conn.CreateCommand();
                     cmd.CommandText =
-                        "INSERT INTO relationships (id, from_symbol_id, to_symbol_id, kind) " +
-                        "VALUES ($id, $from, $to, $kind);";
+                        "INSERT INTO relationships (relationship_id, from_symbol_id, to_symbol_id, file_id, path, " +
+                        "kind, confidence) VALUES ($id, $from, $to, '', '', $kind, 1.0);";
                     cmd.Parameters.AddWithValue("$id", rel.Id);
                     cmd.Parameters.AddWithValue("$from", rel.FromSymbolId);
                     cmd.Parameters.AddWithValue("$to", rel.ToSymbolId);
@@ -309,8 +345,7 @@ internal sealed class JulieDbFixture : IDisposable
                 }
             }
 
-            // canonical_revisions rows (M3 freshness cursor). revision is an explicit PK here (the test
-            // controls the values), so we insert the column directly rather than relying on AUTOINCREMENT.
+            // canonical_revisions rows (Phase-3 transitional M3 freshness cursor). revision is an explicit PK.
             if (revisions is not null)
             {
                 foreach (var rev in revisions)
@@ -329,7 +364,7 @@ internal sealed class JulieDbFixture : IDisposable
                 }
             }
 
-            // revision_file_changes rows (M3 changed-file delta).
+            // revision_file_changes rows (Phase-3 transitional M3 changed-file delta).
             if (fileChanges is not null)
             {
                 foreach (var fc in fileChanges)
@@ -349,43 +384,41 @@ internal sealed class JulieDbFixture : IDisposable
                 }
             }
 
-            if (createSchemaVersionTable && schemaVersion is { } sv)
+            // v1 artifact_metadata: the full REQUIRED_METADATA_KEYS set so the synthetic fixture is a faithful
+            // v1 artifact (metadata.rs). The gate reads sqlite_schema_version / schema_version /
+            // extract_contract_version / hash_algorithm; the rest keep the fixture honest. Fingerprints carry the
+            // sha256: domain prefix (NEVER blake3:) — Miller stores but never compares them (hash-domain split).
+            if (createMetadataTable)
             {
-                using var cmd = conn.CreateCommand();
-                cmd.CommandText =
-                    "INSERT INTO schema_version (version, applied_at, description) VALUES ($v, 0, 'test');";
-                cmd.Parameters.AddWithValue("$v", sv);
-                cmd.ExecuteNonQuery();
-            }
+                void Meta(string key, string value)
+                {
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = "INSERT INTO artifact_metadata (key, value) VALUES ($k, $v);";
+                    cmd.Parameters.AddWithValue("$k", key);
+                    cmd.Parameters.AddWithValue("$v", value);
+                    cmd.ExecuteNonQuery();
+                }
 
-            if (createMetadataTable && contractValue is not null)
-            {
-                using var cmd = conn.CreateCommand();
-                cmd.CommandText =
-                    "INSERT INTO external_extract_metadata (key, value, updated_at) " +
-                    "VALUES ('extract_contract_version', $val, 0);";
-                cmd.Parameters.AddWithValue("$val", contractValue);
-                cmd.ExecuteNonQuery();
-            }
+                Meta("artifact_id", "artifact-" + (workspaceId ?? "default"));
+                Meta("root_path", "/work/repo");
+                Meta("binary_version", MillerExtractContract.PinnedJulieExtractVersion);
+                Meta("parser_inventory_fingerprint", "sha256:" + new string('a', 64));
+                Meta("capability_snapshot_fingerprint", "sha256:" + new string('b', 64));
+                Meta("created_at", "1970-01-01T00:00:00Z");
+                Meta("updated_at", "1970-01-01T00:00:00Z");
 
-            if (createMetadataTable && hashAlgorithm is not null)
-            {
-                using var cmd = conn.CreateCommand();
-                cmd.CommandText =
-                    "INSERT INTO external_extract_metadata (key, value, updated_at) " +
-                    "VALUES ('hash_algorithm', $val, 0);";
-                cmd.Parameters.AddWithValue("$val", hashAlgorithm);
-                cmd.ExecuteNonQuery();
-            }
+                if (createSchemaVersionTable && schemaVersion is { } sv)
+                {
+                    string svText = sv.ToString(CultureInfo.InvariantCulture);
+                    Meta("sqlite_schema_version", svText);
+                    Meta("schema_version", svText);
+                }
 
-            if (createMetadataTable && workspaceId is not null)
-            {
-                using var cmd = conn.CreateCommand();
-                cmd.CommandText =
-                    "INSERT INTO external_extract_metadata (key, value, updated_at) " +
-                    "VALUES ('workspace_id', $val, 0);";
-                cmd.Parameters.AddWithValue("$val", workspaceId);
-                cmd.ExecuteNonQuery();
+                if (contractValue is not null)
+                    Meta("extract_contract_version", contractValue);
+
+                if (hashAlgorithm is not null)
+                    Meta("hash_algorithm", hashAlgorithm);
             }
         }
 
@@ -394,9 +427,12 @@ internal sealed class JulieDbFixture : IDisposable
         return new JulieDbFixture(dir, dbPath, rows);
     }
 
+    /// <summary>The deterministic synthetic file_id for a path (v1 files PK; symbols/identifiers FK to it).</summary>
+    private static string FileId(string path) => "file:" + path;
+
     /// <summary>
-    /// The canonical fixture: schema 28 / contract '3' with ~12 realistic rows — mixed kinds/languages,
-    /// some NULL signatures, at least one NULL start_line, parent/child pairs via parent_id, distinct files.
+    /// The canonical fixture: a v1 artifact with ~12 realistic rows — mixed kinds/languages, some NULL
+    /// signatures, at least one NULL start_line, parent/child pairs, distinct files.
     /// </summary>
     public static JulieDbFixture CreateDefault() => Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, DefaultRows);
 
@@ -423,7 +459,7 @@ internal sealed class JulieDbFixture : IDisposable
     /// A fixture wired for the M2 inspect/ExtractReader tests: GetUser carries doc_comment + visibility +
     /// body byte/line spans into <see cref="UserServiceContent"/>; identifiers record two name-based refs to
     /// GetUser (in two enclosing symbols) and one call FROM GetUser to a helper (callee). DeleteUser carries
-    /// NULL body spans (the graceful-degradation case). workspace_id is set so startup can read it.
+    /// NULL body spans (the graceful-degradation case). workspace_id drives the artifact identity keys.
     /// </summary>
     public static JulieDbFixture CreateForInspect()
     {
@@ -443,7 +479,6 @@ internal sealed class JulieDbFixture : IDisposable
             {
                 Visibility = "public",
                 DocComment = "Gets a user by id.",
-                CodeContext = "public User GetUser(int id) { ... }",
                 BodyStartByte = bodyStart, BodyEndByte = bodyEnd,
                 BodyStartLine = 2, BodyEndLine = 4,
             },
@@ -565,7 +600,7 @@ internal sealed class JulieDbFixture : IDisposable
         };
 
         // Four 'Total' identifier sites across three files. ReadIdentifierSites must return all of them,
-        // ordered by file_path then start_byte. The Café.cs site's start_byte (31) differs from its char
+        // ordered by path then start_byte. The Café.cs site's start_byte (31) differs from its char
         // index (30) — the UTF-8 proof. A homonym call site (Invoice.cs:3) is INCLUDED — name-based matching.
         var identifiers = new[]
         {
@@ -595,7 +630,7 @@ internal sealed class JulieDbFixture : IDisposable
     /// <summary>Realistic MD5-hex symbol ids (32 lowercase hex chars), per julie's id scheme (treated as opaque).</summary>
     public static IReadOnlyList<SymbolRow> DefaultRows { get; } = new[]
     {
-        // auth/UserService.cs — a class with two child methods (parent/child via parent_id).
+        // auth/UserService.cs — a class with two child methods (parent/child via parent_symbol_id).
         new SymbolRow("a1b2c3d4e5f600112233445566778899", "UserService", "class", "csharp",
             "auth/UserService.cs", "public class UserService", 1, null),
         new SymbolRow("b2c3d4e5f6001122334455667788990a", "GetUser", "method", "csharp",
@@ -679,151 +714,266 @@ internal sealed class JulieDbFixture : IDisposable
         _ = CultureInfo.InvariantCulture; // keep the using meaningful if trimmed later
     }
 
-    // --- DDL transcribed verbatim from julie src/database/schema.rs (contract-verified §1) ---
+    // --- v1 DDL transcribed from julie-extractors crates/julie-extract-artifact/src/schema.rs (SQLITE_SCHEMA_VERSION = 1) ---
+    // Phase-3 deviations: files.last_revision_id has NO FK (extraction_revisions is Phase 4); files keeps a
+    // transitional `content` column (Phase 5 drops it); symbol/identifier position columns are nullable here
+    // (the synthetic DB relaxes julie's NOT NULL so the existing NULL-discipline tests keep coverage).
 
     private const string FilesDdl = """
         CREATE TABLE IF NOT EXISTS files (
-            path TEXT PRIMARY KEY,
+            file_id TEXT PRIMARY KEY,
+            path TEXT NOT NULL UNIQUE,
             language TEXT NOT NULL,
-            hash TEXT NOT NULL,
-            size INTEGER NOT NULL,
-            last_modified INTEGER NOT NULL,
-            last_indexed INTEGER DEFAULT 0,
-            parse_cache BLOB,
-            symbol_count INTEGER DEFAULT 0,
-            content TEXT,
-            line_count INTEGER DEFAULT 0
+            content_hash TEXT NOT NULL,
+            content_bytes INTEGER NOT NULL,
+            line_count INTEGER,
+            indexed_at TEXT NOT NULL,
+            last_revision_id INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            metadata_json TEXT,
+            content TEXT
         );
         """;
 
     private const string SymbolsDdl = """
         CREATE TABLE IF NOT EXISTS symbols (
-            id TEXT PRIMARY KEY,
+            symbol_id TEXT PRIMARY KEY,
+            file_id TEXT NOT NULL,
+            path TEXT NOT NULL,
+            language TEXT NOT NULL,
             name TEXT NOT NULL,
             kind TEXT NOT NULL,
-            language TEXT NOT NULL,
-            file_path TEXT NOT NULL REFERENCES files(path) ON DELETE CASCADE,
             signature TEXT,
-            start_line INTEGER, start_col INTEGER, end_line INTEGER, end_col INTEGER,
-            start_byte INTEGER, end_byte INTEGER,
             doc_comment TEXT,
             visibility TEXT,
-            code_context TEXT,
-            parent_id TEXT REFERENCES symbols(id),
-            metadata TEXT,
-            file_hash TEXT,
-            last_indexed INTEGER DEFAULT 0,
-            semantic_group TEXT,
-            confidence REAL DEFAULT 1.0,
-            content_type TEXT DEFAULT NULL,
-            body_start_line INTEGER, body_start_col INTEGER, body_end_line INTEGER, body_end_col INTEGER,
+            parent_symbol_id TEXT REFERENCES symbols(symbol_id) ON DELETE SET NULL,
+            start_line INTEGER, start_column INTEGER, end_line INTEGER, end_column INTEGER,
+            start_byte INTEGER, end_byte INTEGER,
+            body_start_line INTEGER, body_start_column INTEGER, body_end_line INTEGER, body_end_column INTEGER,
             body_start_byte INTEGER, body_end_byte INTEGER, body_hash TEXT,
-            reference_score REAL NOT NULL DEFAULT 0.0
+            semantic_group TEXT,
+            confidence REAL,
+            content_type TEXT,
+            is_test INTEGER NOT NULL DEFAULT 0,
+            test_container INTEGER NOT NULL DEFAULT 0,
+            test_lifecycle INTEGER NOT NULL DEFAULT 0,
+            metadata_json TEXT
         );
         """;
 
     private const string IdentifiersDdl = """
         CREATE TABLE IF NOT EXISTS identifiers (
-            id TEXT PRIMARY KEY,
+            identifier_id TEXT PRIMARY KEY,
+            file_id TEXT NOT NULL,
+            path TEXT NOT NULL,
+            language TEXT NOT NULL,
             name TEXT NOT NULL,
             kind TEXT NOT NULL,
-            language TEXT NOT NULL,
-            file_path TEXT NOT NULL REFERENCES files(path) ON DELETE CASCADE,
-            start_line INTEGER NOT NULL, start_col INTEGER NOT NULL, end_line INTEGER NOT NULL, end_col INTEGER NOT NULL,
+            containing_symbol_id TEXT,
+            target_symbol_id TEXT,
+            start_line INTEGER, start_column INTEGER, end_line INTEGER, end_column INTEGER,
             start_byte INTEGER, end_byte INTEGER,
-            containing_symbol_id TEXT REFERENCES symbols(id) ON DELETE CASCADE,
-            target_symbol_id TEXT REFERENCES symbols(id) ON DELETE SET NULL,
-            confidence REAL DEFAULT 1.0,
+            confidence REAL NOT NULL DEFAULT 1.0,
             code_context TEXT,
-            last_indexed INTEGER DEFAULT 0
+            metadata_json TEXT
         );
         """;
 
     private const string RelationshipsDdl = """
         CREATE TABLE IF NOT EXISTS relationships (
-            id TEXT PRIMARY KEY,
-            from_symbol_id TEXT NOT NULL REFERENCES symbols(id) ON DELETE CASCADE,
-            to_symbol_id TEXT NOT NULL REFERENCES symbols(id) ON DELETE CASCADE,
+            relationship_id TEXT PRIMARY KEY,
+            from_symbol_id TEXT NOT NULL,
+            to_symbol_id TEXT NOT NULL,
+            file_id TEXT NOT NULL,
+            path TEXT NOT NULL,
             kind TEXT NOT NULL,
-            file_path TEXT NOT NULL DEFAULT '',
-            line_number INTEGER NOT NULL DEFAULT 0,
-            confidence REAL DEFAULT 1.0,
-            metadata TEXT,
-            created_at INTEGER DEFAULT 0
+            start_line INTEGER, start_column INTEGER, end_line INTEGER, end_column INTEGER,
+            start_byte INTEGER, end_byte INTEGER,
+            confidence REAL NOT NULL DEFAULT 1.0,
+            metadata_json TEXT
         );
         """;
 
-    // ---- M4 bridge tables (verbatim from julie v7.13.1 schema.rs; findings 28-3) ------------------------
-    // The SqliteBridgeReader is now on the single production RepositoryIndexLoader.Load path (D9), so these are
-    // always created — empty by default — and every loader/rebuilder/freshness-swap test that routes through Load
-    // can open against ANY fixture (without them: "no such table: type_arguments"). The reader selects:
-    //   type_arguments(identifier_id, ordinal, parent_arg_id, type_name, file_path, id);
-    //   literals(literal_text, kind, carrier, arg_position, language, containing_symbol_id, start_byte, end_byte, file_path, start_line, id);
-    //   symbol_annotations(symbol_id, ordinal, annotation, annotation_key, raw_text, carrier, id).
+    // ---- M4 bridge tables (v1 schema.rs:192-233) -----------------------------------------------------------
+    // Created empty (the bridge rows are seeded by subsystem-B's SqliteBridgeReaderTests inline DBs, not here).
+    // v1 split: type_argument_usages carries identifier_id/path/language; type_arguments carries usage_id +
+    // ordinal + parent_type_argument_id + type_name. symbol_annotations has NO ordinal (re-keyed to annotation_id).
+
+    private const string TypeArgumentUsagesDdl = """
+        CREATE TABLE IF NOT EXISTS type_argument_usages (
+            usage_id TEXT PRIMARY KEY,
+            identifier_id TEXT NOT NULL,
+            file_id TEXT NOT NULL,
+            path TEXT NOT NULL,
+            language TEXT NOT NULL,
+            metadata_json TEXT
+        );
+        """;
 
     private const string TypeArgumentsDdl = """
         CREATE TABLE IF NOT EXISTS type_arguments (
-            id TEXT PRIMARY KEY,
-            identifier_id TEXT NOT NULL,
-            parent_arg_id TEXT,
+            type_argument_id TEXT PRIMARY KEY,
+            usage_id TEXT NOT NULL,
+            parent_type_argument_id TEXT,
             ordinal INTEGER NOT NULL,
-            type_name TEXT NOT NULL,
-            target_symbol_id TEXT,
-            file_path TEXT NOT NULL,
-            language TEXT NOT NULL,
-            last_indexed INTEGER
+            type_name TEXT NOT NULL
         );
         """;
 
     private const string LiteralsDdl = """
         CREATE TABLE IF NOT EXISTS literals (
-            id TEXT PRIMARY KEY,
+            literal_id TEXT PRIMARY KEY,
+            file_id TEXT NOT NULL,
+            path TEXT NOT NULL,
+            language TEXT NOT NULL,
             literal_text TEXT NOT NULL,
             kind TEXT NOT NULL,
             carrier TEXT,
             arg_position INTEGER NOT NULL,
-            language TEXT NOT NULL,
-            file_path TEXT NOT NULL,
-            start_line INTEGER,
-            end_line INTEGER,
-            start_byte INTEGER,
-            end_byte INTEGER,
             containing_symbol_id TEXT,
-            confidence REAL
+            start_line INTEGER NOT NULL,
+            start_column INTEGER NOT NULL,
+            end_line INTEGER NOT NULL,
+            end_column INTEGER NOT NULL,
+            start_byte INTEGER NOT NULL,
+            end_byte INTEGER NOT NULL,
+            confidence REAL NOT NULL,
+            metadata_json TEXT
         );
         """;
 
     private const string SymbolAnnotationsDdl = """
         CREATE TABLE IF NOT EXISTS symbol_annotations (
-            id TEXT PRIMARY KEY,
+            annotation_id TEXT PRIMARY KEY,
             symbol_id TEXT NOT NULL,
-            ordinal INTEGER NOT NULL,
             annotation TEXT NOT NULL,
-            annotation_key TEXT,
+            annotation_key TEXT NOT NULL,
             raw_text TEXT,
             carrier TEXT,
-            UNIQUE (symbol_id, ordinal)
+            metadata_json TEXT
         );
         """;
 
-    private const string SchemaVersionDdl = """
-        CREATE TABLE IF NOT EXISTS schema_version (
-            version INTEGER PRIMARY KEY,
-            applied_at INTEGER NOT NULL,
-            description TEXT NOT NULL
+    // ---- v1-only tables (schema.rs:18-26, 155-190, 235-288) — created empty for artifact fidelity ----------
+
+    private const string ParserInventoryDdl = """
+        CREATE TABLE IF NOT EXISTS parser_inventory (
+            language TEXT NOT NULL,
+            parser_package TEXT NOT NULL,
+            parser_version TEXT,
+            grammar_version TEXT,
+            source TEXT,
+            metadata_json TEXT,
+            PRIMARY KEY (language, parser_package)
+        );
+        """;
+
+    private const string ParseDiagnosticsDdl = """
+        CREATE TABLE IF NOT EXISTS parse_diagnostics (
+            diagnostic_id TEXT PRIMARY KEY,
+            file_id TEXT NOT NULL,
+            path TEXT NOT NULL,
+            language TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            message TEXT,
+            start_line INTEGER NOT NULL,
+            start_column INTEGER NOT NULL,
+            end_line INTEGER NOT NULL,
+            end_column INTEGER NOT NULL,
+            start_byte INTEGER NOT NULL,
+            end_byte INTEGER NOT NULL,
+            metadata_json TEXT
+        );
+        """;
+
+    private const string LanguageCapabilitiesDdl = """
+        CREATE TABLE IF NOT EXISTS language_capabilities (
+            language TEXT PRIMARY KEY,
+            parser_package TEXT NOT NULL,
+            extensions_json TEXT NOT NULL,
+            dependency_status TEXT NOT NULL,
+            target_symbols INTEGER NOT NULL,
+            target_relationships INTEGER NOT NULL,
+            target_pending_relationships INTEGER NOT NULL,
+            target_identifiers INTEGER NOT NULL,
+            target_types INTEGER NOT NULL,
+            actual_symbols INTEGER NOT NULL,
+            actual_relationships INTEGER NOT NULL,
+            actual_pending_relationships INTEGER NOT NULL,
+            actual_identifiers INTEGER NOT NULL,
+            actual_types INTEGER NOT NULL,
+            kind_coverage_json TEXT NOT NULL
+        );
+        """;
+
+    private const string LanguageCapabilityFixturesDdl = """
+        CREATE TABLE IF NOT EXISTS language_capability_fixtures (
+            language TEXT NOT NULL,
+            fixture_name TEXT NOT NULL,
+            source_path TEXT NOT NULL,
+            expected_path TEXT NOT NULL,
+            PRIMARY KEY (language, fixture_name)
+        );
+        """;
+
+    private const string LanguageCapabilityGapsDdl = """
+        CREATE TABLE IF NOT EXISTS language_capability_gaps (
+            gap_id TEXT PRIMARY KEY,
+            language TEXT NOT NULL,
+            capability TEXT NOT NULL,
+            status TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            required_closure TEXT NOT NULL,
+            evidence_json TEXT NOT NULL
+        );
+        """;
+
+    private const string PendingRelationshipsDdl = """
+        CREATE TABLE IF NOT EXISTS pending_relationships (
+            pending_relationship_id TEXT PRIMARY KEY,
+            from_symbol_id TEXT NOT NULL,
+            caller_scope_symbol_id TEXT,
+            file_id TEXT NOT NULL,
+            path TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            target_display_name TEXT NOT NULL,
+            target_terminal_name TEXT NOT NULL,
+            target_receiver TEXT,
+            target_namespace_json TEXT NOT NULL,
+            target_import_context TEXT,
+            start_line INTEGER NOT NULL,
+            start_column INTEGER,
+            end_line INTEGER,
+            end_column INTEGER,
+            start_byte INTEGER,
+            end_byte INTEGER,
+            confidence REAL NOT NULL,
+            metadata_json TEXT
+        );
+        """;
+
+    private const string TypeFactsDdl = """
+        CREATE TABLE IF NOT EXISTS type_facts (
+            type_fact_id TEXT PRIMARY KEY,
+            symbol_id TEXT NOT NULL,
+            language TEXT NOT NULL,
+            resolved_type TEXT NOT NULL,
+            generic_params_json TEXT,
+            constraints_json TEXT,
+            is_inferred INTEGER NOT NULL,
+            metadata_json TEXT
         );
         """;
 
     private const string MetadataDdl = """
-        CREATE TABLE IF NOT EXISTS external_extract_metadata (
+        CREATE TABLE IF NOT EXISTS artifact_metadata (
             key TEXT PRIMARY KEY,
-            value TEXT NOT NULL,
-            updated_at INTEGER NOT NULL
+            value TEXT NOT NULL
         );
         """;
 
-    // --- M3 freshness DDL transcribed verbatim from the PINNED julie-server v7.13.1 (schema 28) live DB ---
-    // (dumped via `.schema` against a real `extract scan` output; see m3-design.md verified-fact 1/5).
+    // --- OLD M3 freshness DDL (Phase-3 transitional — the OLD FreshnessReader reads canonical_revisions until
+    //     Phase 4 flips it to extraction_revisions; kept verbatim so FreshnessReaderTests stay green). ---
 
     private const string CanonicalRevisionsDdl = """
         CREATE TABLE IF NOT EXISTS canonical_revisions (

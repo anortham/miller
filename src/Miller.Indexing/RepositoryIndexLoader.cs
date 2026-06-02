@@ -121,7 +121,7 @@ public static class RepositoryIndexLoader
                 FilePath: symbol.FilePath,
                 Signature: symbol.Signature ?? string.Empty,
                 Namespace: null,
-                TestRole: symbol.TestRole,
+                IsTest: symbol.IsTest,
                 ParentClassName: parentClassName));
         }
         return details;

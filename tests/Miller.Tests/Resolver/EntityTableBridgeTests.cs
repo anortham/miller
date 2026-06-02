@@ -18,9 +18,9 @@ namespace Miller.Tests.Resolver;
 /// </summary>
 public sealed class EntityTableBridgeTests
 {
-    // SymbolDetail ctor order: (Id, Name, Kind, FilePath, Signature, Namespace, TestRole, ParentClassName).
+    // SymbolDetail ctor order: (Id, Name, Kind, FilePath, Signature, Namespace, IsTest, ParentClassName).
     private static SymbolDetail Entity(string id, string name, string? ns, string file = "Domain/Entities.cs") =>
-        new(id, name, "class", file, $"public class {name}", ns, null, null);
+        new(id, name, "class", file, $"public class {name}", ns, false, null);
 
     // DbSetProperty ctor order: (PropertySymbolId, TableName, EntityTypeName, FilePath, StartLine).
     private static DbSetProperty DbSet(string entity, string table,
@@ -74,7 +74,7 @@ public sealed class EntityTableBridgeTests
         [
             Entity("e1", "ApplicationUser", "Domain"),
             new SymbolDetail("ctx", "MyraNextContext", "class", "Data/MyraNextContext.cs",
-                "public class MyraNextContext : DbContext", "Data", null, null),
+                "public class MyraNextContext : DbContext", "Data", false, null),
         ]);
         var input = new EntityTableInput([DbSet("ApplicationUser", "ApplicationUsers")], []);
 

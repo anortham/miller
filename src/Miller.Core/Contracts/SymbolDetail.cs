@@ -18,9 +18,10 @@ namespace Miller.Core.Contracts;
 /// The symbol's declaring namespace when known (for the name-resolution tie-break), or null. Two same-named types in
 /// different namespaces are distinguished by this; absent a tie-break, &gt;1 match is ambiguous.
 /// </param>
-/// <param name="TestRole">
-/// The julie <c>test_role</c> from <c>symbols.metadata</c>, or null when the field is absent. Used to exclude test
-/// HttpClient url literals from the route bridge (see <see cref="Contracts.TestRole"/>).
+/// <param name="IsTest">
+/// julie-extractors v1's typed <c>symbols.is_test</c> signal (cross-language, AST-accurate). Used to exclude
+/// test HttpClient url literals from the route bridge (see <see cref="Resolver.RouteBridge"/>). Replaces the
+/// pre-v1 <c>test_role</c> string — Miller only ever needed the presence predicate.
 /// </param>
 /// <param name="ParentClassName">
 /// For a controller METHOD, the name of its parent class (e.g. <c>AppSettingsController</c>) — the input the route
@@ -34,5 +35,5 @@ public sealed record SymbolDetail(
     string FilePath,
     string Signature,
     string? Namespace,
-    TestRole? TestRole,
+    bool IsTest,
     string? ParentClassName);

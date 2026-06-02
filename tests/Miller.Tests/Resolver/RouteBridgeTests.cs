@@ -24,22 +24,22 @@ namespace Miller.Tests.Resolver;
 /// </summary>
 public sealed class RouteBridgeTests
 {
-    // SymbolDetail ctor order: (Id, Name, Kind, FilePath, Signature, Namespace, TestRole, ParentClassName).
+    // SymbolDetail ctor order: (Id, Name, Kind, FilePath, Signature, Namespace, IsTest, ParentClassName).
     private static SymbolDetail Dto(string id, string name, string? ns = "Dtos", string file = "Api/Dtos/Dtos.cs") =>
-        new(id, name, "class", file, $"public class {name}", ns, null, null);
+        new(id, name, "class", file, $"public class {name}", ns, false, null);
 
     // A TS client call. Defaults to the real-data shape: a typescript url literal at arg 0, axios.<verb> carrier.
     private static TsClientCall Call(
         string carrier,
         string route,
         string language = "typescript",
-        TestRole? testRole = null,
+        bool isTest = false,
         string file = "web/src/api/client.ts",
         int line = 12,
         string containingSymbolId = "ts.fn") =>
         new(
             new LiteralRecord(route, "url", carrier, 0, language, containingSymbolId, new SourceSpan(0, route.Length)),
-            testRole,
+            isTest,
             file,
             line);
 
@@ -191,21 +191,34 @@ public sealed class RouteBridgeTests
         Assert.DoesNotContain(hits, e => e.SourceRef.Display == "api/objectcodemappings/{}" && e.TargetRef.SymbolId == "ep.appsettings");
     }
 
-    // ---- TS side filtering: language + test_role ---------------------------------------------------------------
+    // ---- TS side filtering: language + is_test -----------------------------------------------------------------
 
     [Fact]
     public void Resolve_CsharpTestHttpClientLiteral_Excluded_FromTsSide()
     {
-        // A C# test HttpClient url literal (language=csharp, a test_role) must NOT be treated as a TS client call.
+        // A C# test HttpClient url literal (language=csharp, is_test) must NOT be treated as a TS client call.
         // On real data the 57 csharp literals are all test HttpClient; only the 39 typescript ones are real calls.
         var resolver = new SymbolResolver([]);
         var input = new RouteBridgeInput(
-            [Call("client.GetAsync", "/api/appsettings", language: "csharp", testRole: new TestRole("test_case"))],
+            [Call("client.GetAsync", "/api/appsettings", language: "csharp", isTest: true)],
             [Endpoint("httpget", "AppSettingsController", "List")]);
 
         var edges = RouteBridge.Resolve(input, resolver);
 
         Assert.DoesNotContain(edges, e => e.Kind == BridgeKind.Hits);
+    }
+
+    [Fact]
+    public void Resolve_TypescriptTestClientCall_Excluded_FromTsSide()
+    {
+        // A test-flagged url literal is excluded even in a frontend language — the predicate keys on IsTest,
+        // not on the C# language short-circuit. A test fetch() in a *.spec.ts must not produce a Hits edge.
+        var resolver = new SymbolResolver([]);
+        var input = new RouteBridgeInput(
+            [Call("axios.get", "/api/appsettings", language: "typescript", isTest: true)],
+            [Endpoint("httpget", "AppSettingsController", "List")]);
+
+        Assert.DoesNotContain(RouteBridge.Resolve(input, resolver), e => e.Kind == BridgeKind.Hits);
     }
 
     [Fact]
@@ -215,7 +228,7 @@ public sealed class RouteBridgeTests
         var resolver = new SymbolResolver([]);
         var sql = new LiteralRecord("SELECT * FROM X", "sql", "QueryAsync", 0, "csharp", "m", new SourceSpan(0, 1));
         var input = new RouteBridgeInput(
-            [new TsClientCall(sql, null, "Data/Repo.cs", 5)],
+            [new TsClientCall(sql, false, "Data/Repo.cs", 5)],
             [Endpoint("httpget", "AppSettingsController", "List")]);
 
         Assert.DoesNotContain(RouteBridge.Resolve(input, resolver), e => e.Kind == BridgeKind.Hits);
@@ -224,10 +237,10 @@ public sealed class RouteBridgeTests
     [Fact]
     public void Resolve_TypescriptNonTestLiteral_Included()
     {
-        // The positive of the filter: a typescript url literal with no test_role IS a real client call.
+        // The positive of the filter: a typescript url literal with is_test=false IS a real client call.
         var resolver = new SymbolResolver([]);
         var input = new RouteBridgeInput(
-            [Call("axios.get", "/api/appsettings", language: "typescript", testRole: null)],
+            [Call("axios.get", "/api/appsettings", language: "typescript", isTest: false)],
             [Endpoint("httpget", "AppSettingsController", "List")]);
 
         Assert.Contains(RouteBridge.Resolve(input, resolver), e => e.Kind == BridgeKind.Hits);
@@ -263,7 +276,7 @@ public sealed class RouteBridgeTests
         // Task<IEnumerable<IProject>> unwraps to the collection element type IProject (an interface is a valid named
         // user type per design §4) => a Responds edge.
         var resolver = new SymbolResolver(
-            [new SymbolDetail("i1", "IProject", "interface", "Api/Models/IProject.cs", "public interface IProject", "Models", null, null)]);
+            [new SymbolDetail("i1", "IProject", "interface", "Api/Models/IProject.cs", "public interface IProject", "Models", false, null)]);
         var input = new RouteBridgeInput(
             [],
             [Endpoint("httpget", "ProjectsController", "List", returnType: "Task<IEnumerable<IProject>>")]);

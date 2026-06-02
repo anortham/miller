@@ -21,7 +21,7 @@ namespace Miller.Core.Graph;
 /// verb annotation <c>raw_text</c>, and parse the return + request-body types from the method <c>signature</c> into a
 /// <see cref="ControllerEndpoint"/>.</item>
 /// <item><b>TsClientCall reduction</b> — for <c>kind='url'</c> literals, attach the containing symbol's
-/// <c>test_role</c> and the use-site file:line into a <see cref="TsClientCall"/>.</item>
+/// <c>is_test</c> flag and the use-site file:line into a <see cref="TsClientCall"/>.</item>
 /// </list></para>
 ///
 /// <para><b>Contract gap (flagged, not silently worked around).</b> The Dapper-FROM secondary anchor (Leg 3's
@@ -392,8 +392,8 @@ public static class BridgeGraphBuilder
 
     /// <summary>
     /// Reduce each <c>kind='url'</c> literal into a <see cref="TsClientCall"/>, attaching the containing symbol's
-    /// <c>test_role</c> and the use-site file:line. The leg itself does the language + test filter; the builder only
-    /// supplies the located rows. Deterministic: ordered by literal span.
+    /// <c>is_test</c> flag and the use-site file:line. The leg itself does the language + test filter; the builder
+    /// only supplies the located rows. Deterministic: ordered by literal span.
     /// </summary>
     private static IReadOnlyList<TsClientCall> ReduceClientCalls(
         IReadOnlyList<LiteralRecord> literals,
@@ -408,15 +408,15 @@ public static class BridgeGraphBuilder
 
         foreach (var literal in ordered)
         {
-            TestRole? testRole = null;
+            bool isTest = false;
             if (!string.IsNullOrEmpty(literal.ContainingSymbolId) &&
                 symbolsById.TryGetValue(literal.ContainingSymbolId, out var container))
             {
-                testRole = container.TestRole;
+                isTest = container.IsTest;
             }
 
             var site = SiteFor(literal, symbolsById, literalSites);
-            calls.Add(new TsClientCall(literal, testRole, site.FilePath, site.Line));
+            calls.Add(new TsClientCall(literal, isTest, site.FilePath, site.Line));
         }
         return calls;
     }

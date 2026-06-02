@@ -12,7 +12,7 @@ namespace Miller.Tests.Graph;
 ///
 /// <para>Every fixture uses ONLY the verified lean contracts:
 /// <c>TypeArgument(IdentifierId, Ordinal, ParentArgId, TypeName, FilePath)</c> and
-/// <c>SymbolDetail(Id, Name, Kind, FilePath, Signature, Namespace, TestRole, ParentClassName)</c>. The endpoint
+/// <c>SymbolDetail(Id, Name, Kind, FilePath, Signature, Namespace, IsTest, ParentClassName)</c>. The endpoint
 /// class <c>[Route]</c> join is by <see cref="SymbolDetail.ParentClassName"/> (the contract carries no parent symbol
 /// id), and the Dapper-FROM secondary anchor is not expressible (the contract carries no per-arg containing-symbol id
 /// or span), so the entity-table edge here is exercised via the <c>DbSet&lt;T&gt;</c> PRIMARY breadcrumb.</para>
@@ -20,10 +20,10 @@ namespace Miller.Tests.Graph;
 public sealed class BridgeGraphBuilderTests
 {
     private static SymbolDetail Type(string id, string name, string kind = "class", string? ns = null, string file = "src/X.cs") =>
-        new(id, name, kind, file, Signature: name, Namespace: ns, TestRole: null, ParentClassName: null);
+        new(id, name, kind, file, Signature: name, Namespace: ns, IsTest: false, ParentClassName: null);
 
     private static SymbolDetail Method(string id, string name, string signature, string parentClassName, string file) =>
-        new(id, name, "method", file, signature, Namespace: "Api.Controllers", TestRole: null, ParentClassName: parentClassName);
+        new(id, name, "method", file, signature, Namespace: "Api.Controllers", IsTest: false, ParentClassName: parentClassName);
 
     private static TypeArgument Arg(string identifierId, int ordinal, string typeName, string file = "src/Profile.cs") =>
         new(IdentifierId: identifierId, Ordinal: ordinal, ParentArgId: null, TypeName: typeName, FilePath: file);
@@ -275,6 +275,60 @@ public sealed class BridgeGraphBuilderTests
         var graph = BridgeGraphBuilder.Build(symbols, [], [literal], annotations, [], sites);
 
         Assert.Contains(graph.Incident("sym-get"), e => e.Edge.Kind == BridgeKind.Hits);
+    }
+
+    [Fact]
+    public void ReduceClientCalls_TestContainerLiteral_ExcludedFromBridge()
+    {
+        // A url literal whose containing symbol is julie-flagged is_test => the reduced TsClientCall carries
+        // IsTest=true => RouteBridge.IsRealClientCall drops it => no Hits edge, even with a matching endpoint.
+        var symbols = new List<SymbolDetail>
+        {
+            // containing TS function, flagged test (IsTest is the 7th positional SymbolDetail param)
+            new("ts.testfn", "should_call_api", "function", "web/src/api.spec.ts", "function should_call_api()", "Web", IsTest: true, ParentClassName: null),
+            new("cs.endpoint", "List", "method", "Api/Controllers/AppSettingsController.cs", "Task<ActionResult> List()", "Api.Controllers", IsTest: false, ParentClassName: "AppSettingsController"),
+            new("cs.ctrl", "AppSettingsController", "class", "Api/Controllers/AppSettingsController.cs", "class AppSettingsController", "Api.Controllers", IsTest: false, ParentClassName: null),
+        };
+        var literals = new List<LiteralRecord>
+        {
+            new("/api/appsettings", "url", "axios.get", 0, "typescript", "ts.testfn", new SourceSpan(0, 16)),
+        };
+        var annotations = new List<SymbolAnnotation>
+        {
+            new("cs.endpoint", 0, "HttpGet", "httpget", "HttpGet", "HttpGet"),     // verb on the method
+            new("cs.ctrl", 0, "Route", "route", "Route(\"api/[controller]\")", "Route"),
+        };
+
+        var graph = BridgeGraphBuilder.Build(symbols, [], literals, annotations, []);
+
+        // No Hits edge incident on the endpoint node: the test-flagged container's literal was dropped.
+        Assert.DoesNotContain(graph.Incident("cs.endpoint"), e => e.Edge.Kind == BridgeKind.Hits);
+    }
+
+    [Fact]
+    public void ReduceClientCalls_ProductionContainerLiteral_YieldsHitsEdge()
+    {
+        // Positive control: an identical literal whose container is NOT a test produces a Hits edge — proving the
+        // previous test's exclusion is driven by the container's IsTest flag, not by the route/verb shape.
+        var symbols = new List<SymbolDetail>
+        {
+            new("ts.fn", "callApi", "function", "web/src/api.ts", "function callApi()", "Web", IsTest: false, ParentClassName: null),
+            new("cs.endpoint", "List", "method", "Api/Controllers/AppSettingsController.cs", "Task<ActionResult> List()", "Api.Controllers", IsTest: false, ParentClassName: "AppSettingsController"),
+            new("cs.ctrl", "AppSettingsController", "class", "Api/Controllers/AppSettingsController.cs", "class AppSettingsController", "Api.Controllers", IsTest: false, ParentClassName: null),
+        };
+        var literals = new List<LiteralRecord>
+        {
+            new("/api/appsettings", "url", "axios.get", 0, "typescript", "ts.fn", new SourceSpan(0, 16)),
+        };
+        var annotations = new List<SymbolAnnotation>
+        {
+            new("cs.endpoint", 0, "HttpGet", "httpget", "HttpGet", "HttpGet"),
+            new("cs.ctrl", 0, "Route", "route", "Route(\"api/[controller]\")", "Route"),
+        };
+
+        var graph = BridgeGraphBuilder.Build(symbols, [], literals, annotations, []);
+
+        Assert.Contains(graph.Incident("cs.endpoint"), e => e.Edge.Kind == BridgeKind.Hits);
     }
 
     [Fact]

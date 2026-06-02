@@ -40,12 +40,12 @@ public sealed class ImpactToolTests
     {
         var symbols = new List<IndexedSymbol>
         {
-            new(0, ValidateId, "Validate", "void Validate()", "method", "csharp", "src/Service.cs", 10, 14, null),
-            new(1, ProcessId, "Process", "void Process()", "method", "csharp", "src/Service.cs", 20, 30, null),
-            new(2, HandleId, "Handle", "void Handle()", "method", "csharp", "web/Controller.cs", 5, 9, null),
+            new(0, ValidateId, "Validate", "void Validate()", "method", "csharp", "src/Service.cs", 10, 14, null, false),
+            new(1, ProcessId, "Process", "void Process()", "method", "csharp", "src/Service.cs", 20, 30, null, false),
+            new(2, HandleId, "Handle", "void Handle()", "method", "csharp", "web/Controller.cs", 5, 9, null, false),
             new(3, ProcessWorksId, "ProcessWorks", "void ProcessWorks()", "method", "csharp",
                 "tests/ServiceTests.cs", 8, 12, null, IsTest: true),
-            new(4, LonelyId, "Lonely", "void Lonely()", "method", "csharp", "src/Other.cs", 1, 3, null),
+            new(4, LonelyId, "Lonely", "void Lonely()", "method", "csharp", "src/Other.cs", 1, 3, null, false),
         };
         var edges = new[]
         {
