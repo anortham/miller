@@ -32,9 +32,20 @@ public sealed record ExtractReport(
     /// <summary>artifact.hash_algorithm; null when the artifact block is absent (a failed op).</summary>
     [JsonIgnore] public string? HashAlgorithm => Artifact?.HashAlgorithm;
 
+    /// <summary>
+    /// True when julie-extract returned <c>status=="partial"</c>: the artifact is CONSISTENT but one or more files
+    /// failed to parse, so their symbols are ABSENT from the index. <c>Interpret</c> returns such a report (rather
+    /// than throwing) so the usable rows still load; the caller MUST surface it as a WARNING (the dropped files are
+    /// otherwise hidden behind a clean "scan complete"). See <see cref="FilesFailed"/>/<see cref="Errors"/>.
+    /// </summary>
+    [JsonIgnore] public bool IsPartial => string.Equals(Status, "partial", StringComparison.Ordinal);
+
     [JsonIgnore] public ulong FilesScanned => ToU(Counts?.FilesScanned);
     [JsonIgnore] public ulong FilesUpdated => ToU(Counts?.FilesChanged);   // v1 calls it files_changed
     [JsonIgnore] public ulong FilesDeleted => ToU(Counts?.FilesDeleted);
+
+    /// <summary>counts.files_failed — files that failed to parse; their symbols are absent from the index.</summary>
+    [JsonIgnore] public ulong FilesFailed => ToU(Counts?.FilesFailed);
     [JsonIgnore] public ulong SymbolsExtracted => ToU(Counts?.RowsWritten?.Symbols);
     [JsonIgnore] public ulong FilesTotal => ToU(Counts?.Totals?.Files);
     [JsonIgnore] public ulong SymbolsTotal => ToU(Counts?.Totals?.Symbols);

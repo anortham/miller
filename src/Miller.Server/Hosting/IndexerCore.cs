@@ -132,12 +132,17 @@ public sealed class IndexerCore
                 _ => throw new InvalidOperationException($"Unhandled ExtractOp '{op.GetType().Name}'."),
             };
 
-            // M8 §D4: a per-file extract outcome at Debug — silent at the default Information level, but the line
-            // an operator running MILLER_LOG_LEVEL=Debug needs to follow which file moved the index to which
-            // revision. Cheap: the template is not rendered unless Debug is enabled.
-            _logger?.LogDebug(
-                "extract op {Op} succeeded (status {Status}, revision {Revision}).",
-                Describe(op), report.Status, report.Revision);
+            // A PARTIAL report (the op succeeded but a file failed to parse, so its symbols are absent) is not a
+            // routine success — surface it at WARNING so it is not buried at Debug while the index silently drops
+            // rows (julie-extract migration review finding). A healthy op stays the M8 §D4 Debug line: silent at
+            // the default Information level, but the breadcrumb an operator on MILLER_LOG_LEVEL=Debug needs to
+            // follow which file moved the index to which revision. Cheap: neither template renders unless enabled.
+            if (PartialExtractLog.DescribePartial(report) is { } partial)
+                _logger?.LogWarning("extract op {Op}: {Partial}", Describe(op), partial);
+            else
+                _logger?.LogDebug(
+                    "extract op {Op} succeeded (status {Status}, revision {Revision}).",
+                    Describe(op), report.Status, report.Revision);
         }
         catch (JulieExtractFailedException ex)
         {

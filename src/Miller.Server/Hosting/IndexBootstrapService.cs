@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Miller.Indexing;
+using Miller.Server.Logging;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
@@ -136,6 +137,11 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                     _logger.LogInformation(
                         "Scan complete: {Symbols} symbols extracted (revision {Rev}).",
                         report.SymbolsExtracted, report.Revision);
+                    // A partial scan (some files failed to parse) is a CONSISTENT artifact loaded with rows
+                    // missing — surface it as a WARNING so the clean "Scan complete" above never hides silent
+                    // symbol loss (julie-extract migration review finding).
+                    if (PartialExtractLog.DescribePartial(report) is { } partial)
+                        _logger.LogWarning("Bootstrap scan: {Partial}", partial);
                 }
                 else
                 {

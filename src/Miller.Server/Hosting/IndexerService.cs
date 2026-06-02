@@ -247,6 +247,8 @@ public sealed class IndexerService : BackgroundService
             _logger.LogInformation(
                 "Startup delta scan complete: revision {Revision}, {Updated} files updated, {Deleted} files deleted.",
                 report.Revision, report.FilesUpdated, report.FilesDeleted);
+            if (PartialExtractLog.DescribePartial(report) is { } partial)
+                _logger.LogWarning("Startup delta scan: {Partial}", partial);
         }
         catch (Exception ex)
         {
@@ -279,7 +281,9 @@ public sealed class IndexerService : BackgroundService
                 return false; // not the leader — the watcher event from the file write converges instead
             try
             {
-                ops.Update(path);
+                ExtractReport report = ops.Update(path);
+                if (PartialExtractLog.DescribePartial(report) is { } partial)
+                    _logger.LogWarning("Inline write-through reindex of {Path}: {Partial}", path, partial);
                 return true;
             }
             catch (Exception ex)
@@ -314,6 +318,9 @@ public sealed class IndexerService : BackgroundService
             try
             {
                 ExtractReport report = ops.Scan(force);
+                if (PartialExtractLog.DescribePartial(report) is { } partial)
+                    _logger.LogWarning(
+                        "On-demand {Kind} scan: {Partial}", force ? "full (force)" : "refresh (delta)", partial);
                 return ScanOutcome.Scanned(report);
             }
             catch (Exception ex)

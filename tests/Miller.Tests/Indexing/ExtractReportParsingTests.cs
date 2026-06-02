@@ -76,6 +76,28 @@ public sealed class ExtractReportParsingTests
           "errors": [], "warnings": [] }
         """;
 
+    // a scan where some files failed to parse -> status=partial, files_failed>0, a CONSISTENT artifact +
+    // revision (Interpret returns it; the caller WARN-logs the dropped files). errors[] carry the per-file codes.
+    private const string PartialJson = """
+        { "report_schema_version": 1, "status": "partial", "operation": "scan", "mode": "full",
+          "input": { "db_path": "/abs/db", "root_path": "/abs/r", "file_path": null,
+                     "root_relative_path": null, "format": null, "output_path": null },
+          "artifact": { "db_path": "/abs/db", "root_path": "/abs/r", "artifact_id": "a", "schema_version": 1,
+                        "extract_contract_version": 1, "sqlite_schema_version": 1, "jsonl_schema_version": 1,
+                        "hash_algorithm": "blake3", "parser_inventory_fingerprint": "sha256:p",
+                        "capability_snapshot_fingerprint": "sha256:c" },
+          "tool": { "binary_name": "julie-extract", "binary_version": "2.0.0" },
+          "revision": { "latest_revision_id": 9, "created_revision_id": 9 },
+          "counts": { "files_scanned": 10, "files_changed": 8, "files_unchanged": 0, "files_unsupported": 0,
+                      "files_deleted": 0, "files_failed": 2,
+                      "rows_written": { "symbols": 40 }, "totals": { "files": 10, "symbols": 120 } },
+          "errors": [ { "code": "parse_error", "message": "tree-sitter failed", "path": "/abs/r/broken/a.rs",
+                        "root_relative_path": "broken/a.rs", "recoverable": true, "details": {} },
+                      { "code": "parse_error", "message": "tree-sitter failed", "path": "/abs/r/broken/b.rs",
+                        "root_relative_path": "broken/b.rs", "recoverable": true, "details": {} } ],
+          "warnings": [] }
+        """;
+
     private const string FailedJson = """
         { "report_schema_version": 1, "status": "failed", "operation": "update", "mode": "single_file",
           "input": { "db_path": "/abs/db", "root_path": "/abs/r", "file_path": "/abs/r/a.cs",
@@ -131,6 +153,25 @@ public sealed class ExtractReportParsingTests
         Assert.Equal(0u, r.FilesDeleted);
         Assert.Equal(8L, r.Revision);              // cursor unchanged from the prior delete
         Assert.Null(r.CreatedRevision);            // a no-op delete did not mutate
+    }
+
+    [Fact]
+    public void Parse_Partial_IsPartialTrue_AndFilesFailedCounted()
+    {
+        var r = JulieExtractRunner.ParseReport(PartialJson);
+        Assert.Equal("partial", r.Status);
+        Assert.True(r.IsPartial);
+        Assert.Equal(2u, r.FilesFailed);          // counts.files_failed — the dropped files
+        Assert.Equal(9L, r.Revision);             // a partial artifact is consistent and carries a revision
+        Assert.Equal(2, r.Errors.Count);          // per-file parse diagnostics surfaced to the caller
+    }
+
+    [Fact]
+    public void Parse_HealthyOk_IsNotPartial_FilesFailedZero()
+    {
+        var r = JulieExtractRunner.ParseReport(ChangedJson);
+        Assert.False(r.IsPartial);                 // status=ok must never read as partial
+        Assert.Equal(0u, r.FilesFailed);
     }
 
     [Fact]
