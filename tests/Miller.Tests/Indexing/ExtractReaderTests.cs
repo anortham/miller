@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Xunit;
 
@@ -176,6 +177,99 @@ public sealed class ExtractReaderTests
         // v1 records the canonical root in artifact_metadata.root_path (the fixture seeds '/work/repo').
         using var fx = JulieDbFixture.CreateForInspect();
         Assert.Equal("/work/repo", ExtractReader.ReadRootPath(fx.DbPath));
+    }
+
+    [Fact]
+    public void ReadRootPath_LegacyDbWithoutArtifactMetadataTable_ReturnsNull_NotThrows()
+    {
+        // A pre-v1 julie-server DB (schema 28) has NO artifact_metadata table. ReadRootPath must treat the
+        // missing table as "unknown root" (null) — NOT throw — so the bootstrap's DecideBootstrapScan force-
+        // rescans and julie-extract rebuilds it as a v1 artifact (the documented self-healing upgrade,
+        // reconciliation #14). Throwing here propagates out of bootstrap StartAsync and crashes server startup
+        // for every user upgrading with an existing .miller/symbols.db. Mirrors the missing-table tolerance
+        // ExtractFileHashReader.ReadHashAlgorithm already has.
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract,
+            JulieDbFixture.DefaultRows, createMetadataTable: false);
+
+        Assert.Null(ExtractReader.ReadRootPath(fx.DbPath));
+    }
+
+    // ---- ReadBody workspace-containment trust boundary (Finding 3) ----
+    // v1 re-sources body text from DISK keyed on the artifact's files.path. A corrupt/tampered artifact could
+    // record a path that escapes the workspace root (absolute, or via '..') with a content_hash matching the
+    // external file's bytes; the inspect surface must NEVER disclose a file outside the root. These prove the
+    // reader fails CLOSED (null) on an out-of-root path even when the hash would otherwise match.
+
+    [Fact]
+    public void ReadBody_AbsoluteSymbolPath_ReturnsNull_EvenWhenHashMatches()
+    {
+        string root = NewTempDir();
+        string secretAbs = Path.Combine(NewTempDir(), "secret.txt");
+        byte[] secret = System.Text.Encoding.UTF8.GetBytes("TOP SECRET (absolute path)\n");
+        File.WriteAllBytes(secretAbs, secret);
+
+        // Artifact row: an ABSOLUTE path pointing outside the workspace, hash matching the secret's real bytes.
+        string db = Path.Combine(root, "symbols.db");
+        BuildFilesOnlyDb(db, secretAbs, "blake3:" + ContentHasher.Blake3Hex(secret));
+
+        string? body = ExtractReader.ReadBody(
+            db, workspaceRoot: root, filePath: secretAbs,
+            startByte: 0, endByte: secret.Length, startLine: 1, endLine: 1);
+
+        Assert.Null(body);
+    }
+
+    [Fact]
+    public void ReadBody_ParentEscapingSymbolPath_ReturnsNull_EvenWhenHashMatches()
+    {
+        string parent = NewTempDir();
+        string root = Path.Combine(parent, "ws");
+        Directory.CreateDirectory(root);
+        byte[] secret = System.Text.Encoding.UTF8.GetBytes("TOP SECRET (.. escape)\n");
+        File.WriteAllBytes(Path.Combine(parent, "secret.txt"), secret);
+
+        // Artifact row: a RELATIVE path that escapes the root via '..', hash matching the secret's real bytes.
+        string escaping = Path.Combine("..", "secret.txt");
+        string db = Path.Combine(root, "symbols.db");
+        BuildFilesOnlyDb(db, escaping, "blake3:" + ContentHasher.Blake3Hex(secret));
+
+        string? body = ExtractReader.ReadBody(
+            db, workspaceRoot: root, filePath: escaping,
+            startByte: 0, endByte: secret.Length, startLine: 1, endLine: 1);
+
+        Assert.Null(body);
+    }
+
+    // A fresh temp directory (left for the OS temp reaper — tests must not depend on cleanup ordering).
+    private static string NewTempDir()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "miller-extractreader-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        return dir;
+    }
+
+    // A minimal v1-shaped DB carrying ONE files row (path + content_hash) — all ReadBody's disk re-source needs
+    // to look up the stored hash. Deliberately does NOT materialize the file under any root (the path is meant to
+    // point outside it), so it exercises the containment guard, not the manifest-miss branch.
+    private static void BuildFilesOnlyDb(string dbPath, string filePath, string contentHash)
+    {
+        var csb = new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath, Mode = SqliteOpenMode.ReadWriteCreate, Pooling = false,
+        };
+        using var conn = new SqliteConnection(csb.ToString());
+        conn.Open();
+        using (var ddl = conn.CreateCommand())
+        {
+            ddl.CommandText = "CREATE TABLE files (path TEXT PRIMARY KEY, content_hash TEXT NOT NULL);";
+            ddl.ExecuteNonQuery();
+        }
+        using var ins = conn.CreateCommand();
+        ins.CommandText = "INSERT INTO files (path, content_hash) VALUES ($p, $h);";
+        ins.Parameters.AddWithValue("$p", filePath);
+        ins.Parameters.AddWithValue("$h", contentHash);
+        ins.ExecuteNonQuery();
     }
 
     // ---- D6 by-name read discipline: a value comes from its NAMED column, not a fixed ordinal ----

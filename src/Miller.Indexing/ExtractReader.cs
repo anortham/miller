@@ -270,8 +270,22 @@ public sealed class ExtractReader
         using var command = connection.CreateCommand();
         command.CommandText =
             "SELECT value FROM artifact_metadata WHERE key = 'root_path';";
-        var value = command.ExecuteScalar();
-        return value is string s ? s : null;
+        try
+        {
+            var value = command.ExecuteScalar();
+            return value is string s ? s : null;
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 1
+            && ex.Message.Contains("artifact_metadata", StringComparison.OrdinalIgnoreCase))
+        {
+            // A pre-v1 julie-server DB (or a corrupt/truncated artifact) has no artifact_metadata table. Treat the
+            // missing table as an UNKNOWN root (null) — not an error — so the bootstrap's DecideBootstrapScan
+            // force-rescans and julie-extract rebuilds the DB as a v1 artifact (verified: `scan --force` cleanly
+            // overwrites a foreign-schema DB). Throwing here would propagate out of bootstrap StartAsync and crash
+            // server startup for anyone upgrading with an existing .miller/symbols.db, defeating the documented
+            // self-healing upgrade (reconciliation #14). Mirrors ExtractFileHashReader.ReadHashAlgorithm's tolerance.
+            return null;
+        }
     }
 
     /// <summary>The verified on-disk file text, or a staleness sentinel telling the caller the file drifted.</summary>
@@ -289,7 +303,19 @@ public sealed class ExtractReader
         if (string.IsNullOrWhiteSpace(storedHash))
             return new FileContentResult(Text: null, Stale: true); // no manifest entry → not-readable
 
-        string abs = Path.IsPathRooted(relPath) ? relPath : Path.Combine(workspaceRoot, relPath);
+        // Trust boundary (finding 3): julie-extract records ROOT-RELATIVE paths. A rooted path, or one that
+        // escapes the workspace root via "..", must never reach File.ReadAllBytes — a corrupt or tampered artifact
+        // could otherwise disclose a file OUTSIDE the workspace through the inspect surface (and the content_hash
+        // gate below would not stop it if the artifact recorded the external file's real hash). Resolve under the
+        // root and require containment; fail CLOSED (Stale) on violation. A legitimate root-relative path always
+        // stays under the root, so this never rejects a real read. Same under-canonical-root discipline the
+        // bootstrap enforces for julie's --db/--file (verified-fact 4).
+        if (Path.IsPathRooted(relPath))
+            return new FileContentResult(Text: null, Stale: true);
+        string root = Path.GetFullPath(workspaceRoot);
+        string abs = Path.GetFullPath(Path.Combine(root, relPath));
+        if (!IsUnderRoot(root, abs))
+            return new FileContentResult(Text: null, Stale: true);
         if (!File.Exists(abs))
             return new FileContentResult(Text: null, Stale: true);
 
@@ -300,6 +326,19 @@ public sealed class ExtractReader
             return new FileContentResult(Text: null, Stale: true); // HARD INVARIANT: never slice drifted bytes
 
         return new FileContentResult(Text: Encoding.UTF8.GetString(bytes), Stale: false);
+    }
+
+    // Whether <paramref name="candidate"/> (an absolute, normalized path) is the root itself or lies beneath it.
+    // Ordinal comparison matches the rest of the path discipline (the bootstrap's RootPathsEqual); the trailing
+    // separator stops a sibling like "/ws-evil" from matching root "/ws".
+    private static bool IsUnderRoot(string root, string candidate)
+    {
+        if (string.Equals(candidate, root, StringComparison.Ordinal))
+            return true;
+        string rootWithSep = root.EndsWith(Path.DirectorySeparatorChar)
+            ? root
+            : root + Path.DirectorySeparatorChar;
+        return candidate.StartsWith(rootWithSep, StringComparison.Ordinal);
     }
 
     // julie byte offsets are absolute UTF-8 byte indices; C# strings are UTF-16. Encode, slice on bytes,
