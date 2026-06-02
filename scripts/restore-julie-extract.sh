@@ -5,7 +5,7 @@
 # Reads scripts/julie-pins.json for the version, per-triple asset name + sha256, and the URL template.
 # Detects the host platform, downloads the matching release archive from anortham/julie-extractors,
 # VERIFIES its sha256 against the pin (julie-extractors publishes no checksum assets — these were
-# download-verified and committed), extracts ONLY the julie-extract binary from the archive, sets the
+# download-verified and committed), stages the archive and installs only the julie-extract binary, sets the
 # exec bit, clears the macOS quarantine xattr, and removes the archive. Fails loudly on unsupported
 # platforms.
 #
@@ -197,12 +197,20 @@ verify_sha() {
 verify_sha "${ARCHIVE}" "${SHA256}"
 echo "  sha256 OK"
 
-# --- extract ONLY julie-extract from the archive (v1 archives nest under dist/{triple}/) ---
-INNER="$(read_pin .archiveInnerPathTemplate)"
-INNER="${INNER/\{triple\}/${TRIPLE}}"; INNER="${INNER/\{exe\}/}"   # no exe suffix on unix
-tar -xzf "${ARCHIVE}" -C "${TOOLS_DIR}" "${INNER}"
-mv "${TOOLS_DIR}/${INNER}" "${BINARY}"
-rm -rf "${TOOLS_DIR}/dist"
+# --- extract julie-extract from the archive (v1 archives nest under dist/{triple}/) ---
+STAGING="$(mktemp -d "${TOOLS_DIR}/julie-extract-stage.XXXXXX")"
+cleanup_staging() {
+  rm -rf "${STAGING}"
+}
+trap cleanup_staging EXIT
+
+tar -xzf "${ARCHIVE}" -C "${STAGING}"
+FOUND="$(find "${STAGING}" -type f -path "*/dist/${TRIPLE}/julie-extract" -print -quit)"
+if [[ -z "${FOUND}" ]]; then
+  echo "error: julie-extract not found under dist/${TRIPLE}/ in ${ASSET}" >&2
+  exit 1
+fi
+mv "${FOUND}" "${BINARY}"
 
 # --- exec bit + clear macOS quarantine (ignore if absent) ---
 chmod +x "${BINARY}"
@@ -212,6 +220,8 @@ fi
 
 # --- cleanup ---
 rm -f "${ARCHIVE}"
+cleanup_staging
+trap - EXIT
 
 echo "Installed: ${BINARY}"
 "${BINARY}" --version 2>/dev/null || true

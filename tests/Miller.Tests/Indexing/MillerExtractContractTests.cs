@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
@@ -167,6 +168,100 @@ public sealed class MillerExtractContractTests
         }
     }
 
+    [Fact]
+    public void UnixRestoreScriptExtractsLinuxArchiveWithLeadingDotDistPrefix()
+    {
+        if (OperatingSystem.IsWindows())
+            Assert.Skip("POSIX shell restore-script regression test.");
+
+        string repoRoot = ScaleTestSupport.RepoRoot();
+        string tempRoot = Path.Combine(Path.GetTempPath(), $"miller-restore-script-{Guid.NewGuid():N}");
+        try
+        {
+            string scriptsDir = Path.Combine(tempRoot, "scripts");
+            string fakeBin = Path.Combine(tempRoot, "fake-bin");
+            string archiveRoot = Path.Combine(tempRoot, "archive-root");
+            string binaryDir = Path.Combine(archiveRoot, "dist", "x86_64-unknown-linux-gnu");
+            Directory.CreateDirectory(scriptsDir);
+            Directory.CreateDirectory(fakeBin);
+            Directory.CreateDirectory(binaryDir);
+
+            string scriptPath = Path.Combine(scriptsDir, "restore-julie-extract.sh");
+            File.Copy(Path.Combine(repoRoot, "scripts", "restore-julie-extract.sh"), scriptPath);
+
+            string archiveBinary = Path.Combine(binaryDir, "julie-extract");
+            WriteExecutable(archiveBinary, """
+                #!/usr/bin/env bash
+                echo "julie-extract 2.0.0"
+                """);
+
+            string archivePath = Path.Combine(tempRoot, "julie-extract-v2.0.0-x86_64-unknown-linux-gnu.tar.gz");
+            RunProcess("tar", ["-czf", archivePath, "-C", archiveRoot, "."]);
+            string sha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(archivePath))).ToLowerInvariant();
+
+            File.WriteAllText(Path.Combine(scriptsDir, "julie-pins.json"), $$"""
+                {
+                  "version": "2.0.0",
+                  "binary": "julie-extract",
+                  "archiveInnerPathTemplate": "dist/{triple}/julie-extract{exe}",
+                  "urlTemplate": "https://example.test/{VER}/{asset}",
+                  "assets": {
+                    "x86_64-unknown-linux-gnu": {
+                      "name": "julie-extract-v{VER}-x86_64-unknown-linux-gnu.tar.gz",
+                      "sha256": "{{sha256}}"
+                    }
+                  }
+                }
+                """);
+
+            WriteExecutable(Path.Combine(fakeBin, "uname"), """
+                #!/usr/bin/env bash
+                case "${1:-}" in
+                  -s) echo Linux ;;
+                  -m) echo x86_64 ;;
+                  *) /usr/bin/uname "$@" ;;
+                esac
+                """);
+            WriteExecutable(Path.Combine(fakeBin, "curl"), """
+                #!/usr/bin/env bash
+                set -euo pipefail
+                out=""
+                while [[ $# -gt 0 ]]; do
+                  case "$1" in
+                    -o) out="$2"; shift 2 ;;
+                    *) shift ;;
+                  esac
+                done
+                if [[ -z "$out" ]]; then
+                  echo "missing -o" >&2
+                  exit 1
+                fi
+                cp "$FAKE_JULIE_ARCHIVE" "$out"
+                """);
+
+            ProcessResult result = RunProcess(
+                "bash",
+                [scriptPath],
+                cwd: tempRoot,
+                env: new Dictionary<string, string?>
+                {
+                    ["PATH"] = fakeBin + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH"),
+                    ["FAKE_JULIE_ARCHIVE"] = archivePath,
+                });
+
+            Assert.True(result.ExitCode == 0, $"restore script failed:\nSTDOUT:\n{result.Stdout}\nSTDERR:\n{result.Stderr}");
+            string installed = Path.Combine(tempRoot, ".tools", "julie-extract");
+            Assert.True(File.Exists(installed), $"expected restored binary at {installed}");
+            ProcessResult version = RunProcess(installed, ["--version"]);
+            Assert.Contains("julie-extract 2.0.0", version.Stdout, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+                Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
     private static string ExtractPythonFallback(string script)
     {
         Match match = Regex.Match(
@@ -184,4 +279,52 @@ public sealed class MillerExtractContractTests
             if (c is not (>= '0' and <= '9' or >= 'a' and <= 'f')) return false;
         return true;
     }
+
+    private static void WriteExecutable(string path, string contents)
+    {
+        File.WriteAllText(path, contents);
+        RunProcess("chmod", ["+x", path]);
+    }
+
+    private static ProcessResult RunProcess(
+        string fileName,
+        IReadOnlyList<string> args,
+        string? cwd = null,
+        IReadOnlyDictionary<string, string?>? env = null)
+    {
+        var psi = new ProcessStartInfo(fileName)
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        if (cwd is not null)
+            psi.WorkingDirectory = cwd;
+        foreach (string arg in args)
+            psi.ArgumentList.Add(arg);
+        if (env is not null)
+        {
+            foreach ((string key, string? value) in env)
+            {
+                if (value is null)
+                    psi.Environment.Remove(key);
+                else
+                    psi.Environment[key] = value;
+            }
+        }
+
+        using Process process = Process.Start(psi)
+            ?? throw new InvalidOperationException($"Failed to start {fileName}.");
+        string stdout = process.StandardOutput.ReadToEnd();
+        string stderr = process.StandardError.ReadToEnd();
+        bool exited = process.WaitForExit(10000);
+        if (!exited)
+        {
+            process.Kill(entireProcessTree: true);
+            throw new TimeoutException($"{fileName} did not exit within 10s.");
+        }
+        return new(process.ExitCode, stdout, stderr);
+    }
+
+    private sealed record ProcessResult(int ExitCode, string Stdout, string Stderr);
 }
