@@ -4,15 +4,18 @@ using Miller.Indexing;
 namespace Miller.Tests.Server;
 
 /// <summary>
-/// A fast bulk writer for a large synthesized julie-schema extract DB, used only by the Scale
+/// A fast bulk writer for a large synthesized julie-extract v1 DB, used only by the Scale
 /// <see cref="RebuildLatencyTests"/>. Unlike <see cref="Miller.Tests.Indexing.JulieDbFixture"/> (which inserts
 /// row-by-row for fidelity on small fixtures), this inserts tens of thousands of symbols inside ONE transaction
-/// with prepared, reused commands — so building the latency fixture is itself fast. The schema is the minimal
+/// with prepared, reused commands — so building the latency fixture is itself fast. The schema is the minimal v1
 /// subset the production build path (<see cref="RepositoryIndexLoader.Load"/> → <see cref="SqliteSymbolReader.Read"/>
-/// + <see cref="SymbolGraphReader.Read"/>) + the schema gate require (files + symbols [incl. <c>end_line</c>, D7]
-/// + the <c>relationships</c>/<c>identifiers</c> edge tables [D2] + schema_version + external_extract_metadata),
-/// at the pinned schema 28 / contract 3. The edge tables are created empty here — the rebuild latency this
-/// measures is the read+build path, and empty edge reads still exercise the loader's two extra SELECTs.
+/// + <see cref="SymbolGraphReader.Read"/> + <see cref="SqliteBridgeReader.Read"/>) + the schema gate require:
+/// v1 <c>files</c>/<c>symbols</c> (incl. <c>end_line</c> [D7] and the typed <c>is_test</c> column) + the
+/// <c>relationships</c>/<c>identifiers</c> edge tables [D2] + the split bridge tables
+/// (<c>type_argument_usages</c>/<c>type_arguments</c>/<c>literals</c>/<c>symbol_annotations</c>) + the single
+/// <c>artifact_metadata</c> table carrying the gate's version/hash keys. The bridge + identifier tables are
+/// created empty — the rebuild latency this measures is the read+build path, and empty reads still exercise the
+/// loader's extra SELECTs.
 /// </summary>
 internal static class LargeDbWriter
 {
@@ -28,71 +31,83 @@ internal static class LargeDbWriter
         Exec(conn, "PRAGMA foreign_keys=OFF;"); // bulk load: skip FK checks (the data is internally consistent)
         Exec(conn, "PRAGMA synchronous=OFF;");  // bulk load only; not a production setting
 
+        // v1 files: file_id PK + path UNIQUE + content_hash/content_bytes (the symbol reader keys symbols to file_id).
         Exec(conn, """
             CREATE TABLE files (
-                path TEXT PRIMARY KEY, language TEXT NOT NULL, hash TEXT NOT NULL, size INTEGER NOT NULL,
-                last_modified INTEGER NOT NULL, content TEXT, line_count INTEGER DEFAULT 0);
+                file_id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, language TEXT NOT NULL,
+                content_hash TEXT NOT NULL, content_bytes INTEGER NOT NULL, line_count INTEGER,
+                indexed_at TEXT NOT NULL, last_revision_id INTEGER NOT NULL, status TEXT NOT NULL,
+                metadata_json TEXT, content TEXT);
             """);
+        // v1 symbols: symbol_id PK, path (not file_path), parent_symbol_id (not parent_id), typed is_test column.
         Exec(conn, """
             CREATE TABLE symbols (
-                id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, language TEXT NOT NULL,
-                file_path TEXT NOT NULL, signature TEXT, start_line INTEGER, end_line INTEGER,
-                parent_id TEXT, metadata TEXT);
+                symbol_id TEXT PRIMARY KEY, file_id TEXT NOT NULL, path TEXT NOT NULL, language TEXT NOT NULL,
+                name TEXT NOT NULL, kind TEXT NOT NULL, signature TEXT, start_line INTEGER, end_line INTEGER,
+                parent_symbol_id TEXT, is_test INTEGER NOT NULL DEFAULT 0, metadata_json TEXT);
             """);
-        // D2 edge tables — the production build path (RepositoryIndexLoader) reads both. Minimal column subset
-        // the readers SELECT (relationships: from/to/kind; identifiers: name/kind/containing_symbol_id).
+        // D2 edge tables — the production build path reads both. v1 column names (relationships: relationship_id +
+        // from/to/kind; identifiers: identifier_id + name/kind/path/containing_symbol_id).
         Exec(conn, """
             CREATE TABLE relationships (
-                id TEXT PRIMARY KEY, from_symbol_id TEXT NOT NULL, to_symbol_id TEXT NOT NULL, kind TEXT NOT NULL);
+                relationship_id TEXT PRIMARY KEY, from_symbol_id TEXT NOT NULL, to_symbol_id TEXT NOT NULL,
+                path TEXT, kind TEXT NOT NULL);
             """);
         Exec(conn, """
             CREATE TABLE identifiers (
-                id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, language TEXT NOT NULL,
-                file_path TEXT NOT NULL, start_line INTEGER NOT NULL, start_col INTEGER NOT NULL,
-                end_line INTEGER NOT NULL, end_col INTEGER NOT NULL, containing_symbol_id TEXT, target_symbol_id TEXT);
+                identifier_id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, language TEXT NOT NULL,
+                path TEXT NOT NULL, start_line INTEGER NOT NULL, start_column INTEGER NOT NULL,
+                end_line INTEGER NOT NULL, end_column INTEGER NOT NULL, containing_symbol_id TEXT, target_symbol_id TEXT);
             """);
-        // M4 bridge tables (verbatim from julie v7.13.1 schema.rs). SqliteBridgeReader is on the single production
-        // RepositoryIndexLoader.Load path (D9), so IndexRebuilder.Rebuild over this DB SELECTs all three — created
-        // empty here, exactly as JulieDbFixture does, so the rebuild/latency path does not crash on
-        // "no such table: type_arguments".
+        // M4 bridge tables (v1 split). SqliteBridgeReader is on the single production RepositoryIndexLoader.Load
+        // path (D9), so IndexRebuilder.Rebuild over this DB SELECTs all of them — created empty so the rebuild path
+        // does not crash on "no such table". v1 moves identifier_id/path onto type_argument_usages; the args JOIN by
+        // usage_id; literals/symbol_annotations carry v1 columns (literal_id/path; annotation_id, no ordinal).
+        Exec(conn, """
+            CREATE TABLE type_argument_usages (
+                usage_id TEXT PRIMARY KEY, identifier_id TEXT NOT NULL, path TEXT NOT NULL, language TEXT NOT NULL);
+            """);
         Exec(conn, """
             CREATE TABLE type_arguments (
-                id TEXT PRIMARY KEY, identifier_id TEXT NOT NULL, parent_arg_id TEXT, ordinal INTEGER NOT NULL,
-                type_name TEXT NOT NULL, target_symbol_id TEXT, file_path TEXT NOT NULL, language TEXT NOT NULL,
-                last_indexed INTEGER);
+                type_argument_id TEXT PRIMARY KEY, usage_id TEXT NOT NULL, parent_type_argument_id TEXT,
+                ordinal INTEGER NOT NULL, type_name TEXT NOT NULL);
             """);
         Exec(conn, """
             CREATE TABLE literals (
-                id TEXT PRIMARY KEY, literal_text TEXT NOT NULL, kind TEXT NOT NULL, carrier TEXT,
-                arg_position INTEGER NOT NULL, language TEXT NOT NULL, file_path TEXT NOT NULL, start_line INTEGER,
+                literal_id TEXT PRIMARY KEY, literal_text TEXT NOT NULL, kind TEXT NOT NULL, carrier TEXT,
+                arg_position INTEGER NOT NULL, language TEXT NOT NULL, path TEXT NOT NULL, start_line INTEGER,
                 end_line INTEGER, start_byte INTEGER, end_byte INTEGER, containing_symbol_id TEXT, confidence REAL);
             """);
         Exec(conn, """
             CREATE TABLE symbol_annotations (
-                id TEXT PRIMARY KEY, symbol_id TEXT NOT NULL, ordinal INTEGER NOT NULL, annotation TEXT NOT NULL,
-                annotation_key TEXT, raw_text TEXT, carrier TEXT, UNIQUE (symbol_id, ordinal));
+                annotation_id TEXT PRIMARY KEY, symbol_id TEXT NOT NULL, annotation TEXT NOT NULL,
+                annotation_key TEXT, raw_text TEXT, carrier TEXT);
             """);
-        Exec(conn, "CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL, description TEXT NOT NULL);");
-        Exec(conn, "CREATE TABLE external_extract_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL);");
-        Exec(conn, $"INSERT INTO schema_version (version, applied_at, description) VALUES ({MillerExtractContract.ExpectedSchemaVersion}, 0, 'test');");
-        Exec(conn, $"INSERT INTO external_extract_metadata (key, value, updated_at) VALUES ('extract_contract_version', '{MillerExtractContract.ExpectedExtractContractVersion}', 0);");
-        Exec(conn, $"INSERT INTO external_extract_metadata (key, value, updated_at) VALUES ('hash_algorithm', '{MillerExtractContract.ExpectedHashAlgorithm}', 0);");
+        // v1 single metadata table carrying the gate's version + hash keys.
+        Exec(conn, "CREATE TABLE artifact_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);");
+        Exec(conn, $"INSERT INTO artifact_metadata (key, value) VALUES ('sqlite_schema_version', '{MillerExtractContract.ExpectedSchemaVersion}');");
+        Exec(conn, $"INSERT INTO artifact_metadata (key, value) VALUES ('schema_version', '{MillerExtractContract.ExpectedSchemaVersion}');");
+        Exec(conn, $"INSERT INTO artifact_metadata (key, value) VALUES ('extract_contract_version', '{MillerExtractContract.ExpectedExtractContractVersion}');");
+        Exec(conn, $"INSERT INTO artifact_metadata (key, value) VALUES ('hash_algorithm', '{MillerExtractContract.ExpectedHashAlgorithm}');");
 
         using var tx = conn.BeginTransaction();
 
-        // Distinct files first (symbols.file_path has no FK here, but keep the files table populated/realistic).
+        // Distinct files first. The v1 symbol reader keys symbols to file_id; use a deterministic file_id per path.
         var distinctFiles = new HashSet<string>(StringComparer.Ordinal);
         using (var fcmd = conn.CreateCommand())
         {
             fcmd.Transaction = tx;
             fcmd.CommandText =
-                "INSERT OR IGNORE INTO files (path, language, hash, size, last_modified, content, line_count) " +
-                "VALUES ($p, 'csharp', 'h', 1, 0, '', 0);";
-            var pPath = fcmd.CreateParameter(); pPath.ParameterName = "$p"; fcmd.Parameters.Add(pPath);
+                "INSERT OR IGNORE INTO files (file_id, path, language, content_hash, content_bytes, line_count, " +
+                "indexed_at, last_revision_id, status, metadata_json, content) " +
+                "VALUES ($fid, $p, 'csharp', 'blake3:00', 0, 0, '1970-01-01T00:00:00Z', 0, 'indexed', NULL, '');";
+            var pFid = Add(fcmd, "$fid");
+            var pPath = Add(fcmd, "$p");
             fcmd.Prepare();
             foreach (var s in symbols)
             {
                 if (!distinctFiles.Add(s.FilePath)) continue;
+                pFid.Value = FileId(s.FilePath);
                 pPath.Value = s.FilePath;
                 fcmd.ExecuteNonQuery();
             }
@@ -102,30 +117,35 @@ internal static class LargeDbWriter
         {
             cmd.Transaction = tx;
             cmd.CommandText =
-                "INSERT INTO symbols (id, name, kind, language, file_path, signature, start_line, end_line, parent_id, metadata) " +
-                "VALUES ($id, $name, $kind, $lang, $fp, $sig, $sl, $el, $pid, NULL);";
+                "INSERT INTO symbols (symbol_id, file_id, path, language, name, kind, signature, start_line, " +
+                "end_line, parent_symbol_id, is_test, metadata_json) " +
+                "VALUES ($id, $fid, $p, $lang, $name, $kind, $sig, $sl, $el, $pid, $istest, NULL);";
             var pId = Add(cmd, "$id");
+            var pFid = Add(cmd, "$fid");
+            var pPath = Add(cmd, "$p");
+            var pLang = Add(cmd, "$lang");
             var pName = Add(cmd, "$name");
             var pKind = Add(cmd, "$kind");
-            var pLang = Add(cmd, "$lang");
-            var pFp = Add(cmd, "$fp");
             var pSig = Add(cmd, "$sig");
             var pSl = Add(cmd, "$sl");
             var pEl = Add(cmd, "$el");
             var pPid = Add(cmd, "$pid");
+            var pIsTest = Add(cmd, "$istest");
             cmd.Prepare();
 
             foreach (var s in symbols)
             {
                 pId.Value = s.SymbolId;
+                pFid.Value = FileId(s.FilePath);
+                pPath.Value = s.FilePath;
+                pLang.Value = s.Language;
                 pName.Value = s.Name;
                 pKind.Value = s.Kind;
-                pLang.Value = s.Language;
-                pFp.Value = s.FilePath;
                 pSig.Value = (object?)s.Signature ?? DBNull.Value;
                 pSl.Value = s.StartLine;
                 pEl.Value = s.EndLine;
                 pPid.Value = (object?)s.ParentId ?? DBNull.Value;
+                pIsTest.Value = s.IsTest ? 1 : 0;
                 cmd.ExecuteNonQuery();
             }
         }
@@ -139,7 +159,8 @@ internal static class LargeDbWriter
             using var rcmd = conn.CreateCommand();
             rcmd.Transaction = tx;
             rcmd.CommandText =
-                "INSERT INTO relationships (id, from_symbol_id, to_symbol_id, kind) VALUES ($id, $from, $to, 'calls');";
+                "INSERT INTO relationships (relationship_id, from_symbol_id, to_symbol_id, path, kind) " +
+                "VALUES ($id, $from, $to, '', 'calls');";
             var rId = Add(rcmd, "$id");
             var rFrom = Add(rcmd, "$from");
             var rTo = Add(rcmd, "$to");
@@ -155,6 +176,9 @@ internal static class LargeDbWriter
 
         tx.Commit();
     }
+
+    /// <summary>The deterministic synthetic v1 file_id for a path (symbols FK to it).</summary>
+    private static string FileId(string path) => "file:" + path;
 
     private static SqliteParameter Add(SqliteCommand cmd, string name)
     {

@@ -11,16 +11,17 @@ namespace Miller.Indexing;
 /// rows the <see cref="BridgeGraphBuilder"/> consumes. It performs NO leg transformation — that is Task 8's job; this
 /// reader only maps julie columns to records.
 ///
-/// <para>The four sources (verified 28/2 column shapes — findings 28-2):
+/// <para>The four sources (v1 schema.rs column shapes):
 /// <list type="bullet">
-/// <item><c>type_arguments</c> → <see cref="TypeArgument"/> (CreateMap grouping input), ordered by
-/// <c>identifier_id</c> then <c>ordinal</c> for deterministic grouping downstream.</item>
-/// <item><c>literals</c> → <see cref="LiteralRecord"/> (url client calls + sql), ordered by file then start_byte.
-/// The <c>literals</c> table HAS its own <c>file_path</c>/<c>start_line</c> columns (unlike the lean
+/// <item><c>type_arguments</c> JOIN <c>type_argument_usages</c> → <see cref="TypeArgument"/> (CreateMap grouping
+/// input): v1 moved <c>identifier_id</c>/<c>path</c> onto the usage row, so the reader JOINs by <c>usage_id</c>.
+/// Ordered by <c>identifier_id</c> then <c>ordinal</c> for deterministic grouping downstream.</item>
+/// <item><c>literals</c> → <see cref="LiteralRecord"/> (url client calls + sql), ordered by <c>path</c> then start_byte.
+/// The <c>literals</c> table HAS its own <c>path</c>/<c>start_line</c> columns (unlike the lean
 /// <see cref="LiteralRecord"/> which surfaces only span + containing-symbol id), so the reader ALSO returns the
 /// literal→(file,line) lookup the builder's literal-evidence seam needs (Task 8 deviation).</item>
 /// <item><c>symbol_annotations</c> → <see cref="SymbolAnnotation"/> (http-verb endpoints + class <c>[Route]</c>),
-/// ordered by <c>symbol_id</c> then <c>ordinal</c>.</item>
+/// ordered by <c>symbol_id</c> then <c>annotation_id</c> (v1 dropped <c>ordinal</c>).</item>
 /// <item>DbContext <c>DbSet&lt;T&gt;</c> properties → <see cref="DbSetProperty"/> (Leg 3 PRIMARY), parsed from
 /// <c>symbols</c> rows with <c>kind='property'</c> whose <c>signature</c> contains <c>DbSet&lt;…&gt;</c>: the property
 /// name IS the table name (EF convention), the generic arg IS the entity type.</item>
@@ -40,7 +41,7 @@ public static class SqliteBridgeReader
     /// <exception cref="ArgumentException"><paramref name="dbPath"/> is null/empty/whitespace.</exception>
     /// <exception cref="FileNotFoundException">The DB file does not exist.</exception>
     /// <exception cref="InvalidOperationException">The DB's directory is not writable (WAL sidecar trap).</exception>
-    /// <exception cref="IncompatibleExtractException">The DB is not a compatible v7.13.0 julie extract.</exception>
+    /// <exception cref="IncompatibleExtractException">The DB is not a compatible julie-extract v1 artifact.</exception>
     public static BridgeData Read(string dbPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
@@ -61,24 +62,32 @@ public static class SqliteBridgeReader
     private static IReadOnlyList<TypeArgument> ReadTypeArguments(SqliteConnection connection)
     {
         using var command = connection.CreateCommand();
-        // identifier_id keys the CreateMap grouping; ordinal slots the args. Order by both so the builder's grouping
-        // (and any test asserting row order) is deterministic.
+        // v1 splits the use-site identity onto type_argument_usages: identifier_id/path live there, the args
+        // (ordinal/parent/type_name) live on type_arguments and JOIN by usage_id. identifier_id keys the CreateMap
+        // grouping; ordinal slots the args. Order by (identifier_id, ordinal, type_argument_id) so the builder's
+        // grouping (and any test asserting row order) is deterministic. By-name reads (D6).
         command.CommandText = """
-            SELECT identifier_id, ordinal, parent_arg_id, type_name, file_path
-            FROM type_arguments
-            WHERE identifier_id IS NOT NULL AND type_name IS NOT NULL
-            ORDER BY identifier_id, ordinal, id;
+            SELECT u.identifier_id, t.ordinal, t.parent_type_argument_id, t.type_name, u.path
+            FROM type_arguments t
+            JOIN type_argument_usages u ON u.usage_id = t.usage_id
+            WHERE u.identifier_id IS NOT NULL AND t.type_name IS NOT NULL
+            ORDER BY u.identifier_id, t.ordinal, t.type_argument_id;
             """;
 
         var results = new List<TypeArgument>();
         using var reader = command.ExecuteReader();
+        int oIdentifierId = reader.GetOrdinal("identifier_id");
+        int oOrdinal = reader.GetOrdinal("ordinal");
+        int oParent = reader.GetOrdinal("parent_type_argument_id");
+        int oTypeName = reader.GetOrdinal("type_name");
+        int oPath = reader.GetOrdinal("path");
         while (reader.Read())
         {
-            string identifierId = reader.GetString(0);                                  // identifier_id  NOT NULL (filtered)
-            int ordinal = reader.IsDBNull(1) ? 0 : reader.GetInt32(1);                  // ordinal        nullable -> 0
-            string? parentArgId = reader.IsDBNull(2) ? null : reader.GetString(2);     // parent_arg_id  nullable
-            string typeName = reader.GetString(3);                                      // type_name      NOT NULL (filtered)
-            string filePath = reader.IsDBNull(4) ? string.Empty : reader.GetString(4); // file_path      nullable -> ""
+            string identifierId = reader.GetString(oIdentifierId);                          // identifier_id  NOT NULL (filtered)
+            int ordinal = reader.IsDBNull(oOrdinal) ? 0 : reader.GetInt32(oOrdinal);        // ordinal        v1 NOT NULL; guard
+            string? parentArgId = reader.IsDBNull(oParent) ? null : reader.GetString(oParent); // parent_type_argument_id nullable
+            string typeName = reader.GetString(oTypeName);                                  // type_name      NOT NULL (filtered)
+            string filePath = reader.IsDBNull(oPath) ? string.Empty : reader.GetString(oPath); // u.path      -> FilePath
 
             results.Add(new TypeArgument(identifierId, ordinal, parentArgId, typeName, filePath));
         }
@@ -91,14 +100,15 @@ public static class SqliteBridgeReader
         ReadLiterals(SqliteConnection connection)
     {
         using var command = connection.CreateCommand();
-        // literals carries its OWN file_path + start_line (the lean LiteralRecord does not re-expose them), so we
+        // v1 literals carries its OWN path + start_line (the lean LiteralRecord does not re-expose them), so we
         // build the literal->(file,line) lookup the BridgeGraphBuilder's literal-evidence seam needs here.
+        // By-name reads (D6); order by (path, start_byte, literal_id).
         command.CommandText = """
             SELECT literal_text, kind, carrier, arg_position, language, containing_symbol_id,
-                   start_byte, end_byte, file_path, start_line
+                   start_byte, end_byte, path, start_line
             FROM literals
             WHERE literal_text IS NOT NULL
-            ORDER BY file_path, start_byte, id;
+            ORDER BY path, start_byte, literal_id;
             """;
 
         var literals = new List<LiteralRecord>();
@@ -107,18 +117,28 @@ public static class SqliteBridgeReader
         var sites = new Dictionary<LiteralRecord, LiteralSite>(ReferenceEqualityComparer.Instance);
 
         using var reader = command.ExecuteReader();
+        int oLiteralText = reader.GetOrdinal("literal_text");
+        int oKind = reader.GetOrdinal("kind");
+        int oCarrier = reader.GetOrdinal("carrier");
+        int oArgPosition = reader.GetOrdinal("arg_position");
+        int oLanguage = reader.GetOrdinal("language");
+        int oContaining = reader.GetOrdinal("containing_symbol_id");
+        int oStartByte = reader.GetOrdinal("start_byte");
+        int oEndByte = reader.GetOrdinal("end_byte");
+        int oPath = reader.GetOrdinal("path");
+        int oStartLine = reader.GetOrdinal("start_line");
         while (reader.Read())
         {
-            string literalText = reader.GetString(0);                                          // literal_text  NOT NULL (filtered)
-            string kind = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);            // kind          nullable -> ""
-            string carrier = reader.IsDBNull(2) ? string.Empty : reader.GetString(2);         // carrier       nullable -> ""
-            int argPosition = reader.IsDBNull(3) ? 0 : reader.GetInt32(3);                     // arg_position  nullable -> 0
-            string language = reader.IsDBNull(4) ? string.Empty : reader.GetString(4);         // language      nullable -> ""
-            string containingSymbolId = reader.IsDBNull(5) ? string.Empty : reader.GetString(5);// containing_symbol_id nullable -> ""
-            int startByte = reader.IsDBNull(6) ? 0 : reader.GetInt32(6);                       // start_byte    nullable -> 0
-            int endByte = reader.IsDBNull(7) ? 0 : reader.GetInt32(7);                         // end_byte      nullable -> 0
-            string filePath = reader.IsDBNull(8) ? string.Empty : reader.GetString(8);         // file_path     nullable -> ""
-            int startLine = reader.IsDBNull(9) ? 0 : reader.GetInt32(9);                        // start_line    nullable -> 0
+            string literalText = reader.GetString(oLiteralText);                                          // literal_text  NOT NULL (filtered)
+            string kind = reader.IsDBNull(oKind) ? string.Empty : reader.GetString(oKind);               // kind          nullable -> ""
+            string carrier = reader.IsDBNull(oCarrier) ? string.Empty : reader.GetString(oCarrier);      // carrier       nullable -> ""
+            int argPosition = reader.IsDBNull(oArgPosition) ? 0 : reader.GetInt32(oArgPosition);          // arg_position  nullable -> 0
+            string language = reader.IsDBNull(oLanguage) ? string.Empty : reader.GetString(oLanguage);   // language      nullable -> ""
+            string containingSymbolId = reader.IsDBNull(oContaining) ? string.Empty : reader.GetString(oContaining); // containing_symbol_id nullable -> ""
+            int startByte = reader.IsDBNull(oStartByte) ? 0 : reader.GetInt32(oStartByte);                // start_byte    nullable -> 0
+            int endByte = reader.IsDBNull(oEndByte) ? 0 : reader.GetInt32(oEndByte);                      // end_byte      nullable -> 0
+            string filePath = reader.IsDBNull(oPath) ? string.Empty : reader.GetString(oPath);            // path          -> FilePath
+            int startLine = reader.IsDBNull(oStartLine) ? 0 : reader.GetInt32(oStartLine);                // start_line    nullable -> 0
 
             var record = new LiteralRecord(
                 literalText, kind, carrier, argPosition, language, containingSymbolId,
@@ -134,26 +154,33 @@ public static class SqliteBridgeReader
     private static IReadOnlyList<SymbolAnnotation> ReadAnnotations(SqliteConnection connection)
     {
         using var command = connection.CreateCommand();
-        // Deterministic by (symbol_id, ordinal) — the UNIQUE(symbol_id, ordinal) pair (findings 28-2).
+        // v1 drops symbol_annotations.ordinal; the deterministic order re-keys to (symbol_id, annotation_id)
+        // (design §4.3). The SymbolAnnotation Core record keeps its Ordinal field (minimizing blast radius into
+        // BridgeGraphBuilder) but it is no longer meaningful — passed as 0. By-name reads (D6).
         command.CommandText = """
-            SELECT symbol_id, ordinal, annotation, annotation_key, raw_text, carrier
+            SELECT symbol_id, annotation, annotation_key, raw_text, carrier
             FROM symbol_annotations
             WHERE symbol_id IS NOT NULL
-            ORDER BY symbol_id, ordinal, id;
+            ORDER BY symbol_id, annotation_id;
             """;
 
         var results = new List<SymbolAnnotation>();
         using var reader = command.ExecuteReader();
+        int oSymbolId = reader.GetOrdinal("symbol_id");
+        int oAnnotation = reader.GetOrdinal("annotation");
+        int oAnnotationKey = reader.GetOrdinal("annotation_key");
+        int oRawText = reader.GetOrdinal("raw_text");
+        int oCarrier = reader.GetOrdinal("carrier");
         while (reader.Read())
         {
-            string symbolId = reader.GetString(0);                                          // symbol_id       NOT NULL (filtered)
-            int ordinal = reader.IsDBNull(1) ? 0 : reader.GetInt32(1);                       // ordinal         nullable -> 0
-            string annotation = reader.IsDBNull(2) ? string.Empty : reader.GetString(2);    // annotation      nullable -> ""
-            string annotationKey = reader.IsDBNull(3) ? string.Empty : reader.GetString(3); // annotation_key  nullable -> ""
-            string rawText = reader.IsDBNull(4) ? string.Empty : reader.GetString(4);       // raw_text        nullable -> ""
-            string carrier = reader.IsDBNull(5) ? string.Empty : reader.GetString(5);       // carrier         nullable -> ""
+            string symbolId = reader.GetString(oSymbolId);                                          // symbol_id       NOT NULL (filtered)
+            string annotation = reader.IsDBNull(oAnnotation) ? string.Empty : reader.GetString(oAnnotation);       // annotation      v1 NOT NULL; guard
+            string annotationKey = reader.IsDBNull(oAnnotationKey) ? string.Empty : reader.GetString(oAnnotationKey); // annotation_key v1 NOT NULL; guard
+            string rawText = reader.IsDBNull(oRawText) ? string.Empty : reader.GetString(oRawText);  // raw_text        nullable -> ""
+            string carrier = reader.IsDBNull(oCarrier) ? string.Empty : reader.GetString(oCarrier);  // carrier         nullable -> ""
 
-            results.Add(new SymbolAnnotation(symbolId, ordinal, annotation, annotationKey, rawText, carrier));
+            // ordinal is gone in v1; pass 0 (annotation order is now opaque-id order, not insertion ordinal).
+            results.Add(new SymbolAnnotation(symbolId, 0, annotation, annotationKey, rawText, carrier));
         }
         return results;
     }
@@ -166,23 +193,28 @@ public static class SqliteBridgeReader
         // EF convention (findings 28-2): a DbContext exposes `public DbSet<Entity> TableName { get; set; }`. The
         // property NAME is the table; the generic arg of DbSet<…> in the signature is the entity. There is no
         // [Table] attribute and no Dapper FROM on the stored-proc repos, so this property is Leg 3's sole anchor.
-        // Deterministic by (file_path, start_line, id).
+        // v1 columns (symbol_id/path); deterministic by (path, start_line, symbol_id). By-name reads (D6).
         command.CommandText = """
-            SELECT id, name, signature, file_path, start_line
+            SELECT symbol_id, name, signature, path, start_line
             FROM symbols
             WHERE kind = 'property' AND name IS NOT NULL AND signature LIKE '%DbSet<%'
-            ORDER BY file_path, start_line, id;
+            ORDER BY path, start_line, symbol_id;
             """;
 
         var results = new List<DbSetProperty>();
         using var reader = command.ExecuteReader();
+        int oSymbolId = reader.GetOrdinal("symbol_id");
+        int oName = reader.GetOrdinal("name");
+        int oSignature = reader.GetOrdinal("signature");
+        int oPath = reader.GetOrdinal("path");
+        int oStartLine = reader.GetOrdinal("start_line");
         while (reader.Read())
         {
-            string propertyId = reader.GetString(0);                                       // id          NOT NULL
-            string tableName = reader.GetString(1);                                        // name        NOT NULL (filtered) = table
-            string signature = reader.IsDBNull(2) ? string.Empty : reader.GetString(2);    // signature   (filtered to contain DbSet<)
-            string filePath = reader.IsDBNull(3) ? string.Empty : reader.GetString(3);     // file_path   nullable -> ""
-            int startLine = reader.IsDBNull(4) ? 0 : reader.GetInt32(4);                    // start_line  nullable -> 0
+            string propertyId = reader.GetString(oSymbolId);                               // symbol_id   NOT NULL
+            string tableName = reader.GetString(oName);                                    // name        NOT NULL (filtered) = table
+            string signature = reader.IsDBNull(oSignature) ? string.Empty : reader.GetString(oSignature); // signature (filtered to contain DbSet<)
+            string filePath = reader.IsDBNull(oPath) ? string.Empty : reader.GetString(oPath); // path     -> FilePath
+            int startLine = reader.IsDBNull(oStartLine) ? 0 : reader.GetInt32(oStartLine);  // start_line  nullable -> 0
 
             string? entityType = ParseDbSetEntity(signature);
             if (entityType is null)

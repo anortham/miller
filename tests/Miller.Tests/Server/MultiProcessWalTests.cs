@@ -39,8 +39,8 @@ public sealed class MultiProcessWalTests
             var runner = new JulieExtractRunner(binary!);
             var scan = runner.Scan(canonicalRoot, db, force: true);
             Assert.NotEqual("failed", scan.Status);
-            string workspaceId = ExtractReader.ReadWorkspaceId(db)
-                ?? throw new InvalidOperationException("scan did not record a workspace_id");
+            // v1 stores no workspace_id; the stable id is derived from the canonical root (reconciliation #17).
+            string workspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot);
 
             long startRevision;
             using (var seed = new FreshnessReader(db))

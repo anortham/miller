@@ -6,7 +6,7 @@ using Xunit;
 namespace Miller.Tests.Indexing;
 
 /// <summary>
-/// Pins <see cref="SqliteBridgeReader"/> (plan Task 9) against a hand-written 28/3 bridge DB. These are
+/// Pins <see cref="SqliteBridgeReader"/> (plan Task 9) against a hand-written v1 bridge DB. These are
 /// read-CONTRACT tests: they assert the exact <see cref="Miller.Core.Contracts.TypeArgument"/> /
 /// <see cref="Miller.Core.Contracts.LiteralRecord"/> / <see cref="Miller.Core.Contracts.SymbolAnnotation"/> /
 /// <see cref="Miller.Core.Contracts.DbSetProperty"/> mapping (ordering, NULL discipline, the DbSet&lt;T&gt;
@@ -41,41 +41,44 @@ public sealed class SqliteBridgeReaderTests : IDisposable
         return connection;
     }
 
-    // Create the 28/3 bridge-relevant schema (the four tables the reader reads + the gate tables) and seed the gate.
+    // Create the v1 bridge-relevant schema (the tables the reader reads + the artifact_metadata gate table) and
+    // seed the gate. v1 splits type_arguments/type_argument_usages, drops symbol_annotations.ordinal, and renames
+    // file_path→path / id→{symbol_id,literal_id}.
     private void CreateSchemaAndGate(SqliteConnection connection)
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
             CREATE TABLE symbols (
-                id TEXT PRIMARY KEY, name TEXT, signature TEXT, kind TEXT, language TEXT,
-                file_path TEXT, start_line INTEGER, end_line INTEGER, parent_id TEXT, metadata TEXT
+                symbol_id TEXT PRIMARY KEY, name TEXT, signature TEXT, kind TEXT, language TEXT,
+                path TEXT, start_line INTEGER, end_line INTEGER, parent_symbol_id TEXT, metadata_json TEXT
+            );
+            CREATE TABLE type_argument_usages (
+                usage_id TEXT PRIMARY KEY, identifier_id TEXT, file_id TEXT, path TEXT, language TEXT, metadata_json TEXT
             );
             CREATE TABLE type_arguments (
-                id TEXT PRIMARY KEY, identifier_id TEXT, parent_arg_id TEXT, ordinal INTEGER,
-                type_name TEXT, target_symbol_id TEXT, file_path TEXT, language TEXT, last_indexed TEXT
+                type_argument_id TEXT PRIMARY KEY, usage_id TEXT, parent_type_argument_id TEXT, ordinal INTEGER,
+                type_name TEXT
             );
             CREATE TABLE literals (
-                id TEXT PRIMARY KEY, literal_text TEXT, kind TEXT, carrier TEXT, arg_position INTEGER,
-                language TEXT, file_path TEXT, start_line INTEGER, end_line INTEGER, start_byte INTEGER,
+                literal_id TEXT PRIMARY KEY, literal_text TEXT, kind TEXT, carrier TEXT, arg_position INTEGER,
+                language TEXT, path TEXT, start_line INTEGER, end_line INTEGER, start_byte INTEGER,
                 end_byte INTEGER, containing_symbol_id TEXT, confidence REAL
             );
             CREATE TABLE symbol_annotations (
-                id TEXT PRIMARY KEY, symbol_id TEXT, ordinal INTEGER, annotation TEXT, annotation_key TEXT,
+                annotation_id TEXT PRIMARY KEY, symbol_id TEXT, annotation TEXT, annotation_key TEXT,
                 raw_text TEXT, carrier TEXT
             );
-            CREATE TABLE schema_version (version INTEGER);
-            CREATE TABLE external_extract_metadata (key TEXT, value TEXT);
+            CREATE TABLE artifact_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             """;
         command.ExecuteNonQuery();
 
         using var seed = connection.CreateCommand();
-        // Seed the gate version from the pinned constant (not a literal) so a julie re-pin needs no edit here;
-        // C5/C1 will rewrite this seed onto v1 artifact_metadata (Phase 3). (Was a hardcoded 28; A1 flipped the
-        // pin to 1, so the literal would now fail JulieSchemaGate — derive it like the contract line already does.)
+        // Seed the v1 gate keys from the pinned constants (not literals) so a julie re-pin needs no edit here.
         seed.CommandText = $"""
-            INSERT INTO schema_version(version) VALUES ({MillerExtractContract.ExpectedSchemaVersion});
-            INSERT INTO external_extract_metadata(key, value) VALUES ('extract_contract_version', '{MillerExtractContract.ExpectedExtractContractVersion}');
-            INSERT INTO external_extract_metadata(key, value) VALUES ('hash_algorithm', '{MillerExtractContract.ExpectedHashAlgorithm}');
+            INSERT INTO artifact_metadata(key, value) VALUES ('sqlite_schema_version', '{MillerExtractContract.ExpectedSqliteSchemaVersion}');
+            INSERT INTO artifact_metadata(key, value) VALUES ('schema_version', '{MillerExtractContract.ExpectedSchemaVersion}');
+            INSERT INTO artifact_metadata(key, value) VALUES ('extract_contract_version', '{MillerExtractContract.ExpectedExtractContractVersion}');
+            INSERT INTO artifact_metadata(key, value) VALUES ('hash_algorithm', '{MillerExtractContract.ExpectedHashAlgorithm}');
             """;
         seed.ExecuteNonQuery();
     }
@@ -95,15 +98,19 @@ public sealed class SqliteBridgeReaderTests : IDisposable
         using (var c = OpenWrite())
         {
             CreateSchemaAndGate(c);
-            // Two use-sites. Insert OUT of order to prove the reader sorts by (identifier_id, ordinal).
+            // v1 split: the usage rows carry identifier_id/path; the arg rows carry usage_id/ordinal/parent/type.
+            // Insert OUT of order to prove the reader sorts by (identifier_id, ordinal).
             Exec(c, """
-                INSERT INTO type_arguments(id, identifier_id, parent_arg_id, ordinal, type_name, target_symbol_id, file_path, language, last_indexed)
+                INSERT INTO type_argument_usages(usage_id, identifier_id, file_id, path, language) VALUES
+                  ('uA','idA','fA','src/Map.cs','csharp'),
+                  ('uB','idB','fB','src/Profile.cs','csharp');
+                INSERT INTO type_arguments(type_argument_id, usage_id, parent_type_argument_id, ordinal, type_name)
                 VALUES
-                  ('t4', 'idB', NULL, 1, 'ApplicationUser', NULL, 'src/Profile.cs', 'csharp', NULL),
-                  ('t2', 'idA', NULL, 1, 'UserDto',         NULL, 'src/Map.cs',     'csharp', NULL),
-                  ('t1', 'idA', NULL, 0, 'ApplicationUser', NULL, 'src/Map.cs',     'csharp', NULL),
-                  ('t3', 'idB', NULL, 0, 'List',            NULL, 'src/Profile.cs', 'csharp', NULL),
-                  ('t5', 'idB', 't3', 0, 'Inner',           NULL, 'src/Profile.cs', 'csharp', NULL);
+                  ('t4', 'uB', NULL, 1, 'ApplicationUser'),
+                  ('t2', 'uA', NULL, 1, 'UserDto'),
+                  ('t1', 'uA', NULL, 0, 'ApplicationUser'),
+                  ('t3', 'uB', NULL, 0, 'List'),
+                  ('t5', 'uB', 't3', 0, 'Inner');
                 """);
         }
 
@@ -130,9 +137,9 @@ public sealed class SqliteBridgeReaderTests : IDisposable
         using (var c = OpenWrite())
         {
             CreateSchemaAndGate(c);
-            // A url literal (TS client call) and a sql literal — both must come through; ordered by file,start_byte.
+            // A url literal (TS client call) and a sql literal — both must come through; ordered by path,start_byte.
             Exec(c, """
-                INSERT INTO literals(id, literal_text, kind, carrier, arg_position, language, file_path, start_line, end_line, start_byte, end_byte, containing_symbol_id, confidence)
+                INSERT INTO literals(literal_id, literal_text, kind, carrier, arg_position, language, path, start_line, end_line, start_byte, end_byte, containing_symbol_id, confidence)
                 VALUES
                   ('l2', '/api/users/{}', 'url', 'axios.get',  0, 'typescript', 'web/api.ts', 42, 42, 120, 135, 'sym-ts',  0.9),
                   ('l1', 'SELECT 1 FROM dbo.AppSettings', 'sql', 'QueryAsync', 1, 'csharp', 'data/Repo.cs', 7, 7, 30, 60, 'sym-cs', 0.8);
@@ -141,7 +148,7 @@ public sealed class SqliteBridgeReaderTests : IDisposable
 
         var data = SqliteBridgeReader.Read(_dbPath);
 
-        // Ordered by file_path then start_byte: data/Repo.cs(sql) before web/api.ts(url).
+        // Ordered by path then start_byte: data/Repo.cs(sql) before web/api.ts(url).
         Assert.Equal(new[] { "sql", "url" }, data.Literals.Select(l => l.Kind).ToArray());
 
         var url = data.Literals.Single(l => l.Kind == "url");
@@ -168,23 +175,24 @@ public sealed class SqliteBridgeReaderTests : IDisposable
     // ---- symbol_annotations ----------------------------------------------------------------------------------
 
     [Fact]
-    public void Read_Annotations_OrderedBySymbolThenOrdinal_ArgsLiveInRawText()
+    public void Read_Annotations_OrderedBySymbolThenAnnotationId_ArgsLiveInRawText()
     {
         using (var c = OpenWrite())
         {
             CreateSchemaAndGate(c);
-            // A class [Route] and a method [HttpGet] — inserted out of order to prove (symbol_id, ordinal) sort.
+            // A class [Route] and a method [HttpGet] — inserted out of order to prove (symbol_id, annotation_id)
+            // sort. v1 has no ordinal column; ordering re-keys to (symbol_id, annotation_id).
             Exec(c, """
-                INSERT INTO symbol_annotations(id, symbol_id, ordinal, annotation, annotation_key, raw_text, carrier)
+                INSERT INTO symbol_annotations(annotation_id, symbol_id, annotation, annotation_key, raw_text, carrier)
                 VALUES
-                  ('a2', 'sym-method', 0, 'HttpGet', 'httpget', 'HttpGet("{id}")', 'attribute'),
-                  ('a1', 'sym-class',  0, 'Route',   'route',   'Route("api/[controller]")', 'attribute');
+                  ('a2', 'sym-method', 'HttpGet', 'httpget', 'HttpGet("{id}")', 'attribute'),
+                  ('a1', 'sym-class',  'Route',   'route',   'Route("api/[controller]")', 'attribute');
                 """);
         }
 
         var data = SqliteBridgeReader.Read(_dbPath);
 
-        // Ordered by symbol_id then ordinal: sym-class before sym-method (ordinal both 0).
+        // Ordered by symbol_id then annotation_id: sym-class before sym-method.
         Assert.Equal(new[] { "sym-class", "sym-method" }, data.Annotations.Select(a => a.SymbolId).ToArray());
 
         var route = data.Annotations.Single(a => a.AnnotationKey == "route");
@@ -206,7 +214,7 @@ public sealed class SqliteBridgeReaderTests : IDisposable
             CreateSchemaAndGate(c);
             // Three DbContext properties + one non-DbSet property (must be excluded) + a namespaced generic arg.
             Exec(c, """
-                INSERT INTO symbols(id, name, signature, kind, language, file_path, start_line, end_line, parent_id, metadata)
+                INSERT INTO symbols(symbol_id, name, signature, kind, language, path, start_line, end_line, parent_symbol_id, metadata_json)
                 VALUES
                   ('p1', 'ApplicationUsers', 'public DbSet<ApplicationUser> ApplicationUsers { get; set; }', 'property', 'csharp', 'data/Ctx.cs', 10, 10, 'ctx', NULL),
                   ('p2', 'AppSettings',      'public DbSet<Core.Data.AppSetting> AppSettings { get; set; }',  'property', 'csharp', 'data/Ctx.cs', 11, 11, 'ctx', NULL),
@@ -257,18 +265,18 @@ public sealed class SqliteBridgeReaderTests : IDisposable
     {
         using (var c = OpenWrite())
         {
-            // Build the schema but seed a WRONG schema_version so the gate rejects it before any bridge read.
+            // Build the v1 schema but seed a WRONG sqlite_schema_version so the gate rejects before any bridge read.
             using var command = c.CreateCommand();
             command.CommandText = $"""
-                CREATE TABLE type_arguments (id TEXT PRIMARY KEY, identifier_id TEXT, parent_arg_id TEXT, ordinal INTEGER, type_name TEXT, target_symbol_id TEXT, file_path TEXT, language TEXT, last_indexed TEXT);
-                CREATE TABLE literals (id TEXT PRIMARY KEY, literal_text TEXT, kind TEXT, carrier TEXT, arg_position INTEGER, language TEXT, file_path TEXT, start_line INTEGER, end_line INTEGER, start_byte INTEGER, end_byte INTEGER, containing_symbol_id TEXT, confidence REAL);
-                CREATE TABLE symbol_annotations (id TEXT PRIMARY KEY, symbol_id TEXT, ordinal INTEGER, annotation TEXT, annotation_key TEXT, raw_text TEXT, carrier TEXT);
-                CREATE TABLE symbols (id TEXT PRIMARY KEY, name TEXT, signature TEXT, kind TEXT, language TEXT, file_path TEXT, start_line INTEGER, end_line INTEGER, parent_id TEXT, metadata TEXT);
-                CREATE TABLE schema_version (version INTEGER);
-                CREATE TABLE external_extract_metadata (key TEXT, value TEXT);
-                INSERT INTO schema_version(version) VALUES (27);
-                INSERT INTO external_extract_metadata(key, value) VALUES ('extract_contract_version', '{MillerExtractContract.ExpectedExtractContractVersion}');
-                INSERT INTO external_extract_metadata(key, value) VALUES ('hash_algorithm', '{MillerExtractContract.ExpectedHashAlgorithm}');
+                CREATE TABLE type_argument_usages (usage_id TEXT PRIMARY KEY, identifier_id TEXT, file_id TEXT, path TEXT, language TEXT, metadata_json TEXT);
+                CREATE TABLE type_arguments (type_argument_id TEXT PRIMARY KEY, usage_id TEXT, parent_type_argument_id TEXT, ordinal INTEGER, type_name TEXT);
+                CREATE TABLE literals (literal_id TEXT PRIMARY KEY, literal_text TEXT, kind TEXT, carrier TEXT, arg_position INTEGER, language TEXT, path TEXT, start_line INTEGER, end_line INTEGER, start_byte INTEGER, end_byte INTEGER, containing_symbol_id TEXT, confidence REAL);
+                CREATE TABLE symbol_annotations (annotation_id TEXT PRIMARY KEY, symbol_id TEXT, annotation TEXT, annotation_key TEXT, raw_text TEXT, carrier TEXT);
+                CREATE TABLE symbols (symbol_id TEXT PRIMARY KEY, name TEXT, signature TEXT, kind TEXT, language TEXT, path TEXT, start_line INTEGER, end_line INTEGER, parent_symbol_id TEXT, metadata_json TEXT);
+                CREATE TABLE artifact_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                INSERT INTO artifact_metadata(key, value) VALUES ('sqlite_schema_version', '2');
+                INSERT INTO artifact_metadata(key, value) VALUES ('extract_contract_version', '{MillerExtractContract.ExpectedExtractContractVersion}');
+                INSERT INTO artifact_metadata(key, value) VALUES ('hash_algorithm', '{MillerExtractContract.ExpectedHashAlgorithm}');
                 """;
             command.ExecuteNonQuery();
         }

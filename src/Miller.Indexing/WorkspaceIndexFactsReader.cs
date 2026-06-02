@@ -31,13 +31,15 @@ public static class WorkspaceIndexFactsReader
     private static int ReadKnownExtensionsCount(SqliteConnection connection)
     {
         using SqliteCommand command = connection.CreateCommand();
-        command.CommandText = "SELECT DISTINCT file_path FROM symbols WHERE name IS NOT NULL;";
+        // v1: symbols.file_path → path. By-name read (D6).
+        command.CommandText = "SELECT DISTINCT path FROM symbols WHERE name IS NOT NULL;";
 
         var extensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         using SqliteDataReader reader = command.ExecuteReader();
+        int oPath = reader.GetOrdinal("path");
         while (reader.Read())
         {
-            string fileName = LastPathSegment(reader.GetString(0));
+            string fileName = LastPathSegment(reader.GetString(oPath));
             string extension = Path.GetExtension(fileName);
             if (extension.Length > 1)
                 extensions.Add(extension);

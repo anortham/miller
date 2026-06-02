@@ -114,15 +114,16 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 // index, freshness cursor, registry row, and julie metadata all converge on the stable root hash.
                 long? scanRevision = null;
                 bool dbExists = File.Exists(canonicalDbPath);
-                string? existingWorkspaceId = dbExists ? ExtractReader.ReadWorkspaceId(canonicalDbPath) : null;
-                var scanDecision = DecideBootstrapScan(dbExists, existingWorkspaceId, stableWorkspaceId);
+                // v1 identity is the recorded canonical root_path, not a stored workspace_id (reconciliation #14).
+                string? existingRootPath = dbExists ? ExtractReader.ReadRootPath(canonicalDbPath) : null;
+                var scanDecision = DecideBootstrapScan(dbExists, existingRootPath, canonicalRoot);
                 if (scanDecision.ShouldScan)
                 {
                     if (scanDecision.Force)
                     {
                         _logger.LogInformation(
-                            "Extract DB at {Db} has workspace_id={ExistingWorkspaceId}; force-scanning {Root} with stable workspace_id={StableWorkspaceId}.",
-                            canonicalDbPath, existingWorkspaceId ?? "(missing)", canonicalRoot, stableWorkspaceId);
+                            "Extract DB at {Db} has root_path={ExistingRootPath}; force-scanning {Root} with stable workspace_id={StableWorkspaceId}.",
+                            canonicalDbPath, existingRootPath ?? "(missing)", canonicalRoot, stableWorkspaceId);
                     }
                     else
                     {
@@ -146,12 +147,10 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 // rebuild both route through RepositoryIndexLoader so each gets the graph identically.
                 var index = RepositoryIndexLoader.Load(canonicalDbPath);
 
-                // Resolve the workspace id (for telemetry scoping + the freshness poll) and finalize the context.
-                string? persistedWorkspaceId = ExtractReader.ReadWorkspaceId(canonicalDbPath);
-                if (!string.Equals(persistedWorkspaceId, stableWorkspaceId, StringComparison.Ordinal))
-                    throw new InvalidOperationException(
-                        $"Extract DB workspace_id '{persistedWorkspaceId ?? "(missing)"}' does not match stable workspace id '{stableWorkspaceId}' for canonical root '{canonicalRoot}'.");
-
+                // The workspace id is derived from the canonical root (stableWorkspaceId), NOT read back from the
+                // DB: v1 stores no workspace_id, and the pre-load DecideBootstrapScan already force-rescanned any
+                // DB whose recorded root_path did not match this root (reconciliation #14 — the post-load workspace_id
+                // assertion is gone with the metadata key).
                 var workspace = ctx with
                 {
                     WorkspaceId = stableWorkspaceId,
@@ -242,22 +241,40 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         }
     }
 
+    /// <summary>
+    /// Decide whether bootstrap must (re)scan. v1 has no <c>workspace_id</c> metadata key, so artifact identity
+    /// is the canonical <c>root_path</c> the artifact was extracted from (reconciliation #14): a missing DB delta-
+    /// scans; a DB whose recorded root does NOT match the root Miller is indexing (a relocated/aliased workspace,
+    /// or a pre-v1 DB with no <c>root_path</c>) is force-rescanned so the index, freshness cursor, and metadata all
+    /// converge on the current root; a matching root reuses the existing DB.
+    /// </summary>
     internal static BootstrapScanDecision DecideBootstrapScan(
-        bool dbExists, string? existingWorkspaceId, string stableWorkspaceId)
+        bool dbExists, string? existingRootPath, string canonicalRoot)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(stableWorkspaceId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(canonicalRoot);
 
         if (!dbExists)
             return new BootstrapScanDecision(
                 ShouldScan: true, Force: false, WorkspaceRegistryState.Ready);
 
-        if (!string.Equals(existingWorkspaceId, stableWorkspaceId, StringComparison.Ordinal))
+        if (!RootPathsEqual(existingRootPath, canonicalRoot))
             return new BootstrapScanDecision(
                 ShouldScan: true, Force: true, WorkspaceRegistryState.Ready);
 
         return new BootstrapScanDecision(
             ShouldScan: false, Force: false, WorkspaceRegistryState.LoadedExisting);
     }
+
+    /// <summary>
+    /// Whether the DB's recorded <c>root_path</c> identifies the same workspace root Miller is indexing. Both
+    /// julie (when it writes the artifact) and Miller (<see cref="PathCanonicalizer.CanonicalizeRoot"/>) record an
+    /// absolute, symlink-resolved canonical root, so this is an ordinal comparison — the stored root is NOT re-
+    /// canonicalized here (it may not exist on this machine, e.g. a copied DB). A missing/empty recorded root
+    /// (a pre-v1 artifact) never matches, forcing a clean rescan.
+    /// </summary>
+    internal static bool RootPathsEqual(string? recordedRootPath, string canonicalRoot) =>
+        !string.IsNullOrEmpty(recordedRootPath) &&
+        string.Equals(recordedRootPath, canonicalRoot, StringComparison.Ordinal);
 
     internal static WorkspaceRegistryRow RegisterBootstrapWorkspace(
         WorkspaceContext workspace,

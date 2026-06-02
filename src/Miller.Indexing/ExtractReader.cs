@@ -27,10 +27,12 @@ public sealed class ExtractReader
         using var connection = Open(dbPath);
 
         using var command = connection.CreateCommand();
+        // v1: keyed by symbol_id (was id). code_context is GONE from v1 symbols (it lives only on identifiers),
+        // so it is no longer selected (reconciliation #11). By-name reads (D6) decouple value from SELECT order.
         command.CommandText = """
-            SELECT doc_comment, visibility, code_context,
+            SELECT doc_comment, visibility,
                    body_start_byte, body_end_byte, body_start_line, body_end_line
-            FROM symbols WHERE id = $id;
+            FROM symbols WHERE symbol_id = $id;
             """;
         command.Parameters.AddWithValue("$id", symbolId);
 
@@ -38,14 +40,20 @@ public sealed class ExtractReader
         if (!reader.Read())
             return null;
 
+        int oDocComment = reader.GetOrdinal("doc_comment");
+        int oVisibility = reader.GetOrdinal("visibility");
+        int oBodyStartByte = reader.GetOrdinal("body_start_byte");
+        int oBodyEndByte = reader.GetOrdinal("body_end_byte");
+        int oBodyStartLine = reader.GetOrdinal("body_start_line");
+        int oBodyEndLine = reader.GetOrdinal("body_end_line");
+
         return new SymbolDetail(
-            DocComment: reader.IsDBNull(0) ? null : reader.GetString(0),
-            Visibility: reader.IsDBNull(1) ? null : reader.GetString(1),
-            CodeContext: reader.IsDBNull(2) ? null : reader.GetString(2),
-            BodyStartByte: reader.IsDBNull(3) ? null : reader.GetInt32(3),
-            BodyEndByte: reader.IsDBNull(4) ? null : reader.GetInt32(4),
-            BodyStartLine: reader.IsDBNull(5) ? null : reader.GetInt32(5),
-            BodyEndLine: reader.IsDBNull(6) ? null : reader.GetInt32(6));
+            DocComment: reader.IsDBNull(oDocComment) ? null : reader.GetString(oDocComment),
+            Visibility: reader.IsDBNull(oVisibility) ? null : reader.GetString(oVisibility),
+            BodyStartByte: reader.IsDBNull(oBodyStartByte) ? null : reader.GetInt32(oBodyStartByte),
+            BodyEndByte: reader.IsDBNull(oBodyEndByte) ? null : reader.GetInt32(oBodyEndByte),
+            BodyStartLine: reader.IsDBNull(oBodyStartLine) ? null : reader.GetInt32(oBodyStartLine),
+            BodyEndLine: reader.IsDBNull(oBodyEndLine) ? null : reader.GetInt32(oBodyEndLine));
     }
 
     /// <summary>
@@ -65,9 +73,10 @@ public sealed class ExtractReader
         using var connection = Open(dbPath);
 
         using var command = connection.CreateCommand();
+        // v1: keyed by symbol_id (was id). By-name reads (D6).
         command.CommandText = """
             SELECT start_byte, end_byte, body_start_byte, body_end_byte, start_line, name
-            FROM symbols WHERE id = $id;
+            FROM symbols WHERE symbol_id = $id;
             """;
         command.Parameters.AddWithValue("$id", symbolId);
 
@@ -75,13 +84,20 @@ public sealed class ExtractReader
         if (!reader.Read())
             return null;
 
+        int oStartByte = reader.GetOrdinal("start_byte");
+        int oEndByte = reader.GetOrdinal("end_byte");
+        int oBodyStartByte = reader.GetOrdinal("body_start_byte");
+        int oBodyEndByte = reader.GetOrdinal("body_end_byte");
+        int oStartLine = reader.GetOrdinal("start_line");
+        int oName = reader.GetOrdinal("name");
+
         return new SymbolEditSpan(
-            StartByte: reader.IsDBNull(0) ? 0 : reader.GetInt32(0),
-            EndByte: reader.IsDBNull(1) ? 0 : reader.GetInt32(1),
-            BodyStartByte: reader.IsDBNull(2) ? null : reader.GetInt32(2),
-            BodyEndByte: reader.IsDBNull(3) ? null : reader.GetInt32(3),
-            StartLine: reader.IsDBNull(4) ? 0 : reader.GetInt32(4),
-            Name: reader.GetString(5));
+            StartByte: reader.IsDBNull(oStartByte) ? 0 : reader.GetInt32(oStartByte),
+            EndByte: reader.IsDBNull(oEndByte) ? 0 : reader.GetInt32(oEndByte),
+            BodyStartByte: reader.IsDBNull(oBodyStartByte) ? null : reader.GetInt32(oBodyStartByte),
+            BodyEndByte: reader.IsDBNull(oBodyEndByte) ? null : reader.GetInt32(oBodyEndByte),
+            StartLine: reader.IsDBNull(oStartLine) ? 0 : reader.GetInt32(oStartLine),
+            Name: reader.GetString(oName));
     }
 
     /// <summary>
@@ -94,10 +110,11 @@ public sealed class ExtractReader
         using var connection = Open(dbPath);
 
         using var command = connection.CreateCommand();
+        // v1: identifiers.file_path → path, id → identifier_id (ORDER BY). By-name reads (D6).
         command.CommandText = """
-            SELECT name, kind, file_path, start_line, containing_symbol_id
+            SELECT name, kind, path, start_line, containing_symbol_id
             FROM identifiers WHERE name = $name
-            ORDER BY file_path, start_line, id;
+            ORDER BY path, start_line, identifier_id;
             """;
         command.Parameters.AddWithValue("$name", name);
         return ReadRefs(command);
@@ -113,10 +130,11 @@ public sealed class ExtractReader
         using var connection = Open(dbPath);
 
         using var command = connection.CreateCommand();
+        // v1: identifiers.file_path → path, id → identifier_id (ORDER BY). By-name reads (D6).
         command.CommandText = """
-            SELECT name, kind, file_path, start_line, containing_symbol_id
+            SELECT name, kind, path, start_line, containing_symbol_id
             FROM identifiers WHERE containing_symbol_id = $cid AND kind = 'call'
-            ORDER BY file_path, start_line, id;
+            ORDER BY path, start_line, identifier_id;
             """;
         command.Parameters.AddWithValue("$cid", containingSymbolId);
         return ReadRefs(command);
@@ -126,14 +144,19 @@ public sealed class ExtractReader
     {
         var results = new List<SymbolRef>();
         using var reader = command.ExecuteReader();
+        int oName = reader.GetOrdinal("name");
+        int oKind = reader.GetOrdinal("kind");
+        int oPath = reader.GetOrdinal("path");
+        int oStartLine = reader.GetOrdinal("start_line");
+        int oContaining = reader.GetOrdinal("containing_symbol_id");
         while (reader.Read())
         {
             results.Add(new SymbolRef(
-                Name: reader.GetString(0),
-                Kind: reader.GetString(1),
-                FilePath: reader.GetString(2),
-                StartLine: reader.IsDBNull(3) ? 0 : reader.GetInt32(3),
-                ContainingSymbolId: reader.IsDBNull(4) ? null : reader.GetString(4)));
+                Name: reader.GetString(oName),
+                Kind: reader.GetString(oKind),
+                FilePath: reader.GetString(oPath),
+                StartLine: reader.IsDBNull(oStartLine) ? 0 : reader.GetInt32(oStartLine),
+                ContainingSymbolId: reader.IsDBNull(oContaining) ? null : reader.GetString(oContaining)));
         }
         return results;
     }
@@ -154,26 +177,31 @@ public sealed class ExtractReader
         using var connection = Open(dbPath);
 
         using var command = connection.CreateCommand();
+        // v1: identifiers.file_path → path. By-name reads (D6).
         command.CommandText = """
-            SELECT file_path, start_byte, end_byte, start_line
+            SELECT path, start_byte, end_byte, start_line
             FROM identifiers WHERE name = $name
-            ORDER BY file_path, start_byte;
+            ORDER BY path, start_byte;
             """;
         command.Parameters.AddWithValue("$name", name);
 
         var results = new List<IdentifierSite>();
         using var reader = command.ExecuteReader();
+        int oPath = reader.GetOrdinal("path");
+        int oStartByte = reader.GetOrdinal("start_byte");
+        int oEndByte = reader.GetOrdinal("end_byte");
+        int oStartLine = reader.GetOrdinal("start_line");
         while (reader.Read())
         {
             // A NULL byte span has no token to rewrite — skip it rather than emit a degenerate (0,0) edit.
-            if (reader.IsDBNull(1) || reader.IsDBNull(2))
+            if (reader.IsDBNull(oStartByte) || reader.IsDBNull(oEndByte))
                 continue;
 
             results.Add(new IdentifierSite(
-                FilePath: reader.GetString(0),
-                StartByte: reader.GetInt32(1),
-                EndByte: reader.GetInt32(2),
-                StartLine: reader.IsDBNull(3) ? 0 : reader.GetInt32(3)));
+                FilePath: reader.GetString(oPath),
+                StartByte: reader.GetInt32(oStartByte),
+                EndByte: reader.GetInt32(oEndByte),
+                StartLine: reader.IsDBNull(oStartLine) ? 0 : reader.GetInt32(oStartLine)));
         }
         return results;
     }
@@ -229,15 +257,17 @@ public sealed class ExtractReader
     }
 
     /// <summary>
-    /// The <c>workspace_id</c> recorded in <c>external_extract_metadata</c>, or null if the key is absent.
-    /// Used by startup to populate <c>WorkspaceContext.WorkspaceId</c> for telemetry scoping.
+    /// The canonical <c>root_path</c> the artifact was extracted from, recorded in <c>artifact_metadata</c>
+    /// (v1's single metadata surface), or null if the key is absent. Startup derives the stable workspace id
+    /// from this (SHA-256 of the canonical root) and uses it as the artifact-identity check (reconciliation #14):
+    /// v1 has no <c>workspace_id</c> metadata key, so identity is the root path, not a stored id.
     /// </summary>
-    public static string? ReadWorkspaceId(string dbPath)
+    public static string? ReadRootPath(string dbPath)
     {
         using var connection = Open(dbPath);
         using var command = connection.CreateCommand();
         command.CommandText =
-            "SELECT value FROM external_extract_metadata WHERE key = 'workspace_id';";
+            "SELECT value FROM artifact_metadata WHERE key = 'root_path';";
         var value = command.ExecuteScalar();
         return value is string s ? s : null;
     }

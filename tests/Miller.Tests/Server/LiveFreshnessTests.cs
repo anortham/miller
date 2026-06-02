@@ -55,11 +55,11 @@ public sealed class LiveFreshnessTests
             string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(repo);
             var runner = new JulieExtractRunner(binary!);
 
-            // --- initial scan: seeds workspace_id + the first revision ---
+            // --- initial scan: seeds the first revision (v1 stores no workspace_id) ---
             var scan = runner.Scan(canonicalRoot, db, force: true);
             Assert.NotEqual("failed", scan.Status);
-            string workspaceId = ExtractReader.ReadWorkspaceId(db)
-                ?? throw new InvalidOperationException("scan did not record a workspace_id");
+            // v1 has no workspace_id metadata; the stable id is derived from the canonical root (reconciliation #17).
+            string workspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot);
 
             using var reader = new FreshnessReader(db);
             long initialRevision = reader.LatestRevision(workspaceId);

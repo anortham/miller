@@ -68,7 +68,8 @@ public sealed class LiveSearchInspectTests
             var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(db));
             var holder = new IndexHolder(index, builtRevision: 0);
             var resolver = new SmartTargetResolver(holder);
-            string? workspaceId = ExtractReader.ReadWorkspaceId(db);
+            // v1 stores no workspace_id; the stable id is derived from the canonical root (reconciliation #17).
+            string workspaceId = WorkspaceId.FromCanonicalRoot(PathCanonicalizer.CanonicalizeRoot(repo));
 
             // --- pure-core sanity: search + inspect return correct results ---
             string searchOut = SearchTool.Run(index, "OrderService", SearchToolMode.Auto, limit: 10,

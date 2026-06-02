@@ -80,11 +80,15 @@ public static class SymbolGraphReader
             """;
 
         using var reader = command.ExecuteReader();
+        // By-name reads (D6): a future column add/reorder can never silently shift a value into the wrong field.
+        int oFrom = reader.GetOrdinal("from_symbol_id");
+        int oTo = reader.GetOrdinal("to_symbol_id");
+        int oKind = reader.GetOrdinal("kind");
         while (reader.Read())
         {
-            string from = reader.GetString(0); // from_symbol_id NOT NULL
-            string to = reader.GetString(1);   // to_symbol_id   NOT NULL
-            string kind = reader.GetString(2); // kind           NOT NULL
+            string from = reader.GetString(oFrom); // from_symbol_id NOT NULL
+            string to = reader.GetString(oTo);     // to_symbol_id   NOT NULL
+            string kind = reader.GetString(oKind); // kind           NOT NULL
 
             if (string.Equals(from, to, StringComparison.Ordinal))
                 continue; // defensive self-loop drop (the graph drops it too — defense in depth)
@@ -111,11 +115,15 @@ public static class SymbolGraphReader
             """;
 
         using var reader = command.ExecuteReader();
+        // By-name reads (D6).
+        int oName = reader.GetOrdinal("name");
+        int oKind = reader.GetOrdinal("kind");
+        int oContaining = reader.GetOrdinal("containing_symbol_id");
         while (reader.Read())
         {
-            string name = reader.GetString(0);      // name                 NOT NULL
-            string kind = reader.GetString(1);      // kind                 NOT NULL
-            string from = reader.GetString(2);      // containing_symbol_id  NOT NULL by the WHERE
+            string name = reader.GetString(oName);      // name                 NOT NULL
+            string kind = reader.GetString(oKind);      // kind                 NOT NULL
+            string from = reader.GetString(oContaining); // containing_symbol_id NOT NULL by the WHERE
 
             // Resolve the name to every indexed symbol it names. A name with no indexed target (external/library
             // ref) yields an empty list → no edge (bounds the graph to indexed symbols).

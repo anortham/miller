@@ -43,63 +43,78 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
 
         using (var command = connection.CreateCommand())
         {
+            // v1 schema.rs column shapes: symbols(symbol_id/path/parent_symbol_id + typed test cols),
+            // identifiers(identifier_id/path/containing_symbol_id), relationships(relationship_id + path),
+            // type_argument_usages + type_arguments (the v1 split — identifier_id/path live on the usage row),
+            // literals(literal_id/path), symbol_annotations(annotation_id, NO ordinal). The readers do by-name
+            // GetOrdinal reads, so only the columns they SELECT must exist; the rest honor the v1 NOT NULLs.
             command.CommandText = """
                 CREATE TABLE symbols (
-                    id TEXT PRIMARY KEY, name TEXT, signature TEXT, kind TEXT, language TEXT,
-                    file_path TEXT, start_line INTEGER, end_line INTEGER, parent_id TEXT, metadata TEXT
+                    symbol_id TEXT PRIMARY KEY, name TEXT, signature TEXT, kind TEXT, language TEXT,
+                    path TEXT, start_line INTEGER, end_line INTEGER, parent_symbol_id TEXT,
+                    is_test INTEGER NOT NULL DEFAULT 0, metadata_json TEXT
                 );
                 CREATE TABLE identifiers (
-                    id TEXT PRIMARY KEY, name TEXT, kind TEXT, file_path TEXT, start_line INTEGER, containing_symbol_id TEXT
+                    identifier_id TEXT PRIMARY KEY, name TEXT, kind TEXT, path TEXT, start_line INTEGER,
+                    containing_symbol_id TEXT, target_symbol_id TEXT
                 );
-                CREATE TABLE relationships (id TEXT PRIMARY KEY, from_symbol_id TEXT, to_symbol_id TEXT, kind TEXT);
+                CREATE TABLE relationships (
+                    relationship_id TEXT PRIMARY KEY, from_symbol_id TEXT, to_symbol_id TEXT, path TEXT, kind TEXT
+                );
+                CREATE TABLE type_argument_usages (
+                    usage_id TEXT PRIMARY KEY, identifier_id TEXT, path TEXT, language TEXT
+                );
                 CREATE TABLE type_arguments (
-                    id TEXT PRIMARY KEY, identifier_id TEXT, parent_arg_id TEXT, ordinal INTEGER,
-                    type_name TEXT, target_symbol_id TEXT, file_path TEXT, language TEXT, last_indexed TEXT
+                    type_argument_id TEXT PRIMARY KEY, usage_id TEXT, parent_type_argument_id TEXT,
+                    ordinal INTEGER, type_name TEXT
                 );
                 CREATE TABLE literals (
-                    id TEXT PRIMARY KEY, literal_text TEXT, kind TEXT, carrier TEXT, arg_position INTEGER,
-                    language TEXT, file_path TEXT, start_line INTEGER, end_line INTEGER, start_byte INTEGER,
+                    literal_id TEXT PRIMARY KEY, literal_text TEXT, kind TEXT, carrier TEXT, arg_position INTEGER,
+                    language TEXT, path TEXT, start_line INTEGER, end_line INTEGER, start_byte INTEGER,
                     end_byte INTEGER, containing_symbol_id TEXT, confidence REAL
                 );
                 CREATE TABLE symbol_annotations (
-                    id TEXT PRIMARY KEY, symbol_id TEXT, ordinal INTEGER, annotation TEXT, annotation_key TEXT, raw_text TEXT, carrier TEXT
+                    annotation_id TEXT PRIMARY KEY, symbol_id TEXT, annotation TEXT, annotation_key TEXT, raw_text TEXT, carrier TEXT
                 );
-                CREATE TABLE schema_version (version INTEGER);
-                CREATE TABLE external_extract_metadata (key TEXT, value TEXT);
+                CREATE TABLE artifact_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
                 -- The entity, the DTO, and a DbContext exposing DbSet<ApplicationUser> ApplicationUsers.
-                INSERT INTO symbols(id, name, signature, kind, language, file_path, start_line, end_line, parent_id, metadata)
+                INSERT INTO symbols(symbol_id, name, signature, kind, language, path, start_line, end_line, parent_symbol_id)
                 VALUES
-                  ('s-entity', 'ApplicationUser', 'public class ApplicationUser', 'class', 'csharp', 'model/ApplicationUser.cs', 1, 20, NULL, NULL),
-                  ('s-dto',    'UserDto',         'public class UserDto',         'class', 'csharp', 'dto/UserDto.cs',           1, 10, NULL, NULL),
-                  ('s-ctx',    'AppDbContext',    'public class AppDbContext',    'class', 'csharp', 'data/AppDbContext.cs',     1, 30, NULL, NULL),
-                  ('s-prop',   'ApplicationUsers','public DbSet<ApplicationUser> ApplicationUsers { get; set; }', 'property', 'csharp', 'data/AppDbContext.cs', 5, 5, 's-ctx', NULL),
-                  ('s-profile','MapProfile',      'public class MapProfile',      'class', 'csharp', 'map/MapProfile.cs',        1, 8, NULL, NULL);
+                  ('s-entity', 'ApplicationUser', 'public class ApplicationUser', 'class', 'csharp', 'model/ApplicationUser.cs', 1, 20, NULL),
+                  ('s-dto',    'UserDto',         'public class UserDto',         'class', 'csharp', 'dto/UserDto.cs',           1, 10, NULL),
+                  ('s-ctx',    'AppDbContext',    'public class AppDbContext',    'class', 'csharp', 'data/AppDbContext.cs',     1, 30, NULL),
+                  ('s-prop',   'ApplicationUsers','public DbSet<ApplicationUser> ApplicationUsers { get; set; }', 'property', 'csharp', 'data/AppDbContext.cs', 5, 5, 's-ctx'),
+                  ('s-profile','MapProfile',      'public class MapProfile',      'class', 'csharp', 'map/MapProfile.cs',        1, 8, NULL);
 
-                -- CreateMap<ApplicationUser, UserDto> use-site: two top-level type args sharing identifier_id 'id-map'.
-                INSERT INTO type_arguments(id, identifier_id, parent_arg_id, ordinal, type_name, target_symbol_id, file_path, language, last_indexed)
+                -- CreateMap<ApplicationUser, UserDto> use-site: ONE usage row carries identifier_id 'id-map' + path;
+                -- the two top-level type args JOIN it by usage_id (the v1 split the reader re-assembles).
+                INSERT INTO type_argument_usages(usage_id, identifier_id, path, language)
+                VALUES ('u-map', 'id-map', 'map/MapProfile.cs', 'csharp');
+
+                INSERT INTO type_arguments(type_argument_id, usage_id, parent_type_argument_id, ordinal, type_name)
                 VALUES
-                  ('ta-0', 'id-map', NULL, 0, 'ApplicationUser', NULL, 'map/MapProfile.cs', 'csharp', NULL),
-                  ('ta-1', 'id-map', NULL, 1, 'UserDto',         NULL, 'map/MapProfile.cs', 'csharp', NULL);
+                  ('ta-0', 'u-map', NULL, 0, 'ApplicationUser'),
+                  ('ta-1', 'u-map', NULL, 1, 'UserDto');
                 """;
             command.ExecuteNonQuery();
 
-            // Seed the gate version from the pinned constant (not a literal) so a julie re-pin needs no edit here;
-            // C1/H rewrite this onto v1 artifact_metadata (Phase 3). (Was a hardcoded schema 28; A1 flipped the
-            // pin to 1, so a literal would now fail JulieSchemaGate.) Kept as a separate interpolated command to
-            // leave the brace-bearing DDL above a plain raw string.
+            // Seed the v1 artifact_metadata gate keys from the pinned constants (not literals) so a julie re-pin
+            // needs no edit here. Kept as a separate interpolated command to leave the brace-bearing DDL above a
+            // plain raw string.
             SeedGate(command);
         }
     }
 
-    // Seed schema_version + external_extract_metadata from the pinned contract so JulieSchemaGate.Verify accepts
-    // the fixture (Phase 2). C1/H migrate this onto v1 artifact_metadata in Phase 3.
+    // Seed the v1 artifact_metadata gate keys (sqlite_schema_version / schema_version / extract_contract_version /
+    // hash_algorithm) from the pinned contract so JulieSchemaGate.Verify accepts the fixture (Phase 3).
     private static void SeedGate(SqliteCommand command)
     {
         command.CommandText = $"""
-            INSERT INTO schema_version(version) VALUES ({MillerExtractContract.ExpectedSchemaVersion});
-            INSERT INTO external_extract_metadata(key, value) VALUES ('extract_contract_version', '{MillerExtractContract.ExpectedExtractContractVersion}');
-            INSERT INTO external_extract_metadata(key, value) VALUES ('hash_algorithm', '{MillerExtractContract.ExpectedHashAlgorithm}');
+            INSERT INTO artifact_metadata(key, value) VALUES ('sqlite_schema_version', '{MillerExtractContract.ExpectedSchemaVersion}');
+            INSERT INTO artifact_metadata(key, value) VALUES ('schema_version', '{MillerExtractContract.ExpectedSchemaVersion}');
+            INSERT INTO artifact_metadata(key, value) VALUES ('extract_contract_version', '{MillerExtractContract.ExpectedExtractContractVersion}');
+            INSERT INTO artifact_metadata(key, value) VALUES ('hash_algorithm', '{MillerExtractContract.ExpectedHashAlgorithm}');
             """;
         command.ExecuteNonQuery();
     }
@@ -190,19 +205,20 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
                 connection.Open();
                 using var command = connection.CreateCommand();
                 command.CommandText = $"""
-                    CREATE TABLE symbols (id TEXT PRIMARY KEY, name TEXT, signature TEXT, kind TEXT, language TEXT, file_path TEXT, start_line INTEGER, end_line INTEGER, parent_id TEXT, metadata TEXT);
-                    CREATE TABLE identifiers (id TEXT PRIMARY KEY, name TEXT, kind TEXT, file_path TEXT, start_line INTEGER, containing_symbol_id TEXT);
-                    CREATE TABLE relationships (id TEXT PRIMARY KEY, from_symbol_id TEXT, to_symbol_id TEXT, kind TEXT);
-                    CREATE TABLE type_arguments (id TEXT PRIMARY KEY, identifier_id TEXT, parent_arg_id TEXT, ordinal INTEGER, type_name TEXT, target_symbol_id TEXT, file_path TEXT, language TEXT, last_indexed TEXT);
-                    CREATE TABLE literals (id TEXT PRIMARY KEY, literal_text TEXT, kind TEXT, carrier TEXT, arg_position INTEGER, language TEXT, file_path TEXT, start_line INTEGER, end_line INTEGER, start_byte INTEGER, end_byte INTEGER, containing_symbol_id TEXT, confidence REAL);
-                    CREATE TABLE symbol_annotations (id TEXT PRIMARY KEY, symbol_id TEXT, ordinal INTEGER, annotation TEXT, annotation_key TEXT, raw_text TEXT, carrier TEXT);
-                    CREATE TABLE schema_version (version INTEGER);
-                    CREATE TABLE external_extract_metadata (key TEXT, value TEXT);
-                    INSERT INTO schema_version(version) VALUES ({MillerExtractContract.ExpectedSchemaVersion});
-                    INSERT INTO external_extract_metadata(key, value) VALUES ('extract_contract_version', '{MillerExtractContract.ExpectedExtractContractVersion}');
-                    INSERT INTO external_extract_metadata(key, value) VALUES ('hash_algorithm', '{MillerExtractContract.ExpectedHashAlgorithm}');
-                    INSERT INTO symbols(id, name, signature, kind, language, file_path, start_line, end_line, parent_id, metadata)
-                    VALUES ('s1', 'Foo', 'public class Foo', 'class', 'csharp', 'Foo.cs', 1, 3, NULL, NULL);
+                    CREATE TABLE symbols (symbol_id TEXT PRIMARY KEY, name TEXT, signature TEXT, kind TEXT, language TEXT, path TEXT, start_line INTEGER, end_line INTEGER, parent_symbol_id TEXT, is_test INTEGER NOT NULL DEFAULT 0, metadata_json TEXT);
+                    CREATE TABLE identifiers (identifier_id TEXT PRIMARY KEY, name TEXT, kind TEXT, path TEXT, start_line INTEGER, containing_symbol_id TEXT, target_symbol_id TEXT);
+                    CREATE TABLE relationships (relationship_id TEXT PRIMARY KEY, from_symbol_id TEXT, to_symbol_id TEXT, path TEXT, kind TEXT);
+                    CREATE TABLE type_argument_usages (usage_id TEXT PRIMARY KEY, identifier_id TEXT, path TEXT, language TEXT);
+                    CREATE TABLE type_arguments (type_argument_id TEXT PRIMARY KEY, usage_id TEXT, parent_type_argument_id TEXT, ordinal INTEGER, type_name TEXT);
+                    CREATE TABLE literals (literal_id TEXT PRIMARY KEY, literal_text TEXT, kind TEXT, carrier TEXT, arg_position INTEGER, language TEXT, path TEXT, start_line INTEGER, end_line INTEGER, start_byte INTEGER, end_byte INTEGER, containing_symbol_id TEXT, confidence REAL);
+                    CREATE TABLE symbol_annotations (annotation_id TEXT PRIMARY KEY, symbol_id TEXT, annotation TEXT, annotation_key TEXT, raw_text TEXT, carrier TEXT);
+                    CREATE TABLE artifact_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                    INSERT INTO artifact_metadata(key, value) VALUES ('sqlite_schema_version', '{MillerExtractContract.ExpectedSchemaVersion}');
+                    INSERT INTO artifact_metadata(key, value) VALUES ('schema_version', '{MillerExtractContract.ExpectedSchemaVersion}');
+                    INSERT INTO artifact_metadata(key, value) VALUES ('extract_contract_version', '{MillerExtractContract.ExpectedExtractContractVersion}');
+                    INSERT INTO artifact_metadata(key, value) VALUES ('hash_algorithm', '{MillerExtractContract.ExpectedHashAlgorithm}');
+                    INSERT INTO symbols(symbol_id, name, signature, kind, language, path, start_line, end_line, parent_symbol_id)
+                    VALUES ('s1', 'Foo', 'public class Foo', 'class', 'csharp', 'Foo.cs', 1, 3, NULL);
                     """;
                 command.ExecuteNonQuery();
             }

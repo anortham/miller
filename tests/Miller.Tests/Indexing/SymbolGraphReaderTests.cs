@@ -207,6 +207,32 @@ public sealed class SymbolGraphReaderTests
     }
 
     [Fact]
+    public void Read_ByColumnName_NotOrdinal_MapsFromToKind_AndContainingName_ToTheRightFields()
+    {
+        // D6 by-name lock: both readers (relationships + identifiers) resolve columns via GetOrdinal(name), so a
+        // future column add/reorder in the v1 tables can never silently shift a value into the wrong GraphEdge
+        // field. Distinct from/to ids + a distinct kind on the relationship, and a distinct containing/name on the
+        // identifier, would all cross if the reads were positional and a column moved. Asserting each lands where
+        // it belongs pins the by-name wiring.
+        using var fx = FixtureWith(
+            relationships: new[]
+            {
+                new JulieDbFixture.RelationshipRow("r1", HandleId, ProcessId, "implements"),
+            },
+            identifiers: new[]
+            {
+                new JulieDbFixture.IdentifierRow("i1", "Validate", "type_usage", "csharp", "src/A.cs", 9, HandleId),
+            });
+
+        var edges = SymbolGraphReader.Read(fx.DbPath, ResolverFor(NameMap));
+
+        // relationships: from=Handle, to=Process, kind=implements — none crossed.
+        Assert.Contains(edges, e => e.From == HandleId && e.To == ProcessId && e.Kind == "implements");
+        // identifiers: containing=Handle resolves name "Validate"→ValidateId, kind=type_usage.
+        Assert.Contains(edges, e => e.From == HandleId && e.To == ValidateId && e.Kind == "type_usage");
+    }
+
+    [Fact]
     public void Read_NullResolver_Throws()
     {
         using var fx = FixtureWith(relationships: null, identifiers: null);

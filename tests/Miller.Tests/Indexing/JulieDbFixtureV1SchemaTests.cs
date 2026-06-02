@@ -52,7 +52,9 @@ public sealed class JulieDbFixtureV1SchemaTests
 
         // Old-schema artifacts H1 removes are gone.
         Assert.False(TableExists(c, "schema_version"), "schema_version table is dropped in v1");
-        Assert.False(TableExists(c, "external_extract_metadata"), "renamed to artifact_metadata in v1");
+        // NOTE: external_extract_metadata is kept TRANSITIONALLY in Phase 3 (it still carries hash_algorithm for the
+        // Subsystem-D ExtractFileHashReader/FreshnessGate). Phase 4 moves hash_algorithm fully onto artifact_metadata
+        // and drops this table; the "external_extract_metadata is gone" assertion is Phase 4's lock, not here.
     }
 
     [Fact]
@@ -72,9 +74,11 @@ public sealed class JulieDbFixtureV1SchemaTests
 
         Assert.True(ColumnExists(c, "files", "content_hash"));
         Assert.True(ColumnExists(c, "files", "content_bytes"));
-        Assert.False(ColumnExists(c, "files", "hash"), "renamed to content_hash");
-        // The transitional `content` column is still present in Phase 3 (OLD ReadBody reads it until C3/Phase 5);
-        // the "files is content-free" assertion lives in H3's Phase-5 lock test, not here.
+        // NOTE: files.hash is kept TRANSITIONALLY in Phase 3 (raw blake3 hex the Subsystem-D ExtractFileHashReader
+        // still reads). Phase 4 flips the freshness path onto content_hash and drops this column; the
+        // "files.hash renamed to content_hash" assertion is Phase 4's lock, not here.
+        // The transitional `content` column is likewise still present in Phase 3 (OLD ReadBody reads it until
+        // C3/Phase 5); the "files is content-free" assertion lives in H3's Phase-5 lock test, not here.
 
         Assert.True(ColumnExists(c, "artifact_metadata", "key"));
         Assert.True(ColumnExists(c, "artifact_metadata", "value"));

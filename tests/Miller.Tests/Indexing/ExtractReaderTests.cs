@@ -23,7 +23,6 @@ public sealed class ExtractReaderTests
         Assert.NotNull(detail);
         Assert.Equal("Gets a user by id.", detail!.DocComment);
         Assert.Equal("public", detail.Visibility);
-        Assert.Equal("public User GetUser(int id) { ... }", detail.CodeContext);
         Assert.NotNull(detail.BodyStartByte);
         Assert.NotNull(detail.BodyEndByte);
         Assert.Equal(2, detail.BodyStartLine);
@@ -35,12 +34,11 @@ public sealed class ExtractReaderTests
     {
         using var fx = JulieDbFixture.CreateForInspect();
 
-        // DeleteUser has NULL doc_comment, NULL code_context, NULL body spans.
+        // DeleteUser has NULL doc_comment and NULL body spans (code_context is gone from v1 symbols).
         var detail = ExtractReader.ReadDetail(fx.DbPath, "c3d4e5f6001122334455667788990a1b");
 
         Assert.NotNull(detail);
         Assert.Null(detail!.DocComment);
-        Assert.Null(detail.CodeContext);
         Assert.Null(detail.BodyStartByte);
         Assert.Null(detail.BodyEndByte);
         Assert.Null(detail.BodyStartLine);
@@ -150,18 +148,33 @@ public sealed class ExtractReaderTests
         Assert.Null(body);
     }
 
-    [Fact]
-    public void ReadWorkspaceId_ReturnsTheMetadataValue()
-    {
-        using var fx = JulieDbFixture.CreateForInspect();
-        Assert.Equal("ws-inspect-001", ExtractReader.ReadWorkspaceId(fx.DbPath));
-    }
+    // ---- ReadRootPath (v1 artifact identity — reconciliation #14) ----
 
     [Fact]
-    public void ReadWorkspaceId_AbsentKey_ReturnsNull()
+    public void ReadRootPath_ReturnsTheArtifactMetadataValue()
     {
-        using var fx = JulieDbFixture.CreateDefault(); // no workspace_id written
-        Assert.Null(ExtractReader.ReadWorkspaceId(fx.DbPath));
+        // v1 records the canonical root in artifact_metadata.root_path (the fixture seeds '/work/repo').
+        using var fx = JulieDbFixture.CreateForInspect();
+        Assert.Equal("/work/repo", ExtractReader.ReadRootPath(fx.DbPath));
+    }
+
+    // ---- D6 by-name read discipline: a value comes from its NAMED column, not a fixed ordinal ----
+
+    [Fact]
+    public void ReadDetail_ReadsByColumnName_NotOrdinal_AcrossTheFullV1ColumnLayout()
+    {
+        // The v1 symbols table interleaves many position/test/metadata columns; ReadDetail SELECTs a SUBSET
+        // (doc_comment, visibility, body spans) and reads each by GetOrdinal(name). This pins that the doc text
+        // lands in DocComment and the visibility in Visibility — i.e. the by-name reads are wired to the right
+        // columns and never silently shift a value into the wrong field if julie reorders the table (D6).
+        using var fx = JulieDbFixture.CreateForInspect();
+
+        var detail = ExtractReader.ReadDetail(fx.DbPath, JulieDbFixture.GetUserId)!;
+
+        // GetUser's doc_comment and visibility are distinct strings — a column-order bug would cross them.
+        Assert.Equal("Gets a user by id.", detail.DocComment);
+        Assert.Equal("public", detail.Visibility);
+        Assert.NotEqual(detail.DocComment, detail.Visibility);
     }
 
     // ---- D4 read discipline (finding-2): ExtractReader shares SqliteReadOnlyAccess's guards ----

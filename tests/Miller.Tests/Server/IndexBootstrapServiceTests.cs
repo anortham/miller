@@ -22,8 +22,8 @@ public sealed class IndexBootstrapServiceTests
     {
         var decision = IndexBootstrapService.DecideBootstrapScan(
             dbExists: false,
-            existingWorkspaceId: null,
-            stableWorkspaceId: WorkspaceId.FromCanonicalRoot("/work/repo"));
+            existingRootPath: null,
+            canonicalRoot: "/work/repo");
 
         Assert.True(decision.ShouldScan);
         Assert.False(decision.Force);
@@ -31,14 +31,13 @@ public sealed class IndexBootstrapServiceTests
     }
 
     [Fact]
-    public void DecideBootstrapScan_ExistingDbWithStableId_LoadsExistingWithoutScan()
+    public void DecideBootstrapScan_ExistingDbWithMatchingRootPath_LoadsExistingWithoutScan()
     {
-        string stable = WorkspaceId.FromCanonicalRoot("/work/repo");
-
+        // v1 identity is the recorded canonical root_path; a match reuses the DB (reconciliation #14).
         var decision = IndexBootstrapService.DecideBootstrapScan(
             dbExists: true,
-            existingWorkspaceId: stable,
-            stableWorkspaceId: stable);
+            existingRootPath: "/work/repo",
+            canonicalRoot: "/work/repo");
 
         Assert.False(decision.ShouldScan);
         Assert.False(decision.Force);
@@ -46,22 +45,30 @@ public sealed class IndexBootstrapServiceTests
     }
 
     [Theory]
-    [InlineData(null)]
-    [InlineData("550e8400-e29b-41d4-a716-446655440000")]
-    [InlineData("legacy-non-stable-id")]
-    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
-    public void DecideBootstrapScan_ExistingDbWithMissingLegacyOrMismatchedId_ForceScansBeforeLoad(string? existingWorkspaceId)
+    [InlineData(null)]                       // pre-v1 artifact with no root_path key
+    [InlineData("")]                         // empty recorded root
+    [InlineData("/work/other-repo")]         // a different workspace's DB at this path
+    [InlineData("/work/repo/")]              // a non-identical (trailing-slash) spelling never matches ordinally
+    public void DecideBootstrapScan_ExistingDbWithMissingOrMismatchedRootPath_ForceScansBeforeLoad(string? existingRootPath)
     {
-        string stable = WorkspaceId.FromCanonicalRoot("/work/repo");
-
         var decision = IndexBootstrapService.DecideBootstrapScan(
             dbExists: true,
-            existingWorkspaceId: existingWorkspaceId,
-            stableWorkspaceId: stable);
+            existingRootPath: existingRootPath,
+            canonicalRoot: "/work/repo");
 
         Assert.True(decision.ShouldScan);
         Assert.True(decision.Force);
         Assert.Equal(WorkspaceRegistryState.Ready, decision.RegistryStateAfterLoad);
+    }
+
+    [Theory]
+    [InlineData(null, "/work/repo", false)]            // pre-v1 (no key) never matches
+    [InlineData("", "/work/repo", false)]              // empty never matches
+    [InlineData("/work/repo", "/work/repo", true)]     // exact canonical match
+    [InlineData("/work/other", "/work/repo", false)]   // different root
+    public void RootPathsEqual_IsOrdinalCanonicalMatch(string? recorded, string canonical, bool expected)
+    {
+        Assert.Equal(expected, IndexBootstrapService.RootPathsEqual(recorded, canonical));
     }
 
     [Fact]

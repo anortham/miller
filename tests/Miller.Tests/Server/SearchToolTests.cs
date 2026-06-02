@@ -55,8 +55,8 @@ public sealed class SearchToolTests
     }
 
     // A fixture proving the FULL cross-language predicate (decision-4): exclude_tests must hide BOTH a
-    // path-flagged test row (tests/auth/AuthServiceTests.cs — no metadata) AND a julie-is_test row whose path
-    // is NOT test-shaped (src/auth/AuthHelper.cs carrying {"is_test":true}, a [Fact] method julie flagged).
+    // path-flagged test row (tests/auth/AuthServiceTests.cs — not is_test) AND a julie-is_test row whose path
+    // is NOT test-shaped (src/auth/AuthHelper.cs with the typed is_test column set, a [Fact] method julie flagged).
     // The third row is the one the path-only filter would miss; it pins the sym.IsTest branch of the predicate.
     private static JulieDbFixture FixtureWithTestPaths() => JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
     {
@@ -65,9 +65,10 @@ public sealed class SearchToolTests
         new JulieDbFixture.SymbolRow("b0001122334455667788990a1b2c3d4e", "AuthServiceTests", "class", "csharp",
             "tests/auth/AuthServiceTests.cs", "public class AuthServiceTests", 1, null),
         // julie-flagged test method in a PRODUCTION-named path: only sym.IsTest can hide this, not the path rule.
+        // v1 carries the test signal in the typed is_test column (NOT a metadata-JSON parse).
         new JulieDbFixture.SymbolRow("c0001122334455667788990a1b2c3d4e", "AuthService_Smoke", "method", "csharp",
             "src/auth/AuthHelper.cs", "public void AuthService_Smoke()", 1, null)
-        { Metadata = "{\"is_test\":true}" },
+        { IsTest = true },
     });
 
     [Fact]

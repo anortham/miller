@@ -68,7 +68,8 @@ public sealed class LiveWorkspaceTests : IDisposable
 
         ExtractReport scan = runner.Scan(canonicalRoot, dbPath, force: false);
         Assert.NotEqual("failed", scan.Status);
-        string? workspaceId = ExtractReader.ReadWorkspaceId(dbPath);
+        // v1 stores no workspace_id; the stable id is derived from the canonical root (reconciliation #17).
+        string workspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot);
 
         string home = NewTempDir("home");
         var workspace = WorkspaceContext.Create(root, AppContext.BaseDirectory, home) with

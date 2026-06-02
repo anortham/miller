@@ -82,12 +82,12 @@ public sealed class LiveEditTests
             Assert.NotEqual("failed", report.Status);
             Assert.True(report.SymbolsExtracted > 0);
 
-            string? workspaceId = ExtractReader.ReadWorkspaceId(canonicalDb);
-            Assert.NotNull(workspaceId);
+            // v1 stores no workspace_id; the stable id is derived from the canonical root (reconciliation #17).
+            string workspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot);
 
             long revAfterScan;
             using (var fr = new FreshnessReader(canonicalDb))
-                revAfterScan = fr.LatestRevision(workspaceId!);
+                revAfterScan = fr.LatestRevision(workspaceId);
 
             // --- build the edit service against the real extract + a real reindexing write-through ---
             // NOTE: julie reassigns a symbol's opaque id on every `extract update` (verified: an id is NOT stable
@@ -130,7 +130,7 @@ public sealed class LiveEditTests
             // Write-through reindexed → the canonical revision advanced past the scan.
             long revAfterEdits;
             using (var fr = new FreshnessReader(canonicalDb))
-                revAfterEdits = fr.LatestRevision(workspaceId!);
+                revAfterEdits = fr.LatestRevision(workspaceId);
             Assert.True(revAfterEdits > revAfterScan,
                 $"revision should bump after write-through (scan={revAfterScan}, edits={revAfterEdits}).");
 

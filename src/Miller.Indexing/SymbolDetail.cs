@@ -4,11 +4,13 @@ namespace Miller.Indexing;
 /// On-demand per-symbol detail fetched for an <c>inspect</c> call (M2 §2). Kept off the in-memory index
 /// (which stays lean at ~565k rows) and read lazily because inspect is far lower-volume than search. Every
 /// field is nullable: julie writes NULL for absent doc comments, visibility, and body spans.
+///
+/// <para>v1 dropped <c>code_context</c> from <c>symbols</c> (it lives only on <c>identifiers</c> now), so this
+/// record no longer carries it (reconciliation #11).</para>
 /// </summary>
 public sealed record SymbolDetail(
     string? DocComment,
     string? Visibility,
-    string? CodeContext,
     int? BodyStartByte,
     int? BodyEndByte,
     int? BodyStartLine,

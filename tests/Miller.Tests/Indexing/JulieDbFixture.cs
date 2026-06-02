@@ -16,7 +16,12 @@ namespace Miller.Tests.Indexing;
 /// are a Phase-4 migration; (b) a TRANSITIONAL <c>files.content</c> column is kept so the OLD
 /// <c>ExtractReader.ReadBody</c> can slice bodies until Phase 5 moves body reads to disk; (c) the OLD M3
 /// freshness tables (<c>canonical_revisions</c>/<c>revision_file_changes</c>) are kept untouched so the OLD
-/// FreshnessReader stays green through Phase 3 (Phase 4 flips them to extraction_revisions).</para>
+/// FreshnessReader stays green through Phase 3 (Phase 4 flips them to extraction_revisions); (d) the OLD
+/// freshness-hash surface — a TRANSITIONAL <c>files.hash</c> (raw blake3 hex, NO domain prefix) and the OLD
+/// <c>external_extract_metadata</c> table carrying <c>hash_algorithm</c> — is kept so the Subsystem-D
+/// <c>ExtractFileHashReader</c>/<c>FreshnessGate</c> path stays coherent end-to-end through Phase 3. The WHOLE
+/// freshness subsystem (hash reader + gate domain-prefix handling + cursor) migrates together in Phase 4; this
+/// fixture flips <c>files.hash</c>→<c>content_hash</c> and the metadata table then, NOT piecemeal here.</para>
 ///
 /// Disposable: deletes the temp directory (and -wal/-shm sidecars) on <see cref="Dispose"/>.
 /// </summary>
@@ -227,6 +232,8 @@ internal sealed class JulieDbFixture : IDisposable
             // The OLD M3 freshness tables (Phase-3 transitional) so the OLD FreshnessReader can open.
             Exec(conn, CanonicalRevisionsDdl);
             Exec(conn, RevisionFileChangesDdl);
+            // The OLD freshness-hash metadata table (Phase-3 transitional) so ExtractFileHashReader can open.
+            Exec(conn, ExternalExtractMetadataDdl);
             // The M4 bridge tables are always created (empty by default) so the SqliteBridgeReader — on the single
             // production RepositoryIndexLoader.Load path (D9) — can open against ANY fixture.
             Exec(conn, TypeArgumentUsagesDdl);
@@ -249,17 +256,19 @@ internal sealed class JulieDbFixture : IDisposable
             {
                 string content = fileContent is not null && fileContent.TryGetValue(path, out var c) ? c : "";
                 byte[] bytes = System.Text.Encoding.UTF8.GetBytes(content);
-                string hash = "blake3:" + ContentHasher.Blake3Hex(bytes);
+                string rawHex = ContentHasher.Blake3Hex(bytes);
+                string contentHash = "blake3:" + rawHex;            // v1 content_hash: domain-prefixed
                 using var fcmd = conn.CreateCommand();
                 fcmd.CommandText =
                     "INSERT INTO files (file_id, path, language, content_hash, content_bytes, line_count, " +
-                    "indexed_at, last_revision_id, status, metadata_json, content) " +
-                    "VALUES ($fid, $p, 'csharp', $hash, $bytes, 0, '1970-01-01T00:00:00Z', 0, 'indexed', NULL, $content);";
+                    "indexed_at, last_revision_id, status, metadata_json, content, hash) " +
+                    "VALUES ($fid, $p, 'csharp', $chash, $bytes, 0, '1970-01-01T00:00:00Z', 0, 'indexed', NULL, $content, $hash);";
                 fcmd.Parameters.AddWithValue("$fid", FileId(path));
                 fcmd.Parameters.AddWithValue("$p", path);
-                fcmd.Parameters.AddWithValue("$hash", hash);
+                fcmd.Parameters.AddWithValue("$chash", contentHash);
                 fcmd.Parameters.AddWithValue("$bytes", bytes.Length);
                 fcmd.Parameters.AddWithValue("$content", content);
+                fcmd.Parameters.AddWithValue("$hash", rawHex);      // transitional OLD files.hash: raw hex (Phase-4 reader still reads this)
                 fcmd.ExecuteNonQuery();
             }
 
@@ -419,6 +428,18 @@ internal sealed class JulieDbFixture : IDisposable
 
                 if (hashAlgorithm is not null)
                     Meta("hash_algorithm", hashAlgorithm);
+            }
+
+            // OLD freshness-hash metadata (Phase-3 transitional, independent of artifact_metadata): the Subsystem-D
+            // ExtractFileHashReader.ReadHashAlgorithm reads external_extract_metadata.hash_algorithm until Phase 4
+            // moves it onto artifact_metadata. Mirrors the same hashAlgorithm param so a null omits the row (and the
+            // OLD reader returns null), matching the v1 hash_algorithm key's presence.
+            if (hashAlgorithm is not null)
+            {
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "INSERT INTO external_extract_metadata (key, value, updated_at) VALUES ('hash_algorithm', $v, 0);";
+                cmd.Parameters.AddWithValue("$v", hashAlgorithm);
+                cmd.ExecuteNonQuery();
             }
         }
 
@@ -731,7 +752,8 @@ internal sealed class JulieDbFixture : IDisposable
             last_revision_id INTEGER NOT NULL,
             status TEXT NOT NULL,
             metadata_json TEXT,
-            content TEXT
+            content TEXT,
+            hash TEXT
         );
         """;
 
@@ -999,6 +1021,18 @@ internal sealed class JulieDbFixture : IDisposable
             old_hash TEXT,
             new_hash TEXT,
             PRIMARY KEY (revision, workspace_id, file_path)
+        );
+        """;
+
+    // --- OLD freshness-hash metadata (Phase-3 transitional). The Subsystem-D ExtractFileHashReader.ReadHashAlgorithm
+    //     still reads external_extract_metadata.hash_algorithm; Phase 4 moves it to artifact_metadata.hash_algorithm
+    //     (which the gate already reads) and drops this table. Kept so the OLD freshness path stays green. ---
+
+    private const string ExternalExtractMetadataDdl = """
+        CREATE TABLE IF NOT EXISTS external_extract_metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at INTEGER NOT NULL
         );
         """;
 }

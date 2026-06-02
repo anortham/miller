@@ -95,36 +95,34 @@ public sealed class JulieSchemaGateTests
     }
 
     [Fact]
-    public void Verify_MissingSchemaVersionTable_ThrowsNamingTheTable()
+    public void Verify_MissingMetadataTable_ThrowsNamingArtifactMetadata()
     {
-        // A non-julie / corrupt DB: no schema_version table at all. COALESCE(MAX(version),0) can't even
-        // run, so the gate must detect the missing table and reject (fail-fast on non-julie DBs).
-        using var fx = JulieDbFixture.Create(null, PinContractStr, NoRows, createSchemaVersionTable: false);
-        using var conn = OpenReadOnly(fx.DbPath);
-
-        var ex = Assert.Throws<IncompatibleExtractException>(() => JulieSchemaGate.Verify(conn));
-        Assert.Contains("schema_version", ex.Message);
-        Assert.Contains($"not a v{PinnedVer} julie extract", ex.Message, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public void Verify_MissingMetadataTable_ThrowsNamingTheTable()
-    {
-        // Schema is at the pin (so the schema check passes); the metadata table is absent, so the gate must
-        // fail on the missing table next.
+        // A non-julie / corrupt DB: no artifact_metadata table at all (the only metadata surface in v1). The
+        // gate hits it on the FIRST metadata read (sqlite_schema_version) and rejects (fail-fast on non-julie DBs).
         using var fx = JulieDbFixture.Create(PinSchema, null, NoRows, createMetadataTable: false);
         using var conn = OpenReadOnly(fx.DbPath);
 
         var ex = Assert.Throws<IncompatibleExtractException>(() => JulieSchemaGate.Verify(conn));
-        Assert.Contains("external_extract_metadata", ex.Message);
+        Assert.Contains("artifact_metadata", ex.Message);
+        Assert.Contains("not a julie-extract", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Verify_MissingSqliteSchemaVersionKey_ThrowsNamingTheKey()
+    {
+        // Table present, but the sqlite_schema_version row absent (older/corrupt artifact).
+        using var fx = JulieDbFixture.Create(schemaVersion: null, PinContractStr, NoRows, createMetadataTable: true);
+        using var conn = OpenReadOnly(fx.DbPath);
+
+        var ex = Assert.Throws<IncompatibleExtractException>(() => JulieSchemaGate.Verify(conn));
+        Assert.Contains("sqlite_schema_version", ex.Message);
     }
 
     [Fact]
     public void Verify_MissingContractKey_ThrowsNamingTheKey()
     {
-        // The metadata table exists but the extract_contract_version row is absent (contractValue null
-        // with the table present). Schema is at the pin so we reach the contract check; the SELECT returns
-        // no row → treated as incompatible (older/missing).
+        // The metadata table exists and the schema key is present (so we reach the contract check), but the
+        // extract_contract_version row is absent (contractValue null with the table present) → incompatible.
         using var fx = JulieDbFixture.Create(PinSchema, null, NoRows, createMetadataTable: true);
         using var conn = OpenReadOnly(fx.DbPath);
 
