@@ -353,12 +353,13 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         return (canonicalRoot, canonicalDbPath);
     }
 
-    // The latest persisted revision for a reused DB. A MISSING DB file is the only safe degrade-to-0 case
-    // (the workspace genuinely has no revision yet → start fresh). A present-but-unreadable DB (corruption,
-    // permission denied, the WAL-sidecar writable-dir violation, a lock) is an operator/config error: surface
-    // it loudly (decision-10) rather than silently seeding revision 0, which would mask the problem and trigger
-    // a spurious rebuild on the first freshness tick. So only FileNotFoundException degrades; InvalidOperationException
-    // (the D4 writable-dir guard) and SqliteException (corruption/lock) propagate and fail the bootstrap.
+    // The latest persisted revision for a reused DB, read from v1's extraction_revisions (MAX(revision_id); one
+    // DB = one root, so no workspace filter — design §4.4). workspaceId here is ONLY the null-sentinel guard (a
+    // never-scanned workspace has no revision → 0); it is NOT a SQL filter. A MISSING DB file is the only safe
+    // degrade-to-0 case (the workspace genuinely has no revision yet → start fresh). A present-but-unreadable DB
+    // (corruption, permission denied, the WAL-sidecar writable-dir violation, a lock) is an operator/config
+    // error: surface it loudly (decision-10) rather than silently seeding revision 0. So only FileNotFoundException
+    // degrades; InvalidOperationException (the D4 writable-dir guard) and SqliteException (corruption/lock) propagate.
     internal static long ReadLatestRevisionOrZero(string dbPath, string? workspaceId)
     {
         if (workspaceId is null)
@@ -366,7 +367,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         try
         {
             using var reader = new FreshnessReader(dbPath);
-            return reader.LatestRevision(workspaceId);
+            return reader.LatestRevision();
         }
         catch (FileNotFoundException)
         {

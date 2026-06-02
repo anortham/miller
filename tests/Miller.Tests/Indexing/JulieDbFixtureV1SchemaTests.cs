@@ -42,19 +42,66 @@ public sealed class JulieDbFixtureV1SchemaTests
         using var fx = JulieDbFixture.CreateDefault();
         using var c = Open(fx.DbPath);
 
-        // Phase 3 = the non-revision v1 spine. The revision tables (extraction_revisions/revision_file_changes)
-        // and the canonical_revisions DROP are H2's lock assertions (Phase 4): in Phase 3 canonical_revisions is
-        // still present and untouched, so do NOT assert on revision tables here.
         foreach (var t in new[] { "artifact_metadata", "files", "symbols", "identifiers",
             "relationships", "type_argument_usages", "type_arguments", "literals", "symbol_annotations",
-            "parse_diagnostics", "parser_inventory", "language_capabilities" })
+            "parse_diagnostics", "parser_inventory", "language_capabilities",
+            "extraction_revisions", "revision_file_changes" })
             Assert.True(TableExists(c, t), $"v1 table '{t}' must exist");
 
-        // Old-schema artifacts H1 removes are gone.
+        // Old-schema artifacts removed in v1 are gone.
         Assert.False(TableExists(c, "schema_version"), "schema_version table is dropped in v1");
-        // NOTE: external_extract_metadata is kept TRANSITIONALLY in Phase 3 (it still carries hash_algorithm for the
-        // Subsystem-D ExtractFileHashReader/FreshnessGate). Phase 4 moves hash_algorithm fully onto artifact_metadata
-        // and drops this table; the "external_extract_metadata is gone" assertion is Phase 4's lock, not here.
+        Assert.False(TableExists(c, "external_extract_metadata"),
+            "external_extract_metadata is dropped in v1 (hash_algorithm moved onto artifact_metadata)");
+    }
+
+    // ---- H2: v1 revision tables (extraction_revisions / revision_file_changes) ----
+
+    [Fact]
+    public void Fixture_RevisionTables_AreV1_CanonicalRevisionsGone()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+        using var c = Open(fx.DbPath);
+        Assert.True(TableExists(c, "extraction_revisions"), "v1 revision table present");
+        Assert.True(TableExists(c, "revision_file_changes"), "v1 per-file change table present");
+        Assert.False(TableExists(c, "canonical_revisions"), "old revision table renamed to extraction_revisions in v1");
+    }
+
+    [Fact]
+    public void Fixture_ExtractionRevisions_AreWorkspaceIdFree_AndKeyedByRevisionId()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract,
+            Array.Empty<JulieDbFixture.SymbolRow>(),
+            revisions: new[] { new JulieDbFixture.RevisionRow(1), new JulieDbFixture.RevisionRow(2) });
+        using var c = Open(fx.DbPath);
+
+        Assert.False(ColumnExists(c, "extraction_revisions", "workspace_id"),
+            "v1 extraction_revisions has no workspace_id (one DB = one root)");
+        Assert.True(ColumnExists(c, "extraction_revisions", "revision_id"));
+
+        using var max = c.CreateCommand();
+        max.CommandText = "SELECT MAX(revision_id) FROM extraction_revisions;";
+        Assert.Equal(2L, System.Convert.ToInt64(max.ExecuteScalar()));
+    }
+
+    [Fact]
+    public void Fixture_RevisionFileChanges_UseV1VocabularyWithoutCheckConstraint()
+    {
+        // v1 has NO CHECK on change_kind; 'unsupported' (a v1-only value) must insert without error.
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract,
+            Array.Empty<JulieDbFixture.SymbolRow>(),
+            revisions: new[] { new JulieDbFixture.RevisionRow(1) },
+            fileChanges: new[]
+            {
+                new JulieDbFixture.RevisionFileChangeRow(1, "a.cs", "inserted"),
+                new JulieDbFixture.RevisionFileChangeRow(1, "b.cs", "unsupported"),
+            });
+        using var c = Open(fx.DbPath);
+        Assert.False(ColumnExists(c, "revision_file_changes", "workspace_id"));
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM revision_file_changes;";
+        Assert.Equal(2L, System.Convert.ToInt64(cmd.ExecuteScalar()));
     }
 
     [Fact]
@@ -74,11 +121,10 @@ public sealed class JulieDbFixtureV1SchemaTests
 
         Assert.True(ColumnExists(c, "files", "content_hash"));
         Assert.True(ColumnExists(c, "files", "content_bytes"));
-        // NOTE: files.hash is kept TRANSITIONALLY in Phase 3 (raw blake3 hex the Subsystem-D ExtractFileHashReader
-        // still reads). Phase 4 flips the freshness path onto content_hash and drops this column; the
-        // "files.hash renamed to content_hash" assertion is Phase 4's lock, not here.
-        // The transitional `content` column is likewise still present in Phase 3 (OLD ReadBody reads it until
-        // C3/Phase 5); the "files is content-free" assertion lives in H3's Phase-5 lock test, not here.
+        Assert.False(ColumnExists(c, "files", "hash"),
+            "the transitional raw-hex files.hash column is dropped in v1; freshness reads content_hash");
+        // The transitional `content` column is still present (OLD ReadBody reads it until C3/Phase 5); the
+        // "files is content-free" assertion lives in H3's Phase-5 lock test, not here.
 
         Assert.True(ColumnExists(c, "artifact_metadata", "key"));
         Assert.True(ColumnExists(c, "artifact_metadata", "value"));

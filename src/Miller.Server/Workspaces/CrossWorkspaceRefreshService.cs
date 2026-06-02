@@ -12,7 +12,7 @@ public sealed class CrossWorkspaceRefreshService
     private readonly WorkspaceRegistry _registry;
     private readonly Func<string, string, bool, ExtractReport> _scan;
     private readonly Func<string, IDisposable?> _acquireLock;
-    private readonly Func<string, string, long> _readLatestRevision;
+    private readonly Func<string, long> _readLatestRevision;
     private readonly TimeSpan _lockBusyWait;
     private readonly TimeSpan _lockBusyPollInterval;
     private readonly Action<TimeSpan> _sleep;
@@ -35,7 +35,7 @@ public sealed class CrossWorkspaceRefreshService
         WorkspaceRegistry registry,
         Func<string, string, bool, ExtractReport> scan,
         Func<string, IDisposable?> acquireLock,
-        Func<string, string, long> readLatestRevision,
+        Func<string, long> readLatestRevision,
         TimeSpan lockBusyWait,
         TimeSpan lockBusyPollInterval,
         Action<TimeSpan> sleep,
@@ -110,23 +110,10 @@ public sealed class CrossWorkspaceRefreshService
         try
         {
             ExtractReport report = _scan(row.CanonicalRoot, row.IndexDbPath, force);
-            if (report.WorkspaceId is { } reportedWorkspaceId
-                && !string.Equals(reportedWorkspaceId, row.WorkspaceId, StringComparison.Ordinal))
-            {
-                string error =
-                    $"Refresh for workspace '{row.WorkspaceId}' returned workspace_id '{reportedWorkspaceId}'.";
-                _registry.MarkError(row.WorkspaceId, error, _utcNow());
-                return new WorkspaceRefreshResult(
-                    WorkspaceRefreshStatus.Failed,
-                    row.WorkspaceId,
-                    row.CanonicalRoot,
-                    row.IndexDbPath,
-                    row.LastRevision,
-                    Scanned: true,
-                    Error: error);
-            }
 
-            long revision = report.Revision ?? _readLatestRevision(row.IndexDbPath, row.WorkspaceId);
+            // No workspace_id echo to cross-check in v1: julie-extract self-rejects a DB built for a different
+            // root (exit 3 RootMismatch, design §4.1), so a wrong-DB scan throws and is handled by the catch below.
+            long revision = report.Revision ?? _readLatestRevision(row.IndexDbPath);
             _registry.MarkScanned(row.WorkspaceId, revision, _utcNow());
             WorkspaceRefreshStatus status = revision > (row.LastRevision ?? 0)
                 ? WorkspaceRefreshStatus.Refreshed
@@ -209,7 +196,7 @@ public sealed class CrossWorkspaceRefreshService
     {
         try
         {
-            revision = _readLatestRevision(row.IndexDbPath, row.WorkspaceId);
+            revision = _readLatestRevision(row.IndexDbPath);
             return true;
         }
         catch (Exception ex) when (ex is FileNotFoundException or IOException or InvalidOperationException
@@ -224,9 +211,9 @@ public sealed class CrossWorkspaceRefreshService
         _registry.Get(workspaceId) ?? throw new KeyNotFoundException(
             $"Workspace registry row '{workspaceId}' was not found.");
 
-    private static long ReadLatestRevision(string dbPath, string workspaceId)
+    private static long ReadLatestRevision(string dbPath)
     {
         using var reader = new FreshnessReader(dbPath);
-        return reader.LatestRevision(workspaceId);
+        return reader.LatestRevision();
     }
 }

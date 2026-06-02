@@ -6,9 +6,9 @@ namespace Miller.Server.Hosting;
 /// <summary>
 /// The M6 <c>edit</c> mutation gate (m6-design decision-3, Components/3, impl-order step 6). It answers one
 /// question before any edit is planned/applied: <em>is the index's view of this file still the file on disk?</em>
-/// It reads julie's BLAKE3 snapshot from <c>files.hash</c>, hashes the current disk bytes with BLAKE3, and runs
-/// both hashes through the pure <see cref="StalenessCheck"/>. Exact text is still supplied when available as the
-/// collision/normalization guard, but the required freshness path is raw bytes vs <c>files.hash</c>.
+/// It reads julie's normalized BLAKE3 hash from <c>files.content_hash</c>, hashes the current disk bytes with
+/// BLAKE3, and runs both hashes through the pure <see cref="StalenessCheck"/>. v1 artifacts store no snapshot
+/// text, so the verdict rests on the <c>content_hash</c> compare alone (the exact-text tiebreaker is skipped).
 ///
 /// <para>If julie has no hash snapshot for the file, or the extract metadata does not declare
 /// <c>hash_algorithm = blake3</c>, the gate cannot verify freshness and reports
@@ -67,9 +67,13 @@ public static class FreshnessGate
         if (string.IsNullOrWhiteSpace(indexedHash))
             return new GateResult(FreshnessResult.Stale, IndexedContentFound: false);
 
-        string? indexedText = ExtractReader.ReadIndexedFileText(dbPath, indexedFilePath);
         string currentHash = ContentHasher.Blake3FileHex(diskPath);
-        var indexed = new IndexedSnapshot(indexedHash, indexedText);
+        // v1 artifacts store NO snapshot text (files.content is gone), so the indexed side is hash-only: pass
+        // indexedText:null. StalenessCheck then decides on the hash compare ALONE — it runs the exact-text
+        // tiebreaker only when text is present on BOTH sides (StalenessCheck.cs), so null indexedText is NOT
+        // auto-Stale, it just skips the tiebreaker. NormalizeHash is the idempotent belt-and-suspenders at the
+        // comparison boundary (the reader already returns bare hex; this guards a still-prefixed caller).
+        var indexed = new IndexedSnapshot(ContentHasher.NormalizeHash(indexedHash), indexedText: null);
         var current = new CurrentProbe(currentHash, diskText);
         return new GateResult(StalenessCheck.Check(indexed, current), IndexedContentFound: true);
     }

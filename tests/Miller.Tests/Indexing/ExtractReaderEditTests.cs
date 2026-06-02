@@ -197,7 +197,7 @@ public sealed class ExtractReaderEditTests
         Assert.Throws<FileNotFoundException>(() => ExtractReader.ReadIndexedFileText(missing, "any/path.cs"));
     }
 
-    // ---- files.hash + hash_algorithm (BLAKE3 freshness baseline) ----
+    // ---- files.content_hash + hash_algorithm (BLAKE3 freshness baseline) ----
 
     [Fact]
     public void ReadFileHash_ReturnsTheFilesTableHashForThePath()
@@ -209,6 +209,19 @@ public sealed class ExtractReaderEditTests
         Assert.NotNull(hash);
         Assert.NotEmpty(hash);
         Assert.Equal(hash, hash!.ToLowerInvariant());
+    }
+
+    [Fact]
+    public void ReadFileHash_StripsBlake3Prefix_ReturningBareHex()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        // v1 fixture stores files.content_hash as "blake3:<hex>"; the reader must hand back bare hex.
+        string? hash = ExtractFileHashReader.ReadFileHash(fx.DbPath, "orders/OrderService.cs");
+        Assert.NotNull(hash);
+        Assert.DoesNotContain(":", hash);                                  // no scheme prefix leaked
+        Assert.Equal(
+            ContentHasher.Blake3Hex(System.Text.Encoding.UTF8.GetBytes(JulieDbFixture.OrderServiceContent)),
+            hash);                                                          // equals the bare disk hash
     }
 
     [Fact]
@@ -279,5 +292,38 @@ public sealed class ExtractReaderEditTests
             if (System.IO.Directory.Exists(dir))
                 System.IO.Directory.Delete(dir, recursive: true);
         }
+    }
+
+    // ---- NormalizeHash (D1): the single blake3: → bare-hex normalizer ----
+
+    [Fact]
+    public void NormalizeHash_StripsBlake3Prefix_LeavingBareLowercaseHex()
+    {
+        // julie v1 stores files.content_hash as "blake3:<hex>" (extraction.rs:644). Miller compares bare hex.
+        string bare = ContentHasher.Blake3Hex(System.Text.Encoding.UTF8.GetBytes("namespace A { }"));
+        Assert.Equal(bare, ContentHasher.NormalizeHash("blake3:" + bare));
+    }
+
+    [Fact]
+    public void NormalizeHash_BareHash_ReturnedUnchanged()
+    {
+        // A disk hash from Blake3FileHex has no prefix; normalization is a no-op so disk==stored stays comparable.
+        string bare = ContentHasher.Blake3Hex(System.Text.Encoding.UTF8.GetBytes("x"));
+        Assert.Equal(bare, ContentHasher.NormalizeHash(bare));
+    }
+
+    [Fact]
+    public void NormalizeHash_PrefixSchemeIsCaseInsensitive_ValuePreservedOrdinal()
+    {
+        Assert.Equal("ABCDEF", ContentHasher.NormalizeHash("BLAKE3:ABCDEF")); // scheme token case-insensitive
+        Assert.Equal("ABCDEF", ContentHasher.NormalizeHash("ABCDEF"));        // value left byte-exact (not lowered)
+    }
+
+    [Fact]
+    public void NormalizeHash_NullOrWhitespace_Throws()
+    {
+        // null throws ArgumentNullException (an ArgumentException subtype); whitespace throws ArgumentException.
+        Assert.ThrowsAny<ArgumentException>(() => ContentHasher.NormalizeHash(null!));
+        Assert.Throws<ArgumentException>(() => ContentHasher.NormalizeHash("   "));
     }
 }

@@ -2,25 +2,29 @@ using Microsoft.Data.Sqlite;
 
 namespace Miller.Indexing;
 
-/// <summary>The kind of change a <see cref="RevisionFileChange"/> records (julie's <c>change_kind</c>).</summary>
+/// <summary>The kind of change a <see cref="RevisionFileChange"/> records (julie v1 <c>change_kind</c>).</summary>
 public enum RevisionChangeKind
 {
-    /// <summary>A new file appeared in this revision.</summary>
+    /// <summary>A new file appeared in this revision (v1 <c>inserted</c>).</summary>
     Added,
 
-    /// <summary>An existing file's content changed in this revision.</summary>
+    /// <summary>An existing file's content changed in this revision (v1 <c>updated</c>).</summary>
     Modified,
 
-    /// <summary>A file was removed in this revision.</summary>
+    /// <summary>A file was removed in this revision (v1 <c>deleted</c>).</summary>
     Deleted,
+
+    /// <summary>A file became unsupported and is no longer represented (v1 <c>unsupported</c>); for
+    /// freshness/incremental purposes treat it as a removal from the index.</summary>
+    Unsupported,
 }
 
 /// <summary>
-/// One row of julie's <c>revision_file_changes</c> delta: which file changed, how, and in which revision. The
-/// exact changed-file delta (verified-fact 5) — gold for the incremental rebuild decision-5 would consume and
-/// for M4. <see cref="FilePath"/> is workspace-relative (as julie stores it).
+/// One row of julie's v1 <c>revision_file_changes</c> delta: which file changed, how, and in which revision.
+/// The exact changed-file delta — gold for the incremental rebuild the freshness path would consume and for M4.
+/// <see cref="Path"/> is workspace-relative (the v1 <c>path</c> column).
 /// </summary>
-public sealed record RevisionFileChange(long Revision, string FilePath, RevisionChangeKind ChangeKind);
+public sealed record RevisionFileChange(long RevisionId, string Path, RevisionChangeKind ChangeKind);
 
 /// <summary>
 /// Owns the long-lived <c>Mode=ReadOnly</c> connection that every Miller instance polls for freshness
@@ -59,21 +63,18 @@ public sealed class FreshnessReader : IDisposable
     }
 
     /// <summary>
-    /// The freshness cursor: <c>SELECT MAX(revision) FROM canonical_revisions WHERE workspace_id=@id</c>.
-    /// Returns 0 when the workspace has no revision yet (the "no revision" sentinel — MAX over no rows is SQL
-    /// NULL). Re-runnable on the same connection for every poll.
+    /// The freshness cursor: <c>SELECT MAX(revision_id) FROM extraction_revisions</c>. v1 has no
+    /// <c>workspace_id</c> (one DB = one root), so there is no per-workspace filter. Returns 0 when the DB has no
+    /// revision yet (the "no revision" sentinel — MAX over no rows is SQL NULL). Re-runnable on the same
+    /// connection for every poll.
     /// </summary>
-    /// <exception cref="ArgumentNullException"><paramref name="workspaceId"/> is null.</exception>
     /// <exception cref="ObjectDisposedException">The reader has been disposed.</exception>
-    public long LatestRevision(string workspaceId)
+    public long LatestRevision()
     {
-        ArgumentNullException.ThrowIfNull(workspaceId);
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         using var cmd = _connection.CreateCommand();
-        cmd.CommandText =
-            "SELECT MAX(revision) FROM canonical_revisions WHERE workspace_id = $ws;";
-        cmd.Parameters.AddWithValue("$ws", workspaceId);
+        cmd.CommandText = "SELECT MAX(revision_id) FROM extraction_revisions;";
 
         object? result = cmd.ExecuteScalar();
         // MAX over zero matching rows is SQL NULL → DBNull here. Map to 0 (no revision yet).
@@ -81,48 +82,47 @@ public sealed class FreshnessReader : IDisposable
     }
 
     /// <summary>
-    /// The changed-file delta strictly AFTER <paramref name="sinceRevision"/> for <paramref name="workspaceId"/>,
-    /// from <c>revision_file_changes</c> (verified-fact 5), ordered by revision then file_path. Used by the
-    /// future incremental rebuild (decision-5) / M4. Returns an empty list when nothing changed since.
+    /// The changed-file delta strictly AFTER <paramref name="sinceRevision"/>, from v1's
+    /// <c>revision_file_changes</c>, ordered by revision_id then path. v1 has no <c>workspace_id</c> (one DB =
+    /// one root), so there is no per-workspace filter. Used by the future incremental rebuild / M4. Returns an
+    /// empty list when nothing changed since.
     /// </summary>
-    /// <exception cref="ArgumentNullException"><paramref name="workspaceId"/> is null.</exception>
     /// <exception cref="ObjectDisposedException">The reader has been disposed.</exception>
-    public IReadOnlyList<RevisionFileChange> ChangedSince(long sinceRevision, string workspaceId)
+    public IReadOnlyList<RevisionFileChange> ChangedSince(long sinceRevision)
     {
-        ArgumentNullException.ThrowIfNull(workspaceId);
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         using var cmd = _connection.CreateCommand();
         cmd.CommandText =
-            "SELECT revision, file_path, change_kind FROM revision_file_changes " +
-            "WHERE workspace_id = $ws AND revision > $since " +
-            "ORDER BY revision, file_path;";
-        cmd.Parameters.AddWithValue("$ws", workspaceId);
+            "SELECT revision_id, path, change_kind FROM revision_file_changes " +
+            "WHERE revision_id > $since ORDER BY revision_id, path;";
         cmd.Parameters.AddWithValue("$since", sinceRevision);
 
         var changes = new List<RevisionFileChange>();
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
-            long revision = reader.GetInt64(0);
-            string filePath = reader.GetString(1);
+            long revisionId = reader.GetInt64(0);
+            string path = reader.GetString(1);
             string changeKind = reader.GetString(2);
-            changes.Add(new RevisionFileChange(revision, filePath, ParseChangeKind(changeKind)));
+            changes.Add(new RevisionFileChange(revisionId, path, ParseChangeKind(changeKind)));
         }
 
         return changes;
     }
 
-    // julie CHECK-constrains change_kind to exactly {added, modified, deleted}, so an unknown value means the
-    // schema drifted (a future julie) — fail loudly rather than silently misclassify a change as Modified.
+    // v1's revision_file_changes.change_kind has NO CHECK constraint (julie-extractors schema.rs:47) — Miller is
+    // the only guard. The writer emits exactly inserted|updated|deleted|unsupported (model.rs:60-66); anything
+    // else means the v1 contract drifted (a future julie-extract), so fail loud rather than misclassify.
     private static RevisionChangeKind ParseChangeKind(string changeKind) => changeKind switch
     {
-        "added" => RevisionChangeKind.Added,
-        "modified" => RevisionChangeKind.Modified,
+        "inserted" => RevisionChangeKind.Added,
+        "updated" => RevisionChangeKind.Modified,
         "deleted" => RevisionChangeKind.Deleted,
+        "unsupported" => RevisionChangeKind.Unsupported,
         _ => throw new InvalidOperationException(
-            $"Unknown revision_file_changes.change_kind '{changeKind}'; expected added|modified|deleted " +
-            "(the julie extract schema may have drifted)."),
+            $"Unknown revision_file_changes.change_kind '{changeKind}'; expected " +
+            "inserted|updated|deleted|unsupported (the julie-extract v1 schema may have drifted)."),
     };
 
     /// <summary>Close the long-lived read connection.</summary>

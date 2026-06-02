@@ -3,8 +3,8 @@ using Microsoft.Data.Sqlite;
 namespace Miller.Indexing;
 
 /// <summary>
-/// Reads julie's file-level freshness contract: <c>files.hash</c> plus
-/// <c>external_extract_metadata.hash_algorithm</c>.
+/// Reads julie's v1 file-level freshness contract: <c>files.content_hash</c> (the <c>blake3:&lt;hex&gt;</c>
+/// token, normalized to bare hex on the way out) plus <c>artifact_metadata.hash_algorithm</c>.
 /// </summary>
 public static class ExtractFileHashReader
 {
@@ -14,18 +14,23 @@ public static class ExtractFileHashReader
 
         using var connection = Open(dbPath);
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT hash FROM files WHERE path = $path;";
+        command.CommandText = "SELECT content_hash FROM files WHERE path = $path;";
         command.Parameters.AddWithValue("$path", filePath);
 
         var value = command.ExecuteScalar();
-        return value is string s ? s : null;
+        // v1 stores "blake3:<hex>"; normalize to bare hex so freshness consumers compare against disk hashes. A
+        // missing row yields null; a present-but-empty/whitespace value is returned verbatim (NOT normalized) so
+        // the gate's own IsNullOrWhiteSpace guard trips to Stale rather than NormalizeHash throwing on it.
+        return value is string s
+            ? string.IsNullOrWhiteSpace(s) ? s : ContentHasher.NormalizeHash(s)
+            : null;
     }
 
     public static string? ReadHashAlgorithm(string dbPath)
     {
         using var connection = Open(dbPath);
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT value FROM external_extract_metadata WHERE key = 'hash_algorithm';";
+        command.CommandText = "SELECT value FROM artifact_metadata WHERE key = 'hash_algorithm';";
 
         try
         {
@@ -33,7 +38,7 @@ public static class ExtractFileHashReader
             return value is string s ? s : null;
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode == 1
-            && ex.Message.Contains("external_extract_metadata", StringComparison.OrdinalIgnoreCase))
+            && ex.Message.Contains("artifact_metadata", StringComparison.OrdinalIgnoreCase))
         {
             return null;
         }

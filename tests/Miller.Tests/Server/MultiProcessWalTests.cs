@@ -39,12 +39,10 @@ public sealed class MultiProcessWalTests
             var runner = new JulieExtractRunner(binary!);
             var scan = runner.Scan(canonicalRoot, db, force: true);
             Assert.NotEqual("failed", scan.Status);
-            // v1 stores no workspace_id; the stable id is derived from the canonical root (reconciliation #17).
-            string workspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot);
-
+            // v1's extraction_revisions has no workspace_id (one DB = one root), so LatestRevision takes no key.
             long startRevision;
             using (var seed = new FreshnessReader(db))
-                startRevision = seed.LatestRevision(workspaceId);
+                startRevision = seed.LatestRevision();
 
             using var cts = new CancellationTokenSource();
             var maxObserved = new long[readerCount];
@@ -63,16 +61,16 @@ public sealed class MultiProcessWalTests
                         using var fr = new FreshnessReader(db); // ONE connection for the whole loop (no reopen)
                         while (!cts.IsCancellationRequested)
                         {
-                            long rev = fr.LatestRevision(workspaceId);
+                            long rev = fr.LatestRevision();
                             if (rev > maxObserved[idx])
                                 maxObserved[idx] = rev;
                             // Also exercise the changed-file delta read under contention (must not corrupt).
-                            _ = fr.ChangedSince(startRevision, workspaceId);
+                            _ = fr.ChangedSince(startRevision);
                             try { await Task.Delay(5, cts.Token).ConfigureAwait(false); }
                             catch (OperationCanceledException) { break; }
                         }
                         // A final read after cancellation to capture the last committed revision.
-                        long finalRev = fr.LatestRevision(workspaceId);
+                        long finalRev = fr.LatestRevision();
                         if (finalRev > maxObserved[idx])
                             maxObserved[idx] = finalRev;
                     }
@@ -105,7 +103,7 @@ public sealed class MultiProcessWalTests
 
             long finalRevision;
             using (var verify = new FreshnessReader(db))
-                finalRevision = verify.LatestRevision(workspaceId);
+                finalRevision = verify.LatestRevision();
             Assert.True(finalRevision > startRevision, "the writer's updates must have advanced the revision");
 
             // Every reader observed the final committed revision via its long-lived connection (no reopen).

@@ -61,8 +61,8 @@ public sealed class FreshnessService : BackgroundService
 
         if (_workspaceId is null)
         {
-            // No workspace id => no canonical_revisions rows to poll (a never-scanned or empty extract). The
-            // bootstrap already built the initial index; there is nothing to converge on. Idle.
+            // No workspace id => a never-scanned / static extract with no revision cursor to poll. The bootstrap
+            // already built the initial index; there is nothing to converge on. Idle.
             _logger.LogInformation(
                 "FreshnessService: no workspace_id; the index is static (no revision cursor to poll).");
             return;
@@ -149,12 +149,12 @@ public sealed class FreshnessService : BackgroundService
                 // Reuse the loop's long-lived reader/rebuilder when the hosted loop has initialised them;
                 // otherwise build transient ones from the workspace for this single on-demand poll.
                 if (_reader is { } reader && _rebuilder is { } rebuilder)
-                    return PollThenSwap(reader, rebuilder, workspaceId);
+                    return PollThenSwap(reader, rebuilder);
 
                 string dbPath = _bootstrap.Workspace.ExtractDbPath;
                 using var transientReader = new FreshnessReader(dbPath);
                 var transientRebuilder = new IndexRebuilder(dbPath);
-                return PollThenSwap(transientReader, transientRebuilder, workspaceId);
+                return PollThenSwap(transientReader, transientRebuilder);
             }
             catch (Exception ex)
             {
@@ -209,7 +209,7 @@ public sealed class FreshnessService : BackgroundService
         {
             try
             {
-                PollThenSwap(_reader!, _rebuilder!, _workspaceId!);
+                PollThenSwap(_reader!, _rebuilder!);
             }
             catch (Exception ex)
             {
@@ -223,11 +223,13 @@ public sealed class FreshnessService : BackgroundService
     // The shared poll-then-swap core (the loop and PollNow both route through it): read the latest persisted
     // revision, cache it for the index_fresh probe, and rebuild+swap iff the writer has moved ahead. Returns the
     // typed outcome. Callers hold _pollGate; exceptions propagate to the caller's own keep-prior-index handling.
-    private PollResult PollThenSwap(FreshnessReader reader, IndexRebuilder rebuilder, string workspaceId)
+    // v1's extraction_revisions has no workspace_id (one DB = one root), so LatestRevision takes no key — the
+    // _workspaceId field still gates WHETHER to poll (a static extract has none), not the SQL filter.
+    private PollResult PollThenSwap(FreshnessReader reader, IndexRebuilder rebuilder)
     {
         var holder = Holder;
         long built = holder.BuiltRevision;
-        long latest = reader.LatestRevision(workspaceId);
+        long latest = reader.LatestRevision();
         Interlocked.Exchange(ref _lastObservedRevision, latest);
 
         // M8 §D4: the observed-vs-built comparison every poll makes — at Debug so it costs nothing at the default

@@ -161,22 +161,22 @@ public sealed class IndexBootstrapServiceTests
     }
 
     [Fact]
-    public void ReadLatestRevisionOrZero_ReusedDbWithRevisions_ReturnsTheMaxForTheWorkspace()
+    public void ReadLatestRevisionOrZero_ReusedDbWithRevisions_ReturnsTheMaxRevisionId()
     {
-        // The happy path: a reused DB with persisted revisions seeds the holder from the MAX (so the freshness
-        // poll does not rebuild on the first tick).
+        // The happy path: a reused DB with persisted revisions seeds the holder from MAX(revision_id) (so the
+        // freshness poll does not rebuild on the first tick). v1: one DB = one root, no workspace filter — the
+        // workspaceId arg is now only the null-sentinel guard.
         using var fx = JulieDbFixture.Create(
             schemaVersion: JulieDbFixture.PinnedSchema, contractValue: JulieDbFixture.PinnedContract,
             rows: System.Array.Empty<JulieDbFixture.SymbolRow>(),
-            workspaceId: "ws-seed",
             revisions: new[]
             {
-                new JulieDbFixture.RevisionRow(3, "ws-seed"),
-                new JulieDbFixture.RevisionRow(7, "ws-seed"),
-                new JulieDbFixture.RevisionRow(5, "ws-other"), // another workspace must not leak in
+                new JulieDbFixture.RevisionRow(3),
+                new JulieDbFixture.RevisionRow(7),
+                new JulieDbFixture.RevisionRow(5),
             });
 
-        Assert.Equal(7L, IndexBootstrapService.ReadLatestRevisionOrZero(fx.DbPath, "ws-seed"));
+        Assert.Equal(7L, IndexBootstrapService.ReadLatestRevisionOrZero(fx.DbPath, "ws-anything"));
     }
 
     [Fact]
@@ -305,7 +305,7 @@ public sealed class IndexBootstrapServiceTests
             schemaVersion: JulieDbFixture.PinnedSchema, contractValue: JulieDbFixture.PinnedContract,
             rows: System.Array.Empty<JulieDbFixture.SymbolRow>(),
             workspaceId: "ws-1",
-            revisions: new[] { new JulieDbFixture.RevisionRow(2, "ws-1") });
+            revisions: new[] { new JulieDbFixture.RevisionRow(2) });
 
         string dir = fx.Directory;
         var original = File.GetUnixFileMode(dir);

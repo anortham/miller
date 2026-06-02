@@ -68,7 +68,7 @@ public sealed class WorkspaceToolTests : IDisposable
         Func<string, string, bool, ExtractReport>? crossWorkspaceScan = null,
         Func<string, string, bool, ExtractReport>? openScan = null,
         Func<string, IDisposable?>? acquireLock = null,
-        Func<string, string, long>? readLatestRevision = null)
+        Func<string, long>? readLatestRevision = null)
     {
         // The served workspace root is the fixture dir's parent of .miller; point ExtractDbPath at the fixture DB.
         string root = Path.GetDirectoryName(fx.DbPath)!;
@@ -125,7 +125,7 @@ public sealed class WorkspaceToolTests : IDisposable
             registry,
             crossWorkspaceScan ?? ((_, _, _) => throw new InvalidOperationException("cross-workspace scan was not expected")),
             acquireLock ?? (millerDir => SingleWriterLock.TryAcquire(millerDir)),
-            readLatestRevision ?? ((_, _) => 0),
+            readLatestRevision ?? (_ => 0),
             lockBusyWait: TimeSpan.Zero,
             lockBusyPollInterval: TimeSpan.FromMilliseconds(1),
             sleep: _ => { },
@@ -154,7 +154,7 @@ public sealed class WorkspaceToolTests : IDisposable
             JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, JulieDbFixture.DefaultRows, workspaceId: workspaceId,
             revisions: workspaceId is null
                 ? null
-                : new[] { new JulieDbFixture.RevisionRow(revision, workspaceId) });
+                : new[] { new JulieDbFixture.RevisionRow(revision) });
 
     // A fake leader: publish recording ops so the indexer reports Scanned for refresh/full.
     private sealed class RecordingScanOps : IExtractOps
@@ -180,8 +180,8 @@ public sealed class WorkspaceToolTests : IDisposable
         }
     }
 
-    // workspaceId is retained for caller readability/registry setup; the nested v1 report carries no
-    // workspace_id (the echo cross-check in WorkspaceTool goes inert until E3 removes it in Phase 4).
+    // workspaceId is retained only for caller readability/registry setup; the nested v1 report carries no
+    // workspace_id and WorkspaceTool no longer cross-checks one (E3 removed the echo check).
     private static ExtractReport Report(string root, string dbPath, string workspaceId, long revision) =>
         new(
             ReportSchemaVersion: 1, Status: "ok", Operation: "scan", Mode: "incremental", Input: null,

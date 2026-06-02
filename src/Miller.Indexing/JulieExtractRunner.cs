@@ -377,6 +377,14 @@ public sealed class JulieExtractRunner
                 standardError: stderr.ToString().TrimEnd('\n', '\r'));
         }
 
+        // The timed WaitForExit(int) overload returns as soon as the process exits but does NOT wait for the
+        // async output handlers (BeginOutputReadLine/BeginErrorReadLine) to flush their final buffers — so the
+        // StringBuilders can still be empty/partial here. The parameterless WaitForExit() blocks until the
+        // redirected streams are fully drained (documented .NET requirement when mixing the timed overload with
+        // async reads). Without it, ParseReport sees an empty stdout and throws "no JSON tokens" even though the
+        // child wrote a complete report. The process has already exited, so this returns promptly.
+        process.WaitForExit();
+
         ExtractReport report = Interpret(
             process.ExitCode, stdout.ToString().TrimEnd('\n', '\r'), stderr.ToString().TrimEnd('\n', '\r'));
 

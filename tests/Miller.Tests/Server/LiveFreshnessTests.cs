@@ -62,7 +62,7 @@ public sealed class LiveFreshnessTests
             string workspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot);
 
             using var reader = new FreshnessReader(db);
-            long initialRevision = reader.LatestRevision(workspaceId);
+            long initialRevision = reader.LatestRevision();
             Assert.True(initialRevision > 0, "scan should establish a revision cursor");
 
             var holder = new IndexHolder(
@@ -85,7 +85,7 @@ public sealed class LiveFreshnessTests
             core.Enqueue(new WatchEvent(alphaFile, WatchEventKind.Modified));
             core.DrainAndProcess(headChanged: false); // real `extract update` subprocess
 
-            long afterModify = reader.LatestRevision(workspaceId);
+            long afterModify = reader.LatestRevision();
             Assert.True(afterModify > initialRevision, "a real content change must bump the revision");
 
             // the freshness poll rebuilds + swaps; search through the holder now sees the new symbol.
@@ -94,7 +94,7 @@ public sealed class LiveFreshnessTests
             Assert.Contains("Zigglethorpe", searchTool.Search("Zigglethorpe"));
 
             // a second poll at the same revision is a no-op (no churn while the writer is idle).
-            Assert.False(FreshnessPoller.PollOnce(holder, reader.LatestRevision(workspaceId), rebuilder.Rebuild));
+            Assert.False(FreshnessPoller.PollOnce(holder, reader.LatestRevision(), rebuilder.Rebuild));
 
             // --- DELETE beta.cs: route the delete event, then converge; its symbol disappears ---
             Assert.Contains("Vortle", searchTool.Search("Vortle")); // present before delete
@@ -102,7 +102,7 @@ public sealed class LiveFreshnessTests
             core.Enqueue(new WatchEvent(betaFile, WatchEventKind.Deleted));
             core.DrainAndProcess(headChanged: false); // real `extract delete` subprocess
 
-            long afterDelete = reader.LatestRevision(workspaceId);
+            long afterDelete = reader.LatestRevision();
             Assert.True(afterDelete > afterModify, "a delete must bump the revision");
             Assert.True(FreshnessPoller.PollOnce(holder, afterDelete, rebuilder.Rebuild));
             Assert.Equal("No results.", searchTool.Search("Vortle").Trim());
@@ -116,7 +116,7 @@ public sealed class LiveFreshnessTests
             File.WriteAllText(Path.Combine(repo, ".git", "HEAD"), "ref: refs/heads/feature\n");
             core.DrainAndProcess(headChanged: true); // real `extract scan` reconcile
 
-            long afterScan = reader.LatestRevision(workspaceId);
+            long afterScan = reader.LatestRevision();
             Assert.True(afterScan >= afterDelete, "the scan reconcile should not regress the revision");
             Assert.True(FreshnessPoller.PollOnce(holder, afterScan, rebuilder.Rebuild) || afterScan == afterDelete);
             // Force a rebuild even if the revision happened not to bump (e.g. scan no-op), so we read latest state.

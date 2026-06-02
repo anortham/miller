@@ -34,4 +34,17 @@ public sealed class WorkspaceIdTests
 
         Assert.Equal("My-Repo-1-a0efc97f7ea3", display);
     }
+
+    [Fact]
+    public void FromCanonicalRoot_IsPureFunctionOfRoot_NotDerivedFromAnyArtifact()
+    {
+        // v1 julie-extract stores artifact_id + root_path in artifact_metadata; it does NOT echo a
+        // workspace_id. Miller's workspace_id is its OWN registry identity, derived solely from the
+        // canonical root, never read back from a julie DB. Same root in, same id out, every time.
+        const string root = "/abs/work/repo";
+        string a = WorkspaceId.FromCanonicalRoot(root);
+        string b = WorkspaceId.FromCanonicalRoot(root);
+        Assert.Equal(a, b);
+        Assert.Equal("a0efc97f7ea34ca9673db9e8a54459b869b3de0f386f8140de8177c6b947a311", a);
+    }
 }

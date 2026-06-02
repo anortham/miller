@@ -32,10 +32,6 @@ public sealed record ExtractReport(
     /// <summary>artifact.hash_algorithm; null when the artifact block is absent (a failed op).</summary>
     [JsonIgnore] public string? HashAlgorithm => Artifact?.HashAlgorithm;
 
-    // Transitional: v1 reports carry no workspace_id; the echo cross-checks in WorkspaceTool/CrossWorkspaceRefreshService
-    // go inert (null can never mismatch) until E3/E4 remove them (Phase 4).
-    [JsonIgnore] public string? WorkspaceId => null;
-
     [JsonIgnore] public ulong FilesScanned => ToU(Counts?.FilesScanned);
     [JsonIgnore] public ulong FilesUpdated => ToU(Counts?.FilesChanged);   // v1 calls it files_changed
     [JsonIgnore] public ulong FilesDeleted => ToU(Counts?.FilesDeleted);

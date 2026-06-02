@@ -382,19 +382,10 @@ public sealed class WorkspaceTool
         // force:false — a prime is a from-current scan (julie creates the DB on the first scan of a fresh root,
         // or delta-reconciles an existing one); --force is reserved for the live workspace's `full` rebuild.
         ExtractReport report = _scanForOpen(canonicalRoot, dbPath, false);
-        if (report.WorkspaceId is { } reportedWorkspaceId
-            && !string.Equals(reportedWorkspaceId, stableWorkspaceId, StringComparison.Ordinal))
-        {
-            _registry.UpsertSeen(stableWorkspaceId, displayId, canonicalRoot, dbPath, WorkspaceRegistryState.Error);
-            _registry.MarkError(
-                stableWorkspaceId,
-                $"open scan returned workspace_id '{reportedWorkspaceId}', expected stable id '{stableWorkspaceId}'.");
-            string note =
-                $"cannot register '{canonicalRoot}': scan returned workspace_id '{reportedWorkspaceId}', " +
-                $"expected stable id '{stableWorkspaceId}'.";
-            return (Note(note, json), 0, TelemetryOutcome.Empty);
-        }
 
+        // v1 has no echoed workspace_id to cross-check: julie-extract self-rejects a DB built for a different
+        // root (exit 3 RootMismatch, design §4.1), so a wrong-DB prime fails the scan above and surfaces through
+        // the outer catch. The id we register is Miller's own stable id for canonicalRoot.
         long revision = report.Revision
             ?? IndexBootstrapService.ReadLatestRevisionOrZero(dbPath, stableWorkspaceId);
         _registry.UpsertSeen(stableWorkspaceId, displayId, canonicalRoot, dbPath, WorkspaceRegistryState.Ready);

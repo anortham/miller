@@ -48,7 +48,7 @@ public sealed class FreshnessServicePollNowTests
     {
         using var fx = JulieDbFixture.Create(
             JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, JulieDbFixture.DefaultRows, workspaceId: Ws,
-            revisions: new[] { new JulieDbFixture.RevisionRow(5, Ws) });
+            revisions: new[] { new JulieDbFixture.RevisionRow(5) });
         var holder = HolderAt(fx, builtRevision: 1); // the writer has moved to 5, the held index is at 1
         var service = NewServiceOverDb(fx.DbPath, Ws, holder);
 
@@ -64,7 +64,7 @@ public sealed class FreshnessServicePollNowTests
     {
         using var fx = JulieDbFixture.Create(
             JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, JulieDbFixture.DefaultRows, workspaceId: Ws,
-            revisions: new[] { new JulieDbFixture.RevisionRow(4, Ws) });
+            revisions: new[] { new JulieDbFixture.RevisionRow(4) });
         var holder = HolderAt(fx, builtRevision: 4); // already current
         var service = NewServiceOverDb(fx.DbPath, Ws, holder);
         var beforeIndex = holder.Current;
@@ -83,7 +83,7 @@ public sealed class FreshnessServicePollNowTests
         // reader/rebuilder from the workspace and still converge — never throw into the tool.
         using var fx = JulieDbFixture.Create(
             JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, JulieDbFixture.DefaultRows, workspaceId: Ws,
-            revisions: new[] { new JulieDbFixture.RevisionRow(9, Ws) });
+            revisions: new[] { new JulieDbFixture.RevisionRow(9) });
         var holder = HolderAt(fx, builtRevision: 2);
         var service = NewServiceOverDb(fx.DbPath, Ws, holder);
 
@@ -103,7 +103,7 @@ public sealed class FreshnessServicePollNowTests
         // gate (RunUnderPollGateForTest) and assert a concurrent disposal cannot complete until the gate releases.
         using var fx = JulieDbFixture.Create(
             JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, JulieDbFixture.DefaultRows, workspaceId: Ws,
-            revisions: new[] { new JulieDbFixture.RevisionRow(1, Ws) });
+            revisions: new[] { new JulieDbFixture.RevisionRow(1) });
         var holder = HolderAt(fx, builtRevision: 1);
         var service = NewServiceOverDb(fx.DbPath, Ws, holder);
         service.InitReaderForTest();
@@ -149,8 +149,8 @@ public sealed class FreshnessServicePollNowTests
     [Fact]
     public void PollNow_NoWorkspaceId_ReturnsNotSwapped()
     {
-        // No workspace_id => no canonical_revisions cursor to poll (a never-scanned/static extract). PollNow must
-        // honestly report not-swapped at the held revision rather than fabricate a convergence.
+        // No workspace_id => no revision cursor to poll (a never-scanned/static extract). PollNow must honestly
+        // report not-swapped at the held revision rather than fabricate a convergence.
         using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, JulieDbFixture.DefaultRows); // no workspaceId, no revisions
         var holder = HolderAt(fx, builtRevision: 3);
         var service = NewServiceOverDb(fx.DbPath, workspaceId: null, holder);

@@ -148,7 +148,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
                 throw new InvalidOperationException("scan should not run while the lock is busy");
             },
             acquireLock: _ => null,
-            readLatestRevision: (_, _) => 7,
+            readLatestRevision: _ => 7,
             clock: clock);
 
         WorkspaceRefreshResult result = service.Refresh("target-ws");
@@ -178,7 +178,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
                 throw new InvalidOperationException("scan should not run while the lock is busy");
             },
             acquireLock: _ => null,
-            readLatestRevision: (_, _) => throw new FileNotFoundException("index db missing"),
+            readLatestRevision: _ => throw new FileNotFoundException("index db missing"),
             clock: clock);
 
         WorkspaceRefreshResult result = service.Refresh("target-ws");
@@ -210,7 +210,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
                 throw new InvalidOperationException("scan should not run while the lock is busy");
             },
             acquireLock: _ => null,
-            readLatestRevision: (_, _) => ++pollCount < 2 ? 7 : 8,
+            readLatestRevision: _ => ++pollCount < 2 ? 7 : 8,
             clock: clock);
 
         WorkspaceRefreshResult result = service.Refresh("target-ws");
@@ -296,7 +296,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         WorkspaceRegistry registry,
         Func<string, string, bool, ExtractReport> scan,
         Func<string, IDisposable?> acquireLock,
-        Func<string, string, long>? readLatestRevision = null,
+        Func<string, long>? readLatestRevision = null,
         FakeClock? clock = null)
     {
         clock ??= new FakeClock();
@@ -304,7 +304,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
             registry,
             scan,
             acquireLock,
-            readLatestRevision ?? ((_, _) => 0),
+            readLatestRevision ?? (_ => 0),
             lockBusyWait: TimeSpan.FromMilliseconds(250),
             lockBusyPollInterval: TimeSpan.FromMilliseconds(100),
             sleep: clock.Sleep,
@@ -318,8 +318,8 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         return root;
     }
 
-    // workspaceId is retained for caller readability/registry setup; the nested v1 report carries no
-    // workspace_id (the echo cross-check in CrossWorkspaceRefreshService goes inert until E4 removes it in Phase 4).
+    // workspaceId is retained only for caller readability/registry setup; the nested v1 report carries no
+    // workspace_id and CrossWorkspaceRefreshService no longer cross-checks one (E4 removed the echo check).
     private static ExtractReport Report(string root, string dbPath, string workspaceId, long revision) =>
         new(
             ReportSchemaVersion: 1, Status: "ok", Operation: "scan", Mode: "incremental", Input: null,

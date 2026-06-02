@@ -9,11 +9,11 @@ using Xunit;
 namespace Miller.Tests.Server;
 
 /// <summary>
-/// Pins the M6 freshness gate (m6-design Components/3, impl-order step 6): SHA256 the indexed snapshot
-/// (<c>ReadIndexedFileText</c>) against the current disk text and run it through
-/// <see cref="Miller.Core.Freshness.StalenessCheck"/>. Indexed==disk → Fresh; differ → Stale; missing indexed
-/// content → Stale (can't verify) unless <c>allow_stale</c>. Driven against the synthesized
-/// <see cref="JulieDbFixture.CreateForEdit"/> (no julie-server binary) — fast suite.
+/// Pins the M6 freshness gate (m6-design Components/3, impl-order step 6): normalize julie's v1
+/// <c>files.content_hash</c> (<c>blake3:&lt;hex&gt;</c>) and compare it to the BLAKE3 of the current disk bytes
+/// through <see cref="Miller.Core.Freshness.StalenessCheck"/>. Stored==disk → Fresh; differ → Stale; missing
+/// hash / wrong hash_algorithm → Stale (can't verify) unless <c>allow_stale</c>. v1 stores no snapshot text, so
+/// the verdict is the hash compare alone. Driven against <see cref="JulieDbFixture.CreateForEdit"/> — fast suite.
 /// </summary>
 public sealed class FreshnessGateTests
 {
@@ -23,7 +23,7 @@ public sealed class FreshnessGateTests
         using var fx = JulieDbFixture.CreateForEdit();
         using var workspace = FreshWorkspace();
         string diskPath = WriteFile(workspace, "orders/OrderService.cs", Encoding.UTF8.GetBytes(JulieDbFixture.OrderServiceContent));
-        SetFileHash(fx.DbPath, "orders/OrderService.cs", ContentHasher.Blake3FileHex(diskPath));
+        SetFileHash(fx.DbPath, "orders/OrderService.cs", "blake3:" + ContentHasher.Blake3FileHex(diskPath));
 
         var result = FreshnessGate.Check(
             fx.DbPath,
@@ -36,11 +36,30 @@ public sealed class FreshnessGateTests
     }
 
     [Fact]
+    public void Check_StoredHashHasBlake3Prefix_StillFreshAgainstByteIdenticalFile()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        using var workspace = FreshWorkspace();
+        string diskPath = WriteFile(workspace, "orders/OrderService.cs",
+            Encoding.UTF8.GetBytes(JulieDbFixture.OrderServiceContent));
+        // julie v1 stores files.content_hash as "blake3:<hex>". The gate must normalize before comparing to the
+        // bare-hex disk hash, else a byte-identical file would read Stale.
+        SetFileHash(fx.DbPath, "orders/OrderService.cs",
+            "blake3:" + ContentHasher.Blake3FileHex(diskPath));
+
+        var result = FreshnessGate.Check(fx.DbPath, "orders/OrderService.cs", diskPath,
+            JulieDbFixture.OrderServiceContent);
+
+        Assert.Equal(FreshnessResult.Fresh, result.Result);
+        Assert.True(result.IndexedContentFound);
+    }
+
+    [Fact]
     public void Check_ChangedBytes_IsStale()
     {
         using var fx = JulieDbFixture.CreateForEdit();
         using var workspace = FreshWorkspace();
-        SetFileHash(fx.DbPath, "orders/OrderService.cs", ContentHasher.Blake3Hex(Encoding.UTF8.GetBytes(JulieDbFixture.OrderServiceContent)));
+        SetFileHash(fx.DbPath, "orders/OrderService.cs", "blake3:" + ContentHasher.Blake3Hex(Encoding.UTF8.GetBytes(JulieDbFixture.OrderServiceContent)));
         string mutated = JulieDbFixture.OrderServiceContent.Replace("Total", "Sum", StringComparison.Ordinal);
         string diskPath = WriteFile(workspace, "orders/OrderService.cs", Encoding.UTF8.GetBytes(mutated));
 
@@ -60,7 +79,7 @@ public sealed class FreshnessGateTests
             0xEF, 0xBB, 0xBF,
             .. Encoding.UTF8.GetBytes(JulieDbFixture.OrderServiceContent),
         ];
-        SetFileHash(fx.DbPath, "orders/OrderService.cs", ContentHasher.Blake3Hex(indexedBytesWithBom));
+        SetFileHash(fx.DbPath, "orders/OrderService.cs", "blake3:" + ContentHasher.Blake3Hex(indexedBytesWithBom));
         string diskPath = WriteFile(workspace, "orders/OrderService.cs", Encoding.UTF8.GetBytes(JulieDbFixture.OrderServiceContent));
 
         var result = FreshnessGate.Check(
@@ -93,7 +112,7 @@ public sealed class FreshnessGateTests
         using var fx = JulieDbFixture.CreateForEdit();
         using var workspace = FreshWorkspace();
         string diskPath = WriteFile(workspace, "orders/OrderService.cs", Encoding.UTF8.GetBytes(JulieDbFixture.OrderServiceContent));
-        SetFileHash(fx.DbPath, "orders/OrderService.cs", ContentHasher.Blake3FileHex(diskPath));
+        SetFileHash(fx.DbPath, "orders/OrderService.cs", "blake3:" + ContentHasher.Blake3FileHex(diskPath));
 
         var found = FreshnessGate.Check(fx.DbPath, "orders/OrderService.cs", diskPath, JulieDbFixture.OrderServiceContent);
         var missing = FreshnessGate.Check(fx.DbPath, "ghost/Unknown.cs", "x");
@@ -108,7 +127,7 @@ public sealed class FreshnessGateTests
         using var fx = JulieDbFixture.CreateForEdit();
         using var workspace = FreshWorkspace();
         string diskPath = WriteFile(workspace, "orders/OrderService.cs", Encoding.UTF8.GetBytes(JulieDbFixture.OrderServiceContent));
-        SetFileHash(fx.DbPath, "orders/OrderService.cs", ContentHasher.Blake3FileHex(diskPath));
+        SetFileHash(fx.DbPath, "orders/OrderService.cs", "blake3:" + ContentHasher.Blake3FileHex(diskPath));
         SetHashAlgorithm(fx.DbPath, null);
 
         var result = FreshnessGate.Check(
@@ -127,7 +146,7 @@ public sealed class FreshnessGateTests
         using var fx = JulieDbFixture.CreateForEdit();
         using var workspace = FreshWorkspace();
         string diskPath = WriteFile(workspace, "orders/OrderService.cs", Encoding.UTF8.GetBytes(JulieDbFixture.OrderServiceContent));
-        SetFileHash(fx.DbPath, "orders/OrderService.cs", ContentHasher.Blake3FileHex(diskPath));
+        SetFileHash(fx.DbPath, "orders/OrderService.cs", "blake3:" + ContentHasher.Blake3FileHex(diskPath));
         SetHashAlgorithm(fx.DbPath, "sha256");
 
         var result = FreshnessGate.Check(
@@ -185,11 +204,13 @@ public sealed class FreshnessGateTests
         return path;
     }
 
+    // Store the value verbatim into the v1 files.content_hash column. Callers store the "blake3:<hex>" form to
+    // mirror what julie writes — the gate normalizes the prefix before comparing (D5).
     private static void SetFileHash(string dbPath, string relativePath, string hash)
     {
         using var conn = OpenReadWrite(dbPath);
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "UPDATE files SET hash = $hash WHERE path = $path;";
+        cmd.CommandText = "UPDATE files SET content_hash = $hash WHERE path = $path;";
         cmd.Parameters.AddWithValue("$hash", hash);
         cmd.Parameters.AddWithValue("$path", relativePath);
         Assert.Equal(1, cmd.ExecuteNonQuery());
@@ -201,16 +222,16 @@ public sealed class FreshnessGateTests
         if (hashAlgorithm is null)
         {
             using var delete = conn.CreateCommand();
-            delete.CommandText = "DELETE FROM external_extract_metadata WHERE key = 'hash_algorithm';";
+            delete.CommandText = "DELETE FROM artifact_metadata WHERE key = 'hash_algorithm';";
             delete.ExecuteNonQuery();
             return;
         }
 
         using var upsert = conn.CreateCommand();
         upsert.CommandText = """
-            INSERT INTO external_extract_metadata (key, value, updated_at)
-            VALUES ('hash_algorithm', $value, 0)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;
+            INSERT INTO artifact_metadata (key, value)
+            VALUES ('hash_algorithm', $value)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value;
             """;
         upsert.Parameters.AddWithValue("$value", hashAlgorithm);
         upsert.ExecuteNonQuery();

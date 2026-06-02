@@ -11,17 +11,13 @@ namespace Miller.Tests.Indexing;
 /// <c>julie-extractors/crates/julie-extract-artifact/src/schema.rs</c>, so the reader is exercised against the
 /// real v1 column set, NULL discipline, and self-FK that a live extract produces.
 ///
-/// <para>Phase-3 deviations from the strict v1 schema (called out where they apply):
-/// (a) <c>files.last_revision_id</c> is a plain column with NO FK — the revision tables (extraction_revisions)
-/// are a Phase-4 migration; (b) a TRANSITIONAL <c>files.content</c> column is kept so the OLD
-/// <c>ExtractReader.ReadBody</c> can slice bodies until Phase 5 moves body reads to disk; (c) the OLD M3
-/// freshness tables (<c>canonical_revisions</c>/<c>revision_file_changes</c>) are kept untouched so the OLD
-/// FreshnessReader stays green through Phase 3 (Phase 4 flips them to extraction_revisions); (d) the OLD
-/// freshness-hash surface — a TRANSITIONAL <c>files.hash</c> (raw blake3 hex, NO domain prefix) and the OLD
-/// <c>external_extract_metadata</c> table carrying <c>hash_algorithm</c> — is kept so the Subsystem-D
-/// <c>ExtractFileHashReader</c>/<c>FreshnessGate</c> path stays coherent end-to-end through Phase 3. The WHOLE
-/// freshness subsystem (hash reader + gate domain-prefix handling + cursor) migrates together in Phase 4; this
-/// fixture flips <c>files.hash</c>→<c>content_hash</c> and the metadata table then, NOT piecemeal here.</para>
+/// <para>Remaining deviations from the strict v1 schema (called out where they apply):
+/// (a) <c>files.last_revision_id</c> is a plain column with NO FK to <c>extraction_revisions</c> (the synthetic
+/// DB relaxes the FK so a <c>files</c> row can be seeded with no revision); (b) a TRANSITIONAL
+/// <c>files.content</c> column is kept so the OLD <c>ExtractReader.ReadBody</c> can slice bodies until Phase 5
+/// moves body reads to disk. The freshness subsystem is now fully v1: the cursor reads
+/// <c>extraction_revisions</c>/<c>revision_file_changes</c>, the file hash reads <c>files.content_hash</c>
+/// (<c>blake3:</c>-prefixed), and <c>hash_algorithm</c> lives only in <c>artifact_metadata</c> (Phase 4).</para>
 ///
 /// Disposable: deletes the temp directory (and -wal/-shm sidecars) on <see cref="Dispose"/>.
 /// </summary>
@@ -156,29 +152,24 @@ internal sealed class JulieDbFixture : IDisposable
         string Kind);
 
     /// <summary>
-    /// A row as written into the OLD <c>canonical_revisions</c> table (M3 freshness cursor, Phase-3
-    /// transitional — the OLD FreshnessReader still reads this; Phase 4 flips to extraction_revisions).
-    /// <see cref="Revision"/> is the PK the FreshnessReader takes MAX of per workspace; <see cref="Kind"/> is
-    /// <c>fresh|incremental</c> (CHECK-constrained).
+    /// A row as written into the v1 <c>extraction_revisions</c> table (the freshness cursor; schema.rs:28-41).
+    /// <see cref="Revision"/> maps to the <c>revision_id</c> PK the FreshnessReader takes MAX of (one DB = one
+    /// root, so there is no <c>workspace_id</c>); <see cref="Kind"/> maps to the <c>mode</c> column and defaults
+    /// to <c>full</c> (a scan-produced revision is a full extraction). The other NOT-NULL columns are supplied by
+    /// the INSERT from <see cref="MillerExtractContract"/> so the synthetic row is a faithful v1 shape.
     /// </summary>
-    internal sealed record RevisionRow(long Revision, string WorkspaceId, string Kind = "incremental")
+    internal sealed record RevisionRow(long Revision, string Kind = "full")
     {
         public long CreatedAt { get; init; }
     }
 
     /// <summary>
-    /// A row as written into the OLD <c>revision_file_changes</c> table (M3 changed-file delta, Phase-3
-    /// transitional). <see cref="ChangeKind"/> is <c>added|modified|deleted</c> (CHECK-constrained).
+    /// A row as written into the v1 <c>revision_file_changes</c> table (the changed-file delta; schema.rs:43-50).
+    /// v1 has no <c>workspace_id</c> and no CHECK on <c>change_kind</c>. <see cref="Path"/> maps to the v1
+    /// <c>path</c> column; <see cref="ChangeKind"/> is one of <c>inserted|updated|deleted|unsupported</c>. The
+    /// NOT-NULL <c>file_id</c> PK component is DERIVED (via the shared <see cref="FileId"/> helper), not a field.
     /// </summary>
-    internal sealed record RevisionFileChangeRow(
-        long Revision,
-        string WorkspaceId,
-        string FilePath,
-        string ChangeKind)
-    {
-        public string? OldHash { get; init; }
-        public string? NewHash { get; init; }
-    }
+    internal sealed record RevisionFileChangeRow(long Revision, string Path, string ChangeKind);
 
     /// <summary>
     /// Build a fixture with the given schema/contract version values and the supplied symbol rows.
@@ -218,9 +209,9 @@ internal sealed class JulieDbFixture : IDisposable
         using (var conn = new SqliteConnection(csb.ToString()))
         {
             conn.Open();
-            // Match julie: WAL. FK enforcement is left OFF here so the Phase-3 transitional
-            // files.last_revision_id (no extraction_revisions table) and the synthetic position-nullable
-            // columns can be seeded freely; the real artifact enforces FKs, but Miller only READS.
+            // Match julie: WAL. FK enforcement is left OFF here so the FK-free files.last_revision_id and the
+            // synthetic position-nullable columns can be seeded freely; the real artifact enforces FKs, but
+            // Miller only READS.
             Exec(conn, "PRAGMA journal_mode=WAL;");
             Exec(conn, "PRAGMA foreign_keys=OFF;");
 
@@ -229,11 +220,9 @@ internal sealed class JulieDbFixture : IDisposable
             Exec(conn, IdentifiersDdl);
             // The relationships table is always created so a SymbolGraphReader can open against any fixture.
             Exec(conn, RelationshipsDdl);
-            // The OLD M3 freshness tables (Phase-3 transitional) so the OLD FreshnessReader can open.
-            Exec(conn, CanonicalRevisionsDdl);
+            // The v1 freshness tables (extraction_revisions/revision_file_changes) so the FreshnessReader can open.
+            Exec(conn, ExtractionRevisionsDdl);
             Exec(conn, RevisionFileChangesDdl);
-            // The OLD freshness-hash metadata table (Phase-3 transitional) so ExtractFileHashReader can open.
-            Exec(conn, ExternalExtractMetadataDdl);
             // The M4 bridge tables are always created (empty by default) so the SqliteBridgeReader — on the single
             // production RepositoryIndexLoader.Load path (D9) — can open against ANY fixture.
             Exec(conn, TypeArgumentUsagesDdl);
@@ -256,19 +245,17 @@ internal sealed class JulieDbFixture : IDisposable
             {
                 string content = fileContent is not null && fileContent.TryGetValue(path, out var c) ? c : "";
                 byte[] bytes = System.Text.Encoding.UTF8.GetBytes(content);
-                string rawHex = ContentHasher.Blake3Hex(bytes);
-                string contentHash = "blake3:" + rawHex;            // v1 content_hash: domain-prefixed
+                string contentHash = "blake3:" + ContentHasher.Blake3Hex(bytes); // v1 content_hash: domain-prefixed
                 using var fcmd = conn.CreateCommand();
                 fcmd.CommandText =
                     "INSERT INTO files (file_id, path, language, content_hash, content_bytes, line_count, " +
-                    "indexed_at, last_revision_id, status, metadata_json, content, hash) " +
-                    "VALUES ($fid, $p, 'csharp', $chash, $bytes, 0, '1970-01-01T00:00:00Z', 0, 'indexed', NULL, $content, $hash);";
+                    "indexed_at, last_revision_id, status, metadata_json, content) " +
+                    "VALUES ($fid, $p, 'csharp', $chash, $bytes, 0, '1970-01-01T00:00:00Z', 0, 'indexed', NULL, $content);";
                 fcmd.Parameters.AddWithValue("$fid", FileId(path));
                 fcmd.Parameters.AddWithValue("$p", path);
                 fcmd.Parameters.AddWithValue("$chash", contentHash);
                 fcmd.Parameters.AddWithValue("$bytes", bytes.Length);
                 fcmd.Parameters.AddWithValue("$content", content);
-                fcmd.Parameters.AddWithValue("$hash", rawHex);      // transitional OLD files.hash: raw hex (Phase-4 reader still reads this)
                 fcmd.ExecuteNonQuery();
             }
 
@@ -354,41 +341,50 @@ internal sealed class JulieDbFixture : IDisposable
                 }
             }
 
-            // canonical_revisions rows (Phase-3 transitional M3 freshness cursor). revision is an explicit PK.
+            // extraction_revisions rows (v1 freshness cursor). revision_id is an explicit (non-autoincrement) PK;
+            // the NOT-NULL columns v1 requires are supplied from the pinned contract constants for fidelity.
             if (revisions is not null)
             {
                 foreach (var rev in revisions)
                 {
+                    string ts = rev.CreatedAt == 0
+                        ? "1970-01-01T00:00:00Z"
+                        : rev.CreatedAt.ToString(CultureInfo.InvariantCulture);
                     using var cmd = conn.CreateCommand();
                     cmd.CommandText =
-                        "INSERT INTO canonical_revisions " +
-                        "(revision, workspace_id, kind, cleaned_file_count, file_count, symbol_count, " +
-                        "relationship_count, identifier_count, type_count, created_at) " +
-                        "VALUES ($rev, $ws, $kind, 0, 0, 0, 0, 0, 0, $created);";
+                        "INSERT INTO extraction_revisions " +
+                        "(revision_id, parent_revision_id, operation, mode, started_at, completed_at, " +
+                        "binary_version, extract_contract_version, sqlite_schema_version, input_root, counts_json) " +
+                        "VALUES ($rev, NULL, 'scan', $mode, $started, $completed, $bin, $contract, $schema, NULL, '{}');";
                     cmd.Parameters.AddWithValue("$rev", rev.Revision);
-                    cmd.Parameters.AddWithValue("$ws", rev.WorkspaceId);
-                    cmd.Parameters.AddWithValue("$kind", rev.Kind);
-                    cmd.Parameters.AddWithValue("$created", rev.CreatedAt);
+                    cmd.Parameters.AddWithValue("$mode", rev.Kind);
+                    cmd.Parameters.AddWithValue("$started", ts);
+                    cmd.Parameters.AddWithValue("$completed", ts);
+                    cmd.Parameters.AddWithValue("$bin", MillerExtractContract.PinnedJulieExtractVersion);
+                    cmd.Parameters.AddWithValue(
+                        "$contract",
+                        MillerExtractContract.ExpectedExtractContractVersion.ToString(CultureInfo.InvariantCulture));
+                    cmd.Parameters.AddWithValue(
+                        "$schema",
+                        MillerExtractContract.ExpectedSchemaVersion.ToString(CultureInfo.InvariantCulture));
                     cmd.ExecuteNonQuery();
                 }
             }
 
-            // revision_file_changes rows (Phase-3 transitional M3 changed-file delta).
+            // revision_file_changes rows (v1 changed-file delta). file_id is DERIVED from the path (the shared
+            // FileId helper); v1 has no workspace_id / old_hash / new_hash and no CHECK on change_kind.
             if (fileChanges is not null)
             {
                 foreach (var fc in fileChanges)
                 {
                     using var cmd = conn.CreateCommand();
                     cmd.CommandText =
-                        "INSERT INTO revision_file_changes " +
-                        "(revision, workspace_id, file_path, change_kind, old_hash, new_hash) " +
-                        "VALUES ($rev, $ws, $fp, $ck, $oh, $nh);";
+                        "INSERT INTO revision_file_changes (revision_id, file_id, path, change_kind) " +
+                        "VALUES ($rev, $fid, $p, $ck);";
                     cmd.Parameters.AddWithValue("$rev", fc.Revision);
-                    cmd.Parameters.AddWithValue("$ws", fc.WorkspaceId);
-                    cmd.Parameters.AddWithValue("$fp", fc.FilePath);
+                    cmd.Parameters.AddWithValue("$fid", FileId(fc.Path));
+                    cmd.Parameters.AddWithValue("$p", fc.Path);
                     cmd.Parameters.AddWithValue("$ck", fc.ChangeKind);
-                    cmd.Parameters.AddWithValue("$oh", (object?)fc.OldHash ?? DBNull.Value);
-                    cmd.Parameters.AddWithValue("$nh", (object?)fc.NewHash ?? DBNull.Value);
                     cmd.ExecuteNonQuery();
                 }
             }
@@ -428,18 +424,6 @@ internal sealed class JulieDbFixture : IDisposable
 
                 if (hashAlgorithm is not null)
                     Meta("hash_algorithm", hashAlgorithm);
-            }
-
-            // OLD freshness-hash metadata (Phase-3 transitional, independent of artifact_metadata): the Subsystem-D
-            // ExtractFileHashReader.ReadHashAlgorithm reads external_extract_metadata.hash_algorithm until Phase 4
-            // moves it onto artifact_metadata. Mirrors the same hashAlgorithm param so a null omits the row (and the
-            // OLD reader returns null), matching the v1 hash_algorithm key's presence.
-            if (hashAlgorithm is not null)
-            {
-                using var cmd = conn.CreateCommand();
-                cmd.CommandText = "INSERT INTO external_extract_metadata (key, value, updated_at) VALUES ('hash_algorithm', $v, 0);";
-                cmd.Parameters.AddWithValue("$v", hashAlgorithm);
-                cmd.ExecuteNonQuery();
             }
         }
 
@@ -736,9 +720,9 @@ internal sealed class JulieDbFixture : IDisposable
     }
 
     // --- v1 DDL transcribed from julie-extractors crates/julie-extract-artifact/src/schema.rs (SQLITE_SCHEMA_VERSION = 1) ---
-    // Phase-3 deviations: files.last_revision_id has NO FK (extraction_revisions is Phase 4); files keeps a
-    // transitional `content` column (Phase 5 drops it); symbol/identifier position columns are nullable here
-    // (the synthetic DB relaxes julie's NOT NULL so the existing NULL-discipline tests keep coverage).
+    // Remaining deviations: files.last_revision_id has NO FK (so a files row can be seeded with no revision);
+    // files keeps a transitional `content` column (Phase 5 drops it); symbol/identifier position columns are
+    // nullable here (the synthetic DB relaxes julie's NOT NULL so the existing NULL-discipline tests keep coverage).
 
     private const string FilesDdl = """
         CREATE TABLE IF NOT EXISTS files (
@@ -752,8 +736,7 @@ internal sealed class JulieDbFixture : IDisposable
             last_revision_id INTEGER NOT NULL,
             status TEXT NOT NULL,
             metadata_json TEXT,
-            content TEXT,
-            hash TEXT
+            content TEXT
         );
         """;
 
@@ -994,45 +977,33 @@ internal sealed class JulieDbFixture : IDisposable
         );
         """;
 
-    // --- OLD M3 freshness DDL (Phase-3 transitional — the OLD FreshnessReader reads canonical_revisions until
-    //     Phase 4 flips it to extraction_revisions; kept verbatim so FreshnessReaderTests stay green). ---
+    // --- v1 freshness DDL (schema.rs:28-50). extraction_revisions has no workspace_id (one DB = one root) and
+    //     revision_id is an explicit PRIMARY KEY (NOT autoincrement); revision_file_changes has no workspace_id
+    //     and no CHECK on change_kind (Miller is the only guard — see FreshnessReader.ParseChangeKind). ---
 
-    private const string CanonicalRevisionsDdl = """
-        CREATE TABLE IF NOT EXISTS canonical_revisions (
-            revision INTEGER PRIMARY KEY AUTOINCREMENT,
-            workspace_id TEXT NOT NULL,
-            kind TEXT NOT NULL CHECK(kind IN ('fresh', 'incremental')),
-            cleaned_file_count INTEGER NOT NULL DEFAULT 0,
-            file_count INTEGER NOT NULL DEFAULT 0,
-            symbol_count INTEGER NOT NULL DEFAULT 0,
-            relationship_count INTEGER NOT NULL DEFAULT 0,
-            identifier_count INTEGER NOT NULL DEFAULT 0,
-            type_count INTEGER NOT NULL DEFAULT 0,
-            created_at INTEGER NOT NULL
+    private const string ExtractionRevisionsDdl = """
+        CREATE TABLE IF NOT EXISTS extraction_revisions (
+            revision_id INTEGER PRIMARY KEY,
+            parent_revision_id INTEGER,
+            operation TEXT NOT NULL,
+            mode TEXT,
+            started_at TEXT NOT NULL,
+            completed_at TEXT NOT NULL,
+            binary_version TEXT NOT NULL,
+            extract_contract_version TEXT NOT NULL,
+            sqlite_schema_version TEXT NOT NULL,
+            input_root TEXT,
+            counts_json TEXT NOT NULL
         );
         """;
 
     private const string RevisionFileChangesDdl = """
         CREATE TABLE IF NOT EXISTS revision_file_changes (
-            revision INTEGER NOT NULL,
-            workspace_id TEXT NOT NULL,
-            file_path TEXT NOT NULL,
-            change_kind TEXT NOT NULL CHECK(change_kind IN ('added', 'modified', 'deleted')),
-            old_hash TEXT,
-            new_hash TEXT,
-            PRIMARY KEY (revision, workspace_id, file_path)
-        );
-        """;
-
-    // --- OLD freshness-hash metadata (Phase-3 transitional). The Subsystem-D ExtractFileHashReader.ReadHashAlgorithm
-    //     still reads external_extract_metadata.hash_algorithm; Phase 4 moves it to artifact_metadata.hash_algorithm
-    //     (which the gate already reads) and drops this table. Kept so the OLD freshness path stays green. ---
-
-    private const string ExternalExtractMetadataDdl = """
-        CREATE TABLE IF NOT EXISTS external_extract_metadata (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL,
-            updated_at INTEGER NOT NULL
+            revision_id INTEGER NOT NULL,
+            file_id TEXT NOT NULL,
+            path TEXT NOT NULL,
+            change_kind TEXT NOT NULL,
+            PRIMARY KEY (revision_id, file_id)
         );
         """;
 }

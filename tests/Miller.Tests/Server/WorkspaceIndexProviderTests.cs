@@ -497,6 +497,6 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             workspaceId: workspaceId,
             revisions: new[]
             {
-                new JulieDbFixture.RevisionRow(revision, workspaceId, "fresh"),
+                new JulieDbFixture.RevisionRow(revision, "fresh"),
             });
 }

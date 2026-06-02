@@ -18,8 +18,8 @@ namespace Miller.Server.Hosting;
 /// <para><b>One in-flight subprocess.</b> A drain holds the lock for the whole batch, so a second tick cannot
 /// interleave a concurrent <c>extract</c> — the operations run strictly one at a time, in routed order.</para>
 ///
-/// <para><b>Failure isolation (decision-10).</b> A single op throwing (a flock timeout, a data-loss guard, a
-/// transient parser failure) is logged and the batch continues; the prior index is kept and the failed file
+/// <para><b>Failure isolation (decision-10).</b> A single op throwing (a lock timeout, a data-loss guard, a
+/// recoverable parser failure) is logged and the batch continues; the prior index is kept and the failed file
 /// is reconciled on the next scan. One bad file never wipes the queue or aborts sibling updates.</para>
 /// </summary>
 public sealed class IndexerCore
@@ -112,12 +112,12 @@ public sealed class IndexerCore
         }
     }
 
-    // julie's exit-1 error codes that are EXPECTED/transient (decision-10): the empty-re-parse data-loss guard
-    // (a previously-populated file that re-parsed empty — julie refuses to wipe it) and the cross-process flock
-    // timeout (another writer held the lock). Both leave the prior index intact and self-heal on the next scan,
-    // so they are an INFO-level "retry later", never an Error/Warning that implies something is broken.
-    private static readonly HashSet<string> TransientErrorCodes =
-        new(StringComparer.Ordinal) { "data_loss_guard", "flock_timeout" };
+    // v1 emits a per-diagnostic `recoverable` flag; that is the primary keep-prior signal. The data-loss guard
+    // is emitted recoverable:false by julie (commands.rs), yet its semantics ARE keep-prior (an empty re-parse
+    // self-heals on the next scan), so it is carved in explicitly until julie marks it recoverable. lock_timeout
+    // (v1 ReportCode::LockTimeout, formerly flock_timeout) rides julie's recoverable flag, so it needs no carve-in.
+    private static readonly HashSet<string> KeepPriorCodes =
+        new(StringComparer.Ordinal) { "data_loss_guard" };
 
     // Run one op, isolating any failure so a single bad file never aborts the rest of the batch (decision-10).
     private void ExecuteIsolated(ExtractOp op)
@@ -141,20 +141,22 @@ public sealed class IndexerCore
         }
         catch (JulieExtractFailedException ex)
         {
-            // Outcome-aware handling (decision-10): inspect the structured error codes the failed report
-            // carried. A transient/expected code (data-loss guard, flock timeout) is a recoverable "keep the
-            // prior index, retry later" at INFO; everything else (usage, outside-root, operator errors, or a
-            // failure with NO structured code) is abnormal and must surface LOUDLY at Error. In all cases the
-            // prior index is kept and the batch continues — the next scan reconciles the failed file.
-            // M8 §D3: source codes + julie's raw stderr tail from the pure helper (the codes wording is
-            // behavior-preserving; the stderr tail is the missing piece Exception.ToString() drops).
+            // Outcome-aware handling (decision-10): v1 stamps each diagnostic with a `recoverable` flag — the
+            // primary keep-prior signal. A failure is recoverable if ANY diagnostic is recoverable OR carries a
+            // keep-prior code (data_loss_guard, which v1 emits recoverable:false yet self-heals). A recoverable
+            // failure is logged at INFO ("keep the prior index, retry later"); everything else (usage, outside-
+            // root, operator errors, or a failure with NO structured code) is abnormal and surfaces LOUDLY at
+            // Error. In all cases the prior index is kept and the batch continues — the next scan reconciles.
+            // M8 §D3: source codes + julie's raw stderr tail from the pure helper (the stderr tail is the missing
+            // piece Exception.ToString() drops).
             var described = ExtractErrorLog.Describe(ex);
-            bool isTransient = ex.Errors.Count > 0 && ex.Errors.Any(e => TransientErrorCodes.Contains(e.Code));
+            bool isRecoverable = ex.Errors.Count > 0
+                && ex.Errors.Any(e => e.Recoverable || KeepPriorCodes.Contains(e.Code));
 
-            if (isTransient)
+            if (isRecoverable)
             {
                 _logger?.LogInformation(ex,
-                    "extract op {Op} hit a transient/expected failure ({Codes}); keeping the prior index and " +
+                    "extract op {Op} hit a recoverable/expected failure ({Codes}); keeping the prior index and " +
                     "retrying on the next scan. julie stderr: {ExtractStderrTail}",
                     Describe(op), described.Codes, described.StderrTail);
             }

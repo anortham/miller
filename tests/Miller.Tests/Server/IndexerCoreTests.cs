@@ -229,24 +229,30 @@ public sealed class IndexerCoreTests
 
     // ---- finding-6: outcome-aware error handling on JulieExtractFailedException (decision-10) ----
 
-    private static JulieExtractFailedException Failed(params string[] codes)
+    private static JulieExtractFailedException Failed(params (string code, bool recoverable)[] diags)
     {
-        var errors = codes
-            .Select(c => new ReportDiagnostic(Code: c, Message: $"{c} happened", Path: "/repo/x.cs",
-                RootRelativePath: null, Recoverable: false))
+        var errors = diags
+            .Select(d => new ReportDiagnostic(
+                Code: d.code, Message: $"{d.code} happened", Path: "/repo/x.cs",
+                RootRelativePath: "x.cs", Recoverable: d.recoverable))
             .ToArray();
-        return new JulieExtractFailedException($"exit 1: {string.Join(",", codes)}", errors, standardError: "");
+        return new JulieExtractFailedException(
+            $"exit 1: {string.Join(",", diags.Select(d => d.code))}", errors, standardError: "");
     }
 
+    private static JulieExtractFailedException FailedNoDiagnostics() =>
+        new("exit 1: (no diagnostics)", System.Array.Empty<ReportDiagnostic>(), standardError: "");
+
     [Theory]
-    [InlineData("data_loss_guard")]
-    [InlineData("flock_timeout")]
-    public void ExecuteIsolated_TransientFailure_LogsAtInformation_AndContinuesTheBatch(string transientCode)
+    [InlineData("lock_timeout", true)]          // julie marks a lock timeout recoverable
+    [InlineData("data_loss_guard", false)]      // v1 emits recoverable:false, but Miller keeps-prior on it
+    public void ExecuteIsolated_RecoverableFailure_LogsAtInformation_AndContinuesTheBatch(
+        string code, bool recoverable)
     {
-        // decision-10: a data-loss guard (empty re-parse) or a flock timeout is EXPECTED/transient — keep the
-        // prior index, log at Info (not Error/Warning), and the next scan reconciles. Must not abort siblings.
+        // decision-10: a recoverable diagnostic (a lock timeout) or the keep-prior data-loss guard is EXPECTED —
+        // keep the prior index, log at Info (not Error/Warning), and the next scan reconciles. No sibling abort.
         var ops = new RecordingOps();
-        ops.ThrowExceptionOnUpdatePath["/repo/bad.cs"] = Failed(transientCode);
+        ops.ThrowExceptionOnUpdatePath["/repo/bad.cs"] = Failed((code, recoverable));
         var logger = new RecordingLogger();
         var core = NewCore(ops, _ => true, logger);
         core.Queue.Enqueue(new WatchEvent("/repo/good1.cs", WatchEventKind.Modified));
@@ -259,24 +265,24 @@ public sealed class IndexerCoreTests
         Assert.Equal(
             new[] { "update:/repo/good1.cs", "update:/repo/bad.cs", "update:/repo/good2.cs" }, ops.Calls);
         // Exactly ONE failure entry (the two successes now also log a per-file outcome at Debug, M8 §D4), at
-        // Information, carrying the failed exception and naming the transient code.
+        // Information, carrying the failed exception and naming the recoverable code.
         var entry = Assert.Single(logger.Entries, e => e.Exception is JulieExtractFailedException);
         Assert.Equal(LogLevel.Information, entry.Level);
-        Assert.Contains(transientCode, entry.Message, StringComparison.Ordinal);
+        Assert.Contains(code, entry.Message, StringComparison.Ordinal);
         // The successful siblings' Debug outcome lines are the only OTHER entries — no stray failure/warn lines.
         Assert.Equal(2, logger.Entries.Count(e => e.Level == LogLevel.Debug));
     }
 
     [Theory]
-    [InlineData("outside_root")]
-    [InlineData("usage")]
-    [InlineData("not_extract_root")]
-    public void ExecuteIsolated_AbnormalFailure_LogsAtError(string abnormalCode)
+    [InlineData("file_outside_root")]   // real v1 wire code (ReportCode::FileOutsideRoot, snake_case); recoverable:false, NOT keep-prior
+    [InlineData("usage_error")]
+    [InlineData("root_mismatch")]
+    public void ExecuteIsolated_NonRecoverableFailure_LogsAtError(string abnormalCode)
     {
-        // decision-10: usage / outside-root / operator errors must surface loudly (Error level), NOT be hidden
-        // as a transient retry-later.
+        // decision-10: usage / outside-root / root-mismatch operator errors must surface loudly (Error level),
+        // NOT be hidden as a recoverable retry-later.
         var ops = new RecordingOps();
-        ops.ThrowExceptionOnUpdatePath["/repo/bad.cs"] = Failed(abnormalCode);
+        ops.ThrowExceptionOnUpdatePath["/repo/bad.cs"] = Failed((abnormalCode, recoverable: false));
         var logger = new RecordingLogger();
         var core = NewCore(ops, _ => true, logger);
         core.Queue.Enqueue(new WatchEvent("/repo/bad.cs", WatchEventKind.Modified));
@@ -291,10 +297,10 @@ public sealed class IndexerCoreTests
     [Fact]
     public void ExecuteIsolated_FailedWithNoStructuredErrors_LogsAtError_NotInformation()
     {
-        // A failed report with an empty errors array is NOT a known transient case → treat it as abnormal
+        // A failed report with an empty errors array is NOT a known recoverable case → treat it as abnormal
         // (surface loudly). Silently downgrading the no-code case to Info would hide real failures.
         var ops = new RecordingOps();
-        ops.ThrowExceptionOnUpdatePath["/repo/bad.cs"] = Failed();
+        ops.ThrowExceptionOnUpdatePath["/repo/bad.cs"] = FailedNoDiagnostics();
         var logger = new RecordingLogger();
         var core = NewCore(ops, _ => true, logger);
         core.Queue.Enqueue(new WatchEvent("/repo/bad.cs", WatchEventKind.Modified));
@@ -306,12 +312,13 @@ public sealed class IndexerCoreTests
     }
 
     [Fact]
-    public void ExecuteIsolated_MixedTransientAndAbnormalCodes_TreatedAsTransient_IfAnyCodeIsTransient()
+    public void ExecuteIsolated_MixedRecoverableAndAbnormal_TreatedAsRecoverable_IfAnyIsRecoverable()
     {
-        // If the failure carries a transient code alongside others, the recoverable path wins (keep-prior,
+        // If the failure carries a recoverable diagnostic alongside others, the recoverable path wins (keep-prior,
         // retry later) — the next scan reconciles regardless, and we should not escalate a recoverable case.
         var ops = new RecordingOps();
-        ops.ThrowExceptionOnUpdatePath["/repo/bad.cs"] = Failed("flock_timeout", "some_other_code");
+        ops.ThrowExceptionOnUpdatePath["/repo/bad.cs"] =
+            Failed(("lock_timeout", recoverable: true), ("some_other_code", recoverable: false));
         var logger = new RecordingLogger();
         var core = NewCore(ops, _ => true, logger);
         core.Queue.Enqueue(new WatchEvent("/repo/bad.cs", WatchEventKind.Modified));
@@ -348,9 +355,9 @@ public sealed class IndexerCoreTests
         // The abnormal (Error) branch must now render BOTH the structured codes AND julie's raw stderr (which
         // Exception.ToString() drops) — the daemon-debugging payoff of D3.
         var failed = new JulieExtractFailedException(
-            "exit 1: outside_root",
-            new[] { new ReportDiagnostic("outside_root", "the path is outside the extract root", "/repo/x.cs",
-                RootRelativePath: null, Recoverable: false) },
+            "exit 1: file_outside_root",
+            new[] { new ReportDiagnostic("file_outside_root", "the path is outside the extract root", "/repo/x.cs",
+                RootRelativePath: "x.cs", Recoverable: false) },
             standardError: "ERROR julie::extract: path '/repo/x.cs' is outside root '/repo'");
         var ops = new RecordingOps();
         ops.ThrowExceptionOnUpdatePath["/repo/bad.cs"] = failed;
@@ -362,19 +369,19 @@ public sealed class IndexerCoreTests
 
         var entry = Assert.Single(logger.Entries);
         Assert.Equal(LogLevel.Error, entry.Level);
-        Assert.Contains("outside_root", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("file_outside_root", entry.Message, StringComparison.Ordinal);
         Assert.Contains("is outside root", entry.Message, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void ExecuteIsolated_TransientFailure_LogsCodes_AndJuliesStderrTail_AtInformation()
+    public void ExecuteIsolated_RecoverableFailure_LogsCodes_AndJuliesStderrTail_AtInformation()
     {
-        // The transient (Info) branch also surfaces the stderr tail so a "retry later" still shows julie's words.
+        // The recoverable (Info) branch also surfaces the stderr tail so a "retry later" still shows julie's words.
         var failed = new JulieExtractFailedException(
-            "exit 1: flock_timeout",
-            new[] { new ReportDiagnostic("flock_timeout", "another writer held the lock", "/repo/x.cs",
-                RootRelativePath: null, Recoverable: false) },
-            standardError: "WARN julie::flock: timed out waiting for the write lock after 5s");
+            "exit 1: lock_timeout",
+            new[] { new ReportDiagnostic("lock_timeout", "another writer held the lock", "/repo/x.cs",
+                RootRelativePath: "x.cs", Recoverable: true) },
+            standardError: "WARN julie::lock: timed out waiting for the write lock after 5s");
         var ops = new RecordingOps();
         ops.ThrowExceptionOnUpdatePath["/repo/bad.cs"] = failed;
         var logger = new RecordingLogger();
@@ -385,7 +392,7 @@ public sealed class IndexerCoreTests
 
         var entry = Assert.Single(logger.Entries);
         Assert.Equal(LogLevel.Information, entry.Level);
-        Assert.Contains("flock_timeout", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("lock_timeout", entry.Message, StringComparison.Ordinal);
         Assert.Contains("timed out waiting for the write lock", entry.Message, StringComparison.Ordinal);
     }
 
