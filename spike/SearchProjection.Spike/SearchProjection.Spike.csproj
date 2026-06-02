@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.8" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Miller.Core/Miller.Core.csproj" />
+    <ProjectReference Include="../../src/Miller.Indexing/Miller.Indexing.csproj" />
+  </ItemGroup>
+
+</Project>

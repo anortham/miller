@@ -127,7 +127,7 @@ public sealed class MillerExtractContractTests
         string pinsPath = Path.Combine(Path.GetTempPath(), $"miller-julie-pins-{Guid.NewGuid():N}.json");
         File.WriteAllText(pinsPath, """
             {
-              "version": "2.0.0",
+              "version": "2.0.1",
               "urlTemplate": "https://example.test/{VER}/{asset}",
               "archiveInnerPathTemplate": "dist/{triple}/julie-extract{exe}",
               "assets": {}
@@ -192,16 +192,16 @@ public sealed class MillerExtractContractTests
             string archiveBinary = Path.Combine(binaryDir, "julie-extract");
             WriteExecutable(archiveBinary, """
                 #!/usr/bin/env bash
-                echo "julie-extract 2.0.0"
+                echo "julie-extract 2.0.1"
                 """);
 
-            string archivePath = Path.Combine(tempRoot, "julie-extract-v2.0.0-x86_64-unknown-linux-gnu.tar.gz");
+            string archivePath = Path.Combine(tempRoot, "julie-extract-v2.0.1-x86_64-unknown-linux-gnu.tar.gz");
             RunProcess("tar", ["-czf", archivePath, "-C", archiveRoot, "."]);
             string sha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(archivePath))).ToLowerInvariant();
 
             File.WriteAllText(Path.Combine(scriptsDir, "julie-pins.json"), $$"""
                 {
-                  "version": "2.0.0",
+                  "version": "2.0.1",
                   "binary": "julie-extract",
                   "archiveInnerPathTemplate": "dist/{triple}/julie-extract{exe}",
                   "urlTemplate": "https://example.test/{VER}/{asset}",
@@ -253,7 +253,7 @@ public sealed class MillerExtractContractTests
             string installed = Path.Combine(tempRoot, ".tools", "julie-extract");
             Assert.True(File.Exists(installed), $"expected restored binary at {installed}");
             ProcessResult version = RunProcess(installed, ["--version"]);
-            Assert.Contains("julie-extract 2.0.0", version.Stdout, StringComparison.Ordinal);
+            Assert.Contains("julie-extract 2.0.1", version.Stdout, StringComparison.Ordinal);
         }
         finally
         {
