@@ -6,8 +6,9 @@ namespace Miller.Tests.Indexing;
 /// <summary>
 /// Pins the M2 on-demand read layer (<see cref="ExtractReader"/>): per-inspect detail (doc/visibility/body
 /// spans), name-based references (identifiers — <c>target_symbol_id</c> is always NULL), and the body slice
-/// out of <c>files.content</c> with graceful NULL-span degradation. Driven against the inspect fixture; opens
-/// the DB Mode=ReadOnly like the M1 reader. Fast suite (no julie-server binary).
+/// re-sourced from DISK under the fixture's <c>WorkspaceRoot</c> with the hard content_hash freshness invariant
+/// (a drifted file is never sliced) and graceful NULL-span degradation. Driven against the inspect fixture;
+/// opens the DB Mode=ReadOnly like the M1 reader. Fast suite (no julie-server binary).
 /// </summary>
 public sealed class ExtractReaderTests
 {
@@ -90,33 +91,64 @@ public sealed class ExtractReaderTests
         Assert.Empty(ExtractReader.ReadReferences(fx.DbPath, "NoSuchIdentifier"));
     }
 
-    // ---- ReadBody ----
+    // ---- ReadBody (disk re-source with the hard content_hash freshness invariant) ----
 
     [Fact]
-    public void ReadBody_SlicesTheByteRangeOutOfFileContent()
+    public void ReadBody_FreshFile_SlicesByteRangeFromDisk()
     {
         using var fx = JulieDbFixture.CreateForInspect();
         var detail = ExtractReader.ReadDetail(fx.DbPath, JulieDbFixture.GetUserId)!;
 
         string? body = ExtractReader.ReadBody(
-            fx.DbPath, "auth/UserService.cs", detail.BodyStartByte, detail.BodyEndByte,
-            detail.BodyStartLine, detail.BodyEndLine);
+            fx.DbPath, fx.WorkspaceRoot, "auth/UserService.cs",
+            detail.BodyStartByte, detail.BodyEndByte, detail.BodyStartLine, detail.BodyEndLine);
 
         Assert.NotNull(body);
-        // The slice must start at the method signature and end at its closing brace.
         Assert.StartsWith("public User GetUser(int id)", body);
-        Assert.EndsWith("}", body!.TrimEnd());
-        Assert.Contains("return _repo.Find(id);", body);
+        Assert.Contains("return _repo.Find(id);", body!);
+        Assert.EndsWith("}", body.TrimEnd());
     }
 
     [Fact]
-    public void ReadBody_NullByteSpans_FallsBackToLineSlice()
+    public void ReadBody_DriftedFile_ReturnsNull_NeverSlicesStaleBytes()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        var detail = ExtractReader.ReadDetail(fx.DbPath, JulieDbFixture.GetUserId)!;
+
+        // Mutate the on-disk file so its blake3 no longer matches the stored content_hash.
+        string abs = Path.Combine(fx.WorkspaceRoot, "auth/UserService.cs");
+        File.WriteAllText(abs, "// completely different file\nclass X {}\n");
+
+        string? body = ExtractReader.ReadBody(
+            fx.DbPath, fx.WorkspaceRoot, "auth/UserService.cs",
+            detail.BodyStartByte, detail.BodyEndByte, detail.BodyStartLine, detail.BodyEndLine);
+
+        // Hard invariant (design §7): the stored byte offsets address the INDEXED content; slicing them out of
+        // the drifted file would return the WRONG bytes. The reader must refuse and signal staleness.
+        Assert.Null(body);
+    }
+
+    [Fact]
+    public void ReadBody_MissingDiskFile_ReturnsNull()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        File.Delete(Path.Combine(fx.WorkspaceRoot, "auth/UserService.cs"));
+
+        string? body = ExtractReader.ReadBody(
+            fx.DbPath, fx.WorkspaceRoot, "auth/UserService.cs",
+            startByte: 0, endByte: 10, startLine: 1, endLine: 1);
+
+        Assert.Null(body);
+    }
+
+    [Fact]
+    public void ReadBody_NullByteSpans_FallsBackToLineSlice_FromDisk()
     {
         using var fx = JulieDbFixture.CreateForInspect();
 
-        // No byte spans, but line range 2..4 → line-based fallback slice of the content.
+        // No byte spans, but line range 2..4 → line-based fallback slice of the FRESH on-disk content.
         string? body = ExtractReader.ReadBody(
-            fx.DbPath, "auth/UserService.cs",
+            fx.DbPath, fx.WorkspaceRoot, "auth/UserService.cs",
             startByte: null, endByte: null, startLine: 2, endLine: 4);
 
         Assert.NotNull(body);
@@ -130,20 +162,8 @@ public sealed class ExtractReaderTests
         using var fx = JulieDbFixture.CreateForInspect();
 
         string? body = ExtractReader.ReadBody(
-            fx.DbPath, "auth/UserService.cs",
+            fx.DbPath, fx.WorkspaceRoot, "auth/UserService.cs",
             startByte: null, endByte: null, startLine: null, endLine: null);
-
-        Assert.Null(body);
-    }
-
-    [Fact]
-    public void ReadBody_EmptyFileContent_ReturnsNull()
-    {
-        // The default fixture writes content='' for every file; a byte slice of empty content has nothing.
-        using var fx = JulieDbFixture.CreateDefault();
-
-        string? body = ExtractReader.ReadBody(
-            fx.DbPath, "auth/UserService.cs", startByte: 0, endByte: 10, startLine: 1, endLine: 1);
 
         Assert.Null(body);
     }

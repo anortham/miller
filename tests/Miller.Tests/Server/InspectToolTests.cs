@@ -37,7 +37,7 @@ public sealed class InspectToolTests
         using var fx = JulieDbFixture.CreateForInspect();
         var (index, resolver) = Build(fx);
 
-        string output = InspectTool.Run(index, resolver, fx.DbPath,
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
             "auth/UserService.cs", depth: "summary", kind: null, scope: null, limit: 50, json: false, out _);
 
         Assert.Contains("UserService", output);
@@ -51,7 +51,7 @@ public sealed class InspectToolTests
         using var fx = JulieDbFixture.CreateForInspect();
         var (index, resolver) = Build(fx);
 
-        string output = InspectTool.Run(index, resolver, fx.DbPath,
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
             "auth/UserService.cs", depth: "summary", kind: "method", scope: null, limit: 50, json: false, out _);
 
         // Only the methods (GetUser, DeleteUser); the class UserService is filtered out.
@@ -66,7 +66,7 @@ public sealed class InspectToolTests
         using var fx = JulieDbFixture.CreateForInspect();
         var (index, resolver) = Build(fx);
 
-        string output = InspectTool.Run(index, resolver, fx.DbPath,
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
             "auth/UserService.cs", depth: "summary", kind: null, scope: null, limit: 1, json: false, out int count);
 
         Assert.Equal(1, count);
@@ -79,7 +79,7 @@ public sealed class InspectToolTests
         using var fx = JulieDbFixture.CreateForInspect();
         var (index, resolver) = Build(fx);
 
-        string output = InspectTool.Run(index, resolver, fx.DbPath,
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
             "does/not/exist.cs", depth: "summary", kind: null, scope: null, limit: 50, json: false, out int count);
 
         Assert.Equal(0, count);
@@ -94,7 +94,7 @@ public sealed class InspectToolTests
         using var fx = JulieDbFixture.CreateForInspect();
         var (index, resolver) = Build(fx);
 
-        string output = InspectTool.Run(index, resolver, fx.DbPath,
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
             "GetUser", depth: "summary", kind: null, scope: null, limit: 50, json: false, out _);
 
         Assert.Contains("GetUser", output);
@@ -112,7 +112,7 @@ public sealed class InspectToolTests
         var (index, resolver) = Build(fx);
 
         // Inspect the parent class at full depth: children = GetUser + DeleteUser.
-        string output = InspectTool.Run(index, resolver, fx.DbPath,
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
             "UserService", depth: "full", kind: null, scope: null, limit: 50, json: false, out _);
 
         Assert.Contains("GetUser", output);   // child
@@ -125,7 +125,7 @@ public sealed class InspectToolTests
         using var fx = JulieDbFixture.CreateForInspect();
         var (index, resolver) = Build(fx);
 
-        string output = InspectTool.Run(index, resolver, fx.DbPath,
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
             "GetUser", depth: "full", kind: null, scope: null, limit: 50, json: false, out _);
 
         // refs: GetUser is referenced in Controller.cs:4 and Repo.cs:9.
@@ -138,13 +138,42 @@ public sealed class InspectToolTests
     }
 
     [Fact]
+    public void Run_FullDepth_FreshFile_RendersBody()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        var (index, resolver) = Build(fx);
+
+        // The fixture materializes auth/UserService.cs under WorkspaceRoot; a fresh disk read matches the
+        // stored content_hash, so full-depth body renders from disk.
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "GetUser", depth: "full", kind: null, scope: null, limit: 50, json: false, out _);
+
+        Assert.Contains("return _repo.Find(id);", output);
+    }
+
+    [Fact]
+    public void Run_FullDepth_DriftedFile_DegradesBodyGracefully()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        // Mutate the on-disk file so its blake3 no longer matches the stored content_hash.
+        File.WriteAllText(Path.Combine(fx.WorkspaceRoot, "auth/UserService.cs"), "changed\n");
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "GetUser", depth: "full", kind: null, scope: null, limit: 50, json: false, out _);
+
+        Assert.Contains("body unavailable", output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("changed", output); // never slices the drifted file
+    }
+
+    [Fact]
     public void Run_SymbolFull_NullBodySpans_DegradesGracefullyWithNote()
     {
         using var fx = JulieDbFixture.CreateForInspect();
         var (index, resolver) = Build(fx);
 
         // DeleteUser has NULL body spans → body section is a note, not a crash.
-        string output = InspectTool.Run(index, resolver, fx.DbPath,
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
             "DeleteUser", depth: "full", kind: null, scope: null, limit: 50, json: false, out _);
 
         Assert.Contains("DeleteUser", output);
@@ -165,7 +194,7 @@ public sealed class InspectToolTests
         });
         var (index, resolver) = Build(fx);
 
-        string output = InspectTool.Run(index, resolver, fx.DbPath,
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
             "Handle", depth: "summary", kind: null, scope: null, limit: 50, json: false, out _);
 
         Assert.Contains("a/First.cs", output);
@@ -179,7 +208,7 @@ public sealed class InspectToolTests
         using var fx = JulieDbFixture.CreateForInspect();
         var (index, resolver) = Build(fx);
 
-        string output = InspectTool.Run(index, resolver, fx.DbPath,
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
             "NoSuchSymbol", depth: "summary", kind: null, scope: null, limit: 50, json: false, out int count);
 
         Assert.Equal(0, count);
@@ -194,7 +223,7 @@ public sealed class InspectToolTests
         using var fx = JulieDbFixture.CreateForInspect();
         var (index, resolver) = Build(fx);
 
-        string output = InspectTool.Run(index, resolver, fx.DbPath,
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
             "GetUser", depth: "full", kind: null, scope: null, limit: 50, json: true, out _);
 
         using var doc = JsonDocument.Parse(output);
@@ -213,7 +242,7 @@ public sealed class InspectToolTests
         using var fx = JulieDbFixture.CreateForInspect();
         var (index, resolver) = Build(fx);
 
-        string output = InspectTool.Run(index, resolver, fx.DbPath,
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
             "auth/UserService.cs", depth: "summary", kind: null, scope: null, limit: 50, json: true, out _);
 
         using var doc = JsonDocument.Parse(output);

@@ -77,14 +77,14 @@ public sealed class LiveSearchInspectTests
             Assert.True(searchCount >= 1);
             Assert.Contains("OrderService", searchOut);
 
-            string inspectSummary = InspectTool.Run(index, resolver, db, "OrderService",
+            string inspectSummary = InspectTool.Run(index, resolver, db, repo, "OrderService",
                 depth: "summary", kind: null, scope: null, limit: 50, json: false, out _);
             Assert.Contains("OrderService", inspectSummary);
 
-            string inspectFull = InspectTool.Run(index, resolver, db, "Process",
+            string inspectFull = InspectTool.Run(index, resolver, db, repo, "Process",
                 depth: "full", kind: null, scope: null, limit: 50, json: false, out _);
             Assert.Contains("Process", inspectFull);
-            // full depth on Process should surface its body (it calls Validate).
+            // full depth on Process should surface its body re-sourced from disk (it calls Validate).
             Assert.Contains("Validate", inspectFull);
 
             // --- end-to-end through the SDK with the production filter: rows must land per call ---

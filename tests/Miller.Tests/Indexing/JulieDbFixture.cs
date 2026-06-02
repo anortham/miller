@@ -12,12 +12,12 @@ namespace Miller.Tests.Indexing;
 /// real v1 column set, NULL discipline, and self-FK that a live extract produces.
 ///
 /// <para>Remaining deviations from the strict v1 schema (called out where they apply):
-/// (a) <c>files.last_revision_id</c> is a plain column with NO FK to <c>extraction_revisions</c> (the synthetic
-/// DB relaxes the FK so a <c>files</c> row can be seeded with no revision); (b) a TRANSITIONAL
-/// <c>files.content</c> column is kept so the OLD <c>ExtractReader.ReadBody</c> can slice bodies until Phase 5
-/// moves body reads to disk. The freshness subsystem is now fully v1: the cursor reads
-/// <c>extraction_revisions</c>/<c>revision_file_changes</c>, the file hash reads <c>files.content_hash</c>
-/// (<c>blake3:</c>-prefixed), and <c>hash_algorithm</c> lives only in <c>artifact_metadata</c> (Phase 4).</para>
+/// <c>files.last_revision_id</c> is a plain column with NO FK to <c>extraction_revisions</c> (the synthetic
+/// DB relaxes the FK so a <c>files</c> row can be seeded with no revision). The fixture is fully v1: <c>files</c>
+/// is content-free (no <c>content</c> column — body text re-sources from DISK under <see cref="WorkspaceRoot"/>,
+/// Phase 5/D2), the freshness cursor reads <c>extraction_revisions</c>/<c>revision_file_changes</c>, the file
+/// hash reads <c>files.content_hash</c> (<c>blake3:</c>-prefixed), and <c>hash_algorithm</c> lives only in
+/// <c>artifact_metadata</c> (Phase 4).</para>
 ///
 /// Disposable: deletes the temp directory (and -wal/-shm sidecars) on <see cref="Dispose"/>.
 /// </summary>
@@ -49,6 +49,14 @@ internal sealed class JulieDbFixture : IDisposable
 
     /// <summary>Absolute path to the directory containing the DB (the WAL sidecars live here).</summary>
     public string Directory => _dir;
+
+    /// <summary>
+    /// The fixture-owned workspace root: every fixture file's exact UTF-8 bytes are materialized under this
+    /// directory (parent dirs created) so the D2 disk-slice path (<see cref="ExtractReader.ReadBody"/>) can
+    /// re-source body text from disk and verify it against the stored <c>files.content_hash</c>. The on-disk
+    /// bytes are the SAME bytes the stored hash was computed from, so a fresh read matches by construction.
+    /// </summary>
+    public string WorkspaceRoot => _dir;
 
     /// <summary>
     /// The known rows inserted by <see cref="CreateDefault"/>, in INSERT order. Tests assert the reader's
@@ -239,23 +247,30 @@ internal sealed class JulieDbFixture : IDisposable
             Exec(conn, TypeFactsDdl);
             if (createMetadataTable) Exec(conn, MetadataDdl);
 
-            // files rows (v1: file_id PK, path UNIQUE, content_hash/content_bytes; PLUS the transitional `content`).
-            // identifiers also carry path, so union both sources of paths.
+            // files rows (v1: file_id PK, path UNIQUE, content_hash/content_bytes — content-free, no `content`).
+            // identifiers also carry path, so union both sources of paths. The exact bytes hashed into
+            // content_hash are ALSO materialized to disk under _dir (the WorkspaceRoot), so the D2 disk-slice
+            // path reads a file whose blake3 matches the stored content_hash by construction (reconciliation #3).
             foreach (var path in DistinctPaths(rows, identifiers))
             {
                 string content = fileContent is not null && fileContent.TryGetValue(path, out var c) ? c : "";
                 byte[] bytes = System.Text.Encoding.UTF8.GetBytes(content);
                 string contentHash = "blake3:" + ContentHasher.Blake3Hex(bytes); // v1 content_hash: domain-prefixed
+
+                // Materialize the EXACT bytes to disk (parent dirs first) so disk-hash == stored content_hash.
+                string abs = Path.Combine(dir, path);
+                System.IO.Directory.CreateDirectory(Path.GetDirectoryName(abs)!);
+                File.WriteAllBytes(abs, bytes);
+
                 using var fcmd = conn.CreateCommand();
                 fcmd.CommandText =
                     "INSERT INTO files (file_id, path, language, content_hash, content_bytes, line_count, " +
-                    "indexed_at, last_revision_id, status, metadata_json, content) " +
-                    "VALUES ($fid, $p, 'csharp', $chash, $bytes, 0, '1970-01-01T00:00:00Z', 0, 'indexed', NULL, $content);";
+                    "indexed_at, last_revision_id, status, metadata_json) " +
+                    "VALUES ($fid, $p, 'csharp', $chash, $bytes, 0, '1970-01-01T00:00:00Z', 0, 'indexed', NULL);";
                 fcmd.Parameters.AddWithValue("$fid", FileId(path));
                 fcmd.Parameters.AddWithValue("$p", path);
                 fcmd.Parameters.AddWithValue("$chash", contentHash);
                 fcmd.Parameters.AddWithValue("$bytes", bytes.Length);
-                fcmd.Parameters.AddWithValue("$content", content);
                 fcmd.ExecuteNonQuery();
             }
 
@@ -562,8 +577,8 @@ internal sealed class JulieDbFixture : IDisposable
     public const string CountFieldId = "f1e1df1e1df1e1df1e1df1e1df1e1d00";
 
     /// <summary>
-    /// A fixture wired for the M6 edit read-layer tests (<c>ReadEditSpan</c> / <c>ReadIdentifierSites</c> /
-    /// <c>ReadIndexedFileText</c>). <c>OrderService.Total</c> carries the full whole-span + body byte offsets;
+    /// A fixture wired for the M6 edit read-layer tests (<c>ReadEditSpan</c> / <c>ReadIdentifierSites</c>).
+    /// <c>OrderService.Total</c> carries the full whole-span + body byte offsets;
     /// the <c>_count</c> field carries NULL body spans (body/signature ops reject it). The name <c>Total</c>
     /// occurs at four identifier sites across three files: two in OrderService.cs (the method-header name token
     /// and the <c>i.Total</c> property access), one genuine call <c>o.Total()</c> in Invoice.cs, and one in the
@@ -721,8 +736,8 @@ internal sealed class JulieDbFixture : IDisposable
 
     // --- v1 DDL transcribed from julie-extractors crates/julie-extract-artifact/src/schema.rs (SQLITE_SCHEMA_VERSION = 1) ---
     // Remaining deviations: files.last_revision_id has NO FK (so a files row can be seeded with no revision);
-    // files keeps a transitional `content` column (Phase 5 drops it); symbol/identifier position columns are
-    // nullable here (the synthetic DB relaxes julie's NOT NULL so the existing NULL-discipline tests keep coverage).
+    // symbol/identifier position columns are nullable here (the synthetic DB relaxes julie's NOT NULL so the
+    // existing NULL-discipline tests keep coverage). v1 files is content-free — body text re-sources from disk.
 
     private const string FilesDdl = """
         CREATE TABLE IF NOT EXISTS files (
@@ -735,8 +750,7 @@ internal sealed class JulieDbFixture : IDisposable
             indexed_at TEXT NOT NULL,
             last_revision_id INTEGER NOT NULL,
             status TEXT NOT NULL,
-            metadata_json TEXT,
-            content TEXT
+            metadata_json TEXT
         );
         """;
 

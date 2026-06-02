@@ -15,7 +15,8 @@ namespace Miller.Server.Tools;
 /// The <c>inspect</c> tool (M2 §5): view a file or a symbol you can already name (absorbs julie get_symbols +
 /// deep_dive, ~44% of calls). A file path lists the file's symbols; a symbol name shows its definition,
 /// signature and docs; <c>depth=full</c> adds children, name-based references, one-hop callers/callees, and
-/// the body sliced from <c>files.content</c> (with graceful NULL-span degradation). The resolved cross-ref
+/// the body re-sliced from the on-disk file under the workspace root, gated by the content_hash freshness
+/// invariant (a drifted file degrades to a "body unavailable" note, never stale bytes). The resolved cross-ref
 /// graph + bridge are M4, not this. The target is smart-resolved; an ambiguous name returns candidates
 /// (never pick-first), an unknown one a note (never an error).
 /// </summary>
@@ -56,7 +57,7 @@ public sealed class InspectTool
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
             WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
             string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
-            string output = Run(context.Index, context.Resolver, context.IndexDbPath,
+            string output = Run(context.Index, context.Resolver, context.IndexDbPath, context.WorkspaceRoot,
                 target, depth, kind, scope, limit, json, out int count, compactBanner);
 
             if (telemetry is not null)
@@ -87,7 +88,7 @@ public sealed class InspectTool
     /// primary collection rendered (file symbols, candidates, or 1 for a resolved symbol; 0 for not-found).
     /// </summary>
     public static string Run(
-        MillerRepositoryIndex index, SmartTargetResolver resolver, string dbPath,
+        MillerRepositoryIndex index, SmartTargetResolver resolver, string dbPath, string workspaceRoot,
         string target, string depth, string? kind, string? scope, int limit, bool json,
         out int resultCount,
         string? compactBanner = null)
@@ -109,8 +110,8 @@ public sealed class InspectTool
             case TargetResolution.Symbol sym:
                 resultCount = 1;
                 string symbolOutput = json
-                    ? RenderSymbolJson(index, dbPath, sym.Value, full)
-                    : RenderSymbolCompact(index, dbPath, sym.Value, full);
+                    ? RenderSymbolJson(index, dbPath, workspaceRoot, sym.Value, full)
+                    : RenderSymbolCompact(index, dbPath, workspaceRoot, sym.Value, full);
                 return ReadToolWorkspaceRouting.PrefixCompact(symbolOutput, json ? null : compactBanner);
 
             case TargetResolution.Candidates cands:
@@ -180,7 +181,7 @@ public sealed class InspectTool
     // ---------- symbol ----------
 
     private static string RenderSymbolCompact(
-        MillerRepositoryIndex index, string dbPath, IndexedSymbol sym, bool full)
+        MillerRepositoryIndex index, string dbPath, string workspaceRoot, IndexedSymbol sym, bool full)
     {
         var detail = ExtractReader.ReadDetail(dbPath, sym.SymbolId);
         var sb = new StringBuilder();
@@ -236,7 +237,7 @@ public sealed class InspectTool
         sb.Append("\n## body\n");
         string? body = detail is null
             ? null
-            : ExtractReader.ReadBody(dbPath, sym.FilePath,
+            : ExtractReader.ReadBody(dbPath, workspaceRoot, sym.FilePath,
                 detail.BodyStartByte, detail.BodyEndByte, detail.BodyStartLine, detail.BodyEndLine);
         sb.Append(body ?? "(body unavailable — no span recorded)");
 
@@ -244,7 +245,7 @@ public sealed class InspectTool
     }
 
     private static string RenderSymbolJson(
-        MillerRepositoryIndex index, string dbPath, IndexedSymbol sym, bool full)
+        MillerRepositoryIndex index, string dbPath, string workspaceRoot, IndexedSymbol sym, bool full)
     {
         var detail = ExtractReader.ReadDetail(dbPath, sym.SymbolId);
         var buffer = new ArrayBufferWriter<byte>();
@@ -293,7 +294,7 @@ public sealed class InspectTool
 
                 string? body = detail is null
                     ? null
-                    : ExtractReader.ReadBody(dbPath, sym.FilePath,
+                    : ExtractReader.ReadBody(dbPath, workspaceRoot, sym.FilePath,
                         detail.BodyStartByte, detail.BodyEndByte, detail.BodyStartLine, detail.BodyEndLine);
                 if (body is null) w.WriteNull("body");
                 else w.WriteString("body", body);

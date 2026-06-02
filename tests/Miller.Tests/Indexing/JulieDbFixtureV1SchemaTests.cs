@@ -123,11 +123,60 @@ public sealed class JulieDbFixtureV1SchemaTests
         Assert.True(ColumnExists(c, "files", "content_bytes"));
         Assert.False(ColumnExists(c, "files", "hash"),
             "the transitional raw-hex files.hash column is dropped in v1; freshness reads content_hash");
-        // The transitional `content` column is still present (OLD ReadBody reads it until C3/Phase 5); the
-        // "files is content-free" assertion lives in H3's Phase-5 lock test, not here.
+        Assert.False(ColumnExists(c, "files", "content"),
+            "v1 files is content-free (H3/Phase 5); body text re-sources from disk under WorkspaceRoot");
 
         Assert.True(ColumnExists(c, "artifact_metadata", "key"));
         Assert.True(ColumnExists(c, "artifact_metadata", "value"));
+    }
+
+    // ---- H3: v1 files are content-free; body text re-sources from disk under WorkspaceRoot ----
+
+    [Fact]
+    public void Fixture_FilesStoreContentHashPrefixedAndByteCount_NotContent()
+    {
+        using var fx = JulieDbFixture.CreateForInspect(); // writes UserServiceContent
+        using var c = Open(fx.DbPath);
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT content_hash, content_bytes FROM files WHERE path='auth/UserService.cs';";
+        using var r = cmd.ExecuteReader();
+        Assert.True(r.Read());
+        string hash = r.GetString(0);
+        long bytes = r.GetInt64(1);
+
+        Assert.StartsWith("blake3:", hash);
+        var expected = System.Text.Encoding.UTF8.GetBytes(JulieDbFixture.UserServiceContent);
+        Assert.Equal(expected.Length, bytes);
+        Assert.Equal("blake3:" + Miller.Indexing.ContentHasher.Blake3Hex(expected), hash);
+
+        // H3 drops H1's transitional `content` column in Phase 5 — v1 is content-free (D2). (Moved here from
+        // H1's lock test, which keeps `content` through Phases 3-4 for the OLD ReadBody path.)
+        Assert.False(ColumnExists(c, "files", "content"), "v1 files has no content column after H3");
+    }
+
+    [Fact]
+    public void Fixture_MaterializesFilesUnderWorkspaceRoot_MatchingStoredHash()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+
+        // Bytes are on disk under WorkspaceRoot (no test-side write), and their blake3 equals the stored content_hash.
+        foreach (var (rel, content) in new[]
+        {
+            ("orders/OrderService.cs", JulieDbFixture.OrderServiceContent),
+            ("unicode/Café.cs", JulieDbFixture.CafeContent),
+        })
+        {
+            string abs = Path.Combine(fx.WorkspaceRoot, rel);
+            Assert.True(File.Exists(abs), $"{rel} must be materialized under WorkspaceRoot");
+            var bytes = File.ReadAllBytes(abs);
+            Assert.Equal(content, System.Text.Encoding.UTF8.GetString(bytes));
+
+            using var c = Open(fx.DbPath);
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "SELECT content_hash FROM files WHERE path=$p;";
+            cmd.Parameters.AddWithValue("$p", rel);
+            Assert.Equal("blake3:" + Miller.Indexing.ContentHasher.Blake3Hex(bytes), (string)cmd.ExecuteScalar()!);
+        }
     }
 
     [Fact]

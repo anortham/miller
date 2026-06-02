@@ -6,11 +6,10 @@ namespace Miller.Tests.Indexing;
 
 /// <summary>
 /// Pins the M6 edit read-layer extensions on <see cref="ExtractReader"/> (m6-design.md Components/2,
-/// impl-order step 5): <c>ReadEditSpan</c> (the symbol's whole + body byte spans, NULL body preserved),
+/// impl-order step 5): <c>ReadEditSpan</c> (the symbol's whole + body byte spans, NULL body preserved) and
 /// <c>ReadIdentifierSites</c> (every exact per-occurrence byte token for a name, ordered, including homonyms,
-/// UTF-8 byte offsets), and <c>ReadIndexedFileText</c> (the gate's indexed snapshot). Driven against the
-/// synthesized <see cref="JulieDbFixture.CreateForEdit"/>; opens Mode=ReadOnly via the shared
-/// <see cref="SqliteReadOnlyAccess"/>. Fast suite (no julie-server binary).
+/// UTF-8 byte offsets). Driven against the synthesized <see cref="JulieDbFixture.CreateForEdit"/>; opens
+/// Mode=ReadOnly via the shared <see cref="SqliteReadOnlyAccess"/>. Fast suite (no julie-server binary).
 /// </summary>
 public sealed class ExtractReaderEditTests
 {
@@ -137,40 +136,6 @@ public sealed class ExtractReaderEditTests
         Assert.Empty(ExtractReader.ReadIdentifierSites(fx.DbPath, "NoSuchName"));
     }
 
-    // ---- ReadIndexedFileText (the gate's indexed snapshot) ----
-
-    [Fact]
-    public void ReadIndexedFileText_ReturnsTheIndexedFileContentVerbatim()
-    {
-        using var fx = JulieDbFixture.CreateForEdit();
-
-        string? text = ExtractReader.ReadIndexedFileText(fx.DbPath, "orders/OrderService.cs");
-
-        Assert.Equal(JulieDbFixture.OrderServiceContent, text);
-    }
-
-    [Fact]
-    public void ReadIndexedFileText_Utf8FileRoundTripsThroughTheAccentByte()
-    {
-        // The freshness gate SHA256s the indexed text vs disk; a lossy decode of the 'é' would false-positive
-        // staleness. Prove the indexed snapshot comes back byte-identical (its UTF-8 length is preserved).
-        using var fx = JulieDbFixture.CreateForEdit();
-
-        string? text = ExtractReader.ReadIndexedFileText(fx.DbPath, "unicode/Café.cs");
-
-        Assert.Equal(JulieDbFixture.CafeContent, text);
-        Assert.Equal(
-            System.Text.Encoding.UTF8.GetByteCount(JulieDbFixture.CafeContent),
-            System.Text.Encoding.UTF8.GetByteCount(text!));
-    }
-
-    [Fact]
-    public void ReadIndexedFileText_UnknownPath_ReturnsNull()
-    {
-        using var fx = JulieDbFixture.CreateForEdit();
-        Assert.Null(ExtractReader.ReadIndexedFileText(fx.DbPath, "no/such/file.cs"));
-    }
-
     // ---- D4 read discipline: the M6 reads share SqliteReadOnlyAccess's guards ----
 
     [Fact]
@@ -187,14 +152,6 @@ public sealed class ExtractReaderEditTests
         string missing = Path.Combine(
             Path.GetTempPath(), "miller-identsites-missing-" + Guid.NewGuid().ToString("N"), "symbols.db");
         Assert.Throws<FileNotFoundException>(() => ExtractReader.ReadIdentifierSites(missing, "Total"));
-    }
-
-    [Fact]
-    public void ReadIndexedFileText_MissingDbFile_ThrowsFileNotFound()
-    {
-        string missing = Path.Combine(
-            Path.GetTempPath(), "miller-indexedtext-missing-" + Guid.NewGuid().ToString("N"), "symbols.db");
-        Assert.Throws<FileNotFoundException>(() => ExtractReader.ReadIndexedFileText(missing, "any/path.cs"));
     }
 
     // ---- files.content_hash + hash_algorithm (BLAKE3 freshness baseline) ----

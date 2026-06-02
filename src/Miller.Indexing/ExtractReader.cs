@@ -8,8 +8,12 @@ namespace Miller.Indexing;
 /// The M2 on-demand detail reader over a julie extract DB. Where <see cref="SqliteSymbolReader"/> does the
 /// single bulk startup pass that builds the in-memory index, <see cref="ExtractReader"/> answers the
 /// lower-volume per-<c>inspect</c> queries: symbol detail (doc/visibility/body spans), name-based references
-/// (the <c>identifiers</c> table), and the body slice out of <c>files.content</c>. It opens
-/// <c>Mode=ReadOnly</c> like the startup reader, never writes, and parameterizes every query.
+/// (the <c>identifiers</c> table), and the body slice re-sourced from DISK. v1 stores no file content in the
+/// DB (<c>files</c> has only <c>content_hash</c>/<c>content_bytes</c>), so <see cref="ReadBody"/> reads the
+/// on-disk file by the symbol's byte span — but ONLY after verifying the disk file's BLAKE3 still matches the
+/// stored <c>files.content_hash</c> (the hard freshness invariant: a drifted file is never sliced; the caller
+/// gets <c>null</c>). It opens <c>Mode=ReadOnly</c> like the startup reader, never writes, and parameterizes
+/// every query.
 ///
 /// The schema gate already ran at startup (<see cref="SqliteSymbolReader.Read"/>), so these reads do not
 /// re-gate — they just re-open the read-only connection. All offsets follow julie's contract: byte offsets
@@ -207,29 +211,22 @@ public sealed class ExtractReader
     }
 
     /// <summary>
-    /// The full indexed text of <paramref name="filePath"/> from <c>files.content</c> — julie's snapshot of the
-    /// file as of the last extract — or null if the file is absent (or its content column is NULL). This is the
-    /// M6 freshness gate's "indexed side": the gate SHA256s this against the current disk text and refuses a
-    /// stale edit. Returned verbatim (julie stores UTF-8 TEXT; the SQLite driver decodes it losslessly), so the
-    /// accent/multibyte bytes survive the round-trip and the gate does not false-positive on encoding drift.
+    /// Slice a symbol's body text out of the on-disk file. v1 stores no file content in the DB, so the text is
+    /// re-sourced from disk: <paramref name="filePath"/> (a julie-relative path) is resolved against
+    /// <paramref name="workspaceRoot"/>, and BEFORE any slice the disk file's BLAKE3 is compared to the stored
+    /// <c>files.content_hash</c>. On a mismatch — or a missing manifest entry, missing/unreadable file — this
+    /// returns <c>null</c> rather than slicing stale bytes (the design §7 hard invariant: the stored byte offsets
+    /// address the INDEXED content, so slicing a drifted file would return the WRONG bytes). When fresh, prefers
+    /// the absolute UTF-8 byte span [<paramref name="startByte"/>, <paramref name="endByte"/>); if either byte
+    /// offset is NULL, falls back to a 1-based line slice [<paramref name="startLine"/>, <paramref name="endLine"/>].
+    /// Also returns <c>null</c> when no usable span is supplied or the span is degenerate.
     /// </summary>
     /// <exception cref="FileNotFoundException">The DB file does not exist.</exception>
-    public static string? ReadIndexedFileText(string dbPath, string filePath)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
-        return ReadFileContent(dbPath, filePath);
-    }
-
-    /// <summary>
-    /// Slice a symbol's body text out of <c>files.content</c>. Prefers the absolute UTF-8 byte span
-    /// [<paramref name="startByte"/>, <paramref name="endByte"/>); if either byte offset is NULL, falls back
-    /// to a 1-based line slice [<paramref name="startLine"/>, <paramref name="endLine"/>]. Returns null when
-    /// no usable span is supplied, the file/content is absent or empty, or the span is degenerate.
-    /// </summary>
     public static string? ReadBody(
-        string dbPath, string filePath,
+        string dbPath, string workspaceRoot, string filePath,
         int? startByte, int? endByte, int? startLine, int? endLine)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
 
         // No usable span at all → nothing to read (caller renders a "body unavailable" note).
@@ -238,8 +235,13 @@ public sealed class ExtractReader
         if (!hasByteSpan && !hasLineSpan)
             return null;
 
-        string? content = ReadFileContent(dbPath, filePath);
-        if (string.IsNullOrEmpty(content))
+        // Re-source from disk WITH the hard freshness invariant: a drifted (or missing) file yields null, never
+        // a slice of stale bytes.
+        FileContentResult verified = ReadVerifiedFileContent(dbPath, workspaceRoot, filePath);
+        if (verified.Stale || verified.Text is null)
+            return null;
+        string content = verified.Text;
+        if (content.Length == 0)
             return null;
 
         if (hasByteSpan)
@@ -247,7 +249,7 @@ public sealed class ExtractReader
             string? sliced = SliceByBytes(content, startByte!.Value, endByte!.Value);
             if (sliced is not null)
                 return sliced;
-            // A byte span that fell outside the (possibly stale) content degrades to the line slice.
+            // A byte span that fell outside the content degrades to the line slice.
         }
 
         if (hasLineSpan)
@@ -272,14 +274,32 @@ public sealed class ExtractReader
         return value is string s ? s : null;
     }
 
-    private static string? ReadFileContent(string dbPath, string filePath)
+    /// <summary>The verified on-disk file text, or a staleness sentinel telling the caller the file drifted.</summary>
+    internal readonly record struct FileContentResult(string? Text, bool Stale);
+
+    // Re-source the on-disk file for <paramref name="relPath"/> (resolved against <paramref name="workspaceRoot"/>),
+    // returning its UTF-8 text ONLY if the disk bytes' BLAKE3 still matches the stored files.content_hash. On a
+    // missing manifest entry, missing file, or hash mismatch, returns Stale (Text=null) so the caller never
+    // slices drifted bytes (the §7 hard invariant). The hash compare is blake3-only (hash-domain split,
+    // reconciliation #9): NormalizeHash strips a blake3: scheme token ONLY.
+    private static FileContentResult ReadVerifiedFileContent(string dbPath, string workspaceRoot, string relPath)
     {
-        using var connection = Open(dbPath);
-        using var command = connection.CreateCommand();
-        command.CommandText = "SELECT content FROM files WHERE path = $path;";
-        command.Parameters.AddWithValue("$path", filePath);
-        var value = command.ExecuteScalar();
-        return value is string s ? s : null;
+        // D2's ReadFileHash already returns BARE hex (it strips julie's "blake3:" prefix via NormalizeHash).
+        string? storedHash = ExtractFileHashReader.ReadFileHash(dbPath, relPath);
+        if (string.IsNullOrWhiteSpace(storedHash))
+            return new FileContentResult(Text: null, Stale: true); // no manifest entry → not-readable
+
+        string abs = Path.IsPathRooted(relPath) ? relPath : Path.Combine(workspaceRoot, relPath);
+        if (!File.Exists(abs))
+            return new FileContentResult(Text: null, Stale: true);
+
+        byte[] bytes = File.ReadAllBytes(abs);
+        string diskHash = ContentHasher.Blake3Hex(bytes); // bare hex
+        // Idempotent belt-and-suspenders in case a caller ever passes a still-prefixed hash; blake3-only.
+        if (!StringComparer.OrdinalIgnoreCase.Equals(diskHash, ContentHasher.NormalizeHash(storedHash)))
+            return new FileContentResult(Text: null, Stale: true); // HARD INVARIANT: never slice drifted bytes
+
+        return new FileContentResult(Text: Encoding.UTF8.GetString(bytes), Stale: false);
     }
 
     // julie byte offsets are absolute UTF-8 byte indices; C# strings are UTF-16. Encode, slice on bytes,
