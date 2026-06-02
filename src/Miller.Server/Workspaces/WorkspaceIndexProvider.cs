@@ -4,16 +4,18 @@ using Miller.Server.Tools;
 
 namespace Miller.Server.Workspaces;
 
-public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider
+public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider, IWorkspaceSearchProvider
 {
     private readonly IndexHolder _holder;
     private readonly WorkspaceContext _currentWorkspace;
     private readonly WorkspaceRegistry _registry;
     private readonly Func<string, WorkspaceRefreshResult> _refresh;
     private readonly Func<string, MillerRepositoryIndex> _loadIndex;
+    private readonly Func<string, SymbolSearchProjection> _loadSymbolSearch;
     private readonly Func<long, bool?> _currentIndexFresh;
     private readonly object _cacheGate = new();
     private readonly Dictionary<CacheKey, Lazy<CachedIndex>> _cache = new();
+    private readonly Dictionary<CacheKey, Lazy<CachedSymbolSearch>> _symbolSearchCache = new();
 
     public WorkspaceIndexProvider(
         IndexHolder holder,
@@ -26,6 +28,7 @@ public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider
             registry,
             workspaceId => refreshService.Refresh(workspaceId),
             dbPath => RepositoryIndexLoader.Load(dbPath),
+            dbPath => SymbolSearchProjectionLoader.Load(dbPath),
             currentIndexFresh: _ => null)
     {
     }
@@ -36,6 +39,7 @@ public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider
         WorkspaceRegistry registry,
         Func<string, WorkspaceRefreshResult> refresh,
         Func<string, MillerRepositoryIndex> loadIndex,
+        Func<string, SymbolSearchProjection> loadSymbolSearch,
         Func<long, bool?> currentIndexFresh)
     {
         ArgumentNullException.ThrowIfNull(holder);
@@ -43,12 +47,14 @@ public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(refresh);
         ArgumentNullException.ThrowIfNull(loadIndex);
+        ArgumentNullException.ThrowIfNull(loadSymbolSearch);
         ArgumentNullException.ThrowIfNull(currentIndexFresh);
         _holder = holder;
         _currentWorkspace = currentWorkspace;
         _registry = registry;
         _refresh = refresh;
         _loadIndex = loadIndex;
+        _loadSymbolSearch = loadSymbolSearch;
         _currentIndexFresh = currentIndexFresh;
     }
 
@@ -62,6 +68,18 @@ public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider
             return ResolveCurrent();
 
         return ResolveRegistered(workspaceId, ensureFresh);
+    }
+
+    public WorkspaceSymbolSearchContext ResolveSymbolSearch(string? workspaceId, bool ensureFresh)
+    {
+        if (workspaceId is null)
+            return ResolveCurrentSymbolSearch();
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
+        if (string.Equals(workspaceId, _currentWorkspace.WorkspaceId, StringComparison.Ordinal))
+            return ResolveCurrentSymbolSearch();
+
+        return ResolveRegisteredSymbolSearch(workspaceId, ensureFresh);
     }
 
     private WorkspaceReadContext ResolveCurrent()
@@ -81,7 +99,63 @@ public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider
             DisplayId: CurrentDisplayId());
     }
 
+    private WorkspaceSymbolSearchContext ResolveCurrentSymbolSearch()
+    {
+        (MillerRepositoryIndex index, long revision) = _holder.Snapshot();
+        return new WorkspaceSymbolSearchContext(
+            index,
+            _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath,
+            _currentWorkspace.WorkspaceId,
+            _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
+            revision,
+            _currentIndexFresh(revision),
+            "current",
+            WarningText: null,
+            DisplayId: CurrentDisplayId());
+    }
+
     private WorkspaceReadContext ResolveRegistered(string workspaceId, bool ensureFresh)
+    {
+        RegisteredWorkspaceState state = ResolveRegisteredState(workspaceId, ensureFresh);
+        WorkspaceRegistryRow row = state.Row;
+        WorkspaceRefreshResult? refreshResult = state.RefreshResult;
+
+        long revision = row.LastRevision ?? 0;
+        CachedIndex cached = GetOrLoad(row, revision);
+        return new WorkspaceReadContext(
+            cached.Index,
+            cached.Resolver,
+            row.IndexDbPath,
+            row.WorkspaceId,
+            row.CanonicalRoot,
+            revision,
+            WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
+            WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
+            WorkspaceFreshnessView.WarningTextFor(refreshResult),
+            row.DisplayId);
+    }
+
+    private WorkspaceSymbolSearchContext ResolveRegisteredSymbolSearch(string workspaceId, bool ensureFresh)
+    {
+        RegisteredWorkspaceState state = ResolveRegisteredState(workspaceId, ensureFresh);
+        WorkspaceRegistryRow row = state.Row;
+        WorkspaceRefreshResult? refreshResult = state.RefreshResult;
+
+        long revision = row.LastRevision ?? 0;
+        CachedSymbolSearch cached = GetOrLoadSymbolSearch(row, revision);
+        return new WorkspaceSymbolSearchContext(
+            cached.Index,
+            row.IndexDbPath,
+            row.WorkspaceId,
+            row.CanonicalRoot,
+            revision,
+            WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
+            WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
+            WorkspaceFreshnessView.WarningTextFor(refreshResult),
+            row.DisplayId);
+    }
+
+    private RegisteredWorkspaceState ResolveRegisteredState(string workspaceId, bool ensureFresh)
     {
         WorkspaceRegistryRow row = GetRequiredRow(workspaceId);
         VerifyRegisteredRoot(row);
@@ -104,19 +178,7 @@ public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider
             VerifyRegisteredRoot(row);
         }
 
-        long revision = row.LastRevision ?? 0;
-        CachedIndex cached = GetOrLoad(row, revision);
-        return new WorkspaceReadContext(
-            cached.Index,
-            cached.Resolver,
-            row.IndexDbPath,
-            row.WorkspaceId,
-            row.CanonicalRoot,
-            revision,
-            WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
-            WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
-            WorkspaceFreshnessView.WarningTextFor(refreshResult),
-            row.DisplayId);
+        return new RegisteredWorkspaceState(row, refreshResult);
     }
 
     private CachedIndex GetOrLoad(WorkspaceRegistryRow row, long revision)
@@ -135,7 +197,7 @@ public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider
                     },
                     LazyThreadSafetyMode.ExecutionAndPublication);
                 _cache[key] = lazy;
-                EvictOtherEntriesForWorkspaceUnderLock(key);
+                EvictOtherEntriesForWorkspaceUnderLock(_cache, key);
             }
         }
 
@@ -154,14 +216,47 @@ public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider
         }
     }
 
-    private void EvictOtherEntriesForWorkspaceUnderLock(CacheKey keep)
+    private CachedSymbolSearch GetOrLoadSymbolSearch(WorkspaceRegistryRow row, long revision)
     {
-        foreach (CacheKey key in _cache.Keys
+        var key = new CacheKey(row.WorkspaceId, row.IndexDbPath, revision);
+        Lazy<CachedSymbolSearch> lazy;
+        lock (_cacheGate)
+        {
+            if (!_symbolSearchCache.TryGetValue(key, out lazy!))
+            {
+                lazy = new Lazy<CachedSymbolSearch>(
+                    () => new CachedSymbolSearch(_loadSymbolSearch(row.IndexDbPath)),
+                    LazyThreadSafetyMode.ExecutionAndPublication);
+                _symbolSearchCache[key] = lazy;
+                EvictOtherEntriesForWorkspaceUnderLock(_symbolSearchCache, key);
+            }
+        }
+
+        try
+        {
+            return lazy.Value;
+        }
+        catch
+        {
+            lock (_cacheGate)
+            {
+                if (_symbolSearchCache.TryGetValue(key, out Lazy<CachedSymbolSearch>? cachedLazy) &&
+                    ReferenceEquals(cachedLazy, lazy))
+                    _symbolSearchCache.Remove(key);
+            }
+            throw;
+        }
+    }
+
+    private static void EvictOtherEntriesForWorkspaceUnderLock<T>(
+        Dictionary<CacheKey, Lazy<T>> cache, CacheKey keep)
+    {
+        foreach (CacheKey key in cache.Keys
                      .Where(key => string.Equals(key.WorkspaceId, keep.WorkspaceId, StringComparison.Ordinal)
                                    && !key.Equals(keep))
                      .ToArray())
         {
-            _cache.Remove(key);
+            cache.Remove(key);
         }
     }
 
@@ -207,5 +302,9 @@ public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider
 
     private readonly record struct CacheKey(string WorkspaceId, string IndexDbPath, long Revision);
 
+    private sealed record RegisteredWorkspaceState(WorkspaceRegistryRow Row, WorkspaceRefreshResult? RefreshResult);
+
     private sealed record CachedIndex(MillerRepositoryIndex Index, SmartTargetResolver Resolver);
+
+    private sealed record CachedSymbolSearch(SymbolSearchProjection Index);
 }

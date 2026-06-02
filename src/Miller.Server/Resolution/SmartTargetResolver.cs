@@ -19,26 +19,34 @@ namespace Miller.Server.Resolution;
 /// </summary>
 public sealed partial class SmartTargetResolver
 {
-    // The resolver reads the index PER CALL through the holder (M3 step 10), so a freshness Swap behind a live
-    // resolver is observed on the next Resolve without reconstructing it. A fixed-index constructor (used by the
-    // unit tests and any pure-over-one-index caller) wraps the index in a never-swapped holder.
-    private readonly IndexHolder _holder;
+    // Live resolvers read the index PER CALL through a holder-backed delegate (M3 step 10), so a freshness Swap is
+    // observed on the next Resolve without reconstructing the resolver. Projection-specific callers use a fixed
+    // lookup delegate over the symbol projection.
+    private readonly Func<ISymbolLookupIndex> _index;
 
-    private MillerRepositoryIndex Index => _holder.Current;
+    private ISymbolLookupIndex Index => _index();
 
     /// <summary>Resolve against whatever index <paramref name="holder"/> currently holds (live, per call).</summary>
     /// <exception cref="ArgumentNullException"><paramref name="holder"/> is null.</exception>
     public SmartTargetResolver(IndexHolder holder)
     {
         ArgumentNullException.ThrowIfNull(holder);
-        _holder = holder;
+        _index = () => holder.Current;
     }
 
-    /// <summary>Resolve against a fixed index (wrapped in a never-swapped holder). For tests / single-index callers.</summary>
+    /// <summary>Resolve against a fixed repository index. For tests / single-index callers.</summary>
     /// <exception cref="ArgumentNullException"><paramref name="index"/> is null.</exception>
     public SmartTargetResolver(MillerRepositoryIndex index)
-        : this(new IndexHolder(index ?? throw new ArgumentNullException(nameof(index)), builtRevision: 0))
+        : this((ISymbolLookupIndex)(index ?? throw new ArgumentNullException(nameof(index))))
     {
+    }
+
+    /// <summary>Resolve against a fixed lookup projection. For projection-specific read paths.</summary>
+    /// <exception cref="ArgumentNullException"><paramref name="index"/> is null.</exception>
+    public SmartTargetResolver(ISymbolLookupIndex index)
+    {
+        ArgumentNullException.ThrowIfNull(index);
+        _index = () => index;
     }
 
     /// <summary>

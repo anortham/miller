@@ -102,8 +102,9 @@ public sealed class LiveSearchInspectTests
             var services = new ServiceCollection();
             services.AddLogging();
             services.AddSingleton(ledger);
-            services.AddSingleton<IWorkspaceIndexProvider>(
-                new HolderWorkspaceIndexProvider(holder, db, workspaceId, repo));
+            var workspaceProvider = new HolderWorkspaceIndexProvider(holder, db, workspaceId, repo);
+            services.AddSingleton<IWorkspaceIndexProvider>(workspaceProvider);
+            services.AddSingleton<IWorkspaceSearchProvider>(workspaceProvider);
             services.AddSingleton(workspace);
             services
                 .AddMcpServer(o => { o.ServerInfo = new() { Name = "miller-live", Version = "0" }; })

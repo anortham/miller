@@ -11,7 +11,7 @@ namespace Miller.Indexing;
 /// a <see cref="SearchHit"/>'s <see cref="SearchableDocument.DocId"/> resolves back through
 /// <see cref="Resolve"/> to the julie symbol id (the M4 join key) and its containment parent.
 /// </summary>
-public sealed class MillerRepositoryIndex
+public sealed class MillerRepositoryIndex : ISymbolLookupIndex
 {
     private readonly MillerSearchIndex _index;
     private readonly IndexedSymbol[] _byDocId; // DocId == array index by construction (see Build)

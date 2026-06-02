@@ -38,11 +38,11 @@ public enum SearchToolMode
 [McpServerToolType]
 public sealed class SearchTool
 {
-    private readonly IWorkspaceIndexProvider _workspaceProvider;
+    private readonly IWorkspaceSearchProvider _workspaceProvider;
 
-    /// <summary>Construct over the workspace read provider (production / freshness-aware).</summary>
+    /// <summary>Construct over the workspace search provider (production / freshness-aware).</summary>
     /// <exception cref="ArgumentNullException"><paramref name="workspaceProvider"/> is null.</exception>
-    public SearchTool(IWorkspaceIndexProvider workspaceProvider)
+    public SearchTool(IWorkspaceSearchProvider workspaceProvider)
     {
         ArgumentNullException.ThrowIfNull(workspaceProvider);
         _workspaceProvider = workspaceProvider;
@@ -71,7 +71,7 @@ public sealed class SearchTool
             var parsedMode = ParseMode(mode);
             bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
-            WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
+            WorkspaceSymbolSearchContext context = _workspaceProvider.ResolveSymbolSearch(workspace_id, ensureFresh);
             string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
             string output = Run(context.Index, query, parsedMode, limit, exclude_tests, json, out int count, compactBanner);
 
@@ -111,7 +111,7 @@ public sealed class SearchTool
     /// string and sets <paramref name="renderedCount"/> to the number of rows actually shown (the page).
     /// </summary>
     public static string Run(
-        MillerRepositoryIndex index, string query, SearchToolMode mode, int limit,
+        ISymbolSearchIndex index, string query, SearchToolMode mode, int limit,
         bool? excludeTests, bool json, out int renderedCount, string? compactBanner = null)
     {
         ArgumentNullException.ThrowIfNull(index);

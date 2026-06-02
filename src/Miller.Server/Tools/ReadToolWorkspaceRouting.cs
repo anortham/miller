@@ -11,17 +11,48 @@ internal static class ReadToolWorkspaceRouting
 
     public static string? CompactBanner(WorkspaceReadContext context, string? requestedWorkspaceId, bool json)
     {
+        return CompactBanner(
+            context.DisplayId,
+            context.WorkspaceId,
+            context.WorkspaceRoot,
+            context.IndexFresh,
+            context.FreshnessStatus,
+            requestedWorkspaceId,
+            json);
+    }
+
+    public static string? CompactBanner(WorkspaceSymbolSearchContext context, string? requestedWorkspaceId, bool json)
+    {
+        return CompactBanner(
+            context.DisplayId,
+            context.WorkspaceId,
+            context.WorkspaceRoot,
+            context.IndexFresh,
+            context.FreshnessStatus,
+            requestedWorkspaceId,
+            json);
+    }
+
+    private static string? CompactBanner(
+        string? displayId,
+        string? workspaceId,
+        string workspaceRoot,
+        bool? indexFresh,
+        string freshnessStatus,
+        string? requestedWorkspaceId,
+        bool json)
+    {
         if (json || string.IsNullOrWhiteSpace(requestedWorkspaceId))
             return null;
 
         var sb = new StringBuilder();
         sb.Append("workspace: ")
-          .Append(Display(context, requestedWorkspaceId))
+          .Append(Display(displayId, workspaceId, requestedWorkspaceId))
           .Append(' ')
-          .Append(context.WorkspaceRoot);
+          .Append(workspaceRoot);
 
-        if (ShouldShowFreshness(context))
-            sb.Append('\n').Append("freshness: ").Append(context.FreshnessStatus);
+        if (ShouldShowFreshness(indexFresh, freshnessStatus))
+            sb.Append('\n').Append("freshness: ").Append(freshnessStatus);
 
         return sb.ToString();
     }
@@ -31,31 +62,42 @@ internal static class ReadToolWorkspaceRouting
 
     public static void ApplyTelemetry(TelemetryScope? telemetry, WorkspaceReadContext context)
     {
+        ApplyTelemetry(telemetry, context.WorkspaceId, context.WorkspaceRoot, context.IndexFresh);
+    }
+
+    public static void ApplyTelemetry(TelemetryScope? telemetry, WorkspaceSymbolSearchContext context)
+    {
+        ApplyTelemetry(telemetry, context.WorkspaceId, context.WorkspaceRoot, context.IndexFresh);
+    }
+
+    private static void ApplyTelemetry(
+        TelemetryScope? telemetry, string? workspaceId, string workspaceRoot, bool? indexFresh)
+    {
         if (telemetry is null)
             return;
 
-        if (!string.IsNullOrWhiteSpace(context.WorkspaceId))
-            telemetry.SetWorkspace(context.WorkspaceId, context.WorkspaceRoot);
+        if (!string.IsNullOrWhiteSpace(workspaceId))
+            telemetry.SetWorkspace(workspaceId, workspaceRoot);
 
-        telemetry.IndexFresh = context.IndexFresh;
+        telemetry.IndexFresh = indexFresh;
     }
 
-    private static bool ShouldShowFreshness(WorkspaceReadContext context)
+    private static bool ShouldShowFreshness(bool? indexFresh, string freshnessStatus)
     {
-        if (string.IsNullOrWhiteSpace(context.FreshnessStatus))
+        if (string.IsNullOrWhiteSpace(freshnessStatus))
             return false;
 
-        return context.IndexFresh != true ||
-               context.FreshnessStatus.StartsWith("unconfirmed", StringComparison.OrdinalIgnoreCase) ||
-               context.FreshnessStatus.Contains("stale", StringComparison.OrdinalIgnoreCase);
+        return indexFresh != true ||
+               freshnessStatus.StartsWith("unconfirmed", StringComparison.OrdinalIgnoreCase) ||
+               freshnessStatus.Contains("stale", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string Display(WorkspaceReadContext context, string? requestedWorkspaceId)
+    private static string Display(string? displayId, string? workspaceId, string? requestedWorkspaceId)
     {
-        if (!string.IsNullOrWhiteSpace(context.DisplayId))
-            return context.DisplayId;
-        if (!string.IsNullOrWhiteSpace(context.WorkspaceId))
-            return context.WorkspaceId;
+        if (!string.IsNullOrWhiteSpace(displayId))
+            return displayId;
+        if (!string.IsNullOrWhiteSpace(workspaceId))
+            return workspaceId;
         return requestedWorkspaceId ?? "(unknown)";
     }
 }

@@ -4,7 +4,7 @@ using Miller.Server.Workspaces;
 
 namespace Miller.Tests;
 
-internal sealed class RecordingWorkspaceIndexProvider : IWorkspaceIndexProvider
+internal sealed class RecordingWorkspaceIndexProvider : IWorkspaceIndexProvider, IWorkspaceSearchProvider
 {
     private readonly WorkspaceReadContext _current;
     private readonly Dictionary<string, WorkspaceReadContext> _targets;
@@ -27,6 +27,20 @@ internal sealed class RecordingWorkspaceIndexProvider : IWorkspaceIndexProvider
         LastEnsureFresh = ensureFresh;
         ResolveCount++;
 
+        return ResolveContext(workspaceId);
+    }
+
+    public WorkspaceSymbolSearchContext ResolveSymbolSearch(string? workspaceId, bool ensureFresh)
+    {
+        LastWorkspaceId = workspaceId;
+        LastEnsureFresh = ensureFresh;
+        ResolveCount++;
+
+        return ReadToolRoutingTestSupport.SearchContextFor(ResolveContext(workspaceId));
+    }
+
+    private WorkspaceReadContext ResolveContext(string? workspaceId)
+    {
         if (workspaceId is null)
             return _current;
 
@@ -55,9 +69,21 @@ internal static class ReadToolRoutingTestSupport
             indexFresh,
             freshnessStatus,
             WarningText: null);
+
+    public static WorkspaceSymbolSearchContext SearchContextFor(WorkspaceReadContext context) =>
+        new(
+            context.Index,
+            context.IndexDbPath,
+            context.WorkspaceId,
+            context.WorkspaceRoot,
+            context.Revision,
+            context.IndexFresh,
+            context.FreshnessStatus,
+            context.WarningText,
+            context.DisplayId);
 }
 
-internal sealed class HolderWorkspaceIndexProvider : IWorkspaceIndexProvider
+internal sealed class HolderWorkspaceIndexProvider : IWorkspaceIndexProvider, IWorkspaceSearchProvider
 {
     private readonly IndexHolder _holder;
     private readonly string _indexDbPath;
@@ -85,6 +111,20 @@ internal sealed class HolderWorkspaceIndexProvider : IWorkspaceIndexProvider
         return new WorkspaceReadContext(
             index,
             new SmartTargetResolver(index),
+            _indexDbPath,
+            _workspaceId,
+            _workspaceRoot,
+            revision,
+            IndexFresh: null,
+            FreshnessStatus: "current",
+            WarningText: null);
+    }
+
+    public WorkspaceSymbolSearchContext ResolveSymbolSearch(string? workspaceId, bool ensureFresh)
+    {
+        (MillerRepositoryIndex index, long revision) = _holder.Snapshot();
+        return new WorkspaceSymbolSearchContext(
+            index,
             _indexDbPath,
             _workspaceId,
             _workspaceRoot,

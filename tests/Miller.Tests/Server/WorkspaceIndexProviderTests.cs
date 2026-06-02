@@ -87,6 +87,111 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     }
 
     [Fact]
+    public void ResolveSymbolSearch_RegisteredWorkspace_UsesSymbolProjectionLoaderWithoutFullLoad()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-symbol-search");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+
+        int fullLoadCount = 0;
+        int searchLoadCount = 0;
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            loadIndex: _ =>
+            {
+                fullLoadCount++;
+                throw new InvalidOperationException("full loader was not expected");
+            },
+            loadSymbolSearch: path =>
+            {
+                searchLoadCount++;
+                return SymbolSearchProjectionLoader.Load(path);
+            });
+
+        WorkspaceSymbolSearchContext context = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
+
+        Assert.Equal("target-ws", context.WorkspaceId);
+        Assert.Equal(1, context.Revision);
+        Assert.Equal(1, searchLoadCount);
+        Assert.Equal(0, fullLoadCount);
+        var hit = Assert.Single(context.Index.Search("TargetType", limit: 10));
+        Assert.Equal("TargetType", context.Index.Resolve(hit.Document.DocId).Name);
+    }
+
+    [Fact]
+    public void ResolveSymbolSearch_RegisteredWorkspace_CachesByWorkspacePathAndRevision()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-symbol-cache");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+
+        int searchLoadCount = 0;
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            loadSymbolSearch: path =>
+            {
+                searchLoadCount++;
+                return SymbolSearchProjectionLoader.Load(path);
+            });
+
+        WorkspaceSymbolSearchContext first = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
+        WorkspaceSymbolSearchContext second = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
+
+        Assert.Same(first.Index, second.Index);
+        Assert.Equal(1, searchLoadCount);
+
+        registry.MarkScanned("target-ws", revision: 2);
+        WorkspaceSymbolSearchContext afterRevisionChange =
+            provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
+
+        Assert.Equal(2, afterRevisionChange.Revision);
+        Assert.NotSame(first.Index, afterRevisionChange.Index);
+        Assert.Equal(2, searchLoadCount);
+    }
+
+    [Fact]
+    public void ResolveSymbolSearch_RegisteredWorkspace_ReloadsWhenDbPathChangesEvenAtTheSameRevision()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var targetA = DbWithSymbol("target-ws", revision: 3, "Quokkanaut");
+        using var targetB = DbWithSymbol("target-ws", revision: 3, "Zigglethorpe");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-symbol-path-change");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, targetA.DbPath);
+        registry.MarkScanned("target-ws", revision: 3);
+
+        int searchLoadCount = 0;
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            loadSymbolSearch: path =>
+            {
+                searchLoadCount++;
+                return SymbolSearchProjectionLoader.Load(path);
+            });
+
+        WorkspaceSymbolSearchContext first = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
+        registry.UpsertSeen("target-ws", "target-111111111111", root, targetB.DbPath);
+        WorkspaceSymbolSearchContext second = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
+
+        Assert.Empty(first.Index.Search("Zigglethorpe", limit: 10));
+        Assert.NotEmpty(second.Index.Search("Zigglethorpe", limit: 10));
+        Assert.NotSame(first.Index, second.Index);
+        Assert.Equal(2, searchLoadCount);
+    }
+
+    [Fact]
     public async Task Resolve_RegisteredWorkspace_ConcurrentCacheMissesShareOneLoad()
     {
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
@@ -450,6 +555,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         WorkspaceRegistry registry,
         Func<string, WorkspaceRefreshResult>? refresh = null,
         Func<string, MillerRepositoryIndex>? loadIndex = null,
+        Func<string, SymbolSearchProjection>? loadSymbolSearch = null,
         Func<long, bool?>? currentIndexFresh = null) =>
         new(
             holder,
@@ -457,6 +563,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             registry,
             refresh ?? (_ => throw new InvalidOperationException("refresh was not expected")),
             loadIndex ?? (path => RepositoryIndexLoader.Load(path)),
+            loadSymbolSearch ?? (path => SymbolSearchProjectionLoader.Load(path)),
             currentIndexFresh ?? (_ => true));
 
     private WorkspaceContext CurrentWorkspace(string dbPath, string workspaceId)

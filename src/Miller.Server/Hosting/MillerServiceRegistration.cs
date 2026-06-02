@@ -101,7 +101,9 @@ public static class MillerServiceRegistration
         services.AddSingleton(sp =>
             WorkspaceRegistry.Open(sp.GetRequiredService<WorkspaceContext>().RegistryDbPath));
         services.AddSingleton<CrossWorkspaceRefreshService>();
-        services.AddSingleton<IWorkspaceIndexProvider, WorkspaceIndexProvider>();
+        services.AddSingleton<WorkspaceIndexProvider>();
+        services.AddSingleton<IWorkspaceIndexProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
+        services.AddSingleton<IWorkspaceSearchProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
 
         return services;
     }

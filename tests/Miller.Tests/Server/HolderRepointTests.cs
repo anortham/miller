@@ -72,8 +72,9 @@ public sealed class HolderRepointTests
         using var after = WithMarker();
         var holder = new IndexHolder(BuildIndex(before), builtRevision: 1);
         // InspectTool reads the extract DB for detail; point it at the "after" DB (where the symbol's file lives).
-        var tool = new InspectTool(new HolderWorkspaceIndexProvider(
-            holder, after.DbPath, workspaceId: "test-ws", workspaceRoot: Path.GetTempPath()));
+        var provider = new HolderWorkspaceIndexProvider(
+            holder, after.DbPath, workspaceId: "test-ws", workspaceRoot: Path.GetTempPath());
+        var tool = new InspectTool(provider, provider);
 
         string beforeOut = tool.Inspect("Zebraphone");
         Assert.Contains("not found", beforeOut);

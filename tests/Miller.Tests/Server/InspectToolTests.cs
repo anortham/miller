@@ -1,8 +1,10 @@
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
+using Miller.Server;
 using Miller.Server.Resolution;
 using Miller.Server.Tools;
+using Miller.Server.Workspaces;
 using Miller.Tests;
 using Miller.Tests.Indexing;
 using Xunit;
@@ -368,7 +370,7 @@ public sealed class InspectToolTests
                 targetRoot,
                 indexFresh: false,
                 freshnessStatus: "unconfirmed_lock_busy")));
-        var tool = new InspectTool(provider);
+        var tool = new InspectTool(provider, provider);
 
         string output = tool.Inspect(
             "GetUser",
@@ -382,6 +384,106 @@ public sealed class InspectToolTests
         Assert.Contains(targetRoot, output);
         Assert.Contains("freshness: unconfirmed_lock_busy", output);
         Assert.Contains("Gets a user by id.", output);
+    }
+
+    [Fact]
+    public void Inspect_Summary_RegisteredWorkspace_UsesSymbolProjectionWithoutFullLoad()
+    {
+        using var current = EmptyFixture("current-ws");
+        using var target = JulieDbFixture.CreateForInspect();
+        string dir = Path.Combine(Path.GetTempPath(), "miller-inspect-projection-" + Guid.NewGuid().ToString("N"));
+        string currentRoot = Path.Combine(dir, "current");
+        string registryDb = Path.Combine(dir, "workspaces.db");
+        Directory.CreateDirectory(currentRoot);
+
+        try
+        {
+            using var registry = WorkspaceRegistry.Open(registryDb);
+            registry.UpsertSeen("target-ws", "target-111111111111", target.WorkspaceRoot, target.DbPath);
+            registry.MarkScanned("target-ws", revision: 1);
+
+            int fullLoadCount = 0;
+            int symbolLoadCount = 0;
+            var workspace = new WorkspaceContext(
+                currentRoot,
+                current.DbPath,
+                Path.Combine(dir, "telemetry.db"),
+                registryDb,
+                AppContext.BaseDirectory,
+                "current-ws",
+                currentRoot,
+                current.DbPath);
+            var provider = new WorkspaceIndexProvider(
+                new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+                workspace,
+                registry,
+                refresh: _ => throw new InvalidOperationException("refresh was not expected"),
+                loadIndex: _ =>
+                {
+                    fullLoadCount++;
+                    throw new InvalidOperationException("full loader was not expected");
+                },
+                loadSymbolSearch: path =>
+                {
+                    symbolLoadCount++;
+                    return SymbolSearchProjectionLoader.Load(path);
+                },
+                currentIndexFresh: _ => true);
+            var tool = new InspectTool(provider, provider);
+
+            string output = tool.Inspect(
+                "GetUser",
+                depth: "summary",
+                workspace_id: "target-ws",
+                ensure_fresh: false);
+
+            Assert.DoesNotContain("inspect failed", output);
+            Assert.Contains("Gets a user by id.", output);
+            Assert.Equal(0, fullLoadCount);
+            Assert.Equal(1, symbolLoadCount);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void Inspect_Full_RegisteredWorkspace_UsesFullProvider()
+    {
+        using var current = EmptyFixture("current-ws");
+        using var target = JulieDbFixture.CreateForInspect();
+        var targetIndex = RepositoryIndexLoader.Load(target.DbPath);
+        string currentRoot = Path.Combine(Path.GetTempPath(), "miller-current-" + Guid.NewGuid().ToString("N"));
+        string targetRoot = target.WorkspaceRoot;
+
+        int fullResolveCount = 0;
+        int searchResolveCount = 0;
+        var provider = new FullInspectRecordingProvider(
+            ReadToolRoutingTestSupport.ContextFor(
+                MillerRepositoryIndex.Build(SqliteSymbolReader.Read(current.DbPath)),
+                current.DbPath,
+                "current-ws",
+                currentRoot),
+            ReadToolRoutingTestSupport.ContextFor(
+                targetIndex,
+                target.DbPath,
+                "target-ws",
+                targetRoot),
+            () => fullResolveCount++,
+            () => searchResolveCount++);
+        var tool = new InspectTool(provider, provider);
+
+        string output = tool.Inspect(
+            "GetUser",
+            depth: "full",
+            workspace_id: "target-ws",
+            ensure_fresh: false);
+
+        Assert.Contains("## body", output);
+        Assert.Equal(1, fullResolveCount);
+        Assert.Equal(0, searchResolveCount);
     }
 
     private static void DeleteFileRow(string dbPath, string filePath)
@@ -399,5 +501,37 @@ public sealed class InspectToolTests
         cmd.CommandText = "DELETE FROM files WHERE path = $path;";
         cmd.Parameters.AddWithValue("$path", filePath);
         Assert.Equal(1, cmd.ExecuteNonQuery());
+    }
+
+    private sealed class FullInspectRecordingProvider : IWorkspaceIndexProvider, IWorkspaceSearchProvider
+    {
+        private readonly WorkspaceReadContext _current;
+        private readonly WorkspaceReadContext _target;
+        private readonly Action _onFullResolve;
+        private readonly Action _onSearchResolve;
+
+        public FullInspectRecordingProvider(
+            WorkspaceReadContext current,
+            WorkspaceReadContext target,
+            Action onFullResolve,
+            Action onSearchResolve)
+        {
+            _current = current;
+            _target = target;
+            _onFullResolve = onFullResolve;
+            _onSearchResolve = onSearchResolve;
+        }
+
+        public WorkspaceReadContext Resolve(string? workspaceId, bool ensureFresh)
+        {
+            _onFullResolve();
+            return workspaceId is null ? _current : _target;
+        }
+
+        public WorkspaceSymbolSearchContext ResolveSymbolSearch(string? workspaceId, bool ensureFresh)
+        {
+            _onSearchResolve();
+            return ReadToolRoutingTestSupport.SearchContextFor(workspaceId is null ? _current : _target);
+        }
     }
 }

@@ -24,13 +24,16 @@ namespace Miller.Server.Tools;
 public sealed class InspectTool
 {
     private readonly IWorkspaceIndexProvider _workspaceProvider;
+    private readonly IWorkspaceSearchProvider _workspaceSearchProvider;
 
     /// <summary>Construct over the live index holder (production / freshness-aware).</summary>
     /// <exception cref="ArgumentNullException">Any argument is null.</exception>
-    public InspectTool(IWorkspaceIndexProvider workspaceProvider)
+    public InspectTool(IWorkspaceIndexProvider workspaceProvider, IWorkspaceSearchProvider workspaceSearchProvider)
     {
         ArgumentNullException.ThrowIfNull(workspaceProvider);
+        ArgumentNullException.ThrowIfNull(workspaceSearchProvider);
         _workspaceProvider = workspaceProvider;
+        _workspaceSearchProvider = workspaceSearchProvider;
     }
 
     [McpServerTool(Name = "inspect")]
@@ -55,14 +58,33 @@ public sealed class InspectTool
         {
             bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
-            WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
-            string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
-            string output = Run(context.Index, context.Resolver, context.IndexDbPath, context.WorkspaceRoot,
-                target, depth, kind, scope, limit, json, out int count, compactBanner);
+            bool full = string.Equals(depth, "full", StringComparison.OrdinalIgnoreCase);
+
+            string output;
+            int count;
+            if (full)
+            {
+                WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
+                string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
+                output = Run(context.Index, context.Resolver, context.IndexDbPath, context.WorkspaceRoot,
+                    target, depth, kind, scope, limit, json, out count, compactBanner);
+
+                if (telemetry is not null)
+                    ReadToolWorkspaceRouting.ApplyTelemetry(telemetry, context);
+            }
+            else
+            {
+                WorkspaceSymbolSearchContext context = _workspaceSearchProvider.ResolveSymbolSearch(workspace_id, ensureFresh);
+                string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
+                output = RunSummary(context.Index, context.IndexDbPath, context.WorkspaceRoot,
+                    target, kind, scope, limit, json, out count, compactBanner);
+
+                if (telemetry is not null)
+                    ReadToolWorkspaceRouting.ApplyTelemetry(telemetry, context);
+            }
 
             if (telemetry is not null)
             {
-                ReadToolWorkspaceRouting.ApplyTelemetry(telemetry, context);
                 telemetry.SetTarget(target);
                 telemetry.ResultCount = count;
                 telemetry.Outcome = count == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
@@ -99,6 +121,36 @@ public sealed class InspectTool
         if (limit < 1) limit = 1;
         bool full = string.Equals(depth, "full", StringComparison.OrdinalIgnoreCase);
 
+        return RunCore(index, full ? index : null, resolver, dbPath, workspaceRoot, target, full, kind, scope, limit,
+            json, out resultCount, compactBanner);
+    }
+
+    public static string RunSummary(
+        ISymbolLookupIndex index, string dbPath, string workspaceRoot,
+        string target, string? kind, string? scope, int limit, bool json,
+        out int resultCount,
+        string? compactBanner = null)
+    {
+        ArgumentNullException.ThrowIfNull(index);
+        ArgumentException.ThrowIfNullOrWhiteSpace(target);
+        if (limit < 1) limit = 1;
+
+        var resolver = new SmartTargetResolver(index);
+        return RunCore(index, fullIndex: null, resolver, dbPath, workspaceRoot, target, full: false, kind, scope, limit,
+            json, out resultCount, compactBanner);
+    }
+
+    private static string RunCore(
+        ISymbolLookupIndex index, MillerRepositoryIndex? fullIndex, SmartTargetResolver resolver,
+        string dbPath, string workspaceRoot, string target, bool full,
+        string? kind, string? scope, int limit, bool json,
+        out int resultCount,
+        string? compactBanner)
+    {
+        ArgumentNullException.ThrowIfNull(index);
+        ArgumentNullException.ThrowIfNull(resolver);
+        ArgumentException.ThrowIfNullOrWhiteSpace(target);
+
         var resolution = resolver.Resolve(target, scope);
         switch (resolution)
         {
@@ -110,8 +162,8 @@ public sealed class InspectTool
             case TargetResolution.Symbol sym:
                 resultCount = 1;
                 string symbolOutput = json
-                    ? RenderSymbolJson(index, dbPath, workspaceRoot, sym.Value, full)
-                    : RenderSymbolCompact(index, dbPath, workspaceRoot, sym.Value, full);
+                    ? RenderSymbolJson(index, fullIndex, dbPath, workspaceRoot, sym.Value, full)
+                    : RenderSymbolCompact(index, fullIndex, dbPath, workspaceRoot, sym.Value, full);
                 return ReadToolWorkspaceRouting.PrefixCompact(symbolOutput, json ? null : compactBanner);
 
             case TargetResolution.Candidates cands:
@@ -137,7 +189,7 @@ public sealed class InspectTool
     // ---------- file listing ----------
 
     private static string RenderFile(
-        MillerRepositoryIndex index, string path, string? kind, int limit, bool json, out int resultCount)
+        ISymbolLookupIndex index, string path, string? kind, int limit, bool json, out int resultCount)
     {
         IEnumerable<IndexedSymbol> symbols = index.FindByFilePath(path);
         if (!string.IsNullOrWhiteSpace(kind))
@@ -181,7 +233,8 @@ public sealed class InspectTool
     // ---------- symbol ----------
 
     private static string RenderSymbolCompact(
-        MillerRepositoryIndex index, string dbPath, string workspaceRoot, IndexedSymbol sym, bool full)
+        ISymbolLookupIndex index, MillerRepositoryIndex? fullIndex,
+        string dbPath, string workspaceRoot, IndexedSymbol sym, bool full)
     {
         var detail = ExtractReader.ReadDetail(dbPath, sym.SymbolId);
         var sb = new StringBuilder();
@@ -197,8 +250,11 @@ public sealed class InspectTool
         if (!full)
             return sb.ToString().TrimEnd('\n');
 
+        if (fullIndex is null)
+            throw new InvalidOperationException("Full inspect requires the repository projection.");
+
         // children
-        var children = index.FindChildren(sym.SymbolId);
+        var children = fullIndex.FindChildren(sym.SymbolId);
         if (children.Count > 0)
         {
             sb.Append("\n## children\n");
@@ -245,7 +301,8 @@ public sealed class InspectTool
     }
 
     private static string RenderSymbolJson(
-        MillerRepositoryIndex index, string dbPath, string workspaceRoot, IndexedSymbol sym, bool full)
+        ISymbolLookupIndex index, MillerRepositoryIndex? fullIndex,
+        string dbPath, string workspaceRoot, IndexedSymbol sym, bool full)
     {
         var detail = ExtractReader.ReadDetail(dbPath, sym.SymbolId);
         var buffer = new ArrayBufferWriter<byte>();
@@ -258,8 +315,11 @@ public sealed class InspectTool
 
             if (full)
             {
+                if (fullIndex is null)
+                    throw new InvalidOperationException("Full inspect requires the repository projection.");
+
                 w.WritePropertyName("children");
-                WriteSymbolArray(w, index.FindChildren(sym.SymbolId));
+                WriteSymbolArray(w, fullIndex.FindChildren(sym.SymbolId));
 
                 var refs = ExtractReader.ReadReferences(dbPath, sym.Name);
                 w.WritePropertyName("refs");
@@ -313,7 +373,7 @@ public sealed class InspectTool
     }
 
     // distinct enclosing symbols of the refs, rendered as "Name  file:line" where resolvable, else the id.
-    private static List<string> DistinctCallers(MillerRepositoryIndex index, IReadOnlyList<SymbolRef> refs)
+    private static List<string> DistinctCallers(ISymbolLookupIndex index, IReadOnlyList<SymbolRef> refs)
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var result = new List<string>();
