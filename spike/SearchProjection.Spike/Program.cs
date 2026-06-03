@@ -651,7 +651,8 @@ internal static class Program
             || normalized.StartsWith("docs/", StringComparison.OrdinalIgnoreCase)
             || normalized.Contains("/doc/", StringComparison.OrdinalIgnoreCase)
             || normalized.StartsWith("doc/", StringComparison.OrdinalIgnoreCase)
-            || normalized.Contains("/documentation/", StringComparison.OrdinalIgnoreCase))
+            || normalized.Contains("/documentation/", StringComparison.OrdinalIgnoreCase)
+            || normalized.StartsWith("documentation/", StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
@@ -663,7 +664,14 @@ internal static class Program
             || string.Equals(extension, ".mdx", StringComparison.OrdinalIgnoreCase)
             || string.Equals(extension, ".rst", StringComparison.OrdinalIgnoreCase)
             || string.Equals(extension, ".adoc", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(extension, ".txt", StringComparison.OrdinalIgnoreCase);
+            || string.Equals(extension, ".txt", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(extension, ".org", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(extension, ".json", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(extension, ".yaml", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(extension, ".yml", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(extension, ".toml", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(extension, ".ini", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(extension, ".cfg", StringComparison.OrdinalIgnoreCase);
     }
 
     private static void PrintHeader(string dbPath, DbFacts dbFacts, Options options)
@@ -703,7 +711,7 @@ internal static class Program
               --limit <n>                       Per-query result limit. Default: 50
               --symbol-extra-char-limit <n>     Per-symbol cap for identifier context/literals in wide projection. Default: 2000
               --content-max-bytes <n>           Max bytes per file for content corpus. Default: 1048576
-              --content-scope <all|docs>        Content corpus filter. Default: all
+              --content-scope <all|docs>        Content corpus filter. Default: docs
               --no-hash-verify                  Skip BLAKE3 freshness verification while reading disk content.
               --no-fts                          Skip SQLite FTS5 content indexes.
               --fts-dir <path>                  Directory for temporary FTS DBs.
@@ -764,7 +772,7 @@ internal sealed class Options
     public int Limit { get; private set; } = 50;
     public int SymbolExtraCharLimit { get; private set; } = 2_000;
     public long ContentMaxBytes { get; private set; } = 1_048_576;
-    public ContentScope ContentScope { get; private set; } = ContentScope.All;
+    public ContentScope ContentScope { get; private set; } = ContentScope.Docs;
     public bool HashVerify { get; private set; } = true;
     public bool NoFts { get; private set; }
     public string? FtsDir { get; private set; }

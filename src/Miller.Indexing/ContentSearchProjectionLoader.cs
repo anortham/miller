@@ -84,6 +84,9 @@ public static class ContentSearchProjectionLoader
         byte[] bytes;
         try
         {
+            if (new FileInfo(abs).Length > MaxContentBytes)
+                return null;
+
             bytes = File.ReadAllBytes(abs);
         }
         catch (IOException)
@@ -94,6 +97,9 @@ public static class ContentSearchProjectionLoader
         {
             return null;
         }
+
+        if (bytes.LongLength > MaxContentBytes)
+            return null;
 
         if (!StringComparer.OrdinalIgnoreCase.Equals(
                 ContentHasher.Blake3Hex(bytes), ContentHasher.NormalizeHash(storedHash)))

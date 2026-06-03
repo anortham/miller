@@ -55,6 +55,21 @@ public sealed class ContentSearchIndexTests
     }
 
     [Fact]
+    public void Search_MultiTermQueryRanksDocumentMatchingBothTermsFirst()
+    {
+        var index = Build(
+            Doc(0, "/both.md", "freshness gate"),
+            Doc(1, "/one.md", "freshness freshness unrelated"));
+
+        var hits = index.Search("freshness gate", limit: 10);
+
+        Assert.Equal(2, hits.Count);
+        Assert.Equal("/both.md", hits[0].Path);
+        Assert.True(hits[0].Score > hits[1].Score,
+            $"two-term score {hits[0].Score} should exceed one-term score {hits[1].Score}");
+    }
+
+    [Fact]
     public void Search_ReturnsBestMatchingLine_OneBased()
     {
         var index = Build(Doc(0, "/doc.md",

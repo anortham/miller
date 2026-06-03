@@ -27,6 +27,10 @@ public sealed class SearchToolTests
         ContentSearchProjection.Build(
             docs.Select((d, i) => new ContentDocument(i, d.Path, d.Text)).ToList());
 
+    private static IndexedSymbol Symbol(
+        int docId, string symbolId, string name, string kind, string filePath, int line, string? signature = null) =>
+        new(docId, symbolId, name, signature, kind, "csharp", filePath, line, EndLine: line, ParentId: null, IsTest: false);
+
     private static JulieDbFixture FixtureWithSymbol(string workspaceId, string symbolName) =>
         JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
         {
@@ -76,6 +80,49 @@ public sealed class SearchToolTests
             "src/auth/AuthHelper.cs", "public void AuthService_Smoke()", 1, null)
         { IsTest = true },
     });
+
+    [Theory]
+    [InlineData(SearchToolMode.Auto)]
+    [InlineData(SearchToolMode.Text)]
+    [InlineData(SearchToolMode.Symbol)]
+    [InlineData(SearchToolMode.File)]
+    public void Run_SymbolModes_RenderExactCompactShape(SearchToolMode mode)
+    {
+        var index = new StubSymbolSearchIndex(
+            (Symbol(0, "sym-alpha", "Alpha", "method", "src/Alpha.cs", 7, "public void Alpha()"), 1.25),
+            (Symbol(1, "sym-beta", "Beta", "class", "src/Beta.cs", 3), 0.5),
+            (Symbol(2, "sym-gamma", "Gamma", "function", "src/Gamma.cs", 11, "Gamma()"), 0.25));
+
+        string output = SearchTool.Run(index, "Alpha", mode, limit: 2,
+            excludeTests: null, json: false, out int count, compactBanner: "workspace: target-ws /tmp/root");
+
+        Assert.Equal(2, count);
+        Assert.Equal(
+            "workspace: target-ws /tmp/root\n" +
+            "Alpha  method  src/Alpha.cs:7  public void Alpha()\n" +
+            "Beta  class  src/Beta.cs:3\n" +
+            "… 1 more (raise limit)",
+            output);
+    }
+
+    [Fact]
+    public void Run_SymbolJson_RendersExactCompatibilityShape()
+    {
+        var index = new StubSymbolSearchIndex(
+            (Symbol(0, "sym-alpha", "Alpha", "method", "src/Alpha.cs", 7, "public void Alpha()"), 1.25),
+            (Symbol(1, "sym-beta", "Beta", "class", "src/Beta.cs", 3), 0.5));
+
+        string output = SearchTool.Run(index, "Alpha", SearchToolMode.Auto, limit: 10,
+            excludeTests: null, json: true, out int count);
+
+        Assert.Equal(2, count);
+        Assert.Equal(
+            "[{\"name\":\"Alpha\",\"kind\":\"method\",\"file\":\"src/Alpha.cs\",\"line\":7," +
+            "\"signature\":\"public void Alpha()\",\"score\":1.25,\"symbol_id\":\"sym-alpha\"}," +
+            "{\"name\":\"Beta\",\"kind\":\"class\",\"file\":\"src/Beta.cs\",\"line\":3," +
+            "\"signature\":null,\"score\":0.5,\"symbol_id\":\"sym-beta\"}]",
+            output);
+    }
 
     [Fact]
     public void Run_Compact_RendersOneLinePerHit_WithNameKindFileLine()
@@ -330,13 +377,17 @@ public sealed class SearchToolTests
     public void RunContent_Compact_RendersPathLineAndSnippet()
     {
         var index = ContentIndex(
-            ("docs/guide.md", "# Guide\nThe freshness gate verifies blake3 before reading.\nMore text.\n"));
+            ("docs/guide.md", "# Guide\nThe freshness gate verifies blake3 before reading.\nMore text."));
 
         string output = SearchTool.RunContent(index, "freshness", limit: 10, json: false, out int count);
 
         Assert.Equal(1, count);
-        Assert.Contains("docs/guide.md:2", output); // path + best line (1-based)
-        Assert.Contains("The freshness gate verifies blake3", output); // snippet window
+        Assert.Equal(
+            "docs/guide.md:2\n" +
+            "    # Guide\n" +
+            "    The freshness gate verifies blake3 before reading.\n" +
+            "    More text.",
+            output);
     }
 
     [Fact]
@@ -467,5 +518,26 @@ public sealed class SearchToolTests
         Assert.Equal(0, provider.ContentSearchResolveCount);
         Assert.Equal(1, provider.SymbolSearchResolveCount);
         Assert.Contains("CurrentOnly", output);
+    }
+
+    private sealed class StubSymbolSearchIndex : ISymbolSearchIndex
+    {
+        private readonly SearchHit[] _hits;
+        private readonly Dictionary<int, IndexedSymbol> _symbols;
+
+        public StubSymbolSearchIndex(params (IndexedSymbol Symbol, double Score)[] rows)
+        {
+            _symbols = rows.ToDictionary(static row => row.Symbol.DocId, static row => row.Symbol);
+            _hits = rows
+                .Select(static row => new SearchHit(row.Symbol.ToSearchableDocument(), row.Score))
+                .ToArray();
+        }
+
+        public int DocumentCount => _symbols.Count;
+
+        public IReadOnlyList<SearchHit> Search(string query, int limit = 10, SearchMode mode = SearchMode.Or) =>
+            _hits.Take(limit).ToArray();
+
+        public IndexedSymbol Resolve(int docId) => _symbols[docId];
     }
 }

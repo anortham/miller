@@ -396,6 +396,42 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     }
 
     [Fact]
+    public async Task ResolveContentSearch_RegisteredWorkspace_ConcurrentCacheMissesShareOneLoad()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithDoc("docs/guide.md", "freshness documentation");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        registry.UpsertSeen("target-ws", "target-111111111111", target.WorkspaceRoot, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+
+        int loadCount = 0;
+        var loadStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            loadContentSearch: (dbPath, root) =>
+            {
+                Interlocked.Increment(ref loadCount);
+                loadStarted.TrySetResult();
+                Thread.Sleep(200);
+                return ContentSearchProjectionLoader.Load(dbPath, root);
+            });
+
+        Task<WorkspaceContentSearchContext> first =
+            Task.Run(() => provider.ResolveContentSearch("target-ws", ensureFresh: false));
+        Task timeout = Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.Same(loadStarted.Task, await Task.WhenAny(loadStarted.Task, timeout));
+        Task<WorkspaceContentSearchContext> second =
+            Task.Run(() => provider.ResolveContentSearch("target-ws", ensureFresh: false));
+
+        WorkspaceContentSearchContext[] contexts = await Task.WhenAll(first, second);
+
+        Assert.Equal(1, loadCount);
+        Assert.Same(contexts[0].Index, contexts[1].Index);
+    }
+
+    [Fact]
     public void Resolve_RegisteredWorkspace_ReloadsWhenDbPathChangesEvenAtTheSameRevision()
     {
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
@@ -522,6 +558,125 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Assert.IsType<TargetResolution.Symbol>(fresh.Resolver.Resolve("TargetB"));
         Assert.Same(fresh.Index, freshAgain.Index);
         Assert.Same(fresh.Resolver, freshAgain.Resolver);
+        Assert.Equal(2, loadCount);
+    }
+
+    [Fact]
+    public async Task ResolveSymbolSearch_RegisteredWorkspace_InFlightStaleLoadCannotEvictNewerCacheEntry()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var targetA = DbWithSymbol("target-ws", revision: 1, "TargetA");
+        using var targetB = DbWithSymbol("target-ws", revision: 2, "TargetB");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-symbol-inflight-evict");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, targetA.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+
+        int loadCount = 0;
+        var startedA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var startedB = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseA = new ManualResetEventSlim();
+        using var releaseB = new ManualResetEventSlim();
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            loadSymbolSearch: path =>
+            {
+                Interlocked.Increment(ref loadCount);
+                if (path == targetA.DbPath)
+                {
+                    startedA.TrySetResult();
+                    releaseA.Wait(TestContext.Current.CancellationToken);
+                }
+                else if (path == targetB.DbPath)
+                {
+                    startedB.TrySetResult();
+                    releaseB.Wait(TestContext.Current.CancellationToken);
+                }
+                return SymbolSearchProjectionLoader.Load(path);
+            });
+
+        Task<WorkspaceSymbolSearchContext> first =
+            Task.Run(() => provider.ResolveSymbolSearch("target-ws", ensureFresh: false));
+        Task timeout = Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.Same(startedA.Task, await Task.WhenAny(startedA.Task, timeout));
+
+        registry.UpsertSeen("target-ws", "target-111111111111", root, targetB.DbPath);
+        registry.MarkScanned("target-ws", revision: 2);
+
+        Task<WorkspaceSymbolSearchContext> second =
+            Task.Run(() => provider.ResolveSymbolSearch("target-ws", ensureFresh: false));
+        Assert.Same(startedB.Task, await Task.WhenAny(startedB.Task, timeout));
+
+        releaseA.Set();
+        WorkspaceSymbolSearchContext stale = await first;
+        releaseB.Set();
+        WorkspaceSymbolSearchContext fresh = await second;
+        WorkspaceSymbolSearchContext freshAgain = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
+
+        Assert.NotEmpty(stale.Index.Search("TargetA", limit: 10));
+        Assert.NotEmpty(fresh.Index.Search("TargetB", limit: 10));
+        Assert.Same(fresh.Index, freshAgain.Index);
+        Assert.Equal(2, loadCount);
+    }
+
+    [Fact]
+    public async Task ResolveContentSearch_RegisteredWorkspace_InFlightStaleLoadCannotEvictNewerCacheEntry()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var targetA = DbWithDoc("docs/guide.md", "alpha older documentation");
+        using var targetB = DbWithDoc("docs/guide.md", "beta newer documentation");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        registry.UpsertSeen("target-ws", "target-111111111111", targetA.WorkspaceRoot, targetA.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+
+        int loadCount = 0;
+        var startedA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var startedB = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseA = new ManualResetEventSlim();
+        using var releaseB = new ManualResetEventSlim();
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            loadContentSearch: (dbPath, root) =>
+            {
+                Interlocked.Increment(ref loadCount);
+                if (dbPath == targetA.DbPath)
+                {
+                    startedA.TrySetResult();
+                    releaseA.Wait(TestContext.Current.CancellationToken);
+                }
+                else if (dbPath == targetB.DbPath)
+                {
+                    startedB.TrySetResult();
+                    releaseB.Wait(TestContext.Current.CancellationToken);
+                }
+                return ContentSearchProjectionLoader.Load(dbPath, root);
+            });
+
+        Task<WorkspaceContentSearchContext> first =
+            Task.Run(() => provider.ResolveContentSearch("target-ws", ensureFresh: false));
+        Task timeout = Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.Same(startedA.Task, await Task.WhenAny(startedA.Task, timeout));
+
+        registry.UpsertSeen("target-ws", "target-111111111111", targetB.WorkspaceRoot, targetB.DbPath);
+        registry.MarkScanned("target-ws", revision: 2);
+
+        Task<WorkspaceContentSearchContext> second =
+            Task.Run(() => provider.ResolveContentSearch("target-ws", ensureFresh: false));
+        Assert.Same(startedB.Task, await Task.WhenAny(startedB.Task, timeout));
+
+        releaseA.Set();
+        WorkspaceContentSearchContext stale = await first;
+        releaseB.Set();
+        WorkspaceContentSearchContext fresh = await second;
+        WorkspaceContentSearchContext freshAgain = provider.ResolveContentSearch("target-ws", ensureFresh: false);
+
+        Assert.NotEmpty(stale.Index.Search("alpha", limit: 10));
+        Assert.NotEmpty(fresh.Index.Search("beta", limit: 10));
+        Assert.Same(fresh.Index, freshAgain.Index);
         Assert.Equal(2, loadCount);
     }
 

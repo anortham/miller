@@ -12,10 +12,12 @@ Usage:
 
 Examples:
   scripts/bench-search.sh .miller/symbols.db
-  scripts/bench-search.sh .miller/symbols.db --content-scope docs --repetitions 5
+  scripts/bench-search.sh .miller/symbols.db --content-scope all --repetitions 5
 
 Environment:
   CONFIG=Release|Debug   Build configuration. Default: Release
+
+Default content scope is docs-like, matching production mode=content.
 USAGE
   exit 0
 fi

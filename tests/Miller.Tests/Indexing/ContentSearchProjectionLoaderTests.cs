@@ -86,6 +86,20 @@ public sealed class ContentSearchProjectionLoaderTests
     }
 
     [Fact]
+    public void Load_SkipsFileWhenActualDiskBytesExceedCap()
+    {
+        byte[] diskBytes = System.Text.Encoding.UTF8.GetBytes(new string('a', 1_048_577));
+        using var fx = WithFiles(new JulieDbFixture.FileSpec("docs/big-on-disk.md")
+        {
+            Language = "markdown",
+            DiskBytes = diskBytes,
+            ContentBytesOverride = 12, // corrupt/stale manifest says the file is tiny
+        });
+
+        Assert.Equal(0, ContentSearchProjectionLoader.Load(fx.DbPath, fx.WorkspaceRoot).DocumentCount);
+    }
+
+    [Fact]
     public void Load_SkipsNonIndexedStatus()
     {
         using var fx = WithFiles(new JulieDbFixture.FileSpec("docs/draft.md")
