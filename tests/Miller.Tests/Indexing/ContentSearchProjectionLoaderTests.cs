@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Xunit;
 
@@ -184,6 +185,48 @@ public sealed class ContentSearchProjectionLoaderTests
         finally
         {
             try { File.Delete(escapedAbs); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void Load_IncompatibleArtifact_UsesSchemaGateBeforeReadingFiles()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-content-loader-root-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string dbPath = Path.Combine(root, "legacy.db");
+        try
+        {
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = dbPath,
+                Pooling = false,
+            }.ToString()))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    CREATE TABLE files (
+                        path TEXT PRIMARY KEY,
+                        language TEXT NOT NULL,
+                        hash TEXT NOT NULL,
+                        size INTEGER NOT NULL,
+                        content TEXT
+                    );
+                    INSERT INTO files (path, language, hash, size, content)
+                    VALUES ('docs/legacy.md', 'markdown', 'sha256:legacy', 12, 'legacy docs');
+                    """;
+                command.ExecuteNonQuery();
+            }
+
+            var ex = Assert.Throws<IncompatibleExtractException>(() =>
+                ContentSearchProjectionLoader.Load(dbPath, root));
+
+            Assert.Contains("artifact_metadata", ex.Message);
+            Assert.DoesNotContain("content_hash", ex.Message);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
         }
     }
 }

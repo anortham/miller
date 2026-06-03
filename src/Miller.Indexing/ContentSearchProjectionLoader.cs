@@ -34,6 +34,8 @@ public static class ContentSearchProjectionLoader
         using (var connection = SqliteReadOnlyAccess.Open(dbPath))
         using (var command = connection.CreateCommand())
         {
+            JulieSchemaGate.Verify(connection);
+
             command.CommandText =
                 "SELECT path, language, content_hash, content_bytes, status FROM files ORDER BY path;";
             using var reader = command.ExecuteReader();

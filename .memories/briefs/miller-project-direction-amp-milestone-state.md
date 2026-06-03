@@ -3,7 +3,7 @@ id: miller-project-direction-amp-milestone-state
 title: Miller — product direction & milestone state
 status: active
 created: 2026-05-30T16:32:42.067Z
-updated: 2026-06-03T02:50:00Z
+updated: 2026-06-03T03:20:00Z
 tags:
   - miller
   - project-direction
@@ -22,16 +22,17 @@ Current architecture contracts:
 - Read tools accept `workspace_id` selectors: display ID, unique prefix, full workspace ID, `current`, or `primary`; explicit `workspace_id` defaults refresh-first.
 - Stable `workspace_id` is SHA-256 of canonical workspace root.
 - Extraction integration is CLI-first through the pinned `julie-extract` binary.
-- Current product pin is `julie-extract` v2.0.0 from `julie-extractors`; compatibility gates are SQLite schema 1, extract contract 1, and report schema 1.
+- Current product pin is `julie-extract` v2.0.1 from `julie-extractors`; compatibility gates are SQLite schema 1, extract contract 1, and report schema 1.
 - File freshness uses `files.content_hash` (`blake3:<hex>`, normalized before comparison) and is guarded by `artifact_metadata.hash_algorithm=blake3`.
 - `artifact_metadata` is the artifact metadata surface for schema/contract/hash/root keys.
 
-## Current State - 2026-06-02
+## Current State - 2026-06-03
 
-- Julie-extractors migration is now the active extract contract line in Miller's handoff docs: `julie-extract` v2.0.0, SQLite schema 1, extract contract 1, report schema 1.
+- Julie-extractors migration is now the active extract contract line in Miller's handoff docs: `julie-extract` v2.0.1, SQLite schema 1, extract contract 1, report schema 1.
 - M0-M8 are done on `main`, including registry, freshness, and dashboard foundations.
-- Search dogfood UX cleanup is ready to commit: file-mode search now searches file path fragments, auto mode routes path-like queries to file search, compact workspace/read-tool output favors display IDs over raw SHA-256 IDs, and workspace selectors accept display ID, unique prefix, full ID, `current`, or `primary`.
-- Verification for the search UX cleanup: `dotnet build Miller.slnx -c Release`, `scripts/test.sh all`, and `git diff --check` passed locally before commit.
+- Search dogfood UX cleanup is committed as `aa4e15f fix(search): clean up workspace selectors and file mode`: file-mode search now searches file path fragments, auto mode routes path-like queries to file search, compact workspace/read-tool output favors display IDs over raw SHA-256 IDs, and workspace selectors accept display ID, unique prefix, full ID, `current`, or `primary`.
+- Restart dogfood after `aa4e15f` found two follow-up fixes: current display-ID prefixes such as `miller-816` must route to the live current index without registry refresh, and content search must run `JulieSchemaGate` before reading `files` so incompatible old Julie DBs fail with an actionable artifact error instead of raw SQLite.
+- Verification for the search UX cleanup and follow-up fixes: `dotnet build Miller.slnx -c Release`, `scripts/test.sh all`, and `git diff --check` passed locally before commit.
 - Large-workspace dogfood fixes are committed on `main` as `afffbd2 fix: bound large workspace read costs`.
 - Brief/state update is committed as `a75e702 docs: update miller dogfood brief`.
 - User rebuilt/restarted the Miller MCP server after those commits; current MCP tools are responding.
@@ -67,7 +68,7 @@ Verification after fixes:
 
 ## Next Product Work
 
-Immediate next work: restart onto the new binary after the commit/push and dogfood the cleaner selector/output contract live.
+Immediate next work: restart onto the new binary after the follow-up commit/push and re-dogfood current display-prefix routing plus cross-workspace content search on registered repos.
 
 Primary product work after that: design and implement large-workspace read projections for first-read `search` / `inspect` performance.
 

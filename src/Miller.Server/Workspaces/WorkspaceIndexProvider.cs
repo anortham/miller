@@ -71,7 +71,7 @@ public sealed class WorkspaceIndexProvider
             return ResolveCurrent();
 
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
-        if (IsCurrentSelector(workspaceId))
+        if (SelectorTargetsCurrent(workspaceId))
             return ResolveCurrent();
 
         return ResolveRegistered(workspaceId, ensureFresh);
@@ -83,7 +83,7 @@ public sealed class WorkspaceIndexProvider
             return ResolveCurrentSymbolSearch();
 
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
-        if (IsCurrentSelector(workspaceId))
+        if (SelectorTargetsCurrent(workspaceId))
             return ResolveCurrentSymbolSearch();
 
         return ResolveRegisteredSymbolSearch(workspaceId, ensureFresh);
@@ -95,7 +95,7 @@ public sealed class WorkspaceIndexProvider
             return ResolveCurrentContentSearch();
 
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
-        if (IsCurrentSelector(workspaceId))
+        if (SelectorTargetsCurrent(workspaceId))
             return ResolveCurrentContentSearch();
 
         return ResolveRegisteredContentSearch(workspaceId, ensureFresh);
@@ -404,6 +404,21 @@ public sealed class WorkspaceIndexProvider
         return !string.IsNullOrWhiteSpace(displayId) &&
                string.Equals(trimmed, displayId, StringComparison.OrdinalIgnoreCase);
     }
+
+    private bool SelectorTargetsCurrent(string selector)
+    {
+        if (IsCurrentSelector(selector))
+            return true;
+
+        WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(_registry, selector);
+        return IsCurrentWorkspace(row);
+    }
+
+    private bool IsCurrentWorkspace(WorkspaceRegistryRow row) =>
+        string.Equals(row.WorkspaceId, _currentWorkspace.WorkspaceId, StringComparison.Ordinal) ||
+        WorkspaceSafety.IsLiveWorkspace(
+            row.CanonicalRoot,
+            _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot);
 
     private readonly record struct CacheKey(string WorkspaceId, string IndexDbPath, long Revision);
 

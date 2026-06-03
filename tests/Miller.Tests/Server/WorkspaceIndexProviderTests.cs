@@ -169,6 +169,32 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     }
 
     [Fact]
+    public void ResolveSymbolSearch_CurrentDisplayIdPrefixRoutesToServedWorkspaceWithoutRefresh()
+    {
+        const string currentId = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
+        using var current = DbWithSymbol(currentId, revision: 1, "CurrentType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = Path.Combine(_dir, "current-display-prefix");
+        Directory.CreateDirectory(root);
+        string displayId = WorkspaceId.Display(root, currentId);
+        registry.UpsertSeen(currentId, displayId, root, current.DbPath);
+        registry.MarkScanned(currentId, revision: 1);
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspaceAt(root, current.DbPath, currentId),
+            registry,
+            refresh: _ => throw new InvalidOperationException("current display prefix should not refresh through registry"));
+
+        WorkspaceSymbolSearchContext context = provider.ResolveSymbolSearch("current-display-prefix-abcdef", ensureFresh: true);
+
+        Assert.Equal(currentId, context.WorkspaceId);
+        Assert.Equal(displayId, context.DisplayId);
+        Assert.Equal("current", context.FreshnessStatus);
+        var hit = Assert.Single(context.Index.Search("CurrentType", limit: 10));
+        Assert.Equal("CurrentType", context.Index.Resolve(hit.Document.DocId).Name);
+    }
+
+    [Fact]
     public void ResolveSymbolSearch_AmbiguousWorkspacePrefix_ReturnsClearError()
     {
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
