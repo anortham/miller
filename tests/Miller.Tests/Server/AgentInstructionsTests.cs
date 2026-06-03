@@ -36,6 +36,7 @@ public sealed class AgentInstructionsTests
     [Theory]
     [InlineData("`workspace_id`")]
     [InlineData("`ensure_fresh`")]
+    [InlineData("display ID")]
     public void Load_DocumentsCrossWorkspaceReadParameters(string parameterName)
     {
         string instructions = AgentInstructions.Load();

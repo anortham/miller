@@ -93,7 +93,8 @@ internal static class ReadToolRoutingTestSupport
         string? workspaceId,
         string workspaceRoot,
         bool? indexFresh = true,
-        string freshnessStatus = "current") =>
+        string freshnessStatus = "current",
+        string? displayId = null) =>
         new(
             index,
             new SmartTargetResolver(index),
@@ -103,7 +104,8 @@ internal static class ReadToolRoutingTestSupport
             Revision: 1,
             indexFresh,
             freshnessStatus,
-            WarningText: null);
+            WarningText: null,
+            DisplayId: displayId);
 
     public static WorkspaceSymbolSearchContext SearchContextFor(WorkspaceReadContext context) =>
         new(
@@ -123,7 +125,8 @@ internal static class ReadToolRoutingTestSupport
         string? workspaceId,
         string workspaceRoot,
         bool? indexFresh = true,
-        string freshnessStatus = "current") =>
+        string freshnessStatus = "current",
+        string? displayId = null) =>
         new(
             index,
             indexDbPath,
@@ -132,7 +135,8 @@ internal static class ReadToolRoutingTestSupport
             Revision: 1,
             indexFresh,
             freshnessStatus,
-            WarningText: null);
+            WarningText: null,
+            DisplayId: displayId);
 }
 
 internal sealed class HolderWorkspaceIndexProvider

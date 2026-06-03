@@ -142,8 +142,9 @@ polyglot fixture (MyraNext/Lab/Tycho-style, extracted on demand); refs/call-path
 ### M7 — `workspace` + polish + registry-backed dashboard
 **Deliverable:** admin tool and operational hygiene.
 - `workspace` (operation=status default | refresh | full | list | open | remove), backed by the central
-  `~/.miller/workspaces.db` registry. `status`, `refresh`, `full`, and `remove` accept `workspace_id` or `path`.
-- Read tools accept `workspace_id`; explicit cross-workspace reads default `ensure_fresh=true`.
+  `~/.miller/workspaces.db` registry. `status`, `refresh`, `full`, and `remove` accept a display ID, unique
+  prefix, full workspace ID, `current`, `primary`, or `path`.
+- Read tools accept the same `workspace_id` selectors; explicit cross-workspace reads default `ensure_fresh=true`.
 - Soft budgets: warn-on-overage for latency + tokens per tool (cheap early-warning for refinement).
 - Minimal Kestrel dashboard reproducing the tool-breakdown telemetry view, decoupled from MCP and the indexer.
   It discovers workspaces from the registry and reads the shared telemetry DB.

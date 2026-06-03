@@ -71,7 +71,7 @@ public sealed class WorkspaceIndexProvider
             return ResolveCurrent();
 
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
-        if (string.Equals(workspaceId, _currentWorkspace.WorkspaceId, StringComparison.Ordinal))
+        if (IsCurrentSelector(workspaceId))
             return ResolveCurrent();
 
         return ResolveRegistered(workspaceId, ensureFresh);
@@ -83,7 +83,7 @@ public sealed class WorkspaceIndexProvider
             return ResolveCurrentSymbolSearch();
 
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
-        if (string.Equals(workspaceId, _currentWorkspace.WorkspaceId, StringComparison.Ordinal))
+        if (IsCurrentSelector(workspaceId))
             return ResolveCurrentSymbolSearch();
 
         return ResolveRegisteredSymbolSearch(workspaceId, ensureFresh);
@@ -95,7 +95,7 @@ public sealed class WorkspaceIndexProvider
             return ResolveCurrentContentSearch();
 
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
-        if (string.Equals(workspaceId, _currentWorkspace.WorkspaceId, StringComparison.Ordinal))
+        if (IsCurrentSelector(workspaceId))
             return ResolveCurrentContentSearch();
 
         return ResolveRegisteredContentSearch(workspaceId, ensureFresh);
@@ -218,13 +218,13 @@ public sealed class WorkspaceIndexProvider
 
     private RegisteredWorkspaceState ResolveRegisteredState(string workspaceId, bool ensureFresh)
     {
-        WorkspaceRegistryRow row = GetRequiredRow(workspaceId);
+        WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(_registry, workspaceId);
         VerifyRegisteredRoot(row);
 
         WorkspaceRefreshResult? refreshResult = null;
         if (ensureFresh)
         {
-            refreshResult = _refresh(workspaceId);
+            refreshResult = _refresh(row.WorkspaceId);
             if (refreshResult.Status == WorkspaceRefreshStatus.MissingRoot)
                 throw new DirectoryNotFoundException(refreshResult.Error ?? $"Workspace root not found: {row.CanonicalRoot}");
             if (refreshResult.Status == WorkspaceRefreshStatus.MissingIndex)
@@ -233,9 +233,9 @@ public sealed class WorkspaceIndexProvider
                     refreshResult.IndexDbPath);
             if (refreshResult.Status == WorkspaceRefreshStatus.Failed)
                 throw new InvalidOperationException(
-                    refreshResult.Error ?? $"Workspace '{workspaceId}' refresh failed.");
+                    refreshResult.Error ?? $"Workspace '{row.WorkspaceId}' refresh failed.");
 
-            row = GetRequiredRow(workspaceId);
+            row = WorkspaceRegistrySelector.Resolve(_registry, row.WorkspaceId);
             VerifyRegisteredRoot(row);
         }
 
@@ -373,10 +373,6 @@ public sealed class WorkspaceIndexProvider
         }
     }
 
-    private WorkspaceRegistryRow GetRequiredRow(string workspaceId) =>
-        _registry.Get(workspaceId) ?? throw new KeyNotFoundException(
-            $"Workspace registry row '{workspaceId}' was not found.");
-
     private string? CurrentDisplayId()
     {
         if (string.IsNullOrWhiteSpace(_currentWorkspace.WorkspaceId))
@@ -391,6 +387,22 @@ public sealed class WorkspaceIndexProvider
         {
             return _currentWorkspace.WorkspaceId;
         }
+    }
+
+    private bool IsCurrentSelector(string selector)
+    {
+        string trimmed = selector.Trim();
+        if (string.Equals(trimmed, "current", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(trimmed, "primary", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (!string.IsNullOrWhiteSpace(_currentWorkspace.WorkspaceId) &&
+            string.Equals(trimmed, _currentWorkspace.WorkspaceId, StringComparison.Ordinal))
+            return true;
+
+        string? displayId = CurrentDisplayId();
+        return !string.IsNullOrWhiteSpace(displayId) &&
+               string.Equals(trimmed, displayId, StringComparison.OrdinalIgnoreCase);
     }
 
     private readonly record struct CacheKey(string WorkspaceId, string IndexDbPath, long Revision);

@@ -27,8 +27,12 @@ public sealed class WorkspaceRenderTests
         QueueEmpty: true);
 
     private static readonly TelemetrySummary Telemetry = new(
-        new[] { new ToolStat("search", 10, 120.0, 250, 400, 1, 5000) },
-        TotalCalls: 10, WindowStartTs: "2026-05-01T00:00:00.000Z", WindowEndTs: "2026-05-01T01:00:00.000Z",
+        new[]
+        {
+            new ToolStat("search", 10, 120.0, 250, 400, 1, 5000),
+            new ToolStat("inspect", 1, 900.0, 900, 900, 0, 2000),
+        },
+        TotalCalls: 11, WindowStartTs: "2026-05-01T00:00:00.000Z", WindowEndTs: "2026-05-01T01:00:00.000Z",
         DroppedWrites: 0);
 
     // ---- status ----
@@ -36,14 +40,17 @@ public sealed class WorkspaceRenderTests
     [Fact]
     public void Status_Compact_ShowsWorkspaceIndexAndTelemetryFacts()
     {
-        string text = WorkspaceRender.Status(Facts(), Telemetry, json: false);
+        const string fullId = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
+        string text = WorkspaceRender.Status(Facts() with { Root = "/repo/miller", WorkspaceId = fullId }, Telemetry, json: false);
 
-        Assert.Contains("/repo", text);
-        Assert.Contains("ws-123", text);
+        Assert.Contains("miller-abcdef123456", text);
+        Assert.DoesNotContain(fullId, text);
+        Assert.DoesNotContain("db:", text);
         Assert.Contains("565", text);            // document count
         Assert.Contains("42", text);             // built revision
         Assert.Contains("leader", text, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("search", text);         // the embedded telemetry breakdown
+        Assert.Contains("telemetry:", text);      // concise telemetry summary
+        Assert.Contains("search", text);         // top tool by p95
         Assert.Contains("250", text);            // a telemetry metric (p95)
     }
 
@@ -67,7 +74,7 @@ public sealed class WorkspaceRenderTests
         Assert.True(idx.GetProperty("queue_empty").GetBoolean());
 
         // The telemetry breakdown is embedded as a nested object (the same shape TelemetryRender.Json emits).
-        Assert.Equal(10, root.GetProperty("telemetry").GetProperty("total_calls").GetInt64());
+        Assert.Equal(11, root.GetProperty("telemetry").GetProperty("total_calls").GetInt64());
     }
 
     [Fact]
@@ -144,8 +151,11 @@ public sealed class WorkspaceRenderTests
         string text = WorkspaceRender.List(rows, json: false);
 
         Assert.Contains("# workspaces (2)", text);
-        Assert.Contains("ws-current", text);
-        Assert.Contains("ws-other", text);
+        Assert.Contains("current-111111111111", text);
+        Assert.Contains("other-222222222222", text);
+        Assert.DoesNotContain("workspace_id:", text);
+        Assert.DoesNotContain("/repo/current/.miller/symbols.db", text);
+        Assert.DoesNotContain("/repo/other/.miller/symbols.db", text);
         Assert.Contains("[current]", text);
         Assert.Contains("state: ready", text);
     }

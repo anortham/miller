@@ -70,8 +70,8 @@ docs/
 ## The tool surface (target)
 
 Seven tools, each with smart defaults so the common path is the simplest call: `search`, `inspect`, `context`,
-`trace`, `impact`, `edit`, `workspace`. Read tools accept `workspace_id` for registered workspaces; explicit
-`workspace_id` defaults `ensure_fresh=true`. Targets are smart strings, not JSON objects. See
+`trace`, `impact`, `edit`, `workspace`. Read tools accept a `workspace_id` selector: display ID, unique prefix,
+full ID, `current`, or `primary`. Explicit `workspace_id` defaults `ensure_fresh=true`. Targets are smart strings, not JSON objects. See
 [docs/findings/miller-toolbox.md](docs/findings/miller-toolbox.md).
 
 ## Build & test

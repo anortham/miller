@@ -1,7 +1,9 @@
 using System.Buffers;
+using System.Globalization;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using Miller.Indexing;
 using Miller.Server.Telemetry;
 
 namespace Miller.Server.Tools;
@@ -14,7 +16,7 @@ namespace Miller.Server.Tools;
 /// rides alongside as a <see cref="TelemetrySummary"/>.
 /// </summary>
 /// <param name="Root">The served workspace root (the CWD Miller was launched in).</param>
-/// <param name="WorkspaceId">julie's workspace id (SHA256 of the canonical root), or null if not yet known.</param>
+/// <param name="WorkspaceId">Miller's stable workspace id (SHA-256 of the canonical root), or null if not yet known.</param>
 /// <param name="DbPath">The julie extract DB path Miller reads.</param>
 /// <param name="IsLeader">Whether THIS instance holds the writer lock (runs the watcher/extract writes).</param>
 /// <param name="DocumentCount">Indexed symbol count of the live index.</param>
@@ -23,6 +25,7 @@ namespace Miller.Server.Tools;
 /// <param name="LatestObservedRevision">The latest revision the freshness poll has observed.</param>
 /// <param name="IndexFresh">The coarse <c>index_fresh</c> probe (built==latest AND queue empty); null = unknown.</param>
 /// <param name="QueueEmpty">Whether the leader's watcher queue holds no pending events (vacuously true on a reader).</param>
+/// <param name="DisplayId">Human-sized selector shown in compact output, when known from the registry.</param>
 public readonly record struct WorkspaceFacts(
     string Root,
     string? WorkspaceId,
@@ -35,7 +38,8 @@ public readonly record struct WorkspaceFacts(
     bool? IndexFresh,
     bool QueueEmpty,
     string? FreshnessStatus = null,
-    string? WarningText = null);
+    string? WarningText = null,
+    string? DisplayId = null);
 
 /// <summary>A registry-backed row rendered by <c>workspace list</c>.</summary>
 public readonly record struct WorkspaceListEntry(
@@ -154,24 +158,27 @@ public static class WorkspaceRender
     {
         var sb = new StringBuilder();
         sb.Append("# workspace\n");
-        sb.Append("root: ").Append(facts.Root).Append('\n');
-        sb.Append("workspace_id: ").Append(facts.WorkspaceId ?? "(unknown)").Append('\n');
-        sb.Append("db: ").Append(facts.DbPath).Append('\n');
-        sb.Append("role: ").Append(facts.IsLeader ? "leader (writer)" : "reader").Append('\n');
+        sb.Append(DisplayId(facts.Root, facts.WorkspaceId, facts.DisplayId))
+          .Append("  ").Append(facts.Root)
+          .Append("  [").Append(facts.IsLeader ? "leader" : "reader").Append("]\n");
 
-        sb.Append("\n# index\n");
-        sb.Append("symbols: ").Append(facts.DocumentCount).Append('\n');
-        sb.Append("extensions: ").Append(facts.KnownExtensionsCount).Append('\n');
-        sb.Append("built_revision: ").Append(facts.BuiltRevision).Append('\n');
-        sb.Append("latest_revision: ").Append(facts.LatestObservedRevision).Append('\n');
-        sb.Append("index_fresh: ").Append(FreshLabel(facts)).Append('\n');
-        if (!string.IsNullOrEmpty(facts.FreshnessStatus))
-            sb.Append("freshness_status: ").Append(facts.FreshnessStatus).Append('\n');
+        sb.Append("symbols: ").Append(facts.DocumentCount)
+          .Append("  ext: ").Append(facts.KnownExtensionsCount)
+          .Append("  rev: ").Append(facts.BuiltRevision);
+        if (facts.LatestObservedRevision != facts.BuiltRevision)
+            sb.Append('/').Append(facts.LatestObservedRevision);
+        sb.Append("  ").Append(FreshLabel(facts))
+          .Append("  queue: ").Append(facts.QueueEmpty ? "empty" : "pending")
+          .Append('\n');
+        if (!string.IsNullOrEmpty(facts.FreshnessStatus) &&
+            !string.Equals(facts.FreshnessStatus, "current", StringComparison.OrdinalIgnoreCase))
+            sb.Append("freshness: ").Append(facts.FreshnessStatus).Append('\n');
         if (!string.IsNullOrEmpty(facts.WarningText))
             sb.Append("warning: ").Append(facts.WarningText).Append('\n');
-        sb.Append("queue_empty: ").Append(facts.QueueEmpty ? "yes" : "no").Append('\n');
 
-        sb.Append('\n').Append(TelemetryRender.Compact(telemetry));
+        string telemetryLine = TelemetryLine(telemetry);
+        if (!string.IsNullOrEmpty(telemetryLine))
+            sb.Append(telemetryLine).Append('\n');
         return sb.ToString().TrimEnd('\n');
     }
 
@@ -182,6 +189,47 @@ public static class WorkspaceRender
         false => $"STALE (built {facts.BuiltRevision} < latest {facts.LatestObservedRevision})",
         null => "unknown",
     };
+
+    private static string DisplayId(string root, string? workspaceId, string? displayId)
+    {
+        if (!string.IsNullOrWhiteSpace(displayId))
+            return displayId;
+
+        if (string.IsNullOrWhiteSpace(workspaceId))
+            return "(unknown)";
+
+        try
+        {
+            return WorkspaceId.Display(root, workspaceId);
+        }
+        catch (ArgumentException)
+        {
+            return workspaceId;
+        }
+    }
+
+    private static string TelemetryLine(TelemetrySummary telemetry)
+    {
+        if (telemetry.Tools.Count == 0)
+            return string.Empty;
+
+        ToolStat top = telemetry.Tools
+            .OrderByDescending(static tool => tool.Calls)
+            .ThenByDescending(static tool => tool.P95Ms)
+            .ThenBy(static tool => tool.Tool, StringComparer.Ordinal)
+            .First();
+        long errors = telemetry.Tools.Sum(static tool => tool.ErrorCount);
+        var sb = new StringBuilder();
+        sb.Append("telemetry: ").Append(telemetry.TotalCalls.ToString(CultureInfo.InvariantCulture))
+          .Append(" calls");
+        if (errors > 0)
+            sb.Append("  errors=").Append(errors.ToString(CultureInfo.InvariantCulture));
+        sb.Append("  top=").Append(top.Tool)
+          .Append(" p95=").Append(top.P95Ms.ToString(CultureInfo.InvariantCulture)).Append("ms");
+        if (telemetry.DroppedWrites > 0)
+            sb.Append("  dropped=").Append(telemetry.DroppedWrites.ToString(CultureInfo.InvariantCulture));
+        return sb.ToString();
+    }
 
     private static string StatusJson(WorkspaceFacts facts, TelemetrySummary telemetry)
     {
@@ -195,6 +243,8 @@ public static class WorkspaceRender
             w.WriteString("root", facts.Root);
             if (facts.WorkspaceId is null) w.WriteNull("workspace_id");
             else w.WriteString("workspace_id", facts.WorkspaceId);
+            if (facts.DisplayId is null) w.WriteNull("display_id");
+            else w.WriteString("display_id", facts.DisplayId);
             w.WriteString("db", facts.DbPath);
             w.WriteBoolean("leader", facts.IsLeader);
             w.WriteEndObject();
@@ -242,13 +292,14 @@ public static class WorkspaceRender
     private static string ListCompact(WorkspaceFacts facts)
     {
         var sb = new StringBuilder();
-        sb.Append("# workspaces (1 — Miller serves one workspace per process)\n");
-        sb.Append("* ").Append(facts.Root).Append("  [current]\n");
-        sb.Append("  workspace_id: ").Append(facts.WorkspaceId ?? "(unknown)").Append('\n');
-        sb.Append("  symbols: ").Append(facts.DocumentCount)
-          .Append("  built_revision: ").Append(facts.BuiltRevision)
-          .Append("  index_fresh: ").Append(FreshLabel(facts))
-          .Append("  role: ").Append(facts.IsLeader ? "leader" : "reader");
+        sb.Append("# workspaces (1)\n");
+        sb.Append("* ").Append(DisplayId(facts.Root, facts.WorkspaceId, facts.DisplayId))
+          .Append("  ").Append(facts.Root)
+          .Append("  [current]")
+          .Append("  symbols=").Append(facts.DocumentCount)
+          .Append("  rev=").Append(facts.BuiltRevision)
+          .Append("  ").Append(FreshLabel(facts))
+          .Append("  role=").Append(facts.IsLeader ? "leader" : "reader");
         return sb.ToString();
     }
 
@@ -261,12 +312,8 @@ public static class WorkspaceRender
             sb.Append("* ").Append(entry.DisplayId).Append("  ").Append(entry.Root);
             if (entry.Current)
                 sb.Append("  [current]");
-            sb.Append('\n');
-            sb.Append("  workspace_id: ").Append(entry.WorkspaceId)
-              .Append("  state: ").Append(entry.State)
-              .Append("  revision: ").Append(entry.LastRevision?.ToString() ?? "(unknown)")
-              .Append('\n');
-            sb.Append("  db: ").Append(entry.DbPath);
+            sb.Append("  state: ").Append(entry.State)
+              .Append("  rev: ").Append(entry.LastRevision?.ToString() ?? "(unknown)");
             if (!string.IsNullOrEmpty(entry.LastError))
                 sb.Append('\n').Append("  error: ").Append(entry.LastError);
             sb.Append('\n');

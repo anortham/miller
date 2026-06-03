@@ -123,6 +123,77 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Assert.Equal("TargetType", context.Index.Resolve(hit.Document.DocId).Name);
     }
 
+    [Theory]
+    [InlineData("target-111111111111")]
+    [InlineData("target-1111")]
+    [InlineData("target-ws")]
+    public void ResolveSymbolSearch_RegisteredWorkspace_AcceptsDisplayIdAndUniquePrefix(string selector)
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-symbol-alias");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry);
+
+        WorkspaceSymbolSearchContext context = provider.ResolveSymbolSearch(selector, ensureFresh: false);
+
+        Assert.Equal("target-ws", context.WorkspaceId);
+        Assert.Equal("target-111111111111", context.DisplayId);
+        var hit = Assert.Single(context.Index.Search("TargetType", limit: 10));
+        Assert.Equal("TargetType", context.Index.Resolve(hit.Document.DocId).Name);
+    }
+
+    [Theory]
+    [InlineData("current")]
+    [InlineData("primary")]
+    public void ResolveSymbolSearch_CurrentAliasesRouteToServedWorkspace(string selector)
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry);
+
+        WorkspaceSymbolSearchContext context = provider.ResolveSymbolSearch(selector, ensureFresh: false);
+
+        Assert.Equal("current-ws", context.WorkspaceId);
+        var hit = Assert.Single(context.Index.Search("CurrentType", limit: 10));
+        Assert.Equal("CurrentType", context.Index.Resolve(hit.Document.DocId).Name);
+    }
+
+    [Fact]
+    public void ResolveSymbolSearch_AmbiguousWorkspacePrefix_ReturnsClearError()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var targetA = DbWithSymbol("target-a", revision: 1, "TargetA");
+        using var targetB = DbWithSymbol("target-b", revision: 1, "TargetB");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string rootA = NewRoot("target-ambiguous-a");
+        string rootB = NewRoot("target-ambiguous-b");
+        registry.UpsertSeen("target-a", "target-111111111111", rootA, targetA.DbPath);
+        registry.MarkScanned("target-a", revision: 1);
+        registry.UpsertSeen("target-b", "target-222222222222", rootB, targetB.DbPath);
+        registry.MarkScanned("target-b", revision: 1);
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry);
+
+        var ex = Assert.Throws<KeyNotFoundException>(() =>
+            provider.ResolveSymbolSearch("target", ensureFresh: false));
+
+        Assert.Contains("ambiguous workspace selector 'target'", ex.Message);
+        Assert.Contains("target-111111111111", ex.Message);
+        Assert.Contains("target-222222222222", ex.Message);
+    }
+
     [Fact]
     public void ResolveSymbolSearch_RegisteredWorkspace_CachesByWorkspacePathAndRevision()
     {

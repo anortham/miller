@@ -72,7 +72,7 @@ public sealed class SearchTool
         [Description("Hide test code: leave unset to auto-hide for natural-language queries; true/false to force.")]
         bool? exclude_tests = null,
         [Description("Output format: compact|json. Default compact.")] string format = "compact",
-        [Description("Registered workspace id to query. Omit for the current workspace.")] string? workspace_id = null,
+        [Description("Workspace selector: display_id, unique prefix, full id, current, or primary.")] string? workspace_id = null,
         [Description("Refresh a registered workspace before reading. Defaults true when workspace_id is supplied.")]
         bool? ensure_fresh = null)
     {
@@ -140,7 +140,7 @@ public sealed class SearchTool
     /// string and sets <paramref name="renderedCount"/> to the number of rows actually shown (the page).
     /// </summary>
     public static string Run(
-        ISymbolSearchIndex index, string query, SearchToolMode mode, int limit,
+        ISymbolLookupIndex index, string query, SearchToolMode mode, int limit,
         bool? excludeTests, bool json, out int renderedCount, string? compactBanner = null)
     {
         ArgumentNullException.ThrowIfNull(index);
@@ -150,22 +150,29 @@ public sealed class SearchTool
         // Pull enough to know whether there is an overflow beyond `limit` after the test filter, so the
         // "… N more" note is accurate. Cap the over-fetch to avoid pathological cost.
         int overFetch = Math.Min(limit * 4 + 10, 500);
-        IReadOnlyList<SearchHit> hits = index.Search(query, overFetch, SearchMode.Or);
+        bool fileMode = mode == SearchToolMode.File ||
+                        (mode == SearchToolMode.Auto && IsPathLikeQuery(query, index));
 
         bool hideTests = ResolveExcludeTests(excludeTests, query, mode);
 
         // Preserve index order; only filter (never re-sort).
-        var kept = new List<IndexedSymbol>(hits.Count);
-        var scores = new List<double>(hits.Count);
-        foreach (var hit in hits)
+        var kept = new List<IndexedSymbol>();
+        var scores = new List<double>();
+        if (fileMode)
         {
-            var sym = index.Resolve(hit.Document.DocId);
-            // Cross-language predicate (decision-4): julie's persisted is_test OR the path fallback. Using the
-            // shared helper means an AST-flagged test in a non-test-named file is hidden, not just *Tests.cs.
-            if (hideTests && IsTestPath.IsTest(sym))
-                continue;
-            kept.Add(sym);
-            scores.Add(hit.Score);
+            IReadOnlyList<IndexedSymbol> symbols = index.FindByFilePathFragment(query, overFetch);
+            kept.Capacity = symbols.Count;
+            scores.Capacity = symbols.Count;
+            foreach (IndexedSymbol sym in symbols)
+                AddIfVisible(sym, score: 1.0);
+        }
+        else
+        {
+            IReadOnlyList<SearchHit> hits = index.Search(query, overFetch, SearchMode.Or);
+            kept.Capacity = hits.Count;
+            scores.Capacity = hits.Count;
+            foreach (var hit in hits)
+                AddIfVisible(index.Resolve(hit.Document.DocId), hit.Score);
         }
 
         int total = kept.Count;
@@ -178,6 +185,16 @@ public sealed class SearchTool
         return json
             ? RenderJson(kept, scores, page)
             : RenderCompact(kept, page, total, compactBanner);
+
+        void AddIfVisible(IndexedSymbol sym, double score)
+        {
+            // Cross-language predicate (decision-4): julie's persisted is_test OR the path fallback. Using the
+            // shared helper means an AST-flagged test in a non-test-named file is hidden, not just *Tests.cs.
+            if (hideTests && IsTestPath.IsTest(sym))
+                return;
+            kept.Add(sym);
+            scores.Add(score);
+        }
     }
 
     /// <summary>
@@ -239,6 +256,15 @@ public sealed class SearchTool
                 return true;
         }
         return false;
+    }
+
+    private static bool IsPathLikeQuery(string query, ISymbolLookupIndex index)
+    {
+        if (query.Contains('/') || query.Contains('\\'))
+            return true;
+
+        string ext = Path.GetExtension(query.Trim());
+        return ext.Length > 1 && index.KnownExtensions.Contains(ext);
     }
 
     private static string RenderCompact(IReadOnlyList<IndexedSymbol> kept, int page, int total, string? compactBanner)

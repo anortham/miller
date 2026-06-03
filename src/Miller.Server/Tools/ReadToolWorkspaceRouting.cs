@@ -54,16 +54,18 @@ internal static class ReadToolWorkspaceRouting
         string? requestedWorkspaceId,
         bool json)
     {
-        if (json || string.IsNullOrWhiteSpace(requestedWorkspaceId))
+        if (json)
+            return null;
+
+        bool showFreshness = ShouldShowFreshness(indexFresh, freshnessStatus);
+        if (string.IsNullOrWhiteSpace(requestedWorkspaceId) && !showFreshness)
             return null;
 
         var sb = new StringBuilder();
         sb.Append("workspace: ")
-          .Append(Display(displayId, workspaceId, requestedWorkspaceId))
-          .Append(' ')
-          .Append(workspaceRoot);
+          .Append(Display(displayId, workspaceId, requestedWorkspaceId));
 
-        if (ShouldShowFreshness(indexFresh, freshnessStatus))
+        if (showFreshness)
             sb.Append('\n').Append("freshness: ").Append(freshnessStatus);
 
         return sb.ToString();
@@ -102,6 +104,8 @@ internal static class ReadToolWorkspaceRouting
     private static bool ShouldShowFreshness(bool? indexFresh, string freshnessStatus)
     {
         if (string.IsNullOrWhiteSpace(freshnessStatus))
+            return false;
+        if (string.Equals(freshnessStatus, "current", StringComparison.OrdinalIgnoreCase))
             return false;
 
         return indexFresh != true ||

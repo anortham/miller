@@ -24,8 +24,8 @@ the tokens.
   code is auto-hidden for natural-language queries (`exclude_tests=false` to force them in). The first move for
   "where is…?". Use `mode=content` (alias `docs`) to search docs/prose file CONTENT instead of symbols — it
   returns `path:line` + a snippet window, for files symbol search can't see (markdown, config, plain text).
-  Optional `workspace_id` queries another registered workspace; explicit `workspace_id` defaults
-  `ensure_fresh=true`.
+  Optional `workspace_id` accepts a display ID, unique prefix, full ID, `current`, or `primary`; explicit
+  `workspace_id` defaults `ensure_fresh=true`.
 - `inspect` — A file or symbol you can already name. A file path lists its symbols; a symbol name gives its
   definition, signature, and docs. `depth=full` adds references, callers/callees, and the body. Use before
   reading an entire file. Optional `workspace_id` and `ensure_fresh` follow the same rules as `search`.
@@ -60,8 +60,9 @@ the tokens.
   re-run `impact` if the surface changed.
 - **Edit a symbol**: `inspect` it → `edit … dry_run` (the default) → `edit … apply=true`.
 - **Index looks stale**: `workspace refresh` (or `workspace full` to force a clean rebuild).
-- **Need another repo**: `workspace list` → pass `workspace_id` to `search`/`inspect`/`context`/`impact`/`trace`.
-  Use `ensure_fresh=false` only when a fast best-effort stale read is acceptable.
+- **Need another repo**: `workspace list` → pass the displayed ID (or a unique prefix) as `workspace_id` to
+  `search`/`inspect`/`context`/`impact`/`trace`. Use `ensure_fresh=false` only when a fast best-effort stale
+  read is acceptable.
 
 Do not use `grep`/`find`/`rg` when a Miller tool fits. Do not read a whole file before `inspect`. Do not chain
 several lookups when one `inspect depth=full` or `context` call answers the question.

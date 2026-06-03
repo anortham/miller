@@ -121,6 +121,9 @@ public sealed class SymbolSearchProjection : ISymbolLookupIndex
         return _byFilePath.TryGetValue(filePath, out var list) ? list : Empty;
     }
 
+    public IReadOnlyList<IndexedSymbol> FindByFilePathFragment(string query, int limit) =>
+        FilePathSymbolLookup.FindByFilePathFragment(_byFilePath, query, limit);
+
     public bool IsIndexedFilePath(string path)
     {
         ArgumentNullException.ThrowIfNull(path);

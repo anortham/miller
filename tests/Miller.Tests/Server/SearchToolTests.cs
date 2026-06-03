@@ -85,7 +85,6 @@ public sealed class SearchToolTests
     [InlineData(SearchToolMode.Auto)]
     [InlineData(SearchToolMode.Text)]
     [InlineData(SearchToolMode.Symbol)]
-    [InlineData(SearchToolMode.File)]
     public void Run_SymbolModes_RenderExactCompactShape(SearchToolMode mode)
     {
         var index = new StubSymbolSearchIndex(
@@ -94,15 +93,49 @@ public sealed class SearchToolTests
             (Symbol(2, "sym-gamma", "Gamma", "function", "src/Gamma.cs", 11, "Gamma()"), 0.25));
 
         string output = SearchTool.Run(index, "Alpha", mode, limit: 2,
-            excludeTests: null, json: false, out int count, compactBanner: "workspace: target-ws /tmp/root");
+            excludeTests: null, json: false, out int count, compactBanner: "workspace: target-ws");
 
         Assert.Equal(2, count);
         Assert.Equal(
-            "workspace: target-ws /tmp/root\n" +
+            "workspace: target-ws\n" +
             "Alpha  method  src/Alpha.cs:7  public void Alpha()\n" +
             "Beta  class  src/Beta.cs:3\n" +
             "… 1 more (raise limit)",
             output);
+    }
+
+    [Fact]
+    public void Run_FileMode_SearchesFilePathFragments()
+    {
+        var index = SymbolSearchProjection.Build([
+            Symbol(0, "sym-file-hit", "ActualFileSymbol", "class",
+                "src/Miller.Server/Tools/SearchTool.cs", 9),
+            Symbol(1, "sym-symbol-decoy", "SearchTool", "class",
+                "src/NotTheFile.cs", 3),
+        ]);
+
+        string output = SearchTool.Run(index, "SearchTool.cs", SearchToolMode.File, limit: 10,
+            excludeTests: null, json: false, out int count);
+
+        Assert.Equal(1, count);
+        Assert.Equal("ActualFileSymbol  class  src/Miller.Server/Tools/SearchTool.cs:9", output);
+    }
+
+    [Fact]
+    public void Run_AutoMode_RoutesPathLikeQueryToFileSearch()
+    {
+        var index = SymbolSearchProjection.Build([
+            Symbol(0, "sym-file-hit", "ActualFileSymbol", "class",
+                "src/Miller.Server/Tools/SearchTool.cs", 9),
+            Symbol(1, "sym-symbol-decoy", "SearchTool", "class",
+                "src/NotTheFile.cs", 3),
+        ]);
+
+        string output = SearchTool.Run(index, "src/Miller.Server/Tools/SearchTool.cs", SearchToolMode.Auto, limit: 10,
+            excludeTests: null, json: false, out int count);
+
+        Assert.Equal(1, count);
+        Assert.Equal("ActualFileSymbol  class  src/Miller.Server/Tools/SearchTool.cs:9", output);
     }
 
     [Fact]
@@ -314,15 +347,20 @@ public sealed class SearchToolTests
         string targetRoot = Path.Combine(Path.GetTempPath(), "miller-target-" + Guid.NewGuid().ToString("N"));
         var provider = new RecordingWorkspaceIndexProvider(
             ReadToolRoutingTestSupport.ContextFor(BuildIndex(current), current.DbPath, "current-ws", currentRoot),
-            ("target-ws", ReadToolRoutingTestSupport.ContextFor(BuildIndex(target), target.DbPath, "target-ws", targetRoot)));
+            ("target-ws", ReadToolRoutingTestSupport.ContextFor(
+                BuildIndex(target),
+                target.DbPath,
+                "target-ws",
+                targetRoot,
+                displayId: "target-111111111111")));
         var tool = new SearchTool(provider, provider);
 
         string output = tool.Search("TargetOnly", workspace_id: "target-ws");
 
         Assert.Equal("target-ws", provider.LastWorkspaceId);
         Assert.True(provider.LastEnsureFresh);
-        Assert.StartsWith("workspace: target-ws ", output);
-        Assert.Contains(targetRoot, output);
+        Assert.StartsWith("workspace: target-111111111111\n", output);
+        Assert.DoesNotContain(targetRoot, output);
         Assert.Contains("TargetOnly", output);
     }
 
@@ -344,7 +382,8 @@ public sealed class SearchToolTests
                 "target-ws",
                 targetRoot,
                 indexFresh: false,
-                freshnessStatus: "loaded_existing")));
+                freshnessStatus: "loaded_existing",
+                displayId: "target-111111111111")));
         var tool = new SearchTool(provider, provider);
 
         try
@@ -356,7 +395,9 @@ public sealed class SearchToolTests
 
                 Assert.Equal("target-ws", provider.LastWorkspaceId);
                 Assert.False(provider.LastEnsureFresh);
+                Assert.StartsWith("workspace: target-111111111111\n", output);
                 Assert.Contains("freshness: loaded_existing", output);
+                Assert.DoesNotContain(targetRoot, output);
                 Assert.Contains("TargetOnly", output);
             }
 
@@ -460,8 +501,8 @@ public sealed class SearchToolTests
         Assert.True(provider.LastEnsureFresh); // explicit workspace_id defaults ensure_fresh=true
         Assert.Equal(1, provider.ContentSearchResolveCount);
         Assert.Equal(0, provider.SymbolSearchResolveCount); // content mode never touches the symbol provider
-        Assert.StartsWith("workspace: target-ws ", output);
-        Assert.Contains(targetRoot, output);
+        Assert.StartsWith("workspace: target-ws\n", output);
+        Assert.DoesNotContain(targetRoot, output);
         Assert.Contains("docs/guide.md:2", output);
         Assert.Contains("The freshness gate verifies blake3", output);
     }
@@ -520,23 +561,56 @@ public sealed class SearchToolTests
         Assert.Contains("CurrentOnly", output);
     }
 
-    private sealed class StubSymbolSearchIndex : ISymbolSearchIndex
+    private sealed class StubSymbolSearchIndex : ISymbolLookupIndex
     {
         private readonly SearchHit[] _hits;
         private readonly Dictionary<int, IndexedSymbol> _symbols;
+        private readonly Dictionary<string, List<IndexedSymbol>> _byName;
+        private readonly Dictionary<string, List<IndexedSymbol>> _byFilePath;
 
         public StubSymbolSearchIndex(params (IndexedSymbol Symbol, double Score)[] rows)
         {
             _symbols = rows.ToDictionary(static row => row.Symbol.DocId, static row => row.Symbol);
+            _byName = rows
+                .GroupBy(static row => row.Symbol.Name, StringComparer.Ordinal)
+                .ToDictionary(static group => group.Key, static group => group.Select(row => row.Symbol).ToList(),
+                    StringComparer.Ordinal);
+            _byFilePath = rows
+                .GroupBy(static row => row.Symbol.FilePath, StringComparer.Ordinal)
+                .ToDictionary(static group => group.Key, static group => group.Select(row => row.Symbol).ToList(),
+                    StringComparer.Ordinal);
             _hits = rows
                 .Select(static row => new SearchHit(row.Symbol.ToSearchableDocument(), row.Score))
                 .ToArray();
+            KnownExtensions = rows
+                .Select(static row => Path.GetExtension(row.Symbol.FilePath))
+                .Where(static ext => ext.Length > 1)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
         }
 
         public int DocumentCount => _symbols.Count;
 
+        public IReadOnlySet<string> KnownExtensions { get; }
+
         public IReadOnlyList<SearchHit> Search(string query, int limit = 10, SearchMode mode = SearchMode.Or) =>
             _hits.Take(limit).ToArray();
+
+        public IReadOnlyList<IndexedSymbol> FindByName(string name) =>
+            _byName.TryGetValue(name, out var symbols) ? symbols : Array.Empty<IndexedSymbol>();
+
+        public IndexedSymbol? FindBySymbolId(string symbolId) =>
+            _symbols.Values.FirstOrDefault(symbol => symbol.SymbolId == symbolId);
+
+        public IReadOnlyList<IndexedSymbol> FindByFilePath(string filePath) =>
+            _byFilePath.TryGetValue(filePath, out var symbols) ? symbols : Array.Empty<IndexedSymbol>();
+
+        public IReadOnlyList<IndexedSymbol> FindByFilePathFragment(string query, int limit) =>
+            FilePathSymbolLookup.FindByFilePathFragment(_byFilePath, query, limit);
+
+        public bool IsIndexedFilePath(string path) => _byFilePath.ContainsKey(path);
+
+        public string? ResolveIndexedFilePath(string target) =>
+            IsIndexedFilePath(target) ? target : null;
 
         public IndexedSymbol Resolve(int docId) => _symbols[docId];
     }

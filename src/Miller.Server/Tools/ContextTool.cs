@@ -61,7 +61,7 @@ public sealed partial class ContextTool
         [Description("A stack trace; its symbol tokens are folded into the seeds. Optional.")]
         string? stack_trace = null,
         [Description("Output format: compact|json. Default compact.")] string format = "compact",
-        [Description("Registered workspace id to query. Omit for the current workspace.")] string? workspace_id = null,
+        [Description("Workspace selector: display_id, unique prefix, full id, current, or primary.")] string? workspace_id = null,
         [Description("Refresh a registered workspace before reading. Defaults true when workspace_id is supplied.")]
         bool? ensure_fresh = null)
     {

@@ -77,9 +77,9 @@ scripts/test.sh all     # both
   is no per-pid file and no startup reaper (both removed 2026-05-31; see the superseded D1/D6 notes in
   [`docs/m8-design.md`](docs/m8-design.md)).
 - **Workspace registry.** Index DBs stay local at `<workspace>/.miller/symbols.db`; the central discovery
-  surface is `~/.miller/workspaces.db`. Read tools accept `workspace_id` and `ensure_fresh`; explicit
-  `workspace_id` defaults to refresh-first. The dashboard reads the registry and shared telemetry DB, not
-  the filesystem.
+  surface is `~/.miller/workspaces.db`. Read tools accept `workspace_id` selectors: display ID, unique prefix,
+  full ID, `current`, or `primary`; explicit `workspace_id` defaults to refresh-first. The dashboard reads the
+  registry and shared telemetry DB, not the filesystem.
 - **Hash split.** Stable `workspace_id` is SHA-256 of the canonical root. File freshness uses
   `files.content_hash` (`blake3:<hex>`, normalized before comparison) and is guarded by
   `artifact_metadata.hash_algorithm=blake3`.

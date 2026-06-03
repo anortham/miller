@@ -69,7 +69,7 @@ public sealed class TraceTool
         [Description("Max links/neighbours to return. Default 20.")] int limit = 20,
         [Description("Output format: compact|full. full adds the firing signals per bridge link. Default compact.")]
         string format = "compact",
-        [Description("Registered workspace id to query. Omit for the current workspace.")] string? workspace_id = null,
+        [Description("Workspace selector: display_id, unique prefix, full id, current, or primary.")] string? workspace_id = null,
         [Description("Refresh a registered workspace before reading. Defaults true when workspace_id is supplied.")]
         bool? ensure_fresh = null)
     {

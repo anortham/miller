@@ -336,8 +336,8 @@ public sealed class ContextToolTests
 
         Assert.Equal("target-ws", provider.LastWorkspaceId);
         Assert.True(provider.LastEnsureFresh);
-        Assert.StartsWith("workspace: target-ws ", output);
-        Assert.Contains(targetRoot, output);
+        Assert.StartsWith("workspace: target-ws\n", output);
+        Assert.DoesNotContain(targetRoot, output);
         Assert.Contains("OrderService", output);
     }
 

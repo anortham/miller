@@ -133,10 +133,10 @@ public sealed class LiveWorkspaceTests : IDisposable
         string output = tool.Workspace(); // status, compact
 
         Assert.Contains(root, output);
-        Assert.Contains("# index", output);
+        Assert.Contains("# workspace", output);
         Assert.Contains("symbols:", output);
-        Assert.Contains("search", output);  // the telemetry breakdown surfaces the recorded tools
-        Assert.Contains("inspect", output);
+        Assert.Contains("telemetry:", output);  // compact status surfaces the telemetry summary
+        Assert.Contains("top=search", output);
     }
 
     [Fact]

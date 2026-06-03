@@ -249,7 +249,7 @@ public sealed class WorkspaceToolTests : IDisposable
 
         Assert.Contains(root, output);
         Assert.Contains(Ws, output);
-        Assert.Contains("# index", output);
+        Assert.Contains("# workspace", output);
         Assert.Contains("symbols:", output);
         // A non-leader (never-started indexer) reads as "reader", not leader — honest about this process's role.
         Assert.Contains("reader", output, StringComparison.OrdinalIgnoreCase);
@@ -331,6 +331,26 @@ public sealed class WorkspaceToolTests : IDisposable
         Assert.True(doc.RootElement.GetProperty("index").GetProperty("document_count").GetInt64() > 0);
         Assert.Equal(9, doc.RootElement.GetProperty("index").GetProperty("built_revision").GetInt64());
         Assert.Equal("ready", doc.RootElement.GetProperty("index").GetProperty("freshness_status").GetString());
+    }
+
+    [Fact]
+    public void Status_ByDisplayId_ReadsRegisteredWorkspace()
+    {
+        using var current = CreateSynth(revision: 4, workspaceId: Ws);
+        using var other = CreateSynth(revision: 9, workspaceId: OtherWs);
+        WorkspaceToolHarness harness = BuildHarness(current, builtRevision: 4, workspaceId: Ws);
+        string otherRoot = Path.GetDirectoryName(other.DbPath)!;
+        harness.Registry.UpsertSeen(OtherWs, "other-111111111111", otherRoot, other.DbPath, WorkspaceRegistryState.Ready);
+        harness.Registry.MarkScanned(OtherWs, revision: 9);
+
+        using var doc = JsonDocument.Parse(harness.Tool.Workspace(
+            operation: "status",
+            workspace_id: "other-111111111111",
+            format: "json"));
+
+        Assert.Equal(OtherWs, doc.RootElement.GetProperty("workspace").GetProperty("workspace_id").GetString());
+        Assert.Equal(otherRoot, doc.RootElement.GetProperty("workspace").GetProperty("root").GetString());
+        Assert.Equal(9, doc.RootElement.GetProperty("index").GetProperty("built_revision").GetInt64());
     }
 
     [Fact]
@@ -424,8 +444,9 @@ public sealed class WorkspaceToolTests : IDisposable
         string output = harness.Tool.Workspace(operation: "status", path: otherRoot);
 
         Assert.Contains(otherRoot, output);
-        Assert.Contains(OtherWs, output);
-        Assert.Contains("freshness_status: ready", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("other-111111111111", output);
+        Assert.DoesNotContain(OtherWs, output);
+        Assert.Contains("freshness: ready", output, StringComparison.OrdinalIgnoreCase);
     }
 
     // ---- open / remove arg guards ----
@@ -883,8 +904,8 @@ public sealed class WorkspaceToolTests : IDisposable
 
         string output = tool.Workspace(operation: "status", workspace_id: "missing-workspace-id");
 
-        Assert.Contains("unknown workspace_id", output, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("workspace(operation=\"open\"", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("unknown workspace selector", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("workspace(operation=\"list\"", output, StringComparison.OrdinalIgnoreCase);
         Assert.False(output.StartsWith("workspace failed", StringComparison.Ordinal));
     }
 

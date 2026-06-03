@@ -115,7 +115,7 @@ public sealed class WorkspaceTool
         "from scratch, list to see registered workspaces.")]
     public string Workspace(
         [Description("status|refresh|full|list|open|remove. Default status.")] string operation = "status",
-        [Description("Registered workspace id. Optional for status/refresh/full/remove; ignored by list/open.")]
+        [Description("Workspace selector: display_id, unique prefix, full id, current, or primary.")]
         string? workspace_id = null,
         [Description("A workspace root path. Required for open; optional for status/refresh/full/remove.")]
         string? path = null,
@@ -215,7 +215,8 @@ public sealed class WorkspaceTool
                 IndexFresh: false,
                 QueueEmpty: true,
                 FreshnessStatus: "missing_index",
-                WarningText: error);
+                WarningText: error,
+                DisplayId: row.DisplayId);
             return (WorkspaceRender.Status(missingFacts, _ledger.SummarizeForWorkspace(row.WorkspaceId), json),
                 1, TelemetryOutcome.Empty);
         }
@@ -232,7 +233,8 @@ public sealed class WorkspaceTool
             IndexFresh: WorkspaceFreshnessView.IndexFreshFor(refreshResult: null, row),
             QueueEmpty: true,
             FreshnessStatus: WorkspaceFreshnessView.FreshnessStatusFor(refreshResult: null, row),
-            WarningText: WorkspaceFreshnessView.WarningTextFor(refreshResult: null));
+            WarningText: WorkspaceFreshnessView.WarningTextFor(refreshResult: null),
+            DisplayId: row.DisplayId);
         return (WorkspaceRender.Status(facts, _ledger.SummarizeForWorkspace(row.WorkspaceId), json),
             1, TelemetryOutcome.Ok);
     }
@@ -272,7 +274,8 @@ public sealed class WorkspaceTool
             LatestObservedRevision: _freshness.LatestObservedRevision,
             IndexFresh: _freshProbe.Compute(),
             QueueEmpty: _indexer.QueueEmpty,
-            FreshnessStatus: "current");
+            FreshnessStatus: "current",
+            DisplayId: CurrentDisplayId());
     }
 
     // ---------- refresh / full ----------
@@ -529,13 +532,18 @@ public sealed class WorkspaceTool
     {
         if (!string.IsNullOrWhiteSpace(workspaceId))
         {
-            if (string.Equals(workspaceId, _workspace.WorkspaceId, StringComparison.Ordinal))
+            if (IsCurrentSelector(workspaceId))
                 return TargetWorkspace.Current(_workspace.WorkspaceId);
 
-            WorkspaceRegistryRow? row = _registry.Get(workspaceId);
-            return row is null
-                ? TargetWorkspace.Unknown(UnknownWorkspaceIdNote(workspaceId))
-                : TargetWorkspace.Registered(row, IsCurrentWorkspace(row));
+            try
+            {
+                WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(_registry, workspaceId);
+                return TargetWorkspace.Registered(row, IsCurrentWorkspace(row));
+            }
+            catch (KeyNotFoundException ex)
+            {
+                return TargetWorkspace.Unknown(ex.Message);
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(path))
@@ -571,6 +579,38 @@ public sealed class WorkspaceTool
         string.Equals(row.WorkspaceId, _workspace.WorkspaceId, StringComparison.Ordinal)
         || WorkspaceSafety.IsLiveWorkspace(row.CanonicalRoot, _workspace.WorkspaceRoot);
 
+    private bool IsCurrentSelector(string selector)
+    {
+        string trimmed = selector.Trim();
+        if (string.Equals(trimmed, "current", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(trimmed, "primary", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (!string.IsNullOrWhiteSpace(_workspace.WorkspaceId) &&
+            string.Equals(trimmed, _workspace.WorkspaceId, StringComparison.Ordinal))
+            return true;
+
+        string? displayId = CurrentDisplayId();
+        return !string.IsNullOrWhiteSpace(displayId) &&
+               string.Equals(trimmed, displayId, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private string? CurrentDisplayId()
+    {
+        if (string.IsNullOrWhiteSpace(_workspace.WorkspaceId))
+            return null;
+
+        string root = _workspace.CanonicalRoot ?? _workspace.WorkspaceRoot;
+        try
+        {
+            return WorkspaceId.Display(root, _workspace.WorkspaceId);
+        }
+        catch (ArgumentException)
+        {
+            return _workspace.WorkspaceId;
+        }
+    }
+
     private void VerifyRegisteredRoot(WorkspaceRegistryRow row)
     {
         if (!Directory.Exists(row.CanonicalRoot))
@@ -592,8 +632,8 @@ public sealed class WorkspaceTool
     }
 
     private static string UnknownWorkspaceIdNote(string workspaceId) =>
-        $"unknown workspace_id '{workspaceId}'. Run workspace(operation=\"open\", path=\"/repo\") " +
-        "to register a workspace, then retry with workspace_id.";
+        $"unknown workspace selector '{workspaceId}'. Run workspace(operation=\"list\") to see display IDs, or " +
+        "workspace(operation=\"open\", path=\"/repo\") to register a workspace.";
 
     private static string UnknownWorkspacePathNote(string path) =>
         $"unknown workspace path '{path}'. Run workspace(operation=\"open\", path=\"{path}\") " +

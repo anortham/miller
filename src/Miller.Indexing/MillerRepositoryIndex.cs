@@ -251,6 +251,9 @@ public sealed class MillerRepositoryIndex : ISymbolLookupIndex
         return _byFilePath.TryGetValue(filePath, out var list) ? list : Empty;
     }
 
+    public IReadOnlyList<IndexedSymbol> FindByFilePathFragment(string query, int limit) =>
+        FilePathSymbolLookup.FindByFilePathFragment(_byFilePath, query, limit);
+
     /// <summary>True if <paramref name="path"/> is exactly an indexed file path (ordinal). O(1).</summary>
     public bool IsIndexedFilePath(string path)
     {
