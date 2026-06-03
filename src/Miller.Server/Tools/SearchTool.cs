@@ -26,6 +26,9 @@ public enum SearchToolMode
 
     /// <summary>Treat the query as a file path fragment.</summary>
     File,
+
+    /// <summary>Search docs-like file CONTENT (prose/markup/config), returning path + line + snippet hits.</summary>
+    Content,
 }
 
 /// <summary>
@@ -39,24 +42,32 @@ public enum SearchToolMode
 public sealed class SearchTool
 {
     private readonly IWorkspaceSearchProvider _workspaceProvider;
+    private readonly IWorkspaceContentSearchProvider _contentProvider;
 
-    /// <summary>Construct over the workspace search provider (production / freshness-aware).</summary>
-    /// <exception cref="ArgumentNullException"><paramref name="workspaceProvider"/> is null.</exception>
-    public SearchTool(IWorkspaceSearchProvider workspaceProvider)
+    /// <summary>
+    /// Construct over the symbol-search and content-search providers (production / freshness-aware). In
+    /// production both resolve to the one <c>WorkspaceIndexProvider</c> singleton; they are split here so the
+    /// content/docs projection loads lazily and only when <c>mode=content</c> asks for it.
+    /// </summary>
+    /// <exception cref="ArgumentNullException">Either provider is null.</exception>
+    public SearchTool(IWorkspaceSearchProvider workspaceProvider, IWorkspaceContentSearchProvider contentProvider)
     {
         ArgumentNullException.ThrowIfNull(workspaceProvider);
+        ArgumentNullException.ThrowIfNull(contentProvider);
         _workspaceProvider = workspaceProvider;
+        _contentProvider = contentProvider;
     }
 
     [McpServerTool(Name = "search")]
     [Description(
         "Search indexed code and return ranked results. Use this before shell rg/grep/cat or reading whole " +
         "files. Pass a symbol name, an identifier, or a natural-language phrase. Test code is hidden for " +
-        "natural-language queries unless you ask for it. Returns compact text by default; pass format=json " +
-        "to chain results.")]
+        "natural-language queries unless you ask for it. Use mode=content (alias docs) to search docs/prose " +
+        "file content instead of symbols — it returns path + line + snippet hits. Returns compact text by " +
+        "default; pass format=json to chain results.")]
     public string Search(
         [Description("Symbol name, identifier, or natural-language phrase.")] string query,
-        [Description("Interpretation axis: auto|text|symbol|file. Default auto.")] string mode = "auto",
+        [Description("Interpretation axis: auto|text|symbol|file|content (alias docs). Default auto.")] string mode = "auto",
         [Description("Max results to return. Default 10.")] int limit = 10,
         [Description("Hide test code: leave unset to auto-hide for natural-language queries; true/false to force.")]
         bool? exclude_tests = null,
@@ -71,13 +82,29 @@ public sealed class SearchTool
             var parsedMode = ParseMode(mode);
             bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
-            WorkspaceSymbolSearchContext context = _workspaceProvider.ResolveSymbolSearch(workspace_id, ensureFresh);
-            string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
-            string output = Run(context.Index, query, parsedMode, limit, exclude_tests, json, out int count, compactBanner);
+
+            string output;
+            int count;
+            if (parsedMode == SearchToolMode.Content)
+            {
+                // Content/docs search routes to its own projection and result kind; exclude_tests is a no-op.
+                WorkspaceContentSearchContext content = _contentProvider.ResolveContentSearch(workspace_id, ensureFresh);
+                string? contentBanner = ReadToolWorkspaceRouting.CompactBanner(content, workspace_id, json);
+                output = RunContent(content.Index, query, limit, json, out count, contentBanner);
+                if (scope is not null)
+                    ReadToolWorkspaceRouting.ApplyTelemetry(scope, content);
+            }
+            else
+            {
+                WorkspaceSymbolSearchContext context = _workspaceProvider.ResolveSymbolSearch(workspace_id, ensureFresh);
+                string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
+                output = Run(context.Index, query, parsedMode, limit, exclude_tests, json, out count, compactBanner);
+                if (scope is not null)
+                    ReadToolWorkspaceRouting.ApplyTelemetry(scope, context);
+            }
 
             if (scope is not null)
             {
-                ReadToolWorkspaceRouting.ApplyTelemetry(scope, context);
                 scope.SetTarget(query);
                 scope.ResultCount = count;
                 scope.Outcome = count == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
@@ -101,6 +128,8 @@ public sealed class SearchTool
         "text" => SearchToolMode.Text,
         "symbol" => SearchToolMode.Symbol,
         "file" => SearchToolMode.File,
+        "content" => SearchToolMode.Content,
+        "docs" => SearchToolMode.Content, // alias
         _ => SearchToolMode.Auto, // includes "auto", null, and anything unrecognized
     };
 
@@ -149,6 +178,35 @@ public sealed class SearchTool
         return json
             ? RenderJson(kept, scores, page)
             : RenderCompact(kept, page, total, compactBanner);
+    }
+
+    /// <summary>
+    /// The pure content-search execution core (no MCP/DI/telemetry): rank docs-like file content and render
+    /// path + best line + snippet hits. A distinct result kind from <see cref="Run"/> — never a fake symbol —
+    /// so <c>exclude_tests</c> does not apply. Sets <paramref name="renderedCount"/> to the page size.
+    /// </summary>
+    public static string RunContent(
+        IContentSearchIndex index, string query, int limit,
+        bool json, out int renderedCount, string? compactBanner = null)
+    {
+        ArgumentNullException.ThrowIfNull(index);
+        ArgumentException.ThrowIfNullOrWhiteSpace(query);
+        if (limit < 1) limit = 1;
+
+        // Over-fetch (same cap as symbol search) so the "… N more" overflow note is accurate without paging.
+        int overFetch = Math.Min(limit * 4 + 10, 500);
+        IReadOnlyList<ContentSearchHit> hits = index.Search(query, overFetch);
+
+        int total = hits.Count;
+        int page = Math.Min(limit, total);
+        renderedCount = page;
+
+        if (total == 0)
+            return json ? "[]" : ReadToolWorkspaceRouting.PrefixCompact("No results.", compactBanner);
+
+        return json
+            ? RenderContentJson(hits, page)
+            : RenderContentCompact(hits, page, total, compactBanner);
     }
 
     // tri-state: null → hide only for NL phrases lacking test/def intent; true → always; false → never.
@@ -222,6 +280,54 @@ public sealed class SearchTool
                 else writer.WriteString("signature", s.Signature);
                 writer.WriteNumber("score", scores[i]);
                 writer.WriteString("symbol_id", s.SymbolId);
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+        }
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    // Each hit is a `path:line` header followed by its snippet window (±2 lines), each snippet line indented
+    // for visual nesting; hits are separated by a blank line. A distinct shape from the symbol renderer.
+    private static string RenderContentCompact(
+        IReadOnlyList<ContentSearchHit> hits, int page, int total, string? compactBanner)
+    {
+        var blocks = new List<string>(page);
+        for (int i = 0; i < page; i++)
+        {
+            var h = hits[i];
+            var block = new StringBuilder();
+            block.Append(h.Path).Append(':').Append(h.Line);
+            foreach (var line in h.Snippet.Split('\n'))
+                block.Append('\n').Append("    ").Append(line);
+            blocks.Add(block.ToString());
+        }
+
+        var sb = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(compactBanner))
+            sb.Append(compactBanner).Append('\n');
+        sb.Append(string.Join("\n\n", blocks));
+
+        int remainder = total - page;
+        if (remainder > 0)
+            sb.Append('\n').Append("… ").Append(remainder).Append(" more (raise limit)");
+        return sb.ToString();
+    }
+
+    private static string RenderContentJson(IReadOnlyList<ContentSearchHit> hits, int page)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
+        {
+            writer.WriteStartArray();
+            for (int i = 0; i < page; i++)
+            {
+                var h = hits[i];
+                writer.WriteStartObject();
+                writer.WriteString("file", h.Path);
+                writer.WriteNumber("line", h.Line);
+                writer.WriteNumber("score", h.Score);
+                writer.WriteString("snippet", h.Snippet);
                 writer.WriteEndObject();
             }
             writer.WriteEndArray();

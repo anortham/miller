@@ -428,6 +428,8 @@ public sealed class InspectToolTests
                     symbolLoadCount++;
                     return SymbolSearchProjectionLoader.Load(path);
                 },
+                loadContentSearch: (_, _) =>
+                    throw new InvalidOperationException("content loader was not expected"),
                 currentIndexFresh: _ => true);
             var tool = new InspectTool(provider, provider);
 

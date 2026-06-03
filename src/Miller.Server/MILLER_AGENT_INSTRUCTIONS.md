@@ -20,9 +20,11 @@ the tokens.
 
 ## Tools
 
-- `search` — Find code by name, identifier, or natural-language phrase. `mode=auto|text|symbol|file`. Test code
-  is auto-hidden for natural-language queries (`exclude_tests=false` to force them in). The first move for
-  "where is…?". Optional `workspace_id` queries another registered workspace; explicit `workspace_id` defaults
+- `search` — Find code by name, identifier, or natural-language phrase. `mode=auto|text|symbol|file|content`. Test
+  code is auto-hidden for natural-language queries (`exclude_tests=false` to force them in). The first move for
+  "where is…?". Use `mode=content` (alias `docs`) to search docs/prose file CONTENT instead of symbols — it
+  returns `path:line` + a snippet window, for files symbol search can't see (markdown, config, plain text).
+  Optional `workspace_id` queries another registered workspace; explicit `workspace_id` defaults
   `ensure_fresh=true`.
 - `inspect` — A file or symbol you can already name. A file path lists its symbols; a symbol name gives its
   definition, signature, and docs. `depth=full` adds references, callers/callees, and the body. Use before
@@ -52,6 +54,8 @@ the tokens.
 - **Understand a symbol**: `inspect target depth=full` (definition + refs + callers/callees + body in one call).
 - **Trace a flow**: `trace mode=auto` to fan out, `mode=path` for a specific A→B chain, `mode=bridge` to cross a
   language boundary.
+- **Find something in docs/prose**: `search mode=content "<phrase>"` — searches markdown/config/text content and
+  returns `path:line` + snippet, where symbol search would find nothing.
 - **Scope a change**: `impact target=…` → run the tests it lists → `edit` (dry-run) → `edit apply=true` →
   re-run `impact` if the surface changed.
 - **Edit a symbol**: `inspect` it → `edit … dry_run` (the default) → `edit … apply=true`.

@@ -1,8 +1,10 @@
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
+using Miller.Core.Search;
 using Miller.Indexing;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
+using Miller.Server.Workspaces;
 using Miller.Tests;
 using Miller.Tests.Indexing;
 using Xunit;
@@ -20,6 +22,10 @@ public sealed class SearchToolTests
 {
     private static MillerRepositoryIndex BuildIndex(JulieDbFixture fx) =>
         MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath));
+
+    private static IContentSearchIndex ContentIndex(params (string Path, string Text)[] docs) =>
+        ContentSearchProjection.Build(
+            docs.Select((d, i) => new ContentDocument(i, d.Path, d.Text)).ToList());
 
     private static JulieDbFixture FixtureWithSymbol(string workspaceId, string symbolName) =>
         JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
@@ -262,7 +268,7 @@ public sealed class SearchToolTests
         var provider = new RecordingWorkspaceIndexProvider(
             ReadToolRoutingTestSupport.ContextFor(BuildIndex(current), current.DbPath, "current-ws", currentRoot),
             ("target-ws", ReadToolRoutingTestSupport.ContextFor(BuildIndex(target), target.DbPath, "target-ws", targetRoot)));
-        var tool = new SearchTool(provider);
+        var tool = new SearchTool(provider, provider);
 
         string output = tool.Search("TargetOnly", workspace_id: "target-ws");
 
@@ -292,7 +298,7 @@ public sealed class SearchToolTests
                 targetRoot,
                 indexFresh: false,
                 freshnessStatus: "loaded_existing")));
-        var tool = new SearchTool(provider);
+        var tool = new SearchTool(provider, provider);
 
         try
         {
@@ -316,5 +322,150 @@ public sealed class SearchToolTests
         {
             try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
         }
+    }
+
+    // ----- mode=content (phase 3) -----
+
+    [Fact]
+    public void RunContent_Compact_RendersPathLineAndSnippet()
+    {
+        var index = ContentIndex(
+            ("docs/guide.md", "# Guide\nThe freshness gate verifies blake3 before reading.\nMore text.\n"));
+
+        string output = SearchTool.RunContent(index, "freshness", limit: 10, json: false, out int count);
+
+        Assert.Equal(1, count);
+        Assert.Contains("docs/guide.md:2", output); // path + best line (1-based)
+        Assert.Contains("The freshness gate verifies blake3", output); // snippet window
+    }
+
+    [Fact]
+    public void RunContent_Empty_ReturnsNoResultsSentinel()
+    {
+        var index = ContentIndex(("docs/guide.md", "nothing relevant on this page"));
+
+        string output = SearchTool.RunContent(index, "zzzznotpresent", limit: 10, json: false, out int count);
+
+        Assert.Equal(0, count);
+        Assert.Equal("No results.", output.Trim());
+    }
+
+    [Fact]
+    public void RunContent_Json_HasContentShape_NeverFakeSymbols()
+    {
+        var index = ContentIndex(("docs/guide.md", "alpha freshness beta\n"));
+
+        string output = SearchTool.RunContent(index, "freshness", limit: 10, json: true, out int count);
+
+        Assert.True(count >= 1);
+        using var doc = JsonDocument.Parse(output);
+        var first = doc.RootElement[0];
+        Assert.Equal("docs/guide.md", first.GetProperty("file").GetString());
+        Assert.Equal(1, first.GetProperty("line").GetInt32());
+        Assert.True(first.TryGetProperty("score", out _));
+        Assert.False(string.IsNullOrEmpty(first.GetProperty("snippet").GetString()));
+        // Content hits are a distinct result kind — NOT fake symbols.
+        Assert.False(first.TryGetProperty("symbol_id", out _));
+        Assert.False(first.TryGetProperty("kind", out _));
+        Assert.False(first.TryGetProperty("name", out _));
+    }
+
+    [Fact]
+    public void RunContent_OverLimit_AppendsMoreNote_AndDoesNotDrop()
+    {
+        var docs = Enumerable.Range(0, 5)
+            .Select(i => ($"docs/d{i}.md", $"widget content number {i}"))
+            .ToArray();
+        var index = ContentIndex(docs);
+
+        string output = SearchTool.RunContent(index, "widget", limit: 2, json: false, out int count);
+
+        Assert.Equal(2, count);
+        Assert.Contains("more", output);
+        Assert.Contains("raise limit", output);
+    }
+
+    [Fact]
+    public void Search_ModeContent_RoutesToContentProvider_AndRendersContentHits()
+    {
+        using var current = FixtureWithSymbol("current-ws", "CurrentOnly");
+        string currentRoot = Path.Combine(Path.GetTempPath(), "miller-current-" + Guid.NewGuid().ToString("N"));
+        string targetRoot = Path.Combine(Path.GetTempPath(), "miller-target-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(BuildIndex(current), current.DbPath, "current-ws", currentRoot),
+            currentContent: ReadToolRoutingTestSupport.ContentContextFor(
+                ContentIndex(("docs/none.md", "irrelevant")), current.DbPath, "current-ws", currentRoot),
+            contentTargets: new[]
+            {
+                ("target-ws", ReadToolRoutingTestSupport.ContentContextFor(
+                    ContentIndex(("docs/guide.md", "# Guide\nThe freshness gate verifies blake3.\n")),
+                    "target.db", "target-ws", targetRoot)),
+            });
+        var tool = new SearchTool(provider, provider);
+
+        string output = tool.Search("freshness", mode: "content", workspace_id: "target-ws");
+
+        Assert.Equal("target-ws", provider.LastWorkspaceId);
+        Assert.True(provider.LastEnsureFresh); // explicit workspace_id defaults ensure_fresh=true
+        Assert.Equal(1, provider.ContentSearchResolveCount);
+        Assert.Equal(0, provider.SymbolSearchResolveCount); // content mode never touches the symbol provider
+        Assert.StartsWith("workspace: target-ws ", output);
+        Assert.Contains(targetRoot, output);
+        Assert.Contains("docs/guide.md:2", output);
+        Assert.Contains("The freshness gate verifies blake3", output);
+    }
+
+    [Fact]
+    public void Search_ModeDocs_AliasesContent()
+    {
+        using var current = FixtureWithSymbol("current-ws", "CurrentOnly");
+        string currentRoot = Path.Combine(Path.GetTempPath(), "miller-current-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(BuildIndex(current), current.DbPath, "current-ws", currentRoot),
+            currentContent: ReadToolRoutingTestSupport.ContentContextFor(
+                ContentIndex(("docs/readme.md", "alpha docsalias beta")), current.DbPath, "current-ws", currentRoot),
+            contentTargets: Array.Empty<(string, WorkspaceContentSearchContext)>());
+        var tool = new SearchTool(provider, provider);
+
+        string output = tool.Search("docsalias", mode: "docs");
+
+        Assert.Equal(1, provider.ContentSearchResolveCount);
+        Assert.Equal(0, provider.SymbolSearchResolveCount);
+        Assert.Contains("docs/readme.md", output);
+    }
+
+    [Fact]
+    public void Search_ModeContent_ExcludeTestsIsNoOp()
+    {
+        using var current = FixtureWithSymbol("current-ws", "CurrentOnly");
+        string currentRoot = Path.Combine(Path.GetTempPath(), "miller-current-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(BuildIndex(current), current.DbPath, "current-ws", currentRoot),
+            currentContent: ReadToolRoutingTestSupport.ContentContextFor(
+                ContentIndex(("docs/guide.md", "alpha freshness beta")), current.DbPath, "current-ws", currentRoot),
+            contentTargets: Array.Empty<(string, WorkspaceContentSearchContext)>());
+        var tool = new SearchTool(provider, provider);
+
+        string withExclude = tool.Search("freshness", mode: "content", exclude_tests: true);
+        string withoutExclude = tool.Search("freshness", mode: "content", exclude_tests: false);
+
+        Assert.Equal(withExclude, withoutExclude); // exclude_tests does not filter content results
+        Assert.Contains("docs/guide.md", withExclude);
+    }
+
+    [Fact]
+    public void Search_NonContentMode_DoesNotResolveContentProvider()
+    {
+        using var current = FixtureWithSymbol("current-ws", "CurrentOnly");
+        string currentRoot = Path.Combine(Path.GetTempPath(), "miller-current-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(BuildIndex(current), current.DbPath, "current-ws", currentRoot));
+        var tool = new SearchTool(provider, provider);
+
+        string output = tool.Search("CurrentOnly"); // mode defaults to auto
+
+        Assert.Equal(0, provider.ContentSearchResolveCount);
+        Assert.Equal(1, provider.SymbolSearchResolveCount);
+        Assert.Contains("CurrentOnly", output);
     }
 }

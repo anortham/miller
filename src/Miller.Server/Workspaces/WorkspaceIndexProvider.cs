@@ -4,7 +4,8 @@ using Miller.Server.Tools;
 
 namespace Miller.Server.Workspaces;
 
-public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider, IWorkspaceSearchProvider
+public sealed class WorkspaceIndexProvider
+    : IWorkspaceIndexProvider, IWorkspaceSearchProvider, IWorkspaceContentSearchProvider
 {
     private readonly IndexHolder _holder;
     private readonly WorkspaceContext _currentWorkspace;
@@ -12,10 +13,12 @@ public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider, IWorkspace
     private readonly Func<string, WorkspaceRefreshResult> _refresh;
     private readonly Func<string, MillerRepositoryIndex> _loadIndex;
     private readonly Func<string, SymbolSearchProjection> _loadSymbolSearch;
+    private readonly Func<string, string, ContentSearchProjection> _loadContentSearch;
     private readonly Func<long, bool?> _currentIndexFresh;
     private readonly object _cacheGate = new();
     private readonly Dictionary<CacheKey, Lazy<CachedIndex>> _cache = new();
     private readonly Dictionary<CacheKey, Lazy<CachedSymbolSearch>> _symbolSearchCache = new();
+    private readonly Dictionary<CacheKey, Lazy<CachedContentSearch>> _contentSearchCache = new();
 
     public WorkspaceIndexProvider(
         IndexHolder holder,
@@ -29,6 +32,7 @@ public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider, IWorkspace
             workspaceId => refreshService.Refresh(workspaceId),
             dbPath => RepositoryIndexLoader.Load(dbPath),
             dbPath => SymbolSearchProjectionLoader.Load(dbPath),
+            (dbPath, root) => ContentSearchProjectionLoader.Load(dbPath, root),
             currentIndexFresh: _ => null)
     {
     }
@@ -40,6 +44,7 @@ public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider, IWorkspace
         Func<string, WorkspaceRefreshResult> refresh,
         Func<string, MillerRepositoryIndex> loadIndex,
         Func<string, SymbolSearchProjection> loadSymbolSearch,
+        Func<string, string, ContentSearchProjection> loadContentSearch,
         Func<long, bool?> currentIndexFresh)
     {
         ArgumentNullException.ThrowIfNull(holder);
@@ -48,6 +53,7 @@ public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider, IWorkspace
         ArgumentNullException.ThrowIfNull(refresh);
         ArgumentNullException.ThrowIfNull(loadIndex);
         ArgumentNullException.ThrowIfNull(loadSymbolSearch);
+        ArgumentNullException.ThrowIfNull(loadContentSearch);
         ArgumentNullException.ThrowIfNull(currentIndexFresh);
         _holder = holder;
         _currentWorkspace = currentWorkspace;
@@ -55,6 +61,7 @@ public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider, IWorkspace
         _refresh = refresh;
         _loadIndex = loadIndex;
         _loadSymbolSearch = loadSymbolSearch;
+        _loadContentSearch = loadContentSearch;
         _currentIndexFresh = currentIndexFresh;
     }
 
@@ -80,6 +87,18 @@ public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider, IWorkspace
             return ResolveCurrentSymbolSearch();
 
         return ResolveRegisteredSymbolSearch(workspaceId, ensureFresh);
+    }
+
+    public WorkspaceContentSearchContext ResolveContentSearch(string? workspaceId, bool ensureFresh)
+    {
+        if (workspaceId is null)
+            return ResolveCurrentContentSearch();
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
+        if (string.Equals(workspaceId, _currentWorkspace.WorkspaceId, StringComparison.Ordinal))
+            return ResolveCurrentContentSearch();
+
+        return ResolveRegisteredContentSearch(workspaceId, ensureFresh);
     }
 
     private WorkspaceReadContext ResolveCurrent()
@@ -144,6 +163,48 @@ public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider, IWorkspace
         long revision = row.LastRevision ?? 0;
         CachedSymbolSearch cached = GetOrLoadSymbolSearch(row, revision);
         return new WorkspaceSymbolSearchContext(
+            cached.Index,
+            row.IndexDbPath,
+            row.WorkspaceId,
+            row.CanonicalRoot,
+            revision,
+            WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
+            WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
+            WorkspaceFreshnessView.WarningTextFor(refreshResult),
+            row.DisplayId);
+    }
+
+    private WorkspaceContentSearchContext ResolveCurrentContentSearch()
+    {
+        // No content index lives in the holder (the bootstrap seeds only the full repository index), so the
+        // current workspace builds its content projection lazily on first content query and caches it keyed on
+        // the holder's built revision — a freshness Swap (reindex) bumps the revision and rebuilds.
+        (_, long revision) = _holder.Snapshot();
+        string dbPath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
+        string root = _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot;
+        string workspaceKey = string.IsNullOrEmpty(_currentWorkspace.WorkspaceId) ? dbPath : _currentWorkspace.WorkspaceId;
+        CachedContentSearch cached = GetOrLoadContentSearch(workspaceKey, dbPath, root, revision);
+        return new WorkspaceContentSearchContext(
+            cached.Index,
+            dbPath,
+            _currentWorkspace.WorkspaceId,
+            root,
+            revision,
+            _currentIndexFresh(revision),
+            "current",
+            WarningText: null,
+            DisplayId: CurrentDisplayId());
+    }
+
+    private WorkspaceContentSearchContext ResolveRegisteredContentSearch(string workspaceId, bool ensureFresh)
+    {
+        RegisteredWorkspaceState state = ResolveRegisteredState(workspaceId, ensureFresh);
+        WorkspaceRegistryRow row = state.Row;
+        WorkspaceRefreshResult? refreshResult = state.RefreshResult;
+
+        long revision = row.LastRevision ?? 0;
+        CachedContentSearch cached = GetOrLoadContentSearch(row.WorkspaceId, row.IndexDbPath, row.CanonicalRoot, revision);
+        return new WorkspaceContentSearchContext(
             cached.Index,
             row.IndexDbPath,
             row.WorkspaceId,
@@ -248,6 +309,38 @@ public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider, IWorkspace
         }
     }
 
+    private CachedContentSearch GetOrLoadContentSearch(string workspaceId, string dbPath, string root, long revision)
+    {
+        var key = new CacheKey(workspaceId, dbPath, revision);
+        Lazy<CachedContentSearch> lazy;
+        lock (_cacheGate)
+        {
+            if (!_contentSearchCache.TryGetValue(key, out lazy!))
+            {
+                lazy = new Lazy<CachedContentSearch>(
+                    () => new CachedContentSearch(_loadContentSearch(dbPath, root)),
+                    LazyThreadSafetyMode.ExecutionAndPublication);
+                _contentSearchCache[key] = lazy;
+                EvictOtherEntriesForWorkspaceUnderLock(_contentSearchCache, key);
+            }
+        }
+
+        try
+        {
+            return lazy.Value;
+        }
+        catch
+        {
+            lock (_cacheGate)
+            {
+                if (_contentSearchCache.TryGetValue(key, out Lazy<CachedContentSearch>? cachedLazy) &&
+                    ReferenceEquals(cachedLazy, lazy))
+                    _contentSearchCache.Remove(key);
+            }
+            throw;
+        }
+    }
+
     private static void EvictOtherEntriesForWorkspaceUnderLock<T>(
         Dictionary<CacheKey, Lazy<T>> cache, CacheKey keep)
     {
@@ -307,4 +400,6 @@ public sealed class WorkspaceIndexProvider : IWorkspaceIndexProvider, IWorkspace
     private sealed record CachedIndex(MillerRepositoryIndex Index, SmartTargetResolver Resolver);
 
     private sealed record CachedSymbolSearch(SymbolSearchProjection Index);
+
+    private sealed record CachedContentSearch(ContentSearchProjection Index);
 }

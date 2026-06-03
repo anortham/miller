@@ -192,6 +192,174 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     }
 
     [Fact]
+    public void ResolveContentSearch_RegisteredWorkspace_UsesContentLoaderWithoutFullOrSymbolLoad()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithDoc("docs/guide.md", "# Guide\nThe freshness gate verifies blake3 before reading.\n");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        registry.UpsertSeen("target-ws", "target-111111111111", target.WorkspaceRoot, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+
+        int fullLoadCount = 0;
+        int symbolLoadCount = 0;
+        int contentLoadCount = 0;
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            loadIndex: _ =>
+            {
+                fullLoadCount++;
+                throw new InvalidOperationException("full loader was not expected");
+            },
+            loadSymbolSearch: _ =>
+            {
+                symbolLoadCount++;
+                throw new InvalidOperationException("symbol loader was not expected");
+            },
+            loadContentSearch: (dbPath, root) =>
+            {
+                contentLoadCount++;
+                return ContentSearchProjectionLoader.Load(dbPath, root);
+            });
+
+        WorkspaceContentSearchContext context = provider.ResolveContentSearch("target-ws", ensureFresh: false);
+
+        Assert.Equal("target-ws", context.WorkspaceId);
+        Assert.Equal(1, context.Revision);
+        Assert.Equal(1, contentLoadCount);
+        Assert.Equal(0, fullLoadCount);
+        Assert.Equal(0, symbolLoadCount);
+        var hit = Assert.Single(context.Index.Search("freshness", limit: 10));
+        Assert.Equal("docs/guide.md", hit.Path);
+    }
+
+    [Fact]
+    public void ResolveContentSearch_RegisteredWorkspace_CachesByWorkspacePathAndRevision()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithDoc("docs/guide.md", "alpha freshness documentation");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        registry.UpsertSeen("target-ws", "target-111111111111", target.WorkspaceRoot, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+
+        int contentLoadCount = 0;
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            loadContentSearch: (dbPath, root) =>
+            {
+                contentLoadCount++;
+                return ContentSearchProjectionLoader.Load(dbPath, root);
+            });
+
+        WorkspaceContentSearchContext first = provider.ResolveContentSearch("target-ws", ensureFresh: false);
+        WorkspaceContentSearchContext second = provider.ResolveContentSearch("target-ws", ensureFresh: false);
+
+        Assert.Same(first.Index, second.Index);
+        Assert.Equal(1, contentLoadCount);
+
+        registry.MarkScanned("target-ws", revision: 2);
+        WorkspaceContentSearchContext afterRevisionChange =
+            provider.ResolveContentSearch("target-ws", ensureFresh: false);
+
+        Assert.Equal(2, afterRevisionChange.Revision);
+        Assert.NotSame(first.Index, afterRevisionChange.Index);
+        Assert.Equal(2, contentLoadCount);
+    }
+
+    [Fact]
+    public void ResolveContentSearch_RegisteredWorkspace_ReloadsWhenDbPathChangesEvenAtTheSameRevision()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var targetA = DbWithDoc("docs/guide.md", "alpha apple documentation");
+        using var targetB = DbWithDoc("docs/guide.md", "beta zigglethorpe documentation");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        registry.UpsertSeen("target-ws", "target-111111111111", targetA.WorkspaceRoot, targetA.DbPath);
+        registry.MarkScanned("target-ws", revision: 3);
+
+        int contentLoadCount = 0;
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            loadContentSearch: (dbPath, root) =>
+            {
+                contentLoadCount++;
+                return ContentSearchProjectionLoader.Load(dbPath, root);
+            });
+
+        WorkspaceContentSearchContext first = provider.ResolveContentSearch("target-ws", ensureFresh: false);
+        registry.UpsertSeen("target-ws", "target-111111111111", targetB.WorkspaceRoot, targetB.DbPath);
+        WorkspaceContentSearchContext second = provider.ResolveContentSearch("target-ws", ensureFresh: false);
+
+        Assert.Empty(first.Index.Search("zigglethorpe", limit: 10));
+        Assert.NotEmpty(second.Index.Search("zigglethorpe", limit: 10));
+        Assert.NotSame(first.Index, second.Index);
+        Assert.Equal(2, contentLoadCount);
+    }
+
+    [Fact]
+    public void ResolveContentSearch_CurrentWorkspace_BuildsAndCachesFromDiskLazily()
+    {
+        using var fx = DbWithDoc("docs/guide.md", "# Guide\nThe freshness gate verifies blake3 hashes.\n");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        var holder = new IndexHolder(RepositoryIndexLoader.Load(fx.DbPath), builtRevision: 7);
+
+        int contentLoadCount = 0;
+        var provider = NewProvider(
+            holder,
+            CurrentWorkspaceAt(fx.WorkspaceRoot, fx.DbPath, "current-ws"),
+            registry,
+            loadContentSearch: (dbPath, root) =>
+            {
+                contentLoadCount++;
+                return ContentSearchProjectionLoader.Load(dbPath, root);
+            });
+
+        WorkspaceContentSearchContext byNull = provider.ResolveContentSearch(workspaceId: null, ensureFresh: false);
+        WorkspaceContentSearchContext byId = provider.ResolveContentSearch("current-ws", ensureFresh: false);
+
+        Assert.Equal(7, byNull.Revision);
+        Assert.Equal("current", byNull.FreshnessStatus);
+        var hit = Assert.Single(byNull.Index.Search("freshness", limit: 10));
+        Assert.Equal("docs/guide.md", hit.Path);
+        Assert.Same(byNull.Index, byId.Index); // null and the explicit current id resolve to one cached build
+        Assert.Equal(1, contentLoadCount);
+    }
+
+    [Fact]
+    public void ResolveContentSearch_CurrentWorkspace_RebuildsWhenHolderRevisionChanges()
+    {
+        using var fx = DbWithDoc("docs/guide.md", "freshness corpustoken");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        var holder = new IndexHolder(RepositoryIndexLoader.Load(fx.DbPath), builtRevision: 1);
+
+        int contentLoadCount = 0;
+        var provider = NewProvider(
+            holder,
+            CurrentWorkspaceAt(fx.WorkspaceRoot, fx.DbPath, "current-ws"),
+            registry,
+            loadContentSearch: (dbPath, root) =>
+            {
+                contentLoadCount++;
+                return ContentSearchProjectionLoader.Load(dbPath, root);
+            });
+
+        WorkspaceContentSearchContext first = provider.ResolveContentSearch(workspaceId: null, ensureFresh: false);
+        WorkspaceContentSearchContext cached = provider.ResolveContentSearch(workspaceId: null, ensureFresh: false);
+        holder.Swap(RepositoryIndexLoader.Load(fx.DbPath), revision: 2);
+        WorkspaceContentSearchContext afterSwap = provider.ResolveContentSearch(workspaceId: null, ensureFresh: false);
+
+        Assert.Equal(1, first.Revision);
+        Assert.Same(first.Index, cached.Index);       // same holder revision → cached, one build
+        Assert.Equal(2, afterSwap.Revision);
+        Assert.NotSame(first.Index, afterSwap.Index); // a freshness Swap bumps the revision → rebuild
+        Assert.Equal(2, contentLoadCount);
+    }
+
+    [Fact]
     public async Task Resolve_RegisteredWorkspace_ConcurrentCacheMissesShareOneLoad()
     {
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
@@ -556,6 +724,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Func<string, WorkspaceRefreshResult>? refresh = null,
         Func<string, MillerRepositoryIndex>? loadIndex = null,
         Func<string, SymbolSearchProjection>? loadSymbolSearch = null,
+        Func<string, string, ContentSearchProjection>? loadContentSearch = null,
         Func<long, bool?>? currentIndexFresh = null) =>
         new(
             holder,
@@ -564,19 +733,20 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             refresh ?? (_ => throw new InvalidOperationException("refresh was not expected")),
             loadIndex ?? (path => RepositoryIndexLoader.Load(path)),
             loadSymbolSearch ?? (path => SymbolSearchProjectionLoader.Load(path)),
+            loadContentSearch ?? ((dbPath, root) => ContentSearchProjectionLoader.Load(dbPath, root)),
             currentIndexFresh ?? (_ => true));
 
-    private WorkspaceContext CurrentWorkspace(string dbPath, string workspaceId)
-    {
-        string root = NewRoot("current");
-        return WorkspaceContext.Create(root, AppContext.BaseDirectory, _dir) with
+    private WorkspaceContext CurrentWorkspace(string dbPath, string workspaceId) =>
+        CurrentWorkspaceAt(NewRoot("current"), dbPath, workspaceId);
+
+    private WorkspaceContext CurrentWorkspaceAt(string root, string dbPath, string workspaceId) =>
+        WorkspaceContext.Create(root, AppContext.BaseDirectory, _dir) with
         {
             ExtractDbPath = dbPath,
             CanonicalRoot = root,
             CanonicalExtractDbPath = dbPath,
             WorkspaceId = workspaceId,
         };
-    }
 
     private string NewRoot(string name)
     {
@@ -605,5 +775,18 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             revisions: new[]
             {
                 new JulieDbFixture.RevisionRow(revision, "fresh"),
+            });
+
+    // A symbol-free fixture whose only `files` row is a docs-like file materialized on disk under
+    // WorkspaceRoot — the corpus the content-search loader re-sources and BLAKE3-verifies. Register the
+    // workspace with root == fixture.WorkspaceRoot so the loader finds the doc under the registered root.
+    private static JulieDbFixture DbWithDoc(string docPath, string docText) =>
+        JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            Array.Empty<JulieDbFixture.SymbolRow>(),
+            extraFiles: new[]
+            {
+                new JulieDbFixture.FileSpec(docPath) { Language = "markdown", DiskText = docText },
             });
 }

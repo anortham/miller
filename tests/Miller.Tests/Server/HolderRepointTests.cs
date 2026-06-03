@@ -40,8 +40,9 @@ public sealed class HolderRepointTests
         using var before = WithoutMarker();
         using var after = WithMarker();
         var holder = new IndexHolder(BuildIndex(before), builtRevision: 1);
-        var tool = new SearchTool(new HolderWorkspaceIndexProvider(
-            holder, before.DbPath, workspaceId: "test-ws", workspaceRoot: Path.GetTempPath()));
+        var provider = new HolderWorkspaceIndexProvider(
+            holder, before.DbPath, workspaceId: "test-ws", workspaceRoot: Path.GetTempPath());
+        var tool = new SearchTool(provider, provider);
 
         Assert.Equal("No results.", tool.Search("Zebraphone").Trim());
 

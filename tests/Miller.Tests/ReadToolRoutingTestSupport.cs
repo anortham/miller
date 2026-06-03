@@ -4,10 +4,13 @@ using Miller.Server.Workspaces;
 
 namespace Miller.Tests;
 
-internal sealed class RecordingWorkspaceIndexProvider : IWorkspaceIndexProvider, IWorkspaceSearchProvider
+internal sealed class RecordingWorkspaceIndexProvider
+    : IWorkspaceIndexProvider, IWorkspaceSearchProvider, IWorkspaceContentSearchProvider
 {
     private readonly WorkspaceReadContext _current;
     private readonly Dictionary<string, WorkspaceReadContext> _targets;
+    private readonly WorkspaceContentSearchContext? _currentContent;
+    private readonly Dictionary<string, WorkspaceContentSearchContext> _contentTargets;
 
     public RecordingWorkspaceIndexProvider(
         WorkspaceReadContext current,
@@ -15,11 +18,27 @@ internal sealed class RecordingWorkspaceIndexProvider : IWorkspaceIndexProvider,
     {
         _current = current;
         _targets = targets.ToDictionary(x => x.WorkspaceId, x => x.Context, StringComparer.Ordinal);
+        _currentContent = null;
+        _contentTargets = new Dictionary<string, WorkspaceContentSearchContext>(StringComparer.Ordinal);
+    }
+
+    public RecordingWorkspaceIndexProvider(
+        WorkspaceReadContext current,
+        WorkspaceContentSearchContext currentContent,
+        (string WorkspaceId, WorkspaceContentSearchContext Context)[] contentTargets,
+        params (string WorkspaceId, WorkspaceReadContext Context)[] targets)
+    {
+        _current = current;
+        _currentContent = currentContent;
+        _contentTargets = contentTargets.ToDictionary(x => x.WorkspaceId, x => x.Context, StringComparer.Ordinal);
+        _targets = targets.ToDictionary(x => x.WorkspaceId, x => x.Context, StringComparer.Ordinal);
     }
 
     public string? LastWorkspaceId { get; private set; }
     public bool? LastEnsureFresh { get; private set; }
     public int ResolveCount { get; private set; }
+    public int SymbolSearchResolveCount { get; private set; }
+    public int ContentSearchResolveCount { get; private set; }
 
     public WorkspaceReadContext Resolve(string? workspaceId, bool ensureFresh)
     {
@@ -35,8 +54,24 @@ internal sealed class RecordingWorkspaceIndexProvider : IWorkspaceIndexProvider,
         LastWorkspaceId = workspaceId;
         LastEnsureFresh = ensureFresh;
         ResolveCount++;
+        SymbolSearchResolveCount++;
 
         return ReadToolRoutingTestSupport.SearchContextFor(ResolveContext(workspaceId));
+    }
+
+    public WorkspaceContentSearchContext ResolveContentSearch(string? workspaceId, bool ensureFresh)
+    {
+        LastWorkspaceId = workspaceId;
+        LastEnsureFresh = ensureFresh;
+        ResolveCount++;
+        ContentSearchResolveCount++;
+
+        if (workspaceId is null)
+            return _currentContent ?? throw new InvalidOperationException("no current content context configured");
+
+        return _contentTargets.TryGetValue(workspaceId, out WorkspaceContentSearchContext? context)
+            ? context
+            : throw new KeyNotFoundException(workspaceId);
     }
 
     private WorkspaceReadContext ResolveContext(string? workspaceId)
@@ -81,9 +116,27 @@ internal static class ReadToolRoutingTestSupport
             context.FreshnessStatus,
             context.WarningText,
             context.DisplayId);
+
+    public static WorkspaceContentSearchContext ContentContextFor(
+        IContentSearchIndex index,
+        string indexDbPath,
+        string? workspaceId,
+        string workspaceRoot,
+        bool? indexFresh = true,
+        string freshnessStatus = "current") =>
+        new(
+            index,
+            indexDbPath,
+            workspaceId,
+            workspaceRoot,
+            Revision: 1,
+            indexFresh,
+            freshnessStatus,
+            WarningText: null);
 }
 
-internal sealed class HolderWorkspaceIndexProvider : IWorkspaceIndexProvider, IWorkspaceSearchProvider
+internal sealed class HolderWorkspaceIndexProvider
+    : IWorkspaceIndexProvider, IWorkspaceSearchProvider, IWorkspaceContentSearchProvider
 {
     private readonly IndexHolder _holder;
     private readonly string _indexDbPath;
@@ -133,4 +186,9 @@ internal sealed class HolderWorkspaceIndexProvider : IWorkspaceIndexProvider, IW
             FreshnessStatus: "current",
             WarningText: null);
     }
+
+    // These freshness/repoint fixtures exercise symbol search only; content search has no holder-backed
+    // index, so this double does not serve it (a content-mode test wires a content provider explicitly).
+    public WorkspaceContentSearchContext ResolveContentSearch(string? workspaceId, bool ensureFresh) =>
+        throw new NotSupportedException("HolderWorkspaceIndexProvider does not serve content search.");
 }

@@ -33,6 +33,18 @@ internal static class ReadToolWorkspaceRouting
             json);
     }
 
+    public static string? CompactBanner(WorkspaceContentSearchContext context, string? requestedWorkspaceId, bool json)
+    {
+        return CompactBanner(
+            context.DisplayId,
+            context.WorkspaceId,
+            context.WorkspaceRoot,
+            context.IndexFresh,
+            context.FreshnessStatus,
+            requestedWorkspaceId,
+            json);
+    }
+
     private static string? CompactBanner(
         string? displayId,
         string? workspaceId,
@@ -66,6 +78,11 @@ internal static class ReadToolWorkspaceRouting
     }
 
     public static void ApplyTelemetry(TelemetryScope? telemetry, WorkspaceSymbolSearchContext context)
+    {
+        ApplyTelemetry(telemetry, context.WorkspaceId, context.WorkspaceRoot, context.IndexFresh);
+    }
+
+    public static void ApplyTelemetry(TelemetryScope? telemetry, WorkspaceContentSearchContext context)
     {
         ApplyTelemetry(telemetry, context.WorkspaceId, context.WorkspaceRoot, context.IndexFresh);
     }

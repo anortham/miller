@@ -127,6 +127,24 @@ internal sealed class JulieDbFixture : IDisposable
         public bool TestLifecycle { get; init; }
     }
 
+    /// <summary>
+    /// An extra <c>files</c>-manifest row with full control over status/language/on-disk bytes — for the
+    /// content-search loader tests (docs-scope, freshness, size-cap, status, non-UTF-8). Independent of the
+    /// symbol-derived files the fixture also writes. <see cref="DiskText"/>/<see cref="DiskBytes"/> are
+    /// materialized under <see cref="WorkspaceRoot"/> (null => file NOT written, the missing-file case); the
+    /// stored <c>content_hash</c> is BLAKE3 of those bytes unless <see cref="StaleHash"/> forces a mismatch;
+    /// <see cref="ContentBytesOverride"/> sets <c>content_bytes</c> without writing a large file (size-cap case).
+    /// </summary>
+    internal sealed record FileSpec(string Path)
+    {
+        public string Language { get; init; } = "csharp";
+        public string Status { get; init; } = "indexed";
+        public string? DiskText { get; init; }
+        public byte[]? DiskBytes { get; init; }
+        public bool StaleHash { get; init; }
+        public long? ContentBytesOverride { get; init; }
+    }
+
     /// <summary>A row as written into the synthesized v1 <c>identifiers</c> table (M2 <c>ReadReferences</c>).</summary>
     internal sealed record IdentifierRow(
         string Id,
@@ -201,7 +219,8 @@ internal sealed class JulieDbFixture : IDisposable
         IReadOnlyList<RevisionRow>? revisions = null,
         IReadOnlyList<RevisionFileChangeRow>? fileChanges = null,
         IReadOnlyList<RelationshipRow>? relationships = null,
-        string? hashAlgorithm = MillerExtractContract.ExpectedHashAlgorithm)
+        string? hashAlgorithm = MillerExtractContract.ExpectedHashAlgorithm,
+        IReadOnlyList<FileSpec>? extraFiles = null)
     {
         string dir = Path.Combine(Path.GetTempPath(), "miller-julie-fixture-" + Guid.NewGuid().ToString("N"));
         System.IO.Directory.CreateDirectory(dir);
@@ -272,6 +291,43 @@ internal sealed class JulieDbFixture : IDisposable
                 fcmd.Parameters.AddWithValue("$chash", contentHash);
                 fcmd.Parameters.AddWithValue("$bytes", bytes.Length);
                 fcmd.ExecuteNonQuery();
+            }
+
+            // extra files-manifest rows for content-search loader tests: full control over status/language/
+            // on-disk bytes/hash/size, independent of the symbol-derived files above. Paths must not collide.
+            if (extraFiles is not null)
+            {
+                foreach (var f in extraFiles)
+                {
+                    byte[]? disk = f.DiskBytes
+                        ?? (f.DiskText is null ? null : System.Text.Encoding.UTF8.GetBytes(f.DiskText));
+                    if (disk is not null)
+                    {
+                        string abs = Path.Combine(dir, f.Path);
+                        System.IO.Directory.CreateDirectory(Path.GetDirectoryName(abs)!);
+                        File.WriteAllBytes(abs, disk);
+                    }
+
+                    // Stored content_hash matches the on-disk bytes unless StaleHash forces a drift.
+                    byte[] hashedBytes = f.StaleHash
+                        ? System.Text.Encoding.UTF8.GetBytes("STALE-" + f.Path)
+                        : (disk ?? Array.Empty<byte>());
+                    string contentHash = "blake3:" + ContentHasher.Blake3Hex(hashedBytes);
+                    long contentBytes = f.ContentBytesOverride ?? (disk?.Length ?? 0);
+
+                    using var fcmd = conn.CreateCommand();
+                    fcmd.CommandText =
+                        "INSERT INTO files (file_id, path, language, content_hash, content_bytes, line_count, " +
+                        "indexed_at, last_revision_id, status, metadata_json) " +
+                        "VALUES ($fid, $p, $lang, $chash, $bytes, 0, '1970-01-01T00:00:00Z', 0, $status, NULL);";
+                    fcmd.Parameters.AddWithValue("$fid", FileId(f.Path));
+                    fcmd.Parameters.AddWithValue("$p", f.Path);
+                    fcmd.Parameters.AddWithValue("$lang", f.Language);
+                    fcmd.Parameters.AddWithValue("$chash", contentHash);
+                    fcmd.Parameters.AddWithValue("$bytes", contentBytes);
+                    fcmd.Parameters.AddWithValue("$status", f.Status);
+                    fcmd.ExecuteNonQuery();
+                }
             }
 
             // symbols rows — parents first so self-FK parent_symbol_id resolves. The detail/body/typed-test

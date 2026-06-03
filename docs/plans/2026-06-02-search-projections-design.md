@@ -166,7 +166,7 @@ Phase 3:
 
 - Add content/docs search as its own projection and result kind.
 - Keep symbol and content ranking independent until result merging is measured.
-- Status: in progress.
+- Status: implemented.
 
 Phase 3 shape (locked):
 
