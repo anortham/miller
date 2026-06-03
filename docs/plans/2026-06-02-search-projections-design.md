@@ -79,11 +79,27 @@ Purpose:
 - Search docs and file content, including future Julie web-research parity.
 - Return content/file results as a separate result kind, not as fake symbols.
 
-Initial implementation:
+Initial implementation (decisions locked 2026-06-02):
 
-- In-memory text index behind an interface.
-- Build from root-relative files verified by the `files.content_hash` contract.
-- Do not make SQLite FTS5 the default yet.
+- In-memory BM25 text index behind `IContentSearchIndex`. Its own
+  `ContentSearchIndex` in `Miller.Core.Search` (same `CodeTokenizer` as symbol
+  search, K1=1.2 / B=0.75), NOT a reuse of `MillerSearchIndex` — that index
+  scores only `Name + Signature` with an exact-name boost and is symbol-coupled.
+- Scope is **docs-like only**: keep `files.status='indexed'` rows whose path or
+  language is prose/markup/config (the spike's `IsDocsLike`: `.md/.mdx/.markdown/
+  .txt/.rst/.adoc/.org` and config like `.json/.yaml/.yml/.toml`). Source files
+  are already covered by symbol search; content search complements it for files
+  that may carry zero symbols.
+- Build from root-relative files re-sourced from disk and BLAKE3-verified against
+  `files.content_hash`, reusing `ExtractFileHashReader` + `ContentHasher` and the
+  existing under-root path-safety. Skip — never error — files that are
+  out-of-scope, non-`indexed`, oversize (`> 1 MiB`), missing, hash-mismatched
+  (stale), non-UTF-8, or unreadable.
+- Each hit returns `path + best line + snippet window` (the best-scoring line by
+  query-term hits, plus ±2 lines of context), not a fake symbol.
+- Do not make SQLite FTS5 the default. FTS5 trigram was measured larger and
+  slower for the docs workload; persisted FTS adds invalidation/lifecycle
+  complexity before the product shape is proven.
 
 Reason:
 
@@ -150,6 +166,47 @@ Phase 3:
 
 - Add content/docs search as its own projection and result kind.
 - Keep symbol and content ranking independent until result merging is measured.
+- Status: in progress.
+
+Phase 3 shape (locked):
+
+- `SearchTool` gains `SearchToolMode.Content` (`mode=content`, alias `docs`).
+  `mode=content` routes to the content provider and renders content hits; every
+  other mode (`auto`/`symbol`/`text`/`file`) is untouched and byte-compatible.
+  `exclude_tests` is a no-op for content.
+- New `IWorkspaceContentSearchProvider.ResolveContentSearch(workspaceId,
+  ensureFresh)` returning `WorkspaceContentSearchContext`. `WorkspaceIndexProvider`
+  implements it with a third, separate revision/path-keyed cache and single-flight
+  load, reusing `ResolveRegisteredState` and the generic eviction. Current
+  workspace builds and caches the content projection lazily on first content
+  query (no bootstrap change). Registered `workspace_id` parity is supported.
+- New components: `Miller.Core.Search.ContentSearchIndex` (+ `ContentDocument`,
+  `ContentSearchHit`); `Miller.Indexing` `IContentSearchIndex`,
+  `ContentSearchProjection`, `ContentSearchProjectionLoader`;
+  `Miller.Server.Workspaces` `IWorkspaceContentSearchProvider`,
+  `WorkspaceContentSearchContext`.
+
+Phase 3 acceptance gates:
+
+- `mode=content` returns content hits (path + line + snippet), never fake symbols.
+- Only docs-like, `indexed`, in-size, freshness-verified files are indexed; bad
+  files are skipped, not errored; rooted or root-escaping manifest paths are
+  never read from disk.
+- Registered-workspace `mode=content` calls neither `RepositoryIndexLoader.Load`
+  nor the symbol-search loader.
+- The content projection cache invalidates on revision/path change.
+- Symbol modes (`auto`/`symbol`/`text`/`file`) stay byte-compatible.
+
+Phase 3 test plan:
+
+- Core: `ContentSearchIndex` ranking, best-line/snippet, window bounds,
+  empty/whitespace query, tie-break determinism.
+- Indexing: loader docs-scope filter, size cap, status skip, freshness skips
+  (stale/missing/non-UTF-8/IO), under-root path-safety.
+- Provider: registered `ResolveContentSearch` uses the content loader only (no
+  full or symbol load), caches by revision/path, reloads on path change.
+- Tool: `mode=content` compact + JSON shapes; symbol-mode byte-compat.
+- Scale: large-repo content build cost.
 
 Phase 4:
 
