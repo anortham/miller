@@ -38,31 +38,45 @@ The gap is purely that the CLI dispatch doesn't expose them.
 Target root = `--path DIR` if given, else the current workspace (`ctx.WorkspaceRoot`). This makes the
 80% flow `cd repo && miller workspace open` work, while `--path` mirrors the existing selector style.
 
-Flow (all in a new `WorkspaceOpen(ctx, path, full, json, outw, err)` in `CliDispatch`):
+Flow (all in a new `WorkspaceOpen(ctx, path, full, json, outw, err)` in `CliDispatch`). **Ordering is
+load-bearing** — see the two review fixes inline (R1, R3):
 
 1. `targetRoot = string.IsNullOrWhiteSpace(path) ? ctx.WorkspaceRoot : path`.
 2. If `!Directory.Exists(targetRoot)` → `err`: "cannot open: no directory at '…'." → **exit 2**.
-3. **Sensitive-root guard** (before touching the registry): if
-   `WorkspaceRootSafety.IsSensitiveRoot(targetRoot, WorkspaceRootSafety.SensitiveRootCandidates())`
-   → `err`: "refusing to index sensitive system path '…': choose a project directory." → **exit 2**.
-   (Guards `cd ~ && miller workspace open` and `--path /`.)
-4. Canonicalize + derive identity:
-   - `canonicalRoot = PathCanonicalizer.CanonicalizeRoot(targetRoot)`
-   - `millerDir = <canonicalRoot>/.miller`, `dbPath = <millerDir>/symbols.db`
-   - `id = WorkspaceId.FromCanonicalRoot(canonicalRoot)`, `display = WorkspaceId.Display(canonicalRoot, id)`
-5. **Register** the row: `registry.UpsertSeen(id, display, canonicalRoot, dbPath, WorkspaceRegistryState.Ready)`.
-6. **Index** via the same machinery `full`/`refresh` already use:
+   (`PathCanonicalizer.CanonicalizeRoot` requires an existing dir, so this check comes first.)
+3. **Canonicalize first** (R3): `canonicalRoot = PathCanonicalizer.CanonicalizeRoot(targetRoot)`. Deriving
+   the symlink-resolved root *before* the safety check is what lets the guard catch a symlink that points
+   at `~`/`/`.
+4. **Sensitive-root guard on the canonical root** (R3 — was pre-canonicalization in the first draft, which
+   a symlink alias could slip past): if
+   `WorkspaceRootSafety.IsSensitiveRoot(canonicalRoot, WorkspaceRootSafety.SensitiveRootCandidates())`
+   → `err`: "refusing to index sensitive system path '…': choose a project directory." → **exit 2**,
+   **before any registry write**. (Guards `cd ~ && miller workspace open`, `--path /`, and a symlink to either.)
+5. Derive identity: `millerDir = <canonicalRoot>/.miller`, `dbPath = <millerDir>/symbols.db`,
+   `id = WorkspaceId.FromCanonicalRoot(canonicalRoot)`, `display = WorkspaceId.Display(canonicalRoot, id)`.
+6. **Locate the tool + construct the services BEFORE registering** (R1 — a missing `julie-extract` must not
+   leave an orphan `ready` row): `JulieExtractRunner.Locate` throws `FileNotFoundException` (the
+   restore-script message) when the binary is absent. Do it first; on throw, write the message to `err` and
+   **exit 3** with **no registry row written**.
    ```csharp
-   var runner  = JulieExtractRunner.Locate(ctx.ToolsRoot);
+   JulieExtractRunner runner = JulieExtractRunner.Locate(ctx.ToolsRoot); // may throw → exit 3, no row
    var sidecar = SymbolSearchSidecar.FromEnvironment();
    var refresh = new CrossWorkspaceRefreshService(registry, runner, sidecar);
+   ```
+7. **Register** the row (only now that the tool is confirmed present):
+   `registry.UpsertSeen(id, display, canonicalRoot, dbPath, WorkspaceRegistryState.Ready)`.
+8. **Index** via the same machinery `full`/`refresh` already use:
+   ```csharp
    WorkspaceRefreshResult result = refresh.Refresh(id, force: full);
    ```
    `Refresh` acquires the single-writer lock (which `Directory.CreateDirectory`s `.miller` on first run),
-   runs julie-extract (creating `symbols.db`), reads the revision, builds the search sidecar, and marks
-   the row scanned. `--full` → `force:true` (from-scratch rebuild); default → `force:false` (delta on
+   runs julie-extract (creating `symbols.db`), reads the revision, **best-effort builds the search sidecar
+   when enabled** (R2 — `MarkScanned` happens first and a sidecar failure is swallowed by design; reads
+   self-heal to in-memory BM25, and `MILLER_SEARCH_SIDECAR=0` skips it), and marks the row scanned. A scan
+   that *fails* now marks the **existing** row error (visible in `list`) — that is the property register-
+   before-scan buys us. `--full` → `force:true` (from-scratch rebuild); default → `force:false` (delta on
    re-open; a fresh dir has no DB so it is a full initial scan regardless).
-7. **Render + exit** via `WorkspaceRender.Action(operation: "open", …)` for **all** outcomes, exit via
+9. **Render + exit** via `WorkspaceRender.Action(operation: "open", …)` for **all** outcomes, exit via
    the existing `RefreshExitCode(result.Status)`:
    ```csharp
    var action = new WorkspaceActionResult(
@@ -109,12 +123,17 @@ accident is a foot-gun; the server also requires a selector):
    - Else `Directory.Delete(millerDir, recursive: true)`; `registry.Remove(row.WorkspaceId)`; render
      `Removed(…)` → **exit 0**.
 3. **By `--path`** (no `--id`):
-   - If `!Directory.Exists(path)` → render `NotFound(<path>/.miller)` → **exit 0** (nothing to remove).
-   - `canonicalRoot = PathCanonicalizer.CanonicalizeRoot(path)`; find the row by canonical root
-     (`registry.List()` match on `CanonicalRoot` ordinal, else `WorkspaceSafety.IsLiveWorkspace`). If a row
-     is found → same delete + unregister as the id branch.
-   - If no row → backward-compatible local cleanup: `millerDir = <fullpath(path)>/.miller`; not-exists →
-     `NotFound` exit 0; lock busy → `RefusedInUse` exit 3; else delete → `Removed` exit 0 (no row to unregister).
+   - **Missing dir (R4):** if `!Directory.Exists(path)`, the dir is gone but a stale registry row may still
+     point at it, and `PathCanonicalizer.CanonicalizeRoot` cannot run on a missing dir. Match lexically:
+     `full = Path.GetFullPath(path)`; if any `registry.List()` row has `CanonicalRoot == full` (OS-case
+     comparison, like `WorkspaceRootSafety`), `registry.Remove(row.WorkspaceId)` and render `Removed` →
+     **exit 0**; else render `NotFound(<full>/.miller)` → **exit 0**. (A CI teardown that already deleted the
+     repo can still prune the registry with `remove --path $REPO`.)
+   - **Existing dir:** `canonicalRoot = PathCanonicalizer.CanonicalizeRoot(path)`; find the row by canonical
+     root (`registry.List()` match on `CanonicalRoot` ordinal, else `WorkspaceSafety.IsLiveWorkspace`). If a
+     row is found → same delete + unregister as the id branch.
+   - If no row → backward-compatible local cleanup: `millerDir = <full>/.miller`; not-exists → `NotFound`
+     exit 0; lock busy → `RefusedInUse` exit 3; else delete → `Removed` exit 0 (no row to unregister).
 4. Render via `WorkspaceRender.Remove(result, json)`; exit via a new `RemoveExitCode` helper:
    ```csharp
    internal static int RemoveExitCode(WorkspaceRemoveResult.Outcome outcome) => outcome switch
@@ -124,7 +143,9 @@ accident is a foot-gun; the server also requires a selector):
        _ => 1,
    };
    ```
-   (`RefusedLive` cannot occur in the CLI but is mapped for completeness.)
+   (`RefusedLive` cannot occur in the CLI but is mapped for completeness.) **R5 — call site:** the
+   `WorkspaceRemoveResult` record's enum-typed property is `Result`, not `Outcome`, so the call is
+   `RemoveExitCode(result.Result)` (and `WorkspaceRender.Remove(result, json)` for the text).
 
 ### Dispatch + parsing
 
@@ -161,6 +182,15 @@ Update the `workspace [op]` block in `HelpText`:
 - `open` guards (no julie reached):
   - `workspace open --path <nonexistent>` → exit 2, "no directory".
   - `workspace open --path /` → exit 2, "sensitive" (a filesystem root has no parent → always sensitive).
+  - **R3** `workspace open --path <symlink→/>` (create a temp symlink to `/`) → exit 2, and assert the
+    registry has **no** row for it (the guard fired before `UpsertSeen`).
+  - **R1** `workspace open` with `ctx.ToolsRoot` pointing at an empty dir (no `julie-extract`) → exit 3,
+    and assert `registry.List()` has **no** row (Locate threw before registration). This reaches
+    `JulieExtractRunner.Locate` but **not** a julie subprocess, so it stays in the fast suite.
+    *Caveat:* `Locate(toolsRoot)` also searches `PATH`, so the test must run with `julie-extract` **not**
+    on `PATH` to fail deterministically (it normally lives at `.tools/`, off `PATH`). If that can't be
+    guaranteed in CI, set `PATH=""` for the test or move this assertion to the Scale suite with a bogus
+    `ToolsRoot`. Do **not** add a production locate-seam just for the test.
 - `remove`:
   - `workspace remove` (no selector) → exit 2 usage.
   - `workspace remove --id <unknown>` → exit 2.
@@ -171,6 +201,9 @@ Update the `workspace [op]` block in `HelpText`:
     (assert `registry.Get(id)` is null).
   - **RefusedInUse:** hold `SingleWriterLock.TryAcquire(<millerDir>)` in-test, then `remove --path <dir>`
     → exit 3, `in use`, dir still present.
+  - **R4** `workspace remove --path <gone dir with a seeded row>` → exit 0, `removed`, row pruned
+    (`registry.Get(id)` null). Seed a row with `CanonicalRoot = Path.GetFullPath(<dir>)`; do **not** create
+    the dir.
 - `RemoveExitCode` `[Theory]` over all four outcomes (mirrors the existing `RefreshExitCode` theory):
   Removed→0, NotFound→0, RefusedInUse→3, RefusedLive→3.
 
@@ -182,12 +215,20 @@ an index in a fresh dir via a real second process):
 - Fresh source tree (no pre-built DB). `miller workspace open` → exit 0; assert `<root>/.miller/symbols.db`
   now exists; then `miller search <Symbol>` → exit 0 and finds the symbol.
 - Idempotency: second `miller workspace open` → exit 0 (status `unchanged`).
+- `--full` (R-test): `miller workspace open --full` → exit 0 with `scanned: yes`, proving `--full` reaches
+  `force:true` (a delta re-open without `--full` reports `unchanged`/`scanned: no`).
 - `miller workspace remove --path <root>` → exit 0; assert `<root>/.miller` is gone.
+
+Note (R2): the open Scale test asserts `symbols.db` + that `search` works, but does **not** assert the
+`search.db` sidecar exists — `search` self-heals to in-memory BM25, so a sidecar miss would not fail it
+(a false positive). The sidecar's on-disk build is already pinned by `CrossWorkspaceRefreshServiceTests`.
 
 ## Acceptance criteria
 
 - [ ] `miller workspace open` on a fresh, unregistered dir builds `.miller/symbols.db`, registers the
-      workspace, builds the search sidecar, and exits 0.
+      workspace, builds the search sidecar when enabled (best-effort), and exits 0.
+- [ ] A missing `julie-extract` fails `open` with exit 3 and **no registry row written** (R1).
+- [ ] A symlink whose canonical target is a sensitive root is refused (exit 2) before any registry write (R3).
 - [ ] `miller workspace open --path DIR` targets DIR; default targets the current dir.
 - [ ] `--full` forces a from-scratch rebuild; default re-open is a cheap delta (exit 0, `unchanged`).
 - [ ] Sensitive-root and missing-dir targets are refused with exit 2 before any registry write.
