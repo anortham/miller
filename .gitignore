@@ -42,6 +42,9 @@ Thumbs.db
 # Claude Code local settings (contains user-specific config)
 .claude/settings.local.json
 
+# Codex CLI local config (user/machine-specific)
+.codex/
+
 # Generated julie extract index + logs (per-project, rebuildable)
 .julie/
 

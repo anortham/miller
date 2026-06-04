@@ -55,14 +55,20 @@ routine, so forcing it is acceptable.
 
 ## Acceptance criteria
 
-- [ ] `dotnet build Miller.slnx -c Release` → 0 warnings / 0 errors.
-- [ ] `scripts/test.sh` (fast) green; `scripts/test.sh scale` green using the v2.1.0 binary.
+- [x] `dotnet build Miller.slnx -c Release` → 0 warnings / 0 errors.
+- [x] `scripts/test.sh` (fast) green; `scripts/test.sh scale` green using the v2.1.0 binary.
 - [ ] `restore-julie-extract.sh` downloads v2.1.0 and passes sha256 verification on this machine.
-- [ ] A fresh `scan --force` on a real repo produces a **schema-2** DB Miller reads
+      _(Pin + sha256 for all four triples are present in `scripts/julie-pins.json`; the actual network
+      download was not re-run on this machine — left to the scale CI restore job.)_
+- [x] A fresh `scan --force` on a real repo produces a **schema-2** DB Miller reads
       (search/inspect/trace).
-- [ ] A leftover **v1** DB is rejected with a message that names `workspace full`; `workspace full`
-      upgrades it cleanly.
-- [ ] `source_regions` is untouched (out of scope); readers ignore the new table.
+- [x] A leftover **v1** DB is rejected with a message that names `workspace full`; `workspace full`
+      upgrades it cleanly (and as of `fix(server)` `5362b3d` it also auto-upgrades at bootstrap).
+- [x] `source_regions` is untouched (out of scope); readers ignore the new table.
+
+_Verified 2026-06-04 on `chore/extract-2.1.0` @ `5362b3d`: build 0/0, fast 1307, scale 21 (3 consecutive
+runs), schema-1→2 heal proven by `LiveBootstrapAutoRebuildTests` (5/5 in isolation). Only the network
+restore gate above remains unchecked._
 
 ## Deferred to "consume next"
 
