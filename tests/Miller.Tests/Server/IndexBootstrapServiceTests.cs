@@ -71,6 +71,104 @@ public sealed class IndexBootstrapServiceTests
         Assert.Equal(expected, IndexBootstrapService.RootPathsEqual(recorded, canonical));
     }
 
+    // ---- auto-rebuild: an incompatible-but-root-matching DB force-rescans once instead of crashing startup ----
+
+    [Fact]
+    public void LoadIndexWithAutoRebuild_CompatibleDb_LoadsOnceAndNeverRescans()
+    {
+        // The reuse happy path: the DB is compatible, so the index loads on the first try and the force-rescan
+        // escape hatch is never touched (no needless full scan on every healthy startup).
+        int loads = 0, rescans = 0;
+        var result = IndexBootstrapService.LoadIndexWithAutoRebuild(
+            load: () => { loads++; return "index"; },
+            forceRescan: () => { rescans++; return 5L; },
+            onBeforeRetry: () => Assert.Fail("onBeforeRetry must not fire for a compatible DB"),
+            onIncompatible: _ => Assert.Fail("onIncompatible must not fire for a compatible DB"));
+
+        Assert.Equal("index", result.Index);
+        Assert.False(result.Rebuilt);
+        Assert.Null(result.RebuiltRevision);
+        Assert.Equal(1, loads);
+        Assert.Equal(0, rescans);
+    }
+
+    [Fact]
+    public void LoadIndexWithAutoRebuild_RunsTheBarrier_AfterRescanAndBeforeRetry()
+    {
+        // Regression guard for the SQLite pool-staleness bug: a force rebuild REPLACES the DB file, so the failed
+        // first load's pooled read connection would re-read the OLD inode on retry. onBeforeRetry (wired to
+        // SqliteConnection.ClearAllPools in production) MUST run exactly once, AFTER forceRescan rewrote the DB and
+        // BEFORE the retry load — otherwise the auto-heal deterministically re-throws the incompatibility.
+        var order = new List<string>();
+        int loads = 0;
+        var result = IndexBootstrapService.LoadIndexWithAutoRebuild<string>(
+            load: () =>
+            {
+                loads++;
+                order.Add("load" + loads);
+                if (loads == 1)
+                    throw new IncompatibleExtractException("DB schema is 1 but this Miller build expects 2");
+                return "rebuilt";
+            },
+            forceRescan: () => { order.Add("rescan"); return 3L; },
+            onBeforeRetry: () => order.Add("barrier"),
+            onIncompatible: _ => order.Add("warn"));
+
+        Assert.Equal("rebuilt", result.Index);
+        Assert.True(result.Rebuilt);
+        Assert.Equal(new[] { "load1", "warn", "rescan", "barrier", "load2" }, order);
+    }
+
+    [Fact]
+    public void LoadIndexWithAutoRebuild_IncompatibleDb_ForceRescansOnceThenReloads()
+    {
+        // The bug this fixes: a stale schema-1 DB (after a julie-extract schema bump) used to crash bootstrap.
+        // Now the first load throws IncompatibleExtractException, we force-rescan exactly once, and the reload
+        // succeeds — the server self-heals instead of failing to connect. The rebuilt revision is reported back
+        // so the holder + registry record the scan.
+        int loads = 0, rescans = 0, warned = 0, barriers = 0;
+        var result = IndexBootstrapService.LoadIndexWithAutoRebuild(
+            load: () =>
+            {
+                loads++;
+                if (loads == 1)
+                    throw new IncompatibleExtractException("DB schema is 1 but this Miller build expects 2");
+                return "rebuilt-index";
+            },
+            forceRescan: () => { rescans++; return 7L; },
+            onBeforeRetry: () => barriers++,
+            onIncompatible: _ => warned++);
+
+        Assert.Equal("rebuilt-index", result.Index);
+        Assert.True(result.Rebuilt);
+        Assert.Equal(7L, result.RebuiltRevision);
+        Assert.Equal(2, loads);   // initial attempt (threw) + one retry after the rebuild
+        Assert.Equal(1, rescans); // exactly one force-rescan
+        Assert.Equal(1, barriers); // exactly one pool barrier before the retry
+        Assert.Equal(1, warned);  // the operator is told the DB was incompatible and is being rebuilt
+    }
+
+    [Fact]
+    public void LoadIndexWithAutoRebuild_StillIncompatibleAfterRebuild_PropagatesWithoutLooping()
+    {
+        // The loud-failure guard: if the freshly-rebuilt DB is STILL incompatible, the bundled julie-extract does
+        // not match this Miller build — a real config error. We must rethrow the ORIGINAL exception after exactly
+        // one rebuild attempt, never loop forever force-rescanning.
+        int loads = 0, rescans = 0;
+        var boom = new IncompatibleExtractException("still schema 1 after rebuild — bundled tool mismatch");
+
+        var thrown = Assert.Throws<IncompatibleExtractException>(() =>
+            IndexBootstrapService.LoadIndexWithAutoRebuild<string>(
+                load: () => { loads++; throw boom; },
+                forceRescan: () => { rescans++; return 1L; },
+                onBeforeRetry: () => { },
+                onIncompatible: _ => { }));
+
+        Assert.Same(boom, thrown);
+        Assert.Equal(2, loads);   // initial + a single retry, then give up
+        Assert.Equal(1, rescans); // rescanned exactly once — no infinite loop
+    }
+
     [Fact]
     public void RegisterBootstrapWorkspace_LoadedExisting_RecordsStableIdentityAndRevisionWithoutScanTimestamp()
     {
