@@ -41,6 +41,8 @@ Thumbs.db
 
 # Claude Code local settings (contains user-specific config)
 .claude/settings.local.json
+# Claude Code scheduler runtime lock (transient, machine-local)
+.claude/scheduled_tasks.lock
 
 # Codex CLI local config (user/machine-specific)
 .codex/
