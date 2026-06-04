@@ -19,16 +19,23 @@ namespace Miller.Tests.Server.Cli;
 public sealed class CliBinarySubprocessTests : IDisposable
 {
     private readonly string _root;
+    private readonly string _home;
 
     public CliBinarySubprocessTests()
     {
-        _root = Path.Combine(Path.GetTempPath(), "miller-cli-e2e-" + Guid.NewGuid().ToString("N"));
+        string unique = Guid.NewGuid().ToString("N");
+        _root = Path.Combine(Path.GetTempPath(), "miller-cli-e2e-" + unique);
+        // An ISOLATED home so the binary's machine-global registry/telemetry (<home>/.miller/workspaces.db) lands
+        // in a temp dir — a subprocess `workspace open` must NOT register into the dev machine's real ~/.miller.
+        _home = Path.Combine(Path.GetTempPath(), "miller-cli-home-" + unique);
         Directory.CreateDirectory(_root);
+        Directory.CreateDirectory(_home);
     }
 
     public void Dispose()
     {
         try { Directory.Delete(_root, recursive: true); } catch { /* best effort */ }
+        try { Directory.Delete(_home, recursive: true); } catch { /* best effort */ }
     }
 
     [Fact]
@@ -65,6 +72,47 @@ public sealed class CliBinarySubprocessTests : IDisposable
         Assert.Equal(2, bad.ExitCode);
     }
 
+    [Fact]
+    public void BuiltBinary_WorkspaceOpen_BootstrapsFreshDir_ThenRemove()
+    {
+        ScaleTestSupport.RequireJulieServer();          // Scale launch signal; skips when .tools is absent
+        string millerDll = ServerBinaryOrSkip();
+
+        // A fresh source tree with NO pre-built index — `workspace open` must build it from scratch (the path
+        // no in-process test can reach: a real second process resolving its CWD + locating its own .tools julie).
+        string srcDir = Path.Combine(_root, "src");
+        Directory.CreateDirectory(srcDir);
+        File.WriteAllText(Path.Combine(srcDir, "Gadget.cs"),
+            "namespace Demo;\npublic class GadgetFromOpen\n{\n    public int Spin() => 7;\n}\n");
+        string dbPath = Path.Combine(_root, ".miller", "symbols.db");
+        Assert.False(File.Exists(dbPath), "the index must not exist before `workspace open`.");
+
+        // open → builds <root>/.miller/symbols.db and registers the workspace (exit 0).
+        ProcessResult open = RunMiller(millerDll, _root, "workspace", "open");
+        Assert.Equal(0, open.ExitCode);
+        Assert.True(File.Exists(dbPath), $"`workspace open` did not create {dbPath}.\n{open.Stdout}\n{open.Stderr}");
+
+        // search now resolves the freshly-built index and finds the symbol.
+        ProcessResult search = RunMiller(millerDll, _root, "search", "GadgetFromOpen");
+        Assert.Equal(0, search.ExitCode);
+        Assert.Contains("GadgetFromOpen", search.Stdout);
+
+        // Re-open is idempotent (a cheap delta) → still exit 0.
+        ProcessResult reopen = RunMiller(millerDll, _root, "workspace", "open");
+        Assert.Equal(0, reopen.ExitCode);
+
+        // --full is accepted and forces a from-scratch rebuild → exit 0, scanned.
+        ProcessResult full = RunMiller(millerDll, _root, "workspace", "open", "--full");
+        Assert.Equal(0, full.ExitCode);
+        Assert.Contains("scanned: yes", full.Stdout);
+
+        // remove --path deletes the .miller index dir (exit 0); the dir is gone afterward.
+        ProcessResult remove = RunMiller(millerDll, _root, "workspace", "remove", "--path", _root);
+        Assert.Equal(0, remove.ExitCode);
+        Assert.False(Directory.Exists(Path.Combine(_root, ".miller")),
+            $"`workspace remove` left .miller behind.\n{remove.Stdout}\n{remove.Stderr}");
+    }
+
     // The server's built miller.dll (runtimeconfig + deps + .tools live next to it), located via the repo root +
     // the build configuration/TFM the test assembly itself was built under. Run through `dotnet` for portability.
     private static string ServerBinaryOrSkip()
@@ -79,7 +127,7 @@ public sealed class CliBinarySubprocessTests : IDisposable
         return dll;
     }
 
-    private static ProcessResult RunMiller(string millerDll, string cwd, params string[] args)
+    private ProcessResult RunMiller(string millerDll, string cwd, params string[] args)
     {
         var psi = new ProcessStartInfo("dotnet")
         {
@@ -88,6 +136,11 @@ public sealed class CliBinarySubprocessTests : IDisposable
             RedirectStandardError = true,
             UseShellExecute = false,
         };
+        // Isolate the machine-global Miller home (registry + telemetry) into the test's temp home so a real
+        // `workspace open` registers there, never in the dev machine's ~/.miller. HOME drives UserProfile on
+        // POSIX; USERPROFILE on Windows — set both for a cross-platform isolation.
+        psi.Environment["HOME"] = _home;
+        psi.Environment["USERPROFILE"] = _home;
         psi.ArgumentList.Add(millerDll);
         foreach (string arg in args)
             psi.ArgumentList.Add(arg);

@@ -2,6 +2,7 @@ using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Miller.Server;
 using Miller.Server.Cli;
+using Miller.Server.Tools;
 using Miller.Server.Workspaces;
 using Miller.Tests.Indexing;
 using Xunit;
@@ -180,4 +181,216 @@ public sealed class CliDispatchTests : IDisposable
     [InlineData(WorkspaceRefreshStatus.Failed, 3)]
     public void RefreshExitCode_NonSuccessIsAlwaysNonZero(WorkspaceRefreshStatus status, int expected) =>
         Assert.Equal(expected, CliDispatch.RefreshExitCode(status));
+
+    // ---------- workspace open (bootstrap a fresh dir) ----------
+
+    [Fact]
+    public void WorkspaceOpen_NonexistentPath_IsUsageErrorExitTwo()
+    {
+        string missing = Path.Combine(_dir, "does-not-exist");
+        var (code, _, errText) = Run(new[] { "workspace", "open", "--path", missing },
+            Context(Path.Combine(_dir, "symbols.db")));
+        Assert.Equal(2, code);
+        Assert.Contains("no directory", errText);
+    }
+
+    [Fact]
+    public void WorkspaceOpen_SensitiveRoot_RefusedExitTwo()
+    {
+        // A filesystem root ("/" — or the drive root on Windows) has no parent → always sensitive. The guard
+        // fires before any registry write or julie locate.
+        string root = Path.GetPathRoot(Path.GetTempPath())!;
+        var (code, _, errText) = Run(new[] { "workspace", "open", "--path", root },
+            Context(Path.Combine(_dir, "symbols.db")));
+        Assert.Equal(2, code);
+        Assert.Contains("sensitive", errText);
+        Assert.Empty(ListRegistry());
+    }
+
+    [Fact]
+    public void WorkspaceOpen_SymlinkToSensitiveRoot_RefusedBeforeRegister()
+    {
+        // R3: the guard must see the CANONICAL (symlink-resolved) root, not the lexical arg — a symlink whose
+        // target is a sensitive root must be refused before UpsertSeen.
+        string root = Path.GetPathRoot(Path.GetTempPath())!;
+        string link = Path.Combine(_dir, "link-to-root");
+        Directory.CreateSymbolicLink(link, root);
+
+        var (code, _, errText) = Run(new[] { "workspace", "open", "--path", link },
+            Context(Path.Combine(_dir, "symbols.db")));
+
+        Assert.Equal(2, code);
+        Assert.Contains("sensitive", errText);
+        Assert.Empty(ListRegistry()); // refused before registration
+
+        Directory.Delete(link); // remove the reparse point ourselves (don't rely on recursive cleanup)
+    }
+
+    [Fact]
+    public void WorkspaceOpen_MissingTool_ExitsThree_AndDoesNotRegister()
+    {
+        // R1: julie-extract is located BEFORE registration, so a missing tool fails with no orphan row.
+        // ctx.ToolsRoot defaults to <_dir>/.tools, which does not exist. Locate also searches PATH, so skip
+        // (don't risk spawning julie) if the binary is resolvable there.
+        Assert.SkipWhen(JulieResolvableOnPath(), "julie-extract is on PATH; cannot prove the missing-tool path here.");
+
+        var (code, _, errText) = Run(new[] { "workspace", "open" }, Context(Path.Combine(_dir, "symbols.db")));
+
+        Assert.Equal(3, code);
+        Assert.False(string.IsNullOrWhiteSpace(errText));
+        Assert.Empty(ListRegistry()); // Locate threw before UpsertSeen
+    }
+
+    // ---------- workspace remove ----------
+
+    [Fact]
+    public void WorkspaceRemove_NoSelector_IsUsageErrorExitTwo()
+    {
+        var (code, _, errText) = Run(new[] { "workspace", "remove" }, Context(Path.Combine(_dir, "symbols.db")));
+        Assert.Equal(2, code);
+        Assert.Contains("--id", errText);   // the remove-specific usage, not the generic unknown-operation note
+        Assert.Contains("--path", errText);
+    }
+
+    [Fact]
+    public void WorkspaceRemove_UnknownId_IsUsageErrorExitTwo()
+    {
+        var (code, _, errText) = Run(new[] { "workspace", "remove", "--id", "does-not-exist" },
+            Context(Path.Combine(_dir, "symbols.db")));
+        Assert.Equal(2, code);
+        Assert.Contains("does-not-exist", errText);   // the selector is echoed (resolver KeyNotFound), not swallowed
+        Assert.Contains("selector", errText);
+    }
+
+    [Fact]
+    public void WorkspaceRemove_ByPath_DeletesMillerDir()
+    {
+        string sub = Path.Combine(_dir, "ws-bypath");
+        string millerDir = Path.Combine(sub, ".miller");
+        Directory.CreateDirectory(millerDir);
+        File.WriteAllText(Path.Combine(millerDir, "symbols.db"), "x"); // a stand-in index file
+
+        var (code, outText, _) = Run(new[] { "workspace", "remove", "--path", sub },
+            Context(Path.Combine(_dir, "symbols.db")));
+
+        Assert.Equal(0, code);
+        Assert.Contains("removed", outText);
+        Assert.False(Directory.Exists(millerDir));
+    }
+
+    [Fact]
+    public void WorkspaceRemove_ByPath_NoMillerDir_NotFoundExitZero()
+    {
+        string sub = Path.Combine(_dir, "ws-empty");
+        Directory.CreateDirectory(sub); // exists, but has no .miller
+
+        var (code, outText, _) = Run(new[] { "workspace", "remove", "--path", sub },
+            Context(Path.Combine(_dir, "symbols.db")));
+
+        Assert.Equal(0, code);
+        Assert.Contains("not found", outText);
+    }
+
+    [Fact]
+    public void WorkspaceRemove_ById_DeletesAndUnregisters()
+    {
+        string sub = Path.Combine(_dir, "ws-byid");
+        string millerDir = Path.Combine(sub, ".miller");
+        Directory.CreateDirectory(millerDir);
+        const string id = "ws-byid-00000000";
+        using (WorkspaceRegistry registry = WorkspaceRegistry.Open(_registryDb))
+            registry.UpsertSeen(id, "byid-disp", sub, Path.Combine(millerDir, "symbols.db"),
+                WorkspaceRegistryState.Ready);
+        SqliteConnection.ClearAllPools();
+
+        var (code, outText, _) = Run(new[] { "workspace", "remove", "--id", "byid-disp" },
+            Context(Path.Combine(_dir, "symbols.db")));
+
+        Assert.Equal(0, code);
+        Assert.Contains("removed", outText);
+        Assert.False(Directory.Exists(millerDir));
+        using WorkspaceRegistry check = WorkspaceRegistry.Open(_registryDb);
+        Assert.Null(check.Get(id));
+    }
+
+    [Fact]
+    public void WorkspaceRemove_LockHeldByAnotherWriter_RefusedExitThree()
+    {
+        string sub = Path.Combine(_dir, "ws-locked");
+        string millerDir = Path.Combine(sub, ".miller");
+        Directory.CreateDirectory(millerDir);
+
+        using (SingleWriterLock? lease = SingleWriterLock.TryAcquire(millerDir))
+        {
+            Assert.NotNull(lease); // we hold the writer lock
+            var (code, outText, _) = Run(new[] { "workspace", "remove", "--path", sub },
+                Context(Path.Combine(_dir, "symbols.db")));
+
+            Assert.Equal(3, code);
+            Assert.Contains("in use", outText);
+            Assert.True(Directory.Exists(millerDir)); // not deleted while held
+        }
+    }
+
+    [Fact]
+    public void WorkspaceRemove_ByPath_GoneDir_PrunesStaleRow()
+    {
+        // R4: the dir is already deleted but a registry row still points at it. remove --path must prune the
+        // row via a lexical match (CanonicalizeRoot cannot run on a missing dir).
+        string gone = Path.Combine(_dir, "ws-gone");
+        string full = Path.GetFullPath(gone);
+        const string id = "ws-gone-000000000";
+        using (WorkspaceRegistry registry = WorkspaceRegistry.Open(_registryDb))
+            registry.UpsertSeen(id, "gone-disp", full, Path.Combine(full, ".miller", "symbols.db"),
+                WorkspaceRegistryState.Ready);
+        SqliteConnection.ClearAllPools();
+
+        var (code, outText, _) = Run(new[] { "workspace", "remove", "--path", gone },
+            Context(Path.Combine(_dir, "symbols.db")));
+
+        Assert.Equal(0, code);
+        Assert.Contains("removed", outText);
+        using WorkspaceRegistry check = WorkspaceRegistry.Open(_registryDb);
+        Assert.Null(check.Get(id));
+    }
+
+    [Theory]
+    [InlineData(WorkspaceRemoveResult.Outcome.Removed, 0)]
+    [InlineData(WorkspaceRemoveResult.Outcome.NotFound, 0)]
+    [InlineData(WorkspaceRemoveResult.Outcome.RefusedInUse, 3)]
+    [InlineData(WorkspaceRemoveResult.Outcome.RefusedLive, 3)]
+    public void RemoveExitCode_MapsOutcomesToCodes(WorkspaceRemoveResult.Outcome outcome, int expected) =>
+        Assert.Equal(expected, CliDispatch.RemoveExitCode(outcome));
+
+    // ---------- helpers ----------
+
+    private IReadOnlyList<WorkspaceRegistryRow> ListRegistry()
+    {
+        SqliteConnection.ClearAllPools();
+        using WorkspaceRegistry registry = WorkspaceRegistry.Open(_registryDb);
+        return registry.List();
+    }
+
+    // Whether `julie-extract` is resolvable on PATH (so an empty ToolsRoot would NOT fail Locate). Used to skip
+    // the missing-tool test rather than risk spawning julie in the fast suite.
+    private static bool JulieResolvableOnPath()
+    {
+        string? path = Environment.GetEnvironmentVariable("PATH");
+        if (string.IsNullOrEmpty(path))
+            return false;
+        string[] names = OperatingSystem.IsWindows()
+            ? new[] { "julie-extract.exe", "julie-extract" }
+            : new[] { "julie-extract" };
+        foreach (string dir in path.Split(Path.PathSeparator))
+        {
+            if (string.IsNullOrWhiteSpace(dir))
+                continue;
+            foreach (string name in names)
+            {
+                try { if (File.Exists(Path.Combine(dir, name))) return true; }
+                catch { /* an unparseable PATH entry is not a julie hit */ }
+            }
+        }
+        return false;
+    }
 }

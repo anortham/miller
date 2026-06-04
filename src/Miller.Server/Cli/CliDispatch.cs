@@ -186,7 +186,7 @@ public static class CliDispatch
 
     private static int Workspace(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
-        CliOptions o = CliOptions.Parse(args, "json");
+        CliOptions o = CliOptions.Parse(args, "json", "full");
         string operation = (o.Query.Length > 0 ? o.Query : "status").ToLowerInvariant();
         bool json = o.Has("json");
         string? id = o.Value("id");
@@ -202,8 +202,12 @@ public static class CliDispatch
                 return WorkspaceRefresh(ctx, id, path, force: false, json, outw, err);
             case "full":
                 return WorkspaceRefresh(ctx, id, path, force: true, json, outw, err);
+            case "open":
+                return WorkspaceOpen(ctx, path, full: o.Has("full"), json, outw, err);
+            case "remove":
+                return WorkspaceRemove(ctx, id, path, json, outw, err);
             default:
-                err.WriteLine($"unknown workspace operation '{operation}'. Use status|list|refresh|full.");
+                err.WriteLine($"unknown workspace operation '{operation}'. Use status|list|refresh|full|open|remove.");
                 return 2;
         }
     }
@@ -372,6 +376,169 @@ public static class CliDispatch
         return RefreshExitCode(result.Status);
     }
 
+    // ---------- open (bootstrap a fresh directory) ----------
+
+    // Register the target directory and index it from the CLI — the bootstrap path a one-shot/CI flow needs
+    // (`cd repo && miller workspace open`). Target = --path, else the current workspace. We canonicalize FIRST
+    // so the sensitive-root guard sees the symlink-resolved root, locate julie-extract BEFORE registering (a
+    // missing tool must not leave an orphan "ready" row), then drive the SAME lock-holding refresh machinery
+    // `refresh`/`full` use — it acquires the single-writer lock, runs the scan (creating .miller/symbols.db on
+    // first run), builds the search sidecar (best-effort, when enabled), and marks the row scanned. Rendered as
+    // an "open" action and mapped through the shared RefreshExitCode so a failure is a non-zero CI signal.
+    private static int WorkspaceOpen(
+        WorkspaceContext ctx, string? path, bool full, bool json, TextWriter outw, TextWriter err)
+    {
+        string targetRoot = string.IsNullOrWhiteSpace(path) ? ctx.WorkspaceRoot : path!;
+
+        if (!Directory.Exists(targetRoot))
+        {
+            err.WriteLine($"cannot open: no directory at '{targetRoot}'.");
+            return 2;
+        }
+
+        // Canonicalize before the safety check so a symlink whose target is a sensitive root cannot slip past
+        // the lexical predicate, and before any registry write.
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(targetRoot);
+        if (WorkspaceRootSafety.IsSensitiveRoot(canonicalRoot, WorkspaceRootSafety.SensitiveRootCandidates()))
+        {
+            err.WriteLine($"refusing to index sensitive system path '{canonicalRoot}': choose a project directory.");
+            return 2;
+        }
+
+        string millerDir = Path.Combine(canonicalRoot, ".miller");
+        string dbPath = Path.Combine(millerDir, "symbols.db");
+        string id = WorkspaceId.FromCanonicalRoot(canonicalRoot);
+        string display = WorkspaceId.Display(canonicalRoot, id);
+
+        // Locate julie-extract BEFORE registering — absent ⇒ exit 3 with the restore message and NO orphan row.
+        JulieExtractRunner runner;
+        try
+        {
+            runner = JulieExtractRunner.Locate(ctx.ToolsRoot);
+        }
+        catch (FileNotFoundException ex)
+        {
+            err.WriteLine($"cannot open: {ex.Message}");
+            return 3;
+        }
+
+        var sidecar = SymbolSearchSidecar.FromEnvironment();
+        using WorkspaceRegistry registry = WorkspaceRegistry.Open(ctx.RegistryDbPath);
+        registry.UpsertSeen(id, display, canonicalRoot, dbPath, WorkspaceRegistryState.Ready);
+
+        var refresh = new CrossWorkspaceRefreshService(registry, runner, sidecar);
+        WorkspaceRefreshResult result = refresh.Refresh(id, force: full);
+
+        // Rendered via the Action view (NOT WorkspaceRender.Open, whose "primed / not a live switch" copy is
+        // server semantics — false for the CLI). A scan failure has marked the just-registered row error.
+        var action = new WorkspaceActionResult(
+            "open",
+            Scanned: result.Scanned,
+            Swapped: false,
+            Revision: result.Revision ?? 0,
+            Note: result.Error ?? result.WarningText,
+            WorkspaceId: result.WorkspaceId,
+            Root: result.WorkspaceRoot,
+            Status: result.StatusText);
+        outw.WriteLine(WorkspaceRender.Action(action, json));
+        return RefreshExitCode(result.Status);
+    }
+
+    // ---------- remove (delete a workspace's .miller index dir) ----------
+
+    // Delete a workspace's `.miller` index dir + unregister it. Ported from the server's WorkspaceTool.Remove
+    // minus the in-process "live workspace" refusal — the one-shot CLI serves nothing in-process, so the
+    // cross-process single-writer lock is the only guard against deleting a dir a running Miller owns. Requires
+    // an explicit selector (--id or --path); there is no current-dir default (deleting the dir you stand in by
+    // accident is a foot-gun).
+    private static int WorkspaceRemove(
+        WorkspaceContext ctx, string? id, string? path, bool json, TextWriter outw, TextWriter err)
+    {
+        if (string.IsNullOrWhiteSpace(id) && string.IsNullOrWhiteSpace(path))
+        {
+            err.WriteLine("workspace remove requires a selector: --id <display-id> or --path <dir>.");
+            return 2;
+        }
+
+        using WorkspaceRegistry registry = WorkspaceRegistry.Open(ctx.RegistryDbPath);
+
+        // By id: resolve the registry row, then delete its .miller dir + unregister.
+        if (!string.IsNullOrWhiteSpace(id))
+        {
+            WorkspaceRegistryRow row;
+            try
+            {
+                row = WorkspaceRegistrySelector.Resolve(registry, id!);
+            }
+            catch (KeyNotFoundException ex)
+            {
+                err.WriteLine(ex.Message);
+                return 2;
+            }
+            string millerDir = Path.GetDirectoryName(row.IndexDbPath)
+                ?? throw new InvalidOperationException(
+                    $"Cannot determine the .miller directory for index DB path '{row.IndexDbPath}'.");
+            return RemoveMillerDir(registry, row.WorkspaceId, row.CanonicalRoot, millerDir, json, outw);
+        }
+
+        // By path. A GONE dir cannot be canonicalized, so best-effort prune a registry row whose canonical root
+        // lexically matches the full path (R4 — lets a CI teardown clean the registry after deleting the repo).
+        string fullPath = Path.GetFullPath(path!);
+        if (!Directory.Exists(fullPath))
+        {
+            string goneMillerDir = Path.Combine(fullPath, ".miller");
+            WorkspaceRegistryRow? stale = registry.List().FirstOrDefault(r =>
+                string.Equals(r.CanonicalRoot, fullPath, StringComparison.Ordinal));
+            if (stale is not null)
+            {
+                registry.Remove(stale.WorkspaceId);
+                outw.WriteLine(WorkspaceRender.Remove(
+                    WorkspaceRemoveResult.Removed(goneMillerDir, stale.WorkspaceId, stale.CanonicalRoot), json));
+                return RemoveExitCode(WorkspaceRemoveResult.Outcome.Removed);
+            }
+            outw.WriteLine(WorkspaceRender.Remove(WorkspaceRemoveResult.NotFound(goneMillerDir), json));
+            return RemoveExitCode(WorkspaceRemoveResult.Outcome.NotFound);
+        }
+
+        // Existing dir: canonicalize and match a registry row (ordinal canonical root, like the server's
+        // FindByCanonicalRoot), falling back to a local .miller cleanup when no row is registered.
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(fullPath);
+        WorkspaceRegistryRow? match = registry.List().FirstOrDefault(r =>
+            string.Equals(r.CanonicalRoot, canonicalRoot, StringComparison.Ordinal)
+            || WorkspaceSafety.IsLiveWorkspace(r.CanonicalRoot, canonicalRoot));
+        string millerDirByPath = match is { } m
+            ? Path.GetDirectoryName(m.IndexDbPath) ?? Path.Combine(canonicalRoot, ".miller")
+            : Path.Combine(canonicalRoot, ".miller");
+        return RemoveMillerDir(registry, match?.WorkspaceId, match?.CanonicalRoot ?? canonicalRoot, millerDirByPath, json, outw);
+    }
+
+    // Delete one `.miller` dir under the cross-process writer lock. Missing dir ⇒ a clean not-found (prune any
+    // stale row); lock held by another writer ⇒ refused, NOT deleted; otherwise delete + unregister.
+    private static int RemoveMillerDir(
+        WorkspaceRegistry registry, string? workspaceId, string? root, string millerDir, bool json, TextWriter outw)
+    {
+        if (!Directory.Exists(millerDir))
+        {
+            if (workspaceId is not null)
+                registry.Remove(workspaceId);
+            outw.WriteLine(WorkspaceRender.Remove(WorkspaceRemoveResult.NotFound(millerDir, workspaceId, root), json));
+            return RemoveExitCode(WorkspaceRemoveResult.Outcome.NotFound);
+        }
+
+        using IDisposable? lease = SingleWriterLock.TryAcquire(millerDir);
+        if (lease is null)
+        {
+            outw.WriteLine(WorkspaceRender.Remove(WorkspaceRemoveResult.RefusedInUse(millerDir, workspaceId, root), json));
+            return RemoveExitCode(WorkspaceRemoveResult.Outcome.RefusedInUse);
+        }
+
+        Directory.Delete(millerDir, recursive: true);
+        if (workspaceId is not null)
+            registry.Remove(workspaceId);
+        outw.WriteLine(WorkspaceRender.Remove(WorkspaceRemoveResult.Removed(millerDir, workspaceId, root), json));
+        return RemoveExitCode(WorkspaceRemoveResult.Outcome.Removed);
+    }
+
     // Map a refresh/full outcome to a process exit code. EVERY non-success terminal state must be non-zero so a
     // script (`miller workspace full && deploy`) can't proceed on a broken/never-refreshed workspace: only
     // Refreshed/Unchanged (the index is current) are success (0); a missing root/index, a hard failure, or a busy
@@ -383,6 +550,16 @@ public static class CliDispatch
             or WorkspaceRefreshStatus.MissingIndex
             or WorkspaceRefreshStatus.LockBusy
             or WorkspaceRefreshStatus.Failed => 3,
+        _ => 1,
+    };
+
+    // Map a remove outcome to a process exit code. Removed and NotFound are both success (the index dir is gone
+    // — NotFound is an idempotent no-op); a refusal (another writer holds the lock, or the live workspace) did
+    // NOT delete, so it is an operational failure (3) a CI teardown must see.
+    internal static int RemoveExitCode(WorkspaceRemoveResult.Outcome outcome) => outcome switch
+    {
+        WorkspaceRemoveResult.Outcome.Removed or WorkspaceRemoveResult.Outcome.NotFound => 0,
+        WorkspaceRemoveResult.Outcome.RefusedInUse or WorkspaceRemoveResult.Outcome.RefusedLive => 3,
         _ => 1,
     };
 
@@ -431,7 +608,9 @@ public static class CliDispatch
                              [--max-depth N] [--limit N] [--json]
           trace <symbol>     Follow callers/callees, a path, or a cross-language bridge.
                              [--mode auto|path|bridge] [--to SYMBOL] [--depth N] [--limit N] [--full]
-          workspace [op]     Index lifecycle. op = status (default) | list | refresh | full.
+          workspace [op]     Index lifecycle. op = status (default) | list | refresh | full | open | remove.
+                             open   [--path DIR] [--full]   Register + index a directory (creates .miller/symbols.db).
+                             remove (--id ID | --path DIR)  Delete a workspace's .miller index dir.
                              [--id DISPLAY-ID] [--path DIR] [--json]
           version            Print the build version (e.g. 0.1.0+<sha>).
           help               Show this help.
