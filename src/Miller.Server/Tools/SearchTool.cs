@@ -126,7 +126,9 @@ public sealed class SearchTool
         }
     }
 
-    private static SearchToolMode ParseMode(string mode) => mode?.ToLowerInvariant() switch
+    // internal (not private): the CLI search verb reuses the EXACT same mode mapping so `miller search --mode x`
+    // and the MCP tool agree on interpretation — one source of truth.
+    internal static SearchToolMode ParseMode(string mode) => mode?.ToLowerInvariant() switch
     {
         "text" => SearchToolMode.Text,
         "symbol" => SearchToolMode.Symbol,

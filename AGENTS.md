@@ -72,6 +72,16 @@ scripts/test.sh all     # both
   to index the home dir, a filesystem/drive root, or a system dir. It runs at the very top of `Program.cs`
   (before any filesystem touch) and in `workspace open`. Ported from julie's `root_safety.rs` — keep the
   forbidden set in step with julie/eros.
+- **CLI vs server (load-bearing branch).** The same `miller` binary is both the MCP stdio server and a one-shot
+  CLI. `Program.cs` branches at the very top (before any filesystem touch / host build) on
+  [`CliDispatch.IsCliInvocation`](src/Miller.Server/Cli/CliDispatch.cs): **no args OR `serve` → MCP host**
+  (the historical default; stdio purity preserved), **any other verb → `CliDispatch.Run`** which loads the
+  current workspace's `symbols.db` via `RepositoryIndexLoader` and calls the SAME pure tool cores the server
+  exposes (`SearchTool.Run`, `InspectTool.Run`, `WorkspaceRender`, …), then exits. The CLI OWNS stdout — it does
+  NOT start Serilog file logging or any background service. `mcp-config.json` launches the server with the
+  explicit `-- serve` (cross-platform; no shell script). Build version is single-sourced in
+  `Directory.Build.props` (`<Version>` + git short SHA → `MillerVersion.Current`), surfaced in MCP
+  `ServerInfo.Version`, `miller version`, and the `workspace status` header.
 - **Logging.** All processes append to ONE shared daily pair (`.miller/logs/miller-<YYYYMMDD>.log` +
   `.jsonl`, Serilog `shared:true`); `pid`/`role`/`cid` are line properties, not file-name segments. There
   is no per-pid file and no startup reaper (both removed 2026-05-31; see the superseded D1/D6 notes in

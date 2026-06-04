@@ -2,7 +2,7 @@
   "mcpServers": {
     "miller": {
       "command": "dotnet",
-      "args": ["run", "--project", "src/Miller.Server", "-c", "Release"],
+      "args": ["run", "--project", "src/Miller.Server", "-c", "Release", "--", "serve"],
       "env": {}
     }
   }

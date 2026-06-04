@@ -22,6 +22,16 @@ using Serilog.Core;
 // STDIO PURITY: nothing may touch stdout except the MCP protocol. Serilog Console is routed to stderr; never
 // Console.WriteLine anywhere in this process.
 
+// CLI FAST-PATH: a non-empty verb other than `serve` runs a one-shot command over the existing index and exits
+// — NO MCP host, NO Serilog file logging, NO stdio-purity constraint (the CLI OWNS stdout here). `serve` and the
+// no-args launch fall through to the MCP stdio server below (the historical default). The CLI reads the SAME pure
+// tool cores the server exposes, so a shell invocation and a tool call agree. Resolved before any filesystem touch.
+if (Miller.Server.Cli.CliDispatch.IsCliInvocation(args))
+{
+    var cliContext = WorkspaceContext.Create(Environment.CurrentDirectory, AppContext.BaseDirectory);
+    return Miller.Server.Cli.CliDispatch.Run(args, cliContext, Console.Out, Console.Error);
+}
+
 var workspacePath = Environment.CurrentDirectory;
 
 // SAFETY (must precede ANY filesystem touch): refuse to run in a sensitive system root — the home dir, a
@@ -71,7 +81,7 @@ builder.Services.AddMillerServices();
 builder.Services
     .AddMcpServer(options =>
     {
-        options.ServerInfo = new() { Name = "miller", Version = "0.1.0" };
+        options.ServerInfo = new() { Name = "miller", Version = MillerVersion.Current };
         // Server-level behavioral-adoption guidance (search-before-read, per-tool one-liners, workflows) the
         // client surfaces to the agent. Embedded in the binary; see AgentInstructions + MILLER_AGENT_INSTRUCTIONS.md.
         options.ServerInstructions = AgentInstructions.Load();
@@ -83,3 +93,4 @@ builder.Services
 
 var host = builder.Build();
 await host.RunAsync();
+return 0;

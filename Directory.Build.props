@@ -5,5 +5,31 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- Single source of truth for the Miller build version. Surfaced at runtime via MillerVersion.Current
+         (MCP ServerInfo.Version, `miller version`, and `workspace status`) so a session can tell WHICH build is
+         live. The git short SHA is appended to InformationalVersion below when building inside the repo. -->
+    <Version>0.1.0</Version>
+    <!-- We stamp the short SHA into InformationalVersion ourselves (below); stop the SDK from ALSO appending the
+         full 40-char SourceRevisionId, which would double the suffix (0.1.0+<short>.<full>). -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
+
+  <!-- Stamp the git short SHA into InformationalVersion (=> "0.1.0+<sha>") so two builds off different commits are
+       distinguishable in a running process. Guarded on a .git directory so a source/published build with no repo
+       still builds cleanly (InformationalVersion then defaults to $(Version)). IgnoreExitCode (NOT ContinueOnError)
+       silently tolerates a git failure — git not on PATH, a broken repo, a worktree/submodule .git-file — WITHOUT
+       emitting an MSB3073 warning (which would breach the zero-warning invariant); the ExitCode is still captured, so
+       the guard below falls back to the bare $(Version). -->
+  <Target Name="_MillerStampInformationalVersion"
+          BeforeTargets="GetAssemblyVersion;GenerateAssemblyInfo"
+          Condition="Exists('$(MSBuildThisFileDirectory).git')">
+    <Exec Command="git -C &quot;$(MSBuildThisFileDirectory.TrimEnd('\/'))&quot; rev-parse --short=12 HEAD"
+          ConsoleToMSBuild="true" IgnoreExitCode="true" StandardOutputImportance="low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_MillerGitSha" />
+      <Output TaskParameter="ExitCode" PropertyName="_MillerGitExit" />
+    </Exec>
+    <PropertyGroup>
+      <InformationalVersion Condition="'$(_MillerGitExit)' == '0' and '$(_MillerGitSha)' != ''">$(Version)+$(_MillerGitSha)</InformationalVersion>
+    </PropertyGroup>
+  </Target>
 </Project>

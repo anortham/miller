@@ -216,7 +216,8 @@ public sealed class WorkspaceTool
                 QueueEmpty: true,
                 FreshnessStatus: "missing_index",
                 WarningText: error,
-                DisplayId: row.DisplayId);
+                DisplayId: row.DisplayId,
+                ServerVersion: MillerVersion.Current);
             return (WorkspaceRender.Status(missingFacts, _ledger.SummarizeForWorkspace(row.WorkspaceId), json),
                 1, TelemetryOutcome.Empty);
         }
@@ -234,7 +235,8 @@ public sealed class WorkspaceTool
             QueueEmpty: true,
             FreshnessStatus: WorkspaceFreshnessView.FreshnessStatusFor(refreshResult: null, row),
             WarningText: WorkspaceFreshnessView.WarningTextFor(refreshResult: null),
-            DisplayId: row.DisplayId);
+            DisplayId: row.DisplayId,
+            ServerVersion: MillerVersion.Current);
         return (WorkspaceRender.Status(facts, _ledger.SummarizeForWorkspace(row.WorkspaceId), json),
             1, TelemetryOutcome.Ok);
     }
@@ -275,7 +277,8 @@ public sealed class WorkspaceTool
             IndexFresh: _freshProbe.Compute(),
             QueueEmpty: _indexer.QueueEmpty,
             FreshnessStatus: "current",
-            DisplayId: CurrentDisplayId());
+            DisplayId: CurrentDisplayId(),
+            ServerVersion: MillerVersion.Current);
     }
 
     // ---------- refresh / full ----------

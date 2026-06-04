@@ -74,6 +74,37 @@ Seven tools, each with smart defaults so the common path is the simplest call: `
 full ID, `current`, or `primary`. Explicit `workspace_id` defaults `ensure_fresh=true`. Targets are smart strings, not JSON objects. See
 [docs/findings/miller-toolbox.md](docs/findings/miller-toolbox.md).
 
+## Running Miller
+
+The single `miller` binary runs two ways:
+
+- **MCP server (default).** With no arguments — or the explicit `serve` verb — Miller speaks the MCP protocol
+  over stdio. This is how an MCP client (Claude Code, etc.) connects; see [`mcp-config.json`](mcp-config.json):
+
+  ```bash
+  dotnet run --project src/Miller.Server -c Release -- serve
+  ```
+
+- **CLI (one-shot).** Any other verb runs a single command over the current directory's `.miller/symbols.db`
+  and exits — for shells, CI, and integration tests. The CLI reuses the *same* tool cores the server exposes,
+  so output matches a tool call.
+
+  ```bash
+  dotnet run --project src/Miller.Server -c Release -- search "UserService"
+  dotnet run --project src/Miller.Server -c Release -- inspect auth/UserService.cs --depth full
+  dotnet run --project src/Miller.Server -c Release -- workspace list
+  dotnet run --project src/Miller.Server -c Release -- version
+  ```
+
+  Build once and run the binary directly (`src/Miller.Server/bin/Release/net10.0/miller <verb>`) to skip the
+  `dotnet run` up-to-date check. `miller help` lists every verb: `search`, `inspect`, `context`, `impact`,
+  `trace`, `workspace`, `version`, `serve`.
+
+**Dogfooding the server.** Because MCP runs over stdio, a new build takes effect only after the MCP client
+restarts the subprocess. A build made inside the repo carries its git short SHA — `miller version` prints
+`0.1.0+<sha>` (just `0.1.0` for a build with no `.git`), and the same string heads the `# workspace` block of
+`workspace status` — so a session can always confirm *which* build it is talking to.
+
 ## Build & test
 
 ```bash

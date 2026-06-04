@@ -26,6 +26,9 @@ namespace Miller.Server.Tools;
 /// <param name="IndexFresh">The coarse <c>index_fresh</c> probe (built==latest AND queue empty); null = unknown.</param>
 /// <param name="QueueEmpty">Whether the leader's watcher queue holds no pending events (vacuously true on a reader).</param>
 /// <param name="DisplayId">Human-sized selector shown in compact output, when known from the registry.</param>
+/// <param name="ServerVersion">The version of the Miller binary that produced this status (build-identity
+/// signal), or null when not surfaced. Always THIS process's version — the responder — regardless of which
+/// workspace's facts are shown.</param>
 public readonly record struct WorkspaceFacts(
     string Root,
     string? WorkspaceId,
@@ -39,7 +42,8 @@ public readonly record struct WorkspaceFacts(
     bool QueueEmpty,
     string? FreshnessStatus = null,
     string? WarningText = null,
-    string? DisplayId = null);
+    string? DisplayId = null,
+    string? ServerVersion = null);
 
 /// <summary>A registry-backed row rendered by <c>workspace list</c>.</summary>
 public readonly record struct WorkspaceListEntry(
@@ -157,7 +161,10 @@ public static class WorkspaceRender
     private static string StatusCompact(WorkspaceFacts facts, TelemetrySummary telemetry)
     {
         var sb = new StringBuilder();
-        sb.Append("# workspace\n");
+        sb.Append("# workspace");
+        if (!string.IsNullOrEmpty(facts.ServerVersion))
+            sb.Append("  miller ").Append(facts.ServerVersion);
+        sb.Append('\n');
         sb.Append(DisplayId(facts.Root, facts.WorkspaceId, facts.DisplayId))
           .Append("  ").Append(facts.Root)
           .Append("  [").Append(facts.IsLeader ? "leader" : "reader").Append("]\n");
@@ -247,6 +254,8 @@ public static class WorkspaceRender
             else w.WriteString("display_id", facts.DisplayId);
             w.WriteString("db", facts.DbPath);
             w.WriteBoolean("leader", facts.IsLeader);
+            if (facts.ServerVersion is null) w.WriteNull("server_version");
+            else w.WriteString("server_version", facts.ServerVersion);
             w.WriteEndObject();
 
             w.WritePropertyName("index");
