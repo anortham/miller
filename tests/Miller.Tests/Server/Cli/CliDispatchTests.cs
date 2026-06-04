@@ -354,6 +354,93 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Null(check.Get(id));
     }
 
+    [Fact]
+    public void WorkspaceRemove_ByPath_RegisteredDir_DeletesAndUnregisters()
+    {
+        // The realistic by-path flow: the dir EXISTS and IS registered (the normal state after `open`). Exercises
+        // the registry-match arm + the post-delete unregister that the no-row by-path test does not.
+        string sub = Path.Combine(_dir, "ws-reg");
+        Directory.CreateDirectory(sub);
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(sub);
+        string millerDir = Path.Combine(canonicalRoot, ".miller");
+        Directory.CreateDirectory(millerDir);
+        const string id = "ws-reg-00000000000";
+        using (WorkspaceRegistry registry = WorkspaceRegistry.Open(_registryDb))
+            registry.UpsertSeen(id, "reg-disp", canonicalRoot,
+                Path.Combine(canonicalRoot, ".miller", "symbols.db"), WorkspaceRegistryState.Ready);
+        SqliteConnection.ClearAllPools();
+
+        var (code, outText, _) = Run(new[] { "workspace", "remove", "--path", canonicalRoot },
+            Context(Path.Combine(_dir, "symbols.db")));
+
+        Assert.Equal(0, code);
+        Assert.Contains("removed", outText);
+        Assert.False(Directory.Exists(millerDir));
+        using WorkspaceRegistry check = WorkspaceRegistry.Open(_registryDb);
+        Assert.Null(check.Get(id));   // the match arm resolved the row and unregistered it after the delete
+    }
+
+    [Fact]
+    public void WorkspaceRemove_ById_MissingDir_PrunesOrphanRow()
+    {
+        // A registered row whose .miller dir was deleted out from under it: remove --id must prune the orphan row
+        // and report a clean not-found (exit 0), without a dir to delete.
+        string sub = Path.Combine(_dir, "ws-orphan");
+        const string id = "ws-orphan-000000000";
+        using (WorkspaceRegistry registry = WorkspaceRegistry.Open(_registryDb))
+            registry.UpsertSeen(id, "orphan-disp", sub,
+                Path.Combine(sub, ".miller", "symbols.db"), WorkspaceRegistryState.Ready);
+        SqliteConnection.ClearAllPools();
+
+        var (code, outText, _) = Run(new[] { "workspace", "remove", "--id", "orphan-disp" },
+            Context(Path.Combine(_dir, "symbols.db")));
+
+        Assert.Equal(0, code);
+        Assert.Contains("not found", outText);
+        using WorkspaceRegistry check = WorkspaceRegistry.Open(_registryDb);
+        Assert.Null(check.Get(id));
+    }
+
+    [Fact]
+    public void WorkspaceRemove_ByPath_GoneDir_CaseInsensitiveMatch_PrunesStaleRow()
+    {
+        // On a case-insensitive volume (macOS/Windows) a remove --path that differs ONLY in case from the
+        // registered canonical root is the SAME on-disk dir and must still prune the stale row — mirroring the
+        // existing-dir matcher. On case-sensitive POSIX they are genuinely different dirs, so skip.
+        Assert.SkipUnless(OperatingSystem.IsMacOS() || OperatingSystem.IsWindows(),
+            "case-insensitive path matching only applies on macOS/Windows volumes.");
+
+        string registered = Path.GetFullPath(Path.Combine(_dir, "ws-Case"));   // registered with this casing
+        string requested = Path.Combine(_dir, "ws-case");                      // removed with a different casing
+        const string id = "ws-case-00000000000";
+        using (WorkspaceRegistry registry = WorkspaceRegistry.Open(_registryDb))
+            registry.UpsertSeen(id, "case-disp", registered,
+                Path.Combine(registered, ".miller", "symbols.db"), WorkspaceRegistryState.Ready);
+        SqliteConnection.ClearAllPools();
+
+        var (code, outText, _) = Run(new[] { "workspace", "remove", "--path", requested },
+            Context(Path.Combine(_dir, "symbols.db")));
+
+        Assert.Equal(0, code);
+        Assert.Contains("removed", outText);
+        using WorkspaceRegistry check = WorkspaceRegistry.Open(_registryDb);
+        Assert.Null(check.Get(id));   // matched case-insensitively and pruned (Ordinal alone would miss it)
+    }
+
+    [Fact]
+    public void WorkspaceRemove_ByPath_Json_EmitsResultObject()
+    {
+        string sub = Path.Combine(_dir, "ws-json");
+        Directory.CreateDirectory(Path.Combine(sub, ".miller"));
+
+        var (code, outText, _) = Run(new[] { "workspace", "remove", "--path", sub, "--json" },
+            Context(Path.Combine(_dir, "symbols.db")));
+
+        Assert.Equal(0, code);
+        Assert.Contains("\"result\"", outText);
+        Assert.Contains("removed", outText);
+    }
+
     [Theory]
     [InlineData(WorkspaceRemoveResult.Outcome.Removed, 0)]
     [InlineData(WorkspaceRemoveResult.Outcome.NotFound, 0)]

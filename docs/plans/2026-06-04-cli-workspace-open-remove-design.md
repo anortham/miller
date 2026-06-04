@@ -242,4 +242,26 @@ Note (R2): the open Scale test asserts `symbols.db` + that `search` works, but d
 - [ ] `dotnet build Miller.slnx -c Release` is 0 warnings / 0 errors.
 - [ ] `scripts/test.sh` (fast) and `scripts/test.sh scale` both pass; the scale guard (`ScaleTraitConventionTests`)
       stays green (the new subprocess assertions live in the already-Scale `CliBinarySubprocessTests`).
+
+## Post-implementation review outcomes
+
+A multi-lens adversarial review of the implementation diff (3 reviewers + per-finding verification) confirmed
+7 findings — 1 medium, 6 low — and dismissed 4 non-issues (the `Directory.Delete` symlink/SQLite-pool race was
+verified safe). Applied:
+
+- **Fix (medium) — `remove` deleting `.miller` while holding `indexer.lock`.** `RemoveMillerDir` held the
+  single-writer lease (whose lock file lives *inside* the dir, `FileShare.None`) across `Directory.Delete`. POSIX
+  unlinks an open file fine, but **Windows** would throw → the CLI returned exit 1 instead of 0/3. Now
+  acquire-to-prove-no-writer, **release, then delete** (cross-platform). Windows-only, so verified by reasoning +
+  the existing POSIX tests staying green (no Windows runner here).
+- **Fix (low) — gone-dir registry prune used `StringComparison.Ordinal`,** missing a case-only difference on a
+  case-insensitive volume. Factored a shared `RootMatches` (Ordinal + the OS-case-aware `WorkspaceSafety`
+  fallback) used by both by-path branches. New macOS/Windows fast test (`…CaseInsensitiveMatch…`).
+- **Added fast tests (low coverage gaps):** by-path remove of a *registered* existing dir (match arm +
+  unregister), by-id remove when `.miller` is already gone (orphan-row prune), and `remove --json` shape.
+
+Accepted (low, not fixed): `--full` force:true isn't *distinctly* asserted vs a delta, and the `open` success
+path is covered only in Scale — both would require a production test-seam for glue that mirrors the already-pinned
+`full` verb and is exercised end-to-end in Scale; per the testing-anti-patterns guidance we don't add a
+test-only hook to production for that.
 ```

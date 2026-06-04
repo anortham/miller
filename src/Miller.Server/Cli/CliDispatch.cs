@@ -487,8 +487,7 @@ public static class CliDispatch
         if (!Directory.Exists(fullPath))
         {
             string goneMillerDir = Path.Combine(fullPath, ".miller");
-            WorkspaceRegistryRow? stale = registry.List().FirstOrDefault(r =>
-                string.Equals(r.CanonicalRoot, fullPath, StringComparison.Ordinal));
+            WorkspaceRegistryRow? stale = registry.List().FirstOrDefault(r => RootMatches(r, fullPath));
             if (stale is not null)
             {
                 registry.Remove(stale.WorkspaceId);
@@ -503,9 +502,7 @@ public static class CliDispatch
         // Existing dir: canonicalize and match a registry row (ordinal canonical root, like the server's
         // FindByCanonicalRoot), falling back to a local .miller cleanup when no row is registered.
         string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(fullPath);
-        WorkspaceRegistryRow? match = registry.List().FirstOrDefault(r =>
-            string.Equals(r.CanonicalRoot, canonicalRoot, StringComparison.Ordinal)
-            || WorkspaceSafety.IsLiveWorkspace(r.CanonicalRoot, canonicalRoot));
+        WorkspaceRegistryRow? match = registry.List().FirstOrDefault(r => RootMatches(r, canonicalRoot));
         string millerDirByPath = match is { } m
             ? Path.GetDirectoryName(m.IndexDbPath) ?? Path.Combine(canonicalRoot, ".miller")
             : Path.Combine(canonicalRoot, ".miller");
@@ -525,11 +522,17 @@ public static class CliDispatch
             return RemoveExitCode(WorkspaceRemoveResult.Outcome.NotFound);
         }
 
-        using IDisposable? lease = SingleWriterLock.TryAcquire(millerDir);
-        if (lease is null)
+        // Acquire the writer lock ONLY to prove no live Miller owns this workspace, then RELEASE it before the
+        // delete. `indexer.lock` lives inside millerDir and is held FileShare.None, so on Windows our OWN handle
+        // would block Directory.Delete (it would throw and the CLI would wrongly report exit 1 instead of 0).
+        // Acquire-release-delete keeps the no-concurrent-writer guard on every platform.
+        using (IDisposable? lease = SingleWriterLock.TryAcquire(millerDir))
         {
-            outw.WriteLine(WorkspaceRender.Remove(WorkspaceRemoveResult.RefusedInUse(millerDir, workspaceId, root), json));
-            return RemoveExitCode(WorkspaceRemoveResult.Outcome.RefusedInUse);
+            if (lease is null)
+            {
+                outw.WriteLine(WorkspaceRender.Remove(WorkspaceRemoveResult.RefusedInUse(millerDir, workspaceId, root), json));
+                return RemoveExitCode(WorkspaceRemoveResult.Outcome.RefusedInUse);
+            }
         }
 
         Directory.Delete(millerDir, recursive: true);
@@ -538,6 +541,13 @@ public static class CliDispatch
         outw.WriteLine(WorkspaceRender.Remove(WorkspaceRemoveResult.Removed(millerDir, workspaceId, root), json));
         return RemoveExitCode(WorkspaceRemoveResult.Outcome.Removed);
     }
+
+    // Whether a registry row's canonical root identifies the given root. Ordinal first (the common exact case),
+    // then the OS-case-aware WorkspaceSafety fallback so a case-only difference on a case-insensitive volume
+    // (macOS/Windows) still matches — and, for a GONE dir, IsLiveWorkspace degrades to a lexical full-path compare.
+    private static bool RootMatches(WorkspaceRegistryRow row, string root) =>
+        string.Equals(row.CanonicalRoot, root, StringComparison.Ordinal)
+        || WorkspaceSafety.IsLiveWorkspace(row.CanonicalRoot, root);
 
     // Map a refresh/full outcome to a process exit code. EVERY non-success terminal state must be non-zero so a
     // script (`miller workspace full && deploy`) can't proceed on a broken/never-refreshed workspace: only
