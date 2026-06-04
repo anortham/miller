@@ -360,15 +360,17 @@ public sealed class JulieExtractRunnerTests
 
     private static ExtractReport ReportWith(
         long? sqliteSchema, long? contract, string? hashAlgorithm = MillerExtractContract.ExpectedHashAlgorithm,
-        bool withArtifact = true, int? reportSchemaVersion = 1)
+        bool withArtifact = true, int? reportSchemaVersion = (int)MillerExtractContract.ExpectedReportSchemaVersion)
     {
+        // reportSchemaVersion defaults to the pinned-current envelope (so a julie re-pin needs no edits here);
+        // pass an explicit value — including null — to force a mismatch (a null models an ABSENT version).
         ExtractArtifact? artifact = withArtifact
             ? new ExtractArtifact(
                 DbPath: "/abs/db", RootPath: "/abs/r", ArtifactId: "a",
                 SchemaVersion: sqliteSchema ?? MillerExtractContract.ExpectedSchemaVersion,
                 ExtractContractVersion: contract ?? MillerExtractContract.ExpectedExtractContractVersion,
                 SqliteSchemaVersion: sqliteSchema ?? MillerExtractContract.ExpectedSqliteSchemaVersion,
-                JsonlSchemaVersion: 1, HashAlgorithm: hashAlgorithm!,
+                JsonlSchemaVersion: 2, HashAlgorithm: hashAlgorithm!,
                 ParserInventoryFingerprint: "p", CapabilitySnapshotFingerprint: "c")
             : null;
         return new ExtractReport(
@@ -396,41 +398,44 @@ public sealed class JulieExtractRunnerTests
     }
 
     [Fact]
-    public void VerifyReport_OlderContract_ThrowsNamingValueAndPointingAtRestore()
+    public void VerifyReport_OlderContract_ThrowsNamingValueAndPointingAtRebuild()
     {
         var ex = Assert.Throws<IncompatibleExtractException>(() =>
             ExtractVersionMismatch.VerifyReport(ReportWith(
                 MillerExtractContract.ExpectedSqliteSchemaVersion, MillerExtractContract.ExpectedExtractContractVersion - 1)));
         Assert.Contains("extract_contract_version", ex.Message);
+        Assert.Contains("workspace full", ex.Message, StringComparison.OrdinalIgnoreCase); // force-rebuild remedy
         Assert.Contains("restore", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
     public void VerifyReport_NullArtifact_FailsTheGate_NotASilentPass()
     {
-        // A v1 artifact-producing op MUST carry the artifact block; its absence is a contract failure.
+        // An artifact-producing op MUST carry the artifact block; its absence is a contract failure.
         var ex = Assert.Throws<IncompatibleExtractException>(() =>
-            ExtractVersionMismatch.VerifyReport(ReportWith(1, 1, withArtifact: false)));
+            ExtractVersionMismatch.VerifyReport(ReportWith(null, null, withArtifact: false)));
         Assert.Contains("artifact", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
     public void VerifyReport_WrongHashAlgorithm_ThrowsNamingValueAndExpectedValue()
     {
+        // null,null == pinned-current schema/contract, so the gate reaches the hash check (not an earlier mismatch).
         var ex = Assert.Throws<IncompatibleExtractException>(() =>
-            ExtractVersionMismatch.VerifyReport(ReportWith(1, 1, hashAlgorithm: "sha256")));
+            ExtractVersionMismatch.VerifyReport(ReportWith(null, null, hashAlgorithm: "sha256")));
         Assert.Contains("hash_algorithm", ex.Message);
         Assert.Contains("sha256", ex.Message);
         Assert.Contains("blake3", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Theory]
-    [InlineData(2)]      // a future/incompatible report envelope
+    [InlineData(3)]      // a future/incompatible report envelope (> the pinned-current 2)
     [InlineData(null)]   // absent report_schema_version
     public void VerifyReport_WrongOrMissingReportSchemaVersion_Throws(int? reportSchemaVersion)
     {
+        // null,null == pinned-current schema/contract so the report-envelope check is what fails.
         var ex = Assert.Throws<IncompatibleExtractException>(() =>
-            ExtractVersionMismatch.VerifyReport(ReportWith(1, 1, reportSchemaVersion: reportSchemaVersion)));
+            ExtractVersionMismatch.VerifyReport(ReportWith(null, null, reportSchemaVersion: reportSchemaVersion)));
         Assert.Contains("report_schema_version", ex.Message);
     }
 }

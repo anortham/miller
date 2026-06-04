@@ -265,7 +265,7 @@ public sealed class SqliteBridgeReaderTests : IDisposable
     {
         using (var c = OpenWrite())
         {
-            // Build the v1 schema but seed a WRONG sqlite_schema_version so the gate rejects before any bridge read.
+            // Build the schema but seed a WRONG (newer-than-pinned) sqlite_schema_version so the gate rejects before any bridge read.
             using var command = c.CreateCommand();
             command.CommandText = $"""
                 CREATE TABLE type_argument_usages (usage_id TEXT PRIMARY KEY, identifier_id TEXT, file_id TEXT, path TEXT, language TEXT, metadata_json TEXT);
@@ -274,7 +274,7 @@ public sealed class SqliteBridgeReaderTests : IDisposable
                 CREATE TABLE symbol_annotations (annotation_id TEXT PRIMARY KEY, symbol_id TEXT, annotation TEXT, annotation_key TEXT, raw_text TEXT, carrier TEXT);
                 CREATE TABLE symbols (symbol_id TEXT PRIMARY KEY, name TEXT, signature TEXT, kind TEXT, language TEXT, path TEXT, start_line INTEGER, end_line INTEGER, parent_symbol_id TEXT, metadata_json TEXT);
                 CREATE TABLE artifact_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-                INSERT INTO artifact_metadata(key, value) VALUES ('sqlite_schema_version', '2');
+                INSERT INTO artifact_metadata(key, value) VALUES ('sqlite_schema_version', '{MillerExtractContract.ExpectedSqliteSchemaVersion + 1}');
                 INSERT INTO artifact_metadata(key, value) VALUES ('extract_contract_version', '{MillerExtractContract.ExpectedExtractContractVersion}');
                 INSERT INTO artifact_metadata(key, value) VALUES ('hash_algorithm', '{MillerExtractContract.ExpectedHashAlgorithm}');
                 """;

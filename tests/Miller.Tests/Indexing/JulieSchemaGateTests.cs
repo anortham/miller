@@ -71,7 +71,7 @@ public sealed class JulieSchemaGateTests
     }
 
     [Fact]
-    public void Verify_OlderContract_ThrowsNamingTheValueAndPointsAtRestore()
+    public void Verify_OlderContract_ThrowsNamingTheValueAndPointsAtRebuild()
     {
         using var fx = JulieDbFixture.Create(PinSchema, S(PinContract - 1), NoRows);
         using var conn = OpenReadOnly(fx.DbPath);
@@ -79,11 +79,12 @@ public sealed class JulieSchemaGateTests
         var ex = Assert.Throws<IncompatibleExtractException>(() => JulieSchemaGate.Verify(conn));
         Assert.Contains(S(PinContract - 1), ex.Message);
         Assert.Contains(PinContractStr, ex.Message);
+        Assert.Contains("workspace full", ex.Message, StringComparison.OrdinalIgnoreCase); // force-rebuild remedy
         Assert.Contains("restore", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public void Verify_OlderSchema_ThrowsPointingAtRestore()
+    public void Verify_OlderSchema_ThrowsPointingAtRebuild()
     {
         using var fx = JulieDbFixture.Create(PinSchema - 1, PinContractStr, NoRows);
         using var conn = OpenReadOnly(fx.DbPath);
@@ -91,6 +92,7 @@ public sealed class JulieSchemaGateTests
         var ex = Assert.Throws<IncompatibleExtractException>(() => JulieSchemaGate.Verify(conn));
         Assert.Contains(S(PinSchema - 1), ex.Message);
         Assert.Contains($"v{PinnedVer}", ex.Message);      // error message names the pinned julie-extract version
+        Assert.Contains("workspace full", ex.Message, StringComparison.OrdinalIgnoreCase); // force-rebuild remedy
         Assert.Contains("restore", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 

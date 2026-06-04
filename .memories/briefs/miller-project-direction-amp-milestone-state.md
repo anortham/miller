@@ -22,13 +22,13 @@ Current architecture contracts:
 - Read tools accept `workspace_id` selectors: display ID, unique prefix, full workspace ID, `current`, or `primary`; explicit `workspace_id` defaults refresh-first.
 - Stable `workspace_id` is SHA-256 of canonical workspace root.
 - Extraction integration is CLI-first through the pinned `julie-extract` binary.
-- Current product pin is `julie-extract` v2.0.3 from `julie-extractors`; compatibility gates are SQLite schema 1, extract contract 1, and report schema 1.
+- Current product pin is `julie-extract` v2.1.0 from `julie-extractors`; compatibility gates are SQLite schema 2, extract contract 2, and report schema 2. (v2.1.0 adds the `source_regions` table — comments/doc-comments/string-literals/embedded-language spans — which Miller does NOT yet consume; that is the planned "consume next" piece.)
 - File freshness uses `files.content_hash` (`blake3:<hex>`, normalized before comparison) and is guarded by `artifact_metadata.hash_algorithm=blake3`.
 - `artifact_metadata` is the artifact metadata surface for schema/contract/hash/root keys.
 
 ## Current State - 2026-06-03
 
-- Julie-extractors migration is now the active extract contract line in Miller's handoff docs: `julie-extract` v2.0.3, SQLite schema 1, extract contract 1, report schema 1.
+- Julie-extractors migration is now the active extract contract line in Miller's handoff docs: `julie-extract` v2.1.0, SQLite schema 2, extract contract 2, report schema 2 (bumped from v2.0.3/schema 1 on 2026-06-03; compatibility-only, source_regions not yet consumed).
 - M0-M8 are done on `main`, including registry, freshness, and dashboard foundations.
 - Search dogfood UX cleanup is committed as `aa4e15f fix(search): clean up workspace selectors and file mode`: file-mode search now searches file path fragments, auto mode routes path-like queries to file search, compact workspace/read-tool output favors display IDs over raw SHA-256 IDs, and workspace selectors accept display ID, unique prefix, full ID, `current`, or `primary`.
 - Restart dogfood after `aa4e15f` found two follow-up fixes: current display-ID prefixes such as `miller-816` must route to the live current index without registry refresh, and content search must run `JulieSchemaGate` before reading `files` so incompatible old Julie DBs fail with an actionable artifact error instead of raw SQLite.
