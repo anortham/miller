@@ -89,7 +89,7 @@ public sealed class WorkspaceToolTests : IDisposable
 
         var indexer = new IndexerService(
             new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance),
-            NullLogger<IndexerService>.Instance, NullLoggerFactory.Instance);
+            NullLogger<IndexerService>.Instance, NullLoggerFactory.Instance, SymbolSearchSidecar.Disabled);
         var freshness = new FreshnessService(bootstrap, NullLogger<FreshnessService>.Instance);
 
         var probe = new IndexFreshProbe(
@@ -129,7 +129,8 @@ public sealed class WorkspaceToolTests : IDisposable
             lockBusyWait: TimeSpan.Zero,
             lockBusyPollInterval: TimeSpan.FromMilliseconds(1),
             sleep: _ => { },
-            utcNow: () => DateTimeOffset.UtcNow);
+            utcNow: () => DateTimeOffset.UtcNow,
+            sidecar: SymbolSearchSidecar.Disabled);
         var tool = new WorkspaceTool(
             holder, workspace, indexer, freshness, probe, ledger, runner, registry, crossRefresh,
             openScan ?? ((scanRoot, scanDb, force) => runner.Scan(scanRoot, scanDb, force)),

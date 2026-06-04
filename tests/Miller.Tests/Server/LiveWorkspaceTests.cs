@@ -88,7 +88,7 @@ public sealed class LiveWorkspaceTests : IDisposable
 
         var indexer = new IndexerService(
             new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance),
-            NullLogger<IndexerService>.Instance, NullLoggerFactory.Instance);
+            NullLogger<IndexerService>.Instance, NullLoggerFactory.Instance, SymbolSearchSidecar.Disabled);
         var freshness = new FreshnessService(bootstrap, NullLogger<FreshnessService>.Instance);
         var probe = new IndexFreshProbe(
             holder,
@@ -109,7 +109,7 @@ public sealed class LiveWorkspaceTests : IDisposable
                 WorkspaceRegistryState.Current);
             registry.MarkScanned(workspaceId, scan.Revision ?? 0);
         }
-        var crossRefresh = new CrossWorkspaceRefreshService(registry, runner);
+        var crossRefresh = new CrossWorkspaceRefreshService(registry, runner, SymbolSearchSidecar.Disabled);
 
         var tool = new WorkspaceTool(
             holder, workspace, indexer, freshness, probe, ledger, runner, registry, crossRefresh,

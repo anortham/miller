@@ -64,6 +64,87 @@ public sealed class SearchToolTests
             r.IsDBNull(2) ? null : r.GetInt64(2) == 1);
     }
 
+    private static string ReadTelemetryMetadata(string dbPath)
+    {
+        using var c = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        c.Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT metadata_json FROM tool_telemetry LIMIT 1;";
+        using var r = cmd.ExecuteReader();
+        Assert.True(r.Read(), "expected one telemetry row");
+        return r.GetString(0);
+    }
+
+    // A search-symbol provider returning a fixed context over ANY ISymbolLookupIndex — used to drive the
+    // backend-tagging telemetry path with either the on-disk FtsSymbolSearchIndex or an in-memory index
+    // (the production RecordingWorkspaceIndexProvider only ever yields a MillerRepositoryIndex-backed context).
+    private sealed class FixedSymbolSearchProvider : IWorkspaceSearchProvider, IWorkspaceContentSearchProvider
+    {
+        private readonly WorkspaceSymbolSearchContext _context;
+
+        public FixedSymbolSearchProvider(ISymbolLookupIndex index, string root) =>
+            _context = new WorkspaceSymbolSearchContext(
+                index, "symbols.db", "current-ws", root,
+                Revision: 1, IndexFresh: true, "current", WarningText: null, DisplayId: "current-ws");
+
+        public WorkspaceSymbolSearchContext ResolveSymbolSearch(string? workspaceId, bool ensureFresh) => _context;
+
+        public WorkspaceContentSearchContext ResolveContentSearch(string? workspaceId, bool ensureFresh) =>
+            throw new NotSupportedException("FixedSymbolSearchProvider serves symbol search only.");
+    }
+
+    [Theory]
+    [InlineData(true, "disk")]
+    [InlineData(false, "memory")]
+    public void Search_RecordsServingBackend_InTelemetryMetadata(bool onDisk, string expectedBackend)
+    {
+        // The "disk path taken" telemetry counter (Phase 5): every symbol search stamps which backend served it
+        // into the row's metadata_json, so a silent self-heal from the on-disk sidecar to the in-memory index is
+        // observable (otherwise the slow path hides). disk == FtsSymbolSearchIndex, memory == any in-memory index.
+        string dir = Path.Combine(Path.GetTempPath(), "miller-search-backend-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string telemetryDb = Path.Combine(dir, "telemetry.db");
+        var sym = Symbol(0, "probe-id", "TelemetryProbe", "class", "src/Probe.cs", 1, "public class TelemetryProbe");
+
+        ISymbolLookupIndex index;
+        if (onDisk)
+        {
+            string searchDb = Path.Combine(dir, "search.db");
+            SearchIndexWriter.Write(searchDb, new[] { sym }, revision: 1);
+            index = FtsSymbolSearchIndex.Open(searchDb);
+        }
+        else
+        {
+            index = SymbolSearchProjection.Build(new[] { sym });
+        }
+
+        var provider = new FixedSymbolSearchProvider(index, Path.Combine(dir, "root"));
+        var tool = new SearchTool(provider, provider);
+
+        try
+        {
+            using (var ledger = TelemetryLedger.Open(telemetryDb, "current-ws", Path.Combine(dir, "root")))
+            {
+                using var scope = ledger.Measure("search", op: "auto");
+                string output = tool.Search("TelemetryProbe");
+                Assert.Contains("TelemetryProbe", output);
+            }
+
+            using var doc = JsonDocument.Parse(ReadTelemetryMetadata(telemetryDb));
+            Assert.Equal(expectedBackend, doc.RootElement.GetProperty("search_backend").GetString());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+        }
+    }
+
     // A fixture proving the FULL cross-language predicate (decision-4): exclude_tests must hide BOTH a
     // path-flagged test row (tests/auth/AuthServiceTests.cs — not is_test) AND a julie-is_test row whose path
     // is NOT test-shaped (src/auth/AuthHelper.cs with the typed is_test column set, a [Fact] method julie flagged).

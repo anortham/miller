@@ -430,7 +430,8 @@ public sealed class InspectToolTests
                 },
                 loadContentSearch: (_, _) =>
                     throw new InvalidOperationException("content loader was not expected"),
-                currentIndexFresh: _ => true);
+                currentIndexFresh: _ => true,
+                sidecar: SymbolSearchSidecar.Disabled);
             var tool = new InspectTool(provider, provider);
 
             string output = tool.Inspect(

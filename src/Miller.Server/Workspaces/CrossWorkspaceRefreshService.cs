@@ -18,8 +18,10 @@ public sealed class CrossWorkspaceRefreshService
     private readonly TimeSpan _lockBusyPollInterval;
     private readonly Action<TimeSpan> _sleep;
     private readonly Func<DateTimeOffset> _utcNow;
+    private readonly SymbolSearchSidecar _sidecar;
 
-    public CrossWorkspaceRefreshService(WorkspaceRegistry registry, JulieExtractRunner runner)
+    public CrossWorkspaceRefreshService(
+        WorkspaceRegistry registry, JulieExtractRunner runner, SymbolSearchSidecar sidecar)
         : this(
             registry,
             (root, db, force) => runner.Scan(root, db, force),
@@ -28,7 +30,8 @@ public sealed class CrossWorkspaceRefreshService
             DefaultLockBusyWait,
             DefaultLockBusyPollInterval,
             Thread.Sleep,
-            () => DateTimeOffset.UtcNow)
+            () => DateTimeOffset.UtcNow,
+            sidecar)
     {
     }
 
@@ -40,7 +43,8 @@ public sealed class CrossWorkspaceRefreshService
         TimeSpan lockBusyWait,
         TimeSpan lockBusyPollInterval,
         Action<TimeSpan> sleep,
-        Func<DateTimeOffset> utcNow)
+        Func<DateTimeOffset> utcNow,
+        SymbolSearchSidecar sidecar)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(scan);
@@ -48,6 +52,7 @@ public sealed class CrossWorkspaceRefreshService
         ArgumentNullException.ThrowIfNull(readLatestRevision);
         ArgumentNullException.ThrowIfNull(sleep);
         ArgumentNullException.ThrowIfNull(utcNow);
+        ArgumentNullException.ThrowIfNull(sidecar);
         if (lockBusyWait < TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(lockBusyWait), lockBusyWait, "Wait must be non-negative.");
         if (lockBusyPollInterval <= TimeSpan.Zero)
@@ -62,6 +67,7 @@ public sealed class CrossWorkspaceRefreshService
         _lockBusyPollInterval = lockBusyPollInterval;
         _sleep = sleep;
         _utcNow = utcNow;
+        _sidecar = sidecar;
     }
 
     public WorkspaceRefreshResult Refresh(string workspaceId, bool force = false)
@@ -117,6 +123,13 @@ public sealed class CrossWorkspaceRefreshService
             long revision = report.Revision ?? _readLatestRevision(row.IndexDbPath);
             string? warning = PartialExtractLog.DescribePartial(report);
             _registry.MarkScanned(row.WorkspaceId, revision, _utcNow());
+
+            // Phase 4: this is the one safe writer for an external workspace's search.db — it holds the
+            // workspace single-writer lock around the scan. Build the sidecar here (off the search hot path,
+            // skipped when already revision-fresh). Best-effort: a sidecar build failure must NEVER undo a
+            // successful scan/refresh — reads self-heal to the in-memory index.
+            TryBuildSidecar(row.IndexDbPath, revision);
+
             WorkspaceRefreshStatus status = revision > (row.LastRevision ?? 0)
                 ? WorkspaceRefreshStatus.Refreshed
                 : WorkspaceRefreshStatus.Unchanged;
@@ -140,6 +153,23 @@ public sealed class CrossWorkspaceRefreshService
                 row.LastRevision,
                 Scanned: false,
                 Error: ex.Message);
+        }
+    }
+
+    // Build the external workspace's search.db sidecar best-effort: enabled-and-stale ⇒ rebuild, else no-op.
+    // Swallows build failures by design — the refresh's contract is the scanned symbols.db; the derived sidecar
+    // is optional and a failure must not surface as a refresh error (reads fall back to the in-memory index).
+    private void TryBuildSidecar(string symbolsDbPath, long revision)
+    {
+        try
+        {
+            _sidecar.EnsureBuilt(symbolsDbPath, revision);
+        }
+        catch (Exception ex) when (
+            ex is SqliteException or IOException or InvalidOperationException
+                or UnauthorizedAccessException or ArgumentException or IncompatibleExtractException)
+        {
+            // Best-effort: the sidecar is a rebuildable derived artifact; the next refresh retries.
         }
     }
 

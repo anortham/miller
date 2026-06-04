@@ -158,7 +158,10 @@ public static class DashboardData
 
         using WorkspaceRegistry registry = WorkspaceRegistry.Open(registryDbPath);
         var runner = JulieExtractRunner.Locate(toolsRoot);
-        var refresh = new CrossWorkspaceRefreshService(registry, runner);
+        // A dashboard-triggered refresh holds the workspace lock around the scan, so it is also a safe sidecar
+        // writer; honor the same default-on MILLER_SEARCH_SIDECAR flag as the server so the artifact stays consistent.
+        var sidecar = SymbolSearchSidecar.FromEnvironment();
+        var refresh = new CrossWorkspaceRefreshService(registry, runner, sidecar);
         return refresh.Refresh(workspaceId);
     }
 

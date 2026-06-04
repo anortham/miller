@@ -14,10 +14,6 @@ namespace Miller.Core.Search;
 /// </summary>
 public sealed class MillerSearchIndex
 {
-    private const double K1 = 1.2;
-    private const double B = 0.75;
-    private const double ExactNameBoost = 1.5;
-
     private readonly FrozenDictionary<string, Posting[]> _postings;
     private readonly FrozenDictionary<int, int> _docLen;            // DocId -> total emitted tokens (pre-dedup)
     private readonly FrozenDictionary<int, SearchableDocument> _documents;
@@ -141,14 +137,12 @@ public sealed class MillerSearchIndex
                 continue;
 
             int df = plist.Length;
-            double idf = Math.Log(1.0 + (n - df + 0.5) / (df + 0.5));
+            double idf = Bm25.Idf(n, df);
 
             foreach (var posting in plist)
             {
                 int docLen = _docLen[posting.DocId];
-                double tf = posting.Tf;
-                double termScore = idf * (tf * (K1 + 1)) /
-                                   (tf + K1 * (1 - B + B * docLen / _avgdl));
+                double termScore = Bm25.TermScore(idf, posting.Tf, docLen, _avgdl);
 
                 accum.TryGetValue(posting.DocId, out double prior);
                 accum[posting.DocId] = prior + termScore;
@@ -173,7 +167,7 @@ public sealed class MillerSearchIndex
             var document = _documents[docId];
             double score = rawScore;
             if (string.Equals(document.Name.ToLowerInvariant(), normalizedQuery, StringComparison.Ordinal))
-                score *= ExactNameBoost;
+                score *= Bm25.ExactNameBoost;
 
             hits.Add(new SearchHit(document, score));
         }

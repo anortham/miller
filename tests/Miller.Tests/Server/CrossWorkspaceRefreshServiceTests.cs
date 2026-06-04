@@ -1,5 +1,6 @@
 using Miller.Indexing;
 using Miller.Server.Workspaces;
+using Miller.Tests.Indexing;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -315,12 +316,129 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         Assert.Equal(1, registry.Get("target-ws")?.LastRevision);
     }
 
+    [Fact]
+    public void Refresh_SidecarEnabled_BuildsSearchDbNextToTheScannedIndexAtTheScannedRevision()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow("s1", "IAuthenticationProvider", "interface", "csharp",
+                    "src/Auth.cs", "public interface IAuthenticationProvider", 1, ParentId: null),
+                new JulieDbFixture.SymbolRow("s2", "Cache", "class", "csharp",
+                    "src/Cache.cs", "public class Cache", 1, ParentId: null),
+            });
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        registry.UpsertSeen("target-ws", "target-111111111111", julie.WorkspaceRoot, julie.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        var service = NewService(
+            registry,
+            scan: (_, _, _) => Report(julie.WorkspaceRoot, julie.DbPath, "target-ws", revision: 5),
+            acquireLock: _ => new NoopLease(),
+            sidecar: new SymbolSearchSidecar(enabled: true));
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws");
+
+        Assert.Equal(WorkspaceRefreshStatus.Refreshed, result.Status);
+        string searchDb = SymbolSearchSidecar.SearchDbPathFor(julie.DbPath);
+        Assert.True(File.Exists(searchDb));
+        var index = FtsSymbolSearchIndex.Open(searchDb);
+        Assert.Equal(5L, index.Revision);
+        Assert.Equal(2, index.DocumentCount);
+    }
+
+    [Fact]
+    public void Refresh_SidecarDisabled_DoesNotBuildSearchDb()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow("s1", "Cache", "class", "csharp",
+                    "src/Cache.cs", "public class Cache", 1, ParentId: null),
+            });
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        registry.UpsertSeen("target-ws", "target-111111111111", julie.WorkspaceRoot, julie.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        var service = NewService(
+            registry,
+            scan: (_, _, _) => Report(julie.WorkspaceRoot, julie.DbPath, "target-ws", revision: 5),
+            acquireLock: _ => new NoopLease());   // default sidecar = Disabled
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws");
+
+        Assert.Equal(WorkspaceRefreshStatus.Refreshed, result.Status);
+        Assert.False(File.Exists(SymbolSearchSidecar.SearchDbPathFor(julie.DbPath)));
+    }
+
+    [Fact]
+    public void Refresh_SidecarEnabledUnchangedStatusButArtifactMissing_StillBuildsSidecar()
+    {
+        // The flag flips on for an already-scanned workspace whose search.db doesn't exist yet: an Unchanged
+        // refresh (no new revision) must STILL build the missing artifact, not gate the build on Refreshed.
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow("s1", "Cache", "class", "csharp",
+                    "src/Cache.cs", "public class Cache", 1, ParentId: null),
+            });
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        registry.UpsertSeen("target-ws", "target-111111111111", julie.WorkspaceRoot, julie.DbPath);
+        registry.MarkScanned("target-ws", revision: 5);
+        var service = NewService(
+            registry,
+            scan: (_, _, _) => Report(julie.WorkspaceRoot, julie.DbPath, "target-ws", revision: 5),
+            acquireLock: _ => new NoopLease(),
+            sidecar: new SymbolSearchSidecar(enabled: true));
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws");
+
+        Assert.Equal(WorkspaceRefreshStatus.Unchanged, result.Status);
+        string searchDb = SymbolSearchSidecar.SearchDbPathFor(julie.DbPath);
+        Assert.True(File.Exists(searchDb));
+        Assert.Equal(5L, FtsSymbolSearchIndex.Open(searchDb).Revision);
+    }
+
+    [Fact]
+    public void Refresh_SidecarEnabledButBuildFails_StillReportsRefreshedAndDoesNotThrow()
+    {
+        // A successful scan must never be undone by a sidecar build failure: point the index path at a
+        // non-julie file so the build's symbol read throws — the refresh must still report Refreshed.
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("sidecar-build-fails");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        var service = NewService(
+            registry,
+            scan: (_, scanDb, _) =>
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(scanDb)!);
+                File.WriteAllText(scanDb, "not a sqlite database");
+                return Report(root, dbPath, "target-ws", revision: 5);
+            },
+            acquireLock: _ => new NoopLease(),
+            sidecar: new SymbolSearchSidecar(enabled: true));
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws");
+
+        Assert.Equal(WorkspaceRefreshStatus.Refreshed, result.Status);
+        Assert.True(result.Scanned);
+        Assert.Equal(5, result.Revision);
+        Assert.False(File.Exists(SymbolSearchSidecar.SearchDbPathFor(dbPath)));
+    }
+
     private CrossWorkspaceRefreshService NewService(
         WorkspaceRegistry registry,
         Func<string, string, bool, ExtractReport> scan,
         Func<string, IDisposable?> acquireLock,
         Func<string, long>? readLatestRevision = null,
-        FakeClock? clock = null)
+        FakeClock? clock = null,
+        SymbolSearchSidecar? sidecar = null)
     {
         clock ??= new FakeClock();
         return new CrossWorkspaceRefreshService(
@@ -331,7 +449,8 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
             lockBusyWait: TimeSpan.FromMilliseconds(250),
             lockBusyPollInterval: TimeSpan.FromMilliseconds(100),
             sleep: clock.Sleep,
-            utcNow: clock.UtcNow);
+            utcNow: clock.UtcNow,
+            sidecar: sidecar ?? SymbolSearchSidecar.Disabled);
     }
 
     private string NewRoot(string name)

@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Miller.Core.Freshness;
@@ -37,6 +38,11 @@ public sealed class IndexerService : BackgroundService
     private readonly Func<WorkspaceContext, string, string, IExtractOps> _createOps;
     private readonly TimeSpan _leaderRetryInterval;
 
+    // Phase 1: the on-disk search.db sidecar. Default OFF. When enabled, THIS instance — the writer-lock leader —
+    // is the one safe writer for the CURRENT workspace's search.db, so it (re)builds it after its own scans
+    // (startup delta + on-demand refresh/full) under _opsGate. Best-effort: reads self-heal to the in-memory index.
+    private readonly SymbolSearchSidecar _sidecar;
+
     private IDisposable? _lease;
     private FileSystemWatcher? _watcher;
     private FileSystemWatcher? _gitHeadWatcher;
@@ -56,7 +62,8 @@ public sealed class IndexerService : BackgroundService
     private readonly object _headGate = new();
 
     public IndexerService(
-        IndexBootstrapService bootstrap, ILogger<IndexerService> logger, ILoggerFactory loggerFactory)
+        IndexBootstrapService bootstrap, ILogger<IndexerService> logger, ILoggerFactory loggerFactory,
+        SymbolSearchSidecar sidecar)
         : this(
             bootstrap,
             logger,
@@ -67,7 +74,8 @@ public sealed class IndexerService : BackgroundService
                 var runner = JulieExtractRunner.Locate(workspace.ToolsRoot);
                 return JulieExtractOps.Create(canonicalRoot, canonicalDbPath, runner);
             },
-            DefaultLeaderRetryInterval)
+            DefaultLeaderRetryInterval,
+            sidecar)
     {
     }
 
@@ -77,13 +85,15 @@ public sealed class IndexerService : BackgroundService
         ILoggerFactory loggerFactory,
         Func<string, IDisposable?> tryAcquireLeadership,
         Func<WorkspaceContext, string, string, IExtractOps> createOps,
-        TimeSpan leaderRetryInterval)
+        TimeSpan leaderRetryInterval,
+        SymbolSearchSidecar sidecar)
     {
         ArgumentNullException.ThrowIfNull(bootstrap);
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(loggerFactory);
         ArgumentNullException.ThrowIfNull(tryAcquireLeadership);
         ArgumentNullException.ThrowIfNull(createOps);
+        ArgumentNullException.ThrowIfNull(sidecar);
         if (leaderRetryInterval <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(
                 nameof(leaderRetryInterval), leaderRetryInterval, "Leader retry interval must be positive.");
@@ -93,6 +103,7 @@ public sealed class IndexerService : BackgroundService
         _tryAcquireLeadership = tryAcquireLeadership;
         _createOps = createOps;
         _leaderRetryInterval = leaderRetryInterval;
+        _sidecar = sidecar;
     }
 
     /// <summary>True once this instance holds the writer lock and is running the watcher. For diagnostics/tests.</summary>
@@ -241,6 +252,10 @@ public sealed class IndexerService : BackgroundService
                 IExtractOps ops = _ops
                     ?? throw new InvalidOperationException("Indexer leader startup scan requested before ops were published.");
                 report = ops.Scan(force: false);
+                // (Re)build the search.db sidecar under _opsGate — the same lock that serializes extract
+                // subprocesses — so the symbols.db read never races a concurrent extract that could replace the
+                // file. Best-effort + revision-gated inside the sidecar; a no-op when the feature is off.
+                TryBuildSidecar(workspace.CanonicalExtractDbPath, report);
             }
 
             IndexBootstrapService.MarkRegistryScanned(workspace, stableWorkspaceId, report.Revision);
@@ -315,13 +330,11 @@ public sealed class IndexerService : BackgroundService
         {
             if (_ops is not { } ops)
                 return ScanOutcome.NotLeader; // not the leader — must not write (M3 single-writer guard)
+
+            ExtractReport report;
             try
             {
-                ExtractReport report = ops.Scan(force);
-                if (PartialExtractLog.DescribePartial(report) is { } partial)
-                    _logger.LogWarning(
-                        "On-demand {Kind} scan: {Partial}", force ? "full (force)" : "refresh (delta)", partial);
-                return ScanOutcome.Scanned(report);
+                report = ops.Scan(force);
             }
             catch (Exception ex)
             {
@@ -330,6 +343,44 @@ public sealed class IndexerService : BackgroundService
                     force ? "full (force)" : "refresh (delta)");
                 return ScanOutcome.Failed;
             }
+
+            if (PartialExtractLog.DescribePartial(report) is { } partial)
+                _logger.LogWarning(
+                    "On-demand {Kind} scan: {Partial}", force ? "full (force)" : "refresh (delta)", partial);
+
+            // (Re)build the search.db sidecar after a successful scan, still under _opsGate. Deliberately OUTSIDE
+            // the scan's try/catch so a sidecar build issue can never be misreported as a scan failure — the build
+            // is best-effort and reads self-heal to the in-memory index. The bootstrap getter is read only when the
+            // feature is on, so an un-started, no-workspace unit-test instance on the OFF path never touches it.
+            if (_sidecar.Enabled && _bootstrap.Workspace.CanonicalExtractDbPath is { } symbolsDbPath)
+                TryBuildSidecar(symbolsDbPath, report);
+
+            return ScanOutcome.Scanned(report);
+        }
+    }
+
+    // Best-effort search.db (re)build for the CURRENT workspace. Enabled-and-stale ⇒ rebuild; off / already-fresh /
+    // no-revision ⇒ no-op. MUST be called holding _opsGate: it reads symbols.db, which a concurrent extract could
+    // replace. Swallows the expected build failures by design — the sidecar is a rebuildable derived artifact, so a
+    // failure must NEVER undo a successful scan; reads fall back to the always-fresh in-memory index.
+    private void TryBuildSidecar(string? symbolsDbPath, ExtractReport report)
+    {
+        if (!_sidecar.Enabled)
+            return;
+        if (symbolsDbPath is null || report.Revision is not { } revision)
+            return; // no symbols.db path or no revision cursor to stamp; the next scan with a revision builds it
+
+        try
+        {
+            if (_sidecar.EnsureBuilt(symbolsDbPath, revision))
+                _logger.LogInformation("Built search sidecar at revision {Revision}.", revision);
+        }
+        catch (Exception ex) when (
+            ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException
+                or ArgumentException or NotSupportedException or IncompatibleExtractException)
+        {
+            _logger.LogWarning(ex,
+                "Search sidecar build failed (best-effort); reads fall back to the in-memory index.");
         }
     }
 

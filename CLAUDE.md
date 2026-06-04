@@ -83,6 +83,14 @@ scripts/test.sh all     # both
 - **Hash split.** Stable `workspace_id` is SHA-256 of the canonical root. File freshness uses
   `files.content_hash` (`blake3:<hex>`, normalized before comparison) and is guarded by
   `artifact_metadata.hash_algorithm=blake3`.
+- **Search sidecar.** Symbol search is served from a Miller-owned, on-disk FTS5 artifact
+  `<workspace>/.miller/search.db` (a revision-keyed derived index, same pattern as `telemetry.db`) built by the
+  lock-holding writer (`IndexerService` leader / `CrossWorkspaceRefreshService`) and opened read-only by
+  `WorkspaceIndexProvider`. **On by default — opt out with `MILLER_SEARCH_SIDECAR=0`** (`SymbolSearchSidecar.FromEnvironment`).
+  It self-heals to the in-memory BM25 index when the artifact is missing/stale/corrupt, so search is always correct.
+  Ranking stays in C# (`Miller.Core.Search.Bm25`, shared by both backends); FTS5 is recall-only (a word arm plus a
+  collapsed-trigram arm for interior substrings). See
+  [`docs/plans/2026-06-04-symbol-search-collapsed-trigram-design.md`](docs/plans/2026-06-04-symbol-search-collapsed-trigram-design.md).
 - **Agent instructions.** The MCP server-level guidance is
   [`MILLER_AGENT_INSTRUCTIONS.md`](src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md), embedded in the binary
   and set as `ServerInstructions`. Edit the markdown; `AgentInstructionsTests` guards that every tool stays

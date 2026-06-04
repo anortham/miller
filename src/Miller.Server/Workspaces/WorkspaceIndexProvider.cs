@@ -15,6 +15,7 @@ public sealed class WorkspaceIndexProvider
     private readonly Func<string, SymbolSearchProjection> _loadSymbolSearch;
     private readonly Func<string, string, ContentSearchProjection> _loadContentSearch;
     private readonly Func<long, bool?> _currentIndexFresh;
+    private readonly SymbolSearchSidecar _sidecar;
     private readonly object _cacheGate = new();
     private readonly Dictionary<CacheKey, Lazy<CachedIndex>> _cache = new();
     private readonly Dictionary<CacheKey, Lazy<CachedSymbolSearch>> _symbolSearchCache = new();
@@ -24,7 +25,8 @@ public sealed class WorkspaceIndexProvider
         IndexHolder holder,
         WorkspaceContext currentWorkspace,
         WorkspaceRegistry registry,
-        CrossWorkspaceRefreshService refreshService)
+        CrossWorkspaceRefreshService refreshService,
+        SymbolSearchSidecar sidecar)
         : this(
             holder,
             currentWorkspace,
@@ -33,7 +35,8 @@ public sealed class WorkspaceIndexProvider
             dbPath => RepositoryIndexLoader.Load(dbPath),
             dbPath => SymbolSearchProjectionLoader.Load(dbPath),
             (dbPath, root) => ContentSearchProjectionLoader.Load(dbPath, root),
-            currentIndexFresh: _ => null)
+            currentIndexFresh: _ => null,
+            sidecar)
     {
     }
 
@@ -45,7 +48,8 @@ public sealed class WorkspaceIndexProvider
         Func<string, MillerRepositoryIndex> loadIndex,
         Func<string, SymbolSearchProjection> loadSymbolSearch,
         Func<string, string, ContentSearchProjection> loadContentSearch,
-        Func<long, bool?> currentIndexFresh)
+        Func<long, bool?> currentIndexFresh,
+        SymbolSearchSidecar sidecar)
     {
         ArgumentNullException.ThrowIfNull(holder);
         ArgumentNullException.ThrowIfNull(currentWorkspace);
@@ -55,6 +59,7 @@ public sealed class WorkspaceIndexProvider
         ArgumentNullException.ThrowIfNull(loadSymbolSearch);
         ArgumentNullException.ThrowIfNull(loadContentSearch);
         ArgumentNullException.ThrowIfNull(currentIndexFresh);
+        ArgumentNullException.ThrowIfNull(sidecar);
         _holder = holder;
         _currentWorkspace = currentWorkspace;
         _registry = registry;
@@ -63,6 +68,7 @@ public sealed class WorkspaceIndexProvider
         _loadSymbolSearch = loadSymbolSearch;
         _loadContentSearch = loadContentSearch;
         _currentIndexFresh = currentIndexFresh;
+        _sidecar = sidecar;
     }
 
     public WorkspaceReadContext Resolve(string? workspaceId, bool ensureFresh)
@@ -121,8 +127,9 @@ public sealed class WorkspaceIndexProvider
     private WorkspaceSymbolSearchContext ResolveCurrentSymbolSearch()
     {
         (MillerRepositoryIndex index, long revision) = _holder.Snapshot();
+        ISymbolLookupIndex searchIndex = ResolveCurrentSymbolSearchIndex(index, revision);
         return new WorkspaceSymbolSearchContext(
-            index,
+            searchIndex,
             _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath,
             _currentWorkspace.WorkspaceId,
             _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
@@ -131,6 +138,21 @@ public sealed class WorkspaceIndexProvider
             "current",
             WarningText: null,
             DisplayId: CurrentDisplayId());
+    }
+
+    // Phase 3 routing for the current workspace. Default (flag off): the holder's already-built full index
+    // serves search, byte-identical to pre-Phase-3. Flag on: route to the revision-fresh on-disk sidecar when
+    // present, else self-heal to the holder index. The chosen backend is cached keyed on (workspace, dbPath,
+    // revision) so a freshness Swap (revision bump) rebuilds it and the sidecar is not re-opened per query.
+    private ISymbolLookupIndex ResolveCurrentSymbolSearchIndex(MillerRepositoryIndex holderIndex, long revision)
+    {
+        if (!_sidecar.Enabled)
+            return holderIndex;
+
+        string dbPath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
+        string workspaceKey = string.IsNullOrEmpty(_currentWorkspace.WorkspaceId) ? dbPath : _currentWorkspace.WorkspaceId;
+        var key = new CacheKey(workspaceKey, dbPath, revision);
+        return GetOrLoadSymbolSearch(key, dbPath, () => holderIndex).Index;
     }
 
     private WorkspaceReadContext ResolveRegistered(string workspaceId, bool ensureFresh)
@@ -161,7 +183,8 @@ public sealed class WorkspaceIndexProvider
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
         long revision = row.LastRevision ?? 0;
-        CachedSymbolSearch cached = GetOrLoadSymbolSearch(row, revision);
+        var key = new CacheKey(row.WorkspaceId, row.IndexDbPath, revision);
+        CachedSymbolSearch cached = GetOrLoadSymbolSearch(key, row.IndexDbPath, () => _loadSymbolSearch(row.IndexDbPath));
         return new WorkspaceSymbolSearchContext(
             cached.Index,
             row.IndexDbPath,
@@ -277,16 +300,21 @@ public sealed class WorkspaceIndexProvider
         }
     }
 
-    private CachedSymbolSearch GetOrLoadSymbolSearch(WorkspaceRegistryRow row, long revision)
+    // Resolve the search index for a cache key: the on-disk sidecar when enabled + present + revision-fresh
+    // (Phase 3), else the in-memory backend from <paramref name="loadInMemory"/> (the lean projection for a
+    // registered workspace; the holder's full index for the current one). Single-flight + revision-keyed so a
+    // miss loads once and a revision bump evicts the prior entry.
+    private CachedSymbolSearch GetOrLoadSymbolSearch(
+        CacheKey key, string symbolsDbPath, Func<ISymbolLookupIndex> loadInMemory)
     {
-        var key = new CacheKey(row.WorkspaceId, row.IndexDbPath, revision);
         Lazy<CachedSymbolSearch> lazy;
         lock (_cacheGate)
         {
             if (!_symbolSearchCache.TryGetValue(key, out lazy!))
             {
                 lazy = new Lazy<CachedSymbolSearch>(
-                    () => new CachedSymbolSearch(_loadSymbolSearch(row.IndexDbPath)),
+                    () => new CachedSymbolSearch(
+                        _sidecar.TryOpen(symbolsDbPath, key.Revision) ?? loadInMemory()),
                     LazyThreadSafetyMode.ExecutionAndPublication);
                 _symbolSearchCache[key] = lazy;
                 EvictOtherEntriesForWorkspaceUnderLock(_symbolSearchCache, key);
@@ -426,7 +454,7 @@ public sealed class WorkspaceIndexProvider
 
     private sealed record CachedIndex(MillerRepositoryIndex Index, SmartTargetResolver Resolver);
 
-    private sealed record CachedSymbolSearch(SymbolSearchProjection Index);
+    private sealed record CachedSymbolSearch(ISymbolLookupIndex Index);
 
     private sealed record CachedContentSearch(ContentSearchProjection Index);
 }

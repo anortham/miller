@@ -1,9 +1,11 @@
 using System.Threading;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
 using Miller.Core.Freshness;
 using Miller.Indexing;
 using Miller.Server;
 using Miller.Server.Hosting;
+using Miller.Tests.Indexing;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -74,15 +76,30 @@ public sealed class IndexerServiceScanTests
     }
 
     // A never-started IndexerService: TryScanAsLeader reads only the published _ops under _opsGate (it never
-    // touches the bootstrap), so an un-started instance is the correct, I/O-free unit-test surface.
+    // touches the bootstrap), so an un-started instance is the correct, I/O-free unit-test surface. The sidecar
+    // defaults OFF, so the disabled (byte-identical) path is what these no-workspace tests exercise.
     private static IndexerService NewService() =>
         new(new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance),
-            NullLogger<IndexerService>.Instance, NullLoggerFactory.Instance);
+            NullLogger<IndexerService>.Instance, NullLoggerFactory.Instance, SymbolSearchSidecar.Disabled);
+
+    // A leader-capable instance whose bootstrap is SEEDED with a workspace (so TryScanAsLeader can read its
+    // CanonicalExtractDbPath for the sidecar build) and whose sidecar gate is the caller's choice. Not started —
+    // PublishOpsForTest makes it the leader without the cross-process lock or a subprocess.
+    private static IndexerService NewSeededService(WorkspaceContext workspace, SymbolSearchSidecar sidecar)
+    {
+        var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
+        bootstrap.SeedForTest(
+            workspace,
+            new IndexHolder(MillerRepositoryIndex.Build(System.Array.Empty<IndexedSymbol>()), builtRevision: 0));
+        return new IndexerService(
+            bootstrap, NullLogger<IndexerService>.Instance, NullLoggerFactory.Instance, sidecar);
+    }
 
     private static IndexerService NewStartedService(
         WorkspaceContext workspace,
         Func<string, IDisposable?> tryAcquireLeadership,
-        Func<WorkspaceContext, string, string, IExtractOps> createOps)
+        Func<WorkspaceContext, string, string, IExtractOps> createOps,
+        SymbolSearchSidecar? sidecar = null)
     {
         var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
         bootstrap.SeedForTest(
@@ -95,7 +112,39 @@ public sealed class IndexerServiceScanTests
             NullLoggerFactory.Instance,
             tryAcquireLeadership,
             createOps,
-            TimeSpan.FromHours(1));
+            TimeSpan.FromHours(1),
+            sidecar ?? SymbolSearchSidecar.Disabled);
+    }
+
+    // A tiny real julie artifact (synthetic, no subprocess) the sidecar build can read symbols from. The interior
+    // 'thenti' trigram inside IAuthen|tica|tion is only recoverable from the disk artifact's trigram arm.
+    private static JulieDbFixture JulieDb() => JulieDbFixture.Create(
+        JulieDbFixture.PinnedSchema,
+        JulieDbFixture.PinnedContract,
+        new[]
+        {
+            new JulieDbFixture.SymbolRow("s1", "IAuthenticationProvider", "interface", "csharp",
+                "src/Auth.cs", "public interface IAuthenticationProvider", 1, ParentId: null),
+            new JulieDbFixture.SymbolRow("s2", "Cache", "class", "csharp",
+                "src/Cache.cs", "public class Cache", 1, ParentId: null),
+        });
+
+    // A workspace whose CanonicalExtractDbPath points at <paramref name="dbPath"/> (the symbols.db the sidecar
+    // build reads + writes its search.db sibling next to). The repo root is a real sibling dir so a started
+    // instance's FileSystemWatcher can attach; it lives under the db's dir so the fixture's cleanup removes it.
+    private static WorkspaceContext WorkspaceWithDb(string dbPath)
+    {
+        string dir = Path.GetDirectoryName(Path.GetFullPath(dbPath))!;
+        string root = Path.Combine(dir, "repo");
+        string home = Path.Combine(dir, "home");
+        Directory.CreateDirectory(root);
+        string canonicalRoot = Path.GetFullPath(root);
+        return WorkspaceContext.Create(root, AppContext.BaseDirectory, home) with
+        {
+            WorkspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot),
+            CanonicalRoot = canonicalRoot,
+            CanonicalExtractDbPath = dbPath,
+        };
     }
 
     private static WorkspaceContext CreateWorkspace(string dir)
@@ -207,6 +256,125 @@ public sealed class IndexerServiceScanTests
         }
         finally
         {
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    // ---- Phase 1: the leader builds the on-disk search.db sidecar after its scans (enabled), best-effort -----
+
+    [Fact]
+    public void TryScanAsLeader_WhenEnabledLeader_BuildsRevisionFreshSearchSidecar()
+    {
+        using var julie = JulieDb();
+        var sidecar = new SymbolSearchSidecar(enabled: true);
+        var service = NewSeededService(WorkspaceWithDb(julie.DbPath), sidecar);
+        service.PublishOpsForTest(new RecordingScanOps { Revision = 9 });
+
+        ScanOutcome outcome = service.TryScanAsLeader(force: false);
+
+        Assert.Equal(ScanOutcome.Kind.Scanned, outcome.Result);
+        string searchDb = SymbolSearchSidecar.SearchDbPathFor(julie.DbPath);
+        Assert.True(File.Exists(searchDb), $"expected the leader to build {searchDb}");
+        // The artifact is usable AND stamped with the scanned revision (the strict-equality routing contract).
+        FtsSymbolSearchIndex? index = sidecar.TryOpen(julie.DbPath, expectedRevision: 9);
+        Assert.NotNull(index);
+        Assert.Equal(9L, index!.Revision);
+    }
+
+    [Fact]
+    public void TryScanAsLeader_WhenSidecarDisabled_DoesNotBuildSearchSidecar()
+    {
+        using var julie = JulieDb();
+        var service = NewSeededService(WorkspaceWithDb(julie.DbPath), SymbolSearchSidecar.Disabled);
+        service.PublishOpsForTest(new RecordingScanOps { Revision = 9 });
+
+        ScanOutcome outcome = service.TryScanAsLeader(force: false);
+
+        // OFF path is byte-identical to pre-feature behavior: a successful scan and NO derived artifact.
+        Assert.Equal(ScanOutcome.Kind.Scanned, outcome.Result);
+        Assert.False(File.Exists(SymbolSearchSidecar.SearchDbPathFor(julie.DbPath)));
+    }
+
+    [Fact]
+    public void TryScanAsLeader_WhenEnabledButSidecarSourceUnreadable_StillReportsScanned()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "miller-indexer-sidecar-fail-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            // A symbols.db the sidecar build cannot read (not a SQLite file). The scan itself is faked + succeeds.
+            string brokenDb = Path.Combine(dir, "symbols.db");
+            File.WriteAllText(brokenDb, "this is not a sqlite database");
+            var service = NewSeededService(WorkspaceWithDb(brokenDb), new SymbolSearchSidecar(enabled: true));
+            service.PublishOpsForTest(new RecordingScanOps { Revision = 9 });
+
+            ScanOutcome outcome = service.TryScanAsLeader(force: false);
+
+            // Best-effort: a sidecar build failure NEVER turns a successful scan into a failure (reads self-heal).
+            Assert.Equal(ScanOutcome.Kind.Scanned, outcome.Result);
+            Assert.False(File.Exists(SymbolSearchSidecar.SearchDbPathFor(brokenDb)));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public async Task StartAsync_WhenEnabledLeader_BuildsSearchSidecarAfterStartupScan()
+    {
+        using var julie = JulieDb();
+        var lease = new TestLease();
+        var ops = new RecordingScanOps { Revision = 13 };
+        var sidecar = new SymbolSearchSidecar(enabled: true);
+        var service = NewStartedService(WorkspaceWithDb(julie.DbPath), _ => lease, (_, _, _) => ops, sidecar);
+
+        await service.StartAsync(CancellationToken.None);
+        Assert.True(ops.ScanCalled.Wait(5000, CancellationToken.None));
+        await service.StopAsync(CancellationToken.None); // awaits ExecuteAsync, so RunStartupDeltaScan has finished
+
+        string searchDb = SymbolSearchSidecar.SearchDbPathFor(julie.DbPath);
+        Assert.True(File.Exists(searchDb), $"expected the startup delta scan to build {searchDb}");
+        Assert.NotNull(sidecar.TryOpen(julie.DbPath, expectedRevision: 13));
+    }
+
+    [Fact]
+    public async Task StartAsync_WhenEnabledLeaderAndSidecarBuildFails_StillMarksRegistryScanned()
+    {
+        string dir = Path.Combine(
+            Path.GetTempPath(), "miller-indexer-sidecar-startup-fail-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var lease = new TestLease();
+        var ops = new RecordingScanOps { Revision = 11 };
+        try
+        {
+            // A symbols.db the sidecar build cannot read; the faked startup delta scan still succeeds at rev 11.
+            // The build call sits INSIDE RunStartupDeltaScan's outer try whose catch calls MarkRegistryError, so
+            // this pins that a build failure is fully absorbed and never poisons the registry as an errored scan.
+            string brokenDb = Path.Combine(dir, "symbols.db");
+            File.WriteAllText(brokenDb, "this is not a sqlite database");
+            var workspace = WorkspaceWithDb(brokenDb);
+            string workspaceId = workspace.WorkspaceId!;
+            IndexBootstrapService.RegisterBootstrapWorkspace(
+                workspace, workspaceId, WorkspaceRegistryState.LoadedExisting, revision: 4);
+            var service = NewStartedService(
+                workspace, _ => lease, (_, _, _) => ops, new SymbolSearchSidecar(enabled: true));
+
+            await service.StartAsync(CancellationToken.None);
+            Assert.True(ops.ScanCalled.Wait(5000, CancellationToken.None));
+            await service.StopAsync(CancellationToken.None); // awaits ExecuteAsync ⇒ RunStartupDeltaScan finished
+
+            using var registry = WorkspaceRegistry.Open(workspace.RegistryDbPath);
+            var row = registry.Get(workspaceId);
+            Assert.NotNull(row);
+            Assert.Equal(WorkspaceRegistryState.Ready, row!.State); // Scanned, NOT errored by the failed build
+            Assert.Equal(11, row.LastRevision);
+            Assert.False(File.Exists(SymbolSearchSidecar.SearchDbPathFor(brokenDb)));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
             try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
         }
     }
