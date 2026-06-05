@@ -1,3 +1,4 @@
+using System.Text;
 using Microsoft.Data.Sqlite;
 using Miller.Core.Tokenization;
 using Miller.Indexing;
@@ -208,5 +209,69 @@ public sealed class SearchIndexWriterTests : IDisposable
         Assert.Equal(0L, Long(Scalar(c, "SELECT COUNT(*) FROM search_symbols")));
         Assert.Equal(0L, Long(Scalar(c, "SELECT doc_count FROM meta")));
         Assert.Equal(3L, Long(Scalar(c, "SELECT revision FROM meta")));
+    }
+
+    [Fact]
+    public void Write_CreatesEmptyRegionTablesInSchemaV3()
+    {
+        SearchIndexWriter.Write(_dbPath, Array.Empty<IndexedSymbol>(), revision: 3);
+
+        using var c = OpenRead();
+        Assert.Equal(3L, Long(Scalar(c, "SELECT schema_version FROM meta")));
+        Assert.Equal(0L, Long(Scalar(c, "SELECT region_count FROM meta")));
+        Assert.Equal(0.0, Convert.ToDouble(Scalar(c, "SELECT region_avgdl FROM meta")), 5);
+        Assert.Equal(0L, Long(Scalar(c, "SELECT COUNT(*) FROM search_regions")));
+        Assert.Equal(0L, Long(Scalar(c, "SELECT COUNT(*) FROM regions_fts")));
+    }
+
+    [Fact]
+    public void Write_RegionIndexEnabled_SlicesVerifiedUtf8RegionsIntoSearchDb()
+    {
+        const string path = "src/A.cs";
+        const string symbolId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        const string text = "// TODO café\nclass A { string Url = \"http://localhost\"; }\n";
+        int commentStart = text.IndexOf("//", StringComparison.Ordinal);
+        int commentEnd = text.IndexOf('\n', commentStart);
+        int literalStart = text.IndexOf("\"http://localhost\"", StringComparison.Ordinal);
+        int literalEnd = literalStart + "\"http://localhost\"".Length;
+        int CommentByte(int index) => Encoding.UTF8.GetByteCount(text[..index]);
+
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow(symbolId, "A", "class", "csharp", path, "class A", 2, ParentId: null),
+            },
+            fileContent: new Dictionary<string, string> { [path] = text },
+            sourceRegions: new[]
+            {
+                new JulieDbFixture.SourceRegionRow(
+                    "comment-region", "file:" + path, path, "csharp", "comment", symbolId,
+                    1, 1, 1, 13, CommentByte(commentStart), CommentByte(commentEnd), null),
+                new JulieDbFixture.SourceRegionRow(
+                    "literal-region", "file:" + path, path, "csharp", "string_literal", symbolId,
+                    2, 30, 2, 48, CommentByte(literalStart), CommentByte(literalEnd), null),
+                new JulieDbFixture.SourceRegionRow(
+                    "embedded-region", "file:" + path, path, "csharp", "embedded", symbolId,
+                    2, 1, 2, 48, 0, Encoding.UTF8.GetByteCount(text), null),
+            });
+
+        SearchIndexWriter.Write(
+            _dbPath,
+            SqliteSymbolReader.Read(fx.DbPath),
+            revision: 5,
+            symbolsDbPath: fx.DbPath,
+            workspaceRoot: fx.WorkspaceRoot,
+            regionOptions: RegionIndexOptions.EnabledDefault);
+
+        using var c = OpenRead();
+        Assert.Equal(2L, Long(Scalar(c, "SELECT region_count FROM meta")));
+        Assert.Equal("// TODO café", Scalar(c, "SELECT raw_text FROM search_regions WHERE region_id='comment-region'"));
+        Assert.Equal("\"http://localhost\"", Scalar(c, "SELECT raw_text FROM search_regions WHERE region_id='literal-region'"));
+        Assert.Equal("A", Scalar(c, "SELECT containing_symbol_name FROM search_regions WHERE region_id='comment-region'"));
+        Assert.Equal(0L, Long(Scalar(c, "SELECT COUNT(*) FROM search_regions WHERE kind='embedded'")));
+        Assert.Equal("comment-region", Scalar(c, "SELECT region_id FROM regions_fts WHERE body MATCH 'café'"));
+        Assert.Equal("literal-region", Scalar(c, "SELECT region_id FROM regions_fts WHERE body MATCH 'localhost'"));
     }
 }

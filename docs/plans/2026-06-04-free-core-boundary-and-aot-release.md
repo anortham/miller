@@ -37,6 +37,12 @@ Miller should avoid:
 - hosted services, accounts, policies, billing, or team governance
 - duplicating `julie-extractors` parsing or schema ownership
 
+The scale assumption is important: SQLite is the right Miller substrate for exact, local,
+read-mostly code facts and FTS-backed lexical recall. It is not the chosen substrate for
+portfolio-scale semantic/vector retrieval. If Eros needs LanceDB-scale projections, that is an
+Eros-owned storage/runtime decision above the shared artifacts, not a reason to pull embeddings or
+vector indexing into Miller's free core.
+
 ## Relationship To `julie-extractors`
 
 `julie-extractors` remains the extraction product:
@@ -60,6 +66,11 @@ core. Miller should expose a clean enough CLI/MCP/process surface that Eros can 
 - call Miller's public tool/process surface where that is cheaper and stable.
 
 Miller must not make Eros depend on private .NET types or internal indexes.
+
+Eros architecture decisions should remain downstream of Miller product completion. Until Miller is
+functionally strong as the free core, Eros cannot know which workflows should consume Miller
+directly, which should read `julie-extractors` artifacts, and which genuinely need Eros-owned
+projections such as LanceDB-backed semantic retrieval.
 
 The dividing line:
 
@@ -149,6 +160,8 @@ fall back to `PATH` only as a convenience.
 
 ## Near-Term Alignment Tasks
 
+- Finish Miller's full product implementation first. Its functional success as the free core is the
+  main input into every Eros duplication, projection, storage, and runtime-language decision.
 - Keep Miller focused on projection-specific loading for first-read `search` / `inspect` latency.
 - Add the Miller CLI surface so behavior can be tested outside MCP and used by other process-level
   consumers.

@@ -24,8 +24,12 @@ the tokens.
   code is auto-hidden for natural-language queries (`exclude_tests=false` to force them in). The first move for
   "where is…?". Use `mode=content` (alias `docs`) to search docs/prose file CONTENT instead of symbols — it
   returns `path:line` + a snippet window, for files symbol search can't see (markdown, config, plain text).
-  Optional `workspace_id` accepts a display ID, unique prefix, full ID, `current`, or `primary`; explicit
-  `workspace_id` defaults `ensure_fresh=true`.
+  Use `regions=comment|doc_comment|string_literal` (comma lists accepted; `docstring` aliases `doc_comment`) to
+  search only inside comments, doc-comments, or string literals. Region search requires `MILLER_REGION_INDEX=1`
+  and a refreshed `search.db` sidecar; if unavailable, it fails closed instead of returning symbol results.
+  Symbol hits may include `has_doc` when the symbol has `symbols.doc_comment`. Optional `workspace_id` accepts a
+  display ID, unique prefix, full ID, `current`, or `primary`; explicit `workspace_id` defaults
+  `ensure_fresh=true`.
 - `inspect` — A file or symbol you can already name. A file path lists its symbols; a symbol name gives its
   definition, signature, and docs. `depth=full` adds references, callers/callees, and the body. Use before
   reading an entire file. Optional `workspace_id` and `ensure_fresh` follow the same rules as `search`.
@@ -56,6 +60,8 @@ the tokens.
   language boundary.
 - **Find something in docs/prose**: `search mode=content "<phrase>"` — searches markdown/config/text content and
   returns `path:line` + snippet, where symbol search would find nothing.
+- **Find text only inside comments or strings**: `search "<phrase>" regions=comment` or
+  `search "<phrase>" regions=string_literal` — requires `MILLER_REGION_INDEX=1` and a refreshed workspace.
 - **Scope a change**: `impact target=…` → run the tests it lists → `edit` (dry-run) → `edit apply=true` →
   re-run `impact` if the surface changed.
 - **Edit a symbol**: `inspect` it → `edit … dry_run` (the default) → `edit … apply=true`.

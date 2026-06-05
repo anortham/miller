@@ -1,13 +1,13 @@
 # source_regions / pillar-3 scope-aware lexical search — design
 
 - **Date:** 2026-06-04
-- **Status:** ⛔ **DEFERRED — blocked on julie-extract 2.1.1.** The pinned 2.1.0 emits `source_regions` only
-  for JavaScript (verified on this repo's live artifact: 187 region rows, all JS; **0 C#**, **0
-  `doc_comment`** of any language), so a region-text index would be empty on C#/.NET and most languages. The
-  julie-extractors 2.1.1 update (in progress) will emit `source_regions` for all supported languages; resume
-  this feature then. Design agreed in brainstorming and revised twice after Codex adversarial review — it is
-  review-clean and ready to build once the data exists. **Apply the resume conditions below before coding.**
-- **Scope:** Consume julie-extract 2.1.0's `source_regions` table to deliver pillar-3 *scope-aware lexical
+- **Status:** ✅ **UNBLOCKED by julie-extract 2.1.1.** The pinned 2.1.1 binary was restored and a fresh extract
+  of this repo verified `source_regions` for C# (`comment=3607`, `doc_comment=5505`,
+  `string_literal=11062`) plus JavaScript, JSON, Markdown embedded regions, PowerShell, Bash, and YAML. The
+  prior 2.1.0 blocker was real: that release emitted only JavaScript regions on this repo. Design agreed in
+  brainstorming and revised twice after Codex adversarial review; build from this document after preserving the
+  verified corrections below.
+- **Scope:** Consume julie-extract schema-v2's `source_regions` table, using 2.1.1 all-language emission, to deliver pillar-3 *scope-aware lexical
   search*: an **inclusive region-text search** ("find TODO inside comments", "find `localhost` inside string
   literals") backed by a new region-text index in the `search.db` sidecar, plus a cheap `has_doc` annotation
   on symbol search. Exact match-inside-region (the region text *is* the indexed unit).
@@ -16,20 +16,26 @@
   `search.db`), `docs/plans/2026-06-04-free-core-boundary-and-aot-release.md` (the region index is an
   Eros-shareable derived artifact).
 
-## ⛔ Deferral & resume conditions (read first when 2.1.1 lands)
+## Resume evidence and corrections
 
-This feature is paused until julie-extract 2.1.1 emits `source_regions` across languages. **Before resuming,
-re-verify coverage** on a fresh extract (`SELECT language, kind, COUNT(*) FROM source_regions GROUP BY 1,2`)
-— if C#/your target languages still show 0, it is still blocked.
+Resume check completed 2026-06-05 with pinned julie-extract 2.1.1:
+
+```sql
+SELECT language, kind, COUNT(*) FROM source_regions GROUP BY 1,2;
+```
+
+Relevant result on this repo: `csharp|comment|3607`, `csharp|doc_comment|5505`,
+`csharp|string_literal|11062`; total `source_regions=20887`. If a future extractor bump changes coverage,
+repeat this query before shipping.
 
 The two Codex reviews verified five corrections that the body below must reflect when building (the prose
 below was written before the live-data check; these notes win on conflict):
 
-1. **`has_doc` comes from `symbols.doc_comment`, NOT `source_regions`.** Live data: `symbols.doc_comment` =
-   3,840 non-null rows; `source_regions WHERE kind='doc_comment'` = 0. Derive `has_doc` from
-   `symbols.doc_comment IS NOT NULL` (query `symbols` by result `symbol_id`); use any `doc_comment` region
-   only as optional line-range enrichment when present. (`inspect` already surfaces `symbols.doc_comment` at
-   `InspectTool.cs:239` — unchanged.)
+1. **`has_doc` comes from `symbols.doc_comment`, NOT `source_regions`.** 2.1.1 now emits `doc_comment` regions,
+   but `symbols.doc_comment` is already symbol-owned and result-bounded. Derive `has_doc` from
+   `symbols.doc_comment IS NOT NULL` (query `symbols` by result `symbol_id`); use `doc_comment` regions for
+   explicit `regions=doc_comment` search and optional line-range enrichment. (`inspect` already surfaces
+   `symbols.doc_comment` at `InspectTool.cs:239` — unchanged.)
 2. **`regions_fts.body` stores the `CodeTokenizer` token stream, not raw text** — exactly like the symbol arm
    (`SearchIndexWriter`), so FTS re-splits only on inserted spaces and DF/TF/doc_len match Miller's BM25.
    Store the **raw** region text in a separate `search_regions` column for snippet display only.
@@ -283,29 +289,30 @@ build (leader / external refresh, under SingleWriterLock):
   taken, not a silent miss).
 - **Build-cost probe**: record region-build time + `search.db` size delta on a real extract (the new disk-read
   pass is the main new cost; this is the number that informs whether `embedded`/trigram are worth adding and
-  whether default-on is safe on large repos).
+  whether default-on is safe on large repos). 2026-06-05 scale fixture evidence:
+  `region_build_ms=9.4`, `search_db_bytes=98304`, `source_regions=2`, `search_regions=2`.
 
 `ScaleTraitConventionTests` stays green — only the real-binary tests are Scale.
 
 ## Acceptance criteria
 
-- [ ] `SearchIndexWriter` builds `regions_fts` + `search_regions` (kinds: comment, doc_comment, string_literal)
+- [x] `SearchIndexWriter` builds `regions_fts` + `search_regions` (kinds: comment, doc_comment, string_literal)
       by slicing UTF-8 region text from disk under the writer lock, on both writer paths; `SchemaVersion` = 3;
       stale-`content_hash` files skipped.
-- [ ] `search "<q>" regions=<kinds>` returns BM25-ranked region hits whose text is inside those region kinds,
+- [x] `search "<q>" regions=<kinds>` returns BM25-ranked region hits whose text is inside those region kinds,
       with `path:line`, snippet, kind, and containing symbol; excludes same-token code occurrences.
-- [ ] String-literal text search works (`regions=string_literal`).
-- [ ] `regions` present routes to region search regardless of `mode`; absent `regions` is byte-identical to
+- [x] String-literal text search works (`regions=string_literal`).
+- [x] `regions` present routes to region search regardless of `mode`; absent `regions` is byte-identical to
       current behavior; CLI `--regions` mirrors it.
-- [ ] Explicit `regions=` queries **fail closed** (actionable error + leader rebuild) when the region index is
+- [x] Explicit `regions=` queries **fail closed** (actionable error + leader rebuild) when the region index is
       disabled/missing/stale — never silent unfiltered/symbol results.
-- [ ] Symbol search results carry a `has_doc` annotation (result-bounded, `containing_symbol_id`-indexed);
+- [x] Symbol search results carry a `has_doc` annotation (result-bounded, `containing_symbol_id`-indexed);
       `inspect` unchanged.
-- [ ] `Miller.Core` stays pure (slice/decode/BM25 in Core; SQLite + disk I/O in `Miller.Indexing`); no
+- [x] `Miller.Core` stays pure (slice/decode/BM25 in Core; SQLite + disk I/O in `Miller.Indexing`); no
       `ISymbolSearchIndex.Search` widening; rankers reuse `Miller.Core.Search.Bm25`.
-- [ ] `MILLER_AGENT_INSTRUCTIONS.md` documents `regions` + `has_doc`; `AgentInstructionsTests` green.
-- [ ] `JulieDbFixture` builds `source_regions`; `JulieDbFixtureV2SchemaTests` asserts the schema.
-- [ ] Scale build-cost probe recorded; `dotnet build Miller.slnx -c Release` 0/0; `scripts/test.sh` and
+- [x] `MILLER_AGENT_INSTRUCTIONS.md` documents `regions` + `has_doc`; `AgentInstructionsTests` green.
+- [x] `JulieDbFixture` builds `source_regions`; `JulieDbFixtureV2SchemaTests` asserts the schema.
+- [x] Scale build-cost probe recorded; `dotnet build Miller.slnx -c Release` 0/0; `scripts/test.sh` and
       `scripts/test.sh scale` pass; `ScaleTraitConventionTests` green.
 
 ## Phases

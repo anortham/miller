@@ -51,6 +51,41 @@ public sealed class CliDispatchTests : IDisposable
         return (code, stdout.ToString(), stderr.ToString());
     }
 
+    private static JulieDbFixture DbWithRegion(string path, string text)
+    {
+        int newline = text.IndexOf('\n', StringComparison.Ordinal);
+        int endByte = newline < 0 ? System.Text.Encoding.UTF8.GetByteCount(text) : newline;
+        const string symbolId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        return JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow(symbolId, "TargetType", "class", "csharp",
+                    path, "public class TargetType", 2, ParentId: null),
+            },
+            fileContent: new Dictionary<string, string> { [path] = text },
+            sourceRegions: new[]
+            {
+                new JulieDbFixture.SourceRegionRow(
+                    "region-target", "file:" + path, path, "csharp", "comment", symbolId,
+                    1, 1, 1, endByte, 0, endByte, null),
+            },
+            revisions: new[]
+            {
+                new JulieDbFixture.RevisionRow(1, "fresh"),
+            });
+    }
+
+    private static void WriteRegionSearchDbFor(JulieDbFixture fixture, long revision) =>
+        SearchIndexWriter.Write(
+            SymbolSearchSidecar.SearchDbPathFor(fixture.DbPath),
+            SqliteSymbolReader.Read(fixture.DbPath),
+            revision,
+            fixture.DbPath,
+            fixture.WorkspaceRoot,
+            RegionIndexOptions.EnabledDefault);
+
     [Fact]
     public void IsCliInvocation_ServeAndEmptyAreServer_EverythingElseIsCli()
     {
@@ -119,6 +154,45 @@ public sealed class CliDispatchTests : IDisposable
         var (code, outText, _) = Run(new[] { "search", "UserService", "--json" }, Context(fx.DbPath));
         Assert.Equal(0, code);
         Assert.StartsWith("[", outText.Trim());
+    }
+
+    [Fact]
+    public void Search_BadRegions_IsUsageErrorExitTwo()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+
+        var (code, _, errText) = Run(new[] { "search", "TODO", "--regions", "unknown" }, Context(fx.DbPath));
+
+        Assert.Equal(2, code);
+        Assert.Contains("regions must be", errText);
+    }
+
+    [Fact]
+    public void Search_Regions_UsesFreshDiskRegionIndex()
+    {
+        const string path = "src/Target.cs";
+        const string text = "// TODO cli region\nclass TargetType {}\n";
+        using var fx = DbWithRegion(path, text);
+        WriteRegionSearchDbFor(fx, revision: 1);
+
+        string? oldRegion = Environment.GetEnvironmentVariable(RegionIndexOptions.EnvVar);
+        try
+        {
+            Environment.SetEnvironmentVariable(RegionIndexOptions.EnvVar, "1");
+
+            var (code, outText, errText) = Run(
+                new[] { "search", "TODO", "--regions", "comment" },
+                Context(fx.DbPath, fx.WorkspaceRoot));
+
+            Assert.Equal(0, code);
+            Assert.Empty(errText);
+            Assert.Contains("src/Target.cs:1  comment  TargetType", outText);
+            Assert.Contains("// TODO cli region", outText);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(RegionIndexOptions.EnvVar, oldRegion);
+        }
     }
 
     [Fact]

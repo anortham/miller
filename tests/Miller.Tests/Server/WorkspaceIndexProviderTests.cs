@@ -1,3 +1,4 @@
+using Miller.Core.Search;
 using Miller.Indexing;
 using Miller.Server;
 using Miller.Server.Resolution;
@@ -632,6 +633,55 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     }
 
     [Fact]
+    public void ResolveRegionSearch_RegionIndexDisabled_FailsClosed()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspaceAt(current.Directory, current.DbPath, "current-ws"),
+            registry,
+            sidecar: new SymbolSearchSidecar(enabled: true));
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            provider.ResolveRegionSearch(workspaceId: null, ensureFresh: false));
+
+        Assert.Contains("MILLER_REGION_INDEX=1", ex.Message);
+    }
+
+    [Fact]
+    public void ResolveRegionSearch_RegisteredWorkspace_UsesFreshDiskRegionIndexAndCachesIt()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithRegion("target-ws", revision: 1, "TargetType", "src/Target.cs", "// TODO target\nclass TargetType {}\n");
+        WriteRegionSearchDbFor(target, revision: 1);
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        registry.UpsertSeen("target-ws", "target-111111111111", target.WorkspaceRoot, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+
+        int regionLoadCount = 0;
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            loadRegionSearch: (dbPath, revision) =>
+            {
+                regionLoadCount++;
+                return FtsRegionSearchIndex.Open(SymbolSearchSidecar.SearchDbPathFor(dbPath), revision);
+            },
+            sidecar: new SymbolSearchSidecar(enabled: true, RegionIndexOptions.EnabledDefault));
+
+        WorkspaceRegionSearchContext first = provider.ResolveRegionSearch("target-ws", ensureFresh: false);
+        WorkspaceRegionSearchContext second = provider.ResolveRegionSearch("target-ws", ensureFresh: false);
+
+        Assert.IsType<FtsRegionSearchIndex>(first.Index);
+        Assert.Same(first.Index, second.Index);
+        Assert.Equal(1, regionLoadCount);
+        RegionSearchHit hit = Assert.Single(first.Index.Search("TODO", new HashSet<string> { "comment" }, limit: 10));
+        Assert.Equal("src/Target.cs", hit.Path);
+    }
+
+    [Fact]
     public async Task Resolve_RegisteredWorkspace_ConcurrentCacheMissesShareOneLoad()
     {
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
@@ -1152,6 +1202,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Func<string, MillerRepositoryIndex>? loadIndex = null,
         Func<string, SymbolSearchProjection>? loadSymbolSearch = null,
         Func<string, string, ContentSearchProjection>? loadContentSearch = null,
+        Func<string, long, IRegionSearchIndex>? loadRegionSearch = null,
         Func<long, bool?>? currentIndexFresh = null,
         SymbolSearchSidecar? sidecar = null) =>
         new(
@@ -1162,6 +1213,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             loadIndex ?? (path => RepositoryIndexLoader.Load(path)),
             loadSymbolSearch ?? (path => SymbolSearchProjectionLoader.Load(path)),
             loadContentSearch ?? ((dbPath, root) => ContentSearchProjectionLoader.Load(dbPath, root)),
+            loadRegionSearch ?? ((dbPath, revision) => FtsRegionSearchIndex.Open(SymbolSearchSidecar.SearchDbPathFor(dbPath), revision)),
             currentIndexFresh ?? (_ => true),
             sidecar ?? SymbolSearchSidecar.Disabled);
 
@@ -1172,6 +1224,15 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             SymbolSearchSidecar.SearchDbPathFor(fixture.DbPath),
             SqliteSymbolReader.Read(fixture.DbPath),
             revision);
+
+    private static void WriteRegionSearchDbFor(JulieDbFixture fixture, long revision) =>
+        SearchIndexWriter.Write(
+            SymbolSearchSidecar.SearchDbPathFor(fixture.DbPath),
+            SqliteSymbolReader.Read(fixture.DbPath),
+            revision,
+            fixture.DbPath,
+            fixture.WorkspaceRoot,
+            RegionIndexOptions.EnabledDefault);
 
     private WorkspaceContext CurrentWorkspace(string dbPath, string workspaceId) =>
         CurrentWorkspaceAt(NewRoot("current"), dbPath, workspaceId);
@@ -1213,6 +1274,38 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             {
                 new JulieDbFixture.RevisionRow(revision, "fresh"),
             });
+
+    private static JulieDbFixture DbWithRegion(
+        string workspaceId,
+        long revision,
+        string symbolName,
+        string path,
+        string text)
+    {
+        int newline = text.IndexOf('\n', StringComparison.Ordinal);
+        int endByte = newline < 0 ? System.Text.Encoding.UTF8.GetByteCount(text) : newline;
+        string symbolId = Guid.NewGuid().ToString("N");
+        return JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow(symbolId, symbolName, "class", "csharp",
+                    path, $"public class {symbolName}", 2, ParentId: null),
+            },
+            workspaceId: workspaceId,
+            fileContent: new Dictionary<string, string> { [path] = text },
+            sourceRegions: new[]
+            {
+                new JulieDbFixture.SourceRegionRow(
+                    "region-" + symbolName, "file:" + path, path, "csharp", "comment", symbolId,
+                    1, 1, 1, endByte, 0, endByte, null),
+            },
+            revisions: new[]
+            {
+                new JulieDbFixture.RevisionRow(revision, "fresh"),
+            });
+    }
 
     // A symbol-free fixture whose only `files` row is a docs-like file materialized on disk under
     // WorkspaceRoot — the corpus the content-search loader re-sources and BLAKE3-verifies. Register the

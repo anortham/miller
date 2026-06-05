@@ -88,13 +88,58 @@ public static class CliDispatch
     {
         CliOptions o = CliOptions.Parse(args, "json", "include-tests");
         if (string.IsNullOrWhiteSpace(o.Query))
-            return Usage(err, "miller search <query> [--mode auto|text|symbol|file|content] [--limit N] [--json] [--include-tests]");
+            return Usage(err, "miller search <query> [--mode auto|text|symbol|file|content] [--regions KINDS] [--limit N] [--json] [--include-tests]");
 
         bool json = o.Has("json");
         int limit = o.Int("limit", 10);
-        SearchToolMode mode = SearchTool.ParseMode(o.Value("mode", "auto")!);
+        string requestedMode = o.Value("mode", "auto")!;
+        SearchToolMode mode = SearchTool.ParseMode(requestedMode);
+        IReadOnlySet<string>? regionKinds;
+        try
+        {
+            regionKinds = SearchTool.ParseRegionKinds(o.Value("regions"));
+        }
+        catch (InvalidOperationException ex)
+        {
+            err.WriteLine(ex.Message);
+            return 2;
+        }
         // exclude_tests tri-state: --include-tests forces them in; otherwise leave unset (the tool auto-hides for NL).
         bool? excludeTests = o.Has("include-tests") ? false : null;
+
+        if (regionKinds is not null)
+        {
+            if (!RequireIndex(ctx, err))
+                return 3;
+
+            SymbolSearchSidecar sidecar = SymbolSearchSidecar.FromEnvironment();
+            if (!sidecar.Enabled || !sidecar.RegionOptions.Enabled)
+            {
+                err.WriteLine("region search requires MILLER_REGION_INDEX=1 and a refreshed search sidecar.");
+                return 3;
+            }
+
+            try
+            {
+                using var freshness = new FreshnessReader(ctx.ExtractDbPath);
+                long revision = freshness.LatestRevision();
+                string searchDb = SymbolSearchSidecar.SearchDbPathFor(ctx.ExtractDbPath);
+                FtsRegionSearchIndex regionIndex = FtsRegionSearchIndex.Open(searchDb, revision);
+                bool hideTests = SearchTool.ResolveExcludeTests(excludeTests, o.Query, mode);
+                string? modeNote = mode == SearchToolMode.Auto
+                    ? null
+                    : $"mode={requestedMode} ignored; regions search uses source-region text.";
+                outw.WriteLine(SearchTool.RunRegions(regionIndex, o.Query, regionKinds, limit, hideTests, json, out _, modeNote: modeNote));
+                return 0;
+            }
+            catch (Exception ex) when (
+                ex is FileNotFoundException or InvalidOperationException or IOException
+                    or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                err.WriteLine("region search requires MILLER_REGION_INDEX=1 and a refreshed search sidecar: " + ex.Message);
+                return 3;
+            }
+        }
 
         if (mode == SearchToolMode.Content)
         {
@@ -609,7 +654,7 @@ public static class CliDispatch
 
         Commands:
           search <query>     Find code by name, identifier, or phrase.
-                             [--mode auto|text|symbol|file|content] [--limit N] [--json] [--include-tests]
+                             [--mode auto|text|symbol|file|content] [--regions KINDS] [--limit N] [--json] [--include-tests]
           inspect <target>   List a file's symbols, or show a symbol's definition.
                              [--depth summary|full] [--kind K] [--scope FILE] [--limit N] [--json]
           context <query>    Token-budgeted bundle of the most relevant code for a task.
