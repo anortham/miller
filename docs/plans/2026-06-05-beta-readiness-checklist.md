@@ -163,6 +163,8 @@ Also capture a short dogfood note with:
 - Any failures or limits accepted for beta.
 - Cross-platform evidence: Unix/macOS wrapper output and Windows PowerShell wrapper output or CI run.
 
+Captured in `docs/findings/2026-06-05-beta-candidate-dogfood.md`.
+
 ## Not Beta Blockers Unless Evidence Says Otherwise
 
 - Full release-blocking Native AOT.
