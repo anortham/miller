@@ -31,13 +31,14 @@ search, CLI verbs, and the `julie-extract` 2.1.1 source-region consumer.
 ### 1. Source Regions Closeout
 
 - [x] Implement the `julie-extract` 2.1.1 and `source_regions` consumer path.
-- [ ] Dogfood `MILLER_REGION_INDEX=1` on real repositories.
-- [ ] Record region-search evidence: representative queries, result quality, build time, and
-  `search.db` size delta.
-- [ ] Decide beta behavior: keep region indexing opt-in, make it default-on, or defer the default
-  decision.
-- [ ] Explicitly defer or accept follow-ups: `embedded` regions, trigram recall for regions, and
-  exclusion queries.
+- [x] Dogfood `MILLER_REGION_INDEX=1` on real repositories.
+- [x] Record region-search evidence: representative queries, result quality, build time, and
+  `search.db` size delta. See `docs/findings/2026-06-05-source-region-dogfood.md`.
+- [x] Decide beta behavior: keep region indexing opt-in for beta.
+- [x] Explicitly defer follow-ups: `embedded` regions, trigram recall for regions, and exclusion
+  queries.
+- [ ] Investigate post-beta/default-on quality and size follow-ups from dogfood: multi-token region
+  query semantics and very large `string_literal` sidecars.
 
 ### 2. Search And Inspect Quality
 
