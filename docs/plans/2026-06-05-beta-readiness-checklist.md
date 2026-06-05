@@ -102,9 +102,10 @@ status workspaces. It should read the workspace registry, telemetry DB, and ligh
 - [x] Add a convention guard so beta-critical shell scripts cannot drift back to Unix-only
   entry points.
 - [x] Add a Windows fast-suite CI job that uses the PowerShell test wrapper.
-- [x] Verify the Windows restore/test path on a Windows host or CI run:
+- [x] Verify the Windows restore/test path on a Windows host or CI run for the 2.1.1 beta candidate:
   GitHub Actions run `27014619404` on 2026-06-05 passed
   `scripts/restore-julie-extract.ps1`, `dotnet build`, and `scripts/test.ps1`.
+- [ ] Rerun Windows restore/build/test on the final 2.1.2 beta commit.
 - [x] Audit package/archive scripts for Unix-only assumptions before a packaged beta: not
   required for source-checkout beta. Keep as release-readiness follow-up if beta expands to
   platform archives.
@@ -114,9 +115,10 @@ status workspaces. It should read the workspace registry, telemetry DB, and ligh
 - [x] Verify `scripts/restore-julie-extract.sh` restores the pinned binary on a clean machine
   or clean checkout. Fresh macOS arm64 restore on 2026-06-05 downloaded v2.1.2, verified
   sha256, and installed `julie-extract 2.1.2`.
-- [x] Verify `scripts/restore-julie-extract.ps1` restores the pinned binary on Windows x64.
+- [x] Verify `scripts/restore-julie-extract.ps1` restores the 2.1.1 pinned binary on Windows x64.
   GitHub Actions run `27014619404` on 2026-06-05 restored the Windows x64 2.1.1 archive
-  before the Windows build and fast suite; rerun Windows restore/test on the final 2.1.2 beta commit.
+  before the Windows build and fast suite.
+- [ ] Verify `scripts/restore-julie-extract.ps1` restores the 2.1.2 pinned binary on Windows x64.
 - [x] Keep `scripts/julie-pins.json`, `PinnedJulieExtractVersion`, and contract tests in sync.
 - [x] Document MCP configuration and CLI install/run paths.
 - [x] Define beta package shape: source checkout beta with per-platform restore scripts.
@@ -164,7 +166,8 @@ Also capture a short dogfood note with:
 - Any failures or limits accepted for beta.
 - Cross-platform evidence: Unix/macOS wrapper output and Windows PowerShell wrapper output or CI run.
 
-Captured in `docs/findings/2026-06-05-beta-candidate-dogfood.md`.
+Captured in `docs/findings/2026-06-05-beta-candidate-dogfood.md`, with 2.1.2 bridge follow-up evidence in
+`docs/findings/2026-06-05-julie-extract-2-1-2-bridge-dogfood.md`.
 
 ## Not Beta Blockers Unless Evidence Says Otherwise
 
