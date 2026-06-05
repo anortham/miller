@@ -4,7 +4,7 @@
 - **Workspace used for scale evidence:** `/Users/murphy/source/openclaw`
 - **OpenClaw index:** 640,317 symbols, 12,781 files, revision 1
 - **OpenClaw DB sizes:** `symbols.db` 1.7G, `search.db` 664M
-- **Decision:** beta read paths are acceptable with a fresh sidecar. Summary `inspect`, `context`, workspace `status`, and workspace `list` stay cheap on a very large registered workspace. Full `inspect` can still be expensive and should be documented as heavier than summary inspect.
+- **Decision:** beta read paths are acceptable with a fresh sidecar. MCP summary `inspect`, `context`, workspace `status`, and workspace `list` stay cheap on a very large registered workspace once the relevant projections/full index are cached. One-shot CLI `search` and summary `inspect` now avoid both full graph hydration and eager sidecar snapshot loading. Full `inspect` and graph-heavy one-shot CLI commands can still be expensive and should be documented as heavier than summary inspect/search.
 
 ## Setup
 
@@ -66,6 +66,29 @@ context "OpenClaw doctor workspace status flow" entry_symbols=d89f2940bee8dbd088
 workspace status openclaw
 workspace list
 ```
+
+## CLI Rerun After Search-Quality Fixes
+
+After the compact-output/search-quality fixes, the CLI read path exposed two separate issues:
+
+- `miller search` and default `miller inspect` still used `RepositoryIndexLoader.Load`, so one-shot CLI calls paid the full graph/bridge load cost even when they only needed symbol lookup.
+- The disk sidecar reader eagerly materialized every `search_symbols` row into `SymbolLookupTables` at open time. On OpenClaw, `SELECT ... FROM search_symbols ORDER BY path, start_line, symbol_id` alone took `real=1.82s`, while FTS candidate lookup plus candidate metadata fetch was tens of milliseconds.
+
+The fix has two parts: route the lightweight CLI commands through symbol lookup, then make `FtsSymbolSearchIndex` lazy. It now opens by reading/validating only metadata and FTS tables, fetches FTS candidates plus metadata on demand, and uses small lazy path lookups for file-mode/extension checks.
+
+Measured from `/Users/murphy/source/openclaw` with the Release CLI:
+
+| Operation | Before | After | Result |
+|---|---:|---:|---|
+| `miller search "workspace status"` | `real=6.55s` | `real=0.26s` | Fixed: lazy disk symbol search |
+| Scoped `miller search "workspace status"` | `real=6.53s` | `real=0.26s` | Fixed: lazy disk symbol search |
+| `miller search "doctor-workspace-status.ts" --mode file` | not measured in first pass | `real=0.31s` | Cheap file lookup |
+| `miller search "gateway health checks" --mode content` | `real=0.26s` | `real=0.32s` | Unchanged and cheap |
+| `miller inspect noteWorkspaceStatus` | `real=6.57s` | `real=0.31s` | Fixed: summary inspect uses lazy symbol lookup |
+| `miller inspect noteWorkspaceStatus --depth full` | not measured in first pass | `real=6.74s` | Expected full path |
+| `miller context "workspace status command"` | `real=6.67s` | `real=6.75s` | Expected full path |
+
+Repeated `miller search "workspace status"` runs were stable at `real=0.26s`. The remaining expensive one-shot CLI paths are graph-heavy by design. If post-beta CLI workflows need faster full `inspect` / `context`, evaluate lazy graph/bridge loading or persisted read models there, not symbol-search widening or per-file in-memory patching first.
 
 ## Region Search Fail-Closed Check
 

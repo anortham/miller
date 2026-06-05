@@ -55,6 +55,22 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
         params (string Id, string Name, string? Sig, string Kind, string Lang, string Path)[] rows) =>
         Corpus(rows.Select(static r => (r.Id, r.Name, r.Sig, r.Kind, r.Lang, r.Path, ParentId: (string?)null)).ToArray());
 
+    private void SetSearchSymbolNameToNull(string symbolId)
+    {
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = _dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString();
+        using var connection = new SqliteConnection(connectionString);
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE search_symbols SET name = NULL WHERE symbol_id = $id;";
+        command.Parameters.AddWithValue("$id", symbolId);
+        command.ExecuteNonQuery();
+    }
+
     [Fact]
     public void Open_ExposesDocumentCountRevisionAndResolvesFullSymbol()
     {
@@ -91,6 +107,22 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
         Assert.Equal("core/Cache.cs", index.ResolveIndexedFilePath("Cache.cs"));
         Assert.Contains(".cs", index.KnownExtensions);
         Assert.NotEmpty(index.FindByFilePathFragment("UserService", limit: 10));
+    }
+
+    [Fact]
+    public void Open_DoesNotEagerlyReadEveryResidentSymbol()
+    {
+        var syms = Corpus(
+            ("a", "AlphaTarget", "class AlphaTarget", "class", "csharp", "src/A.cs"),
+            ("b", "BrokenUnused", "class BrokenUnused", "class", "csharp", "src/B.cs"));
+        SearchIndexWriter.Write(_dbPath, syms, revision: 1);
+        SetSearchSymbolNameToNull("b");
+
+        var index = FtsSymbolSearchIndex.Open(_dbPath);
+
+        Assert.Equal(2, index.DocumentCount);
+        SearchHit hit = Assert.Single(index.Search("AlphaTarget", limit: 10));
+        Assert.Equal("AlphaTarget", index.Resolve(hit.Document.DocId).Name);
     }
 
     [Fact]

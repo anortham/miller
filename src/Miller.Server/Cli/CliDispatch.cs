@@ -9,9 +9,10 @@ namespace Miller.Server.Cli;
 /// <summary>
 /// Miller's command-line surface: a thin one-shot dispatch over the SAME pure tool cores the MCP server exposes
 /// (each tool's <c>Run(...)</c> + the <see cref="WorkspaceRender"/> renderers), so a shell/CI invocation and a
-/// tool call produce identical output. The index is loaded once from the current workspace's
-/// <c>.miller/symbols.db</c> via <see cref="RepositoryIndexLoader"/> — NO MCP host, NO background services, NO
-/// Serilog file logging. <c>serve</c> and no-args are NOT CLI invocations (see <see cref="IsCliInvocation"/>);
+/// tool call produce identical output. Read verbs load the smallest index shape they need from the current
+/// workspace's <c>.miller/symbols.db</c>: symbol search and summary inspect use the symbol lookup projection,
+/// while graph-heavy verbs still use <see cref="RepositoryIndexLoader"/>. There is NO MCP host, NO background
+/// services, NO Serilog file logging. <c>serve</c> and no-args are NOT CLI invocations (see <see cref="IsCliInvocation"/>);
 /// they fall through to the stdio MCP server in <c>Program.cs</c>, which keeps its STDIO-purity contract. The CLI
 /// OWNS stdout here, so it writes results to the injected <c>stdout</c> writer (Console in production, a capture
 /// buffer in tests).
@@ -152,7 +153,7 @@ public static class CliDispatch
             return 0;
         }
 
-        if (!TryLoadIndex(ctx, err, out MillerRepositoryIndex index))
+        if (!TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex index))
             return 3;
         outw.WriteLine(SearchTool.Run(index, o.Query, mode, limit, excludeTests, json, out _,
             filePattern: o.Value("file-pattern"), language: o.Value("language")));
@@ -165,14 +166,29 @@ public static class CliDispatch
         if (string.IsNullOrWhiteSpace(o.Query))
             return Usage(err, "miller inspect <file-or-symbol> [--depth summary|full] [--kind K] [--scope FILE] [--limit N] [--json]");
 
-        if (!TryLoadIndex(ctx, err, out MillerRepositoryIndex index))
-            return 3;
+        string depth = o.Value("depth", "summary")!;
+        string output;
+        if (string.Equals(depth, "full", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!TryLoadIndex(ctx, err, out MillerRepositoryIndex index))
+                return 3;
 
-        var resolver = new SmartTargetResolver(index);
-        string output = InspectTool.Run(
-            index, resolver, ctx.ExtractDbPath, ctx.WorkspaceRoot,
-            target: o.Query, depth: o.Value("depth", "summary")!, kind: o.Value("kind"), scope: o.Value("scope"),
-            limit: o.Int("limit", 50), json: o.Has("json"), out _);
+            var resolver = new SmartTargetResolver(index);
+            output = InspectTool.Run(
+                index, resolver, ctx.ExtractDbPath, ctx.WorkspaceRoot,
+                target: o.Query, depth, kind: o.Value("kind"), scope: o.Value("scope"),
+                limit: o.Int("limit", 50), json: o.Has("json"), out _);
+        }
+        else
+        {
+            if (!TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex index))
+                return 3;
+
+            output = InspectTool.RunSummary(
+                index, ctx.ExtractDbPath, ctx.WorkspaceRoot,
+                target: o.Query, kind: o.Value("kind"), scope: o.Value("scope"),
+                limit: o.Int("limit", 50), json: o.Has("json"), out _);
+        }
         outw.WriteLine(output);
         return 0;
     }
@@ -632,6 +648,45 @@ public static class CliDispatch
         }
         index = RepositoryIndexLoader.Load(ctx.ExtractDbPath);
         return true;
+    }
+
+    private static bool TryLoadSymbolSearchIndex(WorkspaceContext ctx, TextWriter err, out ISymbolLookupIndex index)
+    {
+        if (!RequireIndex(ctx, err))
+        {
+            index = null!;
+            return false;
+        }
+
+        SymbolSearchSidecar sidecar = SymbolSearchSidecar.FromEnvironment();
+        if (sidecar.Enabled)
+        {
+            FtsSymbolSearchIndex? sidecarIndex = TryOpenFreshSymbolSearchSidecar(ctx.ExtractDbPath, sidecar);
+            if (sidecarIndex is not null)
+            {
+                index = sidecarIndex;
+                return true;
+            }
+        }
+
+        index = SymbolSearchProjectionLoader.Load(ctx.ExtractDbPath);
+        return true;
+    }
+
+    private static FtsSymbolSearchIndex? TryOpenFreshSymbolSearchSidecar(string dbPath, SymbolSearchSidecar sidecar)
+    {
+        try
+        {
+            using var freshness = new FreshnessReader(dbPath);
+            return sidecar.TryOpen(dbPath, freshness.LatestRevision());
+        }
+        catch (Exception ex) when (
+            ex is FileNotFoundException or InvalidOperationException or IOException
+                or UnauthorizedAccessException or ArgumentException or NotSupportedException
+                or Microsoft.Data.Sqlite.SqliteException)
+        {
+            return null;
+        }
     }
 
     private static bool RequireIndex(WorkspaceContext ctx, TextWriter err)

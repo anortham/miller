@@ -148,6 +148,20 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void Search_UsesSymbolProjectionWithoutFullGraphLoad()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        SqliteFixtureMutator.DropRelationshipsTable(fx.DbPath);
+
+        var (code, outText, errText) = Run(new[] { "search", "GetUser" }, Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("GetUser", outText);
+        Assert.Contains("auth/UserService.cs", outText);
+    }
+
+    [Fact]
     public void Search_FilePatternAndLanguageFlags_FilterResults()
     {
         using var fx = JulieDbFixture.CreateForInspect();
@@ -217,6 +231,20 @@ public sealed class CliDispatchTests : IDisposable
         var (code, outText, _) = Run(new[] { "inspect", "auth/UserService.cs" }, Context(fx.DbPath));
         Assert.Equal(0, code);
         Assert.Contains("GetUser", outText);
+    }
+
+    [Fact]
+    public void Inspect_Summary_UsesSymbolProjectionWithoutFullGraphLoad()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        SqliteFixtureMutator.DropRelationshipsTable(fx.DbPath);
+
+        var (code, outText, errText) = Run(new[] { "inspect", "GetUser" }, Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("Gets a user by id.", outText);
+        Assert.Contains("auth/UserService.cs", outText);
     }
 
     [Fact]

@@ -11,32 +11,39 @@ namespace Miller.Indexing;
 /// stays in Miller's C# — candidates are re-scored with the shared <see cref="Bm25"/> math so the word
 /// arm reproduces the in-memory <see cref="SymbolSearchProjection"/>'s top-N exactly.
 ///
-/// <para>The resident symbol metadata (one <see cref="IndexedSymbol"/> per row, ordered to reproduce the
-/// in-memory DocId ordinals) and corpus stats are loaded once at <see cref="Open"/>. Each query opens a
-/// short-lived read-only connection for its FTS MATCH lookups, so the reader holds no file handle between
-/// queries — atomic <c>search.db</c> replacement by the writer never races a held reader, and concurrent
-/// searches need no lock.</para>
+/// <para><see cref="Open"/> reads only the metadata and validates the FTS tables. Symbol metadata stays on
+/// disk and is fetched on demand for FTS candidates, exact symbol/file lookups, and summary inspect resolution.
+/// <c>DocId</c> is derived from <c>search_symbols.rowid - 1</c>; <see cref="SearchIndexWriter"/> inserts rows
+/// in the same deterministic order as <see cref="SqliteSymbolReader"/>, preserving parity without loading every
+/// row. Each operation opens a short-lived read-only connection, so atomic <c>search.db</c> replacement by the
+/// writer never races a held reader, and concurrent searches need no lock.</para>
 /// </summary>
 public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
 {
     private readonly string _connectionString;
-    private readonly SymbolLookupTables _tables;
     private readonly double _avgdl;
+    private readonly int _documentCount;
+    private readonly Lazy<IReadOnlyList<string>> _paths;
+    private readonly Lazy<IReadOnlySet<string>> _knownExtensions;
 
-    private FtsSymbolSearchIndex(string connectionString, SymbolLookupTables tables, double avgdl, long revision)
+    private FtsSymbolSearchIndex(string connectionString, double avgdl, long revision, int documentCount)
     {
         _connectionString = connectionString;
-        _tables = tables;
         _avgdl = avgdl;
         Revision = revision;
+        _documentCount = documentCount;
+        _paths = new Lazy<IReadOnlyList<string>>(LoadPaths, LazyThreadSafetyMode.ExecutionAndPublication);
+        _knownExtensions = new Lazy<IReadOnlySet<string>>(
+            () => BuildKnownExtensions(_paths.Value),
+            LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
     /// <summary>The julie-extract revision this artifact was built from (freshness key for Phase 3 routing).</summary>
     public long Revision { get; }
 
-    public int DocumentCount => _tables.DocumentCount;
+    public int DocumentCount => _documentCount;
 
-    public IReadOnlySet<string> KnownExtensions => _tables.KnownExtensions;
+    public IReadOnlySet<string> KnownExtensions => _knownExtensions.Value;
 
     /// <summary>
     /// Open the <c>search.db</c> at <paramref name="searchDbPath"/>, validate its schema version, and load
@@ -61,63 +68,30 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
         using var connection = new SqliteConnection(connectionString);
         connection.Open();
 
-        (long revision, double avgdl) = ReadMeta(connection, absPath);
-        IReadOnlyList<IndexedSymbol> symbols = ReadResidentSymbols(connection);
+        (long revision, int documentCount, double avgdl) = ReadMeta(connection, absPath);
         ValidateFtsTables(connection);
 
-        return new FtsSymbolSearchIndex(connectionString, SymbolLookupTables.Build(symbols), avgdl, revision);
+        return new FtsSymbolSearchIndex(connectionString, avgdl, revision, documentCount);
     }
 
-    private static (long Revision, double Avgdl) ReadMeta(SqliteConnection connection, string absPath)
+    private static (long Revision, int DocumentCount, double Avgdl) ReadMeta(SqliteConnection connection, string absPath)
     {
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT revision, avgdl, schema_version FROM meta LIMIT 1;";
+        cmd.CommandText = "SELECT revision, doc_count, avgdl, schema_version FROM meta LIMIT 1;";
         using var reader = cmd.ExecuteReader();
         if (!reader.Read())
             throw new InvalidOperationException($"search.db at '{absPath}' has no meta row.");
 
         long revision = reader.GetInt64(0);
-        double avgdl = reader.GetDouble(1);
-        int schemaVersion = reader.GetInt32(2);
+        int documentCount = checked((int)reader.GetInt64(1));
+        double avgdl = reader.GetDouble(2);
+        int schemaVersion = reader.GetInt32(3);
         if (schemaVersion != SearchIndexWriter.SchemaVersion)
             throw new InvalidOperationException(
                 $"search.db at '{absPath}' has schema_version {schemaVersion}; " +
                 $"this build expects {SearchIndexWriter.SchemaVersion}. Rebuild the search index.");
 
-        return (revision, avgdl);
-    }
-
-    // ORDER BY path, start_line, symbol_id — byte-for-byte the SqliteSymbolReader order, so the 0-based
-    // ordinal we assign as DocId equals the in-memory projection's DocId (ranking-parity requirement).
-    private static IReadOnlyList<IndexedSymbol> ReadResidentSymbols(SqliteConnection connection)
-    {
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT symbol_id, name, signature, kind, language, path,
-                   start_line, end_line, parent_symbol_id, is_test
-            FROM search_symbols
-            ORDER BY path, start_line, symbol_id;
-            """;
-
-        var results = new List<IndexedSymbol>();
-        using var reader = cmd.ExecuteReader();
-        int docId = 0;
-        while (reader.Read())
-        {
-            results.Add(new IndexedSymbol(
-                DocId: docId++,
-                SymbolId: reader.GetString(0),
-                Name: reader.GetString(1),
-                Signature: reader.IsDBNull(2) ? null : reader.GetString(2),
-                Kind: reader.GetString(3),
-                Language: reader.GetString(4),
-                FilePath: reader.GetString(5),
-                StartLine: reader.IsDBNull(6) ? 0 : reader.GetInt32(6),
-                EndLine: reader.IsDBNull(7) ? 0 : reader.GetInt32(7),
-                ParentId: reader.IsDBNull(8) ? null : reader.GetString(8),
-                IsTest: !reader.IsDBNull(9) && reader.GetInt64(9) != 0));
-        }
-        return results;
+        return (revision, documentCount, avgdl);
     }
 
     private static void ValidateFtsTables(SqliteConnection connection)
@@ -137,7 +111,7 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
 
     public IReadOnlyList<SearchHit> Search(string query, int limit = 10, SearchMode mode = SearchMode.Or)
     {
-        if (string.IsNullOrWhiteSpace(query) || limit <= 0 || _tables.DocumentCount == 0)
+        if (string.IsNullOrWhiteSpace(query) || limit <= 0 || _documentCount == 0)
             return Array.Empty<SearchHit>();
 
         // Distinct query terms in first-seen order — preserving the in-memory index's per-document
@@ -164,7 +138,7 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
         var wordMatched = new HashSet<int>();   // DocIds the word arm produced (so the trigram arm only adds extras)
         if (distinctTerms.Count > 0)
         {
-            int n = _tables.DocumentCount;
+            int n = _documentCount;
             string normalizedQuery = query.Trim().ToLowerInvariant();
             int requiredTerms = distinctTerms.Count;
 
@@ -175,18 +149,17 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
                 df[term] = CountDocsMatching(connection, QuoteFts(term));
 
             string orMatch = string.Join(" OR ", distinctTerms.Select(QuoteFts));
-            List<string> candidateIds = WordCandidates(connection, orMatch);
+            IReadOnlyList<DiskSymbol> candidates = WordCandidates(connection, orMatch);
 
             var tokens = new List<string>(16);
-            foreach (string symbolId in candidateIds)
+            foreach (DiskSymbol candidate in candidates)
             {
-                IndexedSymbol? symbol = _tables.FindBySymbolId(symbolId);
-                if (symbol is null) continue;   // defensive: symbols_fts and search_symbols are written together
+                IndexedSymbol symbol = candidate.Symbol;
 
                 tokens.Clear();
                 string text = string.IsNullOrEmpty(symbol.Signature) ? symbol.Name : symbol.Name + " " + symbol.Signature;
                 CodeTokenizer.Tokenize(text, tokens);
-                int docLen = tokens.Count;
+                int docLen = candidate.DocLen;
 
                 double score = 0.0;
                 int matched = 0;
@@ -224,10 +197,10 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
         List<SearchHit>? trigramOnly = null;
         if (wantTrigram)
         {
-            foreach (string symbolId in TrigramCandidates(connection, QuoteFts(collapsedQuery), TrigramWindow))
+            foreach (DiskSymbol candidate in TrigramCandidates(connection, QuoteFts(collapsedQuery), TrigramWindow))
             {
-                IndexedSymbol? symbol = _tables.FindBySymbolId(symbolId);
-                if (symbol is null || wordMatched.Contains(symbol.DocId)) continue;
+                IndexedSymbol symbol = candidate.Symbol;
+                if (wordMatched.Contains(symbol.DocId)) continue;
                 (trigramOnly ??= new List<SearchHit>()).Add(new SearchHit(symbol.ToSearchableDocument(), 0.0));
             }
             trigramOnly?.Sort(static (a, b) => a.Document.DocId.CompareTo(b.Document.DocId));
@@ -256,30 +229,39 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
         return Convert.ToInt32(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
     }
 
-    private static List<string> WordCandidates(SqliteConnection connection, string match)
+    private static IReadOnlyList<DiskSymbol> WordCandidates(SqliteConnection connection, string match)
     {
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT symbol_id FROM symbols_fts WHERE body MATCH $q;";
+        cmd.CommandText = SymbolSelect("""
+            FROM symbols_fts
+            JOIN search_symbols s ON s.symbol_id = symbols_fts.symbol_id
+            WHERE body MATCH $q
+            """);
         cmd.Parameters.AddWithValue("$q", match);
-        return ReadSymbolIds(cmd);
+        return ReadDiskSymbols(cmd);
     }
 
-    private static List<string> TrigramCandidates(SqliteConnection connection, string match, int limit)
+    private static IReadOnlyList<DiskSymbol> TrigramCandidates(SqliteConnection connection, string match, int limit)
     {
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT symbol_id FROM symbols_trigram WHERE symbols_trigram MATCH $q LIMIT $lim;";
+        cmd.CommandText = SymbolSelect("""
+            FROM symbols_trigram
+            JOIN search_symbols s ON s.symbol_id = symbols_trigram.symbol_id
+            WHERE symbols_trigram MATCH $q
+            LIMIT $lim
+            """);
         cmd.Parameters.AddWithValue("$q", match);
         cmd.Parameters.AddWithValue("$lim", limit);
-        return ReadSymbolIds(cmd);
+        return ReadDiskSymbols(cmd);
     }
 
-    private static List<string> ReadSymbolIds(SqliteCommand cmd)
+    private static IReadOnlyList<DiskSymbol> ReadDiskSymbols(SqliteCommand cmd)
     {
-        var ids = new List<string>();
+        var results = new List<DiskSymbol>();
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
-            ids.Add(reader.GetString(0));
-        return ids;
+            results.Add(ReadDiskSymbol(reader));
+        return results;
     }
 
     private static int CountOccurrences(List<string> tokens, string term)
@@ -296,18 +278,213 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
     // FTS reserved words (AND/OR/NOT/NEAR) and stray characters are treated as a literal term.
     private static string QuoteFts(string term) => "\"" + term.Replace("\"", "\"\"") + "\"";
 
-    public IReadOnlyList<IndexedSymbol> FindByName(string name) => _tables.FindByName(name);
+    public IReadOnlyList<IndexedSymbol> FindByName(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        using var connection = OpenConnection();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = SymbolSelect("FROM search_symbols s WHERE s.name = $name ORDER BY s.rowid;");
+        cmd.Parameters.AddWithValue("$name", name);
+        return ReadIndexedSymbols(cmd);
+    }
 
-    public IndexedSymbol? FindBySymbolId(string symbolId) => _tables.FindBySymbolId(symbolId);
+    public IndexedSymbol? FindBySymbolId(string symbolId)
+    {
+        ArgumentNullException.ThrowIfNull(symbolId);
+        using var connection = OpenConnection();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = SymbolSelect("FROM search_symbols s WHERE s.symbol_id = $id;");
+        cmd.Parameters.AddWithValue("$id", symbolId);
+        using var reader = cmd.ExecuteReader();
+        return reader.Read() ? ReadDiskSymbol(reader).Symbol : null;
+    }
 
-    public IReadOnlyList<IndexedSymbol> FindByFilePath(string filePath) => _tables.FindByFilePath(filePath);
+    public IReadOnlyList<IndexedSymbol> FindByFilePath(string filePath)
+    {
+        ArgumentNullException.ThrowIfNull(filePath);
+        using var connection = OpenConnection();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = SymbolSelect("FROM search_symbols s WHERE s.path = $path ORDER BY s.rowid;");
+        cmd.Parameters.AddWithValue("$path", filePath);
+        return ReadIndexedSymbols(cmd);
+    }
 
-    public IReadOnlyList<IndexedSymbol> FindByFilePathFragment(string query, int limit) =>
-        _tables.FindByFilePathFragment(query, limit);
+    public IReadOnlyList<IndexedSymbol> FindByFilePathFragment(string query, int limit)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(query);
+        if (limit < 1)
+            return Array.Empty<IndexedSymbol>();
 
-    public bool IsIndexedFilePath(string path) => _tables.IsIndexedFilePath(path);
+        string normalizedQuery = query.Trim().Replace('\\', '/');
+        var rankedPaths = new List<(string Path, int Rank)>();
+        foreach (string path in _paths.Value)
+        {
+            string fileName = LastPathSegment(path);
+            int rank = RankPath(path, fileName, normalizedQuery);
+            if (rank >= 0)
+                rankedPaths.Add((path, rank));
+        }
 
-    public string? ResolveIndexedFilePath(string target) => _tables.ResolveIndexedFilePath(target);
+        rankedPaths.Sort(static (a, b) =>
+        {
+            int byRank = a.Rank.CompareTo(b.Rank);
+            if (byRank != 0) return byRank;
+            int byLength = a.Path.Length.CompareTo(b.Path.Length);
+            return byLength != 0 ? byLength : string.CompareOrdinal(a.Path, b.Path);
+        });
 
-    public IndexedSymbol Resolve(int docId) => _tables.Resolve(docId);
+        var results = new List<IndexedSymbol>(limit);
+        var pathsWithRemainder = new List<IReadOnlyList<IndexedSymbol>>();
+        foreach ((string path, _) in rankedPaths)
+        {
+            IReadOnlyList<IndexedSymbol> symbols = FindByFilePath(path);
+            if (symbols.Count == 0)
+                continue;
+
+            results.Add(symbols[0]);
+            if (results.Count == limit)
+                return results;
+            if (symbols.Count > 1)
+                pathsWithRemainder.Add(symbols);
+        }
+
+        foreach (IReadOnlyList<IndexedSymbol> symbols in pathsWithRemainder)
+        {
+            for (int i = 1; i < symbols.Count; i++)
+            {
+                results.Add(symbols[i]);
+                if (results.Count == limit)
+                    return results;
+            }
+        }
+
+        return results;
+    }
+
+    public bool IsIndexedFilePath(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        return _paths.Value.Contains(path, StringComparer.Ordinal);
+    }
+
+    public string? ResolveIndexedFilePath(string target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        if (IsIndexedFilePath(target))
+            return target;
+
+        string? match = null;
+        foreach (string path in _paths.Value)
+        {
+            if (!string.Equals(LastPathSegment(path), target, StringComparison.Ordinal))
+                continue;
+            if (match is not null)
+                return null;
+            match = path;
+        }
+        return match;
+    }
+
+    public IndexedSymbol Resolve(int docId)
+    {
+        if ((uint)docId >= (uint)_documentCount)
+            throw new ArgumentOutOfRangeException(nameof(docId), docId,
+                $"DocId must be in [0, {_documentCount}).");
+
+        using var connection = OpenConnection();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = SymbolSelect("FROM search_symbols s WHERE s.rowid = $rowid;");
+        cmd.Parameters.AddWithValue("$rowid", docId + 1L);
+        using var reader = cmd.ExecuteReader();
+        if (reader.Read())
+            return ReadDiskSymbol(reader).Symbol;
+
+        throw new ArgumentOutOfRangeException(nameof(docId), docId,
+            $"No symbol row exists for DocId {docId}.");
+    }
+
+    private SqliteConnection OpenConnection()
+    {
+        var connection = new SqliteConnection(_connectionString);
+        connection.Open();
+        return connection;
+    }
+
+    private IReadOnlyList<string> LoadPaths()
+    {
+        using var connection = OpenConnection();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT DISTINCT path FROM search_symbols ORDER BY path;";
+        var paths = new List<string>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            paths.Add(reader.GetString(0));
+        return paths;
+    }
+
+    private static IReadOnlySet<string> BuildKnownExtensions(IReadOnlyList<string> paths)
+    {
+        var knownExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string path in paths)
+        {
+            string ext = Path.GetExtension(LastPathSegment(path));
+            if (ext.Length > 1)
+                knownExtensions.Add(ext);
+        }
+        return knownExtensions;
+    }
+
+    private static string SymbolSelect(string suffix) => """
+        SELECT CAST(s.rowid - 1 AS INTEGER) AS doc_id,
+               s.symbol_id, s.name, s.signature, s.kind, s.language, s.path,
+               s.start_line, s.end_line, s.parent_symbol_id, s.is_test, s.doc_len
+        """ + "\n" + suffix;
+
+    private static IReadOnlyList<IndexedSymbol> ReadIndexedSymbols(SqliteCommand cmd)
+    {
+        var results = new List<IndexedSymbol>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            results.Add(ReadDiskSymbol(reader).Symbol);
+        return results;
+    }
+
+    private static DiskSymbol ReadDiskSymbol(SqliteDataReader reader)
+    {
+        var symbol = new IndexedSymbol(
+            DocId: reader.GetInt32(0),
+            SymbolId: reader.GetString(1),
+            Name: reader.GetString(2),
+            Signature: reader.IsDBNull(3) ? null : reader.GetString(3),
+            Kind: reader.GetString(4),
+            Language: reader.GetString(5),
+            FilePath: reader.GetString(6),
+            StartLine: reader.IsDBNull(7) ? 0 : reader.GetInt32(7),
+            EndLine: reader.IsDBNull(8) ? 0 : reader.GetInt32(8),
+            ParentId: reader.IsDBNull(9) ? null : reader.GetString(9),
+            IsTest: !reader.IsDBNull(10) && reader.GetInt64(10) != 0);
+        int docLen = reader.IsDBNull(11) ? 0 : reader.GetInt32(11);
+        return new DiskSymbol(symbol, docLen);
+    }
+
+    private static int RankPath(string path, string fileName, string query)
+    {
+        if (string.Equals(path, query, StringComparison.OrdinalIgnoreCase))
+            return 0;
+        if (string.Equals(fileName, query, StringComparison.OrdinalIgnoreCase))
+            return 1;
+        if (fileName.Contains(query, StringComparison.OrdinalIgnoreCase))
+            return 2;
+        if (path.Contains(query, StringComparison.OrdinalIgnoreCase))
+            return 3;
+        return -1;
+    }
+
+    private static string LastPathSegment(string path)
+    {
+        int slash = path.LastIndexOf('/');
+        return slash >= 0 ? path[(slash + 1)..] : path;
+    }
+
+    private readonly record struct DiskSymbol(IndexedSymbol Symbol, int DocLen);
 }

@@ -146,6 +146,14 @@ startup-phase change can make even the current workspace bootstrap
 projection-specific; this design does not require that to make registered
 workspace search cheap.
 
+CLI one-shot reads do not have an `IndexHolder` cache to amortize the full load.
+The 2026-06-05 large-repo rerun extended the same projection boundary to the
+CLI: `miller search` and summary `miller inspect` now open a fresh lazy
+`search.db` sidecar when available and fall back to `SymbolSearchProjectionLoader`;
+full `inspect`, `context`, `impact`, and `trace` still use `RepositoryIndexLoader`.
+The disk sidecar reader must not eagerly materialize every `search_symbols` row
+on open; it fetches FTS candidates and lookup rows on demand.
+
 ## Tool Routing
 
 Phase 1:
@@ -239,12 +247,18 @@ Functional:
 - `search` output stays byte-compatible for compact and JSON shapes.
 - Workspace routing, freshness defaults, banners, and telemetry remain unchanged.
 - Full-read tools still use the full provider.
+- CLI `miller search` and summary `miller inspect` do not call
+  `RepositoryIndexLoader.Load`; full CLI read tools still may.
+- `FtsSymbolSearchIndex.Open` does not eagerly read every resident symbol row.
 
 Performance:
 
 - Registered OpenClaw first `search` should align with the symbol projection
   range from the spike, not the full-load range.
 - Registered Hermes first `search` should align with the symbol projection range.
+- One-shot OpenClaw CLI `search` / summary `inspect` should align with lazy
+  candidate/lookup SQL cost, not full graph/bridge load or eager sidecar
+  snapshot cost.
 
 Test plan:
 
