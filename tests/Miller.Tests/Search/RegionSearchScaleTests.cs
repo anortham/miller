@@ -8,8 +8,8 @@ namespace Miller.Tests.Search;
 
 /// <summary>
 /// Scale proof for the first source-region consumer: the real pinned julie-extract binary emits C#
-/// source_regions, Miller builds schema-v3 region tables from that artifact, and explicit region search takes
-/// the disk region path. This spawns julie-extract, so it is excluded from the fast suite.
+/// source_regions, Miller builds region tables in the current search sidecar from that artifact, and explicit
+/// region search takes the disk region path. This spawns julie-extract, so it is excluded from the fast suite.
 /// </summary>
 [Trait("Category", "Scale")]
 public sealed class RegionSearchScaleTests : IDisposable

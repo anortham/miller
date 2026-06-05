@@ -637,13 +637,17 @@ public sealed class WorkspaceToolTests : IDisposable
     public void Remove_NonLiveWorkspaceWithMillerDir_DeletesIt()
     {
         using var fx = CreateSynth(revision: 4, workspaceId: Ws);
-        var (tool, _, _, _) = BuildTool(fx, builtRevision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(
+            fx,
+            builtRevision: 4,
+            workspaceId: Ws,
+            acquireLock: _ => new NoopLease());
         string other = NewTempDir("other-with-index");
         string otherMiller = Path.Combine(other, ".miller");
         Directory.CreateDirectory(otherMiller);
         File.WriteAllText(Path.Combine(otherMiller, "symbols.db"), "stub");
 
-        string output = tool.Workspace(operation: "remove", path: other);
+        string output = harness.Tool.Workspace(operation: "remove", path: other);
 
         Assert.Contains("removed", output, StringComparison.OrdinalIgnoreCase);
         Assert.False(Directory.Exists(otherMiller)); // actually deleted

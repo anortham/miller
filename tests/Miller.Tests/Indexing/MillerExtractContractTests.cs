@@ -267,7 +267,7 @@ public sealed class MillerExtractContractTests
     {
         Match match = Regex.Match(
             script,
-            "python3 - \\\"\\$expr\\\" \\\"\\$\\{PINS\\}\\\" <<'PY'\\n(?<code>.*?)\\nPY",
+            "python3 - \\\"\\$expr\\\" \\\"\\$\\{PINS\\}\\\" <<'PY'\\r?\\n(?<code>.*?)\\r?\\nPY",
             RegexOptions.Singleline);
         Assert.True(match.Success, "Could not find the restore script's python3 fallback heredoc.");
         return match.Groups["code"].Value;

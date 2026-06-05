@@ -380,6 +380,40 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     }
 
     [Fact]
+    public void ResolveSymbolSearch_Registered_SidecarEnabled_RepairsMissingArtifactAtSameRevision()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-sidecar-repair");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+
+        int searchLoadCount = 0;
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            loadSymbolSearch: path =>
+            {
+                searchLoadCount++;
+                return SymbolSearchProjectionLoader.Load(path);
+            },
+            sidecar: new SymbolSearchSidecar(enabled: true));
+
+        WorkspaceSymbolSearchContext first = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
+        WriteSearchDbFor(target, revision: 1);
+        WorkspaceSymbolSearchContext second = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
+
+        Assert.IsType<SymbolSearchProjection>(first.Index);
+        Assert.IsType<FtsSymbolSearchIndex>(second.Index);
+        Assert.NotSame(first.Index, second.Index);
+        Assert.Equal(1, searchLoadCount);
+        var hit = Assert.Single(second.Index.Search("TargetType", limit: 10));
+        Assert.Equal("TargetType", second.Index.Resolve(hit.Document.DocId).Name);
+    }
+
+    [Fact]
     public void ResolveSymbolSearch_Registered_SidecarEnabledButArtifactStale_FallsBackToProjection()
     {
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
@@ -462,6 +496,30 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
 
         Assert.IsType<MillerRepositoryIndex>(context.Index);
         Assert.Same(holder.Current, context.Index);
+    }
+
+    [Fact]
+    public void ResolveSymbolSearch_Current_SidecarEnabled_RepairsMissingArtifactAtSameRevision()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        var holder = new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1);
+        var provider = NewProvider(
+            holder,
+            CurrentWorkspaceAt(current.Directory, current.DbPath, "current-ws"),
+            registry,
+            sidecar: new SymbolSearchSidecar(enabled: true));
+
+        WorkspaceSymbolSearchContext first = provider.ResolveSymbolSearch(workspaceId: null, ensureFresh: false);
+        WriteSearchDbFor(current, revision: 1);
+        WorkspaceSymbolSearchContext second = provider.ResolveSymbolSearch(workspaceId: null, ensureFresh: false);
+
+        Assert.IsType<MillerRepositoryIndex>(first.Index);
+        Assert.Same(holder.Current, first.Index);
+        Assert.IsType<FtsSymbolSearchIndex>(second.Index);
+        Assert.NotSame(first.Index, second.Index);
+        var hit = Assert.Single(second.Index.Search("CurrentType", limit: 10));
+        Assert.Equal("CurrentType", second.Index.Resolve(hit.Document.DocId).Name);
     }
 
     [Fact]
@@ -980,15 +1038,16 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
 
         Task<WorkspaceContentSearchContext> first =
             Task.Run(() => provider.ResolveContentSearch("target-ws", ensureFresh: false));
-        Task timeout = Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
-        Assert.Same(startedA.Task, await Task.WhenAny(startedA.Task, timeout));
+        Task firstTimeout = Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.Same(startedA.Task, await Task.WhenAny(startedA.Task, firstTimeout));
 
         registry.UpsertSeen("target-ws", "target-111111111111", targetB.WorkspaceRoot, targetB.DbPath);
         registry.MarkScanned("target-ws", revision: 2);
 
         Task<WorkspaceContentSearchContext> second =
             Task.Run(() => provider.ResolveContentSearch("target-ws", ensureFresh: false));
-        Assert.Same(startedB.Task, await Task.WhenAny(startedB.Task, timeout));
+        Task secondTimeout = Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.Same(startedB.Task, await Task.WhenAny(startedB.Task, secondTimeout));
 
         releaseA.Set();
         WorkspaceContentSearchContext stale = await first;

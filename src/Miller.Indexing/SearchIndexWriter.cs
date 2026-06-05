@@ -32,11 +32,11 @@ public static class SearchIndexWriter
         new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     /// <summary>
-    /// The on-disk schema version stamped into <c>meta.schema_version</c>. Bumped 2→3 to reserve the
-    /// region-text tables for explicit <c>regions=</c> search. Region rows are populated only when the
-    /// region index is enabled, but the schema stays stable for readers and Eros consumers.
+    /// The on-disk schema version stamped into <c>meta.schema_version</c>. Bumped 3→4 so artifacts built
+    /// before <c>symbols_trigram.qual_collapsed</c> was populated are rejected and rebuilt instead of
+    /// silently missing qualified-name substring recall.
     /// </summary>
-    public const int SchemaVersion = 3;
+    public const int SchemaVersion = 4;
 
     private const string SchemaDdl = """
         CREATE VIRTUAL TABLE symbols_fts USING fts5(
@@ -196,6 +196,7 @@ public static class SearchIndexWriter
         var tQc = triCmd.Parameters.Add("$qc", SqliteType.Text);
 
         var tokens = new List<string>(16);
+        var symbolsById = symbols.ToDictionary(static s => s.SymbolId, StringComparer.Ordinal);
         long totalLen = 0;
 
         foreach (var s in symbols)
@@ -229,8 +230,7 @@ public static class SearchIndexWriter
 
             tId.Value = s.SymbolId;
             tNc.Value = CollapseName.Of(s.Name);
-            // Qualified-name (parent-chain) collapse is a later phase; store empty for now (column reserved).
-            tQc.Value = string.Empty;
+            tQc.Value = CollapseName.Of(QualifiedNameOf(s, symbolsById));
             triCmd.ExecuteNonQuery();
         }
 
@@ -255,6 +255,26 @@ public static class SearchIndexWriter
         }
 
         tx.Commit();
+    }
+
+    private static string QualifiedNameOf(
+        IndexedSymbol symbol,
+        IReadOnlyDictionary<string, IndexedSymbol> symbolsById)
+    {
+        var parts = new List<string>(4);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        IndexedSymbol? current = symbol;
+        while (current is not null && seen.Add(current.SymbolId))
+        {
+            parts.Add(current.Name);
+            current = current.ParentId is { Length: > 0 } parentId &&
+                      symbolsById.TryGetValue(parentId, out IndexedSymbol? parent)
+                ? parent
+                : null;
+        }
+
+        parts.Reverse();
+        return string.Join('.', parts);
     }
 
     private static (int RegionCount, double RegionAvgdl) InsertRegions(

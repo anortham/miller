@@ -248,13 +248,14 @@ public sealed class SearchTool
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
         if (limit < 1) limit = 1;
 
-        // Pull enough to know whether there is an overflow beyond `limit` after the test filter, so the
-        // "… N more" note is accurate. Cap the over-fetch to avoid pathological cost.
-        int overFetch = Math.Min(limit * 4 + 10, 500);
         bool fileMode = mode == SearchToolMode.File ||
                         (mode == SearchToolMode.Auto && IsPathLikeQuery(query, index));
 
         bool hideTests = ResolveExcludeTests(excludeTests, query, mode);
+        bool hideLowSignalKinds = fileMode || ResolveHideLowSignalKinds(query, mode);
+        // Pull enough to know whether there is an overflow beyond `limit` after post-search filters, so the
+        // "… N more" note is accurate. Natural-language phrase search can be import/module-heavy, so use the cap.
+        int overFetch = hideLowSignalKinds ? 500 : Math.Min(limit * 4 + 10, 500);
 
         // Preserve index order; only filter (never re-sort).
         var kept = new List<IndexedSymbol>();
@@ -299,6 +300,8 @@ public sealed class SearchTool
             // Cross-language predicate (decision-4): julie's persisted is_test OR the path fallback. Using the
             // shared helper means an AST-flagged test in a non-test-named file is hidden, not just *Tests.cs.
             if (hideTests && IsTestPath.IsTest(sym))
+                return;
+            if (hideLowSignalKinds && IsLowSignalKind(sym.Kind))
                 return;
             kept.Add(sym);
             scores.Add(score);
@@ -381,6 +384,14 @@ public sealed class SearchTool
             return false;
         return !HasTestOrDefIntent(query);
     }
+
+    internal static bool ResolveHideLowSignalKinds(string query, SearchToolMode mode) =>
+        mode == SearchToolMode.Text ||
+        (mode == SearchToolMode.Auto && IsNaturalLanguagePhrase(query));
+
+    private static bool IsLowSignalKind(string kind) =>
+        string.Equals(kind, "import", StringComparison.Ordinal) ||
+        string.Equals(kind, "module", StringComparison.Ordinal);
 
     // A natural-language phrase = multiple whitespace-delimited words (a single identifier-ish token is not).
     private static bool IsNaturalLanguagePhrase(string query)

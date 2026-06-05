@@ -11,7 +11,7 @@ namespace Miller.Tests.Indexing;
 /// <c>search_symbols</c> metadata table, the <c>meta</c> stats row, the word <c>symbols_fts</c> arm
 /// (exact CodeTokenizer token stream incl. duplicates), and the collapsed <c>symbols_trigram</c> arm
 /// (interior + boundary-crossing substring recall). These are the contract Eros and the reader depend on.
-/// See docs/plans/2026-04-symbol-search-collapsed-trigram-design.md.
+/// See docs/plans/2026-06-04-symbol-search-collapsed-trigram-design.md.
 /// </summary>
 public sealed class SearchIndexWriterTests : IDisposable
 {
@@ -33,8 +33,8 @@ public sealed class SearchIndexWriterTests : IDisposable
 
     private static IndexedSymbol Sym(
         int docId, string id, string name, string? sig, string kind, string lang,
-        string path, int startLine, int endLine, bool isTest = false)
-        => new(docId, id, name, sig, kind, lang, path, startLine, endLine, ParentId: null, IsTest: isTest);
+        string path, int startLine, int endLine, bool isTest = false, string? parentId = null)
+        => new(docId, id, name, sig, kind, lang, path, startLine, endLine, ParentId: parentId, IsTest: isTest);
 
     private SqliteConnection OpenRead()
     {
@@ -184,6 +184,23 @@ public sealed class SearchIndexWriterTests : IDisposable
     }
 
     [Fact]
+    public void Write_Trigram_StoresCollapsedQualifiedParentChain()
+    {
+        var syms = new[]
+        {
+            Sym(0, "parent", "AuthProvider", null, "class", "csharp", "a.cs", 1, 20),
+            Sym(1, "child", "ResolveToken", null, "method", "csharp", "a.cs", 3, 6, parentId: "parent"),
+        };
+        SearchIndexWriter.Write(_dbPath, syms, 1);
+
+        using var c = OpenRead();
+        Assert.Equal("authproviderresolvetoken",
+            Scalar(c, "SELECT qual_collapsed FROM symbols_trigram WHERE symbol_id=$i", ("$i", "child")));
+        Assert.Equal("child",
+            Scalar(c, "SELECT symbol_id FROM symbols_trigram WHERE qual_collapsed MATCH $q", ("$q", "providerreso")));
+    }
+
+    [Fact]
     public void Write_OverwritesExistingDb_ReplacesRowsAndRevision()
     {
         SearchIndexWriter.Write(_dbPath, new[]
@@ -212,12 +229,12 @@ public sealed class SearchIndexWriterTests : IDisposable
     }
 
     [Fact]
-    public void Write_CreatesEmptyRegionTablesInSchemaV3()
+    public void Write_CreatesEmptyRegionTablesInCurrentSchema()
     {
         SearchIndexWriter.Write(_dbPath, Array.Empty<IndexedSymbol>(), revision: 3);
 
         using var c = OpenRead();
-        Assert.Equal(3L, Long(Scalar(c, "SELECT schema_version FROM meta")));
+        Assert.Equal((long)SearchIndexWriter.SchemaVersion, Long(Scalar(c, "SELECT schema_version FROM meta")));
         Assert.Equal(0L, Long(Scalar(c, "SELECT region_count FROM meta")));
         Assert.Equal(0.0, Convert.ToDouble(Scalar(c, "SELECT region_avgdl FROM meta")), 5);
         Assert.Equal(0L, Long(Scalar(c, "SELECT COUNT(*) FROM search_regions")));

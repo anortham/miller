@@ -28,8 +28,9 @@ that, and there are guards that will fail the build if the split erodes.
   `.runsettings` `<TestCaseFilter>` works too; the csproj property is preferred because it needs no extra
   file and fails the build loudly on a typo instead of silently running everything.)
 - **Scale suite is opt-in.** `Category=Scale` tests spawn the real `julie-extract` or build large
-  fixtures. Run them with `scripts/test.sh scale` (or `all`) before a commit/PR, or when you touch the
-  indexing/extract path. They **skip** (not fail) if `.tools/julie-extract` is missing.
+  fixtures. Run them with `scripts/test.sh scale` / `scripts/test.ps1 scale` (or `all`) before a
+  commit/PR, or when you touch the indexing/extract path. They **skip** (not fail) if
+  `.tools/julie-extract` is missing.
 
 Use the wrapper, not raw `dotnet test`, unless you have a reason:
 
@@ -37,6 +38,14 @@ Use the wrapper, not raw `dotnet test`, unless you have a reason:
 scripts/test.sh         # fast suite + a wall-clock budget tripwire (<30s)
 scripts/test.sh scale   # scale suite only
 scripts/test.sh all     # both
+```
+
+Windows PowerShell mirrors exist for beta-critical scripts:
+
+```powershell
+scripts/test.ps1
+scripts/test.ps1 scale
+scripts/test.ps1 all
 ```
 
 ### Rules when adding or changing tests
@@ -66,7 +75,9 @@ scripts/test.sh all     # both
   item in [`Miller.Server.csproj`](src/Miller.Server/Miller.Server.csproj)) because production locates it
   at `AppContext.BaseDirectory/.tools` (`WorkspaceContext.ToolsRoot`), NOT the repo. A no-restore machine
   still builds; the runtime then fails loudly with the restore-script message. To build from source, use
-  `MILLER_JULIE_SOURCE=/path/to/julie-extractors scripts/restore-julie-extract.sh --from-source`.
+  `MILLER_JULIE_SOURCE=/path/to/julie-extractors scripts/restore-julie-extract.sh --from-source`
+  or, on Windows, `$env:MILLER_JULIE_SOURCE='C:\path\to\julie-extractors';
+  scripts/restore-julie-extract.ps1 -FromSource`.
 
 ## Server host & startup
 
@@ -85,13 +96,14 @@ scripts/test.sh all     # both
 - **CLI vs server (load-bearing branch).** The same `miller` binary is both the MCP stdio server and a one-shot
   CLI. `Program.cs` branches at the very top (before any filesystem touch / host build) on
   [`CliDispatch.IsCliInvocation`](src/Miller.Server/Cli/CliDispatch.cs): **no args OR `serve` → MCP host**
-  (the historical default; stdio purity preserved), **any other verb → `CliDispatch.Run`** which loads the
-  current workspace's `symbols.db` via `RepositoryIndexLoader` and calls the SAME pure tool cores the server
-  exposes (`SearchTool.Run`, `InspectTool.Run`, `WorkspaceRender`, …), then exits. The CLI OWNS stdout — it does
-  NOT start Serilog file logging or any background service. `mcp-config.json` launches the server with the
-  explicit `-- serve` (cross-platform; no shell script). Build version is single-sourced in
-  `Directory.Build.props` (`<Version>` + git short SHA → `MillerVersion.Current`), surfaced in MCP
-  `ServerInfo.Version`, `miller version`, and the `workspace status` header.
+  (the historical default; stdio purity preserved), **any other verb → `CliDispatch.Run`** and exits. Read verbs
+  load the current workspace's `symbols.db` through the same pure tool cores the server exposes (`SearchTool.Run`,
+  `InspectTool.Run`, `WorkspaceRender`, …); lifecycle verbs such as `workspace open/remove` use the registry and
+  refresh paths; `version`/`help` do not load an index. The CLI OWNS stdout — it does NOT start Serilog file
+  logging or any background service. `mcp-config.json` launches the server with the explicit `-- serve`
+  (cross-platform; no shell script). Build version is single-sourced in `Directory.Build.props` (`<Version>` + git
+  short SHA → `MillerVersion.Current`), surfaced in MCP `ServerInfo.Version`, `miller version`, and the `workspace`
+  status header.
 - **Logging.** All processes append to ONE shared daily pair (`.miller/logs/miller-<YYYYMMDD>.log` +
   `.jsonl`, Serilog `shared:true`); `pid`/`role`/`cid` are line properties, not file-name segments. There
   is no per-pid file and no startup reaper (both removed 2026-05-31; see the superseded D1/D6 notes in
@@ -119,5 +131,6 @@ scripts/test.sh all     # both
 ## AGENTS.md is generated
 
 `AGENTS.md` is a byte-for-byte mirror of THIS file. Edit `CLAUDE.md` only, then run
-`scripts/sync-agents.sh` to regenerate `AGENTS.md`. A pre-commit hook (installed via
-`scripts/install-hooks.sh`, which sets `core.hooksPath=.githooks`) fails the commit if they diverge.
+`scripts/sync-agents.sh` or `scripts/sync-agents.ps1` to regenerate `AGENTS.md`. A pre-commit hook
+(installed via `scripts/install-hooks.sh` or `scripts/install-hooks.ps1`, which sets
+`core.hooksPath=.githooks`) fails the commit if they diverge.

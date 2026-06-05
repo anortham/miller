@@ -39,8 +39,9 @@ below was written before the live-data check; these notes win on conflict):
 2. **`regions_fts.body` stores the `CodeTokenizer` token stream, not raw text** — exactly like the symbol arm
    (`SearchIndexWriter`), so FTS re-splits only on inserted spaces and DF/TF/doc_len match Miller's BM25.
    Store the **raw** region text in a separate `search_regions` column for snippet display only.
-3. **Region build is gated by its OWN flag with size caps, separate from `MILLER_SEARCH_SIDECAR`.** A schema-v3
-   bump would otherwise make region build+storage default behavior on every refresh. Add e.g.
+3. **Region build is gated by its OWN flag with size caps, separate from `MILLER_SEARCH_SIDECAR`.** Adding the
+   region tables to the shared sidecar schema would otherwise make region build+storage default behavior on every
+   refresh. Add e.g.
    `MILLER_REGION_INDEX` (default OFF until a Scale build-cost probe clears), and cap/skip oversized
    `string_literal` bodies (numeric byte budget) so a repo full of huge string constants can't blow up
    `search.db`.
@@ -145,7 +146,7 @@ based, `metadata_json = {embedded_language, host_node_kind}`.
 
 ## Design
 
-### Storage: new region tables in `search.db` (`SearchIndexWriter.SchemaVersion` 2 → 3)
+### Storage: region tables in `search.db` (introduced at `SearchIndexWriter.SchemaVersion` 3)
 
 Added to the existing sidecar schema (built/owned by the lock-holding writer, opened read-only by readers and
 by Eros):
@@ -171,11 +172,12 @@ CREATE TABLE search_regions(
 CREATE INDEX ix_search_regions_kind ON search_regions(kind);
 
 -- meta gains region_count + region_avgdl for BM25 over the region corpus (own corpus stats, separate from
--- the symbol corpus). schema_version bumped to 3.
+-- the symbol corpus). These columns were introduced when schema_version moved 2→3.
 ```
 
-Bumping `SchemaVersion` 2→3 means any existing `search.db` (symbol-only) is rejected by
-`FtsSymbolSearchIndex.Open`/the region reader and rebuilt — the same revision/schema gate already in place.
+Bumping `SchemaVersion` 2→3 meant any existing `search.db` (symbol-only) was rejected by
+`FtsSymbolSearchIndex.Open`/the region reader and rebuilt — the same revision/schema gate remains in place for
+later sidecar rebuilds.
 
 ### Build: slice region text under the writer lock (`SearchIndexWriter`, both writer paths)
 
@@ -244,7 +246,7 @@ search("foo", mode=symbol)                            → symbol search (unchang
 build (leader / external refresh, under SingleWriterLock):
   SqliteSourceRegionReader.Read(db) → spans
   → read file bytes (freshness via content_hash) → UTF-8 slice region text
-  → regions_fts + search_regions + meta(region_count, region_avgdl)   [SearchIndexWriter, schema v3]
+  → regions_fts + search_regions + meta(region_count, region_avgdl)   [SearchIndexWriter, current schema]
 ```
 
 ### Error handling / self-heal (fail **closed** for explicit requests)
@@ -253,7 +255,7 @@ build (leader / external refresh, under SingleWriterLock):
   (region text is only indexed in the sidecar). So:
   - Sidecar disabled (`MILLER_SEARCH_SIDECAR=0`) → `regions=` returns an actionable error: "region search
     requires the search sidecar (currently disabled); unset MILLER_SEARCH_SIDECAR and refresh."
-  - Region table missing / `schema_version` < 3 / revision-stale → actionable "region index is stale/missing;
+  - Region table missing / too-old `schema_version` / revision-stale → actionable "region index is stale/missing;
     refreshing" error, and on the **leader** trigger a rebuild (the build path exists). **Never** silently
     return unfiltered or symbol results — that would be a false answer to a scoped query.
 - The `has_doc` **annotation** (optional, additive) stays best-effort: a read failure simply omits the flag.
@@ -297,7 +299,7 @@ build (leader / external refresh, under SingleWriterLock):
 ## Acceptance criteria
 
 - [x] `SearchIndexWriter` builds `regions_fts` + `search_regions` (kinds: comment, doc_comment, string_literal)
-      by slicing UTF-8 region text from disk under the writer lock, on both writer paths; `SchemaVersion` = 3;
+      by slicing UTF-8 region text from disk under the writer lock, on both writer paths; current sidecar schema;
       stale-`content_hash` files skipped.
 - [x] `search "<q>" regions=<kinds>` returns BM25-ranked region hits whose text is inside those region kinds,
       with `path:line`, snippet, kind, and containing symbol; excludes same-token code occurrences.

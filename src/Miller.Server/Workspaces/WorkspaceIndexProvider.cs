@@ -357,12 +357,54 @@ public sealed class WorkspaceIndexProvider
         }
     }
 
-    // Resolve the search index for a cache key: the on-disk sidecar when enabled + present + revision-fresh
-    // (Phase 3), else the in-memory backend from <paramref name="loadInMemory"/> (the lean projection for a
-    // registered workspace; the holder's full index for the current one). Single-flight + revision-keyed so a
-    // miss loads once and a revision bump evicts the prior entry.
+    // Resolve the search index for a cache key: the on-disk sidecar when enabled + present + revision-fresh,
+    // else the in-memory backend from <paramref name="loadInMemory"/> (the lean projection for a registered
+    // workspace; the holder's full index for the current one). A fallback cache entry is still repairable at the
+    // same extract revision because the writer can build search.db after the first read observes it missing.
     private CachedSymbolSearch GetOrLoadSymbolSearch(
         CacheKey key, string symbolsDbPath, Func<ISymbolLookupIndex> loadInMemory)
+    {
+        if (_sidecar.Enabled)
+        {
+            CachedSymbolSearch? cachedSidecar = TryGetCachedSidecarSymbolSearch(key);
+            if (cachedSidecar is not null)
+                return cachedSidecar;
+
+            FtsSymbolSearchIndex? sidecarIndex = _sidecar.TryOpen(symbolsDbPath, key.Revision);
+            if (sidecarIndex is not null)
+                return ReplaceSymbolSearchCache(key, new CachedSymbolSearch(sidecarIndex, IsSidecar: true));
+        }
+
+        return GetOrAddSymbolSearchCache(key, () => new CachedSymbolSearch(loadInMemory(), IsSidecar: false));
+    }
+
+    private CachedSymbolSearch? TryGetCachedSidecarSymbolSearch(CacheKey key)
+    {
+        Lazy<CachedSymbolSearch>? lazy;
+        lock (_cacheGate)
+            _symbolSearchCache.TryGetValue(key, out lazy);
+
+        if (lazy is null || !lazy.IsValueCreated)
+            return null;
+
+        CachedSymbolSearch cached = lazy.Value;
+        return cached.IsSidecar ? cached : null;
+    }
+
+    private CachedSymbolSearch ReplaceSymbolSearchCache(CacheKey key, CachedSymbolSearch value)
+    {
+        var lazy = new Lazy<CachedSymbolSearch>(() => value, LazyThreadSafetyMode.ExecutionAndPublication);
+        CachedSymbolSearch cached = lazy.Value;
+        lock (_cacheGate)
+        {
+            _symbolSearchCache[key] = lazy;
+            EvictOtherEntriesForWorkspaceUnderLock(_symbolSearchCache, key);
+        }
+
+        return cached;
+    }
+
+    private CachedSymbolSearch GetOrAddSymbolSearchCache(CacheKey key, Func<CachedSymbolSearch> load)
     {
         Lazy<CachedSymbolSearch> lazy;
         lock (_cacheGate)
@@ -370,8 +412,7 @@ public sealed class WorkspaceIndexProvider
             if (!_symbolSearchCache.TryGetValue(key, out lazy!))
             {
                 lazy = new Lazy<CachedSymbolSearch>(
-                    () => new CachedSymbolSearch(
-                        _sidecar.TryOpen(symbolsDbPath, key.Revision) ?? loadInMemory()),
+                    load,
                     LazyThreadSafetyMode.ExecutionAndPublication);
                 _symbolSearchCache[key] = lazy;
                 EvictOtherEntriesForWorkspaceUnderLock(_symbolSearchCache, key);
@@ -575,7 +616,7 @@ public sealed class WorkspaceIndexProvider
 
     private sealed record CachedIndex(MillerRepositoryIndex Index, SmartTargetResolver Resolver);
 
-    private sealed record CachedSymbolSearch(ISymbolLookupIndex Index);
+    private sealed record CachedSymbolSearch(ISymbolLookupIndex Index, bool IsSidecar);
 
     private sealed record CachedContentSearch(ContentSearchProjection Index);
 

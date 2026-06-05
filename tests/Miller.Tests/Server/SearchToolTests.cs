@@ -212,6 +212,25 @@ public sealed class SearchToolTests
     }
 
     [Fact]
+    public void Run_FileMode_HidesImportAndModuleNoise()
+    {
+        var index = SymbolSearchProjection.Build([
+            Symbol(0, "sym-import", "Text", "import",
+                "src/Miller.Server/Tools/SearchTool.cs", 1),
+            Symbol(1, "sym-module", "Tools", "module",
+                "src/Miller.Server/Tools/SearchTool.cs", 2),
+            Symbol(2, "sym-file-hit", "SearchTool", "class",
+                "src/Miller.Server/Tools/SearchTool.cs", 42),
+        ]);
+
+        string output = SearchTool.Run(index, "SearchTool.cs", SearchToolMode.File, limit: 10,
+            excludeTests: null, json: false, out int count);
+
+        Assert.Equal(1, count);
+        Assert.Equal("SearchTool  class  src/Miller.Server/Tools/SearchTool.cs:42", output);
+    }
+
+    [Fact]
     public void Run_AutoMode_RoutesPathLikeQueryToFileSearch()
     {
         var index = SymbolSearchProjection.Build([
@@ -404,6 +423,60 @@ public sealed class SearchToolTests
             excludeTests: null, json: false, out _);
 
         Assert.Contains("tests/auth/AuthServiceTests.cs", output);
+    }
+
+    [Fact]
+    public void Run_NaturalLanguagePhrase_HidesImportAndModuleNoise()
+    {
+        var index = new StubSymbolSearchIndex(
+            (Symbol(0, "import-row", "collapsed-trigram", "import", "src/Imports.cs", 1), 10.0),
+            (Symbol(1, "module-row", "collapsed-trigram", "module", "src/Module.cs", 1), 9.0),
+            (Symbol(2, "class-row", "CollapsedTrigramDesign", "class", "src/SearchDesign.cs", 12), 1.0));
+
+        string output = SearchTool.Run(index, "collapsed trigram", SearchToolMode.Auto, limit: 10,
+            excludeTests: null, json: false, out int count);
+
+        Assert.Equal(1, count);
+        Assert.Contains("CollapsedTrigramDesign  class  src/SearchDesign.cs:12", output);
+        Assert.DoesNotContain("src/Imports.cs", output);
+        Assert.DoesNotContain("src/Module.cs", output);
+    }
+
+    [Fact]
+    public void Run_NaturalLanguagePhrase_OverfetchesPastImportAndModuleNoise()
+    {
+        var rows = Enumerable.Range(0, 75)
+            .Select(i => (
+                Symbol(i, $"import-row-{i}", "collapsed-trigram", "import", $"src/Imports{i}.cs", 1),
+                Score: 100.0 - i))
+            .Append((
+                Symbol(75, "class-row", "CollapsedTrigramDesign", "class", "src/SearchDesign.cs", 12),
+                Score: 1.0))
+            .ToArray();
+        var index = new StubSymbolSearchIndex(rows);
+
+        string output = SearchTool.Run(index, "collapsed trigram", SearchToolMode.Auto, limit: 10,
+            excludeTests: null, json: false, out int count);
+
+        Assert.Equal(1, count);
+        Assert.Contains("CollapsedTrigramDesign  class  src/SearchDesign.cs:12", output);
+    }
+
+    [Fact]
+    public void Run_SingleIdentifierQuery_KeepsImportAndModuleRows()
+    {
+        var index = new StubSymbolSearchIndex(
+            (Symbol(0, "import-row", "React", "import", "src/App.tsx", 1), 10.0),
+            (Symbol(1, "module-row", "React", "module", "src/react.ts", 1), 9.0),
+            (Symbol(2, "class-row", "ReactWidget", "class", "src/ReactWidget.cs", 12), 1.0));
+
+        string output = SearchTool.Run(index, "React", SearchToolMode.Auto, limit: 10,
+            excludeTests: null, json: false, out int count);
+
+        Assert.Equal(3, count);
+        Assert.Contains("React  import  src/App.tsx:1", output);
+        Assert.Contains("React  module  src/react.ts:1", output);
+        Assert.Contains("ReactWidget  class  src/ReactWidget.cs:12", output);
     }
 
     [Fact]

@@ -359,4 +359,24 @@ public sealed class SymbolSearchSidecarTests : IDisposable
         var sidecar = new SymbolSearchSidecar(enabled: true);
         Assert.Null(sidecar.TryOpen(_symbolsDbPath, expectedRevision: 7));
     }
+
+    [Fact]
+    public void TryOpen_EnabledButFtsTablesDamaged_ReturnsNullWithoutThrowing()
+    {
+        WriteSearchDb(revision: 7);
+        using (var rw = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _searchDbPath, Mode = SqliteOpenMode.ReadWrite, Pooling = false,
+        }.ToString()))
+        {
+            rw.Open();
+            using var cmd = rw.CreateCommand();
+            cmd.CommandText = "DROP TABLE symbols_fts;";
+            cmd.ExecuteNonQuery();
+        }
+        SqliteConnection.ClearAllPools();
+
+        var sidecar = new SymbolSearchSidecar(enabled: true);
+        Assert.Null(sidecar.TryOpen(_symbolsDbPath, expectedRevision: 7));
+    }
 }

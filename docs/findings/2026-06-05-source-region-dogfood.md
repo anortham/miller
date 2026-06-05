@@ -1,7 +1,7 @@
 # Source-Region Search Dogfood
 
 - **Date:** 2026-06-05
-- **Miller build:** `0.1.0+e9b5a35c506c`
+- **Miller build used for dogfood:** `0.1.0+e9b5a35c506c`
 - **Feature:** explicit `search --regions comment|doc_comment|string_literal`
 - **Decision:** keep region indexing opt-in for beta
 
@@ -20,7 +20,7 @@ Keep the beta behavior opt-in until quality and size tradeoffs are better unders
 
 ## Current Miller Workspace
 
-The restarted Miller binary is current:
+The restarted Miller binary was current for the source-region feature commit used in this dogfood run:
 
 ```text
 0.1.0+e9b5a35c506c
