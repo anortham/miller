@@ -1,4 +1,7 @@
+using System.ComponentModel;
+using System.Reflection;
 using Miller.Server;
+using Miller.Server.Tools;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -11,12 +14,34 @@ namespace Miller.Tests.Server;
 /// </summary>
 public sealed class AgentInstructionsTests
 {
+    private const int MaxServerInstructionsChars = 12_000;
+    private const int MaxToolDescriptionChars = 900;
+    private const int MaxParameterDescriptionChars = 250;
+
     [Fact]
     public void Load_ReturnsNonEmptyInstructions()
     {
         string instructions = AgentInstructions.Load();
         Assert.False(string.IsNullOrWhiteSpace(instructions));
         Assert.Contains("Search before reading", instructions); // the lead behavioral rule
+    }
+
+    [Fact]
+    public void Load_StaysUnderClaudeCodeInstructionBudget()
+    {
+        string instructions = AgentInstructions.Load();
+        Assert.True(
+            instructions.Length <= MaxServerInstructionsChars,
+            $"Server instructions are {instructions.Length} chars; keep them under {MaxServerInstructionsChars} for MCP clients with instruction limits.");
+    }
+
+    [Fact]
+    public void Load_PinsBehavioralAdoptionLanguage()
+    {
+        string instructions = AgentInstructions.Load();
+        Assert.Contains("Reach for a Miller tool before a raw", instructions);
+        Assert.Contains("Do not use `grep`/`find`/`rg` when a Miller tool fits", instructions);
+        Assert.Contains("Do not read a whole file before `inspect`", instructions);
     }
 
     [Theory]
@@ -61,5 +86,57 @@ public sealed class AgentInstructionsTests
         Assert.Contains("regions=comment|doc_comment|string_literal", instructions);
         Assert.Contains("MILLER_REGION_INDEX=1", instructions);
         Assert.Contains("has_doc", instructions);
+    }
+
+    [Fact]
+    public void Load_DocumentsSubagentToolPrimer()
+    {
+        string instructions = AgentInstructions.Load();
+        Assert.Contains("Subagent Dispatching", instructions);
+        Assert.Contains("Code Intelligence Tools (use instead of Grep/Glob/Read)", instructions);
+        Assert.Contains("Do NOT fall back to Glob/Read/Grep chains", instructions);
+    }
+
+    [Theory]
+    [MemberData(nameof(ToolMethods))]
+    public void ToolDescriptions_StayWithinClaudeCodeBudgets(MethodInfo method)
+    {
+        string methodName = $"{method.DeclaringType?.Name}.{method.Name}";
+        string? description = method.GetCustomAttribute<DescriptionAttribute>()?.Description;
+        Assert.False(string.IsNullOrWhiteSpace(description), $"{methodName} is missing a tool description.");
+        Assert.True(
+            description!.Length <= MaxToolDescriptionChars,
+            $"{methodName} description is {description.Length} chars; keep it under {MaxToolDescriptionChars}.");
+
+        foreach (ParameterInfo parameter in method.GetParameters())
+        {
+            string? parameterDescription = parameter.GetCustomAttribute<DescriptionAttribute>()?.Description;
+            Assert.False(
+                string.IsNullOrWhiteSpace(parameterDescription),
+                $"{methodName}.{parameter.Name} is missing a parameter description.");
+            Assert.True(
+                parameterDescription!.Length <= MaxParameterDescriptionChars,
+                $"{methodName}.{parameter.Name} description is {parameterDescription.Length} chars; keep it under {MaxParameterDescriptionChars}.");
+        }
+    }
+
+    public static TheoryData<MethodInfo> ToolMethods()
+    {
+        return new TheoryData<MethodInfo>
+        {
+            ToolMethod<SearchTool>(nameof(SearchTool.Search)),
+            ToolMethod<InspectTool>(nameof(InspectTool.Inspect)),
+            ToolMethod<ContextTool>(nameof(ContextTool.Context)),
+            ToolMethod<TraceTool>(nameof(TraceTool.Trace)),
+            ToolMethod<ImpactTool>(nameof(ImpactTool.Impact)),
+            ToolMethod<EditTool>(nameof(EditTool.Edit)),
+            ToolMethod<WorkspaceTool>(nameof(WorkspaceTool.Workspace)),
+        };
+    }
+
+    private static MethodInfo ToolMethod<TTool>(string name)
+    {
+        return typeof(TTool).GetMethod(name)
+            ?? throw new InvalidOperationException($"Could not find {typeof(TTool).Name}.{name}.");
     }
 }

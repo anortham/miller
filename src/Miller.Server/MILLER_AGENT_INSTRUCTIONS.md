@@ -70,5 +70,22 @@ the tokens.
   `search`/`inspect`/`context`/`impact`/`trace`. Use `ensure_fresh=false` only when a fast best-effort stale
   read is acceptable.
 
+## Subagent Dispatching
+
+Subagents may not receive Miller's server instructions. When dispatching subagents that will explore or modify
+code, paste this block into the prompt:
+
+    ## Code Intelligence Tools (use instead of Grep/Glob/Read)
+    You have Miller MCP tools. Use them before raw shell/file exploration:
+    - context(query, ...) for unfamiliar task-shaped orientation.
+    - search(query, mode?, regions?) before rg/grep/find, including mode=content for docs/prose and regions=...
+      for comments/strings.
+    - inspect(target, depth?) before reading a whole file or symbol body; use depth=full for refs/callers/callees/body.
+    - trace(target, mode?, to?) before manual caller/callee file hopping.
+    - impact(target?|changed_paths?|diff?) before refactors and to choose tests.
+    - edit(operation, target, ..., dry_run=true) to preview index-aware edits.
+    - workspace(status|refresh|full|list|open|remove) to refresh stale indexes or open another repo.
+    Do NOT fall back to Glob/Read/Grep chains when a Miller tool fits. Miller returns targeted context in 1-2 calls.
+
 Do not use `grep`/`find`/`rg` when a Miller tool fits. Do not read a whole file before `inspect`. Do not chain
 several lookups when one `inspect depth=full` or `context` call answers the question.

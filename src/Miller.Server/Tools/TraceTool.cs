@@ -57,7 +57,7 @@ public sealed class TraceTool
         "shows the shortest dependency path from target to 'to'; mode=bridge follows the cross-language chain " +
         "(TS call to endpoint to DTO to entity to table) with a confidence band on each link. Reduced-confidence " +
         "links are flagged [verb-unknown] / [ambiguous] — never trust an unflagged link more than a flagged one. " +
-        "Pass format=full to also see the signals behind each bridge link.")]
+        "Use before manual caller/callee file hopping. Pass format=full to also see the signals behind each bridge link.")]
     public string Trace(
         [Description("A symbol name/id or a file path (smart-resolved) — where the trace starts.")]
         string target,

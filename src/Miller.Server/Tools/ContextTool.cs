@@ -48,8 +48,9 @@ public sealed partial class ContextTool
     [Description(
         "Assemble a token-budgeted bundle of the most relevant code for a task or question. Give a description " +
         "of what you're working on — optionally a failing test or stack trace — and get a bounded set of the " +
-        "most relevant symbols and signatures with provenance. Use for orientation in an unfamiliar area; if " +
-        "you already know the symbol, use inspect. Returns compact text by default; pass format=json to chain.")]
+        "most relevant symbols and signatures with provenance. Use for orientation in an unfamiliar area before " +
+        "broad shell/file exploration; if you already know the symbol, use inspect. Returns compact text by default; " +
+        "pass format=json to chain.")]
     public string Context(
         [Description("The task or question to anchor the bundle on.")] string query,
         [Description("Hard bound on the returned bundle size, in estimated tokens. Default 4000.")]
