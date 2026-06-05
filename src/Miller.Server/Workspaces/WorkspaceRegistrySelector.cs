@@ -1,4 +1,5 @@
 using Miller.Indexing;
+using Miller.Server.Tools;
 
 namespace Miller.Server.Workspaces;
 
@@ -22,6 +23,19 @@ internal static class WorkspaceRegistrySelector
         if (exactDisplayMatches.Length > 1)
             throw Ambiguous(trimmed, exactDisplayMatches);
 
+        if (Path.IsPathRooted(trimmed))
+        {
+            var pathMatches = rows
+                .Where(row => WorkspaceSafety.IsLiveWorkspace(trimmed, row.CanonicalRoot))
+                .GroupBy(row => row.WorkspaceId, StringComparer.Ordinal)
+                .Select(group => group.First())
+                .ToArray();
+            if (pathMatches.Length == 1)
+                return pathMatches[0];
+            if (pathMatches.Length > 1)
+                throw Ambiguous(trimmed, pathMatches);
+        }
+
         var prefixMatches = rows
             .Where(row =>
                 row.WorkspaceId.StartsWith(trimmed, StringComparison.OrdinalIgnoreCase) ||
@@ -36,7 +50,7 @@ internal static class WorkspaceRegistrySelector
 
         throw new KeyNotFoundException(
             $"unknown workspace selector '{trimmed}'. Use workspace(operation=\"list\") to see display IDs; " +
-            "selectors accept display_id, unique prefix, full workspace_id, current, or primary.");
+            "selectors accept display_id, unique prefix, full workspace_id, registered root path, current, or primary.");
     }
 
     private static KeyNotFoundException Ambiguous(string selector, IReadOnlyList<WorkspaceRegistryRow> matches)

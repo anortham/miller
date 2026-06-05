@@ -80,7 +80,7 @@ public sealed class LiveBridgeTraceTests
         Assert.Contains("AppSetting", mapNames);
         Assert.Contains("AppSettingDto", mapNames);
 
-        // ── Leg 1 (route): TS axios.get('/api/appsettings/{id}') ⇒ Hits the [controller]-expanded GET endpoint.
+        // ── Leg 1 (route): TS axios.get<AppSettingDto>('/api/appsettings/{id}') ⇒ Hits the [controller]-expanded GET endpoint.
         // axios.get is a verb-KNOWN carrier ⇒ RouteVerbMatch structural breadcrumb ⇒ High band, NOT verb-unknown.
         string handlerId = FindSymbolId(index, "GetById", "method");
         var hits = SingleEdgeOfKind(graph, handlerId, BridgeKind.Hits);
@@ -88,9 +88,9 @@ public sealed class LiveBridgeTraceTests
         Assert.False(hits.IsVerbUnknown, "axios.get supplies a known verb; this route edge must not be verb-unknown");
         Assert.False(hits.HasAmbiguousName);
         Assert.Equal(ConfidenceBand.High, hits.Band);
-        // The client side is the normalized route — the [controller] token expanded to "appsettings", {id} → {}.
-        string routeDisplay = EndpointDisplayOf(graph, hits, EndpointSide.Source);
-        Assert.Contains("appsettings", routeDisplay, StringComparison.OrdinalIgnoreCase);
+        // The client side is the containing TS function, not the synthetic route node, so agents start from useful code.
+        string clientDisplay = EndpointDisplayOf(graph, hits, EndpointSide.Source);
+        Assert.Equal("fetchAppSetting", clientDisplay);
 
         // ── End-to-end render proof: the entity→table bridge must render through the real TraceTool.Run with its band.
         var resolver = new SmartTargetResolver(index);
@@ -104,7 +104,7 @@ public sealed class LiveBridgeTraceTests
         _output.WriteLine("DISCIPLINED FIXTURE — known bridge set verified:");
         _output.WriteLine($"  Leg3 StoredIn: AppSetting -> AppSettings   band={storedIn.Band} score={Fmt(storedIn.Score)}");
         _output.WriteLine($"  Leg2 MapsTo:   {mapNames[0]} <-> {mapNames[1]}   band={mapsTo.Band} score={Fmt(mapsTo.Score)}");
-        _output.WriteLine($"  Leg1 Hits:     {routeDisplay} -> GetById   band={hits.Band} score={Fmt(hits.Score)} verbUnknown={hits.IsVerbUnknown}");
+        _output.WriteLine($"  Leg1 Hits:     {clientDisplay} -> GetById   band={hits.Band} score={Fmt(hits.Score)} verbUnknown={hits.IsVerbUnknown}");
         _output.WriteLine("  Rendered (trace bridge AppSetting):");
         _output.WriteLine(rendered);
     }
@@ -334,7 +334,8 @@ public sealed class LiveBridgeTraceTests
             }
             """);
 
-        // TS client: axios.get / axios.post to the same routes (Leg 1 frontend side; verb-known carriers).
+        // TS client: typed axios.get<T> / axios.post to the same routes (Leg 1 frontend side; verb-known carriers).
+        // The generic GET shape pins the julie-extract 2.1.2 TypeScript URL-literal persistence fix.
         File.WriteAllText(Path.Combine(ts, "appSettings.api.ts"), """
             import axios from "axios";
 
@@ -345,7 +346,7 @@ public sealed class LiveBridgeTraceTests
             }
 
             export async function fetchAppSetting(id: number): Promise<AppSettingDto> {
-              const res = await axios.get(`/api/appsettings/${id}`);
+              const res = await axios.get<AppSettingDto>(`/api/appsettings/${id}`);
               return res.data;
             }
 

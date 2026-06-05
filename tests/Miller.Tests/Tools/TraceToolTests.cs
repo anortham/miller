@@ -329,6 +329,62 @@ public sealed class TraceToolTests
     }
 
     [Fact]
+    public void Bridge_RouteStringTarget_StartsFromClientSymbolForThatRoute()
+    {
+        var hits = MakeScored(
+            BridgeKind.Hits,
+            new EdgeRef("api/users/{}", "client", "web/api.ts", Resolved("client")),
+            SymbolRef("ep", "DismissUser", "src/UsersController.cs"),
+            ConfidenceBand.High, 0.9);
+
+        var index = BuildBridgeIndex(
+            new[]
+            {
+                ("client", "dismissUser", "web/api.ts", 5),
+                ("ep", "DismissUser", "src/UsersController.cs", 12),
+            },
+            new[] { hits },
+            new Dictionary<string, BridgeNode>(StringComparer.Ordinal));
+
+        string outp = TraceTool.Run(index, ResolverFor(index),
+            target: "/api/users/{userId}", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false,
+            out int emitted, out _);
+
+        Assert.Equal(1, emitted);
+        Assert.Contains("# trace bridge dismissUser", outp);
+        Assert.Contains("dismissUser  --route-->  DismissUser", outp);
+        Assert.DoesNotContain("is a file", outp);
+    }
+
+    [Fact]
+    public void Bridge_FilePathWithOneBridgeSymbol_StartsFromThatSymbol()
+    {
+        var mapsTo = MakeScored(
+            BridgeKind.MapsTo,
+            SymbolRef("dto", "UserDto", "src/UserDto.cs"),
+            SymbolRef("entity", "User", "src/User.cs"),
+            ConfidenceBand.High, 0.95);
+        var index = BuildBridgeIndex(
+            new[]
+            {
+                ("dto", "UserDto", "src/UserDto.cs", 1),
+                ("helper", "UserDtoHelper", "src/UserDto.cs", 20),
+                ("entity", "User", "src/User.cs", 1),
+            },
+            new[] { mapsTo },
+            new Dictionary<string, BridgeNode>(StringComparer.Ordinal));
+
+        string outp = TraceTool.Run(index, ResolverFor(index),
+            target: "src/UserDto.cs", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false,
+            out int emitted, out _);
+
+        Assert.Equal(1, emitted);
+        Assert.Contains("# trace bridge UserDto", outp);
+        Assert.Contains("UserDto  --CreateMap-->  User", outp);
+        Assert.DoesNotContain("is a file", outp);
+    }
+
+    [Fact]
     public void Bridge_RendersAmbiguousFlag()
     {
         var mapsTo = MakeScored(

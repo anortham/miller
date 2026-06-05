@@ -29,7 +29,7 @@ the tokens.
   and a refreshed `search.db` sidecar; set `MILLER_REGION_MAX_BYTES=<n>` before refresh to tune the per-region cap.
   If unavailable, region search fails closed instead of returning symbol results.
   Symbol hits may include `has_doc` when the symbol has `symbols.doc_comment`. Optional `workspace_id` accepts a
-  display ID, unique prefix, full ID, `current`, or `primary`; explicit `workspace_id` defaults
+  display ID, unique prefix, full ID, registered root path, `current`, or `primary`; explicit `workspace_id` defaults
   `ensure_fresh=true`.
 - `inspect` — A file or symbol you can already name. A file path lists its symbols; a symbol name gives its
   definition, signature, and docs. `depth=full` adds references, callers/callees, and the body. Use before
@@ -68,8 +68,8 @@ the tokens.
   re-run `impact` if the surface changed.
 - **Edit a symbol**: `inspect` it → `edit … dry_run` (the default) → `edit … apply=true`.
 - **Index looks stale**: `workspace refresh` (or `workspace full` to force a clean rebuild).
-- **Need another repo**: `workspace list` → pass the displayed ID (or a unique prefix) as `workspace_id` to
-  `search`/`inspect`/`context`/`impact`/`trace`. Use `ensure_fresh=false` only when a fast best-effort stale
+- **Need another repo**: `workspace list` → pass the displayed ID, a unique prefix, or the root path as
+  `workspace_id` to `search`/`inspect`/`context`/`impact`/`trace`. Use `ensure_fresh=false` only when a fast best-effort stale
   read is acceptable.
 
 ## Subagent Dispatching

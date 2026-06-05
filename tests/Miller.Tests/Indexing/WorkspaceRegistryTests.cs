@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
+using Miller.Server.Workspaces;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -258,6 +259,48 @@ public sealed class WorkspaceRegistryTests : IDisposable
         Assert.Equal(
             new[] { "ws-current", "ws-ready-a", "ws-ready-b", "ws-loaded", "ws-error", "ws-missing" },
             registry.List().Select(row => row.WorkspaceId));
+    }
+
+    [Fact]
+    public void Resolve_AcceptsRegisteredCanonicalRootPathAsSelector()
+    {
+        using var registry = WorkspaceRegistry.Open(_dbPath);
+        string root = Path.Combine(_dir, "workspace-a");
+        Directory.CreateDirectory(root);
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(root);
+        registry.UpsertSeen(
+            "ws-a",
+            "workspace-a-111111111111",
+            canonicalRoot,
+            Path.Combine(canonicalRoot, ".miller", "symbols.db"),
+            WorkspaceRegistryState.Ready,
+            Utc(1));
+
+        WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(registry, canonicalRoot);
+
+        Assert.Equal("ws-a", row.WorkspaceId);
+    }
+
+    [Fact]
+    public void Resolve_AcceptsRegisteredRootPathWithTrailingSeparator()
+    {
+        using var registry = WorkspaceRegistry.Open(_dbPath);
+        string root = Path.Combine(_dir, "workspace-b");
+        Directory.CreateDirectory(root);
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(root);
+        registry.UpsertSeen(
+            "ws-b",
+            "workspace-b-111111111111",
+            canonicalRoot,
+            Path.Combine(canonicalRoot, ".miller", "symbols.db"),
+            WorkspaceRegistryState.Ready,
+            Utc(1));
+
+        WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(
+            registry,
+            canonicalRoot + Path.DirectorySeparatorChar);
+
+        Assert.Equal("ws-b", row.WorkspaceId);
     }
 
     [Fact]

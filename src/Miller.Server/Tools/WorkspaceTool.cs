@@ -115,7 +115,7 @@ public sealed class WorkspaceTool
         "from scratch, list to see registered workspaces.")]
     public string Workspace(
         [Description("status|refresh|full|list|open|remove. Default status.")] string operation = "status",
-        [Description("Workspace selector: display_id, unique prefix, full id, current, or primary.")]
+        [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")]
         string? workspace_id = null,
         [Description("A workspace root path. Required for open; optional for status/refresh/full/remove.")]
         string? path = null,
@@ -635,7 +635,7 @@ public sealed class WorkspaceTool
     }
 
     private static string UnknownWorkspaceIdNote(string workspaceId) =>
-        $"unknown workspace selector '{workspaceId}'. Run workspace(operation=\"list\") to see display IDs, or " +
+        $"unknown workspace selector '{workspaceId}'. Run workspace(operation=\"list\") to see display IDs/root paths, or " +
         "workspace(operation=\"open\", path=\"/repo\") to register a workspace.";
 
     private static string UnknownWorkspacePathNote(string path) =>

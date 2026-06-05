@@ -64,7 +64,7 @@ public sealed class ImpactTool
         int max_depth = 2,
         [Description("Max impacted symbols to return. Default 100.")] int limit = 100,
         [Description("Output format: compact|json. Default compact.")] string format = "compact",
-        [Description("Workspace selector: display_id, unique prefix, full id, current, or primary.")] string? workspace_id = null,
+        [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")] string? workspace_id = null,
         [Description("Refresh a registered workspace before reading. Defaults true when workspace_id is supplied.")]
         bool? ensure_fresh = null)
     {

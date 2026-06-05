@@ -5,7 +5,7 @@ namespace Miller.Indexing;
 /// <see cref="JulieSchemaGate"/> (reading the DB's artifact_metadata) and <see cref="ExtractVersionMismatch"/>
 /// (cross-checking the extract report's artifact block) gate on these constants. The runtime gate is the
 /// schema/contract versions, NOT the product binary_version (D7 — product version and schema/contract version
-/// are orthogonal: julie-extract 2.1.1 ships schema/contract 2, and a future product bump that keeps the
+/// are orthogonal: julie-extract 2.1.2 ships schema/contract 2, and a future product bump that keeps the
 /// contract must not break Miller); <see cref="PinnedJulieExtractVersion"/> is the download pin only.
 /// </summary>
 internal static class MillerExtractContract
@@ -20,6 +20,6 @@ internal static class MillerExtractContract
     public const string ExpectedHashAlgorithm = "blake3";
 
     // Download pin only (restore-script + julie-pins.json target). This is the PRODUCT version,
-    // orthogonal to the runtime schema/contract gate above (D7): product 2.1.1 ships schema/contract 2.
-    public const string PinnedJulieExtractVersion = "2.1.1"; // julie-extractors release tag v2.1.1 (published 2026-06-05).
+    // orthogonal to the runtime schema/contract gate above (D7): product 2.1.2 ships schema/contract 2.
+    public const string PinnedJulieExtractVersion = "2.1.2"; // julie-extractors release tag v2.1.2 (published 2026-06-05).
 }

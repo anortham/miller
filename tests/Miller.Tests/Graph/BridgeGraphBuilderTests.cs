@@ -219,6 +219,72 @@ public sealed class BridgeGraphBuilderTests
     }
 
     [Fact]
+    public void Client_call_container_symbol_is_a_bridge_start_node()
+    {
+        var classSym = Type("sym-class", "ReportMenuController", "class", "Api.Controllers",
+            "MyraNext/MyraNext.Web/Controllers/ReportMenuController.cs");
+        var methodSym = Method("sym-put", "Put", "Task<ActionResult> Put(IEnumerable<ReportMenuGroup> menu)",
+            "ReportMenuController", "MyraNext/MyraNext.Web/Controllers/ReportMenuController.cs");
+        var tsFn = Type("sym-update-report-menu", "updateReportMenuOrder", "function",
+            file: "MyraNext/MyraNext.Web/ClientApp/src/services/api/reportMenuService.ts");
+        var symbols = new List<SymbolDetail> { classSym, methodSym, tsFn };
+
+        var annotations = new List<SymbolAnnotation>
+        {
+            new("sym-class", 0, "Route", "route", "Route(\"api/[controller]\")", "Route"),
+            new("sym-put", 0, "HttpPut", "httpput", "HttpPut", "HttpPut"),
+        };
+
+        var literal = MakeLiteral("/api/reportmenu", kind: "url", language: "typescript",
+            carrier: "axios.put", containingSymbolId: "sym-update-report-menu", spanStart: 0);
+
+        var graph = BridgeGraphBuilder.Build(symbols, [], [literal], annotations, []);
+
+        var fromClientFunction = graph.Incident("sym-update-report-menu");
+        var hits = Assert.Single(fromClientFunction, e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal("sym-update-report-menu", hits.Edge.SourceRef.SymbolId);
+        Assert.Equal("sym-put", hits.Edge.TargetRef.SymbolId);
+    }
+
+    [Fact]
+    public void Dotnet_web_resolution_ignores_generated_typescript_symbols_for_server_types()
+    {
+        var symbols = new List<SymbolDetail>
+        {
+            Type("cs-appsetting", "AppSetting", "class", "MyraNext.Core.Domain",
+                "MyraNext/MyraNext.Core/Domain/AppSetting.cs"),
+            Type("ts-appsetting-interface", "AppSetting", "interface", "Client.Models",
+                "MyraNext/MyraNext.Web/ClientApp/src/models/AppSetting.ts"),
+            Type("ts-appsetting-export", "AppSetting", "export", "Client.Models",
+                "MyraNext/MyraNext.Web/ClientApp/src/models/index.ts"),
+            Type("ts-appsetting-import", "AppSetting", "import", "Client.Pages",
+                "MyraNext/MyraNext.Web/ClientApp/src/pages/AppSettings.vue"),
+            Type("sym-class", "AppSettingsController", "class", "Api.Controllers",
+                "MyraNext/MyraNext.Web/Controllers/AppSettingsController.cs"),
+            Method("sym-post", "Post", "Task<ActionResult> Post(AppSetting appSetting)",
+                "AppSettingsController", "MyraNext/MyraNext.Web/Controllers/AppSettingsController.cs"),
+        };
+
+        var annotations = new List<SymbolAnnotation>
+        {
+            new("sym-class", 0, "Route", "route", "Route(\"api/[controller]\")", "Route"),
+            new("sym-post", 0, "HttpPost", "httppost", "HttpPost", "HttpPost"),
+        };
+
+        var dbSets = new List<DbSetProperty>
+        {
+            DbSet("AppSettings", "AppSetting", "MyraNext/MyraNext.Core/Persistence/MyraNextContext.cs"),
+        };
+
+        var graph = BridgeGraphBuilder.Build(symbols, [], [], annotations, dbSets);
+
+        Assert.Contains(graph.Incident("cs-appsetting"), e => e.Edge.Kind == BridgeKind.StoredIn);
+        var consumes = Assert.Single(graph.Incident("sym-post"), e => e.Edge.Kind == BridgeKind.Consumes);
+        Assert.Equal("cs-appsetting", consumes.Edge.TargetRef.SymbolId);
+        Assert.DoesNotContain(graph.Incident("ts-appsetting-interface"), e => e.Edge.Kind is BridgeKind.StoredIn or BridgeKind.Consumes);
+    }
+
+    [Fact]
     public void FromBody_honesty_a_route_primitive_param_does_not_produce_a_Consumes_edge()
     {
         var classSym = Type("sym-class", "ItemsController", "class", "Api.Controllers", "api/ItemsController.cs");

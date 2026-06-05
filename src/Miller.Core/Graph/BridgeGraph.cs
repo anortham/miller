@@ -62,20 +62,26 @@ public sealed class BridgeGraph
     // node id -> the scored edges incident on it, pre-sorted for deterministic traversal.
     private readonly IReadOnlyDictionary<string, ScoredEdge[]> _adjacency;
     private readonly IReadOnlyDictionary<string, BridgeNode> _nodes;
+    private readonly IReadOnlyList<ScoredEdge> _edges;
 
     private static readonly ScoredEdge[] NoEdges = [];
 
     private BridgeGraph(
         IReadOnlyDictionary<string, ScoredEdge[]> adjacency,
         IReadOnlyDictionary<string, BridgeNode> nodes,
+        IReadOnlyList<ScoredEdge> edges,
         BridgeCapabilityReport capabilityReport)
     {
         _adjacency = adjacency;
         _nodes = nodes;
+        _edges = edges;
         CapabilityReport = capabilityReport;
     }
 
     public BridgeCapabilityReport CapabilityReport { get; }
+
+    /// <summary>The unique scored bridge edges admitted to the graph, in deterministic order.</summary>
+    public IReadOnlyList<ScoredEdge> Edges => _edges;
 
     /// <summary>
     /// Build a bridge graph from <paramref name="scoredEdges"/> and a <paramref name="nodes"/> lookup. Each edge is
@@ -97,6 +103,7 @@ public sealed class BridgeGraph
 
         // Per-node deduped edge set; dedupe by a stable edge signature so the same correspondence is not double-counted.
         var byNode = new Dictionary<string, Dictionary<string, ScoredEdge>>(StringComparer.Ordinal);
+        var uniqueEdges = new Dictionary<string, ScoredEdge>(StringComparer.Ordinal);
 
         foreach (var edge in scoredEdges)
         {
@@ -111,6 +118,7 @@ public sealed class BridgeGraph
                 continue; // endpoint not in the node lookup — bound the graph to known nodes
 
             var signature = EdgeSignature(edge, sourceId, targetId);
+            uniqueEdges.TryAdd(signature, edge);
             AddIncident(byNode, sourceId, signature, edge);
             AddIncident(byNode, targetId, signature, edge);
         }
@@ -122,6 +130,7 @@ public sealed class BridgeGraph
         return new BridgeGraph(
             adjacency,
             new Dictionary<string, BridgeNode>(nodes, StringComparer.Ordinal),
+            uniqueEdges.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => kv.Value).ToArray(),
             capabilityReport ?? BridgeCapabilityReport.Empty);
     }
 

@@ -26,6 +26,7 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
         var createMaps = ReduceCreateMaps(context.TypeArguments);
         var endpoints = ReduceEndpoints(context.Symbols, context.Annotations);
         var clientCalls = ReduceClientCalls(context.Literals, context.SymbolsById, context.LiteralSites);
+        var serverTypeResolver = new SymbolResolver(context.Symbols.Where(IsCSharpUserType).ToArray());
 
         var evidenceCounts = new Dictionary<string, int>(StringComparer.Ordinal)
         {
@@ -45,11 +46,11 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
 
         var candidates = new List<CandidateEdge>();
         candidates.AddRange(EntityTableBridge.Resolve(
-            new EntityTableInput(context.DbSetProperties, DapperFromCandidates: []), context.Resolver));
+            new EntityTableInput(context.DbSetProperties, DapperFromCandidates: []), serverTypeResolver));
         candidates.AddRange(DtoEntityBridge.Resolve(
-            new DtoEntityInput(createMaps, Projections: [], FieldSources: null), context.Resolver));
+            new DtoEntityInput(createMaps, Projections: [], FieldSources: null), serverTypeResolver));
         candidates.AddRange(RouteBridge.Resolve(
-            new RouteBridgeInput(clientCalls, endpoints), context.Resolver));
+            new RouteBridgeInput(clientCalls, endpoints), serverTypeResolver));
 
         evidenceCounts["dotnet-web.candidates"] = candidates.Count;
         return BridgeProviderResult.ActiveResult(candidates, evidenceCounts);
@@ -175,6 +176,19 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
     private static bool IsClassKind(string kind) =>
         string.Equals(kind, "class", StringComparison.OrdinalIgnoreCase)
         || string.Equals(kind, "record", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsCSharpUserType(SymbolDetail symbol) =>
+        IsCSharpFile(symbol.FilePath) && IsUserTypeKind(symbol.Kind);
+
+    private static bool IsCSharpFile(string filePath) =>
+        filePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsUserTypeKind(string kind) =>
+        string.Equals(kind, "class", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(kind, "record", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(kind, "interface", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(kind, "struct", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(kind, "enum", StringComparison.OrdinalIgnoreCase);
 
     private static readonly string[] HttpVerbKeys =
     [

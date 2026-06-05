@@ -24,7 +24,7 @@ standalone packaged binary release.
 
 M0-M8 are complete. Miller has the default-on symbol search sidecar, workspace registry, cheap
 registered-workspace status/list paths, projection-specific `search` and summary `inspect`, content
-search, CLI verbs, and the `julie-extract` 2.1.1 source-region consumer.
+search, CLI verbs, and the `julie-extract` 2.1.2 source-region / TypeScript URL-literal consumer.
 
 ## Dashboard Boundary
 
@@ -40,7 +40,7 @@ status workspaces. It should read the workspace registry, telemetry DB, and ligh
 
 ### 1. Source Regions Closeout
 
-- [x] Implement the `julie-extract` 2.1.1 and `source_regions` consumer path.
+- [x] Implement the `julie-extract` 2.1.x and `source_regions` consumer path.
 - [x] Dogfood `MILLER_REGION_INDEX=1` on real repositories.
 - [x] Record region-search evidence: representative queries, result quality, build time, and
   `search.db` size delta. See `docs/findings/2026-06-05-source-region-dogfood.md`.
@@ -111,12 +111,12 @@ status workspaces. It should read the workspace registry, telemetry DB, and ligh
 
 ### 6. Packaging, Restore, And Install
 
-- [x] Verify `scripts/restore-julie-extract.sh` restores the pinned 2.1.1 binary on a clean machine
-  or clean checkout. Fresh macOS arm64 restore on 2026-06-05 downloaded v2.1.1, verified
-  sha256, and installed `julie-extract 2.1.1`.
-- [x] Verify `scripts/restore-julie-extract.ps1` restores the pinned 2.1.1 binary on Windows x64.
-  GitHub Actions run `27014619404` on 2026-06-05 restored the Windows x64 archive
-  before the Windows build and fast suite.
+- [x] Verify `scripts/restore-julie-extract.sh` restores the pinned binary on a clean machine
+  or clean checkout. Fresh macOS arm64 restore on 2026-06-05 downloaded v2.1.2, verified
+  sha256, and installed `julie-extract 2.1.2`.
+- [x] Verify `scripts/restore-julie-extract.ps1` restores the pinned binary on Windows x64.
+  GitHub Actions run `27014619404` on 2026-06-05 restored the Windows x64 2.1.1 archive
+  before the Windows build and fast suite; rerun Windows restore/test on the final 2.1.2 beta commit.
 - [x] Keep `scripts/julie-pins.json`, `PinnedJulieExtractVersion`, and contract tests in sync.
 - [x] Document MCP configuration and CLI install/run paths.
 - [x] Define beta package shape: source checkout beta with per-platform restore scripts.

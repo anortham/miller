@@ -241,9 +241,9 @@ public static class RouteBridge
         var callEvidence = new Evidence(call.FilePath, call.Line);
         var endpointEvidence = new Evidence(endpoint.FilePath, endpoint.Line);
 
-        // The client side is a route node (no symbol); the endpoint side is the resolved method symbol. Both refs are
-        // trivially Resolved so the scorer's name gates do not fire on the route bridge's structural endpoints.
-        var clientRef = RouteNode(callRoute.Route, call.FilePath);
+        // The client side is the containing frontend function when julie supplied one, falling back to a route node for
+        // legacy or malformed rows. This makes trace bridge useful from the symbol agents naturally start with.
+        var clientRef = ClientCallRef(call, callRoute.Route);
         var endpointRef = new EdgeRef(
             Display: endpointRoute.Route,
             SymbolId: endpoint.SymbolId,
@@ -325,10 +325,26 @@ public static class RouteBridge
         return new CandidateEdge(kind, endpointRef, dtoRef, [evidence], signals);
     }
 
+    /// <summary>The client endpoint of a Hits edge: the containing frontend symbol when known, or a route node fallback.</summary>
+    private static EdgeRef ClientCallRef(TsClientCall call, string route)
+    {
+        var symbolId = string.IsNullOrWhiteSpace(call.Literal.ContainingSymbolId)
+            ? null
+            : call.Literal.ContainingSymbolId;
+
+        if (symbolId is null)
+            return RouteNode(route, call.FilePath);
+
+        return new EdgeRef(
+            route,
+            symbolId,
+            call.FilePath,
+            new NameResolution(ResolutionStatus.Resolved, symbolId, 1));
+    }
+
     /// <summary>
-    /// A route endpoint of a Hits edge: a normalized route string, not a code symbol, so the ref is trivially
-    /// <see cref="ResolutionStatus.Resolved"/> with no symbol id (the route bridge's name gates are about the DTO
-    /// targets, not the route nodes).
+    /// A route endpoint fallback of a Hits edge: a normalized route string, not a code symbol, so the ref is trivially
+    /// <see cref="ResolutionStatus.Resolved"/> with no symbol id.
     /// </summary>
     private static EdgeRef RouteNode(string route, string filePath) =>
         new(route, SymbolId: null, FilePath: filePath, new NameResolution(ResolutionStatus.Resolved, null, 1));

@@ -59,7 +59,7 @@ public sealed class TraceTool
         "links are flagged [verb-unknown] / [ambiguous] — never trust an unflagged link more than a flagged one. " +
         "Use before manual caller/callee file hopping. Pass format=full to also see the signals behind each bridge link.")]
     public string Trace(
-        [Description("A symbol name/id or a file path (smart-resolved) — where the trace starts.")]
+        [Description("A symbol name/id where the trace starts. In bridge mode, route/table nodes and single-symbol files are also accepted.")]
         string target,
         [Description("Trace mode: auto (callers+callees) | path (shortest path to 'to') | bridge (provider-scoped cross-language chain). Default auto.")]
         string mode = "auto",
@@ -69,7 +69,7 @@ public sealed class TraceTool
         [Description("Max links/neighbours to return. Default 20.")] int limit = 20,
         [Description("Output format: compact|full. full adds the firing signals per bridge link. Default compact.")]
         string format = "compact",
-        [Description("Workspace selector: display_id, unique prefix, full id, current, or primary.")] string? workspace_id = null,
+        [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")] string? workspace_id = null,
         [Description("Refresh a registered workspace before reading. Defaults true when workspace_id is supplied.")]
         bool? ensure_fresh = null)
     {
@@ -231,9 +231,7 @@ public sealed class TraceTool
         emitted = 0;
         nodesVisited = 0;
 
-        // The bridge graph keys symbol-backed nodes by their symbol id, so resolve the target to a symbol id first.
-        // (A pure route/table node has no code symbol and is not a smart-resolvable start; symbols are the entry.)
-        if (!ResolveSymbol(index, resolver, target, out string startId, out string? note))
+        if (!ResolveBridgeStart(index, resolver, target, out string startId, out string? note))
             return note!;
 
         // A symbol with no incident bridge edges is not on any cross-language thread — whether it is absent from the
@@ -295,6 +293,182 @@ public sealed class TraceTool
 
         foreach (var note in report.Notes)
             sb.Append("bridge note: ").Append(note).Append('\n');
+    }
+
+    private static bool ResolveBridgeStart(
+        MillerRepositoryIndex index, SmartTargetResolver resolver, string target,
+        out string startId, out string? note)
+    {
+        startId = string.Empty;
+        note = null;
+
+        if (string.IsNullOrWhiteSpace(target))
+        {
+            note = "trace: a target symbol is required.";
+            return false;
+        }
+
+        if (TryResolveSyntheticBridgeNode(index.BridgeGraph, target, out startId))
+            return true;
+
+        if (TryResolveBridgeRouteTarget(index.BridgeGraph, target, out startId, out note))
+            return true;
+        if (note is not null)
+            return false;
+
+        switch (resolver.Resolve(target))
+        {
+            case TargetResolution.Symbol sym:
+                startId = sym.Value.SymbolId;
+                return true;
+
+            case TargetResolution.File file:
+                return ResolveBridgeFileStart(index, target, file.Path, out startId, out note);
+
+            case TargetResolution.Candidates cands:
+                note = RenderCandidatesNote(cands.Matches);
+                return false;
+
+            case TargetResolution.NotFound nf:
+                note = $"'{nf.Target}' not found. Try search to locate it.";
+                return false;
+
+            default:
+                note = "trace: unrecognized target resolution.";
+                return false;
+        }
+    }
+
+    private static bool TryResolveSyntheticBridgeNode(BridgeGraph graph, string target, out string startId)
+    {
+        startId = string.Empty;
+
+        var route = RouteNormalizer.FromClientCall("fetch", target).Route;
+        if (route.Length > 0)
+        {
+            string routeId = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, route);
+            if (graph.Contains(routeId))
+            {
+                startId = routeId;
+                return true;
+            }
+        }
+
+        var table = target.Trim();
+        if (table.Length > 0)
+        {
+            string tableId = BridgeGraph.SynthesizeId(BridgeNodeKind.DbTable, table);
+            if (graph.Contains(tableId))
+            {
+                startId = tableId;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryResolveBridgeRouteTarget(
+        BridgeGraph graph, string target, out string startId, out string? note)
+    {
+        startId = string.Empty;
+        note = null;
+
+        if (!target.Contains('/', StringComparison.Ordinal))
+            return false;
+
+        var route = RouteNormalizer.FromClientCall("fetch", target).Route;
+        if (route.Length == 0)
+            return false;
+
+        var starts = graph.Edges
+            .Where(e => e.Edge.Kind == BridgeKind.Hits && HitsRouteMatches(e.Edge, route))
+            .Select(e => BridgeGraph.NodeIdOf(e.Edge.SourceRef, e.Edge.Kind, EndpointSide.Source))
+            .Where(id => id is not null && graph.Contains(id))
+            .Cast<string>()
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToList();
+
+        if (starts.Count == 1)
+        {
+            startId = starts[0];
+            return true;
+        }
+
+        if (starts.Count > 1)
+            note = RenderBridgeRouteCandidatesNote(graph, route, starts);
+
+        return false;
+    }
+
+    private static bool HitsRouteMatches(CandidateEdge edge, string route) =>
+        string.Equals(edge.SourceRef.Display, route, StringComparison.Ordinal)
+        || string.Equals(edge.TargetRef.Display, route, StringComparison.Ordinal);
+
+    private static string RenderBridgeRouteCandidatesNote(
+        BridgeGraph graph, string route, IReadOnlyList<string> startIds)
+    {
+        var sb = new StringBuilder();
+        sb.Append("Multiple bridge starts match route '").Append(route)
+          .Append("' — pass a symbol name/id:\n");
+        foreach (var id in startIds)
+        {
+            var node = graph.Node(id);
+            sb.Append(node?.Display ?? id);
+            if (node?.FilePath is { Length: > 0 })
+                sb.Append("  ").Append(node.FilePath);
+            sb.Append('\n');
+        }
+        return sb.ToString().TrimEnd('\n');
+    }
+
+    private static bool ResolveBridgeFileStart(
+        MillerRepositoryIndex index, string target, string filePath,
+        out string startId, out string? note)
+    {
+        startId = string.Empty;
+        note = null;
+
+        var symbols = index.FindByFilePath(filePath);
+        if (symbols.Count == 0 && !index.IsIndexedFilePath(filePath))
+        {
+            note = $"'{target}' is not a bridge route/table node or indexed file. Try search to locate a symbol.";
+            return false;
+        }
+
+        var bridgeSymbols = symbols
+            .Where(s => index.BridgeGraph.Incident(s.SymbolId).Count > 0)
+            .OrderBy(s => s.StartLine)
+            .ThenBy(s => s.Name, StringComparer.Ordinal)
+            .ToList();
+
+        if (bridgeSymbols.Count == 1)
+        {
+            startId = bridgeSymbols[0].SymbolId;
+            return true;
+        }
+
+        if (bridgeSymbols.Count == 0)
+        {
+            note = $"'{target}' is a file, but no symbols in it are on a cross-language bridge. " +
+                   "Pass a symbol name/id, frontend route, or table name.";
+            return false;
+        }
+
+        note = RenderBridgeFileCandidatesNote(filePath, bridgeSymbols);
+        return false;
+    }
+
+    private static string RenderBridgeFileCandidatesNote(string filePath, IReadOnlyList<IndexedSymbol> matches)
+    {
+        var sb = new StringBuilder();
+        sb.Append("Multiple bridge-connected symbols in '").Append(filePath)
+          .Append("' — pass a symbol name/id:\n");
+        foreach (var s in matches)
+            sb.Append(s.Name).Append("  ").Append(s.Kind).Append("  ")
+              .Append(s.FilePath).Append(':').Append(s.StartLine).Append('\n');
+        return sb.ToString().TrimEnd('\n');
     }
 
     // "<source> --<verb>--> <target>  [flags]  <score> (Band)" — one scored bridge link.
