@@ -164,7 +164,8 @@ public sealed class FtsRegionSearchIndex : IRegionSearchIndex
                 region.RawText,
                 region.RegionId,
                 region.ContainingSymbolId,
-                region.ContainingSymbolName));
+                region.ContainingSymbolName,
+                region.Language));
         }
 
         if (hits.Count == 0)

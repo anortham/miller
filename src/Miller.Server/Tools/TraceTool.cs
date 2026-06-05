@@ -61,6 +61,8 @@ public sealed class TraceTool
     public string Trace(
         [Description("A symbol name/id where the trace starts. In bridge mode, route/table nodes and single-symbol files are also accepted.")]
         string target,
+        [Description("Disambiguate an ambiguous target symbol name to a file. Optional.")]
+        string? scope = null,
         [Description("Trace mode: auto (callers+callees) | path (shortest path to 'to') | bridge (provider-scoped cross-language chain). Default auto.")]
         string mode = "auto",
         [Description("For mode=path: the destination symbol name/id the path must reach. Ignored otherwise.")]
@@ -81,7 +83,7 @@ public sealed class TraceTool
             WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
             string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json: false);
             string output = Run(context.Index, context.Resolver,
-                target, mode, to, depth, limit, full,
+                target, scope, mode, to, depth, limit, full,
                 out int emitted, out int nodesVisited);
             output = ReadToolWorkspaceRouting.PrefixCompact(output, compactBanner);
 
@@ -122,7 +124,7 @@ public sealed class TraceTool
     /// <exception cref="ArgumentNullException"><paramref name="index"/> or <paramref name="resolver"/> is null.</exception>
     public static string Run(
         MillerRepositoryIndex index, SmartTargetResolver resolver,
-        string target, string mode, string? to, int depth, int limit, bool fullFormat,
+        string target, string? scope, string mode, string? to, int depth, int limit, bool fullFormat,
         out int emitted, out int nodesVisited)
     {
         ArgumentNullException.ThrowIfNull(index);
@@ -136,23 +138,29 @@ public sealed class TraceTool
 
         return normalizedMode switch
         {
-            ModeAuto => RunAuto(index, resolver, target, depth, limit, out emitted, out nodesVisited),
-            ModePath => RunPath(index, resolver, target, to, depth, limit, out emitted, out nodesVisited),
-            ModeBridge => RunBridge(index, resolver, target, depth, limit, fullFormat, out emitted, out nodesVisited),
+            ModeAuto => RunAuto(index, resolver, target, scope, depth, limit, out emitted, out nodesVisited),
+            ModePath => RunPath(index, resolver, target, scope, to, depth, limit, out emitted, out nodesVisited),
+            ModeBridge => RunBridge(index, resolver, target, scope, depth, limit, fullFormat, out emitted, out nodesVisited),
             _ => $"Unknown mode '{mode}'. Use one of: auto, path, bridge.",
         };
     }
 
+    public static string Run(
+        MillerRepositoryIndex index, SmartTargetResolver resolver,
+        string target, string mode, string? to, int depth, int limit, bool fullFormat,
+        out int emitted, out int nodesVisited) =>
+        Run(index, resolver, target, scope: null, mode, to, depth, limit, fullFormat, out emitted, out nodesVisited);
+
     // ---------- mode: auto (callers + callees neighbourhood) ----------
 
     private static string RunAuto(
-        MillerRepositoryIndex index, SmartTargetResolver resolver, string target,
+        MillerRepositoryIndex index, SmartTargetResolver resolver, string target, string? scope,
         int depth, int limit, out int emitted, out int nodesVisited)
     {
         emitted = 0;
         nodesVisited = 0;
 
-        if (!ResolveSymbol(index, resolver, target, out string seedId, out string? note))
+        if (!ResolveSymbol(index, resolver, target, scope, out string seedId, out string? note))
             return note!;
 
         IReadOnlyList<ReachedNode> reached =
@@ -184,7 +192,7 @@ public sealed class TraceTool
     // ---------- mode: path (shortest dependency path target -> to) ----------
 
     private static string RunPath(
-        MillerRepositoryIndex index, SmartTargetResolver resolver, string target, string? to,
+        MillerRepositoryIndex index, SmartTargetResolver resolver, string target, string? scope, string? to,
         int depth, int limit, out int emitted, out int nodesVisited)
     {
         emitted = 0;
@@ -193,9 +201,9 @@ public sealed class TraceTool
         if (string.IsNullOrWhiteSpace(to))
             return "Usage: mode=path requires 'to' (the destination symbol to find a path to).";
 
-        if (!ResolveSymbol(index, resolver, target, out string fromId, out string? fromNote))
+        if (!ResolveSymbol(index, resolver, target, scope, out string fromId, out string? fromNote))
             return fromNote!;
-        if (!ResolveSymbol(index, resolver, to, out string toId, out string? toNote))
+        if (!ResolveSymbol(index, resolver, to, scope: null, out string toId, out string? toNote))
             return toNote!;
 
         IReadOnlyList<string>? path = index.Graph.ShortestPath(fromId, toId, depth);
@@ -225,13 +233,13 @@ public sealed class TraceTool
     // ---------- mode: bridge (cross-language scored chain) ----------
 
     private static string RunBridge(
-        MillerRepositoryIndex index, SmartTargetResolver resolver, string target,
+        MillerRepositoryIndex index, SmartTargetResolver resolver, string target, string? scope,
         int depth, int limit, bool fullFormat, out int emitted, out int nodesVisited)
     {
         emitted = 0;
         nodesVisited = 0;
 
-        if (!ResolveBridgeStart(index, resolver, target, out string startId, out string? note))
+        if (!ResolveBridgeStart(index, resolver, target, scope, out string startId, out string? note))
             return note!;
 
         // A symbol with no incident bridge edges is not on any cross-language thread — whether it is absent from the
@@ -296,7 +304,7 @@ public sealed class TraceTool
     }
 
     private static bool ResolveBridgeStart(
-        MillerRepositoryIndex index, SmartTargetResolver resolver, string target,
+        MillerRepositoryIndex index, SmartTargetResolver resolver, string target, string? scope,
         out string startId, out string? note)
     {
         startId = string.Empty;
@@ -316,7 +324,7 @@ public sealed class TraceTool
         if (note is not null)
             return false;
 
-        switch (resolver.Resolve(target))
+        switch (resolver.Resolve(target, scope))
         {
             case TargetResolution.Symbol sym:
                 startId = sym.Value.SymbolId;
@@ -326,6 +334,8 @@ public sealed class TraceTool
                 return ResolveBridgeFileStart(index, target, file.Path, out startId, out note);
 
             case TargetResolution.Candidates cands:
+                if (TryResolveSingleBridgeCandidate(index, cands.Matches, out startId))
+                    return true;
                 note = RenderCandidatesNote(cands.Matches);
                 return false;
 
@@ -337,6 +347,22 @@ public sealed class TraceTool
                 note = "trace: unrecognized target resolution.";
                 return false;
         }
+    }
+
+    private static bool TryResolveSingleBridgeCandidate(
+        MillerRepositoryIndex index,
+        IReadOnlyList<IndexedSymbol> candidates,
+        out string startId)
+    {
+        startId = string.Empty;
+        var bridgeCandidates = candidates
+            .Where(s => index.BridgeGraph.Incident(s.SymbolId).Count > 0)
+            .ToList();
+        if (bridgeCandidates.Count != 1)
+            return false;
+
+        startId = bridgeCandidates[0].SymbolId;
+        return true;
     }
 
     private static bool TryResolveSyntheticBridgeNode(BridgeGraph graph, string target, out string startId)
@@ -570,7 +596,7 @@ public sealed class TraceTool
     /// not-found resolution (trace is a symbol-anchored walk — a file is not a graph start).
     /// </summary>
     private static bool ResolveSymbol(
-        MillerRepositoryIndex index, SmartTargetResolver resolver, string target,
+        MillerRepositoryIndex index, SmartTargetResolver resolver, string target, string? scope,
         out string symbolId, out string? note)
     {
         symbolId = string.Empty;
@@ -582,7 +608,7 @@ public sealed class TraceTool
             return false;
         }
 
-        switch (resolver.Resolve(target))
+        switch (resolver.Resolve(target, scope))
         {
             case TargetResolution.Symbol sym:
                 symbolId = sym.Value.SymbolId;
@@ -609,7 +635,7 @@ public sealed class TraceTool
     private static string RenderCandidatesNote(IReadOnlyList<IndexedSymbol> matches)
     {
         var sb = new StringBuilder();
-        sb.Append("Multiple candidates — pass a more specific target:\n");
+        sb.Append("Multiple candidates — pass scope=<file> or a more specific target:\n");
         foreach (var s in matches)
             sb.Append(s.Name).Append("  ").Append(s.Kind).Append("  ")
               .Append(s.FilePath).Append(':').Append(s.StartLine).Append('\n');

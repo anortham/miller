@@ -33,12 +33,27 @@ internal static class FilePathSymbolLookup
             return byLength != 0 ? byLength : string.CompareOrdinal(a.Path, b.Path);
         });
 
-        var results = new List<IndexedSymbol>(Math.Min(limit, rankedPaths.Count));
+        var results = new List<IndexedSymbol>(limit);
+        var pathsWithRemainder = new List<string>();
         foreach (var (path, _) in rankedPaths)
         {
-            foreach (IndexedSymbol symbol in byFilePath[path])
+            List<IndexedSymbol> symbols = byFilePath[path];
+            if (symbols.Count == 0)
+                continue;
+
+            results.Add(symbols[0]);
+            if (results.Count == limit)
+                return results;
+            if (symbols.Count > 1)
+                pathsWithRemainder.Add(path);
+        }
+
+        foreach (string path in pathsWithRemainder)
+        {
+            List<IndexedSymbol> symbols = byFilePath[path];
+            for (int i = 1; i < symbols.Count; i++)
             {
-                results.Add(symbol);
+                results.Add(symbols[i]);
                 if (results.Count == limit)
                     return results;
             }

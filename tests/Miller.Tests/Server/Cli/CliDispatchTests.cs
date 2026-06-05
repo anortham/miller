@@ -148,6 +148,21 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void Search_FilePatternAndLanguageFlags_FilterResults()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+
+        var (code, outText, errText) = Run(
+            new[] { "search", "GetUser", "--file-pattern", "auth/**", "--language", "csharp" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("auth/UserService.cs", outText);
+        Assert.DoesNotContain("web/Controller.cs", outText);
+    }
+
+    [Fact]
     public void Search_Json_EmitsAJsonArray()
     {
         using var fx = JulieDbFixture.CreateDefault();
@@ -250,6 +265,21 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Contains("# trace GetUser", outText);
         Assert.Contains("Find", outText);
         Assert.Contains("auth/Repo.cs", outText);
+    }
+
+    [Fact]
+    public void Trace_ScopeFlag_IsAccepted()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+
+        var (code, outText, errText) = Run(
+            new[] { "trace", "GetUser", "--scope", "auth/UserService.cs", "--depth", "1" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("# trace GetUser", outText);
+        Assert.Contains("Find", outText);
     }
 
     [Fact]

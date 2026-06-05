@@ -31,6 +31,12 @@ inspect(target="<symbol>", depth="full")
 trace(target="<anchor>", mode="bridge")
 ```
 
+If the anchor name is ambiguous but you know the file, pass scope instead of doing a JSON search for the id:
+
+```text
+trace(target="<symbol>", mode="bridge", scope="<file>")
+```
+
 4. If the user asks for a specific route from one node to another, use path mode first, then bridge mode if the path crosses provider boundaries:
 
 ```text

@@ -6,4 +6,4 @@ namespace Miller.Core.Search;
 /// <see cref="Path"/> is the workspace-relative file path carried through to results;
 /// <see cref="Text"/> is the full UTF-8 file content (already freshness-verified by the loader).
 /// </summary>
-public sealed record ContentDocument(int DocId, string Path, string Text);
+public sealed record ContentDocument(int DocId, string Path, string Text, string Language = "");

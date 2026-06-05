@@ -25,6 +25,7 @@ search(query="<symbol-ish>", mode="symbol")
 search(query="<path-ish>", mode="file")
 search(query="<docs or prose>", mode="content")
 search(query="<comment or literal>", regions="comment|string_literal|doc_comment")
+search(query="<known area>", file_pattern="src/ui/**", language="typescript")
 ```
 
 3. Check common beta gotchas:
@@ -33,6 +34,7 @@ search(query="<comment or literal>", regions="comment|string_literal|doc_comment
 - Symbol search ranks `name + signature`; docs/prose belong in `mode=content`.
 - Comment, doc-comment, and string-literal searches require region indexing and a fresh sidecar.
 - File/path queries should use `mode=file` when auto mode looks noisy.
+- Scoped workflows should use `file_pattern` and `language` before raising `limit`.
 - Stale indexes should be refreshed with `workspace(operation="refresh")`.
 
 4. Verify the expected item exists:

@@ -114,4 +114,17 @@ public sealed class SymbolLookupTablesTests
         Assert.NotEmpty(hits);
         Assert.Equal("Alpha", hits[0].Name);
     }
+
+    [Fact]
+    public void FindByFilePathFragment_ReturnsOneSymbolPerFileBeforeExtraSymbols()
+    {
+        var t = Build(
+            Sym(0, "a", "Alpha", "src/a/mod.rs"),
+            Sym(1, "b", "Beta", "src/a/mod.rs"),
+            Sym(2, "c", "Gamma", "src/b/mod.rs"));
+
+        var hits = t.FindByFilePathFragment("mod.rs", limit: 2);
+
+        Assert.Equal(["Alpha", "Gamma"], hits.Select(static hit => hit.Name).ToArray());
+    }
 }

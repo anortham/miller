@@ -63,7 +63,7 @@ public static class ContentSearchProjectionLoader
                 if (text is null)
                     continue;
 
-                documents.Add(new ContentDocument(documents.Count, path, text));
+                documents.Add(new ContentDocument(documents.Count, path, text, language));
             }
         }
 

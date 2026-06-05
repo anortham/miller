@@ -28,8 +28,9 @@ public sealed class SearchToolTests
             docs.Select((d, i) => new ContentDocument(i, d.Path, d.Text)).ToList());
 
     private static IndexedSymbol Symbol(
-        int docId, string symbolId, string name, string kind, string filePath, int line, string? signature = null) =>
-        new(docId, symbolId, name, signature, kind, "csharp", filePath, line, EndLine: line, ParentId: null, IsTest: false);
+        int docId, string symbolId, string name, string kind, string filePath, int line, string? signature = null,
+        string language = "csharp") =>
+        new(docId, symbolId, name, signature, kind, language, filePath, line, EndLine: line, ParentId: null, IsTest: false);
 
     private static JulieDbFixture FixtureWithSymbol(string workspaceId, string symbolName) =>
         JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
@@ -213,7 +214,10 @@ public sealed class SearchToolTests
             excludeTests: null, json: false, out int count);
 
         Assert.Equal(1, count);
-        Assert.Equal("ActualFileSymbol  class  src/Miller.Server/Tools/SearchTool.cs:9", output);
+        Assert.Equal(
+            "File match: src/Miller.Server/Tools/SearchTool.cs\n" +
+            "  :9 ActualFileSymbol class",
+            output);
     }
 
     [Fact]
@@ -232,7 +236,10 @@ public sealed class SearchToolTests
             excludeTests: null, json: false, out int count);
 
         Assert.Equal(1, count);
-        Assert.Equal("SearchTool  class  src/Miller.Server/Tools/SearchTool.cs:42", output);
+        Assert.Equal(
+            "File match: src/Miller.Server/Tools/SearchTool.cs\n" +
+            "  :42 SearchTool class",
+            output);
     }
 
     [Fact]
@@ -249,7 +256,83 @@ public sealed class SearchToolTests
             excludeTests: null, json: false, out int count);
 
         Assert.Equal(1, count);
-        Assert.Equal("ActualFileSymbol  class  src/Miller.Server/Tools/SearchTool.cs:9", output);
+        Assert.Equal(
+            "File match: src/Miller.Server/Tools/SearchTool.cs\n" +
+            "  :9 ActualFileSymbol class",
+            output);
+    }
+
+    [Fact]
+    public void Run_FileMode_GroupsMultipleFileMatches()
+    {
+        var index = SymbolSearchProjection.Build([
+            Symbol(0, "sym-backend", "backend", "namespace",
+                "src/tools/search/mod.rs", 14, "mod backend"),
+            Symbol(1, "sym-content", "content_scoring_tests", "namespace",
+                "src/tests/tools/search/mod.rs", 15, "mod content_scoring_tests"),
+            Symbol(2, "sym-other", "Other", "class",
+                "src/Other.rs", 3),
+        ]);
+
+        string output = SearchTool.Run(index, "search/mod.rs", SearchToolMode.File, limit: 10,
+            excludeTests: null, json: false, out int count);
+
+        Assert.Equal(2, count);
+        Assert.Equal(
+            "File matches:\n" +
+            "src/tools/search/mod.rs:\n" +
+            "  :14 backend namespace\n" +
+            "src/tests/tools/search/mod.rs:\n" +
+            "  :15 content_scoring_tests namespace",
+            output);
+    }
+
+    [Fact]
+    public void Run_FileMode_Json_KeepsSymbolRows()
+    {
+        var index = SymbolSearchProjection.Build([
+            Symbol(0, "sym-file-hit", "ActualFileSymbol", "class",
+                "src/Miller.Server/Tools/SearchTool.cs", 9),
+        ]);
+
+        string output = SearchTool.Run(index, "SearchTool.cs", SearchToolMode.File, limit: 10,
+            excludeTests: null, json: true, out int count);
+
+        Assert.Equal(1, count);
+        using var doc = JsonDocument.Parse(output);
+        Assert.Equal(JsonValueKind.Array, doc.RootElement.ValueKind);
+        Assert.Equal("ActualFileSymbol", doc.RootElement[0].GetProperty("name").GetString());
+        Assert.Equal("src/Miller.Server/Tools/SearchTool.cs", doc.RootElement[0].GetProperty("file").GetString());
+    }
+
+    [Fact]
+    public void Run_SymbolSearch_FilePatternFiltersByGlob()
+    {
+        var index = new StubSymbolSearchIndex(
+            (Symbol(0, "sym-ui", "SearchWidget", "class", "src/ui/SearchWidget.cs", 7), 10.0),
+            (Symbol(1, "sym-api", "SearchWidget", "class", "src/api/SearchWidget.cs", 8), 9.0));
+
+        string output = SearchTool.Run(index, "SearchWidget", SearchToolMode.Auto, limit: 10,
+            excludeTests: null, json: false, out int count, filePattern: "src/ui/**");
+
+        Assert.Equal(1, count);
+        Assert.Contains("src/ui/SearchWidget.cs", output);
+        Assert.DoesNotContain("src/api/SearchWidget.cs", output);
+    }
+
+    [Fact]
+    public void Run_SymbolSearch_LanguageFilters()
+    {
+        var index = new StubSymbolSearchIndex(
+            (Symbol(0, "sym-cs", "SearchWidget", "class", "src/SearchWidget.cs", 7, language: "csharp"), 10.0),
+            (Symbol(1, "sym-ts", "SearchWidget", "interface", "src/SearchWidget.ts", 8, language: "typescript"), 9.0));
+
+        string output = SearchTool.Run(index, "SearchWidget", SearchToolMode.Auto, limit: 10,
+            excludeTests: null, json: false, out int count, language: "typescript");
+
+        Assert.Equal(1, count);
+        Assert.Contains("src/SearchWidget.ts", output);
+        Assert.DoesNotContain("src/SearchWidget.cs", output);
     }
 
     [Fact]
@@ -687,6 +770,22 @@ public sealed class SearchToolTests
     }
 
     [Fact]
+    public void RunContent_FilePatternAndLanguageFilters()
+    {
+        var index = ContentSearchProjection.Build([
+            new ContentDocument(0, "docs/guide.md", "alpha scoped content", "markdown"),
+            new ContentDocument(1, "notes/guide.txt", "alpha scoped content", "text"),
+        ]);
+
+        string output = SearchTool.RunContent(index, "alpha", limit: 10, json: false, out int count,
+            filePattern: "docs/**", language: "markdown");
+
+        Assert.Equal(1, count);
+        Assert.Contains("docs/guide.md", output);
+        Assert.DoesNotContain("notes/guide.txt", output);
+    }
+
+    [Fact]
     public void Search_ModeContent_RoutesToContentProvider_AndRendersContentHits()
     {
         using var current = FixtureWithSymbol("current-ws", "CurrentOnly");
@@ -802,7 +901,7 @@ public sealed class SearchToolTests
     {
         var index = new StubRegionSearchIndex(
             new RegionSearchHit("src/A.cs", 2.0, 7, "string_literal", "\"todo\"", "\"todo\"",
-                "region-a", "sym-a", "A"));
+                "region-a", "sym-a", "A", "csharp"));
 
         string output = SearchTool.RunRegions(
             index,
@@ -822,6 +921,31 @@ public sealed class SearchToolTests
         Assert.Equal("sym-a", first.GetProperty("containing_symbol_id").GetString());
         Assert.False(first.TryGetProperty("symbol_id", out _));
         Assert.False(first.TryGetProperty("name", out _));
+    }
+
+    [Fact]
+    public void RunRegions_FilePatternAndLanguageFilters()
+    {
+        var index = new StubRegionSearchIndex(
+            new RegionSearchHit("src/ui/A.ts", 2.0, 7, "comment", "// TODO scoped", "// TODO scoped",
+                "region-ts", "sym-ts", "A", "typescript"),
+            new RegionSearchHit("src/api/A.cs", 1.0, 7, "comment", "// TODO scoped", "// TODO scoped",
+                "region-cs", "sym-cs", "A", "csharp"));
+
+        string output = SearchTool.RunRegions(
+            index,
+            "TODO",
+            new HashSet<string> { "comment" },
+            limit: 10,
+            excludeTests: false,
+            json: false,
+            out int count,
+            filePattern: "src/ui/**",
+            language: "typescript");
+
+        Assert.Equal(1, count);
+        Assert.Contains("src/ui/A.ts", output);
+        Assert.DoesNotContain("src/api/A.cs", output);
     }
 
     [Fact]

@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Miller.Core.Search;
 using Miller.Indexing;
 using Miller.Server.Resolution;
@@ -96,7 +97,11 @@ public sealed class SearchTool
         [Description("Refresh a registered workspace before reading. Defaults true when workspace_id is supplied.")]
         bool? ensure_fresh = null,
         [Description("Source-region kinds to search: comma list of comment, doc_comment, string_literal. Alias: docstring.")]
-        string? regions = null)
+        string? regions = null,
+        [Description("Glob filter for workspace-relative file paths, e.g. src/ui/**. Optional.")]
+        string? file_pattern = null,
+        [Description("Comma-separated language filter, e.g. csharp,typescript. Optional.")]
+        string? language = null)
     {
         var scope = TelemetryContext.Current;
         try
@@ -116,7 +121,8 @@ public sealed class SearchTool
                 string? modeNote = parsedMode == SearchToolMode.Auto
                     ? null
                     : $"mode={mode} ignored; regions search uses source-region text.";
-                output = RunRegions(region.Index, query, regionKinds, limit, hideTests, json, out count, compactBanner, modeNote);
+                output = RunRegions(region.Index, query, regionKinds, limit, hideTests, json, out count, compactBanner, modeNote,
+                    filePattern: file_pattern, language: language);
                 if (scope is not null)
                 {
                     ReadToolWorkspaceRouting.ApplyTelemetry(scope, region);
@@ -128,7 +134,8 @@ public sealed class SearchTool
                 // Content/docs search routes to its own projection and result kind; exclude_tests is a no-op.
                 WorkspaceContentSearchContext content = _contentProvider.ResolveContentSearch(workspace_id, ensureFresh);
                 string? contentBanner = ReadToolWorkspaceRouting.CompactBanner(content, workspace_id, json);
-                output = RunContent(content.Index, query, limit, json, out count, contentBanner);
+                output = RunContent(content.Index, query, limit, json, out count, contentBanner,
+                    filePattern: file_pattern, language: language);
                 if (scope is not null)
                     ReadToolWorkspaceRouting.ApplyTelemetry(scope, content);
             }
@@ -145,7 +152,9 @@ public sealed class SearchTool
                     json,
                     out count,
                     compactBanner,
-                    symbolIds => ReadHasDocCommentBestEffort(context.IndexDbPath, symbolIds));
+                    symbolIds => ReadHasDocCommentBestEffort(context.IndexDbPath, symbolIds),
+                    filePattern: file_pattern,
+                    language: language);
                 if (scope is not null)
                 {
                     ReadToolWorkspaceRouting.ApplyTelemetry(scope, context);
@@ -242,7 +251,9 @@ public sealed class SearchTool
     public static string Run(
         ISymbolLookupIndex index, string query, SearchToolMode mode, int limit,
         bool? excludeTests, bool json, out int renderedCount, string? compactBanner = null,
-        Func<IReadOnlyCollection<string>, IReadOnlySet<string>>? hasDocLookup = null)
+        Func<IReadOnlyCollection<string>, IReadOnlySet<string>>? hasDocLookup = null,
+        string? filePattern = null,
+        string? language = null)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
@@ -253,9 +264,10 @@ public sealed class SearchTool
 
         bool hideTests = ResolveExcludeTests(excludeTests, query, mode);
         bool hideLowSignalKinds = fileMode || ResolveHideLowSignalKinds(query, mode);
+        SearchFilters filters = SearchFilters.Parse(filePattern, language);
         // Pull enough to know whether there is an overflow beyond `limit` after post-search filters, so the
         // "… N more" note is accurate. Natural-language phrase search can be import/module-heavy, so use the cap.
-        int overFetch = hideLowSignalKinds ? 500 : Math.Min(limit * 4 + 10, 500);
+        int overFetch = hideLowSignalKinds || filters.HasAny ? 500 : Math.Min(limit * 4 + 10, 500);
 
         // Preserve index order; only filter (never re-sort).
         var kept = new List<IndexedSymbol>();
@@ -293,6 +305,8 @@ public sealed class SearchTool
 
         return json
             ? RenderJson(kept, scores, page, hasDocSymbolIds)
+            : fileMode
+                ? RenderFileCompact(kept, page, total, compactBanner, hasDocSymbolIds)
             : RenderCompact(kept, page, total, query, compactBanner, hasDocSymbolIds);
 
         void AddIfVisible(IndexedSymbol sym, double score)
@@ -302,6 +316,8 @@ public sealed class SearchTool
             if (hideTests && IsTestPath.IsTest(sym))
                 return;
             if (hideLowSignalKinds && IsLowSignalKind(sym.Kind))
+                return;
+            if (!filters.Allows(sym.FilePath, sym.Language))
                 return;
             kept.Add(sym);
             scores.Add(score);
@@ -315,15 +331,20 @@ public sealed class SearchTool
     /// </summary>
     public static string RunContent(
         IContentSearchIndex index, string query, int limit,
-        bool json, out int renderedCount, string? compactBanner = null)
+        bool json, out int renderedCount, string? compactBanner = null,
+        string? filePattern = null,
+        string? language = null)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
         if (limit < 1) limit = 1;
 
         // Over-fetch (same cap as symbol search) so the "… N more" overflow note is accurate without paging.
-        int overFetch = Math.Min(limit * 4 + 10, 500);
-        IReadOnlyList<ContentSearchHit> hits = index.Search(query, overFetch);
+        SearchFilters filters = SearchFilters.Parse(filePattern, language);
+        int overFetch = filters.HasAny ? 500 : Math.Min(limit * 4 + 10, 500);
+        IReadOnlyList<ContentSearchHit> hits = index.Search(query, overFetch)
+            .Where(hit => filters.Allows(hit.Path, hit.Language))
+            .ToArray();
 
         int total = hits.Count;
         int page = Math.Min(limit, total);
@@ -350,15 +371,20 @@ public sealed class SearchTool
         bool json,
         out int renderedCount,
         string? compactBanner = null,
-        string? modeNote = null)
+        string? modeNote = null,
+        string? filePattern = null,
+        string? language = null)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentNullException.ThrowIfNull(kinds);
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
         if (limit < 1) limit = 1;
 
-        int overFetch = Math.Min(limit * 4 + 10, 500);
-        IReadOnlyList<RegionSearchHit> hits = index.Search(query, kinds, overFetch, excludeTests);
+        SearchFilters filters = SearchFilters.Parse(filePattern, language);
+        int overFetch = filters.HasAny ? 500 : Math.Min(limit * 4 + 10, 500);
+        IReadOnlyList<RegionSearchHit> hits = index.Search(query, kinds, overFetch, excludeTests)
+            .Where(hit => filters.Allows(hit.Path, hit.Language))
+            .ToArray();
 
         int total = hits.Count;
         int page = Math.Min(limit, total);
@@ -471,6 +497,66 @@ public sealed class SearchTool
         if (remainder > 0)
             sb.Append('\n').Append("… ").Append(remainder).Append(" more (raise limit)");
         return sb.ToString();
+    }
+
+    private static string RenderFileCompact(
+        IReadOnlyList<IndexedSymbol> kept,
+        int page,
+        int total,
+        string? compactBanner,
+        IReadOnlySet<string>? hasDocSymbolIds)
+    {
+        var groups = new List<(string FilePath, List<IndexedSymbol> Symbols)>();
+        for (int i = 0; i < page; i++)
+        {
+            IndexedSymbol symbol = kept[i];
+            int groupIndex = groups.FindIndex(group => group.FilePath == symbol.FilePath);
+            if (groupIndex >= 0)
+                groups[groupIndex].Symbols.Add(symbol);
+            else
+                groups.Add((symbol.FilePath, new List<IndexedSymbol> { symbol }));
+        }
+
+        var sb = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(compactBanner))
+            sb.Append(compactBanner).Append('\n');
+
+        if (groups.Count == 1)
+        {
+            sb.Append("File match: ").Append(groups[0].FilePath).Append('\n');
+            AppendFileModeSymbols(sb, groups[0].Symbols, hasDocSymbolIds);
+        }
+        else
+        {
+            sb.Append("File matches:").Append('\n');
+            foreach (var group in groups)
+            {
+                sb.Append(group.FilePath).Append(':').Append('\n');
+                AppendFileModeSymbols(sb, group.Symbols, hasDocSymbolIds);
+            }
+        }
+
+        TrimTrailingNewlines(sb);
+        int remainder = total - page;
+        if (remainder > 0)
+            sb.Append('\n').Append("… ").Append(remainder).Append(" more (raise limit)");
+        return sb.ToString();
+    }
+
+    private static void AppendFileModeSymbols(
+        StringBuilder sb,
+        IReadOnlyList<IndexedSymbol> symbols,
+        IReadOnlySet<string>? hasDocSymbolIds)
+    {
+        foreach (IndexedSymbol symbol in symbols)
+        {
+            sb.Append("  :").Append(symbol.StartLine)
+              .Append(' ').Append(symbol.Name)
+              .Append(' ').Append(symbol.Kind);
+            if (hasDocSymbolIds?.Contains(symbol.SymbolId) == true)
+                sb.Append(" has_doc");
+            sb.Append('\n');
+        }
     }
 
     private static string RenderDefinitionCompact(
@@ -782,6 +868,112 @@ public sealed class SearchTool
 
     internal static string Truncate(string value, int max) =>
         value.Length <= max ? value : value[..(max - 1)] + "…";
+
+    private sealed class SearchFilters
+    {
+        private readonly GlobMatcher[] _filePatterns;
+        private readonly HashSet<string>? _languages;
+
+        private SearchFilters(GlobMatcher[] filePatterns, HashSet<string>? languages)
+        {
+            _filePatterns = filePatterns;
+            _languages = languages;
+        }
+
+        public bool HasAny => _filePatterns.Length > 0 || _languages is not null;
+
+        public static SearchFilters Parse(string? filePattern, string? language)
+        {
+            GlobMatcher[] filePatterns = string.IsNullOrWhiteSpace(filePattern)
+                ? Array.Empty<GlobMatcher>()
+                : filePattern
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Where(static pattern => pattern.Length > 0)
+                    .Select(static pattern => new GlobMatcher(pattern))
+                    .ToArray();
+
+            HashSet<string>? languages = null;
+            if (!string.IsNullOrWhiteSpace(language))
+            {
+                languages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (string part in language.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                    if (part.Length > 0)
+                        languages.Add(part);
+                if (languages.Count == 0)
+                    languages = null;
+            }
+
+            return new SearchFilters(filePatterns, languages);
+        }
+
+        public bool Allows(string path, string language)
+        {
+            if (_filePatterns.Length > 0 && !_filePatterns.Any(pattern => pattern.IsMatch(path)))
+                return false;
+            if (_languages is not null && !_languages.Contains(language))
+                return false;
+            return true;
+        }
+    }
+
+    private sealed class GlobMatcher
+    {
+        private readonly Regex _regex;
+        private readonly bool _containsSlash;
+
+        public GlobMatcher(string pattern)
+        {
+            string normalized = NormalizePath(pattern);
+            _containsSlash = normalized.Contains('/', StringComparison.Ordinal);
+            _regex = new Regex("^" + GlobToRegex(normalized) + "$", RegexOptions.CultureInvariant);
+        }
+
+        public bool IsMatch(string path)
+        {
+            string normalized = NormalizePath(path);
+            if (_regex.IsMatch(normalized))
+                return true;
+            if (_containsSlash)
+                return false;
+
+            int lastSlash = normalized.LastIndexOf('/');
+            string basename = lastSlash >= 0 ? normalized[(lastSlash + 1)..] : normalized;
+            return _regex.IsMatch(basename);
+        }
+
+        private static string NormalizePath(string path) => path.Replace('\\', '/').Trim();
+
+        private static string GlobToRegex(string pattern)
+        {
+            var sb = new StringBuilder(pattern.Length * 2);
+            for (int i = 0; i < pattern.Length; i++)
+            {
+                char c = pattern[i];
+                if (c == '*')
+                {
+                    bool globstar = i + 1 < pattern.Length && pattern[i + 1] == '*';
+                    if (globstar)
+                    {
+                        sb.Append(".*");
+                        i++;
+                    }
+                    else
+                    {
+                        sb.Append("[^/]*");
+                    }
+                }
+                else if (c == '?')
+                {
+                    sb.Append("[^/]");
+                }
+                else
+                {
+                    sb.Append(Regex.Escape(c.ToString()));
+                }
+            }
+            return sb.ToString();
+        }
+    }
 
     private sealed class UnavailableRegionSearchProvider : IWorkspaceRegionSearchProvider
     {

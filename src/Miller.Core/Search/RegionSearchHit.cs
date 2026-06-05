@@ -12,4 +12,5 @@ public sealed record RegionSearchHit(
     string RawText,
     string RegionId,
     string? ContainingSymbolId,
-    string? ContainingSymbolName);
+    string? ContainingSymbolName,
+    string Language = "");

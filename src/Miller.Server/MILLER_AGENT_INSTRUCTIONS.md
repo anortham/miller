@@ -24,6 +24,7 @@ the tokens.
   code is auto-hidden for natural-language queries (`exclude_tests=false` to force them in). The first move for
   "where is…?". Use `mode=content` (alias `docs`) to search docs/prose file CONTENT instead of symbols — it
   returns `path:line` + a snippet window, for files symbol search can't see (markdown, config, plain text).
+  Use `file_pattern=<glob>` and `language=<lang>` to keep result sets small when you know the area or language.
   Use `regions=comment|doc_comment|string_literal` (comma lists accepted; `docstring` aliases `doc_comment`) to
   search only inside comments, doc-comments, or string literals. Region search requires `MILLER_REGION_INDEX=1`
   and a refreshed `search.db` sidecar; set `MILLER_REGION_MAX_BYTES=<n>` before refresh to tune the per-region cap.
@@ -41,7 +42,8 @@ the tokens.
 - `trace` — Follow a thread of code. `mode=auto` (callers + callees), `mode=path` (shortest path from `target`
   to `to`), `mode=bridge` (cross-language chain: TS call → endpoint → DTO → entity → table). Reduced-confidence
   links are flagged `[verb-unknown]`/`[ambiguous]` — never trust an unflagged link less than a flagged one.
-  Optional `workspace_id` and `ensure_fresh` work for cross-workspace traces.
+  Pass `scope=<file>` to disambiguate duplicate symbol names before falling back to symbol IDs. Optional
+  `workspace_id` and `ensure_fresh` work for cross-workspace traces.
 - `impact` — What a change would affect: downstream symbols and linked tests. Pass exactly one of `target` (a
   symbol or file), `changed_paths` (a set of files), or `diff` (a unified diff). Use before refactoring or to
   pick which tests to run. Optional `workspace_id` and `ensure_fresh` work for registered workspaces.
@@ -58,9 +60,10 @@ the tokens.
 - **New task / unfamiliar area**: `context` → `inspect` the key symbols → implement.
 - **Understand a symbol**: `inspect target depth=full` (definition + refs + callers/callees + body in one call).
 - **Trace a flow**: `trace mode=auto` to fan out, `mode=path` for a specific A→B chain, `mode=bridge` to cross a
-  language boundary.
+  language boundary. If a name is ambiguous, retry with `scope=<file>`.
 - **Find something in docs/prose**: `search mode=content "<phrase>"` — searches markdown/config/text content and
   returns `path:line` + snippet, where symbol search would find nothing.
+- **Scope noisy search**: add `file_pattern=src/ui/**` or `language=typescript` when you know the likely area.
 - **Find text only inside comments or strings**: `search "<phrase>" regions=comment` or
   `search "<phrase>" regions=string_literal` — requires `MILLER_REGION_INDEX=1` and a refreshed workspace.
   Use `MILLER_REGION_MAX_BYTES=<n>` to tune oversized region indexing.
@@ -80,10 +83,10 @@ code, paste this block into the prompt:
     ## Code Intelligence Tools (use instead of Grep/Glob/Read)
     You have Miller MCP tools. Use them before raw shell/file exploration:
     - context(query, ...) for unfamiliar task-shaped orientation.
-    - search(query, mode?, regions?) before rg/grep/find, including mode=content for docs/prose and regions=...
-      for comments/strings.
+    - search(query, mode?, regions?, file_pattern?, language?) before rg/grep/find, including mode=content for
+      docs/prose, regions=... for comments/strings, and scoped filters for smaller result sets.
     - inspect(target, depth?) before reading a whole file or symbol body; use depth=full for refs/callers/callees/body.
-    - trace(target, mode?, to?) before manual caller/callee file hopping.
+    - trace(target, mode?, to?, scope?) before manual caller/callee file hopping; use scope for ambiguous names.
     - impact(target?|changed_paths?|diff?) before refactors and to choose tests.
     - edit(operation, target, ..., dry_run=true) to preview index-aware edits.
     - workspace(status|refresh|full|list|open|remove) to refresh stale indexes or open another repo.

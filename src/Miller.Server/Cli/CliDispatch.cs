@@ -88,7 +88,7 @@ public static class CliDispatch
     {
         CliOptions o = CliOptions.Parse(args, "json", "include-tests");
         if (string.IsNullOrWhiteSpace(o.Query))
-            return Usage(err, "miller search <query> [--mode auto|text|symbol|file|content] [--regions KINDS] [--limit N] [--json] [--include-tests]");
+            return Usage(err, "miller search <query> [--mode auto|text|symbol|file|content] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--include-tests]");
 
         bool json = o.Has("json");
         int limit = o.Int("limit", 10);
@@ -129,7 +129,8 @@ public static class CliDispatch
                 string? modeNote = mode == SearchToolMode.Auto
                     ? null
                     : $"mode={requestedMode} ignored; regions search uses source-region text.";
-                outw.WriteLine(SearchTool.RunRegions(regionIndex, o.Query, regionKinds, limit, hideTests, json, out _, modeNote: modeNote));
+                outw.WriteLine(SearchTool.RunRegions(regionIndex, o.Query, regionKinds, limit, hideTests, json, out _,
+                    modeNote: modeNote, filePattern: o.Value("file-pattern"), language: o.Value("language")));
                 return 0;
             }
             catch (Exception ex) when (
@@ -146,13 +147,15 @@ public static class CliDispatch
             if (!RequireIndex(ctx, err))
                 return 3;
             ContentSearchProjection content = ContentSearchProjectionLoader.Load(ctx.ExtractDbPath, ctx.WorkspaceRoot);
-            outw.WriteLine(SearchTool.RunContent(content, o.Query, limit, json, out _));
+            outw.WriteLine(SearchTool.RunContent(content, o.Query, limit, json, out _,
+                filePattern: o.Value("file-pattern"), language: o.Value("language")));
             return 0;
         }
 
         if (!TryLoadIndex(ctx, err, out MillerRepositoryIndex index))
             return 3;
-        outw.WriteLine(SearchTool.Run(index, o.Query, mode, limit, excludeTests, json, out _));
+        outw.WriteLine(SearchTool.Run(index, o.Query, mode, limit, excludeTests, json, out _,
+            filePattern: o.Value("file-pattern"), language: o.Value("language")));
         return 0;
     }
 
@@ -214,14 +217,14 @@ public static class CliDispatch
         // no JSON output for trace, so --json is intentionally not a flag here.
         CliOptions o = CliOptions.Parse(args, "full");
         if (string.IsNullOrWhiteSpace(o.Query))
-            return Usage(err, "miller trace <symbol> [--mode auto|path|bridge] [--to SYMBOL] [--depth N] [--limit N] [--full]");
+            return Usage(err, "miller trace <symbol> [--scope FILE] [--mode auto|path|bridge] [--to SYMBOL] [--depth N] [--limit N] [--full]");
 
         if (!TryLoadIndex(ctx, err, out MillerRepositoryIndex index))
             return 3;
 
         var resolver = new SmartTargetResolver(index);
         string output = TraceTool.Run(
-            index, resolver, target: o.Query, mode: o.Value("mode", "auto")!, to: o.Value("to"),
+            index, resolver, target: o.Query, scope: o.Value("scope"), mode: o.Value("mode", "auto")!, to: o.Value("to"),
             depth: o.Int("depth", 3), limit: o.Int("limit", 20), fullFormat: o.Has("full"), out _, out _);
         outw.WriteLine(output);
         return 0;
@@ -654,7 +657,7 @@ public static class CliDispatch
 
         Commands:
           search <query>     Find code by name, identifier, or phrase.
-                             [--mode auto|text|symbol|file|content] [--regions KINDS] [--limit N] [--json] [--include-tests]
+                             [--mode auto|text|symbol|file|content] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--include-tests]
           inspect <target>   List a file's symbols, or show a symbol's definition.
                              [--depth summary|full] [--kind K] [--scope FILE] [--limit N] [--json]
           context <query>    Token-budgeted bundle of the most relevant code for a task.
@@ -662,7 +665,7 @@ public static class CliDispatch
           impact <symbol>    Downstream symbols + tests a change would affect.
                              [--max-depth N] [--limit N] [--json]
           trace <symbol>     Follow callers/callees, a path, or a cross-language bridge.
-                             [--mode auto|path|bridge] [--to SYMBOL] [--depth N] [--limit N] [--full]
+                             [--scope FILE] [--mode auto|path|bridge] [--to SYMBOL] [--depth N] [--limit N] [--full]
           workspace [op]     Index lifecycle. op = status (default) | list | refresh | full | open | remove.
                              open   [--path DIR] [--full]   Register + index a directory (creates .miller/symbols.db).
                              remove (--id ID | --path DIR)  Delete a workspace's .miller index dir.

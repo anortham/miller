@@ -167,6 +167,49 @@ public sealed class TraceToolTests
         Assert.Contains("not found", outp);
     }
 
+    [Fact]
+    public void Auto_ScopeDisambiguatesAmbiguousTarget()
+    {
+        var index = BuildSymbolIndex(
+            new[]
+            {
+                ("a1", "Handle", "method", "src/First.cs", 1),
+                ("a2", "Handle", "method", "src/Second.cs", 1),
+                ("b", "Next", "method", "src/Next.cs", 10),
+            },
+            new[] { ("a2", "b") });
+
+        string outp = TraceTool.Run(index, ResolverFor(index),
+            target: "Handle", scope: "src/Second.cs", mode: "auto", to: null, depth: 3, limit: 20,
+            fullFormat: false, emitted: out int emitted, nodesVisited: out int visited);
+
+        Assert.Equal(1, emitted);
+        Assert.Equal(1, visited);
+        Assert.Contains("# trace Handle (auto, 1 neighbour(s))", outp);
+        Assert.Contains("Next  method  src/Next.cs:10  (hop 1)", outp);
+        Assert.DoesNotContain("Multiple candidates", outp);
+    }
+
+    [Fact]
+    public void Auto_AmbiguousTarget_PointsToScope()
+    {
+        var index = BuildSymbolIndex(
+            new[]
+            {
+                ("a1", "Handle", "method", "src/First.cs", 1),
+                ("a2", "Handle", "method", "src/Second.cs", 1),
+            },
+            Array.Empty<(string, string)>());
+
+        string outp = TraceTool.Run(index, ResolverFor(index),
+            target: "Handle", scope: null, mode: "auto", to: null, depth: 3, limit: 20,
+            fullFormat: false, emitted: out int emitted, nodesVisited: out _);
+
+        Assert.Equal(0, emitted);
+        Assert.Contains("Multiple candidates", outp);
+        Assert.Contains("scope=<file>", outp);
+    }
+
     // ---------- mode: path ----------
 
     [Fact]
@@ -382,6 +425,34 @@ public sealed class TraceToolTests
         Assert.Contains("# trace bridge UserDto", outp);
         Assert.Contains("UserDto  --CreateMap-->  User", outp);
         Assert.DoesNotContain("is a file", outp);
+    }
+
+    [Fact]
+    public void Bridge_ScopeDisambiguatesFunctionExportDuplicate()
+    {
+        var hits = MakeScored(
+            BridgeKind.Hits,
+            SymbolRef("fn", "getAllSecurityUsers", "web/userManagementservice.ts"),
+            SymbolRef("ep", "AllUsers", "Controllers/UserManagementController.cs"),
+            ConfidenceBand.High, 0.9);
+        var index = BuildBridgeIndex(
+            new[]
+            {
+                ("fn", "getAllSecurityUsers", "web/userManagementservice.ts", 16),
+                ("export", "getAllSecurityUsers", "web/userManagementservice.ts", 16),
+                ("import", "getAllSecurityUsers", "store/UserManagementModule.ts", 4),
+                ("ep", "AllUsers", "Controllers/UserManagementController.cs", 65),
+            },
+            new[] { hits },
+            new Dictionary<string, BridgeNode>(StringComparer.Ordinal));
+
+        string outp = TraceTool.Run(index, ResolverFor(index),
+            target: "getAllSecurityUsers", scope: "web/userManagementservice.ts", mode: "bridge", to: null,
+            depth: 2, limit: 20, fullFormat: false, emitted: out int emitted, nodesVisited: out _);
+
+        Assert.Equal(1, emitted);
+        Assert.Contains("getAllSecurityUsers  --route-->  AllUsers  0.90 (High)", outp);
+        Assert.DoesNotContain("Multiple candidates", outp);
     }
 
     [Fact]

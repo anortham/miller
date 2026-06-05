@@ -60,7 +60,7 @@ public sealed class ContentSearchIndex
 
         foreach (ContentDocument document in documents)
         {
-            if (!docs.TryAdd(document.DocId, new DocEntry(document.Path, SplitLines(document.Text))))
+            if (!docs.TryAdd(document.DocId, new DocEntry(document.Path, document.Language, SplitLines(document.Text))))
                 throw new ArgumentException(
                     $"Duplicate DocId {document.DocId}; content document ids must be unique.", nameof(documents));
 
@@ -149,7 +149,7 @@ public sealed class ContentSearchIndex
         {
             DocEntry entry = _docs[docId];
             (int line, string snippet) = BestLineAndSnippet(entry.Lines, seen);
-            hits.Add(new ContentSearchHit(entry.Path, score, line, snippet));
+            hits.Add(new ContentSearchHit(entry.Path, score, line, snippet, entry.Language));
         }
         return hits;
     }
@@ -197,5 +197,5 @@ public sealed class ContentSearchIndex
 
     private readonly record struct Posting(int DocId, int Tf);
 
-    private readonly record struct DocEntry(string Path, string[] Lines);
+    private readonly record struct DocEntry(string Path, string Language, string[] Lines);
 }
