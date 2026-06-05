@@ -5,6 +5,16 @@ source or use embeddings; extraction is delegated to the pinned `julie-extract` 
 [README.md](README.md) for the architecture and [docs/miller-mvp-plan.md](docs/miller-mvp-plan.md) for
 the milestone plan.
 
+## Language parity (load-bearing product rule)
+
+A feature built on `julie-extract` data (a new table/column/extraction capability) is **not done until it
+works for every language julie-extractors supports**, not just one. Verify per-language coverage on a real
+extract before shipping or depending on it (`SELECT language, kind, COUNT(*) FROM <table> GROUP BY 1,2`); a
+feature that silently covers only a subset but looks authoritative is a bug. When a capability needs new
+extraction, add it across all supported languages in `julie-extractors`, not one at a time. (Why: the
+`source_regions` table shipped in julie-extract 2.1.0 emitting only for JavaScript — Miller's consumer was
+deferred to the 2.1.1 all-language emission rather than shipping a C#-empty feature.)
+
 ## Testing — read this before running tests
 
 The suite is split into two categories. **Keep them separate; this is load-bearing.** julie's suite once
