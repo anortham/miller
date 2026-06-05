@@ -19,6 +19,13 @@ public static class Bm25
     public const double ExactNameBoost = 1.5;
 
     /// <summary>
+    /// Multiplicative penalty applied to low-signal exact-name rows after <see cref="ExactNameBoost"/>.
+    /// This keeps import/module rows visible for identifier queries without letting duplicate query terms
+    /// in import signatures outrank the concrete definition with the same name.
+    /// </summary>
+    public const double ExactNameLowSignalKindPenalty = 0.75;
+
+    /// <summary>
     /// Inverse document frequency, the non-negative "+1 inside log" probabilistic variant
     /// <c>ln(1 + (N - df + 0.5) / (df + 0.5))</c>. Unlike the classic <c>ln((N-df+0.5)/(df+0.5))</c>
     /// it never goes negative for very common terms — this is the variant Miller's ranking is tuned to,
@@ -45,4 +52,28 @@ public static class Bm25
         return idf * (tf * (K1 + 1)) /
                (tf + K1 * (1 - B + B * documentLength / averageDocumentLength));
     }
+
+    /// <summary>
+    /// Apply Miller's exact-name ranking adjustments. <paramref name="normalizedQuery"/> must be the
+    /// trimmed, lowercased query string used by the caller for all documents in the result set.
+    /// </summary>
+    public static double ApplyExactNameAdjustments(
+        double score,
+        string documentName,
+        string documentKind,
+        string normalizedQuery)
+    {
+        if (!string.Equals(documentName.ToLowerInvariant(), normalizedQuery, StringComparison.Ordinal))
+            return score;
+
+        score *= ExactNameBoost;
+        if (IsLowSignalKind(documentKind))
+            score *= ExactNameLowSignalKindPenalty;
+
+        return score;
+    }
+
+    private static bool IsLowSignalKind(string kind) =>
+        string.Equals(kind, "import", StringComparison.Ordinal) ||
+        string.Equals(kind, "module", StringComparison.Ordinal);
 }

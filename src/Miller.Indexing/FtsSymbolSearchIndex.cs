@@ -201,8 +201,11 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
                 if (matched == 0) continue;
                 if (mode == SearchMode.And && matched < requiredTerms) continue;   // AND: every distinct term must hit
 
-                if (string.Equals(symbol.Name.ToLowerInvariant(), normalizedQuery, StringComparison.Ordinal))
-                    score *= Bm25.ExactNameBoost;
+                score = Bm25.ApplyExactNameAdjustments(
+                    score,
+                    symbol.Name,
+                    symbol.Kind,
+                    normalizedQuery);
 
                 wordHits.Add(new SearchHit(symbol.ToSearchableDocument(), score));
                 wordMatched.Add(symbol.DocId);

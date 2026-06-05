@@ -188,8 +188,13 @@ public sealed class SearchToolTests
         Assert.Equal(2, count);
         Assert.Equal(
             "workspace: target-ws\n" +
-            "Alpha  method  src/Alpha.cs:7  public void Alpha()\n" +
-            "Beta  class  src/Beta.cs:3\n" +
+            "Definition found: Alpha\n" +
+            "  src/Alpha.cs:7 (method)\n" +
+            "  public void Alpha()\n" +
+            "\n" +
+            "Other matches:\n" +
+            "\n" +
+            "src/Beta.cs:3 (class)\n" +
             "… 1 more (raise limit)",
             output);
     }
@@ -267,19 +272,20 @@ public sealed class SearchToolTests
     }
 
     [Fact]
-    public void Run_Compact_RendersOneLinePerHit_WithNameKindFileLine()
+    public void Run_Compact_RendersOneLinePerHit_WithNameKindFileLine_ForNonExactSearch()
     {
-        using var fx = JulieDbFixture.CreateDefault();
-        var index = BuildIndex(fx);
+        var index = new StubSymbolSearchIndex(
+            (Symbol(0, "sym-alpha", "AlphaParser", "method", "src/Alpha.cs", 7, "public void AlphaParser()"), 1.25),
+            (Symbol(1, "sym-beta", "BetaParser", "class", "src/Beta.cs", 3), 0.5));
 
-        string output = SearchTool.Run(index, "parseToken", SearchToolMode.Auto, limit: 10,
+        string output = SearchTool.Run(index, "Parser", SearchToolMode.Auto, limit: 10,
             excludeTests: null, json: false, out int count);
 
-        Assert.True(count >= 1);
+        Assert.Equal(2, count);
         var first = output.Split('\n')[0];
-        Assert.Contains("parseToken", first);
-        Assert.Contains("function", first);
-        Assert.Contains("auth/token.ts:3", first);
+        Assert.Contains("AlphaParser", first);
+        Assert.Contains("method", first);
+        Assert.Contains("src/Alpha.cs:7", first);
         // Compact output has no blank lines.
         Assert.DoesNotContain("\n\n", output);
     }
@@ -477,6 +483,46 @@ public sealed class SearchToolTests
         Assert.Contains("React  import  src/App.tsx:1", output);
         Assert.Contains("React  module  src/react.ts:1", output);
         Assert.Contains("ReactWidget  class  src/ReactWidget.cs:12", output);
+    }
+
+    [Fact]
+    public void Run_Compact_PromotesExactDefinitionAndGroupsOtherMatches()
+    {
+        var index = new StubSymbolSearchIndex(
+            (Symbol(0, "struct-row", "FastSearchTool", "struct", "crates/julie-tools/src/search/mod.rs", 58,
+                "pub struct FastSearchTool"), 30.0),
+            (Symbol(1, "import-row", "FastSearchTool", "import", "crates/julie-tools/src/lib.rs", 26,
+                "pub use search::FastSearchTool;"), 20.0),
+            (Symbol(2, "import-row-two", "FastSearchTool", "import", "src/tools/mod.rs", 31,
+                "pub use search::FastSearchTool;"), 20.0),
+            (Symbol(3, "module-row", "search", "module", "src/tools/mod.rs", 1,
+                "pub mod search;"), 10.0));
+
+        string compact = SearchTool.Run(index, "FastSearchTool", SearchToolMode.Auto, limit: 10,
+            excludeTests: null, json: false, out int compactCount);
+        string json = SearchTool.Run(index, "FastSearchTool", SearchToolMode.Auto, limit: 10,
+            excludeTests: null, json: true, out int jsonCount);
+
+        Assert.Equal(4, compactCount);
+        Assert.Equal(4, jsonCount);
+        Assert.Contains(
+            "Definition found: FastSearchTool\n" +
+            "  crates/julie-tools/src/search/mod.rs:58 (struct)\n" +
+            "  pub struct FastSearchTool",
+            compact);
+        Assert.Contains("Other matches:", compact);
+        Assert.Contains("crates/julie-tools/src/lib.rs:26 (import) low_signal", compact);
+        Assert.Contains(
+            "src/tools/mod.rs:\n" +
+            "  :31 (import) low_signal\n" +
+            "  :1 (module) low_signal",
+            compact);
+        Assert.DoesNotContain("FastSearchTool  import", compact);
+        Assert.DoesNotContain("FastSearchTool  module", compact);
+        Assert.DoesNotContain("pub use search::FastSearchTool;", compact);
+        Assert.DoesNotContain("pub mod search;", compact);
+        Assert.Contains("\"signature\":\"pub use search::FastSearchTool;\"", json);
+        Assert.Contains("\"signature\":\"pub mod search;\"", json);
     }
 
     [Fact]

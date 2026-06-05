@@ -231,6 +231,29 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
     }
 
     [Fact]
+    public void Search_ExactNameDefinitionOutranksImportRows_ParityWithInMemory()
+    {
+        var syms = Corpus(
+            ("a", "WorkspacePool", "use super::workspace_pool::WorkspacePool;", "import", "rust", "src/daemon/app.rs"),
+            ("b", "WorkspacePool", "pub struct WorkspacePool", "struct", "rust", "src/daemon/workspace_pool.rs"));
+        SearchIndexWriter.Write(_dbPath, syms, 1);
+
+        var fts = FtsSymbolSearchIndex.Open(_dbPath);
+        var memory = SymbolSearchProjection.Build(syms);
+
+        var expected = memory.Search("WorkspacePool", limit: 10);
+        var actual = fts.Search("WorkspacePool", limit: 10);
+
+        Assert.Equal("struct", actual[0].Document.Kind);
+        Assert.Equal("src/daemon/workspace_pool.rs", actual[0].Document.FilePath);
+        Assert.Equal(
+            expected.Select(h => h.Document.DocId).ToArray(),
+            actual.Select(h => h.Document.DocId).ToArray());
+        for (int i = 0; i < expected.Count; i++)
+            Assert.Equal(expected[i].Score, actual[i].Score, precision: 9);
+    }
+
+    [Fact]
     public void Search_AndMode_RequiresAllDistinctTerms()
     {
         var syms = Corpus(

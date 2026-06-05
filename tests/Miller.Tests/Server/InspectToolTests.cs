@@ -32,6 +32,23 @@ public sealed class InspectToolTests
             Array.Empty<JulieDbFixture.SymbolRow>(),
             workspaceId: workspaceId);
 
+    private static JulieDbFixture FixtureWithNoisyFileSummary() =>
+        JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
+        {
+            new JulieDbFixture.SymbolRow("a0000000000000000000000000000001", "System", "import", "csharp",
+                "src/SearchTool.cs", "using System;", 1, null),
+            new JulieDbFixture.SymbolRow("a0000000000000000000000000000002", "Tools", "module", "csharp",
+                "src/SearchTool.cs", "namespace Miller.Server.Tools", 2, null),
+            new JulieDbFixture.SymbolRow("a0000000000000000000000000000003", "SearchTool", "class", "csharp",
+                "src/SearchTool.cs", "public sealed class SearchTool", 10, null),
+            new JulieDbFixture.SymbolRow("a0000000000000000000000000000004", "_workspaceProvider", "field", "csharp",
+                "src/SearchTool.cs", "private readonly IWorkspaceSearchProvider _workspaceProvider", 11, "a0000000000000000000000000000003"),
+            new JulieDbFixture.SymbolRow("a0000000000000000000000000000005", "Run", "method", "csharp",
+                "src/SearchTool.cs", "public static string Run(...)", 20, "a0000000000000000000000000000003"),
+            new JulieDbFixture.SymbolRow("a0000000000000000000000000000006", "RenderCompact", "method", "csharp",
+                "src/SearchTool.cs", "private static string RenderCompact(...)", 30, "a0000000000000000000000000000003"),
+        });
+
     // ---- File listing ----
 
     [Fact]
@@ -74,6 +91,68 @@ public sealed class InspectToolTests
 
         Assert.Equal(1, count);
         Assert.Contains("more", output); // overflow note
+    }
+
+    [Fact]
+    public void Run_FileSummary_Compact_GroupsByKindAndHidesLowSignalRows()
+    {
+        using var fx = FixtureWithNoisyFileSummary();
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "src/SearchTool.cs", depth: "summary", kind: null, scope: null, limit: 50, json: false, out int count);
+
+        Assert.Equal(4, count);
+        Assert.Equal(
+            "# src/SearchTool.cs\n" +
+            "class (1)\n" +
+            "  SearchTool  :10  public sealed class SearchTool\n" +
+            "method (2)\n" +
+            "  Run  :20  public static string Run(...)\n" +
+            "  RenderCompact  :30  private static string RenderCompact(...)\n" +
+            "field (1)\n" +
+            "  _workspaceProvider  :11  private readonly IWorkspaceSearchProvider _workspaceProvider\n" +
+            "low_signal hidden: 1 import, 1 module (pass kind=import/module)",
+            output);
+        Assert.DoesNotContain("using System;", output);
+        Assert.DoesNotContain("namespace Miller.Server.Tools", output);
+        Assert.DoesNotContain("SearchTool  class  src/SearchTool.cs", output);
+    }
+
+    [Fact]
+    public void Run_FileSummary_Compact_KindFilterShowsLowSignalRows()
+    {
+        using var fx = FixtureWithNoisyFileSummary();
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "src/SearchTool.cs", depth: "summary", kind: "import", scope: null, limit: 50, json: false, out int count);
+
+        Assert.Equal(1, count);
+        Assert.Equal(
+            "# src/SearchTool.cs\n" +
+            "import (1)\n" +
+            "  System  :1  using System;",
+            output);
+        Assert.DoesNotContain("low_signal hidden", output);
+    }
+
+    [Fact]
+    public void Run_FileSummary_Json_KeepsLowSignalChildren()
+    {
+        using var fx = FixtureWithNoisyFileSummary();
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "src/SearchTool.cs", depth: "summary", kind: null, scope: null, limit: 50, json: true, out int count);
+
+        Assert.Equal(6, count);
+        using var doc = JsonDocument.Parse(output);
+        var children = doc.RootElement.GetProperty("children");
+        Assert.Equal(6, children.GetArrayLength());
+        Assert.Equal("System", children[0].GetProperty("name").GetString());
+        Assert.Equal("import", children[0].GetProperty("kind").GetString());
+        Assert.Equal("using System;", children[0].GetProperty("signature").GetString());
     }
 
     [Fact]

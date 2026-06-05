@@ -17,6 +17,7 @@ public sealed class Bm25Tests
         Assert.Equal(1.2, Bm25.K1);
         Assert.Equal(0.75, Bm25.B);
         Assert.Equal(1.5, Bm25.ExactNameBoost);
+        Assert.Equal(0.75, Bm25.ExactNameLowSignalKindPenalty);
     }
 
     [Fact]

@@ -3,7 +3,7 @@ id: miller-project-direction-amp-milestone-state
 title: Miller — product direction & milestone state
 status: active
 created: 2026-05-30T16:32:42.067Z
-updated: 2026-06-05T02:19:27.498Z
+updated: 2026-06-05T19:10:00.736Z
 tags:
   - miller
   - project-direction
@@ -19,27 +19,31 @@ tags:
 - Dividing line: Miller answers "where is the code and what does it structurally connect to?"; Eros answers "what should the agent do next, how confident, what higher-level evidence?"
 - Stay daemon-light; embeddings/semantic/vector scale stay OUT of the free core. If Eros needs LanceDB-scale semantic retrieval, keep it behind an Eros projection adapter instead of moving that stack into Miller.
 
-Architecture contracts (unchanged): index DBs local at `<workspace>/.miller/symbols.db`; central discovery `~/.miller/workspaces.db`; `workspace_id` = SHA-256 of canonical root; freshness via `files.content_hash` (`blake3:`); read tools accept selectors. Pin: `julie-extract` v2.1.1, SQLite schema 2, extract contract 2, report schema 2.
+Architecture contracts: index DBs local at `<workspace>/.miller/symbols.db`; central discovery `~/.miller/workspaces.db`; `workspace_id` = SHA-256 of canonical root; freshness via `files.content_hash` (`blake3:`); read tools accept selectors. Current pin: `julie-extract` v2.1.3, SQLite schema 2, extract contract 2, report schema 2.
 
 ## Current state - 2026-06-05
 
-M0-M8 done. Recently shipped on `main`: search projection split (OpenClaw first search ~1.8s/+55MB); collapsed-trigram **FTS5 sidecar default-ON** (`search.db`); CLI `status|list|refresh|full|open|remove` + single-sourced build version; large-workspace dogfood fixes.
+M0-M8 are complete. Recently shipped on `main`: search projection split; collapsed-trigram **FTS5 sidecar default-ON** (`search.db`); CLI `status|list|refresh|full|open|remove` + single-sourced build version; large-workspace dogfood fixes; source-region consumer path; `dotnet-web` bridge provider; cross-workspace selector fixes; local Miller skill package; and `julie-extract` v2.1.3 file-policy parity.
 
-## Source regions / pillar-3 scope-aware lexical search - implemented and dogfooded
+The source-checkout beta checklist is effectively closed. Evidence recorded in `docs/plans/2026-06-05-beta-readiness-checklist.md`: local macOS restore/build/fast/scale/diff gates passed after the 2.1.3 pin, Windows `windows-fast` passed on the exact candidate commit, and branch-tip CI passed after evidence docs were committed.
 
-`julie-extractors` 2.1.1 landed and Miller pins/restores `julie-extract` v2.1.1. Miller consumer path is implemented and committed in `e9b5a35`: `SearchIndexWriter` schema v3 always creates `regions_fts` + `search_regions`, and populates them when `MILLER_REGION_INDEX=1`; explicit `search regions=comment|doc_comment|string_literal` / CLI `--regions` routes to fail-closed disk region search; symbol search adds best-effort `has_doc` from `symbols.doc_comment`.
+## Source regions / pillar-3 scope-aware lexical search
+
+Miller consumes `julie-extractors` source regions. `SearchIndexWriter` schema v3 creates `regions_fts` + `search_regions`, populates them when `MILLER_REGION_INDEX=1`, and explicit `search regions=comment|doc_comment|string_literal` / CLI `--regions` routes to fail-closed disk region search.
 
 Dogfood evidence in `docs/findings/2026-06-05-source-region-dogfood.md`: `julie-extractors` built 80,446 indexed regions in a 46M `search.db` with ~0.5s scoped queries; OpenClaw built 877,694 indexed regions in a 664M `search.db` with ~3.5s scoped queries. Decision: keep region indexing opt-in for beta. Default-on waits for follow-up on multi-token region query semantics and very large `string_literal` sidecars. `embedded`, region trigram recall, and exclusion queries remain deferred.
-
-Docs: `docs/plans/2026-06-04-source-regions-pillar3-design.md`, `docs/plans/2026-06-05-source-regions-pillar3-implementation-plan.md`, `docs/findings/2026-06-05-source-region-dogfood.md`.
 
 ## Beta readiness routing
 
 Use `docs/plans/2026-06-05-beta-readiness-checklist.md` as the beta-candidate routing doc. Beta means Miller is usable as the free local code-intelligence core through MCP and CLI on real repos; it does not require Eros, embeddings, semantic/vector search, or full release-blocking Native AOT.
 
-## Next track - search quality and beta docs
+## Current search-quality track
 
-Immediate priority: work down the beta checklist after source-region closeout. Next likely items: dogfood symbol search and `mode=content`, decide whether the symbol projection must widen before beta, then document CLI/README behavior. Miller's functional success as the free core determines which Eros paths should call Miller, which should read shared artifacts, and which truly need Eros-owned projections such as LanceDB-backed semantic retrieval.
+TODO #15 is active: build a measured Julie-vs-Miller search-quality matrix before widening Miller symbol ranking. Use the isolated Julie comparison clone at `/Users/murphy/source/julie-head-to-head` and do not touch `/Users/murphy/source/julie` while the user is refactoring it.
+
+First smoke matrix is in `docs/findings/2026-06-05-julie-vs-miller-search-quality-matrix.md`. It found and locally fixed the highest-value first bug: exact symbol queries can rank import/re-export rows above concrete definitions. Miller now applies shared exact-name ranking adjustments in both in-memory and FTS-backed search: exact-name `import`/`module` rows remain visible but receive a low-signal penalty, so `WorkspacePool` returns the struct definition first.
+
+Remaining search-quality rows: natural-language docs, doc comments, literals/env vars, path/basename, call-flow, and bridge-provider workflows. Product-surface gaps already observed: search `file_pattern` / language filters, and exact file-path queries returning symbol rows rather than file-level rows.
 
 ## Guardrails
 

@@ -117,7 +117,7 @@ public sealed class ImpactTool
     /// The pure execution core (no MCP/DI/telemetry; no DB — the graph is in-memory). Resolves the seed symbols
     /// per D5, runs a bounded REVERSE reachability to <paramref name="maxDepth"/> capped at <paramref name="limit"/>,
     /// partitions the reached nodes into impacted symbols vs likely tests, and renders compact or json with
-    /// provenance (<c>name kind file:line</c>, hop distance). <paramref name="impactedCount"/> is the number of
+    /// provenance (file group, <c>:line name kind hop=N</c>). <paramref name="impactedCount"/> is the number of
     /// non-test impacted symbols (the result-count KPI); a usage error / not-found / empty closure yields 0.
     /// <paramref name="nodesVisited"/> is the size of the reverse-reachability set the BFS produced (impacted +
     /// likely tests, before the partition) — the D10 <c>bytes_examined ≈ nodes visited</c> work proxy; the guard /
@@ -311,17 +311,26 @@ public sealed class ImpactTool
         }
 
         sb.Append("# impacted (").Append(impacted.Count).Append(")\n");
+        var visibleImpacted = impacted.Where(r => !IsLowSignalKind(r.Symbol.Kind)).ToList();
+        int hiddenLowSignal = impacted.Count - visibleImpacted.Count;
         if (impacted.Count == 0)
             sb.Append("(none)\n");
-        foreach (var r in impacted)
-            sb.Append(ProvenanceLine(r)).Append('\n');
+        else if (visibleImpacted.Count == 0)
+            sb.Append("(only low_signal rows hidden; use format=json for full list.)\n");
+        else
+            AppendReachedGroups(sb, visibleImpacted);
+
+        if (hiddenLowSignal > 0)
+        {
+            sb.Append("low_signal hidden: ").Append(hiddenLowSignal)
+                .Append(" imports/modules (use format=json for full list.)\n");
+        }
 
         if (tests.Count > 0)
         {
             sb.Append("\n# likely tests (").Append(tests.Count).Append(")\n");
             int shown = Math.Min(tests.Count, CompactLikelyTestsLimit);
-            for (int i = 0; i < shown; i++)
-                sb.Append(ProvenanceLine(tests[i])).Append('\n');
+            AppendReachedGroups(sb, tests.Take(shown).ToList());
 
             int hidden = tests.Count - shown;
             if (hidden > 0)
@@ -334,12 +343,35 @@ public sealed class ImpactTool
         return sb.ToString().TrimEnd('\n');
     }
 
-    // "Name  kind  file:line  (hop N)" — the impact provenance line.
-    private static string ProvenanceLine(Reached r)
+    private static void AppendReachedGroups(StringBuilder sb, IReadOnlyList<Reached> items)
+    {
+        var groups = new List<(string FilePath, List<Reached> Items)>();
+        foreach (Reached item in items)
+        {
+            int groupIndex = groups.FindIndex(group => group.FilePath == item.Symbol.FilePath);
+            if (groupIndex >= 0)
+                groups[groupIndex].Items.Add(item);
+            else
+                groups.Add((item.Symbol.FilePath, new List<Reached> { item }));
+        }
+
+        foreach (var group in groups)
+        {
+            sb.Append(group.FilePath).Append(':').Append('\n');
+            foreach (Reached item in group.Items)
+                sb.Append(ReachedLine(item)).Append('\n');
+        }
+    }
+
+    private static string ReachedLine(Reached r)
     {
         var s = r.Symbol;
-        return $"{s.Name}  {s.Kind}  {s.FilePath}:{s.StartLine}  (hop {r.Hop})";
+        return $"  :{s.StartLine} {s.Name} {s.Kind} hop={r.Hop}";
     }
+
+    private static bool IsLowSignalKind(string kind) =>
+        string.Equals(kind, "import", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(kind, "module", StringComparison.OrdinalIgnoreCase);
 
     private static string RenderJson(
         IReadOnlyList<Reached> impacted, IReadOnlyList<Reached> tests, string? note)

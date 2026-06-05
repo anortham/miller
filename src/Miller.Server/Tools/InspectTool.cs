@@ -204,30 +204,108 @@ public sealed class InspectTool
                 : $"No indexed symbols in {path}";
         }
 
-        int page = Math.Min(limit, all.Count);
-        resultCount = page;
-
         if (json)
         {
+            int jsonPage = Math.Min(limit, all.Count);
+            resultCount = jsonPage;
             var buffer = new ArrayBufferWriter<byte>();
             using var w = NewWriter(buffer);
             w.WriteStartObject();
             w.WriteString("file", path);
             w.WritePropertyName("children");
-            WriteSymbolArray(w, all.Take(page));
+            WriteSymbolArray(w, all.Take(jsonPage));
             w.WriteEndObject();
             w.Flush();
             return Utf8(buffer);
         }
 
+        var visible = string.IsNullOrWhiteSpace(kind)
+            ? all.Where(static s => !IsLowSignalKind(s.Kind)).ToList()
+            : all;
+        int compactPage = Math.Min(limit, visible.Count);
+        resultCount = compactPage;
+
+        if (visible.Count == 0)
+            return RenderNoVisibleFileSymbols(path, all, kind);
+
         var sb = new StringBuilder();
         sb.Append("# ").Append(path).Append('\n');
-        for (int i = 0; i < page; i++)
-            sb.Append(SymbolLine(all[i])).Append('\n');
-        int remainder = all.Count - page;
+        AppendFileSymbolGroups(sb, visible.Take(compactPage));
+        int remainder = visible.Count - compactPage;
         if (remainder > 0)
             sb.Append("… ").Append(remainder).Append(" more (raise limit)\n");
+        if (string.IsNullOrWhiteSpace(kind))
+            AppendHiddenLowSignalNote(sb, all);
         return sb.ToString().TrimEnd('\n');
+    }
+
+    private static string RenderNoVisibleFileSymbols(string path, IReadOnlyList<IndexedSymbol> all, string? kind)
+    {
+        var sb = new StringBuilder();
+        sb.Append("# ").Append(path).Append('\n');
+        if (!string.IsNullOrWhiteSpace(kind))
+        {
+            sb.Append("No indexed symbols in ").Append(path);
+            return sb.ToString();
+        }
+
+        sb.Append("No high-signal indexed symbols.");
+        AppendHiddenLowSignalNote(sb.Append('\n'), all);
+        return sb.ToString().TrimEnd('\n');
+    }
+
+    private static void AppendFileSymbolGroups(StringBuilder sb, IEnumerable<IndexedSymbol> symbols)
+    {
+        foreach (var group in symbols
+                     .GroupBy(static s => s.Kind, StringComparer.Ordinal)
+                     .OrderBy(static g => KindRank(g.Key))
+                     .ThenBy(static g => g.Key, StringComparer.Ordinal))
+        {
+            var items = group.OrderBy(static s => s.StartLine).ThenBy(static s => s.Name, StringComparer.Ordinal).ToList();
+            sb.Append(group.Key).Append(" (").Append(items.Count).Append(")\n");
+            foreach (IndexedSymbol symbol in items)
+                sb.Append("  ").Append(FileSymbolLine(symbol)).Append('\n');
+        }
+    }
+
+    private static string FileSymbolLine(IndexedSymbol s)
+    {
+        var sb = new StringBuilder();
+        sb.Append(s.Name).Append("  :").Append(s.StartLine);
+        if (!string.IsNullOrEmpty(s.Signature))
+            sb.Append("  ").Append(Truncate(s.Signature!, SignatureMaxLength));
+        return sb.ToString();
+    }
+
+    private static int KindRank(string kind) => kind switch
+    {
+        "class" or "interface" or "struct" or "record" or "enum" or "type" => 0,
+        "constructor" or "method" or "function" => 1,
+        "property" or "field" or "constant" or "variable" => 2,
+        "enum_member" => 3,
+        "namespace" => 4,
+        "module" or "import" => 5,
+        _ => 6,
+    };
+
+    private static bool IsLowSignalKind(string kind) =>
+        string.Equals(kind, "import", StringComparison.Ordinal) ||
+        string.Equals(kind, "module", StringComparison.Ordinal);
+
+    private static void AppendHiddenLowSignalNote(StringBuilder sb, IReadOnlyList<IndexedSymbol> all)
+    {
+        var hidden = all
+            .Where(static s => IsLowSignalKind(s.Kind))
+            .GroupBy(static s => s.Kind, StringComparer.Ordinal)
+            .OrderBy(static g => g.Key, StringComparer.Ordinal)
+            .Select(static g => $"{g.Count()} {g.Key}{(g.Count() == 1 ? string.Empty : "s")}")
+            .ToList();
+        if (hidden.Count == 0)
+            return;
+
+        sb.Append("low_signal hidden: ")
+          .Append(string.Join(", ", hidden))
+          .Append(" (pass kind=import/module)\n");
     }
 
     // ---------- symbol ----------

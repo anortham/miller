@@ -25,7 +25,7 @@ namespace Miller.Server.Tools;
 ///
 /// <para>This is the thin MCP/DI/telemetry shell; the pure, DB-free <see cref="Run"/> core (mirroring
 /// <see cref="InspectTool.Run"/>) holds the correctness and is unit-tested. Token cost is computed here by the
-/// Server's <see cref="TokenEstimator"/> over each candidate's exact render line and handed to the pure
+/// Server's <see cref="TokenEstimator"/> over a conservative per-candidate render line and handed to the pure
 /// <see cref="ContextPacker"/> (D8 — cost in, Core stays pure). Reads the live <see cref="IndexHolder"/> per
 /// call (M3 step 10).</para>
 /// </summary>
@@ -197,12 +197,13 @@ public sealed partial class ContextTool
                 candidates.Add(new Candidate(symbol, node.Hop));
         }
 
-        // --- 4. Cost each candidate by the token estimate of its EXACT render line (D8), then pack (D6). The
-        // packer is pure (cost in); it honours the priority order and uses the budget greedily (keep-scanning). ---
+        // --- 4. Cost each candidate conservatively, then pack (D6). The compact renderer groups selected rows by
+        // file path, so per-candidate costing intentionally includes the file path even though the grouped output
+        // prints it once per file. This keeps packing under budget while the rendered output gets the token savings.
         var packCandidates = new List<PackCandidate<Candidate>>(candidates.Count);
         foreach (var c in candidates)
         {
-            int cost = (int)TokenEstimator.Count(CompactLine(c));
+            int cost = (int)TokenEstimator.Count(CompactCostLine(c));
             packCandidates.Add(new PackCandidate<Candidate>(c, cost));
         }
 
@@ -247,15 +248,26 @@ public sealed partial class ContextTool
 
     // ---------- rendering ----------
 
-    // The compact, token-costed line for a candidate: "Name  kind  file:line  (hop N)  <signature>". This exact
-    // string is what the estimator costs AND what the compact renderer emits, so the budget reflects the output.
-    private static string CompactLine(Candidate c)
+    // Conservative per-candidate cost line: includes the file path even though compact output groups by file.
+    private static string CompactCostLine(Candidate c)
     {
         var s = c.Symbol;
         var sb = new StringBuilder();
         sb.Append(s.Name).Append("  ").Append(s.Kind).Append("  ")
           .Append(s.FilePath).Append(':').Append(s.StartLine)
-          .Append("  (hop ").Append(c.Hop).Append(')');
+          .Append("  hop=").Append(c.Hop);
+        if (!string.IsNullOrEmpty(s.Signature))
+            sb.Append("  ").Append(Truncate(s.Signature!, SignatureMaxLength));
+        return sb.ToString();
+    }
+
+    private static string GroupedCandidateLine(Candidate c)
+    {
+        var s = c.Symbol;
+        var sb = new StringBuilder();
+        sb.Append("  :").Append(s.StartLine).Append(' ')
+          .Append(s.Name).Append(' ')
+          .Append(s.Kind).Append(" hop=").Append(c.Hop);
         if (!string.IsNullOrEmpty(s.Signature))
             sb.Append("  ").Append(Truncate(s.Signature!, SignatureMaxLength));
         return sb.ToString();
@@ -268,13 +280,25 @@ public sealed partial class ContextTool
 
         var sb = new StringBuilder();
         sb.Append("# context bundle (").Append(selected.Count).Append(")\n");
-        for (int i = 0; i < selected.Count; i++)
+        var groups = new List<(string FilePath, List<Candidate> Candidates)>();
+        foreach (Candidate candidate in selected)
         {
-            sb.Append(CompactLine(selected[i]));
-            if (i < selected.Count - 1)
-                sb.Append('\n');
+            int groupIndex = groups.FindIndex(group => group.FilePath == candidate.Symbol.FilePath);
+            if (groupIndex >= 0)
+                groups[groupIndex].Candidates.Add(candidate);
+            else
+                groups.Add((candidate.Symbol.FilePath, new List<Candidate> { candidate }));
         }
-        return sb.ToString();
+
+        for (int i = 0; i < groups.Count; i++)
+        {
+            var group = groups[i];
+            sb.Append(group.FilePath).Append(':').Append('\n');
+            foreach (Candidate candidate in group.Candidates)
+                sb.Append(GroupedCandidateLine(candidate)).Append('\n');
+        }
+
+        return sb.ToString().TrimEnd('\n');
     }
 
     private static string RenderJson(IReadOnlyList<Candidate> selected)

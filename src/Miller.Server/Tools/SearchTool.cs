@@ -293,7 +293,7 @@ public sealed class SearchTool
 
         return json
             ? RenderJson(kept, scores, page, hasDocSymbolIds)
-            : RenderCompact(kept, page, total, compactBanner, hasDocSymbolIds);
+            : RenderCompact(kept, page, total, query, compactBanner, hasDocSymbolIds);
 
         void AddIfVisible(IndexedSymbol sym, double score)
         {
@@ -442,9 +442,14 @@ public sealed class SearchTool
         IReadOnlyList<IndexedSymbol> kept,
         int page,
         int total,
+        string query,
         string? compactBanner,
         IReadOnlySet<string>? hasDocSymbolIds)
     {
+        int definitionIndex = FindPromotableDefinitionIndex(kept, page, query);
+        if (definitionIndex >= 0)
+            return RenderDefinitionCompact(kept, page, total, definitionIndex, query, compactBanner, hasDocSymbolIds);
+
         var sb = new StringBuilder();
         if (!string.IsNullOrWhiteSpace(compactBanner))
             sb.Append(compactBanner).Append('\n');
@@ -453,7 +458,9 @@ public sealed class SearchTool
             var s = kept[i];
             sb.Append(s.Name).Append("  ").Append(s.Kind).Append("  ")
               .Append(s.FilePath).Append(':').Append(s.StartLine);
-            if (!string.IsNullOrEmpty(s.Signature))
+            if (IsLowSignalKind(s.Kind))
+                sb.Append("  low_signal");
+            else if (!string.IsNullOrEmpty(s.Signature))
                 sb.Append("  ").Append(Truncate(s.Signature!, SignatureMaxLength));
             if (hasDocSymbolIds?.Contains(s.SymbolId) == true)
                 sb.Append("  has_doc");
@@ -464,6 +471,170 @@ public sealed class SearchTool
         if (remainder > 0)
             sb.Append('\n').Append("… ").Append(remainder).Append(" more (raise limit)");
         return sb.ToString();
+    }
+
+    private static string RenderDefinitionCompact(
+        IReadOnlyList<IndexedSymbol> kept,
+        int page,
+        int total,
+        int definitionIndex,
+        string query,
+        string? compactBanner,
+        IReadOnlySet<string>? hasDocSymbolIds)
+    {
+        var sb = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(compactBanner))
+            sb.Append(compactBanner).Append('\n');
+
+        IndexedSymbol definition = kept[definitionIndex];
+        sb.Append("Definition found: ").Append(query.Trim()).Append('\n');
+        AppendPromotedDefinition(sb, definition, hasDocSymbolIds);
+
+        var otherRows = new List<IndexedSymbol>(Math.Max(0, page - 1));
+        for (int i = 0; i < page; i++)
+        {
+            if (i != definitionIndex)
+                otherRows.Add(kept[i]);
+        }
+
+        if (otherRows.Count > 0)
+        {
+            sb.Append('\n').Append("Other matches:").Append('\n').Append('\n');
+            AppendOtherMatchesGroupedByFile(sb, otherRows, hasDocSymbolIds);
+        }
+
+        TrimTrailingNewlines(sb);
+        int remainder = total - page;
+        if (remainder > 0)
+            sb.Append('\n').Append("… ").Append(remainder).Append(" more (raise limit)");
+        return sb.ToString();
+    }
+
+    private static int FindPromotableDefinitionIndex(IReadOnlyList<IndexedSymbol> kept, int page, string query)
+    {
+        string queryLower = query.Trim().ToLowerInvariant();
+        if (queryLower.Length == 0)
+            return -1;
+
+        for (int i = 0; i < page; i++)
+        {
+            IndexedSymbol symbol = kept[i];
+            if (!IsLowSignalKind(symbol.Kind) && IsDefinitionNameMatch(symbol.Name, queryLower))
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static bool IsDefinitionNameMatch(string symbolName, string queryLower)
+    {
+        string nameLower = symbolName.ToLowerInvariant();
+        if (nameLower == queryLower)
+            return true;
+        if (nameLower.LastIndexOf('.') is int lastDot && lastDot >= 0 &&
+            nameLower[(lastDot + 1)..] == queryLower)
+            return true;
+        if (queryLower.Contains('.', StringComparison.Ordinal) && nameLower.EndsWith(queryLower, StringComparison.Ordinal))
+        {
+            int prefixLength = nameLower.Length - queryLower.Length;
+            return prefixLength == 0 || nameLower[prefixLength - 1] == '.';
+        }
+        return false;
+    }
+
+    private static void AppendPromotedDefinition(
+        StringBuilder sb,
+        IndexedSymbol symbol,
+        IReadOnlySet<string>? hasDocSymbolIds)
+    {
+        sb.Append("  ").Append(symbol.FilePath).Append(':').Append(symbol.StartLine)
+          .Append(" (").Append(symbol.Kind).Append(')');
+        if (hasDocSymbolIds?.Contains(symbol.SymbolId) == true)
+            sb.Append(" has_doc");
+        sb.Append('\n');
+
+        if (!string.IsNullOrEmpty(symbol.Signature))
+            sb.Append("  ").Append(Truncate(symbol.Signature!, SignatureMaxLength)).Append('\n');
+    }
+
+    private static void AppendOtherMatchesGroupedByFile(
+        StringBuilder sb,
+        IReadOnlyList<IndexedSymbol> symbols,
+        IReadOnlySet<string>? hasDocSymbolIds)
+    {
+        var groups = new List<(string FilePath, List<IndexedSymbol> Symbols)>();
+        foreach (IndexedSymbol symbol in symbols)
+        {
+            int groupIndex = groups.FindIndex(group => group.FilePath == symbol.FilePath);
+            if (groupIndex >= 0)
+                groups[groupIndex].Symbols.Add(symbol);
+            else
+                groups.Add((symbol.FilePath, new List<IndexedSymbol> { symbol }));
+        }
+
+        for (int i = 0; i < groups.Count; i++)
+        {
+            var group = groups[i];
+            if (group.Symbols.Count == 1)
+            {
+                AppendSingleOtherMatch(sb, group.Symbols[0], hasDocSymbolIds);
+            }
+            else
+            {
+                sb.Append(group.FilePath).Append(':').Append('\n');
+                foreach (IndexedSymbol symbol in group.Symbols)
+                    AppendGroupedOtherMatch(sb, symbol, hasDocSymbolIds);
+            }
+
+            if (i < groups.Count - 1)
+                sb.Append('\n');
+        }
+    }
+
+    private static void AppendSingleOtherMatch(
+        StringBuilder sb,
+        IndexedSymbol symbol,
+        IReadOnlySet<string>? hasDocSymbolIds)
+    {
+        sb.Append(symbol.FilePath).Append(':').Append(symbol.StartLine)
+          .Append(" (").Append(symbol.Kind).Append(')');
+        AppendCompactMatchDetails(sb, symbol, "  ", hasDocSymbolIds);
+    }
+
+    private static void AppendGroupedOtherMatch(
+        StringBuilder sb,
+        IndexedSymbol symbol,
+        IReadOnlySet<string>? hasDocSymbolIds)
+    {
+        sb.Append("  :").Append(symbol.StartLine)
+          .Append(" (").Append(symbol.Kind).Append(')');
+        AppendCompactMatchDetails(sb, symbol, "    ", hasDocSymbolIds);
+    }
+
+    private static void AppendCompactMatchDetails(
+        StringBuilder sb,
+        IndexedSymbol symbol,
+        string continuationIndent,
+        IReadOnlySet<string>? hasDocSymbolIds)
+    {
+        if (hasDocSymbolIds?.Contains(symbol.SymbolId) == true)
+            sb.Append(" has_doc");
+
+        if (IsLowSignalKind(symbol.Kind))
+        {
+            sb.Append(" low_signal").Append('\n');
+            return;
+        }
+
+        if (!string.IsNullOrEmpty(symbol.Signature))
+            sb.Append('\n').Append(continuationIndent).Append(Truncate(symbol.Signature!, SignatureMaxLength));
+        sb.Append('\n');
+    }
+
+    private static void TrimTrailingNewlines(StringBuilder sb)
+    {
+        while (sb.Length > 0 && sb[^1] is '\n' or '\r')
+            sb.Length--;
     }
 
     private static string RenderJson(

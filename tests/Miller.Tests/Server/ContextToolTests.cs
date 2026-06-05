@@ -56,6 +56,21 @@ public sealed class ContextToolTests
     private static MillerRepositoryIndex EmptyIndex() =>
         MillerRepositoryIndex.Build(Array.Empty<IndexedSymbol>(), Array.Empty<GraphEdge>());
 
+    private static (MillerRepositoryIndex index, SmartTargetResolver resolver) BuildSharedFileFixture()
+    {
+        var symbols = new List<IndexedSymbol>
+        {
+            new(0, "shared-alpha", "Alpha", "method Alpha()", "method", "csharp",
+                "src/Shared.cs", 10, 10, null, false),
+            new(1, "shared-beta", "Beta", "method Beta()", "method", "csharp",
+                "src/Shared.cs", 20, 20, null, false),
+            new(2, "other-gamma", "Gamma", "class Gamma", "class", "csharp",
+                "src/Gamma.cs", 30, 30, null, false),
+        };
+        var index = MillerRepositoryIndex.Build(symbols, Array.Empty<GraphEdge>());
+        return (index, new SmartTargetResolver(index));
+    }
+
     // ---- seeds + expansion ----
 
     [Fact]
@@ -313,9 +328,51 @@ public sealed class ContextToolTests
 
         // Provenance: name, file:line, hop annotation, and the signature.
         Assert.Contains("OrderService", output);
-        Assert.Contains("src/OrderService.cs:1", output);
+        Assert.Contains("src/OrderService.cs:", output);
+        Assert.Contains(":1 OrderService", output);
         Assert.Contains("class OrderService", output);
         Assert.Contains("hop", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Run_Compact_GroupsCandidatesByFile()
+    {
+        var (index, resolver) = BuildSharedFileFixture();
+
+        string output = ContextTool.Run(index, resolver,
+            query: "", tokenBudget: 100000, maxHops: 0,
+            entrySymbols: new[] { "Alpha", "Beta", "Gamma" }, failingTest: null, stackTrace: null,
+            json: false, out int count, out _);
+
+        Assert.Equal(3, count);
+        Assert.Equal(
+            "# context bundle (3)\n" +
+            "src/Shared.cs:\n" +
+            "  :10 Alpha method hop=0  method Alpha()\n" +
+            "  :20 Beta method hop=0  method Beta()\n" +
+            "src/Gamma.cs:\n" +
+            "  :30 Gamma class hop=0  class Gamma",
+            output);
+        Assert.Equal(1, output.Split("src/Shared.cs").Length - 1);
+        Assert.DoesNotContain("Alpha  method  src/Shared.cs", output);
+        Assert.DoesNotContain("Beta  method  src/Shared.cs", output);
+    }
+
+    [Fact]
+    public void Run_Json_KeepsPerCandidateFileFields()
+    {
+        var (index, resolver) = BuildSharedFileFixture();
+
+        string output = ContextTool.Run(index, resolver,
+            query: "", tokenBudget: 100000, maxHops: 0,
+            entrySymbols: new[] { "Alpha", "Beta" }, failingTest: null, stackTrace: null,
+            json: true, out int count, out _);
+
+        Assert.Equal(2, count);
+        using var doc = JsonDocument.Parse(output);
+        var bundle = doc.RootElement.GetProperty("bundle");
+        Assert.Equal("src/Shared.cs", bundle[0].GetProperty("file").GetString());
+        Assert.Equal("src/Shared.cs", bundle[1].GetProperty("file").GetString());
     }
 
     // ---- routed wrapper / ctor shape ----

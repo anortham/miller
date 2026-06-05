@@ -190,6 +190,36 @@ public sealed class MillerSearchIndexTests
     }
 
     [Fact]
+    public void Search_ExactNameDefinitionOutranksImportRows()
+    {
+        var index = MillerSearchIndex.Build(new[]
+        {
+            new SearchableDocument(
+                1,
+                "WorkspacePool",
+                "use super::workspace_pool::WorkspacePool;",
+                "import",
+                "rust",
+                "src/daemon/app.rs",
+                32),
+            new SearchableDocument(
+                2,
+                "WorkspacePool",
+                "pub struct WorkspacePool",
+                "struct",
+                "rust",
+                "src/daemon/workspace_pool.rs",
+                59),
+        });
+
+        var hits = index.Search("WorkspacePool", limit: 10);
+
+        Assert.Equal(2, hits.Count);
+        Assert.Equal("struct", hits[0].Document.Kind);
+        Assert.Equal("src/daemon/workspace_pool.rs", hits[0].Document.FilePath);
+    }
+
+    [Fact]
     public void Search_TieBreak_EqualScoreOrdersByDocIdAscending()
     {
         var index = MillerSearchIndex.Build(new[]

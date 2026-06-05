@@ -106,10 +106,11 @@ public sealed class MillerSearchIndex
     /// Search the index. The query is tokenized with <see cref="CodeTokenizer"/>; per-document
     /// scores accumulate over the distinct query terms a document matches (Decision D2).
     /// <see cref="SearchMode.And"/> excludes documents that do not match every distinct query term.
-    /// An exact match of the trimmed lowercased query against a document's <c>Name</c> multiplies
-    /// that document's score by 1.5. Results are ordered by score DESC then DocId ASC (deterministic),
-    /// truncated to <paramref name="limit"/>. An empty/whitespace/tokenless query, or no matches,
-    /// yields an empty list.
+    /// An exact match of the trimmed lowercased query against a document's <c>Name</c> applies the
+    /// shared exact-name adjustments in <see cref="Bm25"/>: concrete exact matches are boosted, while
+    /// low-signal import/module exact matches remain visible but are penalized. Results are ordered by
+    /// score DESC then DocId ASC (deterministic), truncated to <paramref name="limit"/>. An
+    /// empty/whitespace/tokenless query, or no matches, yields an empty list.
     /// </summary>
     public IReadOnlyList<SearchHit> Search(string query, int limit = 10, SearchMode mode = SearchMode.Or)
     {
@@ -165,9 +166,11 @@ public sealed class MillerSearchIndex
                 continue;   // AND: must match every distinct query term
 
             var document = _documents[docId];
-            double score = rawScore;
-            if (string.Equals(document.Name.ToLowerInvariant(), normalizedQuery, StringComparison.Ordinal))
-                score *= Bm25.ExactNameBoost;
+            double score = Bm25.ApplyExactNameAdjustments(
+                rawScore,
+                document.Name,
+                document.Kind,
+                normalizedQuery);
 
             hits.Add(new SearchHit(document, score));
         }

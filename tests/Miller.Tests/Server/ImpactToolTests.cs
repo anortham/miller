@@ -29,6 +29,9 @@ public sealed class ImpactToolTests
     private const string HandleId = "00000000000000000000000000000003";
     private const string ProcessWorksId = "00000000000000000000000000000004";
     private const string LonelyId = "00000000000000000000000000000005";
+    private const string HelperId = "00000000000000000000000000000006";
+    private const string ImportId = "00000000000000000000000000000007";
+    private const string ModuleId = "00000000000000000000000000000008";
 
     // A small dependency graph:
     //   Process   depends on Validate   (Process → Validate)
@@ -74,6 +77,30 @@ public sealed class ImpactToolTests
             edges.Add(new GraphEdge(id, ValidateId, "calls"));
         }
 
+        var index = MillerRepositoryIndex.Build(symbols, edges);
+        return (index, new SmartTargetResolver(index));
+    }
+
+    private static (MillerRepositoryIndex index, SmartTargetResolver resolver) BuildNoisyImpactFixture()
+    {
+        var symbols = new List<IndexedSymbol>
+        {
+            new(0, ValidateId, "Validate", "void Validate()", "method", "csharp", "src/Service.cs", 10, 14, null, false),
+            new(1, ProcessId, "Process", "void Process()", "method", "csharp", "src/Service.cs", 20, 24, null, false),
+            new(2, HelperId, "Helper", "class Helper", "class", "csharp", "src/Service.cs", 30, 36, null, false),
+            new(3, ImportId, "ComponentModel", "using System.ComponentModel;", "import", "csharp", "src/Service.cs", 1, 1, null, false),
+            new(4, ModuleId, "Service Module", "Service Module", "module", "markdown", "docs/service.md", 1, 1, null, false),
+            new(5, ProcessWorksId, "ProcessWorks", "void ProcessWorks()", "method", "csharp",
+                "tests/ServiceTests.cs", 8, 12, null, IsTest: true),
+        };
+        var edges = new[]
+        {
+            new GraphEdge(ProcessId, ValidateId, "calls"),
+            new GraphEdge(HelperId, ValidateId, "uses"),
+            new GraphEdge(ImportId, ValidateId, "uses"),
+            new GraphEdge(ModuleId, ValidateId, "contains"),
+            new GraphEdge(ProcessWorksId, ValidateId, "calls"),
+        };
         var index = MillerRepositoryIndex.Build(symbols, edges);
         return (index, new SmartTargetResolver(index));
     }
@@ -136,8 +163,55 @@ public sealed class ImpactToolTests
         // Process is reached at hop 1, in src/Service.cs:20.
         Assert.Contains("Process", output);
         Assert.Contains("method", output);
-        Assert.Contains("src/Service.cs:20", output);
-        Assert.Contains("hop", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("src/Service.cs:", output);
+        Assert.Contains(":20 Process method hop=1", output);
+    }
+
+    [Fact]
+    public void Run_Compact_GroupsByFileAndHidesLowSignalRows()
+    {
+        var (index, resolver) = BuildNoisyImpactFixture();
+
+        string output = ImpactTool.Run(index, resolver,
+            target: "Validate", changedPaths: null, diff: null, maxDepth: 1, limit: 100, json: false,
+            out int impactedCount, out _);
+
+        Assert.Equal(4, impactedCount);
+        Assert.Equal(
+            "# impacted (4)\n" +
+            "src/Service.cs:\n" +
+            "  :20 Process method hop=1\n" +
+            "  :30 Helper class hop=1\n" +
+            "low_signal hidden: 2 imports/modules (use format=json for full list.)\n" +
+            "\n" +
+            "# likely tests (1)\n" +
+            "tests/ServiceTests.cs:\n" +
+            "  :8 ProcessWorks method hop=1",
+            output);
+        Assert.DoesNotContain("ComponentModel", output);
+        Assert.DoesNotContain("Service Module", output);
+        Assert.DoesNotContain("Process  method  src/Service.cs", output);
+    }
+
+    [Fact]
+    public void Run_Json_KeepsLowSignalImpactedRows()
+    {
+        var (index, resolver) = BuildNoisyImpactFixture();
+
+        string output = ImpactTool.Run(index, resolver,
+            target: "Validate", changedPaths: null, diff: null, maxDepth: 1, limit: 100, json: true,
+            out int impactedCount, out _);
+
+        Assert.Equal(4, impactedCount);
+        using var doc = JsonDocument.Parse(output);
+        var names = doc.RootElement.GetProperty("impacted")
+            .EnumerateArray()
+            .Select(e => e.GetProperty("name").GetString())
+            .ToList();
+        Assert.Contains("Process", names);
+        Assert.Contains("Helper", names);
+        Assert.Contains("ComponentModel", names);
+        Assert.Contains("Service Module", names);
     }
 
     [Fact]
