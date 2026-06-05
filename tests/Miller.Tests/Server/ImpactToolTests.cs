@@ -57,6 +57,27 @@ public sealed class ImpactToolTests
         return (index, new SmartTargetResolver(index));
     }
 
+    private static (MillerRepositoryIndex index, SmartTargetResolver resolver) BuildManyLikelyTestsFixture(int testCount)
+    {
+        var symbols = new List<IndexedSymbol>
+        {
+            new(0, ValidateId, "Validate", "void Validate()", "method", "csharp", "src/Service.cs", 10, 14, null, false),
+        };
+        var edges = new List<GraphEdge>();
+
+        for (int i = 0; i < testCount; i++)
+        {
+            string id = (i + 10).ToString("x32");
+            string name = $"ValidateWorks{i + 1:00}";
+            symbols.Add(new(i + 1, id, name, $"void {name}()", "method", "csharp",
+                "tests/ServiceTests.cs", i + 1, i + 1, null, IsTest: true));
+            edges.Add(new GraphEdge(id, ValidateId, "calls"));
+        }
+
+        var index = MillerRepositoryIndex.Build(symbols, edges);
+        return (index, new SmartTargetResolver(index));
+    }
+
     private static MillerRepositoryIndex EmptyIndex() =>
         MillerRepositoryIndex.Build(Array.Empty<IndexedSymbol>(), Array.Empty<GraphEdge>());
 
@@ -117,6 +138,26 @@ public sealed class ImpactToolTests
         Assert.Contains("method", output);
         Assert.Contains("src/Service.cs:20", output);
         Assert.Contains("hop", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Run_Compact_CapsLikelyTests_ButJsonKeepsFullList()
+    {
+        var (index, resolver) = BuildManyLikelyTestsFixture(testCount: 25);
+
+        string compact = ImpactTool.Run(index, resolver,
+            target: "Validate", changedPaths: null, diff: null, maxDepth: 1, limit: 100, json: false, out _, out _);
+
+        Assert.Contains("# likely tests (25)", compact);
+        Assert.Contains("ValidateWorks20", compact);
+        Assert.DoesNotContain("ValidateWorks21", compact);
+        Assert.DoesNotContain("ValidateWorks25", compact);
+        Assert.Contains("... 5 more likely tests; use format=json for full list.", compact);
+
+        string json = ImpactTool.Run(index, resolver,
+            target: "Validate", changedPaths: null, diff: null, maxDepth: 1, limit: 100, json: true, out _, out _);
+        using var doc = JsonDocument.Parse(json);
+        Assert.Equal(25, doc.RootElement.GetProperty("tests").GetArrayLength());
     }
 
     [Fact]

@@ -34,6 +34,8 @@ namespace Miller.Server.Tools;
 [McpServerToolType]
 public sealed class ImpactTool
 {
+    private const int CompactLikelyTestsLimit = 20;
+
     private readonly IWorkspaceIndexProvider _workspaceProvider;
 
     /// <summary>Construct over the live index holder (production / freshness-aware). Unlike inspect, impact's
@@ -317,8 +319,16 @@ public sealed class ImpactTool
         if (tests.Count > 0)
         {
             sb.Append("\n# likely tests (").Append(tests.Count).Append(")\n");
-            foreach (var r in tests)
-                sb.Append(ProvenanceLine(r)).Append('\n');
+            int shown = Math.Min(tests.Count, CompactLikelyTestsLimit);
+            for (int i = 0; i < shown; i++)
+                sb.Append(ProvenanceLine(tests[i])).Append('\n');
+
+            int hidden = tests.Count - shown;
+            if (hidden > 0)
+            {
+                sb.Append("... ").Append(hidden)
+                    .Append(" more likely tests; use format=json for full list.\n");
+            }
         }
 
         return sb.ToString().TrimEnd('\n');
