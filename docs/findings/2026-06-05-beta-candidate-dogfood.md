@@ -149,6 +149,73 @@ held the writer/indexer lock. This matches the beta decision: region indexing is
 not a blocker for the default beta path. Successful opt-in region rebuild/query evidence remains in
 `docs/findings/2026-06-05-source-region-dogfood.md`.
 
+## Dashboard Evidence
+
+The dashboard was rebuilt from the source checkout and launched on loopback with the CLI launcher:
+
+```bash
+miller dashboard
+```
+
+The launcher starts one machine-global dashboard process and subsequent sessions reuse it while opening the
+current workspace selector URL:
+
+```text
+dashboard started (pid 96245): http://127.0.0.1:4977/?workspace_id=816288f47c5b0cf50c2eed1a22557d97100a6811846cc2061687421eaa5cc227
+~/.miller/dashboard.pid -> 96245
+~/.miller/dashboard.json -> ProcessId 96245, Url http://127.0.0.1:4977
+lsof -> dotnet PID 96245 listening on 127.0.0.1:4977
+/healthz -> miller-dashboard ok
+dashboard already running: http://127.0.0.1:4977/?workspace_id=816288f47c5b0cf50c2eed1a22557d97100a6811846cc2061687421eaa5cc227
+miller dashboard --port 5001 -> dashboard already running: http://127.0.0.1:4977/?workspace_id=816288f47c5b0cf50c2eed1a22557d97100a6811846cc2061687421eaa5cc227
+no listener on 127.0.0.1:5001
+```
+
+The root page rendered registered workspaces and a visible telemetry table, with static SSR Razor components
+and htmx fragment targets:
+
+```text
+Miller Dashboard
+Workspaces
+Telemetry
+Avg ms
+p95 ms
+Est tokens
+hx-get="/fragments/dashboard?workspace_id=..."
+hx-target="#dashboard-content"
+```
+
+Registry endpoint:
+
+```text
+/workspaces.json -> 18 registered workspaces
+first: browser39-7a38e8d999bb, state loaded_existing
+```
+
+Scoped telemetry endpoint against the Miller workspace:
+
+```text
+/telemetry.json?workspace_id=816288f47c5b0cf50c2eed1a22557d97100a6811846cc2061687421eaa5cc227
+total_calls: 1151
+tools: 6
+search: calls 439, error_count 27, last_call_ts 2026-06-05T23:25:41.655Z, last_outcome ok,
+last_error_ts 2026-06-05T20:44:49.700Z, last_error_kind IncompatibleExtractException
+recent_errors[0]: search IncompatibleExtractException at 2026-06-05T20:44:49.700Z
+```
+
+The combined dashboard fragment for the Miller workspace returned `#dashboard-content`, the selected Miller
+workspace row, `#telemetry-panel`, per-tool rows including `context` and `search`, `Last call`, `Last error`,
+and the `Recent errors` list. Static assets were served from the Release output and accepted `HEAD` checks:
+
+```text
+/dashboard.css -> 200 OK, 4338 bytes
+/lib/htmx/htmx.min.js -> 200 OK, 50917 bytes
+```
+
+The dashboard does not hydrate full indexes for listing or telemetry. `DashboardData.ReadWorkspaces` reads
+`~/.miller/workspaces.db`; `DashboardData.ReadTelemetrySummary` reads `~/.miller/telemetry.db`; empty or missing
+DB behavior is pinned by `DashboardRegistryReadTests`.
+
 ## Accepted Beta Limits
 
 - Ambiguous symbol targets in `inspect`, `trace`, and `impact` require a file path, a more specific
@@ -165,6 +232,8 @@ The source-checkout beta path is ready for final gate verification:
 
 - default search, content search, inspect, context, trace, impact, workspace status/list, and restore
   paths all worked on real Miller state;
+- the loopback dashboard shows registered workspaces and scoped per-tool telemetry without requiring JSON
+  inspection;
 - cross-platform restore/test evidence exists in CI;
 - region search stays opt-in and documented;
 - the remaining work before calling beta is the final build/fast/scale/diff gate on the commit that

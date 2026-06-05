@@ -93,7 +93,23 @@ status workspaces. It should read the workspace registry, telemetry DB, and ligh
   is still necessary: not applicable before beta because the beta decision is not to widen the
   symbol projection.
 
-### 5. Cross-Platform Compatibility
+### 5. Dashboard Minimum Functionality
+
+- [x] Launch the dashboard locally on loopback from the source checkout with a configurable port.
+- [x] Confirm `/` visibly shows registered workspaces and captured telemetry; telemetry must not be
+  JSON-only for beta testers.
+- [x] Confirm `/workspaces.json` reads the workspace registry without scanning the filesystem or
+  hydrating full indexes.
+- [x] Confirm `/telemetry.json?workspace_id=<id>` returns scoped per-tool telemetry from
+  `~/.miller/telemetry.db`: calls, avg/p95/max latency, error counts, last call, last error,
+  recent error rows, and estimated tokens.
+- [x] Confirm missing or empty registry/telemetry databases render empty views instead of crashing.
+- [x] Confirm `miller dashboard` starts or reuses one machine-global loopback instance and opens the
+  current workspace selector URL.
+- [x] Dogfood after representative live MCP calls and record the dashboard evidence in the beta
+  candidate dogfood note.
+
+### 6. Cross-Platform Compatibility
 
 - [x] Keep the MCP server launch path cross-platform: `mcp-config.json` invokes the `miller`
   binary with `serve`, not a shell script.
@@ -118,7 +134,7 @@ status workspaces. It should read the workspace registry, telemetry DB, and ligh
   required for source-checkout beta. Keep as release-readiness follow-up if beta expands to
   platform archives.
 
-### 6. Packaging, Restore, And Install
+### 7. Packaging, Restore, And Install
 
 - [x] Verify `scripts/restore-julie-extract.sh` restores the pinned binary on a clean machine
   or clean checkout. Fresh macOS arm64 restore on 2026-06-05 downloaded v2.1.3, verified
@@ -141,7 +157,7 @@ status workspaces. It should read the workspace registry, telemetry DB, and ligh
   target and checksums: not required for source-checkout beta; the release workflow already
   verifies Unix vs. Windows packaged extractor shape for archive builds.
 
-### 7. Docs And User-Facing Limits
+### 8. Docs And User-Facing Limits
 
 - [x] Update `README.md` with current architecture, setup, CLI, MCP, and troubleshooting.
 - [x] Ensure `src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md` documents every beta tool surface.
@@ -149,7 +165,7 @@ status workspaces. It should read the workspace registry, telemetry DB, and ligh
   AOT status, and any large-repo caveats including full `inspect` cost.
 - [x] Make `TODO.md` point at this checklist for beta-routing work.
 
-### 8. File Policy Parity
+### 9. File Policy Parity
 
 - [x] Audit Miller's delegated `julie-extract` scan path against Julie's walker/file-policy behavior.
   See `docs/findings/2026-06-05-file-policy-parity-dogfood.md`.
@@ -207,4 +223,4 @@ Captured in `docs/findings/2026-06-05-beta-candidate-dogfood.md`, with 2.1.2 bri
 - `embedded` source regions.
 - Region trigram recall or exclusion queries.
 - Incremental in-memory patching after refresh.
-- Dashboard polish beyond local operational status.
+- Dashboard polish beyond the minimum workspace + telemetry beta view.

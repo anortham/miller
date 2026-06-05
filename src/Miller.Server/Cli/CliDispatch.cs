@@ -37,7 +37,15 @@ public static class CliDispatch
     /// 0 success, 2 usage error (bad/missing args or unknown verb), 3 no index / operational failure,
     /// 1 an unexpected error. NEVER throws — every failure becomes an exit code + a written message.
     /// </summary>
-    public static int Run(IReadOnlyList<string> args, WorkspaceContext context, TextWriter stdout, TextWriter stderr)
+    public static int Run(IReadOnlyList<string> args, WorkspaceContext context, TextWriter stdout, TextWriter stderr) =>
+        Run(args, context, stdout, stderr, new DashboardCliLauncher());
+
+    internal static int Run(
+        IReadOnlyList<string> args,
+        WorkspaceContext context,
+        TextWriter stdout,
+        TextWriter stderr,
+        IDashboardLauncher dashboardLauncher)
     {
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(context);
@@ -67,6 +75,8 @@ public static class CliDispatch
                     return Impact(rest, context, stdout, stderr);
                 case "trace":
                     return Trace(rest, context, stdout, stderr);
+                case "dashboard":
+                    return Dashboard(rest, context, stdout, stderr, dashboardLauncher);
                 case "workspace":
                     return Workspace(rest, context, stdout, stderr);
                 default:
@@ -81,6 +91,48 @@ public static class CliDispatch
             stderr.WriteLine($"{verb} failed: {ex.Message}");
             return 1;
         }
+    }
+
+    private static int Dashboard(
+        IReadOnlyList<string> args,
+        WorkspaceContext ctx,
+        TextWriter outw,
+        TextWriter err,
+        IDashboardLauncher launcher)
+    {
+        CliOptions o = CliOptions.Parse(args, "json");
+        if (o.Positionals.Count > 0)
+            return Usage(err, "miller dashboard [--port N] [--json]");
+
+        int port = o.Int("port", DashboardCliLauncher.DefaultPort);
+        DashboardLaunchResult result = launcher.EnsureRunning(
+            new DashboardLaunchRequest(ctx, port, StartupTimeout: TimeSpan.FromSeconds(5)));
+        if (o.Has("json"))
+        {
+            outw.WriteLine(System.Text.Json.JsonSerializer.Serialize(new
+            {
+                status = result.Outcome.ToString().ToLowerInvariant(),
+                url = result.Url.ToString(),
+                pid = result.ProcessId,
+                message = result.Message,
+            }));
+            return result.Success ? 0 : 3;
+        }
+
+        if (!result.Success)
+        {
+            err.WriteLine(result.Message ?? "dashboard failed");
+            return 3;
+        }
+
+        string status = result.Outcome == DashboardLaunchOutcome.Started
+            ? "dashboard started"
+            : "dashboard already running";
+        if (result.ProcessId is { } pid)
+            outw.WriteLine($"{status} (pid {pid}): {result.Url}");
+        else
+            outw.WriteLine($"{status}: {result.Url}");
+        return 0;
     }
 
     // ---------- read verbs (over the current workspace's symbols.db) ----------
@@ -721,6 +773,8 @@ public static class CliDispatch
                              [--max-depth N] [--limit N] [--json]
           trace <symbol>     Follow callers/callees, a path, or a cross-language bridge.
                              [--scope FILE] [--mode auto|path|bridge] [--to SYMBOL] [--depth N] [--limit N] [--full]
+          dashboard          Start or reuse the machine-global loopback dashboard.
+                             [--port N] [--json]
           workspace [op]     Index lifecycle. op = status (default) | list | refresh | full | open | remove.
                              open   [--path DIR] [--full]   Register + index a directory (creates .miller/symbols.db).
                              remove (--id ID | --path DIR)  Delete a workspace's .miller index dir.

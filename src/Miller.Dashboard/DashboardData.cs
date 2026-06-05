@@ -1,7 +1,4 @@
-using System.Buffers;
 using System.Globalization;
-using System.Net;
-using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -27,7 +24,8 @@ public sealed record DashboardTelemetrySummary(
     [property: JsonPropertyName("tools")] IReadOnlyList<DashboardToolStat> Tools,
     [property: JsonPropertyName("total_calls")] long TotalCalls,
     [property: JsonPropertyName("window_start_ts")] string? WindowStartTs,
-    [property: JsonPropertyName("window_end_ts")] string? WindowEndTs);
+    [property: JsonPropertyName("window_end_ts")] string? WindowEndTs,
+    [property: JsonPropertyName("recent_errors")] IReadOnlyList<DashboardRecentError> RecentErrors);
 
 public sealed record DashboardToolStat(
     [property: JsonPropertyName("tool")] string Tool,
@@ -36,7 +34,23 @@ public sealed record DashboardToolStat(
     [property: JsonPropertyName("p95_ms")] long P95Ms,
     [property: JsonPropertyName("max_ms")] long MaxMs,
     [property: JsonPropertyName("error_count")] long ErrorCount,
-    [property: JsonPropertyName("sum_est_tokens")] long SumEstTokens);
+    [property: JsonPropertyName("sum_est_tokens")] long SumEstTokens,
+    [property: JsonPropertyName("last_call_ts")] string? LastCallTs,
+    [property: JsonPropertyName("last_outcome")] string? LastOutcome,
+    [property: JsonPropertyName("last_error_ts")] string? LastErrorTs,
+    [property: JsonPropertyName("last_error_kind")] string? LastErrorKind);
+
+public sealed record DashboardRecentError(
+    [property: JsonPropertyName("ts")] string Ts,
+    [property: JsonPropertyName("tool")] string Tool,
+    [property: JsonPropertyName("op")] string? Op,
+    [property: JsonPropertyName("error_kind")] string? ErrorKind,
+    [property: JsonPropertyName("duration_ms")] long DurationMs);
+
+public sealed record DashboardSnapshot(
+    IReadOnlyList<DashboardWorkspaceRow> Workspaces,
+    DashboardTelemetrySummary Telemetry,
+    string? SelectedWorkspaceId);
 
 public static class DashboardData
 {
@@ -89,15 +103,44 @@ public static class DashboardData
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(telemetryDbPath);
         if (!File.Exists(telemetryDbPath))
-            return new DashboardTelemetrySummary(workspaceId, Array.Empty<DashboardToolStat>(), 0, null, null);
+        {
+            return new DashboardTelemetrySummary(
+                workspaceId,
+                Array.Empty<DashboardToolStat>(),
+                0,
+                null,
+                null,
+                Array.Empty<DashboardRecentError>());
+        }
 
         using var connection = OpenReadOnly(telemetryDbPath);
         if (!TableExists(connection, "tool_telemetry"))
-            return new DashboardTelemetrySummary(workspaceId, Array.Empty<DashboardToolStat>(), 0, null, null);
+        {
+            return new DashboardTelemetrySummary(
+                workspaceId,
+                Array.Empty<DashboardToolStat>(),
+                0,
+                null,
+                null,
+                Array.Empty<DashboardRecentError>());
+        }
 
         var tools = ReadToolStats(connection, workspaceId);
         (long totalCalls, string? windowStart, string? windowEnd) = ReadTotals(connection, workspaceId);
-        return new DashboardTelemetrySummary(workspaceId, tools, totalCalls, windowStart, windowEnd);
+        IReadOnlyList<DashboardRecentError> recentErrors = ReadRecentErrors(connection, workspaceId);
+        return new DashboardTelemetrySummary(workspaceId, tools, totalCalls, windowStart, windowEnd, recentErrors);
+    }
+
+    public static DashboardSnapshot ReadSnapshot(
+        string registryDbPath,
+        string telemetryDbPath,
+        string? workspaceId,
+        string? preferredWorkspaceRoot = null)
+    {
+        IReadOnlyList<DashboardWorkspaceRow> workspaces = ReadWorkspaces(registryDbPath);
+        string? selectedWorkspaceId = SelectWorkspace(workspaces, telemetryDbPath, workspaceId, preferredWorkspaceRoot);
+        DashboardTelemetrySummary telemetry = ReadTelemetrySummary(telemetryDbPath, selectedWorkspaceId);
+        return new DashboardSnapshot(workspaces, telemetry, selectedWorkspaceId);
     }
 
     public static string RenderWorkspacesJson(string registryDbPath) =>
@@ -106,48 +149,85 @@ public static class DashboardData
     public static string RenderTelemetryJson(string telemetryDbPath, string? workspaceId) =>
         JsonSerializer.Serialize(ReadTelemetrySummary(telemetryDbPath, workspaceId), JsonOptions);
 
-    public static string RenderIndexHtml(string registryDbPath)
+    private static string? SelectWorkspace(
+        IReadOnlyList<DashboardWorkspaceRow> workspaces,
+        string telemetryDbPath,
+        string? requestedWorkspaceId,
+        string? preferredWorkspaceRoot)
     {
-        IReadOnlyList<DashboardWorkspaceRow> rows = ReadWorkspaces(registryDbPath);
-        var sb = new StringBuilder("""
-            <!doctype html>
-            <html lang="en">
-            <head>
-              <meta charset="utf-8">
-              <meta name="viewport" content="width=device-width, initial-scale=1">
-              <title>Miller Dashboard</title>
-              <style>
-                body { font: 14px system-ui, sans-serif; margin: 24px; color: #1f2933; }
-                table { border-collapse: collapse; width: 100%; }
-                th, td { border-bottom: 1px solid #d8dee4; padding: 8px; text-align: left; vertical-align: top; }
-                th { font-size: 12px; text-transform: uppercase; color: #52616b; }
-                code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-              </style>
-            </head>
-            <body>
-              <h1>Miller Dashboard</h1>
-              <table>
-                <thead><tr><th>Workspace</th><th>State</th><th>Revision</th><th>Root</th><th>Index</th><th>Error</th></tr></thead>
-                <tbody>
-            """);
+        if (!string.IsNullOrWhiteSpace(requestedWorkspaceId) &&
+            workspaces.Any(row => string.Equals(row.WorkspaceId, requestedWorkspaceId, StringComparison.Ordinal)))
+            return requestedWorkspaceId;
 
-        foreach (DashboardWorkspaceRow row in rows)
+        if (!string.IsNullOrWhiteSpace(preferredWorkspaceRoot))
         {
-            sb.Append("<tr><td><code>").Append(Html(row.DisplayId)).Append("</code><br><small>")
-              .Append(Html(row.WorkspaceId)).Append("</small></td><td>").Append(Html(row.State))
-              .Append("</td><td>").Append(row.LastRevision?.ToString(CultureInfo.InvariantCulture) ?? "")
-              .Append("</td><td><code>").Append(Html(row.CanonicalRoot)).Append("</code></td><td><code>")
-              .Append(Html(row.IndexDbPath)).Append("</code></td><td>")
-              .Append(Html(row.LastError ?? "")).Append("</td></tr>");
+            foreach (DashboardWorkspaceRow row in workspaces)
+            {
+                if (SameRoot(row.CanonicalRoot, preferredWorkspaceRoot))
+                    return row.WorkspaceId;
+            }
         }
 
-        sb.Append("""
-                </tbody>
-              </table>
-            </body>
-            </html>
-            """);
-        return sb.ToString();
+        if (SelectTelemetryWorkspace(workspaces, telemetryDbPath) is { } telemetryWorkspaceId)
+            return telemetryWorkspaceId;
+
+        return workspaces.Count == 0 ? requestedWorkspaceId : workspaces[0].WorkspaceId;
+    }
+
+    private static string? SelectTelemetryWorkspace(
+        IReadOnlyList<DashboardWorkspaceRow> workspaces,
+        string telemetryDbPath)
+    {
+        if (workspaces.Count == 0 || !File.Exists(telemetryDbPath))
+            return null;
+
+        var registeredIds = workspaces
+            .Select(row => row.WorkspaceId)
+            .ToHashSet(StringComparer.Ordinal);
+
+        using var connection = OpenReadOnly(telemetryDbPath);
+        if (!TableExists(connection, "tool_telemetry"))
+            return null;
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT workspace_id
+            FROM tool_telemetry
+            WHERE workspace_id IS NOT NULL
+            GROUP BY workspace_id
+            ORDER BY COUNT(*) DESC, workspace_id;
+            """;
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            string workspaceId = reader.GetString(0);
+            if (registeredIds.Contains(workspaceId))
+                return workspaceId;
+        }
+
+        return null;
+    }
+
+    private static bool SameRoot(string left, string right)
+    {
+        try
+        {
+            return string.Equals(
+                NormalizeRoot(left),
+                NormalizeRoot(right),
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    private static string NormalizeRoot(string path)
+    {
+        string fullPath = Path.GetFullPath(path);
+        string trimmed = fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return trimmed.Length == 0 ? fullPath : trimmed;
     }
 
     public static WorkspaceRefreshResult RefreshWorkspace(string registryDbPath, string toolsRoot, string workspaceId)
@@ -199,7 +279,21 @@ public static class DashboardData
                    AVG(duration_ms) AS avg_ms,
                    MAX(duration_ms) AS max_ms,
                    SUM(CASE WHEN outcome = 'error' THEN 1 ELSE 0 END) AS errors,
-                   COALESCE(SUM(est_tokens), 0) AS sum_tokens
+                   COALESCE(SUM(est_tokens), 0) AS sum_tokens,
+                   MAX(ts) AS last_call_ts,
+                   (SELECT latest.outcome
+                    FROM tool_telemetry latest
+                    WHERE latest.workspace_id IS $ws AND latest.tool = tool_telemetry.tool
+                    ORDER BY latest.ts DESC, latest.id DESC
+                    LIMIT 1) AS last_outcome,
+                   MAX(CASE WHEN outcome = 'error' THEN ts END) AS last_error_ts,
+                   (SELECT latest_error.error_kind
+                    FROM tool_telemetry latest_error
+                    WHERE latest_error.workspace_id IS $ws
+                      AND latest_error.tool = tool_telemetry.tool
+                      AND latest_error.outcome = 'error'
+                    ORDER BY latest_error.ts DESC, latest_error.id DESC
+                    LIMIT 1) AS last_error_kind
             FROM tool_telemetry
             WHERE workspace_id IS $ws
             GROUP BY tool
@@ -219,10 +313,42 @@ public static class DashboardData
                 ComputeP95(connection, workspaceId, tool, calls),
                 reader.GetInt64(3),
                 reader.GetInt64(4),
-                reader.GetInt64(5)));
+                reader.GetInt64(5),
+                reader.IsDBNull(6) ? null : reader.GetString(6),
+                reader.IsDBNull(7) ? null : reader.GetString(7),
+                reader.IsDBNull(8) ? null : reader.GetString(8),
+                reader.IsDBNull(9) ? null : reader.GetString(9)));
         }
 
         return stats;
+    }
+
+    private static IReadOnlyList<DashboardRecentError> ReadRecentErrors(
+        SqliteConnection connection,
+        string? workspaceId)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT ts, tool, op, error_kind, duration_ms
+            FROM tool_telemetry
+            WHERE workspace_id IS $ws AND outcome = 'error'
+            ORDER BY ts DESC, id DESC
+            LIMIT 8;
+            """;
+        cmd.Parameters.AddWithValue("$ws", (object?)workspaceId ?? DBNull.Value);
+        using var reader = cmd.ExecuteReader();
+        var errors = new List<DashboardRecentError>();
+        while (reader.Read())
+        {
+            errors.Add(new DashboardRecentError(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                reader.GetInt64(4)));
+        }
+
+        return errors;
     }
 
     private static (long TotalCalls, string? WindowStart, string? WindowEnd) ReadTotals(
@@ -256,5 +382,4 @@ public static class DashboardData
         return value is null or DBNull ? 0 : Convert.ToInt64(value, CultureInfo.InvariantCulture);
     }
 
-    private static string Html(string value) => WebUtility.HtmlEncode(value);
 }

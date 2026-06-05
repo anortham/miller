@@ -1,0 +1,11 @@
+@namespace Miller.Dashboard.Components
+
+<section id="dashboard-content" class="layout" aria-label="Miller operational dashboard">
+    <WorkspacesPanel Workspaces="Snapshot.Workspaces" SelectedWorkspaceId="@Snapshot.SelectedWorkspaceId" />
+    <TelemetryPanel Telemetry="Snapshot.Telemetry" SelectedWorkspaceId="@Snapshot.SelectedWorkspaceId" />
+</section>
+
+@code {
+    [Parameter, EditorRequired] public DashboardSnapshot Snapshot { get; set; } =
+        new(Array.Empty<DashboardWorkspaceRow>(), new DashboardTelemetrySummary(null, [], 0, null, null, []), null);
+}

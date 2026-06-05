@@ -113,7 +113,8 @@ public sealed class IndexerServiceScanTests
             tryAcquireLeadership,
             createOps,
             TimeSpan.FromHours(1),
-            sidecar ?? SymbolSearchSidecar.Disabled);
+            sidecar ?? SymbolSearchSidecar.Disabled,
+            attachFileWatchers: false);
     }
 
     // A tiny real julie artifact (synthetic, no subprocess) the sidecar build can read symbols from. The interior

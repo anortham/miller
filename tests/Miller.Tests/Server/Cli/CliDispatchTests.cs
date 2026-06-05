@@ -43,11 +43,16 @@ public sealed class CliDispatchTests : IDisposable
             ToolsRoot: Path.Combine(_dir, ".tools"),
             WorkspaceId: null);
 
-    private static (int Code, string Out, string Err) Run(IReadOnlyList<string> args, WorkspaceContext ctx)
+    private static (int Code, string Out, string Err) Run(
+        IReadOnlyList<string> args,
+        WorkspaceContext ctx,
+        IDashboardLauncher? dashboardLauncher = null)
     {
         var stdout = new StringWriter();
         var stderr = new StringWriter();
-        int code = CliDispatch.Run(args, ctx, stdout, stderr);
+        int code = dashboardLauncher is null
+            ? CliDispatch.Run(args, ctx, stdout, stderr)
+            : CliDispatch.Run(args, ctx, stdout, stderr, dashboardLauncher);
         return (code, stdout.ToString(), stderr.ToString());
     }
 
@@ -120,6 +125,70 @@ public sealed class CliDispatchTests : IDisposable
         var (code, _, errText) = Run(new[] { "frobnicate" }, Context(Path.Combine(_dir, "symbols.db")));
         Assert.Equal(2, code);
         Assert.Contains("unknown command", errText);
+    }
+
+    [Fact]
+    public void Dashboard_ReusesRunningInstanceAndPrintsWorkspaceUrl()
+    {
+        var launcher = new RecordingDashboardLauncher(
+            new DashboardLaunchResult(
+                DashboardLaunchOutcome.AlreadyRunning,
+                new Uri("http://127.0.0.1:4977/?workspace_id=ws-current"),
+                ProcessId: 123,
+                Message: "already running"));
+
+        var (code, outText, errText) = Run(
+            new[] { "dashboard" },
+            Context(Path.Combine(_dir, "symbols.db")),
+            launcher);
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("dashboard already running", outText);
+        Assert.Contains("http://127.0.0.1:4977/?workspace_id=ws-current", outText);
+        Assert.Equal(4977, launcher.Requests.Single().Port);
+    }
+
+    [Fact]
+    public void Dashboard_PortFlagOverridesDefault()
+    {
+        var launcher = new RecordingDashboardLauncher(
+            new DashboardLaunchResult(
+                DashboardLaunchOutcome.Started,
+                new Uri("http://127.0.0.1:5001/?workspace_id=ws-current"),
+                ProcessId: 456,
+                Message: "started"));
+
+        var (code, outText, errText) = Run(
+            new[] { "dashboard", "--port", "5001" },
+            Context(Path.Combine(_dir, "symbols.db")),
+            launcher);
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("dashboard started", outText);
+        Assert.Contains("pid 456", outText);
+        Assert.Equal(5001, launcher.Requests.Single().Port);
+    }
+
+    [Fact]
+    public void Dashboard_LaunchFailureIsOperationalExitThree()
+    {
+        var launcher = new RecordingDashboardLauncher(
+            new DashboardLaunchResult(
+                DashboardLaunchOutcome.Failed,
+                new Uri("http://127.0.0.1:4977/?workspace_id=ws-current"),
+                ProcessId: null,
+                Message: "dashboard binary not found"));
+
+        var (code, outText, errText) = Run(
+            new[] { "dashboard" },
+            Context(Path.Combine(_dir, "symbols.db")),
+            launcher);
+
+        Assert.Equal(3, code);
+        Assert.Empty(outText);
+        Assert.Contains("dashboard binary not found", errText);
     }
 
     [Fact]
@@ -659,5 +728,19 @@ public sealed class CliDispatchTests : IDisposable
             }
         }
         return false;
+    }
+
+    private sealed class RecordingDashboardLauncher(DashboardLaunchResult result) : IDashboardLauncher
+    {
+        private readonly DashboardLaunchResult _result = result;
+        private readonly List<DashboardLaunchRequest> _requests = new();
+
+        public IReadOnlyList<DashboardLaunchRequest> Requests => _requests;
+
+        public DashboardLaunchResult EnsureRunning(DashboardLaunchRequest request)
+        {
+            _requests.Add(request);
+            return _result;
+        }
     }
 }

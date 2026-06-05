@@ -107,12 +107,24 @@ The single `miller` binary runs two ways:
 
   Build once and run the binary directly (`src/Miller.Server/bin/Release/net10.0/miller <verb>`) to skip the
   `dotnet run` up-to-date check. `miller help` lists every verb: `search`, `inspect`, `context`, `impact`,
-  `trace`, `workspace`, `version`, `serve`.
+  `trace`, `workspace`, `dashboard`, `version`, `serve`.
 
 **Dogfooding the server.** Because MCP runs over stdio, a new build takes effect only after the MCP client
 restarts the subprocess. A build made inside the repo carries its git short SHA — `miller version` prints
 `0.1.0+<sha>` (just `0.1.0` for a build with no `.git`), and the same string heads the `# workspace` block of
 `workspace status` — so a session can always confirm *which* build it is talking to.
+
+**Dashboard.** The local dashboard binds to loopback and reads only the workspace registry plus telemetry DB.
+Use the CLI launcher so multiple Miller sessions reuse one machine-global dashboard process while opening the
+current workspace selector. `--port` selects the launch port only when no healthy dashboard is already running:
+
+```bash
+miller dashboard
+miller dashboard --port 4977
+```
+
+Open the printed URL to view registered workspaces and scoped per-tool telemetry. Set `MILLER_REGISTRY_DB`,
+`MILLER_TELEMETRY_DB`, or `MILLER_DASHBOARD_WEBROOT` only when testing non-default paths.
 
 ## CLI output expectations
 

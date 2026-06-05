@@ -37,6 +37,7 @@ public sealed class IndexerService : BackgroundService
     private readonly Func<string, IDisposable?> _tryAcquireLeadership;
     private readonly Func<WorkspaceContext, string, string, IExtractOps> _createOps;
     private readonly TimeSpan _leaderRetryInterval;
+    private readonly bool _attachFileWatchers;
 
     // Phase 1: the on-disk search.db sidecar. Default OFF. When enabled, THIS instance — the writer-lock leader —
     // is the one safe writer for the CURRENT workspace's search.db, so it (re)builds it after its own scans
@@ -75,7 +76,8 @@ public sealed class IndexerService : BackgroundService
                 return JulieExtractOps.Create(canonicalRoot, canonicalDbPath, runner);
             },
             DefaultLeaderRetryInterval,
-            sidecar)
+            sidecar,
+            attachFileWatchers: true)
     {
     }
 
@@ -86,7 +88,8 @@ public sealed class IndexerService : BackgroundService
         Func<string, IDisposable?> tryAcquireLeadership,
         Func<WorkspaceContext, string, string, IExtractOps> createOps,
         TimeSpan leaderRetryInterval,
-        SymbolSearchSidecar sidecar)
+        SymbolSearchSidecar sidecar,
+        bool attachFileWatchers = true)
     {
         ArgumentNullException.ThrowIfNull(bootstrap);
         ArgumentNullException.ThrowIfNull(logger);
@@ -104,6 +107,7 @@ public sealed class IndexerService : BackgroundService
         _createOps = createOps;
         _leaderRetryInterval = leaderRetryInterval;
         _sidecar = sidecar;
+        _attachFileWatchers = attachFileWatchers;
     }
 
     /// <summary>True once this instance holds the writer lock and is running the watcher. For diagnostics/tests.</summary>
@@ -168,12 +172,14 @@ public sealed class IndexerService : BackgroundService
                 new WatchEventQueue(), ops, File.Exists,
                 _loggerFactory.CreateLogger<IndexerCore>());
 
-            AttachWatchers(canonicalRoot);
+            if (_attachFileWatchers)
+                AttachWatchers(canonicalRoot);
             // M8 §D2: this instance won the lease — flip the live log role to leader so every subsequent log line
             // (human + jsonl) is tagged role=leader, distinguishing it from the reader instances sharing the logs
             // directory. Readers leave the startup default (reader) untouched.
             MillerRole.SetLeader();
-            _logger.LogInformation("Indexer leader: watching {Root} (recursive) + .git/HEAD.", canonicalRoot);
+            if (_attachFileWatchers)
+                _logger.LogInformation("Indexer leader: watching {Root} (recursive) + .git/HEAD.", canonicalRoot);
 
             // Yield once so BackgroundService.StartAsync can return after the watcher is attached: existing DBs
             // are available immediately as loaded_existing, while this leader reconciles missed downtime edits in

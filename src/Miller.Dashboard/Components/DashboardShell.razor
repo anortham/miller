@@ -1,0 +1,31 @@
+@namespace Miller.Dashboard.Components
+
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="htmx-config" content='{"selfRequestsOnly":true,"allowEval":false}'>
+    <title>Miller Dashboard</title>
+    <link rel="stylesheet" href="/dashboard.css">
+    <script src="/lib/htmx/htmx.min.js"></script>
+</head>
+<body>
+    <main class="shell">
+        <header class="topbar">
+            <div>
+                <p class="eyebrow">Local telemetry</p>
+                <h1>Miller Dashboard</h1>
+            </div>
+            <a class="api-link" href="/telemetry.json?workspace_id=@Uri.EscapeDataString(Snapshot.SelectedWorkspaceId ?? "")">telemetry.json</a>
+        </header>
+
+        <DashboardContent Snapshot="Snapshot" />
+    </main>
+</body>
+</html>
+
+@code {
+    [Parameter, EditorRequired] public DashboardSnapshot Snapshot { get; set; } =
+        new(Array.Empty<DashboardWorkspaceRow>(), new DashboardTelemetrySummary(null, [], 0, null, null, []), null);
+}

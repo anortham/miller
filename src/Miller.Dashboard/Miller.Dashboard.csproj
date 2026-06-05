@@ -3,4 +3,8 @@
     <ProjectReference Include="../Miller.Indexing/Miller.Indexing.csproj" />
     <ProjectReference Include="../Miller.Server/Miller.Server.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <Content Update="wwwroot/**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>
