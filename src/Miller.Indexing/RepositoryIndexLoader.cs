@@ -76,6 +76,7 @@ public static class RepositoryIndexLoader
         //    consume those). MEASURE the build cost (plan Task 9) — do NOT add caching/persistence speculatively.
         var bridgeData = SqliteBridgeReader.Read(dbPath);
         var symbolDetails = ProjectToSymbolDetails(symbols);
+        var bridgeProviders = BridgeProviderSelection.ProvidersForDatabase(dbPath);
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         var bridgeGraph = BridgeGraphBuilder.Build(
@@ -84,6 +85,7 @@ public static class RepositoryIndexLoader
             bridgeData.Literals,
             bridgeData.Annotations,
             bridgeData.DbSetProperties,
+            bridgeProviders,
             bridgeData.LiteralSites);
         stopwatch.Stop();
         onBridgeGraphBuilt?.Invoke(stopwatch.Elapsed);

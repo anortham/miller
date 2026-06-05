@@ -23,7 +23,7 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
         _dir = Path.Combine(Path.GetTempPath(), "miller-loaderbridge-" + Guid.NewGuid().ToString("N"));
         System.IO.Directory.CreateDirectory(_dir);
         _dbPath = Path.Combine(_dir, "symbols.db");
-        BuildChainDb();
+        BuildChainDb(_dbPath);
     }
 
     public void Dispose()
@@ -35,10 +35,10 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
     //   CreateMap<ApplicationUser, UserDto>  (DTO↔entity, MapsTo)   +   DbSet<ApplicationUser> ApplicationUsers (entity↔table, StoredIn)
     // The entity (ApplicationUser) and DTO (UserDto) are real class symbols so the SymbolResolver resolves both
     // sides and the scorer can band the StoredIn/MapsTo edges High.
-    private void BuildChainDb()
+    private static void BuildChainDb(string dbPath)
     {
         using var connection = new SqliteConnection(
-            new SqliteConnectionStringBuilder { DataSource = _dbPath, Mode = SqliteOpenMode.ReadWriteCreate }.ToString());
+            new SqliteConnectionStringBuilder { DataSource = dbPath, Mode = SqliteOpenMode.ReadWriteCreate }.ToString());
         connection.Open();
 
         using (var command = connection.CreateCommand())
@@ -119,6 +119,22 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
         command.ExecuteNonQuery();
     }
 
+    private static (string Root, string DbPath) CreateConfiguredBridgeWorkspace(string configJson)
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-bridge-config-" + Guid.NewGuid().ToString("N"));
+        string millerDir = Path.Combine(root, ".miller");
+        System.IO.Directory.CreateDirectory(millerDir);
+        string dbPath = Path.Combine(millerDir, "symbols.db");
+        BuildChainDb(dbPath);
+        File.WriteAllText(Path.Combine(root, "miller.json"), configJson);
+        return (root, dbPath);
+    }
+
+    private static void TryDelete(string path)
+    {
+        try { System.IO.Directory.Delete(path, recursive: true); } catch { /* best effort */ }
+    }
+
     [Fact]
     public void Load_PopulatesBridgeGraph_WithTheEntityTableChain()
     {
@@ -138,6 +154,7 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
         Assert.Equal(ConfidenceBand.High, storedIn.Band);
         Assert.Equal("ApplicationUser", storedIn.Edge.SourceRef.Display);
         Assert.Equal("ApplicationUsers", storedIn.Edge.TargetRef.Display);
+        Assert.Contains("dotnet-web", index.BridgeGraph.CapabilityReport.ActiveProviders);
     }
 
     [Fact]
@@ -187,6 +204,81 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
         Assert.Equal(1, calls);
         Assert.True(observed >= TimeSpan.Zero);
         Assert.True(index.BridgeGraph.Contains("s-entity")); // and the graph is still populated
+    }
+
+    [Fact]
+    public void Load_RootMillerJsonDotnetWebProvider_PopulatesBridgeGraph()
+    {
+        var (root, dbPath) = CreateConfiguredBridgeWorkspace("""
+            {
+              "bridge": {
+                "providers": ["dotnet-web"]
+              }
+            }
+            """);
+        try
+        {
+            var index = RepositoryIndexLoader.Load(dbPath);
+
+            Assert.True(index.BridgeGraph.Contains("s-entity"));
+            Assert.Contains("dotnet-web", index.BridgeGraph.CapabilityReport.ActiveProviders);
+        }
+        finally
+        {
+            TryDelete(root);
+        }
+    }
+
+    [Fact]
+    public void Load_RootMillerJsonEmptyProviders_DisablesBridgeGraph()
+    {
+        var (root, dbPath) = CreateConfiguredBridgeWorkspace("""
+            {
+              "bridge": {
+                "providers": []
+              }
+            }
+            """);
+        try
+        {
+            var index = RepositoryIndexLoader.Load(dbPath);
+
+            Assert.False(index.BridgeGraph.Contains("s-entity"));
+            Assert.Empty(index.BridgeGraph.CapabilityReport.ActiveProviders);
+            Assert.Contains(
+                index.BridgeGraph.CapabilityReport.Notes,
+                note => note.Contains("no bridge providers", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            TryDelete(root);
+        }
+    }
+
+    [Fact]
+    public void Load_RootMillerJsonUnknownProvider_DoesNotRunDefaultProvider()
+    {
+        var (root, dbPath) = CreateConfiguredBridgeWorkspace("""
+            {
+              "bridge": {
+                "providers": ["rails"]
+              }
+            }
+            """);
+        try
+        {
+            var index = RepositoryIndexLoader.Load(dbPath);
+
+            Assert.False(index.BridgeGraph.Contains("s-entity"));
+            var skipped = Assert.Single(index.BridgeGraph.CapabilityReport.SkippedProviders);
+            Assert.Equal("rails", skipped.ProviderId);
+            Assert.Contains("unknown bridge provider", skipped.Reason, StringComparison.OrdinalIgnoreCase);
+            Assert.Empty(index.BridgeGraph.CapabilityReport.ActiveProviders);
+        }
+        finally
+        {
+            TryDelete(root);
+        }
     }
 
     [Fact]

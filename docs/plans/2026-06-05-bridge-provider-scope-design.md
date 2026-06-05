@@ -4,8 +4,9 @@ Date: 2026-06-05
 
 ## Status
 
-Approved direction. First provider-seam slice implemented: current reducers are behind `dotnet-web`, bridge graphs carry
-capability metadata, and trace reports no-bridge provider status. Config-driven provider selection remains open.
+Approved direction. Provider seam and root `miller.json` selection are implemented: current reducers are behind
+`dotnet-web`, bridge graphs carry capability metadata, and trace reports no-bridge provider status. Measured dogfood and
+future provider fixtures remain open.
 
 ## Problem
 
@@ -165,7 +166,7 @@ behavior-preserving extraction of the existing dotnet bridge before any new prov
 - [x] Bridge builder accepts an explicit provider set and does not hard-code the dotnet reducers directly.
 - [x] `trace mode=bridge` reports provider/capability status on no-bridge paths when useful.
 - [x] Unsupported/no-provider paths do not look like empty-success; they surface an explicit skipped/no-provider note.
-- [ ] The default provider selection is conservative and tested.
+- [x] The default provider selection is conservative and tested.
 - [x] The old C#/TS-specific labels in public comments and docs are reframed as `dotnet-web`, not universal bridge support.
 - [x] Fast tests cover the provider seam, disabled-provider behavior, and unchanged dotnet bridge output.
 - [ ] Scale or fixture tests prove any future provider before it is enabled.
@@ -175,7 +176,7 @@ behavior-preserving extraction of the existing dotnet bridge before any new prov
 1. [done] Add provider interfaces and build-result metadata in `Miller.Core`.
 2. [done] Extract current reductions into `DotnetWebBridgeProvider` with unchanged candidate output.
 3. [done] Change `BridgeGraphBuilder.Build` to orchestrate providers, score candidates, and carry capability metadata.
-4. Thread provider selection from indexing/load configuration.
+4. [done] Thread provider selection from indexing/load configuration.
 5. [done] Update `TraceTool` rendering to show provider capability status on no-bridge paths.
 6. Update docs and agent instructions so agents treat bridge output as provider-scoped evidence.
 
