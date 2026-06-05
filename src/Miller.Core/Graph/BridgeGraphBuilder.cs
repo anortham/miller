@@ -4,43 +4,23 @@ using Miller.Core.Resolver;
 namespace Miller.Core.Graph;
 
 /// <summary>
-/// Assembles the in-memory <see cref="BridgeGraph"/> from the raw julie-derived contract collections (plan Task 8;
-/// design §3/§4). PURE Miller.Core — it takes already-loaded value records (the DB reader, plan Task 9, supplies them)
-/// and performs the per-leg REDUCTIONS the legs explicitly delegate to the builder, then runs the three legs, scores
-/// every candidate, and builds the graph. No DB, no I/O.
+/// Assembles the in-memory <see cref="BridgeGraph"/> from the raw julie-derived contract collections. PURE Miller.Core
+/// — it takes already-loaded value records, asks bridge providers to reduce framework-specific evidence into candidate
+/// edges, scores every candidate, and builds the graph. No DB, no I/O.
 ///
-/// <para>The reductions the builder owns (each is named in the corresponding leg's doc-comment as "the graph builder's
-/// job, out of this leg's scope"):
-/// <list type="bullet">
-/// <item><b>CreateMap grouping</b> — group <c>type_arguments</c> by <c>identifier_id</c> into A/B pairs (ordinal 0 =
-/// copy-source, ordinal 1 = copy-dest into a <see cref="CreateMapCandidate"/>). The ordinal IS the copy direction — the
-/// builder NEVER classifies entity-vs-DTO. Only un-nested (no <c>parent_arg_id</c>) two-arg groups are taken; the leg +
-/// scorer + name-resolution gate then filter (an unresolvable pair yields no edge).</item>
-/// <item><b>Controller endpoint reduction</b> — for method symbols carrying an http-verb annotation, find the parent
-/// class by <see cref="SymbolDetail.ParentClassName"/> for the class <c>[Route]</c>, parse the method route from the
-/// verb annotation <c>raw_text</c>, and parse the return + request-body types from the method <c>signature</c> into a
-/// <see cref="ControllerEndpoint"/>.</item>
-/// <item><b>TsClientCall reduction</b> — for <c>kind='url'</c> literals, attach the containing symbol's
-/// <c>is_test</c> flag and the use-site file:line into a <see cref="TsClientCall"/>.</item>
-/// </list></para>
-///
-/// <para><b>Contract gap (flagged, not silently worked around).</b> The Dapper-FROM secondary anchor (Leg 3's
-/// <see cref="DapperFromCandidate"/>) cannot be produced here: it requires pairing a <c>kind='sql'</c> literal to a
-/// co-located entity <c>type_argument</c> by span proximity within the same containing symbol, but the verified
-/// <see cref="TypeArgument"/> contract carries NEITHER a <c>containing_symbol_id</c> NOR a span — so there is no key or
-/// proximity signal to pair on (and <see cref="LiteralRecord"/> carries no <c>identifier_id</c> for a join — findings
-/// 28-2). The builder therefore emits no Dapper candidates; the DbSet&lt;T&gt; property remains Leg 3's PRIMARY (and on
-/// the verified MyraNext shape, 13/15 sql literals have no FROM clause anyway, so the Dapper path is opportunistic).
-/// Task 9 / a contract revision can add the co-location fields to <see cref="TypeArgument"/> to re-enable it.</para>
+/// <para>The default provider is <see cref="DotnetWebBridgeProvider"/>, which owns the current ASP.NET/TypeScript
+/// reductions: CreateMap pairs, controller endpoints, client URL calls, and EF DbSet breadcrumbs. The builder remains
+/// provider-agnostic so future bridge models can plug in without changing scoring or graph traversal.</para>
 ///
 /// <para><b>Literal evidence seam (Task 9 must match this).</b> <see cref="LiteralRecord"/> surfaces only a byte
 /// <c>span</c> + <c>containing_symbol_id</c>; it does not re-expose the <c>literals</c> row's own file/line columns. So
-/// the builder takes a reader-supplied <c>literal → (file, line)</c> lookup (<paramref name="literalSites"/> on
-/// <see cref="Build"/>) rather than extending <see cref="LiteralRecord"/> — keeping Miller.Core free of julie row-shape
-/// leakage. A literal absent from the lookup falls back to its containing symbol's file:line.</para>
+/// providers receive a reader-supplied <c>literal → (file, line)</c> lookup (<paramref name="literalSites"/> on
+/// <see cref="Build"/>) rather than extending <see cref="LiteralRecord"/>.</para>
 /// </summary>
 public static class BridgeGraphBuilder
 {
+    private static readonly IBridgeProvider[] DefaultProviders = [DotnetWebBridgeProvider.Instance];
+
     /// <summary>
     /// Build the cross-language <see cref="BridgeGraph"/> over a workspace's symbols + julie breadcrumbs.
     /// </summary>
@@ -60,6 +40,22 @@ public static class BridgeGraphBuilder
         IReadOnlyList<LiteralRecord> literals,
         IReadOnlyList<SymbolAnnotation> annotations,
         IReadOnlyList<DbSetProperty> dbSetProperties,
+        IReadOnlyDictionary<LiteralRecord, LiteralSite>? literalSites = null) =>
+        Build(symbols, typeArguments, literals, annotations, dbSetProperties, DefaultProviders, literalSites);
+
+    /// <summary>
+    /// Build the cross-language <see cref="BridgeGraph"/> with an explicit provider set. Tests and future
+    /// configuration use this seam to verify provider-specific capability boundaries without changing the scorer or
+    /// graph traversal.
+    /// </summary>
+    /// <exception cref="ArgumentNullException">Any required collection is null.</exception>
+    public static BridgeGraph Build(
+        IReadOnlyList<SymbolDetail> symbols,
+        IReadOnlyList<TypeArgument> typeArguments,
+        IReadOnlyList<LiteralRecord> literals,
+        IReadOnlyList<SymbolAnnotation> annotations,
+        IReadOnlyList<DbSetProperty> dbSetProperties,
+        IReadOnlyList<IBridgeProvider> providers,
         IReadOnlyDictionary<LiteralRecord, LiteralSite>? literalSites = null)
     {
         ArgumentNullException.ThrowIfNull(symbols);
@@ -67,23 +63,51 @@ public static class BridgeGraphBuilder
         ArgumentNullException.ThrowIfNull(literals);
         ArgumentNullException.ThrowIfNull(annotations);
         ArgumentNullException.ThrowIfNull(dbSetProperties);
+        ArgumentNullException.ThrowIfNull(providers);
 
         var symbolsById = BuildSymbolIndex(symbols);
         var resolver = new SymbolResolver(symbols);
 
-        // --- the reductions (Task 8's job per the leg doc-comments) ---------------------------------------------
-        var createMaps = ReduceCreateMaps(typeArguments);
-        var endpoints = ReduceEndpoints(symbols, annotations);
-        var clientCalls = ReduceClientCalls(literals, symbolsById, literalSites);
-
-        // --- run the three legs (each emits candidates; the scorer scores) --------------------------------------
+        // --- run enabled bridge providers; each emits candidates that the shared scorer scores -------------------
         var candidates = new List<CandidateEdge>();
-        candidates.AddRange(EntityTableBridge.Resolve(
-            new EntityTableInput(dbSetProperties, DapperFromCandidates: []), resolver));
-        candidates.AddRange(DtoEntityBridge.Resolve(
-            new DtoEntityInput(createMaps, Projections: [], FieldSources: null), resolver));
-        candidates.AddRange(RouteBridge.Resolve(
-            new RouteBridgeInput(clientCalls, endpoints), resolver));
+        var activeProviders = new List<string>();
+        var skippedProviders = new List<BridgeProviderSkip>();
+        var notes = new List<string>();
+        var evidenceCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        if (providers.Count == 0)
+            notes.Add("no bridge providers enabled");
+
+        var context = new BridgeProviderContext(
+            symbols,
+            typeArguments,
+            literals,
+            annotations,
+            dbSetProperties,
+            literalSites,
+            symbolsById,
+            resolver);
+
+        foreach (var provider in providers)
+        {
+            ArgumentNullException.ThrowIfNull(provider);
+
+            var result = provider.BuildCandidates(context) ??
+                         throw new InvalidOperationException($"Bridge provider '{provider.Id}' returned null.");
+            AddEvidenceCounts(evidenceCounts, result.EvidenceCounts);
+
+            if (result.Active)
+            {
+                activeProviders.Add(provider.Id);
+                candidates.AddRange(result.Candidates);
+            }
+            else
+            {
+                skippedProviders.Add(new BridgeProviderSkip(
+                    provider.Id,
+                    string.IsNullOrWhiteSpace(result.SkipReason) ? "no bridge evidence" : result.SkipReason));
+            }
+        }
 
         // --- score; drop nulls (no-edge per design §5) ----------------------------------------------------------
         var scored = new List<ScoredEdge>();
@@ -96,329 +120,12 @@ public static class BridgeGraphBuilder
 
         // --- build a node for every endpoint of a surviving edge, then the graph --------------------------------
         var nodes = BuildNodes(scored, symbolsById);
-        return BridgeGraph.Build(scored, nodes);
-    }
-
-    // ============================ CreateMap grouping (Leg 2 PRIMARY reduction) ==================================
-
-    /// <summary>
-    /// Group the <c>type_arguments</c> of each generic use-site (one group per <c>identifier_id</c>) into the A/B pair
-    /// of a candidate map: ordinal 0 = copy-source, ordinal 1 = copy-dest into a <see cref="CreateMapCandidate"/>. ONLY
-    /// the two top-level args of a use-site are read; nested generic args (<c>parent_arg_id</c> set) are skipped — they
-    /// are the components of a generic type arg, not the map's own A/B. The ordinal encodes the COPY direction; the
-    /// builder NEVER reorders to entity-vs-DTO (the design §8 trap). The leg + scorer + name-resolution gate filter the
-    /// over-produced set: an unresolvable pair yields no edge.
-    ///
-    /// <para><b>Contract limit.</b> The verified <see cref="TypeArgument"/> carries no use-site name or kind, so the
-    /// builder cannot restrict to literal <c>CreateMap</c> calls, and no <c>.ReverseMap()</c> sibling is observable —
-    /// <see cref="CreateMapCandidate.HasReverseMap"/> is therefore always false (a contract gap, see the type remarks).
-    /// Only un-nested, exactly-two-arg groups are admitted, which keeps over-production tight.</para>
-    /// </summary>
-    private static IReadOnlyList<CreateMapCandidate> ReduceCreateMaps(IReadOnlyList<TypeArgument> typeArguments)
-    {
-        // identifier_id -> the two top-level args (ordinal -> type name + a use-site file), plus a count of how many
-        // distinct top-level ordinals appeared (to reject groups that are not a clean A/B pair).
-        var groups = new Dictionary<string, CreateMapGroup>(StringComparer.Ordinal);
-
-        foreach (var arg in typeArguments)
-        {
-            if (arg.ParentArgId is not null)
-                continue; // a nested generic component, not one of the map's own A/B
-            if (string.IsNullOrEmpty(arg.IdentifierId) || string.IsNullOrWhiteSpace(arg.TypeName))
-                continue;
-
-            if (!groups.TryGetValue(arg.IdentifierId, out var group))
-            {
-                group = new CreateMapGroup();
-                groups[arg.IdentifierId] = group;
-            }
-
-            group.TopLevelArgCount++;
-            if (arg.Ordinal == 0)
-                group.Source ??= arg.TypeName;
-            else if (arg.Ordinal == 1)
-                group.Dest ??= arg.TypeName;
-            group.FilePath ??= arg.FilePath;
-        }
-
-        // Deterministic order: by identifier_id.
-        var candidates = new List<CreateMapCandidate>();
-        foreach (var identifierId in Sorted(groups.Keys))
-        {
-            var group = groups[identifierId];
-            if (group.Source is null || group.Dest is null)
-                continue; // not a clean ordinal 0 + 1 pair
-            if (group.TopLevelArgCount != 2)
-                continue; // a 1-arg or 3+-arg generic use-site is not a 2-type map (e.g. Dictionary<,>, single T)
-
-            candidates.Add(new CreateMapCandidate(
-                group.Source,
-                group.Dest,
-                group.FilePath ?? string.Empty,
-                Line: 0,
-                HasReverseMap: false));
-        }
-        return candidates;
-    }
-
-    private sealed class CreateMapGroup
-    {
-        public string? Source;
-        public string? Dest;
-        public string? FilePath;
-        public int TopLevelArgCount;
-    }
-
-    // ============================ Controller endpoint reduction (Leg 1 C# side) =================================
-
-    /// <summary>
-    /// Reduce each method symbol carrying an http-verb annotation into a <see cref="ControllerEndpoint"/>: find the
-    /// parent class by <see cref="SymbolDetail.ParentClassName"/> for the class <c>[Route]</c>, parse the method route
-    /// from the verb annotation <c>raw_text</c>, and parse the return type + a conservative request-body type from the
-    /// method <c>signature</c>. Deterministic: endpoints ordered by symbol id.
-    ///
-    /// <para><b>Contract note.</b> <see cref="SymbolDetail"/> carries <see cref="SymbolDetail.ParentClassName"/> but no
-    /// parent symbol id, so the class is found by name. When several classes share a name, the class <c>[Route]</c> may
-    /// be wrong; the route normalizer + scorer tolerate a missing/loose class route, and the verb-known route match
-    /// still anchors the edge.</para>
-    /// </summary>
-    private static IReadOnlyList<ControllerEndpoint> ReduceEndpoints(
-        IReadOnlyList<SymbolDetail> symbols,
-        IReadOnlyList<SymbolAnnotation> annotations)
-    {
-        // symbol id -> its annotations, for the verb + class [Route] lookups.
-        var annotationsBySymbol = new Dictionary<string, List<SymbolAnnotation>>(StringComparer.Ordinal);
-        foreach (var annotation in annotations)
-        {
-            if (!annotationsBySymbol.TryGetValue(annotation.SymbolId, out var list))
-            {
-                list = [];
-                annotationsBySymbol[annotation.SymbolId] = list;
-            }
-            list.Add(annotation);
-        }
-
-        // class name -> the class symbol's annotations (for the [Route] lookup by ParentClassName). First class with a
-        // [Route] wins for a duplicated name; deterministic by symbol id.
-        var classRouteByName = new Dictionary<string, string?>(StringComparer.Ordinal);
-        foreach (var symbol in symbols.OrderBy(s => s.Id, StringComparer.Ordinal))
-        {
-            if (!IsClassKind(symbol.Kind))
-                continue;
-            if (classRouteByName.ContainsKey(symbol.Name))
-                continue;
-            classRouteByName[symbol.Name] =
-                annotationsBySymbol.TryGetValue(symbol.Id, out var classAnnotations)
-                    ? RouteArgOf(classAnnotations)
-                    : null;
-        }
-
-        var endpoints = new List<ControllerEndpoint>();
-        foreach (var method in symbols.OrderBy(s => s.Id, StringComparer.Ordinal))
-        {
-            if (!annotationsBySymbol.TryGetValue(method.Id, out var methodAnnotations))
-                continue;
-
-            var verbAnnotation = methodAnnotations.FirstOrDefault(a => IsHttpVerbKey(a.AnnotationKey));
-            if (verbAnnotation is null)
-                continue;
-
-            var parentClassName = method.ParentClassName ?? string.Empty;
-            if (parentClassName.Length == 0)
-                continue; // cannot expand [controller] without a parent class name
-
-            string? classRoute = classRouteByName.TryGetValue(parentClassName, out var route) ? route : null;
-
-            var methodRoute = FirstStringArg(verbAnnotation.RawText);
-            var (returnType, requestBodyType) = ParseSignatureTypes(method.Signature, verbAnnotation.AnnotationKey);
-
-            endpoints.Add(new ControllerEndpoint(
-                SymbolId: method.Id,
-                VerbKey: verbAnnotation.AnnotationKey,
-                ClassRoute: classRoute,
-                MethodRoute: methodRoute,
-                ParentClassName: parentClassName,
-                MethodName: method.Name,
-                ReturnType: returnType,
-                RequestBodyType: requestBodyType,
-                FilePath: method.FilePath,
-                Line: 0));
-        }
-        return endpoints;
-    }
-
-    private static bool IsClassKind(string kind) =>
-        string.Equals(kind, "class", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(kind, "record", StringComparison.OrdinalIgnoreCase);
-
-    private static readonly string[] HttpVerbKeys =
-    [
-        "httpget", "httppost", "httpput", "httpdelete", "httppatch", "httphead", "httpoptions",
-    ];
-
-    private static bool IsHttpVerbKey(string key)
-    {
-        foreach (var verb in HttpVerbKeys)
-        {
-            if (string.Equals(key, verb, StringComparison.OrdinalIgnoreCase))
-                return true;
-        }
-        return false;
-    }
-
-    // Body-bearing verbs whose request parameter MAY be a request body (findings 28-2: [FromBody] is NOT persisted).
-    private static readonly string[] BodyBearingVerbKeys = ["httppost", "httpput", "httppatch"];
-
-    private static bool IsBodyBearingVerb(string verbKey)
-    {
-        foreach (var verb in BodyBearingVerbKeys)
-        {
-            if (string.Equals(verbKey, verb, StringComparison.OrdinalIgnoreCase))
-                return true;
-        }
-        return false;
-    }
-
-    /// <summary>The route arg of a class's <c>[Route("...")]</c> annotation, or null when the class declares none.</summary>
-    private static string? RouteArgOf(List<SymbolAnnotation> classAnnotations)
-    {
-        foreach (var annotation in classAnnotations)
-        {
-            if (string.Equals(annotation.AnnotationKey, "route", StringComparison.OrdinalIgnoreCase))
-                return FirstStringArg(annotation.RawText);
-        }
-        return null;
-    }
-
-    /// <summary>
-    /// Parse the method signature into (returnType, requestBodyType). The return type is the leading token run before
-    /// the method-name "(". The request-body type is populated CONSERVATIVELY (findings 28-2: <c>[FromBody]</c> is NOT
-    /// persisted by julie 28/2 — a param attribute degrades to the declared parameter type in the signature): ONLY a
-    /// plausible request-body parameter (a complex, non-primitive, non-route-bound type) on a body-bearing verb
-    /// (POST/PUT/PATCH) is promoted; otherwise null. An arbitrary first parameter is NEVER promoted to a Consumes edge.
-    /// </summary>
-    private static (string ReturnType, string? RequestBodyType) ParseSignatureTypes(string signature, string verbKey)
-    {
-        var returnType = ParseReturnType(signature);
-        string? requestBodyType = null;
-
-        if (IsBodyBearingVerb(verbKey))
-            requestBodyType = ParseRequestBodyType(signature);
-
-        return (returnType, requestBodyType);
-    }
-
-    /// <summary>The return type = the balanced-aware leading token run before the parameter-list <c>(</c>.</summary>
-    private static string ParseReturnType(string signature)
-    {
-        var sig = (signature ?? string.Empty).Trim();
-        int open = TopLevelChar(sig, '(');
-        if (open < 0)
-            return sig; // no parameter list visible — treat the whole thing as the return type
-
-        var head = sig[..open].Trim();
-        // head is "...modifiers Return MethodName" — the return type is the second-to-last top-level token run.
-        int lastSpace = LastTopLevelSpace(head);
-        return lastSpace <= 0 ? string.Empty : head[..lastSpace].Trim();
-    }
-
-    /// <summary>
-    /// The first parameter whose type is a complex (non-primitive) user type, on a body-bearing verb — the
-    /// conservative request-body candidate. A route-bound primitive (<c>int id</c>, <c>string name</c>) is never a body.
-    /// </summary>
-    private static string? ParseRequestBodyType(string signature)
-    {
-        var sig = signature ?? string.Empty;
-        int open = TopLevelChar(sig, '(');
-        if (open < 0)
-            return null;
-        var inner = BalancedInner(sig, open);
-        if (inner is null || inner.Trim().Length == 0)
-            return null;
-
-        foreach (var param in SplitTopLevel(inner))
-        {
-            var type = ParamType(param);
-            if (type is null)
-                continue;
-            if (IsPlausibleBodyType(type))
-                return type;
-        }
-        return null;
-    }
-
-    /// <summary>A parameter's declared type = everything before its last top-level token (the name); null if malformed.</summary>
-    private static string? ParamType(string param)
-    {
-        var p = param.Trim();
-        if (p.Length == 0)
-            return null;
-
-        int eq = TopLevelIndexOf(p, '=');
-        if (eq >= 0)
-            p = p[..eq].Trim();
-
-        int lastSpace = LastTopLevelSpace(p);
-        if (lastSpace <= 0)
-            return null;
-
-        var type = p[..lastSpace].Trim();
-        return type.Length == 0 ? null : type;
-    }
-
-    /// <summary>True when a parameter type is a complex named type plausibly carrying a request body (not a primitive).</summary>
-    private static bool IsPlausibleBodyType(string type)
-    {
-        var t = type.TrimEnd('?').Trim();
-        if (t.Length == 0)
-            return false;
-        // A generic/collection or array param is not a single request DTO; treat only a bare named type as a body.
-        if (t.IndexOfAny(['<', '>', '[', ']']) >= 0)
-            return false;
-        if (Primitives.Contains(t))
-            return false;
-        // Must look like a user type (an upper-case leading char, or interface 'I' prefix).
-        return char.IsUpper(t[0]);
-    }
-
-    private static readonly HashSet<string> Primitives = new(StringComparer.Ordinal)
-    {
-        "bool", "byte", "sbyte", "char", "decimal", "double", "float", "int", "uint", "long", "ulong", "short",
-        "ushort", "string", "object", "void", "Guid", "DateTime", "DateTimeOffset", "TimeSpan", "Boolean", "Int32",
-        "Int64", "Int16", "Double", "Single", "Decimal", "String", "Object", "Byte", "Char", "CancellationToken",
-    };
-
-    // ============================ TsClientCall reduction (Leg 1 TS side) ========================================
-
-    /// <summary>
-    /// Reduce each <c>kind='url'</c> literal into a <see cref="TsClientCall"/>, attaching the containing symbol's
-    /// <c>is_test</c> flag and the use-site file:line. The leg itself does the language + test filter; the builder
-    /// only supplies the located rows. Deterministic: ordered by literal span.
-    /// </summary>
-    private static IReadOnlyList<TsClientCall> ReduceClientCalls(
-        IReadOnlyList<LiteralRecord> literals,
-        IReadOnlyDictionary<string, SymbolDetail> symbolsById,
-        IReadOnlyDictionary<LiteralRecord, LiteralSite>? literalSites)
-    {
-        var calls = new List<TsClientCall>();
-        var ordered = literals
-            .Where(l => string.Equals(l.Kind, "url", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(l => l.Span.StartByte)
-            .ThenBy(l => l.ContainingSymbolId, StringComparer.Ordinal);
-
-        foreach (var literal in ordered)
-        {
-            bool isTest = false;
-            if (!string.IsNullOrEmpty(literal.ContainingSymbolId) &&
-                symbolsById.TryGetValue(literal.ContainingSymbolId, out var container))
-            {
-                isTest = container.IsTest;
-            }
-
-            var site = SiteFor(literal, symbolsById, literalSites);
-            calls.Add(new TsClientCall(literal, isTest, site.FilePath, site.Line));
-        }
-        return calls;
+        var capabilityReport = new BridgeCapabilityReport(
+            activeProviders,
+            skippedProviders,
+            notes,
+            evidenceCounts);
+        return BridgeGraph.Build(scored, nodes, capabilityReport);
     }
 
     // ============================ node construction ============================================================
@@ -478,148 +185,19 @@ public static class BridgeGraphBuilder
         return byId;
     }
 
-    /// <summary>
-    /// Resolve a literal's use-site file:line: the reader-supplied lookup first (the seam), else the containing
-    /// symbol's file (line 0, unknown). A literal with neither yields an empty file + line 0.
-    /// </summary>
-    private static LiteralSite SiteFor(
-        LiteralRecord literal,
-        IReadOnlyDictionary<string, SymbolDetail> symbolsById,
-        IReadOnlyDictionary<LiteralRecord, LiteralSite>? literalSites)
+    private static void AddEvidenceCounts(
+        Dictionary<string, int> target,
+        IReadOnlyDictionary<string, int> source)
     {
-        if (literalSites is not null && literalSites.TryGetValue(literal, out var site))
-            return site;
-
-        if (!string.IsNullOrEmpty(literal.ContainingSymbolId) &&
-            symbolsById.TryGetValue(literal.ContainingSymbolId, out var container))
-            return new LiteralSite(container.FilePath, 0);
-
-        return new LiteralSite(string.Empty, 0);
-    }
-
-    private static IEnumerable<string> Sorted(IEnumerable<string> keys)
-    {
-        var list = keys.ToList();
-        list.Sort(StringComparer.Ordinal);
-        return list;
-    }
-
-    /// <summary>The first double-quoted string argument in a raw attribute text, or null.</summary>
-    private static string? FirstStringArg(string rawText)
-    {
-        if (rawText is null)
-            return null;
-        int start = rawText.IndexOf('"');
-        if (start < 0)
-            return null;
-        int end = rawText.IndexOf('"', start + 1);
-        if (end <= start)
-            return null;
-        return rawText[(start + 1)..end];
-    }
-
-    // ---- balanced-bracket helpers (treat <...>/(...)/[...] by depth) -------------------------------------------
-
-    private static int TopLevelChar(string s, char target)
-    {
-        int depth = 0;
-        for (int i = 0; i < s.Length; i++)
+        foreach (var item in source.OrderBy(kv => kv.Key, StringComparer.Ordinal))
         {
-            char ch = s[i];
-            if (ch is '<' or '[')
-                depth++;
-            else if (ch is '>' or ']')
-                depth--;
-            else if (ch == target && depth == 0)
-                return i;
+            if (target.TryGetValue(item.Key, out int existing))
+                target[item.Key] = existing + item.Value;
+            else
+                target[item.Key] = item.Value;
         }
-        return -1;
     }
 
-    private static string? BalancedInner(string s, int open)
-    {
-        char openCh = s[open];
-        char closeCh = openCh switch { '<' => '>', '(' => ')', '[' => ']', '{' => '}', _ => '\0' };
-        if (closeCh == '\0')
-            return null;
-
-        int depth = 0;
-        for (int i = open; i < s.Length; i++)
-        {
-            if (s[i] == openCh)
-                depth++;
-            else if (s[i] == closeCh)
-            {
-                depth--;
-                if (depth == 0)
-                    return s[(open + 1)..i];
-            }
-        }
-        return null;
-    }
-
-    private static IEnumerable<string> SplitTopLevel(string s)
-    {
-        var parts = new List<string>();
-        var current = new System.Text.StringBuilder();
-        int depth = 0;
-        foreach (var ch in s)
-        {
-            switch (ch)
-            {
-                case '<' or '(' or '[':
-                    depth++;
-                    current.Append(ch);
-                    break;
-                case '>' or ')' or ']':
-                    depth--;
-                    current.Append(ch);
-                    break;
-                case ',' when depth == 0:
-                    parts.Add(current.ToString());
-                    current.Clear();
-                    break;
-                default:
-                    current.Append(ch);
-                    break;
-            }
-        }
-        if (current.Length > 0)
-            parts.Add(current.ToString());
-        return parts;
-    }
-
-    private static int TopLevelIndexOf(string s, char target)
-    {
-        int depth = 0;
-        for (int i = 0; i < s.Length; i++)
-        {
-            char ch = s[i];
-            if (ch is '<' or '(' or '[')
-                depth++;
-            else if (ch is '>' or ')' or ']')
-                depth--;
-            else if (ch == target && depth == 0)
-                return i;
-        }
-        return -1;
-    }
-
-    private static int LastTopLevelSpace(string s)
-    {
-        int depth = 0, last = -1;
-        for (int i = 0; i < s.Length; i++)
-        {
-            char ch = s[i];
-            if (ch is '<' or '(' or '[')
-                depth++;
-            else if (ch is '>' or ')' or ']')
-                depth--;
-            else if ((ch == ' ' || ch == '\t') && depth == 0)
-                last = i;
-        }
-        return last;
-    }
 }
 
 /// <summary>

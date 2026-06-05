@@ -69,7 +69,8 @@ public sealed class TraceToolTests
     private static MillerRepositoryIndex BuildBridgeIndex(
         IReadOnlyList<(string symbolId, string name, string file, int line)> symbols,
         IReadOnlyList<ScoredEdge> edges,
-        IReadOnlyDictionary<string, BridgeNode> extraNodes)
+        IReadOnlyDictionary<string, BridgeNode> extraNodes,
+        BridgeCapabilityReport? capabilityReport = null)
     {
         var indexed = new List<IndexedSymbol>(symbols.Count);
         var nodes = new Dictionary<string, BridgeNode>(StringComparer.Ordinal);
@@ -84,7 +85,7 @@ public sealed class TraceToolTests
         foreach (var (id, node) in extraNodes)
             nodes[id] = node;
 
-        var bridge = BridgeGraph.Build(edges, nodes);
+        var bridge = BridgeGraph.Build(edges, nodes, capabilityReport);
         return MillerRepositoryIndex.Build(indexed, Array.Empty<GraphEdge>(), bridge);
     }
 
@@ -367,6 +368,29 @@ public sealed class TraceToolTests
 
         Assert.Equal(0, emitted);
         Assert.Contains("not on a cross-language bridge", outp);
+    }
+
+    [Fact]
+    public void Bridge_NotOnBridge_IncludesCapabilityStatus_WhenProvidersSkipped()
+    {
+        var capability = new BridgeCapabilityReport(
+            ActiveProviders: [],
+            SkippedProviders: [new BridgeProviderSkip("dotnet-web", "no dotnet-web bridge evidence")],
+            Notes: [],
+            EvidenceCounts: new Dictionary<string, int>(StringComparer.Ordinal));
+        var index = BuildBridgeIndex(
+            new[] { ("x", "Loner", "src/Loner.cs", 1) },
+            Array.Empty<ScoredEdge>(),
+            new Dictionary<string, BridgeNode>(StringComparer.Ordinal),
+            capability);
+
+        string outp = TraceTool.Run(index, ResolverFor(index),
+            target: "Loner", mode: "bridge", to: null, depth: 3, limit: 20, fullFormat: false,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        Assert.Contains("bridge providers active: none", outp);
+        Assert.Contains("dotnet-web skipped: no dotnet-web bridge evidence", outp);
     }
 
     [Fact]

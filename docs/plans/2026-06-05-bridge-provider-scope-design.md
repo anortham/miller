@@ -4,7 +4,8 @@ Date: 2026-06-05
 
 ## Status
 
-Approved direction. This document narrows TODO item 10 before implementation.
+Approved direction. First provider-seam slice implemented: current reducers are behind `dotnet-web`, bridge graphs carry
+capability metadata, and trace reports no-bridge provider status. Config-driven provider selection remains open.
 
 ## Problem
 
@@ -12,13 +13,13 @@ Miller's current cross-language bridge delivers a real agent-facing capability: 
 frontend HTTP call -> endpoint -> request/response DTO -> mapper -> entity -> table. That is the feature we had hoped
 semantic embeddings would unlock in Julie.
 
-The current implementation is too stack-specific to present as general language support:
+The pre-provider implementation was too stack-specific to present as general language support:
 
 - `RouteBridge` assumes TS/JS/Vue-style URL literals on one side and ASP.NET controller annotations on the other.
 - `DtoEntityBridge` assumes AutoMapper-style `CreateMap<A,B>` and projection breadcrumbs.
 - `EntityTableBridge` assumes EF `DbSet<T>` and opportunistic Dapper SQL.
-- `BridgeGraphBuilder.Build` always runs those same static reducers.
-- `BridgeKind` and rendered labels still use C#/TS-oriented naming in comments and output.
+- `BridgeGraphBuilder.Build` always ran those same static reducers.
+- `BridgeKind` and rendered labels used C#/TS-oriented naming in comments and output.
 
 The pinned `julie-extract` reports 36 supported language/extension groups. Miller's bridge should not look
 authoritative for all of them when only one stack family has real evidence.
@@ -160,22 +161,22 @@ behavior-preserving extraction of the existing dotnet bridge before any new prov
 
 ## Acceptance Criteria
 
-- [ ] Existing bridge results remain unchanged when `dotnet-web` is active.
-- [ ] Bridge builder accepts an explicit provider set and does not hard-code the dotnet reducers directly.
-- [ ] `trace mode=bridge` reports active provider/capability status in compact and JSON/full output when useful.
-- [ ] Unsupported stacks do not look like empty-success; they surface an explicit unsupported/no-provider note.
+- [x] Existing bridge results remain unchanged when `dotnet-web` is active.
+- [x] Bridge builder accepts an explicit provider set and does not hard-code the dotnet reducers directly.
+- [x] `trace mode=bridge` reports provider/capability status on no-bridge paths when useful.
+- [x] Unsupported/no-provider paths do not look like empty-success; they surface an explicit skipped/no-provider note.
 - [ ] The default provider selection is conservative and tested.
-- [ ] The old C#/TS-specific labels in public comments and docs are reframed as `dotnet-web`, not universal bridge support.
-- [ ] Fast tests cover the provider seam, disabled-provider behavior, and unchanged dotnet bridge output.
+- [x] The old C#/TS-specific labels in public comments and docs are reframed as `dotnet-web`, not universal bridge support.
+- [x] Fast tests cover the provider seam, disabled-provider behavior, and unchanged dotnet bridge output.
 - [ ] Scale or fixture tests prove any future provider before it is enabled.
 
 ## Implementation Sketch
 
-1. Add provider interfaces and build-result metadata in `Miller.Core`.
-2. Extract current reductions into `DotnetWebBridgeProvider` with unchanged candidate output.
-3. Change `BridgeGraphBuilder.Build` to orchestrate providers, score candidates, and carry capability metadata.
+1. [done] Add provider interfaces and build-result metadata in `Miller.Core`.
+2. [done] Extract current reductions into `DotnetWebBridgeProvider` with unchanged candidate output.
+3. [done] Change `BridgeGraphBuilder.Build` to orchestrate providers, score candidates, and carry capability metadata.
 4. Thread provider selection from indexing/load configuration.
-5. Update `TraceTool` rendering to show active provider/unsupported status.
+5. [done] Update `TraceTool` rendering to show provider capability status on no-bridge paths.
 6. Update docs and agent instructions so agents treat bridge output as provider-scoped evidence.
 
 ## Resolved Choices

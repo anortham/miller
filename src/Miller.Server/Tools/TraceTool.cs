@@ -23,9 +23,9 @@ namespace Miller.Server.Tools;
 /// <item><b>path</b> — the shortest dependency path from <c>target</c> to <c>to</c> via
 ///   <see cref="SymbolGraph.ShortestPath"/> (Task 8); a clean message when the two are not connected within
 ///   <c>depth</c>.</item>
-/// <item><b>bridge</b> — the cross-language structural chain (TS call → endpoint → DTO → entity → table) via
-///   <see cref="BridgeGraph.Walk"/> (Task 8) over the Task-9-populated <see cref="BridgeGraph"/>, rendering each scored
-///   bridge edge with its confidence band and score.</item>
+/// <item><b>bridge</b> — the provider-scoped structural chain via <see cref="BridgeGraph.Walk"/> over the loaded
+///   <see cref="BridgeGraph"/>, rendering each scored bridge edge with its confidence band and score. The current
+///   provider is dotnet-web.</item>
 /// </list>
 ///
 /// <para><b>Honesty flags are load-bearing.</b> A reduced-confidence bridge edge is never rendered as if it were
@@ -54,14 +54,14 @@ public sealed class TraceTool
     [McpServerTool(Name = "trace")]
     [Description(
         "Follow a thread of code through the repository. mode=auto shows a symbol's callers and callees; mode=path " +
-        "shows the shortest dependency path from target to 'to'; mode=bridge follows the cross-language chain " +
-        "(TS call to endpoint to DTO to entity to table) with a confidence band on each link. Reduced-confidence " +
+        "shows the shortest dependency path from target to 'to'; mode=bridge follows provider-scoped cross-language " +
+        "chains (currently dotnet-web: client call to endpoint to DTO/entity/table) with a confidence band. Reduced-confidence " +
         "links are flagged [verb-unknown] / [ambiguous] — never trust an unflagged link more than a flagged one. " +
         "Use before manual caller/callee file hopping. Pass format=full to also see the signals behind each bridge link.")]
     public string Trace(
         [Description("A symbol name/id or a file path (smart-resolved) — where the trace starts.")]
         string target,
-        [Description("Trace mode: auto (callers+callees) | path (shortest path to 'to') | bridge (cross-language chain). Default auto.")]
+        [Description("Trace mode: auto (callers+callees) | path (shortest path to 'to') | bridge (provider-scoped cross-language chain). Default auto.")]
         string mode = "auto",
         [Description("For mode=path: the destination symbol name/id the path must reach. Ignored otherwise.")]
         string? to = null,
@@ -239,8 +239,13 @@ public sealed class TraceTool
         // A symbol with no incident bridge edges is not on any cross-language thread — whether it is absent from the
         // bridge node lookup entirely or present but edge-less, the honest answer is the same. Incident subsumes both.
         if (index.BridgeGraph.Incident(startId).Count == 0)
-            return $"'{target}' is not on a cross-language bridge. trace bridge follows DTO/entity/table/route links; " +
-                   "this symbol has none.";
+        {
+            var message = new StringBuilder();
+            message.Append($"'{target}' is not on a cross-language bridge. trace bridge follows DTO/entity/table/route links; ")
+              .Append("this symbol has none.");
+            AppendBridgeCapabilityStatus(message, index.BridgeGraph.CapabilityReport);
+            return message.ToString();
+        }
 
         IReadOnlyList<ScoredEdge> edges = index.BridgeGraph.Walk(startId, depth);
         nodesVisited = edges.Count;
@@ -266,6 +271,30 @@ public sealed class TraceTool
             emitted++;
         }
         return sb.ToString().TrimEnd('\n');
+    }
+
+    private static void AppendBridgeCapabilityStatus(StringBuilder sb, BridgeCapabilityReport report)
+    {
+        if (!report.HasStatus)
+            return;
+
+        sb.Append('\n');
+        if (report.ActiveProviders.Count == 0)
+        {
+            sb.Append("bridge providers active: none\n");
+        }
+        else
+        {
+            sb.Append("bridge providers active: ")
+              .Append(string.Join(", ", report.ActiveProviders))
+              .Append('\n');
+        }
+
+        foreach (var skipped in report.SkippedProviders)
+            sb.Append(skipped.ProviderId).Append(" skipped: ").Append(skipped.Reason).Append('\n');
+
+        foreach (var note in report.Notes)
+            sb.Append("bridge note: ").Append(note).Append('\n');
     }
 
     // "<source> --<verb>--> <target>  [flags]  <score> (Band)" — one scored bridge link.

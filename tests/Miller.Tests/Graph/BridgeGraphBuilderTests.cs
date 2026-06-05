@@ -156,6 +156,40 @@ public sealed class BridgeGraphBuilderTests
     }
 
     [Fact]
+    public void Build_DefaultProvider_ReportsDotnetWebCapability()
+    {
+        var symbols = new List<SymbolDetail> { Type("sym-appsetting", "AppSetting", "class", "Domain") };
+        var dbSets = new List<DbSetProperty> { DbSet("AppSettings", "AppSetting") };
+
+        var graph = BridgeGraphBuilder.Build(symbols, [], [], [], dbSets);
+
+        Assert.Contains("dotnet-web", graph.CapabilityReport.ActiveProviders);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.dbsets"]);
+        Assert.Empty(graph.CapabilityReport.SkippedProviders);
+    }
+
+    [Fact]
+    public void Build_ExplicitEmptyProviderSet_DisablesDotnetWebBridge()
+    {
+        var symbols = new List<SymbolDetail> { Type("sym-appsetting", "AppSetting", "class", "Domain") };
+        var dbSets = new List<DbSetProperty> { DbSet("AppSettings", "AppSetting") };
+
+        var graph = BridgeGraphBuilder.Build(
+            symbols,
+            [],
+            [],
+            [],
+            dbSets,
+            providers: []);
+
+        Assert.Empty(graph.Incident("sym-appsetting"));
+        Assert.Empty(graph.CapabilityReport.ActiveProviders);
+        Assert.Contains(
+            graph.CapabilityReport.Notes,
+            note => note.Contains("no bridge providers", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void Controller_endpoint_reduction_builds_the_expanded_route_and_hits_edge()
     {
         var classSym = Type("sym-class", "AppSettingsController", "class", "Api.Controllers", "api/AppSettingsController.cs");
@@ -339,6 +373,7 @@ public sealed class BridgeGraphBuilderTests
         Assert.Throws<ArgumentNullException>(() => BridgeGraphBuilder.Build([], [], null!, [], []));
         Assert.Throws<ArgumentNullException>(() => BridgeGraphBuilder.Build([], [], [], null!, []));
         Assert.Throws<ArgumentNullException>(() => BridgeGraphBuilder.Build([], [], [], [], null!));
+        Assert.Throws<ArgumentNullException>(() => BridgeGraphBuilder.Build([], [], [], [], [], providers: null!));
     }
 
     private static LiteralRecord MakeLiteral(

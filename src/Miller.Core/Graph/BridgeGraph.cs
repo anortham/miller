@@ -3,26 +3,26 @@ using Miller.Core.Resolver;
 namespace Miller.Core.Graph;
 
 /// <summary>
-/// The kind of a node in the cross-language <see cref="BridgeGraph"/> (design §4 node kinds). A node is one endpoint of
-/// a scored bridge edge — a TS type, a C# DTO/entity, a database table, or a controller endpoint. The kind is carried
-/// for rendering and to keep the synthetic id of a non-symbol side (table / route endpoint) namespaced by kind so two
-/// different-kind nodes with the same display never collide.
+/// The kind of a node in the provider-scored <see cref="BridgeGraph"/>. Current names reflect the first provider
+/// (<see cref="DotnetWebBridgeProvider"/>), where nodes are client types/calls, .NET DTOs/entities, database tables,
+/// or controller endpoints. The kind is carried for rendering and to keep the synthetic id of a non-symbol side
+/// namespaced by kind so two different-kind nodes with the same display never collide.
 /// </summary>
 public enum BridgeNodeKind
 {
-    /// <summary>A TypeScript/JS type or client-call endpoint (the frontend side of a route or type chain).</summary>
+    /// <summary>A dotnet-web client type or client-call endpoint.</summary>
     TsType,
 
-    /// <summary>A C# DTO (a data-transfer / request / response shape).</summary>
+    /// <summary>A dotnet-web .NET DTO (a data-transfer / request / response shape).</summary>
     CsDto,
 
-    /// <summary>A C# entity (a persistence / domain shape, typically a DbSet element).</summary>
+    /// <summary>A dotnet-web .NET entity (a persistence / domain shape, typically a DbSet element).</summary>
     CsEntity,
 
     /// <summary>A database table (named by EF convention or SQL text — has no code symbol).</summary>
     DbTable,
 
-    /// <summary>A C# controller action endpoint (a route target — the <c>—hits→</c> destination).</summary>
+    /// <summary>A dotnet-web controller action endpoint (a route target — the <c>—hits→</c> destination).</summary>
     Endpoint,
 }
 
@@ -41,11 +41,11 @@ public enum BridgeNodeKind
 public sealed record BridgeNode(string Id, BridgeNodeKind Kind, string Display, string? FilePath, int Line);
 
 /// <summary>
-/// The pure, immutable cross-language bridge graph (design §3/§4; plan Task 8). Built once per index from the
-/// surviving <see cref="ScoredEdge"/>s and a node lookup, it keeps an undirected adjacency over <see cref="BridgeNode"/>
-/// ids so a bounded BFS (<see cref="Walk"/>) follows a thread of code across languages — TS type → DTO → entity →
-/// table, or TS call → endpoint → request/response DTO — without touching the DB. Zero I/O; every method is
-/// deterministic. Mirrors <see cref="SymbolGraph"/>'s immutable, id-sorted-adjacency, atomic-build discipline.
+/// The pure, immutable cross-language bridge graph. Built once per index from the surviving <see cref="ScoredEdge"/>s
+/// and a node lookup, it keeps an undirected adjacency over <see cref="BridgeNode"/> ids so a bounded BFS
+/// (<see cref="Walk"/>) follows provider-scored threads across layers. The current dotnet-web provider can produce
+/// chains like client call → endpoint → DTO/entity → table. Zero I/O; every method is deterministic. Mirrors
+/// <see cref="SymbolGraph"/>'s immutable, id-sorted-adjacency, atomic-build discipline.
 ///
 /// <para><b>Adjacency is undirected for the walk.</b> A bridge edge is a correspondence (a DTO maps-to an entity, an
 /// entity is stored-in a table); a trace can start at any endpoint and follow the chain either way, so each scored edge
@@ -67,11 +67,15 @@ public sealed class BridgeGraph
 
     private BridgeGraph(
         IReadOnlyDictionary<string, ScoredEdge[]> adjacency,
-        IReadOnlyDictionary<string, BridgeNode> nodes)
+        IReadOnlyDictionary<string, BridgeNode> nodes,
+        BridgeCapabilityReport capabilityReport)
     {
         _adjacency = adjacency;
         _nodes = nodes;
+        CapabilityReport = capabilityReport;
     }
+
+    public BridgeCapabilityReport CapabilityReport { get; }
 
     /// <summary>
     /// Build a bridge graph from <paramref name="scoredEdges"/> and a <paramref name="nodes"/> lookup. Each edge is
@@ -85,7 +89,8 @@ public sealed class BridgeGraph
     /// <exception cref="ArgumentNullException"><paramref name="scoredEdges"/> or <paramref name="nodes"/> is null.</exception>
     public static BridgeGraph Build(
         IReadOnlyList<ScoredEdge> scoredEdges,
-        IReadOnlyDictionary<string, BridgeNode> nodes)
+        IReadOnlyDictionary<string, BridgeNode> nodes,
+        BridgeCapabilityReport? capabilityReport = null)
     {
         ArgumentNullException.ThrowIfNull(scoredEdges);
         ArgumentNullException.ThrowIfNull(nodes);
@@ -114,7 +119,10 @@ public sealed class BridgeGraph
         foreach (var (nodeId, edgeSet) in byNode)
             adjacency[nodeId] = SortIncident(nodeId, edgeSet.Values);
 
-        return new BridgeGraph(adjacency, new Dictionary<string, BridgeNode>(nodes, StringComparer.Ordinal));
+        return new BridgeGraph(
+            adjacency,
+            new Dictionary<string, BridgeNode>(nodes, StringComparer.Ordinal),
+            capabilityReport ?? BridgeCapabilityReport.Empty);
     }
 
     /// <summary>
@@ -214,8 +222,8 @@ public sealed class BridgeGraph
         $"{kind}:{display.ToLowerInvariant()}";
 
     /// <summary>
-    /// Map a bridge edge kind + endpoint side to the node kind of that endpoint. The directed legs pin which side is
-    /// which: a StoredIn edge is entity→table; a Hits edge is route(TS)→endpoint; MapsTo is DTO/entity (both C#);
+    /// Map a bridge edge kind + endpoint side to the node kind of that endpoint. Current labels match dotnet-web
+    /// provider output: StoredIn is entity→table; Hits is client route→endpoint; MapsTo is DTO/entity;
     /// Responds/Consumes are endpoint→DTO. The source-vs-target side disambiguates the two ends.
     /// </summary>
     public static BridgeNodeKind NodeKindFor(BridgeKind edgeKind, EndpointSide side) => edgeKind switch
