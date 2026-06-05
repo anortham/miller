@@ -142,6 +142,48 @@ Before AOT becomes a required release gate:
 8. Exclude `.pdb`, `.dSYM`, and other debug symbols from normal user downloads. Publish them as
    separate debug artifacts if needed.
 
+## Deferred AOT Release-Readiness Notes
+
+This is deferred until the remaining beta/TODO work is addressed. Do not treat it as a source-checkout
+beta blocker.
+
+Current release workflow state as of 2026-06-05:
+
+- `.github/workflows/release.yml` already has a platform matrix for:
+  - `aarch64-apple-darwin` / `osx-arm64`
+  - `x86_64-apple-darwin` / `osx-x64`
+  - `x86_64-unknown-linux-gnu` / `linux-x64`
+  - `x86_64-pc-windows-msvc` / `win-x64`
+- The workflow restores `julie-extract` on each runner before publish.
+- The workflow verifies package shape so Unix packages include `.tools/julie-extract` and not
+  `.tools/julie-extract.exe`, while Windows packages include `.tools/julie-extract.exe` and not the
+  Unix binary.
+- The workflow currently publishes self-contained single-file artifacts with
+  `PublishSingleFile=true` and `PublishTrimmed=false`.
+- It does not currently publish AOT artifacts because it does not set `PublishAot=true`.
+
+The release-readiness track should therefore proceed in two stages:
+
+1. Add a non-blocking `aot-smoke` CI job that restores the platform-matched `julie-extract`, runs
+   `dotnet publish` with `PublishAot=true`, and keeps AOT/trim warnings visible in CI output.
+2. After warning cleanup, promote AOT to the release workflow and keep the existing archive-shape
+   invariant: one Miller runtime plus exactly one matching `julie-extract` binary per package.
+
+The warning cleanup list remains:
+
+- replace reflection-based `System.Text.Json` serialization/deserialization paths, especially
+  `JulieExtractRunner.ParseReport`, with source-generated JSON contexts;
+- replace or harden MCP `WithToolsFromAssembly()` reflection discovery, likely with explicit generic
+  tool registration if the SDK requires it;
+- investigate Serilog trim/AOT warnings and either use an AOT-clean configuration or suppress narrowly
+  with runtime smoke coverage;
+- keep normal build warnings as errors, but make AOT warnings release-blocking only after they are
+  understood and warning-clean.
+
+When AOT packaging resumes, also verify `scripts/julie-pins.json` still contains exactly the extractor
+targets the release matrix packages. If a new Miller target is added, add the matching
+`julie-extractors` release asset first or explicitly mark the target unsupported.
+
 ## Packaging Contract
 
 Each release archive should contain:
