@@ -24,7 +24,7 @@ standalone packaged binary release.
 
 M0-M8 are complete. Miller has the default-on symbol search sidecar, workspace registry, cheap
 registered-workspace status/list paths, projection-specific `search` and summary `inspect`, content
-search, CLI verbs, and the `julie-extract` 2.1.2 source-region / TypeScript URL-literal consumer.
+search, CLI verbs, and the `julie-extract` 2.1.3 source-region / TypeScript URL-literal consumer.
 
 ## Dashboard Boundary
 
@@ -105,7 +105,13 @@ status workspaces. It should read the workspace registry, telemetry DB, and ligh
 - [x] Verify the Windows restore/test path on a Windows host or CI run for the 2.1.1 beta candidate:
   GitHub Actions run `27014619404` on 2026-06-05 passed
   `scripts/restore-julie-extract.ps1`, `dotnet build`, and `scripts/test.ps1`.
-- [ ] Rerun Windows restore/build/test on the final 2.1.2 beta commit.
+- [x] Rerun Windows restore/build/test on the 2.1.2 beta candidate commit. GitHub Actions run
+  `27025159337` on 2026-06-05 passed the `windows-fast` job on commit
+  `17593a3db148545500e5efa0fe00541c25585fdc`, including
+  `scripts/restore-julie-extract.ps1`, `dotnet build`, and `scripts/test.ps1 fast --no-build`.
+  If later commits become part of the beta candidate, rerun this gate on that exact pushed commit.
+- [ ] Rerun Windows restore/build/test on the 2.1.3 beta candidate commit after this pin-bump/docs
+  slice is committed and pushed.
 - [x] Audit package/archive scripts for Unix-only assumptions before a packaged beta: not
   required for source-checkout beta. Keep as release-readiness follow-up if beta expands to
   platform archives.
@@ -113,12 +119,17 @@ status workspaces. It should read the workspace registry, telemetry DB, and ligh
 ### 6. Packaging, Restore, And Install
 
 - [x] Verify `scripts/restore-julie-extract.sh` restores the pinned binary on a clean machine
-  or clean checkout. Fresh macOS arm64 restore on 2026-06-05 downloaded v2.1.2, verified
-  sha256, and installed `julie-extract 2.1.2`.
+  or clean checkout. Fresh macOS arm64 restore on 2026-06-05 downloaded v2.1.3, verified
+  sha256 `c4a90671a66bcc5b002793b6d0acc2925c85152b9833e7dedcea6c47ab70c51d`, and installed
+  `julie-extract 2.1.3`.
 - [x] Verify `scripts/restore-julie-extract.ps1` restores the 2.1.1 pinned binary on Windows x64.
   GitHub Actions run `27014619404` on 2026-06-05 restored the Windows x64 2.1.1 archive
   before the Windows build and fast suite.
-- [ ] Verify `scripts/restore-julie-extract.ps1` restores the 2.1.2 pinned binary on Windows x64.
+- [x] Verify `scripts/restore-julie-extract.ps1` restores the 2.1.2 pinned binary on Windows x64.
+  GitHub Actions run `27025159337` on 2026-06-05 restored the pinned 2.1.2 Windows x64 archive
+  before the Windows build and fast suite.
+- [ ] Verify `scripts/restore-julie-extract.ps1` restores the 2.1.3 pinned binary on Windows x64
+  on the exact pushed beta-candidate commit.
 - [x] Keep `scripts/julie-pins.json`, `PinnedJulieExtractVersion`, and contract tests in sync.
 - [x] Document MCP configuration and CLI install/run paths.
 - [x] Define beta package shape: source checkout beta with per-platform restore scripts.
@@ -134,6 +145,21 @@ status workspaces. It should read the workspace registry, telemetry DB, and ligh
 - [x] Document known beta limits: no embeddings, no Eros workflows, region search default status,
   AOT status, and any large-repo caveats including full `inspect` cost.
 - [x] Make `TODO.md` point at this checklist for beta-routing work.
+
+### 8. File Policy Parity
+
+- [x] Audit Miller's delegated `julie-extract` scan path against Julie's walker/file-policy behavior.
+  See `docs/findings/2026-06-05-file-policy-parity-dogfood.md`.
+- [x] Fix the two confirmed `julie-extract` 2.1.2 parity gaps locally in `julie-extractors`:
+  `vendor/` was indexed, and nested workspace roots did not inherit git-root `.gitignore` rules.
+- [x] Release the patched `julie-extractors` as v2.1.3.
+- [x] Bump Miller's pinned `julie-extract` to 2.1.3 and restore the patched binary locally.
+- [x] Rerun the live file-policy fixture with the restored 2.1.3 binary; only `src/keep.rs` and
+  `sub/keep.rs` were indexed.
+- [x] Rerun the local macOS beta gates after the 2.1.3 pin: `scripts/test.sh all` passed
+  1,568 fast tests and 25 scale tests, and `dotnet build Miller.slnx -c Release` passed with
+  0 warnings and 0 errors.
+- [ ] Rerun Windows CI beta gates on the exact pushed 2.1.3 candidate commit.
 
 ## Final Beta Candidate Gate
 

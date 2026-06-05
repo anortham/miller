@@ -1,0 +1,6 @@
+interface:
+  display_name: "Miller Explore Area"
+  short_description: "Orient on code with Miller context"
+  default_prompt: "Use $miller-explore-area to map the relevant code area before changing it."
+policy:
+  allow_implicit_invocation: true
