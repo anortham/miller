@@ -58,7 +58,7 @@ Miller evidence:
 
 1. **File policy parity release:** `julie-extractors` v2.1.3 now makes Miller's delegated scan path
    match Julie's walker policy for `vendor/` and git-root `.gitignore` inheritance in nested workspaces.
-   Miller's local pin and restore path now target 2.1.3; rerun Windows CI on the exact pushed beta
+   Miller's local pin and restore path now target 2.1.3, and Windows CI passed on the exact pushed
    candidate. Evidence is recorded in `docs/findings/2026-06-05-file-policy-parity-dogfood.md`.
 2. **Miller skills:** Closed. The project-local skill package now teaches agents the Miller workflow
    outside the MCP server instructions: `explore-area`, `impact-analysis`, `editing`, `bridge-trace`,
@@ -75,5 +75,5 @@ Miller evidence:
 ## Beta Impact
 
 The audit no longer has an open proof gap: file-policy dogfood confirmed an upstream extractor mismatch,
-and the v2.1.3 pin closes it locally. Treat the exact-candidate Windows CI rerun as the remaining
-cross-platform beta hardening item.
+the v2.1.3 pin closes it locally, and exact-candidate Windows CI passed. Treat the measured
+Julie-vs-Miller search-quality matrix as the remaining audit follow-up before post-beta search widening.

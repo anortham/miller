@@ -19,7 +19,7 @@ Julie's walker contract. Two gaps were real in the released 2.1.2 binary:
 
 This means the file-policy parity follow-up was not merely a documentation proof. The patched
 `julie-extractors` release is now available as v2.1.3, and Miller's local pin/restore path has been
-updated to that binary. The exact Windows beta-candidate CI rerun remains tracked in the beta checklist.
+updated to that binary. The exact Windows beta-candidate CI rerun also passed after the pin-bump push.
 
 ## Live Fixture
 
@@ -145,5 +145,6 @@ Local upstream fix status:
 - Local Miller gate: `scripts/test.sh all` passed 1,568 fast tests and 25 scale tests, and
   `dotnet build Miller.slnx -c Release` passed with 0 warnings and 0 errors.
 
-Recommended next step: commit this pin-bump/docs slice, push it, and rerun the Windows restore/build/test
-gate on the exact beta-candidate commit.
+Windows follow-up: GitHub Actions run `27032916563` passed `windows-fast` on commit
+`e51feeb49614f960c5cc3bd2c9d63444965b63c5`, including Windows restore, build, and the PowerShell
+fast-suite wrapper. File-policy parity is closed for the source-checkout beta.

@@ -110,8 +110,10 @@ status workspaces. It should read the workspace registry, telemetry DB, and ligh
   `17593a3db148545500e5efa0fe00541c25585fdc`, including
   `scripts/restore-julie-extract.ps1`, `dotnet build`, and `scripts/test.ps1 fast --no-build`.
   If later commits become part of the beta candidate, rerun this gate on that exact pushed commit.
-- [ ] Rerun Windows restore/build/test on the 2.1.3 beta candidate commit after this pin-bump/docs
-  slice is committed and pushed.
+- [x] Rerun Windows restore/build/test on the 2.1.3 beta candidate commit. GitHub Actions run
+  `27032916563` on 2026-06-05 passed the `windows-fast` job on commit
+  `e51feeb49614f960c5cc3bd2c9d63444965b63c5`, including
+  `scripts/restore-julie-extract.ps1`, `dotnet build`, and `scripts/test.ps1 fast --no-build`.
 - [x] Audit package/archive scripts for Unix-only assumptions before a packaged beta: not
   required for source-checkout beta. Keep as release-readiness follow-up if beta expands to
   platform archives.
@@ -128,8 +130,9 @@ status workspaces. It should read the workspace registry, telemetry DB, and ligh
 - [x] Verify `scripts/restore-julie-extract.ps1` restores the 2.1.2 pinned binary on Windows x64.
   GitHub Actions run `27025159337` on 2026-06-05 restored the pinned 2.1.2 Windows x64 archive
   before the Windows build and fast suite.
-- [ ] Verify `scripts/restore-julie-extract.ps1` restores the 2.1.3 pinned binary on Windows x64
-  on the exact pushed beta-candidate commit.
+- [x] Verify `scripts/restore-julie-extract.ps1` restores the 2.1.3 pinned binary on Windows x64.
+  GitHub Actions run `27032916563` on 2026-06-05 restored the pinned 2.1.3 Windows x64 archive
+  before the Windows build and fast suite.
 - [x] Keep `scripts/julie-pins.json`, `PinnedJulieExtractVersion`, and contract tests in sync.
 - [x] Document MCP configuration and CLI install/run paths.
 - [x] Define beta package shape: source checkout beta with per-platform restore scripts.
@@ -159,7 +162,8 @@ status workspaces. It should read the workspace registry, telemetry DB, and ligh
 - [x] Rerun the local macOS beta gates after the 2.1.3 pin: `scripts/test.sh all` passed
   1,568 fast tests and 25 scale tests, and `dotnet build Miller.slnx -c Release` passed with
   0 warnings and 0 errors.
-- [ ] Rerun Windows CI beta gates on the exact pushed 2.1.3 candidate commit.
+- [x] Rerun Windows CI beta gates on the exact pushed 2.1.3 candidate commit. GitHub Actions run
+  `27032916563` passed `windows-fast` on `e51feeb49614f960c5cc3bd2c9d63444965b63c5`.
 
 ## Final Beta Candidate Gate
 
