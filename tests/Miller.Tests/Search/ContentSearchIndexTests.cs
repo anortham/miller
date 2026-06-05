@@ -63,10 +63,90 @@ public sealed class ContentSearchIndexTests
 
         var hits = index.Search("freshness gate", limit: 10);
 
-        Assert.Equal(2, hits.Count);
+        Assert.Single(hits);
         Assert.Equal("/both.md", hits[0].Path);
-        Assert.True(hits[0].Score > hits[1].Score,
-            $"two-term score {hits[0].Score} should exceed one-term score {hits[1].Score}");
+    }
+
+    [Fact]
+    public void Search_MultiTermProseQueryFiltersWeakTermOverlap()
+    {
+        var index = Build(
+            Doc(0, "/weak.md", "user to user to user to status"),
+            Doc(1, "/also-weak.md", "organization status overview"));
+
+        var hits = index.Search("add user to organization", limit: 10);
+
+        Assert.Empty(hits);
+    }
+
+    [Fact]
+    public void Search_MultiTermProseQueryKeepsMeaningfulMatches()
+    {
+        var index = Build(
+            Doc(0, "/health.md", "Gateway health checks run from the doctor command."),
+            Doc(1, "/weak.md", "gateway gateway health"));
+
+        var hits = index.Search("gateway health checks", limit: 10);
+
+        Assert.NotEmpty(hits);
+        Assert.Equal("/health.md", hits[0].Path);
+    }
+
+    [Fact]
+    public void Search_TokenPhraseMatchBoostsAboveTermDenseDocument()
+    {
+        var index = Build(
+            Doc(0, "/dense.md",
+                "region search region search region search\n" +
+                "the sidecar fails when closed"),
+            Doc(1, "/phrase.md",
+                "region search fails closed when the sidecar was not built"));
+
+        var hits = index.Search("region search fails closed", limit: 10);
+
+        Assert.Single(hits);
+        Assert.Equal("/phrase.md", hits[0].Path);
+    }
+
+    [Fact]
+    public void Search_CodeLikeContentQueryRequiresExactTokenPhrase()
+    {
+        var weak = Build(Doc(0, "/weak.md", "spawn timeout secs can be configured elsewhere"));
+
+        Assert.Empty(weak.Search("JULIE_EMBEDDING_HOST_SPAWN_TIMEOUT_SECS", limit: 10));
+
+        var exact = Build(Doc(0, "/exact.md",
+            "Set JULIE_EMBEDDING_HOST_SPAWN_TIMEOUT_SECS for slow model startup."));
+
+        var hits = exact.Search("JULIE_EMBEDDING_HOST_SPAWN_TIMEOUT_SECS", limit: 10);
+
+        Assert.Single(hits);
+        Assert.Equal("/exact.md", hits[0].Path);
+    }
+
+    [Fact]
+    public void Search_BestLineCountsDistinctTerms_NotRepeatedTerms()
+    {
+        var index = Build(Doc(0, "/doc.md",
+            "region search region search region search\n" +
+            "region search fails closed when unavailable"));
+
+        var hit = index.Search("region search fails closed", limit: 10)[0];
+
+        Assert.Equal(2, hit.Line);
+        Assert.Contains("region search fails closed", hit.Snippet);
+    }
+
+    [Fact]
+    public void Search_MultiTermProseRequiresCoverageOnBestLine()
+    {
+        var index = Build(Doc(0, "/spread.md",
+            "canonicalized paths prevent drift\n" +
+            "duplicate workspace IDs are tracked elsewhere"));
+
+        var hits = index.Search("canonicalized to prevent duplicate workspace IDs", limit: 10);
+
+        Assert.Empty(hits);
     }
 
     [Fact]

@@ -17,9 +17,16 @@ public sealed class ContentSearchIndex
 {
     private const double K1 = 1.2;
     private const double B = 0.75;
+    private const double TokenPhraseBoost = 2.5;
 
     /// <summary>Context lines kept on each side of the best-matching line in a snippet.</summary>
     private const int WindowRadius = 2;
+
+    private static readonly FrozenSet<string> CoverageStopWords = new[]
+    {
+        "a", "an", "and", "are", "as", "at", "by", "does", "for", "from", "in", "is", "it", "of", "on",
+        "or", "that", "the", "this", "to", "where", "with",
+    }.ToFrozenSet(StringComparer.Ordinal);
 
     private readonly FrozenDictionary<string, Posting[]> _postings;
     private readonly FrozenDictionary<int, int> _docLengths;
@@ -119,7 +126,15 @@ public sealed class ContentSearchIndex
             if (seen.Add(token))
                 distinct.Add(token);
 
+        IReadOnlyList<string> coverageTerms = CoverageTerms(distinct);
+        var coverageTermSet = coverageTerms.ToHashSet(StringComparer.Ordinal);
+        bool requiresTokenPhrase = RequiresTokenPhrase(query);
+        int requiredCoverage = requiresTokenPhrase
+            ? coverageTerms.Count
+            : RequiredCoverageTermCount(coverageTerms.Count);
+
         var scores = new Dictionary<int, double>();
+        var matchedCoverageTermCount = new Dictionary<int, int>();
         foreach (string term in distinct)
         {
             if (!_postings.TryGetValue(term, out Posting[]? postings))
@@ -133,48 +148,155 @@ public sealed class ContentSearchIndex
                 double score = idf * posting.Tf * (K1 + 1) / denominator;
                 scores.TryGetValue(posting.DocId, out double current);
                 scores[posting.DocId] = current + score;
+
+                if (coverageTermSet.Contains(term))
+                {
+                    matchedCoverageTermCount.TryGetValue(posting.DocId, out int matchedTerms);
+                    matchedCoverageTermCount[posting.DocId] = matchedTerms + 1;
+                }
             }
         }
 
         if (scores.Count == 0)
             return Array.Empty<ContentSearchHit>();
 
-        var ranked = scores
-            .OrderByDescending(static kv => kv.Value)
-            .ThenBy(static kv => kv.Key)
-            .Take(limit);
-
-        var hits = new List<ContentSearchHit>();
-        foreach (var (docId, score) in ranked)
+        var hits = new List<ScoredHit>();
+        foreach (var (docId, rawScore) in scores)
         {
+            matchedCoverageTermCount.TryGetValue(docId, out int matchedTerms);
+            if (matchedTerms < requiredCoverage)
+                continue;
+
             DocEntry entry = _docs[docId];
-            (int line, string snippet) = BestLineAndSnippet(entry.Lines, seen);
-            hits.Add(new ContentSearchHit(entry.Path, score, line, snippet, entry.Language));
+            bool hasTokenPhrase = ContainsTokenPhrase(entry.Lines, queryTokens);
+            if (requiresTokenPhrase && !hasTokenPhrase)
+                continue;
+
+            double score = hasTokenPhrase ? rawScore * TokenPhraseBoost : rawScore;
+            BestLineMatch bestLine = BestLineAndSnippet(entry.Lines, coverageTermSet, queryTokens);
+            if (bestLine.DistinctTermCount < requiredCoverage)
+                continue;
+
+            hits.Add(new ScoredHit(docId,
+                new ContentSearchHit(entry.Path, score, bestLine.Line, bestLine.Snippet, entry.Language)));
         }
-        return hits;
+
+        if (hits.Count == 0)
+            return Array.Empty<ContentSearchHit>();
+
+        hits.Sort(static (a, b) =>
+        {
+            int byScore = b.Hit.Score.CompareTo(a.Hit.Score);
+            return byScore != 0 ? byScore : a.DocId.CompareTo(b.DocId);
+        });
+
+        if (hits.Count > limit)
+            hits.RemoveRange(limit, hits.Count - limit);
+
+        return hits.Select(static h => h.Hit).ToArray();
+    }
+
+    private static IReadOnlyList<string> CoverageTerms(IReadOnlyList<string> distinctTerms)
+    {
+        var terms = new List<string>(distinctTerms.Count);
+        foreach (string term in distinctTerms)
+            if (term.Length > 2 && !CoverageStopWords.Contains(term))
+                terms.Add(term);
+
+        return terms.Count == 0 ? distinctTerms : terms;
+    }
+
+    private static int RequiredCoverageTermCount(int termCount)
+    {
+        if (termCount <= 1)
+            return termCount;
+        if (termCount <= 5)
+            return termCount;
+        return Math.Max(2, (int)Math.Ceiling(termCount * 0.6));
+    }
+
+    private static bool RequiresTokenPhrase(string query) =>
+        query.Any(static c => c == '_' || c == ':' || c == '/' || c == '\\');
+
+    private static bool ContainsTokenPhrase(string[] lines, IReadOnlyList<string> queryTokens)
+    {
+        if (queryTokens.Count < 2)
+            return false;
+
+        var lineTokens = new List<string>(32);
+        foreach (string line in lines)
+        {
+            lineTokens.Clear();
+            CodeTokenizer.Tokenize(line, lineTokens);
+            if (lineTokens.Count < queryTokens.Count)
+                continue;
+
+            if (ContainsTokenPhrase(lineTokens, queryTokens))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool ContainsTokenPhrase(IReadOnlyList<string> lineTokens, IReadOnlyList<string> queryTokens)
+    {
+        for (int start = 0; start <= lineTokens.Count - queryTokens.Count; start++)
+        {
+            bool matches = true;
+            for (int offset = 0; offset < queryTokens.Count; offset++)
+            {
+                if (!string.Equals(lineTokens[start + offset], queryTokens[offset], StringComparison.Ordinal))
+                {
+                    matches = false;
+                    break;
+                }
+            }
+
+            if (matches)
+                return true;
+        }
+
+        return false;
     }
 
     // The line with the most query-term hits (earliest on a tie), plus a ±WindowRadius context
-    // window of raw lines joined by '\n'. Returns a 1-based line number. distinctTerms is the set of
-    // query tokens; a line is scored by how many of its tokens are in that set.
-    private static (int Line, string Snippet) BestLineAndSnippet(string[] lines, HashSet<string> distinctTerms)
+    // window of raw lines joined by '\n'. Returns a 1-based line number. A token-phrase line wins first;
+    // otherwise a line is scored by distinct query terms, then repeated term hits.
+    private static BestLineMatch BestLineAndSnippet(
+        string[] lines,
+        HashSet<string> coverageTerms,
+        IReadOnlyList<string> queryTokens)
     {
         int bestLine = 0;
+        bool bestHasPhrase = false;
         int bestHits = -1;
+        int bestTokenHits = -1;
         var tokens = new List<string>(32);
+        var lineTerms = new HashSet<string>(StringComparer.Ordinal);
 
         for (int i = 0; i < lines.Length; i++)
         {
             tokens.Clear();
+            lineTerms.Clear();
             CodeTokenizer.Tokenize(lines[i], tokens);
-            int hitCount = 0;
+            int tokenHits = 0;
             foreach (string token in tokens)
-                if (distinctTerms.Contains(token))
-                    hitCount++;
-
-            if (hitCount > bestHits)
             {
-                bestHits = hitCount;
+                if (coverageTerms.Contains(token))
+                {
+                    lineTerms.Add(token);
+                    tokenHits++;
+                }
+            }
+
+            bool hasPhrase = queryTokens.Count > 1 && ContainsTokenPhrase(tokens, queryTokens);
+            if (hasPhrase && !bestHasPhrase ||
+                hasPhrase == bestHasPhrase &&
+                (lineTerms.Count > bestHits || (lineTerms.Count == bestHits && tokenHits > bestTokenHits)))
+            {
+                bestHasPhrase = hasPhrase;
+                bestHits = lineTerms.Count;
+                bestTokenHits = tokenHits;
                 bestLine = i;
             }
         }
@@ -182,7 +304,7 @@ public sealed class ContentSearchIndex
         int start = Math.Max(0, bestLine - WindowRadius);
         int end = Math.Min(lines.Length - 1, bestLine + WindowRadius);
         string snippet = string.Join('\n', lines[start..(end + 1)]);
-        return (bestLine + 1, snippet);
+        return new BestLineMatch(bestLine + 1, snippet, bestHits);
     }
 
     // Split on '\n' and drop a trailing '\r' so CRLF files do not leak carriage returns into snippets.
@@ -198,4 +320,8 @@ public sealed class ContentSearchIndex
     private readonly record struct Posting(int DocId, int Tf);
 
     private readonly record struct DocEntry(string Path, string Language, string[] Lines);
+
+    private readonly record struct ScoredHit(int DocId, ContentSearchHit Hit);
+
+    private readonly record struct BestLineMatch(int Line, string Snippet, int DistinctTermCount);
 }
