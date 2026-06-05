@@ -81,6 +81,25 @@ public sealed class SymbolSearchSidecarTests : IDisposable
     public void FromEnvValue_DefaultsOn_OptsOutOnFalsy(string? raw, bool expectedEnabled) =>
         Assert.Equal(expectedEnabled, SymbolSearchSidecar.FromEnvValue(raw).Enabled);
 
+    [Theory]
+    [InlineData(null, true, false)]
+    [InlineData("", true, false)]
+    [InlineData("1", true, true)]
+    [InlineData("true", true, true)]
+    [InlineData("on", true, true)]
+    [InlineData("yes", true, true)]
+    [InlineData("garbage", true, false)]
+    [InlineData("0", true, false)]
+    [InlineData("false", true, false)]
+    public void FromEnvValue_RegionIndexDefaultsOff_AndOptInTruthy(
+        string? regionRaw, bool expectedSidecarEnabled, bool expectedRegionEnabled)
+    {
+        SymbolSearchSidecar sidecar = SymbolSearchSidecar.FromEnvValue(sidecarRaw: null, regionRaw);
+
+        Assert.Equal(expectedSidecarEnabled, sidecar.Enabled);
+        Assert.Equal(expectedRegionEnabled, sidecar.RegionOptions.Enabled);
+    }
+
     [Fact]
     public void SearchDbPathFor_IsTheSiblingSearchDbInTheSameDirectory()
     {
@@ -192,6 +211,51 @@ public sealed class SymbolSearchSidecarTests : IDisposable
     }
 
     [Fact]
+    public void EnsureBuilt_RegionIndexEnabled_RequiresWorkspaceRoot()
+    {
+        using var julie = JulieDb();
+        var sidecar = new SymbolSearchSidecar(enabled: true, RegionIndexOptions.EnabledDefault);
+
+        Assert.ThrowsAny<ArgumentException>(() => sidecar.EnsureBuilt(julie.DbPath, revision: 5));
+    }
+
+    [Fact]
+    public void EnsureBuilt_RegionIndexEnabled_PopulatesRegionTables()
+    {
+        const string path = "src/A.cs";
+        const string text = "// region TODO\nclass A {}\n";
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow("sym-a", "A", "class", "csharp", path, "class A", 2, ParentId: null),
+            },
+            fileContent: new Dictionary<string, string> { [path] = text },
+            sourceRegions: new[]
+            {
+                new JulieDbFixture.SourceRegionRow(
+                    "region-a", "file:" + path, path, "csharp", "comment", "sym-a",
+                    1, 1, 1, 15, 0, text.IndexOf('\n'), null),
+            });
+        var sidecar = new SymbolSearchSidecar(enabled: true, RegionIndexOptions.EnabledDefault);
+
+        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 5, workspaceRoot: julie.WorkspaceRoot));
+
+        string searchDb = SymbolSearchSidecar.SearchDbPathFor(julie.DbPath);
+        using var c = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = searchDb,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        c.Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM search_regions WHERE region_id='region-a';";
+        Assert.Equal(1L, Convert.ToInt64(cmd.ExecuteScalar()));
+    }
+
+    [Fact]
     public void EnsureBuilt_EnabledAndArtifactAlreadyFresh_SkipsAndReturnsFalse()
     {
         using var julie = JulieDb();
@@ -288,6 +352,26 @@ public sealed class SymbolSearchSidecarTests : IDisposable
             rw.Open();
             using var cmd = rw.CreateCommand();
             cmd.CommandText = "UPDATE meta SET schema_version = 999;";
+            cmd.ExecuteNonQuery();
+        }
+        SqliteConnection.ClearAllPools();
+
+        var sidecar = new SymbolSearchSidecar(enabled: true);
+        Assert.Null(sidecar.TryOpen(_symbolsDbPath, expectedRevision: 7));
+    }
+
+    [Fact]
+    public void TryOpen_EnabledButFtsTablesDamaged_ReturnsNullWithoutThrowing()
+    {
+        WriteSearchDb(revision: 7);
+        using (var rw = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _searchDbPath, Mode = SqliteOpenMode.ReadWrite, Pooling = false,
+        }.ToString()))
+        {
+            rw.Open();
+            using var cmd = rw.CreateCommand();
+            cmd.CommandText = "DROP TABLE symbols_fts;";
             cmd.ExecuteNonQuery();
         }
         SqliteConnection.ClearAllPools();

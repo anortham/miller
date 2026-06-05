@@ -45,6 +45,15 @@ public sealed class SearchToolTests
                 ParentId: null),
         }, workspaceId: workspaceId);
 
+    private static JulieDbFixture FixtureWithDocCommentSymbol() =>
+        JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
+        {
+            new JulieDbFixture.SymbolRow("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "HasDoc", "method", "csharp",
+                "src/Docs.cs", "void HasDoc()", 10, ParentId: null) { DocComment = "/// Has documentation." },
+            new JulieDbFixture.SymbolRow("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "NoDoc", "method", "csharp",
+                "src/Docs.cs", "void NoDoc()", 20, ParentId: null),
+        });
+
     private static (string? WorkspaceId, string? WorkspaceRoot, bool? IndexFresh) ReadTelemetryRow(string dbPath)
     {
         using var c = new SqliteConnection(new SqliteConnectionStringBuilder
@@ -200,6 +209,25 @@ public sealed class SearchToolTests
 
         Assert.Equal(1, count);
         Assert.Equal("ActualFileSymbol  class  src/Miller.Server/Tools/SearchTool.cs:9", output);
+    }
+
+    [Fact]
+    public void Run_FileMode_HidesImportAndModuleNoise()
+    {
+        var index = SymbolSearchProjection.Build([
+            Symbol(0, "sym-import", "Text", "import",
+                "src/Miller.Server/Tools/SearchTool.cs", 1),
+            Symbol(1, "sym-module", "Tools", "module",
+                "src/Miller.Server/Tools/SearchTool.cs", 2),
+            Symbol(2, "sym-file-hit", "SearchTool", "class",
+                "src/Miller.Server/Tools/SearchTool.cs", 42),
+        ]);
+
+        string output = SearchTool.Run(index, "SearchTool.cs", SearchToolMode.File, limit: 10,
+            excludeTests: null, json: false, out int count);
+
+        Assert.Equal(1, count);
+        Assert.Equal("SearchTool  class  src/Miller.Server/Tools/SearchTool.cs:42", output);
     }
 
     [Fact]
@@ -395,6 +423,60 @@ public sealed class SearchToolTests
             excludeTests: null, json: false, out _);
 
         Assert.Contains("tests/auth/AuthServiceTests.cs", output);
+    }
+
+    [Fact]
+    public void Run_NaturalLanguagePhrase_HidesImportAndModuleNoise()
+    {
+        var index = new StubSymbolSearchIndex(
+            (Symbol(0, "import-row", "collapsed-trigram", "import", "src/Imports.cs", 1), 10.0),
+            (Symbol(1, "module-row", "collapsed-trigram", "module", "src/Module.cs", 1), 9.0),
+            (Symbol(2, "class-row", "CollapsedTrigramDesign", "class", "src/SearchDesign.cs", 12), 1.0));
+
+        string output = SearchTool.Run(index, "collapsed trigram", SearchToolMode.Auto, limit: 10,
+            excludeTests: null, json: false, out int count);
+
+        Assert.Equal(1, count);
+        Assert.Contains("CollapsedTrigramDesign  class  src/SearchDesign.cs:12", output);
+        Assert.DoesNotContain("src/Imports.cs", output);
+        Assert.DoesNotContain("src/Module.cs", output);
+    }
+
+    [Fact]
+    public void Run_NaturalLanguagePhrase_OverfetchesPastImportAndModuleNoise()
+    {
+        var rows = Enumerable.Range(0, 75)
+            .Select(i => (
+                Symbol(i, $"import-row-{i}", "collapsed-trigram", "import", $"src/Imports{i}.cs", 1),
+                Score: 100.0 - i))
+            .Append((
+                Symbol(75, "class-row", "CollapsedTrigramDesign", "class", "src/SearchDesign.cs", 12),
+                Score: 1.0))
+            .ToArray();
+        var index = new StubSymbolSearchIndex(rows);
+
+        string output = SearchTool.Run(index, "collapsed trigram", SearchToolMode.Auto, limit: 10,
+            excludeTests: null, json: false, out int count);
+
+        Assert.Equal(1, count);
+        Assert.Contains("CollapsedTrigramDesign  class  src/SearchDesign.cs:12", output);
+    }
+
+    [Fact]
+    public void Run_SingleIdentifierQuery_KeepsImportAndModuleRows()
+    {
+        var index = new StubSymbolSearchIndex(
+            (Symbol(0, "import-row", "React", "import", "src/App.tsx", 1), 10.0),
+            (Symbol(1, "module-row", "React", "module", "src/react.ts", 1), 9.0),
+            (Symbol(2, "class-row", "ReactWidget", "class", "src/ReactWidget.cs", 12), 1.0));
+
+        string output = SearchTool.Run(index, "React", SearchToolMode.Auto, limit: 10,
+            excludeTests: null, json: false, out int count);
+
+        Assert.Equal(3, count);
+        Assert.Contains("React  import  src/App.tsx:1", output);
+        Assert.Contains("React  module  src/react.ts:1", output);
+        Assert.Contains("ReactWidget  class  src/ReactWidget.cs:12", output);
     }
 
     [Fact]
@@ -642,6 +724,101 @@ public sealed class SearchToolTests
         Assert.Contains("CurrentOnly", output);
     }
 
+    // ----- regions=comment|doc_comment|string_literal (source-region search) -----
+
+    [Fact]
+    public void RunRegions_Compact_RendersRegionHitShape()
+    {
+        var index = new StubRegionSearchIndex(
+            new RegionSearchHit("src/A.cs", 2.0, 7, "comment", "// TODO migrate", "// TODO migrate",
+                "region-a", "sym-a", "A"));
+
+        string output = SearchTool.RunRegions(
+            index,
+            "TODO",
+            new HashSet<string> { "comment" },
+            limit: 10,
+            excludeTests: false,
+            json: false,
+            out int count,
+            compactBanner: "workspace: current-ws");
+
+        Assert.Equal(1, count);
+        Assert.Equal(
+            "workspace: current-ws\n" +
+            "src/A.cs:7  comment  A\n" +
+            "    // TODO migrate",
+            output);
+    }
+
+    [Fact]
+    public void RunRegions_Json_HasRegionShape_NotSymbolShape()
+    {
+        var index = new StubRegionSearchIndex(
+            new RegionSearchHit("src/A.cs", 2.0, 7, "string_literal", "\"todo\"", "\"todo\"",
+                "region-a", "sym-a", "A"));
+
+        string output = SearchTool.RunRegions(
+            index,
+            "todo",
+            new HashSet<string> { "string_literal" },
+            limit: 10,
+            excludeTests: false,
+            json: true,
+            out int count);
+
+        Assert.Equal(1, count);
+        using var doc = JsonDocument.Parse(output);
+        var first = doc.RootElement[0];
+        Assert.Equal("src/A.cs", first.GetProperty("file").GetString());
+        Assert.Equal("string_literal", first.GetProperty("kind").GetString());
+        Assert.Equal("region-a", first.GetProperty("region_id").GetString());
+        Assert.Equal("sym-a", first.GetProperty("containing_symbol_id").GetString());
+        Assert.False(first.TryGetProperty("symbol_id", out _));
+        Assert.False(first.TryGetProperty("name", out _));
+    }
+
+    [Fact]
+    public void Search_RegionsPresent_RoutesOnlyToRegionProvider_AndRegionsWinsOverMode()
+    {
+        using var current = FixtureWithSymbol("current-ws", "CurrentOnly");
+        string root = Path.Combine(Path.GetTempPath(), "miller-current-" + Guid.NewGuid().ToString("N"));
+        var regionIndex = new StubRegionSearchIndex(
+            new RegionSearchHit("src/A.cs", 2.0, 7, "comment", "// TODO migrate", "// TODO migrate",
+                "region-a", "sym-a", "A"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(BuildIndex(current), current.DbPath, "current-ws", root),
+            ReadToolRoutingTestSupport.RegionContextFor(regionIndex, current.DbPath, "current-ws", root),
+            regionTargets: Array.Empty<(string, WorkspaceRegionSearchContext)>());
+        var tool = new SearchTool(provider, provider, provider);
+
+        string output = tool.Search("TODO", mode: "content", regions: "comment");
+
+        Assert.Equal(1, provider.RegionSearchResolveCount);
+        Assert.Equal(0, provider.SymbolSearchResolveCount);
+        Assert.Equal(0, provider.ContentSearchResolveCount);
+        Assert.Contains("mode=content ignored", output);
+        Assert.Contains("src/A.cs:7  comment  A", output);
+    }
+
+    [Fact]
+    public void Search_SymbolResultsAnnotateHasDocFromSymbolsDocComment()
+    {
+        using var fx = FixtureWithDocCommentSymbol();
+        string root = Path.Combine(Path.GetTempPath(), "miller-current-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(BuildIndex(fx), fx.DbPath, "current-ws", root));
+        var tool = new SearchTool(provider, provider);
+
+        string compact = tool.Search("HasDoc");
+        string json = tool.Search("HasDoc", format: "json");
+
+        Assert.Contains("HasDoc", compact);
+        Assert.Contains("has_doc", compact);
+        using var doc = JsonDocument.Parse(json);
+        Assert.True(doc.RootElement[0].GetProperty("has_doc").GetBoolean());
+    }
+
     private sealed class StubSymbolSearchIndex : ISymbolLookupIndex
     {
         private readonly SearchHit[] _hits;
@@ -694,5 +871,29 @@ public sealed class SearchToolTests
             IsIndexedFilePath(target) ? target : null;
 
         public IndexedSymbol Resolve(int docId) => _symbols[docId];
+    }
+
+    private sealed class StubRegionSearchIndex : IRegionSearchIndex
+    {
+        private readonly IReadOnlyList<RegionSearchHit> _hits;
+
+        public StubRegionSearchIndex(params RegionSearchHit[] hits)
+        {
+            _hits = hits;
+        }
+
+        public int DocumentCount => _hits.Count;
+
+        public long Revision { get; } = 1;
+
+        public IReadOnlyList<RegionSearchHit> Search(
+            string query,
+            IReadOnlySet<string> kinds,
+            int limit = 10,
+            bool excludeTests = false) =>
+            _hits
+                .Where(hit => kinds.Contains(hit.Kind))
+                .Take(limit)
+                .ToArray();
     }
 }

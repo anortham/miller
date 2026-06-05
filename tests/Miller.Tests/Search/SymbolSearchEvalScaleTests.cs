@@ -7,18 +7,17 @@ using Xunit;
 namespace Miller.Tests.Search;
 
 /// <summary>
-/// The Phase-5 recall eval against a REAL corpus — Miller's own committed <c>.miller/symbols.db</c> (the only
-/// schema-compatible large index available on this machine; OpenClaw/Hermes are an older incompatible artifact
-/// and would need a multi-minute re-extraction). It builds the in-memory baseline and the on-disk FTS5 candidate
-/// from one shared snapshot, then asserts the candidate is a strict recall SUPERSET (interior substring recall
-/// rises by a real margin) with ZERO word-arm ranking regression, and that the routing gate actually TAKES the
-/// disk path for a revision-fresh artifact (a silent self-heal to the in-memory index would make every parity
-/// check pass trivially). Recall@5 / MRR per class, build time, artifact size and first-search latency are logged
-/// as the eval evidence.
+/// The Phase-5 recall eval against a REAL corpus: Miller's local <c>.miller/symbols.db</c> when available,
+/// otherwise a fresh temp extract of this repo using the pinned <c>julie-extract</c> binary. It builds the
+/// in-memory baseline and the on-disk FTS5 candidate from one shared snapshot, then asserts the candidate is a
+/// strict recall SUPERSET (interior substring recall rises by a real margin) with ZERO word-arm ranking
+/// regression, and that the routing gate actually TAKES the disk path for a revision-fresh artifact (a silent
+/// self-heal to the in-memory index would make every parity check pass trivially). Recall@5 / MRR per class,
+/// build time, artifact size and first-search latency are logged as the eval evidence.
 ///
-/// <para><c>[Trait("Category","Scale")]</c>: it reads a ~45 MB DB and builds a full FTS index, so it stays out of
-/// the &lt;10s fast suite. It spawns NO julie subprocess (it reads the already-built committed index), so it does
-/// not use the Scale launch signal; it SKIPS (never fails) when the index is absent or schema-incompatible.</para>
+/// <para><c>[Trait("Category","Scale")]</c>: it reads/builds a full repo extract and builds a full FTS index, so
+/// it stays out of the &lt;10s fast suite. It uses the Scale launch signal only when a fresh temp extract is needed;
+/// it SKIPS (never fails) only when no usable local DB exists and the pinned binary has not been restored.</para>
 /// </summary>
 [Trait("Category", "Scale")]
 public sealed class SymbolSearchEvalScaleTests : IDisposable
@@ -50,23 +49,20 @@ public sealed class SymbolSearchEvalScaleTests : IDisposable
     [Fact]
     public void RecallEval_OnMillerCorpus_IsSupersetWithParity_AndDiskPathIsTaken()
     {
-        string symbolsDb = Path.Combine(ScaleTestSupport.RepoRoot(), ".miller", "symbols.db");
-        Assert.SkipUnless(File.Exists(symbolsDb),
-            $"no committed index at {symbolsDb} — run the indexer first to enable the real-corpus eval.");
-
+        string symbolsDb = ResolveMillerCorpusDb();
         IReadOnlyList<IndexedSymbol> corpus;
         try
         {
             corpus = SqliteSymbolReader.Read(symbolsDb);
         }
-        // A pre-schema-2 / partially-written / locked index surfaces as IncompatibleExtractException OR a raw
-        // Sqlite/InvalidOperation read failure. All mean "this machine's committed index can't feed the eval" —
-        // SKIP (never fail), exactly like the missing-index case above.
+        // A pre-schema-2 / partially-written / locked local index surfaces as IncompatibleExtractException OR a
+        // raw Sqlite/InvalidOperation read failure. Fall back to a fresh temp extract so a restored scale run
+        // still produces evidence instead of silently opting out.
         catch (Exception ex) when (ex is IncompatibleExtractException or InvalidOperationException or SqliteException)
         {
-            Assert.Skip($"{symbolsDb} is not a readable schema-compatible julie artifact " +
-                $"({ex.GetType().Name}: {ex.Message}); rebuild to run the eval.");
-            return;
+            symbolsDb = BuildFreshMillerCorpusDb(
+                $"local eval DB was not readable ({ex.GetType().Name}: {ex.Message})");
+            corpus = SqliteSymbolReader.Read(symbolsDb);
         }
         Assert.SkipUnless(corpus.Count >= 500, $"corpus has only {corpus.Count} symbols — too small for a meaningful eval.");
 
@@ -134,6 +130,25 @@ public sealed class SymbolSearchEvalScaleTests : IDisposable
         Assert.True(interior.CandidateRecall >= interior.BaselineRecall + floor,
             $"interior recall gain {interior.CandidateRecall - interior.BaselineRecall:F3} below the {floor:F2} floor " +
             $"(baseline {interior.BaselineRecall:F3} -> candidate {interior.CandidateRecall:F3}).");
+    }
+
+    private string ResolveMillerCorpusDb()
+    {
+        string localDb = Path.Combine(ScaleTestSupport.RepoRoot(), ".miller", "symbols.db");
+        return File.Exists(localDb)
+            ? localDb
+            : BuildFreshMillerCorpusDb($"no local eval DB at {localDb}");
+    }
+
+    private string BuildFreshMillerCorpusDb(string reason)
+    {
+        _output.WriteLine($"{reason}; building a fresh temp Miller corpus extract.");
+        string binary = ScaleTestSupport.RequireJulieServer();
+        string db = Path.Combine(_dir, "symbols.db");
+        var runner = new JulieExtractRunner(binary);
+        ExtractReport report = runner.Scan(ScaleTestSupport.RepoRoot(), db, force: true);
+        Assert.NotEqual("failed", report.Status);
+        return db;
     }
 
     private void LogReport(

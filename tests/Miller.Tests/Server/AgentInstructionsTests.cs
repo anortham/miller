@@ -53,4 +53,13 @@ public sealed class AgentInstructionsTests
         Assert.Contains("file|content", instructions);
         Assert.Contains("alias `docs`", instructions);
     }
+
+    [Fact]
+    public void Load_DocumentsRegionSearchAndHasDoc()
+    {
+        string instructions = AgentInstructions.Load();
+        Assert.Contains("regions=comment|doc_comment|string_literal", instructions);
+        Assert.Contains("MILLER_REGION_INDEX=1", instructions);
+        Assert.Contains("has_doc", instructions);
+    }
 }

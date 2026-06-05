@@ -18,10 +18,23 @@ public sealed class SymbolSearchSidecar
     /// set to a falsy value) and the in-memory pin used by tests that exercise the non-sidecar path.</summary>
     public static SymbolSearchSidecar Disabled { get; } = new(enabled: false);
 
-    public SymbolSearchSidecar(bool enabled) => Enabled = enabled;
+    public SymbolSearchSidecar(bool enabled)
+        : this(enabled, RegionIndexOptions.Disabled)
+    {
+    }
+
+    public SymbolSearchSidecar(bool enabled, RegionIndexOptions regionOptions)
+    {
+        ArgumentNullException.ThrowIfNull(regionOptions);
+        Enabled = enabled;
+        RegionOptions = enabled ? regionOptions : RegionIndexOptions.Disabled;
+    }
 
     /// <summary>Whether the disk sidecar is on. When false the caller stays on the in-memory path unconditionally.</summary>
     public bool Enabled { get; }
+
+    /// <summary>Whether the source-region tables should be populated when the sidecar is built.</summary>
+    public RegionIndexOptions RegionOptions { get; }
 
     /// <summary>The on-disk <c>search.db</c> path for a julie <c>symbols.db</c> — its sibling in the same dir.</summary>
     public static string SearchDbPathFor(string symbolsDbPath)
@@ -38,11 +51,24 @@ public sealed class SymbolSearchSidecar
     /// to a falsy value (<c>0/false/off/no</c>, any case); an unset, empty, or truthy value stays enabled.
     /// </summary>
     public static SymbolSearchSidecar FromEnvironment() =>
-        FromEnvValue(Environment.GetEnvironmentVariable(EnvVar));
+        FromEnvValue(
+            Environment.GetEnvironmentVariable(EnvVar),
+            Environment.GetEnvironmentVariable(RegionIndexOptions.EnvVar));
 
     /// <summary>The pure env-value ⇒ sidecar mapping behind <see cref="FromEnvironment"/> — testable without
     /// mutating the process environment (which would leak across xUnit's parallel collections).</summary>
     internal static SymbolSearchSidecar FromEnvValue(string? raw) => new(enabled: !IsDisabledValue(raw));
+
+    /// <summary>
+    /// Pure env-value parser for both sidecar flags. Symbol search defaults on; region text defaults off and
+    /// enables only on an explicit truthy token.
+    /// </summary>
+    internal static SymbolSearchSidecar FromEnvValue(string? sidecarRaw, string? regionRaw)
+    {
+        bool enabled = !IsDisabledValue(sidecarRaw);
+        bool regionEnabled = IsTruthyValue(regionRaw);
+        return new SymbolSearchSidecar(enabled, regionEnabled ? RegionIndexOptions.EnabledDefault : RegionIndexOptions.Disabled);
+    }
 
     /// <summary>
     /// True only for an explicit falsy opt-out token (<c>0/false/off/no</c>, any case, trimmed). A null, empty,
@@ -56,6 +82,18 @@ public sealed class SymbolSearchSidecar
         return raw.Trim().ToLowerInvariant() switch
         {
             "0" or "false" or "off" or "no" => true,
+            _ => false,
+        };
+    }
+
+    private static bool IsTruthyValue(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return false;
+
+        return raw.Trim().ToLowerInvariant() switch
+        {
+            "1" or "true" or "on" or "yes" => true,
             _ => false,
         };
     }
@@ -99,10 +137,12 @@ public sealed class SymbolSearchSidecar
     /// (unreadable extract, write error) so the lock-holding writer can surface/log it; the build is one symbol
     /// read off the search hot path.
     /// </summary>
-    public bool EnsureBuilt(string symbolsDbPath, long revision)
+    public bool EnsureBuilt(string symbolsDbPath, long revision, string? workspaceRoot = null)
     {
         if (!Enabled)
             return false;
+        if (RegionOptions.Enabled)
+            ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
 
         string searchDbPath = SearchDbPathFor(symbolsDbPath);
         // Cheap freshness gate: read meta.revision AND meta.schema_version (one row, no resident snapshot) so an
@@ -116,7 +156,7 @@ public sealed class SymbolSearchSidecar
             return false;
 
         IReadOnlyList<IndexedSymbol> symbols = SqliteSymbolReader.Read(symbolsDbPath);
-        SearchIndexWriter.Write(searchDbPath, symbols, revision);
+        SearchIndexWriter.Write(searchDbPath, symbols, revision, symbolsDbPath, workspaceRoot, RegionOptions);
         return true;
     }
 

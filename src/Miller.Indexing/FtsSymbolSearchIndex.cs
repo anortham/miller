@@ -63,6 +63,7 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
 
         (long revision, double avgdl) = ReadMeta(connection, absPath);
         IReadOnlyList<IndexedSymbol> symbols = ReadResidentSymbols(connection);
+        ValidateFtsTables(connection);
 
         return new FtsSymbolSearchIndex(connectionString, SymbolLookupTables.Build(symbols), avgdl, revision);
     }
@@ -117,6 +118,21 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
                 IsTest: !reader.IsDBNull(9) && reader.GetInt64(9) != 0));
         }
         return results;
+    }
+
+    private static void ValidateFtsTables(SqliteConnection connection)
+    {
+        ExecuteMatchSmokeQuery(connection, "SELECT symbol_id FROM symbols_fts WHERE body MATCH $q LIMIT 1;");
+        ExecuteMatchSmokeQuery(connection, "SELECT symbol_id FROM symbols_trigram WHERE symbols_trigram MATCH $q LIMIT 1;");
+    }
+
+    private static void ExecuteMatchSmokeQuery(SqliteConnection connection, string commandText)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = commandText;
+        cmd.Parameters.AddWithValue("$q", "\"__miller_sidecar_smoke__\"");
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read()) { }
     }
 
     public IReadOnlyList<SearchHit> Search(string query, int limit = 10, SearchMode mode = SearchMode.Or)
@@ -248,7 +264,7 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
     private static List<string> TrigramCandidates(SqliteConnection connection, string match, int limit)
     {
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT symbol_id FROM symbols_trigram WHERE name_collapsed MATCH $q LIMIT $lim;";
+        cmd.CommandText = "SELECT symbol_id FROM symbols_trigram WHERE symbols_trigram MATCH $q LIMIT $lim;";
         cmd.Parameters.AddWithValue("$q", match);
         cmd.Parameters.AddWithValue("$lim", limit);
         return ReadSymbolIds(cmd);

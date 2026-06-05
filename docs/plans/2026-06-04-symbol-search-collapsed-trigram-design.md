@@ -2,11 +2,14 @@
 
 - **Date:** 2026-06-04
 - **Status:** Phases 0–5 implemented 2026-06-04 — the on-disk `search.db` sidecar is **on by default** (opt out
-  with `MILLER_SEARCH_SIDECAR=0`). BOTH writer paths wired (indexer leader + `CrossWorkspaceRefreshService`); the
-  Phase-5 recall eval CLEARED (interior recall 0.000→0.763, zero word-class regression, word-arm ranking parity
-  exact 0/521) so the flag was flipped on; the diacritics parity caveat is closed (`remove_diacritics 0`,
-  `SchemaVersion` 1→2) and a "disk path taken" telemetry counter added. (TDD, fast suite 1434 green / 0 warnings,
-  scale 22/22; routing, both writers, and Phase 5 adversarially reviewed.) (FTS5-first; Codex-reviewed 2026-06-04.)
+  with `MILLER_SEARCH_SIDECAR=0`). BOTH writer paths are wired (indexer leader + `CrossWorkspaceRefreshService`);
+  the Phase-5 recall eval cleared a narrow C# symbol-name gate (interior recall 0.000→0.763, zero word-class
+  regression, word-arm ranking parity exact 0/521), the diacritics parity caveat is closed
+  (`remove_diacritics 0`), and a "disk path taken" telemetry counter exists. Audit follow-up on 2026-06-05 bumped
+  `SchemaVersion` to 4, populated/queried collapsed qualified-name trigrams, added same-revision sidecar repair,
+  validated FTS tables at open, and filtered import/module noise for natural-language and path-like file searches.
+  Remaining caveat: this is not yet a full real-agent search-quality certification; ranking is still Miller BM25
+  plus floored trigram-only recall.
 - **Origin:** codenav trigram experiment (`~/source/codenav/docs/plans/2026-06-04-trigram-symbol-search-design.md`)
 - **Aligns with:** `docs/plans/2026-06-04-free-core-boundary-and-aot-release.md` (Eros consumes Miller's data),
   `docs/findings/gemini-search-suggestion.md` (3-pillar search), `docs/plans/2026-06-02-search-projections-design.md`
@@ -42,7 +45,7 @@ tree-sitter (via julie-extract).
 |---|---|---|
 | 1. Code graph | precise structural queries ("who implements X", "callers of Y") | **Exists** — symbol graph + trace/impact/references over julie's `symbols.db` |
 | 2. Meaning-based search | embeddings over AST-bounded chunks | **Missing by design** — this is Eros's commercial layer; free-core keeps embeddings out |
-| 3. Scope-aware lexical | keyword/trigram search tagged with code structure ("`TODO` only in comments") | **Missing** — this design lays its foundation |
+| 3. Scope-aware lexical | keyword/trigram search tagged with code structure ("`TODO` only in comments") | **Partial / opt-in** — explicit `regions=comment|doc_comment|string_literal` search exists behind `MILLER_REGION_INDEX=1`; default-on waits for size and query-quality follow-up |
 
 Next: ship pillar-3's *foundation* (this doc) without blocking pillars 1 and 2.
 
@@ -68,8 +71,10 @@ Next: ship pillar-3's *foundation* (this doc) without blocking pillars 1 and 2.
 | exact name | full name | ✅ | ✅ (regression check) |
 | snake_case interior | `external` in `format_external_extract` | ⚠️ component-only | ✅ uniform |
 
-Evidence (codenav, external): collapsed-trigram recall is a strict superset of word recall with **zero
-ranking regression** across 6 languages; Miller's own C# corpus measured interior recall **0.57 → 0.84**.
+Evidence (codenav, external): collapsed-trigram recall improved interior-substring recall across 6 languages
+without observed word-class regression. Miller has reproduced the narrow name-derived C# gate only: interior
+recall **0.000 → 0.763** on its own corpus. Do not treat this as proof that real agent queries, qualified-name
+queries, doc-comment/literal queries, or cross-language Miller corpora are beta-ready.
 
 ## Design
 
@@ -123,10 +128,10 @@ CREATE TABLE meta(revision INT, doc_count INT /* N */, avgdl REAL, schema_versio
   lexical search ("`TODO` only in comments") — that needs the reserved `source_regions` table below.
   These columns make that additive; they don't deliver it.
 
-**Reserved for later (do not build now, but the schema makes it additive):** a region-typed trigram
-table over julie-extract v2.1.0's `source_regions` (comments / doc-comments / string-literals /
-embedded-language spans). That is what turns "search only in comments" / "exclude string literals" on.
-This is already Miller's "consume next" item — this schema lays its track.
+**Built after this design:** region-typed word FTS over julie-extract 2.1.1 `source_regions`
+(comments / doc-comments / string-literals) now powers explicit `regions=` search. Remaining later work:
+default-on sizing, multi-token region query semantics, embedded regions, region trigram recall, and exclusion
+queries.
 
 ### Query + rank flow (ranking stays in Miller's C#)
 
@@ -136,20 +141,22 @@ inherit our scorer unless it wants to.
 1. `SearchTool.Run` → `WorkspaceSymbolSearchContext.Index` (already typed `ISymbolLookupIndex` — clean seam).
 2. New `FtsSymbolSearchIndex` opens `search.db` read-only. Per query:
    - Tokenize with the same `CodeTokenizer`; compute the collapsed form.
-   - **Word arm (parity-critical): do NOT cap it.** Fetch *all* docs matching the query terms (strict
-     `AND`, broad `OR` fallback when under-filled) — this is exactly the set the in-memory index would
-     score, so re-ranking it reproduces today's top-N. No FTS-rank `LIMIT` on this arm (an FTS-rank cut
-     could strand a result C# would have ranked higher).
+   - **Word arm (parity-critical): do NOT cap it.** Fetch *all* docs matching any query term, then apply the
+     same C# scoring/filtering as the in-memory index. `SearchMode.And` is filtered in C# after accumulation.
+     No FTS-rank `LIMIT` on this arm (an FTS-rank cut could strand a result C# would have ranked higher).
    - **Trigram arm (additive recall): windowed.** Require **all** ≥3-char query trigrams (`AND`);
-     `LIMIT` ~200, since it is pure extra substring recall. Skip entirely for <3-char queries (word-only).
+     `LIMIT` ~200, since it is pure extra substring recall. It searches collapsed short names and collapsed
+     parent-qualified names. Skip entirely for <3-char queries (word-only).
    - `UNION` candidates by `symbol_id` → resident `IndexedSymbol`.
    - **Filters stay in C#.** The `ISymbolSearchIndex.Search(query, limit, mode)` interface carries no
      filter args today and `SearchTool` filters tests *after* the search — so apply `exclude_tests`/kind
-     post-fetch with conservative overfetch, as now. (Pushing filters into SQL means widening the search
-     interface — a later option, not v1.)
+     post-fetch with conservative overfetch, as now. As of the 2026-06-05 audit, natural-language symbol
+     searches and path-like file searches hide `import`/`module` rows post-fetch; single-identifier queries
+     still keep them.
+     (Pushing filters into SQL means widening the search interface — a later option.)
    - Re-rank with Miller's **unchanged** BM25 + 1.5× exact-name boost. Stats: `N`/`avgdl` from `meta()`,
-     per-term **DF from `fts5vocab`**, per-candidate **TF + doc-len recomputed in C#** by re-tokenizing
-     the resident symbol. Trigram-only hits floored below word hits; excluded under `And`.
+     per-term **DF from `COUNT(*) WHERE body MATCH`**, per-candidate **TF + doc-len recomputed in C#** by
+     re-tokenizing the resident symbol. Trigram-only hits floored below word hits; excluded under `And`.
 3. `index.Resolve(docId)` returns the full symbol from the resident `IndexedSymbol[]` (unchanged tool surface).
 
 ### Self-heal
@@ -190,8 +197,10 @@ swapped in atomically so a reader never sees a half-built DB.
    self-heal to the in-memory projection. Default off until eval clears it.
 4. ✅ **External build** — build the sidecar in `CrossWorkspaceRefreshService` (holds the lock before scan;
    one extra symbol read).
-5. *(later)* `source_regions` region-typed table → scope-aware lexical (pillar 3 proper); optional
-   collapsed qualified-name recall; widen the search interface to push filters into SQL if profiling wants it.
+5. ✅ `source_regions` region-typed table → explicit opt-in region search.
+6. ✅ Collapsed qualified-name trigram recall (`SchemaVersion` 4).
+7. *(later)* Widen the search interface to push filters into SQL if profiling wants it; tune ranking beyond
+   BM25 parity when real-query dogfood justifies it.
 
 ### As built — Phases 0–2 (2026-06-04, TDD)
 
@@ -221,6 +230,15 @@ Decisions and deviations from the doc above:
   lock, thread-safe). Not `IDisposable`.
 - **Lookup reuse:** `SymbolLookupTables` (lookup maps without the BM25 postings) was extracted from
   `SymbolSearchProjection`; both backends share it.
+
+Audit update (2026-06-05):
+
+- **Collapsed qualified-name trigrams now populated and queried.** `symbols_trigram.qual_collapsed` stores the
+  parent-chain-qualified collapsed name (for example `AuthProvider.ResolveToken` →
+  `authproviderresolvetoken`), and the reader searches both trigram columns. `SchemaVersion` bumped 3→4 so old
+  artifacts with empty `qual_collapsed` rebuild automatically.
+- **Byte spans remain NULL in `search_symbols`.** `IndexedSymbol` does not yet carry `start_byte`/`end_byte`, so
+  the sidecar is not yet sufficient for Eros AST-bounded chunks despite reserving the columns.
 
 Open caveat carried to the **eval (Phase 5)**: FTS5's default `unicode61` folds diacritics, so per-term DF can
 drift from the in-memory DF for non-ASCII identifiers with accent collisions (recall stays exact — C#
@@ -410,8 +428,9 @@ parity exact, disk-path test green).
 - **Word-arm fidelity:** feed the *exact* `CodeTokenizer` token stream **including duplicates** as the FTS
   body (TF + doc-len depend on multiplicity); let FTS only re-split on the spaces we insert. A built-in
   tokenizer that re-folds or re-splits diverges. Resolve before claiming zero regression.
-- **Stats parity:** BM25 needs per-term DF + per-doc TF + doc-len, not just `avgdl`/`N`. Plan: DF from
-  `fts5vocab`, TF + doc-len recomputed in C# from the resident symbol; a ranking-parity test gates it.
+- **Stats parity:** BM25 needs per-term DF + per-doc TF + doc-len, not just `avgdl`/`N`. Current implementation:
+  DF from `COUNT(*) WHERE body MATCH`, TF + doc-len recomputed in C# from the resident symbol; a ranking-parity
+  test gates it.
 - **Candidate-window stranding (trigram arm only):** the word arm is uncapped so it can't strand; the
   trigram arm is windowed but purely additive. Guard with a recall test on hot tokens (`parse`, `service`).
 - **Byte spans for pillar 2:** julie emits byte spans but Miller's lean reader drops them; the writer must
@@ -428,4 +447,4 @@ New posture: symbol search moves to an **on-disk, Eros-shareable FTS5 sidecar** 
 revision-keyed, ranking still in Miller's C#. Driver is **data-sharing with Eros + the 3-pillar
 foundation**, not speed. Miller stays a read-only consumer of julie's `symbols.db` and additionally owns
 a rebuildable derived `search.db` (same pattern as `telemetry.db`/`workspaces.db`). Out of scope here:
-embeddings/semantic (Eros), and the `source_regions` scope-aware layer (next, but the schema is ready).
+embeddings/semantic (Eros) and default-on source-region expansion beyond the explicit opt-in beta path.

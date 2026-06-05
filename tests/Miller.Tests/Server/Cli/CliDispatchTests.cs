@@ -51,6 +51,41 @@ public sealed class CliDispatchTests : IDisposable
         return (code, stdout.ToString(), stderr.ToString());
     }
 
+    private static JulieDbFixture DbWithRegion(string path, string text)
+    {
+        int newline = text.IndexOf('\n', StringComparison.Ordinal);
+        int endByte = newline < 0 ? System.Text.Encoding.UTF8.GetByteCount(text) : newline;
+        const string symbolId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        return JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow(symbolId, "TargetType", "class", "csharp",
+                    path, "public class TargetType", 2, ParentId: null),
+            },
+            fileContent: new Dictionary<string, string> { [path] = text },
+            sourceRegions: new[]
+            {
+                new JulieDbFixture.SourceRegionRow(
+                    "region-target", "file:" + path, path, "csharp", "comment", symbolId,
+                    1, 1, 1, endByte, 0, endByte, null),
+            },
+            revisions: new[]
+            {
+                new JulieDbFixture.RevisionRow(1, "fresh"),
+            });
+    }
+
+    private static void WriteRegionSearchDbFor(JulieDbFixture fixture, long revision) =>
+        SearchIndexWriter.Write(
+            SymbolSearchSidecar.SearchDbPathFor(fixture.DbPath),
+            SqliteSymbolReader.Read(fixture.DbPath),
+            revision,
+            fixture.DbPath,
+            fixture.WorkspaceRoot,
+            RegionIndexOptions.EnabledDefault);
+
     [Fact]
     public void IsCliInvocation_ServeAndEmptyAreServer_EverythingElseIsCli()
     {
@@ -122,12 +157,99 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void Search_BadRegions_IsUsageErrorExitTwo()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+
+        var (code, _, errText) = Run(new[] { "search", "TODO", "--regions", "unknown" }, Context(fx.DbPath));
+
+        Assert.Equal(2, code);
+        Assert.Contains("regions must be", errText);
+    }
+
+    [Fact]
+    public void Search_Regions_UsesFreshDiskRegionIndex()
+    {
+        const string path = "src/Target.cs";
+        const string text = "// TODO cli region\nclass TargetType {}\n";
+        using var fx = DbWithRegion(path, text);
+        WriteRegionSearchDbFor(fx, revision: 1);
+
+        string? oldRegion = Environment.GetEnvironmentVariable(RegionIndexOptions.EnvVar);
+        try
+        {
+            Environment.SetEnvironmentVariable(RegionIndexOptions.EnvVar, "1");
+
+            var (code, outText, errText) = Run(
+                new[] { "search", "TODO", "--regions", "comment" },
+                Context(fx.DbPath, fx.WorkspaceRoot));
+
+            Assert.Equal(0, code);
+            Assert.Empty(errText);
+            Assert.Contains("src/Target.cs:1  comment  TargetType", outText);
+            Assert.Contains("// TODO cli region", outText);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(RegionIndexOptions.EnvVar, oldRegion);
+        }
+    }
+
+    [Fact]
     public void Inspect_File_ListsItsSymbols()
     {
         using var fx = JulieDbFixture.CreateDefault();
         var (code, outText, _) = Run(new[] { "inspect", "auth/UserService.cs" }, Context(fx.DbPath));
         Assert.Equal(0, code);
         Assert.Contains("GetUser", outText);
+    }
+
+    [Fact]
+    public void Context_FindsRelevantBundle()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+
+        var (code, outText, errText) = Run(
+            new[] { "context", "GetUser", "--token-budget", "1200", "--max-hops", "1" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("# context bundle", outText);
+        Assert.Contains("GetUser", outText);
+        Assert.Contains("auth/UserService.cs", outText);
+    }
+
+    [Fact]
+    public void Impact_Symbol_RendersDependents()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+
+        var (code, outText, errText) = Run(
+            new[] { "impact", "GetUser", "--max-depth", "1" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("# impacted", outText);
+        Assert.Contains("Controller", outText);
+        Assert.Contains("web/Controller.cs", outText);
+    }
+
+    [Fact]
+    public void Trace_Symbol_RendersNeighbourhood()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+
+        var (code, outText, errText) = Run(
+            new[] { "trace", "GetUser", "--depth", "1" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("# trace GetUser", outText);
+        Assert.Contains("Find", outText);
+        Assert.Contains("auth/Repo.cs", outText);
     }
 
     [Fact]

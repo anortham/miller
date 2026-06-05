@@ -372,7 +372,8 @@ public sealed class IndexerService : BackgroundService
 
         try
         {
-            if (_sidecar.EnsureBuilt(symbolsDbPath, revision))
+            string workspaceRoot = _bootstrap.Workspace.CanonicalRoot ?? _bootstrap.Workspace.WorkspaceRoot;
+            if (_sidecar.EnsureBuilt(symbolsDbPath, revision, workspaceRoot))
                 _logger.LogInformation("Built search sidecar at revision {Revision}.", revision);
         }
         catch (Exception ex) when (

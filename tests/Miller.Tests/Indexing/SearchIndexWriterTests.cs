@@ -1,3 +1,4 @@
+using System.Text;
 using Microsoft.Data.Sqlite;
 using Miller.Core.Tokenization;
 using Miller.Indexing;
@@ -10,7 +11,7 @@ namespace Miller.Tests.Indexing;
 /// <c>search_symbols</c> metadata table, the <c>meta</c> stats row, the word <c>symbols_fts</c> arm
 /// (exact CodeTokenizer token stream incl. duplicates), and the collapsed <c>symbols_trigram</c> arm
 /// (interior + boundary-crossing substring recall). These are the contract Eros and the reader depend on.
-/// See docs/plans/2026-04-symbol-search-collapsed-trigram-design.md.
+/// See docs/plans/2026-06-04-symbol-search-collapsed-trigram-design.md.
 /// </summary>
 public sealed class SearchIndexWriterTests : IDisposable
 {
@@ -32,8 +33,8 @@ public sealed class SearchIndexWriterTests : IDisposable
 
     private static IndexedSymbol Sym(
         int docId, string id, string name, string? sig, string kind, string lang,
-        string path, int startLine, int endLine, bool isTest = false)
-        => new(docId, id, name, sig, kind, lang, path, startLine, endLine, ParentId: null, IsTest: isTest);
+        string path, int startLine, int endLine, bool isTest = false, string? parentId = null)
+        => new(docId, id, name, sig, kind, lang, path, startLine, endLine, ParentId: parentId, IsTest: isTest);
 
     private SqliteConnection OpenRead()
     {
@@ -183,6 +184,23 @@ public sealed class SearchIndexWriterTests : IDisposable
     }
 
     [Fact]
+    public void Write_Trigram_StoresCollapsedQualifiedParentChain()
+    {
+        var syms = new[]
+        {
+            Sym(0, "parent", "AuthProvider", null, "class", "csharp", "a.cs", 1, 20),
+            Sym(1, "child", "ResolveToken", null, "method", "csharp", "a.cs", 3, 6, parentId: "parent"),
+        };
+        SearchIndexWriter.Write(_dbPath, syms, 1);
+
+        using var c = OpenRead();
+        Assert.Equal("authproviderresolvetoken",
+            Scalar(c, "SELECT qual_collapsed FROM symbols_trigram WHERE symbol_id=$i", ("$i", "child")));
+        Assert.Equal("child",
+            Scalar(c, "SELECT symbol_id FROM symbols_trigram WHERE qual_collapsed MATCH $q", ("$q", "providerreso")));
+    }
+
+    [Fact]
     public void Write_OverwritesExistingDb_ReplacesRowsAndRevision()
     {
         SearchIndexWriter.Write(_dbPath, new[]
@@ -208,5 +226,69 @@ public sealed class SearchIndexWriterTests : IDisposable
         Assert.Equal(0L, Long(Scalar(c, "SELECT COUNT(*) FROM search_symbols")));
         Assert.Equal(0L, Long(Scalar(c, "SELECT doc_count FROM meta")));
         Assert.Equal(3L, Long(Scalar(c, "SELECT revision FROM meta")));
+    }
+
+    [Fact]
+    public void Write_CreatesEmptyRegionTablesInCurrentSchema()
+    {
+        SearchIndexWriter.Write(_dbPath, Array.Empty<IndexedSymbol>(), revision: 3);
+
+        using var c = OpenRead();
+        Assert.Equal((long)SearchIndexWriter.SchemaVersion, Long(Scalar(c, "SELECT schema_version FROM meta")));
+        Assert.Equal(0L, Long(Scalar(c, "SELECT region_count FROM meta")));
+        Assert.Equal(0.0, Convert.ToDouble(Scalar(c, "SELECT region_avgdl FROM meta")), 5);
+        Assert.Equal(0L, Long(Scalar(c, "SELECT COUNT(*) FROM search_regions")));
+        Assert.Equal(0L, Long(Scalar(c, "SELECT COUNT(*) FROM regions_fts")));
+    }
+
+    [Fact]
+    public void Write_RegionIndexEnabled_SlicesVerifiedUtf8RegionsIntoSearchDb()
+    {
+        const string path = "src/A.cs";
+        const string symbolId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        const string text = "// TODO café\nclass A { string Url = \"http://localhost\"; }\n";
+        int commentStart = text.IndexOf("//", StringComparison.Ordinal);
+        int commentEnd = text.IndexOf('\n', commentStart);
+        int literalStart = text.IndexOf("\"http://localhost\"", StringComparison.Ordinal);
+        int literalEnd = literalStart + "\"http://localhost\"".Length;
+        int CommentByte(int index) => Encoding.UTF8.GetByteCount(text[..index]);
+
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow(symbolId, "A", "class", "csharp", path, "class A", 2, ParentId: null),
+            },
+            fileContent: new Dictionary<string, string> { [path] = text },
+            sourceRegions: new[]
+            {
+                new JulieDbFixture.SourceRegionRow(
+                    "comment-region", "file:" + path, path, "csharp", "comment", symbolId,
+                    1, 1, 1, 13, CommentByte(commentStart), CommentByte(commentEnd), null),
+                new JulieDbFixture.SourceRegionRow(
+                    "literal-region", "file:" + path, path, "csharp", "string_literal", symbolId,
+                    2, 30, 2, 48, CommentByte(literalStart), CommentByte(literalEnd), null),
+                new JulieDbFixture.SourceRegionRow(
+                    "embedded-region", "file:" + path, path, "csharp", "embedded", symbolId,
+                    2, 1, 2, 48, 0, Encoding.UTF8.GetByteCount(text), null),
+            });
+
+        SearchIndexWriter.Write(
+            _dbPath,
+            SqliteSymbolReader.Read(fx.DbPath),
+            revision: 5,
+            symbolsDbPath: fx.DbPath,
+            workspaceRoot: fx.WorkspaceRoot,
+            regionOptions: RegionIndexOptions.EnabledDefault);
+
+        using var c = OpenRead();
+        Assert.Equal(2L, Long(Scalar(c, "SELECT region_count FROM meta")));
+        Assert.Equal("// TODO café", Scalar(c, "SELECT raw_text FROM search_regions WHERE region_id='comment-region'"));
+        Assert.Equal("\"http://localhost\"", Scalar(c, "SELECT raw_text FROM search_regions WHERE region_id='literal-region'"));
+        Assert.Equal("A", Scalar(c, "SELECT containing_symbol_name FROM search_regions WHERE region_id='comment-region'"));
+        Assert.Equal(0L, Long(Scalar(c, "SELECT COUNT(*) FROM search_regions WHERE kind='embedded'")));
+        Assert.Equal("comment-region", Scalar(c, "SELECT region_id FROM regions_fts WHERE body MATCH 'café'"));
+        Assert.Equal("literal-region", Scalar(c, "SELECT region_id FROM regions_fts WHERE body MATCH 'localhost'"));
     }
 }

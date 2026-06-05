@@ -5,12 +5,11 @@ using Xunit;
 namespace Miller.Tests.Indexing;
 
 /// <summary>
-/// Locks JulieDbFixture to the v1 julie-extract artifact schema (schema.rs v1). This is the canonical
-/// synthetic-schema guard the design (§10H) calls for: if the fixture drifts off v1, the readers it feeds
-/// would silently test against the wrong contract. Asserts the v1 table set exists and the old-schema
-/// tables/columns are GONE.
+/// Locks JulieDbFixture to the julie-extract schema-v2 artifact contract. This is the canonical synthetic
+/// schema guard the readers rely on: if the fixture drifts off the pinned contract, tests would silently
+/// exercise the wrong SQLite shape.
 /// </summary>
-public sealed class JulieDbFixtureV1SchemaTests
+public sealed class JulieDbFixtureV2SchemaTests
 {
     private static SqliteConnection Open(string dbPath)
     {
@@ -36,8 +35,16 @@ public sealed class JulieDbFixtureV1SchemaTests
         return cmd.ExecuteScalar() is not null;
     }
 
+    private static bool IndexExists(SqliteConnection c, string name)
+    {
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT 1 FROM sqlite_master WHERE type='index' AND name=$n;";
+        cmd.Parameters.AddWithValue("$n", name);
+        return cmd.ExecuteScalar() is not null;
+    }
+
     [Fact]
-    public void Fixture_EmitsV1ArtifactTables_AndDropsOldSchemaTables()
+    public void Fixture_EmitsV2ArtifactTables_AndDropsOldSchemaTables()
     {
         using var fx = JulieDbFixture.CreateDefault();
         using var c = Open(fx.DbPath);
@@ -45,13 +52,32 @@ public sealed class JulieDbFixtureV1SchemaTests
         foreach (var t in new[] { "artifact_metadata", "files", "symbols", "identifiers",
             "relationships", "type_argument_usages", "type_arguments", "literals", "symbol_annotations",
             "parse_diagnostics", "parser_inventory", "language_capabilities",
-            "extraction_revisions", "revision_file_changes" })
-            Assert.True(TableExists(c, t), $"v1 table '{t}' must exist");
+            "extraction_revisions", "revision_file_changes", "source_regions" })
+            Assert.True(TableExists(c, t), $"schema-v2 table '{t}' must exist");
 
         // Old-schema artifacts removed in v1 are gone.
         Assert.False(TableExists(c, "schema_version"), "schema_version table is dropped in v1");
         Assert.False(TableExists(c, "external_extract_metadata"),
             "external_extract_metadata is dropped in v1 (hash_algorithm moved onto artifact_metadata)");
+    }
+
+    [Fact]
+    public void Fixture_SourceRegions_UseV2ColumnSetAndIndexes()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+        using var c = Open(fx.DbPath);
+
+        foreach (var column in new[]
+        {
+            "source_region_id", "file_id", "path", "language", "kind", "containing_symbol_id",
+            "start_line", "start_column", "end_line", "end_column", "start_byte", "end_byte",
+            "metadata_json",
+        })
+            Assert.True(ColumnExists(c, "source_regions", column), $"source_regions.{column} must exist");
+
+        Assert.True(IndexExists(c, "idx_source_regions_file_span"));
+        Assert.True(IndexExists(c, "idx_source_regions_kind_file"));
+        Assert.True(IndexExists(c, "idx_source_regions_symbol"));
     }
 
     // ---- H2: v1 revision tables (extraction_revisions / revision_file_changes) ----

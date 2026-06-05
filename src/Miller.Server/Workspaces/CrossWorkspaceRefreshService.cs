@@ -128,7 +128,7 @@ public sealed class CrossWorkspaceRefreshService
             // workspace single-writer lock around the scan. Build the sidecar here (off the search hot path,
             // skipped when already revision-fresh). Best-effort: a sidecar build failure must NEVER undo a
             // successful scan/refresh — reads self-heal to the in-memory index.
-            TryBuildSidecar(row.IndexDbPath, revision);
+            TryBuildSidecar(row.IndexDbPath, row.CanonicalRoot, revision);
 
             WorkspaceRefreshStatus status = revision > (row.LastRevision ?? 0)
                 ? WorkspaceRefreshStatus.Refreshed
@@ -159,11 +159,11 @@ public sealed class CrossWorkspaceRefreshService
     // Build the external workspace's search.db sidecar best-effort: enabled-and-stale ⇒ rebuild, else no-op.
     // Swallows build failures by design — the refresh's contract is the scanned symbols.db; the derived sidecar
     // is optional and a failure must not surface as a refresh error (reads fall back to the in-memory index).
-    private void TryBuildSidecar(string symbolsDbPath, long revision)
+    private void TryBuildSidecar(string symbolsDbPath, string workspaceRoot, long revision)
     {
         try
         {
-            _sidecar.EnsureBuilt(symbolsDbPath, revision);
+            _sidecar.EnsureBuilt(symbolsDbPath, revision, workspaceRoot);
         }
         catch (Exception ex) when (
             ex is SqliteException or IOException or InvalidOperationException

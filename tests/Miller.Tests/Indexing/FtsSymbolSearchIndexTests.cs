@@ -35,7 +35,7 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
     // search_symbols, with DocId == ordinal — so the reader and the in-memory projection assign identical
     // DocIds (parity depends on it). start_line is fixed at 1, so the order is (path, symbol_id) Ordinal.
     private static IndexedSymbol[] Corpus(
-        params (string Id, string Name, string? Sig, string Kind, string Lang, string Path)[] rows)
+        params (string Id, string Name, string? Sig, string Kind, string Lang, string Path, string? ParentId)[] rows)
     {
         var ordered = rows
             .OrderBy(r => r.Path, StringComparer.Ordinal)
@@ -46,10 +46,14 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
         {
             var r = ordered[i];
             syms[i] = new IndexedSymbol(i, r.Id, r.Name, r.Sig, r.Kind, r.Lang, r.Path,
-                StartLine: 1, EndLine: 2, ParentId: null, IsTest: false);
+                StartLine: 1, EndLine: 2, ParentId: r.ParentId, IsTest: false);
         }
         return syms;
     }
+
+    private static IndexedSymbol[] Corpus(
+        params (string Id, string Name, string? Sig, string Kind, string Lang, string Path)[] rows) =>
+        Corpus(rows.Select(static r => (r.Id, r.Name, r.Sig, r.Kind, r.Lang, r.Path, ParentId: (string?)null)).ToArray());
 
     [Fact]
     public void Open_ExposesDocumentCountRevisionAndResolvesFullSymbol()
@@ -261,6 +265,22 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
         // 'matexter' spans for|mat..exter|nal — a boundary-crossing fragment contiguous only once collapsed.
         Assert.Equal(new[] { "format_external_extract" },
             index.Search("matexter", limit: 10).Select(h => index.Resolve(h.Document.DocId).Name).ToArray());
+    }
+
+    [Fact]
+    public void Search_TrigramArm_FindsCollapsedQualifiedParentChildSubstring()
+    {
+        var syms = Corpus(
+            ("parent", "AuthProvider", null, "class", "csharp", "src/Auth.cs", ParentId: (string?)null),
+            ("child", "ResolveToken", null, "method", "csharp", "src/Auth.cs", ParentId: "parent"),
+            ("other", "Unrelated", null, "class", "csharp", "src/Other.cs", ParentId: (string?)null));
+        SearchIndexWriter.Write(_dbPath, syms, 1);
+
+        var index = FtsSymbolSearchIndex.Open(_dbPath);
+
+        // Spans AuthProvider.ResolveToken across the parent-child boundary; neither bare name contains it.
+        Assert.Equal(new[] { "ResolveToken" },
+            index.Search("providerreso", limit: 10).Select(h => index.Resolve(h.Document.DocId).Name).ToArray());
     }
 
     [Fact]

@@ -18,7 +18,7 @@ public sealed class MillerExtractContractTests
         Assert.Equal(2, MillerExtractContract.ExpectedExtractContractVersion);
         Assert.Equal(2, MillerExtractContract.ExpectedReportSchemaVersion);
         Assert.Equal("blake3", MillerExtractContract.ExpectedHashAlgorithm);
-        Assert.Equal("2.1.0", MillerExtractContract.PinnedJulieExtractVersion);
+        Assert.Equal("2.1.1", MillerExtractContract.PinnedJulieExtractVersion);
         Assert.False(string.IsNullOrWhiteSpace(MillerExtractContract.PinnedJulieExtractVersion));
     }
 
@@ -267,7 +267,7 @@ public sealed class MillerExtractContractTests
     {
         Match match = Regex.Match(
             script,
-            "python3 - \\\"\\$expr\\\" \\\"\\$\\{PINS\\}\\\" <<'PY'\\n(?<code>.*?)\\nPY",
+            "python3 - \\\"\\$expr\\\" \\\"\\$\\{PINS\\}\\\" <<'PY'\\r?\\n(?<code>.*?)\\r?\\nPY",
             RegexOptions.Singleline);
         Assert.True(match.Success, "Could not find the restore script's python3 fallback heredoc.");
         return match.Groups["code"].Value;

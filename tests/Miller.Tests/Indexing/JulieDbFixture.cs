@@ -178,6 +178,25 @@ internal sealed class JulieDbFixture : IDisposable
         string Kind);
 
     /// <summary>
+    /// A row as written into the synthesized v2 <c>source_regions</c> table. It carries the full julie column
+    /// set; region text is not stored in the artifact and must be sliced from file bytes by consumers.
+    /// </summary>
+    internal sealed record SourceRegionRow(
+        string SourceRegionId,
+        string FileId,
+        string Path,
+        string Language,
+        string Kind,
+        string? ContainingSymbolId,
+        int StartLine,
+        int StartColumn,
+        int EndLine,
+        int EndColumn,
+        int StartByte,
+        int EndByte,
+        string? MetadataJson);
+
+    /// <summary>
     /// A row as written into the v1 <c>extraction_revisions</c> table (the freshness cursor; schema.rs:28-41).
     /// <see cref="Revision"/> maps to the <c>revision_id</c> PK the FreshnessReader takes MAX of (one DB = one
     /// root, so there is no <c>workspace_id</c>); <see cref="Kind"/> maps to the <c>mode</c> column and defaults
@@ -220,7 +239,8 @@ internal sealed class JulieDbFixture : IDisposable
         IReadOnlyList<RevisionFileChangeRow>? fileChanges = null,
         IReadOnlyList<RelationshipRow>? relationships = null,
         string? hashAlgorithm = MillerExtractContract.ExpectedHashAlgorithm,
-        IReadOnlyList<FileSpec>? extraFiles = null)
+        IReadOnlyList<FileSpec>? extraFiles = null,
+        IReadOnlyList<SourceRegionRow>? sourceRegions = null)
     {
         string dir = Path.Combine(Path.GetTempPath(), "miller-julie-fixture-" + Guid.NewGuid().ToString("N"));
         System.IO.Directory.CreateDirectory(dir);
@@ -247,6 +267,8 @@ internal sealed class JulieDbFixture : IDisposable
             Exec(conn, IdentifiersDdl);
             // The relationships table is always created so a SymbolGraphReader can open against any fixture.
             Exec(conn, RelationshipsDdl);
+            Exec(conn, SourceRegionsDdl);
+            Exec(conn, SourceRegionsIndexesDdl);
             // The v1 freshness tables (extraction_revisions/revision_file_changes) so the FreshnessReader can open.
             Exec(conn, ExtractionRevisionsDdl);
             Exec(conn, RevisionFileChangesDdl);
@@ -270,7 +292,7 @@ internal sealed class JulieDbFixture : IDisposable
             // identifiers also carry path, so union both sources of paths. The exact bytes hashed into
             // content_hash are ALSO materialized to disk under _dir (the WorkspaceRoot), so the D2 disk-slice
             // path reads a file whose blake3 matches the stored content_hash by construction (reconciliation #3).
-            foreach (var path in DistinctPaths(rows, identifiers))
+            foreach (var path in DistinctPaths(rows, identifiers, sourceRegions))
             {
                 string content = fileContent is not null && fileContent.TryGetValue(path, out var c) ? c : "";
                 byte[] bytes = System.Text.Encoding.UTF8.GetBytes(content);
@@ -408,6 +430,33 @@ internal sealed class JulieDbFixture : IDisposable
                     cmd.Parameters.AddWithValue("$from", rel.FromSymbolId);
                     cmd.Parameters.AddWithValue("$to", rel.ToSymbolId);
                     cmd.Parameters.AddWithValue("$kind", rel.Kind);
+                    cmd.ExecuteNonQuery();
+                }
+            }
+
+            if (sourceRegions is not null)
+            {
+                foreach (var region in sourceRegions)
+                {
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText =
+                        "INSERT INTO source_regions (source_region_id, file_id, path, language, kind, " +
+                        "containing_symbol_id, start_line, start_column, end_line, end_column, " +
+                        "start_byte, end_byte, metadata_json) " +
+                        "VALUES ($id, $fid, $path, $lang, $kind, $symbol, $sl, $sc, $el, $ec, $sb, $eb, $meta);";
+                    cmd.Parameters.AddWithValue("$id", region.SourceRegionId);
+                    cmd.Parameters.AddWithValue("$fid", region.FileId);
+                    cmd.Parameters.AddWithValue("$path", region.Path);
+                    cmd.Parameters.AddWithValue("$lang", region.Language);
+                    cmd.Parameters.AddWithValue("$kind", region.Kind);
+                    cmd.Parameters.AddWithValue("$symbol", (object?)region.ContainingSymbolId ?? DBNull.Value);
+                    cmd.Parameters.AddWithValue("$sl", region.StartLine);
+                    cmd.Parameters.AddWithValue("$sc", region.StartColumn);
+                    cmd.Parameters.AddWithValue("$el", region.EndLine);
+                    cmd.Parameters.AddWithValue("$ec", region.EndColumn);
+                    cmd.Parameters.AddWithValue("$sb", region.StartByte);
+                    cmd.Parameters.AddWithValue("$eb", region.EndByte);
+                    cmd.Parameters.AddWithValue("$meta", (object?)region.MetadataJson ?? DBNull.Value);
                     cmd.ExecuteNonQuery();
                 }
             }
@@ -742,7 +791,9 @@ internal sealed class JulieDbFixture : IDisposable
     };
 
     private static IEnumerable<string> DistinctPaths(
-        IReadOnlyList<SymbolRow> rows, IReadOnlyList<IdentifierRow>? identifiers)
+        IReadOnlyList<SymbolRow> rows,
+        IReadOnlyList<IdentifierRow>? identifiers,
+        IReadOnlyList<SourceRegionRow>? sourceRegions)
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var r in rows)
@@ -752,6 +803,10 @@ internal sealed class JulieDbFixture : IDisposable
             foreach (var i in identifiers)
                 if (seen.Add(i.FilePath))
                     yield return i.FilePath;
+        if (sourceRegions is not null)
+            foreach (var r in sourceRegions)
+                if (seen.Add(r.Path))
+                    yield return r.Path;
     }
 
     // Parents (parent_id == null) before children so the self-referential FK never dangles at insert time.
@@ -867,6 +922,30 @@ internal sealed class JulieDbFixture : IDisposable
             confidence REAL NOT NULL DEFAULT 1.0,
             metadata_json TEXT
         );
+        """;
+
+    private const string SourceRegionsDdl = """
+        CREATE TABLE IF NOT EXISTS source_regions (
+            source_region_id TEXT PRIMARY KEY,
+            file_id TEXT NOT NULL REFERENCES files(file_id) ON DELETE CASCADE,
+            path TEXT NOT NULL,
+            language TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            containing_symbol_id TEXT REFERENCES symbols(symbol_id) ON DELETE SET NULL,
+            start_line INTEGER NOT NULL,
+            start_column INTEGER NOT NULL,
+            end_line INTEGER NOT NULL,
+            end_column INTEGER NOT NULL,
+            start_byte INTEGER NOT NULL,
+            end_byte INTEGER NOT NULL,
+            metadata_json TEXT
+        );
+        """;
+
+    private const string SourceRegionsIndexesDdl = """
+        CREATE INDEX IF NOT EXISTS idx_source_regions_file_span ON source_regions(file_id, start_byte, end_byte);
+        CREATE INDEX IF NOT EXISTS idx_source_regions_kind_file ON source_regions(kind, file_id, start_byte);
+        CREATE INDEX IF NOT EXISTS idx_source_regions_symbol ON source_regions(containing_symbol_id);
         """;
 
     // ---- M4 bridge tables (v1 schema.rs:192-233) -----------------------------------------------------------

@@ -57,3 +57,30 @@ jobs:
 
       - name: Test (Scale suite)
         run: scripts/test.sh scale
+
+  windows-fast:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore Miller.slnx
+
+      - name: Restore julie-extract (Windows)
+        shell: pwsh
+        run: ./scripts/restore-julie-extract.ps1
+
+      - name: Build (warnings are errors via Directory.Build.props)
+        run: dotnet build Miller.slnx --no-restore -c Release
+
+      - name: Test (default suite via PowerShell wrapper)
+        shell: pwsh
+        env:
+          FAST_BUDGET_SECONDS: 300
+        run: ./scripts/test.ps1 fast --no-build

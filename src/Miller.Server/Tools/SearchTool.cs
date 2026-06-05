@@ -43,6 +43,7 @@ public sealed class SearchTool
 {
     private readonly IWorkspaceSearchProvider _workspaceProvider;
     private readonly IWorkspaceContentSearchProvider _contentProvider;
+    private readonly IWorkspaceRegionSearchProvider _regionProvider;
 
     /// <summary>
     /// Construct over the symbol-search and content-search providers (production / freshness-aware). In
@@ -51,11 +52,29 @@ public sealed class SearchTool
     /// </summary>
     /// <exception cref="ArgumentNullException">Either provider is null.</exception>
     public SearchTool(IWorkspaceSearchProvider workspaceProvider, IWorkspaceContentSearchProvider contentProvider)
+        : this(
+            workspaceProvider,
+            contentProvider,
+            workspaceProvider as IWorkspaceRegionSearchProvider ?? new UnavailableRegionSearchProvider())
+    {
+    }
+
+    /// <summary>
+    /// Construct over all search providers. Region search is split out because it has no in-memory fallback and
+    /// must read a revision-fresh <c>search.db</c> sidecar.
+    /// </summary>
+    /// <exception cref="ArgumentNullException">Any provider is null.</exception>
+    public SearchTool(
+        IWorkspaceSearchProvider workspaceProvider,
+        IWorkspaceContentSearchProvider contentProvider,
+        IWorkspaceRegionSearchProvider regionProvider)
     {
         ArgumentNullException.ThrowIfNull(workspaceProvider);
         ArgumentNullException.ThrowIfNull(contentProvider);
+        ArgumentNullException.ThrowIfNull(regionProvider);
         _workspaceProvider = workspaceProvider;
         _contentProvider = contentProvider;
+        _regionProvider = regionProvider;
     }
 
     [McpServerTool(Name = "search")]
@@ -63,7 +82,8 @@ public sealed class SearchTool
         "Search indexed code and return ranked results. Use this before shell rg/grep/cat or reading whole " +
         "files. Pass a symbol name, an identifier, or a natural-language phrase. Test code is hidden for " +
         "natural-language queries unless you ask for it. Use mode=content (alias docs) to search docs/prose " +
-        "file content instead of symbols — it returns path + line + snippet hits. Returns compact text by " +
+        "file content instead of symbols — it returns path + line + snippet hits. Pass regions=comment, " +
+        "doc_comment, or string_literal to search only inside those source regions. Returns compact text by " +
         "default; pass format=json to chain results.")]
     public string Search(
         [Description("Symbol name, identifier, or natural-language phrase.")] string query,
@@ -74,7 +94,9 @@ public sealed class SearchTool
         [Description("Output format: compact|json. Default compact.")] string format = "compact",
         [Description("Workspace selector: display_id, unique prefix, full id, current, or primary.")] string? workspace_id = null,
         [Description("Refresh a registered workspace before reading. Defaults true when workspace_id is supplied.")]
-        bool? ensure_fresh = null)
+        bool? ensure_fresh = null,
+        [Description("Source-region kinds to search: comma list of comment, doc_comment, string_literal. Alias: docstring.")]
+        string? regions = null)
     {
         var scope = TelemetryContext.Current;
         try
@@ -82,10 +104,26 @@ public sealed class SearchTool
             var parsedMode = ParseMode(mode);
             bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
+            IReadOnlySet<string>? regionKinds = ParseRegionKinds(regions);
 
             string output;
             int count;
-            if (parsedMode == SearchToolMode.Content)
+            if (regionKinds is not null)
+            {
+                WorkspaceRegionSearchContext region = _regionProvider.ResolveRegionSearch(workspace_id, ensureFresh);
+                string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(region, workspace_id, json);
+                bool hideTests = ResolveExcludeTests(exclude_tests, query, parsedMode);
+                string? modeNote = parsedMode == SearchToolMode.Auto
+                    ? null
+                    : $"mode={mode} ignored; regions search uses source-region text.";
+                output = RunRegions(region.Index, query, regionKinds, limit, hideTests, json, out count, compactBanner, modeNote);
+                if (scope is not null)
+                {
+                    ReadToolWorkspaceRouting.ApplyTelemetry(scope, region);
+                    scope.MetadataJson = RegionBackendMetadata;
+                }
+            }
+            else if (parsedMode == SearchToolMode.Content)
             {
                 // Content/docs search routes to its own projection and result kind; exclude_tests is a no-op.
                 WorkspaceContentSearchContext content = _contentProvider.ResolveContentSearch(workspace_id, ensureFresh);
@@ -98,7 +136,16 @@ public sealed class SearchTool
             {
                 WorkspaceSymbolSearchContext context = _workspaceProvider.ResolveSymbolSearch(workspace_id, ensureFresh);
                 string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
-                output = Run(context.Index, query, parsedMode, limit, exclude_tests, json, out count, compactBanner);
+                output = Run(
+                    context.Index,
+                    query,
+                    parsedMode,
+                    limit,
+                    exclude_tests,
+                    json,
+                    out count,
+                    compactBanner,
+                    symbolIds => ReadHasDocCommentBestEffort(context.IndexDbPath, symbolIds));
                 if (scope is not null)
                 {
                     ReadToolWorkspaceRouting.ApplyTelemetry(scope, context);
@@ -138,6 +185,34 @@ public sealed class SearchTool
         _ => SearchToolMode.Auto, // includes "auto", null, and anything unrecognized
     };
 
+    internal static IReadOnlySet<string>? ParseRegionKinds(string? regions)
+    {
+        if (string.IsNullOrWhiteSpace(regions))
+            return null;
+
+        var parsed = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string rawPart in regions.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            string normalized = rawPart.ToLowerInvariant() switch
+            {
+                "comment" => "comment",
+                "doc_comment" or "docstring" => "doc_comment",
+                "string_literal" => "string_literal",
+                _ => throw new InvalidOperationException(
+                    "regions must be a comma list of comment, doc_comment, or string_literal.")
+            };
+            parsed.Add(normalized);
+        }
+
+        if (parsed.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "regions must be a comma list of comment, doc_comment, or string_literal.");
+        }
+
+        return parsed;
+    }
+
     /// <summary>
     /// Telemetry metadata recording which backend served a symbol search — <c>disk</c> when the on-disk
     /// <see cref="FtsSymbolSearchIndex"/> sidecar answered, <c>memory</c> when the in-memory index did. This is
@@ -152,6 +227,9 @@ public sealed class SearchTool
     /// <summary>In-memory backend marker (see <see cref="DiskBackendMetadata"/>).</summary>
     internal const string MemoryBackendMetadata = "{\"search_backend\":\"memory\"}";
 
+    /// <summary>Region text is always served from the disk sidecar.</summary>
+    internal const string RegionBackendMetadata = "{\"search_backend\":\"region_disk\"}";
+
     private static string SearchBackendMetadata(ISymbolLookupIndex index) =>
         index is FtsSymbolSearchIndex ? DiskBackendMetadata : MemoryBackendMetadata;
 
@@ -163,19 +241,21 @@ public sealed class SearchTool
     /// </summary>
     public static string Run(
         ISymbolLookupIndex index, string query, SearchToolMode mode, int limit,
-        bool? excludeTests, bool json, out int renderedCount, string? compactBanner = null)
+        bool? excludeTests, bool json, out int renderedCount, string? compactBanner = null,
+        Func<IReadOnlyCollection<string>, IReadOnlySet<string>>? hasDocLookup = null)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
         if (limit < 1) limit = 1;
 
-        // Pull enough to know whether there is an overflow beyond `limit` after the test filter, so the
-        // "… N more" note is accurate. Cap the over-fetch to avoid pathological cost.
-        int overFetch = Math.Min(limit * 4 + 10, 500);
         bool fileMode = mode == SearchToolMode.File ||
                         (mode == SearchToolMode.Auto && IsPathLikeQuery(query, index));
 
         bool hideTests = ResolveExcludeTests(excludeTests, query, mode);
+        bool hideLowSignalKinds = fileMode || ResolveHideLowSignalKinds(query, mode);
+        // Pull enough to know whether there is an overflow beyond `limit` after post-search filters, so the
+        // "… N more" note is accurate. Natural-language phrase search can be import/module-heavy, so use the cap.
+        int overFetch = hideLowSignalKinds ? 500 : Math.Min(limit * 4 + 10, 500);
 
         // Preserve index order; only filter (never re-sort).
         var kept = new List<IndexedSymbol>();
@@ -204,15 +284,24 @@ public sealed class SearchTool
         if (total == 0)
             return json ? "[]" : ReadToolWorkspaceRouting.PrefixCompact("No results.", compactBanner);
 
+        IReadOnlySet<string>? hasDocSymbolIds = null;
+        if (hasDocLookup is not null && page > 0)
+        {
+            string[] pageIds = kept.Take(page).Select(static s => s.SymbolId).ToArray();
+            hasDocSymbolIds = hasDocLookup(pageIds);
+        }
+
         return json
-            ? RenderJson(kept, scores, page)
-            : RenderCompact(kept, page, total, compactBanner);
+            ? RenderJson(kept, scores, page, hasDocSymbolIds)
+            : RenderCompact(kept, page, total, compactBanner, hasDocSymbolIds);
 
         void AddIfVisible(IndexedSymbol sym, double score)
         {
             // Cross-language predicate (decision-4): julie's persisted is_test OR the path fallback. Using the
             // shared helper means an AST-flagged test in a non-test-named file is hidden, not just *Tests.cs.
             if (hideTests && IsTestPath.IsTest(sym))
+                return;
+            if (hideLowSignalKinds && IsLowSignalKind(sym.Kind))
                 return;
             kept.Add(sym);
             scores.Add(score);
@@ -248,8 +337,44 @@ public sealed class SearchTool
             : RenderContentCompact(hits, page, total, compactBanner);
     }
 
+    /// <summary>
+    /// The pure source-region search execution core (no MCP/DI/telemetry). This is a distinct result kind from
+    /// symbol and content search: each hit is text inside a comment, doc-comment, or string literal.
+    /// </summary>
+    public static string RunRegions(
+        IRegionSearchIndex index,
+        string query,
+        IReadOnlySet<string> kinds,
+        int limit,
+        bool excludeTests,
+        bool json,
+        out int renderedCount,
+        string? compactBanner = null,
+        string? modeNote = null)
+    {
+        ArgumentNullException.ThrowIfNull(index);
+        ArgumentNullException.ThrowIfNull(kinds);
+        ArgumentException.ThrowIfNullOrWhiteSpace(query);
+        if (limit < 1) limit = 1;
+
+        int overFetch = Math.Min(limit * 4 + 10, 500);
+        IReadOnlyList<RegionSearchHit> hits = index.Search(query, kinds, overFetch, excludeTests);
+
+        int total = hits.Count;
+        int page = Math.Min(limit, total);
+        renderedCount = page;
+
+        string? prefix = CombineCompactPrefix(compactBanner, modeNote);
+        if (total == 0)
+            return json ? "[]" : ReadToolWorkspaceRouting.PrefixCompact("No results.", prefix);
+
+        return json
+            ? RenderRegionJson(hits, page)
+            : RenderRegionCompact(hits, page, total, prefix);
+    }
+
     // tri-state: null → hide only for NL phrases lacking test/def intent; true → always; false → never.
-    private static bool ResolveExcludeTests(bool? excludeTests, string query, SearchToolMode mode)
+    internal static bool ResolveExcludeTests(bool? excludeTests, string query, SearchToolMode mode)
     {
         if (excludeTests is { } forced)
             return forced;
@@ -259,6 +384,14 @@ public sealed class SearchTool
             return false;
         return !HasTestOrDefIntent(query);
     }
+
+    internal static bool ResolveHideLowSignalKinds(string query, SearchToolMode mode) =>
+        mode == SearchToolMode.Text ||
+        (mode == SearchToolMode.Auto && IsNaturalLanguagePhrase(query));
+
+    private static bool IsLowSignalKind(string kind) =>
+        string.Equals(kind, "import", StringComparison.Ordinal) ||
+        string.Equals(kind, "module", StringComparison.Ordinal);
 
     // A natural-language phrase = multiple whitespace-delimited words (a single identifier-ish token is not).
     private static bool IsNaturalLanguagePhrase(string query)
@@ -289,7 +422,28 @@ public sealed class SearchTool
         return ext.Length > 1 && index.KnownExtensions.Contains(ext);
     }
 
-    private static string RenderCompact(IReadOnlyList<IndexedSymbol> kept, int page, int total, string? compactBanner)
+    private static IReadOnlySet<string> ReadHasDocCommentBestEffort(
+        string dbPath,
+        IReadOnlyCollection<string> symbolIds)
+    {
+        try
+        {
+            return SqliteSourceRegionReader.ReadHasDocComment(dbPath, symbolIds);
+        }
+        catch (Exception ex) when (
+            ex is FileNotFoundException or InvalidOperationException or IOException or UnauthorizedAccessException
+                or ArgumentException or NotSupportedException)
+        {
+            return new HashSet<string>(StringComparer.Ordinal);
+        }
+    }
+
+    private static string RenderCompact(
+        IReadOnlyList<IndexedSymbol> kept,
+        int page,
+        int total,
+        string? compactBanner,
+        IReadOnlySet<string>? hasDocSymbolIds)
     {
         var sb = new StringBuilder();
         if (!string.IsNullOrWhiteSpace(compactBanner))
@@ -301,6 +455,8 @@ public sealed class SearchTool
               .Append(s.FilePath).Append(':').Append(s.StartLine);
             if (!string.IsNullOrEmpty(s.Signature))
                 sb.Append("  ").Append(Truncate(s.Signature!, SignatureMaxLength));
+            if (hasDocSymbolIds?.Contains(s.SymbolId) == true)
+                sb.Append("  has_doc");
             if (i < page - 1)
                 sb.Append('\n');
         }
@@ -310,7 +466,11 @@ public sealed class SearchTool
         return sb.ToString();
     }
 
-    private static string RenderJson(IReadOnlyList<IndexedSymbol> kept, IReadOnlyList<double> scores, int page)
+    private static string RenderJson(
+        IReadOnlyList<IndexedSymbol> kept,
+        IReadOnlyList<double> scores,
+        int page,
+        IReadOnlySet<string>? hasDocSymbolIds)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
@@ -328,11 +488,77 @@ public sealed class SearchTool
                 else writer.WriteString("signature", s.Signature);
                 writer.WriteNumber("score", scores[i]);
                 writer.WriteString("symbol_id", s.SymbolId);
+                if (hasDocSymbolIds is not null)
+                    writer.WriteBoolean("has_doc", hasDocSymbolIds.Contains(s.SymbolId));
                 writer.WriteEndObject();
             }
             writer.WriteEndArray();
         }
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    private static string RenderRegionCompact(
+        IReadOnlyList<RegionSearchHit> hits,
+        int page,
+        int total,
+        string? compactPrefix)
+    {
+        var blocks = new List<string>(page);
+        for (int i = 0; i < page; i++)
+        {
+            RegionSearchHit h = hits[i];
+            var block = new StringBuilder();
+            block.Append(h.Path).Append(':').Append(h.Line).Append("  ").Append(h.Kind);
+            if (!string.IsNullOrWhiteSpace(h.ContainingSymbolName))
+                block.Append("  ").Append(h.ContainingSymbolName);
+            foreach (string line in h.Snippet.Split('\n'))
+                block.Append('\n').Append("    ").Append(line);
+            blocks.Add(block.ToString());
+        }
+
+        var sb = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(compactPrefix))
+            sb.Append(compactPrefix).Append('\n');
+        sb.Append(string.Join("\n\n", blocks));
+
+        int remainder = total - page;
+        if (remainder > 0)
+            sb.Append('\n').Append("… ").Append(remainder).Append(" more (raise limit)");
+        return sb.ToString();
+    }
+
+    private static string RenderRegionJson(IReadOnlyList<RegionSearchHit> hits, int page)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
+        {
+            writer.WriteStartArray();
+            for (int i = 0; i < page; i++)
+            {
+                RegionSearchHit h = hits[i];
+                writer.WriteStartObject();
+                writer.WriteString("file", h.Path);
+                writer.WriteNumber("line", h.Line);
+                writer.WriteString("kind", h.Kind);
+                writer.WriteNumber("score", h.Score);
+                writer.WriteString("snippet", h.Snippet);
+                writer.WriteString("region_id", h.RegionId);
+                if (h.ContainingSymbolId is null) writer.WriteNull("containing_symbol_id");
+                else writer.WriteString("containing_symbol_id", h.ContainingSymbolId);
+                if (h.ContainingSymbolName is null) writer.WriteNull("containing_symbol_name");
+                else writer.WriteString("containing_symbol_name", h.ContainingSymbolName);
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+        }
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    private static string? CombineCompactPrefix(string? compactBanner, string? modeNote)
+    {
+        if (string.IsNullOrWhiteSpace(compactBanner))
+            return string.IsNullOrWhiteSpace(modeNote) ? null : modeNote;
+        return string.IsNullOrWhiteSpace(modeNote) ? compactBanner : compactBanner + '\n' + modeNote;
     }
 
     // Each hit is a `path:line` header followed by its snippet window (±2 lines), each snippet line indented
@@ -385,4 +611,10 @@ public sealed class SearchTool
 
     internal static string Truncate(string value, int max) =>
         value.Length <= max ? value : value[..(max - 1)] + "…";
+
+    private sealed class UnavailableRegionSearchProvider : IWorkspaceRegionSearchProvider
+    {
+        public WorkspaceRegionSearchContext ResolveRegionSearch(string? workspaceId, bool ensureFresh) =>
+            throw new InvalidOperationException("region search provider is not configured.");
+    }
 }

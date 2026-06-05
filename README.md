@@ -59,13 +59,17 @@ src/
   Miller.Core/       pure logic, ZERO I/O deps: contract record types, in-memory index + BM25, the resolver
   Miller.Indexing/   infrastructure: julie-extract subprocess, SQLite (WAL) read layer, watcher/indexer
   Miller.Server/     MCP stdio host, the 7 tools, the telemetry interceptor + ledger
-  Miller.Dashboard/  loopback dashboard reading the registry + telemetry DB
+  Miller.Dashboard/  narrow loopback ops dashboard reading the registry + telemetry DB
 tests/
   Miller.Tests/      unit (Core, fast) + contract (against a committed extract-DB fixture) + tagged scale set
 docs/
   miller-mvp-plan.md           milestones M0–M7
   findings/                    the investigation this design was mined from
 ```
+
+Miller keeps only the local operational dashboard: registered workspaces, freshness, telemetry, sidecar
+health, and refresh/troubleshooting actions. Eros owns richer product UX such as next-action guidance,
+confidence/evidence views, semantic/vector retrieval, and commercial workflows.
 
 ## The tool surface (target)
 
@@ -91,7 +95,12 @@ The single `miller` binary runs two ways:
 
   ```bash
   dotnet run --project src/Miller.Server -c Release -- search "UserService"
+  dotnet run --project src/Miller.Server -c Release -- search "connection string" --mode content --limit 5
   dotnet run --project src/Miller.Server -c Release -- inspect auth/UserService.cs --depth full
+  dotnet run --project src/Miller.Server -c Release -- context "order processing" --token-budget 2000
+  dotnet run --project src/Miller.Server -c Release -- trace GetUser --depth 2
+  dotnet run --project src/Miller.Server -c Release -- impact GetUser --max-depth 2
+  dotnet run --project src/Miller.Server -c Release -- workspace status
   dotnet run --project src/Miller.Server -c Release -- workspace list
   dotnet run --project src/Miller.Server -c Release -- version
   ```
@@ -104,6 +113,20 @@ The single `miller` binary runs two ways:
 restarts the subprocess. A build made inside the repo carries its git short SHA — `miller version` prints
 `0.1.0+<sha>` (just `0.1.0` for a build with no `.git`), and the same string heads the `# workspace` block of
 `workspace status` — so a session can always confirm *which* build it is talking to.
+
+## CLI output expectations
+
+For beta, text output is a compact human-facing contract and JSON output is the integration contract.
+
+- Exit code `0` means success, `2` means usage/argument error, and `3` means no usable index, refused
+  workspace operation, missing restore, or another operational failure a script should not ignore.
+- `--json` is supported by `search`, `inspect`, `context`, `impact`, and `workspace` operations. `trace`
+  is text-only for now.
+- Text headings and ordering are intended to be stable enough for humans and logs, not for strict parsers.
+  Use `--json` when a caller needs fields.
+- Search result kinds are deliberately separate: symbol search ranks `name + signature`, `--mode content`
+  searches docs-like file content, and `--regions` searches explicit source regions when region indexing
+  is enabled.
 
 ## Build & test
 
@@ -130,17 +153,49 @@ scripts/test.sh scale      # scale suite only (needs .tools/julie-extract — se
 scripts/test.sh all        # both suites
 ```
 
+Windows PowerShell mirrors are available for the beta-critical scripts:
+
+```powershell
+scripts/test.ps1
+scripts/test.ps1 scale
+scripts/test.ps1 all
+```
+
 Two guards keep the split honest: a convention test
 ([`ScaleTraitConventionTests`](tests/Miller.Tests/Conventions/ScaleTraitConventionTests.cs)) fails the
 build if any julie-spawning test is missing `[Trait("Category","Scale")]`, and CI time-budgets the fast
-suite. To enable the scale suite locally:
+suite. A second convention guard requires Windows PowerShell mirrors for beta-critical scripts. To enable
+the scale suite locally:
 
 ```bash
 bash scripts/restore-julie-extract.sh   # downloads the pinned julie-extract into .tools/
 MILLER_JULIE_SOURCE=~/source/julie-extractors bash scripts/restore-julie-extract.sh --from-source
 ```
 
+```powershell
+scripts/restore-julie-extract.ps1       # downloads the pinned julie-extract.exe into .tools\
+$env:MILLER_JULIE_SOURCE='C:\source\julie-extractors'; scripts/restore-julie-extract.ps1 -FromSource
+```
+
 Requires the .NET 10 SDK. Warnings are errors (`Directory.Build.props`).
+
+## Known beta limits
+
+- No embeddings or semantic/vector retrieval in Miller. If that is needed, Eros owns the projection.
+- Region search is explicit and opt-in for beta: set `MILLER_REGION_INDEX=1`, refresh the workspace, then
+  call `search --regions comment|doc_comment|string_literal`.
+- Full `inspect` can still be expensive on very large repositories; summary `inspect`, `search`,
+  `context`, and workspace status/list are the fast dogfood paths.
+- Native AOT is release-readiness work, not a beta blocker.
+- A rebuilt MCP server is picked up only after the MCP client restarts the Miller subprocess.
+
+## Troubleshooting
+
+- `no Miller index`: run `miller workspace full`, or open the folder in the Miller MCP server so the
+  index can be created.
+- Missing `julie-extract`: run the restore script for your platform, then rerun the scale or refresh path.
+- Unsure which server is live: run `miller version` or `miller workspace status` and compare the git SHA
+  suffix with the build you expect.
 
 ## License
 
