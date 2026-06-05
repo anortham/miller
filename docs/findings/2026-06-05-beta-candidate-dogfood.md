@@ -3,6 +3,7 @@
 - **Date:** 2026-06-05
 - **Workspace:** `/Users/murphy/source/miller`
 - **Miller build used for dogfood:** `0.1.0+e51eb98a82d0`
+- **Follow-up README CLI example dogfood:** `0.1.0+c53474eae69e`
 - **`julie-extract` pin:** `julie-extract 2.1.1`
 - **Decision:** source-checkout beta is viable after final gates; remaining issues are documented beta limits or post-beta polish.
 
@@ -102,6 +103,30 @@ miller impact src/Miller.Server/Workspaces/WorkspaceIndexProvider.cs --max-depth
 
 Returned impacted tool methods (`WorkspaceTool`, `SearchTool`, `InspectTool`) and likely provider
 tests. File-path impact is a usable beta workflow for broad change planning.
+
+## README CLI Example Follow-Up
+
+After the adoption-guidance restart, the direct binary equivalent of the README CLI examples was rerun on
+build `0.1.0+c53474eae69e`.
+
+The old generic examples exercised command shapes, but were not good source-checkout dogfood: `trace GetUser`
+and `impact GetUser` returned clean "not found" messages, and `inspect auth/UserService.cs` returned an empty
+file listing. The README examples now use real Miller targets:
+
+```bash
+miller search "WorkspaceIndexProvider" --limit 5
+miller search "source-checkout beta" --mode content --limit 5
+miller inspect src/Miller.Server/AgentInstructions.cs --depth full
+miller context "CLI workspace routing" --token-budget 2000
+miller trace AgentInstructions --depth 2
+miller impact AgentInstructions --max-depth 2
+miller workspace status
+miller workspace list
+miller version
+```
+
+Those commands returned useful results from the Miller checkout. JSON output was also spot-checked for
+`search`, `inspect`, `context`, `impact`, and `workspace status`; `trace` remains text-only as documented.
 
 ## Region Search
 

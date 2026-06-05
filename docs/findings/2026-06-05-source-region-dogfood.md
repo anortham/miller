@@ -11,12 +11,15 @@ Initial real-repo dogfood validates the implementation path: `MILLER_REGION_INDE
 `search_regions` and `regions_fts`, scoped searches return region-typed hits, and query latency is
 usable on a medium repo.
 
-The larger OpenClaw run shows two reasons not to make region indexing default-on for beta yet:
+The larger OpenClaw run showed two reasons not to make region indexing default-on for beta immediately:
 
 - sidecar growth can be large when a repo has many string literals;
-- multi-token region queries currently use broad OR-style recall, so result quality can be noisy.
+- multi-token region queries used broad OR-style recall, so result quality could be noisy.
 
-Keep the beta behavior opt-in until quality and size tradeoffs are better understood.
+Follow-up on `0.1.0+c53474eae69e` changed multi-token region search to require every distinct query term
+while staying non-phrase, and exposed `MILLER_REGION_MAX_BYTES` to tune the existing per-region byte cap.
+Keep the beta behavior opt-in until the large-`string_literal` size tradeoff is better understood and the
+revised semantics/cap are re-measured on large repos.
 
 ## Current Miller Workspace
 
@@ -164,14 +167,15 @@ Keep source-region indexing **opt-in** for beta:
 
 - `MILLER_REGION_INDEX=1` remains required to populate region rows.
 - `regions=` remains explicit and fail-closed.
-- Do not enable region indexing by default until the query-quality and sidecar-size tradeoffs are
-  re-measured after follow-up work.
+- Do not enable region indexing by default until the sidecar-size tradeoff is re-measured after the
+  all-terms query semantics change and the `MILLER_REGION_MAX_BYTES` cap is dogfooded on large
+  `string_literal` corpora.
 
 ## Follow-Ups
 
-- Investigate whether region search should require all distinct query terms by default, or expose a
-  clear AND-style mode for scoped region search.
-- Consider a size guard or separate default for `string_literal` indexing on very large repos.
+- Re-measure OpenClaw and at least one medium repo after the all-terms query semantics change.
+- Dogfood `MILLER_REGION_MAX_BYTES` on very large `string_literal` corpora before choosing a default-on
+  posture or a lower built-in cap.
 - Keep `embedded` regions deferred.
 - Keep region trigram recall deferred.
 - Keep exclusion queries deferred.

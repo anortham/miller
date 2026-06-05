@@ -117,8 +117,8 @@ public sealed class FtsRegionSearchIndex : IRegionSearchIndex
         foreach (string term in distinctTerms)
             documentFrequency[term] = CountRegionsMatching(connection, QuoteFts(term));
 
-        string orMatch = string.Join(" OR ", distinctTerms.Select(QuoteFts));
-        List<string> candidateIds = RegionCandidates(connection, orMatch);
+        string match = string.Join(" AND ", distinctTerms.Select(QuoteFts));
+        List<string> candidateIds = RegionCandidates(connection, match);
 
         var hits = new List<RegionSearchHit>();
         var seenRegionIds = new HashSet<string>(StringComparer.Ordinal);
@@ -138,11 +138,13 @@ public sealed class FtsRegionSearchIndex : IRegionSearchIndex
             CodeTokenizer.Tokenize(region.RawText, tokens);
 
             double score = 0.0;
+            int matchedTerms = 0;
             foreach (string term in distinctTerms)
             {
                 int tf = CountOccurrences(tokens, term);
                 if (tf == 0)
                     continue;
+                matchedTerms++;
                 score += Bm25.TermScore(
                     Bm25.Idf(_regionCount, documentFrequency[term]),
                     tf,
@@ -150,7 +152,7 @@ public sealed class FtsRegionSearchIndex : IRegionSearchIndex
                     _regionAvgdl);
             }
 
-            if (score <= 0.0)
+            if (matchedTerms != distinctTerms.Count || score <= 0.0)
                 continue;
 
             hits.Add(new RegionSearchHit(

@@ -26,7 +26,8 @@ the tokens.
   returns `path:line` + a snippet window, for files symbol search can't see (markdown, config, plain text).
   Use `regions=comment|doc_comment|string_literal` (comma lists accepted; `docstring` aliases `doc_comment`) to
   search only inside comments, doc-comments, or string literals. Region search requires `MILLER_REGION_INDEX=1`
-  and a refreshed `search.db` sidecar; if unavailable, it fails closed instead of returning symbol results.
+  and a refreshed `search.db` sidecar; set `MILLER_REGION_MAX_BYTES=<n>` before refresh to tune the per-region cap.
+  If unavailable, region search fails closed instead of returning symbol results.
   Symbol hits may include `has_doc` when the symbol has `symbols.doc_comment`. Optional `workspace_id` accepts a
   display ID, unique prefix, full ID, `current`, or `primary`; explicit `workspace_id` defaults
   `ensure_fresh=true`.
@@ -62,6 +63,7 @@ the tokens.
   returns `path:line` + snippet, where symbol search would find nothing.
 - **Find text only inside comments or strings**: `search "<phrase>" regions=comment` or
   `search "<phrase>" regions=string_literal` — requires `MILLER_REGION_INDEX=1` and a refreshed workspace.
+  Use `MILLER_REGION_MAX_BYTES=<n>` to tune oversized region indexing.
 - **Scope a change**: `impact target=…` → run the tests it lists → `edit` (dry-run) → `edit apply=true` →
   re-run `impact` if the surface changed.
 - **Edit a symbol**: `inspect` it → `edit … dry_run` (the default) → `edit … apply=true`.

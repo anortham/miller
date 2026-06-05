@@ -53,7 +53,8 @@ public sealed class SymbolSearchSidecar
     public static SymbolSearchSidecar FromEnvironment() =>
         FromEnvValue(
             Environment.GetEnvironmentVariable(EnvVar),
-            Environment.GetEnvironmentVariable(RegionIndexOptions.EnvVar));
+            Environment.GetEnvironmentVariable(RegionIndexOptions.EnvVar),
+            Environment.GetEnvironmentVariable(RegionIndexOptions.MaxBytesEnvVar));
 
     /// <summary>The pure env-value ⇒ sidecar mapping behind <see cref="FromEnvironment"/> — testable without
     /// mutating the process environment (which would leak across xUnit's parallel collections).</summary>
@@ -63,11 +64,18 @@ public sealed class SymbolSearchSidecar
     /// Pure env-value parser for both sidecar flags. Symbol search defaults on; region text defaults off and
     /// enables only on an explicit truthy token.
     /// </summary>
-    internal static SymbolSearchSidecar FromEnvValue(string? sidecarRaw, string? regionRaw)
+    internal static SymbolSearchSidecar FromEnvValue(
+        string? sidecarRaw,
+        string? regionRaw,
+        string? maxRegionBytesRaw = null)
     {
         bool enabled = !IsDisabledValue(sidecarRaw);
         bool regionEnabled = IsTruthyValue(regionRaw);
-        return new SymbolSearchSidecar(enabled, regionEnabled ? RegionIndexOptions.EnabledDefault : RegionIndexOptions.Disabled);
+        int maxRegionBytes = ParsePositiveInt(maxRegionBytesRaw, RegionIndexOptions.DefaultMaxRegionBytes);
+        var regionOptions = regionEnabled
+            ? new RegionIndexOptions(Enabled: true, maxRegionBytes)
+            : new RegionIndexOptions(Enabled: false, maxRegionBytes);
+        return new SymbolSearchSidecar(enabled, regionOptions);
     }
 
     /// <summary>
@@ -96,6 +104,17 @@ public sealed class SymbolSearchSidecar
             "1" or "true" or "on" or "yes" => true,
             _ => false,
         };
+    }
+
+    private static int ParsePositiveInt(string? raw, int fallback)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return fallback;
+
+        return int.TryParse(raw.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsed)
+               && parsed > 0
+            ? parsed
+            : fallback;
     }
 
     /// <summary>

@@ -47,8 +47,9 @@ status workspaces. It should read the workspace registry, telemetry DB, and ligh
 - [x] Decide beta behavior: keep region indexing opt-in for beta.
 - [x] Explicitly defer follow-ups: `embedded` regions, trigram recall for regions, and exclusion
   queries.
-- [x] Record post-beta/default-on follow-ups from dogfood: multi-token region query semantics and
-  very large `string_literal` sidecars.
+- [x] Record post-beta/default-on follow-ups from dogfood: multi-token region query semantics were
+  tightened to all distinct terms and `MILLER_REGION_MAX_BYTES` exposes the existing per-region cap;
+  default-on still waits on re-measurement and very large `string_literal` sidecars.
 
 ### 2. Search And Inspect Quality
 

@@ -94,12 +94,12 @@ The single `miller` binary runs two ways:
   so output matches a tool call.
 
   ```bash
-  dotnet run --project src/Miller.Server -c Release -- search "UserService"
-  dotnet run --project src/Miller.Server -c Release -- search "connection string" --mode content --limit 5
-  dotnet run --project src/Miller.Server -c Release -- inspect auth/UserService.cs --depth full
-  dotnet run --project src/Miller.Server -c Release -- context "order processing" --token-budget 2000
-  dotnet run --project src/Miller.Server -c Release -- trace GetUser --depth 2
-  dotnet run --project src/Miller.Server -c Release -- impact GetUser --max-depth 2
+  dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvider" --limit 5
+  dotnet run --project src/Miller.Server -c Release -- search "source-checkout beta" --mode content --limit 5
+  dotnet run --project src/Miller.Server -c Release -- inspect src/Miller.Server/AgentInstructions.cs --depth full
+  dotnet run --project src/Miller.Server -c Release -- context "CLI workspace routing" --token-budget 2000
+  dotnet run --project src/Miller.Server -c Release -- trace AgentInstructions --depth 2
+  dotnet run --project src/Miller.Server -c Release -- impact AgentInstructions --max-depth 2
   dotnet run --project src/Miller.Server -c Release -- workspace status
   dotnet run --project src/Miller.Server -c Release -- workspace list
   dotnet run --project src/Miller.Server -c Release -- version
@@ -183,7 +183,8 @@ Requires the .NET 10 SDK. Warnings are errors (`Directory.Build.props`).
 
 - No embeddings or semantic/vector retrieval in Miller. If that is needed, Eros owns the projection.
 - Region search is explicit and opt-in for beta: set `MILLER_REGION_INDEX=1`, refresh the workspace, then
-  call `search --regions comment|doc_comment|string_literal`.
+  call `search --regions comment|doc_comment|string_literal`. Set `MILLER_REGION_MAX_BYTES=<n>` to lower
+  or raise the per-region byte cap for very large comment/string-literal corpora.
 - Full `inspect` can still be expensive on very large repositories; summary `inspect`, `search`,
   `context`, and workspace status/list are the fast dogfood paths.
 - Native AOT is release-readiness work, not a beta blocker.

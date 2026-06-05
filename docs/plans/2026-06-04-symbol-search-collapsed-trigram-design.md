@@ -130,8 +130,8 @@ CREATE TABLE meta(revision INT, doc_count INT /* N */, avgdl REAL, schema_versio
 
 **Built after this design:** region-typed word FTS over julie-extract 2.1.1 `source_regions`
 (comments / doc-comments / string-literals) now powers explicit `regions=` search. Remaining later work:
-default-on sizing, multi-token region query semantics, embedded regions, region trigram recall, and exclusion
-queries.
+default-on sizing, large-repo re-measurement after all-terms region query semantics, embedded regions,
+region trigram recall, and exclusion queries.
 
 ### Query + rank flow (ranking stays in Miller's C#)
 

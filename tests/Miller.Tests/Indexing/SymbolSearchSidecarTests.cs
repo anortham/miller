@@ -100,6 +100,27 @@ public sealed class SymbolSearchSidecarTests : IDisposable
         Assert.Equal(expectedRegionEnabled, sidecar.RegionOptions.Enabled);
     }
 
+    [Theory]
+    [InlineData(null, RegionIndexOptions.DefaultMaxRegionBytes)]
+    [InlineData("", RegionIndexOptions.DefaultMaxRegionBytes)]
+    [InlineData("garbage", RegionIndexOptions.DefaultMaxRegionBytes)]
+    [InlineData("0", RegionIndexOptions.DefaultMaxRegionBytes)]
+    [InlineData("-1", RegionIndexOptions.DefaultMaxRegionBytes)]
+    [InlineData("4096", 4096)]
+    [InlineData(" 8192 ", 8192)]
+    public void FromEnvValue_RegionMaxBytesDefaultsAndParsesPositiveValues(
+        string? maxRegionBytesRaw, int expectedMaxRegionBytes)
+    {
+        SymbolSearchSidecar sidecar = SymbolSearchSidecar.FromEnvValue(
+            sidecarRaw: null,
+            regionRaw: "1",
+            maxRegionBytesRaw);
+
+        Assert.True(sidecar.Enabled);
+        Assert.True(sidecar.RegionOptions.Enabled);
+        Assert.Equal(expectedMaxRegionBytes, sidecar.RegionOptions.MaxRegionBytes);
+    }
+
     [Fact]
     public void SearchDbPathFor_IsTheSiblingSearchDbInTheSameDirectory()
     {

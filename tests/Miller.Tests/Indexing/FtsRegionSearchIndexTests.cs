@@ -118,6 +118,50 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
     }
 
     [Fact]
+    public void Search_MultiTokenQueryRequiresEveryDistinctTerm()
+    {
+        WriteSearchDb(
+            Region("both", "comment", "src/Both.cs", 3, "// alpha beta together"),
+            Region("alpha-only", "comment", "src/Alpha.cs", 4, "// alpha alone"),
+            Region("beta-only", "comment", "src/Beta.cs", 5, "// beta alone"));
+
+        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7);
+
+        var hits = index.Search("alpha beta", new HashSet<string> { "comment" }, 10, excludeTests: false);
+
+        RegionSearchHit hit = Assert.Single(hits);
+        Assert.Equal("both", hit.RegionId);
+    }
+
+    [Fact]
+    public void Search_MultiTokenQueryIsNotPhraseSearch()
+    {
+        WriteSearchDb(
+            Region("reversed", "comment", "src/Reversed.cs", 3, "// beta appears before alpha"),
+            Region("partial", "comment", "src/Partial.cs", 4, "// alpha alone"));
+
+        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7);
+
+        var hits = index.Search("alpha beta", new HashSet<string> { "comment" }, 10, excludeTests: false);
+
+        RegionSearchHit hit = Assert.Single(hits);
+        Assert.Equal("reversed", hit.RegionId);
+    }
+
+    [Fact]
+    public void Search_RepeatedQueryTokenDoesNotRequireDuplicateOccurrences()
+    {
+        WriteSearchDb(Region("single", "comment", "src/Single.cs", 3, "// alpha beta once"));
+
+        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7);
+
+        var hits = index.Search("alpha alpha beta", new HashSet<string> { "comment" }, 10, excludeTests: false);
+
+        RegionSearchHit hit = Assert.Single(hits);
+        Assert.Equal("single", hit.RegionId);
+    }
+
+    [Fact]
     public void Open_MissingFile_FailsClosedWithActionableException()
     {
         string missing = Path.Combine(_dir, "missing.db");

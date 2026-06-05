@@ -9,6 +9,9 @@ public sealed record RegionIndexOptions(bool Enabled, int MaxRegionBytes)
     /// <summary>The environment variable that opts into region-text population in <c>search.db</c>.</summary>
     public const string EnvVar = "MILLER_REGION_INDEX";
 
+    /// <summary>Optional environment variable overriding the per-region indexed byte cap.</summary>
+    public const string MaxBytesEnvVar = "MILLER_REGION_MAX_BYTES";
+
     /// <summary>Default cap for one indexed region body. Oversize regions are skipped, not truncated.</summary>
     public const int DefaultMaxRegionBytes = 65_536;
 

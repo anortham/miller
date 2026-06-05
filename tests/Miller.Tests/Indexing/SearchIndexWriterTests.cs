@@ -291,4 +291,47 @@ public sealed class SearchIndexWriterTests : IDisposable
         Assert.Equal("comment-region", Scalar(c, "SELECT region_id FROM regions_fts WHERE body MATCH 'café'"));
         Assert.Equal("literal-region", Scalar(c, "SELECT region_id FROM regions_fts WHERE body MATCH 'localhost'"));
     }
+
+    [Fact]
+    public void Write_RegionIndexEnabled_SkipsRegionsOverConfiguredMaxBytes()
+    {
+        const string path = "src/A.cs";
+        const string symbolId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        const string text = "// short\n// this comment is too large for the test cap\n";
+        int firstStart = text.IndexOf("// short", StringComparison.Ordinal);
+        int firstEnd = text.IndexOf('\n', firstStart);
+        int secondStart = text.LastIndexOf("//", StringComparison.Ordinal);
+        int secondEnd = text.IndexOf('\n', secondStart);
+        int Byte(int index) => Encoding.UTF8.GetByteCount(text[..index]);
+
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow(symbolId, "A", "class", "csharp", path, "class A", 2, ParentId: null),
+            },
+            fileContent: new Dictionary<string, string> { [path] = text },
+            sourceRegions: new[]
+            {
+                new JulieDbFixture.SourceRegionRow(
+                    "small-region", "file:" + path, path, "csharp", "comment", symbolId,
+                    1, 1, 1, 8, Byte(firstStart), Byte(firstEnd), null),
+                new JulieDbFixture.SourceRegionRow(
+                    "large-region", "file:" + path, path, "csharp", "comment", symbolId,
+                    2, 1, 2, 48, Byte(secondStart), Byte(secondEnd), null),
+            });
+
+        SearchIndexWriter.Write(
+            _dbPath,
+            SqliteSymbolReader.Read(fx.DbPath),
+            revision: 5,
+            symbolsDbPath: fx.DbPath,
+            workspaceRoot: fx.WorkspaceRoot,
+            regionOptions: new RegionIndexOptions(Enabled: true, MaxRegionBytes: 10));
+
+        using var c = OpenRead();
+        Assert.Equal(1L, Long(Scalar(c, "SELECT region_count FROM meta")));
+        Assert.Equal("small-region", Scalar(c, "SELECT region_id FROM search_regions"));
+    }
 }
