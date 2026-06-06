@@ -1,0 +1,55 @@
+# Third-Party Notices
+
+Miller is licensed under the MIT License (see [LICENSE](LICENSE)). It depends on, and in some cases
+bundles, third-party components. Some of these ship inside Miller's release archives (the self-contained
+per-platform packages built by the release workflow), some are restored from NuGet at build time, and a
+few JavaScript assets are vendored directly into the repository. The notices below cover those components.
+Each upstream project retains its own copyright and license; this file is provided for attribution and does
+not modify those licenses.
+
+If you redistribute Miller (source or a release archive), keep this file alongside the binaries.
+
+## .NET / NuGet dependencies
+
+| Component | Version | License | Notes |
+| --- | --- | --- | --- |
+| ModelContextProtocol (MCP C# SDK) | 1.3.0 | MIT | Model Context Protocol server/stdio implementation Miller uses to speak MCP. |
+| Microsoft.Extensions.Hosting | 10.0.8 | MIT | .NET Generic Host that runs Miller's server and hosted services. |
+| Microsoft.Data.Sqlite | 10.0.8 | MIT | ADO.NET provider Miller uses to read `julie-extract` artifacts and its own SQLite sidecars. |
+| Serilog.Extensions.Hosting | 10.0.0 | Apache-2.0 | Serilog integration with the .NET Generic Host. |
+| Serilog.Sinks.Console | 6.1.1 | Apache-2.0 | Serilog console sink. |
+| Serilog.Sinks.File | 7.0.0 | Apache-2.0 | Serilog file sink (the shared daily `.log` file). |
+| Serilog.Formatting.Compact | 3.0.0 | Apache-2.0 | Compact JSON formatter for the machine-readable `.jsonl` log. |
+| Blake3 (`Blake3`) | 2.2.1 | BSD-2-Clause | .NET binding by Alexandre Mutel (xoofx) used for `blake3:` content hashing. See note below on the bundled native library. |
+
+### SQLite native provider (SQLitePCLRaw)
+
+`Microsoft.Data.Sqlite` pulls in the `SQLitePCLRaw.*` family, including the `bundle_e_sqlite3` package that
+ships the native `e_sqlite3` provider. SQLitePCLRaw (maintained by Eric Sink) is licensed under the
+**Apache License 2.0**. The native bundle embeds the **SQLite** engine itself, which is released into the
+**public domain** by its authors. These native binaries ship inside Miller's release archives.
+
+### Blake3 native library
+
+The `Blake3` NuGet package is licensed **BSD-2-Clause** (Copyright (c) 2020, Alexandre Mutel). It ships a
+native `blake3_dotnet` library built from the BLAKE3 reference implementation
+(<https://github.com/BLAKE3-team/BLAKE3>), which is dual-licensed: released into the **public domain via
+CC0 1.0**, or alternatively under the **Apache License 2.0**. The native `libblake3_dotnet` binary ships
+inside Miller's release archives.
+
+## Vendored web assets
+
+| Component | Version | License | Notes |
+| --- | --- | --- | --- |
+| htmx | 2.0.4 | Zero-Clause BSD (0BSD) | Vendored at `src/Miller.Dashboard/wwwroot/lib/htmx/htmx.min.js`; powers the loopback dashboard UI. |
+
+## Bundled tooling
+
+### julie-extract
+
+Miller delegates all source extraction to the pinned **`julie-extract`** binary
+(<https://github.com/anortham/julie-extractors>), currently pinned at version **2.1.3**
+(see [`scripts/julie-pins.json`](scripts/julie-pins.json)). It is the same author's own project (Alan
+Northam) and is shipped inside Miller's release archives under `.tools/julie-extract`. Refer to the
+julie-extractors repository for its license terms and for the licenses of the tree-sitter grammars it
+embeds.

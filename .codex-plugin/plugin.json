@@ -1,0 +1,40 @@
+{
+  "name": "miller",
+  "version": "0.1.0-beta.1",
+  "description": "Local SQLite-backed code intelligence server for coding agents.",
+  "author": {
+    "name": "Alan Northam"
+  },
+  "homepage": "https://github.com/anortham/miller#readme",
+  "repository": "https://github.com/anortham/miller",
+  "license": "MIT",
+  "keywords": [
+    "code-intelligence",
+    "mcp",
+    "search",
+    "navigation",
+    "impact-analysis",
+    "sqlite"
+  ],
+  "mcpServers": "./.mcp.json",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Miller",
+    "shortDescription": "Local code intelligence for agent workflows",
+    "longDescription": "Miller provides a local SQLite-backed MCP server and CLI for code search, symbol inspection, context packing, impact analysis, trace paths, edits, and workspace freshness checks.",
+    "developerName": "Alan Northam",
+    "category": "Developer Tools",
+    "capabilities": [
+      "MCP",
+      "Code search",
+      "Impact analysis"
+    ],
+    "websiteURL": "https://github.com/anortham/miller#readme",
+    "defaultPrompt": [
+      "Search this repo with Miller.",
+      "Inspect a symbol with Miller.",
+      "Check impact before editing."
+    ],
+    "brandColor": "#2563EB"
+  }
+}

@@ -37,7 +37,7 @@ Three findings, each a design mandate:
    params cause agent confusion and minor mistakes that cost extra tool calls. eros had to build server-side
    dict-key dispatch to compensate.)
 4. **Single-required-arg 80% path** for every read tool.
-5. **Preview-first mutation**: `edit` defaults to `dry_run=true` and never writes unless `apply=true`.
+5. **Preview-first mutation**: `edit` previews a diff by default and never writes unless `apply=true`.
 6. **Freshness gate**: `edit` refuses a stale target (re-index first), with an `allow_stale` escape (eros pattern).
 7. **`format=compact` default, `json` opt-in for chaining** — token economy on high-volume tools.
 8. **Descriptions carry the steer** *"Use this before shell rg/grep/cat or reading whole files."* on every read
@@ -161,8 +161,7 @@ reachability on demand. Miller must keep a **precomputed transitive-closure** in
 | `old_text` | | `null` | string? | for replace_text |
 | `new_text` | | `null` | string? | replacement / new name |
 | `occurrence` | | `first` | `first\|last\|all` | |
-| `dry_run` | | `true` | bool | **preview by default** |
-| `apply` | | `false` | bool | must flip true to write |
+| `apply` | | `false` | bool | must flip true to write; default previews a diff and writes nothing |
 | `allow_stale` | | `false` | bool | bypass freshness gate |
 | `scope` | | `null` | string? | disambiguate an ambiguous symbol name to a file (the cross-tool §2 override) |
 | `format` | | `compact` | `compact\|json` | |

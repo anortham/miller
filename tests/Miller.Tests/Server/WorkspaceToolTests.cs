@@ -513,6 +513,33 @@ public sealed class WorkspaceToolTests : IDisposable
     }
 
     [Fact]
+    public void Open_SymlinkToSensitiveRoot_IsRefused_NotPrimed()
+    {
+        // The sensitive-root guard must run on the CANONICAL (symlink-resolved) root, not the raw argument —
+        // otherwise a symlink whose own path looks innocuous but whose TARGET is the home dir slips past the
+        // lexical check and primes a sensitive tree. The scan/lock are stubbed so a regression cannot touch home:
+        // the scan throws if reached, proving the guard short-circuits first.
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "directory symlink creation needs privilege on Windows.");
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(
+            fx,
+            builtRevision: 4,
+            workspaceId: Ws,
+            openScan: (_, _, _) => throw new InvalidOperationException("prime scan must not run here"),
+            acquireLock: _ => new NoopLease());
+
+        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        Assert.False(string.IsNullOrEmpty(home));
+        string link = Path.Combine(NewTempDir("sensitive-link"), "homelink");
+        Directory.CreateSymbolicLink(link, home);
+
+        string output = harness.Tool.Workspace(operation: "open", path: link);
+
+        Assert.Contains("sensitive", output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("primed", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Open_NonExistentPath_IsACleanNotFound_NotAToolFailure()
     {
         // Symmetric with remove's not-found: open against a non-null path that does not exist on disk must give

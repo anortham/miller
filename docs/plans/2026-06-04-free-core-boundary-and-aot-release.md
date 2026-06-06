@@ -189,8 +189,9 @@ miller[.exe]
 .tools/julie-extract[.exe]
 libe_sqlite3.<platform-extension>
 libblake3_dotnet.<platform-extension>
-README or install note
-checksums
+LICENSE
+THIRD-PARTY-NOTICES.md
+external .sha256 sidecar
 ```
 
 The runtime should keep locating `julie-extract` from `AppContext.BaseDirectory/.tools` first, then

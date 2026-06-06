@@ -43,7 +43,10 @@ the tokens.
   to `to`), `mode=bridge` (cross-language chain: TS call → endpoint → DTO → entity → table). Reduced-confidence
   links are flagged `[verb-unknown]`/`[ambiguous]` — never trust an unflagged link less than a flagged one.
   Pass `scope=<file>` to disambiguate duplicate symbol names before falling back to symbol IDs. Optional
-  `workspace_id` and `ensure_fresh` work for cross-workspace traces.
+  `workspace_id` and `ensure_fresh` work for cross-workspace traces. **`mode=bridge` is provider-scoped, not a
+  general all-language feature: it currently covers the `dotnet-web` stack (ASP.NET controllers ↔
+  TypeScript/JS client URL calls ↔ AutoMapper ↔ Entity Framework). On another stack, do not expect
+  cross-language bridge results — use `mode=auto`/`mode=path` instead.**
 - `impact` — What a change would affect: downstream symbols and linked tests. Pass exactly one of `target` (a
   symbol or file), `changed_paths` (a set of files), or `diff` (a unified diff). Use before refactoring or to
   pick which tests to run. Optional `workspace_id` and `ensure_fresh` work for registered workspaces.
@@ -61,16 +64,17 @@ the tokens.
 - **New task / unfamiliar area**: `context` → `inspect` the key symbols → implement.
 - **Understand a symbol**: `inspect target depth=full` (definition + refs + callers/callees + body in one call).
 - **Trace a flow**: `trace mode=auto` to fan out, `mode=path` for a specific A→B chain, `mode=bridge` to cross a
-  language boundary. If a name is ambiguous, retry with `scope=<file>`.
+  language boundary (provider-scoped to the `dotnet-web` stack for now; on another stack stay with
+  `mode=auto`/`mode=path`). If a name is ambiguous, retry with `scope=<file>`.
 - **Find something in docs/prose**: `search mode=content "<phrase>"` — searches markdown/config/text content and
   returns `path:line` + snippet, where symbol search would find nothing.
 - **Scope noisy search**: add `file_pattern=src/ui/**` or `language=typescript` when you know the likely area.
 - **Find text only inside comments or strings**: `search "<phrase>" regions=comment` or
   `search "<phrase>" regions=string_literal` — requires `MILLER_REGION_INDEX=1` and a refreshed workspace.
   Use `MILLER_REGION_MAX_BYTES=<n>` to tune oversized region indexing.
-- **Scope a change**: `impact target=…` → run the tests it lists → `edit` (dry-run) → `edit apply=true` →
+- **Scope a change**: `impact target=…` → run the tests it lists → `edit` (preview) → `edit apply=true` →
   re-run `impact` if the surface changed.
-- **Edit a symbol**: `inspect` it → `edit … dry_run` (the default) → `edit … apply=true`.
+- **Edit a symbol**: `inspect` it → `edit …` (preview, the default) → `edit … apply=true`.
 - **Index looks stale**: `workspace refresh` (or `workspace full` to force a clean rebuild).
 - **Need another repo**: `workspace list` → pass the displayed ID, a unique prefix, or the root path as
   `workspace_id` to `search`/`inspect`/`context`/`impact`/`trace`. Use `ensure_fresh=false` only when a fast best-effort stale
@@ -89,7 +93,7 @@ code, paste this block into the prompt:
     - inspect(target, depth?) before reading a whole file or symbol body; use depth=full for refs/callers/callees/body.
     - trace(target, mode?, to?, scope?) before manual caller/callee file hopping; use scope for ambiguous names.
     - impact(target?|changed_paths?|diff?) before refactors and to choose tests.
-    - edit(operation, target, ..., dry_run=true) to preview index-aware edits.
+    - edit(operation, target, ...) to preview index-aware edits (apply=true to commit).
     - workspace(status|refresh|full|list|open|remove|dashboard) to refresh stale indexes, open another repo, or
       start the local dashboard from the session.
     Do NOT fall back to Glob/Read/Grep chains when a Miller tool fits. Miller returns targeted context in 1-2 calls.

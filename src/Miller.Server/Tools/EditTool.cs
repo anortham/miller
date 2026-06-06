@@ -59,8 +59,7 @@ public sealed class EditTool
         [Description("The literal text to replace, for replace_text.")] string? old_text = null,
         [Description("The replacement text, or the new name for rename_symbol.")] string? new_text = null,
         [Description("Which match of old_text to replace: first | last | all. Default first.")] string occurrence = "first",
-        [Description("Preview only (true, the default): render a diff and write nothing.")] bool dry_run = true,
-        [Description("Set true to commit the edit to disk. Default false.")] bool apply = false,
+        [Description("Set true to commit the edit to disk. Default false (preview a diff and write nothing).")] bool apply = false,
         [Description("Bypass the index-stale refusal for the target file. Default false.")] bool allow_stale = false,
         [Description("Disambiguate an ambiguous symbol name to a file. Optional.")] string? scope = null,
         [Description("Output format: compact|json. Default compact.")] string format = "compact")
@@ -73,7 +72,6 @@ public sealed class EditTool
                 OldText = old_text,
                 NewText = new_text,
                 Occurrence = occurrence,
-                DryRun = dry_run,
                 Apply = apply,
                 AllowStale = allow_stale,
                 Scope = scope,

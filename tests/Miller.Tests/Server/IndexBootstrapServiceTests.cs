@@ -83,7 +83,8 @@ public sealed class IndexBootstrapServiceTests
             load: () => { loads++; return "index"; },
             forceRescan: () => { rescans++; return 5L; },
             onBeforeRetry: () => Assert.Fail("onBeforeRetry must not fire for a compatible DB"),
-            onIncompatible: _ => Assert.Fail("onIncompatible must not fire for a compatible DB"));
+            onIncompatible: _ => Assert.Fail("onIncompatible must not fire for a compatible DB"),
+            onCorrupt: _ => Assert.Fail("onCorrupt must not fire for a compatible DB"));
 
         Assert.Equal("index", result.Index);
         Assert.False(result.Rebuilt);
@@ -112,7 +113,8 @@ public sealed class IndexBootstrapServiceTests
             },
             forceRescan: () => { order.Add("rescan"); return 3L; },
             onBeforeRetry: () => order.Add("barrier"),
-            onIncompatible: _ => order.Add("warn"));
+            onIncompatible: _ => order.Add("warn"),
+            onCorrupt: _ => Assert.Fail("onCorrupt must not fire for an incompatible DB"));
 
         Assert.Equal("rebuilt", result.Index);
         Assert.True(result.Rebuilt);
@@ -137,7 +139,8 @@ public sealed class IndexBootstrapServiceTests
             },
             forceRescan: () => { rescans++; return 7L; },
             onBeforeRetry: () => barriers++,
-            onIncompatible: _ => warned++);
+            onIncompatible: _ => warned++,
+            onCorrupt: _ => Assert.Fail("onCorrupt must not fire for an incompatible DB"));
 
         Assert.Equal("rebuilt-index", result.Index);
         Assert.True(result.Rebuilt);
@@ -162,11 +165,61 @@ public sealed class IndexBootstrapServiceTests
                 load: () => { loads++; throw boom; },
                 forceRescan: () => { rescans++; return 1L; },
                 onBeforeRetry: () => { },
-                onIncompatible: _ => { }));
+                onIncompatible: _ => { },
+                onCorrupt: _ => { }));
 
         Assert.Same(boom, thrown);
         Assert.Equal(2, loads);   // initial + a single retry, then give up
         Assert.Equal(1, rescans); // rescanned exactly once — no infinite loop
+    }
+
+    [Fact]
+    public void LoadIndexWithAutoRebuild_CorruptDb_ForceRescansOnceThenReloads()
+    {
+        // The reliability gap this closes: a torn/half-written symbols.db (a writer killed mid-scan) raises
+        // SqliteException(SQLITE_CORRUPT/NOTADB) on load and used to crash startup. Now it self-heals exactly like
+        // the incompatible path — force-rebuild once, reload — instead of failing to connect.
+        int loads = 0, rescans = 0, corrupt = 0, barriers = 0;
+        var result = IndexBootstrapService.LoadIndexWithAutoRebuild(
+            load: () =>
+            {
+                loads++;
+                if (loads == 1)
+                    throw new SqliteException("database disk image is malformed", 11 /* SQLITE_CORRUPT */);
+                return "rebuilt-index";
+            },
+            forceRescan: () => { rescans++; return 9L; },
+            onBeforeRetry: () => barriers++,
+            onIncompatible: _ => Assert.Fail("onIncompatible must not fire for a corrupt DB"),
+            onCorrupt: _ => corrupt++);
+
+        Assert.Equal("rebuilt-index", result.Index);
+        Assert.True(result.Rebuilt);
+        Assert.Equal(9L, result.RebuiltRevision);
+        Assert.Equal(2, loads);
+        Assert.Equal(1, rescans);
+        Assert.Equal(1, barriers);
+        Assert.Equal(1, corrupt);
+    }
+
+    [Fact]
+    public void LoadIndexWithAutoRebuild_NonCorruptionSqliteError_IsNotSwallowed()
+    {
+        // Guard the narrow catch: a NON-corruption SqliteException (e.g. SQLITE_BUSY) must propagate, not trigger a
+        // needless rebuild — only the corruption codes (11/26) self-heal.
+        int rescans = 0;
+        var busy = new SqliteException("database is locked", 5 /* SQLITE_BUSY */);
+
+        var thrown = Assert.Throws<SqliteException>(() =>
+            IndexBootstrapService.LoadIndexWithAutoRebuild<string>(
+                load: () => throw busy,
+                forceRescan: () => { rescans++; return 1L; },
+                onBeforeRetry: () => { },
+                onIncompatible: _ => { },
+                onCorrupt: _ => { }));
+
+        Assert.Same(busy, thrown);
+        Assert.Equal(0, rescans); // never rebuilt for a non-corruption error
     }
 
     [Fact]

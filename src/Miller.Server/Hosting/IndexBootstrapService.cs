@@ -183,6 +183,10 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                     onIncompatible: ex => _logger.LogWarning(
                         "Existing extract DB at {Db} is incompatible ({Message}); force-rebuilding once with the " +
                         "bundled julie-extract.",
+                        canonicalDbPath, ex.Message),
+                    onCorrupt: ex => _logger.LogWarning(
+                        "Existing extract DB at {Db} is corrupt ({Message}); force-rebuilding once with the bundled " +
+                        "julie-extract (a writer likely died mid-scan).",
                         canonicalDbPath, ex.Message));
                 var index = loadResult.Index;
 
@@ -341,12 +345,14 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         Func<T> load,
         Func<long?> forceRescan,
         Action onBeforeRetry,
-        Action<IncompatibleExtractException> onIncompatible)
+        Action<IncompatibleExtractException> onIncompatible,
+        Action<SqliteException> onCorrupt)
     {
         ArgumentNullException.ThrowIfNull(load);
         ArgumentNullException.ThrowIfNull(forceRescan);
         ArgumentNullException.ThrowIfNull(onBeforeRetry);
         ArgumentNullException.ThrowIfNull(onIncompatible);
+        ArgumentNullException.ThrowIfNull(onCorrupt);
 
         try
         {
@@ -354,15 +360,32 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         }
         catch (IncompatibleExtractException ex)
         {
+            // A stale-schema/contract artifact: notify, then force-rebuild once and reload.
             onIncompatible(ex);
-            long? rebuiltRevision = forceRescan();
-            // The force rebuild replaced the DB file out-of-process; drop any pooled read connection still bound to
-            // the pre-rescan inode BEFORE the retry, or the retry deterministically re-reads the stale snapshot.
-            onBeforeRetry();
-            // Retry exactly once. A SECOND IncompatibleExtractException escapes this method — fail loudly rather
-            // than loop force-rescanning a DB the bundled tool cannot make compatible.
-            return new IndexLoadResult<T>(load(), Rebuilt: true, RebuiltRevision: rebuiltRevision);
+            return RebuildAndRetry(load, forceRescan, onBeforeRetry);
         }
+        catch (SqliteException ex) when (IsCorruption(ex))
+        {
+            // A torn/truncated/half-written DB — e.g. the optional writer/indexer was killed (Ctrl-C, OOM, power
+            // loss) mid-scan, leaving symbols.db malformed. Rather than crash startup (surfacing as "MCP failed to
+            // connect"), force-rebuild once with the bundled julie-extract and reload — the same self-heal the
+            // incompatible path uses. A SECOND corruption after rebuild escapes (we never loop).
+            onCorrupt(ex);
+            return RebuildAndRetry(load, forceRescan, onBeforeRetry);
+        }
+    }
+
+    // SQLITE_CORRUPT (11) and SQLITE_NOTADB (26): the codes a torn/truncated extract DB raises on open/read.
+    private static bool IsCorruption(SqliteException ex) => ex.SqliteErrorCode is 11 or 26;
+
+    // Force-rebuild the DB out-of-process, drop pooled read connections still bound to the pre-rescan inode (so the
+    // retry opens a fresh handle on the rebuilt artifact, not the old inode's stale snapshot), then reload ONCE.
+    // A second failure on the retry load propagates — fail loudly rather than loop on a DB the tool cannot fix.
+    private static IndexLoadResult<T> RebuildAndRetry<T>(Func<T> load, Func<long?> forceRescan, Action onBeforeRetry)
+    {
+        long? rebuiltRevision = forceRescan();
+        onBeforeRetry();
+        return new IndexLoadResult<T>(load(), Rebuilt: true, RebuiltRevision: rebuiltRevision);
     }
 
     internal static WorkspaceRegistryRow RegisterBootstrapWorkspace(

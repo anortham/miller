@@ -23,8 +23,8 @@ namespace Miller.Server.Tools;
 ///   index snapshot — decision-2).</item>
 ///   <item>Plan the byte-span edits (<see cref="EditPlanner"/> / <see cref="RenamePlanner"/>) → per-file
 ///   <see cref="PlannedEdit"/> + a <see cref="UnifiedDiff"/>. A planner error → a clean message.</item>
-///   <item><c>dry_run</c> (the default) → return the diff preview (+ rename site summary), write NOTHING, and
-///   skip the freshness gate (the gate guards the WRITE).</item>
+///   <item>preview (the default, <c>apply=false</c>) → return the diff preview (+ rename site summary), write
+///   NOTHING, and skip the freshness gate (the gate guards the WRITE).</item>
 ///   <item><c>apply=true</c> → run the freshness gate per touched file (refuse if stale unless
 ///   <c>allow_stale</c>); then <see cref="EditApplier"/> writes atomically (TOCTOU + rollback); then
 ///   write-through converges the index (<see cref="IEditWriteThrough"/>).</item>
@@ -74,9 +74,9 @@ public sealed class EditService
     /// <param name="Output">Compact markdown (diff preview / apply summary / error) or JSON, per the request format.</param>
     /// <param name="Applied">True iff files were written to disk.</param>
     /// <param name="StaleAllowed">True iff the freshness gate was bypassed via <c>allow_stale</c> for this call.</param>
-    /// <param name="IndexFresh">The freshness verdict for the touched files (null when not evaluated, e.g. dry_run / error).</param>
+    /// <param name="IndexFresh">The freshness verdict for the touched files (null when not evaluated, e.g. preview / error).</param>
     /// <param name="Outcome">A coarse classification for telemetry: "ok" | "empty" | "error".</param>
-    /// <param name="ResultCount">Files touched (apply) or sites previewed (rename dry_run); 0 on error/not-found.</param>
+    /// <param name="ResultCount">Files touched (apply) or sites previewed (rename preview); 0 on error/not-found.</param>
     public readonly record struct EditResult(
         string Output, bool Applied, bool StaleAllowed, bool? IndexFresh, string Outcome, int ResultCount);
 
@@ -414,7 +414,7 @@ public sealed class EditService
             string body = JsonObject(w =>
             {
                 w.WriteBoolean("applied", false);
-                w.WriteString("mode", "dry_run");
+                w.WriteString("mode", "preview");
                 w.WriteString("diff", diff);
                 if (renameSummary is not null)
                 {
@@ -426,7 +426,7 @@ public sealed class EditService
         }
 
         var sb = new StringBuilder();
-        sb.Append("Preview (dry_run) — pass apply=true to commit.\n");
+        sb.Append("Preview — pass apply=true to commit.\n");
         if (renameSummary is not null)
             sb.Append(renameSummary).Append('\n');
         sb.Append(diff);

@@ -114,10 +114,11 @@ public sealed class EditApplier
             }
             catch (Exception ex)
             {
-                // Restore every already-committed file to its original bytes, newest first.
+                // Restore every already-committed file to its original bytes, newest first. Use the same atomic
+                // BOM-preserving write as the forward path so a fault mid-restore cannot truncate the original.
                 for (int i = written.Count - 1; i >= 0; i--)
                 {
-                    try { File.WriteAllText(written[i].Path, written[i].Original); }
+                    try { WriteAtomicPreservingBom(written[i].Path, written[i].Original); }
                     catch (IOException) { /* best-effort restore; the message flags the partial state below */ }
                     catch (UnauthorizedAccessException) { }
                 }
@@ -136,13 +137,36 @@ public sealed class EditApplier
     // The production per-file writer: write the new content to a sibling temp file, then atomically replace the
     // target. File.Move(overwrite:true) is atomic on the same volume (a rename), so a reader never sees a
     // half-written file. The temp is in the SAME directory so the move stays a same-volume rename.
-    private static void AtomicTempMove(string targetPath, string newContent)
+    private static void AtomicTempMove(string targetPath, string newContent) =>
+        WriteAtomicPreservingBom(targetPath, newContent);
+
+    // Atomic temp-file + move write that PRESERVES a UTF-8 BOM. The plan baseline is BOM-stripped (the planner
+    // reads via Encoding.UTF8, which drops the preamble), so a file authored with a BOM (common for
+    // Visual-Studio C#) would silently lose it on edit. Sniff the existing target's first bytes and re-emit the
+    // BOM iff it had one — byte-faithful for both BOM and BOM-less files.
+    private static void WriteAtomicPreservingBom(string targetPath, string content)
     {
+        bool emitBom = FileHasUtf8Bom(targetPath);
         string dir = Path.GetDirectoryName(targetPath) ?? ".";
         string temp = Path.Combine(dir, Path.GetFileName(targetPath) + TempSuffix + Guid.NewGuid().ToString("N"));
-        // No BOM; UTF-8 byte-exact (the planner/splicer already produced exact UTF-8 text).
-        File.WriteAllText(temp, newContent, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        File.WriteAllText(temp, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: emitBom));
         File.Move(temp, targetPath, overwrite: true);
+    }
+
+    // True iff the file currently begins with a UTF-8 byte-order mark (EF BB BF). File.ReadAllText/WriteAllText
+    // with Encoding.UTF8 strips/omits the preamble, so the only way to round-trip a BOM faithfully is to sniff
+    // the raw bytes. Best-effort: an unreadable file reports no BOM (the write below then fails loudly anyway).
+    private static bool FileHasUtf8Bom(string path)
+    {
+        try
+        {
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            Span<byte> head = stackalloc byte[3];
+            int read = fs.Read(head);
+            return read == 3 && head[0] == 0xEF && head[1] == 0xBB && head[2] == 0xBF;
+        }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
     }
 
     // Best-effort: remove any *.miller-tmp* sibling left in each target's directory (a crashed move).

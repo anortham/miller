@@ -65,7 +65,8 @@ public sealed class LiveBootstrapAutoRebuildTests
                 load: () => RepositoryIndexLoader.Load(db),
                 forceRescan: () => runner.Scan(repo, db, force: true).Revision,
                 onBeforeRetry: SqliteConnection.ClearAllPools,
-                onIncompatible: _ => { });
+                onIncompatible: _ => { },
+                onCorrupt: _ => { });
 
             // Healed: a rebuild happened, the rebuilt index is queryable, and the on-disk DB is a compatible
             // schema-2 artifact again (the force rescan overwrote the downgraded metadata).

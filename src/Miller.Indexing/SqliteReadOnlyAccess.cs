@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.Data.Sqlite;
 
 namespace Miller.Indexing;
@@ -64,10 +65,23 @@ internal static class SqliteReadOnlyAccess
         return connection;
     }
 
+    // Directories whose writability has already been confirmed this process. The verdict is stable for a process's
+    // lifetime, so caching successes avoids the create+delete round-trip on EVERY read open. Only successes are
+    // cached; a failure re-throws and re-probes next time. Even a stale-positive entry is safe — the actual Open()
+    // still maps a SQLITE_READONLY failure to a clear error.
+    private static readonly ConcurrentDictionary<string, bool> WritableDirs =
+        new(OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal);
+
     // Probe writability by creating + deleting a temp file in the DB directory. A pure FileMode check is
-    // insufficient (ACLs, read-only mounts); the create+delete round-trip is the honest test.
+    // insufficient (ACLs, read-only mounts); the create+delete round-trip is the honest test. Probed once per
+    // directory per process (see WritableDirs).
     private static void EnsureDirectoryWritable(string dir, string absDbPath)
     {
+        if (WritableDirs.ContainsKey(dir))
+            return;
+
         string probe = Path.Combine(dir, ".miller-write-probe-" + Guid.NewGuid().ToString("N"));
         try
         {
@@ -81,5 +95,7 @@ internal static class SqliteReadOnlyAccess
                 "reader of a WAL DB still needs to write the wal-index sidecar there; move the extract under a " +
                 "Miller-owned writable directory.", ex);
         }
+
+        WritableDirs[dir] = true;
     }
 }

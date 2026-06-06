@@ -376,13 +376,18 @@ public sealed class WorkspaceTool
             return (output, 0, TelemetryOutcome.Empty);
         }
 
+        // Canonicalize (symlink-resolved) BEFORE the safety checks so a symlink whose target is a sensitive root
+        // cannot slip past the lexical guard. WorkspaceRootSafety/Normalize expect an already-canonical root (see
+        // their doc); the CLI prime path canonicalizes first for the same reason.
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(path);
+
         // SAFETY: refuse to prime a sensitive system root (home, a filesystem/drive root, a system dir) — the
         // same guard the bootstrap applies to its cwd, here for an agent-supplied path. Return an honest note
         // (symmetric with the live-workspace / already-served guards below) rather than scanning the home tree.
-        if (WorkspaceRootSafety.IsSensitiveRoot(path, WorkspaceRootSafety.SensitiveRootCandidates()))
+        if (WorkspaceRootSafety.IsSensitiveRoot(canonicalRoot, WorkspaceRootSafety.SensitiveRootCandidates()))
         {
             string note =
-                $"refusing to prime sensitive system path '{Path.GetFullPath(path)}': choose a project " +
+                $"refusing to prime sensitive system path '{canonicalRoot}': choose a project " +
                 "directory or pass a narrower path.";
             string output = json ? ServerJson.Note(note) : note;
             return (output, 0, TelemetryOutcome.Empty);
@@ -405,7 +410,6 @@ public sealed class WorkspaceTool
             return (output, 0, TelemetryOutcome.Empty);
         }
 
-        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(path);
         string millerDir = Path.Combine(canonicalRoot, ".miller");
         string dbPath = Path.Combine(millerDir, "symbols.db");
         string stableWorkspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot);

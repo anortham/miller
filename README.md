@@ -27,8 +27,9 @@ The practical difference from a one-time graph dump is that Miller is built for 
   [`mcp-config.json`](mcp-config.json). `dotnet --version` should report a `10.x` SDK.
 - A restored pinned `julie-extract` binary in `.tools/` for indexing and scale tests. The restore scripts
   download the platform-matched binary and verify its pinned SHA-256 digest.
-- Release archives are built from the same .NET 10 projects and are self-contained per platform, but Native
-  AOT is still deferred beta hardening work.
+- Release archives are built from the same .NET 10 projects and are self-contained per platform. The main
+  `miller` binary publishes with Native AOT, so it runs without a .NET SDK; only the packaged dashboard
+  helper stays self-contained/non-AOT because ASP.NET Razor Components do not yet support Native AOT.
 
 ## How it works
 
@@ -177,6 +178,55 @@ workspace(operation="dashboard", port=4977)
 Open the printed URL to view registered workspaces and scoped per-tool telemetry. Set `MILLER_REGISTRY_DB`,
 `MILLER_TELEMETRY_DB`, or `MILLER_DASHBOARD_WEBROOT` only when testing non-default paths.
 
+## Agent plugins
+
+Miller's first plugin distribution path lives in this repository, not a separate `miller-plugin` repo:
+
+- `.claude-plugin/plugin.json` exposes Miller to Claude Code.
+- `.codex-plugin/plugin.json` and `.mcp.json` expose Miller to Codex.
+- `skills/` is generated from `.agents/skills/` by `scripts/sync-plugin-skills.sh`.
+- `bin/miller-plugin-launcher.cjs` downloads the configured GitHub release archive, verifies the `.sha256`
+  sidecar, caches it under `~/.miller/plugin-cache/`, and runs `miller serve`.
+
+The plugin launcher consumes the release version in `miller-plugin.json`. Until that GitHub release exists with
+matching archives, use `MILLER_BINARY=/absolute/path/to/miller` to skip the download and run a local build.
+
+Claude Code local-checkout install:
+
+```bash
+claude plugin marketplace add /path/to/miller
+claude plugin install miller@miller
+```
+
+Codex local-checkout install:
+
+```bash
+codex plugin marketplace add /path/to/miller
+codex plugin add miller@miller
+```
+
+After the marketplace is published from GitHub, use the repo source instead:
+
+```bash
+claude plugin marketplace add anortham/miller
+claude plugin install miller@miller
+
+codex plugin marketplace add anortham/miller
+codex plugin add miller@miller
+```
+
+For local development against this checkout:
+
+```bash
+dotnet build Miller.slnx -c Release
+export MILLER_BINARY="$PWD/src/Miller.Server/bin/Release/net10.0/miller"
+claude
+```
+
+Cursor plugin support is intentionally deferred until Miller has an npm launcher or another reliable way for Cursor
+to locate the installed plugin root. See
+[docs/plans/2026-06-06-plugin-distribution-design.md](docs/plans/2026-06-06-plugin-distribution-design.md).
+
 ## Source-checkout beta proof
 
 These commands are intentionally real Miller-checkout examples. Run them after the restore/build step above
@@ -213,8 +263,57 @@ pinned `julie-extract` platform when a packaged prerelease is approved:
 - `x86_64-pc-windows-msvc`
 
 Each archive contains `miller`, the matching `.tools/julie-extract` binary, the loopback dashboard binary
-under `dashboard/`, and `dashboard/wwwroot/dashboard.css`. The workflow also uploads a `.sha256` sidecar for
-each archive and smoke-runs both `julie-extract --version` and `miller version` before packaging.
+under `dashboard/`, `dashboard/wwwroot/dashboard.css`, `LICENSE`, and `THIRD-PARTY-NOTICES.md`. The workflow
+also uploads a `.sha256` sidecar for each archive and smoke-runs both `julie-extract --version` and
+`miller version` before packaging.
+
+### Install from a release archive
+
+Source checkout remains the primary documented path, but release archives are self-contained: the main
+`miller` binary is built with Native AOT, so a release machine does **not** need the .NET SDK to run it.
+
+1. Download the archive for your platform from the GitHub release, plus its matching `.sha256` sidecar
+   (for example `miller-<version>-aarch64-apple-darwin.tar.gz` and `…​.tar.gz.sha256`).
+2. Verify the checksum, then extract:
+
+   ```bash
+   # macOS / Linux
+   shasum -a 256 -c miller-<version>-aarch64-apple-darwin.tar.gz.sha256
+   tar -xzf miller-<version>-aarch64-apple-darwin.tar.gz
+   ```
+
+   ```powershell
+   # Windows
+   (Get-FileHash .\miller-<version>-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash
+   # compare against the .sha256 sidecar, then extract
+   Expand-Archive .\miller-<version>-x86_64-pc-windows-msvc.zip -DestinationPath .\miller
+   ```
+
+3. The extracted layout puts the `miller` binary next to its tooling and dashboard:
+
+   ```text
+   miller                 # the AOT binary
+   .tools/julie-extract   # the matching pinned extractor
+   dashboard/             # the packaged loopback dashboard helper (+ wwwroot/dashboard.css)
+   LICENSE
+   THIRD-PARTY-NOTICES.md
+   ```
+
+4. Point your MCP client at the **absolute path** of the extracted `miller` binary with the `serve` arg.
+   No `dotnet run` and no .NET SDK are required for the AOT binary:
+
+   ```json
+   {
+     "mcpServers": {
+       "miller": {
+         "command": "/absolute/path/to/extracted/miller",
+         "args": ["serve"]
+       }
+     }
+   }
+   ```
+
+   On Windows, use the full path to `miller.exe` as `command`.
 
 ## CLI output expectations
 
@@ -291,10 +390,13 @@ Warnings are errors (`Directory.Build.props`).
   or raise the per-region byte cap for very large comment/string-literal corpora.
 - Ambiguous targets may need a file path, a more specific symbol, or a symbol ID. The CLI reports ambiguity
   instead of guessing.
-- Bridge trace intentionally uses the full bridge graph for provider-scoped cross-language evidence. Normal
-  `search`, `inspect`, graph-only `context`, `impact`, non-bridge `trace`, and workspace status/list stay on
-  projection-specific read paths.
-- Native AOT is release-readiness work, not a beta blocker.
+- Bridge trace (`trace mode=bridge`) is provider-scoped, not a general all-language feature. The current
+  provider is the `dotnet-web` stack (ASP.NET controllers ↔ TypeScript/JS client URL calls ↔ AutoMapper ↔
+  Entity Framework), so do not expect cross-language bridge results on another stack. It intentionally uses
+  the full bridge graph for that provider-scoped evidence. Normal `search`, `inspect`, graph-only `context`,
+  `impact`, non-bridge `trace`, and workspace status/list stay on projection-specific read paths.
+- The main `miller` release binary publishes with Native AOT (no .NET SDK required to run it). The packaged
+  dashboard helper stays self-contained/non-AOT because ASP.NET Razor Components do not yet support Native AOT.
 - A rebuilt MCP server is picked up only after the MCP client restarts the Miller subprocess. Use
   `workspace status` and compare the `pid` in the header to confirm the restart actually loaded a new process.
 

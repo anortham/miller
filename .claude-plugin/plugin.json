@@ -1,0 +1,28 @@
+{
+  "name": "miller",
+  "description": "Local SQLite-backed code intelligence server for coding agents.",
+  "version": "0.1.0-beta.1",
+  "author": {
+    "name": "Alan Northam"
+  },
+  "repository": "https://github.com/anortham/miller",
+  "homepage": "https://github.com/anortham/miller#readme",
+  "license": "MIT",
+  "keywords": [
+    "code-intelligence",
+    "mcp",
+    "search",
+    "navigation",
+    "impact-analysis",
+    "sqlite"
+  ],
+  "mcpServers": {
+    "miller": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/bin/miller-plugin-launcher.cjs"
+      ]
+    }
+  },
+  "skills": "./skills/"
+}

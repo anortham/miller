@@ -134,8 +134,9 @@ polyglot fixture (MyraNext/Lab/Tycho-style, extracted on demand); refs/call-path
 ### M6 — `edit` (preview-first, freshness-gated)
 **Deliverable:** index-aware editing.
 - `edit`: operations (replace_text / replace_symbol_body / replace_symbol_signature / rename_symbol / insert_before
-  / insert_after / add_doc). `dry_run=true` default (preview), `apply=true` to commit, `allow_stale` escape; blocked
-  by the M3 mutation gate when the target is stale. Index-aware workspace-wide rename.
+  / insert_after / add_doc). Preview-first: returns a diff and writes NOTHING by default; `apply=true` to commit,
+  `allow_stale` escape; blocked by the M3 mutation gate when the target is stale. Index-aware workspace-wide rename.
+  (Shipped with a single write-control flag, `apply`; the originally-planned redundant `dry_run` flag was dropped.)
 **Verify:** preview diffs correct; apply writes + triggers reindex; stale gate blocks; rename updates all sites.
 **Exit:** the full 6 read/write tools complete.
 

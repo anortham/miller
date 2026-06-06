@@ -15,6 +15,23 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Whitespace and conflict-marker guard
+        run: git diff --check HEAD^ HEAD
+
+      - name: AGENTS.md sync guard
+        run: |
+          bash scripts/sync-agents.sh
+          git diff --exit-code AGENTS.md
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Test plugin distribution metadata
+        run: scripts/test-plugin.sh
 
       - uses: actions/setup-dotnet@v4
         with:

@@ -129,7 +129,7 @@ public sealed class DashboardCliLauncherTests : IDisposable
                 }
                 else
                 {
-                    Assert.Equal("python3", info.FileName);
+                    Assert.Equal("/bin/sh", info.FileName);
                     Assert.Contains(_dashboardDll, info.ArgumentList);
                     string pidPath = info.Environment["MILLER_DASHBOARD_PID_FILE"]!;
                     File.WriteAllText(pidPath, Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture));
@@ -182,7 +182,7 @@ public sealed class DashboardCliLauncherTests : IDisposable
                 }
                 else
                 {
-                    Assert.Equal("python3", info.FileName);
+                    Assert.Equal("/bin/sh", info.FileName);
                     Assert.Contains(dashboardExe, info.ArgumentList);
                     string pidPath = info.Environment["MILLER_DASHBOARD_PID_FILE"]!;
                     File.WriteAllText(pidPath, Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture));

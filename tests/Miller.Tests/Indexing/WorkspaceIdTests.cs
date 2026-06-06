@@ -26,6 +26,21 @@ public sealed class WorkspaceIdTests
     }
 
     [Fact]
+    public void FromCanonicalRoot_FoldsCase_OnCaseInsensitivePlatforms()
+    {
+        // The two case-insensitive release targets (Windows, default macOS) resolve the same directory regardless
+        // of the casing typed/tab-completed, so it must mint ONE identity — otherwise a case-only difference forks
+        // a duplicate workspace (and registry row). Case-sensitive POSIX filesystems keep them distinct.
+        string lower = WorkspaceId.FromCanonicalRoot("/abs/work/Repo");
+        string upper = WorkspaceId.FromCanonicalRoot("/abs/work/repo");
+
+        if (OperatingSystem.IsWindows() || OperatingSystem.IsMacOS())
+            Assert.Equal(lower, upper);
+        else
+            Assert.NotEqual(lower, upper);
+    }
+
+    [Fact]
     public void Display_UsesSanitizedLeafAndShortHashPrefix()
     {
         const string id = "a0efc97f7ea34ca9673db9e8a54459b869b3de0f386f8140de8177c6b947a311";

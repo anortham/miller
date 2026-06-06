@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "miller": {
+      "command": "node",
+      "args": [
+        "./bin/miller-plugin-launcher.cjs"
+      ],
+      "cwd": "."
+    }
+  }
+}

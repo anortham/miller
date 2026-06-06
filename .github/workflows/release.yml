@@ -19,6 +19,11 @@ on:
         required: false
         default: false
         type: boolean
+      allow_overwrite:
+        description: 'Allow overwriting an existing non-prerelease release'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -96,6 +101,7 @@ jobs:
             --self-contained true `
             -p:PublishAot=true `
             -p:JsonSerializerIsReflectionEnabledByDefault=false `
+            -p:Version=$env:RELEASE_VERSION `
             -o $publishDir
           # ASP.NET Razor Components do not currently support Native AOT; keep the packaged dashboard
           # self-contained while the main miller binary is AOT.
@@ -105,6 +111,7 @@ jobs:
             --self-contained true `
             -p:PublishSingleFile=true `
             -p:PublishTrimmed=false `
+            -p:Version=$env:RELEASE_VERSION `
             -o $dashboardDir
           $dashboardTools = Join-Path $dashboardDir ".tools"
           if (Test-Path $dashboardTools) {
@@ -125,6 +132,19 @@ jobs:
           test ! -e "${publish_dir}/dashboard/.tools/julie-extract"
           "${publish_dir}/.tools/julie-extract" --version
           "${publish_dir}/miller" version
+          reqs=$(printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
+            '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}')
+          # printf '%s\n' (not '%s'): $(...) strips trailing newlines, so the final tools/list request
+          # would otherwise reach the line-delimited MCP transport unterminated and never be parsed.
+          out=$( ( printf '%s\n' "$reqs"; sleep 6 ) | "${publish_dir}/miller" serve 2>/dev/null || true )
+          # Assert against the tools/list RESPONSE (id:2), not the initialize capabilities — "tools" alone
+          # would false-positive on the {"tools":{"listChanged":true}} capability in the initialize reply.
+          echo "$out" | grep -q '"id":2' || { echo "AOT MCP serve smoke failed: no tools/list response"; exit 1; }
+          for tool in search inspect context impact trace edit workspace; do
+            echo "$out" | grep -q "\"name\":\"${tool}\"" || { echo "AOT MCP serve smoke failed: ${tool} tool missing"; exit 1; }
+          done
 
       - name: Verify packaged Windows extractor
         if: runner.os == 'Windows'
@@ -172,8 +192,13 @@ jobs:
           rm -rf "${package_root}" "${release_dir}"
           mkdir -p "${package_dir}" "${release_dir}"
           rsync -a "${publish_dir}/" "${package_dir}/"
+          cp "${GITHUB_WORKSPACE}/LICENSE" "${package_dir}/LICENSE"
+          cp "${GITHUB_WORKSPACE}/THIRD-PARTY-NOTICES.md" "${package_dir}/THIRD-PARTY-NOTICES.md"
           find "${package_dir}" -type f \( -name '*.pdb' -o -name '*.dbg' \) -delete
+          find "${package_dir}" -name '*.dSYM' -type d -prune -exec rm -rf {} +
           chmod +x "${package_dir}/miller" "${package_dir}/.tools/julie-extract" "${package_dir}/dashboard/Miller.Dashboard"
+          test -f "${package_dir}/LICENSE"
+          test -f "${package_dir}/THIRD-PARTY-NOTICES.md"
           archive="${release_dir}/${package_name}.tar.gz"
           tar -czf "${archive}" -C "${package_root}" "${package_name}"
           (cd "${release_dir}" && shasum -a 256 "${package_name}.tar.gz" > "${package_name}.tar.gz.sha256")
@@ -192,7 +217,15 @@ jobs:
           Remove-Item $packageRoot, $releaseDir -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path $packageDir, $releaseDir | Out-Null
           Get-ChildItem -Path $publishDir -Force | Copy-Item -Destination $packageDir -Recurse -Force
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE "LICENSE") -Destination (Join-Path $packageDir "LICENSE") -Force
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE "THIRD-PARTY-NOTICES.md") -Destination (Join-Path $packageDir "THIRD-PARTY-NOTICES.md") -Force
           Get-ChildItem -Path $packageDir -Recurse -Filter *.pdb | Remove-Item -Force
+          if (-not (Test-Path (Join-Path $packageDir "LICENSE"))) {
+            throw "missing packaged LICENSE"
+          }
+          if (-not (Test-Path (Join-Path $packageDir "THIRD-PARTY-NOTICES.md"))) {
+            throw "missing packaged THIRD-PARTY-NOTICES.md"
+          }
           $archive = Join-Path $releaseDir "$packageName.zip"
           Compress-Archive -Path $packageDir -DestinationPath $archive -Force
           $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
@@ -243,11 +276,17 @@ jobs:
       - name: Create or update GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          ALLOW_OVERWRITE: ${{ inputs.allow_overwrite }}
         shell: bash
         run: |
           set -euo pipefail
           ls -lh artifacts/release
           if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            is_prerelease="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq .prerelease)"
+            is_draft="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq .draft)"
+            if [ "${is_prerelease}" = "false" ] && [ "${is_draft}" = "false" ] && [ "${ALLOW_OVERWRITE:-false}" != "true" ]; then
+              echo "Refusing to overwrite published release ${RELEASE_TAG}. Re-run with allow_overwrite=true to force."; exit 1
+            fi
             release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq .id)"
             gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
               -f name="Miller ${RELEASE_TAG}" \

@@ -73,6 +73,43 @@ public sealed class EditApplierTests : IDisposable
         Assert.Equal(Encoding.UTF8.GetByteCount(updated), new FileInfo(path).Length);
     }
 
+    [Fact]
+    public void Apply_FileWithUtf8Bom_PreservesBom()
+    {
+        // A file authored with a UTF-8 BOM (common for Visual-Studio C#) must keep its BOM after an edit.
+        // The plan baseline is BOM-stripped (the planner reads via Encoding.UTF8, which strips the preamble),
+        // so the applier must re-emit the BOM on write by sniffing the target's existing bytes.
+        string path = Path.Combine(_dir, "bom.cs");
+        File.WriteAllText(path, "old body\n", new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+        var plan = new PlannedEdit(path, "old body\n", "new body\n",
+            [new TextEdit(0, Encoding.UTF8.GetByteCount("old body\n"), "new body\n")]);
+
+        var result = NewApplier().Apply([plan]);
+
+        Assert.True(result.Success);
+        byte[] raw = File.ReadAllBytes(path);
+        Assert.True(raw.Length >= 3 && raw[0] == 0xEF && raw[1] == 0xBB && raw[2] == 0xBF,
+            "edited file lost its UTF-8 BOM");
+        Assert.Equal("new body\n", File.ReadAllText(path)); // content correct (ReadAllText strips the BOM)
+    }
+
+    [Fact]
+    public void Apply_FileWithoutBom_DoesNotGainBom()
+    {
+        // The converse guard: a BOM-less file must NOT acquire a BOM on edit.
+        string path = Write("nobom.cs", "old body\n");
+        var plan = new PlannedEdit(path, "old body\n", "new body\n",
+            [new TextEdit(0, Encoding.UTF8.GetByteCount("old body\n"), "new body\n")]);
+
+        var result = NewApplier().Apply([plan]);
+
+        Assert.True(result.Success);
+        byte[] raw = File.ReadAllBytes(path);
+        Assert.False(raw.Length >= 3 && raw[0] == 0xEF && raw[1] == 0xBB && raw[2] == 0xBF,
+            "BOM-less file unexpectedly gained a BOM");
+        Assert.Equal(Encoding.UTF8.GetByteCount("new body\n"), raw.Length);
+    }
+
     // ---- TOCTOU abort ----
 
     [Fact]

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Miller Search Debug"
+  short_description: "Troubleshoot Miller search results"
+  default_prompt: "Use $miller-search-debug to diagnose why this Miller search result looks wrong."
+policy:
+  allow_implicit_invocation: true

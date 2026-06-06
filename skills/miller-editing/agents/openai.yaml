@@ -1,0 +1,6 @@
+interface:
+  display_name: "Miller Editing"
+  short_description: "Preview and apply Miller edits"
+  default_prompt: "Use $miller-editing to preview and apply this indexed file change."
+policy:
+  allow_implicit_invocation: true

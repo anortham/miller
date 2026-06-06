@@ -462,10 +462,15 @@ public static class DashboardData
     {
         try
         {
+            // Case-insensitive on BOTH case-insensitive release targets (Windows and default macOS), matching
+            // WorkspaceSafety/WorkspaceId — otherwise the dashboard fails to recognize a registered workspace
+            // whose stored root differs only in case from the preferred root.
             return string.Equals(
                 NormalizeRoot(left),
                 NormalizeRoot(right),
-                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+                OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal);
         }
         catch (ArgumentException)
         {

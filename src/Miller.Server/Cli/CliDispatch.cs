@@ -332,6 +332,15 @@ public static class CliDispatch
         string? id = o.Value("id");
         string? path = o.Value("path");
 
+        // A help request must NOT fall through to `status` (which opens the registry and stamps a version
+        // header). Cover all three spellings: `workspace help` (positional), `workspace --help` (flag, leaves
+        // operation defaulting to status), and `workspace -h` (single-dash positional).
+        if (operation is "help" or "-h" || o.Has("help"))
+        {
+            outw.WriteLine(WorkspaceHelpText);
+            return 0;
+        }
+
         switch (operation)
         {
             case "list":
@@ -889,5 +898,22 @@ public static class CliDispatch
           version            Print the build version (e.g. 0.1.0+<sha>).
           help               Show this help.
           serve              Run the MCP stdio server (the default when launched with no arguments).
+        """;
+
+    private const string WorkspaceHelpText =
+        """
+        miller workspace — index lifecycle for the current (or a selected) workspace.
+
+        Usage: miller workspace [op] [args]
+
+        Operations:
+          status   Show the live index status + build version (the default when no op is given).
+          list     List every registered workspace in ~/.miller/workspaces.db.
+          refresh  Incrementally refresh the index if the working tree changed.
+          full     Force a full re-index (ignores the freshness check).
+          open     Register + index a directory (creates .miller/symbols.db).  [--path DIR] [--full]
+          remove   Delete a workspace's .miller index dir.                     (--id ID | --path DIR)
+
+        Selectors / flags: [--id DISPLAY-ID] [--path DIR] [--json]
         """;
 }

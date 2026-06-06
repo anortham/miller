@@ -10,7 +10,13 @@ public static class WorkspaceId
     public static string FromCanonicalRoot(string root)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
-        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(root)));
+        // On the case-insensitive release targets (Windows, default macOS) the same directory can be reached via
+        // differently-cased paths; fold case before hashing so one directory maps to ONE workspace_id (the
+        // registry PK), matching WorkspaceSafety's case-insensitive path comparison. POSIX stays case-sensitive.
+        string normalized = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+            ? root.ToLowerInvariant()
+            : root;
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(normalized)));
     }
 
     public static string Display(string root, string id)

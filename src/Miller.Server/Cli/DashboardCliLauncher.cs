@@ -401,25 +401,30 @@ internal sealed class DashboardCliLauncher : IDashboardLauncher
             return startInfo;
         }
 
+        // Detach the dashboard on Unix with POSIX /bin/sh + nohup — present on every macOS/Linux host, unlike
+        // python3 (a minimal Linux image may lack it, and invoking `python3` on macOS can trigger an Xcode
+        // Command-Line-Tools install prompt). sh backgrounds nohup and exits, so the dashboard is reparented to
+        // init/launchd and ignores SIGHUP, outliving the launching miller; stdin is detached and stdout/stderr
+        // append to the machine log files. nohup exec-replaces itself, so the recorded $! is the dashboard's pid.
         private ProcessStartInfo UnixDetachedStartInfo(string machineMillerDir, string pidPath)
         {
             string stdoutPath = Path.Combine(machineMillerDir, "dashboard.out.log");
             string stderrPath = Path.Combine(machineMillerDir, "dashboard.err.log");
-            string python = Environment.GetEnvironmentVariable("MILLER_DASHBOARD_PYTHON") ?? "python3";
             var startInfo = new ProcessStartInfo
             {
-                FileName = python,
+                FileName = "/bin/sh",
                 WorkingDirectory = machineMillerDir,
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };
             startInfo.ArgumentList.Add("-c");
             startInfo.ArgumentList.Add(UnixLaunchScript);
-            startInfo.ArgumentList.Add(FileName);
-            startInfo.ArgumentList.Add(Argument ?? string.Empty);
-            startInfo.ArgumentList.Add(pidPath);
-            startInfo.ArgumentList.Add(stdoutPath);
-            startInfo.ArgumentList.Add(stderrPath);
+            startInfo.ArgumentList.Add("sh");                     // $0
+            startInfo.ArgumentList.Add(FileName);                 // $1: the dashboard exe (or "dotnet")
+            startInfo.ArgumentList.Add(Argument ?? string.Empty); // $2: the dll arg, or empty
+            startInfo.ArgumentList.Add(pidPath);                  // $3
+            startInfo.ArgumentList.Add(stdoutPath);               // $4
+            startInfo.ArgumentList.Add(stderrPath);               // $5
             startInfo.Environment["MILLER_DASHBOARD_PID_FILE"] = pidPath;
             return startInfo;
         }
@@ -434,32 +439,17 @@ internal sealed class DashboardCliLauncher : IDashboardLauncher
         }
 
         private const string UnixLaunchScript = """
-import os
-import subprocess
-import sys
-
-exe = sys.argv[1]
-arg = sys.argv[2]
-pid_path = sys.argv[3]
-stdout_path = sys.argv[4]
-stderr_path = sys.argv[5]
-cmd = [exe]
-if arg:
-    cmd.append(arg)
-
-with open(stdout_path, "ab", buffering=0) as out, open(stderr_path, "ab", buffering=0) as err:
-    process = subprocess.Popen(
-        cmd,
-        cwd=os.getcwd(),
-        env=os.environ.copy(),
-        stdin=subprocess.DEVNULL,
-        stdout=out,
-        stderr=err,
-        start_new_session=True,
-        close_fds=True)
-
-with open(pid_path, "w", encoding="utf-8") as pid_file:
-    pid_file.write(str(process.pid))
+exe="$1"
+arg="$2"
+pid_path="$3"
+stdout_path="$4"
+stderr_path="$5"
+if [ -n "$arg" ]; then
+  nohup "$exe" "$arg" >>"$stdout_path" 2>>"$stderr_path" </dev/null &
+else
+  nohup "$exe" >>"$stdout_path" 2>>"$stderr_path" </dev/null &
+fi
+printf '%s' "$!" > "$pid_path"
 """;
     }
 }

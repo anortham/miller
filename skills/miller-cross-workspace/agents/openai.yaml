@@ -1,0 +1,6 @@
+interface:
+  display_name: "Miller Cross Workspace"
+  short_description: "Query registered workspaces"
+  default_prompt: "Use $miller-cross-workspace to query the other repo through Miller."
+policy:
+  allow_implicit_invocation: true

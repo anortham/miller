@@ -586,6 +586,25 @@ public sealed class CliDispatchTests : IDisposable
         Assert.False(string.IsNullOrWhiteSpace(errText));
     }
 
+    [Theory]
+    [InlineData("help")]
+    [InlineData("--help")]
+    [InlineData("-h")]
+    public void WorkspaceHelp_PrintsUsage_DoesNotRunStatus(string token)
+    {
+        // `workspace help` must show the operation list, NOT silently fall through to `status` (which would
+        // open the registry and stamp a version header — surprising for a help request).
+        var (code, outText, _) = Run(new[] { "workspace", token }, Context(Path.Combine(_dir, "symbols.db")));
+        Assert.Equal(0, code);
+        Assert.Contains("status", outText);
+        Assert.Contains("list", outText);
+        Assert.Contains("refresh", outText);
+        Assert.Contains("open", outText);
+        Assert.Contains("remove", outText);
+        // A status run would print the build-version header; a help run must not.
+        Assert.DoesNotContain("symbols:", outText);
+    }
+
     // refresh/full must surface EVERY non-success refresh status as a non-zero exit (a CI `... && deploy` guard):
     // only Refreshed/Unchanged are success. This pins the status→code map directly (the live refresh path itself
     // is exercised by the Scale subprocess test, which spawns julie).

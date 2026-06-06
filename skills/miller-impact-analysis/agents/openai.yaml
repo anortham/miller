@@ -1,0 +1,6 @@
+interface:
+  display_name: "Miller Impact Analysis"
+  short_description: "Find change blast radius with Miller"
+  default_prompt: "Use $miller-impact-analysis to assess the blast radius before editing this target."
+policy:
+  allow_implicit_invocation: true

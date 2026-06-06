@@ -117,7 +117,14 @@ public static class SearchIndexWriter
             // Release the build connection's file handle from the pool before the move (Windows can't
             // replace/rename a file with an open handle).
             SqliteConnection.ClearAllPools();
-            File.Move(tempPath, fullPath, overwrite: true);
+            // Windows can still transiently fail the overwrite-move if another miller briefly holds search.db open
+            // read-only; retry a few times before surfacing the IOException (the finally cleans the temp, and the
+            // sidecar self-heals to in-memory search until the next successful rebuild).
+            for (int attempt = 1; ; attempt++)
+            {
+                try { File.Move(tempPath, fullPath, overwrite: true); break; }
+                catch (IOException) when (attempt < 5) { System.Threading.Thread.Sleep(20 * attempt); }
+            }
         }
         finally
         {

@@ -83,7 +83,6 @@ public sealed class EditToolTests : IDisposable
         var result = svc.Execute(Req("replace_symbol_body", "OrderService.Total") with
         {
             NewText = "{ return 42; }",
-            DryRun = true,
         });
 
         Assert.False(result.Applied);
@@ -96,10 +95,10 @@ public sealed class EditToolTests : IDisposable
     }
 
     [Fact]
-    public void Execute_ApplyFalse_ButDryRunFalse_StillDoesNotWrite()
+    public void Execute_ApplyFalse_DoesNotWrite()
     {
-        // The surface defaults: dry_run=true, apply=false. A caller must FLIP apply=true to write; dry_run=false
-        // alone (apply still false) must not write — apply is the explicit commit switch (decision-1).
+        // The surface default is apply=false → preview, write NOTHING. A caller must FLIP apply=true to write;
+        // apply is the single explicit commit switch (decision-1).
         using var fx = JulieDbFixture.CreateForEdit();
         LayFiles(EditFixtureFiles);
         var (svc, _) = Build(fx);
@@ -107,7 +106,6 @@ public sealed class EditToolTests : IDisposable
         var result = svc.Execute(Req("replace_symbol_body", "OrderService.Total") with
         {
             NewText = "{ return 0; }",
-            DryRun = false,
             Apply = false,
         });
 
@@ -385,7 +383,6 @@ public sealed class EditToolTests : IDisposable
         var result = svc.Execute(Req("replace_symbol_body", "OrderService.Total") with
         {
             NewText = "{ return 9; }",
-            DryRun = true,
         });
 
         Assert.False(result.Applied);
@@ -465,7 +462,6 @@ public sealed class EditToolTests : IDisposable
         var result = svc.Execute(Req("rename_symbol", "OrderService.Total") with
         {
             NewText = "GrandTotal",
-            DryRun = true,
         });
 
         Assert.False(result.Applied);
@@ -600,7 +596,6 @@ public sealed class EditToolTests : IDisposable
         var result = svc.Execute(Req("replace_symbol_body", "OrderService.Total") with
         {
             NewText = "{ return 1; }",
-            DryRun = true,
             Format = "json",
         });
 

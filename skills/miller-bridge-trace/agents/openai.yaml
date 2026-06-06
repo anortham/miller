@@ -1,0 +1,6 @@
+interface:
+  display_name: "Miller Bridge Trace"
+  short_description: "Trace provider-scoped bridges"
+  default_prompt: "Use $miller-bridge-trace to follow this client-to-server bridge."
+policy:
+  allow_implicit_invocation: true
