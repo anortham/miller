@@ -82,5 +82,7 @@ jobs:
       - name: Test (default suite via PowerShell wrapper)
         shell: pwsh
         env:
-          FAST_BUDGET_SECONDS: 300
+          # Windows hosted runners are much slower than local/Ubuntu for test discovery/execution.
+          # Keep the budget high enough for normal runner variance but low enough to catch a true runaway.
+          FAST_BUDGET_SECONDS: 420
         run: ./scripts/test.ps1 fast --no-build

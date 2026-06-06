@@ -76,6 +76,7 @@ jobs:
         shell: pwsh
         run: |
           $publishDir = Join-Path $env:GITHUB_WORKSPACE "artifacts/publish/${{ matrix.target }}"
+          $dashboardDir = Join-Path $publishDir "dashboard"
           dotnet publish src/Miller.Server/Miller.Server.csproj `
             -c Release `
             -r "${{ matrix.rid }}" `
@@ -83,6 +84,17 @@ jobs:
             -p:PublishSingleFile=true `
             -p:PublishTrimmed=false `
             -o $publishDir
+          dotnet publish src/Miller.Dashboard/Miller.Dashboard.csproj `
+            -c Release `
+            -r "${{ matrix.rid }}" `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:PublishTrimmed=false `
+            -o $dashboardDir
+          $dashboardTools = Join-Path $dashboardDir ".tools"
+          if (Test-Path $dashboardTools) {
+            Remove-Item $dashboardTools -Recurse -Force
+          }
 
       - name: Verify packaged Unix extractor
         if: runner.os != 'Windows'
@@ -92,6 +104,9 @@ jobs:
           publish_dir="${GITHUB_WORKSPACE}/artifacts/publish/${{ matrix.target }}"
           test -x "${publish_dir}/.tools/julie-extract"
           test ! -e "${publish_dir}/.tools/julie-extract.exe"
+          test -x "${publish_dir}/dashboard/Miller.Dashboard"
+          test -f "${publish_dir}/dashboard/wwwroot/dashboard.css"
+          test ! -e "${publish_dir}/dashboard/.tools/julie-extract"
           "${publish_dir}/.tools/julie-extract" --version
 
       - name: Verify packaged Windows extractor
@@ -106,6 +121,18 @@ jobs:
           }
           if (Test-Path $unixBinary) {
             throw "Windows package must not include Unix julie-extract"
+          }
+          $dashboardBinary = Join-Path $publishDir "dashboard/Miller.Dashboard.exe"
+          $dashboardCss = Join-Path $publishDir "dashboard/wwwroot/dashboard.css"
+          $dashboardTools = Join-Path $publishDir "dashboard/.tools"
+          if (-not (Test-Path $dashboardBinary)) {
+            throw "missing packaged Windows dashboard executable"
+          }
+          if (-not (Test-Path $dashboardCss)) {
+            throw "missing packaged dashboard CSS"
+          }
+          if (Test-Path $dashboardTools) {
+            throw "dashboard package must not include a duplicate .tools directory"
           }
           & $windowsBinary --version
 
@@ -124,7 +151,7 @@ jobs:
           mkdir -p "${package_dir}" "${release_dir}"
           rsync -a "${publish_dir}/" "${package_dir}/"
           find "${package_dir}" -type f \( -name '*.pdb' -o -name '*.dbg' \) -delete
-          chmod +x "${package_dir}/miller" "${package_dir}/.tools/julie-extract"
+          chmod +x "${package_dir}/miller" "${package_dir}/.tools/julie-extract" "${package_dir}/dashboard/Miller.Dashboard"
           tar -czf "${release_dir}/${package_name}.tar.gz" -C "${package_root}" "${package_name}"
           ls -lh "${release_dir}"
 

@@ -301,9 +301,11 @@ internal sealed class DashboardCliLauncher : IDashboardLauncher
         }
 
         string appBase = Path.GetFullPath(Path.Combine(context.ToolsRoot, ".."));
-        string colocatedDll = Path.Combine(appBase, "Miller.Dashboard.dll");
-        if (File.Exists(colocatedDll))
-            return DashboardCommand.ForPath(colocatedDll);
+        foreach (string packaged in PackagedDashboardCandidates(appBase))
+        {
+            if (File.Exists(packaged))
+                return DashboardCommand.ForPath(packaged);
+        }
 
         string sourceSiblingDll = Path.GetFullPath(Path.Combine(
             appBase,
@@ -320,6 +322,17 @@ internal sealed class DashboardCliLauncher : IDashboardLauncher
             return DashboardCommand.ForPath(sourceSiblingDll);
 
         return null;
+    }
+
+    private static IEnumerable<string> PackagedDashboardCandidates(string appBase)
+    {
+        string packagedDir = Path.Combine(appBase, "dashboard");
+        if (OperatingSystem.IsWindows())
+            yield return Path.Combine(packagedDir, "Miller.Dashboard.exe");
+        else
+            yield return Path.Combine(packagedDir, "Miller.Dashboard");
+        yield return Path.Combine(packagedDir, "Miller.Dashboard.dll");
+        yield return Path.Combine(appBase, "Miller.Dashboard.dll");
     }
 
     private static void WriteMetadata(string path, DashboardProcessMetadata metadata)

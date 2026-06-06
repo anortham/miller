@@ -160,6 +160,48 @@ public sealed class DashboardCliLauncherTests : IDisposable
     }
 
     [Fact]
+    public void EnsureRunning_UsesPackagedDashboardExecutable()
+    {
+        string dashboardDir = Path.Combine(_dir, "dashboard");
+        Directory.CreateDirectory(dashboardDir);
+        string dashboardExe = Path.Combine(
+            dashboardDir,
+            OperatingSystem.IsWindows() ? "Miller.Dashboard.exe" : "Miller.Dashboard");
+        File.WriteAllText(dashboardExe, "fake");
+
+        bool started = false;
+        var launcher = new DashboardCliLauncher(
+            startProcess: info =>
+            {
+                started = true;
+                if (OperatingSystem.IsWindows())
+                {
+                    Assert.Equal(dashboardExe, info.FileName);
+                    Assert.Empty(info.ArgumentList);
+                    Assert.True(info.CreateNewProcessGroup);
+                }
+                else
+                {
+                    Assert.Equal("python3", info.FileName);
+                    Assert.Contains(dashboardExe, info.ArgumentList);
+                    string pidPath = info.Environment["MILLER_DASHBOARD_PID_FILE"]!;
+                    File.WriteAllText(pidPath, Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture));
+                }
+
+                return Process.GetCurrentProcess();
+            },
+            isHealthy: _ => started,
+            tryAcquireLaunchLock: _ => new NoopDisposable(),
+            writeMetadata: (_, _) => { },
+            sleep: _ => { });
+
+        DashboardLaunchResult result = launcher.EnsureRunning(new DashboardLaunchRequest(
+            Context(), 5004, TimeSpan.FromSeconds(1)));
+
+        Assert.Equal(DashboardLaunchOutcome.Started, result.Outcome);
+    }
+
+    [Fact]
     public void EnsureRunning_RemovesStalePidFileBeforeLaunch()
     {
         Environment.SetEnvironmentVariable("MILLER_DASHBOARD_DLL", _dashboardDll);
