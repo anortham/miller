@@ -299,6 +299,50 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
         return reader.Read() ? ReadDiskSymbol(reader).Symbol : null;
     }
 
+    public IReadOnlyDictionary<string, IndexedSymbol> FindBySymbolIds(IEnumerable<string> symbolIds)
+    {
+        ArgumentNullException.ThrowIfNull(symbolIds);
+
+        var requested = symbolIds
+            .Where(static id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (requested.Length == 0)
+            return new Dictionary<string, IndexedSymbol>(StringComparer.Ordinal);
+
+        var loaded = new Dictionary<string, IndexedSymbol>(StringComparer.Ordinal);
+        using var connection = OpenConnection();
+
+        const int chunkSize = 500;
+        for (int offset = 0; offset < requested.Length; offset += chunkSize)
+        {
+            int count = Math.Min(chunkSize, requested.Length - offset);
+            using var cmd = connection.CreateCommand();
+            var placeholders = new string[count];
+            for (int i = 0; i < count; i++)
+            {
+                string parameterName = "$id" + i.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                placeholders[i] = parameterName;
+                cmd.Parameters.AddWithValue(parameterName, requested[offset + i]);
+            }
+
+            cmd.CommandText = SymbolSelect(
+                "FROM search_symbols s WHERE s.symbol_id IN (" + string.Join(", ", placeholders) + ");");
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                IndexedSymbol symbol = ReadDiskSymbol(reader).Symbol;
+                loaded[symbol.SymbolId] = symbol;
+            }
+        }
+
+        var ordered = new Dictionary<string, IndexedSymbol>(StringComparer.Ordinal);
+        foreach (string id in requested)
+            if (loaded.TryGetValue(id, out IndexedSymbol? symbol))
+                ordered[id] = symbol;
+        return ordered;
+    }
+
     public IReadOnlyList<IndexedSymbol> FindChildren(string parentId)
     {
         ArgumentNullException.ThrowIfNull(parentId);

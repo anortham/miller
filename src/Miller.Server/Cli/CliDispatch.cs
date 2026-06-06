@@ -10,10 +10,9 @@ namespace Miller.Server.Cli;
 /// Miller's command-line surface: a thin one-shot dispatch over the SAME pure tool cores the MCP server exposes
 /// (each tool's <c>Run(...)</c> + the <see cref="WorkspaceRender"/> renderers), so a shell/CI invocation and a
 /// tool call produce identical output. Read verbs load the smallest index shape they need from the current
-/// workspace's <c>.miller/symbols.db</c>: symbol search and summary inspect use the symbol lookup projection,
-/// full inspect preflights through that projection before loading a unique symbol's full graph, and graph-heavy
-/// verbs still use <see cref="RepositoryIndexLoader"/>. There is NO MCP host, NO background
-/// services, NO Serilog file logging. <c>serve</c> and no-args are NOT CLI invocations (see <see cref="IsCliInvocation"/>);
+/// workspace's <c>.miller/symbols.db</c>: symbol search and inspect use the symbol lookup projection, graph-only
+/// verbs use on-demand SQLite graph reachability, and bridge trace still uses the full bridge graph. There is NO
+/// MCP host, NO background services, NO Serilog file logging. <c>serve</c> and no-args are NOT CLI invocations (see <see cref="IsCliInvocation"/>);
 /// they fall through to the stdio MCP server in <c>Program.cs</c>, which keeps its STDIO-purity contract. The CLI
 /// OWNS stdout here, so it writes results to the injected <c>stdout</c> writer (Console in production, a capture
 /// buffer in tests).
@@ -257,12 +256,13 @@ public static class CliDispatch
         if (!TryResolveReadContext(ctx, o, err, out ctx))
             return 2;
 
-        if (!TryLoadIndex(ctx, err, out MillerRepositoryIndex index))
+        if (!TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex index))
             return 3;
 
+        using var graph = new SqliteSymbolGraphIndex(ctx.ExtractDbPath);
         var resolver = new SmartTargetResolver(index);
         string output = ContextTool.Run(
-            index, resolver, query: o.Query, tokenBudget: o.Int("token-budget", 4000), maxHops: o.Int("max-hops", 1),
+            index, graph, resolver, query: o.Query, tokenBudget: o.Int("token-budget", 4000), maxHops: o.Int("max-hops", 1),
             entrySymbols: null, failingTest: null, stackTrace: null, json: o.Has("json"), out _, out _);
         outw.WriteLine(output);
         return 0;
@@ -276,12 +276,13 @@ public static class CliDispatch
         if (!TryResolveReadContext(ctx, o, err, out ctx))
             return 2;
 
-        if (!TryLoadIndex(ctx, err, out MillerRepositoryIndex index))
+        if (!TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex index))
             return 3;
 
+        using var graph = new SqliteSymbolGraphIndex(ctx.ExtractDbPath);
         var resolver = new SmartTargetResolver(index);
         string output = ImpactTool.Run(
-            index, resolver, target: o.Query, changedPaths: null, diff: null,
+            index, graph, resolver, target: o.Query, changedPaths: null, diff: null,
             maxDepth: o.Int("max-depth", 2), limit: o.Int("limit", 100), json: o.Has("json"), out _, out _);
         outw.WriteLine(output);
         return 0;
@@ -297,12 +298,27 @@ public static class CliDispatch
         if (!TryResolveReadContext(ctx, o, err, out ctx))
             return 2;
 
-        if (!TryLoadIndex(ctx, err, out MillerRepositoryIndex index))
+        string mode = o.Value("mode", "auto")!;
+        if (string.Equals(mode, "bridge", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!TryLoadIndex(ctx, err, out MillerRepositoryIndex fullIndex))
+                return 3;
+
+            var fullResolver = new SmartTargetResolver(fullIndex);
+            string bridgeOutput = TraceTool.Run(
+                fullIndex, fullResolver, target: o.Query, scope: o.Value("scope"), mode: mode, to: o.Value("to"),
+                depth: o.Int("depth", 3), limit: o.Int("limit", 20), fullFormat: o.Has("full"), out _, out _);
+            outw.WriteLine(bridgeOutput);
+            return 0;
+        }
+
+        if (!TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex index))
             return 3;
 
+        using var graph = new SqliteSymbolGraphIndex(ctx.ExtractDbPath);
         var resolver = new SmartTargetResolver(index);
-        string output = TraceTool.Run(
-            index, resolver, target: o.Query, scope: o.Value("scope"), mode: o.Value("mode", "auto")!, to: o.Value("to"),
+        string output = TraceTool.RunGraph(
+            index, graph, resolver, target: o.Query, scope: o.Value("scope"), mode: mode, to: o.Value("to"),
             depth: o.Int("depth", 3), limit: o.Int("limit", 20), fullFormat: o.Has("full"), out _, out _);
         outw.WriteLine(output);
         return 0;

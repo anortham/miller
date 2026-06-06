@@ -433,6 +433,23 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void Context_UsesSymbolProjectionAndSqliteGraphWithoutFullGraphLoad()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        SqliteFixtureMutator.DropTypeArgumentsTable(fx.DbPath);
+
+        var (code, outText, errText) = Run(
+            new[] { "context", "GetUser", "--token-budget", "1200", "--max-hops", "1" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("# context bundle", outText);
+        Assert.Contains("GetUser", outText);
+        Assert.Contains("Find", outText);
+    }
+
+    [Fact]
     public void Impact_Symbol_RendersDependents()
     {
         using var fx = JulieDbFixture.CreateForInspect();
@@ -449,6 +466,22 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void Impact_Target_UsesSymbolProjectionAndSqliteGraphWithoutFullGraphLoad()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        SqliteFixtureMutator.DropTypeArgumentsTable(fx.DbPath);
+
+        var (code, outText, errText) = Run(
+            new[] { "impact", "GetUser", "--max-depth", "1" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("# impacted", outText);
+        Assert.Contains("Controller", outText);
+    }
+
+    [Fact]
     public void Trace_Symbol_RendersNeighbourhood()
     {
         using var fx = JulieDbFixture.CreateForInspect();
@@ -462,6 +495,40 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Contains("# trace GetUser", outText);
         Assert.Contains("Find", outText);
         Assert.Contains("auth/Repo.cs", outText);
+    }
+
+    [Fact]
+    public void Trace_Auto_UsesSymbolProjectionAndSqliteGraphWithoutFullGraphLoad()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        SqliteFixtureMutator.DropTypeArgumentsTable(fx.DbPath);
+
+        var (code, outText, errText) = Run(
+            new[] { "trace", "GetUser", "--depth", "1" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("# trace GetUser", outText);
+        Assert.Contains("Find", outText);
+        Assert.Contains("auth/Repo.cs", outText);
+    }
+
+    [Fact]
+    public void Trace_Path_UsesSymbolProjectionAndSqliteGraphWithoutFullGraphLoad()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        SqliteFixtureMutator.DropTypeArgumentsTable(fx.DbPath);
+
+        var (code, outText, errText) = Run(
+            new[] { "trace", "GetUser", "--mode", "path", "--to", "Find", "--depth", "2" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("# trace path GetUser -> Find", outText);
+        Assert.Contains("GetUser", outText);
+        Assert.Contains("Find", outText);
     }
 
     [Fact]

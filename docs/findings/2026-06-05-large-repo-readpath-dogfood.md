@@ -4,7 +4,7 @@
 - **Workspace used for scale evidence:** `/Users/murphy/source/openclaw`
 - **OpenClaw index:** 640,317 symbols, 12,781 files, revision 1
 - **OpenClaw DB sizes:** `symbols.db` 1.7G, `search.db` 664M
-- **Decision:** beta read paths are acceptable with a fresh sidecar. MCP summary `inspect`, full `inspect`, `context`, workspace `status`, and workspace `list` stay cheap on a very large registered workspace once the relevant projections/full index are cached. One-shot CLI `search`, summary `inspect`, and full `inspect` now avoid both full graph hydration and eager sidecar snapshot loading. Graph-heavy one-shot CLI commands can still be expensive and should be documented as heavier than summary inspect/search/full inspect.
+- **Decision:** beta read paths are acceptable with a fresh sidecar. MCP summary `inspect`, full `inspect`, `context`, workspace `status`, and workspace `list` stay cheap on a very large registered workspace once the relevant projections/full index are cached. One-shot CLI `search`, `inspect`, graph-only `context`, `impact`, and non-bridge `trace` now avoid both full graph/bridge hydration and eager sidecar snapshot loading. Bridge trace still uses the full bridge graph.
 
 ## Setup
 
@@ -52,7 +52,7 @@ After the v4 sidecar rebuild:
 | Context bundle | `duration_ms=21` | Good |
 | Workspace status | `duration_ms=81` | Good |
 | Workspace list | `duration_ms=2` | Good |
-| Full inspect by symbol id | `duration_ms=8373` | Expensive; document as heavier than summary inspect |
+| Full inspect by symbol id | `duration_ms=8373` | Superseded by projection routing below |
 
 Representative calls:
 
@@ -86,9 +86,9 @@ Measured from `/Users/murphy/source/openclaw` with the Release CLI:
 | `miller search "gateway health checks" --mode content` | `real=0.26s` | `real=0.32s` | Unchanged and cheap |
 | `miller inspect noteWorkspaceStatus` | `real=6.57s` | `real=0.31s` | Fixed: summary inspect uses lazy symbol lookup |
 | `miller inspect noteWorkspaceStatus --depth full` | not measured in first pass | `real=6.74s` | Superseded by projection routing below |
-| `miller context "workspace status command"` | `real=6.67s` | `real=6.75s` | Expected full path |
+| `miller context "workspace status command"` | `real=6.67s` | `real=6.75s` | Superseded by graph-only CLI routing below |
 
-Repeated `miller search "workspace status"` runs were stable at `real=0.26s`. The remaining expensive one-shot CLI paths are graph-heavy by design. If post-beta CLI workflows need faster `context` / `impact` / `trace`, evaluate lazy graph/bridge loading or persisted read models there, not symbol-search widening or per-file in-memory patching first.
+Repeated `miller search "workspace status"` runs were stable at `real=0.26s`.
 
 ## Full Inspect Projection Routing
 
@@ -110,7 +110,24 @@ from parent-id lookup tables, and the FTS sidecar serves it from `search_symbols
 uses that child lookup plus `ExtractReader.ReadDetail` / `ReadReferences` / `ReadCallees` / `ReadBody`, so it no
 longer needs `RepositoryIndexLoader.Load`.
 
-`context`, `impact`, and `trace` remain the follow-up surface for lazy graph/bridge or persisted read-model work.
+## Graph-Only CLI Routing
+
+The remaining one-shot CLI cost was graph-only read verbs loading the full repository projection, including the
+bridge graph. The beta fix keeps graph reachability on-demand: `SqliteSymbolGraphIndex` reads `relationships`,
+`identifiers`, and `symbols` from `symbols.db`, while candidate hydration uses batched sidecar symbol-id lookup
+when the FTS sidecar is active. CLI `context`, `impact`, and `trace mode=auto|path` now use that path;
+`trace mode=bridge` still uses the full bridge graph.
+
+Measured from `/Users/murphy/source/miller` against OpenClaw with the Release CLI:
+
+| Operation | Before | After | Result |
+|---|---:|---:|---|
+| `miller context "OpenClaw doctor workspace status flow" --workspace-id openclaw --token-budget 1800 --max-hops 1` | `real=8.35s`, max RSS ~1.52G | `real=0.77s`, max RSS ~119M | Fixed: graph-only context uses SQLite reachability |
+| `miller impact runWorkspaceStatusHealth --workspace-id openclaw --max-depth 1` | `real=6.17s`, max RSS ~1.52G | `real=0.31s`, max RSS ~69M | Fixed: impact uses SQLite reverse reachability |
+| `miller trace runWorkspaceStatusHealth --workspace-id openclaw --depth 1` | `real=6.32s`, max RSS ~1.52G | `real=0.32s`, max RSS ~69M | Fixed: non-bridge trace uses SQLite reachability |
+
+This closes TODO #5 for the beta CLI path. Current evidence says do not widen symbol search and do not add
+incremental in-memory patching. Reopen only if bridge trace cold-start cost becomes a real workflow bottleneck.
 
 ## Region Search Fail-Closed Check
 

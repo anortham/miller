@@ -33,6 +33,13 @@ public enum Direction
     Both,
 }
 
+public interface ISymbolGraphReachability
+{
+    IReadOnlyList<ReachedNode> Reach(IEnumerable<string> starts, int maxDepth, int limit, Direction dir);
+
+    IReadOnlyList<string>? ShortestPath(string from, string to, int maxDepth);
+}
+
 /// <summary>
 /// The pure, immutable symbol dependency graph (M5 decisions D3/D4). Built once from a node set and a resolved
 /// edge list, it keeps forward adjacency (<see cref="Dependencies"/>: <c>from → [to]</c>) and reverse adjacency
@@ -44,7 +51,7 @@ public enum Direction
 /// (bounding the graph to indexed symbols), self-loops are dropped, and duplicate <c>(from, to)</c> pairs are
 /// collapsed per direction. Neighbour lists are sorted by id so traversal order is stable across runs.</para>
 /// </summary>
-public sealed class SymbolGraph
+public sealed class SymbolGraph : ISymbolGraphReachability
 {
     private readonly IReadOnlyDictionary<string, string[]> _dependencies;
     private readonly IReadOnlyDictionary<string, string[]> _dependents;

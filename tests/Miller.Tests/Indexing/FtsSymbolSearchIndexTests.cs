@@ -113,6 +113,24 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
     }
 
     [Fact]
+    public void FindBySymbolIds_ReturnsRequestedSymbols()
+    {
+        var syms = Corpus(
+            ("a", "Alpha", null, "class", "csharp", "src/A.cs"),
+            ("b", "Beta", null, "class", "csharp", "src/B.cs"),
+            ("c", "Gamma", null, "class", "csharp", "src/C.cs"));
+        SearchIndexWriter.Write(_dbPath, syms, revision: 1);
+
+        var index = FtsSymbolSearchIndex.Open(_dbPath);
+
+        var found = index.FindBySymbolIds(["b", "missing", "a"]);
+
+        Assert.Equal(["b", "a"], found.Keys.ToArray());
+        Assert.Equal("Beta", found["b"].Name);
+        Assert.Equal("Alpha", found["a"].Name);
+    }
+
+    [Fact]
     public void Open_DoesNotEagerlyReadEveryResidentSymbol()
     {
         var syms = Corpus(

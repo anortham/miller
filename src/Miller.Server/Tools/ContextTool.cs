@@ -125,6 +125,18 @@ public sealed partial class ContextTool
         out int selectedCount, out int candidatesExamined)
     {
         ArgumentNullException.ThrowIfNull(index);
+        return Run(index, index.Graph, resolver, query, tokenBudget, maxHops,
+            entrySymbols, failingTest, stackTrace, json, out selectedCount, out candidatesExamined);
+    }
+
+    public static string Run(
+        ISymbolLookupIndex index, ISymbolGraphReachability graph, SmartTargetResolver resolver,
+        string query, int tokenBudget, int maxHops,
+        IReadOnlyList<string>? entrySymbols, string? failingTest, string? stackTrace, bool json,
+        out int selectedCount, out int candidatesExamined)
+    {
+        ArgumentNullException.ThrowIfNull(index);
+        ArgumentNullException.ThrowIfNull(graph);
         ArgumentNullException.ThrowIfNull(resolver);
         if (maxHops < 0) maxHops = 0;
         if (maxHops > 2) maxHops = 2; // D6: max_hops range 0–2
@@ -179,21 +191,22 @@ public sealed partial class ContextTool
 
         // --- 2. Expand both directions to maxHops. Reach excludes the starts and returns min-hop per node. ---
         IReadOnlyList<ReachedNode> reached =
-            index.Graph.Reach(seedOrder, maxHops, ReachCap, Direction.Both);
+            graph.Reach(seedOrder, maxHops, ReachCap, Direction.Both);
 
         // --- 3. Build the candidate list in priority order: seeds (hop 0, in seed rank) then reached (hop, id).
         // Reach already orders the reached nodes by (hop asc, id asc), so appending preserves that. ---
         var candidates = new List<Candidate>(seedOrder.Count + reached.Count);
+        var symbolsById = SymbolLookupBatch.FindBySymbolIds(
+            index,
+            seedOrder.Concat(reached.Select(static node => node.Id)));
         foreach (var seedId in seedOrder)
         {
-            var symbol = index.FindBySymbolId(seedId);
-            if (symbol is not null) // defensive — a seed id always comes from the index
+            if (symbolsById.TryGetValue(seedId, out IndexedSymbol? symbol)) // defensive — a seed id always comes from the index
                 candidates.Add(new Candidate(symbol, Hop: 0));
         }
         foreach (var node in reached)
         {
-            var symbol = index.FindBySymbolId(node.Id);
-            if (symbol is not null)
+            if (symbolsById.TryGetValue(node.Id, out IndexedSymbol? symbol))
                 candidates.Add(new Candidate(symbol, node.Hop));
         }
 

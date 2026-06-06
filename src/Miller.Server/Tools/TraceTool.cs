@@ -129,6 +129,29 @@ public sealed class TraceTool
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentNullException.ThrowIfNull(resolver);
+
+        string normalizedMode = (mode ?? ModeAuto).Trim().ToLowerInvariant();
+
+        return normalizedMode switch
+        {
+            ModeAuto => RunGraph(index, index.Graph, resolver, target, scope, normalizedMode, to, depth, limit, fullFormat,
+                out emitted, out nodesVisited),
+            ModePath => RunGraph(index, index.Graph, resolver, target, scope, normalizedMode, to, depth, limit, fullFormat,
+                out emitted, out nodesVisited),
+            ModeBridge => RunBridge(index, resolver, target, scope, depth, limit, fullFormat, out emitted, out nodesVisited),
+            _ =>
+                UnknownMode(mode, out emitted, out nodesVisited),
+        };
+    }
+
+    public static string RunGraph(
+        ISymbolLookupIndex index, ISymbolGraphReachability graph, SmartTargetResolver resolver,
+        string target, string? scope, string mode, string? to, int depth, int limit, bool fullFormat,
+        out int emitted, out int nodesVisited)
+    {
+        ArgumentNullException.ThrowIfNull(index);
+        ArgumentNullException.ThrowIfNull(graph);
+        ArgumentNullException.ThrowIfNull(resolver);
         if (depth < 1) depth = 1;
         if (limit < 1) limit = 1;
         emitted = 0;
@@ -138,10 +161,10 @@ public sealed class TraceTool
 
         return normalizedMode switch
         {
-            ModeAuto => RunAuto(index, resolver, target, scope, depth, limit, out emitted, out nodesVisited),
-            ModePath => RunPath(index, resolver, target, scope, to, depth, limit, out emitted, out nodesVisited),
-            ModeBridge => RunBridge(index, resolver, target, scope, depth, limit, fullFormat, out emitted, out nodesVisited),
-            _ => $"Unknown mode '{mode}'. Use one of: auto, path, bridge.",
+            ModeAuto => RunAuto(index, graph, resolver, target, scope, depth, limit, out emitted, out nodesVisited),
+            ModePath => RunPath(index, graph, resolver, target, scope, to, depth, limit, out emitted, out nodesVisited),
+            ModeBridge => "trace mode=bridge requires the full repository bridge graph.",
+            _ => UnknownMode(mode, out emitted, out nodesVisited),
         };
     }
 
@@ -154,7 +177,7 @@ public sealed class TraceTool
     // ---------- mode: auto (callers + callees neighbourhood) ----------
 
     private static string RunAuto(
-        MillerRepositoryIndex index, SmartTargetResolver resolver, string target, string? scope,
+        ISymbolLookupIndex index, ISymbolGraphReachability graph, SmartTargetResolver resolver, string target, string? scope,
         int depth, int limit, out int emitted, out int nodesVisited)
     {
         emitted = 0;
@@ -164,7 +187,7 @@ public sealed class TraceTool
             return note!;
 
         IReadOnlyList<ReachedNode> reached =
-            index.Graph.Reach([seedId], depth, limit, Direction.Both);
+            graph.Reach([seedId], depth, limit, Direction.Both);
         nodesVisited = reached.Count;
 
         if (reached.Count == 0)
@@ -174,10 +197,10 @@ public sealed class TraceTool
         var sb = new StringBuilder();
         sb.Append("# trace ").Append(seed is not null ? seed.Name : target)
           .Append(" (auto, ").Append(reached.Count).Append(" neighbour(s))\n");
+        var symbolsById = SymbolLookupBatch.FindBySymbolIds(index, reached.Select(static node => node.Id));
         foreach (var node in reached)
         {
-            var symbol = index.FindBySymbolId(node.Id);
-            if (symbol is null)
+            if (!symbolsById.TryGetValue(node.Id, out IndexedSymbol? symbol))
                 continue; // inconsistent build — drop rather than NRE
             sb.Append(NeighbourLine(symbol, node.Hop)).Append('\n');
             emitted++;
@@ -192,7 +215,7 @@ public sealed class TraceTool
     // ---------- mode: path (shortest dependency path target -> to) ----------
 
     private static string RunPath(
-        MillerRepositoryIndex index, SmartTargetResolver resolver, string target, string? scope, string? to,
+        ISymbolLookupIndex index, ISymbolGraphReachability graph, SmartTargetResolver resolver, string target, string? scope, string? to,
         int depth, int limit, out int emitted, out int nodesVisited)
     {
         emitted = 0;
@@ -206,7 +229,7 @@ public sealed class TraceTool
         if (!ResolveSymbol(index, resolver, to, scope: null, out string toId, out string? toNote))
             return toNote!;
 
-        IReadOnlyList<string>? path = index.Graph.ShortestPath(fromId, toId, depth);
+        IReadOnlyList<string>? path = graph.ShortestPath(fromId, toId, depth);
         if (path is null)
             return $"No path from '{target}' to '{to}' within {depth} hop(s).";
 
@@ -217,10 +240,10 @@ public sealed class TraceTool
           .Append(" (").Append(path.Count - 1).Append(" hop(s))\n");
 
         int shown = 0;
+        var symbolsById = SymbolLookupBatch.FindBySymbolIds(index, path);
         for (int i = 0; i < path.Count && shown < limit; i++)
         {
-            var symbol = index.FindBySymbolId(path[i]);
-            string label = symbol is not null
+            string label = symbolsById.TryGetValue(path[i], out IndexedSymbol? symbol) && symbol is not null
                 ? $"{symbol.Name}  {symbol.Kind}  {symbol.FilePath}:{symbol.StartLine}"
                 : path[i];
             sb.Append(i == 0 ? "  " : "  -> ").Append(label).Append('\n');
@@ -596,7 +619,7 @@ public sealed class TraceTool
     /// not-found resolution (trace is a symbol-anchored walk — a file is not a graph start).
     /// </summary>
     private static bool ResolveSymbol(
-        MillerRepositoryIndex index, SmartTargetResolver resolver, string target, string? scope,
+        ISymbolLookupIndex index, SmartTargetResolver resolver, string target, string? scope,
         out string symbolId, out string? note)
     {
         symbolId = string.Empty;
@@ -640,5 +663,12 @@ public sealed class TraceTool
             sb.Append(s.Name).Append("  ").Append(s.Kind).Append("  ")
               .Append(s.FilePath).Append(':').Append(s.StartLine).Append('\n');
         return sb.ToString().TrimEnd('\n');
+    }
+
+    private static string UnknownMode(string? mode, out int emitted, out int nodesVisited)
+    {
+        emitted = 0;
+        nodesVisited = 0;
+        return $"Unknown mode '{mode}'. Use one of: auto, path, bridge.";
     }
 }

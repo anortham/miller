@@ -131,6 +131,18 @@ public sealed class ImpactTool
         out int impactedCount, out int nodesVisited)
     {
         ArgumentNullException.ThrowIfNull(index);
+        return Run(index, index.Graph, resolver, target, changedPaths, diff, maxDepth, limit, json,
+            out impactedCount, out nodesVisited);
+    }
+
+    public static string Run(
+        ISymbolLookupIndex index, ISymbolGraphReachability graph, SmartTargetResolver resolver,
+        string? target, IReadOnlyList<string>? changedPaths, string? diff,
+        int maxDepth, int limit, bool json,
+        out int impactedCount, out int nodesVisited)
+    {
+        ArgumentNullException.ThrowIfNull(index);
+        ArgumentNullException.ThrowIfNull(graph);
         ArgumentNullException.ThrowIfNull(resolver);
         if (maxDepth < 1) maxDepth = 1;
         if (limit < 1) limit = 1;
@@ -173,17 +185,17 @@ public sealed class ImpactTool
 
         // --- bounded REVERSE reachability over the in-memory graph (D3/D5). Starts are excluded by Reach. ---
         IReadOnlyList<ReachedNode> reached =
-            index.Graph.Reach(seedIds, maxDepth, limit, Direction.Reverse);
+            graph.Reach(seedIds, maxDepth, limit, Direction.Reverse);
         nodesVisited = reached.Count; // D10 work proxy: the whole reached set (before the test partition)
 
         // --- partition the reached nodes into impacted symbols vs likely tests (D5). Hydrate ids → symbols;
         // an id absent from the index is skipped (defensive — the graph bounds edges to indexed nodes). ---
         var impacted = new List<Reached>();
         var tests = new List<Reached>();
+        var symbolsById = SymbolLookupBatch.FindBySymbolIds(index, reached.Select(static node => node.Id));
         foreach (var node in reached)
         {
-            var symbol = index.FindBySymbolId(node.Id);
-            if (symbol is null)
+            if (!symbolsById.TryGetValue(node.Id, out IndexedSymbol? symbol))
                 continue; // inconsistent build — drop rather than NRE
             (symbol.IsTest ? tests : impacted).Add(new Reached(symbol, node.Hop));
         }
@@ -203,7 +215,7 @@ public sealed class ImpactTool
     // ambiguous); true on success (seedIds populated, possibly empty if a file has no symbols). A file target
     // never fails hard — an unknown file simply seeds nothing and falls through to the "nothing depends" note.
     private static bool SeedFromTarget(
-        MillerRepositoryIndex index, SmartTargetResolver resolver, string target,
+        ISymbolLookupIndex index, SmartTargetResolver resolver, string target,
         List<string> seedIds, out string? note)
     {
         note = null;
@@ -234,7 +246,7 @@ public sealed class ImpactTool
     }
 
     // Seed every indexed symbol of a file (D5: a file/changed-path seeds all its symbols).
-    private static void SeedFromFile(MillerRepositoryIndex index, string path, List<string> seedIds)
+    private static void SeedFromFile(ISymbolLookupIndex index, string path, List<string> seedIds)
     {
         // Canonicalize a bare basename to its indexed path when unambiguous (e.g. Service.cs → src/Service.cs).
         string resolved = index.ResolveIndexedFilePath(path) ?? path;
@@ -245,7 +257,7 @@ public sealed class ImpactTool
     // Seed from a unified diff (D5): per changed file, the symbols whose [start_line, end_line] intersect a
     // changed new-side range; when nothing intersects (or no spans recorded), degrade to ALL symbols in the file
     // (a safe over-approximation, noted). Returns a degradation note when any file degraded, else null.
-    private static string? SeedFromDiff(MillerRepositoryIndex index, string diff, List<string> seedIds)
+    private static string? SeedFromDiff(ISymbolLookupIndex index, string diff, List<string> seedIds)
     {
         var degradedFiles = new List<string>();
         foreach (var file in DiffTargets.Parse(diff))
