@@ -1,16 +1,25 @@
 # Miller
 
-A fast, token-thrifty, local code-intelligence MCP server for AI coding assistants, built in .NET 10.
+Miller is a local code-intelligence server for coding agents. It keeps a current SQLite-backed view of a
+workspace, then answers structural questions through MCP and a matching CLI: find symbols, inspect files,
+build focused context, trace relationships, assess change impact, and check workspace freshness without asking
+an agent to grep and reread the repo by hand.
 
-Miller indexes a codebase and answers structural questions about it (find, inspect, trace references, assess
-change impact) over the Model Context Protocol, so an agent spends tokens on reasoning instead of grepping and
-re-reading files. Its differentiator is a **deterministic cross-language structural resolver** that links code
-across language boundaries (e.g. a C# entity to its EF table, a TypeScript call to the C# route that serves it)
-without embeddings.
+Miller is the free local core in the Miller/Eros product split. It stays deterministic, lexical/structural,
+daemon-light, and embedding-free. Eros sits above it for higher-level guidance, semantic/vector workflows,
+confidence/evidence views, and commercial orchestration.
 
-> **Status: WIP replacement for Julie.** The core MCP tool surface, freshness path, workspace registry, and
-> registry-backed dashboard are implemented on the active development branch. See
-> [docs/miller-mvp-plan.md](docs/miller-mvp-plan.md) for the milestone line and remaining hardening work.
+The practical difference from a one-time graph dump is that Miller is built for active agent work:
+
+- workspace state, freshness, refresh, and selectors are first-class;
+- CLI and MCP calls share the same read cores, so examples can be dogfooded in a shell and used by agents;
+- the registry, telemetry, and dashboard show what Miller knows right now;
+- stale or corrupt search sidecars self-heal to correct in-memory search instead of silently lying;
+- cross-language bridge evidence stays structural and provider-scoped, not embedding-driven.
+
+> **Status: source-checkout beta candidate.** M0-M8 are implemented, the source-checkout beta gates are closed
+> from Miller's side, and the remaining decisions are product/release decisions. See
+> [docs/plans/2026-06-05-beta-readiness-checklist.md](docs/plans/2026-06-05-beta-readiness-checklist.md).
 
 ## Requirements
 
@@ -72,15 +81,16 @@ src/
 tests/
   Miller.Tests/      unit (Core, fast) + contract (against a committed extract-DB fixture) + tagged scale set
 docs/
-  miller-mvp-plan.md           milestones M0–M7
-  findings/                    the investigation this design was mined from
+  miller-mvp-plan.md           milestone history
+  plans/                       beta/readiness/design routing docs
+  findings/                    dogfood evidence and investigation notes
 ```
 
 Miller keeps only the local operational dashboard: registered workspaces, freshness, telemetry, sidecar
 health, and refresh/troubleshooting actions. Eros owns richer product UX such as next-action guidance,
 confidence/evidence views, semantic/vector retrieval, and commercial workflows.
 
-## The tool surface (target)
+## The tool surface
 
 Seven tools, each with smart defaults so the common path is the simplest call: `search`, `inspect`, `context`,
 `trace`, `impact`, `edit`, `workspace`. Read tools accept a `workspace_id` selector: display ID, unique prefix,
@@ -167,9 +177,35 @@ workspace(operation="dashboard", port=4977)
 Open the printed URL to view registered workspaces and scoped per-tool telemetry. Set `MILLER_REGISTRY_DB`,
 `MILLER_TELEMETRY_DB`, or `MILLER_DASHBOARD_WEBROOT` only when testing non-default paths.
 
+## Source-checkout beta proof
+
+These commands are intentionally real Miller-checkout examples. Run them after the restore/build step above
+from this repo, or replace `dotnet run --project src/Miller.Server -c Release --` with an installed `miller`
+binary:
+
+```bash
+dotnet run --project src/Miller.Server -c Release -- workspace status
+dotnet run --project src/Miller.Server -c Release -- workspace list
+dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvider" --limit 5
+dotnet run --project src/Miller.Server -c Release -- search "source-checkout beta" --mode content --limit 5
+dotnet run --project src/Miller.Server -c Release -- inspect src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md
+dotnet run --project src/Miller.Server -c Release -- context "dashboard telemetry and workspace registry" --token-budget 1200
+dotnet run --project src/Miller.Server -c Release -- impact src/Miller.Server/Tools/WorkspaceTool.cs --max-depth 1 --limit 10
+```
+
+What these prove:
+
+- `workspace status` and `workspace list` read cheap registry/freshness metadata instead of hydrating the full
+  graph.
+- Symbol search stays narrow and structural (`name + signature`); prose uses `--mode content`.
+- `inspect`, `context`, and `impact` use the same projection-specific read paths exposed to MCP tools.
+- The dashboard is operational evidence, not a separate product UI: it shows registered workspaces, index facts,
+  telemetry, latency/failure signals, and scoped JSON endpoints from the same local state.
+
 ## Release archives
 
-The release workflow is configured for one archive per pinned `julie-extract` platform:
+The current beta path is source-checkout first. The release workflow is already configured for one archive per
+pinned `julie-extract` platform when a packaged prerelease is approved:
 
 - `aarch64-apple-darwin`
 - `x86_64-apple-darwin`
@@ -253,8 +289,11 @@ Warnings are errors (`Directory.Build.props`).
 - Region search is explicit and opt-in for beta: set `MILLER_REGION_INDEX=1`, refresh the workspace, then
   call `search --regions comment|doc_comment|string_literal`. Set `MILLER_REGION_MAX_BYTES=<n>` to lower
   or raise the per-region byte cap for very large comment/string-literal corpora.
-- Full `inspect` can still be expensive on very large repositories; summary `inspect`, `search`,
-  `context`, and workspace status/list are the fast dogfood paths.
+- Ambiguous targets may need a file path, a more specific symbol, or a symbol ID. The CLI reports ambiguity
+  instead of guessing.
+- Bridge trace intentionally uses the full bridge graph for provider-scoped cross-language evidence. Normal
+  `search`, `inspect`, graph-only `context`, `impact`, non-bridge `trace`, and workspace status/list stay on
+  projection-specific read paths.
 - Native AOT is release-readiness work, not a beta blocker.
 - A rebuilt MCP server is picked up only after the MCP client restarts the Miller subprocess. Use
   `workspace status` and compare the `pid` in the header to confirm the restart actually loaded a new process.

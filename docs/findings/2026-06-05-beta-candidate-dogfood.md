@@ -5,7 +5,8 @@
 - **Miller build used for dogfood:** `0.1.0+e51eb98a82d0`
 - **Follow-up README CLI example dogfood:** `0.1.0+c53474eae69e`
 - **Final pushed read-path candidate:** `0.1.0+91288557137a`
-- **`julie-extract` pin:** `julie-extract 2.1.1`
+- **`julie-extract` pin:** `julie-extract 2.1.3` for the final beta candidate; earlier snapshots below
+  record the 2.1.1 state that existed when those specific checks were run.
 - **Decision:** source-checkout beta is viable after final gates; remaining issues are documented beta limits, product/release decisions, or post-beta polish.
 
 ## Final Pushed Candidate Follow-Up - 2026-06-06
@@ -34,7 +35,15 @@ scale-test    -> skipped for push, as expected for the CI matrix
 This supersedes the earlier final-gate note below. The current source-checkout beta candidate is the
 branch tip at `9128855`.
 
-## Restore And Version Evidence
+Current pin follow-up:
+
+```text
+scripts/julie-pins.json -> version 2.1.3
+MillerExtractContract.PinnedJulieExtractVersion -> 2.1.3
+.tools/julie-extract --version -> julie-extract 2.1.3
+```
+
+## Earlier Restore And Version Evidence
 
 Current binary:
 
