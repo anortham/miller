@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Miller - Local Code Intelligence for Coding Agents</title>
+  <meta name="description" content="Miller is the free local code-intelligence core for coding agents: MCP and CLI search, inspect, context, trace, impact, workspace freshness, and telemetry.">
+  <link rel="canonical" href="https://anortham.github.io/miller/">
+
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Miller - Local Code Intelligence for Coding Agents">
+  <meta property="og:description" content="Deterministic, local, SQLite-backed code intelligence for active agent work.">
+  <meta property="og:url" content="https://anortham.github.io/miller/">
+  <meta property="og:image" content="https://anortham.github.io/miller/assets/dashboard-index.png">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Miller - Local Code Intelligence for Coding Agents">
+  <meta name="twitter:description" content="Deterministic, local, SQLite-backed code intelligence for active agent work.">
+  <meta name="twitter:image" content="https://anortham.github.io/miller/assets/dashboard-index.png">
+
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav id="site-nav" class="site-nav" aria-label="Main navigation">
+    <a class="brand" href="#top">Miller</a>
+    <div class="nav-links">
+      <a href="#why">Why</a>
+      <a href="#proof">Proof</a>
+      <a href="#tools">Tools</a>
+      <a href="#dashboard">Dashboard</a>
+      <a href="#install">Install</a>
+      <a href="https://github.com/anortham/miller" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </nav>
+
+  <header id="top" class="hero">
+    <div class="hero-overlay" aria-hidden="true"></div>
+    <div class="hero-content">
+      <p class="eyebrow">Free local code-intelligence core</p>
+      <h1>Miller</h1>
+      <p class="hero-lede">
+        A current, local view of your codebase for coding agents that need to search, inspect, trace,
+        and assess impact without burning the context window on broad file reads.
+      </p>
+      <div class="hero-actions">
+        <a class="button primary" href="#install">Try the source-checkout beta</a>
+        <a class="button secondary" href="https://github.com/anortham/miller" target="_blank" rel="noopener">View on GitHub</a>
+      </div>
+    </div>
+    <a class="scroll-cue" href="#why">Beta shape</a>
+  </header>
+
+  <main>
+    <section id="why" class="section intro-section">
+      <div class="section-heading">
+        <p class="eyebrow">What it is</p>
+        <h2>Built for active agent work, not one-time graph dumps.</h2>
+      </div>
+      <div class="split-copy">
+        <p>
+          Miller consumes <code>julie-extract</code> SQLite artifacts and exposes deterministic local read paths
+          through MCP and a matching CLI. It stays lexical, structural, daemon-light, and embedding-free.
+        </p>
+        <p>
+          Eros sits above Miller for higher-level guidance, semantic/vector retrieval, confidence views, and
+          commercial workflow orchestration.
+        </p>
+      </div>
+      <div class="feature-strip" aria-label="Miller product pillars">
+        <div>
+          <strong>Fresh</strong>
+          <span>workspace state, refresh, selectors, and status are first-class</span>
+        </div>
+        <div>
+          <strong>Local</strong>
+          <span>SQLite-backed, source-checkout friendly, no hosted service required</span>
+        </div>
+        <div>
+          <strong>Structural</strong>
+          <span>symbol search, inspect, context, trace, impact, bridge evidence</span>
+        </div>
+      </div>
+    </section>
+
+    <section id="proof" class="section proof-section">
+      <div class="section-heading">
+        <p class="eyebrow">Source-checkout beta proof</p>
+        <h2>Real commands, same read cores as MCP.</h2>
+      </div>
+      <div class="command-grid">
+        <button class="command-line" type="button" data-copy="dotnet run --project src/Miller.Server -c Release -- workspace status">
+          <span>workspace status</span>
+          <code>dotnet run --project src/Miller.Server -c Release -- workspace status</code>
+        </button>
+        <button class="command-line" type="button" data-copy="dotnet run --project src/Miller.Server -c Release -- search &quot;WorkspaceIndexProvider&quot; --limit 5">
+          <span>symbol search</span>
+          <code>dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvider" --limit 5</code>
+        </button>
+        <button class="command-line" type="button" data-copy="dotnet run --project src/Miller.Server -c Release -- search &quot;source-checkout beta&quot; --mode content --limit 5">
+          <span>content search</span>
+          <code>dotnet run --project src/Miller.Server -c Release -- search "source-checkout beta" --mode content --limit 5</code>
+        </button>
+        <button class="command-line" type="button" data-copy="dotnet run --project src/Miller.Server -c Release -- context &quot;dashboard telemetry and workspace registry&quot; --token-budget 1200">
+          <span>context bundle</span>
+          <code>dotnet run --project src/Miller.Server -c Release -- context "dashboard telemetry and workspace registry" --token-budget 1200</code>
+        </button>
+      </div>
+    </section>
+
+    <section id="tools" class="section tools-section">
+      <div class="section-heading">
+        <p class="eyebrow">Tool surface</p>
+        <h2>Small verbs with clear boundaries.</h2>
+      </div>
+      <div class="tool-list">
+        <article>
+          <h3>search</h3>
+          <p>Symbol search by name and signature. Docs and prose stay in <code>mode=content</code>; comments and literals stay explicit with <code>regions=</code>.</p>
+        </article>
+        <article>
+          <h3>inspect</h3>
+          <p>File and symbol views for definitions, signatures, children, callers, and callees without broad file reads.</p>
+        </article>
+        <article>
+          <h3>context</h3>
+          <p>A token-budgeted bundle for orienting on a task or module before editing.</p>
+        </article>
+        <article>
+          <h3>trace</h3>
+          <p>Structural call and dependency paths, including provider-scoped bridge evidence for `dotnet-web`.</p>
+        </article>
+        <article>
+          <h3>impact</h3>
+          <p>Reverse reachability and likely tests so agents can choose focused verification.</p>
+        </article>
+        <article>
+          <h3>workspace</h3>
+          <p>Registry, freshness, refresh, dashboard launch, and cross-workspace selectors.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="dashboard" class="section dashboard-section">
+      <div class="section-heading">
+        <p class="eyebrow">Operational dashboard</p>
+        <h2>What Miller knows right now.</h2>
+      </div>
+      <figure class="dashboard-shot">
+        <img src="assets/dashboard-index.png" alt="Miller dashboard showing registered workspaces, file counts, symbol counts, languages, and local telemetry controls.">
+        <figcaption>
+          The dashboard is intentionally narrow: registered workspaces, index facts, telemetry, latency and failure
+          signals, and troubleshooting. Eros owns the richer product UI above this local core.
+        </figcaption>
+      </figure>
+    </section>
+
+    <section id="install" class="section install-section">
+      <div class="section-heading">
+        <p class="eyebrow">Try it</p>
+        <h2>Source-checkout beta first.</h2>
+      </div>
+      <div class="install-panel">
+        <pre><code>bash scripts/restore-julie-extract.sh
+dotnet build Miller.slnx -c Release
+dotnet run --project src/Miller.Server -c Release -- workspace open --path /path/to/repo --full
+dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvider" --limit 5
+dotnet run --project src/Miller.Server -c Release -- dashboard</code></pre>
+        <div class="limits">
+          <h3>Beta limits</h3>
+          <ul>
+            <li>No embeddings or semantic/vector retrieval in Miller.</li>
+            <li>Source-region search is opt-in with <code>MILLER_REGION_INDEX=1</code>.</li>
+            <li>Native AOT is release-readiness work, not a beta blocker.</li>
+            <li>GitHub Pages deployment is pending a separate publish decision.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <span>Miller</span>
+    <a href="https://github.com/anortham/miller" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://github.com/anortham/miller/blob/main/docs/release-notes/v0.1.0-beta.1-draft.md" target="_blank" rel="noopener">Draft beta notes</a>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>
