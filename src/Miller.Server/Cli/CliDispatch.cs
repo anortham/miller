@@ -141,7 +141,9 @@ public static class CliDispatch
     {
         CliOptions o = CliOptions.Parse(args, "json", "include-tests");
         if (string.IsNullOrWhiteSpace(o.Query))
-            return Usage(err, "miller search <query> [--mode auto|text|symbol|file|content] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--include-tests]");
+            return Usage(err, "miller search <query> [--workspace-id SELECTOR] [--workspace DIR] [--mode auto|text|symbol|file|content] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--include-tests]");
+        if (!TryResolveReadContext(ctx, o, err, out ctx))
+            return 2;
 
         bool json = o.Has("json");
         int limit = o.Int("limit", 10);
@@ -216,7 +218,9 @@ public static class CliDispatch
     {
         CliOptions o = CliOptions.Parse(args, "json");
         if (string.IsNullOrWhiteSpace(o.Query))
-            return Usage(err, "miller inspect <file-or-symbol> [--depth summary|full] [--kind K] [--scope FILE] [--limit N] [--json]");
+            return Usage(err, "miller inspect <file-or-symbol> [--workspace-id SELECTOR] [--workspace DIR] [--depth summary|full] [--kind K] [--scope FILE] [--limit N] [--json]");
+        if (!TryResolveReadContext(ctx, o, err, out ctx))
+            return 2;
 
         string depth = o.Value("depth", "summary")!;
         string output;
@@ -249,7 +253,9 @@ public static class CliDispatch
     {
         CliOptions o = CliOptions.Parse(args, "json");
         if (string.IsNullOrWhiteSpace(o.Query))
-            return Usage(err, "miller context <query> [--token-budget N] [--max-hops 0-2] [--json]");
+            return Usage(err, "miller context <query> [--workspace-id SELECTOR] [--workspace DIR] [--token-budget N] [--max-hops 0-2] [--json]");
+        if (!TryResolveReadContext(ctx, o, err, out ctx))
+            return 2;
 
         if (!TryLoadIndex(ctx, err, out MillerRepositoryIndex index))
             return 3;
@@ -266,7 +272,9 @@ public static class CliDispatch
     {
         CliOptions o = CliOptions.Parse(args, "json");
         if (string.IsNullOrWhiteSpace(o.Query))
-            return Usage(err, "miller impact <symbol> [--max-depth N] [--limit N] [--json]");
+            return Usage(err, "miller impact <symbol> [--workspace-id SELECTOR] [--workspace DIR] [--max-depth N] [--limit N] [--json]");
+        if (!TryResolveReadContext(ctx, o, err, out ctx))
+            return 2;
 
         if (!TryLoadIndex(ctx, err, out MillerRepositoryIndex index))
             return 3;
@@ -285,7 +293,9 @@ public static class CliDispatch
         // no JSON output for trace, so --json is intentionally not a flag here.
         CliOptions o = CliOptions.Parse(args, "full");
         if (string.IsNullOrWhiteSpace(o.Query))
-            return Usage(err, "miller trace <symbol> [--scope FILE] [--mode auto|path|bridge] [--to SYMBOL] [--depth N] [--limit N] [--full]");
+            return Usage(err, "miller trace <symbol> [--workspace-id SELECTOR] [--workspace DIR] [--scope FILE] [--mode auto|path|bridge] [--to SYMBOL] [--depth N] [--limit N] [--full]");
+        if (!TryResolveReadContext(ctx, o, err, out ctx))
+            return 2;
 
         if (!TryLoadIndex(ctx, err, out MillerRepositoryIndex index))
             return 3;
@@ -395,7 +405,8 @@ public static class CliDispatch
             IndexFresh: null,                 // a one-shot CLI cannot poll freshness — honestly unknown
             QueueEmpty: true,
             FreshnessStatus: "unregistered",
-            ServerVersion: MillerVersion.Current);
+            ServerVersion: MillerVersion.Current,
+            ServerProcessId: Environment.ProcessId);
         outw.WriteLine(WorkspaceRender.Status(facts, TelemetrySummary.Empty, json));
         return 0;
     }
@@ -434,7 +445,8 @@ public static class CliDispatch
             FreshnessStatus: row.StateText,
             WarningText: warning,
             DisplayId: row.DisplayId,
-            ServerVersion: MillerVersion.Current);
+            ServerVersion: MillerVersion.Current,
+            ServerProcessId: Environment.ProcessId);
     }
 
     private static int WorkspaceRefresh(
@@ -741,6 +753,87 @@ public static class CliDispatch
         }
     }
 
+    private static bool TryResolveReadContext(
+        WorkspaceContext ctx,
+        CliOptions options,
+        TextWriter err,
+        out WorkspaceContext readContext)
+    {
+        readContext = ctx;
+        string? selector = options.Value("workspace-id");
+        bool selectorFlagPresent = options.Has("workspace-id");
+        if (string.IsNullOrWhiteSpace(selector))
+        {
+            selector = options.Value("workspace");
+            if (!string.IsNullOrWhiteSpace(selector))
+                selector = Path.GetFullPath(selector, ctx.WorkspaceRoot);
+            selectorFlagPresent = options.Has("workspace");
+        }
+
+        if (!selectorFlagPresent)
+            return true;
+
+        if (string.IsNullOrWhiteSpace(selector))
+        {
+            err.WriteLine("workspace selector requires a value: --workspace-id <selector>.");
+            return false;
+        }
+
+        if (IsCurrentReadSelector(ctx, selector))
+            return true;
+
+        using WorkspaceRegistry registry = WorkspaceRegistry.Open(ctx.RegistryDbPath);
+        WorkspaceRegistryRow row;
+        try
+        {
+            row = WorkspaceRegistrySelector.Resolve(registry, selector);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            err.WriteLine(ex.Message);
+            return false;
+        }
+
+        readContext = ctx with
+        {
+            WorkspaceRoot = row.CanonicalRoot,
+            ExtractDbPath = row.IndexDbPath,
+            WorkspaceId = row.WorkspaceId,
+            CanonicalRoot = row.CanonicalRoot,
+            CanonicalExtractDbPath = row.IndexDbPath,
+        };
+        return true;
+    }
+
+    private static bool IsCurrentReadSelector(WorkspaceContext ctx, string selector)
+    {
+        string trimmed = selector.Trim();
+        if (string.Equals(trimmed, "current", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(trimmed, "primary", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (!string.IsNullOrWhiteSpace(ctx.WorkspaceId) &&
+            string.Equals(trimmed, ctx.WorkspaceId, StringComparison.Ordinal))
+            return true;
+
+        string root = ctx.CanonicalRoot ?? ctx.WorkspaceRoot;
+        if (Path.IsPathRooted(trimmed) && WorkspaceSafety.IsLiveWorkspace(trimmed, root))
+            return true;
+
+        if (string.IsNullOrWhiteSpace(ctx.WorkspaceId))
+            return false;
+
+        try
+        {
+            string displayId = WorkspaceId.Display(root, ctx.WorkspaceId);
+            return string.Equals(trimmed, displayId, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
     private static bool RequireIndex(WorkspaceContext ctx, TextWriter err)
     {
         if (File.Exists(ctx.ExtractDbPath))
@@ -764,15 +857,15 @@ public static class CliDispatch
 
         Commands:
           search <query>     Find code by name, identifier, or phrase.
-                             [--mode auto|text|symbol|file|content] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--include-tests]
+                             [--workspace-id SELECTOR] [--workspace DIR] [--mode auto|text|symbol|file|content] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--include-tests]
           inspect <target>   List a file's symbols, or show a symbol's definition.
-                             [--depth summary|full] [--kind K] [--scope FILE] [--limit N] [--json]
+                             [--workspace-id SELECTOR] [--workspace DIR] [--depth summary|full] [--kind K] [--scope FILE] [--limit N] [--json]
           context <query>    Token-budgeted bundle of the most relevant code for a task.
-                             [--token-budget N] [--max-hops 0-2] [--json]
+                             [--workspace-id SELECTOR] [--workspace DIR] [--token-budget N] [--max-hops 0-2] [--json]
           impact <symbol>    Downstream symbols + tests a change would affect.
-                             [--max-depth N] [--limit N] [--json]
+                             [--workspace-id SELECTOR] [--workspace DIR] [--max-depth N] [--limit N] [--json]
           trace <symbol>     Follow callers/callees, a path, or a cross-language bridge.
-                             [--scope FILE] [--mode auto|path|bridge] [--to SYMBOL] [--depth N] [--limit N] [--full]
+                             [--workspace-id SELECTOR] [--workspace DIR] [--scope FILE] [--mode auto|path|bridge] [--to SYMBOL] [--depth N] [--limit N] [--full]
           dashboard          Start or reuse the machine-global loopback dashboard.
                              [--port N] [--json]
           workspace [op]     Index lifecycle. op = status (default) | list | refresh | full | open | remove.

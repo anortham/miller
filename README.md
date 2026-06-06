@@ -119,11 +119,14 @@ The single `miller` binary runs two ways:
   This source-checkout config uses `dotnet run`, so the MCP client machine needs the .NET 10 SDK installed.
 
 - **CLI (one-shot).** Any other verb runs a single command over the current directory's `.miller/symbols.db`
-  and exits — for shells, CI, and integration tests. The CLI reuses the *same* tool cores the server exposes,
-  so output matches a tool call.
+  and exits — for shells, CI, and integration tests. Read verbs also accept `--workspace-id <selector>`
+  (`--workspace <path>` is a path alias) for registered workspaces, so dogfood and CI calls can target another
+  indexed repo without changing directories. The CLI reuses the *same* tool cores the server exposes, so output
+  matches a tool call.
 
   ```bash
   dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvider" --limit 5
+  dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvider" --workspace-id miller
   dotnet run --project src/Miller.Server -c Release -- search "source-checkout beta" --mode content --limit 5
   dotnet run --project src/Miller.Server -c Release -- inspect src/Miller.Server/AgentInstructions.cs --depth full
   dotnet run --project src/Miller.Server -c Release -- context "CLI workspace routing" --token-budget 2000
@@ -141,7 +144,9 @@ The single `miller` binary runs two ways:
 **Dogfooding the server.** Because MCP runs over stdio, a new build takes effect only after the MCP client
 restarts the subprocess. A build made inside the repo carries its git short SHA — `miller version` prints
 `0.1.0+<sha>` (just `0.1.0` for a build with no `.git`), and the same string heads the `# workspace` block of
-`workspace status` — so a session can always confirm *which* build it is talking to.
+`workspace status`. The status header also includes the process id (`pid <n>`), which is the quickest way to
+confirm a restarted MCP client is talking to a new Miller subprocess when you rebuilt uncommitted changes and
+the SHA suffix stayed the same.
 
 **Dashboard.** The local dashboard binds to loopback and reads only the workspace registry plus telemetry DB.
 Use the CLI launcher so multiple Miller sessions reuse one machine-global dashboard process while opening the
@@ -176,6 +181,8 @@ For beta, text output is a compact human-facing contract and JSON output is the 
   workspace operation, missing restore, or another operational failure a script should not ignore.
 - `--json` is supported by `search`, `inspect`, `context`, `impact`, and `workspace` operations. `trace`
   is text-only for now.
+- `search`, `inspect`, `context`, `impact`, and `trace` accept `--workspace-id <selector>`; selectors are the
+  same registry IDs/display IDs/path selectors used by MCP `workspace_id`.
 - Text headings and ordering are intended to be stable enough for humans and logs, not for strict parsers.
   Use `--json` when a caller needs fields.
 - Search result kinds are deliberately separate: symbol search ranks `name + signature`, `--mode content`
@@ -242,15 +249,16 @@ Warnings are errors (`Directory.Build.props`).
 - Full `inspect` can still be expensive on very large repositories; summary `inspect`, `search`,
   `context`, and workspace status/list are the fast dogfood paths.
 - Native AOT is release-readiness work, not a beta blocker.
-- A rebuilt MCP server is picked up only after the MCP client restarts the Miller subprocess.
+- A rebuilt MCP server is picked up only after the MCP client restarts the Miller subprocess. Use
+  `workspace status` and compare the `pid` in the header to confirm the restart actually loaded a new process.
 
 ## Troubleshooting
 
 - `no Miller index`: run `miller workspace full`, or open the folder in the Miller MCP server so the
   index can be created.
 - Missing `julie-extract`: run the restore script for your platform, then rerun the scale or refresh path.
-- Unsure which server is live: run `miller version` or `miller workspace status` and compare the git SHA
-  suffix with the build you expect.
+- Unsure which server is live: run `miller version` or `miller workspace status`; compare the git SHA suffix
+  with the build you expect, and compare `workspace status`'s `pid` before/after a restart.
 
 ## License
 

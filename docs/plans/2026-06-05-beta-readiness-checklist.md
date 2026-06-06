@@ -78,7 +78,9 @@ status workspaces. It should read the workspace registry, telemetry DB, and ligh
   version/search/workspace flows.
 - [x] Decide whether MCP restart/reconnect developer ergonomics are beta-blocking: not blocking
   for beta. README documents the expected restart requirement and `miller version` /
-  `workspace status` build-SHA checks.
+  `workspace status` build-SHA checks; `workspace status` now also shows `pid <n>` so a
+  dogfood session can confirm that a restart loaded a new subprocess even when the SHA
+  suffix is unchanged by uncommitted rebuilds.
 
 ### 4. Performance And Reliability
 

@@ -217,7 +217,8 @@ public sealed class WorkspaceTool
                 FreshnessStatus: "missing_index",
                 WarningText: error,
                 DisplayId: row.DisplayId,
-                ServerVersion: MillerVersion.Current);
+                ServerVersion: MillerVersion.Current,
+                ServerProcessId: Environment.ProcessId);
             return (WorkspaceRender.Status(missingFacts, _ledger.SummarizeForWorkspace(row.WorkspaceId), json),
                 1, TelemetryOutcome.Empty);
         }
@@ -236,7 +237,8 @@ public sealed class WorkspaceTool
             FreshnessStatus: WorkspaceFreshnessView.FreshnessStatusFor(refreshResult: null, row),
             WarningText: WorkspaceFreshnessView.WarningTextFor(refreshResult: null),
             DisplayId: row.DisplayId,
-            ServerVersion: MillerVersion.Current);
+            ServerVersion: MillerVersion.Current,
+            ServerProcessId: Environment.ProcessId);
         return (WorkspaceRender.Status(facts, _ledger.SummarizeForWorkspace(row.WorkspaceId), json),
             1, TelemetryOutcome.Ok);
     }
@@ -278,7 +280,8 @@ public sealed class WorkspaceTool
             QueueEmpty: _indexer.QueueEmpty,
             FreshnessStatus: "current",
             DisplayId: CurrentDisplayId(),
-            ServerVersion: MillerVersion.Current);
+            ServerVersion: MillerVersion.Current,
+            ServerProcessId: Environment.ProcessId);
     }
 
     // ---------- refresh / full ----------

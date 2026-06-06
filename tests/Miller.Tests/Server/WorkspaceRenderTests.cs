@@ -41,9 +41,13 @@ public sealed class WorkspaceRenderTests
     public void Status_Compact_ShowsWorkspaceIndexAndTelemetryFacts()
     {
         const string fullId = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
-        string text = WorkspaceRender.Status(Facts() with { Root = "/repo/miller", WorkspaceId = fullId }, Telemetry, json: false);
+        string text = WorkspaceRender.Status(
+            Facts() with { Root = "/repo/miller", WorkspaceId = fullId, ServerProcessId = 12345 },
+            Telemetry,
+            json: false);
 
         Assert.Contains("miller-abcdef123456", text);
+        Assert.Contains("pid 12345", text);
         Assert.DoesNotContain(fullId, text);
         Assert.DoesNotContain("db:", text);
         Assert.Contains("565", text);            // document count
@@ -57,13 +61,15 @@ public sealed class WorkspaceRenderTests
     [Fact]
     public void Status_Json_HasWorkspaceIndexAndTelemetrySections()
     {
-        using var doc = JsonDocument.Parse(WorkspaceRender.Status(Facts(), Telemetry, json: true));
+        using var doc = JsonDocument.Parse(
+            WorkspaceRender.Status(Facts() with { ServerProcessId = 12345 }, Telemetry, json: true));
         var root = doc.RootElement;
 
         var ws = root.GetProperty("workspace");
         Assert.Equal("/repo", ws.GetProperty("root").GetString());
         Assert.Equal("ws-123", ws.GetProperty("workspace_id").GetString());
         Assert.True(ws.GetProperty("leader").GetBoolean());
+        Assert.Equal(12345, ws.GetProperty("server_pid").GetInt32());
 
         var idx = root.GetProperty("index");
         Assert.Equal(565, idx.GetProperty("document_count").GetInt64());

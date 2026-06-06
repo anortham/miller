@@ -230,6 +230,62 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Contains("auth/UserService.cs", outText);
     }
 
+    [Theory]
+    [InlineData("search", "GetUser", "auth/UserService.cs")]
+    [InlineData("inspect", "GetUser", "Gets a user by id.")]
+    [InlineData("context", "GetUser", "# context bundle")]
+    [InlineData("impact", "GetUser", "# impacted")]
+    [InlineData("trace", "GetUser", "# trace GetUser")]
+    public void ReadVerbs_WorkspaceIdSelector_ReadsRegisteredWorkspace(
+        string verb,
+        string target,
+        string expected)
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        SeedRegisteredWorkspace("target-ws", "target-111111111111", fx.WorkspaceRoot, fx.DbPath);
+        string currentDb = Path.Combine(_dir, "current", ".miller", "symbols.db");
+
+        var (code, outText, errText) = Run(
+            new[] { verb, target, "--workspace-id", "target-ws" },
+            Context(currentDb));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains(expected, outText);
+    }
+
+    [Fact]
+    public void Search_WorkspaceAlias_ReadsRegisteredWorkspaceByRelativePath()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        string targetRoot = Path.Combine(_dir, "target-workspace");
+        Directory.CreateDirectory(targetRoot);
+        SeedRegisteredWorkspace("target-ws", "target-111111111111", targetRoot, fx.DbPath);
+        string currentDb = Path.Combine(_dir, "current", ".miller", "symbols.db");
+
+        var (code, outText, errText) = Run(
+            new[] { "search", "GetUser", "--workspace", "target-workspace" },
+            Context(currentDb));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("auth/UserService.cs", outText);
+    }
+
+    [Fact]
+    public void Search_WorkspaceIdSelector_UnknownSelectorIsUsageErrorExitTwo()
+    {
+        string currentDb = Path.Combine(_dir, "current", ".miller", "symbols.db");
+
+        var (code, _, errText) = Run(
+            new[] { "search", "GetUser", "--workspace-id", "does-not-exist" },
+            Context(currentDb));
+
+        Assert.Equal(2, code);
+        Assert.Contains("unknown workspace selector", errText);
+        Assert.DoesNotContain("no Miller index", errText);
+    }
+
     [Fact]
     public void Search_FilePatternAndLanguageFlags_FilterResults()
     {
@@ -406,6 +462,7 @@ public sealed class CliDispatchTests : IDisposable
         var (code, outText, _) = Run(new[] { "workspace", "status" }, Context(fx.DbPath));
         Assert.Equal(0, code);
         Assert.Contains("miller 0.1.0", outText);
+        Assert.Contains("pid ", outText);
         Assert.Contains("symbols:", outText);
     }
 
@@ -705,6 +762,13 @@ public sealed class CliDispatchTests : IDisposable
         SqliteConnection.ClearAllPools();
         using WorkspaceRegistry registry = WorkspaceRegistry.Open(_registryDb);
         return registry.List();
+    }
+
+    private void SeedRegisteredWorkspace(string workspaceId, string displayId, string root, string dbPath)
+    {
+        using WorkspaceRegistry registry = WorkspaceRegistry.Open(_registryDb);
+        registry.UpsertSeen(workspaceId, displayId, root, dbPath, WorkspaceRegistryState.Ready);
+        registry.MarkScanned(workspaceId, revision: 1);
     }
 
     // Whether `julie-extract` is resolvable on PATH (so an empty ToolsRoot would NOT fail Locate). Used to skip

@@ -29,6 +29,8 @@ namespace Miller.Server.Tools;
 /// <param name="ServerVersion">The version of the Miller binary that produced this status (build-identity
 /// signal), or null when not surfaced. Always THIS process's version — the responder — regardless of which
 /// workspace's facts are shown.</param>
+/// <param name="ServerProcessId">The OS process id of the Miller process that produced this status, or null when
+/// not surfaced. Useful when verifying that a restarted stdio MCP server is actually a new process.</param>
 public readonly record struct WorkspaceFacts(
     string Root,
     string? WorkspaceId,
@@ -43,7 +45,8 @@ public readonly record struct WorkspaceFacts(
     string? FreshnessStatus = null,
     string? WarningText = null,
     string? DisplayId = null,
-    string? ServerVersion = null);
+    string? ServerVersion = null,
+    int? ServerProcessId = null);
 
 /// <summary>A registry-backed row rendered by <c>workspace list</c>.</summary>
 public readonly record struct WorkspaceListEntry(
@@ -164,6 +167,8 @@ public static class WorkspaceRender
         sb.Append("# workspace");
         if (!string.IsNullOrEmpty(facts.ServerVersion))
             sb.Append("  miller ").Append(facts.ServerVersion);
+        if (facts.ServerProcessId is { } pid)
+            sb.Append("  pid ").Append(pid);
         sb.Append('\n');
         sb.Append(DisplayId(facts.Root, facts.WorkspaceId, facts.DisplayId))
           .Append("  ").Append(facts.Root)
@@ -256,6 +261,8 @@ public static class WorkspaceRender
             w.WriteBoolean("leader", facts.IsLeader);
             if (facts.ServerVersion is null) w.WriteNull("server_version");
             else w.WriteString("server_version", facts.ServerVersion);
+            if (facts.ServerProcessId is { } pid) w.WriteNumber("server_pid", pid);
+            else w.WriteNull("server_pid");
             w.WriteEndObject();
 
             w.WritePropertyName("index");
