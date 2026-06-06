@@ -91,6 +91,15 @@ public sealed class CliDispatchTests : IDisposable
             fixture.WorkspaceRoot,
             RegionIndexOptions.EnabledDefault);
 
+    private static JulieDbFixture DbWithAmbiguousSymbols() =>
+        JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
+        {
+            new JulieDbFixture.SymbolRow("b0000000000000000000000000000001", "Duplicate", "method", "csharp",
+                "src/One.cs", "public void Duplicate()", 10, null),
+            new JulieDbFixture.SymbolRow("b0000000000000000000000000000002", "Duplicate", "method", "csharp",
+                "src/Two.cs", "public void Duplicate()", 20, null),
+        });
+
     [Fact]
     public void IsCliInvocation_ServeAndEmptyAreServer_EverythingElseIsCli()
     {
@@ -370,6 +379,23 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Empty(errText);
         Assert.Contains("Gets a user by id.", outText);
         Assert.Contains("auth/UserService.cs", outText);
+    }
+
+    [Fact]
+    public void Inspect_Full_AmbiguousTarget_UsesSymbolProjectionWithoutFullGraphLoad()
+    {
+        using var fx = DbWithAmbiguousSymbols();
+        SqliteFixtureMutator.DropRelationshipsTable(fx.DbPath);
+
+        var (code, outText, errText) = Run(
+            new[] { "inspect", "Duplicate", "--depth", "full" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("Multiple candidates", outText);
+        Assert.Contains("src/One.cs", outText);
+        Assert.Contains("src/Two.cs", outText);
     }
 
     [Fact]

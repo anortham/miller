@@ -11,7 +11,8 @@ namespace Miller.Server.Cli;
 /// (each tool's <c>Run(...)</c> + the <see cref="WorkspaceRender"/> renderers), so a shell/CI invocation and a
 /// tool call produce identical output. Read verbs load the smallest index shape they need from the current
 /// workspace's <c>.miller/symbols.db</c>: symbol search and summary inspect use the symbol lookup projection,
-/// while graph-heavy verbs still use <see cref="RepositoryIndexLoader"/>. There is NO MCP host, NO background
+/// full inspect preflights through that projection before loading a unique symbol's full graph, and graph-heavy
+/// verbs still use <see cref="RepositoryIndexLoader"/>. There is NO MCP host, NO background
 /// services, NO Serilog file logging. <c>serve</c> and no-args are NOT CLI invocations (see <see cref="IsCliInvocation"/>);
 /// they fall through to the stdio MCP server in <c>Program.cs</c>, which keeps its STDIO-purity contract. The CLI
 /// OWNS stdout here, so it writes results to the injected <c>stdout</c> writer (Console in production, a capture
@@ -226,14 +227,28 @@ public static class CliDispatch
         string output;
         if (string.Equals(depth, "full", StringComparison.OrdinalIgnoreCase))
         {
-            if (!TryLoadIndex(ctx, err, out MillerRepositoryIndex index))
+            if (!TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex searchIndex))
                 return 3;
 
-            var resolver = new SmartTargetResolver(index);
-            output = InspectTool.Run(
-                index, resolver, ctx.ExtractDbPath, ctx.WorkspaceRoot,
-                target: o.Query, depth, kind: o.Value("kind"), scope: o.Value("scope"),
-                limit: o.Int("limit", 50), json: o.Has("json"), out _);
+            var searchResolver = new SmartTargetResolver(searchIndex);
+            if (searchResolver.Resolve(o.Query, o.Value("scope")) is not TargetResolution.Symbol)
+            {
+                output = InspectTool.RunSummary(
+                    searchIndex, ctx.ExtractDbPath, ctx.WorkspaceRoot,
+                    target: o.Query, kind: o.Value("kind"), scope: o.Value("scope"),
+                    limit: o.Int("limit", 50), json: o.Has("json"), out _);
+            }
+            else
+            {
+                if (!TryLoadIndex(ctx, err, out MillerRepositoryIndex index))
+                    return 3;
+
+                var resolver = new SmartTargetResolver(index);
+                output = InspectTool.Run(
+                    index, resolver, ctx.ExtractDbPath, ctx.WorkspaceRoot,
+                    target: o.Query, depth, kind: o.Value("kind"), scope: o.Value("scope"),
+                    limit: o.Int("limit", 50), json: o.Has("json"), out _);
+            }
         }
         else
         {

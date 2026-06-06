@@ -90,6 +90,22 @@ Measured from `/Users/murphy/source/openclaw` with the Release CLI:
 
 Repeated `miller search "workspace status"` runs were stable at `real=0.26s`. The remaining expensive one-shot CLI paths are graph-heavy by design. If post-beta CLI workflows need faster full `inspect` / `context`, evaluate lazy graph/bridge loading or persisted read models there, not symbol-search widening or per-file in-memory patching first.
 
+## Full Inspect Ambiguity Preflight
+
+Follow-up on 2026-06-06 split ambiguous `depth=full` inspect from genuinely full symbol inspection.
+Before the fix, `miller inspect noteWorkspaceStatus --workspace-id openclaw --depth full` returned only
+the same ambiguity candidate list as summary inspect, but paid the full repository graph load first.
+
+Measured from `/Users/murphy/source/miller` against OpenClaw with the Release CLI:
+
+| Operation | Before | After | Result |
+|---|---:|---:|---|
+| `miller inspect noteWorkspaceStatus --workspace-id openclaw --depth full` | `real=8.75s`, max RSS ~1.45G | `real=0.60s`, max RSS ~69M | Fixed: ambiguous full inspect uses symbol preflight and returns candidates without full load |
+
+The full path still loads the repository graph after the cheap preflight when the target resolves to a
+single symbol. `context`, `impact`, `trace`, and unique-symbol full `inspect` remain the follow-up surface
+for lazy graph/bridge or persisted read-model work.
+
 ## Region Search Fail-Closed Check
 
 Region search was not enabled for the default beta path. Explicit region queries failed closed instead of returning misleading symbol or content results:

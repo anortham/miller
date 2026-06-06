@@ -49,6 +49,15 @@ public sealed class InspectToolTests
                 "src/SearchTool.cs", "private static string RenderCompact(...)", 30, "a0000000000000000000000000000003"),
         });
 
+    private static JulieDbFixture FixtureWithAmbiguousSymbols() =>
+        JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
+        {
+            new JulieDbFixture.SymbolRow("b0000000000000000000000000000001", "Duplicate", "method", "csharp",
+                "src/One.cs", "public void Duplicate()", 10, null),
+            new JulieDbFixture.SymbolRow("b0000000000000000000000000000002", "Duplicate", "method", "csharp",
+                "src/Two.cs", "public void Duplicate()", 20, null),
+        });
+
     // ---- File listing ----
 
     [Fact]
@@ -567,7 +576,46 @@ public sealed class InspectToolTests
 
         Assert.Contains("## body", output);
         Assert.Equal(1, fullResolveCount);
-        Assert.Equal(0, searchResolveCount);
+        Assert.Equal(1, searchResolveCount);
+    }
+
+    [Fact]
+    public void Inspect_Full_RegisteredWorkspace_AmbiguousTarget_UsesSymbolProjectionWithoutFullLoad()
+    {
+        using var current = EmptyFixture("current-ws");
+        using var target = FixtureWithAmbiguousSymbols();
+        var targetIndex = RepositoryIndexLoader.Load(target.DbPath);
+        string currentRoot = Path.Combine(Path.GetTempPath(), "miller-current-" + Guid.NewGuid().ToString("N"));
+        string targetRoot = target.WorkspaceRoot;
+
+        int fullResolveCount = 0;
+        int searchResolveCount = 0;
+        var provider = new FullInspectRecordingProvider(
+            ReadToolRoutingTestSupport.ContextFor(
+                MillerRepositoryIndex.Build(SqliteSymbolReader.Read(current.DbPath)),
+                current.DbPath,
+                "current-ws",
+                currentRoot),
+            ReadToolRoutingTestSupport.ContextFor(
+                targetIndex,
+                target.DbPath,
+                "target-ws",
+                targetRoot),
+            () => fullResolveCount++,
+            () => searchResolveCount++);
+        var tool = new InspectTool(provider, provider);
+
+        string output = tool.Inspect(
+            "Duplicate",
+            depth: "full",
+            workspace_id: "target-ws",
+            ensure_fresh: false);
+
+        Assert.Contains("Multiple candidates", output);
+        Assert.Contains("src/One.cs", output);
+        Assert.Contains("src/Two.cs", output);
+        Assert.Equal(0, fullResolveCount);
+        Assert.Equal(1, searchResolveCount);
     }
 
     private static void DeleteFileRow(string dbPath, string filePath)

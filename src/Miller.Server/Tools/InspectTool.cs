@@ -64,13 +64,27 @@ public sealed class InspectTool
             int count;
             if (full)
             {
-                WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
-                string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
-                output = Run(context.Index, context.Resolver, context.IndexDbPath, context.WorkspaceRoot,
-                    target, depth, kind, scope, limit, json, out count, compactBanner);
+                WorkspaceSymbolSearchContext searchContext = _workspaceSearchProvider.ResolveSymbolSearch(workspace_id, ensureFresh);
+                var searchResolver = new SmartTargetResolver(searchContext.Index);
+                if (searchResolver.Resolve(target, scope) is not TargetResolution.Symbol)
+                {
+                    string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(searchContext, workspace_id, json);
+                    output = RunSummary(searchContext.Index, searchContext.IndexDbPath, searchContext.WorkspaceRoot,
+                        target, kind, scope, limit, json, out count, compactBanner);
 
-                if (telemetry is not null)
-                    ReadToolWorkspaceRouting.ApplyTelemetry(telemetry, context);
+                    if (telemetry is not null)
+                        ReadToolWorkspaceRouting.ApplyTelemetry(telemetry, searchContext);
+                }
+                else
+                {
+                    WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
+                    string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
+                    output = Run(context.Index, context.Resolver, context.IndexDbPath, context.WorkspaceRoot,
+                        target, depth, kind, scope, limit, json, out count, compactBanner);
+
+                    if (telemetry is not null)
+                        ReadToolWorkspaceRouting.ApplyTelemetry(telemetry, context);
+                }
             }
             else
             {
