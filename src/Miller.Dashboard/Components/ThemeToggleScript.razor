@@ -1,0 +1,22 @@
+@namespace Miller.Dashboard.Components
+
+@* Theme toggle behaviour, shared across page shells. *@
+<script>
+    function updateThemeButton(theme) {
+        var label = document.getElementById('theme-toggle-label');
+        if (label) {
+            label.textContent = theme === 'dark' ? 'Light' : 'Dark';
+        }
+    }
+    function toggleTheme() {
+        var current = document.documentElement.getAttribute('data-theme');
+        var next = current === 'dark' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', next);
+        localStorage.setItem('theme', next);
+        updateThemeButton(next);
+    }
+    document.addEventListener('DOMContentLoaded', function() {
+        var theme = document.documentElement.getAttribute('data-theme') || 'light';
+        updateThemeButton(theme);
+    });
+</script>

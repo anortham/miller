@@ -37,8 +37,19 @@ var host = new HostBuilder()
                         "miller-dashboard ok",
                         "text/plain; charset=utf-8"));
 
-                    endpoints.MapGet("/", (string? workspace_id) =>
-                        new RazorComponentResult<DashboardShell>(new
+                    // Landing page: full-width index of every registered workspace with stats.
+                    endpoints.MapGet("/", () =>
+                        new RazorComponentResult<WorkspacesShell>(new
+                        {
+                            Index = DashboardData.ReadIndex(paths.RegistryDbPath),
+                        })
+                        {
+                            PreventStreamingRendering = true,
+                        });
+
+                    // Per-workspace detail page: full-width index facts, context savings, telemetry.
+                    endpoints.MapGet("/workspace", (string? workspace_id) =>
+                        new RazorComponentResult<WorkspaceShell>(new
                         {
                             Snapshot = DashboardData.ReadSnapshot(
                                 paths.RegistryDbPath,
@@ -50,6 +61,7 @@ var host = new HostBuilder()
                             PreventStreamingRendering = true,
                         });
 
+                    // Legacy HTMX fragment routes retained for older dashboard links and dogfood evidence.
                     endpoints.MapGet("/fragments/dashboard", (string? workspace_id) =>
                         new RazorComponentResult<DashboardContent>(new
                         {
@@ -63,11 +75,10 @@ var host = new HostBuilder()
                             PreventStreamingRendering = true,
                         });
 
-                    endpoints.MapGet("/fragments/workspaces", (string? workspace_id) =>
-                        new RazorComponentResult<WorkspacesPanel>(new
+                    endpoints.MapGet("/fragments/workspaces", () =>
+                        new RazorComponentResult<WorkspaceIndex>(new
                         {
-                            Workspaces = DashboardData.ReadWorkspaces(paths.RegistryDbPath),
-                            SelectedWorkspaceId = workspace_id,
+                            Index = DashboardData.ReadIndex(paths.RegistryDbPath),
                         })
                         {
                             PreventStreamingRendering = true,
@@ -85,6 +96,10 @@ var host = new HostBuilder()
 
                     endpoints.MapGet("/workspaces.json", () => Results.Text(
                         DashboardData.RenderWorkspacesJson(paths.RegistryDbPath),
+                        "application/json; charset=utf-8"));
+
+                    endpoints.MapGet("/index.json", () => Results.Text(
+                        DashboardData.RenderIndexJson(paths.RegistryDbPath),
                         "application/json; charset=utf-8"));
 
                     endpoints.MapGet("/telemetry.json", (string? workspace_id) => Results.Text(

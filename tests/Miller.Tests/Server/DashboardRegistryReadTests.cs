@@ -533,7 +533,7 @@ public sealed class DashboardRegistryReadTests : IDisposable
     }
 
     [Fact]
-    public async Task DashboardShell_RendersVisibleTelemetryAndHtmxTargets()
+    public async Task WorkspaceShell_RendersVisibleTelemetryAndHtmxTargets()
     {
         var snapshot = new DashboardSnapshot(
             Workspaces:
@@ -579,15 +579,14 @@ public sealed class DashboardRegistryReadTests : IDisposable
                 ]),
             SelectedWorkspaceId: "ws-a");
 
-        string html = await RenderComponentAsync<DashboardShell>(new Dictionary<string, object?>
+        string html = await RenderComponentAsync<WorkspaceShell>(new Dictionary<string, object?>
         {
             ["Snapshot"] = snapshot,
         });
 
-        Assert.Contains("Miller Dashboard", html);
-        Assert.Contains("id=\"dashboard-content\"", html);
-        Assert.Contains("hx-get=\"/fragments/dashboard?workspace_id=ws-a\"", html);
-        Assert.Contains("hx-target=\"#dashboard-content\"", html);
+        Assert.Contains("alpha-abcd1234", html);
+        Assert.Contains("All workspaces", html);
+        Assert.Contains("href=\"/\"", html);
         Assert.Contains("hx-get=\"/fragments/telemetry", html);
         Assert.Contains("workspace_id=ws-a", html);
         Assert.DoesNotContain("Snapshot.SelectedWorkspaceId", html);
@@ -601,7 +600,7 @@ public sealed class DashboardRegistryReadTests : IDisposable
     }
 
     [Fact]
-    public async Task DashboardShell_RendersWorkspaceFactsContextSavingsAndSnapshotLink()
+    public async Task WorkspaceShell_RendersWorkspaceFactsContextSavingsAndSnapshotLink()
     {
         var facts = new DashboardWorkspaceFacts(
             "ws-a",
@@ -664,7 +663,7 @@ public sealed class DashboardRegistryReadTests : IDisposable
                         EstimatedReturnedTokens: 500),
                 ]));
 
-        string html = await RenderComponentAsync<DashboardShell>(new Dictionary<string, object?>
+        string html = await RenderComponentAsync<WorkspaceShell>(new Dictionary<string, object?>
         {
             ["Snapshot"] = snapshot,
         });
@@ -685,7 +684,7 @@ public sealed class DashboardRegistryReadTests : IDisposable
     }
 
     [Fact]
-    public async Task DashboardShell_RendersAtlasStylingHooksForApprovedDashboardLayout()
+    public async Task WorkspaceShell_RendersDetailStylingHooks()
     {
         var facts = new DashboardWorkspaceFacts(
             "ws-a",
@@ -740,19 +739,110 @@ public sealed class DashboardRegistryReadTests : IDisposable
             SelectedWorkspaceFacts: facts,
             ContextSavings: DashboardContextSavingsSummary.NotTracked("ws-a"));
 
-        string html = await RenderComponentAsync<DashboardShell>(new Dictionary<string, object?>
+        string html = await RenderComponentAsync<WorkspaceShell>(new Dictionary<string, object?>
         {
             ["Snapshot"] = snapshot,
         });
 
         Assert.Contains("class=\"dashboard-hero\"", html);
-        Assert.Contains("class=\"workspace-table\"", html);
-        Assert.Contains("class=\"workspace-row-main\"", html);
-        Assert.Contains("class=\"workspace-row-stats\"", html);
-        Assert.Contains("class=\"workspace-status-rail ok\"", html);
+        Assert.Contains("class=\"back-link\"", html);
         Assert.Contains("metric-band", html);
         Assert.Contains("class=\"language-pill\"", html);
         Assert.Contains("detail-grid", html);
+        Assert.Contains("id=\"telemetry-panel\"", html);
+    }
+
+    [Fact]
+    public async Task WorkspacesShell_RendersIndexListHooksAndLinks()
+    {
+        var index = new DashboardWorkspaceIndex(
+            Entries:
+            [
+                new DashboardWorkspaceIndexEntry(
+                    new DashboardWorkspaceRow(
+                        "ws-a",
+                        "alpha-abcd1234",
+                        "/repo/a",
+                        "/repo/a/.miller/symbols.db",
+                        "2026-05-31T10:00:00Z",
+                        "2026-05-31T10:01:00Z",
+                        42,
+                        "ready",
+                        null),
+                    new DashboardWorkspaceFacts(
+                        "ws-a",
+                        "alpha-abcd1234",
+                        "/repo/a",
+                        "/repo/a/.miller/symbols.db",
+                        "ready",
+                        null,
+                        FileCount: 4,
+                        SymbolCount: 3,
+                        LanguageCount: 2,
+                        ContentBytes: 12_800,
+                        LastRevision: 42,
+                        LastScanAt: "2026-05-31T10:01:00Z",
+                        SearchSidecarStatus: "fresh",
+                        Languages:
+                        [
+                            new DashboardLanguageStat("csharp", FileCount: 3, SymbolCount: 3, ContentBytes: 11_200),
+                            new DashboardLanguageStat("markdown", FileCount: 1, SymbolCount: 0, ContentBytes: 1_600),
+                        ],
+                        SymbolKinds: [])),
+                new DashboardWorkspaceIndexEntry(
+                    new DashboardWorkspaceRow(
+                        "ws-b",
+                        "beta-efgh5678",
+                        "/repo/b",
+                        "/repo/b/.miller/symbols.db",
+                        "2026-05-31T10:00:00Z",
+                        null,
+                        null,
+                        "missing",
+                        "missing index"),
+                    DashboardIndexFactsReader.Read(new DashboardWorkspaceRow(
+                        "ws-b",
+                        "beta-efgh5678",
+                        "/repo/b",
+                        "/repo/b/.miller/symbols.db",
+                        "2026-05-31T10:00:00Z",
+                        null,
+                        null,
+                        "missing",
+                        "missing index"))),
+            ],
+            WorkspaceCount: 2,
+            TotalFiles: 4,
+            TotalSymbols: 3,
+            LanguageCount: 2);
+
+        string html = await RenderComponentAsync<WorkspacesShell>(new Dictionary<string, object?>
+        {
+            ["Index"] = index,
+        });
+
+        Assert.Contains("class=\"dashboard-hero\"", html);
+        Assert.Contains("id=\"workspace-index\"", html);
+        Assert.Contains("class=\"ws-index-row\"", html);
+        Assert.Contains("href=\"/workspace?workspace_id=ws-a\"", html);
+        Assert.Contains("class=\"workspace-status-rail ok\"", html);
+        Assert.Contains("class=\"workspace-row-main\"", html);
+        Assert.Contains("alpha-abcd1234", html);
+        Assert.Contains("csharp", html);
+        Assert.DoesNotContain("Index.Entries", html);
+    }
+
+    [Fact]
+    public void DashboardHost_PreservesFragmentCompatibilityRoutes()
+    {
+        string program = File.ReadAllText(Path.Combine(
+            Miller.Tests.ScaleTestSupport.RepoRoot(),
+            "src",
+            "Miller.Dashboard",
+            "Program.cs"));
+
+        Assert.Contains("MapGet(\"/fragments/dashboard\"", program, StringComparison.Ordinal);
+        Assert.Contains("MapGet(\"/fragments/workspaces\"", program, StringComparison.Ordinal);
     }
 
     [Fact]

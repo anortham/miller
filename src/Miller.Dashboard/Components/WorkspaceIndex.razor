@@ -1,0 +1,75 @@
+@namespace Miller.Dashboard.Components
+
+<section id="workspace-index" class="panel ws-index-panel" aria-label="Registered workspaces">
+    <div class="panel-heading">
+        <div>
+            <h2>Workspaces</h2>
+            <p>@Index.WorkspaceCount.ToString("N0", CultureInfo.InvariantCulture) registered · click to inspect</p>
+        </div>
+        <a href="/workspaces.json" class="subtle-link">json</a>
+    </div>
+
+    @if (Index.Entries.Count == 0)
+    {
+        <p class="empty">No registered workspaces yet.</p>
+    }
+    else
+    {
+        <div class="ws-index" role="table">
+            <div class="ws-index-head" role="row" aria-hidden="true">
+                <span></span>
+                <span>Workspace</span>
+                <span>State</span>
+                <span class="ws-num">Files</span>
+                <span class="ws-num">Symbols</span>
+                <span>Languages</span>
+                <span class="ws-num">Rev</span>
+            </div>
+            @foreach (DashboardWorkspaceIndexEntry entry in Index.Entries)
+            {
+                <a class="ws-index-row" role="row" href="/workspace?workspace_id=@Esc(entry.Workspace.WorkspaceId)">
+                    <span class="workspace-status-rail @StateClass(entry.Workspace.State)" aria-hidden="true"></span>
+                    <span class="workspace-row-main">
+                        <span class="workspace-name">@entry.Workspace.DisplayId</span>
+                        <code class="workspace-path">@entry.Workspace.CanonicalRoot</code>
+                    </span>
+                    <span class="ws-cell">
+                        <span class="workspace-state @StateClass(entry.Workspace.State)">@entry.Workspace.State</span>
+                    </span>
+                    <span class="ws-cell ws-num">@Stat(entry, entry.Facts.FileCount)</span>
+                    <span class="ws-cell ws-num">@Stat(entry, entry.Facts.SymbolCount)</span>
+                    <span class="ws-cell ws-langs">@LanguageSummary(entry)</span>
+                    <span class="ws-cell ws-num">@(entry.Workspace.LastRevision?.ToString("N0", CultureInfo.InvariantCulture) ?? "—")</span>
+                </a>
+            }
+        </div>
+    }
+</section>
+
+@code {
+    [Parameter, EditorRequired] public DashboardWorkspaceIndex Index { get; set; } =
+        new(Array.Empty<DashboardWorkspaceIndexEntry>(), 0, 0, 0, 0);
+
+    private static string Esc(string? value) => Uri.EscapeDataString(value ?? string.Empty);
+
+    private static string Stat(DashboardWorkspaceIndexEntry entry, long value) =>
+        entry.HasFacts ? value.ToString("N0", CultureInfo.InvariantCulture) : "—";
+
+    private static string LanguageSummary(DashboardWorkspaceIndexEntry entry)
+    {
+        if (!entry.HasFacts || entry.Facts.Languages.Count == 0)
+            return "—";
+
+        var names = entry.Facts.Languages.Take(3).Select(l => l.Language).ToList();
+        int extra = entry.Facts.Languages.Count - names.Count;
+        string head = string.Join(" · ", names);
+        return extra > 0 ? $"{head} +{extra}" : head;
+    }
+
+    private static string StateClass(string state) => state switch
+    {
+        "ready" or "current" or "loaded_existing" => "ok",
+        "missing" or "error" or "unreadable" => "bad",
+        _ => "neutral",
+    };
+}

@@ -141,6 +141,22 @@ public sealed record DashboardSnapshot
     public DashboardContextSavingsSummary ContextSavings { get; init; }
 }
 
+public sealed record DashboardWorkspaceIndexEntry(
+    [property: JsonPropertyName("workspace")] DashboardWorkspaceRow Workspace,
+    [property: JsonPropertyName("facts")] DashboardWorkspaceFacts Facts)
+{
+    /// <summary>True when the index DB was opened and its facts are real (not missing/unreadable).</summary>
+    [JsonIgnore]
+    public bool HasFacts => Facts.Status is not ("missing" or "unreadable");
+}
+
+public sealed record DashboardWorkspaceIndex(
+    [property: JsonPropertyName("entries")] IReadOnlyList<DashboardWorkspaceIndexEntry> Entries,
+    [property: JsonPropertyName("workspace_count")] int WorkspaceCount,
+    [property: JsonPropertyName("total_files")] long TotalFiles,
+    [property: JsonPropertyName("total_symbols")] long TotalSymbols,
+    [property: JsonPropertyName("language_count")] int LanguageCount);
+
 public static class DashboardData
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -148,6 +164,38 @@ public static class DashboardData
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         WriteIndented = false,
     };
+
+    /// <summary>
+    /// Landing-page view: every registered workspace paired with its index facts, plus machine-wide totals.
+    /// Opens each workspace's symbols.db once (best effort — missing/unreadable ones still appear with their state).
+    /// </summary>
+    public static DashboardWorkspaceIndex ReadIndex(string registryDbPath)
+    {
+        IReadOnlyList<DashboardWorkspaceRow> workspaces = ReadWorkspaces(registryDbPath);
+        var entries = new List<DashboardWorkspaceIndexEntry>(workspaces.Count);
+        long totalFiles = 0;
+        long totalSymbols = 0;
+        var languages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (DashboardWorkspaceRow workspace in workspaces)
+        {
+            DashboardWorkspaceFacts facts = DashboardIndexFactsReader.Read(workspace);
+            var entry = new DashboardWorkspaceIndexEntry(workspace, facts);
+            entries.Add(entry);
+            if (entry.HasFacts)
+            {
+                totalFiles += facts.FileCount;
+                totalSymbols += facts.SymbolCount;
+                foreach (DashboardLanguageStat language in facts.Languages)
+                    languages.Add(language.Language);
+            }
+        }
+
+        return new DashboardWorkspaceIndex(entries, workspaces.Count, totalFiles, totalSymbols, languages.Count);
+    }
+
+    public static string RenderIndexJson(string registryDbPath) =>
+        JsonSerializer.Serialize(ReadIndex(registryDbPath), JsonOptions);
 
     public static IReadOnlyList<DashboardWorkspaceRow> ReadWorkspaces(string registryDbPath)
     {

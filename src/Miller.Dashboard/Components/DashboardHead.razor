@@ -1,0 +1,27 @@
+@namespace Miller.Dashboard.Components
+
+@* Shared <head> contents + theme bootstrap. Rendered inside each page shell's <head>. *@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="htmx-config" content='{"selfRequestsOnly":true,"allowEval":false}'>
+<title>@Title</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/dashboard.css">
+<script src="/lib/htmx/htmx.min.js"></script>
+<script>
+    (function() {
+        var theme = localStorage.getItem('theme');
+        // Default strictly to light mode (ignore media queries) unless explicitly set to dark
+        if (theme === 'dark') {
+            document.documentElement.setAttribute('data-theme', 'dark');
+        } else {
+            document.documentElement.setAttribute('data-theme', 'light');
+        }
+    })();
+</script>
+
+@code {
+    [Parameter] public string Title { get; set; } = "Miller Dashboard";
+}

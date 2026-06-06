@@ -1,0 +1,74 @@
+@namespace Miller.Dashboard.Components
+
+<!doctype html>
+<html lang="en">
+<head>
+    <DashboardHead Title="@PageTitle" />
+</head>
+<body>
+    <main class="shell">
+        <header class="dashboard-hero">
+            <div class="hero-copy">
+                <a class="back-link" href="/">&larr; All workspaces</a>
+                <p class="eyebrow">Index transparency</p>
+                <h1>@Heading</h1>
+                <p class="hero-subtitle">@Subtitle</p>
+            </div>
+            <div class="hero-side">
+                <div class="theme-switch-wrapper">
+                    <button id="theme-toggle" class="theme-switcher-btn" type="button" onclick="toggleTheme()" aria-label="Toggle Theme">
+                        <span id="theme-toggle-label">Dark</span>
+                    </button>
+                </div>
+                <nav class="api-actions" aria-label="Dashboard JSON">
+                    <a class="api-link" href="/snapshot.json?workspace_id=@Esc(Snapshot.SelectedWorkspaceId)">snapshot.json</a>
+                    <a class="api-link" href="/telemetry.json?workspace_id=@Esc(Snapshot.SelectedWorkspaceId)">telemetry.json</a>
+                </nav>
+                <div class="hero-metrics" aria-label="Workspace summary">
+                    <div>
+                        <strong>@FormatNullableCount(Snapshot.SelectedWorkspaceFacts?.FileCount)</strong>
+                        <span>files</span>
+                    </div>
+                    <div>
+                        <strong>@FormatNullableCount(Snapshot.SelectedWorkspaceFacts?.SymbolCount)</strong>
+                        <span>symbols</span>
+                    </div>
+                    <div>
+                        <strong>@FormatNullableCount(Snapshot.SelectedWorkspaceFacts?.LanguageCount)</strong>
+                        <span>languages</span>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <div class="main-stack detail-stack">
+            <WorkspaceDetailPanel Facts="Snapshot.SelectedWorkspaceFacts" />
+            <ContextSavingsPanel Summary="Snapshot.ContextSavings" />
+            <TelemetryPanel Telemetry="Snapshot.Telemetry" SelectedWorkspaceId="@Snapshot.SelectedWorkspaceId" />
+        </div>
+    </main>
+    <ThemeToggleScript />
+</body>
+</html>
+
+@code {
+    [Parameter, EditorRequired] public DashboardSnapshot Snapshot { get; set; } =
+        new(Array.Empty<DashboardWorkspaceRow>(), new DashboardTelemetrySummary(null, [], 0, null, null, []), null);
+
+    private string Heading => Snapshot.SelectedWorkspaceFacts?.DisplayId
+        ?? Snapshot.Workspaces.FirstOrDefault(w =>
+                string.Equals(w.WorkspaceId, Snapshot.SelectedWorkspaceId, StringComparison.Ordinal))?.DisplayId
+        ?? "Workspace";
+
+    private string Subtitle => Snapshot.SelectedWorkspaceFacts?.CanonicalRoot
+        ?? Snapshot.Workspaces.FirstOrDefault(w =>
+                string.Equals(w.WorkspaceId, Snapshot.SelectedWorkspaceId, StringComparison.Ordinal))?.CanonicalRoot
+        ?? "No workspace selected.";
+
+    private string PageTitle => $"Miller — {Heading}";
+
+    private static string Esc(string? value) => Uri.EscapeDataString(value ?? string.Empty);
+
+    private static string FormatNullableCount(long? value) =>
+        value?.ToString("N0", CultureInfo.InvariantCulture) ?? "—";
+}

@@ -1,0 +1,51 @@
+@namespace Miller.Dashboard.Components
+
+<!doctype html>
+<html lang="en">
+<head>
+    <DashboardHead Title="Miller — Workspaces" />
+</head>
+<body>
+    <main class="shell">
+        <header class="dashboard-hero">
+            <div class="hero-copy">
+                <p class="eyebrow">Local index status</p>
+                <h1>Miller Workspaces</h1>
+                <p class="hero-subtitle">Every code workspace Miller has indexed on this machine. Select one to inspect its index, context savings, and telemetry.</p>
+            </div>
+            <div class="hero-side">
+                <div class="theme-switch-wrapper">
+                    <button id="theme-toggle" class="theme-switcher-btn" type="button" onclick="toggleTheme()" aria-label="Toggle Theme">
+                        <span id="theme-toggle-label">Dark</span>
+                    </button>
+                </div>
+                <nav class="api-actions" aria-label="Dashboard JSON">
+                    <a class="api-link" href="/workspaces.json">workspaces.json</a>
+                </nav>
+                <div class="hero-metrics" aria-label="Machine-wide totals">
+                    <div>
+                        <strong>@Index.WorkspaceCount.ToString("N0", CultureInfo.InvariantCulture)</strong>
+                        <span>workspaces</span>
+                    </div>
+                    <div>
+                        <strong>@Index.TotalFiles.ToString("N0", CultureInfo.InvariantCulture)</strong>
+                        <span>files</span>
+                    </div>
+                    <div>
+                        <strong>@Index.TotalSymbols.ToString("N0", CultureInfo.InvariantCulture)</strong>
+                        <span>symbols</span>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <WorkspaceIndex Index="Index" />
+    </main>
+    <ThemeToggleScript />
+</body>
+</html>
+
+@code {
+    [Parameter, EditorRequired] public DashboardWorkspaceIndex Index { get; set; } =
+        new(Array.Empty<DashboardWorkspaceIndexEntry>(), 0, 0, 0, 0);
+}
