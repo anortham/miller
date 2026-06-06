@@ -9,6 +9,11 @@ on:
       version:
         description: 'Release version, with or without leading v'
         required: true
+      prerelease:
+        description: 'Mark the GitHub release as a prerelease'
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: write
@@ -48,6 +53,7 @@ jobs:
           if ("${{ github.event_name }}" -eq "push") {
             $tag = "${{ github.ref_name }}"
             $version = $tag.TrimStart("v")
+            $isPrerelease = $version.Contains("-")
           } else {
             $raw = "${{ inputs.version }}"
             if ([string]::IsNullOrWhiteSpace($raw)) {
@@ -55,10 +61,12 @@ jobs:
             }
             $version = $raw.TrimStart("v")
             $tag = "v$version"
+            $isPrerelease = [System.Convert]::ToBoolean("${{ inputs.prerelease }}")
           }
 
           "RELEASE_TAG=$tag" >> $env:GITHUB_ENV
           "RELEASE_VERSION=$version" >> $env:GITHUB_ENV
+          "RELEASE_PRERELEASE=$($isPrerelease.ToString().ToLowerInvariant())" >> $env:GITHUB_ENV
 
       - name: Restore
         run: dotnet restore Miller.slnx
@@ -102,20 +110,26 @@ jobs:
         run: |
           set -euo pipefail
           publish_dir="${GITHUB_WORKSPACE}/artifacts/publish/${{ matrix.target }}"
+          test -x "${publish_dir}/miller"
           test -x "${publish_dir}/.tools/julie-extract"
           test ! -e "${publish_dir}/.tools/julie-extract.exe"
           test -x "${publish_dir}/dashboard/Miller.Dashboard"
           test -f "${publish_dir}/dashboard/wwwroot/dashboard.css"
           test ! -e "${publish_dir}/dashboard/.tools/julie-extract"
           "${publish_dir}/.tools/julie-extract" --version
+          "${publish_dir}/miller" version
 
       - name: Verify packaged Windows extractor
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $publishDir = Join-Path $env:GITHUB_WORKSPACE "artifacts/publish/${{ matrix.target }}"
+          $millerBinary = Join-Path $publishDir "miller.exe"
           $windowsBinary = Join-Path $publishDir ".tools/julie-extract.exe"
           $unixBinary = Join-Path $publishDir ".tools/julie-extract"
+          if (-not (Test-Path $millerBinary)) {
+            throw "missing packaged Windows miller.exe"
+          }
           if (-not (Test-Path $windowsBinary)) {
             throw "missing packaged Windows julie-extract.exe"
           }
@@ -135,6 +149,7 @@ jobs:
             throw "dashboard package must not include a duplicate .tools directory"
           }
           & $windowsBinary --version
+          & $millerBinary version
 
       - name: Package Unix artifact
         if: runner.os != 'Windows'
@@ -152,7 +167,9 @@ jobs:
           rsync -a "${publish_dir}/" "${package_dir}/"
           find "${package_dir}" -type f \( -name '*.pdb' -o -name '*.dbg' \) -delete
           chmod +x "${package_dir}/miller" "${package_dir}/.tools/julie-extract" "${package_dir}/dashboard/Miller.Dashboard"
-          tar -czf "${release_dir}/${package_name}.tar.gz" -C "${package_root}" "${package_name}"
+          archive="${release_dir}/${package_name}.tar.gz"
+          tar -czf "${archive}" -C "${package_root}" "${package_name}"
+          (cd "${release_dir}" && shasum -a 256 "${package_name}.tar.gz" > "${package_name}.tar.gz.sha256")
           ls -lh "${release_dir}"
 
       - name: Package Windows artifact
@@ -169,7 +186,10 @@ jobs:
           New-Item -ItemType Directory -Force -Path $packageDir, $releaseDir | Out-Null
           Get-ChildItem -Path $publishDir -Force | Copy-Item -Destination $packageDir -Recurse -Force
           Get-ChildItem -Path $packageDir -Recurse -Filter *.pdb | Remove-Item -Force
-          Compress-Archive -Path $packageDir -DestinationPath (Join-Path $releaseDir "$packageName.zip") -Force
+          $archive = Join-Path $releaseDir "$packageName.zip"
+          Compress-Archive -Path $packageDir -DestinationPath $archive -Force
+          $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+          "$hash  $packageName.zip" | Set-Content -Encoding ascii (Join-Path $releaseDir "$packageName.zip.sha256")
           Get-ChildItem $releaseDir | Format-Table Name, Length
 
       - uses: actions/upload-artifact@v4
@@ -198,12 +218,19 @@ jobs:
           set -euo pipefail
           if [[ "${{ github.event_name }}" == "push" ]]; then
             tag="${GITHUB_REF_NAME}"
+            version="${tag#v}"
+            prerelease=false
+            if [[ "${version}" == *-* ]]; then
+              prerelease=true
+            fi
           else
             raw="${{ inputs.version }}"
             version="${raw#v}"
             tag="v${version}"
+            prerelease="${{ inputs.prerelease }}"
           fi
           echo "RELEASE_TAG=${tag}" >> "${GITHUB_ENV}"
+          echo "RELEASE_PRERELEASE=${prerelease}" >> "${GITHUB_ENV}"
 
       - name: Create or update GitHub release
         env:
@@ -213,10 +240,22 @@ jobs:
           set -euo pipefail
           ls -lh artifacts/release
           if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq .id)"
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+              -f name="Miller ${RELEASE_TAG}" \
+              -f body="Miller ${RELEASE_TAG}" \
+              -F prerelease="${RELEASE_PRERELEASE}" >/dev/null
             gh release upload "${RELEASE_TAG}" artifacts/release/* --clobber
           else
-            gh release create "${RELEASE_TAG}" artifacts/release/* \
-              --target "${GITHUB_SHA}" \
-              --title "Miller ${RELEASE_TAG}" \
+            args=(
+              gh release create "${RELEASE_TAG}" artifacts/release/*
+              --target "${GITHUB_SHA}"
+              --title "Miller ${RELEASE_TAG}"
               --notes "Miller ${RELEASE_TAG}"
+              --latest=false
+            )
+            if [[ "${RELEASE_PRERELEASE}" == "true" ]]; then
+              args+=(--prerelease)
+            fi
+            "${args[@]}"
           fi

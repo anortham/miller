@@ -130,9 +130,10 @@ status workspaces. It should read the workspace registry, telemetry DB, and ligh
   `27032916563` on 2026-06-05 passed the `windows-fast` job on commit
   `e51feeb49614f960c5cc3bd2c9d63444965b63c5`, including
   `scripts/restore-julie-extract.ps1`, `dotnet build`, and `scripts/test.ps1 fast --no-build`.
-- [x] Audit package/archive scripts for Unix-only assumptions before a packaged beta: not
-  required for source-checkout beta. Keep as release-readiness follow-up if beta expands to
-  platform archives.
+- [x] Audit package/archive scripts for Unix-only assumptions before a packaged beta. The release
+  workflow now builds target-specific archives for macOS arm64, macOS x64, Linux x64, and Windows
+  x64; verifies the packaged `miller`, matching `julie-extract`, dashboard executable, and dashboard
+  CSS; and emits `.sha256` sidecars.
 
 ### 7. Packaging, Restore, And Install
 
@@ -152,14 +153,17 @@ status workspaces. It should read the workspace registry, telemetry DB, and ligh
 - [x] Keep `scripts/julie-pins.json`, `PinnedJulieExtractVersion`, and contract tests in sync.
 - [x] Document MCP configuration and CLI install/run paths.
 - [x] Define beta package shape: source checkout beta with per-platform restore scripts.
-  Platform archives remain release-readiness work, not a beta blocker.
+  Platform archives are now configured as release-readiness work, not required for the current
+  source-checkout beta.
 - [x] If archives are included, pair each Miller target with only the matching `julie-extract`
-  target and checksums: not required for source-checkout beta; the release workflow already
-  verifies Unix vs. Windows packaged extractor shape for archive builds.
+  target and checksums. The release workflow packages one Miller target with one matching
+  `julie-extract` target, smoke-runs `miller version` and `julie-extract --version`, and uploads
+  `.sha256` sidecars.
 
 ### 8. Docs And User-Facing Limits
 
-- [x] Update `README.md` with current architecture, setup, CLI, MCP, and troubleshooting.
+- [x] Update `README.md` with current architecture, .NET 10 SDK requirement, setup, CLI, MCP,
+  release archive shape, dashboard usage, and troubleshooting.
 - [x] Ensure `src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md` documents every beta tool surface.
 - [x] Document known beta limits: no embeddings, no Eros workflows, region search default status,
   AOT status, and any large-repo caveats including full `inspect` cost.

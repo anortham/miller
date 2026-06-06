@@ -121,6 +121,29 @@ public sealed class MillerExtractContractTests
     }
 
     [Fact]
+    public void ReleaseWorkflowPublishesVerifiablePrereleasePackages()
+    {
+        string workflowPath = Path.Combine(ScaleTestSupport.RepoRoot(), ".github", "workflows", "release.yml");
+        string workflow = File.ReadAllText(workflowPath);
+
+        Assert.Contains("prerelease:", workflow, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("--prerelease", workflow, StringComparison.Ordinal);
+        Assert.Contains("--latest=false", workflow, StringComparison.Ordinal);
+
+        Assert.Contains("shasum -a 256", workflow, StringComparison.Ordinal);
+        Assert.Contains("Get-FileHash -Algorithm SHA256", workflow, StringComparison.Ordinal);
+        Assert.Contains(".tar.gz.sha256", workflow, StringComparison.Ordinal);
+        Assert.Contains(".zip.sha256", workflow, StringComparison.Ordinal);
+
+        Assert.Contains("test -x \"${publish_dir}/miller\"", workflow, StringComparison.Ordinal);
+        Assert.Contains("\"${publish_dir}/miller\" version", workflow, StringComparison.Ordinal);
+        Assert.Contains("& $millerBinary version", workflow, StringComparison.Ordinal);
+
+        Assert.Contains("dashboard/Miller.Dashboard", workflow, StringComparison.Ordinal);
+        Assert.Contains("dashboard/Miller.Dashboard.exe", workflow, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RestoreScriptPythonFallbackReadsArchiveInnerPathTemplate()
     {
         string scriptPath = Path.Combine(ScaleTestSupport.RepoRoot(), "scripts", "restore-julie-extract.sh");

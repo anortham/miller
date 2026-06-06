@@ -12,6 +12,15 @@ without embeddings.
 > registry-backed dashboard are implemented on the active development branch. See
 > [docs/miller-mvp-plan.md](docs/miller-mvp-plan.md) for the milestone line and remaining hardening work.
 
+## Requirements
+
+- **.NET 10 SDK** installed and on `PATH` for source-checkout use, including the checked-in
+  [`mcp-config.json`](mcp-config.json). `dotnet --version` should report a `10.x` SDK.
+- A restored pinned `julie-extract` binary in `.tools/` for indexing and scale tests. The restore scripts
+  download the platform-matched binary and verify its pinned SHA-256 digest.
+- Release archives are built from the same .NET 10 projects and are self-contained per platform, but Native
+  AOT is still deferred beta hardening work.
+
 ## How it works
 
 Miller does **not** parse source code itself and does **not** use embeddings. Extraction is delegated to a
@@ -80,6 +89,24 @@ full ID, `current`, or `primary`. Explicit `workspace_id` defaults `ensure_fresh
 
 ## Running Miller
 
+From a source checkout, restore the extractor once, build, then open or refresh a workspace:
+
+```bash
+bash scripts/restore-julie-extract.sh
+dotnet build Miller.slnx -c Release
+dotnet run --project src/Miller.Server -c Release -- workspace open --path /path/to/repo --full
+dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvider" --limit 5
+```
+
+On Windows:
+
+```powershell
+scripts/restore-julie-extract.ps1
+dotnet build Miller.slnx -c Release
+dotnet run --project src/Miller.Server -c Release -- workspace open --path C:\source\repo --full
+dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvider" --limit 5
+```
+
 The single `miller` binary runs two ways:
 
 - **MCP server (default).** With no arguments — or the explicit `serve` verb — Miller speaks the MCP protocol
@@ -88,6 +115,8 @@ The single `miller` binary runs two ways:
   ```bash
   dotnet run --project src/Miller.Server -c Release -- serve
   ```
+
+  This source-checkout config uses `dotnet run`, so the MCP client machine needs the .NET 10 SDK installed.
 
 - **CLI (one-shot).** Any other verb runs a single command over the current directory's `.miller/symbols.db`
   and exits — for shells, CI, and integration tests. The CLI reuses the *same* tool cores the server exposes,
@@ -125,6 +154,19 @@ miller dashboard --port 4977
 
 Open the printed URL to view registered workspaces and scoped per-tool telemetry. Set `MILLER_REGISTRY_DB`,
 `MILLER_TELEMETRY_DB`, or `MILLER_DASHBOARD_WEBROOT` only when testing non-default paths.
+
+## Release archives
+
+The release workflow is configured for one archive per pinned `julie-extract` platform:
+
+- `aarch64-apple-darwin`
+- `x86_64-apple-darwin`
+- `x86_64-unknown-linux-gnu`
+- `x86_64-pc-windows-msvc`
+
+Each archive contains `miller`, the matching `.tools/julie-extract` binary, the loopback dashboard binary
+under `dashboard/`, and `dashboard/wwwroot/dashboard.css`. The workflow also uploads a `.sha256` sidecar for
+each archive and smoke-runs both `julie-extract --version` and `miller version` before packaging.
 
 ## CLI output expectations
 
@@ -189,7 +231,7 @@ scripts/restore-julie-extract.ps1       # downloads the pinned julie-extract.exe
 $env:MILLER_JULIE_SOURCE='C:\source\julie-extractors'; scripts/restore-julie-extract.ps1 -FromSource
 ```
 
-Requires the .NET 10 SDK. Warnings are errors (`Directory.Build.props`).
+Warnings are errors (`Directory.Build.props`).
 
 ## Known beta limits
 

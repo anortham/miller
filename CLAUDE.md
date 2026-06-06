@@ -66,6 +66,8 @@ scripts/test.ps1 all
 
 ## Build
 
+- Miller targets `net10.0`; source-checkout use and the checked-in `mcp-config.json` require the .NET 10
+  SDK on `PATH`.
 - `dotnet build Miller.slnx -c Release` — warnings are errors (`Directory.Build.props`,
   `TreatWarningsAsErrors`). The build must be 0 warnings / 0 errors; analyzer warnings (e.g. CA1416,
   xUnit1051) are build errors.
@@ -78,6 +80,20 @@ scripts/test.ps1 all
   `MILLER_JULIE_SOURCE=/path/to/julie-extractors scripts/restore-julie-extract.sh --from-source`
   or, on Windows, `$env:MILLER_JULIE_SOURCE='C:\path\to\julie-extractors';
   scripts/restore-julie-extract.ps1 -FromSource`.
+
+## Release packaging
+
+- The GitHub release workflow builds one self-contained package for each pinned `julie-extract` target:
+  `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`, and
+  `x86_64-pc-windows-msvc`. Keep this matrix in step with `scripts/julie-pins.json`.
+- Release archives include `miller`, the matching `.tools/julie-extract` binary, the packaged dashboard
+  executable under `dashboard/`, and `dashboard/wwwroot/dashboard.css`. The workflow smoke-runs
+  `julie-extract --version` and `miller version`, then uploads a `.sha256` sidecar for each archive.
+- Manual workflow dispatch defaults to a prerelease. Tag pushes infer prerelease status from a hyphenated
+  version such as `v0.1.0-beta.1`. Native AOT is viable but still deferred until trim/AOT warnings are
+  cleaned up.
+- Do not publish, retag, delete, or overwrite a release without explicit user approval. README current-release
+  metadata and release-evidence docs must come from live GitHub release facts, not guessed values.
 
 ## Server host & startup
 
