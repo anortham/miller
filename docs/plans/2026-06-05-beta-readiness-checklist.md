@@ -23,8 +23,14 @@ standalone packaged binary release.
 ## Current State
 
 M0-M8 are complete. Miller has the default-on symbol search sidecar, workspace registry, cheap
-registered-workspace status/list paths, projection-specific `search` and summary `inspect`, content
-search, CLI verbs, and the `julie-extract` 2.1.3 source-region / TypeScript URL-literal consumer.
+registered-workspace status/list paths, projection-specific `search`, summary and full `inspect`,
+graph-only `context`, `impact`, non-bridge `trace`, content search, CLI verbs, and the
+`julie-extract` 2.1.3 source-region / TypeScript URL-literal consumer.
+
+The current pushed source-checkout beta candidate is commit
+`91288557137a1711e148628b374863526ae4b3ab` (`0.1.0+91288557137a`). Local macOS gates passed on that
+commit, and GitHub Actions run `27063713900` passed the branch-tip CI and `windows-fast` restore/build/test
+gate.
 
 ## Dashboard Boundary
 
@@ -132,6 +138,10 @@ status workspaces. It should read the workspace registry, telemetry DB, and ligh
   `27032916563` on 2026-06-05 passed the `windows-fast` job on commit
   `e51feeb49614f960c5cc3bd2c9d63444965b63c5`, including
   `scripts/restore-julie-extract.ps1`, `dotnet build`, and `scripts/test.ps1 fast --no-build`.
+- [x] Rerun Windows restore/build/test on the final pushed read-path beta candidate commit. GitHub
+  Actions run `27063713900` on 2026-06-06 passed the `windows-fast` job on commit
+  `91288557137a1711e148628b374863526ae4b3ab`, including restore, `Restore julie-extract (Windows)`,
+  `dotnet build`, and the PowerShell fast-suite wrapper.
 - [x] Audit package/archive scripts for Unix-only assumptions before a packaged beta. The release
   workflow now builds target-specific archives for macOS arm64, macOS x64, Linux x64, and Windows
   x64; verifies the packaged `miller`, matching `julie-extract`, dashboard executable, and dashboard
@@ -152,6 +162,9 @@ status workspaces. It should read the workspace registry, telemetry DB, and ligh
 - [x] Verify `scripts/restore-julie-extract.ps1` restores the 2.1.3 pinned binary on Windows x64.
   GitHub Actions run `27032916563` on 2026-06-05 restored the pinned 2.1.3 Windows x64 archive
   before the Windows build and fast suite.
+- [x] Verify the pushed read-path beta candidate still restores the pinned 2.1.3 binary on Windows
+  x64. GitHub Actions run `27063713900` on 2026-06-06 restored the pinned 2.1.3 Windows x64 archive
+  before the Windows build and fast suite on commit `91288557137a1711e148628b374863526ae4b3ab`.
 - [x] Keep `scripts/julie-pins.json`, `PinnedJulieExtractVersion`, and contract tests in sync.
 - [x] Document MCP configuration and CLI install/run paths.
 - [x] Define beta package shape: source checkout beta with per-platform restore scripts.
@@ -186,6 +199,9 @@ status workspaces. It should read the workspace registry, telemetry DB, and ligh
   0 warnings and 0 errors.
 - [x] Rerun Windows CI beta gates on the exact pushed 2.1.3 candidate commit. GitHub Actions run
   `27032916563` passed `windows-fast` on `e51feeb49614f960c5cc3bd2c9d63444965b63c5`.
+- [x] Rerun Windows CI beta gates on the exact pushed read-path candidate commit. GitHub Actions run
+  `27063713900` passed branch-tip CI and `windows-fast` on
+  `91288557137a1711e148628b374863526ae4b3ab`.
 
 ## Final Beta Candidate Gate
 
@@ -218,7 +234,8 @@ Also capture a short dogfood note with:
 - Any failures or limits accepted for beta.
 - Cross-platform evidence: Unix/macOS wrapper output and Windows PowerShell wrapper output or CI run.
 
-Captured in `docs/findings/2026-06-05-beta-candidate-dogfood.md`, with 2.1.2 bridge follow-up evidence in
+Captured in `docs/findings/2026-06-05-beta-candidate-dogfood.md`, with final pushed-candidate CI evidence
+for `9128855` and 2.1.2 bridge follow-up evidence in
 `docs/findings/2026-06-05-julie-extract-2-1-2-bridge-dogfood.md`.
 
 ## Not Beta Blockers Unless Evidence Says Otherwise

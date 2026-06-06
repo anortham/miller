@@ -4,8 +4,35 @@
 - **Workspace:** `/Users/murphy/source/miller`
 - **Miller build used for dogfood:** `0.1.0+e51eb98a82d0`
 - **Follow-up README CLI example dogfood:** `0.1.0+c53474eae69e`
+- **Final pushed read-path candidate:** `0.1.0+91288557137a`
 - **`julie-extract` pin:** `julie-extract 2.1.1`
-- **Decision:** source-checkout beta is viable after final gates; remaining issues are documented beta limits or post-beta polish.
+- **Decision:** source-checkout beta is viable after final gates; remaining issues are documented beta limits, product/release decisions, or post-beta polish.
+
+## Final Pushed Candidate Follow-Up - 2026-06-06
+
+The read-path follow-up candidate was pushed to `origin/main` at commit
+`91288557137a1711e148628b374863526ae4b3ab` (`perf: use sqlite graph for cli reads`), build version
+`0.1.0+91288557137a`.
+
+Local verification on the pushed commit:
+
+```text
+dotnet build Miller.slnx -c Release  -> 0 warnings / 0 errors
+scripts/test.sh                      -> 1,631 fast tests passed
+scripts/test.sh scale                -> 25 scale tests passed
+git diff --check                     -> clean
+```
+
+GitHub Actions run `27063713900` passed on the same commit:
+
+```text
+build-test    -> restore, Release build, default time-budgeted test suite passed
+windows-fast  -> restore, Restore julie-extract (Windows), Release build, scripts/test.ps1 passed
+scale-test    -> skipped for push, as expected for the CI matrix
+```
+
+This supersedes the earlier final-gate note below. The current source-checkout beta candidate is the
+branch tip at `9128855`.
 
 ## Restore And Version Evidence
 
