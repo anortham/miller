@@ -91,6 +91,10 @@ var host = new HostBuilder()
                         DashboardData.RenderTelemetryJson(paths.TelemetryDbPath, workspace_id),
                         "application/json; charset=utf-8"));
 
+                    endpoints.MapGet("/snapshot.json", (string? workspace_id) => Results.Text(
+                        DashboardData.RenderSnapshotJson(paths.RegistryDbPath, paths.TelemetryDbPath, workspace_id),
+                        "application/json; charset=utf-8"));
+
                     endpoints.MapPost("/workspaces/{workspace_id}/refresh", (string workspace_id) =>
                     {
                         var result = DashboardData.RefreshWorkspace(paths.RegistryDbPath, paths.ToolsRoot, workspace_id);

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text;
 using Microsoft.Data.Sqlite;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
@@ -8,6 +9,7 @@ using Miller.Dashboard.Components;
 using Miller.Dashboard;
 using Miller.Indexing;
 using Miller.Server.Telemetry;
+using Miller.Tests.Indexing;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -274,6 +276,180 @@ public sealed class DashboardRegistryReadTests : IDisposable
     }
 
     [Fact]
+    public void ReadSnapshot_IncludesWorkspaceIndexFactsAndContextSavings()
+    {
+        const string runnerText = "class Runner {}\n";
+        const string helperText = "static class Helper {}\n";
+        const string readmeText = "# Miller\n";
+        const string yamlText = "name: miller\n";
+        using JulieDbFixture fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            rows:
+            [
+                new JulieDbFixture.SymbolRow(
+                    "s1",
+                    "Runner",
+                    "class",
+                    "csharp",
+                    "src/Runner.cs",
+                    "class Runner",
+                    1,
+                    null),
+                new JulieDbFixture.SymbolRow(
+                    "s2",
+                    "Run",
+                    "method",
+                    "csharp",
+                    "src/Runner.cs",
+                    "void Run()",
+                    2,
+                    "s1"),
+                new JulieDbFixture.SymbolRow(
+                    "s3",
+                    "Helper",
+                    "class",
+                    "csharp",
+                    "src/Helper.cs",
+                    "static class Helper",
+                    1,
+                    null),
+            ],
+            fileContent: new Dictionary<string, string>
+            {
+                ["src/Runner.cs"] = runnerText,
+                ["src/Helper.cs"] = helperText,
+            },
+            revisions:
+            [
+                new JulieDbFixture.RevisionRow(7),
+            ],
+            extraFiles:
+            [
+                new JulieDbFixture.FileSpec("docs/README.md")
+                {
+                    Language = "markdown",
+                    DiskText = readmeText,
+                },
+                new JulieDbFixture.FileSpec("config/miller.yml")
+                {
+                    Language = "yaml",
+                    DiskText = yamlText,
+                },
+            ]);
+        using (var registry = WorkspaceRegistry.Open(_registryDb))
+        {
+            registry.UpsertSeen(
+                "ws-a",
+                "alpha-abcd1234",
+                fixture.WorkspaceRoot,
+                fixture.DbPath,
+                WorkspaceRegistryState.Ready,
+                DateTimeOffset.Parse("2026-05-31T10:00:00Z"));
+            registry.MarkScanned("ws-a", 7, DateTimeOffset.Parse("2026-05-31T10:01:00Z"));
+        }
+        InsertTelemetryRow(
+            "ws-a",
+            "context",
+            "ok",
+            "2026-05-31T10:02:00.000Z",
+            durationMs: 20,
+            estTokens: 500,
+            bytesReturned: 2_000,
+            sourceBytes: 10_000);
+        InsertTelemetryRow(
+            "ws-a",
+            "inspect",
+            "ok",
+            "2026-05-31T10:03:00.000Z",
+            durationMs: 12,
+            estTokens: 350,
+            bytesReturned: 1_500,
+            sourceBytes: 8_000);
+        InsertTelemetryRow(
+            "ws-a",
+            "search",
+            "ok",
+            "2026-05-31T10:04:00.000Z",
+            durationMs: 5,
+            estTokens: 10,
+            bytesReturned: 100,
+            sourceBytes: 0);
+
+        DashboardSnapshot snapshot = DashboardData.ReadSnapshot(_registryDb, _telemetryDb, workspaceId: "ws-a");
+
+        DashboardWorkspaceFacts facts = Assert.Single(snapshot.WorkspaceFacts);
+        Assert.Same(facts, snapshot.SelectedWorkspaceFacts);
+        Assert.Equal("ws-a", facts.WorkspaceId);
+        Assert.Equal("ready", facts.Status);
+        Assert.Null(facts.Message);
+        Assert.Equal(4, facts.FileCount);
+        Assert.Equal(3, facts.SymbolCount);
+        Assert.Equal(3, facts.LanguageCount);
+        Assert.Equal(
+            Encoding.UTF8.GetByteCount(runnerText) +
+            Encoding.UTF8.GetByteCount(helperText) +
+            Encoding.UTF8.GetByteCount(readmeText) +
+            Encoding.UTF8.GetByteCount(yamlText),
+            facts.ContentBytes);
+        Assert.Equal(7, facts.LastRevision);
+        Assert.Equal(snapshot.Workspaces[0].LastScanAt, facts.LastScanAt);
+        Assert.Equal("missing", facts.SearchSidecarStatus);
+
+        DashboardLanguageStat csharp = Assert.Single(facts.Languages, language => language.Language == "csharp");
+        Assert.Equal(2, csharp.FileCount);
+        Assert.Equal(3, csharp.SymbolCount);
+        Assert.True(csharp.ContentBytes > 0);
+        DashboardLanguageStat markdown = Assert.Single(facts.Languages, language => language.Language == "markdown");
+        Assert.Equal(1, markdown.FileCount);
+        Assert.Equal(0, markdown.SymbolCount);
+
+        DashboardSymbolKindStat classKind = Assert.Single(facts.SymbolKinds, kind => kind.Kind == "class");
+        Assert.Equal(2, classKind.Count);
+        DashboardSymbolKindStat methodKind = Assert.Single(facts.SymbolKinds, kind => kind.Kind == "method");
+        Assert.Equal(1, methodKind.Count);
+
+        Assert.Equal("tracked", snapshot.ContextSavings.Status);
+        Assert.Equal(2, snapshot.ContextSavings.TrackedCalls);
+        Assert.Equal(18_000, snapshot.ContextSavings.SourceBytes);
+        Assert.Equal(3_500, snapshot.ContextSavings.BytesReturned);
+        Assert.Equal(14_500, snapshot.ContextSavings.SavedBytes);
+        Assert.Equal(850, snapshot.ContextSavings.EstimatedReturnedTokens);
+        Assert.Equal(2, snapshot.ContextSavings.Tools.Count);
+        DashboardContextSavingsTool contextTool =
+            Assert.Single(snapshot.ContextSavings.Tools, tool => tool.Tool == "context");
+        Assert.Equal(10_000, contextTool.SourceBytes);
+        Assert.Equal(8_000, contextTool.SavedBytes);
+    }
+
+    [Fact]
+    public void ReadSnapshot_UnreadableWorkspaceDbReturnsFactsErrorNotCrash()
+    {
+        string corruptDb = Path.Combine(_dir, "corrupt-symbols.db");
+        File.WriteAllText(corruptDb, "not a sqlite database");
+        using (var registry = WorkspaceRegistry.Open(_registryDb))
+        {
+            registry.UpsertSeen(
+                "ws-corrupt",
+                "corrupt-abcd1234",
+                Path.Combine(_dir, "corrupt"),
+                corruptDb,
+                WorkspaceRegistryState.Ready,
+                DateTimeOffset.Parse("2026-05-31T10:00:00Z"));
+        }
+
+        DashboardSnapshot snapshot = DashboardData.ReadSnapshot(_registryDb, _telemetryDb, workspaceId: "ws-corrupt");
+
+        DashboardWorkspaceFacts facts = Assert.Single(snapshot.WorkspaceFacts);
+        Assert.Same(facts, snapshot.SelectedWorkspaceFacts);
+        Assert.Equal("ws-corrupt", facts.WorkspaceId);
+        Assert.Equal("unreadable", facts.Status);
+        Assert.Equal(0, facts.FileCount);
+        Assert.Equal(0, facts.SymbolCount);
+        Assert.False(string.IsNullOrWhiteSpace(facts.Message));
+    }
+
+    [Fact]
     public async Task DashboardShell_RendersVisibleTelemetryAndHtmxTargets()
     {
         var snapshot = new DashboardSnapshot(
@@ -405,6 +581,67 @@ public sealed class DashboardRegistryReadTests : IDisposable
     }
 
     [Fact]
+    public void RenderSnapshotJson_UsesStableSnakeCaseContract()
+    {
+        using JulieDbFixture fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            rows:
+            [
+                new JulieDbFixture.SymbolRow(
+                    "s1",
+                    "Runner",
+                    "class",
+                    "csharp",
+                    "src/Runner.cs",
+                    "class Runner",
+                    1,
+                    null),
+            ],
+            fileContent: new Dictionary<string, string>
+            {
+                ["src/Runner.cs"] = "class Runner {}\n",
+            });
+        using (var registry = WorkspaceRegistry.Open(_registryDb))
+        {
+            registry.UpsertSeen(
+                "ws-json",
+                "json-abc12345",
+                fixture.WorkspaceRoot,
+                fixture.DbPath,
+                WorkspaceRegistryState.Ready,
+                DateTimeOffset.Parse("2026-05-31T12:00:00Z"));
+            registry.MarkScanned("ws-json", 9, DateTimeOffset.Parse("2026-05-31T12:01:00Z"));
+        }
+        InsertTelemetryRow(
+            "ws-json",
+            "context",
+            "ok",
+            "2026-05-31T12:02:00.000Z",
+            durationMs: 8,
+            estTokens: 30,
+            bytesReturned: 120,
+            sourceBytes: 1_200);
+
+        string json = DashboardData.RenderSnapshotJson(_registryDb, _telemetryDb, "ws-json");
+
+        using var doc = JsonDocument.Parse(json);
+        JsonElement root = doc.RootElement;
+        Assert.Equal("ws-json", root.GetProperty("selected_workspace_id").GetString());
+        Assert.True(root.TryGetProperty("workspaces", out _));
+        JsonElement selectedFacts = root.GetProperty("selected_workspace_facts");
+        Assert.Equal("ws-json", selectedFacts.GetProperty("workspace_id").GetString());
+        Assert.Equal(1, selectedFacts.GetProperty("file_count").GetInt64());
+        Assert.Equal(1, selectedFacts.GetProperty("symbol_count").GetInt64());
+        Assert.Equal("csharp", selectedFacts.GetProperty("languages")[0].GetProperty("language").GetString());
+        Assert.Equal("class", selectedFacts.GetProperty("symbol_kinds")[0].GetProperty("kind").GetString());
+        JsonElement savings = root.GetProperty("context_savings");
+        Assert.Equal("tracked", savings.GetProperty("status").GetString());
+        Assert.Equal(1_200, savings.GetProperty("source_bytes").GetInt64());
+        Assert.Equal(1_080, savings.GetProperty("saved_bytes").GetInt64());
+    }
+
+    [Fact]
     public void MissingDashboardDatabases_RenderAsEmptyReadOnlyViews()
     {
         Assert.Empty(DashboardData.ReadWorkspaces(_registryDb));
@@ -435,7 +672,9 @@ public sealed class DashboardRegistryReadTests : IDisposable
         long durationMs,
         string? errorKind = null,
         string? op = null,
-        long? estTokens = null)
+        long? estTokens = null,
+        long bytesReturned = 0,
+        long sourceBytes = 0)
     {
         using (TelemetryLedger.Open(_telemetryDb, workspaceId, "/repo/test"))
         {
@@ -452,9 +691,11 @@ public sealed class DashboardRegistryReadTests : IDisposable
         using var cmd = connection.CreateCommand();
         cmd.CommandText = """
             INSERT INTO tool_telemetry
-                (id, ts, tool, op, workspace_id, workspace_root, duration_ms, outcome, error_kind, est_tokens)
+                (id, ts, tool, op, workspace_id, workspace_root, duration_ms, outcome, error_kind,
+                 bytes_returned, source_bytes, est_tokens)
             VALUES
-                ($id, $ts, $tool, $op, $ws, $root, $duration, $outcome, $error, $tokens);
+                ($id, $ts, $tool, $op, $ws, $root, $duration, $outcome, $error,
+                 $bytesReturned, $sourceBytes, $tokens);
             """;
         cmd.Parameters.AddWithValue("$id", Guid.CreateVersion7().ToString());
         cmd.Parameters.AddWithValue("$ts", ts);
@@ -465,6 +706,8 @@ public sealed class DashboardRegistryReadTests : IDisposable
         cmd.Parameters.AddWithValue("$duration", durationMs);
         cmd.Parameters.AddWithValue("$outcome", outcome);
         cmd.Parameters.AddWithValue("$error", (object?)errorKind ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$bytesReturned", bytesReturned);
+        cmd.Parameters.AddWithValue("$sourceBytes", sourceBytes);
         cmd.Parameters.AddWithValue("$tokens", (object?)estTokens ?? DBNull.Value);
         cmd.ExecuteNonQuery();
     }

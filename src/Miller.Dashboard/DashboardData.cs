@@ -47,10 +47,99 @@ public sealed record DashboardRecentError(
     [property: JsonPropertyName("error_kind")] string? ErrorKind,
     [property: JsonPropertyName("duration_ms")] long DurationMs);
 
-public sealed record DashboardSnapshot(
-    IReadOnlyList<DashboardWorkspaceRow> Workspaces,
-    DashboardTelemetrySummary Telemetry,
-    string? SelectedWorkspaceId);
+public sealed record DashboardLanguageStat(
+    [property: JsonPropertyName("language")] string Language,
+    [property: JsonPropertyName("file_count")] long FileCount,
+    [property: JsonPropertyName("symbol_count")] long SymbolCount,
+    [property: JsonPropertyName("content_bytes")] long ContentBytes);
+
+public sealed record DashboardSymbolKindStat(
+    [property: JsonPropertyName("kind")] string Kind,
+    [property: JsonPropertyName("count")] long Count);
+
+public sealed record DashboardWorkspaceFacts(
+    [property: JsonPropertyName("workspace_id")] string WorkspaceId,
+    [property: JsonPropertyName("display_id")] string DisplayId,
+    [property: JsonPropertyName("canonical_root")] string CanonicalRoot,
+    [property: JsonPropertyName("index_db_path")] string IndexDbPath,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("message")] string? Message,
+    [property: JsonPropertyName("file_count")] long FileCount,
+    [property: JsonPropertyName("symbol_count")] long SymbolCount,
+    [property: JsonPropertyName("language_count")] long LanguageCount,
+    [property: JsonPropertyName("content_bytes")] long ContentBytes,
+    [property: JsonPropertyName("last_revision")] long? LastRevision,
+    [property: JsonPropertyName("last_scan_at")] string? LastScanAt,
+    [property: JsonPropertyName("search_sidecar_status")] string SearchSidecarStatus,
+    [property: JsonPropertyName("languages")] IReadOnlyList<DashboardLanguageStat> Languages,
+    [property: JsonPropertyName("symbol_kinds")] IReadOnlyList<DashboardSymbolKindStat> SymbolKinds);
+
+public sealed record DashboardContextSavingsTool(
+    [property: JsonPropertyName("tool")] string Tool,
+    [property: JsonPropertyName("tracked_calls")] long TrackedCalls,
+    [property: JsonPropertyName("source_bytes")] long SourceBytes,
+    [property: JsonPropertyName("bytes_returned")] long BytesReturned,
+    [property: JsonPropertyName("saved_bytes")] long SavedBytes,
+    [property: JsonPropertyName("estimated_returned_tokens")] long EstimatedReturnedTokens);
+
+public sealed record DashboardContextSavingsSummary(
+    [property: JsonPropertyName("workspace_id")] string? WorkspaceId,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("tracked_calls")] long TrackedCalls,
+    [property: JsonPropertyName("source_bytes")] long SourceBytes,
+    [property: JsonPropertyName("bytes_returned")] long BytesReturned,
+    [property: JsonPropertyName("saved_bytes")] long SavedBytes,
+    [property: JsonPropertyName("estimated_returned_tokens")] long EstimatedReturnedTokens,
+    [property: JsonPropertyName("tools")] IReadOnlyList<DashboardContextSavingsTool> Tools)
+{
+    public static DashboardContextSavingsSummary NotTracked(string? workspaceId) =>
+        new(
+            workspaceId,
+            "not_tracked",
+            TrackedCalls: 0,
+            SourceBytes: 0,
+            BytesReturned: 0,
+            SavedBytes: 0,
+            EstimatedReturnedTokens: 0,
+            Array.Empty<DashboardContextSavingsTool>());
+}
+
+public sealed record DashboardSnapshot
+{
+    public DashboardSnapshot(
+        IReadOnlyList<DashboardWorkspaceRow> Workspaces,
+        DashboardTelemetrySummary Telemetry,
+        string? SelectedWorkspaceId,
+        IReadOnlyList<DashboardWorkspaceFacts>? WorkspaceFacts = null,
+        DashboardWorkspaceFacts? SelectedWorkspaceFacts = null,
+        DashboardContextSavingsSummary? ContextSavings = null)
+    {
+        this.Workspaces = Workspaces;
+        this.Telemetry = Telemetry;
+        this.SelectedWorkspaceId = SelectedWorkspaceId;
+        this.WorkspaceFacts = WorkspaceFacts ?? Array.Empty<DashboardWorkspaceFacts>();
+        this.SelectedWorkspaceFacts = SelectedWorkspaceFacts;
+        this.ContextSavings = ContextSavings ?? DashboardContextSavingsSummary.NotTracked(SelectedWorkspaceId);
+    }
+
+    [JsonPropertyName("workspaces")]
+    public IReadOnlyList<DashboardWorkspaceRow> Workspaces { get; init; }
+
+    [JsonPropertyName("telemetry")]
+    public DashboardTelemetrySummary Telemetry { get; init; }
+
+    [JsonPropertyName("selected_workspace_id")]
+    public string? SelectedWorkspaceId { get; init; }
+
+    [JsonPropertyName("workspace_facts")]
+    public IReadOnlyList<DashboardWorkspaceFacts> WorkspaceFacts { get; init; }
+
+    [JsonPropertyName("selected_workspace_facts")]
+    public DashboardWorkspaceFacts? SelectedWorkspaceFacts { get; init; }
+
+    [JsonPropertyName("context_savings")]
+    public DashboardContextSavingsSummary ContextSavings { get; init; }
+}
 
 public static class DashboardData
 {
@@ -131,6 +220,98 @@ public static class DashboardData
         return new DashboardTelemetrySummary(workspaceId, tools, totalCalls, windowStart, windowEnd, recentErrors);
     }
 
+    private static DashboardContextSavingsSummary ReadContextSavings(string telemetryDbPath, string? workspaceId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(telemetryDbPath);
+        if (!File.Exists(telemetryDbPath))
+            return DashboardContextSavingsSummary.NotTracked(workspaceId);
+
+        using var connection = OpenReadOnly(telemetryDbPath);
+        if (!TableExists(connection, "tool_telemetry"))
+            return DashboardContextSavingsSummary.NotTracked(workspaceId);
+
+        try
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = """
+                SELECT COUNT(*) AS tracked_calls,
+                       COALESCE(SUM(source_bytes), 0) AS source_bytes,
+                       COALESCE(SUM(bytes_returned), 0) AS bytes_returned,
+                       COALESCE(SUM(
+                           CASE
+                               WHEN source_bytes > COALESCE(bytes_returned, 0)
+                                   THEN source_bytes - COALESCE(bytes_returned, 0)
+                               ELSE 0
+                           END), 0) AS saved_bytes,
+                       COALESCE(SUM(est_tokens), 0) AS estimated_returned_tokens
+                FROM tool_telemetry
+                WHERE workspace_id IS $ws AND source_bytes > 0;
+                """;
+            cmd.Parameters.AddWithValue("$ws", (object?)workspaceId ?? DBNull.Value);
+            using SqliteDataReader reader = cmd.ExecuteReader();
+            if (!reader.Read())
+                return DashboardContextSavingsSummary.NotTracked(workspaceId);
+
+            long trackedCalls = reader.GetInt64(0);
+            if (trackedCalls == 0)
+                return DashboardContextSavingsSummary.NotTracked(workspaceId);
+
+            return new DashboardContextSavingsSummary(
+                workspaceId,
+                "tracked",
+                trackedCalls,
+                reader.GetInt64(1),
+                reader.GetInt64(2),
+                reader.GetInt64(3),
+                reader.GetInt64(4),
+                ReadContextSavingsTools(connection, workspaceId));
+        }
+        catch (SqliteException)
+        {
+            return DashboardContextSavingsSummary.NotTracked(workspaceId);
+        }
+    }
+
+    private static IReadOnlyList<DashboardContextSavingsTool> ReadContextSavingsTools(
+        SqliteConnection connection,
+        string? workspaceId)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT tool,
+                   COUNT(*) AS tracked_calls,
+                   COALESCE(SUM(source_bytes), 0) AS source_bytes,
+                   COALESCE(SUM(bytes_returned), 0) AS bytes_returned,
+                   COALESCE(SUM(
+                       CASE
+                           WHEN source_bytes > COALESCE(bytes_returned, 0)
+                               THEN source_bytes - COALESCE(bytes_returned, 0)
+                           ELSE 0
+                       END), 0) AS saved_bytes,
+                   COALESCE(SUM(est_tokens), 0) AS estimated_returned_tokens
+            FROM tool_telemetry
+            WHERE workspace_id IS $ws AND source_bytes > 0
+            GROUP BY tool
+            ORDER BY saved_bytes DESC, source_bytes DESC, tool
+            LIMIT 8;
+            """;
+        cmd.Parameters.AddWithValue("$ws", (object?)workspaceId ?? DBNull.Value);
+        using SqliteDataReader reader = cmd.ExecuteReader();
+        var tools = new List<DashboardContextSavingsTool>();
+        while (reader.Read())
+        {
+            tools.Add(new DashboardContextSavingsTool(
+                reader.GetString(0),
+                reader.GetInt64(1),
+                reader.GetInt64(2),
+                reader.GetInt64(3),
+                reader.GetInt64(4),
+                reader.GetInt64(5)));
+        }
+
+        return tools;
+    }
+
     public static DashboardSnapshot ReadSnapshot(
         string registryDbPath,
         string telemetryDbPath,
@@ -140,7 +321,17 @@ public static class DashboardData
         IReadOnlyList<DashboardWorkspaceRow> workspaces = ReadWorkspaces(registryDbPath);
         string? selectedWorkspaceId = SelectWorkspace(workspaces, telemetryDbPath, workspaceId, preferredWorkspaceRoot);
         DashboardTelemetrySummary telemetry = ReadTelemetrySummary(telemetryDbPath, selectedWorkspaceId);
-        return new DashboardSnapshot(workspaces, telemetry, selectedWorkspaceId);
+        IReadOnlyList<DashboardWorkspaceFacts> workspaceFacts = DashboardIndexFactsReader.Read(workspaces);
+        DashboardWorkspaceFacts? selectedFacts = workspaceFacts.FirstOrDefault(
+            facts => string.Equals(facts.WorkspaceId, selectedWorkspaceId, StringComparison.Ordinal));
+        DashboardContextSavingsSummary contextSavings = ReadContextSavings(telemetryDbPath, selectedWorkspaceId);
+        return new DashboardSnapshot(
+            workspaces,
+            telemetry,
+            selectedWorkspaceId,
+            workspaceFacts,
+            selectedFacts,
+            contextSavings);
     }
 
     public static string RenderWorkspacesJson(string registryDbPath) =>
@@ -148,6 +339,9 @@ public static class DashboardData
 
     public static string RenderTelemetryJson(string telemetryDbPath, string? workspaceId) =>
         JsonSerializer.Serialize(ReadTelemetrySummary(telemetryDbPath, workspaceId), JsonOptions);
+
+    public static string RenderSnapshotJson(string registryDbPath, string telemetryDbPath, string? workspaceId) =>
+        JsonSerializer.Serialize(ReadSnapshot(registryDbPath, telemetryDbPath, workspaceId), JsonOptions);
 
     private static string? SelectWorkspace(
         IReadOnlyList<DashboardWorkspaceRow> workspaces,
