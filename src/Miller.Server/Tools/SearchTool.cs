@@ -134,12 +134,12 @@ public sealed class SearchTool
                 // Content/docs search routes to its own projection and result kind; exclude_tests is a no-op.
                 WorkspaceContentSearchContext content = _contentProvider.ResolveContentSearch(workspace_id, ensureFresh);
                 string? contentBanner = ReadToolWorkspaceRouting.CompactBanner(content, workspace_id, json);
-                output = RunContent(content.Index, query, limit, json, out count, contentBanner,
+                output = RunContent(content.Index, query, limit, json, out count, out long sourceBytes, contentBanner,
                     filePattern: file_pattern, language: language);
                 if (scope is not null)
                 {
                     ReadToolWorkspaceRouting.ApplyTelemetry(scope, content);
-                    scope.SourceBytes = content.Index.SourceBytes;
+                    scope.SourceBytes = sourceBytes;
                 }
             }
             else
@@ -336,6 +336,13 @@ public sealed class SearchTool
         IContentSearchIndex index, string query, int limit,
         bool json, out int renderedCount, string? compactBanner = null,
         string? filePattern = null,
+        string? language = null) =>
+        RunContent(index, query, limit, json, out renderedCount, out _, compactBanner, filePattern, language);
+
+    public static string RunContent(
+        IContentSearchIndex index, string query, int limit,
+        bool json, out int renderedCount, out long sourceBytes, string? compactBanner = null,
+        string? filePattern = null,
         string? language = null)
     {
         ArgumentNullException.ThrowIfNull(index);
@@ -354,7 +361,15 @@ public sealed class SearchTool
         renderedCount = page;
 
         if (total == 0)
+        {
+            sourceBytes = 0;
             return json ? "[]" : ReadToolWorkspaceRouting.PrefixCompact("No results.", compactBanner);
+        }
+
+        sourceBytes = hits
+            .Take(page)
+            .GroupBy(static hit => hit.Path, StringComparer.Ordinal)
+            .Sum(static group => group.Max(static hit => hit.SourceBytes));
 
         return json
             ? RenderContentJson(hits, page)

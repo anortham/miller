@@ -45,6 +45,7 @@ public static class DashboardIndexFactsReader
             FileFacts fileFacts = ReadFileFacts(connection);
             Dictionary<string, long> symbolCountsByLanguage = ReadSymbolCountsByLanguage(connection);
             IReadOnlyList<DashboardSymbolKindStat> symbolKinds = ReadSymbolKinds(connection);
+            int languageCount = CountLanguages(fileFacts.Languages, symbolCountsByLanguage);
             IReadOnlyList<DashboardLanguageStat> languages = BuildLanguageStats(
                 fileFacts.Languages,
                 symbolCountsByLanguage);
@@ -59,7 +60,7 @@ public static class DashboardIndexFactsReader
                 null,
                 fileFacts.FileCount,
                 symbolCount,
-                languages.Count,
+                languageCount,
                 fileFacts.ContentBytes,
                 workspace.LastRevision,
                 workspace.LastScanAt,
@@ -189,6 +190,19 @@ public static class DashboardIndexFactsReader
             .ThenBy(language => language.Language, StringComparer.OrdinalIgnoreCase)
             .Take(12)
             .ToArray();
+    }
+
+    private static int CountLanguages(
+        IReadOnlyDictionary<string, FileLanguageFacts> fileFacts,
+        IReadOnlyDictionary<string, long> symbolCountsByLanguage)
+    {
+        var names = new HashSet<string>(fileFacts.Keys, StringComparer.OrdinalIgnoreCase);
+        foreach (string language in symbolCountsByLanguage.Keys)
+        {
+            names.Add(language);
+        }
+
+        return names.Count;
     }
 
     private static string ReadSearchSidecarStatus(DashboardWorkspaceRow workspace)

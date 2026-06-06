@@ -1,4 +1,5 @@
 using System.Collections.Frozen;
+using System.Text;
 using Miller.Core.Tokenization;
 
 namespace Miller.Core.Search;
@@ -67,7 +68,13 @@ public sealed class ContentSearchIndex
 
         foreach (ContentDocument document in documents)
         {
-            if (!docs.TryAdd(document.DocId, new DocEntry(document.Path, document.Language, SplitLines(document.Text))))
+            if (!docs.TryAdd(
+                    document.DocId,
+                    new DocEntry(
+                        document.Path,
+                        document.Language,
+                        SplitLines(document.Text),
+                        Encoding.UTF8.GetByteCount(document.Text))))
                 throw new ArgumentException(
                     $"Duplicate DocId {document.DocId}; content document ids must be unique.", nameof(documents));
 
@@ -178,7 +185,13 @@ public sealed class ContentSearchIndex
                 continue;
 
             hits.Add(new ScoredHit(docId,
-                new ContentSearchHit(entry.Path, score, bestLine.Line, bestLine.Snippet, entry.Language)));
+                new ContentSearchHit(
+                    entry.Path,
+                    score,
+                    bestLine.Line,
+                    bestLine.Snippet,
+                    entry.Language,
+                    entry.SourceBytes)));
         }
 
         if (hits.Count == 0)
@@ -319,7 +332,7 @@ public sealed class ContentSearchIndex
 
     private readonly record struct Posting(int DocId, int Tf);
 
-    private readonly record struct DocEntry(string Path, string Language, string[] Lines);
+    private readonly record struct DocEntry(string Path, string Language, string[] Lines, long SourceBytes);
 
     private readonly record struct ScoredHit(int DocId, ContentSearchHit Hit);
 

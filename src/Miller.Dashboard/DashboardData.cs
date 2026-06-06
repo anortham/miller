@@ -321,9 +321,14 @@ public static class DashboardData
         IReadOnlyList<DashboardWorkspaceRow> workspaces = ReadWorkspaces(registryDbPath);
         string? selectedWorkspaceId = SelectWorkspace(workspaces, telemetryDbPath, workspaceId, preferredWorkspaceRoot);
         DashboardTelemetrySummary telemetry = ReadTelemetrySummary(telemetryDbPath, selectedWorkspaceId);
-        IReadOnlyList<DashboardWorkspaceFacts> workspaceFacts = DashboardIndexFactsReader.Read(workspaces);
-        DashboardWorkspaceFacts? selectedFacts = workspaceFacts.FirstOrDefault(
-            facts => string.Equals(facts.WorkspaceId, selectedWorkspaceId, StringComparison.Ordinal));
+        DashboardWorkspaceRow? selectedWorkspace = workspaces.FirstOrDefault(
+            row => string.Equals(row.WorkspaceId, selectedWorkspaceId, StringComparison.Ordinal));
+        DashboardWorkspaceFacts? selectedFacts = selectedWorkspace is null
+            ? null
+            : DashboardIndexFactsReader.Read(selectedWorkspace);
+        IReadOnlyList<DashboardWorkspaceFacts> workspaceFacts = selectedFacts is null
+            ? Array.Empty<DashboardWorkspaceFacts>()
+            : new[] { selectedFacts };
         DashboardContextSavingsSummary contextSavings = ReadContextSavings(telemetryDbPath, selectedWorkspaceId);
         return new DashboardSnapshot(
             workspaces,

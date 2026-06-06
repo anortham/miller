@@ -864,9 +864,7 @@ public sealed class SearchToolTests
                 Assert.Contains("docs/guide.md", output);
             }
 
-            long expectedSourceBytes =
-                Encoding.UTF8.GetByteCount(guideText) +
-                Encoding.UTF8.GetByteCount(apiText);
+            long expectedSourceBytes = Encoding.UTF8.GetByteCount(guideText);
             Assert.Equal(expectedSourceBytes, ReadTelemetrySourceBytes(telemetryDb));
         }
         finally

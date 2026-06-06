@@ -11,7 +11,5 @@ public interface IContentSearchIndex
 {
     int DocumentCount { get; }
 
-    long SourceBytes { get; }
-
     IReadOnlyList<ContentSearchHit> Search(string query, int limit = 10);
 }

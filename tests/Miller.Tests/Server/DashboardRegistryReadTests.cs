@@ -450,6 +450,89 @@ public sealed class DashboardRegistryReadTests : IDisposable
     }
 
     [Fact]
+    public void ReadSnapshot_ReadsIndexFactsOnlyForSelectedWorkspace()
+    {
+        using JulieDbFixture selectedFixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            rows:
+            [
+                new JulieDbFixture.SymbolRow(
+                    "s1",
+                    "Selected",
+                    "class",
+                    "csharp",
+                    "src/Selected.cs",
+                    "class Selected",
+                    1,
+                    null),
+            ]);
+        string unselectedCorruptDb = Path.Combine(_dir, "unselected-corrupt-symbols.db");
+        File.WriteAllText(unselectedCorruptDb, "not a sqlite database");
+        using (var registry = WorkspaceRegistry.Open(_registryDb))
+        {
+            registry.UpsertSeen(
+                "ws-selected",
+                "selected-abcd1234",
+                selectedFixture.WorkspaceRoot,
+                selectedFixture.DbPath,
+                WorkspaceRegistryState.Ready,
+                DateTimeOffset.Parse("2026-05-31T10:00:00Z"));
+            registry.UpsertSeen(
+                "ws-unselected",
+                "unselected-abcd1234",
+                Path.Combine(_dir, "unselected"),
+                unselectedCorruptDb,
+                WorkspaceRegistryState.Ready,
+                DateTimeOffset.Parse("2026-05-31T10:01:00Z"));
+        }
+
+        DashboardSnapshot snapshot = DashboardData.ReadSnapshot(
+            _registryDb,
+            _telemetryDb,
+            workspaceId: "ws-selected");
+
+        DashboardWorkspaceFacts facts = Assert.Single(snapshot.WorkspaceFacts);
+        Assert.Equal("ws-selected", facts.WorkspaceId);
+        Assert.Same(facts, snapshot.SelectedWorkspaceFacts);
+        Assert.Equal("ready", facts.Status);
+        Assert.DoesNotContain(snapshot.WorkspaceFacts, row => row.WorkspaceId == "ws-unselected");
+    }
+
+    [Fact]
+    public void ReadSnapshot_CountsAllLanguagesWhileDisplayingTopBreakdown()
+    {
+        JulieDbFixture.FileSpec[] languageFiles = Enumerable.Range(1, 13)
+            .Select(i => new JulieDbFixture.FileSpec($"src/lang-{i}.txt")
+            {
+                Language = $"lang{i:00}",
+                DiskText = $"language {i}",
+            })
+            .ToArray();
+        using JulieDbFixture fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            rows: Array.Empty<JulieDbFixture.SymbolRow>(),
+            extraFiles: languageFiles);
+        using (var registry = WorkspaceRegistry.Open(_registryDb))
+        {
+            registry.UpsertSeen(
+                "ws-languages",
+                "languages-abcd1234",
+                fixture.WorkspaceRoot,
+                fixture.DbPath,
+                WorkspaceRegistryState.Ready,
+                DateTimeOffset.Parse("2026-05-31T10:00:00Z"));
+        }
+
+        DashboardSnapshot snapshot = DashboardData.ReadSnapshot(_registryDb, _telemetryDb, workspaceId: "ws-languages");
+
+        DashboardWorkspaceFacts facts = Assert.Single(snapshot.WorkspaceFacts);
+        Assert.Equal(13, facts.LanguageCount);
+        Assert.Equal(12, facts.Languages.Count);
+    }
+
+    [Fact]
     public async Task DashboardShell_RendersVisibleTelemetryAndHtmxTargets()
     {
         var snapshot = new DashboardSnapshot(
