@@ -1,0 +1,155 @@
+@namespace Miller.Dashboard.Components
+
+<section id="workspace-detail-panel" class="panel detail-panel" aria-label="Selected workspace index facts">
+    <div class="panel-heading">
+        <div>
+            <h2>Index transparency</h2>
+            <p>@Subtitle</p>
+        </div>
+        @if (Facts is not null)
+        {
+            <span class="workspace-state @StateClass(Facts.Status)">@Facts.Status</span>
+        }
+    </div>
+
+    @if (Facts is null)
+    {
+        <p class="empty">Select a workspace to inspect the local index.</p>
+    }
+    else
+    {
+        <div class="stats-grid">
+            <div class="metric">
+                <strong>@FormatCount(Facts.FileCount, "file")</strong>
+                <span>tracked in files</span>
+            </div>
+            <div class="metric">
+                <strong>@FormatCount(Facts.SymbolCount, "symbol")</strong>
+                <span>searchable symbols</span>
+            </div>
+            <div class="metric">
+                <strong>@FormatCount(Facts.LanguageCount, "language")</strong>
+                <span>language groups</span>
+            </div>
+            <div class="metric">
+                <strong>@FormatBytes(Facts.ContentBytes)</strong>
+                <span>indexed bytes</span>
+            </div>
+        </div>
+
+        <dl class="fact-list">
+            <div>
+                <dt>Revision</dt>
+                <dd>@(Facts.LastRevision?.ToString("N0", CultureInfo.InvariantCulture) ?? "n/a")</dd>
+            </div>
+            <div>
+                <dt>Last scan</dt>
+                <dd>@(string.IsNullOrWhiteSpace(Facts.LastScanAt) ? "n/a" : Facts.LastScanAt)</dd>
+            </div>
+            <div>
+                <dt>Search sidecar</dt>
+                <dd>search.db @Facts.SearchSidecarStatus</dd>
+            </div>
+        </dl>
+
+        @if (!string.IsNullOrWhiteSpace(Facts.Message))
+        {
+            <p class="notice">@Facts.Message</p>
+        }
+
+        <div class="breakdown-grid">
+            <section class="breakdown" aria-label="Language breakdown">
+                <h3>Languages</h3>
+                @if (Facts.Languages.Count == 0)
+                {
+                    <p class="empty-inline">No language rows.</p>
+                }
+                else
+                {
+                    <ol>
+                        @foreach (DashboardLanguageStat language in Facts.Languages)
+                        {
+                            <li>
+                                <div class="breakdown-row">
+                                    <span>@language.Language</span>
+                                    <span>@FormatCount(language.FileCount, "file")</span>
+                                </div>
+                                <div class="meter" aria-hidden="true">
+                                    <span style="width:@LanguageWidth(language.FileCount)"></span>
+                                </div>
+                                <small>@FormatCount(language.SymbolCount, "symbol") · @FormatBytes(language.ContentBytes)</small>
+                            </li>
+                        }
+                    </ol>
+                }
+            </section>
+
+            <section class="breakdown" aria-label="Symbol kind breakdown">
+                <h3>Symbol kinds</h3>
+                @if (Facts.SymbolKinds.Count == 0)
+                {
+                    <p class="empty-inline">No symbol rows.</p>
+                }
+                else
+                {
+                    <ol>
+                        @foreach (DashboardSymbolKindStat kind in Facts.SymbolKinds)
+                        {
+                            <li>
+                                <div class="breakdown-row">
+                                    <span>@kind.Kind</span>
+                                    <span>@FormatCount(kind.Count, "symbol")</span>
+                                </div>
+                                <div class="meter secondary" aria-hidden="true">
+                                    <span style="width:@KindWidth(kind.Count)"></span>
+                                </div>
+                            </li>
+                        }
+                    </ol>
+                }
+            </section>
+        </div>
+    }
+</section>
+
+@code {
+    [Parameter] public DashboardWorkspaceFacts? Facts { get; set; }
+
+    private string Subtitle => Facts is null
+        ? "No workspace selected"
+        : Facts.DisplayId;
+
+    private long MaxLanguageFiles => Math.Max(1, Facts?.Languages.Count > 0 ? Facts.Languages.Max(l => l.FileCount) : 1);
+
+    private long MaxSymbolKindCount =>
+        Math.Max(1, Facts?.SymbolKinds.Count > 0 ? Facts.SymbolKinds.Max(k => k.Count) : 1);
+
+    private string LanguageWidth(long count) =>
+        (Math.Max(8, count * 100 / MaxLanguageFiles)).ToString(CultureInfo.InvariantCulture) + "%";
+
+    private string KindWidth(long count) =>
+        (Math.Max(8, count * 100 / MaxSymbolKindCount)).ToString(CultureInfo.InvariantCulture) + "%";
+
+    private static string StateClass(string state) => state switch
+    {
+        "ready" or "current" or "loaded_existing" => "ok",
+        "missing" or "error" or "unreadable" => "bad",
+        _ => "neutral",
+    };
+
+    private static string FormatCount(long value, string singular) =>
+        value.ToString("N0", CultureInfo.InvariantCulture) + " " + (value == 1 ? singular : singular + "s");
+
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes < 1000)
+            return bytes.ToString("N0", CultureInfo.InvariantCulture) + " B";
+
+        double kb = bytes / 1000d;
+        if (kb < 1000)
+            return kb.ToString("0.0", CultureInfo.InvariantCulture) + " KB";
+
+        double mb = kb / 1000d;
+        return mb.ToString("0.0", CultureInfo.InvariantCulture) + " MB";
+    }
+}

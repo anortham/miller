@@ -137,7 +137,10 @@ public sealed class SearchTool
                 output = RunContent(content.Index, query, limit, json, out count, contentBanner,
                     filePattern: file_pattern, language: language);
                 if (scope is not null)
+                {
                     ReadToolWorkspaceRouting.ApplyTelemetry(scope, content);
+                    scope.SourceBytes = content.Index.SourceBytes;
+                }
             }
             else
             {

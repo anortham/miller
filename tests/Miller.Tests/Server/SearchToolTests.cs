@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text;
 using Microsoft.Data.Sqlite;
 using Miller.Core.Search;
 using Miller.Indexing;
@@ -88,6 +89,22 @@ public sealed class SearchToolTests
         using var r = cmd.ExecuteReader();
         Assert.True(r.Read(), "expected one telemetry row");
         return r.GetString(0);
+    }
+
+    private static long ReadTelemetrySourceBytes(string dbPath)
+    {
+        using var c = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        c.Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT source_bytes FROM tool_telemetry LIMIT 1;";
+        object? value = cmd.ExecuteScalar();
+        Assert.NotNull(value);
+        return Convert.ToInt64(value);
     }
 
     // A search-symbol provider returning a fixed context over ANY ISymbolLookupIndex — used to drive the
@@ -813,6 +830,50 @@ public sealed class SearchToolTests
         Assert.DoesNotContain(targetRoot, output);
         Assert.Contains("docs/guide.md:2", output);
         Assert.Contains("The freshness gate verifies blake3", output);
+    }
+
+    [Fact]
+    public void Search_ModeContent_RecordsRealSourceBytesFromContentIndex()
+    {
+        using var current = FixtureWithSymbol("current-ws", "CurrentOnly");
+        string dir = Path.Combine(Path.GetTempPath(), "miller-content-source-bytes-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string telemetryDb = Path.Combine(dir, "telemetry.db");
+        string currentRoot = Path.Combine(dir, "current");
+        const string guideText = "# Guide\nThe freshness gate verifies blake3.\n";
+        const string apiText = "# API\nThe context bundle stays compact.\n";
+        var content = ContentIndex(
+            ("docs/guide.md", guideText),
+            ("docs/api.md", apiText));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(BuildIndex(current), current.DbPath, "current-ws", currentRoot),
+            currentContent: ReadToolRoutingTestSupport.ContentContextFor(
+                content,
+                current.DbPath,
+                "current-ws",
+                currentRoot),
+            contentTargets: Array.Empty<(string, WorkspaceContentSearchContext)>());
+        var tool = new SearchTool(provider, provider);
+
+        try
+        {
+            using (var ledger = TelemetryLedger.Open(telemetryDb, workspaceId: "current-ws", currentRoot))
+            {
+                using var scope = ledger.Measure("search", op: "content");
+                string output = tool.Search("freshness", mode: "content");
+                Assert.Contains("docs/guide.md", output);
+            }
+
+            long expectedSourceBytes =
+                Encoding.UTF8.GetByteCount(guideText) +
+                Encoding.UTF8.GetByteCount(apiText);
+            Assert.Equal(expectedSourceBytes, ReadTelemetrySourceBytes(telemetryDb));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+        }
     }
 
     [Fact]

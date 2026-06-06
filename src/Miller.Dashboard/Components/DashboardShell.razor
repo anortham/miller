@@ -14,10 +14,13 @@
     <main class="shell">
         <header class="topbar">
             <div>
-                <p class="eyebrow">Local telemetry</p>
+                <p class="eyebrow">Local index status</p>
                 <h1>Miller Dashboard</h1>
             </div>
-            <a class="api-link" href="/telemetry.json?workspace_id=@Uri.EscapeDataString(Snapshot.SelectedWorkspaceId ?? "")">telemetry.json</a>
+            <nav class="api-actions" aria-label="Dashboard JSON">
+                <a class="api-link" href="/snapshot.json?workspace_id=@Uri.EscapeDataString(Snapshot.SelectedWorkspaceId ?? "")">snapshot.json</a>
+                <a class="api-link" href="/telemetry.json?workspace_id=@Uri.EscapeDataString(Snapshot.SelectedWorkspaceId ?? "")">telemetry.json</a>
+            </nav>
         </header>
 
         <DashboardContent Snapshot="Snapshot" />

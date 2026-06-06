@@ -1,3 +1,4 @@
+using System.Text;
 using Miller.Core.Search;
 
 namespace Miller.Indexing;
@@ -10,13 +11,22 @@ namespace Miller.Indexing;
 public sealed class ContentSearchProjection : IContentSearchIndex
 {
     private readonly ContentSearchIndex _index;
+    private readonly long _sourceBytes;
 
-    private ContentSearchProjection(ContentSearchIndex index) => _index = index;
+    private ContentSearchProjection(ContentSearchIndex index, long sourceBytes)
+    {
+        _index = index;
+        _sourceBytes = sourceBytes;
+    }
 
     public int DocumentCount => _index.DocumentCount;
 
+    public long SourceBytes => _sourceBytes;
+
     public static ContentSearchProjection Build(IReadOnlyList<ContentDocument> documents) =>
-        new(ContentSearchIndex.Build(documents));
+        new(
+            ContentSearchIndex.Build(documents),
+            documents.Sum(static document => Encoding.UTF8.GetByteCount(document.Text)));
 
     public IReadOnlyList<ContentSearchHit> Search(string query, int limit = 10) =>
         _index.Search(query, limit);

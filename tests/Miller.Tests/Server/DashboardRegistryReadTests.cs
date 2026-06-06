@@ -518,6 +518,90 @@ public sealed class DashboardRegistryReadTests : IDisposable
     }
 
     [Fact]
+    public async Task DashboardShell_RendersWorkspaceFactsContextSavingsAndSnapshotLink()
+    {
+        var facts = new DashboardWorkspaceFacts(
+            "ws-a",
+            "alpha-abcd1234",
+            "/repo/a",
+            "/repo/a/.miller/symbols.db",
+            "ready",
+            null,
+            FileCount: 4,
+            SymbolCount: 3,
+            LanguageCount: 2,
+            ContentBytes: 12_800,
+            LastRevision: 42,
+            LastScanAt: "2026-05-31T10:01:00Z",
+            SearchSidecarStatus: "missing",
+            Languages:
+            [
+                new DashboardLanguageStat("csharp", FileCount: 3, SymbolCount: 3, ContentBytes: 11_200),
+                new DashboardLanguageStat("markdown", FileCount: 1, SymbolCount: 0, ContentBytes: 1_600),
+            ],
+            SymbolKinds:
+            [
+                new DashboardSymbolKindStat("class", Count: 2),
+                new DashboardSymbolKindStat("method", Count: 1),
+            ]);
+        var snapshot = new DashboardSnapshot(
+            Workspaces:
+            [
+                new DashboardWorkspaceRow(
+                    "ws-a",
+                    "alpha-abcd1234",
+                    "/repo/a",
+                    "/repo/a/.miller/symbols.db",
+                    "2026-05-31T10:00:00Z",
+                    "2026-05-31T10:01:00Z",
+                    42,
+                    "ready",
+                    null),
+            ],
+            Telemetry: new DashboardTelemetrySummary("ws-a", [], 0, null, null, []),
+            SelectedWorkspaceId: "ws-a",
+            WorkspaceFacts: [facts],
+            SelectedWorkspaceFacts: facts,
+            ContextSavings: new DashboardContextSavingsSummary(
+                "ws-a",
+                "tracked",
+                TrackedCalls: 2,
+                SourceBytes: 18_000,
+                BytesReturned: 3_500,
+                SavedBytes: 14_500,
+                EstimatedReturnedTokens: 850,
+                Tools:
+                [
+                    new DashboardContextSavingsTool(
+                        "context",
+                        TrackedCalls: 1,
+                        SourceBytes: 10_000,
+                        BytesReturned: 2_000,
+                        SavedBytes: 8_000,
+                        EstimatedReturnedTokens: 500),
+                ]));
+
+        string html = await RenderComponentAsync<DashboardShell>(new Dictionary<string, object?>
+        {
+            ["Snapshot"] = snapshot,
+        });
+
+        Assert.Contains("snapshot.json?workspace_id=ws-a", html);
+        Assert.Contains("Index transparency", html);
+        Assert.Contains("4 files", html);
+        Assert.Contains("3 symbols", html);
+        Assert.Contains("2 languages", html);
+        Assert.Contains("search.db missing", html);
+        Assert.Contains("csharp", html);
+        Assert.Contains("markdown", html);
+        Assert.Contains("class", html);
+        Assert.Contains("Context saved", html);
+        Assert.Contains("14.5 KB", html);
+        Assert.Contains("850 tokens", html);
+        Assert.Contains("context", html);
+    }
+
+    [Fact]
     public void RenderWorkspacesJson_UsesStableSnakeCaseContract()
     {
         using (var registry = WorkspaceRegistry.Open(_registryDb))
