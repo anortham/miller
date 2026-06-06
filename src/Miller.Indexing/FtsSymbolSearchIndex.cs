@@ -299,6 +299,16 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
         return reader.Read() ? ReadDiskSymbol(reader).Symbol : null;
     }
 
+    public IReadOnlyList<IndexedSymbol> FindChildren(string parentId)
+    {
+        ArgumentNullException.ThrowIfNull(parentId);
+        using var connection = OpenConnection();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = SymbolSelect("FROM search_symbols s WHERE s.parent_symbol_id = $parent ORDER BY s.rowid;");
+        cmd.Parameters.AddWithValue("$parent", parentId);
+        return ReadIndexedSymbols(cmd);
+    }
+
     public IReadOnlyList<IndexedSymbol> FindByFilePath(string filePath)
     {
         ArgumentNullException.ThrowIfNull(filePath);

@@ -18,6 +18,7 @@ public sealed class SymbolLookupTables
     private readonly Dictionary<string, IndexedSymbol> _bySymbolId;
     private readonly Dictionary<string, List<IndexedSymbol>> _byName;
     private readonly Dictionary<string, List<IndexedSymbol>> _byFilePath;
+    private readonly Dictionary<string, List<IndexedSymbol>> _byParentId;
     private readonly Dictionary<string, List<string>> _byFileName;
 
     private SymbolLookupTables(
@@ -25,6 +26,7 @@ public sealed class SymbolLookupTables
         Dictionary<string, IndexedSymbol> bySymbolId,
         Dictionary<string, List<IndexedSymbol>> byName,
         Dictionary<string, List<IndexedSymbol>> byFilePath,
+        Dictionary<string, List<IndexedSymbol>> byParentId,
         Dictionary<string, List<string>> byFileName,
         IReadOnlySet<string> knownExtensions)
     {
@@ -32,6 +34,7 @@ public sealed class SymbolLookupTables
         _bySymbolId = bySymbolId;
         _byName = byName;
         _byFilePath = byFilePath;
+        _byParentId = byParentId;
         _byFileName = byFileName;
         KnownExtensions = knownExtensions;
     }
@@ -55,6 +58,7 @@ public sealed class SymbolLookupTables
         var bySymbolId = new Dictionary<string, IndexedSymbol>(symbols.Count, StringComparer.Ordinal);
         var byName = new Dictionary<string, List<IndexedSymbol>>(StringComparer.Ordinal);
         var byFilePath = new Dictionary<string, List<IndexedSymbol>>(StringComparer.Ordinal);
+        var byParentId = new Dictionary<string, List<IndexedSymbol>>(StringComparer.Ordinal);
 
         for (int i = 0; i < symbols.Count; i++)
         {
@@ -69,6 +73,8 @@ public sealed class SymbolLookupTables
             bySymbolId[symbol.SymbolId] = symbol;
             Add(byName, symbol.Name, symbol);
             Add(byFilePath, symbol.FilePath, symbol);
+            if (symbol.ParentId is { } parentId)
+                Add(byParentId, parentId, symbol);
         }
 
         var byFileName = new Dictionary<string, List<string>>(StringComparer.Ordinal);
@@ -85,7 +91,7 @@ public sealed class SymbolLookupTables
                 knownExtensions.Add(ext);
         }
 
-        return new SymbolLookupTables(byDocId, bySymbolId, byName, byFilePath, byFileName, knownExtensions);
+        return new SymbolLookupTables(byDocId, bySymbolId, byName, byFilePath, byParentId, byFileName, knownExtensions);
 
         static void Add(Dictionary<string, List<IndexedSymbol>> map, string key, IndexedSymbol value)
         {
@@ -115,6 +121,12 @@ public sealed class SymbolLookupTables
     {
         ArgumentNullException.ThrowIfNull(symbolId);
         return _bySymbolId.TryGetValue(symbolId, out var symbol) ? symbol : null;
+    }
+
+    public IReadOnlyList<IndexedSymbol> FindChildren(string parentId)
+    {
+        ArgumentNullException.ThrowIfNull(parentId);
+        return _byParentId.TryGetValue(parentId, out var list) ? list : Empty;
     }
 
     public IReadOnlyList<IndexedSymbol> FindByFilePath(string filePath)

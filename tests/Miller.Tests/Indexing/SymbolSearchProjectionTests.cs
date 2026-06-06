@@ -54,6 +54,7 @@ public sealed class SymbolSearchProjectionTests
 
         Assert.Contains(projection.FindByName("GetUser"), s => s.SymbolId == JulieDbFixture.GetUserId);
         Assert.Equal("GetUser", projection.FindBySymbolId(JulieDbFixture.GetUserId)!.Name);
+        Assert.Contains(projection.FindChildren(JulieDbFixture.UserServiceId), s => s.SymbolId == JulieDbFixture.GetUserId);
         Assert.NotEmpty(projection.FindByFilePath("auth/UserService.cs"));
         Assert.Equal("auth/UserService.cs", projection.ResolveIndexedFilePath("UserService.cs"));
         Assert.Contains(".cs", projection.KnownExtensions);

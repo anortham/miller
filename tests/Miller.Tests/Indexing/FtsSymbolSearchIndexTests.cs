@@ -94,15 +94,18 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
     public void Open_DelegatesLookups()
     {
         var syms = Corpus(
-            ("a", "GetUser", null, "method", "csharp", "auth/UserService.cs"),
-            ("b", "GetUser", null, "method", "csharp", "auth/Other.cs"),
-            ("c", "Cache", null, "class", "csharp", "core/Cache.cs"));
+            ("a", "UserService", null, "class", "csharp", "auth/UserService.cs", ParentId: (string?)null),
+            ("b", "GetUser", null, "method", "csharp", "auth/UserService.cs", ParentId: "a"),
+            ("c", "GetUser", null, "method", "csharp", "auth/Other.cs", ParentId: null),
+            ("d", "DeleteUser", null, "method", "csharp", "auth/UserService.cs", ParentId: "a"),
+            ("e", "Cache", null, "class", "csharp", "core/Cache.cs", ParentId: null));
         SearchIndexWriter.Write(_dbPath, syms, revision: 1);
 
         var index = FtsSymbolSearchIndex.Open(_dbPath);
 
         Assert.Equal(2, index.FindByName("GetUser").Count);
-        Assert.Equal("Cache", index.FindBySymbolId("c")!.Name);
+        Assert.Equal("Cache", index.FindBySymbolId("e")!.Name);
+        Assert.Equal(["GetUser", "DeleteUser"], index.FindChildren("a").Select(static s => s.Name).ToArray());
         Assert.NotEmpty(index.FindByFilePath("auth/UserService.cs"));
         Assert.Equal("core/Cache.cs", index.ResolveIndexedFilePath("Cache.cs"));
         Assert.Contains(".cs", index.KnownExtensions);

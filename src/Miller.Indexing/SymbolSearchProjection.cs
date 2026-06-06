@@ -42,6 +42,8 @@ public sealed class SymbolSearchProjection : ISymbolLookupIndex
 
     public IndexedSymbol? FindBySymbolId(string symbolId) => _tables.FindBySymbolId(symbolId);
 
+    public IReadOnlyList<IndexedSymbol> FindChildren(string parentId) => _tables.FindChildren(parentId);
+
     public IReadOnlyList<IndexedSymbol> FindByFilePath(string filePath) => _tables.FindByFilePath(filePath);
 
     public IReadOnlyList<IndexedSymbol> FindByFilePathFragment(string query, int limit) =>

@@ -64,27 +64,13 @@ public sealed class InspectTool
             int count;
             if (full)
             {
-                WorkspaceSymbolSearchContext searchContext = _workspaceSearchProvider.ResolveSymbolSearch(workspace_id, ensureFresh);
-                var searchResolver = new SmartTargetResolver(searchContext.Index);
-                if (searchResolver.Resolve(target, scope) is not TargetResolution.Symbol)
-                {
-                    string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(searchContext, workspace_id, json);
-                    output = RunSummary(searchContext.Index, searchContext.IndexDbPath, searchContext.WorkspaceRoot,
-                        target, kind, scope, limit, json, out count, compactBanner);
+                WorkspaceSymbolSearchContext context = _workspaceSearchProvider.ResolveSymbolSearch(workspace_id, ensureFresh);
+                string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
+                output = RunLookup(context.Index, context.IndexDbPath, context.WorkspaceRoot,
+                    target, depth, kind, scope, limit, json, out count, compactBanner);
 
-                    if (telemetry is not null)
-                        ReadToolWorkspaceRouting.ApplyTelemetry(telemetry, searchContext);
-                }
-                else
-                {
-                    WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
-                    string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
-                    output = Run(context.Index, context.Resolver, context.IndexDbPath, context.WorkspaceRoot,
-                        target, depth, kind, scope, limit, json, out count, compactBanner);
-
-                    if (telemetry is not null)
-                        ReadToolWorkspaceRouting.ApplyTelemetry(telemetry, context);
-                }
+                if (telemetry is not null)
+                    ReadToolWorkspaceRouting.ApplyTelemetry(telemetry, context);
             }
             else
             {
@@ -135,7 +121,23 @@ public sealed class InspectTool
         if (limit < 1) limit = 1;
         bool full = string.Equals(depth, "full", StringComparison.OrdinalIgnoreCase);
 
-        return RunCore(index, full ? index : null, resolver, dbPath, workspaceRoot, target, full, kind, scope, limit,
+        return RunCore(index, resolver, dbPath, workspaceRoot, target, full, kind, scope, limit,
+            json, out resultCount, compactBanner);
+    }
+
+    public static string RunLookup(
+        ISymbolLookupIndex index, string dbPath, string workspaceRoot,
+        string target, string depth, string? kind, string? scope, int limit, bool json,
+        out int resultCount,
+        string? compactBanner = null)
+    {
+        ArgumentNullException.ThrowIfNull(index);
+        ArgumentException.ThrowIfNullOrWhiteSpace(target);
+        if (limit < 1) limit = 1;
+        bool full = string.Equals(depth, "full", StringComparison.OrdinalIgnoreCase);
+
+        var resolver = new SmartTargetResolver(index);
+        return RunCore(index, resolver, dbPath, workspaceRoot, target, full, kind, scope, limit,
             json, out resultCount, compactBanner);
     }
 
@@ -145,17 +147,12 @@ public sealed class InspectTool
         out int resultCount,
         string? compactBanner = null)
     {
-        ArgumentNullException.ThrowIfNull(index);
-        ArgumentException.ThrowIfNullOrWhiteSpace(target);
-        if (limit < 1) limit = 1;
-
-        var resolver = new SmartTargetResolver(index);
-        return RunCore(index, fullIndex: null, resolver, dbPath, workspaceRoot, target, full: false, kind, scope, limit,
+        return RunLookup(index, dbPath, workspaceRoot, target, depth: "summary", kind, scope, limit,
             json, out resultCount, compactBanner);
     }
 
     private static string RunCore(
-        ISymbolLookupIndex index, MillerRepositoryIndex? fullIndex, SmartTargetResolver resolver,
+        ISymbolLookupIndex index, SmartTargetResolver resolver,
         string dbPath, string workspaceRoot, string target, bool full,
         string? kind, string? scope, int limit, bool json,
         out int resultCount,
@@ -176,8 +173,8 @@ public sealed class InspectTool
             case TargetResolution.Symbol sym:
                 resultCount = 1;
                 string symbolOutput = json
-                    ? RenderSymbolJson(index, fullIndex, dbPath, workspaceRoot, sym.Value, full)
-                    : RenderSymbolCompact(index, fullIndex, dbPath, workspaceRoot, sym.Value, full);
+                    ? RenderSymbolJson(index, dbPath, workspaceRoot, sym.Value, full)
+                    : RenderSymbolCompact(index, dbPath, workspaceRoot, sym.Value, full);
                 return ReadToolWorkspaceRouting.PrefixCompact(symbolOutput, json ? null : compactBanner);
 
             case TargetResolution.Candidates cands:
@@ -325,8 +322,7 @@ public sealed class InspectTool
     // ---------- symbol ----------
 
     private static string RenderSymbolCompact(
-        ISymbolLookupIndex index, MillerRepositoryIndex? fullIndex,
-        string dbPath, string workspaceRoot, IndexedSymbol sym, bool full)
+        ISymbolLookupIndex index, string dbPath, string workspaceRoot, IndexedSymbol sym, bool full)
     {
         var detail = ExtractReader.ReadDetail(dbPath, sym.SymbolId);
         var sb = new StringBuilder();
@@ -342,11 +338,8 @@ public sealed class InspectTool
         if (!full)
             return sb.ToString().TrimEnd('\n');
 
-        if (fullIndex is null)
-            throw new InvalidOperationException("Full inspect requires the repository projection.");
-
         // children
-        var children = fullIndex.FindChildren(sym.SymbolId);
+        var children = index.FindChildren(sym.SymbolId);
         if (children.Count > 0)
         {
             sb.Append("\n## children\n");
@@ -393,8 +386,7 @@ public sealed class InspectTool
     }
 
     private static string RenderSymbolJson(
-        ISymbolLookupIndex index, MillerRepositoryIndex? fullIndex,
-        string dbPath, string workspaceRoot, IndexedSymbol sym, bool full)
+        ISymbolLookupIndex index, string dbPath, string workspaceRoot, IndexedSymbol sym, bool full)
     {
         var detail = ExtractReader.ReadDetail(dbPath, sym.SymbolId);
         var buffer = new ArrayBufferWriter<byte>();
@@ -407,11 +399,8 @@ public sealed class InspectTool
 
             if (full)
             {
-                if (fullIndex is null)
-                    throw new InvalidOperationException("Full inspect requires the repository projection.");
-
                 w.WritePropertyName("children");
-                WriteSymbolArray(w, fullIndex.FindChildren(sym.SymbolId));
+                WriteSymbolArray(w, index.FindChildren(sym.SymbolId));
 
                 var refs = ExtractReader.ReadReferences(dbPath, sym.Name);
                 w.WritePropertyName("refs");

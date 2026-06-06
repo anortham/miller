@@ -10,9 +10,9 @@ namespace Miller.Tests.Indexing;
 /// </summary>
 public sealed class SymbolLookupTablesTests
 {
-    private static IndexedSymbol Sym(int docId, string id, string name, string path) =>
+    private static IndexedSymbol Sym(int docId, string id, string name, string path, string? parentId = null) =>
         new(docId, id, name, Signature: null, Kind: "method", Language: "csharp", FilePath: path,
-            StartLine: 1, EndLine: 2, ParentId: null, IsTest: false);
+            StartLine: 1, EndLine: 2, ParentId: parentId, IsTest: false);
 
     private static SymbolLookupTables Build(params IndexedSymbol[] symbols) =>
         SymbolLookupTables.Build(symbols);
@@ -64,6 +64,19 @@ public sealed class SymbolLookupTablesTests
         var t = Build(Sym(0, "sid-0", "Alpha", "src/A.cs"));
         Assert.Equal("Alpha", t.FindBySymbolId("sid-0")!.Name);
         Assert.Null(t.FindBySymbolId("nope"));
+    }
+
+    [Fact]
+    public void FindChildren_ReturnsDirectChildrenByParentId()
+    {
+        var t = Build(
+            Sym(0, "parent", "Parent", "src/A.cs"),
+            Sym(1, "child-a", "ChildA", "src/A.cs", parentId: "parent"),
+            Sym(2, "child-b", "ChildB", "src/A.cs", parentId: "parent"),
+            Sym(3, "other", "Other", "src/B.cs"));
+
+        Assert.Equal(["ChildA", "ChildB"], t.FindChildren("parent").Select(static s => s.Name).ToArray());
+        Assert.Empty(t.FindChildren("missing"));
     }
 
     [Fact]

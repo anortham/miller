@@ -543,7 +543,7 @@ public sealed class InspectToolTests
     }
 
     [Fact]
-    public void Inspect_Full_RegisteredWorkspace_UsesFullProvider()
+    public void Inspect_Full_RegisteredWorkspace_UsesSymbolProjectionWithoutFullLoad()
     {
         using var current = EmptyFixture("current-ws");
         using var target = JulieDbFixture.CreateForInspect();
@@ -575,7 +575,7 @@ public sealed class InspectToolTests
             ensure_fresh: false);
 
         Assert.Contains("## body", output);
-        Assert.Equal(1, fullResolveCount);
+        Assert.Equal(0, fullResolveCount);
         Assert.Equal(1, searchResolveCount);
     }
 

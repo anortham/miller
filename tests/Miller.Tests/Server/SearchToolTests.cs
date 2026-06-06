@@ -995,6 +995,7 @@ public sealed class SearchToolTests
         private readonly Dictionary<int, IndexedSymbol> _symbols;
         private readonly Dictionary<string, List<IndexedSymbol>> _byName;
         private readonly Dictionary<string, List<IndexedSymbol>> _byFilePath;
+        private readonly Dictionary<string, List<IndexedSymbol>> _byParentId;
 
         public StubSymbolSearchIndex(params (IndexedSymbol Symbol, double Score)[] rows)
         {
@@ -1007,6 +1008,11 @@ public sealed class SearchToolTests
                 .GroupBy(static row => row.Symbol.FilePath, StringComparer.Ordinal)
                 .ToDictionary(static group => group.Key, static group => group.Select(row => row.Symbol).ToList(),
                     StringComparer.Ordinal);
+            _byParentId = rows
+                .Select(static row => row.Symbol)
+                .Where(static symbol => symbol.ParentId is not null)
+                .GroupBy(static symbol => symbol.ParentId!, StringComparer.Ordinal)
+                .ToDictionary(static group => group.Key, static group => group.ToList(), StringComparer.Ordinal);
             _hits = rows
                 .Select(static row => new SearchHit(row.Symbol.ToSearchableDocument(), row.Score))
                 .ToArray();
@@ -1028,6 +1034,9 @@ public sealed class SearchToolTests
 
         public IndexedSymbol? FindBySymbolId(string symbolId) =>
             _symbols.Values.FirstOrDefault(symbol => symbol.SymbolId == symbolId);
+
+        public IReadOnlyList<IndexedSymbol> FindChildren(string parentId) =>
+            _byParentId.TryGetValue(parentId, out var symbols) ? symbols : Array.Empty<IndexedSymbol>();
 
         public IReadOnlyList<IndexedSymbol> FindByFilePath(string filePath) =>
             _byFilePath.TryGetValue(filePath, out var symbols) ? symbols : Array.Empty<IndexedSymbol>();

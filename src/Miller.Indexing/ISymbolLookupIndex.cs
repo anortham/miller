@@ -8,6 +8,8 @@ public interface ISymbolLookupIndex : ISymbolSearchIndex
 
     IndexedSymbol? FindBySymbolId(string symbolId);
 
+    IReadOnlyList<IndexedSymbol> FindChildren(string parentId);
+
     IReadOnlyList<IndexedSymbol> FindByFilePath(string filePath);
 
     IReadOnlyList<IndexedSymbol> FindByFilePathFragment(string query, int limit);

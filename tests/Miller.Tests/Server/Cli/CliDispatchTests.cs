@@ -399,6 +399,24 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void Inspect_Full_UniqueTarget_UsesSymbolProjectionWithoutFullGraphLoad()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        SqliteFixtureMutator.DropRelationshipsTable(fx.DbPath);
+
+        var (code, outText, errText) = Run(
+            new[] { "inspect", "GetUser", "--depth", "full" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("## body", outText);
+        Assert.Contains("return _repo.Find(id);", outText);
+        Assert.Contains("web/Controller.cs:4", outText);
+        Assert.Contains("Find", outText);
+    }
+
+    [Fact]
     public void Context_FindsRelevantBundle()
     {
         using var fx = JulieDbFixture.CreateForInspect();

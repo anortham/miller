@@ -227,28 +227,13 @@ public static class CliDispatch
         string output;
         if (string.Equals(depth, "full", StringComparison.OrdinalIgnoreCase))
         {
-            if (!TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex searchIndex))
+            if (!TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex index))
                 return 3;
 
-            var searchResolver = new SmartTargetResolver(searchIndex);
-            if (searchResolver.Resolve(o.Query, o.Value("scope")) is not TargetResolution.Symbol)
-            {
-                output = InspectTool.RunSummary(
-                    searchIndex, ctx.ExtractDbPath, ctx.WorkspaceRoot,
-                    target: o.Query, kind: o.Value("kind"), scope: o.Value("scope"),
-                    limit: o.Int("limit", 50), json: o.Has("json"), out _);
-            }
-            else
-            {
-                if (!TryLoadIndex(ctx, err, out MillerRepositoryIndex index))
-                    return 3;
-
-                var resolver = new SmartTargetResolver(index);
-                output = InspectTool.Run(
-                    index, resolver, ctx.ExtractDbPath, ctx.WorkspaceRoot,
-                    target: o.Query, depth, kind: o.Value("kind"), scope: o.Value("scope"),
-                    limit: o.Int("limit", 50), json: o.Has("json"), out _);
-            }
+            output = InspectTool.RunLookup(
+                index, ctx.ExtractDbPath, ctx.WorkspaceRoot,
+                target: o.Query, depth, kind: o.Value("kind"), scope: o.Value("scope"),
+                limit: o.Int("limit", 50), json: o.Has("json"), out _);
         }
         else
         {

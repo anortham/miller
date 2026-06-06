@@ -4,7 +4,7 @@
 - **Workspace used for scale evidence:** `/Users/murphy/source/openclaw`
 - **OpenClaw index:** 640,317 symbols, 12,781 files, revision 1
 - **OpenClaw DB sizes:** `symbols.db` 1.7G, `search.db` 664M
-- **Decision:** beta read paths are acceptable with a fresh sidecar. MCP summary `inspect`, `context`, workspace `status`, and workspace `list` stay cheap on a very large registered workspace once the relevant projections/full index are cached. One-shot CLI `search` and summary `inspect` now avoid both full graph hydration and eager sidecar snapshot loading. Full `inspect` and graph-heavy one-shot CLI commands can still be expensive and should be documented as heavier than summary inspect/search.
+- **Decision:** beta read paths are acceptable with a fresh sidecar. MCP summary `inspect`, full `inspect`, `context`, workspace `status`, and workspace `list` stay cheap on a very large registered workspace once the relevant projections/full index are cached. One-shot CLI `search`, summary `inspect`, and full `inspect` now avoid both full graph hydration and eager sidecar snapshot loading. Graph-heavy one-shot CLI commands can still be expensive and should be documented as heavier than summary inspect/search/full inspect.
 
 ## Setup
 
@@ -85,26 +85,32 @@ Measured from `/Users/murphy/source/openclaw` with the Release CLI:
 | `miller search "doctor-workspace-status.ts" --mode file` | not measured in first pass | `real=0.31s` | Cheap file lookup |
 | `miller search "gateway health checks" --mode content` | `real=0.26s` | `real=0.32s` | Unchanged and cheap |
 | `miller inspect noteWorkspaceStatus` | `real=6.57s` | `real=0.31s` | Fixed: summary inspect uses lazy symbol lookup |
-| `miller inspect noteWorkspaceStatus --depth full` | not measured in first pass | `real=6.74s` | Expected full path |
+| `miller inspect noteWorkspaceStatus --depth full` | not measured in first pass | `real=6.74s` | Superseded by projection routing below |
 | `miller context "workspace status command"` | `real=6.67s` | `real=6.75s` | Expected full path |
 
-Repeated `miller search "workspace status"` runs were stable at `real=0.26s`. The remaining expensive one-shot CLI paths are graph-heavy by design. If post-beta CLI workflows need faster full `inspect` / `context`, evaluate lazy graph/bridge loading or persisted read models there, not symbol-search widening or per-file in-memory patching first.
+Repeated `miller search "workspace status"` runs were stable at `real=0.26s`. The remaining expensive one-shot CLI paths are graph-heavy by design. If post-beta CLI workflows need faster `context` / `impact` / `trace`, evaluate lazy graph/bridge loading or persisted read models there, not symbol-search widening or per-file in-memory patching first.
 
-## Full Inspect Ambiguity Preflight
+## Full Inspect Projection Routing
 
-Follow-up on 2026-06-06 split ambiguous `depth=full` inspect from genuinely full symbol inspection.
-Before the fix, `miller inspect noteWorkspaceStatus --workspace-id openclaw --depth full` returned only
-the same ambiguity candidate list as summary inspect, but paid the full repository graph load first.
+Follow-up on 2026-06-06 removed the repository-graph dependency from full `inspect`.
+Before the first fix, `miller inspect noteWorkspaceStatus --workspace-id openclaw --depth full` returned only
+the same ambiguity candidate list as summary inspect, but paid the full repository graph load first. Before the
+second fix, unique-symbol full inspect still loaded the full graph only to read child symbols; refs/callers/
+callees/body were already available from lookup projection plus direct SQLite readers.
 
 Measured from `/Users/murphy/source/miller` against OpenClaw with the Release CLI:
 
 | Operation | Before | After | Result |
 |---|---:|---:|---|
 | `miller inspect noteWorkspaceStatus --workspace-id openclaw --depth full` | `real=8.75s`, max RSS ~1.45G | `real=0.60s`, max RSS ~69M | Fixed: ambiguous full inspect uses symbol preflight and returns candidates without full load |
+| `miller inspect runWorkspaceStatusHealth --workspace-id openclaw --depth full` | not previously measured | `real=0.38s`, max RSS ~68M | Fixed: unique-symbol full inspect renders children/callees/body without full load |
 
-The full path still loads the repository graph after the cheap preflight when the target resolves to a
-single symbol. `context`, `impact`, `trace`, and unique-symbol full `inspect` remain the follow-up surface
-for lazy graph/bridge or persisted read-model work.
+Implementation note: `ISymbolLookupIndex` now exposes direct child lookup. The in-memory projection serves it
+from parent-id lookup tables, and the FTS sidecar serves it from `search_symbols.parent_symbol_id`. Full inspect
+uses that child lookup plus `ExtractReader.ReadDetail` / `ReadReferences` / `ReadCallees` / `ReadBody`, so it no
+longer needs `RepositoryIndexLoader.Load`.
+
+`context`, `impact`, and `trace` remain the follow-up surface for lazy graph/bridge or persisted read-model work.
 
 ## Region Search Fail-Closed Check
 
