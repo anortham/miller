@@ -39,7 +39,7 @@ var host = new HostBuilder()
 
                     // Landing page: full-width index of every registered workspace with stats.
                     endpoints.MapGet("/", () =>
-                        new RazorComponentResult<WorkspacesShell>(new
+                        new RazorComponentResult<Miller.Dashboard.Components.WorkspacesShell>(new
                         {
                             Index = DashboardData.ReadIndex(paths.RegistryDbPath),
                         })
@@ -49,7 +49,7 @@ var host = new HostBuilder()
 
                     // Per-workspace detail page: full-width index facts, context savings, telemetry.
                     endpoints.MapGet("/workspace", (string? workspace_id) =>
-                        new RazorComponentResult<WorkspaceShell>(new
+                        new RazorComponentResult<Miller.Dashboard.Components.WorkspaceShell>(new
                         {
                             Snapshot = DashboardData.ReadSnapshot(
                                 paths.RegistryDbPath,
@@ -63,7 +63,7 @@ var host = new HostBuilder()
 
                     // Legacy HTMX fragment routes retained for older dashboard links and dogfood evidence.
                     endpoints.MapGet("/fragments/dashboard", (string? workspace_id) =>
-                        new RazorComponentResult<DashboardContent>(new
+                        new RazorComponentResult<Miller.Dashboard.Components.DashboardContent>(new
                         {
                             Snapshot = DashboardData.ReadSnapshot(
                                 paths.RegistryDbPath,
@@ -76,7 +76,7 @@ var host = new HostBuilder()
                         });
 
                     endpoints.MapGet("/fragments/workspaces", () =>
-                        new RazorComponentResult<WorkspaceIndex>(new
+                        new RazorComponentResult<Miller.Dashboard.Components.WorkspaceIndex>(new
                         {
                             Index = DashboardData.ReadIndex(paths.RegistryDbPath),
                         })
@@ -85,7 +85,7 @@ var host = new HostBuilder()
                         });
 
                     endpoints.MapGet("/fragments/telemetry", (string? workspace_id) =>
-                        new RazorComponentResult<TelemetryPanel>(new
+                        new RazorComponentResult<Miller.Dashboard.Components.TelemetryPanel>(new
                         {
                             Telemetry = DashboardData.ReadTelemetrySummary(paths.TelemetryDbPath, workspace_id),
                             SelectedWorkspaceId = workspace_id,
@@ -113,7 +113,9 @@ var host = new HostBuilder()
                     endpoints.MapPost("/workspaces/{workspace_id}/refresh", (string workspace_id) =>
                     {
                         var result = DashboardData.RefreshWorkspace(paths.RegistryDbPath, paths.ToolsRoot, workspace_id);
-                        return Results.Json(result);
+                        return Results.Text(
+                            DashboardData.RenderRefreshJson(result),
+                            "application/json; charset=utf-8");
                     });
                 });
             });

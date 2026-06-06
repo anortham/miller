@@ -109,13 +109,11 @@ public static class CliDispatch
             new DashboardLaunchRequest(ctx, port, StartupTimeout: TimeSpan.FromSeconds(5)));
         if (o.Has("json"))
         {
-            outw.WriteLine(System.Text.Json.JsonSerializer.Serialize(new
-            {
-                status = result.Outcome.ToString().ToLowerInvariant(),
-                url = result.Url.ToString(),
-                pid = result.ProcessId,
-                message = result.Message,
-            }));
+            outw.WriteLine(ServerJson.Serialize(new DashboardLaunchJson(
+                Status: result.Outcome.ToString().ToLowerInvariant(),
+                Url: result.Url.ToString(),
+                Pid: result.ProcessId,
+                Message: result.Message)));
             return result.Success ? 0 : 3;
         }
 

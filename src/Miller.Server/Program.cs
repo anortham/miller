@@ -7,6 +7,7 @@ using Miller.Server.Hosting;
 using Miller.Server.Logging;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
+using Miller.Server.Tools;
 using ModelContextProtocol.Server;
 using Serilog;
 using Serilog.Core;
@@ -14,10 +15,8 @@ using Serilog.Core;
 // Miller MCP server host bootstrap (M2).
 // IndexBootstrapService (an IHostedService registered BEFORE the MCP host) builds the in-memory index from
 // the julie extract and opens the telemetry ledger before the stdio transport accepts any tools/call. Every
-// [McpServerToolType] tool — search, inspect, context, impact, edit — is auto-discovered from this assembly via
-// WithToolsFromAssembly() (each ctor's deps resolve from DI: all take IndexHolder + SmartTargetResolver; the
-// DB-backed inspect + edit also take WorkspaceContext, while the in-memory context + impact do not); the
-// ONE central telemetry CallToolFilter wraps every call.
+// [McpServerToolType] tool is registered explicitly for Native AOT; each ctor's deps resolve from DI. The ONE
+// central telemetry CallToolFilter wraps every call.
 //
 // STDIO PURITY: nothing may touch stdout except the MCP protocol. Serilog Console is routed to stderr; never
 // Console.WriteLine anywhere in this process.
@@ -87,8 +86,14 @@ builder.Services
         options.ServerInstructions = AgentInstructions.Load();
     })
     .WithStdioServerTransport()
-    .WithToolsFromAssembly()
-    // The ONE central telemetry interceptor — wraps every tools/call including reflection-discovered tools.
+    .WithTools<SearchTool>()
+    .WithTools<InspectTool>()
+    .WithTools<ContextTool>()
+    .WithTools<TraceTool>()
+    .WithTools<ImpactTool>()
+    .WithTools<EditTool>()
+    .WithTools<WorkspaceTool>()
+    // The ONE central telemetry interceptor — wraps every tools/call.
     .WithRequestFilters(filters => filters.AddCallToolFilter(TelemetryCallToolFilter.Create()));
 
 var host = builder.Build();

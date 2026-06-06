@@ -5,6 +5,13 @@
     <AssemblyName>miller</AssemblyName>
   </PropertyGroup>
 
+  <!-- Serilog 4.3 emits an internal Native AOT trim warning from its destructuring converter. Miller does not use
+       destructuring log templates, and we keep the suppression scoped to AOT publish so normal builds remain strict
+       and Miller-owned trim/AOT warnings still fail release packaging. -->
+  <PropertyGroup Condition="'$(PublishAot)' == 'true'">
+    <NoWarn>$(NoWarn);IL2104</NoWarn>
+  </PropertyGroup>
+
   <ItemGroup>
     <InternalsVisibleTo Include="Miller.Tests" />
   </ItemGroup>

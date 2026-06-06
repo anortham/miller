@@ -536,7 +536,7 @@ public sealed class InspectTool
 
     private static string Utf8(ArrayBufferWriter<byte> buffer) => Encoding.UTF8.GetString(buffer.WrittenSpan);
 
-    private static string JsonString(string value) => JsonSerializer.Serialize(value);
+    private static string JsonString(string value) => ServerJson.String(value);
 
     private static string RenderBodyUnavailableNote(ExtractReader.BodyUnavailableReason? reason) =>
         "(body unavailable — " + BodyUnavailableReasonCompact(reason) + ")";

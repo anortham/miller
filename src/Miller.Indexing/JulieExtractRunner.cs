@@ -26,12 +26,6 @@ public sealed class JulieExtractRunner
     // info opens read-only, takes no flock — `info --db <ABS_DB> --strict-schema --json` (NO --root).
     // scan binds the workspace/root — `scan --root <ABS_ROOT> --db <ABS_DB> --strict-schema --json [--force]`.
     // update/delete touch one canonical file — `update|delete --root <ABS_ROOT> --db <ABS_DB> --file <ABS_CANON_FILE> --strict-schema --json` (M3).
-    private static readonly JsonSerializerOptions JsonOpts = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-        PropertyNameCaseInsensitive = true,
-    };
-
     /// <summary>
     /// The default bound on a single julie-extract invocation. Generous (a cold full scan of a large repo is
     /// well under this); the purpose is to bound a truly hung child, not to clip a legitimate slow scan (§10A).
@@ -177,7 +171,7 @@ public sealed class JulieExtractRunner
     public static ExtractReport ParseReport(string json)
     {
         ArgumentNullException.ThrowIfNull(json);
-        return JsonSerializer.Deserialize<ExtractReport>(json, JsonOpts)
+        return JsonSerializer.Deserialize(json, JulieExtractJsonContext.Default.ExtractReport)
             ?? throw new JsonException("julie-extract report deserialized to null.");
     }
 

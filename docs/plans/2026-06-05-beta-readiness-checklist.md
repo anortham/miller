@@ -17,8 +17,7 @@ Miller is beta-ready when it is usable as the free local code-intelligence core 
 - Known limits and post-beta work are documented instead of hidden.
 
 Beta does not require Eros work, organization workflows, semantic/vector search, or a fully
-release-blocking Native AOT gate. AOT remains release-readiness work unless beta is redefined as a
-standalone packaged binary release.
+AOT dashboard. The release workflow should still keep the main `miller` binary Native AOT.
 
 ## Current State
 
@@ -240,7 +239,7 @@ for `9128855` and 2.1.2 bridge follow-up evidence in
 
 ## Not Beta Blockers Unless Evidence Says Otherwise
 
-- Full release-blocking Native AOT.
+- Native AOT dashboard packaging.
 - Eros architecture or commercial workflow decisions.
 - LanceDB, embeddings, semantic search, or vector projections.
 - `embedded` source regions.

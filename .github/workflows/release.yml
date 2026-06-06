@@ -94,9 +94,11 @@ jobs:
             -c Release `
             -r "${{ matrix.rid }}" `
             --self-contained true `
-            -p:PublishSingleFile=true `
-            -p:PublishTrimmed=false `
+            -p:PublishAot=true `
+            -p:JsonSerializerIsReflectionEnabledByDefault=false `
             -o $publishDir
+          # ASP.NET Razor Components do not currently support Native AOT; keep the packaged dashboard
+          # self-contained while the main miller binary is AOT.
           dotnet publish src/Miller.Dashboard/Miller.Dashboard.csproj `
             -c Release `
             -r "${{ matrix.rid }}" `

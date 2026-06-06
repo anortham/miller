@@ -91,8 +91,9 @@ scripts/test.ps1 all
   `julie-extract --version` and `miller version`, then uploads a `.sha256` sidecar for each archive.
 - Manual workflow dispatch defaults to package-only validation; set `publish: true` to create or update the
   GitHub release. Manual publish defaults to a prerelease. Tag pushes infer prerelease status from a
-  hyphenated version such as `v0.1.0-beta.1`. Native AOT is viable but still deferred until trim/AOT warnings
-  are cleaned up.
+  hyphenated version such as `v0.1.0-beta.1`. The main `miller` binary is published with Native AOT; the
+  dashboard executable remains self-contained/non-AOT because ASP.NET Razor Components do not currently support
+  Native AOT.
 - Do not publish, retag, delete, or overwrite a release without explicit user approval. README current-release
   metadata and release-evidence docs must come from live GitHub release facts, not guessed values.
 

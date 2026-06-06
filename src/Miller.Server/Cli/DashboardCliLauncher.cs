@@ -337,7 +337,7 @@ internal sealed class DashboardCliLauncher : IDashboardLauncher
 
     private static void WriteMetadata(string path, DashboardProcessMetadata metadata)
     {
-        string json = JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true });
+        string json = ServerJson.Serialize(metadata);
         File.WriteAllText(path, json);
     }
 

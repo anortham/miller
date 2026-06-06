@@ -105,12 +105,25 @@ dotnet publish src/Miller.Server/Miller.Server.csproj \
   /p:JsonSerializerIsReflectionEnabledByDefault=false
 ```
 
-With normal `TreatWarningsAsErrors=true`, publish fails on AOT/trim warnings. With warnings
-temporarily demoted, publish completes and produces a native `miller` binary.
+As of 2026-06-06, a clean local Native AOT publish of the main `miller` binary succeeds with
+warnings treated as errors:
+
+```bash
+dotnet publish src/Miller.Server/Miller.Server.csproj \
+  -c Release \
+  -r osx-arm64 \
+  /p:PublishAot=true \
+  /p:SelfContained=true \
+  /p:JsonSerializerIsReflectionEnabledByDefault=false
+```
+
+The release workflow uses the same AOT posture for the main `miller` binary. The packaged
+dashboard executable remains self-contained/non-AOT because ASP.NET Razor Components currently mark
+`AddRazorComponents()` as unsupported for trimming and Native AOT.
 
 Observed local output:
 
-- `miller` native executable: about 13 MB expanded
+- `miller` native executable: native Mach-O arm64 on macOS
 - `libe_sqlite3.dylib`: about 1.5 MB
 - `libblake3_dotnet.dylib`: about 433 KB
 - local copied `.tools/julie-extract`: about 64 MB expanded, about 9 MB compressed
@@ -122,32 +135,32 @@ extractor targets in one archive.
 
 ## AOT Hardening Work
 
-Before AOT becomes a required release gate:
+Completed for the main `miller` release binary:
 
-1. Add a non-blocking `aot-smoke` CI lane.
-2. Replace reflection-based `System.Text.Json` serialization/deserialization with source-generated
+1. Replace reflection-based `System.Text.Json` serialization/deserialization with source-generated
    JSON contexts.
-3. Replace MCP `.WithToolsFromAssembly()` reflection discovery with explicit generic tool
+2. Replace MCP `.WithToolsFromAssembly()` reflection discovery with explicit generic tool
    registration.
-4. Investigate Serilog trim warnings. Either move to an AOT-clean logging configuration or suppress
-   narrowly with runtime smoke coverage.
-5. Keep warnings as errors for the normal build, then turn AOT warnings into release-blocking
-   errors once the warnings are understood.
-6. Add release matrix jobs for platform-specific archives:
-   - `linux-x64`
-   - `linux-arm64`
-   - `osx-arm64`
-   - `win-x64`
-7. Package only the matching `julie-extract` binary and checksum for each platform.
-8. Exclude `.pdb`, `.dSYM`, and other debug symbols from normal user downloads. Publish them as
+3. Keep warnings as errors and make the release workflow's main binary publish use
+   `PublishAot=true`.
+4. Suppress Serilog's known package-level `IL2104` AOT warning narrowly on `PublishAot=true`.
+   Miller does not use Serilog destructuring templates; Miller-owned AOT warnings still fail.
+5. Add release matrix jobs for the platform-specific archives below.
+6. Package only the matching `julie-extract` binary and checksum for each platform.
+7. Exclude `.pdb`, `.dSYM`, and other debug symbols from normal user downloads. Publish them as
    separate debug artifacts if needed.
 
-## Deferred AOT Release-Readiness Notes
+Remaining AOT-specific follow-up:
 
-This is deferred until the remaining beta/TODO work is addressed. Do not treat it as a source-checkout
-beta blocker.
+- Replace the dashboard's Razor Components rendering if a Native AOT dashboard executable becomes a
+  product requirement. The current dashboard ships as a self-contained executable because Razor
+  Components do not currently support Native AOT.
+- Keep the package-only workflow dispatch as the cross-platform release validation gate before any
+  publish.
 
-Current release workflow state as of 2026-06-05:
+## Release Workflow State
+
+Current release workflow state as of 2026-06-06:
 
 - `.github/workflows/release.yml` already has a platform matrix for:
   - `aarch64-apple-darwin` / `osx-arm64`
@@ -158,29 +171,12 @@ Current release workflow state as of 2026-06-05:
 - The workflow verifies package shape so Unix packages include `.tools/julie-extract` and not
   `.tools/julie-extract.exe`, while Windows packages include `.tools/julie-extract.exe` and not the
   Unix binary.
-- The workflow currently publishes self-contained single-file artifacts with
-  `PublishSingleFile=true` and `PublishTrimmed=false`.
-- It does not currently publish AOT artifacts because it does not set `PublishAot=true`.
+- The workflow publishes the main `miller` executable with `PublishAot=true` and
+  `JsonSerializerIsReflectionEnabledByDefault=false`.
+- The workflow publishes the dashboard executable with `PublishSingleFile=true` and
+  `PublishTrimmed=false` because Razor Components do not support Native AOT.
 
-The release-readiness track should therefore proceed in two stages:
-
-1. Add a non-blocking `aot-smoke` CI job that restores the platform-matched `julie-extract`, runs
-   `dotnet publish` with `PublishAot=true`, and keeps AOT/trim warnings visible in CI output.
-2. After warning cleanup, promote AOT to the release workflow and keep the existing archive-shape
-   invariant: one Miller runtime plus exactly one matching `julie-extract` binary per package.
-
-The warning cleanup list remains:
-
-- replace reflection-based `System.Text.Json` serialization/deserialization paths, especially
-  `JulieExtractRunner.ParseReport`, with source-generated JSON contexts;
-- replace or harden MCP `WithToolsFromAssembly()` reflection discovery, likely with explicit generic
-  tool registration if the SDK requires it;
-- investigate Serilog trim/AOT warnings and either use an AOT-clean configuration or suppress narrowly
-  with runtime smoke coverage;
-- keep normal build warnings as errors, but make AOT warnings release-blocking only after they are
-  understood and warning-clean.
-
-When AOT packaging resumes, also verify `scripts/julie-pins.json` still contains exactly the extractor
+When changing AOT packaging, verify `scripts/julie-pins.json` still contains exactly the extractor
 targets the release matrix packages. If a new Miller target is added, add the matching
 `julie-extractors` release asset first or explicitly mark the target unsupported.
 
@@ -213,8 +209,10 @@ fall back to `PATH` only as a convenience.
 
 ## Acceptance Criteria For The Next Session
 
-- Miller still builds and tests normally before AOT work begins.
-- AOT warnings are captured in CI output even if not yet blocking.
-- JSON and MCP reflection warnings have tracked fixes.
+- Miller still builds and tests normally with non-AOT local development commands.
+- The release workflow continues to publish the main `miller` binary with Native AOT.
+- Package-only release workflow dispatch succeeds across the release matrix before any publish.
+- Dashboard Native AOT remains explicitly deferred unless the dashboard is rewritten away from Razor
+  Components.
 - Release archives are platform-specific and do not bundle unrelated `julie-extract` targets.
 - Eros alignment docs agree that Miller is the free core and Eros is the commercial extension layer.

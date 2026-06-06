@@ -70,7 +70,7 @@ public static class MillerServiceRegistration
         //    binds to the dedicated EditWriteLock on <.miller>/edit.lock (separate from the indexer lock so an
         //    edit never deadlocks against the running indexer leader — see EditWriteLock).
         //  - IEditWriteThrough: post-apply convergence — the leader reindexes inline, else the watcher reconciles.
-        // EditTool itself is auto-discovered via WithToolsFromAssembly() ([McpServerToolType]); it resolves these.
+        // EditTool itself is explicitly registered in Program.cs for Native AOT; it resolves these.
         services.AddSingleton(sp =>
         {
             var workspace = sp.GetRequiredService<WorkspaceContext>();
@@ -87,9 +87,9 @@ public static class MillerServiceRegistration
         // production defaults live on SoftBudgets.Default.
         services.AddSingleton(SoftBudgets.Default);
 
-        // M7 workspace tool (decision-1): the admin/index-lifecycle tool. Auto-discovered via
-        // WithToolsFromAssembly() ([McpServerToolType]); it resolves the holder/workspace/indexer/freshness/probe/
-        // ledger singletons above plus a JulieExtractRunner for the open(path) prime scan. The runner is located
+        // M7 workspace tool (decision-1): the admin/index-lifecycle tool. Explicitly registered in Program.cs for
+        // Native AOT; it resolves the holder/workspace/indexer/freshness/probe/ledger singletons above plus a
+        // JulieExtractRunner for the open(path) prime scan. The runner is located
         // under the SAME tools root the bootstrap + indexer use (the pinned julie-extract ships there, NOT the repo
         // cwd), so a missing binary fails loudly via JulieExtractRunner.Locate's restore-script message rather than
         // silently degrading.

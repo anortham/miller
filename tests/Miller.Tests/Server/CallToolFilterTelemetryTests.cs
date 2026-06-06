@@ -15,8 +15,8 @@ namespace Miller.Tests.Server;
 
 /// <summary>
 /// A trivial reflection-discoverable tool that exists ONLY for the decision-1 pin. It is discovered via
-/// <c>WithToolsFromAssembly(this assembly)</c> exactly like Miller's real tools, proving the central filter
-/// wraps reflection-discovered tools — not just a not-found fallback.
+/// <c>WithToolsFromAssembly(this assembly)</c> to prove the central filter also wraps SDK reflection-discovered
+/// tools — not just production's explicitly registered tools or a not-found fallback.
 /// </summary>
 [McpServerToolType]
 public static class PinProbeTool
@@ -77,7 +77,7 @@ public static class PinProbeTool
 /// <summary>
 /// THE decision-1 pin (m2-design L20-26, L221-225): the ONE central <c>CallToolFilter</c> must fire for a
 /// reflection-discovered (<c>WithToolsFromAssembly</c>) tool. This stands up a real in-process MCP server
-/// (crossed-pipe stream transport) wired exactly as production — <c>WithToolsFromAssembly</c> + the telemetry
+/// (crossed-pipe stream transport) wired with <c>WithToolsFromAssembly</c> + the telemetry
 /// <c>CallToolFilter</c> + a real <see cref="TelemetryLedger"/> — invokes the discovered tool through the SDK
 /// client, and asserts a <c>tool_telemetry</c> row was recorded for it. If THIS fails, the per-tool
 /// <c>using Measure()</c> fallback is taken (documented in deviations). It passes, so the central filter

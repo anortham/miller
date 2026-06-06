@@ -11,9 +11,8 @@ namespace Miller.Server.Telemetry;
 /// <summary>
 /// The ONE central tool-call interceptor (M2 decision-1). Registered via
 /// <c>builder.WithRequestFilters(f => f.AddCallToolFilter(TelemetryCallToolFilter.Create()))</c>, it wraps
-/// EVERY <c>tools/call</c> — including reflection-discovered (<c>WithToolsFromAssembly</c>) tools, verified
-/// empirically — so telemetry is captured once, centrally, with no per-tool boilerplate. For each call it
-/// opens a <see cref="TelemetryLedger.Measure"/> scope (published as the ambient
+/// every explicitly registered tool, so telemetry is captured once, centrally, with no per-tool boilerplate. For
+/// each call it opens a <see cref="TelemetryLedger.Measure"/> scope (published as the ambient
 /// <see cref="TelemetryContext.Current"/> the tool body may enrich), runs the inner handler, then stamps the
 /// outcome (IsError → error; else, only when the tool did NOT classify it, empty if zero results else ok),
 /// bytes_returned, and est_tokens before the scope disposes and persists the row. index_fresh is left null

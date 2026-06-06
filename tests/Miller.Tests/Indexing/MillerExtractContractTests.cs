@@ -157,6 +157,24 @@ public sealed class MillerExtractContractTests
     }
 
     [Fact]
+    public void ReleaseWorkflowPublishesAotMillerBinaryAndSelfContainedDashboard()
+    {
+        string workflowPath = Path.Combine(ScaleTestSupport.RepoRoot(), ".github", "workflows", "release.yml");
+        string workflow = File.ReadAllText(workflowPath);
+
+        Assert.Matches(
+            @"dotnet publish src/Miller\.Server/Miller\.Server\.csproj[\s\S]*?-p:PublishAot=true[\s\S]*?-p:JsonSerializerIsReflectionEnabledByDefault=false",
+            workflow);
+        Assert.Contains(
+            "ASP.NET Razor Components do not currently support Native AOT",
+            workflow,
+            StringComparison.Ordinal);
+        Assert.Matches(
+            @"dotnet publish src/Miller\.Dashboard/Miller\.Dashboard\.csproj[\s\S]*?-p:PublishSingleFile=true[\s\S]*?-p:PublishTrimmed=false",
+            workflow);
+    }
+
+    [Fact]
     public void RestoreScriptPythonFallbackReadsArchiveInnerPathTemplate()
     {
         string scriptPath = Path.Combine(ScaleTestSupport.RepoRoot(), "scripts", "restore-julie-extract.sh");

@@ -533,7 +533,7 @@ public sealed class EditService
     {
         string msg = $"'{target}' not found. Use search/inspect to locate it.";
         return json
-            ? new EditResult($"{{\"applied\":false,\"not_found\":{JsonSerializer.Serialize(target)}}}",
+            ? new EditResult($"{{\"applied\":false,\"not_found\":{ServerJson.String(target)}}}",
                 false, false, null, "empty", 0)
             : new EditResult(msg, false, false, null, "empty", 0);
     }

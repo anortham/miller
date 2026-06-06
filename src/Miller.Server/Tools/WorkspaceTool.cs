@@ -372,7 +372,7 @@ public sealed class WorkspaceTool
         if (!Directory.Exists(path))
         {
             string note = $"cannot prime: no directory at '{path}'.";
-            string output = json ? $"{{\"note\":{System.Text.Json.JsonSerializer.Serialize(note)}}}" : note;
+            string output = json ? ServerJson.Note(note) : note;
             return (output, 0, TelemetryOutcome.Empty);
         }
 
@@ -384,7 +384,7 @@ public sealed class WorkspaceTool
             string note =
                 $"refusing to prime sensitive system path '{Path.GetFullPath(path)}': choose a project " +
                 "directory or pass a narrower path.";
-            string output = json ? $"{{\"note\":{System.Text.Json.JsonSerializer.Serialize(note)}}}" : note;
+            string output = json ? ServerJson.Note(note) : note;
             return (output, 0, TelemetryOutcome.Empty);
         }
 
@@ -401,7 +401,7 @@ public sealed class WorkspaceTool
                 "that path IS the live workspace this process is serving; open does not prime the in-use " +
                 "index. Use workspace(operation=\"refresh\") (or \"full\" to force a rebuild) — they reconcile " +
                 "it through the indexer leader, keeping every write on the single-writer path.";
-            string output = json ? $"{{\"note\":{System.Text.Json.JsonSerializer.Serialize(note)}}}" : note;
+            string output = json ? ServerJson.Note(note) : note;
             return (output, 0, TelemetryOutcome.Empty);
         }
 
@@ -423,7 +423,7 @@ public sealed class WorkspaceTool
             string note =
                 $"a Miller instance is already serving '{canonicalRoot}' (it holds the writer lock and keeps " +
                 "that index fresh) — not priming it. A Miller launched there will use the live index directly.";
-            string served = json ? $"{{\"note\":{System.Text.Json.JsonSerializer.Serialize(note)}}}" : note;
+            string served = json ? ServerJson.Note(note) : note;
             return (served, 0, TelemetryOutcome.Empty);
         }
 
@@ -684,7 +684,7 @@ public sealed class WorkspaceTool
         "to register it first.";
 
     private static string Note(string message, bool json) =>
-        json ? $"{{\"note\":{System.Text.Json.JsonSerializer.Serialize(message)}}}" : message;
+        json ? ServerJson.Note(message) : message;
 
     private sealed record TargetWorkspace(
         bool IsCurrent,
@@ -717,6 +717,6 @@ public sealed class WorkspaceTool
             _ => $"unknown workspace operation '{operation}'. " +
                  "Use status|refresh|full|list|open|remove|dashboard (default status).",
         };
-        return json ? $"{{\"note\":{System.Text.Json.JsonSerializer.Serialize(message)}}}" : message;
+        return json ? ServerJson.Note(message) : message;
     }
 }

@@ -159,11 +159,11 @@ public sealed record DashboardWorkspaceIndex(
 
 public static class DashboardData
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    private static readonly DashboardJsonContext JsonContext = new(new JsonSerializerOptions
     {
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         WriteIndented = false,
-    };
+    });
 
     /// <summary>
     /// Landing-page view: every registered workspace paired with its index facts, plus machine-wide totals.
@@ -195,7 +195,7 @@ public static class DashboardData
     }
 
     public static string RenderIndexJson(string registryDbPath) =>
-        JsonSerializer.Serialize(ReadIndex(registryDbPath), JsonOptions);
+        JsonSerializer.Serialize(ReadIndex(registryDbPath), JsonContext.DashboardWorkspaceIndex);
 
     public static IReadOnlyList<DashboardWorkspaceRow> ReadWorkspaces(string registryDbPath)
     {
@@ -388,13 +388,16 @@ public static class DashboardData
     }
 
     public static string RenderWorkspacesJson(string registryDbPath) =>
-        JsonSerializer.Serialize(ReadWorkspaces(registryDbPath), JsonOptions);
+        JsonSerializer.Serialize(ReadWorkspaces(registryDbPath), JsonContext.IReadOnlyListDashboardWorkspaceRow);
 
     public static string RenderTelemetryJson(string telemetryDbPath, string? workspaceId) =>
-        JsonSerializer.Serialize(ReadTelemetrySummary(telemetryDbPath, workspaceId), JsonOptions);
+        JsonSerializer.Serialize(ReadTelemetrySummary(telemetryDbPath, workspaceId), JsonContext.DashboardTelemetrySummary);
 
     public static string RenderSnapshotJson(string registryDbPath, string telemetryDbPath, string? workspaceId) =>
-        JsonSerializer.Serialize(ReadSnapshot(registryDbPath, telemetryDbPath, workspaceId), JsonOptions);
+        JsonSerializer.Serialize(ReadSnapshot(registryDbPath, telemetryDbPath, workspaceId), JsonContext.DashboardSnapshot);
+
+    public static string RenderRefreshJson(WorkspaceRefreshResult result) =>
+        JsonSerializer.Serialize(result, JsonContext.WorkspaceRefreshResult);
 
     private static string? SelectWorkspace(
         IReadOnlyList<DashboardWorkspaceRow> workspaces,

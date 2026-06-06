@@ -438,7 +438,7 @@ public sealed class ImpactTool
           "(a unified diff).";
 
     private static string Note(bool json, string message) => json
-        ? $"{{\"note\":{JsonSerializer.Serialize(message)}}}"
+        ? ServerJson.Note(message)
         : message;
 
     private static Utf8JsonWriter NewWriter(ArrayBufferWriter<byte> buffer) =>

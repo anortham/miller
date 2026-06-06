@@ -5,13 +5,6 @@ namespace Miller.Indexing;
 
 internal static class BridgeProviderSelection
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        AllowTrailingCommas = true,
-        PropertyNameCaseInsensitive = true,
-        ReadCommentHandling = JsonCommentHandling.Skip,
-    };
-
     public static IReadOnlyList<IBridgeProvider> ProvidersForDatabase(string dbPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
@@ -23,7 +16,9 @@ internal static class BridgeProviderSelection
         MillerConfig? config;
         try
         {
-            config = JsonSerializer.Deserialize<MillerConfig>(File.ReadAllText(configPath), JsonOptions);
+            config = JsonSerializer.Deserialize(
+                File.ReadAllText(configPath),
+                MillerConfigJsonContext.Default.MillerConfig);
         }
         catch (JsonException ex)
         {
@@ -68,10 +63,6 @@ internal static class BridgeProviderSelection
             ? DotnetWebBridgeProvider.Instance
             : new UnknownBridgeProvider(providerId);
 
-    private sealed record MillerConfig(BridgeConfig? Bridge);
-
-    private sealed record BridgeConfig(List<string>? Providers);
-
     private sealed class UnknownBridgeProvider(string id) : IBridgeProvider
     {
         public string Id { get; } = id;
@@ -82,3 +73,7 @@ internal static class BridgeProviderSelection
                 new Dictionary<string, int>(StringComparer.Ordinal));
     }
 }
+
+internal sealed record MillerConfig(BridgeConfig? Bridge);
+
+internal sealed record BridgeConfig(List<string>? Providers);
