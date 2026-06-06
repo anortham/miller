@@ -3,7 +3,7 @@ id: miller-project-direction-amp-milestone-state
 title: Miller — product direction & beta candidate state
 status: active
 created: 2026-05-30T16:32:42.067Z
-updated: 2026-06-06T13:40:36.460Z
+updated: 2026-06-06T14:01:25.694Z
 tags:
   - miller
   - project-direction
@@ -22,14 +22,29 @@ tags:
 
 Architecture contracts: workspace DBs live at `<workspace>/.miller/symbols.db`; central discovery is `~/.miller/workspaces.db`; `workspace_id` is SHA-256 of canonical root; file freshness uses `files.content_hash` with `blake3:`; read tools accept workspace selectors. Current pin: `julie-extract` v2.1.3, SQLite schema 2, extract contract 2, report schema 2.
 
+## Product Positioning
+
+Miller is a living, up-to-date agent assistant, not just a graph extraction tool.
+
+That means Miller should be framed around freshness and workflow integration, not just graph extraction:
+
+- current workspace state, freshness, and refresh lifecycle
+- MCP + CLI surfaces designed for agents in the loop
+- live registry, telemetry, dashboard, and workspace selection
+- stale/corrupt sidecar self-healing instead of one-time artifact generation
+- structural answers that can be re-run against the current checkout during active work
+
+Public positioning should stay focused on the Miller/Eros vision: Miller as the free local code-intelligence core, Eros as the higher-level guidance and workflow layer.
+
 ## Current State - 2026-06-06
 
-M0-M8 are complete. The source-checkout beta candidate is now branch-tip `main` at `91288557137a1711e148628b374863526ae4b3ab` (`0.1.0+91288557137a`). It has been pushed to `origin/main`.
+M0-M8 are complete. The source-checkout beta code candidate is `91288557137a1711e148628b374863526ae4b3ab` (`0.1.0+91288557137a`). The branch-tip status/documentation commit is `004cfac35cdc60c7bd700c763f42a9ee53213550`, and it has been pushed to `origin/main`.
 
 Verification on the pushed commit:
 
 - Local macOS: `dotnet build Miller.slnx -c Release` passed with 0 warnings/errors; `scripts/test.sh` passed 1,631 fast tests; `scripts/test.sh scale` passed 25 scale tests; `git diff --check` was clean.
 - GitHub Actions run `27063713900` passed on commit `91288557137a1711e148628b374863526ae4b3ab`: main build/test passed, and `windows-fast` restored `julie-extract`, built, and passed `scripts/test.ps1`.
+- GitHub Actions run `27063900807` passed on commit `004cfac35cdc60c7bd700c763f42a9ee53213550`: main build/test passed, and `windows-fast` restored `julie-extract`, built, and passed `scripts/test.ps1`.
 
 ## Search And Read-Path State
 
@@ -60,7 +75,7 @@ Use `docs/plans/2026-06-05-beta-readiness-checklist.md` and `TODO.md` as routing
 Next recommended work:
 
 1. Decide whether to tag/publish a prerelease beta. Do not tag, publish, overwrite, or release without explicit approval.
-2. Before public beta positioning, do the separate Graphify comparison the user deferred, so we are clear about Miller's differentiated reason to exist.
+2. Turn the living, up-to-date agent assistant positioning into README/release language and one or two concrete proof examples.
 3. Post-beta: measure whether symbol projection widening (`doc_comment`, identifiers, bounded context/literals/path tokens) helps real workflows; keep it out of the current beta unless fresh dogfood changes the decision.
 
 ## Guardrails
