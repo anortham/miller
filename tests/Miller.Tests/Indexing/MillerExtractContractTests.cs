@@ -144,6 +144,19 @@ public sealed class MillerExtractContractTests
     }
 
     [Fact]
+    public void ReleaseWorkflowSupportsPackageOnlyManualValidation()
+    {
+        string workflowPath = Path.Combine(ScaleTestSupport.RepoRoot(), ".github", "workflows", "release.yml");
+        string workflow = File.ReadAllText(workflowPath);
+
+        Assert.Matches(
+            @"publish:\s*\n\s+description:\s+'Publish or update the GitHub release'\s*\n\s+required:\s+false\s*\n\s+default:\s+false\s*\n\s+type:\s+boolean",
+            workflow);
+        Assert.Contains("if: github.event_name == 'push' || inputs.publish", workflow, StringComparison.Ordinal);
+        Assert.Contains("Skipping GitHub release publication; packaged artifacts were uploaded for validation.", workflow, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RestoreScriptPythonFallbackReadsArchiveInnerPathTemplate()
     {
         string scriptPath = Path.Combine(ScaleTestSupport.RepoRoot(), "scripts", "restore-julie-extract.sh");

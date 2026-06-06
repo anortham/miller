@@ -14,6 +14,11 @@ on:
         required: false
         default: true
         type: boolean
+      publish:
+        description: 'Publish or update the GitHub release'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -201,6 +206,7 @@ jobs:
   github-release:
     name: publish GitHub release
     needs: build
+    if: github.event_name == 'push' || inputs.publish
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -259,3 +265,12 @@ jobs:
             fi
             "${args[@]}"
           fi
+
+  package-only:
+    name: package-only validation
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && !inputs.publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - run: echo "Skipping GitHub release publication; packaged artifacts were uploaded for validation."

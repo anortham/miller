@@ -89,9 +89,10 @@ scripts/test.ps1 all
 - Release archives include `miller`, the matching `.tools/julie-extract` binary, the packaged dashboard
   executable under `dashboard/`, and `dashboard/wwwroot/dashboard.css`. The workflow smoke-runs
   `julie-extract --version` and `miller version`, then uploads a `.sha256` sidecar for each archive.
-- Manual workflow dispatch defaults to a prerelease. Tag pushes infer prerelease status from a hyphenated
-  version such as `v0.1.0-beta.1`. Native AOT is viable but still deferred until trim/AOT warnings are
-  cleaned up.
+- Manual workflow dispatch defaults to package-only validation; set `publish: true` to create or update the
+  GitHub release. Manual publish defaults to a prerelease. Tag pushes infer prerelease status from a
+  hyphenated version such as `v0.1.0-beta.1`. Native AOT is viable but still deferred until trim/AOT warnings
+  are cleaned up.
 - Do not publish, retag, delete, or overwrite a release without explicit user approval. README current-release
   metadata and release-evidence docs must come from live GitHub release facts, not guessed values.
 
