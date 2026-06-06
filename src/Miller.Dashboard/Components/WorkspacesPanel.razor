@@ -19,7 +19,7 @@
     }
     else
     {
-        <div class="workspace-list">
+        <div class="workspace-table">
             @foreach (DashboardWorkspaceRow row in Workspaces)
             {
                 bool selected = string.Equals(row.WorkspaceId, SelectedWorkspaceId, StringComparison.Ordinal);
@@ -29,10 +29,15 @@
                         hx-target="#dashboard-content"
                         hx-swap="outerHTML"
                         aria-current="@(selected ? "true" : "false")">
-                    <span class="workspace-name">@row.DisplayId</span>
-                    <span class="workspace-state @StateClass(row.State)">@row.State</span>
-                    <span class="workspace-meta">rev @(row.LastRevision?.ToString(CultureInfo.InvariantCulture) ?? "-")</span>
-                    <code>@row.CanonicalRoot</code>
+                    <span class="workspace-status-rail @StateClass(row.State)" aria-hidden="true"></span>
+                    <span class="workspace-row-main">
+                        <span class="workspace-name">@row.DisplayId</span>
+                        <code class="workspace-path">@row.CanonicalRoot</code>
+                    </span>
+                    <span class="workspace-row-stats">
+                        <span class="workspace-state @StateClass(row.State)">@row.State</span>
+                        <span class="workspace-meta">rev @(row.LastRevision?.ToString(CultureInfo.InvariantCulture) ?? "-")</span>
+                    </span>
                 </button>
             }
         </div>

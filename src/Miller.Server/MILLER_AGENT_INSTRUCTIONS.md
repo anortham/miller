@@ -52,8 +52,9 @@ the tokens.
   `apply=true`. Blocked when the index is stale for the target file — `workspace refresh` first (or
   `allow_stale=true` if you accept the risk).
 - `workspace` — Index lifecycle. `status` (default), `refresh` (reconcile stale files), `full` (rebuild from
-  scratch), `list`, `open` (prime a different path's index), `remove`. `status`, `refresh`, `full`, and
-  `remove` accept `workspace_id` or `path`; `list` shows the central registry.
+  scratch), `list`, `open` (prime a different path's index), `remove`, `dashboard` (start/reuse the local
+  loopback dashboard). `status`, `refresh`, `full`, and `remove` accept `workspace_id` or `path`; `list` shows
+  the central registry.
 
 ## Workflows
 
@@ -89,7 +90,8 @@ code, paste this block into the prompt:
     - trace(target, mode?, to?, scope?) before manual caller/callee file hopping; use scope for ambiguous names.
     - impact(target?|changed_paths?|diff?) before refactors and to choose tests.
     - edit(operation, target, ..., dry_run=true) to preview index-aware edits.
-    - workspace(status|refresh|full|list|open|remove) to refresh stale indexes or open another repo.
+    - workspace(status|refresh|full|list|open|remove|dashboard) to refresh stale indexes, open another repo, or
+      start the local dashboard from the session.
     Do NOT fall back to Glob/Read/Grep chains when a Miller tool fits. Miller returns targeted context in 1-2 calls.
 
 Do not use `grep`/`find`/`rg` when a Miller tool fits. Do not read a whole file before `inspect`. Do not chain

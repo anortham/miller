@@ -79,6 +79,14 @@ public readonly record struct WorkspaceActionResult(
     string? Root = null,
     string? Status = null);
 
+/// <summary>The result of starting or reusing the local loopback dashboard from the <c>workspace</c> tool.</summary>
+internal readonly record struct WorkspaceDashboardResult(
+    string Status,
+    bool Success,
+    string Url,
+    int? ProcessId,
+    string? Message);
+
 /// <summary>
 /// The result of an <c>open(path)</c> prime (M7 decision-1): an <c>extract scan</c> ran AT <paramref name="Path"/>
 /// so a future Miller launched there has a warm index. NOT a live switch — the served index/watcher/telemetry
@@ -431,6 +439,45 @@ public static class WorkspaceRender
             w.WriteNumber("revision", result.Revision);
             if (string.IsNullOrEmpty(result.Note)) w.WriteNull("note");
             else w.WriteString("note", result.Note);
+            w.WriteEndObject();
+        }
+        return Utf8(buffer);
+    }
+
+    // ---------- dashboard ----------
+
+    /// <summary>Render a <c>dashboard</c> launch/reuse result for MCP callers.</summary>
+    internal static string Dashboard(WorkspaceDashboardResult result, bool json) =>
+        json ? DashboardJson(result) : DashboardCompact(result);
+
+    private static string DashboardCompact(WorkspaceDashboardResult result)
+    {
+        var sb = new StringBuilder();
+        sb.Append("# workspace dashboard\n");
+        sb.Append("status: ").Append(result.Status).Append('\n');
+        sb.Append("success: ").Append(result.Success ? "yes" : "no").Append('\n');
+        sb.Append("url: ").Append(result.Url);
+        if (result.ProcessId is { } pid)
+            sb.Append('\n').Append("pid: ").Append(pid);
+        if (!string.IsNullOrEmpty(result.Message))
+            sb.Append('\n').Append("message: ").Append(result.Message);
+        return sb.ToString();
+    }
+
+    private static string DashboardJson(WorkspaceDashboardResult result)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var w = NewWriter(buffer))
+        {
+            w.WriteStartObject();
+            w.WriteString("operation", "dashboard");
+            w.WriteString("status", result.Status);
+            w.WriteBoolean("success", result.Success);
+            w.WriteString("url", result.Url);
+            if (result.ProcessId is { } pid) w.WriteNumber("pid", pid);
+            else w.WriteNull("pid");
+            if (result.Message is null) w.WriteNull("message");
+            else w.WriteString("message", result.Message);
             w.WriteEndObject();
         }
         return Utf8(buffer);

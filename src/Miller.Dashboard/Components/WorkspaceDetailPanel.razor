@@ -18,7 +18,7 @@
     }
     else
     {
-        <div class="stats-grid">
+        <div class="stats-grid metric-band">
             <div class="metric">
                 <strong>@FormatCount(Facts.FileCount, "file")</strong>
                 <span>tracked in files</span>
@@ -57,7 +57,20 @@
             <p class="notice">@Facts.Message</p>
         }
 
-        <div class="breakdown-grid">
+        @if (Facts.Languages.Count > 0)
+        {
+            <div class="language-strip" aria-label="Top languages">
+                @foreach (DashboardLanguageStat language in Facts.Languages.Take(6))
+                {
+                    <span class="language-pill">
+                        <span>@language.Language</span>
+                        <strong>@FormatCount(language.FileCount, "file")</strong>
+                    </span>
+                }
+            </div>
+        }
+
+        <div class="breakdown-grid detail-grid">
             <section class="breakdown" aria-label="Language breakdown">
                 <h3>Languages</h3>
                 @if (Facts.Languages.Count == 0)

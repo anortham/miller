@@ -150,11 +150,18 @@ the SHA suffix stayed the same.
 
 **Dashboard.** The local dashboard binds to loopback and reads only the workspace registry plus telemetry DB.
 Use the CLI launcher so multiple Miller sessions reuse one machine-global dashboard process while opening the
-current workspace selector. `--port` selects the launch port only when no healthy dashboard is already running:
+current workspace selector. From an MCP session, use the `workspace` tool's dashboard operation to start or
+reuse the same dashboard without leaving the session. `--port` selects the launch port only when no healthy
+dashboard is already running:
 
 ```bash
 miller dashboard
 miller dashboard --port 4977
+```
+
+```text
+workspace(operation="dashboard")
+workspace(operation="dashboard", port=4977)
 ```
 
 Open the printed URL to view registered workspaces and scoped per-tool telemetry. Set `MILLER_REGISTRY_DB`,

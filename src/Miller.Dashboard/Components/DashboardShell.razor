@@ -12,15 +12,32 @@
 </head>
 <body>
     <main class="shell">
-        <header class="topbar">
-            <div>
+        <header class="dashboard-hero">
+            <div class="hero-copy">
                 <p class="eyebrow">Local index status</p>
                 <h1>Miller Dashboard</h1>
+                <p class="hero-subtitle">@HeroSubtitle</p>
             </div>
-            <nav class="api-actions" aria-label="Dashboard JSON">
-                <a class="api-link" href="/snapshot.json?workspace_id=@Uri.EscapeDataString(Snapshot.SelectedWorkspaceId ?? "")">snapshot.json</a>
-                <a class="api-link" href="/telemetry.json?workspace_id=@Uri.EscapeDataString(Snapshot.SelectedWorkspaceId ?? "")">telemetry.json</a>
-            </nav>
+            <div class="hero-side">
+                <nav class="api-actions" aria-label="Dashboard JSON">
+                    <a class="api-link" href="/snapshot.json?workspace_id=@Uri.EscapeDataString(Snapshot.SelectedWorkspaceId ?? "")">snapshot.json</a>
+                    <a class="api-link" href="/telemetry.json?workspace_id=@Uri.EscapeDataString(Snapshot.SelectedWorkspaceId ?? "")">telemetry.json</a>
+                </nav>
+                <div class="hero-metrics" aria-label="Dashboard summary">
+                    <div>
+                        <strong>@Snapshot.Workspaces.Count.ToString("N0", CultureInfo.InvariantCulture)</strong>
+                        <span>workspaces</span>
+                    </div>
+                    <div>
+                        <strong>@FormatNullableCount(Snapshot.SelectedWorkspaceFacts?.FileCount)</strong>
+                        <span>files</span>
+                    </div>
+                    <div>
+                        <strong>@FormatNullableCount(Snapshot.SelectedWorkspaceFacts?.SymbolCount)</strong>
+                        <span>symbols</span>
+                    </div>
+                </div>
+            </div>
         </header>
 
         <DashboardContent Snapshot="Snapshot" />
@@ -31,4 +48,11 @@
 @code {
     [Parameter, EditorRequired] public DashboardSnapshot Snapshot { get; set; } =
         new(Array.Empty<DashboardWorkspaceRow>(), new DashboardTelemetrySummary(null, [], 0, null, null, []), null);
+
+    private string HeroSubtitle => Snapshot.SelectedWorkspaceFacts is null
+        ? "Choose a registered workspace to inspect Miller's local index."
+        : Snapshot.SelectedWorkspaceFacts.DisplayId;
+
+    private static string FormatNullableCount(long? value) =>
+        value?.ToString("N0", CultureInfo.InvariantCulture) ?? "-";
 }

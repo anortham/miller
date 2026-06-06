@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Miller.Indexing;
 using Miller.Server;
+using Miller.Server.Cli;
 using Miller.Server.Hosting;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
@@ -68,7 +69,8 @@ public sealed class WorkspaceToolTests : IDisposable
         Func<string, string, bool, ExtractReport>? crossWorkspaceScan = null,
         Func<string, string, bool, ExtractReport>? openScan = null,
         Func<string, IDisposable?>? acquireLock = null,
-        Func<string, long>? readLatestRevision = null)
+        Func<string, long>? readLatestRevision = null,
+        IDashboardLauncher? dashboardLauncher = null)
     {
         // The served workspace root is the fixture dir's parent of .miller; point ExtractDbPath at the fixture DB.
         string root = Path.GetDirectoryName(fx.DbPath)!;
@@ -135,6 +137,11 @@ public sealed class WorkspaceToolTests : IDisposable
             holder, workspace, indexer, freshness, probe, ledger, runner, registry, crossRefresh,
             openScan ?? ((scanRoot, scanDb, force) => runner.Scan(scanRoot, scanDb, force)),
             acquireLock ?? (millerDir => SingleWriterLock.TryAcquire(millerDir)),
+            dashboardLauncher ?? new RecordingDashboardLauncher(new DashboardLaunchResult(
+                DashboardLaunchOutcome.AlreadyRunning,
+                new Uri("http://127.0.0.1:4977/?workspace_id=ws-tool-001"),
+                ProcessId: null,
+                Message: "already running")),
             NullLogger<WorkspaceTool>.Instance);
         return new WorkspaceToolHarness(tool, indexer, ledger, root, workspace, registry);
     }
@@ -234,6 +241,20 @@ public sealed class WorkspaceToolTests : IDisposable
     {
         public void Dispose()
         {
+        }
+    }
+
+    private sealed class RecordingDashboardLauncher(DashboardLaunchResult result) : IDashboardLauncher
+    {
+        private readonly DashboardLaunchResult _result = result;
+        private readonly List<DashboardLaunchRequest> _requests = [];
+
+        public IReadOnlyList<DashboardLaunchRequest> Requests => _requests;
+
+        public DashboardLaunchResult EnsureRunning(DashboardLaunchRequest request)
+        {
+            _requests.Add(request);
+            return _result;
         }
     }
 
@@ -600,6 +621,36 @@ public sealed class WorkspaceToolTests : IDisposable
             tool.Workspace(operation: "full"); // non-leader path — deterministic, no live julie spawn
             Assert.Equal("full", scope.Op);
         }
+    }
+
+    // ---- dashboard ----
+
+    [Fact]
+    public void Dashboard_StartsOrReusesDashboardFromMcpWorkspaceTool()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        var launcher = new RecordingDashboardLauncher(new DashboardLaunchResult(
+            DashboardLaunchOutcome.Started,
+            new Uri("http://127.0.0.1:4977/?workspace_id=ws-tool-001"),
+            ProcessId: 4242,
+            Message: "started"));
+        WorkspaceToolHarness harness = BuildHarness(
+            fx,
+            builtRevision: 4,
+            workspaceId: Ws,
+            dashboardLauncher: launcher);
+
+        using var doc = JsonDocument.Parse(harness.Tool.Workspace(operation: "dashboard", format: "json"));
+
+        JsonElement root = doc.RootElement;
+        Assert.Equal("dashboard", root.GetProperty("operation").GetString());
+        Assert.Equal("started", root.GetProperty("status").GetString());
+        Assert.True(root.GetProperty("success").GetBoolean());
+        Assert.Equal("http://127.0.0.1:4977/?workspace_id=ws-tool-001", root.GetProperty("url").GetString());
+        Assert.Equal(4242, root.GetProperty("pid").GetInt32());
+        DashboardLaunchRequest request = launcher.Requests.Single();
+        Assert.Equal(4977, request.Port);
+        Assert.Equal(harness.Workspace, request.Context);
     }
 
     // ---- remove safety ----

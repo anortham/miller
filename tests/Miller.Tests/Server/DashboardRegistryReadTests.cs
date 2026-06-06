@@ -685,6 +685,77 @@ public sealed class DashboardRegistryReadTests : IDisposable
     }
 
     [Fact]
+    public async Task DashboardShell_RendersAtlasStylingHooksForApprovedDashboardLayout()
+    {
+        var facts = new DashboardWorkspaceFacts(
+            "ws-a",
+            "alpha-abcd1234",
+            "/repo/a",
+            "/repo/a/.miller/symbols.db",
+            "ready",
+            null,
+            FileCount: 4,
+            SymbolCount: 3,
+            LanguageCount: 2,
+            ContentBytes: 12_800,
+            LastRevision: 42,
+            LastScanAt: "2026-05-31T10:01:00Z",
+            SearchSidecarStatus: "fresh",
+            Languages:
+            [
+                new DashboardLanguageStat("csharp", FileCount: 3, SymbolCount: 3, ContentBytes: 11_200),
+                new DashboardLanguageStat("markdown", FileCount: 1, SymbolCount: 0, ContentBytes: 1_600),
+            ],
+            SymbolKinds:
+            [
+                new DashboardSymbolKindStat("class", Count: 2),
+            ]);
+        var snapshot = new DashboardSnapshot(
+            Workspaces:
+            [
+                new DashboardWorkspaceRow(
+                    "ws-a",
+                    "alpha-abcd1234",
+                    "/repo/a",
+                    "/repo/a/.miller/symbols.db",
+                    "2026-05-31T10:00:00Z",
+                    "2026-05-31T10:01:00Z",
+                    42,
+                    "ready",
+                    null),
+                new DashboardWorkspaceRow(
+                    "ws-b",
+                    "beta-efgh5678",
+                    "/repo/b",
+                    "/repo/b/.miller/symbols.db",
+                    "2026-05-31T10:00:00Z",
+                    null,
+                    null,
+                    "missing",
+                    "missing index"),
+            ],
+            Telemetry: new DashboardTelemetrySummary("ws-a", [], 0, null, null, []),
+            SelectedWorkspaceId: "ws-a",
+            WorkspaceFacts: [facts],
+            SelectedWorkspaceFacts: facts,
+            ContextSavings: DashboardContextSavingsSummary.NotTracked("ws-a"));
+
+        string html = await RenderComponentAsync<DashboardShell>(new Dictionary<string, object?>
+        {
+            ["Snapshot"] = snapshot,
+        });
+
+        Assert.Contains("class=\"dashboard-hero\"", html);
+        Assert.Contains("class=\"workspace-table\"", html);
+        Assert.Contains("class=\"workspace-row-main\"", html);
+        Assert.Contains("class=\"workspace-row-stats\"", html);
+        Assert.Contains("class=\"workspace-status-rail ok\"", html);
+        Assert.Contains("metric-band", html);
+        Assert.Contains("class=\"language-pill\"", html);
+        Assert.Contains("detail-grid", html);
+    }
+
+    [Fact]
     public void RenderWorkspacesJson_UsesStableSnakeCaseContract()
     {
         using (var registry = WorkspaceRegistry.Open(_registryDb))

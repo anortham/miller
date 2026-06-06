@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using Microsoft.Extensions.Logging;
 using Miller.Indexing;
+using Miller.Server.Cli;
 using Miller.Server.Hosting;
 using Miller.Server.Logging;
 using Miller.Server.Telemetry;
@@ -15,8 +16,9 @@ namespace Miller.Server.Tools;
 /// <c>refresh</c>/<c>full</c> (reconcile / from-scratch rebuild, routed through the single-writer leader so two
 /// Miller instances never both <c>extract scan</c>), <c>list</c> (the current workspace — Miller serves ONE per
 /// process; a multi-workspace registry is eros/commercial-tier, decision-1), <c>open(path)</c> (PRIME a path's
-/// index via an extract scan so a future Miller there is warm — NOT a live switch), and <c>remove(path)</c>
-/// (delete a workspace's <c>.miller</c> index dir, REFUSING the live one).
+/// index via an extract scan so a future Miller there is warm — NOT a live switch), <c>remove(path)</c>
+/// (delete a workspace's <c>.miller</c> index dir, REFUSING the live one), and <c>dashboard</c> (start/reuse the
+/// local loopback transparency dashboard from an MCP session).
 ///
 /// <para>The pure renderers (<see cref="WorkspaceRender"/>) and the remove-safety predicate
 /// (<see cref="WorkspaceSafety"/>) carry the formatting + safety logic and are unit-tested; this class
@@ -39,6 +41,7 @@ public sealed class WorkspaceTool
     private readonly CrossWorkspaceRefreshService _crossWorkspaceRefresh;
     private readonly Func<string, string, bool, ExtractReport> _scanForOpen;
     private readonly Func<string, IDisposable?> _acquireWriterLock;
+    private readonly IDashboardLauncher _dashboardLauncher;
     private readonly ILogger<WorkspaceTool> _logger;
 
     /// <summary>Construct over the live admin singletons (production).</summary>
@@ -66,6 +69,7 @@ public sealed class WorkspaceTool
             crossWorkspaceRefresh,
             (root, db, force) => runner.Scan(root, db, force),
             millerDir => SingleWriterLock.TryAcquire(millerDir),
+            new DashboardCliLauncher(),
             logger)
     {
     }
@@ -82,6 +86,7 @@ public sealed class WorkspaceTool
         CrossWorkspaceRefreshService crossWorkspaceRefresh,
         Func<string, string, bool, ExtractReport> scanForOpen,
         Func<string, IDisposable?> acquireWriterLock,
+        IDashboardLauncher dashboardLauncher,
         ILogger<WorkspaceTool> logger)
     {
         ArgumentNullException.ThrowIfNull(holder);
@@ -95,6 +100,7 @@ public sealed class WorkspaceTool
         ArgumentNullException.ThrowIfNull(crossWorkspaceRefresh);
         ArgumentNullException.ThrowIfNull(scanForOpen);
         ArgumentNullException.ThrowIfNull(acquireWriterLock);
+        ArgumentNullException.ThrowIfNull(dashboardLauncher);
         ArgumentNullException.ThrowIfNull(logger);
         _holder = holder;
         _workspace = workspace;
@@ -106,20 +112,23 @@ public sealed class WorkspaceTool
         _crossWorkspaceRefresh = crossWorkspaceRefresh;
         _scanForOpen = scanForOpen;
         _acquireWriterLock = acquireWriterLock;
+        _dashboardLauncher = dashboardLauncher;
         _logger = logger;
     }
 
     [McpServerTool(Name = "workspace")]
     [Description(
         "Manage the workspace index. Defaults to status. Use refresh to update stale files, full to rebuild " +
-        "from scratch, list to see registered workspaces.")]
+        "from scratch, list to see registered workspaces, dashboard to start the local dashboard.")]
     public string Workspace(
-        [Description("status|refresh|full|list|open|remove. Default status.")] string operation = "status",
+        [Description("status|refresh|full|list|open|remove|dashboard. Default status.")] string operation = "status",
         [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")]
         string? workspace_id = null,
         [Description("A workspace root path. Required for open; optional for status/refresh/full/remove.")]
         string? path = null,
-        [Description("Output format: compact|json. Default compact.")] string format = "compact")
+        [Description("Output format: compact|json. Default compact.")] string format = "compact",
+        [Description("Dashboard launch port. Used only with operation=dashboard when no dashboard is already running.")]
+        int? port = null)
     {
         var telemetry = TelemetryContext.Current;
         // D7: stamp the operation sub-axis onto the ambient scope so the central filter's row records
@@ -131,7 +140,7 @@ public sealed class WorkspaceTool
         {
             bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
 
-            (string output, int resultCount, TelemetryOutcome outcome) = Dispatch(operation, workspace_id, path, json);
+            (string output, int resultCount, TelemetryOutcome outcome) = Dispatch(operation, workspace_id, path, port, json);
 
             if (telemetry is not null)
             {
@@ -155,7 +164,7 @@ public sealed class WorkspaceTool
     // The pure-ish dispatch: route the operation to its handler, returning the rendered output, a result count
     // (for the telemetry KPI), and the outcome. An unknown operation is a usage note (Empty, not an error).
     private (string output, int resultCount, TelemetryOutcome outcome) Dispatch(
-        string? operation, string? workspaceId, string? path, bool json)
+        string? operation, string? workspaceId, string? path, int? port, bool json)
     {
         switch (operation?.ToLowerInvariant())
         {
@@ -171,6 +180,8 @@ public sealed class WorkspaceTool
                 return Open(path, json);
             case "remove":
                 return Remove(workspaceId, path, json);
+            case "dashboard":
+                return Dashboard(port, json);
             default:
                 return (UsageNote(operation!, json), 0, TelemetryOutcome.Empty);
         }
@@ -440,6 +451,33 @@ public sealed class WorkspaceTool
         return (WorkspaceRender.Open(result, json), 1, TelemetryOutcome.Ok);
     }
 
+    // ---------- dashboard ----------
+
+    private (string output, int resultCount, TelemetryOutcome outcome) Dashboard(int? port, bool json)
+    {
+        int launchPort = port is > 0 and <= 65535 ? port.Value : DashboardCliLauncher.DefaultPort;
+        DashboardLaunchResult launch = _dashboardLauncher.EnsureRunning(
+            new DashboardLaunchRequest(_workspace, launchPort, StartupTimeout: TimeSpan.FromSeconds(5)));
+        var result = new WorkspaceDashboardResult(
+            DashboardStatus(launch.Outcome),
+            launch.Success,
+            launch.Url.ToString(),
+            launch.ProcessId,
+            launch.Message);
+        return (
+            WorkspaceRender.Dashboard(result, json),
+            launch.Success ? 1 : 0,
+            launch.Success ? TelemetryOutcome.Ok : TelemetryOutcome.Error);
+    }
+
+    private static string DashboardStatus(DashboardLaunchOutcome outcome) => outcome switch
+    {
+        DashboardLaunchOutcome.AlreadyRunning => "already_running",
+        DashboardLaunchOutcome.Started => "started",
+        DashboardLaunchOutcome.Failed => "failed",
+        _ => outcome.ToString().ToLowerInvariant(),
+    };
+
     // ---------- remove ----------
 
     // Delete a workspace's `.miller` index dir (decision-1/8). SAFETY: refuse the live workspace (it is in use —
@@ -677,7 +715,7 @@ public sealed class WorkspaceTool
             "remove" => "workspace remove requires a path: workspace(operation=\"remove\", path=\"/repo\"). " +
                         "It deletes that path's .miller index dir (the live workspace is refused).",
             _ => $"unknown workspace operation '{operation}'. " +
-                 "Use status|refresh|full|list|open|remove (default status).",
+                 "Use status|refresh|full|list|open|remove|dashboard (default status).",
         };
         return json ? $"{{\"note\":{System.Text.Json.JsonSerializer.Serialize(message)}}}" : message;
     }
