@@ -138,12 +138,24 @@ jobs:
             '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}')
           # printf '%s\n' (not '%s'): $(...) strips trailing newlines, so the final tools/list request
           # would otherwise reach the line-delimited MCP transport unterminated and never be parsed.
-          out=$( ( printf '%s\n' "$reqs"; sleep 6 ) | "${publish_dir}/miller" serve 2>/dev/null || true )
+          stderr_file="$(mktemp)"
+          # Linux Native AOT cold startup on GitHub runners can exceed the old 6s window even though
+          # the binary is valid. Keep stdin open long enough for a real tools/list response, and
+          # preserve stderr so a future failure shows the server-side reason.
+          out=$( ( printf '%s\n' "$reqs"; sleep 20 ) | "${publish_dir}/miller" serve 2>"${stderr_file}" || true )
           # Assert against the tools/list RESPONSE (id:2), not the initialize capabilities — "tools" alone
           # would false-positive on the {"tools":{"listChanged":true}} capability in the initialize reply.
-          echo "$out" | grep -q '"id":2' || { echo "AOT MCP serve smoke failed: no tools/list response"; exit 1; }
+          echo "$out" | grep -q '"id":2' || {
+            echo "AOT MCP serve smoke failed: no tools/list response"
+            sed -n '1,120p' "${stderr_file}"
+            exit 1
+          }
           for tool in search inspect context impact trace edit workspace; do
-            echo "$out" | grep -q "\"name\":\"${tool}\"" || { echo "AOT MCP serve smoke failed: ${tool} tool missing"; exit 1; }
+            echo "$out" | grep -q "\"name\":\"${tool}\"" || {
+              echo "AOT MCP serve smoke failed: ${tool} tool missing"
+              sed -n '1,120p' "${stderr_file}"
+              exit 1
+            }
           done
 
       - name: Verify packaged Windows extractor
