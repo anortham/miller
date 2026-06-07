@@ -147,6 +147,44 @@ public sealed class ContentCorpusWriterTests : IDisposable
         Assert.Equal(1L, ScalarLong(connection, "SELECT COUNT(*) FROM content_sources"));
     }
 
+    [Fact]
+    public void Write_PreservesExternalAndWebSourcesAcrossWorkspaceRebuild()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [new JulieDbFixture.SymbolRow("sym", "Api", "class", "csharp", "src/Api.cs", "public class Api", 1, null)],
+            fileContent: new Dictionary<string, string> { ["src/Api.cs"] = "public class Api { }" });
+        var store = new ContentCorpusExternalStore();
+
+        ContentCorpusWriter.Write(_contentDbPath, fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 1);
+        string logPath = Path.Combine(_dir, "build.log");
+        File.WriteAllText(logPath, "KnownExternalMarker appears here.");
+        string pagePath = Path.Combine(_dir, "page.md");
+        File.WriteAllText(pagePath, "KnownWebMarker appears here.");
+        ExternalContentImportResult external = store.Import(_contentDbPath, logPath, displayPath: "build.log");
+        ExternalContentImportResult web = store.ImportMarkdown(_contentDbPath, pagePath, "https://example.test/page", displayPath: "page");
+
+        ContentCorpusFacts facts = ContentCorpusWriter.Write(
+            _contentDbPath,
+            fx.DbPath,
+            fx.WorkspaceRoot,
+            "workspace-1",
+            revision: 2);
+
+        Assert.Equal(3, facts.SourceCount);
+        Assert.Equal(2, facts.WorkspaceRevision);
+        Assert.Single(store.Search(_contentDbPath, "KnownExternalMarker", TextContentKind.ExternalFile, limit: 5));
+        Assert.Single(store.Search(_contentDbPath, "KnownWebMarker", TextContentKind.Web, limit: 5));
+        Assert.Contains(store.List(_contentDbPath, TextContentKind.ExternalFile), source => source.SourceId == external.SourceId);
+        Assert.Contains(store.List(_contentDbPath, TextContentKind.Web), source => source.SourceId == web.SourceId);
+
+        using var connection = OpenRead();
+        Assert.Equal(1L, ScalarLong(connection, $"SELECT COUNT(*) FROM content_sources WHERE content_kind = '{TextContentKind.WorkspaceSource}'"));
+        Assert.Equal(1L, ScalarLong(connection, $"SELECT COUNT(*) FROM content_sources WHERE content_kind = '{TextContentKind.ExternalFile}'"));
+        Assert.Equal(1L, ScalarLong(connection, $"SELECT COUNT(*) FROM content_sources WHERE content_kind = '{TextContentKind.Web}'"));
+    }
+
     private SqliteConnection OpenRead()
     {
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder

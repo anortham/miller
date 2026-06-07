@@ -33,12 +33,15 @@ public static class ContentCorpusWriter
         try
         {
             facts = BuildInto(tempPath, symbolsDbPath, workspaceRoot, workspaceId, revision);
+            int preserved = PreserveExternalSources(tempPath, fullPath);
             SqliteConnection.ClearAllPools();
             for (int attempt = 1; ; attempt++)
             {
                 try { File.Move(tempPath, fullPath, overwrite: true); break; }
                 catch (IOException) when (attempt < 5) { Thread.Sleep(20 * attempt); }
             }
+            if (preserved > 0)
+                facts = ReadFacts(fullPath, revision);
         }
         finally
         {
@@ -50,6 +53,180 @@ public static class ContentCorpusWriter
         }
 
         return facts with { Path = fullPath };
+    }
+
+    private static int PreserveExternalSources(string tempPath, string existingPath)
+    {
+        if (!File.Exists(existingPath))
+            return 0;
+
+        try
+        {
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = tempPath,
+                Mode = SqliteOpenMode.ReadWrite,
+                Pooling = false,
+            }.ToString());
+            connection.Open();
+
+            using (var attach = connection.CreateCommand())
+            {
+                attach.CommandText = "ATTACH DATABASE $existing AS old;";
+                attach.Parameters.AddWithValue("$existing", Path.GetFullPath(existingPath));
+                attach.ExecuteNonQuery();
+            }
+
+            try
+            {
+                if (!CanCopyExternalSources(connection))
+                    return 0;
+
+                using var tx = connection.BeginTransaction();
+                int sourceCount = ExecuteNonQuery(connection, """
+                    INSERT INTO content_sources
+                        (source_id, content_kind, workspace_id, workspace_revision, path, url, display_path,
+                         language, content_hash, source_bytes, line_count, is_test, status, indexed_at_utc)
+                    SELECT source_id, content_kind, workspace_id, workspace_revision, path, url, display_path,
+                           language, content_hash, source_bytes, line_count, is_test, status, indexed_at_utc
+                    FROM old.content_sources
+                    WHERE content_kind IN ($external, $web)
+                      AND status = 'active';
+                    """);
+                if (sourceCount == 0)
+                {
+                    tx.Commit();
+                    return 0;
+                }
+
+                ExecuteNonQuery(connection, """
+                    INSERT INTO content_chunks
+                        (chunk_id, source_id, content_kind, path, url, display_path, language, line_start,
+                         line_end, byte_start, byte_end, raw_text, doc_len, is_test, source_bytes,
+                         containing_symbol_id, containing_symbol_name)
+                    SELECT c.chunk_id, c.source_id, c.content_kind, c.path, c.url, c.display_path, c.language,
+                           c.line_start, c.line_end, c.byte_start, c.byte_end, c.raw_text, c.doc_len,
+                           c.is_test, c.source_bytes, c.containing_symbol_id, c.containing_symbol_name
+                    FROM old.content_chunks c
+                    JOIN old.content_sources s ON s.source_id = c.source_id
+                    WHERE s.content_kind IN ($external, $web)
+                      AND s.status = 'active';
+                    """);
+                ExecuteNonQuery(connection, """
+                    INSERT INTO content_symbol_spans
+                        (source_id, symbol_id, symbol_name, path, start_line, end_line)
+                    SELECT sp.source_id, sp.symbol_id, sp.symbol_name, sp.path, sp.start_line, sp.end_line
+                    FROM old.content_symbol_spans sp
+                    JOIN old.content_sources s ON s.source_id = sp.source_id
+                    WHERE s.content_kind IN ($external, $web)
+                      AND s.status = 'active';
+                    """);
+                ExecuteNonQuery(connection, """
+                    INSERT INTO content_fts(chunk_id, body)
+                    SELECT f.chunk_id, f.body
+                    FROM old.content_fts f
+                    JOIN old.content_chunks c ON c.chunk_id = f.chunk_id
+                    JOIN old.content_sources s ON s.source_id = c.source_id
+                    WHERE s.content_kind IN ($external, $web)
+                      AND s.status = 'active';
+                    """);
+                UpdateMetaCounts(connection);
+                tx.Commit();
+                return sourceCount;
+            }
+            finally
+            {
+                using var detach = connection.CreateCommand();
+                detach.CommandText = "DETACH DATABASE old;";
+                detach.ExecuteNonQuery();
+            }
+        }
+        catch (Exception ex) when (
+            ex is SqliteException or InvalidOperationException or IOException
+                or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return 0;
+        }
+    }
+
+    private static bool CanCopyExternalSources(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT schema_version
+            FROM old.content_meta
+            LIMIT 2;
+            """;
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+            return false;
+        int schemaVersion = reader.GetInt32(0);
+        if (reader.Read())
+            return false;
+        return schemaVersion == ContentCorpusSchema.SchemaVersion;
+    }
+
+    private static int ExecuteNonQuery(SqliteConnection connection, string sql)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.Parameters.AddWithValue("$external", TextContentKind.ExternalFile);
+        command.Parameters.AddWithValue("$web", TextContentKind.Web);
+        return command.ExecuteNonQuery();
+    }
+
+    private static void UpdateMetaCounts(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE content_meta
+            SET source_count = (SELECT COUNT(*) FROM content_sources),
+                chunk_count = (SELECT COUNT(*) FROM content_chunks),
+                indexed_source_bytes = COALESCE((SELECT SUM(source_bytes) FROM content_sources), 0),
+                stored_raw_bytes = COALESCE((SELECT SUM(length(CAST(raw_text AS BLOB))) FROM content_chunks), 0),
+                updated_at_utc = $updated;
+            """;
+        command.Parameters.AddWithValue("$updated", DateTimeOffset.UtcNow.ToString("O"));
+        command.ExecuteNonQuery();
+    }
+
+    private static ContentCorpusFacts ReadFacts(string contentDbPath, long revision)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = Path.GetFullPath(contentDbPath),
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT schema_version, workspace_revision, source_count, chunk_count,
+                   indexed_source_bytes, stored_raw_bytes, skipped_status, skipped_scope,
+                   skipped_large, skipped_missing, skipped_hash, skipped_utf8, skipped_io
+            FROM content_meta
+            LIMIT 1;
+            """;
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+            throw new InvalidOperationException("content_meta has no row");
+
+        return new ContentCorpusFacts(
+            "current",
+            Path.GetFullPath(contentDbPath),
+            reader.GetInt32(0),
+            revision,
+            reader.GetInt32(2),
+            reader.GetInt32(3),
+            reader.GetInt64(4),
+            reader.GetInt64(5),
+            reader.GetInt32(6),
+            reader.GetInt32(7),
+            reader.GetInt32(8),
+            reader.GetInt32(9),
+            reader.GetInt32(10),
+            reader.GetInt32(11),
+            reader.GetInt32(12));
     }
 
     private static ContentCorpusFacts BuildInto(
