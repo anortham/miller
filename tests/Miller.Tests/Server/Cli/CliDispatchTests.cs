@@ -559,7 +559,10 @@ public sealed class CliDispatchTests : IDisposable
 
         Assert.Equal(0, code);
         Assert.Empty(errText);
-        string line = Assert.Single(outText.Split('\n', StringSplitOptions.RemoveEmptyEntries));
+        Assert.EndsWith("\n", outText, StringComparison.Ordinal);
+        Assert.False(outText.EndsWith("\n\n", StringComparison.Ordinal), outText);
+        Assert.False(outText.EndsWith("\n\r\n", StringComparison.Ordinal), outText);
+        string line = Assert.Single(outText.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries));
         using JsonDocument doc = JsonDocument.Parse(line);
         JsonElement row = doc.RootElement;
         Assert.Equal(TextContentKind.WorkspaceSource, row.GetProperty("content_kind").GetString());

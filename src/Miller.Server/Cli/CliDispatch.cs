@@ -330,8 +330,16 @@ public static class CliDispatch
             return 3;
         }
 
-        outw.WriteLine(output);
+        WriteOutput(outw, output);
         return 0;
+    }
+
+    private static void WriteOutput(TextWriter writer, string output)
+    {
+        if (output.EndsWith('\n'))
+            writer.Write(output);
+        else
+            writer.WriteLine(output);
     }
 
     private static int Inspect(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
