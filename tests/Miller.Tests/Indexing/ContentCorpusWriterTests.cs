@@ -148,6 +148,30 @@ public sealed class ContentCorpusWriterTests : IDisposable
     }
 
     [Fact]
+    public void Write_WhenContentWriteLockIsHeld_TimesOutWithoutReplacingExistingDb()
+    {
+        File.WriteAllText(_contentDbPath, "not sqlite");
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [new JulieDbFixture.SymbolRow("sym", "Api", "class", "csharp", "src/Api.cs", "public class Api", 1, null)],
+            fileContent: new Dictionary<string, string> { ["src/Api.cs"] = "public class Api { }" });
+        using var held = ContentCorpusWriteLock.AcquireFor(_contentDbPath);
+
+        var ex = Assert.Throws<TimeoutException>(() =>
+            ContentCorpusWriter.Write(
+                _contentDbPath,
+                fx.DbPath,
+                fx.WorkspaceRoot,
+                "workspace-1",
+                revision: 1,
+                writeLockTimeout: TimeSpan.Zero));
+
+        Assert.Contains("content corpus write lock", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("not sqlite", File.ReadAllText(_contentDbPath));
+    }
+
+    [Fact]
     public void Write_PreservesExternalAndWebSourcesAcrossWorkspaceRebuild()
     {
         using var fx = JulieDbFixture.Create(

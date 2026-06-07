@@ -17,7 +17,8 @@ public static class ContentCorpusWriter
         string symbolsDbPath,
         string workspaceRoot,
         string? workspaceId,
-        long revision)
+        long revision,
+        TimeSpan? writeLockTimeout = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(contentDbPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(symbolsDbPath);
@@ -33,15 +34,18 @@ public static class ContentCorpusWriter
         try
         {
             facts = BuildInto(tempPath, symbolsDbPath, workspaceRoot, workspaceId, revision);
-            int preserved = PreserveExternalSources(tempPath, fullPath);
-            SqliteConnection.ClearAllPools();
-            for (int attempt = 1; ; attempt++)
+            using (ContentCorpusWriteLock.AcquireFor(fullPath, writeLockTimeout))
             {
-                try { File.Move(tempPath, fullPath, overwrite: true); break; }
-                catch (IOException) when (attempt < 5) { Thread.Sleep(20 * attempt); }
+                int preserved = PreserveExternalSources(tempPath, fullPath);
+                SqliteConnection.ClearAllPools();
+                for (int attempt = 1; ; attempt++)
+                {
+                    try { File.Move(tempPath, fullPath, overwrite: true); break; }
+                    catch (IOException) when (attempt < 5) { Thread.Sleep(20 * attempt); }
+                }
+                if (preserved > 0)
+                    facts = ReadFacts(fullPath, revision);
             }
-            if (preserved > 0)
-                facts = ReadFacts(fullPath, revision);
         }
         finally
         {

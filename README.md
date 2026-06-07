@@ -17,9 +17,9 @@ The practical difference from a one-time graph dump is that Miller is built for 
 - stale or corrupt search sidecars self-heal to correct in-memory search instead of silently lying;
 - cross-language bridge evidence stays structural and provider-scoped, not embedding-driven.
 
-> **Status: source-checkout beta candidate.** M0-M8 are implemented, the source-checkout beta gates are closed
-> from Miller's side, and the remaining decisions are product/release decisions. See
-> [docs/plans/2026-06-05-beta-readiness-checklist.md](docs/plans/2026-06-05-beta-readiness-checklist.md).
+> **Status: release candidate for v0.2.0.** Miller now ships as a source-checkout workflow and as
+> self-contained per-platform release archives. The remaining release work is final package validation and
+> publication.
 
 ## Requirements
 
@@ -138,7 +138,7 @@ The single `miller` binary runs two ways:
   ```bash
   dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvider" --limit 5
   dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvider" --workspace-id miller
-  dotnet run --project src/Miller.Server -c Release -- search "source-checkout beta" --mode content --limit 5
+  dotnet run --project src/Miller.Server -c Release -- search "release archive" --mode content --limit 5
   dotnet run --project src/Miller.Server -c Release -- content add-markdown /tmp/page.md --url https://example.com/page --display-path "Example page" --json
   dotnet run --project src/Miller.Server -c Release -- content search "important phrase" --kind web --limit 5
   dotnet run --project src/Miller.Server -c Release -- inspect src/Miller.Server/AgentInstructions.cs --depth full
@@ -152,11 +152,11 @@ The single `miller` binary runs two ways:
 
   Build once and run the binary directly (`src/Miller.Server/bin/Release/net10.0/miller <verb>`) to skip the
   `dotnet run` up-to-date check. `miller help` lists every verb: `search`, `inspect`, `context`, `impact`,
-  `trace`, `workspace`, `dashboard`, `version`, `serve`.
+  `trace`, `content`, `workspace`, `dashboard`, `version`, `serve`.
 
 **Dogfooding the server.** Because MCP runs over stdio, a new build takes effect only after the MCP client
 restarts the subprocess. A build made inside the repo carries its git short SHA — `miller version` prints
-`0.1.0+<sha>` (just `0.1.0` for a build with no `.git`), and the same string heads the `# workspace` block of
+`0.2.0+<sha>` (just `0.2.0` for a build with no `.git`), and the same string heads the `# workspace` block of
 `workspace status`. The status header also includes the process id (`pid <n>`), which is the quickest way to
 confirm a restarted MCP client is talking to a new Miller subprocess when you rebuilt uncommitted changes and
 the SHA suffix stayed the same.
@@ -229,7 +229,7 @@ Cursor plugin support is intentionally deferred until Miller has an npm launcher
 to locate the installed plugin root. See
 [docs/plans/2026-06-06-plugin-distribution-design.md](docs/plans/2026-06-06-plugin-distribution-design.md).
 
-## Source-checkout beta proof
+## Local proof commands
 
 These commands are intentionally real Miller-checkout examples. Run them after the restore/build step above
 from this repo, or replace `dotnet run --project src/Miller.Server -c Release --` with an installed `miller`
@@ -239,7 +239,7 @@ binary:
 dotnet run --project src/Miller.Server -c Release -- workspace status
 dotnet run --project src/Miller.Server -c Release -- workspace list
 dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvider" --limit 5
-dotnet run --project src/Miller.Server -c Release -- search "source-checkout beta" --mode content --limit 5
+dotnet run --project src/Miller.Server -c Release -- search "release archive" --mode content --limit 5
 dotnet run --project src/Miller.Server -c Release -- inspect src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md
 dotnet run --project src/Miller.Server -c Release -- context "dashboard telemetry and workspace registry" --token-budget 1200
 dotnet run --project src/Miller.Server -c Release -- impact src/Miller.Server/Tools/WorkspaceTool.cs --max-depth 1 --limit 10
@@ -256,8 +256,7 @@ What these prove:
 
 ## Release archives
 
-The current beta path is source-checkout first. The release workflow is already configured for one archive per
-pinned `julie-extract` platform when a packaged prerelease is approved:
+The release workflow builds one archive per pinned `julie-extract` platform:
 
 - `aarch64-apple-darwin`
 - `x86_64-apple-darwin`
@@ -271,8 +270,8 @@ also uploads a `.sha256` sidecar for each archive and smoke-runs both `julie-ext
 
 ### Install from a release archive
 
-Source checkout remains the primary documented path, but release archives are self-contained: the main
-`miller` binary is built with Native AOT, so a release machine does **not** need the .NET SDK to run it.
+Release archives are self-contained: the main `miller` binary is built with Native AOT, so a release machine
+does **not** need the .NET SDK to run it.
 
 1. Download the archive for your platform from the GitHub release, plus its matching `.sha256` sidecar
    (for example `miller-<version>-aarch64-apple-darwin.tar.gz` and `…​.tar.gz.sha256`).
@@ -394,10 +393,10 @@ $env:MILLER_JULIE_SOURCE='C:\source\julie-extractors'; scripts/restore-julie-ext
 
 Warnings are errors (`Directory.Build.props`).
 
-## Known beta limits
+## Known limits
 
 - No embeddings or semantic/vector retrieval in Miller. If that is needed, Eros owns the projection.
-- Region search is explicit and opt-in for beta: set `MILLER_REGION_INDEX=1`, refresh the workspace, then
+- Region search is explicit and opt-in: set `MILLER_REGION_INDEX=1`, refresh the workspace, then
   call `search --regions comment|doc_comment|string_literal`. Set `MILLER_REGION_MAX_BYTES=<n>` to lower
   or raise the per-region byte cap for very large comment/string-literal corpora.
 - Ambiguous targets may need a file path, a more specific symbol, or a symbol ID. The CLI reports ambiguity

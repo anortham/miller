@@ -200,7 +200,7 @@ public sealed class CliDispatchTests : IDisposable
     {
         var (code, outText, _) = Run(new[] { "version" }, Context(Path.Combine(_dir, "symbols.db")));
         Assert.Equal(0, code);
-        Assert.StartsWith("0.1.0", outText.Trim());
+        Assert.StartsWith("0.2.0", outText.Trim());
     }
 
     [Fact]
@@ -368,6 +368,63 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Contains("KnownContentMarker", outText);
         Assert.DoesNotContain(TextContentKind.WorkspaceDocs, outText);
         Assert.DoesNotContain("src/Source.cs", outText);
+    }
+
+    [Fact]
+    public void Search_TextContentModesExternalWebAndAllText_ReadContentCorpusSidecar()
+    {
+        using var fx = DbWithSource("KnownAllTextSource", revision: 7);
+        string contentDbPath = ContentCorpusSidecar.ContentDbPathFor(fx.DbPath);
+        ContentCorpusWriter.Write(
+            contentDbPath,
+            fx.DbPath,
+            fx.WorkspaceRoot,
+            workspaceId: "current-ws",
+            revision: 7);
+        string logPath = Path.Combine(_dir, "external-mode.log");
+        File.WriteAllText(logPath, "KnownCliExternalMode appears in imported log.");
+        string pagePath = Path.Combine(_dir, "web-mode.md");
+        File.WriteAllText(pagePath, "KnownCliWebMode appears in imported markdown.");
+        var store = new ContentCorpusExternalStore();
+        store.Import(contentDbPath, logPath, displayPath: "external-mode.log");
+        store.ImportMarkdown(
+            contentDbPath,
+            pagePath,
+            url: "https://example.test/cli-web-mode",
+            displayPath: "CLI Web Mode");
+        var ctx = Context(fx.DbPath, fx.WorkspaceRoot);
+
+        var (externalCode, externalOut, externalErr) = Run(
+            new[] { "search", "KnownCliExternalMode", "--mode", "external" },
+            ctx);
+        var (webCode, webOut, webErr) = Run(
+            new[] { "search", "KnownCliWebMode", "--mode", "web" },
+            ctx);
+        var (allTextSourceCode, allTextSourceOut, allTextSourceErr) = Run(
+            new[] { "search", "KnownAllTextSource", "--mode", "all-text" },
+            ctx);
+        var (allTextExternalCode, allTextExternalOut, allTextExternalErr) = Run(
+            new[] { "search", "KnownCliExternalMode", "--mode", "all-text" },
+            ctx);
+
+        Assert.Equal(0, externalCode);
+        Assert.Empty(externalErr);
+        Assert.Contains("external-mode.log:1  external_file", externalOut);
+        Assert.Contains("KnownCliExternalMode", externalOut);
+
+        Assert.Equal(0, webCode);
+        Assert.Empty(webErr);
+        Assert.Contains("CLI Web Mode:1  web", webOut);
+        Assert.Contains("KnownCliWebMode", webOut);
+
+        Assert.Equal(0, allTextSourceCode);
+        Assert.Empty(allTextSourceErr);
+        Assert.Contains("src/Source.cs:5  workspace_source  Handle", allTextSourceOut);
+        Assert.Contains("KnownAllTextSource", allTextSourceOut);
+
+        Assert.Equal(0, allTextExternalCode);
+        Assert.Empty(allTextExternalErr);
+        Assert.Contains("external-mode.log:1  external_file", allTextExternalOut);
     }
 
     [Fact]
@@ -932,7 +989,7 @@ public sealed class CliDispatchTests : IDisposable
         // binary's version into the status header (the dogfooding "which build is live" signal).
         var (code, outText, _) = Run(new[] { "workspace", "status" }, Context(fx.DbPath));
         Assert.Equal(0, code);
-        Assert.Contains("miller 0.1.0", outText);
+        Assert.Contains("miller 0.2.0", outText);
         Assert.Contains("pid ", outText);
         Assert.Contains("symbols:", outText);
     }

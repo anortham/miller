@@ -70,6 +70,12 @@ public sealed class ContentCorpusExternalStoreTests : IDisposable
     }
 
     [Fact]
+    public void DefaultMaxImportBytes_IsTwentyFiveMiB()
+    {
+        Assert.Equal(25L * 1024 * 1024, ContentCorpusExternalStore.DefaultMaxImportBytes);
+    }
+
+    [Fact]
     public void Import_RejectsFilesOverDefaultCapUnlessMaxBytesAllowsThem()
     {
         string logPath = Path.Combine(_dir, "large.log");
@@ -81,6 +87,37 @@ public sealed class ContentCorpusExternalStoreTests : IDisposable
         Assert.Contains("max_bytes", ex.Message, StringComparison.OrdinalIgnoreCase);
         ExternalContentImportResult imported = store.Import(_contentDbPath, logPath, maxBytes: 10);
         Assert.Equal(10, imported.SourceBytes);
+    }
+
+    [Fact]
+    public void Import_WhenContentWriteLockIsHeld_TimesOutWithoutMutating()
+    {
+        string logPath = Path.Combine(_dir, "locked.log");
+        File.WriteAllText(logPath, "LockedImportMarker should not be indexed.");
+        using var held = ContentCorpusWriteLock.AcquireFor(_contentDbPath);
+        var store = new ContentCorpusExternalStore(writeLockTimeout: TimeSpan.Zero);
+
+        var ex = Assert.Throws<TimeoutException>(() => store.Import(_contentDbPath, logPath));
+
+        Assert.Contains("content corpus write lock", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(File.Exists(_contentDbPath));
+    }
+
+    [Fact]
+    public void Remove_WhenContentWriteLockIsHeld_TimesOutWithoutMutating()
+    {
+        string logPath = Path.Combine(_dir, "remove-locked.log");
+        File.WriteAllText(logPath, "LockedRemoveMarker should stay indexed.");
+        var store = new ContentCorpusExternalStore();
+        ExternalContentImportResult imported = store.Import(_contentDbPath, logPath);
+        using var held = ContentCorpusWriteLock.AcquireFor(_contentDbPath);
+        var lockedStore = new ContentCorpusExternalStore(writeLockTimeout: TimeSpan.Zero);
+
+        var ex = Assert.Throws<TimeoutException>(() => lockedStore.Remove(_contentDbPath, imported.SourceId));
+
+        Assert.Contains("content corpus write lock", ex.Message, StringComparison.OrdinalIgnoreCase);
+        TextContentSearchHit hit = Assert.Single(store.Search(_contentDbPath, "LockedRemoveMarker", limit: 5));
+        Assert.Equal(imported.SourceId, hit.SourceId);
     }
 
     [Fact]

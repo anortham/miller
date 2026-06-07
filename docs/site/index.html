@@ -43,11 +43,11 @@
         and assess impact without burning the context window on broad file reads.
       </p>
       <div class="hero-actions">
-        <a class="button primary" href="#install">Try the source-checkout beta</a>
+        <a class="button primary" href="#install">Try Miller</a>
         <a class="button secondary" href="https://github.com/anortham/miller" target="_blank" rel="noopener">View on GitHub</a>
       </div>
     </div>
-    <a class="scroll-cue" href="#why">Beta shape</a>
+    <a class="scroll-cue" href="#why">Release shape</a>
   </header>
 
   <main>
@@ -84,7 +84,7 @@
 
     <section id="proof" class="section proof-section">
       <div class="section-heading">
-        <p class="eyebrow">Source-checkout beta proof</p>
+        <p class="eyebrow">Local proof commands</p>
         <h2>Real commands, same read cores as MCP.</h2>
       </div>
       <div class="command-grid">
@@ -96,9 +96,9 @@
           <span>symbol search</span>
           <code>dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvider" --limit 5</code>
         </button>
-        <button class="command-line" type="button" data-copy="dotnet run --project src/Miller.Server -c Release -- search &quot;source-checkout beta&quot; --mode content --limit 5">
+        <button class="command-line" type="button" data-copy="dotnet run --project src/Miller.Server -c Release -- search &quot;release archive&quot; --mode content --limit 5">
           <span>content search</span>
-          <code>dotnet run --project src/Miller.Server -c Release -- search "source-checkout beta" --mode content --limit 5</code>
+          <code>dotnet run --project src/Miller.Server -c Release -- search "release archive" --mode content --limit 5</code>
         </button>
         <button class="command-line" type="button" data-copy="dotnet run --project src/Miller.Server -c Release -- context &quot;dashboard telemetry and workspace registry&quot; --token-budget 1200">
           <span>context bundle</span>
@@ -134,6 +134,10 @@
           <p>Reverse reachability and likely tests so agents can choose focused verification.</p>
         </article>
         <article>
+          <h3>content</h3>
+          <p>Bounded search/read/export for source text, docs, logs, reports, and imported web markdown.</p>
+        </article>
+        <article>
           <h3>workspace</h3>
           <p>Registry, freshness, refresh, dashboard launch, and cross-workspace selectors.</p>
         </article>
@@ -157,7 +161,7 @@
     <section id="install" class="section install-section">
       <div class="section-heading">
         <p class="eyebrow">Try it</p>
-        <h2>Source-checkout beta first.</h2>
+        <h2>Use the source checkout or a release archive.</h2>
       </div>
       <div class="install-panel">
         <pre><code>bash scripts/restore-julie-extract.sh
@@ -166,12 +170,12 @@ dotnet run --project src/Miller.Server -c Release -- workspace open --path /path
 dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvider" --limit 5
 dotnet run --project src/Miller.Server -c Release -- dashboard</code></pre>
         <div class="limits">
-          <h3>Beta limits</h3>
+          <h3>Known limits</h3>
           <ul>
             <li>No embeddings or semantic/vector retrieval in Miller.</li>
             <li>Source-region search is opt-in with <code>MILLER_REGION_INDEX=1</code>.</li>
             <li>The release workflow packages the main <code>miller</code> binary with Native AOT.</li>
-            <li>GitHub Pages deployment is pending a separate publish decision.</li>
+            <li>The dashboard helper stays self-contained/non-AOT because Razor Components do not currently support Native AOT.</li>
           </ul>
         </div>
       </div>
@@ -181,7 +185,7 @@ dotnet run --project src/Miller.Server -c Release -- dashboard</code></pre>
   <footer class="site-footer">
     <span>Miller</span>
     <a href="https://github.com/anortham/miller" target="_blank" rel="noopener">GitHub</a>
-    <a href="https://github.com/anortham/miller/blob/main/docs/release-notes/v0.1.0-beta.1.md" target="_blank" rel="noopener">Beta release notes</a>
+    <a href="https://github.com/anortham/miller/blob/main/docs/release-notes/v0.2.0.md" target="_blank" rel="noopener">Release notes</a>
   </footer>
 
   <script src="script.js"></script>

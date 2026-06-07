@@ -8,7 +8,7 @@ namespace Miller.Indexing;
 
 public sealed class ContentCorpusExternalStore
 {
-    public const long DefaultMaxImportBytes = 10 * 1024 * 1024;
+    public const long DefaultMaxImportBytes = 25 * 1024 * 1024;
     public const int DefaultContextLines = 10;
     public const int MaxReadWindowLines = 200;
 
@@ -16,12 +16,18 @@ public sealed class ContentCorpusExternalStore
         new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     private readonly long _defaultMaxImportBytes;
+    private readonly TimeSpan? _writeLockTimeout;
 
-    public ContentCorpusExternalStore(long defaultMaxImportBytes = DefaultMaxImportBytes)
+    public ContentCorpusExternalStore(
+        long defaultMaxImportBytes = DefaultMaxImportBytes,
+        TimeSpan? writeLockTimeout = null)
     {
         if (defaultMaxImportBytes <= 0)
             throw new ArgumentOutOfRangeException(nameof(defaultMaxImportBytes), "Default max import bytes must be > 0.");
+        if (writeLockTimeout is { } timeout && timeout < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(writeLockTimeout), "Write lock timeout must be >= 0.");
         _defaultMaxImportBytes = defaultMaxImportBytes;
+        _writeLockTimeout = writeLockTimeout;
     }
 
     public ExternalContentImportResult Import(
@@ -124,22 +130,25 @@ public sealed class ContentCorpusExternalStore
             isTest: false,
             containingSymbols: Array.Empty<ContentCorpusSymbolSpan>());
 
-        using var connection = OpenWritable(contentDbPath);
-        using var tx = connection.BeginTransaction();
-        bool replaced = DeleteSource(connection, sourceId).SourceCount > 0;
-        InsertSource(connection, sourceId, contentKind, path, url, renderedPath, LanguageFor(absFile), contentHash, bytes.LongLength, text, chunks);
-        UpdateMeta(connection);
-        tx.Commit();
+        using (ContentCorpusWriteLock.AcquireFor(contentDbPath, _writeLockTimeout))
+        {
+            using var connection = OpenWritable(contentDbPath);
+            using var tx = connection.BeginTransaction();
+            bool replaced = DeleteSource(connection, sourceId).SourceCount > 0;
+            InsertSource(connection, sourceId, contentKind, path, url, renderedPath, LanguageFor(absFile), contentHash, bytes.LongLength, text, chunks);
+            UpdateMeta(connection);
+            tx.Commit();
 
-        return new ExternalContentImportResult(
-            sourceId,
-            contentKind,
-            renderedPath,
-            contentHash,
-            bytes.LongLength,
-            chunks.Count,
-            replaced,
-            url);
+            return new ExternalContentImportResult(
+                sourceId,
+                contentKind,
+                renderedPath,
+                contentHash,
+                bytes.LongLength,
+                chunks.Count,
+                replaced,
+                url);
+        }
     }
 
     public IReadOnlyList<TextContentSearchHit> Search(
@@ -272,12 +281,15 @@ public sealed class ContentCorpusExternalStore
         if (!File.Exists(Path.GetFullPath(contentDbPath)))
             return new ExternalContentRemoveResult(sourceId, Removed: false, SourceCount: 0, ChunkCount: 0);
 
-        using var connection = OpenWritable(contentDbPath);
-        using var tx = connection.BeginTransaction();
-        ExternalContentRemoveResult result = DeleteSource(connection, sourceId);
-        UpdateMeta(connection);
-        tx.Commit();
-        return result;
+        using (ContentCorpusWriteLock.AcquireFor(contentDbPath, _writeLockTimeout))
+        {
+            using var connection = OpenWritable(contentDbPath);
+            using var tx = connection.BeginTransaction();
+            ExternalContentRemoveResult result = DeleteSource(connection, sourceId);
+            UpdateMeta(connection);
+            tx.Commit();
+            return result;
+        }
     }
 
     public static string SourceIdFor(string filePath)

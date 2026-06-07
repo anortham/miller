@@ -150,7 +150,7 @@ jobs:
             sed -n '1,120p' "${stderr_file}"
             exit 1
           }
-          for tool in search inspect context impact trace edit workspace; do
+          for tool in search inspect context impact trace edit content workspace; do
             echo "$out" | grep -q "\"name\":\"${tool}\"" || {
               echo "AOT MCP serve smoke failed: ${tool} tool missing"
               sed -n '1,120p' "${stderr_file}"

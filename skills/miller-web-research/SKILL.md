@@ -1,6 +1,6 @@
 ---
 name: miller-web-research
-description: Use when researching web pages with Miller: fetch token-optimized markdown via browser39, import it as web content, then search/read bounded windows through Miller's content corpus.
+description: "Use when researching web pages with Miller: fetch token-optimized markdown via browser39, import it as web content, then search/read bounded windows through Miller's content corpus."
 ---
 
 # Miller Web Research

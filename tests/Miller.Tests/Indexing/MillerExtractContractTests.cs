@@ -138,6 +138,7 @@ public sealed class MillerExtractContractTests
         Assert.Contains("test -x \"${publish_dir}/miller\"", workflow, StringComparison.Ordinal);
         Assert.Contains("\"${publish_dir}/miller\" version", workflow, StringComparison.Ordinal);
         Assert.Contains("& $millerBinary version", workflow, StringComparison.Ordinal);
+        Assert.Contains("search inspect context impact trace edit content workspace", workflow, StringComparison.Ordinal);
 
         Assert.Contains("dashboard/Miller.Dashboard", workflow, StringComparison.Ordinal);
         Assert.Contains("dashboard/Miller.Dashboard.exe", workflow, StringComparison.Ordinal);

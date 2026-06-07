@@ -169,7 +169,7 @@ public sealed class ContentTool
         foreach (WorkspaceRegistryRow row in workspaces)
         {
             string contentDbPath = ContentCorpusSidecar.ContentDbPathFor(row.IndexDbPath);
-            foreach (TextContentSearchHit hit in _store.Search(contentDbPath, query, contentKind, limit))
+            foreach (TextContentSearchHit hit in SearchWorkspaceContent(row, contentDbPath, query, contentKind, limit))
                 hits.Add(new WorkspaceContentSearchHit(row, hit));
         }
 
@@ -193,6 +193,38 @@ public sealed class ContentTool
 
         return json ? RenderWorkspaceSearchJson(page) : RenderWorkspaceSearchCompact(page);
     }
+
+    private IReadOnlyList<TextContentSearchHit> SearchWorkspaceContent(
+        WorkspaceRegistryRow row,
+        string contentDbPath,
+        string query,
+        string contentKind,
+        int limit)
+    {
+        if (!IsWorkspaceContentKind(contentKind))
+            return _store.Search(contentDbPath, query, contentKind, limit);
+
+        long expectedRevision = ExpectedWorkspaceRevision(row);
+        return FtsTextContentSearchIndex
+            .Open(contentDbPath, expectedRevision)
+            .Search(query, contentKind, limit, excludeTests: false);
+    }
+
+    private static long ExpectedWorkspaceRevision(WorkspaceRegistryRow row)
+    {
+        if (File.Exists(row.IndexDbPath))
+        {
+            using var freshness = new FreshnessReader(row.IndexDbPath);
+            return freshness.LatestRevision();
+        }
+
+        return row.LastRevision ?? 0L;
+    }
+
+    private static bool IsWorkspaceContentKind(string contentKind) =>
+        string.Equals(contentKind, TextContentKind.WorkspaceSource, StringComparison.Ordinal)
+        || string.Equals(contentKind, TextContentKind.WorkspaceDocs, StringComparison.Ordinal)
+        || string.Equals(contentKind, TextContentKind.WorkspaceConfig, StringComparison.Ordinal);
 
     private string Read(
         string contentDbPath,

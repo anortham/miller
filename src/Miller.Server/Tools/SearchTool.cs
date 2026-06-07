@@ -300,7 +300,7 @@ public sealed class SearchTool
         _ => SearchToolMode.Auto, // includes "auto", null, and anything unrecognized
     };
 
-    private static IReadOnlyCollection<string> ContentKindsForMode(SearchToolMode mode) =>
+    internal static IReadOnlyCollection<string> ContentKindsForMode(SearchToolMode mode) =>
         mode switch
         {
             SearchToolMode.External => [TextContentKind.ExternalFile],

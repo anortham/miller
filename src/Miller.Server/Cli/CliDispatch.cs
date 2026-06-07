@@ -141,7 +141,7 @@ public static class CliDispatch
     {
         CliOptions o = CliOptions.Parse(args, "json", "include-tests", "exclude-tests");
         if (string.IsNullOrWhiteSpace(o.Query))
-            return Usage(err, "miller search <query> [--workspace-id SELECTOR] [--workspace DIR] [--mode auto|text|symbol|file|content|source] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--include-tests|--exclude-tests]");
+            return Usage(err, "miller search <query> [--workspace-id SELECTOR] [--workspace DIR] [--mode auto|text|symbol|file|content|source|external|web|all-text] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--include-tests|--exclude-tests]");
         if (!TryResolveReadContext(ctx, o, err, out ctx))
             return 2;
 
@@ -227,7 +227,7 @@ public static class CliDispatch
             }
         }
 
-        if (mode == SearchToolMode.Source)
+        if (mode is SearchToolMode.Source or SearchToolMode.External or SearchToolMode.Web or SearchToolMode.AllText)
         {
             if (!RequireIndex(ctx, err))
                 return 3;
@@ -237,15 +237,19 @@ public static class CliDispatch
                 using var freshness = new FreshnessReader(ctx.ExtractDbPath);
                 long revision = freshness.LatestRevision();
                 var contentSidecar = new ContentCorpusSidecar();
-                FtsTextContentSearchIndex sourceIndex = contentSidecar.OpenRequired(ctx.ExtractDbPath, revision);
+                FtsTextContentSearchIndex textIndex = contentSidecar.OpenRequired(ctx.ExtractDbPath, revision);
                 bool hideTests = SearchTool.ResolveExcludeTests(excludeTests, o.Query, mode);
+                IReadOnlyCollection<string> contentKinds = mode == SearchToolMode.Source
+                    ? [TextContentKind.WorkspaceSource]
+                    : SearchTool.ContentKindsForMode(mode);
                 outw.WriteLine(SearchTool.RunTextContent(
-                    sourceIndex,
+                    textIndex,
                     o.Query,
-                    TextContentKind.WorkspaceSource,
+                    contentKinds,
                     limit,
                     hideTests,
                     json,
+                    out _,
                     out _,
                     filePattern: o.Value("file-pattern"),
                     language: o.Value("language")));
@@ -255,7 +259,7 @@ public static class CliDispatch
                 ex is FileNotFoundException or InvalidOperationException or IOException
                     or UnauthorizedAccessException or ArgumentException or NotSupportedException)
             {
-                err.WriteLine("source search requires a refreshed content corpus: " + ex.Message);
+                err.WriteLine("text content search requires a refreshed content corpus: " + ex.Message);
                 return 3;
             }
         }
@@ -1037,7 +1041,7 @@ public static class CliDispatch
                              open   [--path DIR] [--full]   Register + index a directory (creates .miller/symbols.db).
                              remove (--id ID | --path DIR)  Delete a workspace's .miller index dir.
                              [--id DISPLAY-ID] [--path DIR] [--json]
-          version            Print the build version (e.g. 0.1.0+<sha>).
+          version            Print the build version (e.g. 0.2.0+<sha>).
           help               Show this help.
           serve              Run the MCP stdio server (the default when launched with no arguments).
         """;

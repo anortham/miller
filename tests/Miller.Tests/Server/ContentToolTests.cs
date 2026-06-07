@@ -3,6 +3,7 @@ using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Miller.Server;
 using Miller.Server.Tools;
+using Miller.Tests.Indexing;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -194,5 +195,57 @@ public sealed class ContentToolTests : IDisposable
             row.GetProperty("workspace_id").GetString() == "ws-beta"
             && row.GetProperty("display_id").GetString() == "beta"
             && row.GetProperty("display_path").GetString() == "beta.log");
+    }
+
+    [Fact]
+    public void Content_SearchRegisteredWorkspaceSource_FailsWhenContentDbIsStale()
+    {
+        const string sourceText = """
+            public class Api
+            {
+                public void Handle()
+                {
+                    throw new InvalidOperationException("StaleWorkspaceSourceMarker");
+                }
+            }
+            """;
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [new JulieDbFixture.SymbolRow("sym-api", "Api", "class", "csharp", "src/Api.cs", "public class Api", 1, null)
+            {
+                EndLine = 7,
+            }],
+            fileContent: new Dictionary<string, string>
+            {
+                ["src/Api.cs"] = sourceText,
+            },
+            revisions:
+            [
+                new JulieDbFixture.RevisionRow(1),
+                new JulieDbFixture.RevisionRow(2),
+            ]);
+        ContentCorpusWriter.Write(
+            ContentCorpusSidecar.ContentDbPathFor(fixture.DbPath),
+            fixture.DbPath,
+            fixture.WorkspaceRoot,
+            workspaceId: "ws-stale",
+            revision: 1);
+        using (var registry = WorkspaceRegistry.Open(_workspace.RegistryDbPath))
+        {
+            registry.UpsertSeen("ws-stale", "stale", fixture.WorkspaceRoot, fixture.DbPath);
+            registry.MarkScanned("ws-stale", revision: 2);
+        }
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+
+        string output = tool.Content(
+            "search",
+            query: "StaleWorkspaceSourceMarker",
+            content_kind: TextContentKind.WorkspaceSource,
+            workspace_id: "all");
+
+        Assert.StartsWith("content failed:", output, StringComparison.Ordinal);
+        Assert.Contains("is stale", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("expected 2", output, StringComparison.Ordinal);
     }
 }
