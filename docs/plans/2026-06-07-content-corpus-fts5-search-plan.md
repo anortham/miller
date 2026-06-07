@@ -292,7 +292,7 @@ Out of scope for this plan:
 - [x] Docs/config chunks record `content_kind` as `workspace_docs` or `workspace_config`.
 - [x] Current compact and JSON result shapes remain compatible or receive explicitly versioned additions only.
 - [x] Registered workspace `mode=content` uses content corpus loading without loading the full graph.
-- [ ] Worker-scope verification passes and changes are committed.
+- [x] Worker-scope verification passes and changes are committed.
 
 ## Phase 3: Large External File and Log Tool
 
