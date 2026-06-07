@@ -39,9 +39,9 @@ public sealed class IndexerService : BackgroundService
     private readonly TimeSpan _leaderRetryInterval;
     private readonly bool _attachFileWatchers;
 
-    // Phase 1: the on-disk search.db sidecar. Default OFF. When enabled, THIS instance — the writer-lock leader —
-    // is the one safe writer for the CURRENT workspace's search.db, so it (re)builds it after its own scans
-    // (startup delta + on-demand refresh/full) under _opsGate. Best-effort: reads self-heal to the in-memory index.
+    // The on-disk search.db sidecar. Default ON. When enabled, THIS instance — the writer-lock leader — is the one
+    // safe writer for the CURRENT workspace's search.db, so it converges it after scans and per-file updates under
+    // _opsGate.
     private readonly SymbolSearchSidecar _sidecar;
 
     private IDisposable? _lease;
@@ -211,7 +211,11 @@ public sealed class IndexerService : BackgroundService
                     // own gate; the lock order is always _opsGate -> _core gate (the Try* methods never take the
                     // core gate, and the watcher enqueue only takes the core gate), so there is no inversion.
                     lock (_opsGate)
-                        _core.DrainAndProcess(headChanged);
+                    {
+                        bool processed = _core.DrainAndProcess(headChanged, out bool usedWholeRepoScan);
+                        if (processed)
+                            TryConvergeSidecarToLatest(workspace.CanonicalExtractDbPath, fullRebuild: usedWholeRepoScan);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -258,10 +262,10 @@ public sealed class IndexerService : BackgroundService
                 IExtractOps ops = _ops
                     ?? throw new InvalidOperationException("Indexer leader startup scan requested before ops were published.");
                 report = ops.Scan(force: false);
-                // (Re)build the search.db sidecar under _opsGate — the same lock that serializes extract
-                // subprocesses — so the symbols.db read never races a concurrent extract that could replace the
-                // file. Best-effort + revision-gated inside the sidecar; a no-op when the feature is off.
-                TryBuildSidecar(workspace.CanonicalExtractDbPath, report);
+                // Converge search.db under _opsGate — the same lock that serializes extract subprocesses — so the
+                // symbols.db read never races a concurrent extract that could replace the file. Revision-gated
+                // inside the sidecar; a no-op when the feature is off.
+                TryConvergeSidecar(workspace.CanonicalExtractDbPath, report, fullRebuild: true);
             }
 
             IndexBootstrapService.MarkRegistryScanned(workspace, stableWorkspaceId, report.Revision);
@@ -305,6 +309,7 @@ public sealed class IndexerService : BackgroundService
                 ExtractReport report = ops.Update(path);
                 if (PartialExtractLog.DescribePartial(report) is { } partial)
                     _logger.LogWarning("Inline write-through reindex of {Path}: {Partial}", path, partial);
+                TryConvergeSidecar(_bootstrap.Workspace.CanonicalExtractDbPath, report, fullRebuild: false);
                 return true;
             }
             catch (Exception ex)
@@ -354,40 +359,69 @@ public sealed class IndexerService : BackgroundService
                 _logger.LogWarning(
                     "On-demand {Kind} scan: {Partial}", force ? "full (force)" : "refresh (delta)", partial);
 
-            // (Re)build the search.db sidecar after a successful scan, still under _opsGate. Deliberately OUTSIDE
-            // the scan's try/catch so a sidecar build issue can never be misreported as a scan failure — the build
-            // is best-effort and reads self-heal to the in-memory index. The bootstrap getter is read only when the
-            // feature is on, so an un-started, no-workspace unit-test instance on the OFF path never touches it.
+            // Converge search.db after a successful scan, still under _opsGate. Deliberately OUTSIDE the scan's
+            // try/catch so a sidecar issue can never be misreported as a scan failure. The bootstrap getter is
+            // read only when the feature is on, so an un-started, no-workspace unit-test instance on the OFF path
+            // never touches it.
             if (_sidecar.Enabled && _bootstrap.Workspace.CanonicalExtractDbPath is { } symbolsDbPath)
-                TryBuildSidecar(symbolsDbPath, report);
+                TryConvergeSidecar(symbolsDbPath, report, fullRebuild: true);
 
             return ScanOutcome.Scanned(report);
         }
     }
 
-    // Best-effort search.db (re)build for the CURRENT workspace. Enabled-and-stale ⇒ rebuild; off / already-fresh /
-    // no-revision ⇒ no-op. MUST be called holding _opsGate: it reads symbols.db, which a concurrent extract could
-    // replace. Swallows the expected build failures by design — the sidecar is a rebuildable derived artifact, so a
-    // failure must NEVER undo a successful scan; reads fall back to the always-fresh in-memory index.
-    private void TryBuildSidecar(string? symbolsDbPath, ExtractReport report)
+    private void TryConvergeSidecarToLatest(string? symbolsDbPath, bool fullRebuild)
     {
         if (!_sidecar.Enabled)
             return;
-        if (symbolsDbPath is null || report.Revision is not { } revision)
-            return; // no symbols.db path or no revision cursor to stamp; the next scan with a revision builds it
+        if (symbolsDbPath is null)
+            return;
 
         try
         {
-            string workspaceRoot = _bootstrap.Workspace.CanonicalRoot ?? _bootstrap.Workspace.WorkspaceRoot;
-            if (_sidecar.EnsureBuilt(symbolsDbPath, revision, workspaceRoot))
-                _logger.LogInformation("Built search sidecar at revision {Revision}.", revision);
+            using var freshness = new FreshnessReader(symbolsDbPath);
+            TryConvergeSidecar(symbolsDbPath, freshness.LatestRevision(), fullRebuild);
         }
         catch (Exception ex) when (
             ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException
                 or ArgumentException or NotSupportedException or IncompatibleExtractException)
         {
             _logger.LogWarning(ex,
-                "Search sidecar build failed (best-effort); reads fall back to the in-memory index.");
+                "Search sidecar freshness check failed; the sidecar will remain unavailable or stale until the next successful convergence.");
+        }
+    }
+
+    private void TryConvergeSidecar(string? symbolsDbPath, ExtractReport report, bool fullRebuild)
+    {
+        if (report.Revision is { } revision)
+            TryConvergeSidecar(symbolsDbPath, revision, fullRebuild);
+    }
+
+    // search.db convergence for the CURRENT workspace. Enabled-and-stale ⇒ incremental update from julie's
+    // revision_file_changes; missing/corrupt/schema-stale ⇒ full repair rebuild; off/already-fresh/no-revision
+    // ⇒ no-op. MUST be called holding _opsGate: it reads symbols.db, which a concurrent extract could replace.
+    private void TryConvergeSidecar(string? symbolsDbPath, long revision, bool fullRebuild)
+    {
+        if (!_sidecar.Enabled)
+            return;
+        if (symbolsDbPath is null || revision <= 0)
+            return; // no symbols.db path or no revision cursor to stamp; the next revision-bearing op builds it
+
+        try
+        {
+            string workspaceRoot = _bootstrap.Workspace.CanonicalRoot ?? _bootstrap.Workspace.WorkspaceRoot;
+            bool changed = fullRebuild
+                ? _sidecar.EnsureBuilt(symbolsDbPath, revision, workspaceRoot)
+                : _sidecar.EnsureCurrent(symbolsDbPath, revision, workspaceRoot);
+            if (changed)
+                _logger.LogInformation("Converged search sidecar at revision {Revision}.", revision);
+        }
+        catch (Exception ex) when (
+            ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException
+                or ArgumentException or NotSupportedException or IncompatibleExtractException)
+        {
+            _logger.LogWarning(ex,
+                "Search sidecar convergence failed; the sidecar will remain unavailable or stale until the next successful convergence.");
         }
     }
 

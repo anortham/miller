@@ -39,6 +39,7 @@ public sealed class WorkspaceTool
     private readonly TelemetryLedger _ledger;
     private readonly WorkspaceRegistry _registry;
     private readonly CrossWorkspaceRefreshService _crossWorkspaceRefresh;
+    private readonly SymbolSearchSidecar _sidecar;
     private readonly Func<string, string, bool, ExtractReport> _scanForOpen;
     private readonly Func<string, IDisposable?> _acquireWriterLock;
     private readonly IDashboardLauncher _dashboardLauncher;
@@ -56,6 +57,7 @@ public sealed class WorkspaceTool
         JulieExtractRunner runner,
         WorkspaceRegistry registry,
         CrossWorkspaceRefreshService crossWorkspaceRefresh,
+        SymbolSearchSidecar sidecar,
         ILogger<WorkspaceTool> logger)
         : this(
             holder,
@@ -67,6 +69,7 @@ public sealed class WorkspaceTool
             runner,
             registry,
             crossWorkspaceRefresh,
+            sidecar,
             (root, db, force) => runner.Scan(root, db, force),
             millerDir => SingleWriterLock.TryAcquire(millerDir),
             new DashboardCliLauncher(),
@@ -84,6 +87,7 @@ public sealed class WorkspaceTool
         JulieExtractRunner runner,
         WorkspaceRegistry registry,
         CrossWorkspaceRefreshService crossWorkspaceRefresh,
+        SymbolSearchSidecar sidecar,
         Func<string, string, bool, ExtractReport> scanForOpen,
         Func<string, IDisposable?> acquireWriterLock,
         IDashboardLauncher dashboardLauncher,
@@ -98,6 +102,7 @@ public sealed class WorkspaceTool
         ArgumentNullException.ThrowIfNull(runner);
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(crossWorkspaceRefresh);
+        ArgumentNullException.ThrowIfNull(sidecar);
         ArgumentNullException.ThrowIfNull(scanForOpen);
         ArgumentNullException.ThrowIfNull(acquireWriterLock);
         ArgumentNullException.ThrowIfNull(dashboardLauncher);
@@ -110,6 +115,7 @@ public sealed class WorkspaceTool
         _ledger = ledger;
         _registry = registry;
         _crossWorkspaceRefresh = crossWorkspaceRefresh;
+        _sidecar = sidecar;
         _scanForOpen = scanForOpen;
         _acquireWriterLock = acquireWriterLock;
         _dashboardLauncher = dashboardLauncher;
@@ -229,7 +235,8 @@ public sealed class WorkspaceTool
                 WarningText: error,
                 DisplayId: row.DisplayId,
                 ServerVersion: MillerVersion.Current,
-                ServerProcessId: Environment.ProcessId);
+                ServerProcessId: Environment.ProcessId,
+                SearchSidecar: _sidecar.Inspect(row.IndexDbPath, row.LastRevision ?? 0));
             return (WorkspaceRender.Status(missingFacts, _ledger.SummarizeForWorkspace(row.WorkspaceId), json),
                 1, TelemetryOutcome.Empty);
         }
@@ -249,7 +256,8 @@ public sealed class WorkspaceTool
             WarningText: WorkspaceFreshnessView.WarningTextFor(refreshResult: null),
             DisplayId: row.DisplayId,
             ServerVersion: MillerVersion.Current,
-            ServerProcessId: Environment.ProcessId);
+            ServerProcessId: Environment.ProcessId,
+            SearchSidecar: _sidecar.Inspect(row.IndexDbPath, revision));
         return (WorkspaceRender.Status(facts, _ledger.SummarizeForWorkspace(row.WorkspaceId), json),
             1, TelemetryOutcome.Ok);
     }
@@ -292,7 +300,8 @@ public sealed class WorkspaceTool
             FreshnessStatus: "current",
             DisplayId: CurrentDisplayId(),
             ServerVersion: MillerVersion.Current,
-            ServerProcessId: Environment.ProcessId);
+            ServerProcessId: Environment.ProcessId,
+            SearchSidecar: _sidecar.Inspect(_workspace.ExtractDbPath, builtRevision));
     }
 
     // ---------- refresh / full ----------

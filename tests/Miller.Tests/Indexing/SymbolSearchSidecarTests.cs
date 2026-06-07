@@ -287,6 +287,88 @@ public sealed class SymbolSearchSidecarTests : IDisposable
     }
 
     [Fact]
+    public void EnsureCurrent_StaleArtifactAppliesRevisionFileChangesIncrementally()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow("edit-new", "UpdatedType", "class", "csharp",
+                    "src/Edit.cs", "public class UpdatedType", 1, ParentId: null),
+                new JulieDbFixture.SymbolRow("keep", "Anchor", "class", "csharp",
+                    "src/Keep.cs", "public class Anchor", 1, ParentId: null),
+            },
+            revisions: new[]
+            {
+                new JulieDbFixture.RevisionRow(1),
+                new JulieDbFixture.RevisionRow(2, Kind: "single_file"),
+            },
+            fileChanges: new[]
+            {
+                new JulieDbFixture.RevisionFileChangeRow(2, "src/Edit.cs", "updated"),
+                new JulieDbFixture.RevisionFileChangeRow(2, "src/Delete.cs", "deleted"),
+            });
+        string searchDb = SymbolSearchSidecar.SearchDbPathFor(julie.DbPath);
+        SearchIndexWriter.Write(searchDb, new[]
+        {
+            new IndexedSymbol(0, "delete-old", "RemovedThing", "public class RemovedThing", "class",
+                "csharp", "src/Delete.cs", 1, 1, ParentId: null, IsTest: false),
+            new IndexedSymbol(1, "edit-old", "LegacyWidget", "public class LegacyWidget", "class",
+                "csharp", "src/Edit.cs", 1, 1, ParentId: null, IsTest: false),
+            new IndexedSymbol(2, "keep", "Anchor", "public class Anchor", "class",
+                "csharp", "src/Keep.cs", 1, 1, ParentId: null, IsTest: false),
+        }, revision: 1);
+        CreateSentinelTable(searchDb);
+        var sidecar = new SymbolSearchSidecar(enabled: true);
+
+        Assert.True(sidecar.EnsureCurrent(julie.DbPath, revision: 2, workspaceRoot: julie.WorkspaceRoot));
+
+        Assert.True(TableExists(searchDb, "incremental_sentinel"));
+        FtsSymbolSearchIndex index = Assert.IsType<FtsSymbolSearchIndex>(
+            sidecar.TryOpen(julie.DbPath, expectedRevision: 2));
+        Assert.Equal(2, index.DocumentCount);
+        Assert.Empty(index.Search("RemovedThing", limit: 10));
+        Assert.Empty(index.Search("LegacyWidget", limit: 10));
+        Assert.Equal("UpdatedType", index.Resolve(Assert.Single(index.Search("UpdatedType", limit: 10)).Document.DocId).Name);
+        Assert.Equal("Anchor", index.Resolve(Assert.Single(index.Search("Anchor", limit: 10)).Document.DocId).Name);
+    }
+
+    [Fact]
+    public void EnsureCurrent_StaleArtifactWithNoRevisionFileChanges_RebuildsFromCurrentSymbols()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow("new", "UpdatedType", "class", "csharp",
+                    "src/Edit.cs", "public class UpdatedType", 1, ParentId: null),
+            },
+            revisions: new[]
+            {
+                new JulieDbFixture.RevisionRow(1),
+                new JulieDbFixture.RevisionRow(2, Kind: "full"),
+            });
+        string searchDb = SymbolSearchSidecar.SearchDbPathFor(julie.DbPath);
+        SearchIndexWriter.Write(searchDb, new[]
+        {
+            new IndexedSymbol(0, "old", "LegacyWidget", "public class LegacyWidget", "class",
+                "csharp", "src/Edit.cs", 1, 1, ParentId: null, IsTest: false),
+        }, revision: 1);
+        CreateSentinelTable(searchDb);
+        var sidecar = new SymbolSearchSidecar(enabled: true);
+
+        Assert.True(sidecar.EnsureCurrent(julie.DbPath, revision: 2, workspaceRoot: julie.WorkspaceRoot));
+
+        Assert.False(TableExists(searchDb, "incremental_sentinel"));
+        FtsSymbolSearchIndex index = Assert.IsType<FtsSymbolSearchIndex>(
+            sidecar.TryOpen(julie.DbPath, expectedRevision: 2));
+        Assert.Empty(index.Search("LegacyWidget", limit: 10));
+        Assert.Equal("UpdatedType", index.Resolve(Assert.Single(index.Search("UpdatedType", limit: 10)).Document.DocId).Name);
+    }
+
+    [Fact]
     public void EnsureBuilt_ExistingArtifactHasCorruptRevision_RebuildsWithoutThrowing()
     {
         using var julie = JulieDb();
@@ -343,6 +425,34 @@ public sealed class SymbolSearchSidecarTests : IDisposable
         Assert.Null(sidecar.TryOpen(julie.DbPath, expectedRevision: 5));      // read gate now rejects the stale schema
         Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 5));          // freshness gate rebuilds at the SAME revision
         Assert.NotNull(sidecar.TryOpen(julie.DbPath, expectedRevision: 5));   // rebuilt artifact is current-schema again
+    }
+
+    private static void CreateSentinelTable(string searchDb)
+    {
+        using (var rw = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = searchDb, Mode = SqliteOpenMode.ReadWrite, Pooling = false,
+        }.ToString()))
+        {
+            rw.Open();
+            using var cmd = rw.CreateCommand();
+            cmd.CommandText = "CREATE TABLE incremental_sentinel(value INTEGER);";
+            cmd.ExecuteNonQuery();
+        }
+        SqliteConnection.ClearAllPools();
+    }
+
+    private static bool TableExists(string searchDb, string tableName)
+    {
+        using var c = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = searchDb, Mode = SqliteOpenMode.ReadOnly, Pooling = false,
+        }.ToString());
+        c.Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT 1 FROM sqlite_master WHERE type='table' AND name=$name;";
+        cmd.Parameters.AddWithValue("$name", tableName);
+        return cmd.ExecuteScalar() is not null;
     }
 
     private static void SetSchemaVersion(string searchDb, int version)

@@ -87,6 +87,22 @@ public sealed class SearchIndexWriterTests : IDisposable
     }
 
     [Fact]
+    public void Write_StoresExplicitDocIds_IndependentOfSqliteRowid()
+    {
+        var syms = new[]
+        {
+            Sym(10, "id10", "Alpha", null, "class", "csharp", "src/A.cs", 1, 2),
+            Sym(42, "id42", "Beta", null, "class", "csharp", "src/B.cs", 3, 4),
+        };
+
+        SearchIndexWriter.Write(_dbPath, syms, revision: 7);
+
+        using var c = OpenRead();
+        Assert.Equal(10L, Long(Scalar(c, "SELECT doc_id FROM search_symbols WHERE symbol_id=$i", ("$i", "id10"))));
+        Assert.Equal(42L, Long(Scalar(c, "SELECT doc_id FROM search_symbols WHERE symbol_id=$i", ("$i", "id42"))));
+    }
+
+    [Fact]
     public void Write_StoresSignature_AndPreservesNull()
     {
         // The artifact must be self-contained enough to render full results without julie's symbols.db:
@@ -214,6 +230,44 @@ public sealed class SearchIndexWriterTests : IDisposable
         using var c = OpenRead();
         Assert.Equal(1L, Long(Scalar(c, "SELECT COUNT(*) FROM search_symbols")));
         Assert.Equal("only", Scalar(c, "SELECT symbol_id FROM search_symbols"));
+        Assert.Equal(2L, Long(Scalar(c, "SELECT revision FROM meta")));
+    }
+
+    [Fact]
+    public void ApplyFileChanges_WhenChangedFileGainsSymbolsAfterHighestDocIds_AllocatesUniqueDocIds()
+    {
+        const string changedPath = "src/Changed.cs";
+        SearchIndexWriter.Write(_dbPath, new[]
+        {
+            Sym(0, "unchanged", "Unchanged", null, "class", "csharp", "src/Unchanged.cs", 1, 2),
+            Sym(1, "old-one", "OldOne", null, "class", "csharp", changedPath, 1, 2),
+            Sym(2, "old-two", "OldTwo", null, "method", "csharp", changedPath, 3, 4),
+        }, revision: 1);
+
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow("old-one", "OldOne", "class", "csharp", changedPath, null, 1, ParentId: null),
+                new JulieDbFixture.SymbolRow("old-two", "OldTwo", "method", "csharp", changedPath, null, 3, ParentId: null),
+                new JulieDbFixture.SymbolRow("new-three", "NewThree", "method", "csharp", changedPath, null, 5, ParentId: null),
+            });
+
+        SearchIndexWriter.ApplyFileChanges(
+            _dbPath,
+            fx.DbPath,
+            [changedPath],
+            revision: 2,
+            workspaceRoot: null,
+            RegionIndexOptions.Disabled);
+
+        using var c = OpenRead();
+        Assert.Equal(4L, Long(Scalar(c, "SELECT COUNT(*) FROM search_symbols")));
+        Assert.Equal(4L, Long(Scalar(c, "SELECT COUNT(DISTINCT doc_id) FROM search_symbols")));
+        Assert.Equal(1L, Long(Scalar(c, "SELECT doc_id FROM search_symbols WHERE symbol_id='old-one'")));
+        Assert.Equal(2L, Long(Scalar(c, "SELECT doc_id FROM search_symbols WHERE symbol_id='old-two'")));
+        Assert.Equal(3L, Long(Scalar(c, "SELECT doc_id FROM search_symbols WHERE symbol_id='new-three'")));
         Assert.Equal(2L, Long(Scalar(c, "SELECT revision FROM meta")));
     }
 

@@ -91,6 +91,35 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
     }
 
     [Fact]
+    public void Open_UsesStoredDocId_NotSqliteRowid()
+    {
+        var syms = Corpus(
+            ("a", "Alpha", "class Alpha", "class", "csharp", "src/A.cs"),
+            ("b", "Beta", "class Beta", "class", "csharp", "src/B.cs"));
+        SearchIndexWriter.Write(_dbPath, syms, revision: 42);
+
+        using (var rw = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString()))
+        {
+            rw.Open();
+            using var cmd = rw.CreateCommand();
+            cmd.CommandText = "UPDATE search_symbols SET rowid = rowid + 100;";
+            cmd.ExecuteNonQuery();
+        }
+        SqliteConnection.ClearAllPools();
+
+        var index = FtsSymbolSearchIndex.Open(_dbPath);
+
+        SearchHit hit = Assert.Single(index.Search("Alpha", limit: 10));
+        Assert.Equal(0, hit.Document.DocId);
+        Assert.Equal("Alpha", index.Resolve(0).Name);
+    }
+
+    [Fact]
     public void Open_DelegatesLookups()
     {
         var syms = Corpus(

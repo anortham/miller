@@ -228,8 +228,8 @@ public sealed class SearchTool
     /// <summary>
     /// Telemetry metadata recording which backend served a symbol search — <c>disk</c> when the on-disk
     /// <see cref="FtsSymbolSearchIndex"/> sidecar answered, <c>memory</c> when the in-memory index did. This is
-    /// the observable "disk path taken" signal from the sidecar design's risk list: a silent self-heal back to
-    /// the in-memory index would otherwise be invisible. Every symbol search stamps its backend into the
+    /// the observable "disk path taken" signal from the sidecar design's risk list: an unexpected memory route
+    /// should be easy to distinguish from the default disk route. Every symbol search stamps its backend into the
     /// telemetry row's <c>metadata_json</c> so it can be read back per call and aggregated ad hoc (e.g.
     /// <c>json_extract(metadata_json, '$.search_backend')</c>). No dashboard surface consumes it yet — it is
     /// recorded for diagnosis; <c>SearchToolTests.Search_RecordsServingBackend_InTelemetryMetadata</c> pins it.

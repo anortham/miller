@@ -429,7 +429,8 @@ public static class CliDispatch
             QueueEmpty: true,
             FreshnessStatus: "unregistered",
             ServerVersion: MillerVersion.Current,
-            ServerProcessId: Environment.ProcessId);
+            ServerProcessId: Environment.ProcessId,
+            SearchSidecar: SymbolSearchSidecar.FromEnvironment().Inspect(ctx.ExtractDbPath, expectedRevision: 0));
         outw.WriteLine(WorkspaceRender.Status(facts, TelemetrySummary.Empty, json));
         return 0;
     }
@@ -469,7 +470,8 @@ public static class CliDispatch
             WarningText: warning,
             DisplayId: row.DisplayId,
             ServerVersion: MillerVersion.Current,
-            ServerProcessId: Environment.ProcessId);
+            ServerProcessId: Environment.ProcessId,
+            SearchSidecar: SymbolSearchSidecar.FromEnvironment().Inspect(row.IndexDbPath, revision));
     }
 
     private static int WorkspaceRefresh(

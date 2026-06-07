@@ -350,37 +350,32 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     }
 
     [Fact]
-    public void ResolveSymbolSearch_Registered_SidecarEnabledButArtifactMissing_FallsBackToProjection()
+    public void ResolveSymbolSearch_Registered_SidecarEnabledButArtifactMissing_FailsVisibly()
     {
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
         using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
-        // No search.db written next to target.DbPath — the sidecar must self-heal to the in-memory projection.
+        // No search.db written next to target.DbPath — the sidecar must fail visibly, not allocate a projection.
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
         string root = NewRoot("target-sidecar-missing");
         registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
         registry.MarkScanned("target-ws", revision: 1);
 
-        int searchLoadCount = 0;
         var provider = NewProvider(
             new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
             CurrentWorkspace(current.DbPath, "current-ws"),
             registry,
-            loadSymbolSearch: path =>
-            {
-                searchLoadCount++;
-                return SymbolSearchProjectionLoader.Load(path);
-            },
+            loadSymbolSearch: _ => throw new InvalidOperationException("in-memory fallback must not run"),
             sidecar: new SymbolSearchSidecar(enabled: true));
 
-        WorkspaceSymbolSearchContext context = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            provider.ResolveSymbolSearch("target-ws", ensureFresh: false));
 
-        Assert.IsType<SymbolSearchProjection>(context.Index);
-        Assert.Equal(1, searchLoadCount);
-        Assert.NotEmpty(context.Index.Search("TargetType", limit: 10));
+        Assert.Contains("Search sidecar is enabled but missing", ex.Message);
+        Assert.Contains("workspace refresh", ex.Message);
     }
 
     [Fact]
-    public void ResolveSymbolSearch_Registered_SidecarEnabled_RepairsMissingArtifactAtSameRevision()
+    public void ResolveSymbolSearch_Registered_SidecarEnabled_OpensArtifactCreatedAfterMissingFailure()
     {
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
         using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
@@ -389,32 +384,25 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
         registry.MarkScanned("target-ws", revision: 1);
 
-        int searchLoadCount = 0;
         var provider = NewProvider(
             new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
             CurrentWorkspace(current.DbPath, "current-ws"),
             registry,
-            loadSymbolSearch: path =>
-            {
-                searchLoadCount++;
-                return SymbolSearchProjectionLoader.Load(path);
-            },
+            loadSymbolSearch: _ => throw new InvalidOperationException("in-memory fallback must not run"),
             sidecar: new SymbolSearchSidecar(enabled: true));
 
-        WorkspaceSymbolSearchContext first = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
+        Assert.Throws<InvalidOperationException>(() =>
+            provider.ResolveSymbolSearch("target-ws", ensureFresh: false));
         WriteSearchDbFor(target, revision: 1);
         WorkspaceSymbolSearchContext second = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
 
-        Assert.IsType<SymbolSearchProjection>(first.Index);
         Assert.IsType<FtsSymbolSearchIndex>(second.Index);
-        Assert.NotSame(first.Index, second.Index);
-        Assert.Equal(1, searchLoadCount);
         var hit = Assert.Single(second.Index.Search("TargetType", limit: 10));
         Assert.Equal("TargetType", second.Index.Resolve(hit.Document.DocId).Name);
     }
 
     [Fact]
-    public void ResolveSymbolSearch_Registered_SidecarEnabledButArtifactStale_FallsBackToProjection()
+    public void ResolveSymbolSearch_Registered_SidecarEnabledButArtifactStale_FailsVisibly()
     {
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
         using var target = DbWithSymbol("target-ws", revision: 2, "TargetType");
@@ -424,22 +412,19 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
         registry.MarkScanned("target-ws", revision: 2);
 
-        int searchLoadCount = 0;
         var provider = NewProvider(
             new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
             CurrentWorkspace(current.DbPath, "current-ws"),
             registry,
-            loadSymbolSearch: path =>
-            {
-                searchLoadCount++;
-                return SymbolSearchProjectionLoader.Load(path);
-            },
+            loadSymbolSearch: _ => throw new InvalidOperationException("in-memory fallback must not run"),
             sidecar: new SymbolSearchSidecar(enabled: true));
 
-        WorkspaceSymbolSearchContext context = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            provider.ResolveSymbolSearch("target-ws", ensureFresh: false));
 
-        Assert.IsType<SymbolSearchProjection>(context.Index);
-        Assert.Equal(1, searchLoadCount);
+        Assert.Contains("Search sidecar", ex.Message);
+        Assert.Contains("stale", ex.Message);
+        Assert.Contains("expected 2", ex.Message);
     }
 
     [Fact]
@@ -480,10 +465,10 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     }
 
     [Fact]
-    public void ResolveSymbolSearch_Current_SidecarEnabledButArtifactMissing_UsesHolderIndex()
+    public void ResolveSymbolSearch_Current_SidecarEnabledButArtifactMissing_FailsVisibly()
     {
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
-        // No search.db — the current path self-heals to the holder's in-memory index.
+        // No search.db — the current path must fail visibly instead of silently using the holder index.
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
         var holder = new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1);
         var provider = NewProvider(
@@ -492,14 +477,14 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             registry,
             sidecar: new SymbolSearchSidecar(enabled: true));
 
-        WorkspaceSymbolSearchContext context = provider.ResolveSymbolSearch(workspaceId: null, ensureFresh: false);
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            provider.ResolveSymbolSearch(workspaceId: null, ensureFresh: false));
 
-        Assert.IsType<MillerRepositoryIndex>(context.Index);
-        Assert.Same(holder.Current, context.Index);
+        Assert.Contains("Search sidecar is enabled but missing", ex.Message);
     }
 
     [Fact]
-    public void ResolveSymbolSearch_Current_SidecarEnabled_RepairsMissingArtifactAtSameRevision()
+    public void ResolveSymbolSearch_Current_SidecarEnabled_OpensArtifactCreatedAfterMissingFailure()
     {
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
@@ -510,14 +495,12 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             registry,
             sidecar: new SymbolSearchSidecar(enabled: true));
 
-        WorkspaceSymbolSearchContext first = provider.ResolveSymbolSearch(workspaceId: null, ensureFresh: false);
+        Assert.Throws<InvalidOperationException>(() =>
+            provider.ResolveSymbolSearch(workspaceId: null, ensureFresh: false));
         WriteSearchDbFor(current, revision: 1);
         WorkspaceSymbolSearchContext second = provider.ResolveSymbolSearch(workspaceId: null, ensureFresh: false);
 
-        Assert.IsType<MillerRepositoryIndex>(first.Index);
-        Assert.Same(holder.Current, first.Index);
         Assert.IsType<FtsSymbolSearchIndex>(second.Index);
-        Assert.NotSame(first.Index, second.Index);
         var hit = Assert.Single(second.Index.Search("CurrentType", limit: 10));
         Assert.Equal("CurrentType", second.Index.Resolve(hit.Document.DocId).Name);
     }

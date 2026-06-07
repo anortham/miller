@@ -4,11 +4,10 @@ using Microsoft.Data.Sqlite;
 namespace Miller.Indexing;
 
 /// <summary>
-/// Phase 3 routing gate for the on-disk <c>search.db</c> sidecar. When the feature is enabled AND a
-/// revision-fresh artifact is present, <see cref="TryOpen"/> hands back a <see cref="FtsSymbolSearchIndex"/>;
-/// otherwise it returns <c>null</c> so the caller self-heals to its in-memory index. The gate NEVER throws —
-/// a missing, stale, corrupt, or schema-incompatible sidecar must degrade silently to the in-memory path,
-/// not surface as a search failure (the slow path is always correct).
+/// Routing and lifecycle gate for the on-disk <c>search.db</c> sidecar. <see cref="TryOpen"/> is a non-throwing
+/// probe for tests/evaluation; production routing uses <see cref="OpenRequired"/> so enabled-but-missing/stale
+/// artifacts fail visibly. <see cref="EnsureCurrent"/> is the lock-holding writer path that converges the
+/// sidecar after scans and single-file updates.
 /// </summary>
 public sealed class SymbolSearchSidecar
 {
@@ -94,6 +93,56 @@ public sealed class SymbolSearchSidecar
         };
     }
 
+    /// <summary>Cheap status facts for human/JSON workspace status surfaces.</summary>
+    public SearchSidecarFacts Inspect(string symbolsDbPath, long expectedRevision)
+    {
+        string searchDbPath;
+        try
+        {
+            searchDbPath = SearchDbPathFor(symbolsDbPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+        {
+            return new SearchSidecarFacts(
+                State: "unreadable",
+                Path: null,
+                Revision: null,
+                ExpectedRevision: expectedRevision,
+                DocumentCount: null,
+                Error: "search.db path could not be derived: " + ex.Message);
+        }
+
+        if (!Enabled)
+            return new SearchSidecarFacts("disabled", searchDbPath, null, expectedRevision, null, null);
+
+        if (!File.Exists(searchDbPath))
+            return new SearchSidecarFacts("missing", searchDbPath, null, expectedRevision, null, null);
+
+        try
+        {
+            FtsSymbolSearchIndex index = FtsSymbolSearchIndex.Open(searchDbPath);
+            return new SearchSidecarFacts(
+                State: index.Revision == expectedRevision ? "current" : "stale",
+                Path: searchDbPath,
+                Revision: index.Revision,
+                ExpectedRevision: expectedRevision,
+                DocumentCount: index.DocumentCount,
+                Error: null);
+        }
+        catch (Exception ex) when (
+            ex is SqliteException or InvalidOperationException or IOException
+                or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return new SearchSidecarFacts(
+                State: "unreadable",
+                Path: searchDbPath,
+                Revision: null,
+                ExpectedRevision: expectedRevision,
+                DocumentCount: null,
+                Error: ex.Message);
+        }
+    }
+
     private static bool IsTruthyValue(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw))
@@ -149,6 +198,52 @@ public sealed class SymbolSearchSidecar
     }
 
     /// <summary>
+    /// Open the disk-backed index when the sidecar feature is enabled. Unlike <see cref="TryOpen"/>, this fails
+    /// visibly when the artifact is missing, stale, corrupt, or schema-incompatible; production search uses this
+    /// path so sidecar problems do not silently allocate an in-memory substitute.
+    /// </summary>
+    public FtsSymbolSearchIndex OpenRequired(string symbolsDbPath, long expectedRevision)
+    {
+        if (!Enabled)
+            throw new InvalidOperationException("Search sidecar is disabled.");
+
+        string searchDbPath;
+        try
+        {
+            searchDbPath = SearchDbPathFor(symbolsDbPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+        {
+            throw new InvalidOperationException("Search sidecar path could not be derived from the symbols DB path.", ex);
+        }
+
+        if (!File.Exists(searchDbPath))
+            throw new InvalidOperationException(
+                $"Search sidecar is enabled but missing at '{searchDbPath}'. Run `miller workspace refresh` to rebuild it.");
+
+        try
+        {
+            FtsSymbolSearchIndex index = FtsSymbolSearchIndex.Open(searchDbPath);
+            if (index.Revision != expectedRevision)
+                throw new InvalidOperationException(
+                    $"Search sidecar at '{searchDbPath}' is stale: revision {index.Revision}, expected {expectedRevision}. " +
+                    "Run `miller workspace refresh` to converge it.");
+            return index;
+        }
+        catch (InvalidOperationException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (
+            ex is SqliteException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            throw new InvalidOperationException(
+                $"Search sidecar at '{searchDbPath}' could not be opened. Run `miller workspace refresh` to rebuild it.",
+                ex);
+        }
+    }
+
+    /// <summary>
     /// Ensure a revision-fresh <c>search.db</c> exists next to <paramref name="symbolsDbPath"/>, building it
     /// from the extract when missing or stale. Returns <c>true</c> if it (re)built, <c>false</c> if disabled or
     /// the artifact was already fresh. The caller MUST hold the workspace single-writer lock. Unlike
@@ -176,6 +271,56 @@ public sealed class SymbolSearchSidecar
 
         IReadOnlyList<IndexedSymbol> symbols = SqliteSymbolReader.Read(symbolsDbPath);
         SearchIndexWriter.Write(searchDbPath, symbols, revision, symbolsDbPath, workspaceRoot, RegionOptions);
+        return true;
+    }
+
+    /// <summary>
+    /// Ensure a revision-fresh <c>search.db</c> exists, applying julie's changed-file delta in place when the
+    /// artifact is stale but otherwise healthy. Missing, corrupt, newer-than-target, or schema-stale artifacts
+    /// are repaired with a full rebuild. The caller MUST hold the workspace single-writer lock.
+    /// </summary>
+    public bool EnsureCurrent(string symbolsDbPath, long revision, string? workspaceRoot = null)
+    {
+        if (!Enabled)
+            return false;
+        if (RegionOptions.Enabled)
+            ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
+
+        string searchDbPath = SearchDbPathFor(symbolsDbPath);
+        long? artifactRevision = ReadFreshArtifactRevision(searchDbPath);
+        if (artifactRevision == revision)
+            return false;
+
+        if (artifactRevision is null || artifactRevision.Value > revision)
+        {
+            IReadOnlyList<IndexedSymbol> symbols = SqliteSymbolReader.Read(symbolsDbPath);
+            SearchIndexWriter.Write(searchDbPath, symbols, revision, symbolsDbPath, workspaceRoot, RegionOptions);
+            return true;
+        }
+
+        using var freshness = new FreshnessReader(symbolsDbPath);
+        IReadOnlyList<string> changedPaths = freshness
+            .ChangedSince(artifactRevision.Value)
+            .Where(c => c.RevisionId <= revision)
+            .Select(static c => c.Path)
+            .Where(static p => !string.IsNullOrWhiteSpace(p))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        if (changedPaths.Count == 0)
+        {
+            IReadOnlyList<IndexedSymbol> symbols = SqliteSymbolReader.Read(symbolsDbPath);
+            SearchIndexWriter.Write(searchDbPath, symbols, revision, symbolsDbPath, workspaceRoot, RegionOptions);
+            return true;
+        }
+
+        SearchIndexWriter.ApplyFileChanges(
+            searchDbPath,
+            symbolsDbPath,
+            changedPaths,
+            revision,
+            workspaceRoot,
+            RegionOptions);
         return true;
     }
 
@@ -223,3 +368,11 @@ public sealed class SymbolSearchSidecar
         }
     }
 }
+
+public sealed record SearchSidecarFacts(
+    string State,
+    string? Path,
+    long? Revision,
+    long ExpectedRevision,
+    int? DocumentCount,
+    string? Error);

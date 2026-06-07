@@ -18,6 +18,8 @@ namespace Miller.Indexing;
 /// </summary>
 public static class SqliteSymbolReader
 {
+    private const int ParameterChunkSize = 500;
+
     /// <summary>
     /// Read all named symbols from the julie extract at <paramref name="dbPath"/> into a deterministically
     /// ordered list. DocId is the 0-based ordinal of the SELECT order (path, start_line, symbol_id).
@@ -38,7 +40,8 @@ public static class SqliteSymbolReader
         // v1 columns. By-name reads (D6) decouple SELECT order from the GetX ordinals: a future column
         // add/reorder can never silently shift a value into the wrong field again.
         command.CommandText = """
-            SELECT symbol_id, name, signature, kind, language, path,
+            SELECT ROW_NUMBER() OVER (ORDER BY path, start_line, symbol_id) - 1 AS doc_id,
+                   symbol_id, name, signature, kind, language, path,
                    start_line, end_line, parent_symbol_id, is_test
             FROM symbols
             WHERE name IS NOT NULL
@@ -46,10 +49,64 @@ public static class SqliteSymbolReader
             """;
 
         var results = new List<IndexedSymbol>();
-        int docId = 0;
         using var reader = command.ExecuteReader();
+        ReadRows(reader, results);
+        return results;
+    }
 
+    /// <summary>
+    /// Read only named symbols in the supplied workspace-relative <paramref name="paths"/>. DocId is still the
+    /// global deterministic row ordinal from the full reader's order, but callers that maintain their own stable
+    /// sidecar identities may rewrite it before indexing.
+    /// </summary>
+    public static IReadOnlyList<IndexedSymbol> ReadForPaths(string dbPath, IReadOnlyCollection<string> paths)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
+        ArgumentNullException.ThrowIfNull(paths);
+
+        var distinctPaths = paths
+            .Where(static p => !string.IsNullOrWhiteSpace(p))
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (distinctPaths.Length == 0)
+            return Array.Empty<IndexedSymbol>();
+
+        using var connection = SqliteReadOnlyAccess.Open(dbPath);
+        JulieSchemaGate.Verify(connection);
+
+        var results = new List<IndexedSymbol>();
+        for (int offset = 0; offset < distinctPaths.Length; offset += ParameterChunkSize)
+        {
+            int count = Math.Min(ParameterChunkSize, distinctPaths.Length - offset);
+            using var command = connection.CreateCommand();
+            string placeholders = AddPathParameters(command, distinctPaths, offset, count);
+            command.CommandText = $"""
+                WITH ordered AS (
+                    SELECT ROW_NUMBER() OVER (ORDER BY path, start_line, symbol_id) - 1 AS doc_id,
+                           symbol_id, name, signature, kind, language, path,
+                           start_line, end_line, parent_symbol_id, is_test
+                    FROM symbols
+                    WHERE name IS NOT NULL
+                )
+                SELECT doc_id, symbol_id, name, signature, kind, language, path,
+                       start_line, end_line, parent_symbol_id, is_test
+                FROM ordered
+                WHERE path IN ({placeholders})
+                ORDER BY path, start_line, symbol_id;
+                """;
+            using var reader = command.ExecuteReader();
+            ReadRows(reader, results);
+        }
+
+        results.Sort(static (a, b) => a.DocId.CompareTo(b.DocId));
+        return results;
+    }
+
+    private static void ReadRows(SqliteDataReader reader, List<IndexedSymbol> results)
+    {
         // Resolve ordinals once (cheap, cached) — not per-row over ~565k startup rows.
+        int oDocId = reader.GetOrdinal("doc_id");
         int oSymbolId = reader.GetOrdinal("symbol_id");
         int oName = reader.GetOrdinal("name");
         int oSignature = reader.GetOrdinal("signature");
@@ -75,7 +132,7 @@ public static class SqliteSymbolReader
             bool isTest = reader.GetBoolean(oIsTest); // typed v1 column; replaces the metadata JSON-parse hack (D4)
 
             results.Add(new IndexedSymbol(
-                DocId: docId++,
+                DocId: reader.GetInt32(oDocId),
                 SymbolId: symbolId,
                 Name: name,
                 Signature: signature,
@@ -87,7 +144,17 @@ public static class SqliteSymbolReader
                 ParentId: parentId,
                 IsTest: isTest));
         }
+    }
 
-        return results;
+    private static string AddPathParameters(SqliteCommand command, IReadOnlyList<string> paths, int offset, int count)
+    {
+        var placeholders = new string[count];
+        for (int i = 0; i < count; i++)
+        {
+            string name = "$p" + i.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            placeholders[i] = name;
+            command.Parameters.AddWithValue(name, paths[offset + i]);
+        }
+        return string.Join(", ", placeholders);
     }
 }

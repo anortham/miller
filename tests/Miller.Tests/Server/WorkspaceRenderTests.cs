@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Miller.Indexing;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
 using Xunit;
@@ -101,6 +102,40 @@ public sealed class WorkspaceRenderTests
 
         string text = WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: false);
         Assert.Contains("stale", text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Status_Compact_ShowsSearchSidecarState()
+    {
+        var facts = Facts() with
+        {
+            SearchSidecar = new SearchSidecarFacts(
+                "stale", "/repo/.miller/search.db", Revision: 41, ExpectedRevision: 42, DocumentCount: 565, Error: null),
+        };
+
+        string text = WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: false);
+
+        Assert.Contains("search_db:", text);
+        Assert.Contains("stale", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("expected 42", text);
+    }
+
+    [Fact]
+    public void Status_Json_ShowsSearchSidecarObject()
+    {
+        var facts = Facts() with
+        {
+            SearchSidecar = new SearchSidecarFacts(
+                "current", "/repo/.miller/search.db", Revision: 42, ExpectedRevision: 42, DocumentCount: 565, Error: null),
+        };
+
+        using var doc = JsonDocument.Parse(WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: true));
+        JsonElement sidecar = doc.RootElement.GetProperty("index").GetProperty("search_sidecar");
+
+        Assert.Equal("current", sidecar.GetProperty("state").GetString());
+        Assert.Equal(42, sidecar.GetProperty("revision").GetInt64());
+        Assert.Equal(42, sidecar.GetProperty("expected_revision").GetInt64());
+        Assert.Equal(565, sidecar.GetProperty("document_count").GetInt32());
     }
 
     // ---- list ----

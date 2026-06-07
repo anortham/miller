@@ -13,10 +13,9 @@ namespace Miller.Indexing;
 ///
 /// <para><see cref="Open"/> reads only the metadata and validates the FTS tables. Symbol metadata stays on
 /// disk and is fetched on demand for FTS candidates, exact symbol/file lookups, and summary inspect resolution.
-/// <c>DocId</c> is derived from <c>search_symbols.rowid - 1</c>; <see cref="SearchIndexWriter"/> inserts rows
-/// in the same deterministic order as <see cref="SqliteSymbolReader"/>, preserving parity without loading every
-/// row. Each operation opens a short-lived read-only connection, so atomic <c>search.db</c> replacement by the
-/// writer never races a held reader, and concurrent searches need no lock.</para>
+/// <c>DocId</c> is stored explicitly in <c>search_symbols</c>; SQLite row order is not part of the artifact
+/// contract. Each operation opens a short-lived read-only connection, so atomic <c>search.db</c> replacement by
+/// the writer never races a held reader, and concurrent searches need no lock.</para>
 /// </summary>
 public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
 {
@@ -47,8 +46,8 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
 
     /// <summary>
     /// Open the <c>search.db</c> at <paramref name="searchDbPath"/>, validate its schema version, and load
-    /// the resident symbol snapshot + corpus stats. Throws if the file is missing or schema-incompatible
-    /// (the caller — Phase 3 — self-heals to the in-memory projection on failure).
+    /// the corpus stats. Throws if the file is missing or schema-incompatible; production routing surfaces that
+    /// as a visible sidecar freshness/configuration error unless the sidecar is explicitly disabled.
     /// </summary>
     public static FtsSymbolSearchIndex Open(string searchDbPath)
     {
@@ -283,7 +282,7 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
         ArgumentNullException.ThrowIfNull(name);
         using var connection = OpenConnection();
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = SymbolSelect("FROM search_symbols s WHERE s.name = $name ORDER BY s.rowid;");
+        cmd.CommandText = SymbolSelect("FROM search_symbols s WHERE s.name = $name ORDER BY s.doc_id;");
         cmd.Parameters.AddWithValue("$name", name);
         return ReadIndexedSymbols(cmd);
     }
@@ -348,7 +347,7 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
         ArgumentNullException.ThrowIfNull(parentId);
         using var connection = OpenConnection();
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = SymbolSelect("FROM search_symbols s WHERE s.parent_symbol_id = $parent ORDER BY s.rowid;");
+        cmd.CommandText = SymbolSelect("FROM search_symbols s WHERE s.parent_symbol_id = $parent ORDER BY s.doc_id;");
         cmd.Parameters.AddWithValue("$parent", parentId);
         return ReadIndexedSymbols(cmd);
     }
@@ -358,7 +357,7 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
         ArgumentNullException.ThrowIfNull(filePath);
         using var connection = OpenConnection();
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = SymbolSelect("FROM search_symbols s WHERE s.path = $path ORDER BY s.rowid;");
+        cmd.CommandText = SymbolSelect("FROM search_symbols s WHERE s.path = $path ORDER BY s.doc_id;");
         cmd.Parameters.AddWithValue("$path", filePath);
         return ReadIndexedSymbols(cmd);
     }
@@ -441,14 +440,10 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
 
     public IndexedSymbol Resolve(int docId)
     {
-        if ((uint)docId >= (uint)_documentCount)
-            throw new ArgumentOutOfRangeException(nameof(docId), docId,
-                $"DocId must be in [0, {_documentCount}).");
-
         using var connection = OpenConnection();
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = SymbolSelect("FROM search_symbols s WHERE s.rowid = $rowid;");
-        cmd.Parameters.AddWithValue("$rowid", docId + 1L);
+        cmd.CommandText = SymbolSelect("FROM search_symbols s WHERE s.doc_id = $doc;");
+        cmd.Parameters.AddWithValue("$doc", docId);
         using var reader = cmd.ExecuteReader();
         if (reader.Read())
             return ReadDiskSymbol(reader).Symbol;
@@ -489,7 +484,7 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
     }
 
     private static string SymbolSelect(string suffix) => """
-        SELECT CAST(s.rowid - 1 AS INTEGER) AS doc_id,
+        SELECT s.doc_id,
                s.symbol_id, s.name, s.signature, s.kind, s.language, s.path,
                s.start_line, s.end_line, s.parent_symbol_id, s.is_test, s.doc_len
         """ + "\n" + suffix;

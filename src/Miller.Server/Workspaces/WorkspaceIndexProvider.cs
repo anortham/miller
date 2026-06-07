@@ -158,9 +158,9 @@ public sealed class WorkspaceIndexProvider
             DisplayId: CurrentDisplayId());
     }
 
-    // Phase 3 routing for the current workspace. Default (flag off): the holder's already-built full index
-    // serves search, byte-identical to pre-Phase-3. Flag on: route to the revision-fresh on-disk sidecar when
-    // present, else self-heal to the holder index. The chosen backend is cached keyed on (workspace, dbPath,
+    // Current workspace symbol routing. Explicit sidecar opt-out: the holder's already-built full index serves
+    // search. Sidecar enabled: require a revision-fresh on-disk sidecar so stale/missing artifacts are visible
+    // instead of hidden behind a memory fallback. The chosen backend is cached keyed on (workspace, dbPath,
     // revision) so a freshness Swap (revision bump) rebuilds it and the sidecar is not re-opened per query.
     private ISymbolLookupIndex ResolveCurrentSymbolSearchIndex(MillerRepositoryIndex holderIndex, long revision)
     {
@@ -357,10 +357,9 @@ public sealed class WorkspaceIndexProvider
         }
     }
 
-    // Resolve the search index for a cache key: the on-disk sidecar when enabled + present + revision-fresh,
-    // else the in-memory backend from <paramref name="loadInMemory"/> (the lean projection for a registered
-    // workspace; the holder's full index for the current one). A fallback cache entry is still repairable at the
-    // same extract revision because the writer can build search.db after the first read observes it missing.
+    // Resolve the search index for a cache key. Sidecar disabled: load the in-memory backend supplied by the
+    // caller (the lean projection for a registered workspace; the holder's full index for the current one).
+    // Sidecar enabled: require a fresh disk artifact and fail visibly if it is missing/stale/corrupt.
     private CachedSymbolSearch GetOrLoadSymbolSearch(
         CacheKey key, string symbolsDbPath, Func<ISymbolLookupIndex> loadInMemory)
     {
@@ -370,9 +369,8 @@ public sealed class WorkspaceIndexProvider
             if (cachedSidecar is not null)
                 return cachedSidecar;
 
-            FtsSymbolSearchIndex? sidecarIndex = _sidecar.TryOpen(symbolsDbPath, key.Revision);
-            if (sidecarIndex is not null)
-                return ReplaceSymbolSearchCache(key, new CachedSymbolSearch(sidecarIndex, IsSidecar: true));
+            FtsSymbolSearchIndex sidecarIndex = _sidecar.OpenRequired(symbolsDbPath, key.Revision);
+            return ReplaceSymbolSearchCache(key, new CachedSymbolSearch(sidecarIndex, IsSidecar: true));
         }
 
         return GetOrAddSymbolSearchCache(key, () => new CachedSymbolSearch(loadInMemory(), IsSidecar: false));

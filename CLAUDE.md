@@ -137,7 +137,9 @@ scripts/test.ps1 all
   `<workspace>/.miller/search.db` (a revision-keyed derived index, same pattern as `telemetry.db`) built by the
   lock-holding writer (`IndexerService` leader / `CrossWorkspaceRefreshService`) and opened read-only by
   `WorkspaceIndexProvider`. **On by default — opt out with `MILLER_SEARCH_SIDECAR=0`** (`SymbolSearchSidecar.FromEnvironment`).
-  It self-heals to the in-memory BM25 index when the artifact is missing/stale/corrupt, so search is always correct.
+  The writer converges it incrementally from `revision_file_changes` after single-file updates; missing, stale, or
+  corrupt sidecars fail visibly in search/status rather than silently allocating an in-memory fallback. The explicit
+  opt-out path uses the in-memory BM25 index.
   Ranking stays in C# (`Miller.Core.Search.Bm25`, shared by both backends); FTS5 is recall-only (a word arm plus a
   collapsed-trigram arm for interior substrings). See
   [`docs/plans/2026-06-04-symbol-search-collapsed-trigram-design.md`](docs/plans/2026-06-04-symbol-search-collapsed-trigram-design.md).

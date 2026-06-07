@@ -124,11 +124,12 @@ public sealed class CrossWorkspaceRefreshService
             string? warning = PartialExtractLog.DescribePartial(report);
             _registry.MarkScanned(row.WorkspaceId, revision, _utcNow());
 
-            // Phase 4: this is the one safe writer for an external workspace's search.db — it holds the
-            // workspace single-writer lock around the scan. Build the sidecar here (off the search hot path,
-            // skipped when already revision-fresh). Best-effort: a sidecar build failure must NEVER undo a
-            // successful scan/refresh — reads self-heal to the in-memory index.
-            TryBuildSidecar(row.IndexDbPath, row.CanonicalRoot, revision);
+            // This is the one safe writer for an external workspace's search.db — it holds the workspace
+            // single-writer lock around the scan. Rebuild the sidecar from the scanned symbols.db here (off the
+            // search hot path, skipped when already revision-fresh). A sidecar failure must never undo a
+            // successful scan/refresh; reads report the sidecar unavailable/stale until the next successful
+            // convergence.
+            TryConvergeSidecar(row.IndexDbPath, row.CanonicalRoot, revision);
 
             WorkspaceRefreshStatus status = revision > (row.LastRevision ?? 0)
                 ? WorkspaceRefreshStatus.Refreshed
@@ -156,10 +157,10 @@ public sealed class CrossWorkspaceRefreshService
         }
     }
 
-    // Build the external workspace's search.db sidecar best-effort: enabled-and-stale ⇒ rebuild, else no-op.
-    // Swallows build failures by design — the refresh's contract is the scanned symbols.db; the derived sidecar
-    // is optional and a failure must not surface as a refresh error (reads fall back to the in-memory index).
-    private void TryBuildSidecar(string symbolsDbPath, string workspaceRoot, long revision)
+    // Rebuild the external workspace's search.db sidecar best-effort after a scan. Swallows convergence failures by
+    // design — the refresh's contract is the scanned symbols.db; the derived sidecar failure is surfaced on read as
+    // unavailable/stale and retried on the next refresh.
+    private void TryConvergeSidecar(string symbolsDbPath, string workspaceRoot, long revision)
     {
         try
         {

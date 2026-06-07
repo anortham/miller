@@ -82,12 +82,19 @@ public sealed class IndexerCore
     /// <see cref="WatchEventQueue.NeedsRescan"/> it forces a single <c>scan</c> and drops the per-file events.
     /// Returns true if any op ran (work was scheduled), false on an empty no-op drain.
     /// </summary>
-    public bool DrainAndProcess(bool headChanged)
+    public bool DrainAndProcess(bool headChanged) => DrainAndProcess(headChanged, out _);
+
+    /// <summary>
+    /// Drain and process the queue, also reporting whether the routed batch used a whole-repo scan instead of
+    /// per-file update/delete operations.
+    /// </summary>
+    public bool DrainAndProcess(bool headChanged, out bool usedWholeRepoScan)
     {
         // The whole drain+execute runs under one lock so a second debounce tick cannot interleave a concurrent
         // subprocess: the operations run strictly one-in-flight, in routed order.
         lock (_gate)
         {
+            usedWholeRepoScan = false;
             // NeedsRescan from the Core queue (its own overflow), the FSW buffer-overflow signal, or a
             // .git/HEAD move each force a single whole-repo scan that supersedes the lossy per-file stream.
             bool needsRescanOrHead = Queue.NeedsRescan || _overflowSignaled || headChanged;
@@ -104,6 +111,7 @@ public sealed class IndexerCore
             if (Queue.NeedsRescan)
                 Queue.ClearNeedsRescan();
             _overflowSignaled = false;
+            usedWholeRepoScan = needsRescanOrHead;
 
             foreach (var op in ops)
                 ExecuteIsolated(op);

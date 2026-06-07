@@ -102,8 +102,9 @@ public static class MillerServiceRegistration
             WorkspaceRegistry.Open(sp.GetRequiredService<WorkspaceContext>().RegistryDbPath));
         // Search sidecar flag — default ON (the Phase-5 recall eval cleared it: interior recall up, zero word-arm
         // regression, ranking parity exact). The lock-holding writer (IndexerService leader / CrossWorkspaceRefreshService)
-        // builds the on-disk search.db; reads route to it when present + revision-fresh, else self-heal to the
-        // in-memory index. Opt out with MILLER_SEARCH_SIDECAR=0 (or false/off/no). Registered before both consumers.
+        // converges the on-disk search.db; reads require it when enabled so missing/stale artifacts are visible.
+        // Opt out with MILLER_SEARCH_SIDECAR=0 (or false/off/no) to use the in-memory search path. Registered
+        // before both consumers.
         services.AddSingleton(_ => SymbolSearchSidecar.FromEnvironment());
         services.AddSingleton<CrossWorkspaceRefreshService>();
         services.AddSingleton<WorkspaceIndexProvider>();

@@ -31,6 +31,7 @@ namespace Miller.Server.Tools;
 /// workspace's facts are shown.</param>
 /// <param name="ServerProcessId">The OS process id of the Miller process that produced this status, or null when
 /// not surfaced. Useful when verifying that a restarted stdio MCP server is actually a new process.</param>
+/// <param name="SearchSidecar">Status of the Miller-owned <c>search.db</c> sidecar, when known.</param>
 public readonly record struct WorkspaceFacts(
     string Root,
     string? WorkspaceId,
@@ -46,7 +47,8 @@ public readonly record struct WorkspaceFacts(
     string? WarningText = null,
     string? DisplayId = null,
     string? ServerVersion = null,
-    int? ServerProcessId = null);
+    int? ServerProcessId = null,
+    SearchSidecarFacts? SearchSidecar = null);
 
 /// <summary>A registry-backed row rendered by <c>workspace list</c>.</summary>
 public readonly record struct WorkspaceListEntry(
@@ -193,6 +195,8 @@ public static class WorkspaceRender
         if (!string.IsNullOrEmpty(facts.FreshnessStatus) &&
             !string.Equals(facts.FreshnessStatus, "current", StringComparison.OrdinalIgnoreCase))
             sb.Append("freshness: ").Append(facts.FreshnessStatus).Append('\n');
+        if (facts.SearchSidecar is { } sidecar)
+            sb.Append("search_db: ").Append(SearchSidecarLabel(sidecar)).Append('\n');
         if (!string.IsNullOrEmpty(facts.WarningText))
             sb.Append("warning: ").Append(facts.WarningText).Append('\n');
 
@@ -201,6 +205,18 @@ public static class WorkspaceRender
             sb.Append(telemetryLine).Append('\n');
         return sb.ToString().TrimEnd('\n');
     }
+
+    private static string SearchSidecarLabel(SearchSidecarFacts facts) => facts.State switch
+    {
+        "disabled" => "disabled",
+        "current" => $"current rev {facts.Revision}",
+        "missing" => $"MISSING expected rev {facts.ExpectedRevision}",
+        "stale" => $"STALE (built {facts.Revision?.ToString(CultureInfo.InvariantCulture) ?? "unknown"} < expected {facts.ExpectedRevision})",
+        "unreadable" => string.IsNullOrWhiteSpace(facts.Error)
+            ? "UNREADABLE"
+            : "UNREADABLE: " + facts.Error,
+        _ => facts.State,
+    };
 
     // "fresh" / "STALE (built N < latest M)" / "unknown" — a stale index is called out, never silently glossed.
     private static string FreshLabel(WorkspaceFacts facts) => facts.IndexFresh switch
@@ -286,6 +302,8 @@ public static class WorkspaceRender
             if (facts.WarningText is null) w.WriteNull("warning");
             else w.WriteString("warning", facts.WarningText);
             w.WriteBoolean("queue_empty", facts.QueueEmpty);
+            w.WritePropertyName("search_sidecar");
+            WriteSearchSidecarJson(w, facts.SearchSidecar);
             w.WriteEndObject();
 
             // Embed the telemetry breakdown as a nested object: re-parse TelemetryRender.Json so the two stay in
@@ -297,6 +315,28 @@ public static class WorkspaceRender
             w.WriteEndObject();
         }
         return Utf8(buffer);
+    }
+
+    private static void WriteSearchSidecarJson(Utf8JsonWriter w, SearchSidecarFacts? facts)
+    {
+        if (facts is null)
+        {
+            w.WriteNullValue();
+            return;
+        }
+
+        w.WriteStartObject();
+        w.WriteString("state", facts.State);
+        if (facts.Path is null) w.WriteNull("path");
+        else w.WriteString("path", facts.Path);
+        if (facts.Revision is { } revision) w.WriteNumber("revision", revision);
+        else w.WriteNull("revision");
+        w.WriteNumber("expected_revision", facts.ExpectedRevision);
+        if (facts.DocumentCount is { } documentCount) w.WriteNumber("document_count", documentCount);
+        else w.WriteNull("document_count");
+        if (facts.Error is null) w.WriteNull("error");
+        else w.WriteString("error", facts.Error);
+        w.WriteEndObject();
     }
 
     // ---------- list ----------

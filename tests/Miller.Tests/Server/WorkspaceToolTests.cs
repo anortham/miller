@@ -135,6 +135,7 @@ public sealed class WorkspaceToolTests : IDisposable
             sidecar: SymbolSearchSidecar.Disabled);
         var tool = new WorkspaceTool(
             holder, workspace, indexer, freshness, probe, ledger, runner, registry, crossRefresh,
+            SymbolSearchSidecar.Disabled,
             openScan ?? ((scanRoot, scanDb, force) => runner.Scan(scanRoot, scanDb, force)),
             acquireLock ?? (millerDir => SingleWriterLock.TryAcquire(millerDir)),
             dashboardLauncher ?? new RecordingDashboardLauncher(new DashboardLaunchResult(
