@@ -17,6 +17,12 @@ Useful variants:
 # Focus on docs/web-research-like files.
 dotnet run -c Release --project spike/SearchProjection.Spike -- --db .miller/symbols.db --content-scope docs
 
+# Measure source files plus docs/config as chunked content.
+dotnet run -c Release --project spike/SearchProjection.Spike -- --db .miller/symbols.db --content-scope all --content-chunk-lines 160 --content-chunk-overlap 20
+
+# Measure source-like files only.
+dotnet run -c Release --project spike/SearchProjection.Spike -- --db .miller/symbols.db --content-scope source
+
 # Keep the temporary SQLite FTS files for inspection.
 dotnet run -c Release --project spike/SearchProjection.Spike -- --db .miller/symbols.db --keep-fts
 
@@ -30,5 +36,7 @@ The spike reports:
 - Current symbol projection cost (`name + signature`).
 - Widened symbol projection cost (`doc_comment`, path tokens, bounded identifier context, literals).
 - Content corpus read/hash/decode cost from disk through the `files` manifest.
+- Content corpus source count, chunk count, source lines, raw text bytes, and indexed chunk bytes.
 - In-memory BM25-style content index cost.
 - SQLite FTS5 content index cost with normal and trigram tokenizers.
+- Representative normal-FTS top hits for each query, including path, chunk line range, and a compact snippet.

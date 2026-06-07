@@ -41,8 +41,11 @@ internal static class Program
             var corpusBuild = MeasureBuild(() => LoadContentCorpus(dbPath, dbFacts.RootPath, options, shape), out ContentCorpus corpus);
             PrintBuild("content-corpus read/hash/decode", corpusBuild, new[]
             {
-                $"{corpus.Documents.Count:N0} docs",
-                $"{FormatBytes(corpus.IndexedBytes)} indexed bytes",
+                $"{corpus.SourceCount:N0} sources",
+                $"{corpus.Documents.Count:N0} chunks",
+                $"{corpus.LineCount:N0} source lines",
+                $"{FormatBytes(corpus.SourceRawBytes)} raw text bytes",
+                $"{FormatBytes(corpus.IndexedBytes)} indexed chunk bytes",
                 $"{corpus.ManifestRows:N0} manifest rows",
                 $"{corpus.SkippedSummary}"
             });
@@ -144,13 +147,16 @@ internal static class Program
             var query = MeasureQueries(options, q => index.Search(q, options.Limit));
             PrintBuild(name, build, new[]
             {
-                $"{documents.Count:N0} docs",
+                $"{documents.Count:N0} chunks",
                 $"sqlite {FormatBytes(index.FileBytes)}",
                 $"query p50 {query.P50Ms:F3} ms",
                 $"p95 {query.P95Ms:F3} ms",
                 $"{query.FirstPassHits:N0} top{options.Limit}-hits/{options.Queries.Length}q",
                 options.KeepFts ? index.DbPath : "temp file deleted"
             });
+
+            if (!trigram)
+                PrintRepresentativeHits(index, options);
         }
     }
 
@@ -344,7 +350,10 @@ internal static class Program
         int hashMismatchSkipped = 0;
         int nonUtf8Skipped = 0;
         int ioSkipped = 0;
+        int sourceCount = 0;
+        long sourceRawBytes = 0;
         long indexedBytes = 0;
+        long lineCount = 0;
 
         while (reader.Read())
         {
@@ -354,6 +363,7 @@ internal static class Program
             string contentHash = reader.GetString(hashOrdinal);
             long contentBytes = reader.GetInt64(bytesOrdinal);
             string status = reader.GetString(statusOrdinal);
+            bool docsLike = IsDocsLike(path, language);
 
             if (!string.Equals(status, "indexed", StringComparison.Ordinal))
             {
@@ -361,7 +371,7 @@ internal static class Program
                 continue;
             }
 
-            if (options.ContentScope == ContentScope.Docs && !IsDocsLike(path, language))
+            if (!ScopeIncludes(options.ContentScope, docsLike))
             {
                 scopeSkipped++;
                 continue;
@@ -435,13 +445,18 @@ internal static class Program
                 byteCount = bytes.Length;
             }
 
-            documents.Add(new ProjectionDocument(documents.Count, path, path, text));
-            indexedBytes += byteCount;
+            sourceCount++;
+            sourceRawBytes += byteCount;
+            lineCount += CountLines(text);
+            indexedBytes += AddContentChunks(documents, path, text, byteCount, options);
         }
 
         return new ContentCorpus(
             documents,
             manifestRows,
+            sourceCount,
+            lineCount,
+            sourceRawBytes,
             indexedBytes,
             statusSkipped,
             scopeSkipped,
@@ -644,6 +659,66 @@ internal static class Program
         remainingExtraCharsById[symbolId] = remaining - take;
     }
 
+    private static bool ScopeIncludes(ContentScope scope, bool docsLike) => scope switch
+    {
+        ContentScope.All => true,
+        ContentScope.Docs => docsLike,
+        ContentScope.Source => !docsLike,
+        _ => false
+    };
+
+    private static long AddContentChunks(
+        List<ProjectionDocument> documents,
+        string path,
+        string text,
+        long sourceBytes,
+        Options options)
+    {
+        string normalized = text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+        string[] lines = normalized.Split('\n');
+        long indexedBytes = 0;
+        int start = 0;
+
+        while (start < lines.Length)
+        {
+            int endExclusive = Math.Min(lines.Length, start + options.ContentChunkLines);
+            string chunkText = string.Join('\n', lines, start, endExclusive - start);
+            indexedBytes += StrictUtf8.GetByteCount(chunkText);
+            int lineStart = start + 1;
+            int lineEnd = endExclusive;
+            documents.Add(new ProjectionDocument(
+                documents.Count,
+                $"{path}:{lineStart}",
+                path,
+                chunkText,
+                lineStart,
+                lineEnd,
+                sourceBytes));
+
+            if (endExclusive >= lines.Length)
+                break;
+
+            start = Math.Max(start + 1, endExclusive - options.ContentChunkOverlapLines);
+        }
+
+        return indexedBytes;
+    }
+
+    private static int CountLines(string text)
+    {
+        if (text.Length == 0)
+            return 1;
+
+        int count = 1;
+        foreach (char ch in text)
+        {
+            if (ch == '\n')
+                count++;
+        }
+
+        return count;
+    }
+
     private static bool IsDocsLike(string path, string language)
     {
         string normalized = path.Replace('\\', '/');
@@ -686,7 +761,26 @@ internal static class Program
         Console.WriteLine($"repetitions:     {options.Repetitions:N0}");
         Console.WriteLine($"content scope:   {options.ContentScope.ToString().ToLowerInvariant()}");
         Console.WriteLine($"content cap:     {FormatBytes(options.ContentMaxBytes)} per file");
+        Console.WriteLine($"chunking:        {options.ContentChunkLines:N0} lines, {options.ContentChunkOverlapLines:N0} overlap");
         Console.WriteLine($"hash verify:     {(options.HashVerify ? "on" : "off")}");
+        Console.WriteLine();
+    }
+
+    private static void PrintRepresentativeHits(FtsIndex index, Options options)
+    {
+        Console.WriteLine("  representative top hits:");
+        foreach (string query in options.Queries)
+        {
+            FtsHit? hit = index.SearchHits(query, 1).FirstOrDefault();
+            if (hit is null)
+            {
+                Console.WriteLine($"    {query}: no hit");
+                continue;
+            }
+
+            Console.WriteLine($"    {query}: {hit.Path}:{hit.LineStart}-{hit.LineEnd} | {CollapseSnippet(hit.Snippet, 160)}");
+        }
+
         Console.WriteLine();
     }
 
@@ -711,7 +805,9 @@ internal static class Program
               --limit <n>                       Per-query result limit. Default: 50
               --symbol-extra-char-limit <n>     Per-symbol cap for identifier context/literals in wide projection. Default: 2000
               --content-max-bytes <n>           Max bytes per file for content corpus. Default: 1048576
-              --content-scope <all|docs>        Content corpus filter. Default: docs
+              --content-scope <all|docs|source> Content corpus filter. Default: docs
+              --content-chunk-lines <n>         Lines per content chunk. Default: 160
+              --content-chunk-overlap <n>       Overlap lines between chunks. Default: 20
               --no-hash-verify                  Skip BLAKE3 freshness verification while reading disk content.
               --no-fts                          Skip SQLite FTS5 content indexes.
               --fts-dir <path>                  Directory for temporary FTS DBs.
@@ -750,6 +846,32 @@ internal static class Program
 
     private static string FormatSignedBytes(long bytes) => bytes >= 0 ? "+" + FormatBytes(bytes) : FormatBytes(bytes);
 
+    private static string CollapseSnippet(string value, int maxChars)
+    {
+        var builder = new StringBuilder(value.Length);
+        bool pendingSpace = false;
+        foreach (char ch in value)
+        {
+            if (char.IsWhiteSpace(ch))
+            {
+                pendingSpace = builder.Length > 0;
+                continue;
+            }
+
+            if (pendingSpace)
+            {
+                builder.Append(' ');
+                pendingSpace = false;
+            }
+
+            builder.Append(ch);
+            if (builder.Length >= maxChars)
+                return builder.ToString() + "...";
+        }
+
+        return builder.ToString();
+    }
+
 }
 
 internal sealed class Options
@@ -772,6 +894,8 @@ internal sealed class Options
     public int Limit { get; private set; } = 50;
     public int SymbolExtraCharLimit { get; private set; } = 2_000;
     public long ContentMaxBytes { get; private set; } = 1_048_576;
+    public int ContentChunkLines { get; private set; } = 160;
+    public int ContentChunkOverlapLines { get; private set; } = 20;
     public ContentScope ContentScope { get; private set; } = ContentScope.Docs;
     public bool HashVerify { get; private set; } = true;
     public bool NoFts { get; private set; }
@@ -805,6 +929,12 @@ internal sealed class Options
                 case "--content-max-bytes":
                     options.ContentMaxBytes = ParsePositiveLong(RequiredValue(args, ref i, arg), arg);
                     break;
+                case "--content-chunk-lines":
+                    options.ContentChunkLines = ParsePositiveInt(RequiredValue(args, ref i, arg), arg);
+                    break;
+                case "--content-chunk-overlap":
+                    options.ContentChunkOverlapLines = ParseNonNegativeInt(RequiredValue(args, ref i, arg), arg);
+                    break;
                 case "--content-scope":
                     options.ContentScope = ParseContentScope(RequiredValue(args, ref i, arg));
                     break;
@@ -828,6 +958,9 @@ internal sealed class Options
                     throw new ArgumentException($"Unknown option '{arg}'. Pass --help for usage.");
             }
         }
+
+        if (options.ContentChunkOverlapLines >= options.ContentChunkLines)
+            throw new ArgumentException("--content-chunk-overlap must be smaller than --content-chunk-lines.");
 
         return options;
     }
@@ -885,14 +1018,16 @@ internal sealed class Options
     {
         "all" => ContentScope.All,
         "docs" => ContentScope.Docs,
-        _ => throw new ArgumentException("--content-scope must be 'all' or 'docs'.")
+        "source" => ContentScope.Source,
+        _ => throw new ArgumentException("--content-scope must be 'all', 'docs', or 'source'.")
     };
 }
 
 internal enum ContentScope
 {
     All,
-    Docs
+    Docs,
+    Source
 }
 
 internal enum DbShapeKind
@@ -922,11 +1057,23 @@ internal sealed record BuildStats(TimeSpan Elapsed, long ManagedHeapDelta, long 
 
 internal sealed record QueryStats(double P50Ms, double P95Ms, int FirstPassHits);
 
-internal sealed record ProjectionDocument(int DocId, string Label, string Path, string Text);
+internal sealed record ProjectionDocument(
+    int DocId,
+    string Label,
+    string Path,
+    string Text,
+    int LineStart = 1,
+    int LineEnd = 1,
+    long SourceBytes = 0);
+
+internal sealed record FtsHit(string Path, int LineStart, int LineEnd, string Snippet);
 
 internal sealed record ContentCorpus(
     IReadOnlyList<ProjectionDocument> Documents,
     int ManifestRows,
+    int SourceCount,
+    long LineCount,
+    long SourceRawBytes,
     long IndexedBytes,
     int StatusSkipped,
     int ScopeSkipped,
@@ -1087,20 +1234,26 @@ internal sealed class FtsIndex : IDisposable
         connection.Open();
         Exec(connection, "PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF;");
         Exec(connection, trigram
-            ? "CREATE VIRTUAL TABLE docs USING fts5(path UNINDEXED, body, tokenize='trigram');"
-            : "CREATE VIRTUAL TABLE docs USING fts5(path UNINDEXED, body);");
+            ? "CREATE VIRTUAL TABLE docs USING fts5(path UNINDEXED, line_start UNINDEXED, line_end UNINDEXED, body, tokenize='trigram');"
+            : "CREATE VIRTUAL TABLE docs USING fts5(path UNINDEXED, line_start UNINDEXED, line_end UNINDEXED, body, tokenize='unicode61 remove_diacritics 0');");
 
         using (var transaction = connection.BeginTransaction())
         using (var command = connection.CreateCommand())
         {
             command.Transaction = transaction;
-            command.CommandText = "INSERT INTO docs(rowid, path, body) VALUES($id, $path, $body);";
+            command.CommandText = "INSERT INTO docs(rowid, path, line_start, line_end, body) VALUES($id, $path, $line_start, $line_end, $body);";
             var idParameter = command.CreateParameter();
             idParameter.ParameterName = "$id";
             command.Parameters.Add(idParameter);
             var pathParameter = command.CreateParameter();
             pathParameter.ParameterName = "$path";
             command.Parameters.Add(pathParameter);
+            var lineStartParameter = command.CreateParameter();
+            lineStartParameter.ParameterName = "$line_start";
+            command.Parameters.Add(lineStartParameter);
+            var lineEndParameter = command.CreateParameter();
+            lineEndParameter.ParameterName = "$line_end";
+            command.Parameters.Add(lineEndParameter);
             var bodyParameter = command.CreateParameter();
             bodyParameter.ParameterName = "$body";
             command.Parameters.Add(bodyParameter);
@@ -1109,6 +1262,8 @@ internal sealed class FtsIndex : IDisposable
             {
                 idParameter.Value = document.DocId + 1L;
                 pathParameter.Value = document.Path;
+                lineStartParameter.Value = document.LineStart;
+                lineEndParameter.Value = document.LineEnd;
                 bodyParameter.Value = document.Text;
                 command.ExecuteNonQuery();
             }
@@ -1123,18 +1278,35 @@ internal sealed class FtsIndex : IDisposable
 
     public int Search(string query, int limit)
     {
+        return SearchHits(query, limit).Count;
+    }
+
+    public IReadOnlyList<FtsHit> SearchHits(string query, int limit)
+    {
         string ftsQuery = FtsQuery(query);
         if (ftsQuery.Length == 0)
-            return 0;
+            return [];
 
         using var command = _connection.CreateCommand();
-        command.CommandText = $"SELECT rowid FROM docs WHERE docs MATCH $query ORDER BY rank LIMIT {limit.ToString(CultureInfo.InvariantCulture)};";
+        command.CommandText = $"""
+            SELECT path, line_start, line_end, snippet(docs, 3, '[', ']', ' ... ', 18) AS snippet
+            FROM docs
+            WHERE docs MATCH $query
+            ORDER BY rank
+            LIMIT {limit.ToString(CultureInfo.InvariantCulture)};
+            """;
         command.Parameters.AddWithValue("$query", ftsQuery);
 
-        int hits = 0;
+        var hits = new List<FtsHit>(limit);
         using var reader = command.ExecuteReader();
         while (reader.Read())
-            hits++;
+        {
+            hits.Add(new FtsHit(
+                reader.GetString(0),
+                Convert.ToInt32(reader.GetValue(1), CultureInfo.InvariantCulture),
+                Convert.ToInt32(reader.GetValue(2), CultureInfo.InvariantCulture),
+                reader.GetString(3)));
+        }
 
         return hits;
     }
