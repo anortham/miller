@@ -75,23 +75,63 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
 
     private static (long Revision, int DocumentCount, double Avgdl) ReadMeta(SqliteConnection connection, string absPath)
     {
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT revision, doc_count, avgdl, schema_version FROM meta LIMIT 1;";
-        using var reader = cmd.ExecuteReader();
-        if (!reader.Read())
-            throw new InvalidOperationException($"search.db at '{absPath}' has no meta row.");
+        try
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT revision, doc_count, avgdl, schema_version FROM meta LIMIT 2;";
+            using var reader = cmd.ExecuteReader();
+            if (!reader.Read())
+                throw MalformedMeta(absPath, "no meta row");
 
-        long revision = reader.GetInt64(0);
-        int documentCount = checked((int)reader.GetInt64(1));
-        double avgdl = reader.GetDouble(2);
-        int schemaVersion = reader.GetInt32(3);
-        if (schemaVersion != SearchIndexWriter.SchemaVersion)
-            throw new InvalidOperationException(
-                $"search.db at '{absPath}' has schema_version {schemaVersion}; " +
-                $"this build expects {SearchIndexWriter.SchemaVersion}. Rebuild the search index.");
+            long revision = ReadInt64(reader, 0, absPath, "revision");
+            int documentCount = checked((int)ReadInt64(reader, 1, absPath, "doc_count"));
+            double avgdl = ReadDouble(reader, 2, absPath, "avgdl");
+            int schemaVersion = checked((int)ReadInt64(reader, 3, absPath, "schema_version"));
 
-        return (revision, documentCount, avgdl);
+            if (reader.Read())
+                throw MalformedMeta(absPath, "multiple meta rows");
+            if (documentCount < 0)
+                throw MalformedMeta(absPath, "doc_count is negative");
+            if (avgdl < 0.0)
+                throw MalformedMeta(absPath, "avgdl is negative");
+
+            if (schemaVersion != SearchIndexWriter.SchemaVersion)
+                throw new InvalidOperationException(
+                    $"search.db at '{absPath}' has schema_version {schemaVersion}; " +
+                    $"this build expects {SearchIndexWriter.SchemaVersion}. Rebuild the search index.");
+
+            return (revision, documentCount, avgdl);
+        }
+        catch (SqliteException ex)
+        {
+            throw MalformedMeta(absPath, ex.Message, ex);
+        }
+        catch (InvalidCastException ex)
+        {
+            throw MalformedMeta(absPath, ex.Message, ex);
+        }
+        catch (OverflowException ex)
+        {
+            throw MalformedMeta(absPath, ex.Message, ex);
+        }
     }
+
+    private static long ReadInt64(SqliteDataReader reader, int ordinal, string absPath, string column)
+    {
+        if (reader.IsDBNull(ordinal))
+            throw MalformedMeta(absPath, $"{column} is null");
+        return reader.GetInt64(ordinal);
+    }
+
+    private static double ReadDouble(SqliteDataReader reader, int ordinal, string absPath, string column)
+    {
+        if (reader.IsDBNull(ordinal))
+            throw MalformedMeta(absPath, $"{column} is null");
+        return reader.GetDouble(ordinal);
+    }
+
+    private static InvalidOperationException MalformedMeta(string absPath, string detail, Exception? inner = null) =>
+        new($"search.db at '{absPath}' has malformed meta: {detail}. Rebuild the search index.", inner);
 
     private static void ValidateFtsTables(SqliteConnection connection)
     {
@@ -247,6 +287,7 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
             FROM symbols_trigram
             JOIN search_symbols s ON s.symbol_id = symbols_trigram.symbol_id
             WHERE symbols_trigram MATCH $q
+            ORDER BY s.doc_id
             LIMIT $lim
             """);
         cmd.Parameters.AddWithValue("$q", match);

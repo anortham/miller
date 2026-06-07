@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Miller.Core.Search;
+using Miller.Core.Tokenization;
 using Miller.Indexing;
 using Xunit;
 
@@ -432,6 +433,50 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
         Assert.True(hits[1].Score < hits[0].Score);
     }
 
+    [Fact]
+    public void Search_TrigramWindow_OrdersCandidatesByStoredDocId_NotFtsRowid()
+    {
+        var syms = Corpus(Enumerable.Range(0, 205)
+            .Select(static i =>
+            {
+                string suffix = i.ToString("D3", System.Globalization.CultureInfo.InvariantCulture);
+                return ($"s{suffix}", $"NeedleMatch{suffix}", (string?)null, "class", "csharp", $"src/{suffix}.cs");
+            })
+            .ToArray());
+        SearchIndexWriter.Write(_dbPath, syms, revision: 1);
+
+        using (var rw = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString()))
+        {
+            rw.Open();
+            using var cmd = rw.CreateCommand();
+            cmd.CommandText = """
+                DELETE FROM symbols_trigram WHERE symbol_id = 's000';
+                INSERT INTO symbols_trigram(symbol_id, name_collapsed, qual_collapsed)
+                VALUES ('s000', $collapsed, $collapsed);
+                """;
+            cmd.Parameters.AddWithValue("$collapsed", CollapseName.Of("NeedleMatch000"));
+            cmd.ExecuteNonQuery();
+        }
+        SqliteConnection.ClearAllPools();
+
+        var index = FtsSymbolSearchIndex.Open(_dbPath);
+
+        string[] ids = index.Search("eedlem", limit: 200)
+            .Select(h => index.Resolve(h.Document.DocId).SymbolId)
+            .ToArray();
+
+        Assert.Equal(
+            Enumerable.Range(0, 200)
+                .Select(static i => "s" + i.ToString("D3", System.Globalization.CultureInfo.InvariantCulture))
+                .ToArray(),
+            ids);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
@@ -483,5 +528,30 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
 
         var ex = Assert.Throws<InvalidOperationException>(() => FtsSymbolSearchIndex.Open(_dbPath));
         Assert.Contains("schema_version", ex.Message);
+    }
+
+    [Fact]
+    public void Open_DuplicateMetaRows_Throws()
+    {
+        SearchIndexWriter.Write(_dbPath, Corpus(("a", "Alpha", null, "class", "csharp", "src/A.cs")), 1);
+
+        using (var rw = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _dbPath, Mode = SqliteOpenMode.ReadWrite, Pooling = false,
+        }.ToString()))
+        {
+            rw.Open();
+            using var cmd = rw.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO meta(revision, doc_count, avgdl, schema_version, region_count, region_avgdl)
+                VALUES (1, 1, 1.0, $schema, 0, 0.0);
+                """;
+            cmd.Parameters.AddWithValue("$schema", SearchIndexWriter.SchemaVersion);
+            cmd.ExecuteNonQuery();
+        }
+        SqliteConnection.ClearAllPools();
+
+        var ex = Assert.Throws<InvalidOperationException>(() => FtsSymbolSearchIndex.Open(_dbPath));
+        Assert.Contains("multiple meta rows", ex.Message);
     }
 }

@@ -335,6 +335,50 @@ public sealed class SymbolSearchSidecarTests : IDisposable
     }
 
     [Fact]
+    public void EnsureCurrent_IncrementalUpdateKeepsQualifiedTrigramForUnchangedParent()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow("parent", "ParentAnchor", "class", "csharp",
+                    "src/AParent.cs", "public class ParentAnchor", 1, ParentId: null),
+                new JulieDbFixture.SymbolRow("child", "ChildAction", "method", "csharp",
+                    "src/BChild.cs", "void ChildAction()", 1, ParentId: "parent"),
+            },
+            revisions: new[]
+            {
+                new JulieDbFixture.RevisionRow(1),
+                new JulieDbFixture.RevisionRow(2, Kind: "single_file"),
+            },
+            fileChanges: new[]
+            {
+                new JulieDbFixture.RevisionFileChangeRow(2, "src/BChild.cs", "updated"),
+            });
+        string searchDb = SymbolSearchSidecar.SearchDbPathFor(julie.DbPath);
+        SearchIndexWriter.Write(searchDb, new[]
+        {
+            new IndexedSymbol(0, "parent", "ParentAnchor", "public class ParentAnchor", "class",
+                "csharp", "src/AParent.cs", 1, 1, ParentId: null, IsTest: false),
+            new IndexedSymbol(1, "child", "ChildAction", "void ChildAction()", "method",
+                "csharp", "src/BChild.cs", 1, 1, ParentId: "parent", IsTest: false),
+        }, revision: 1);
+        var sidecar = new SymbolSearchSidecar(enabled: true);
+
+        Assert.Equal("ChildAction",
+            Assert.Single(sidecar.TryOpen(julie.DbPath, expectedRevision: 1)!.Search("anchorchild", limit: 10))
+                .Document.Name);
+
+        Assert.True(sidecar.EnsureCurrent(julie.DbPath, revision: 2, workspaceRoot: julie.WorkspaceRoot));
+
+        FtsSymbolSearchIndex index = Assert.IsType<FtsSymbolSearchIndex>(
+            sidecar.TryOpen(julie.DbPath, expectedRevision: 2));
+        SearchHit hit = Assert.Single(index.Search("anchorchild", limit: 10));
+        Assert.Equal("ChildAction", index.Resolve(hit.Document.DocId).Name);
+    }
+
+    [Fact]
     public void EnsureCurrent_StaleArtifactWithNoRevisionFileChanges_RebuildsFromCurrentSymbols()
     {
         using var julie = JulieDbFixture.Create(
@@ -391,6 +435,36 @@ public sealed class SymbolSearchSidecarTests : IDisposable
         SqliteConnection.ClearAllPools();
 
         Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 5));
+        Assert.NotNull(sidecar.TryOpen(julie.DbPath, expectedRevision: 5));
+    }
+
+    [Fact]
+    public void EnsureBuilt_ExistingArtifactHasDuplicateMetaRows_RebuildsAtMatchingRevision()
+    {
+        using var julie = JulieDb();
+        var sidecar = new SymbolSearchSidecar(enabled: true);
+        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 5));
+
+        string searchDb = SymbolSearchSidecar.SearchDbPathFor(julie.DbPath);
+        CreateSentinelTable(searchDb);
+        using (var rw = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = searchDb, Mode = SqliteOpenMode.ReadWrite, Pooling = false,
+        }.ToString()))
+        {
+            rw.Open();
+            using var cmd = rw.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO meta(revision, doc_count, avgdl, schema_version, region_count, region_avgdl)
+                VALUES (5, 2, 1.0, $schema, 0, 0.0);
+                """;
+            cmd.Parameters.AddWithValue("$schema", SearchIndexWriter.SchemaVersion);
+            cmd.ExecuteNonQuery();
+        }
+        SqliteConnection.ClearAllPools();
+
+        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 5));
+        Assert.False(TableExists(searchDb, "incremental_sentinel"));
         Assert.NotNull(sidecar.TryOpen(julie.DbPath, expectedRevision: 5));
     }
 

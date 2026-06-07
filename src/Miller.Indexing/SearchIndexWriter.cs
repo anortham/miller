@@ -186,7 +186,7 @@ public static class SearchIndexWriter
             IReadOnlyList<IndexedSymbol> currentSymbols = SqliteSymbolReader.ReadForPaths(symbolsDbPath, distinctPaths);
             IReadOnlyList<IndexedSymbol> stableSymbols = AssignStableDocIds(connection, currentSymbols, oldSymbols);
             Dictionary<string, IndexedSymbol> symbolsById =
-                stableSymbols.ToDictionary(static s => s.SymbolId, StringComparer.Ordinal);
+                BuildQualificationSymbolMap(connection, stableSymbols);
             InsertSymbols(connection, stableSymbols, symbolsById);
 
             if (regionOptions.Enabled)
@@ -454,6 +454,62 @@ public static class SearchIndexWriter
         cmd.CommandText = "SELECT MAX(doc_id) FROM search_symbols;";
         object? result = cmd.ExecuteScalar();
         return result is null or DBNull ? -1 : Convert.ToInt32(result);
+    }
+
+    private static Dictionary<string, IndexedSymbol> BuildQualificationSymbolMap(
+        SqliteConnection connection,
+        IReadOnlyList<IndexedSymbol> changedSymbols)
+    {
+        var symbolsById = changedSymbols.ToDictionary(static s => s.SymbolId, StringComparer.Ordinal);
+        var pendingParents = new Queue<string>();
+        foreach (IndexedSymbol symbol in changedSymbols)
+            if (symbol.ParentId is { Length: > 0 } parentId)
+                pendingParents.Enqueue(parentId);
+
+        var seenParentIds = new HashSet<string>(StringComparer.Ordinal);
+        while (pendingParents.TryDequeue(out string? parentId))
+        {
+            if (!seenParentIds.Add(parentId) || symbolsById.ContainsKey(parentId))
+                continue;
+
+            IndexedSymbol? parent = ReadSearchSymbolForQualification(connection, parentId);
+            if (parent is null)
+                continue;
+
+            symbolsById[parent.SymbolId] = parent;
+            if (parent.ParentId is { Length: > 0 } grandParentId)
+                pendingParents.Enqueue(grandParentId);
+        }
+
+        return symbolsById;
+    }
+
+    private static IndexedSymbol? ReadSearchSymbolForQualification(SqliteConnection connection, string symbolId)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT doc_id, symbol_id, name, signature, kind, language, path,
+                   start_line, end_line, parent_symbol_id, is_test
+            FROM search_symbols
+            WHERE symbol_id = $id;
+            """;
+        cmd.Parameters.AddWithValue("$id", symbolId);
+        using var reader = cmd.ExecuteReader();
+        if (!reader.Read())
+            return null;
+
+        return new IndexedSymbol(
+            DocId: reader.GetInt32(0),
+            SymbolId: reader.GetString(1),
+            Name: reader.GetString(2),
+            Signature: reader.IsDBNull(3) ? null : reader.GetString(3),
+            Kind: reader.GetString(4),
+            Language: reader.GetString(5),
+            FilePath: reader.GetString(6),
+            StartLine: reader.IsDBNull(7) ? 0 : reader.GetInt32(7),
+            EndLine: reader.IsDBNull(8) ? 0 : reader.GetInt32(8),
+            ParentId: reader.IsDBNull(9) ? null : reader.GetString(9),
+            IsTest: !reader.IsDBNull(10) && reader.GetInt64(10) != 0);
     }
 
     private static void RewriteMeta(SqliteConnection connection, long revision)

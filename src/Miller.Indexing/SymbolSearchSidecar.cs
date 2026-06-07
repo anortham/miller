@@ -343,7 +343,7 @@ public sealed class SymbolSearchSidecar
             }.ToString());
             connection.Open();
             using var cmd = connection.CreateCommand();
-            cmd.CommandText = "SELECT revision, schema_version FROM meta LIMIT 1;";
+            cmd.CommandText = "SELECT revision, schema_version FROM meta LIMIT 2;";
             using var reader = cmd.ExecuteReader();
             if (!reader.Read())
                 return null;
@@ -355,7 +355,11 @@ public sealed class SymbolSearchSidecar
                 return null;
 
             object revisionRaw = reader.GetValue(0);
-            return revisionRaw is DBNull ? null : Convert.ToInt64(revisionRaw, CultureInfo.InvariantCulture);
+            if (revisionRaw is DBNull)
+                return null;
+
+            long revision = Convert.ToInt64(revisionRaw, CultureInfo.InvariantCulture);
+            return reader.Read() ? null : revision;
         }
         // A damaged artifact may hold a non-integer revision/schema_version, or lack the meta columns entirely:
         // Convert.ToInt64 can throw FormatException (text), OverflowException (out of range), or InvalidCastException
