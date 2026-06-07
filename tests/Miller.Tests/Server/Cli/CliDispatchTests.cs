@@ -464,6 +464,54 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Contains("3: CliWebMarker appears in fetched markdown.", readOut);
     }
 
+    [Fact]
+    public void Content_Export_SupportsKindAndContentWorkspaceFilters()
+    {
+        const string sourceText = """
+            public class Api
+            {
+                public void Handle()
+                {
+                    throw new InvalidOperationException("CliExportMarker");
+                }
+            }
+            """;
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [new JulieDbFixture.SymbolRow("sym-api", "Api", "class", "csharp", "src/Api.cs", "public class Api", 1, null)
+            {
+                EndLine = 7,
+            }],
+            fileContent: new Dictionary<string, string>
+            {
+                ["src/Api.cs"] = sourceText,
+            });
+        string contentDbPath = ContentCorpusSidecar.ContentDbPathFor(fx.DbPath);
+        ContentCorpusWriter.Write(contentDbPath, fx.DbPath, fx.WorkspaceRoot, workspaceId: "workspace-1", revision: 12);
+        var ctx = Context(fx.DbPath, fx.WorkspaceRoot);
+
+        var (code, outText, errText) = Run(
+            new[]
+            {
+                "content", "export",
+                "--kind", TextContentKind.WorkspaceSource,
+                "--content-workspace-id", "workspace-1",
+            },
+            ctx);
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        string line = Assert.Single(outText.Split('\n', StringSplitOptions.RemoveEmptyEntries));
+        using JsonDocument doc = JsonDocument.Parse(line);
+        JsonElement row = doc.RootElement;
+        Assert.Equal(TextContentKind.WorkspaceSource, row.GetProperty("content_kind").GetString());
+        Assert.Equal("workspace-1", row.GetProperty("workspace_id").GetString());
+        Assert.Equal(12, row.GetProperty("workspace_revision").GetInt64());
+        Assert.Equal("src/Api.cs", row.GetProperty("path").GetString());
+        Assert.Contains("CliExportMarker", row.GetProperty("chunk_text").GetString());
+    }
+
     [Theory]
     [InlineData("search", "GetUser", "auth/UserService.cs")]
     [InlineData("inspect", "GetUser", "Gets a user by id.")]

@@ -114,4 +114,32 @@ public sealed class ContentToolTests : IDisposable
         Assert.Equal(sourceId, listDoc.RootElement[0].GetProperty("source_id").GetString());
         Assert.Equal("https://example.test/web-tool", listDoc.RootElement[0].GetProperty("url").GetString());
     }
+
+    [Fact]
+    public void Content_Export_ReturnsJsonLinesScopedByKind()
+    {
+        string logPath = Path.Combine(_dir, "ci.log");
+        File.WriteAllText(logPath, "ExternalToolExportMarker appears here.");
+        string markdownPath = Path.Combine(_dir, "page.md");
+        File.WriteAllText(markdownPath, "WebToolExportMarker appears here.");
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        tool.Content("import", path: logPath);
+        tool.Content(
+            "add_markdown",
+            path: markdownPath,
+            url: "https://example.test/export-tool",
+            display_path: "Tool Export Page");
+
+        string jsonl = tool.Content("export", content_kind: TextContentKind.Web);
+
+        string line = Assert.Single(jsonl.Split('\n', StringSplitOptions.RemoveEmptyEntries));
+        using JsonDocument doc = JsonDocument.Parse(line);
+        JsonElement row = doc.RootElement;
+        Assert.Equal(1, row.GetProperty("schema_version").GetInt32());
+        Assert.Equal(TextContentKind.Web, row.GetProperty("content_kind").GetString());
+        Assert.Equal("https://example.test/export-tool", row.GetProperty("url").GetString());
+        Assert.Equal("Tool Export Page", row.GetProperty("display_path").GetString());
+        Assert.Contains("WebToolExportMarker", row.GetProperty("chunk_text").GetString());
+        Assert.DoesNotContain("ExternalToolExportMarker", jsonl);
+    }
 }

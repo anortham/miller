@@ -335,6 +335,9 @@ For beta, text output is a compact human-facing contract and JSON output is the 
 - The `content` CLI stores non-workspace text in `.miller/content.db`. Use `content import` for logs/reports
   and `content add-markdown <path> --url <url>` for browser-fetched pages. Search web imports with
   `content search "<phrase>" --kind web`, then read bounded windows with `content read --source-id <id>`.
+- `content export [--kind KIND] [--content-workspace-id ID]` writes deterministic JSONL chunk rows for Eros
+  and other local consumers. It includes raw chunk text; use it as an integration feed, not as an interactive
+  reading shortcut.
 - Search defaults to 6 results. Compact symbol rows include name, kind, file, line, and signature when available;
   use `--limit N` when you need a wider page.
 

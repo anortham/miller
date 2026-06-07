@@ -15,6 +15,7 @@ public sealed class ContentTool
 {
     private readonly WorkspaceContext _workspace;
     private readonly ContentCorpusExternalStore _store;
+    private readonly ContentCorpusExportReader _exportReader = new();
 
     public ContentTool(WorkspaceContext workspace, ContentCorpusExternalStore store)
     {
@@ -26,16 +27,17 @@ public sealed class ContentTool
 
     [McpServerTool(Name = "content")]
     [Description(
-        "Import, search, read, list, and remove external/web text in Miller's content corpus. Use for logs, " +
-        "CI output, web markdown, reports, and large text files without printing full content.")]
+        "Import, search, read, list, remove, and export text in Miller's content corpus. Use for logs, " +
+        "CI output, web markdown, reports, large text files, and Eros JSONL chunk feeds.")]
     public string Content(
-        [Description("import|add_markdown|search|read|list|remove.")] string operation,
+        [Description("import|add_markdown|search|read|list|remove|export.")] string operation,
         [Description("Path to import for operation=import/add_markdown.")] string? path = null,
         [Description("Search query for operation=search.")] string? query = null,
         [Description("Imported source id for operation=read/remove.")] string? source_id = null,
         [Description("URL metadata for operation=add_markdown with web content.")] string? url = null,
         [Description("Human display path/title for imported content. Optional.")] string? display_path = null,
-        [Description("Content kind for search/list. Default external_file; use web for web imports.")] string content_kind = TextContentKind.ExternalFile,
+        [Description("Content kind for search/list/export. Default external_file for search/list, all for export.")] string? content_kind = null,
+        [Description("Stored workspace_id filter for operation=export. Optional.")] string? content_workspace_id = null,
         [Description("1-based center line for operation=read.")] int? line = null,
         [Description("Context lines before/after the read line. Default 10, maximum bounded by Miller.")] int? context_lines = null,
         [Description("Max search results. Default 6.")] int limit = SearchTool.DefaultLimit,
@@ -54,11 +56,12 @@ public sealed class ContentTool
                 "import" or "add" => Import(contentDbPath, path, max_bytes, display_path, json, telemetry),
                 "add_markdown" or "add-markdown" or "import_markdown" or "import-markdown" =>
                     AddMarkdown(contentDbPath, path, url, max_bytes, display_path, json, telemetry),
-                "search" => Search(contentDbPath, query, ContentKind(content_kind), limit, json, telemetry),
+                "search" => Search(contentDbPath, query, ContentKindOrDefault(content_kind, TextContentKind.ExternalFile), limit, json, telemetry),
                 "read" => Read(contentDbPath, source_id, line, context_lines, json, telemetry),
-                "list" => List(contentDbPath, ContentKind(content_kind), json, telemetry),
+                "list" => List(contentDbPath, ContentKindOrDefault(content_kind, TextContentKind.ExternalFile), json, telemetry),
                 "remove" or "delete" => Remove(contentDbPath, source_id, json, telemetry),
-                _ => throw new InvalidOperationException("content operation must be import, add_markdown, search, read, list, or remove."),
+                "export" => Export(contentDbPath, OptionalContentKind(content_kind), content_workspace_id, telemetry),
+                _ => throw new InvalidOperationException("content operation must be import, add_markdown, search, read, list, remove, or export."),
             };
         }
         catch (Exception ex)
@@ -203,12 +206,47 @@ public sealed class ContentTool
         return json ? RenderRemoveJson(result) : RenderRemoveCompact(result);
     }
 
-    private static string ContentKind(string value) => value.Trim().ToLowerInvariant() switch
+    private string Export(
+        string contentDbPath,
+        string? contentKind,
+        string? contentWorkspaceId,
+        TelemetryScope? telemetry)
     {
-        "external" or "external_file" or "file" => TextContentKind.ExternalFile,
-        "web" => TextContentKind.Web,
-        _ => throw new InvalidOperationException("content_kind must be external_file or web."),
-    };
+        IReadOnlyList<ContentCorpusExportRow> rows = _exportReader.Read(contentDbPath, contentKind, contentWorkspaceId);
+        if (telemetry is not null)
+        {
+            telemetry.SetTarget(contentWorkspaceId ?? contentKind ?? "all");
+            telemetry.ResultCount = rows.Count;
+            telemetry.SourceBytes = rows
+                .GroupBy(static row => row.SourceId, StringComparer.Ordinal)
+                .Sum(static group => group.Max(static row => row.SourceBytes));
+            telemetry.Outcome = rows.Count == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
+        }
+
+        return ContentCorpusExportReader.ToJsonLines(rows);
+    }
+
+    private static string ContentKindOrDefault(string? value, string fallback) =>
+        OptionalContentKind(value) ?? fallback;
+
+    private static string? OptionalContentKind(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value) ||
+            string.Equals(value.Trim(), "all", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return value.Trim().ToLowerInvariant() switch
+        {
+            "source" or "workspace_source" => TextContentKind.WorkspaceSource,
+            "docs" or "doc" or "workspace_docs" => TextContentKind.WorkspaceDocs,
+            "config" or "workspace_config" => TextContentKind.WorkspaceConfig,
+            "external" or "external_file" or "file" => TextContentKind.ExternalFile,
+            "web" => TextContentKind.Web,
+            _ => throw new InvalidOperationException("content_kind must be all, workspace_source, workspace_docs, workspace_config, external_file, or web."),
+        };
+    }
 
     private static string RenderImportCompact(ExternalContentImportResult result) =>
         $"{(result.Replaced ? "replaced" : "imported")} {result.ContentKind}\n" +

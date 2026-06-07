@@ -311,7 +311,8 @@ public static class CliDispatch
             source_id: o.Value("source-id"),
             url: o.Value("url"),
             display_path: o.Value("display-path"),
-            content_kind: o.Value("kind", o.Value("content-kind", TextContentKind.ExternalFile))!,
+            content_kind: o.Value("kind", o.Value("content-kind")),
+            content_workspace_id: o.Value("content-workspace-id"),
             line: o.Has("line") ? o.Int("line", 0) : null,
             context_lines: o.Has("context-lines") ? o.Int("context-lines", ContentCorpusExternalStore.DefaultContextLines) : null,
             limit: o.Int("limit", SearchTool.DefaultLimit),
@@ -1013,13 +1014,14 @@ public static class CliDispatch
         Commands:
           search <query>     Find code by name, identifier, or phrase.
                              [--workspace-id SELECTOR] [--workspace DIR] [--mode auto|text|symbol|file|content|source] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--include-tests|--exclude-tests]
-          content <op>       Import/search/read/list/remove external and web text in content.db.
+          content <op>       Import/search/read/list/remove/export external and web text in content.db.
                              import <path> [--max-bytes N] [--display-path NAME] [--json]
                              add-markdown <path> --url URL [--display-path NAME] [--json]
-                             search <query> [--kind external_file|web] [--limit N] [--json]
+                             search <query> [--kind KIND] [--limit N] [--json]
                              read --source-id ID --line N [--context-lines N] [--json]
-                             list [--kind external_file|web] [--json]
+                             list [--kind KIND] [--json]
                              remove --source-id ID [--json]
+                             export [--kind KIND] [--content-workspace-id ID]   # JSONL
           inspect <target>   List a file's symbols, or show a symbol's definition.
                              [--workspace-id SELECTOR] [--workspace DIR] [--depth summary|full] [--kind K] [--scope FILE] [--limit N] [--json]
           context <query>    Token-budgeted bundle of the most relevant code for a task.

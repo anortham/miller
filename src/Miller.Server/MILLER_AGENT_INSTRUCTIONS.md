@@ -62,7 +62,8 @@ the tokens.
   logs, CI output, generated reports, large JSON/text dumps, browser-fetched markdown, and other non-workspace
   text that would waste context if read in full. `import` and `add_markdown` report metadata only; `search`
   returns snippets; `read` returns a bounded line window by `source_id` and `line`; `remove` deletes an imported
-  source. Use `content_kind=web` for web-only `search`/`list`.
+  source. Use `content_kind=web` for web-only `search`/`list`. `export` writes deterministic JSONL chunks for
+  Eros/local integration; it includes raw chunk text, so do not use it as an interactive reading shortcut.
 - `workspace` — Index lifecycle. `status` (default), `refresh` (reconcile stale files), `full` (rebuild from
   scratch), `list`, `open` (prime a different path's index), `remove`, `dashboard` (start/reuse the local
   loopback dashboard). `status`, `refresh`, `full`, and `remove` accept `workspace_id` or `path`; `list` shows
@@ -110,7 +111,7 @@ code, paste this block into the prompt:
     - trace(target, mode?, to?, scope?) before manual caller/callee file hopping; use scope for ambiguous names.
     - impact(target?|changed_paths?|diff?) before refactors and to choose tests.
     - edit(operation, target, ...) to preview index-aware edits (apply=true to commit).
-    - content(import|add_markdown|search|read|list|remove, ...) for large logs, CI output, web markdown, and external text; read bounded windows only.
+    - content(import|add_markdown|search|read|list|remove|export, ...) for large logs, CI output, web markdown, and external text; read bounded windows only.
     - workspace(status|refresh|full|list|open|remove|dashboard) to refresh stale indexes, open another repo, or
       start the local dashboard from the session.
     Do NOT fall back to Glob/Read/Grep chains when a Miller tool fits. Miller returns targeted context in 1-2 calls.

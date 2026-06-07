@@ -362,12 +362,12 @@ Out of scope for this plan:
 **Approach:** Document `content.db` as a stable local data contract and add a JSONL export for tools that do not want direct SQLite reads. Export rows should include workspace id, source id, chunk id, content kind, path/url/display path, language, line/byte span, content hash, workspace revision, raw text, and containing-symbol metadata.
 
 **Acceptance criteria:**
-- [ ] JSONL export is deterministic for unchanged content.
-- [ ] Export includes all metadata Eros needs to embed, refresh, and delete stale chunks.
-- [ ] Export can be scoped by content kind and workspace id.
-- [ ] Miller does not invoke embedding models or Eros code.
-- [ ] Contract tests pin required fields and schema version.
-- [ ] Worker-scope verification passes and changes are committed.
+- [x] JSONL export is deterministic for unchanged content.
+- [x] Export includes all metadata Eros needs to embed, refresh, and delete stale chunks.
+- [x] Export can be scoped by content kind and workspace id.
+- [x] Miller does not invoke embedding models or Eros code.
+- [x] Contract tests pin required fields and schema version.
+- [x] Worker-scope verification passes and changes are committed.
 
 ## Phase 6: Cross-Workspace and Audit Workflows
 

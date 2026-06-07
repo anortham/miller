@@ -1,6 +1,6 @@
 # Miller content corpus v1 contract
 
-Status: planned contract. Phase 0 records this before production code writes `.miller/content.db`.
+Status: active local contract for Miller `.miller/content.db` schema version 1.
 
 `content.db` is a Miller-owned sidecar for chunked text content. It is separate from `symbols.db` and
 `search.db`: `symbols.db` remains the `julie-extract` structured artifact, `search.db` remains symbol and
@@ -149,7 +149,9 @@ Chunks must preserve line and byte ranges from the original normalized UTF-8 tex
 
 ## JSONL export
 
-Eros and other consumers read deterministic chunk rows through an export API. Each line is one JSON object:
+Eros and other consumers read deterministic chunk rows through an export API. Each line is one JSON object.
+Optional fields are emitted with explicit `null` values when unavailable so consumers can depend on a stable
+field set.
 
 | Field | Required | Description |
 |---|---:|---|
@@ -174,8 +176,12 @@ Eros and other consumers read deterministic chunk rows through an export API. Ea
 | `is_test` | yes | Boolean. |
 | `containing_symbol_id` | no | Containing symbol ID, when known. |
 | `containing_symbol_name` | no | Containing symbol name, when known. |
+| `source_status` | yes | Source lifecycle status, normally `active` for exported chunks. |
+| `indexed_at_utc` | yes | Source indexing/import timestamp in ISO-8601 round-trip format. |
 
 Export order is stable: `content_kind`, `display_path`, `line_start`, `chunk_id`.
+Exports may be scoped by `content_kind` and by stored `workspace_id`. Miller does not create embeddings,
+call Eros code, or add vector columns to `content.db`.
 
 ## Privacy and storage
 
