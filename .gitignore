@@ -1,5 +1,7 @@
 # .NET
 bin/
+!/bin/
+!/bin/miller-plugin-launcher.cjs
 obj/
 *.user
 *.suo

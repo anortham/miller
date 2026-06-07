@@ -177,6 +177,9 @@ public sealed class MillerExtractContractTests
     [Fact]
     public void RestoreScriptPythonFallbackReadsArchiveInnerPathTemplate()
     {
+        if (OperatingSystem.IsWindows())
+            Assert.Skip("POSIX shell restore-script python fallback contract test.");
+
         string scriptPath = Path.Combine(ScaleTestSupport.RepoRoot(), "scripts", "restore-julie-extract.sh");
         string pythonFallback = ExtractPythonFallback(File.ReadAllText(scriptPath));
         string pinsPath = Path.Combine(Path.GetTempPath(), $"miller-julie-pins-{Guid.NewGuid():N}.json");
