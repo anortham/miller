@@ -124,16 +124,20 @@ public sealed class MillerExtractContractTests
     public void ReleaseWorkflowPublishesVerifiablePrereleasePackages()
     {
         string workflowPath = Path.Combine(ScaleTestSupport.RepoRoot(), ".github", "workflows", "release.yml");
+        string promoteScriptPath = Path.Combine(ScaleTestSupport.RepoRoot(), "scripts", "release-promote.sh");
         string workflow = File.ReadAllText(workflowPath);
+        string promoteScript = File.ReadAllText(promoteScriptPath);
 
         Assert.Contains("prerelease:", workflow, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("--prerelease", workflow, StringComparison.Ordinal);
-        Assert.Contains("--latest=false", workflow, StringComparison.Ordinal);
+        Assert.Contains("args+=(--prerelease)", promoteScript, StringComparison.Ordinal);
+        Assert.Contains("args+=(--latest)", promoteScript, StringComparison.Ordinal);
 
         Assert.Contains("shasum -a 256", workflow, StringComparison.Ordinal);
         Assert.Contains("Get-FileHash -Algorithm SHA256", workflow, StringComparison.Ordinal);
         Assert.Contains(".tar.gz.sha256", workflow, StringComparison.Ordinal);
         Assert.Contains(".zip.sha256", workflow, StringComparison.Ordinal);
+        Assert.Contains("Checksum mismatch", promoteScript, StringComparison.Ordinal);
 
         Assert.Contains("test -x \"${publish_dir}/miller\"", workflow, StringComparison.Ordinal);
         Assert.Contains("\"${publish_dir}/miller\" version", workflow, StringComparison.Ordinal);
@@ -153,7 +157,11 @@ public sealed class MillerExtractContractTests
         Assert.Matches(
             @"publish:\s*\n\s+description:\s+'Publish or update the GitHub release'\s*\n\s+required:\s+false\s*\n\s+default:\s+false\s*\n\s+type:\s+boolean",
             workflow);
-        Assert.Contains("if: github.event_name == 'push' || inputs.publish", workflow, StringComparison.Ordinal);
+        Assert.Contains("promote_run_id:", workflow, StringComparison.Ordinal);
+        Assert.Contains("if: github.event_name == 'push' || (inputs.publish && inputs.promote_run_id == '')", workflow, StringComparison.Ordinal);
+        Assert.Contains("if: github.event_name == 'workflow_dispatch' && !inputs.publish && inputs.promote_run_id == ''", workflow, StringComparison.Ordinal);
+        Assert.Contains("name: promote validated artifacts", workflow, StringComparison.Ordinal);
+        Assert.Contains("--run-id \"${{ inputs.promote_run_id }}\"", workflow, StringComparison.Ordinal);
         Assert.Contains("Skipping GitHub release publication; packaged artifacts were uploaded for validation.", workflow, StringComparison.Ordinal);
     }
 

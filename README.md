@@ -17,9 +17,8 @@ The practical difference from a one-time graph dump is that Miller is built for 
 - stale or corrupt search sidecars self-heal to correct in-memory search instead of silently lying;
 - cross-language bridge evidence stays structural and provider-scoped, not embedding-driven.
 
-> **Status: release candidate for v0.2.0.** Miller now ships as a source-checkout workflow and as
-> self-contained per-platform release archives. The remaining release work is final package validation and
-> publication.
+> **Current release: v0.2.0.** Miller ships as a source-checkout workflow and as self-contained
+> per-platform release archives.
 
 ## Requirements
 
@@ -190,8 +189,8 @@ Miller's first plugin distribution path lives in this repository, not a separate
 - `bin/miller-plugin-launcher.cjs` downloads the configured GitHub release archive, verifies the `.sha256`
   sidecar, caches it under `~/.miller/plugin-cache/`, and runs `miller serve`.
 
-The plugin launcher consumes the release version in `miller-plugin.json`. Until that GitHub release exists with
-matching archives, use `MILLER_BINARY=/absolute/path/to/miller` to skip the download and run a local build.
+The plugin launcher consumes the release version in `miller-plugin.json`. Use
+`MILLER_BINARY=/absolute/path/to/miller` when testing an unreleased local build.
 
 Claude Code local-checkout install:
 
@@ -267,6 +266,10 @@ Each archive contains `miller`, the matching `.tools/julie-extract` binary, the 
 under `dashboard/`, `dashboard/wwwroot/dashboard.css`, `LICENSE`, and `THIRD-PARTY-NOTICES.md`. The workflow
 also uploads a `.sha256` sidecar for each archive and smoke-runs both `julie-extract --version` and
 `miller version` before packaging.
+
+Maintainers should use the two-step validation/promote flow in
+[`docs/release-process.md`](docs/release-process.md) so publishing reuses already validated artifacts instead
+of rebuilding the platform matrix.
 
 ### Install from a release archive
 

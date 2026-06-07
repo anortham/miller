@@ -24,13 +24,19 @@ on:
         required: false
         default: false
         type: boolean
+      promote_run_id:
+        description: 'Promote artifacts from a successful package-only run instead of rebuilding'
+        required: false
+        default: ''
 
 permissions:
+  actions: read
   contents: write
 
 jobs:
   build:
     name: build ${{ matrix.target }}
+    if: github.event_name == 'push' || inputs.promote_run_id == ''
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     strategy:
@@ -253,7 +259,7 @@ jobs:
   github-release:
     name: publish GitHub release
     needs: build
-    if: github.event_name == 'push' || inputs.publish
+    if: github.event_name == 'push' || (inputs.publish && inputs.promote_run_id == '')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -283,47 +289,45 @@ jobs:
             prerelease="${{ inputs.prerelease }}"
           fi
           echo "RELEASE_TAG=${tag}" >> "${GITHUB_ENV}"
+          echo "RELEASE_VERSION=${version}" >> "${GITHUB_ENV}"
           echo "RELEASE_PRERELEASE=${prerelease}" >> "${GITHUB_ENV}"
 
       - name: Create or update GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          ALLOW_OVERWRITE: ${{ inputs.allow_overwrite }}
         shell: bash
-        run: |
-          set -euo pipefail
-          ls -lh artifacts/release
-          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
-            is_prerelease="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq .prerelease)"
-            is_draft="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq .draft)"
-            if [ "${is_prerelease}" = "false" ] && [ "${is_draft}" = "false" ] && [ "${ALLOW_OVERWRITE:-false}" != "true" ]; then
-              echo "Refusing to overwrite published release ${RELEASE_TAG}. Re-run with allow_overwrite=true to force."; exit 1
-            fi
-            release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq .id)"
-            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
-              -f name="Miller ${RELEASE_TAG}" \
-              -f body="Miller ${RELEASE_TAG}" \
-              -F prerelease="${RELEASE_PRERELEASE}" >/dev/null
-            gh release upload "${RELEASE_TAG}" artifacts/release/* --clobber
-          else
-            args=(
-              gh release create "${RELEASE_TAG}" artifacts/release/*
-              --target "${GITHUB_SHA}"
-              --title "Miller ${RELEASE_TAG}"
-              --notes "Miller ${RELEASE_TAG}"
-              --latest=false
-            )
-            if [[ "${RELEASE_PRERELEASE}" == "true" ]]; then
-              args+=(--prerelease)
-            fi
-            "${args[@]}"
-          fi
+        run: >-
+          scripts/release-promote.sh
+          --version "${RELEASE_VERSION}"
+          --artifacts-dir artifacts/release
+          --target "${GITHUB_SHA}"
+          --prerelease "${RELEASE_PRERELEASE}"
+          --allow-overwrite "${{ inputs.allow_overwrite }}"
 
   package-only:
     name: package-only validation
     needs: build
-    if: github.event_name == 'workflow_dispatch' && !inputs.publish
+    if: github.event_name == 'workflow_dispatch' && !inputs.publish && inputs.promote_run_id == ''
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - run: echo "Skipping GitHub release publication; packaged artifacts were uploaded for validation."
+
+  promote-release:
+    name: promote validated artifacts
+    if: github.event_name == 'workflow_dispatch' && inputs.publish && inputs.promote_run_id != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Promote existing package-only artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: >-
+          scripts/release-promote.sh
+          --version "${{ inputs.version }}"
+          --run-id "${{ inputs.promote_run_id }}"
+          --prerelease "${{ inputs.prerelease }}"
+          --allow-overwrite "${{ inputs.allow_overwrite }}"
