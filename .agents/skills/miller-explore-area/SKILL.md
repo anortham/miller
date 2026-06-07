@@ -33,8 +33,14 @@ inspect(target="<symbol>", depth="full")
 ```text
 search(query="<identifier or phrase>")
 search(query="<docs/prose phrase>", mode="content")
+search(query="<source-body literal>", mode="source")
+search(query="<imported log or web phrase>", mode="external|web")
 search(query="<comment or literal>", regions="comment|string_literal|doc_comment")
 ```
+
+For audits across registered workspaces, use `content search "<term>" --workspace-id all --kind source|docs|config|external_file|web` and bounded `content read` windows before escalating to broader context.
+
+`context` integration from content hits remains opt-in: use it only when the user asks for surrounding code context after an audit or text-search hit.
 
 5. Use `trace` when the question is about flow:
 

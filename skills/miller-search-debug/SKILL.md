@@ -24,6 +24,10 @@ search(query="<original>", limit=20)
 search(query="<symbol-ish>", mode="symbol")
 search(query="<path-ish>", mode="file")
 search(query="<docs or prose>", mode="content")
+search(query="<source body text>", mode="source")
+search(query="<imported log text>", mode="external")
+search(query="<imported web text>", mode="web")
+search(query="<broad text>", mode="all-text")
 search(query="<comment or literal>", regions="comment|string_literal|doc_comment")
 search(query="<known area>", file_pattern="src/ui/**", language="typescript")
 ```
@@ -32,6 +36,8 @@ search(query="<known area>", file_pattern="src/ui/**", language="typescript")
 
 - Natural-language search hides test code by default; use `exclude_tests=false` when tests are expected.
 - Symbol search ranks `name + signature`; docs/prose belong in `mode=content`.
+- Source bodies belong in `mode=source`; imported logs/reports and web markdown belong in `mode=external` or `mode=web`.
+- Cross-workspace exact-text audits should use `content search "<term>" --workspace-id all --kind source|docs|config|external_file|web`.
 - Comment, doc-comment, and string-literal searches require region indexing and a fresh sidecar.
 - File/path queries should use `mode=file` when auto mode looks noisy.
 - Scoped workflows should use `file_pattern` and `language` before raising `limit`.

@@ -512,6 +512,41 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Contains("CliExportMarker", row.GetProperty("chunk_text").GetString());
     }
 
+    [Fact]
+    public void Content_SearchAllWorkspaces_ReportsWorkspacePerHit()
+    {
+        string alphaRoot = Path.Combine(_dir, "alpha");
+        string betaRoot = Path.Combine(_dir, "beta");
+        Directory.CreateDirectory(alphaRoot);
+        Directory.CreateDirectory(betaRoot);
+        string alphaSymbols = Path.Combine(alphaRoot, ".miller", "symbols.db");
+        string betaSymbols = Path.Combine(betaRoot, ".miller", "symbols.db");
+        string alphaLog = Path.Combine(alphaRoot, "alpha.log");
+        string betaLog = Path.Combine(betaRoot, "beta.log");
+        File.WriteAllText(alphaLog, "CliCrossWorkspaceNeedle in alpha.");
+        File.WriteAllText(betaLog, "CliCrossWorkspaceNeedle in beta.");
+        var store = new ContentCorpusExternalStore();
+        store.Import(ContentCorpusSidecar.ContentDbPathFor(alphaSymbols), alphaLog, displayPath: "alpha.log");
+        store.Import(ContentCorpusSidecar.ContentDbPathFor(betaSymbols), betaLog, displayPath: "beta.log");
+        var ctx = Context(Path.Combine(_dir, ".miller", "symbols.db"), _dir);
+        using (var registry = WorkspaceRegistry.Open(ctx.RegistryDbPath))
+        {
+            registry.UpsertSeen("ws-alpha", "alpha", alphaRoot, alphaSymbols);
+            registry.MarkScanned("ws-alpha", revision: 1);
+            registry.UpsertSeen("ws-beta", "beta", betaRoot, betaSymbols);
+            registry.MarkScanned("ws-beta", revision: 1);
+        }
+
+        var (code, outText, errText) = Run(
+            new[] { "content", "search", "CliCrossWorkspaceNeedle", "--workspace-id", "all", "--limit", "10" },
+            ctx);
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("alpha (ws-alpha)  alpha.log:1  external_file", outText);
+        Assert.Contains("beta (ws-beta)  beta.log:1  external_file", outText);
+    }
+
     [Theory]
     [InlineData("search", "GetUser", "auth/UserService.cs")]
     [InlineData("inspect", "GetUser", "Gets a user by id.")]

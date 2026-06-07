@@ -385,11 +385,11 @@ Out of scope for this plan:
 **Approach:** Start with explicit content searches across registered workspaces. Add audit skill workflows for debt/security/compatibility terms. Feed high-confidence content hits into `context` only after direct source-mode quality is proven.
 
 **Acceptance criteria:**
-- [ ] Cross-workspace text search reports workspace id/display id for every hit.
-- [ ] Audit skill can search for a configured set of terms and produce concise file/line summaries.
-- [ ] Search quality runner has source/content cases for error strings, config keys, assertions, docs, and web/external content.
-- [ ] `context` integration remains opt-in until quality evidence shows it improves results.
-- [ ] Worker-scope verification passes and changes are committed.
+- [x] Cross-workspace text search reports workspace id/display id for every hit.
+- [x] Audit skill can search for a configured set of terms and produce concise file/line summaries.
+- [x] Search quality runner has source/content cases for error strings, config keys, assertions, docs, and web/external content.
+- [x] `context` integration remains opt-in until quality evidence shows it improves results.
+- [x] Worker-scope verification passes and changes are committed.
 
 ## Verification Strategy
 

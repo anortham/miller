@@ -6,6 +6,7 @@ using System.Text.Json;
 using Miller.Core.Search;
 using Miller.Indexing;
 using Miller.Server.Telemetry;
+using Miller.Server.Workspaces;
 using ModelContextProtocol.Server;
 
 namespace Miller.Server.Tools;
@@ -38,6 +39,7 @@ public sealed class ContentTool
         [Description("Human display path/title for imported content. Optional.")] string? display_path = null,
         [Description("Content kind for search/list/export. Default external_file for search/list, all for export.")] string? content_kind = null,
         [Description("Stored workspace_id filter for operation=export. Optional.")] string? content_workspace_id = null,
+        [Description("Workspace selector for search; use all for registered workspace search. Optional.")] string? workspace_id = null,
         [Description("1-based center line for operation=read.")] int? line = null,
         [Description("Context lines before/after the read line. Default 10, maximum bounded by Miller.")] int? context_lines = null,
         [Description("Max search results. Default 6.")] int limit = SearchTool.DefaultLimit,
@@ -56,7 +58,7 @@ public sealed class ContentTool
                 "import" or "add" => Import(contentDbPath, path, max_bytes, display_path, json, telemetry),
                 "add_markdown" or "add-markdown" or "import_markdown" or "import-markdown" =>
                     AddMarkdown(contentDbPath, path, url, max_bytes, display_path, json, telemetry),
-                "search" => Search(contentDbPath, query, ContentKindOrDefault(content_kind, TextContentKind.ExternalFile), limit, json, telemetry),
+                "search" => Search(contentDbPath, query, ContentKindOrDefault(content_kind, TextContentKind.ExternalFile), limit, workspace_id, json, telemetry),
                 "read" => Read(contentDbPath, source_id, line, context_lines, json, telemetry),
                 "list" => List(contentDbPath, ContentKindOrDefault(content_kind, TextContentKind.ExternalFile), json, telemetry),
                 "remove" or "delete" => Remove(contentDbPath, source_id, json, telemetry),
@@ -129,12 +131,16 @@ public sealed class ContentTool
         string? query,
         string contentKind,
         int limit,
+        string? workspaceId,
         bool json,
         TelemetryScope? telemetry)
     {
         if (string.IsNullOrWhiteSpace(query))
             throw new InvalidOperationException("content search requires query.");
         if (limit < 1) limit = 1;
+
+        if (!string.IsNullOrWhiteSpace(workspaceId))
+            return SearchWorkspaces(query, contentKind, limit, workspaceId, json, telemetry);
 
         IReadOnlyList<TextContentSearchHit> hits = _store.Search(contentDbPath, query, contentKind, limit);
         if (telemetry is not null)
@@ -148,6 +154,44 @@ public sealed class ContentTool
         }
 
         return json ? RenderSearchJson(hits) : RenderSearchCompact(hits);
+    }
+
+    private string SearchWorkspaces(
+        string query,
+        string contentKind,
+        int limit,
+        string workspaceId,
+        bool json,
+        TelemetryScope? telemetry)
+    {
+        IReadOnlyList<WorkspaceRegistryRow> workspaces = ResolveContentSearchWorkspaces(workspaceId);
+        var hits = new List<WorkspaceContentSearchHit>();
+        foreach (WorkspaceRegistryRow row in workspaces)
+        {
+            string contentDbPath = ContentCorpusSidecar.ContentDbPathFor(row.IndexDbPath);
+            foreach (TextContentSearchHit hit in _store.Search(contentDbPath, query, contentKind, limit))
+                hits.Add(new WorkspaceContentSearchHit(row, hit));
+        }
+
+        var page = hits
+            .OrderByDescending(static hit => hit.Hit.Score)
+            .ThenBy(static hit => hit.Workspace.DisplayId, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(static hit => hit.Hit.DisplayPath, StringComparer.Ordinal)
+            .ThenBy(static hit => hit.Hit.Line)
+            .Take(limit)
+            .ToArray();
+
+        if (telemetry is not null)
+        {
+            telemetry.SetTarget(workspaceId);
+            telemetry.ResultCount = page.Length;
+            telemetry.SourceBytes = page
+                .GroupBy(static hit => hit.Workspace.WorkspaceId + "\0" + hit.Hit.SourceId, StringComparer.Ordinal)
+                .Sum(static group => group.Max(static hit => hit.Hit.SourceBytes));
+            telemetry.Outcome = page.Length == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
+        }
+
+        return json ? RenderWorkspaceSearchJson(page) : RenderWorkspaceSearchCompact(page);
     }
 
     private string Read(
@@ -226,6 +270,41 @@ public sealed class ContentTool
         return ContentCorpusExportReader.ToJsonLines(rows);
     }
 
+    private IReadOnlyList<WorkspaceRegistryRow> ResolveContentSearchWorkspaces(string workspaceId)
+    {
+        string selector = workspaceId.Trim();
+        using var registry = WorkspaceRegistry.Open(_workspace.RegistryDbPath);
+        if (string.Equals(selector, "all", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(selector, "registered", StringComparison.OrdinalIgnoreCase))
+        {
+            return registry.List()
+                .Where(static row => row.State is WorkspaceRegistryState.Current
+                    or WorkspaceRegistryState.Ready
+                    or WorkspaceRegistryState.LoadedExisting)
+                .ToArray();
+        }
+
+        if (string.Equals(selector, "current", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(selector, "primary", StringComparison.OrdinalIgnoreCase))
+        {
+            return
+            [
+                new WorkspaceRegistryRow(
+                    _workspace.WorkspaceId ?? "current",
+                    "current",
+                    _workspace.CanonicalRoot ?? _workspace.WorkspaceRoot,
+                    _workspace.CanonicalExtractDbPath ?? _workspace.ExtractDbPath,
+                    DateTimeOffset.UtcNow,
+                    LastScanAt: null,
+                    LastRevision: null,
+                    WorkspaceRegistryState.Current,
+                    LastError: null),
+            ];
+        }
+
+        return [WorkspaceRegistrySelector.Resolve(registry, selector)];
+    }
+
     private static string ContentKindOrDefault(string? value, string fallback) =>
         OptionalContentKind(value) ?? fallback;
 
@@ -266,6 +345,33 @@ public sealed class ContentTool
         {
             var block = new StringBuilder();
             block.Append(hit.DisplayPath).Append(':').Append(hit.Line).Append("  ").Append(hit.ContentKind);
+            foreach (string line in hit.Snippet.Split('\n'))
+                block.Append('\n').Append("    ").Append(line);
+            blocks.Add(block.ToString());
+        }
+
+        return string.Join("\n\n", blocks);
+    }
+
+    private static string RenderWorkspaceSearchCompact(IReadOnlyList<WorkspaceContentSearchHit> hits)
+    {
+        if (hits.Count == 0)
+            return "No results.";
+
+        var blocks = new List<string>(hits.Count);
+        foreach (WorkspaceContentSearchHit workspaceHit in hits)
+        {
+            TextContentSearchHit hit = workspaceHit.Hit;
+            var block = new StringBuilder();
+            block.Append(workspaceHit.Workspace.DisplayId)
+                .Append(" (")
+                .Append(workspaceHit.Workspace.WorkspaceId)
+                .Append(")  ")
+                .Append(hit.DisplayPath)
+                .Append(':')
+                .Append(hit.Line)
+                .Append("  ")
+                .Append(hit.ContentKind);
             foreach (string line in hit.Snippet.Split('\n'))
                 block.Append('\n').Append("    ").Append(line);
             blocks.Add(block.ToString());
@@ -352,6 +458,41 @@ public sealed class ContentTool
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
     }
 
+    private static string RenderWorkspaceSearchJson(IReadOnlyList<WorkspaceContentSearchHit> hits)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = JsonWriter(buffer))
+        {
+            writer.WriteStartArray();
+            foreach (WorkspaceContentSearchHit workspaceHit in hits)
+            {
+                WorkspaceRegistryRow workspace = workspaceHit.Workspace;
+                TextContentSearchHit hit = workspaceHit.Hit;
+                writer.WriteStartObject();
+                writer.WriteString("workspace_id", workspace.WorkspaceId);
+                writer.WriteString("display_id", workspace.DisplayId);
+                writer.WriteString("workspace_root", workspace.CanonicalRoot);
+                writer.WriteString("source_id", hit.SourceId);
+                writer.WriteString("chunk_id", hit.ChunkId);
+                writer.WriteString("content_kind", hit.ContentKind);
+                writer.WriteString("display_path", hit.DisplayPath);
+                if (hit.Path is null) writer.WriteNull("path");
+                else writer.WriteString("path", hit.Path);
+                if (hit.Url is null) writer.WriteNull("url");
+                else writer.WriteString("url", hit.Url);
+                writer.WriteNumber("line", hit.Line);
+                writer.WriteNumber("line_start", hit.LineStart);
+                writer.WriteNumber("line_end", hit.LineEnd);
+                writer.WriteNumber("score", hit.Score);
+                writer.WriteString("snippet", hit.Snippet);
+                writer.WriteNumber("source_bytes", hit.SourceBytes);
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+        }
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
     private static string RenderReadJson(ExternalContentReadResult result)
     {
         var buffer = new ArrayBufferWriter<byte>();
@@ -419,4 +560,6 @@ public sealed class ContentTool
 
     private static Utf8JsonWriter JsonWriter(ArrayBufferWriter<byte> buffer) =>
         new(buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+
+    private sealed record WorkspaceContentSearchHit(WorkspaceRegistryRow Workspace, TextContentSearchHit Hit);
 }

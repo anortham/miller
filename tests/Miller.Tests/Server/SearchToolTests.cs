@@ -1093,6 +1093,15 @@ public sealed class SearchToolTests
         Assert.Equal(SearchToolMode.Source, SearchTool.ParseMode("source"));
     }
 
+    [Theory]
+    [InlineData("external", SearchToolMode.External)]
+    [InlineData("web", SearchToolMode.Web)]
+    [InlineData("all-text", SearchToolMode.AllText)]
+    public void ParseMode_TextCorpusModes_AreExplicitOnly(string mode, SearchToolMode expected)
+    {
+        Assert.Equal(expected, SearchTool.ParseMode(mode));
+    }
+
     [Fact]
     public void RunTextContent_Compact_RendersSourceHitMetadataAndSnippet()
     {
@@ -1117,6 +1126,30 @@ public sealed class SearchToolTests
             "    public void Handle()\n" +
             "    throw new InvalidOperationException(\"KnownSourceError\");",
             output);
+    }
+
+    [Fact]
+    public void RunTextContent_AllText_CanSearchMultipleContentKinds()
+    {
+        var index = TextContentIndex(
+            CorpusHit("src/Api.cs", TextContentKind.WorkspaceSource, 5, "Needle in source"),
+            CorpusHit("docs/guide.md", TextContentKind.WorkspaceDocs, 7, "Needle in docs"),
+            CorpusHit("ci.log", TextContentKind.ExternalFile, 2, "Needle in log"));
+
+        string output = SearchTool.RunTextContent(
+            index,
+            "Needle",
+            [TextContentKind.WorkspaceSource, TextContentKind.WorkspaceDocs, TextContentKind.ExternalFile],
+            limit: 10,
+            excludeTests: false,
+            json: false,
+            out int count,
+            out _);
+
+        Assert.Equal(3, count);
+        Assert.Contains("src/Api.cs:5  workspace_source", output);
+        Assert.Contains("docs/guide.md:7  workspace_docs", output);
+        Assert.Contains("ci.log:2  external_file", output);
     }
 
     [Fact]

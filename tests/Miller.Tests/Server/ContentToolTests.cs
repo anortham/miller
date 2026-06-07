@@ -142,4 +142,57 @@ public sealed class ContentToolTests : IDisposable
         Assert.Contains("WebToolExportMarker", row.GetProperty("chunk_text").GetString());
         Assert.DoesNotContain("ExternalToolExportMarker", jsonl);
     }
+
+    [Fact]
+    public void Content_SearchAllRegisteredWorkspaces_ReportsWorkspacePerHit()
+    {
+        string alphaRoot = Path.Combine(_dir, "alpha");
+        string betaRoot = Path.Combine(_dir, "beta");
+        Directory.CreateDirectory(alphaRoot);
+        Directory.CreateDirectory(betaRoot);
+        string alphaSymbols = Path.Combine(alphaRoot, ".miller", "symbols.db");
+        string betaSymbols = Path.Combine(betaRoot, ".miller", "symbols.db");
+        string alphaLog = Path.Combine(alphaRoot, "alpha.log");
+        string betaLog = Path.Combine(betaRoot, "beta.log");
+        File.WriteAllText(alphaLog, "CrossWorkspaceNeedle in alpha.");
+        File.WriteAllText(betaLog, "CrossWorkspaceNeedle in beta.");
+        var store = new ContentCorpusExternalStore();
+        store.Import(ContentCorpusSidecar.ContentDbPathFor(alphaSymbols), alphaLog, displayPath: "alpha.log");
+        store.Import(ContentCorpusSidecar.ContentDbPathFor(betaSymbols), betaLog, displayPath: "beta.log");
+        using (var registry = WorkspaceRegistry.Open(_workspace.RegistryDbPath))
+        {
+            registry.UpsertSeen("ws-alpha", "alpha", alphaRoot, alphaSymbols);
+            registry.MarkScanned("ws-alpha", revision: 1);
+            registry.UpsertSeen("ws-beta", "beta", betaRoot, betaSymbols);
+            registry.MarkScanned("ws-beta", revision: 1);
+        }
+        var tool = new ContentTool(_workspace, store);
+
+        string compact = tool.Content(
+            "search",
+            query: "CrossWorkspaceNeedle",
+            workspace_id: "all",
+            limit: 10);
+
+        Assert.Contains("alpha (ws-alpha)  alpha.log:1  external_file", compact);
+        Assert.Contains("beta (ws-beta)  beta.log:1  external_file", compact);
+
+        string json = tool.Content(
+            "search",
+            query: "CrossWorkspaceNeedle",
+            workspace_id: "all",
+            limit: 10,
+            format: "json");
+        using JsonDocument doc = JsonDocument.Parse(json);
+        JsonElement[] rows = doc.RootElement.EnumerateArray().ToArray();
+        Assert.Equal(2, rows.Length);
+        Assert.Contains(rows, row =>
+            row.GetProperty("workspace_id").GetString() == "ws-alpha"
+            && row.GetProperty("display_id").GetString() == "alpha"
+            && row.GetProperty("display_path").GetString() == "alpha.log");
+        Assert.Contains(rows, row =>
+            row.GetProperty("workspace_id").GetString() == "ws-beta"
+            && row.GetProperty("display_id").GetString() == "beta"
+            && row.GetProperty("display_path").GetString() == "beta.log");
+    }
 }

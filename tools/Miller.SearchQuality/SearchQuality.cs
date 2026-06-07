@@ -214,8 +214,8 @@ public static class SearchQualityParsers
         foreach (JsonElement item in document.RootElement.EnumerateArray())
         {
             string? name = GetString(item, "name");
-            string? file = GetString(item, "file");
-            string? kind = GetString(item, "kind") ?? (name is null ? "content" : null);
+            string? file = GetString(item, "file") ?? GetString(item, "display_path") ?? GetString(item, "path");
+            string? kind = GetString(item, "kind") ?? GetString(item, "content_kind") ?? (name is null ? "content" : null);
             hits.Add(new SearchQualityHit
             {
                 Provider = provider,
@@ -798,6 +798,7 @@ public static class SearchQualityCli
             new RepositorySpec { Name = "hermes-agent", Root = "~/source/hermes-agent", Language = "python" },
             new RepositorySpec { Name = "openclaw", Root = "~/source/openclaw", Language = "typescript" },
             new RepositorySpec { Name = "MyraNext", Root = "~/source/MyraNext", Language = "csharp" },
+            new RepositorySpec { Name = "miller", Root = ".", Language = "csharp" },
         ],
         Cases =
         [
@@ -863,6 +864,60 @@ public static class SearchQualityCli
                 Mode = "file",
                 Tags = ["sql", "file"],
                 Expected = [new SearchExpectation { Path = "MyraNext.SqlDB/dbo/Tables/ReportMenuItems.sql" }],
+            },
+            new SearchCaseSpec
+            {
+                Id = "miller-source-error-string-content-corpus",
+                Repository = "miller",
+                Query = "content.db schema_version",
+                Mode = "source",
+                Tags = ["csharp", "source", "error-string"],
+                Expected = [new SearchExpectation { Path = "ContentCorpusExportReader.cs" }],
+            },
+            new SearchCaseSpec
+            {
+                Id = "miller-source-assertion-text",
+                Repository = "miller",
+                Query = "Assert.Contains",
+                Mode = "source",
+                Tags = ["csharp", "source", "assertion"],
+                Expected = [new SearchExpectation { Path = "tests/Miller.Tests" }],
+            },
+            new SearchCaseSpec
+            {
+                Id = "miller-content-config-key",
+                Repository = "miller",
+                Query = "MILLER_REGION_INDEX",
+                Mode = "content",
+                Tags = ["config-key", "content"],
+                Expected = [new SearchExpectation { Path = "README.md" }],
+            },
+            new SearchCaseSpec
+            {
+                Id = "miller-content-docs-phrase",
+                Repository = "miller",
+                Query = "content corpus",
+                Mode = "content",
+                Tags = ["docs", "content"],
+                Expected = [new SearchExpectation { Path = "docs/contracts/content-corpus-v1.md" }],
+            },
+            new SearchCaseSpec
+            {
+                Id = "miller-external-imported-log",
+                Repository = "miller",
+                Query = "ExternalToolExportMarker",
+                Mode = "external",
+                Tags = ["external", "content"],
+                Expected = [new SearchExpectation { Kind = "external_file" }],
+            },
+            new SearchCaseSpec
+            {
+                Id = "miller-web-imported-page",
+                Repository = "miller",
+                Query = "WebToolExportMarker",
+                Mode = "web",
+                Tags = ["web", "content"],
+                Expected = [new SearchExpectation { Kind = "web" }],
             },
         ],
     };

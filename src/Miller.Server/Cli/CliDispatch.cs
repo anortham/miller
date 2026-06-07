@@ -313,6 +313,7 @@ public static class CliDispatch
             display_path: o.Value("display-path"),
             content_kind: o.Value("kind", o.Value("content-kind")),
             content_workspace_id: o.Value("content-workspace-id"),
+            workspace_id: o.Value("workspace-id"),
             line: o.Has("line") ? o.Int("line", 0) : null,
             context_lines: o.Has("context-lines") ? o.Int("context-lines", ContentCorpusExternalStore.DefaultContextLines) : null,
             limit: o.Int("limit", SearchTool.DefaultLimit),
@@ -1013,11 +1014,11 @@ public static class CliDispatch
 
         Commands:
           search <query>     Find code by name, identifier, or phrase.
-                             [--workspace-id SELECTOR] [--workspace DIR] [--mode auto|text|symbol|file|content|source] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--include-tests|--exclude-tests]
+                             [--workspace-id SELECTOR] [--workspace DIR] [--mode auto|text|symbol|file|content|source|external|web|all-text] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--include-tests|--exclude-tests]
           content <op>       Import/search/read/list/remove/export external and web text in content.db.
                              import <path> [--max-bytes N] [--display-path NAME] [--json]
                              add-markdown <path> --url URL [--display-path NAME] [--json]
-                             search <query> [--kind KIND] [--limit N] [--json]
+                             search <query> [--kind KIND] [--workspace-id all|SELECTOR] [--limit N] [--json]
                              read --source-id ID --line N [--context-lines N] [--json]
                              list [--kind KIND] [--json]
                              remove --source-id ID [--json]

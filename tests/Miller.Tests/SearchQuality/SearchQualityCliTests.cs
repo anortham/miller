@@ -31,8 +31,24 @@ public sealed class SearchQualityCliTests : IDisposable
         Assert.Equal(0, exitCode);
         Assert.True(File.Exists(casesPath));
         using JsonDocument document = JsonDocument.Parse(File.ReadAllText(casesPath));
-        Assert.Equal(3, document.RootElement.GetProperty("repositories").GetArrayLength());
+        Assert.True(document.RootElement.GetProperty("repositories").GetArrayLength() >= 4);
         Assert.True(document.RootElement.GetProperty("cases").GetArrayLength() >= 6);
+        var cases = document.RootElement.GetProperty("cases").EnumerateArray().ToArray();
+        Assert.Contains(cases, c =>
+            c.GetProperty("mode").GetString() == "source"
+            && c.GetProperty("tags").EnumerateArray().Any(t => t.GetString() == "error-string"));
+        Assert.Contains(cases, c =>
+            c.GetProperty("mode").GetString() == "content"
+            && c.GetProperty("tags").EnumerateArray().Any(t => t.GetString() == "docs"));
+        Assert.Contains(cases, c =>
+            c.GetProperty("mode").GetString() == "source"
+            && c.GetProperty("tags").EnumerateArray().Any(t => t.GetString() == "assertion"));
+        Assert.Contains(cases, c =>
+            c.GetProperty("mode").GetString() == "external"
+            && c.GetProperty("tags").EnumerateArray().Any(t => t.GetString() == "external"));
+        Assert.Contains(cases, c =>
+            c.GetProperty("mode").GetString() == "web"
+            && c.GetProperty("tags").EnumerateArray().Any(t => t.GetString() == "web"));
         Assert.Contains(casesPath, stdout.ToString(), StringComparison.Ordinal);
     }
 

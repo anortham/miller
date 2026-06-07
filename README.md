@@ -330,11 +330,13 @@ For beta, text output is a compact human-facing contract and JSON output is the 
 - Text headings and ordering are intended to be stable enough for humans and logs, not for strict parsers.
   Use `--json` when a caller needs fields.
 - Search result kinds are deliberately separate: symbol search ranks `name + signature`, `--mode content`
-  searches docs-like file content, and `--regions` searches explicit source regions when region indexing
-  is enabled.
+  searches docs-like file content, `--mode source|external|web|all-text` searches explicit content-corpus text,
+  and `--regions` searches explicit source regions when region indexing is enabled.
 - The `content` CLI stores non-workspace text in `.miller/content.db`. Use `content import` for logs/reports
   and `content add-markdown <path> --url <url>` for browser-fetched pages. Search web imports with
   `content search "<phrase>" --kind web`, then read bounded windows with `content read --source-id <id>`.
+- `content search "<term>" --workspace-id all --kind source|docs|config|external_file|web` searches registered
+  workspace content DBs and reports workspace/display IDs on every hit for audits.
 - `content export [--kind KIND] [--content-workspace-id ID]` writes deterministic JSONL chunk rows for Eros
   and other local consumers. It includes raw chunk text; use it as an integration feed, not as an interactive
   reading shortcut.

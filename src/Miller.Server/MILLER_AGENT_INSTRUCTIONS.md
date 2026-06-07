@@ -20,12 +20,14 @@ the tokens.
 
 ## Tools
 
-- `search` — Find code by name, identifier, or natural-language phrase. `mode=auto|text|symbol|file|content|source`. Test
+- `search` — Find code by name, identifier, or natural-language phrase. `mode=auto|text|symbol|file|content|source|external|web|all-text`. Test
   code is auto-hidden for natural-language queries (`exclude_tests=false` to force them in). The first move for
   "where is…?". Use `mode=content` (alias `docs`) to search docs/prose file CONTENT instead of symbols — it
   returns `path:line` + a snippet window, for files symbol search can't see (markdown, config, plain text).
   Use `mode=source` to search verified source-file body text for error strings, route literals, assertion text,
-  and implementation phrases without blending those hits into default symbol search.
+  and implementation phrases without blending those hits into default symbol search. Use `mode=external` for
+  imported logs/reports, `mode=web` for imported web markdown, and `mode=all-text` only when an explicit
+  one-workspace union is useful.
   Use `file_pattern=<glob>` and `language=<lang>` to keep result sets small when you know the area or language.
   The default page is 6 results; each compact symbol hit includes name, kind, file, line, and signature when
   available. Raise `limit` for a wider page.
@@ -62,7 +64,8 @@ the tokens.
   logs, CI output, generated reports, large JSON/text dumps, browser-fetched markdown, and other non-workspace
   text that would waste context if read in full. `import` and `add_markdown` report metadata only; `search`
   returns snippets; `read` returns a bounded line window by `source_id` and `line`; `remove` deletes an imported
-  source. Use `content_kind=web` for web-only `search`/`list`. `export` writes deterministic JSONL chunks for
+  source. Use `content_kind=web` for web-only `search`/`list`, or `workspace_id=all` on `search` to audit all
+  registered workspaces with workspace/display IDs on every hit. `export` writes deterministic JSONL chunks for
   Eros/local integration; it includes raw chunk text, so do not use it as an interactive reading shortcut.
 - `workspace` — Index lifecycle. `status` (default), `refresh` (reconcile stale files), `full` (rebuild from
   scratch), `list`, `open` (prime a different path's index), `remove`, `dashboard` (start/reuse the local
@@ -80,6 +83,8 @@ the tokens.
   returns `path:line` + snippet, where symbol search would find nothing.
 - **Find source-body text**: `search mode=source "<literal or phrase>"` — searches verified source files and
   returns `path:line`, content kind, containing symbol when known, and a snippet.
+- **Audit registered workspaces for exact text**: `content search query="dangerous term" workspace_id=all content_kind=source`
+  or `content_kind=docs|config|external_file|web`, then bounded `content read`.
 - **Inspect a large log/report**: `content import path=/tmp/build.log` → `content search query="error text"` →
   `content read source_id=... line=... context_lines=10`. Do not read or paste the full file.
 - **Research a web page**: use the `miller-web-research` skill to fetch markdown with `browser39` into a temp
@@ -106,12 +111,12 @@ code, paste this block into the prompt:
     You have Miller MCP tools. Use them before raw shell/file exploration:
     - context(query, ...) for unfamiliar task-shaped orientation.
     - search(query, mode?, regions?, file_pattern?, language?) before rg/grep/find, including mode=content for
-      docs/prose, mode=source for source-body text, regions=... for comments/strings, and scoped filters for smaller result sets.
+      docs/prose, mode=source/external/web/all-text for content corpus text, regions=... for comments/strings, and scoped filters for smaller result sets.
     - inspect(target, depth?) before reading a whole file or symbol body; use depth=full for refs/callers/callees/body.
     - trace(target, mode?, to?, scope?) before manual caller/callee file hopping; use scope for ambiguous names.
     - impact(target?|changed_paths?|diff?) before refactors and to choose tests.
     - edit(operation, target, ...) to preview index-aware edits (apply=true to commit).
-    - content(import|add_markdown|search|read|list|remove|export, ...) for large logs, CI output, web markdown, and external text; read bounded windows only.
+    - content(import|add_markdown|search|read|list|remove|export, ...) for large logs, CI output, web markdown, external text, and workspace audits; use workspace_id=all for registered-workspace text audits and read bounded windows only.
     - workspace(status|refresh|full|list|open|remove|dashboard) to refresh stale indexes, open another repo, or
       start the local dashboard from the session.
     Do NOT fall back to Glob/Read/Grep chains when a Miller tool fits. Miller returns targeted context in 1-2 calls.

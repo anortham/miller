@@ -11,7 +11,8 @@ public sealed class SearchQualityParsersTests
         const string json = """
             [
               {"name":"Flask","kind":"class","file":"src/flask/app.py","line":109,"score":7.03},
-              {"file":"docs/search.md","line":12,"score":3.5,"snippet":"search quality"}
+              {"file":"docs/search.md","line":12,"score":3.5,"snippet":"search quality"},
+              {"content_kind":"workspace_source","display_path":"src/Api.cs","path":"src/Api.cs","line":42,"score":12.5,"snippet":"KnownSourceError"}
             ]
             """;
 
@@ -36,6 +37,15 @@ public sealed class SearchQualityParsersTests
                 Assert.Equal("content", second.Kind);
                 Assert.Equal("docs/search.md", second.Path);
                 Assert.Equal(12, second.Line);
+            },
+            third =>
+            {
+                Assert.Equal("src/Api.cs", third.Title);
+                Assert.Null(third.Name);
+                Assert.Equal("workspace_source", third.Kind);
+                Assert.Equal("src/Api.cs", third.Path);
+                Assert.Equal(42, third.Line);
+                Assert.Equal(12.5, third.Score);
             });
     }
 

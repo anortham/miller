@@ -96,3 +96,16 @@ test('web research skill fetches through browser39 and imports through Miller co
   assert.match(skill, /--kind web/);
   assert.doesNotMatch(skill, /docs\/web/);
 });
+
+test('text audit skill uses cross-workspace content search and bounded reads', () => {
+  const skill = fs.readFileSync(
+    path.join(repoRoot, '.agents/skills/miller-text-audit/SKILL.md'),
+    'utf8',
+  );
+
+  assert.match(skill, /content search/);
+  assert.match(skill, /--workspace-id all/);
+  assert.match(skill, /--kind source/);
+  assert.match(skill, /content read/);
+  assert.match(skill, /context remains opt-in/i);
+});

@@ -33,6 +33,15 @@ public enum SearchToolMode
 
     /// <summary>Search workspace source-file body text, returning path + line + snippet hits.</summary>
     Source,
+
+    /// <summary>Search explicitly imported external-file text.</summary>
+    External,
+
+    /// <summary>Search explicitly imported web markdown/text.</summary>
+    Web,
+
+    /// <summary>Search all content corpus text kinds. Explicit only; never the default.</summary>
+    AllText,
 }
 
 /// <summary>
@@ -118,13 +127,13 @@ public sealed class SearchTool
         "Search indexed code and return ranked results. Use this before shell rg/grep/cat or reading whole " +
         "files. Pass a symbol name, an identifier, or a natural-language phrase. Test code is hidden for " +
         "natural-language queries unless you ask for it. Use mode=content (alias docs) to search docs/prose " +
-        "file content instead of symbols, or mode=source to search source-file body text — these return " +
+        "file content instead of symbols, or mode=source/external/web/all-text for content corpus text — these return " +
         "path + line + snippet hits. Pass regions=comment, " +
         "doc_comment, or string_literal to search only inside those source regions. Returns compact text by " +
         "default; pass format=json to chain results.")]
     public string Search(
         [Description("Symbol name, identifier, or natural-language phrase.")] string query,
-        [Description("Interpretation axis: auto|text|symbol|file|content|source (content alias docs). Default auto.")] string mode = "auto",
+        [Description("Interpretation axis: auto|text|symbol|file|content|source|external|web|all-text. Default auto.")] string mode = "auto",
         [Description("Max results to return. Default 6.")] int limit = DefaultLimit,
         [Description("Hide test code: leave unset to auto-hide for natural-language queries; true/false to force.")]
         bool? exclude_tests = null,
@@ -205,6 +214,31 @@ public sealed class SearchTool
                     scope.MetadataJson = TextContentBackendMetadata;
                 }
             }
+            else if (parsedMode is SearchToolMode.External or SearchToolMode.Web or SearchToolMode.AllText)
+            {
+                WorkspaceTextContentSearchContext textContent =
+                    _textContentProvider.ResolveTextContentSearch(workspace_id, ensureFresh);
+                string? contentBanner = ReadToolWorkspaceRouting.CompactBanner(textContent, workspace_id, json);
+                bool hideTests = ResolveExcludeTests(exclude_tests, query, parsedMode);
+                output = RunTextContent(
+                    textContent.Index,
+                    query,
+                    ContentKindsForMode(parsedMode),
+                    limit,
+                    hideTests,
+                    json,
+                    out count,
+                    out long sourceBytes,
+                    contentBanner,
+                    filePattern: file_pattern,
+                    language: language);
+                if (scope is not null)
+                {
+                    ReadToolWorkspaceRouting.ApplyTelemetry(scope, textContent);
+                    scope.SourceBytes = sourceBytes;
+                    scope.MetadataJson = TextContentBackendMetadata;
+                }
+            }
             else
             {
                 WorkspaceSymbolSearchContext context = _workspaceProvider.ResolveSymbolSearch(workspace_id, ensureFresh);
@@ -258,8 +292,29 @@ public sealed class SearchTool
         "content" => SearchToolMode.Content,
         "docs" => SearchToolMode.Content, // alias
         "source" => SearchToolMode.Source,
+        "external" => SearchToolMode.External,
+        "external_file" => SearchToolMode.External,
+        "web" => SearchToolMode.Web,
+        "all-text" => SearchToolMode.AllText,
+        "all_text" => SearchToolMode.AllText,
         _ => SearchToolMode.Auto, // includes "auto", null, and anything unrecognized
     };
+
+    private static IReadOnlyCollection<string> ContentKindsForMode(SearchToolMode mode) =>
+        mode switch
+        {
+            SearchToolMode.External => [TextContentKind.ExternalFile],
+            SearchToolMode.Web => [TextContentKind.Web],
+            SearchToolMode.AllText =>
+            [
+                TextContentKind.WorkspaceSource,
+                TextContentKind.WorkspaceDocs,
+                TextContentKind.WorkspaceConfig,
+                TextContentKind.ExternalFile,
+                TextContentKind.Web,
+            ],
+            _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, "Mode is not a content corpus mode."),
+        };
 
     internal static IReadOnlySet<string>? ParseRegionKinds(string? regions)
     {
@@ -561,6 +616,62 @@ public sealed class SearchTool
             compactBanner,
             filePattern,
             language);
+
+    public static string RunTextContent(
+        ITextContentSearchIndex index,
+        string query,
+        IReadOnlyCollection<string> contentKinds,
+        int limit,
+        bool excludeTests,
+        bool json,
+        out int renderedCount,
+        out long sourceBytes,
+        string? compactBanner = null,
+        string? filePattern = null,
+        string? language = null)
+    {
+        ArgumentNullException.ThrowIfNull(index);
+        ArgumentException.ThrowIfNullOrWhiteSpace(query);
+        ArgumentNullException.ThrowIfNull(contentKinds);
+        if (contentKinds.Count == 0)
+            throw new ArgumentException("At least one content kind is required.", nameof(contentKinds));
+        if (limit < 1) limit = 1;
+
+        SearchFilters filters = SearchFilters.Parse(filePattern, language);
+        int overFetch = filters.HasAny ? 500 : Math.Min(limit * 4 + 10, 500);
+        var hits = new List<TextContentSearchHit>();
+        var outsideScope = new List<TextContentSearchHit>(OutsideScopeHintLimit);
+        foreach (TextContentSearchHit hit in index.Search(query, contentKinds, overFetch, excludeTests))
+        {
+            if (filters.Allows(hit.DisplayPath, hit.Language))
+                hits.Add(hit);
+            else if (filters.HasAny && outsideScope.Count < OutsideScopeHintLimit)
+                outsideScope.Add(hit);
+        }
+
+        int total = hits.Count;
+        int page = Math.Min(limit, total);
+        renderedCount = page;
+
+        if (total == 0)
+        {
+            sourceBytes = 0;
+            if (json)
+                return "[]";
+            return outsideScope.Count > 0
+                ? RenderFilteredMissTextContentCompact(filters, compactBanner, outsideScope)
+                : ReadToolWorkspaceRouting.PrefixCompact("No results.", compactBanner);
+        }
+
+        sourceBytes = hits
+            .Take(page)
+            .GroupBy(static hit => hit.SourceId, StringComparer.Ordinal)
+            .Sum(static group => group.Max(static hit => hit.SourceBytes));
+
+        return json
+            ? RenderTextContentJson(hits, page)
+            : RenderTextContentCompact(hits, page, total, compactBanner);
+    }
 
     public static string RunTextContent(
         ITextContentSearchIndex index,
