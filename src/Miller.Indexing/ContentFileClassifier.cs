@@ -8,10 +8,14 @@ namespace Miller.Indexing;
 /// </summary>
 internal static class ContentFileClassifier
 {
-    private static readonly HashSet<string> DocsExtensions = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly HashSet<string> ProseExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         // prose / markup
         ".md", ".markdown", ".mdx", ".rst", ".adoc", ".txt", ".org",
+    };
+
+    private static readonly HashSet<string> ConfigExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
         // config
         ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg",
     };
@@ -35,6 +39,33 @@ internal static class ContentFileClassifier
         if (string.Equals(language, "markdown", StringComparison.OrdinalIgnoreCase))
             return true;
 
-        return DocsExtensions.Contains(Path.GetExtension(normalized));
+        string extension = Path.GetExtension(normalized);
+        return ProseExtensions.Contains(extension) || ConfigExtensions.Contains(extension);
+    }
+
+    public static string WorkspaceContentKind(string path, string language)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        ArgumentNullException.ThrowIfNull(language);
+
+        if (IsConfigLike(path, language))
+            return TextContentKind.WorkspaceConfig;
+
+        if (IsDocsLike(path, language))
+            return TextContentKind.WorkspaceDocs;
+
+        return TextContentKind.WorkspaceSource;
+    }
+
+    private static bool IsConfigLike(string path, string language)
+    {
+        string normalized = path.Replace('\\', '/');
+        if (ConfigExtensions.Contains(Path.GetExtension(normalized)))
+            return true;
+
+        return string.Equals(language, "json", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(language, "yaml", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(language, "toml", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(language, "ini", StringComparison.OrdinalIgnoreCase);
     }
 }

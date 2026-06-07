@@ -78,9 +78,23 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex
         string query,
         string contentKind,
         int limit = 10,
+        bool excludeTests = false) =>
+        Search(query, new[] { contentKind }, limit, excludeTests);
+
+    public IReadOnlyList<TextContentSearchHit> Search(
+        string query,
+        IReadOnlyCollection<string> contentKinds,
+        int limit = 10,
         bool excludeTests = false)
     {
-        if (string.IsNullOrWhiteSpace(query) || string.IsNullOrWhiteSpace(contentKind) || limit <= 0 || _chunksById.Count == 0)
+        if (string.IsNullOrWhiteSpace(query) || contentKinds.Count == 0 || limit <= 0 || _chunksById.Count == 0)
+            return Array.Empty<TextContentSearchHit>();
+
+        var allowedKinds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string kind in contentKinds)
+            if (!string.IsNullOrWhiteSpace(kind))
+                allowedKinds.Add(kind);
+        if (allowedKinds.Count == 0)
             return Array.Empty<TextContentSearchHit>();
 
         var queryTokens = new List<string>(8);
@@ -111,7 +125,7 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex
         {
             if (!_chunksById.TryGetValue(chunkId, out TextChunk? chunk))
                 continue;
-            if (!string.Equals(chunk.ContentKind, contentKind, StringComparison.Ordinal))
+            if (!allowedKinds.Contains(chunk.ContentKind))
                 continue;
             if (excludeTests && chunk.IsTest)
                 continue;

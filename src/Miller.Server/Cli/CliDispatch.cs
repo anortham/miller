@@ -199,10 +199,30 @@ public static class CliDispatch
         {
             if (!RequireIndex(ctx, err))
                 return 3;
-            ContentSearchProjection content = ContentSearchProjectionLoader.Load(ctx.ExtractDbPath, ctx.WorkspaceRoot);
-            outw.WriteLine(SearchTool.RunContent(content, o.Query, limit, json, out _,
-                filePattern: o.Value("file-pattern"), language: o.Value("language")));
-            return 0;
+
+            try
+            {
+                using var freshness = new FreshnessReader(ctx.ExtractDbPath);
+                long revision = freshness.LatestRevision();
+                var contentSidecar = new ContentCorpusSidecar();
+                FtsTextContentSearchIndex contentIndex = contentSidecar.OpenRequired(ctx.ExtractDbPath, revision);
+                outw.WriteLine(SearchTool.RunContentCorpus(
+                    contentIndex,
+                    o.Query,
+                    limit,
+                    json,
+                    out _,
+                    filePattern: o.Value("file-pattern"),
+                    language: o.Value("language")));
+                return 0;
+            }
+            catch (Exception ex) when (
+                ex is FileNotFoundException or InvalidOperationException or IOException
+                    or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                err.WriteLine("content search requires a refreshed content corpus: " + ex.Message);
+                return 3;
+            }
         }
 
         if (mode == SearchToolMode.Source)

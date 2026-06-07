@@ -11,4 +11,10 @@ public interface ITextContentSearchIndex
         string contentKind,
         int limit = 10,
         bool excludeTests = false);
+
+    IReadOnlyList<TextContentSearchHit> Search(
+        string query,
+        IReadOnlyCollection<string> contentKinds,
+        int limit = 10,
+        bool excludeTests = false);
 }

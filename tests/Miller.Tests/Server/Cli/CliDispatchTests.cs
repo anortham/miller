@@ -126,6 +126,39 @@ public sealed class CliDispatchTests : IDisposable
             });
     }
 
+    private static JulieDbFixture DbWithContentDocs(string marker, long revision) =>
+        JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new JulieDbFixture.SymbolRow("sym-source", "Source", "class", "csharp",
+                    "src/Source.cs", "public class Source", 1, ParentId: null)
+                {
+                    EndLine = 1,
+                },
+            ],
+            fileContent: new Dictionary<string, string>
+            {
+                ["src/Source.cs"] = $"public class Source {{ string Marker = \"{marker}\"; }}",
+            },
+            extraFiles:
+            [
+                new JulieDbFixture.FileSpec("docs/guide.md")
+                {
+                    Language = "markdown",
+                    DiskText = $"# Guide\n{marker} from docs.\n",
+                },
+                new JulieDbFixture.FileSpec("miller.json")
+                {
+                    Language = "json",
+                    DiskText = $$"""{"marker":"{{marker}}"}""",
+                },
+            ],
+            revisions:
+            [
+                new JulieDbFixture.RevisionRow(revision, "fresh"),
+            ]);
+
     private static JulieDbFixture DbWithAmbiguousSymbols() =>
         JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
         {
@@ -309,6 +342,31 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Empty(errText);
         Assert.Contains("src/Source.cs:5  workspace_source  Handle", outText);
         Assert.Contains("KnownSourceError", outText);
+    }
+
+    [Fact]
+    public void Search_ModeContent_ReadsContentCorpusSidecar()
+    {
+        using var fx = DbWithContentDocs("KnownContentMarker", revision: 7);
+        ContentCorpusWriter.Write(
+            ContentCorpusSidecar.ContentDbPathFor(fx.DbPath),
+            fx.DbPath,
+            fx.WorkspaceRoot,
+            workspaceId: "current-ws",
+            revision: 7);
+        File.Delete(Path.Combine(fx.WorkspaceRoot, "docs", "guide.md"));
+        File.Delete(Path.Combine(fx.WorkspaceRoot, "miller.json"));
+
+        var (code, outText, errText) = Run(
+            new[] { "search", "KnownContentMarker", "--mode", "content" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("docs/guide.md:2", outText);
+        Assert.Contains("KnownContentMarker", outText);
+        Assert.DoesNotContain(TextContentKind.WorkspaceDocs, outText);
+        Assert.DoesNotContain("src/Source.cs", outText);
     }
 
     [Theory]

@@ -61,6 +61,60 @@ public sealed class FtsTextContentSearchIndexTests : IDisposable
     }
 
     [Fact]
+    public void Search_ContentKinds_ReturnsDocsAndConfigButNotSource()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new JulieDbFixture.SymbolRow(
+                    "sym-api",
+                    "Api",
+                    "class",
+                    "csharp",
+                    "src/Api.cs",
+                    "class Api",
+                    1,
+                    null)
+                {
+                    EndLine = 1,
+                },
+            ],
+            fileContent: new Dictionary<string, string>
+            {
+                ["src/Api.cs"] = "public class Api { string Marker = \"SharedMarker\"; }",
+            },
+            extraFiles:
+            [
+                new JulieDbFixture.FileSpec("docs/guide.md")
+                {
+                    Language = "markdown",
+                    DiskText = "SharedMarker appears in the guide.",
+                },
+                new JulieDbFixture.FileSpec("miller.json")
+                {
+                    Language = "json",
+                    DiskText = """{"marker":"SharedMarker"}""",
+                },
+            ]);
+        ContentCorpusWriter.Write(_contentDbPath, fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 7);
+        var index = FtsTextContentSearchIndex.Open(_contentDbPath, expectedRevision: 7);
+
+        var hits = index.Search(
+            "SharedMarker",
+            new[] { TextContentKind.WorkspaceDocs, TextContentKind.WorkspaceConfig },
+            limit: 10,
+            excludeTests: false);
+
+        Assert.Equal(["docs/guide.md", "miller.json"], hits.Select(static h => h.Path!).Order().ToArray());
+        Assert.All(hits, static hit =>
+            Assert.True(
+                string.Equals(hit.ContentKind, TextContentKind.WorkspaceDocs, StringComparison.Ordinal)
+                    || string.Equals(hit.ContentKind, TextContentKind.WorkspaceConfig, StringComparison.Ordinal),
+                "hit should be docs or config content"));
+    }
+
+    [Fact]
     public void Search_ExcludeTests_FiltersTestSources()
     {
         using var fx = BuildFixture(

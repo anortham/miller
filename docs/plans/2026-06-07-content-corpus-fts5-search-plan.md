@@ -267,7 +267,7 @@ Out of scope for this plan:
 - [x] Default `search` and `mode=symbol` do not include source-body text hits.
 - [x] Missing, stale, unreadable, non-UTF-8, oversize, or out-of-root files are skipped and reported through facts, not surfaced as raw exceptions.
 - [x] `content.db` rebuilds atomically and rejects stale schema versions visibly.
-- [ ] Worker-scope verification passes and changes are committed.
+- [x] Worker-scope verification passes and changes are committed.
 
 ## Phase 2: Unify Docs/Config Content Search on Content Corpus
 
@@ -287,11 +287,11 @@ Out of scope for this plan:
 **Approach:** Populate `workspace_docs` and `workspace_config` source kinds in `content.db` from the files currently accepted by `ContentFileClassifier`. Keep `mode=content` scoped to those kinds. Retire or reduce the in-memory content projection after parity tests pass. Preserve line/snippet behavior from `ContentSearchIndex`.
 
 **Acceptance criteria:**
-- [ ] Existing `mode=content` tests pass with FTS-backed corpus search.
-- [ ] `mode=content` continues to exclude normal source-body hits.
-- [ ] Docs/config chunks record `content_kind` as `workspace_docs` or `workspace_config`.
-- [ ] Current compact and JSON result shapes remain compatible or receive explicitly versioned additions only.
-- [ ] Registered workspace `mode=content` uses content corpus loading without loading the full graph.
+- [x] Existing `mode=content` tests pass with FTS-backed corpus search.
+- [x] `mode=content` continues to exclude normal source-body hits.
+- [x] Docs/config chunks record `content_kind` as `workspace_docs` or `workspace_config`.
+- [x] Current compact and JSON result shapes remain compatible or receive explicitly versioned additions only.
+- [x] Registered workspace `mode=content` uses content corpus loading without loading the full graph.
 - [ ] Worker-scope verification passes and changes are committed.
 
 ## Phase 3: Large External File and Log Tool

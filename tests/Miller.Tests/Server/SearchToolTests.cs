@@ -32,21 +32,22 @@ public sealed class SearchToolTests
     private static ITextContentSearchIndex TextContentIndex(params TextContentSearchHit[] hits) =>
         new StubTextContentSearchIndex(hits);
 
-    private static TextContentSearchHit SourceHit(
+    private static TextContentSearchHit CorpusHit(
         string path,
+        string contentKind,
         int line,
         string snippet,
-        string language = "csharp",
-        string sourceId = "source-a",
-        string chunkId = "chunk-a",
+        string language = "markdown",
+        string? sourceId = null,
+        string? chunkId = null,
         double score = 2.0,
         long sourceBytes = 128,
-        string? containingSymbolId = "sym-api",
-        string? containingSymbolName = "Api.Handle") =>
+        string? containingSymbolId = null,
+        string? containingSymbolName = null) =>
         new(
-            sourceId,
-            chunkId,
-            TextContentKind.WorkspaceSource,
+            sourceId ?? contentKind + ":" + path,
+            chunkId ?? contentKind + ":" + path + ":1",
+            contentKind,
             path,
             Url: null,
             DisplayPath: path,
@@ -61,6 +62,30 @@ public sealed class SearchToolTests
             sourceBytes,
             containingSymbolId,
             containingSymbolName);
+
+    private static TextContentSearchHit SourceHit(
+        string path,
+        int line,
+        string snippet,
+        string language = "csharp",
+        string sourceId = "source-a",
+        string chunkId = "chunk-a",
+        double score = 2.0,
+        long sourceBytes = 128,
+        string? containingSymbolId = "sym-api",
+        string? containingSymbolName = "Api.Handle") =>
+        CorpusHit(
+            path,
+            TextContentKind.WorkspaceSource,
+            line,
+            snippet,
+            language: language,
+            sourceId: sourceId,
+            chunkId: chunkId,
+            score: score,
+            sourceBytes: sourceBytes,
+            containingSymbolId: containingSymbolId,
+            containingSymbolName: containingSymbolName);
 
     private static IndexedSymbol Symbol(
         int docId, string symbolId, string name, string kind, string filePath, int line, string? signature = null,
@@ -858,6 +883,32 @@ public sealed class SearchToolTests
     }
 
     [Fact]
+    public void RunContentCorpus_Json_HasLegacyContentShape_NeverCorpusShape()
+    {
+        var index = TextContentIndex(CorpusHit(
+            "docs/guide.md",
+            TextContentKind.WorkspaceDocs,
+            line: 2,
+            snippet: "# Guide\nalpha freshness beta"));
+
+        string output = SearchTool.RunContentCorpus(index, "freshness", limit: 10, json: true, out int count);
+
+        Assert.Equal(1, count);
+        using var doc = JsonDocument.Parse(output);
+        var first = doc.RootElement[0];
+        Assert.Equal("docs/guide.md", first.GetProperty("file").GetString());
+        Assert.Equal(2, first.GetProperty("line").GetInt32());
+        Assert.True(first.TryGetProperty("score", out _));
+        Assert.False(string.IsNullOrEmpty(first.GetProperty("snippet").GetString()));
+        Assert.False(first.TryGetProperty("source_id", out _));
+        Assert.False(first.TryGetProperty("chunk_id", out _));
+        Assert.False(first.TryGetProperty("content_kind", out _));
+        Assert.False(first.TryGetProperty("symbol_id", out _));
+        Assert.False(first.TryGetProperty("kind", out _));
+        Assert.False(first.TryGetProperty("name", out _));
+    }
+
+    [Fact]
     public void RunContent_OverLimit_AppendsMoreNote_AndDoesNotDrop()
     {
         var docs = Enumerable.Range(0, 5)
@@ -908,37 +959,46 @@ public sealed class SearchToolTests
     }
 
     [Fact]
-    public void Search_ModeContent_RoutesToContentProvider_AndRendersContentHits()
+    public void Search_ModeContent_RoutesToTextContentProvider_AndRendersLegacyContentHits()
     {
         using var current = FixtureWithSymbol("current-ws", "CurrentOnly");
         string currentRoot = Path.Combine(Path.GetTempPath(), "miller-current-" + Guid.NewGuid().ToString("N"));
         string targetRoot = Path.Combine(Path.GetTempPath(), "miller-target-" + Guid.NewGuid().ToString("N"));
         var provider = new RecordingWorkspaceIndexProvider(
             ReadToolRoutingTestSupport.ContextFor(BuildIndex(current), current.DbPath, "current-ws", currentRoot),
-            currentContent: ReadToolRoutingTestSupport.ContentContextFor(
-                ContentIndex(("docs/none.md", "irrelevant")), current.DbPath, "current-ws", currentRoot),
-            contentTargets: new[]
+            currentTextContent: ReadToolRoutingTestSupport.TextContentContextFor(
+                TextContentIndex(CorpusHit("docs/none.md", TextContentKind.WorkspaceDocs, 1, "irrelevant")),
+                current.DbPath,
+                "current-ws",
+                currentRoot),
+            textContentTargets: new[]
             {
-                ("target-ws", ReadToolRoutingTestSupport.ContentContextFor(
-                    ContentIndex(("docs/guide.md", "# Guide\nThe freshness gate verifies blake3.\n")),
+                ("target-ws", ReadToolRoutingTestSupport.TextContentContextFor(
+                    TextContentIndex(CorpusHit(
+                        "docs/guide.md",
+                        TextContentKind.WorkspaceDocs,
+                        line: 2,
+                        snippet: "# Guide\nThe freshness gate verifies blake3.\n")),
                     "target.db", "target-ws", targetRoot)),
             });
-        var tool = new SearchTool(provider, provider);
+        var tool = new SearchTool(provider, provider, provider, provider);
 
         string output = tool.Search("freshness", mode: "content", workspace_id: "target-ws");
 
         Assert.Equal("target-ws", provider.LastWorkspaceId);
         Assert.True(provider.LastEnsureFresh); // explicit workspace_id defaults ensure_fresh=true
-        Assert.Equal(1, provider.ContentSearchResolveCount);
+        Assert.Equal(1, provider.TextContentSearchResolveCount);
+        Assert.Equal(0, provider.ContentSearchResolveCount);
         Assert.Equal(0, provider.SymbolSearchResolveCount); // content mode never touches the symbol provider
         Assert.StartsWith("workspace: target-ws\n", output);
         Assert.DoesNotContain(targetRoot, output);
         Assert.Contains("docs/guide.md:2", output);
         Assert.Contains("The freshness gate verifies blake3", output);
+        Assert.DoesNotContain(TextContentKind.WorkspaceDocs, output);
     }
 
     [Fact]
-    public void Search_ModeContent_RecordsRealSourceBytesFromContentIndex()
+    public void Search_ModeContent_RecordsRealSourceBytesFromContentCorpusIndex()
     {
         using var current = FixtureWithSymbol("current-ws", "CurrentOnly");
         string dir = Path.Combine(Path.GetTempPath(), "miller-content-source-bytes-" + Guid.NewGuid().ToString("N"));
@@ -947,18 +1007,19 @@ public sealed class SearchToolTests
         string currentRoot = Path.Combine(dir, "current");
         const string guideText = "# Guide\nThe freshness gate verifies blake3.\n";
         const string apiText = "# API\nThe context bundle stays compact.\n";
-        var content = ContentIndex(
-            ("docs/guide.md", guideText),
-            ("docs/api.md", apiText));
         var provider = new RecordingWorkspaceIndexProvider(
             ReadToolRoutingTestSupport.ContextFor(BuildIndex(current), current.DbPath, "current-ws", currentRoot),
-            currentContent: ReadToolRoutingTestSupport.ContentContextFor(
-                content,
+            currentTextContent: ReadToolRoutingTestSupport.TextContentContextFor(
+                TextContentIndex(
+                    CorpusHit("docs/guide.md", TextContentKind.WorkspaceDocs, 2, guideText,
+                        sourceBytes: Encoding.UTF8.GetByteCount(guideText)),
+                    CorpusHit("src/api.md", TextContentKind.WorkspaceSource, 2, apiText,
+                        sourceBytes: Encoding.UTF8.GetByteCount(apiText))),
                 current.DbPath,
                 "current-ws",
                 currentRoot),
-            contentTargets: Array.Empty<(string, WorkspaceContentSearchContext)>());
-        var tool = new SearchTool(provider, provider);
+            textContentTargets: Array.Empty<(string, WorkspaceTextContentSearchContext)>());
+        var tool = new SearchTool(provider, provider, provider, provider);
 
         try
         {
@@ -986,14 +1047,18 @@ public sealed class SearchToolTests
         string currentRoot = Path.Combine(Path.GetTempPath(), "miller-current-" + Guid.NewGuid().ToString("N"));
         var provider = new RecordingWorkspaceIndexProvider(
             ReadToolRoutingTestSupport.ContextFor(BuildIndex(current), current.DbPath, "current-ws", currentRoot),
-            currentContent: ReadToolRoutingTestSupport.ContentContextFor(
-                ContentIndex(("docs/readme.md", "alpha docsalias beta")), current.DbPath, "current-ws", currentRoot),
-            contentTargets: Array.Empty<(string, WorkspaceContentSearchContext)>());
-        var tool = new SearchTool(provider, provider);
+            currentTextContent: ReadToolRoutingTestSupport.TextContentContextFor(
+                TextContentIndex(CorpusHit("docs/readme.md", TextContentKind.WorkspaceDocs, 1, "alpha docsalias beta")),
+                current.DbPath,
+                "current-ws",
+                currentRoot),
+            textContentTargets: Array.Empty<(string, WorkspaceTextContentSearchContext)>());
+        var tool = new SearchTool(provider, provider, provider, provider);
 
         string output = tool.Search("docsalias", mode: "docs");
 
-        Assert.Equal(1, provider.ContentSearchResolveCount);
+        Assert.Equal(1, provider.TextContentSearchResolveCount);
+        Assert.Equal(0, provider.ContentSearchResolveCount);
         Assert.Equal(0, provider.SymbolSearchResolveCount);
         Assert.Contains("docs/readme.md", output);
     }
@@ -1005,16 +1070,19 @@ public sealed class SearchToolTests
         string currentRoot = Path.Combine(Path.GetTempPath(), "miller-current-" + Guid.NewGuid().ToString("N"));
         var provider = new RecordingWorkspaceIndexProvider(
             ReadToolRoutingTestSupport.ContextFor(BuildIndex(current), current.DbPath, "current-ws", currentRoot),
-            currentContent: ReadToolRoutingTestSupport.ContentContextFor(
-                ContentIndex(("docs/guide.md", "alpha freshness beta")), current.DbPath, "current-ws", currentRoot),
-            contentTargets: Array.Empty<(string, WorkspaceContentSearchContext)>());
-        var tool = new SearchTool(provider, provider);
+            currentTextContent: ReadToolRoutingTestSupport.TextContentContextFor(
+                TextContentIndex(CorpusHit("tests/guide.md", TextContentKind.WorkspaceDocs, 1, "alpha freshness beta")),
+                current.DbPath,
+                "current-ws",
+                currentRoot),
+            textContentTargets: Array.Empty<(string, WorkspaceTextContentSearchContext)>());
+        var tool = new SearchTool(provider, provider, provider, provider);
 
         string withExclude = tool.Search("freshness", mode: "content", exclude_tests: true);
         string withoutExclude = tool.Search("freshness", mode: "content", exclude_tests: false);
 
         Assert.Equal(withExclude, withoutExclude); // exclude_tests does not filter content results
-        Assert.Contains("docs/guide.md", withExclude);
+        Assert.Contains("tests/guide.md", withExclude);
     }
 
     // ----- mode=source (content corpus source-body search) -----
@@ -1462,8 +1530,15 @@ public sealed class SearchToolTests
             string contentKind,
             int limit = 10,
             bool excludeTests = false) =>
+            Search(query, new[] { contentKind }, limit, excludeTests);
+
+        public IReadOnlyList<TextContentSearchHit> Search(
+            string query,
+            IReadOnlyCollection<string> contentKinds,
+            int limit = 10,
+            bool excludeTests = false) =>
             _hits
-                .Where(hit => string.Equals(hit.ContentKind, contentKind, StringComparison.Ordinal))
+                .Where(hit => contentKinds.Contains(hit.ContentKind))
                 .Where(hit => !excludeTests || !IsTestPath.Check(hit.Path ?? hit.DisplayPath))
                 .Take(limit)
                 .ToArray();

@@ -80,11 +80,7 @@ public static class ContentCorpusWriter
                 continue;
             }
 
-            if (ContentFileClassifier.IsDocsLike(row.Path, row.Language))
-            {
-                skippedScope++;
-                continue;
-            }
+            string contentKind = ContentFileClassifier.WorkspaceContentKind(row.Path, row.Language);
 
             if (row.ContentBytes > MaxWorkspaceFileBytes)
             {
@@ -146,13 +142,14 @@ public static class ContentCorpusWriter
                 continue;
             }
 
-            string sourceId = SourceId(workspaceId, row.Path, TextContentKind.WorkspaceSource);
-            IReadOnlyList<ContentCorpusSymbolSpan> spans = symbolsByPath.TryGetValue(row.Path, out var pathSpans)
+            string sourceId = SourceId(workspaceId, row.Path, contentKind);
+            IReadOnlyList<ContentCorpusSymbolSpan> spans = string.Equals(contentKind, TextContentKind.WorkspaceSource, StringComparison.Ordinal)
+                && symbolsByPath.TryGetValue(row.Path, out var pathSpans)
                 ? pathSpans
                 : Array.Empty<ContentCorpusSymbolSpan>();
             IReadOnlyList<TextContentDocument> chunks = ContentCorpusChunker.Chunk(
                 sourceId,
-                TextContentKind.WorkspaceSource,
+                contentKind,
                 row.Path,
                 url: null,
                 row.Path,
@@ -164,7 +161,7 @@ public static class ContentCorpusWriter
 
             indexedSourceBytes += bytes.LongLength;
             storedRawBytes += chunks.Sum(static c => Encoding.UTF8.GetByteCount(c.Text));
-            accepted.Add(new SourceBuildInput(row, sourceId, text, bytes.LongLength, spans, chunks));
+            accepted.Add(new SourceBuildInput(row, sourceId, contentKind, text, bytes.LongLength, spans, chunks));
         }
 
         using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
@@ -309,7 +306,7 @@ public static class ContentCorpusWriter
         foreach (SourceBuildInput source in sources)
         {
             psId.Value = source.SourceId;
-            psKind.Value = TextContentKind.WorkspaceSource;
+            psKind.Value = source.ContentKind;
             psWorkspace.Value = (object?)workspaceId ?? DBNull.Value;
             psRevision.Value = revision;
             psPath.Value = source.Row.Path;
@@ -442,6 +439,7 @@ public static class ContentCorpusWriter
     private sealed record SourceBuildInput(
         SourceRow Row,
         string SourceId,
+        string ContentKind,
         string Text,
         long SourceBytes,
         IReadOnlyList<ContentCorpusSymbolSpan> Symbols,

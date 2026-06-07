@@ -56,7 +56,12 @@ public sealed class ContentCorpusWriterTests : IDisposable
                 new JulieDbFixture.FileSpec("docs/guide.md")
                 {
                     Language = "markdown",
-                    DiskText = "KnownSourceError appears in docs but Phase 1 source search must skip it.",
+                    DiskText = "KnownSourceError appears in docs and content mode should find it.",
+                },
+                new JulieDbFixture.FileSpec("miller.json")
+                {
+                    Language = "json",
+                    DiskText = """{"marker":"KnownConfigError"}""",
                 },
                 new JulieDbFixture.FileSpec("src/Stale.cs")
                 {
@@ -98,11 +103,11 @@ public sealed class ContentCorpusWriterTests : IDisposable
         Assert.Equal("current", facts.State);
         Assert.Equal(1, facts.SchemaVersion);
         Assert.Equal(12, facts.WorkspaceRevision);
-        Assert.Equal(1, facts.SourceCount);
-        Assert.Equal(1, facts.ChunkCount);
+        Assert.Equal(3, facts.SourceCount);
+        Assert.Equal(3, facts.ChunkCount);
         Assert.True(facts.IndexedSourceBytes > 0);
         Assert.True(facts.StoredRawBytes > 0);
-        Assert.Equal(1, facts.ScopeSkipped);
+        Assert.Equal(0, facts.ScopeSkipped);
         Assert.Equal(1, facts.StatusSkipped);
         Assert.Equal(1, facts.TooLargeSkipped);
         Assert.Equal(1, facts.MissingSkipped);
@@ -110,13 +115,19 @@ public sealed class ContentCorpusWriterTests : IDisposable
         Assert.Equal(1, facts.NonUtf8Skipped);
 
         using var connection = OpenRead();
-        Assert.Equal(1L, ScalarLong(connection, "SELECT COUNT(*) FROM content_sources"));
-        Assert.Equal(1L, ScalarLong(connection, "SELECT COUNT(*) FROM content_chunks"));
-        Assert.Equal(TextContentKind.WorkspaceSource, ScalarString(connection, "SELECT content_kind FROM content_sources"));
-        Assert.Equal("src/Api.cs", ScalarString(connection, "SELECT path FROM content_sources"));
-        Assert.Equal("src/Api.cs", ScalarString(connection, "SELECT display_path FROM content_chunks"));
-        Assert.Contains("KnownSourceError", ScalarString(connection, "SELECT raw_text FROM content_chunks"));
-        Assert.Equal("sym-api", ScalarString(connection, "SELECT containing_symbol_id FROM content_chunks"));
+        Assert.Equal(3L, ScalarLong(connection, "SELECT COUNT(*) FROM content_sources"));
+        Assert.Equal(3L, ScalarLong(connection, "SELECT COUNT(*) FROM content_chunks"));
+        Assert.Equal(1L, ScalarLong(connection, $"SELECT COUNT(*) FROM content_sources WHERE content_kind = '{TextContentKind.WorkspaceSource}'"));
+        Assert.Equal(1L, ScalarLong(connection, $"SELECT COUNT(*) FROM content_sources WHERE content_kind = '{TextContentKind.WorkspaceDocs}'"));
+        Assert.Equal(1L, ScalarLong(connection, $"SELECT COUNT(*) FROM content_sources WHERE content_kind = '{TextContentKind.WorkspaceConfig}'"));
+        Assert.Equal("src/Api.cs", ScalarString(connection, $"SELECT path FROM content_sources WHERE content_kind = '{TextContentKind.WorkspaceSource}'"));
+        Assert.Equal("docs/guide.md", ScalarString(connection, $"SELECT path FROM content_sources WHERE content_kind = '{TextContentKind.WorkspaceDocs}'"));
+        Assert.Equal("miller.json", ScalarString(connection, $"SELECT path FROM content_sources WHERE content_kind = '{TextContentKind.WorkspaceConfig}'"));
+        Assert.Equal("src/Api.cs", ScalarString(connection, $"SELECT display_path FROM content_chunks WHERE content_kind = '{TextContentKind.WorkspaceSource}'"));
+        Assert.Contains("KnownSourceError", ScalarString(connection, $"SELECT raw_text FROM content_chunks WHERE content_kind = '{TextContentKind.WorkspaceSource}'"));
+        Assert.Contains("KnownSourceError", ScalarString(connection, $"SELECT raw_text FROM content_chunks WHERE content_kind = '{TextContentKind.WorkspaceDocs}'"));
+        Assert.Contains("KnownConfigError", ScalarString(connection, $"SELECT raw_text FROM content_chunks WHERE content_kind = '{TextContentKind.WorkspaceConfig}'"));
+        Assert.Equal("sym-api", ScalarString(connection, $"SELECT containing_symbol_id FROM content_chunks WHERE content_kind = '{TextContentKind.WorkspaceSource}'"));
     }
 
     [Fact]
