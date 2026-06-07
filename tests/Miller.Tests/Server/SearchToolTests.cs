@@ -3,6 +3,7 @@ using System.Text;
 using Microsoft.Data.Sqlite;
 using Miller.Core.Search;
 using Miller.Indexing;
+using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
 using Miller.Server.Workspaces;
@@ -27,6 +28,39 @@ public sealed class SearchToolTests
     private static IContentSearchIndex ContentIndex(params (string Path, string Text)[] docs) =>
         ContentSearchProjection.Build(
             docs.Select((d, i) => new ContentDocument(i, d.Path, d.Text)).ToList());
+
+    private static ITextContentSearchIndex TextContentIndex(params TextContentSearchHit[] hits) =>
+        new StubTextContentSearchIndex(hits);
+
+    private static TextContentSearchHit SourceHit(
+        string path,
+        int line,
+        string snippet,
+        string language = "csharp",
+        string sourceId = "source-a",
+        string chunkId = "chunk-a",
+        double score = 2.0,
+        long sourceBytes = 128,
+        string? containingSymbolId = "sym-api",
+        string? containingSymbolName = "Api.Handle") =>
+        new(
+            sourceId,
+            chunkId,
+            TextContentKind.WorkspaceSource,
+            path,
+            Url: null,
+            DisplayPath: path,
+            language,
+            score,
+            line,
+            LineStart: Math.Max(1, line - 1),
+            LineEnd: line + 1,
+            ByteStart: 24,
+            ByteEnd: 88,
+            snippet,
+            sourceBytes,
+            containingSymbolId,
+            containingSymbolName);
 
     private static IndexedSymbol Symbol(
         int docId, string symbolId, string name, string kind, string filePath, int line, string? signature = null,
@@ -983,6 +1017,187 @@ public sealed class SearchToolTests
         Assert.Contains("docs/guide.md", withExclude);
     }
 
+    // ----- mode=source (content corpus source-body search) -----
+
+    [Fact]
+    public void ParseMode_Source_UsesExplicitSourceBodySearchMode()
+    {
+        Assert.Equal(SearchToolMode.Source, SearchTool.ParseMode("source"));
+    }
+
+    [Fact]
+    public void RunTextContent_Compact_RendersSourceHitMetadataAndSnippet()
+    {
+        var index = TextContentIndex(SourceHit(
+            "src/Api.cs",
+            line: 42,
+            snippet: "public void Handle()\nthrow new InvalidOperationException(\"KnownSourceError\");",
+            containingSymbolName: "Api.Handle"));
+
+        string output = SearchTool.RunTextContent(
+            index,
+            "KnownSourceError",
+            TextContentKind.WorkspaceSource,
+            limit: 10,
+            excludeTests: false,
+            json: false,
+            out int count);
+
+        Assert.Equal(1, count);
+        Assert.Equal(
+            "src/Api.cs:42  workspace_source  Api.Handle\n" +
+            "    public void Handle()\n" +
+            "    throw new InvalidOperationException(\"KnownSourceError\");",
+            output);
+    }
+
+    [Fact]
+    public void RunTextContent_Json_HasSourceCorpusShape_NotSymbolShape()
+    {
+        var index = TextContentIndex(SourceHit(
+            "src/Api.cs",
+            line: 42,
+            snippet: "throw new InvalidOperationException(\"KnownSourceError\");",
+            sourceId: "src:api",
+            chunkId: "src:api:0003",
+            sourceBytes: 4096,
+            containingSymbolId: "sym-handle",
+            containingSymbolName: "Api.Handle"));
+
+        string output = SearchTool.RunTextContent(
+            index,
+            "KnownSourceError",
+            TextContentKind.WorkspaceSource,
+            limit: 10,
+            excludeTests: false,
+            json: true,
+            out int count);
+
+        Assert.Equal(1, count);
+        using var doc = JsonDocument.Parse(output);
+        JsonElement first = doc.RootElement[0];
+        Assert.Equal("src:api", first.GetProperty("source_id").GetString());
+        Assert.Equal("src:api:0003", first.GetProperty("chunk_id").GetString());
+        Assert.Equal("workspace_source", first.GetProperty("content_kind").GetString());
+        Assert.Equal("src/Api.cs", first.GetProperty("path").GetString());
+        Assert.Equal("csharp", first.GetProperty("language").GetString());
+        Assert.Equal(42, first.GetProperty("line").GetInt32());
+        Assert.Equal(41, first.GetProperty("line_start").GetInt32());
+        Assert.Equal(43, first.GetProperty("line_end").GetInt32());
+        Assert.Equal(24, first.GetProperty("byte_start").GetInt64());
+        Assert.Equal(88, first.GetProperty("byte_end").GetInt64());
+        Assert.Equal(4096, first.GetProperty("source_bytes").GetInt64());
+        Assert.Equal("sym-handle", first.GetProperty("containing_symbol_id").GetString());
+        Assert.Equal("Api.Handle", first.GetProperty("containing_symbol_name").GetString());
+        Assert.True(first.TryGetProperty("score", out _));
+        Assert.False(first.TryGetProperty("symbol_id", out _));
+        Assert.False(first.TryGetProperty("name", out _));
+    }
+
+    [Fact]
+    public void RunTextContent_FilePatternLanguageAndExcludeTestsFilterSourceHits()
+    {
+        var index = TextContentIndex(
+            SourceHit("src/ui/Panel.ts", 12, "KnownSourceError", language: "typescript", sourceId: "prod"),
+            SourceHit("src/api/Panel.cs", 12, "KnownSourceError", language: "csharp", sourceId: "api"),
+            SourceHit("tests/ui/PanelTests.ts", 12, "KnownSourceError", language: "typescript", sourceId: "test"));
+
+        string output = SearchTool.RunTextContent(
+            index,
+            "KnownSourceError",
+            TextContentKind.WorkspaceSource,
+            limit: 10,
+            excludeTests: true,
+            json: false,
+            out int count,
+            filePattern: "src/ui/**",
+            language: "typescript");
+
+        Assert.Equal(1, count);
+        Assert.Contains("src/ui/Panel.ts", output);
+        Assert.DoesNotContain("src/api/Panel.cs", output);
+        Assert.DoesNotContain("tests/ui/PanelTests.ts", output);
+    }
+
+    [Fact]
+    public void Search_ModeSource_RoutesToTextContentProvider_AndRendersSourceHits()
+    {
+        using var current = FixtureWithSymbol("current-ws", "CurrentOnly");
+        string currentRoot = Path.Combine(Path.GetTempPath(), "miller-current-" + Guid.NewGuid().ToString("N"));
+        string targetRoot = Path.Combine(Path.GetTempPath(), "miller-target-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(BuildIndex(current), current.DbPath, "current-ws", currentRoot),
+            currentTextContent: ReadToolRoutingTestSupport.TextContentContextFor(
+                TextContentIndex(SourceHit("src/none.cs", 1, "irrelevant")),
+                current.DbPath,
+                "current-ws",
+                currentRoot),
+            textContentTargets: new[]
+            {
+                ("target-ws", ReadToolRoutingTestSupport.TextContentContextFor(
+                    TextContentIndex(SourceHit(
+                        "src/Api.cs",
+                        line: 42,
+                        snippet: "throw new InvalidOperationException(\"KnownSourceError\");")),
+                    "target.db",
+                    "target-ws",
+                    targetRoot)),
+            });
+        var tool = new SearchTool(provider, provider, provider, provider);
+
+        string output = tool.Search("KnownSourceError", mode: "source", workspace_id: "target-ws");
+
+        Assert.Equal("target-ws", provider.LastWorkspaceId);
+        Assert.True(provider.LastEnsureFresh);
+        Assert.Equal(1, provider.TextContentSearchResolveCount);
+        Assert.Equal(0, provider.SymbolSearchResolveCount);
+        Assert.Equal(0, provider.ContentSearchResolveCount);
+        Assert.StartsWith("workspace: target-ws\n", output);
+        Assert.DoesNotContain(targetRoot, output);
+        Assert.Contains("src/Api.cs:42  workspace_source  Api.Handle", output);
+        Assert.Contains("KnownSourceError", output);
+    }
+
+    [Fact]
+    public void Search_ModeSource_RecordsRealSourceBytesFromTextContentIndex()
+    {
+        using var current = FixtureWithSymbol("current-ws", "CurrentOnly");
+        string dir = Path.Combine(Path.GetTempPath(), "miller-source-source-bytes-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string telemetryDb = Path.Combine(dir, "telemetry.db");
+        string currentRoot = Path.Combine(dir, "current");
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(BuildIndex(current), current.DbPath, "current-ws", currentRoot),
+            currentTextContent: ReadToolRoutingTestSupport.TextContentContextFor(
+                TextContentIndex(SourceHit(
+                    "src/Api.cs",
+                    line: 42,
+                    snippet: "throw new InvalidOperationException(\"KnownSourceError\");",
+                    sourceBytes: 777)),
+                current.DbPath,
+                "current-ws",
+                currentRoot),
+            textContentTargets: Array.Empty<(string, WorkspaceTextContentSearchContext)>());
+        var tool = new SearchTool(provider, provider, provider, provider);
+
+        try
+        {
+            using (var ledger = TelemetryLedger.Open(telemetryDb, workspaceId: "current-ws", currentRoot))
+            {
+                using var scope = ledger.Measure("search", op: "source");
+                string output = tool.Search("KnownSourceError", mode: "source");
+                Assert.Contains("src/Api.cs", output);
+            }
+
+            Assert.Equal(777, ReadTelemetrySourceBytes(telemetryDb));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+        }
+    }
+
     [Fact]
     public void Search_NonContentMode_DoesNotResolveContentProvider()
     {
@@ -995,6 +1210,7 @@ public sealed class SearchToolTests
         string output = tool.Search("CurrentOnly"); // mode defaults to auto
 
         Assert.Equal(0, provider.ContentSearchResolveCount);
+        Assert.Equal(0, provider.TextContentSearchResolveCount);
         Assert.Equal(1, provider.SymbolSearchResolveCount);
         Assert.Contains("CurrentOnly", output);
     }
@@ -1226,6 +1442,29 @@ public sealed class SearchToolTests
             bool excludeTests = false) =>
             _hits
                 .Where(hit => kinds.Contains(hit.Kind))
+                .Take(limit)
+                .ToArray();
+    }
+
+    private sealed class StubTextContentSearchIndex : ITextContentSearchIndex
+    {
+        private readonly IReadOnlyList<TextContentSearchHit> _hits;
+
+        public StubTextContentSearchIndex(params TextContentSearchHit[] hits)
+        {
+            _hits = hits;
+        }
+
+        public int DocumentCount => _hits.Count;
+
+        public IReadOnlyList<TextContentSearchHit> Search(
+            string query,
+            string contentKind,
+            int limit = 10,
+            bool excludeTests = false) =>
+            _hits
+                .Where(hit => string.Equals(hit.ContentKind, contentKind, StringComparison.Ordinal))
+                .Where(hit => !excludeTests || !IsTestPath.Check(hit.Path ?? hit.DisplayPath))
                 .Take(limit)
                 .ToArray();
     }

@@ -106,12 +106,14 @@ public static class MillerServiceRegistration
         // Opt out with MILLER_SEARCH_SIDECAR=0 (or false/off/no) to use the in-memory search path. Registered
         // before both consumers.
         services.AddSingleton(_ => SymbolSearchSidecar.FromEnvironment());
+        services.AddSingleton<ContentCorpusSidecar>();
         services.AddSingleton<CrossWorkspaceRefreshService>();
         services.AddSingleton<WorkspaceIndexProvider>();
         services.AddSingleton<IWorkspaceIndexProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
         services.AddSingleton<IWorkspaceSearchProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
         services.AddSingleton<IWorkspaceContentSearchProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
         services.AddSingleton<IWorkspaceRegionSearchProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
+        services.AddSingleton<IWorkspaceTextContentSearchProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
 
         return services;
     }

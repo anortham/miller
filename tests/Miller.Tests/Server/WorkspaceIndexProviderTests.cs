@@ -674,6 +674,80 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     }
 
     [Fact]
+    public void ResolveTextContentSearch_RegisteredWorkspace_UsesFreshContentDbAndCachesIt()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSource("target-ws", revision: 1, "KnownSourceError");
+        ContentCorpusWriter.Write(
+            ContentCorpusSidecar.ContentDbPathFor(target.DbPath),
+            target.DbPath,
+            target.WorkspaceRoot,
+            workspaceId: "target-ws",
+            revision: 1);
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        registry.UpsertSeen("target-ws", "target-111111111111", target.WorkspaceRoot, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+
+        int textLoadCount = 0;
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            loadTextContentSearch: (dbPath, revision) =>
+            {
+                textLoadCount++;
+                return FtsTextContentSearchIndex.Open(ContentCorpusSidecar.ContentDbPathFor(dbPath), revision);
+            });
+
+        WorkspaceTextContentSearchContext first = provider.ResolveTextContentSearch("target-ws", ensureFresh: false);
+        WorkspaceTextContentSearchContext second = provider.ResolveTextContentSearch("target-ws", ensureFresh: false);
+
+        Assert.Equal("target-ws", first.WorkspaceId);
+        Assert.Equal(1, first.Revision);
+        Assert.Same(first.Index, second.Index);
+        Assert.Equal(1, textLoadCount);
+        TextContentSearchHit hit = Assert.Single(first.Index.Search(
+            "KnownSourceError",
+            TextContentKind.WorkspaceSource,
+            limit: 10));
+        Assert.Equal("src/Source.cs", hit.Path);
+    }
+
+    [Fact]
+    public void ResolveTextContentSearch_CurrentWorkspace_UsesHolderRevisionAndCachesIt()
+    {
+        using var fx = DbWithSource("current-ws", revision: 7, "KnownSourceError");
+        ContentCorpusWriter.Write(
+            ContentCorpusSidecar.ContentDbPathFor(fx.DbPath),
+            fx.DbPath,
+            fx.WorkspaceRoot,
+            workspaceId: "current-ws",
+            revision: 7);
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        var holder = new IndexHolder(RepositoryIndexLoader.Load(fx.DbPath), builtRevision: 7);
+
+        int textLoadCount = 0;
+        var provider = NewProvider(
+            holder,
+            CurrentWorkspaceAt(fx.WorkspaceRoot, fx.DbPath, "current-ws"),
+            registry,
+            loadTextContentSearch: (dbPath, revision) =>
+            {
+                textLoadCount++;
+                return FtsTextContentSearchIndex.Open(ContentCorpusSidecar.ContentDbPathFor(dbPath), revision);
+            });
+
+        WorkspaceTextContentSearchContext byNull = provider.ResolveTextContentSearch(workspaceId: null, ensureFresh: false);
+        WorkspaceTextContentSearchContext byId = provider.ResolveTextContentSearch("current-ws", ensureFresh: false);
+
+        Assert.Equal(7, byNull.Revision);
+        Assert.Equal("current", byNull.FreshnessStatus);
+        Assert.Same(byNull.Index, byId.Index);
+        Assert.Equal(1, textLoadCount);
+        Assert.Single(byNull.Index.Search("KnownSourceError", TextContentKind.WorkspaceSource, 10));
+    }
+
+    [Fact]
     public void ResolveRegionSearch_RegionIndexDisabled_FailsClosed()
     {
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
@@ -1244,6 +1318,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Func<string, MillerRepositoryIndex>? loadIndex = null,
         Func<string, SymbolSearchProjection>? loadSymbolSearch = null,
         Func<string, string, ContentSearchProjection>? loadContentSearch = null,
+        Func<string, long, ITextContentSearchIndex>? loadTextContentSearch = null,
         Func<string, long, IRegionSearchIndex>? loadRegionSearch = null,
         Func<long, bool?>? currentIndexFresh = null,
         SymbolSearchSidecar? sidecar = null) =>
@@ -1255,6 +1330,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             loadIndex ?? (path => RepositoryIndexLoader.Load(path)),
             loadSymbolSearch ?? (path => SymbolSearchProjectionLoader.Load(path)),
             loadContentSearch ?? ((dbPath, root) => ContentSearchProjectionLoader.Load(dbPath, root)),
+            loadTextContentSearch ?? ((dbPath, revision) => FtsTextContentSearchIndex.Open(ContentCorpusSidecar.ContentDbPathFor(dbPath), revision)),
             loadRegionSearch ?? ((dbPath, revision) => FtsRegionSearchIndex.Open(SymbolSearchSidecar.SearchDbPathFor(dbPath), revision)),
             currentIndexFresh ?? (_ => true),
             sidecar ?? SymbolSearchSidecar.Disabled);
@@ -1343,6 +1419,42 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                     "region-" + symbolName, "file:" + path, path, "csharp", "comment", symbolId,
                     1, 1, 1, endByte, 0, endByte, null),
             },
+            revisions: new[]
+            {
+                new JulieDbFixture.RevisionRow(revision, "fresh"),
+            });
+    }
+
+    private static JulieDbFixture DbWithSource(string workspaceId, long revision, string marker)
+    {
+        const string path = "src/Source.cs";
+        string text = $$"""
+            public class Source
+            {
+                public void Handle()
+                {
+                    throw new InvalidOperationException("{{marker}}");
+                }
+            }
+            """;
+        return JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow("sym-source", "Source", "class", "csharp",
+                    path, "public class Source", 1, ParentId: null)
+                {
+                    EndLine = 7,
+                },
+                new JulieDbFixture.SymbolRow("sym-handle", "Handle", "method", "csharp",
+                    path, "public void Handle()", 3, ParentId: "sym-source")
+                {
+                    EndLine = 6,
+                },
+            },
+            workspaceId: workspaceId,
+            fileContent: new Dictionary<string, string> { [path] = text },
             revisions: new[]
             {
                 new JulieDbFixture.RevisionRow(revision, "fresh"),

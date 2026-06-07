@@ -138,6 +138,32 @@ public sealed class IndexerServiceScanTests
                 "src/Cache.cs", "public class Cache", 1, ParentId: null),
         });
 
+    private static JulieDbFixture JulieSourceDb(string marker)
+    {
+        const string path = "src/Source.cs";
+        string text = $$"""
+            public class Source
+            {
+                public void Handle()
+                {
+                    throw new InvalidOperationException("{{marker}}");
+                }
+            }
+            """;
+        return JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow("sym-source", "Source", "class", "csharp",
+                    path, "public class Source", 1, ParentId: null)
+                {
+                    EndLine = 7,
+                },
+            },
+            fileContent: new Dictionary<string, string> { [path] = text });
+    }
+
     private static void CreateSentinelTable(string searchDb)
     {
         using (var rw = new SqliteConnection(new SqliteConnectionStringBuilder
@@ -316,6 +342,27 @@ public sealed class IndexerServiceScanTests
         FtsSymbolSearchIndex? index = sidecar.TryOpen(julie.DbPath, expectedRevision: 9);
         Assert.NotNull(index);
         Assert.Equal(9L, index!.Revision);
+    }
+
+    [Fact]
+    public void TryScanAsLeader_BuildsRevisionFreshContentCorpusSidecar()
+    {
+        using var julie = JulieSourceDb("KnownSourceError");
+        WorkspaceContext workspace = WorkspaceWithDb(julie.DbPath) with
+        {
+            WorkspaceRoot = julie.WorkspaceRoot,
+            CanonicalRoot = julie.WorkspaceRoot,
+        };
+        var service = NewSeededService(workspace, SymbolSearchSidecar.Disabled);
+        service.PublishOpsForTest(new RecordingScanOps { Revision = 9 });
+
+        ScanOutcome outcome = service.TryScanAsLeader(force: false);
+
+        Assert.Equal(ScanOutcome.Kind.Scanned, outcome.Result);
+        string contentDb = ContentCorpusSidecar.ContentDbPathFor(julie.DbPath);
+        Assert.True(File.Exists(contentDb), $"expected the leader to build {contentDb}");
+        FtsTextContentSearchIndex index = FtsTextContentSearchIndex.Open(contentDb, expectedRevision: 9);
+        Assert.Single(index.Search("KnownSourceError", TextContentKind.WorkspaceSource, limit: 10));
     }
 
     [Fact]

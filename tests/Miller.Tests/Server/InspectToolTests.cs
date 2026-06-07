@@ -518,6 +518,8 @@ public sealed class InspectToolTests
                 },
                 loadContentSearch: (_, _) =>
                     throw new InvalidOperationException("content loader was not expected"),
+                loadTextContentSearch: (_, _) =>
+                    throw new InvalidOperationException("text content loader was not expected"),
                 loadRegionSearch: (_, _) =>
                     throw new InvalidOperationException("region loader was not expected"),
                 currentIndexFresh: _ => true,

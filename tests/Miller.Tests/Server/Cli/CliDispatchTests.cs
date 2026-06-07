@@ -91,6 +91,41 @@ public sealed class CliDispatchTests : IDisposable
             fixture.WorkspaceRoot,
             RegionIndexOptions.EnabledDefault);
 
+    private static JulieDbFixture DbWithSource(string marker, long revision)
+    {
+        const string path = "src/Source.cs";
+        string text = $$"""
+            public class Source
+            {
+                public void Handle()
+                {
+                    throw new InvalidOperationException("{{marker}}");
+                }
+            }
+            """;
+        return JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow("sym-source", "Source", "class", "csharp",
+                    path, "public class Source", 1, ParentId: null)
+                {
+                    EndLine = 7,
+                },
+                new JulieDbFixture.SymbolRow("sym-handle", "Handle", "method", "csharp",
+                    path, "public void Handle()", 3, ParentId: "sym-source")
+                {
+                    EndLine = 6,
+                },
+            },
+            fileContent: new Dictionary<string, string> { [path] = text },
+            revisions: new[]
+            {
+                new JulieDbFixture.RevisionRow(revision, "fresh"),
+            });
+    }
+
     private static JulieDbFixture DbWithAmbiguousSymbols() =>
         JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
         {
@@ -253,6 +288,27 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Empty(errText);
         Assert.Contains("GetUser", outText);
         Assert.Contains("auth/UserService.cs", outText);
+    }
+
+    [Fact]
+    public void Search_ModeSource_ReadsContentCorpusSidecar()
+    {
+        using var fx = DbWithSource("KnownSourceError", revision: 7);
+        ContentCorpusWriter.Write(
+            ContentCorpusSidecar.ContentDbPathFor(fx.DbPath),
+            fx.DbPath,
+            fx.WorkspaceRoot,
+            workspaceId: "current-ws",
+            revision: 7);
+
+        var (code, outText, errText) = Run(
+            new[] { "search", "KnownSourceError", "--mode", "source" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("src/Source.cs:5  workspace_source  Handle", outText);
+        Assert.Contains("KnownSourceError", outText);
     }
 
     [Theory]

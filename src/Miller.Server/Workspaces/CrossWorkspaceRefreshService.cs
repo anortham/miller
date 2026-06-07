@@ -19,9 +19,10 @@ public sealed class CrossWorkspaceRefreshService
     private readonly Action<TimeSpan> _sleep;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly SymbolSearchSidecar _sidecar;
+    private readonly ContentCorpusSidecar _contentSidecar;
 
     public CrossWorkspaceRefreshService(
-        WorkspaceRegistry registry, JulieExtractRunner runner, SymbolSearchSidecar sidecar)
+        WorkspaceRegistry registry, JulieExtractRunner runner, SymbolSearchSidecar sidecar, ContentCorpusSidecar? contentSidecar = null)
         : this(
             registry,
             (root, db, force) => runner.Scan(root, db, force),
@@ -31,7 +32,8 @@ public sealed class CrossWorkspaceRefreshService
             DefaultLockBusyPollInterval,
             Thread.Sleep,
             () => DateTimeOffset.UtcNow,
-            sidecar)
+            sidecar,
+            contentSidecar)
     {
     }
 
@@ -44,7 +46,8 @@ public sealed class CrossWorkspaceRefreshService
         TimeSpan lockBusyPollInterval,
         Action<TimeSpan> sleep,
         Func<DateTimeOffset> utcNow,
-        SymbolSearchSidecar sidecar)
+        SymbolSearchSidecar sidecar,
+        ContentCorpusSidecar? contentSidecar = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(scan);
@@ -68,6 +71,7 @@ public sealed class CrossWorkspaceRefreshService
         _sleep = sleep;
         _utcNow = utcNow;
         _sidecar = sidecar;
+        _contentSidecar = contentSidecar ?? new ContentCorpusSidecar();
     }
 
     public WorkspaceRefreshResult Refresh(string workspaceId, bool force = false)
@@ -129,7 +133,7 @@ public sealed class CrossWorkspaceRefreshService
             // search hot path, skipped when already revision-fresh). A sidecar failure must never undo a
             // successful scan/refresh; reads report the sidecar unavailable/stale until the next successful
             // convergence.
-            TryConvergeSidecar(row.IndexDbPath, row.CanonicalRoot, revision);
+            TryConvergeSidecar(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId, revision);
 
             WorkspaceRefreshStatus status = revision > (row.LastRevision ?? 0)
                 ? WorkspaceRefreshStatus.Refreshed
@@ -160,8 +164,19 @@ public sealed class CrossWorkspaceRefreshService
     // Rebuild the external workspace's search.db sidecar best-effort after a scan. Swallows convergence failures by
     // design — the refresh's contract is the scanned symbols.db; the derived sidecar failure is surfaced on read as
     // unavailable/stale and retried on the next refresh.
-    private void TryConvergeSidecar(string symbolsDbPath, string workspaceRoot, long revision)
+    private void TryConvergeSidecar(string symbolsDbPath, string workspaceRoot, string? workspaceId, long revision)
     {
+        try
+        {
+            _contentSidecar.EnsureBuilt(symbolsDbPath, workspaceRoot, workspaceId, revision);
+        }
+        catch (Exception ex) when (
+            ex is SqliteException or IOException or InvalidOperationException
+                or UnauthorizedAccessException or ArgumentException or IncompatibleExtractException)
+        {
+            // Best-effort: the content corpus is a rebuildable derived artifact; source-mode reads fail visibly.
+        }
+
         try
         {
             _sidecar.EnsureBuilt(symbolsDbPath, revision, workspaceRoot);

@@ -224,7 +224,7 @@ Out of scope for this plan:
 - [ ] Report includes at least these query classes: error string, env var/config key, route/path literal, assertion text, natural-language implementation phrase, docs phrase.
 - [ ] Contract doc defines every required `content_kind`, source/chunk table field, export field, and lifecycle rule explicitly.
 - [ ] No production behavior changes in this phase.
-- [ ] Worker-scope verification passes and changes are committed.
+- [x] Worker-scope verification passes and changes are committed.
 
 ## Phase 1: Workspace Source Text Search
 
@@ -259,14 +259,14 @@ Out of scope for this plan:
 **Approach:** Build `content.db` from `symbols.db.files` rows whose status is `indexed`, whose file is under the workspace root, whose BLAKE3 matches `content_hash`, whose UTF-8 content is valid, and whose path is not docs-like according to the existing classifier. Chunk text by lines, store raw chunk text, index tokenized chunk text in FTS5, and compute snippets/line hits in C#. Use `search_symbols` line ranges from `search.db` or symbol rows from `symbols.db` to attach containing-symbol metadata when the best hit line falls inside a symbol span.
 
 **Acceptance criteria:**
-- [ ] `search(query="known error string", mode="source")` returns the file/line/snippet containing that source-body string.
-- [ ] `mode=source` supports `file_pattern`, `language`, and `exclude_tests`.
-- [ ] `mode=source` compact output includes path, line, snippet, content kind, and containing symbol when available.
-- [ ] `mode=source` JSON output includes source id, chunk id, content kind, path, language, line span, byte span, score, snippet, source bytes, and containing symbol fields.
-- [ ] `mode=content` behavior remains byte-compatible except for optional workspace/status banners already accepted by existing tests.
-- [ ] Default `search` and `mode=symbol` do not include source-body text hits.
-- [ ] Missing, stale, unreadable, non-UTF-8, oversize, or out-of-root files are skipped and reported through facts, not surfaced as raw exceptions.
-- [ ] `content.db` rebuilds atomically and rejects stale schema versions visibly.
+- [x] `search(query="known error string", mode="source")` returns the file/line/snippet containing that source-body string.
+- [x] `mode=source` supports `file_pattern`, `language`, and `exclude_tests`.
+- [x] `mode=source` compact output includes path, line, snippet, content kind, and containing symbol when available.
+- [x] `mode=source` JSON output includes source id, chunk id, content kind, path, language, line span, byte span, score, snippet, source bytes, and containing symbol fields.
+- [x] `mode=content` behavior remains byte-compatible except for optional workspace/status banners already accepted by existing tests.
+- [x] Default `search` and `mode=symbol` do not include source-body text hits.
+- [x] Missing, stale, unreadable, non-UTF-8, oversize, or out-of-root files are skipped and reported through facts, not surfaced as raw exceptions.
+- [x] `content.db` rebuilds atomically and rejects stale schema versions visibly.
 - [ ] Worker-scope verification passes and changes are committed.
 
 ## Phase 2: Unify Docs/Config Content Search on Content Corpus

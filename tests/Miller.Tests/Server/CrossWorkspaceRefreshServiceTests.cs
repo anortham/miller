@@ -349,6 +349,27 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
     }
 
     [Fact]
+    public void Refresh_BuildsContentDbNextToTheScannedIndexAtTheScannedRevision()
+    {
+        using var julie = JulieSourceDb("KnownSourceError");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        registry.UpsertSeen("target-ws", "target-111111111111", julie.WorkspaceRoot, julie.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        var service = NewService(
+            registry,
+            scan: (_, _, _) => Report(julie.WorkspaceRoot, julie.DbPath, "target-ws", revision: 5),
+            acquireLock: _ => new NoopLease());
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws");
+
+        Assert.Equal(WorkspaceRefreshStatus.Refreshed, result.Status);
+        string contentDb = ContentCorpusSidecar.ContentDbPathFor(julie.DbPath);
+        Assert.True(File.Exists(contentDb));
+        var index = FtsTextContentSearchIndex.Open(contentDb, expectedRevision: 5);
+        Assert.Single(index.Search("KnownSourceError", TextContentKind.WorkspaceSource, limit: 10));
+    }
+
+    [Fact]
     public void Refresh_SidecarDisabled_DoesNotBuildSearchDb()
     {
         using var julie = JulieDbFixture.Create(
@@ -496,6 +517,32 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
                     Recoverable: true),
             },
         };
+
+    private static JulieDbFixture JulieSourceDb(string marker)
+    {
+        const string path = "src/Source.cs";
+        string text = $$"""
+            public class Source
+            {
+                public void Handle()
+                {
+                    throw new InvalidOperationException("{{marker}}");
+                }
+            }
+            """;
+        return JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow("sym-source", "Source", "class", "csharp",
+                    path, "public class Source", 1, ParentId: null)
+                {
+                    EndLine = 7,
+                },
+            },
+            fileContent: new Dictionary<string, string> { [path] = text });
+    }
 
     private sealed class NoopLease : IDisposable
     {

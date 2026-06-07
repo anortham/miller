@@ -139,7 +139,7 @@ public static class CliDispatch
     {
         CliOptions o = CliOptions.Parse(args, "json", "include-tests", "exclude-tests");
         if (string.IsNullOrWhiteSpace(o.Query))
-            return Usage(err, "miller search <query> [--workspace-id SELECTOR] [--workspace DIR] [--mode auto|text|symbol|file|content] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--include-tests|--exclude-tests]");
+            return Usage(err, "miller search <query> [--workspace-id SELECTOR] [--workspace DIR] [--mode auto|text|symbol|file|content|source] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--include-tests|--exclude-tests]");
         if (!TryResolveReadContext(ctx, o, err, out ctx))
             return 2;
 
@@ -203,6 +203,39 @@ public static class CliDispatch
             outw.WriteLine(SearchTool.RunContent(content, o.Query, limit, json, out _,
                 filePattern: o.Value("file-pattern"), language: o.Value("language")));
             return 0;
+        }
+
+        if (mode == SearchToolMode.Source)
+        {
+            if (!RequireIndex(ctx, err))
+                return 3;
+
+            try
+            {
+                using var freshness = new FreshnessReader(ctx.ExtractDbPath);
+                long revision = freshness.LatestRevision();
+                var contentSidecar = new ContentCorpusSidecar();
+                FtsTextContentSearchIndex sourceIndex = contentSidecar.OpenRequired(ctx.ExtractDbPath, revision);
+                bool hideTests = SearchTool.ResolveExcludeTests(excludeTests, o.Query, mode);
+                outw.WriteLine(SearchTool.RunTextContent(
+                    sourceIndex,
+                    o.Query,
+                    TextContentKind.WorkspaceSource,
+                    limit,
+                    hideTests,
+                    json,
+                    out _,
+                    filePattern: o.Value("file-pattern"),
+                    language: o.Value("language")));
+                return 0;
+            }
+            catch (Exception ex) when (
+                ex is FileNotFoundException or InvalidOperationException or IOException
+                    or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                err.WriteLine("source search requires a refreshed content corpus: " + ex.Message);
+                return 3;
+            }
         }
 
         if (!TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex index))
@@ -430,7 +463,8 @@ public static class CliDispatch
             FreshnessStatus: "unregistered",
             ServerVersion: MillerVersion.Current,
             ServerProcessId: Environment.ProcessId,
-            SearchSidecar: SymbolSearchSidecar.FromEnvironment().Inspect(ctx.ExtractDbPath, expectedRevision: 0));
+            SearchSidecar: SymbolSearchSidecar.FromEnvironment().Inspect(ctx.ExtractDbPath, expectedRevision: 0),
+            ContentCorpus: new ContentCorpusSidecar().Inspect(ctx.ExtractDbPath, expectedRevision: 0));
         outw.WriteLine(WorkspaceRender.Status(facts, TelemetrySummary.Empty, json));
         return 0;
     }
@@ -471,7 +505,8 @@ public static class CliDispatch
             DisplayId: row.DisplayId,
             ServerVersion: MillerVersion.Current,
             ServerProcessId: Environment.ProcessId,
-            SearchSidecar: SymbolSearchSidecar.FromEnvironment().Inspect(row.IndexDbPath, revision));
+            SearchSidecar: SymbolSearchSidecar.FromEnvironment().Inspect(row.IndexDbPath, revision),
+            ContentCorpus: new ContentCorpusSidecar().Inspect(row.IndexDbPath, revision));
     }
 
     private static int WorkspaceRefresh(

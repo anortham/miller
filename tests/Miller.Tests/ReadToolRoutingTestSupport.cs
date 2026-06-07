@@ -5,12 +5,15 @@ using Miller.Server.Workspaces;
 namespace Miller.Tests;
 
 internal sealed class RecordingWorkspaceIndexProvider
-    : IWorkspaceIndexProvider, IWorkspaceSearchProvider, IWorkspaceContentSearchProvider, IWorkspaceRegionSearchProvider
+    : IWorkspaceIndexProvider, IWorkspaceSearchProvider, IWorkspaceContentSearchProvider,
+      IWorkspaceRegionSearchProvider, IWorkspaceTextContentSearchProvider
 {
     private readonly WorkspaceReadContext _current;
     private readonly Dictionary<string, WorkspaceReadContext> _targets;
     private readonly WorkspaceContentSearchContext? _currentContent;
     private readonly Dictionary<string, WorkspaceContentSearchContext> _contentTargets;
+    private readonly WorkspaceTextContentSearchContext? _currentTextContent;
+    private readonly Dictionary<string, WorkspaceTextContentSearchContext> _textContentTargets;
     private readonly WorkspaceRegionSearchContext? _currentRegion;
     private readonly Dictionary<string, WorkspaceRegionSearchContext> _regionTargets;
 
@@ -22,6 +25,8 @@ internal sealed class RecordingWorkspaceIndexProvider
         _targets = targets.ToDictionary(x => x.WorkspaceId, x => x.Context, StringComparer.Ordinal);
         _currentContent = null;
         _contentTargets = new Dictionary<string, WorkspaceContentSearchContext>(StringComparer.Ordinal);
+        _currentTextContent = null;
+        _textContentTargets = new Dictionary<string, WorkspaceTextContentSearchContext>(StringComparer.Ordinal);
         _currentRegion = null;
         _regionTargets = new Dictionary<string, WorkspaceRegionSearchContext>(StringComparer.Ordinal);
     }
@@ -36,6 +41,24 @@ internal sealed class RecordingWorkspaceIndexProvider
         _currentContent = currentContent;
         _contentTargets = contentTargets.ToDictionary(x => x.WorkspaceId, x => x.Context, StringComparer.Ordinal);
         _targets = targets.ToDictionary(x => x.WorkspaceId, x => x.Context, StringComparer.Ordinal);
+        _currentTextContent = null;
+        _textContentTargets = new Dictionary<string, WorkspaceTextContentSearchContext>(StringComparer.Ordinal);
+        _currentRegion = null;
+        _regionTargets = new Dictionary<string, WorkspaceRegionSearchContext>(StringComparer.Ordinal);
+    }
+
+    public RecordingWorkspaceIndexProvider(
+        WorkspaceReadContext current,
+        WorkspaceTextContentSearchContext currentTextContent,
+        (string WorkspaceId, WorkspaceTextContentSearchContext Context)[] textContentTargets,
+        params (string WorkspaceId, WorkspaceReadContext Context)[] targets)
+    {
+        _current = current;
+        _targets = targets.ToDictionary(x => x.WorkspaceId, x => x.Context, StringComparer.Ordinal);
+        _currentContent = null;
+        _contentTargets = new Dictionary<string, WorkspaceContentSearchContext>(StringComparer.Ordinal);
+        _currentTextContent = currentTextContent;
+        _textContentTargets = textContentTargets.ToDictionary(x => x.WorkspaceId, x => x.Context, StringComparer.Ordinal);
         _currentRegion = null;
         _regionTargets = new Dictionary<string, WorkspaceRegionSearchContext>(StringComparer.Ordinal);
     }
@@ -50,6 +73,8 @@ internal sealed class RecordingWorkspaceIndexProvider
         _targets = targets.ToDictionary(x => x.WorkspaceId, x => x.Context, StringComparer.Ordinal);
         _currentContent = null;
         _contentTargets = new Dictionary<string, WorkspaceContentSearchContext>(StringComparer.Ordinal);
+        _currentTextContent = null;
+        _textContentTargets = new Dictionary<string, WorkspaceTextContentSearchContext>(StringComparer.Ordinal);
         _currentRegion = currentRegion;
         _regionTargets = regionTargets.ToDictionary(x => x.WorkspaceId, x => x.Context, StringComparer.Ordinal);
     }
@@ -59,6 +84,7 @@ internal sealed class RecordingWorkspaceIndexProvider
     public int ResolveCount { get; private set; }
     public int SymbolSearchResolveCount { get; private set; }
     public int ContentSearchResolveCount { get; private set; }
+    public int TextContentSearchResolveCount { get; private set; }
     public int RegionSearchResolveCount { get; private set; }
 
     public WorkspaceReadContext Resolve(string? workspaceId, bool ensureFresh)
@@ -106,6 +132,21 @@ internal sealed class RecordingWorkspaceIndexProvider
             return _currentRegion ?? throw new InvalidOperationException("no current region context configured");
 
         return _regionTargets.TryGetValue(workspaceId, out WorkspaceRegionSearchContext? context)
+            ? context
+            : throw new KeyNotFoundException(workspaceId);
+    }
+
+    public WorkspaceTextContentSearchContext ResolveTextContentSearch(string? workspaceId, bool ensureFresh)
+    {
+        LastWorkspaceId = workspaceId;
+        LastEnsureFresh = ensureFresh;
+        ResolveCount++;
+        TextContentSearchResolveCount++;
+
+        if (workspaceId is null)
+            return _currentTextContent ?? throw new InvalidOperationException("no current text content context configured");
+
+        return _textContentTargets.TryGetValue(workspaceId, out WorkspaceTextContentSearchContext? context)
             ? context
             : throw new KeyNotFoundException(workspaceId);
     }
@@ -192,10 +233,30 @@ internal static class ReadToolRoutingTestSupport
             freshnessStatus,
             WarningText: null,
             DisplayId: displayId);
+
+    public static WorkspaceTextContentSearchContext TextContentContextFor(
+        ITextContentSearchIndex index,
+        string indexDbPath,
+        string? workspaceId,
+        string workspaceRoot,
+        bool? indexFresh = true,
+        string freshnessStatus = "current",
+        string? displayId = null) =>
+        new(
+            index,
+            indexDbPath,
+            workspaceId,
+            workspaceRoot,
+            Revision: 1,
+            indexFresh,
+            freshnessStatus,
+            WarningText: null,
+            DisplayId: displayId);
 }
 
 internal sealed class HolderWorkspaceIndexProvider
-    : IWorkspaceIndexProvider, IWorkspaceSearchProvider, IWorkspaceContentSearchProvider, IWorkspaceRegionSearchProvider
+    : IWorkspaceIndexProvider, IWorkspaceSearchProvider, IWorkspaceContentSearchProvider,
+      IWorkspaceRegionSearchProvider, IWorkspaceTextContentSearchProvider
 {
     private readonly IndexHolder _holder;
     private readonly string _indexDbPath;
@@ -253,4 +314,7 @@ internal sealed class HolderWorkspaceIndexProvider
 
     public WorkspaceRegionSearchContext ResolveRegionSearch(string? workspaceId, bool ensureFresh) =>
         throw new NotSupportedException("HolderWorkspaceIndexProvider does not serve region search.");
+
+    public WorkspaceTextContentSearchContext ResolveTextContentSearch(string? workspaceId, bool ensureFresh) =>
+        throw new NotSupportedException("HolderWorkspaceIndexProvider does not serve text content search.");
 }

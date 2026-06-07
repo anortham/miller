@@ -5,7 +5,8 @@ using Miller.Server.Tools;
 namespace Miller.Server.Workspaces;
 
 public sealed class WorkspaceIndexProvider
-    : IWorkspaceIndexProvider, IWorkspaceSearchProvider, IWorkspaceContentSearchProvider, IWorkspaceRegionSearchProvider
+    : IWorkspaceIndexProvider, IWorkspaceSearchProvider, IWorkspaceContentSearchProvider,
+      IWorkspaceRegionSearchProvider, IWorkspaceTextContentSearchProvider
 {
     private readonly IndexHolder _holder;
     private readonly WorkspaceContext _currentWorkspace;
@@ -14,6 +15,7 @@ public sealed class WorkspaceIndexProvider
     private readonly Func<string, MillerRepositoryIndex> _loadIndex;
     private readonly Func<string, SymbolSearchProjection> _loadSymbolSearch;
     private readonly Func<string, string, ContentSearchProjection> _loadContentSearch;
+    private readonly Func<string, long, ITextContentSearchIndex> _loadTextContentSearch;
     private readonly Func<string, long, IRegionSearchIndex> _loadRegionSearch;
     private readonly Func<long, bool?> _currentIndexFresh;
     private readonly SymbolSearchSidecar _sidecar;
@@ -21,6 +23,7 @@ public sealed class WorkspaceIndexProvider
     private readonly Dictionary<CacheKey, Lazy<CachedIndex>> _cache = new();
     private readonly Dictionary<CacheKey, Lazy<CachedSymbolSearch>> _symbolSearchCache = new();
     private readonly Dictionary<CacheKey, Lazy<CachedContentSearch>> _contentSearchCache = new();
+    private readonly Dictionary<CacheKey, Lazy<CachedTextContentSearch>> _textContentSearchCache = new();
     private readonly Dictionary<CacheKey, Lazy<CachedRegionSearch>> _regionSearchCache = new();
 
     public WorkspaceIndexProvider(
@@ -37,6 +40,7 @@ public sealed class WorkspaceIndexProvider
             dbPath => RepositoryIndexLoader.Load(dbPath),
             dbPath => SymbolSearchProjectionLoader.Load(dbPath),
             (dbPath, root) => ContentSearchProjectionLoader.Load(dbPath, root),
+            (dbPath, revision) => FtsTextContentSearchIndex.Open(ContentCorpusSidecar.ContentDbPathFor(dbPath), revision),
             (dbPath, revision) => FtsRegionSearchIndex.Open(SymbolSearchSidecar.SearchDbPathFor(dbPath), revision),
             currentIndexFresh: _ => null,
             sidecar)
@@ -51,6 +55,7 @@ public sealed class WorkspaceIndexProvider
         Func<string, MillerRepositoryIndex> loadIndex,
         Func<string, SymbolSearchProjection> loadSymbolSearch,
         Func<string, string, ContentSearchProjection> loadContentSearch,
+        Func<string, long, ITextContentSearchIndex> loadTextContentSearch,
         Func<string, long, IRegionSearchIndex> loadRegionSearch,
         Func<long, bool?> currentIndexFresh,
         SymbolSearchSidecar sidecar)
@@ -62,6 +67,7 @@ public sealed class WorkspaceIndexProvider
         ArgumentNullException.ThrowIfNull(loadIndex);
         ArgumentNullException.ThrowIfNull(loadSymbolSearch);
         ArgumentNullException.ThrowIfNull(loadContentSearch);
+        ArgumentNullException.ThrowIfNull(loadTextContentSearch);
         ArgumentNullException.ThrowIfNull(loadRegionSearch);
         ArgumentNullException.ThrowIfNull(currentIndexFresh);
         ArgumentNullException.ThrowIfNull(sidecar);
@@ -72,6 +78,7 @@ public sealed class WorkspaceIndexProvider
         _loadIndex = loadIndex;
         _loadSymbolSearch = loadSymbolSearch;
         _loadContentSearch = loadContentSearch;
+        _loadTextContentSearch = loadTextContentSearch;
         _loadRegionSearch = loadRegionSearch;
         _currentIndexFresh = currentIndexFresh;
         _sidecar = sidecar;
@@ -123,6 +130,18 @@ public sealed class WorkspaceIndexProvider
             return ResolveCurrentRegionSearch();
 
         return ResolveRegisteredRegionSearch(workspaceId, ensureFresh);
+    }
+
+    public WorkspaceTextContentSearchContext ResolveTextContentSearch(string? workspaceId, bool ensureFresh)
+    {
+        if (workspaceId is null)
+            return ResolveCurrentTextContentSearch();
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
+        if (SelectorTargetsCurrent(workspaceId))
+            return ResolveCurrentTextContentSearch();
+
+        return ResolveRegisteredTextContentSearch(workspaceId, ensureFresh);
     }
 
     private WorkspaceReadContext ResolveCurrent()
@@ -246,6 +265,45 @@ public sealed class WorkspaceIndexProvider
         long revision = row.LastRevision ?? 0;
         CachedContentSearch cached = GetOrLoadContentSearch(row.WorkspaceId, row.IndexDbPath, row.CanonicalRoot, revision);
         return new WorkspaceContentSearchContext(
+            cached.Index,
+            row.IndexDbPath,
+            row.WorkspaceId,
+            row.CanonicalRoot,
+            revision,
+            WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
+            WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
+            WorkspaceFreshnessView.WarningTextFor(refreshResult),
+            row.DisplayId);
+    }
+
+    private WorkspaceTextContentSearchContext ResolveCurrentTextContentSearch()
+    {
+        (_, long revision) = _holder.Snapshot();
+        string dbPath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
+        string root = _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot;
+        string workspaceKey = string.IsNullOrEmpty(_currentWorkspace.WorkspaceId) ? dbPath : _currentWorkspace.WorkspaceId;
+        CachedTextContentSearch cached = GetOrLoadTextContentSearch(new CacheKey(workspaceKey, dbPath, revision), dbPath);
+        return new WorkspaceTextContentSearchContext(
+            cached.Index,
+            dbPath,
+            _currentWorkspace.WorkspaceId,
+            root,
+            revision,
+            _currentIndexFresh(revision),
+            "current",
+            WarningText: null,
+            DisplayId: CurrentDisplayId());
+    }
+
+    private WorkspaceTextContentSearchContext ResolveRegisteredTextContentSearch(string workspaceId, bool ensureFresh)
+    {
+        RegisteredWorkspaceState state = ResolveRegisteredState(workspaceId, ensureFresh);
+        WorkspaceRegistryRow row = state.Row;
+        WorkspaceRefreshResult? refreshResult = state.RefreshResult;
+
+        long revision = row.LastRevision ?? 0;
+        CachedTextContentSearch cached = GetOrLoadTextContentSearch(new CacheKey(row.WorkspaceId, row.IndexDbPath, revision), row.IndexDbPath);
+        return new WorkspaceTextContentSearchContext(
             cached.Index,
             row.IndexDbPath,
             row.WorkspaceId,
@@ -498,6 +556,37 @@ public sealed class WorkspaceIndexProvider
         }
     }
 
+    private CachedTextContentSearch GetOrLoadTextContentSearch(CacheKey key, string dbPath)
+    {
+        Lazy<CachedTextContentSearch> lazy;
+        lock (_cacheGate)
+        {
+            if (!_textContentSearchCache.TryGetValue(key, out lazy!))
+            {
+                lazy = new Lazy<CachedTextContentSearch>(
+                    () => new CachedTextContentSearch(_loadTextContentSearch(dbPath, key.Revision)),
+                    LazyThreadSafetyMode.ExecutionAndPublication);
+                _textContentSearchCache[key] = lazy;
+                EvictOtherEntriesForWorkspaceUnderLock(_textContentSearchCache, key);
+            }
+        }
+
+        try
+        {
+            return lazy.Value;
+        }
+        catch
+        {
+            lock (_cacheGate)
+            {
+                if (_textContentSearchCache.TryGetValue(key, out Lazy<CachedTextContentSearch>? cachedLazy) &&
+                    ReferenceEquals(cachedLazy, lazy))
+                    _textContentSearchCache.Remove(key);
+            }
+            throw;
+        }
+    }
+
     private void EnsureRegionSearchEnabled()
     {
         if (!_sidecar.Enabled)
@@ -617,6 +706,8 @@ public sealed class WorkspaceIndexProvider
     private sealed record CachedSymbolSearch(ISymbolLookupIndex Index, bool IsSidecar);
 
     private sealed record CachedContentSearch(ContentSearchProjection Index);
+
+    private sealed record CachedTextContentSearch(ITextContentSearchIndex Index);
 
     private sealed record CachedRegionSearch(IRegionSearchIndex Index);
 }

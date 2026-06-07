@@ -65,8 +65,23 @@ without reopening large external files or fetched web pages.
 | `raw_text` | `TEXT NOT NULL` | yes | Chunk text stored as UTF-8 text. |
 | `doc_len` | `INTEGER NOT NULL` | yes | Token count used by Miller ranking. |
 | `is_test` | `INTEGER NOT NULL` | yes | `0` or `1`; duplicated for filtering. |
+| `source_bytes` | `INTEGER NOT NULL` | yes | Full source byte count, duplicated for result telemetry without joining. |
 | `containing_symbol_id` | `TEXT NULL` | no | Best containing symbol when the chunk or hit line is in a known symbol range. |
 | `containing_symbol_name` | `TEXT NULL` | no | Human-facing containing symbol name. |
+
+### `content_symbol_spans`
+
+One row per symbol span associated with a text source. This lets Miller attach containing-symbol metadata to the
+actual best hit line inside a chunk instead of only the chunk start line.
+
+| Field | Type | Required | Description |
+|---|---|---:|---|
+| `source_id` | `TEXT NOT NULL` | yes | Parent `content_sources.source_id`. |
+| `symbol_id` | `TEXT NOT NULL` | yes | Stable symbol id from `symbols.db`. |
+| `symbol_name` | `TEXT NOT NULL` | yes | Human-facing symbol name. |
+| `path` | `TEXT NOT NULL` | yes | Workspace-relative source path. |
+| `start_line` | `INTEGER NOT NULL` | yes | One-based inclusive symbol start line. |
+| `end_line` | `INTEGER NOT NULL` | yes | One-based inclusive symbol end line. |
 
 ### `content_fts`
 

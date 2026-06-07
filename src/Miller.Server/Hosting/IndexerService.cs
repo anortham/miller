@@ -43,6 +43,7 @@ public sealed class IndexerService : BackgroundService
     // safe writer for the CURRENT workspace's search.db, so it converges it after scans and per-file updates under
     // _opsGate.
     private readonly SymbolSearchSidecar _sidecar;
+    private readonly ContentCorpusSidecar _contentSidecar;
 
     private IDisposable? _lease;
     private FileSystemWatcher? _watcher;
@@ -64,7 +65,8 @@ public sealed class IndexerService : BackgroundService
 
     public IndexerService(
         IndexBootstrapService bootstrap, ILogger<IndexerService> logger, ILoggerFactory loggerFactory,
-        SymbolSearchSidecar sidecar)
+        SymbolSearchSidecar sidecar,
+        ContentCorpusSidecar? contentSidecar = null)
         : this(
             bootstrap,
             logger,
@@ -77,6 +79,7 @@ public sealed class IndexerService : BackgroundService
             },
             DefaultLeaderRetryInterval,
             sidecar,
+            contentSidecar,
             attachFileWatchers: true)
     {
     }
@@ -89,6 +92,7 @@ public sealed class IndexerService : BackgroundService
         Func<WorkspaceContext, string, string, IExtractOps> createOps,
         TimeSpan leaderRetryInterval,
         SymbolSearchSidecar sidecar,
+        ContentCorpusSidecar? contentSidecar = null,
         bool attachFileWatchers = true)
     {
         ArgumentNullException.ThrowIfNull(bootstrap);
@@ -107,6 +111,7 @@ public sealed class IndexerService : BackgroundService
         _createOps = createOps;
         _leaderRetryInterval = leaderRetryInterval;
         _sidecar = sidecar;
+        _contentSidecar = contentSidecar ?? new ContentCorpusSidecar();
         _attachFileWatchers = attachFileWatchers;
     }
 
@@ -359,14 +364,25 @@ public sealed class IndexerService : BackgroundService
                 _logger.LogWarning(
                     "On-demand {Kind} scan: {Partial}", force ? "full (force)" : "refresh (delta)", partial);
 
-            // Converge search.db after a successful scan, still under _opsGate. Deliberately OUTSIDE the scan's
-            // try/catch so a sidecar issue can never be misreported as a scan failure. The bootstrap getter is
-            // read only when the feature is on, so an un-started, no-workspace unit-test instance on the OFF path
-            // never touches it.
-            if (_sidecar.Enabled && _bootstrap.Workspace.CanonicalExtractDbPath is { } symbolsDbPath)
+            // Converge derived sidecars after a successful scan, still under _opsGate. Deliberately OUTSIDE the
+            // scan's try/catch so sidecar issues can never be misreported as scan failures. Some pure unit seams
+            // publish fake ops without seeding bootstrap workspace state; those still test scan dispatch only.
+            if (TryGetWorkspaceForSidecarConvergence() is { CanonicalExtractDbPath: { } symbolsDbPath })
                 TryConvergeSidecar(symbolsDbPath, report, fullRebuild: true);
 
             return ScanOutcome.Scanned(report);
+        }
+    }
+
+    private WorkspaceContext? TryGetWorkspaceForSidecarConvergence()
+    {
+        try
+        {
+            return _bootstrap.Workspace;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
         }
     }
 
@@ -402,14 +418,29 @@ public sealed class IndexerService : BackgroundService
     // ⇒ no-op. MUST be called holding _opsGate: it reads symbols.db, which a concurrent extract could replace.
     private void TryConvergeSidecar(string? symbolsDbPath, long revision, bool fullRebuild)
     {
-        if (!_sidecar.Enabled)
-            return;
         if (symbolsDbPath is null || revision <= 0)
             return; // no symbols.db path or no revision cursor to stamp; the next revision-bearing op builds it
 
+        string workspaceRoot = _bootstrap.Workspace.CanonicalRoot ?? _bootstrap.Workspace.WorkspaceRoot;
+        string? workspaceId = _bootstrap.Workspace.WorkspaceId;
         try
         {
-            string workspaceRoot = _bootstrap.Workspace.CanonicalRoot ?? _bootstrap.Workspace.WorkspaceRoot;
+            if (_contentSidecar.EnsureBuilt(symbolsDbPath, workspaceRoot, workspaceId, revision))
+                _logger.LogInformation("Converged content corpus sidecar at revision {Revision}.", revision);
+        }
+        catch (Exception ex) when (
+            ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException
+                or ArgumentException or NotSupportedException or IncompatibleExtractException)
+        {
+            _logger.LogWarning(ex,
+                "Content corpus sidecar convergence failed; source text search will remain unavailable or stale until the next successful convergence.");
+        }
+
+        if (!_sidecar.Enabled)
+            return;
+
+        try
+        {
             bool changed = fullRebuild
                 ? _sidecar.EnsureBuilt(symbolsDbPath, revision, workspaceRoot)
                 : _sidecar.EnsureCurrent(symbolsDbPath, revision, workspaceRoot);

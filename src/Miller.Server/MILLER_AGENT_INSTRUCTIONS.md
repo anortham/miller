@@ -20,10 +20,12 @@ the tokens.
 
 ## Tools
 
-- `search` — Find code by name, identifier, or natural-language phrase. `mode=auto|text|symbol|file|content`. Test
+- `search` — Find code by name, identifier, or natural-language phrase. `mode=auto|text|symbol|file|content|source`. Test
   code is auto-hidden for natural-language queries (`exclude_tests=false` to force them in). The first move for
   "where is…?". Use `mode=content` (alias `docs`) to search docs/prose file CONTENT instead of symbols — it
   returns `path:line` + a snippet window, for files symbol search can't see (markdown, config, plain text).
+  Use `mode=source` to search verified source-file body text for error strings, route literals, assertion text,
+  and implementation phrases without blending those hits into default symbol search.
   Use `file_pattern=<glob>` and `language=<lang>` to keep result sets small when you know the area or language.
   The default page is 6 results; each compact symbol hit includes name, kind, file, line, and signature when
   available. Raise `limit` for a wider page.
@@ -70,6 +72,8 @@ the tokens.
   `mode=auto`/`mode=path`). If a name is ambiguous, retry with `scope=<file>`.
 - **Find something in docs/prose**: `search mode=content "<phrase>"` — searches markdown/config/text content and
   returns `path:line` + snippet, where symbol search would find nothing.
+- **Find source-body text**: `search mode=source "<literal or phrase>"` — searches verified source files and
+  returns `path:line`, content kind, containing symbol when known, and a snippet.
 - **Scope noisy search**: add `file_pattern=src/ui/**` or `language=typescript` when you know the likely area.
 - **Find text only inside comments or strings**: `search "<phrase>" regions=comment` or
   `search "<phrase>" regions=string_literal` — requires `MILLER_REGION_INDEX=1` and a refreshed workspace.
@@ -91,7 +95,7 @@ code, paste this block into the prompt:
     You have Miller MCP tools. Use them before raw shell/file exploration:
     - context(query, ...) for unfamiliar task-shaped orientation.
     - search(query, mode?, regions?, file_pattern?, language?) before rg/grep/find, including mode=content for
-      docs/prose, regions=... for comments/strings, and scoped filters for smaller result sets.
+      docs/prose, mode=source for source-body text, regions=... for comments/strings, and scoped filters for smaller result sets.
     - inspect(target, depth?) before reading a whole file or symbol body; use depth=full for refs/callers/callees/body.
     - trace(target, mode?, to?, scope?) before manual caller/callee file hopping; use scope for ambiguous names.
     - impact(target?|changed_paths?|diff?) before refactors and to choose tests.

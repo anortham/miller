@@ -136,6 +136,24 @@ public sealed class WorkspaceRenderTests
     }
 
     [Fact]
+    public void Status_Compact_ShowsContentCorpusState()
+    {
+        var facts = Facts() with
+        {
+            ContentCorpus = new ContentCorpusFacts(
+                "stale", "/repo/.miller/content.db", SchemaVersion: 1, WorkspaceRevision: 41,
+                SourceCount: 12, ChunkCount: 48, IndexedSourceBytes: 1200, StoredRawBytes: 1600),
+        };
+
+        string text = WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: false);
+
+        Assert.Contains("content_db:", text);
+        Assert.Contains("stale", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("rev 41", text);
+        Assert.Contains("chunks 48", text);
+    }
+
+    [Fact]
     public void Status_Json_ShowsSearchSidecarObject()
     {
         var facts = Facts() with
@@ -151,6 +169,27 @@ public sealed class WorkspaceRenderTests
         Assert.Equal(42, sidecar.GetProperty("revision").GetInt64());
         Assert.Equal(42, sidecar.GetProperty("expected_revision").GetInt64());
         Assert.Equal(565, sidecar.GetProperty("document_count").GetInt32());
+    }
+
+    [Fact]
+    public void Status_Json_ShowsContentCorpusObject()
+    {
+        var facts = Facts() with
+        {
+            ContentCorpus = new ContentCorpusFacts(
+                "current", "/repo/.miller/content.db", SchemaVersion: 1, WorkspaceRevision: 42,
+                SourceCount: 12, ChunkCount: 48, IndexedSourceBytes: 1200, StoredRawBytes: 1600,
+                NonUtf8Skipped: 2),
+        };
+
+        using var doc = JsonDocument.Parse(WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: true));
+        JsonElement corpus = doc.RootElement.GetProperty("index").GetProperty("content_corpus");
+
+        Assert.Equal("current", corpus.GetProperty("state").GetString());
+        Assert.Equal(42, corpus.GetProperty("workspace_revision").GetInt64());
+        Assert.Equal(12, corpus.GetProperty("source_count").GetInt32());
+        Assert.Equal(48, corpus.GetProperty("chunk_count").GetInt32());
+        Assert.Equal(2, corpus.GetProperty("non_utf8_skipped").GetInt32());
     }
 
     // ---- list ----

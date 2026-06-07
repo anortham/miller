@@ -32,6 +32,7 @@ namespace Miller.Server.Tools;
 /// <param name="ServerProcessId">The OS process id of the Miller process that produced this status, or null when
 /// not surfaced. Useful when verifying that a restarted stdio MCP server is actually a new process.</param>
 /// <param name="SearchSidecar">Status of the Miller-owned <c>search.db</c> sidecar, when known.</param>
+/// <param name="ContentCorpus">Status of the Miller-owned <c>content.db</c> sidecar, when known.</param>
 public readonly record struct WorkspaceFacts(
     string Root,
     string? WorkspaceId,
@@ -48,7 +49,8 @@ public readonly record struct WorkspaceFacts(
     string? DisplayId = null,
     string? ServerVersion = null,
     int? ServerProcessId = null,
-    SearchSidecarFacts? SearchSidecar = null);
+    SearchSidecarFacts? SearchSidecar = null,
+    ContentCorpusFacts? ContentCorpus = null);
 
 /// <summary>A registry-backed row rendered by <c>workspace list</c>.</summary>
 public readonly record struct WorkspaceListEntry(
@@ -197,6 +199,8 @@ public static class WorkspaceRender
             sb.Append("freshness: ").Append(facts.FreshnessStatus).Append('\n');
         if (facts.SearchSidecar is { } sidecar)
             sb.Append("search_db: ").Append(SearchSidecarLabel(sidecar)).Append('\n');
+        if (facts.ContentCorpus is { } corpus)
+            sb.Append("content_db: ").Append(ContentCorpusLabel(corpus, facts.BuiltRevision)).Append('\n');
         if (!string.IsNullOrEmpty(facts.WarningText))
             sb.Append("warning: ").Append(facts.WarningText).Append('\n');
 
@@ -217,6 +221,21 @@ public static class WorkspaceRender
             : "UNREADABLE: " + facts.Error,
         _ => facts.State,
     };
+
+    private static string ContentCorpusLabel(ContentCorpusFacts facts, long expectedRevision)
+    {
+        string suffix = $"sources {facts.SourceCount}  chunks {facts.ChunkCount}";
+        return facts.State switch
+        {
+            "current" => $"current rev {facts.WorkspaceRevision}  {suffix}",
+            "missing" => $"MISSING expected rev {expectedRevision}",
+            "stale" => $"STALE rev {facts.WorkspaceRevision} ({RevisionComparison(facts.WorkspaceRevision, expectedRevision, "expected")})  {suffix}",
+            "unreadable" => string.IsNullOrWhiteSpace(facts.Error)
+                ? "UNREADABLE"
+                : "UNREADABLE: " + facts.Error,
+            _ => string.IsNullOrWhiteSpace(facts.State) ? suffix : facts.State + "  " + suffix,
+        };
+    }
 
     // "fresh" / "STALE (built N < latest M)" / "unknown" — a stale index is called out, never silently glossed.
     private static string FreshLabel(WorkspaceFacts facts) => facts.IndexFresh switch
@@ -314,6 +333,8 @@ public static class WorkspaceRender
             w.WriteBoolean("queue_empty", facts.QueueEmpty);
             w.WritePropertyName("search_sidecar");
             WriteSearchSidecarJson(w, facts.SearchSidecar);
+            w.WritePropertyName("content_corpus");
+            WriteContentCorpusJson(w, facts.ContentCorpus);
             w.WriteEndObject();
 
             // Embed the telemetry breakdown as a nested object: re-parse TelemetryRender.Json so the two stay in
@@ -344,6 +365,38 @@ public static class WorkspaceRender
         w.WriteNumber("expected_revision", facts.ExpectedRevision);
         if (facts.DocumentCount is { } documentCount) w.WriteNumber("document_count", documentCount);
         else w.WriteNull("document_count");
+        if (facts.Error is null) w.WriteNull("error");
+        else w.WriteString("error", facts.Error);
+        w.WriteEndObject();
+    }
+
+    private static void WriteContentCorpusJson(Utf8JsonWriter w, ContentCorpusFacts? facts)
+    {
+        if (facts is null)
+        {
+            w.WriteNullValue();
+            return;
+        }
+
+        w.WriteStartObject();
+        w.WriteString("state", facts.State);
+        if (facts.Path is null) w.WriteNull("path");
+        else w.WriteString("path", facts.Path);
+        if (facts.SchemaVersion is { } schemaVersion) w.WriteNumber("schema_version", schemaVersion);
+        else w.WriteNull("schema_version");
+        if (facts.WorkspaceRevision is { } revision) w.WriteNumber("workspace_revision", revision);
+        else w.WriteNull("workspace_revision");
+        w.WriteNumber("source_count", facts.SourceCount);
+        w.WriteNumber("chunk_count", facts.ChunkCount);
+        w.WriteNumber("indexed_source_bytes", facts.IndexedSourceBytes);
+        w.WriteNumber("stored_raw_bytes", facts.StoredRawBytes);
+        w.WriteNumber("status_skipped", facts.StatusSkipped);
+        w.WriteNumber("scope_skipped", facts.ScopeSkipped);
+        w.WriteNumber("too_large_skipped", facts.TooLargeSkipped);
+        w.WriteNumber("missing_skipped", facts.MissingSkipped);
+        w.WriteNumber("hash_mismatch_skipped", facts.HashMismatchSkipped);
+        w.WriteNumber("non_utf8_skipped", facts.NonUtf8Skipped);
+        w.WriteNumber("io_skipped", facts.IoSkipped);
         if (facts.Error is null) w.WriteNull("error");
         else w.WriteString("error", facts.Error);
         w.WriteEndObject();

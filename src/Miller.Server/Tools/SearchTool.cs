@@ -30,6 +30,9 @@ public enum SearchToolMode
 
     /// <summary>Search docs-like file CONTENT (prose/markup/config), returning path + line + snippet hits.</summary>
     Content,
+
+    /// <summary>Search workspace source-file body text, returning path + line + snippet hits.</summary>
+    Source,
 }
 
 /// <summary>
@@ -47,6 +50,7 @@ public sealed class SearchTool
     private readonly IWorkspaceSearchProvider _workspaceProvider;
     private readonly IWorkspaceContentSearchProvider _contentProvider;
     private readonly IWorkspaceRegionSearchProvider _regionProvider;
+    private readonly IWorkspaceTextContentSearchProvider _textContentProvider;
 
     /// <summary>
     /// Construct over the symbol-search and content-search providers (production / freshness-aware). In
@@ -58,7 +62,10 @@ public sealed class SearchTool
         : this(
             workspaceProvider,
             contentProvider,
-            workspaceProvider as IWorkspaceRegionSearchProvider ?? new UnavailableRegionSearchProvider())
+            workspaceProvider as IWorkspaceRegionSearchProvider ?? new UnavailableRegionSearchProvider(),
+            workspaceProvider as IWorkspaceTextContentSearchProvider
+                ?? contentProvider as IWorkspaceTextContentSearchProvider
+                ?? new UnavailableTextContentSearchProvider())
     {
     }
 
@@ -71,13 +78,36 @@ public sealed class SearchTool
         IWorkspaceSearchProvider workspaceProvider,
         IWorkspaceContentSearchProvider contentProvider,
         IWorkspaceRegionSearchProvider regionProvider)
+        : this(
+            workspaceProvider,
+            contentProvider,
+            regionProvider,
+            workspaceProvider as IWorkspaceTextContentSearchProvider
+                ?? contentProvider as IWorkspaceTextContentSearchProvider
+                ?? regionProvider as IWorkspaceTextContentSearchProvider
+                ?? new UnavailableTextContentSearchProvider())
+    {
+    }
+
+    /// <summary>
+    /// Construct over all search providers, including the explicit text-content corpus provider used by
+    /// <c>mode=source</c>.
+    /// </summary>
+    /// <exception cref="ArgumentNullException">Any provider is null.</exception>
+    public SearchTool(
+        IWorkspaceSearchProvider workspaceProvider,
+        IWorkspaceContentSearchProvider contentProvider,
+        IWorkspaceRegionSearchProvider regionProvider,
+        IWorkspaceTextContentSearchProvider textContentProvider)
     {
         ArgumentNullException.ThrowIfNull(workspaceProvider);
         ArgumentNullException.ThrowIfNull(contentProvider);
         ArgumentNullException.ThrowIfNull(regionProvider);
+        ArgumentNullException.ThrowIfNull(textContentProvider);
         _workspaceProvider = workspaceProvider;
         _contentProvider = contentProvider;
         _regionProvider = regionProvider;
+        _textContentProvider = textContentProvider;
     }
 
     [McpServerTool(Name = "search")]
@@ -85,12 +115,13 @@ public sealed class SearchTool
         "Search indexed code and return ranked results. Use this before shell rg/grep/cat or reading whole " +
         "files. Pass a symbol name, an identifier, or a natural-language phrase. Test code is hidden for " +
         "natural-language queries unless you ask for it. Use mode=content (alias docs) to search docs/prose " +
-        "file content instead of symbols — it returns path + line + snippet hits. Pass regions=comment, " +
+        "file content instead of symbols, or mode=source to search source-file body text — these return " +
+        "path + line + snippet hits. Pass regions=comment, " +
         "doc_comment, or string_literal to search only inside those source regions. Returns compact text by " +
         "default; pass format=json to chain results.")]
     public string Search(
         [Description("Symbol name, identifier, or natural-language phrase.")] string query,
-        [Description("Interpretation axis: auto|text|symbol|file|content (alias docs). Default auto.")] string mode = "auto",
+        [Description("Interpretation axis: auto|text|symbol|file|content|source (content alias docs). Default auto.")] string mode = "auto",
         [Description("Max results to return. Default 6.")] int limit = DefaultLimit,
         [Description("Hide test code: leave unset to auto-hide for natural-language queries; true/false to force.")]
         bool? exclude_tests = null,
@@ -142,6 +173,31 @@ public sealed class SearchTool
                 {
                     ReadToolWorkspaceRouting.ApplyTelemetry(scope, content);
                     scope.SourceBytes = sourceBytes;
+                }
+            }
+            else if (parsedMode == SearchToolMode.Source)
+            {
+                WorkspaceTextContentSearchContext textContent =
+                    _textContentProvider.ResolveTextContentSearch(workspace_id, ensureFresh);
+                string? contentBanner = ReadToolWorkspaceRouting.CompactBanner(textContent, workspace_id, json);
+                bool hideTests = ResolveExcludeTests(exclude_tests, query, parsedMode);
+                output = RunTextContent(
+                    textContent.Index,
+                    query,
+                    TextContentKind.WorkspaceSource,
+                    limit,
+                    hideTests,
+                    json,
+                    out count,
+                    out long sourceBytes,
+                    contentBanner,
+                    filePattern: file_pattern,
+                    language: language);
+                if (scope is not null)
+                {
+                    ReadToolWorkspaceRouting.ApplyTelemetry(scope, textContent);
+                    scope.SourceBytes = sourceBytes;
+                    scope.MetadataJson = TextContentBackendMetadata;
                 }
             }
             else
@@ -196,6 +252,7 @@ public sealed class SearchTool
         "file" => SearchToolMode.File,
         "content" => SearchToolMode.Content,
         "docs" => SearchToolMode.Content, // alias
+        "source" => SearchToolMode.Source,
         _ => SearchToolMode.Auto, // includes "auto", null, and anything unrecognized
     };
 
@@ -243,6 +300,9 @@ public sealed class SearchTool
 
     /// <summary>Region text is always served from the disk sidecar.</summary>
     internal const string RegionBackendMetadata = "{\"search_backend\":\"region_disk\"}";
+
+    /// <summary>Workspace source text is served from the content corpus sidecar.</summary>
+    internal const string TextContentBackendMetadata = "{\"search_backend\":\"content_disk\"}";
 
     private static string SearchBackendMetadata(ISymbolLookupIndex index) =>
         index is FtsSymbolSearchIndex ? DiskBackendMetadata : MemoryBackendMetadata;
@@ -401,6 +461,88 @@ public sealed class SearchTool
     }
 
     /// <summary>
+    /// The pure text-content corpus execution core (no MCP/DI/telemetry). This is used by explicit
+    /// source/docs/external/web text modes and returns corpus chunk hits, not symbol rows.
+    /// </summary>
+    public static string RunTextContent(
+        ITextContentSearchIndex index,
+        string query,
+        string contentKind,
+        int limit,
+        bool excludeTests,
+        bool json,
+        out int renderedCount,
+        string? compactBanner = null,
+        string? filePattern = null,
+        string? language = null) =>
+        RunTextContent(
+            index,
+            query,
+            contentKind,
+            limit,
+            excludeTests,
+            json,
+            out renderedCount,
+            out _,
+            compactBanner,
+            filePattern,
+            language);
+
+    public static string RunTextContent(
+        ITextContentSearchIndex index,
+        string query,
+        string contentKind,
+        int limit,
+        bool excludeTests,
+        bool json,
+        out int renderedCount,
+        out long sourceBytes,
+        string? compactBanner = null,
+        string? filePattern = null,
+        string? language = null)
+    {
+        ArgumentNullException.ThrowIfNull(index);
+        ArgumentException.ThrowIfNullOrWhiteSpace(query);
+        ArgumentException.ThrowIfNullOrWhiteSpace(contentKind);
+        if (limit < 1) limit = 1;
+
+        SearchFilters filters = SearchFilters.Parse(filePattern, language);
+        int overFetch = filters.HasAny ? 500 : Math.Min(limit * 4 + 10, 500);
+        var hits = new List<TextContentSearchHit>();
+        var outsideScope = new List<TextContentSearchHit>(OutsideScopeHintLimit);
+        foreach (TextContentSearchHit hit in index.Search(query, contentKind, overFetch, excludeTests))
+        {
+            if (filters.Allows(hit.DisplayPath, hit.Language))
+                hits.Add(hit);
+            else if (filters.HasAny && outsideScope.Count < OutsideScopeHintLimit)
+                outsideScope.Add(hit);
+        }
+
+        int total = hits.Count;
+        int page = Math.Min(limit, total);
+        renderedCount = page;
+
+        if (total == 0)
+        {
+            sourceBytes = 0;
+            if (json)
+                return "[]";
+            return outsideScope.Count > 0
+                ? RenderFilteredMissTextContentCompact(filters, compactBanner, outsideScope)
+                : ReadToolWorkspaceRouting.PrefixCompact("No results.", compactBanner);
+        }
+
+        sourceBytes = hits
+            .Take(page)
+            .GroupBy(static hit => hit.SourceId, StringComparer.Ordinal)
+            .Sum(static group => group.Max(static hit => hit.SourceBytes));
+
+        return json
+            ? RenderTextContentJson(hits, page)
+            : RenderTextContentCompact(hits, page, total, compactBanner);
+    }
+
+    /// <summary>
     /// The pure source-region search execution core (no MCP/DI/telemetry). This is a distinct result kind from
     /// symbol and content search: each hit is text inside a comment, doc-comment, or string literal.
     /// </summary>
@@ -546,6 +688,23 @@ public sealed class SearchTool
         foreach (ContentSearchHit h in outsideScope)
         {
             sb.Append('\n').Append(h.Path).Append(':').Append(h.Line);
+            foreach (string line in h.Snippet.Split('\n'))
+                sb.Append('\n').Append("    ").Append(line);
+        }
+        return sb.ToString();
+    }
+
+    private static string RenderFilteredMissTextContentCompact(
+        SearchFilters filters,
+        string? compactBanner,
+        IReadOnlyList<TextContentSearchHit> outsideScope)
+    {
+        var sb = FilteredMissHeader(filters, compactBanner);
+        foreach (TextContentSearchHit h in outsideScope)
+        {
+            sb.Append('\n').Append(h.DisplayPath).Append(':').Append(h.Line).Append("  ").Append(h.ContentKind);
+            if (!string.IsNullOrWhiteSpace(h.ContainingSymbolName))
+                sb.Append("  ").Append(h.ContainingSymbolName);
             foreach (string line in h.Snippet.Split('\n'))
                 sb.Append('\n').Append("    ").Append(line);
         }
@@ -981,6 +1140,71 @@ public sealed class SearchTool
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
     }
 
+    private static string RenderTextContentCompact(
+        IReadOnlyList<TextContentSearchHit> hits, int page, int total, string? compactBanner)
+    {
+        var blocks = new List<string>(page);
+        for (int i = 0; i < page; i++)
+        {
+            TextContentSearchHit h = hits[i];
+            var block = new StringBuilder();
+            block.Append(h.DisplayPath).Append(':').Append(h.Line).Append("  ").Append(h.ContentKind);
+            if (!string.IsNullOrWhiteSpace(h.ContainingSymbolName))
+                block.Append("  ").Append(h.ContainingSymbolName);
+            foreach (string line in h.Snippet.Split('\n'))
+                block.Append('\n').Append("    ").Append(line);
+            blocks.Add(block.ToString());
+        }
+
+        var sb = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(compactBanner))
+            sb.Append(compactBanner).Append('\n');
+        sb.Append(string.Join("\n\n", blocks));
+
+        int remainder = total - page;
+        if (remainder > 0)
+            sb.Append('\n').Append("… ").Append(remainder).Append(" more (raise limit)");
+        return sb.ToString();
+    }
+
+    private static string RenderTextContentJson(IReadOnlyList<TextContentSearchHit> hits, int page)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
+        {
+            writer.WriteStartArray();
+            for (int i = 0; i < page; i++)
+            {
+                TextContentSearchHit h = hits[i];
+                writer.WriteStartObject();
+                writer.WriteString("source_id", h.SourceId);
+                writer.WriteString("chunk_id", h.ChunkId);
+                writer.WriteString("content_kind", h.ContentKind);
+                if (h.Path is null) writer.WriteNull("path");
+                else writer.WriteString("path", h.Path);
+                if (h.Url is null) writer.WriteNull("url");
+                else writer.WriteString("url", h.Url);
+                writer.WriteString("display_path", h.DisplayPath);
+                writer.WriteString("language", h.Language);
+                writer.WriteNumber("line", h.Line);
+                writer.WriteNumber("line_start", h.LineStart);
+                writer.WriteNumber("line_end", h.LineEnd);
+                writer.WriteNumber("byte_start", h.ByteStart);
+                writer.WriteNumber("byte_end", h.ByteEnd);
+                writer.WriteNumber("score", h.Score);
+                writer.WriteString("snippet", h.Snippet);
+                writer.WriteNumber("source_bytes", h.SourceBytes);
+                if (h.ContainingSymbolId is null) writer.WriteNull("containing_symbol_id");
+                else writer.WriteString("containing_symbol_id", h.ContainingSymbolId);
+                if (h.ContainingSymbolName is null) writer.WriteNull("containing_symbol_name");
+                else writer.WriteString("containing_symbol_name", h.ContainingSymbolName);
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+        }
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
     internal static string Truncate(string value, int max) =>
         value.Length <= max ? value : value[..(max - 1)] + "…";
 
@@ -1114,5 +1338,11 @@ public sealed class SearchTool
     {
         public WorkspaceRegionSearchContext ResolveRegionSearch(string? workspaceId, bool ensureFresh) =>
             throw new InvalidOperationException("region search provider is not configured.");
+    }
+
+    private sealed class UnavailableTextContentSearchProvider : IWorkspaceTextContentSearchProvider
+    {
+        public WorkspaceTextContentSearchContext ResolveTextContentSearch(string? workspaceId, bool ensureFresh) =>
+            throw new InvalidOperationException("text content search provider is not configured.");
     }
 }

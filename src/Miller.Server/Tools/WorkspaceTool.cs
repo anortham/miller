@@ -40,6 +40,7 @@ public sealed class WorkspaceTool
     private readonly WorkspaceRegistry _registry;
     private readonly CrossWorkspaceRefreshService _crossWorkspaceRefresh;
     private readonly SymbolSearchSidecar _sidecar;
+    private readonly ContentCorpusSidecar _contentSidecar = new();
     private readonly Func<string, string, bool, ExtractReport> _scanForOpen;
     private readonly Func<string, IDisposable?> _acquireWriterLock;
     private readonly IDashboardLauncher _dashboardLauncher;
@@ -236,7 +237,8 @@ public sealed class WorkspaceTool
                 DisplayId: row.DisplayId,
                 ServerVersion: MillerVersion.Current,
                 ServerProcessId: Environment.ProcessId,
-                SearchSidecar: _sidecar.Inspect(row.IndexDbPath, row.LastRevision ?? 0));
+                SearchSidecar: _sidecar.Inspect(row.IndexDbPath, row.LastRevision ?? 0),
+                ContentCorpus: _contentSidecar.Inspect(row.IndexDbPath, row.LastRevision ?? 0));
             return (WorkspaceRender.Status(missingFacts, _ledger.SummarizeForWorkspace(row.WorkspaceId), json),
                 1, TelemetryOutcome.Empty);
         }
@@ -257,7 +259,8 @@ public sealed class WorkspaceTool
             DisplayId: row.DisplayId,
             ServerVersion: MillerVersion.Current,
             ServerProcessId: Environment.ProcessId,
-            SearchSidecar: _sidecar.Inspect(row.IndexDbPath, revision));
+            SearchSidecar: _sidecar.Inspect(row.IndexDbPath, revision),
+            ContentCorpus: _contentSidecar.Inspect(row.IndexDbPath, revision));
         return (WorkspaceRender.Status(facts, _ledger.SummarizeForWorkspace(row.WorkspaceId), json),
             1, TelemetryOutcome.Ok);
     }
@@ -301,7 +304,8 @@ public sealed class WorkspaceTool
             DisplayId: CurrentDisplayId(),
             ServerVersion: MillerVersion.Current,
             ServerProcessId: Environment.ProcessId,
-            SearchSidecar: _sidecar.Inspect(_workspace.ExtractDbPath, builtRevision));
+            SearchSidecar: _sidecar.Inspect(_workspace.ExtractDbPath, builtRevision),
+            ContentCorpus: _contentSidecar.Inspect(_workspace.ExtractDbPath, builtRevision));
     }
 
     // ---------- refresh / full ----------
