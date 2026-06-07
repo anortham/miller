@@ -353,6 +353,38 @@ public sealed class SearchToolTests
     }
 
     [Fact]
+    public void Run_SymbolSearch_FilteredMiss_ShowsOutsideScopeHintInCompact()
+    {
+        var index = new StubSymbolSearchIndex(
+            (Symbol(0, "sym-api", "SearchWidget", "class", "src/api/SearchWidget.cs", 8,
+                "public class SearchWidget"), 10.0),
+            (Symbol(1, "sym-domain", "SearchWidget", "class", "src/domain/SearchWidget.cs", 9,
+                "public class SearchWidget"), 9.0));
+
+        string output = SearchTool.Run(index, "SearchWidget", SearchToolMode.Auto, limit: 10,
+            excludeTests: null, json: false, out int count, filePattern: "src/ui/**");
+
+        Assert.Equal(0, count);
+        Assert.Contains("No results within file_pattern=src/ui/**.", output);
+        Assert.Contains("Outside scope:", output);
+        Assert.Contains("SearchWidget  class  src/api/SearchWidget.cs:8  public class SearchWidget", output);
+        Assert.Contains("SearchWidget  class  src/domain/SearchWidget.cs:9  public class SearchWidget", output);
+    }
+
+    [Fact]
+    public void Run_SymbolSearch_FilteredMissJson_RemainsEmptyArray()
+    {
+        var index = new StubSymbolSearchIndex(
+            (Symbol(0, "sym-api", "SearchWidget", "class", "src/api/SearchWidget.cs", 8), 10.0));
+
+        string output = SearchTool.Run(index, "SearchWidget", SearchToolMode.Auto, limit: 10,
+            excludeTests: null, json: true, out int count, filePattern: "src/ui/**");
+
+        Assert.Equal(0, count);
+        Assert.Equal("[]", output);
+    }
+
+    [Fact]
     public void Run_SymbolJson_RendersExactCompatibilityShape()
     {
         var index = new StubSymbolSearchIndex(
@@ -388,6 +420,26 @@ public sealed class SearchToolTests
         Assert.Contains("src/Alpha.cs:7", first);
         // Compact output has no blank lines.
         Assert.DoesNotContain("\n\n", output);
+    }
+
+    [Fact]
+    public void Search_DefaultLimit_RendersSixActionableRows_WithOverflowNote()
+    {
+        var rows = Enumerable.Range(0, 8)
+            .Select(i => (
+                Symbol: Symbol(i, $"sym-widget-{i}", $"Widget{i}", "class", $"src/Widget{i}.cs", i + 1,
+                    $"public class Widget{i}"),
+                Score: 10.0 - i))
+            .ToArray();
+        var index = new StubSymbolSearchIndex(rows);
+        var provider = new FixedSymbolSearchProvider(index, Path.Combine(Path.GetTempPath(), "miller-search-root"));
+        var tool = new SearchTool(provider, provider);
+
+        string output = tool.Search("Widget");
+
+        Assert.Contains("Widget5  class  src/Widget5.cs:6", output);
+        Assert.DoesNotContain("Widget6", output);
+        Assert.Contains("… 2 more (raise limit)", output);
     }
 
     [Fact]
@@ -803,6 +855,25 @@ public sealed class SearchToolTests
     }
 
     [Fact]
+    public void RunContent_FilteredMiss_ShowsOutsideScopeHintInCompact()
+    {
+        var index = ContentSearchProjection.Build([
+            new ContentDocument(0, "notes/guide.txt", "alpha scoped content", "text"),
+            new ContentDocument(1, "notes/reference.txt", "alpha scoped reference", "text"),
+        ]);
+
+        string output = SearchTool.RunContent(index, "alpha", limit: 10, json: false, out int count,
+            filePattern: "docs/**");
+
+        Assert.Equal(0, count);
+        Assert.Contains("No results within file_pattern=docs/**.", output);
+        Assert.Contains("Outside scope:", output);
+        Assert.Contains("notes/guide.txt:1", output);
+        Assert.Contains("alpha scoped content", output);
+        Assert.Contains("notes/reference.txt:1", output);
+    }
+
+    [Fact]
     public void Search_ModeContent_RoutesToContentProvider_AndRendersContentHits()
     {
         using var current = FixtureWithSymbol("current-ws", "CurrentOnly");
@@ -1005,6 +1076,30 @@ public sealed class SearchToolTests
         Assert.Equal(1, count);
         Assert.Contains("src/ui/A.ts", output);
         Assert.DoesNotContain("src/api/A.cs", output);
+    }
+
+    [Fact]
+    public void RunRegions_FilteredMiss_ShowsOutsideScopeHintInCompact()
+    {
+        var index = new StubRegionSearchIndex(
+            new RegionSearchHit("src/api/A.cs", 2.0, 7, "comment", "// TODO scoped", "// TODO scoped",
+                "region-cs", "sym-cs", "A", "csharp"));
+
+        string output = SearchTool.RunRegions(
+            index,
+            "TODO",
+            new HashSet<string> { "comment" },
+            limit: 10,
+            excludeTests: false,
+            json: false,
+            out int count,
+            filePattern: "src/ui/**");
+
+        Assert.Equal(0, count);
+        Assert.Contains("No results within file_pattern=src/ui/**.", output);
+        Assert.Contains("Outside scope:", output);
+        Assert.Contains("src/api/A.cs:7  comment  A", output);
+        Assert.Contains("// TODO scoped", output);
     }
 
     [Fact]

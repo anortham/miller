@@ -144,7 +144,7 @@ public static class CliDispatch
             return 2;
 
         bool json = o.Has("json");
-        int limit = o.Int("limit", 10);
+        int limit = o.Int("limit", SearchTool.DefaultLimit);
         string requestedMode = o.Value("mode", "auto")!;
         SearchToolMode mode = SearchTool.ParseMode(requestedMode);
         IReadOnlySet<string>? regionKinds;
@@ -882,7 +882,7 @@ public static class CliDispatch
 
         Commands:
           search <query>     Find code by name, identifier, or phrase.
-                             [--workspace-id SELECTOR] [--workspace DIR] [--mode auto|text|symbol|file|content] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--include-tests]
+                             [--workspace-id SELECTOR] [--workspace DIR] [--mode auto|text|symbol|file|content] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--include-tests|--exclude-tests]
           inspect <target>   List a file's symbols, or show a symbol's definition.
                              [--workspace-id SELECTOR] [--workspace DIR] [--depth summary|full] [--kind K] [--scope FILE] [--limit N] [--json]
           context <query>    Token-budgeted bundle of the most relevant code for a task.

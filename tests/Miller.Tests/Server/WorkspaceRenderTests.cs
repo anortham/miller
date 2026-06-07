@@ -121,6 +121,21 @@ public sealed class WorkspaceRenderTests
     }
 
     [Fact]
+    public void Status_Compact_StaleSearchSidecar_ReportsRevisionDirectionHonestly()
+    {
+        var facts = Facts() with
+        {
+            SearchSidecar = new SearchSidecarFacts(
+                "stale", "/repo/.miller/search.db", Revision: 44, ExpectedRevision: 42, DocumentCount: 565, Error: null),
+        };
+
+        string text = WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: false);
+
+        Assert.Contains("built 44 > expected 42", text);
+        Assert.DoesNotContain("built 44 < expected 42", text);
+    }
+
+    [Fact]
     public void Status_Json_ShowsSearchSidecarObject()
     {
         var facts = Facts() with

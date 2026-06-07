@@ -211,7 +211,7 @@ public static class WorkspaceRender
         "disabled" => "disabled",
         "current" => $"current rev {facts.Revision}",
         "missing" => $"MISSING expected rev {facts.ExpectedRevision}",
-        "stale" => $"STALE (built {facts.Revision?.ToString(CultureInfo.InvariantCulture) ?? "unknown"} < expected {facts.ExpectedRevision})",
+        "stale" => $"STALE ({RevisionComparison(facts.Revision, facts.ExpectedRevision, "expected")})",
         "unreadable" => string.IsNullOrWhiteSpace(facts.Error)
             ? "UNREADABLE"
             : "UNREADABLE: " + facts.Error,
@@ -222,9 +222,19 @@ public static class WorkspaceRender
     private static string FreshLabel(WorkspaceFacts facts) => facts.IndexFresh switch
     {
         true => "fresh",
-        false => $"STALE (built {facts.BuiltRevision} < latest {facts.LatestObservedRevision})",
+        false => $"STALE ({RevisionComparison(facts.BuiltRevision, facts.LatestObservedRevision, "latest")})",
         null => "unknown",
     };
+
+    private static string RevisionComparison(long? builtRevision, long expectedRevision, string expectedLabel)
+    {
+        string expected = expectedRevision.ToString(CultureInfo.InvariantCulture);
+        if (builtRevision is not { } built)
+            return $"built unknown, {expectedLabel} {expected}";
+
+        string op = built < expectedRevision ? "<" : built > expectedRevision ? ">" : "=";
+        return $"built {built.ToString(CultureInfo.InvariantCulture)} {op} {expectedLabel} {expected}";
+    }
 
     private static string DisplayId(string root, string? workspaceId, string? displayId)
     {

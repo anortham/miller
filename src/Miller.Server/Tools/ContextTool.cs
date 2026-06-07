@@ -102,7 +102,7 @@ public sealed partial class ContextTool
     }
 
     private const int SignatureMaxLength = 110;
-    private const int SearchSeedLimit = 10; // BM25 seeds (the toolbox default search page)
+    private const int SearchSeedLimit = 10; // BM25 seed cap for bundle construction, not the rendered search page.
     // A generous internal reach cap so the budget — not an arbitrary count — bounds the bundle. The token pack
     // is the real limiter; this only guards against a pathological fan-out feeding the packer a huge candidate set.
     private const int ReachCap = 500;

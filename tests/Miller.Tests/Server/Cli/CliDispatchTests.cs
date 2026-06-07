@@ -100,6 +100,22 @@ public sealed class CliDispatchTests : IDisposable
                 "src/Two.cs", "public void Duplicate()", 20, null),
         });
 
+    private static JulieDbFixture DbWithDuplicateWidgets() =>
+        JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            Enumerable.Range(0, 8)
+                .Select(i => new JulieDbFixture.SymbolRow(
+                    $"c{i:0000000000000000000000000000000}"[..32],
+                    "Widget",
+                    "class",
+                    "csharp",
+                    $"src/Widget{i}.cs",
+                    $"public class Widget{i}",
+                    i + 1,
+                    ParentId: null))
+                .ToArray());
+
     [Fact]
     public void IsCliInvocation_ServeAndEmptyAreServer_EverythingElseIsCli()
     {
@@ -346,6 +362,20 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Empty(errText);
         Assert.Contains("src/flask/app.py", outText);
         Assert.DoesNotContain("tests/test_config.py", outText);
+    }
+
+    [Fact]
+    public void Search_DefaultLimit_RendersSixActionableRows_WithOverflowNote()
+    {
+        using var fx = DbWithDuplicateWidgets();
+
+        var (code, outText, errText) = Run(new[] { "search", "Widget" }, Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("src/Widget5.cs", outText);
+        Assert.DoesNotContain("src/Widget6.cs", outText);
+        Assert.Contains("… 2 more (raise limit)", outText);
     }
 
     [Fact]

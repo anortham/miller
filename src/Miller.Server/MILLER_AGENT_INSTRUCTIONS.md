@@ -25,6 +25,8 @@ the tokens.
   "where is…?". Use `mode=content` (alias `docs`) to search docs/prose file CONTENT instead of symbols — it
   returns `path:line` + a snippet window, for files symbol search can't see (markdown, config, plain text).
   Use `file_pattern=<glob>` and `language=<lang>` to keep result sets small when you know the area or language.
+  The default page is 6 results; each compact symbol hit includes name, kind, file, line, and signature when
+  available. Raise `limit` for a wider page.
   Use `regions=comment|doc_comment|string_literal` (comma lists accepted; `docstring` aliases `doc_comment`) to
   search only inside comments, doc-comments, or string literals. Region search requires `MILLER_REGION_INDEX=1`
   and a refreshed `search.db` sidecar; set `MILLER_REGION_MAX_BYTES=<n>` before refresh to tune the per-region cap.

@@ -42,6 +42,8 @@ public enum SearchToolMode
 [McpServerToolType]
 public sealed class SearchTool
 {
+    internal const int DefaultLimit = 6;
+
     private readonly IWorkspaceSearchProvider _workspaceProvider;
     private readonly IWorkspaceContentSearchProvider _contentProvider;
     private readonly IWorkspaceRegionSearchProvider _regionProvider;
@@ -89,7 +91,7 @@ public sealed class SearchTool
     public string Search(
         [Description("Symbol name, identifier, or natural-language phrase.")] string query,
         [Description("Interpretation axis: auto|text|symbol|file|content (alias docs). Default auto.")] string mode = "auto",
-        [Description("Max results to return. Default 10.")] int limit = 10,
+        [Description("Max results to return. Default 6.")] int limit = DefaultLimit,
         [Description("Hide test code: leave unset to auto-hide for natural-language queries; true/false to force.")]
         bool? exclude_tests = null,
         [Description("Output format: compact|json. Default compact.")] string format = "compact",
@@ -245,6 +247,7 @@ public sealed class SearchTool
     private static string SearchBackendMetadata(ISymbolLookupIndex index) =>
         index is FtsSymbolSearchIndex ? DiskBackendMetadata : MemoryBackendMetadata;
 
+    private const int OutsideScopeHintLimit = 3;
     private const int SignatureMaxLength = 110;
 
     /// <summary>
@@ -275,6 +278,7 @@ public sealed class SearchTool
         // Preserve index order; only filter (never re-sort).
         var kept = new List<IndexedSymbol>();
         var scores = new List<double>();
+        var outsideScope = new List<IndexedSymbol>(OutsideScopeHintLimit);
         if (fileMode)
         {
             IReadOnlyList<IndexedSymbol> symbols = index.FindByFilePathFragment(query, overFetch);
@@ -297,7 +301,13 @@ public sealed class SearchTool
         renderedCount = page;
 
         if (total == 0)
-            return json ? "[]" : ReadToolWorkspaceRouting.PrefixCompact("No results.", compactBanner);
+        {
+            if (json)
+                return "[]";
+            return outsideScope.Count > 0
+                ? RenderFilteredMissCompact(filters, compactBanner, outsideScope)
+                : ReadToolWorkspaceRouting.PrefixCompact("No results.", compactBanner);
+        }
 
         IReadOnlySet<string>? hasDocSymbolIds = null;
         if (hasDocLookup is not null && page > 0)
@@ -321,7 +331,11 @@ public sealed class SearchTool
             if (hideLowSignalKinds && IsLowSignalKind(sym.Kind))
                 return;
             if (!filters.Allows(sym.FilePath, sym.Language))
+            {
+                if (filters.HasAny && outsideScope.Count < OutsideScopeHintLimit)
+                    outsideScope.Add(sym);
                 return;
+            }
             kept.Add(sym);
             scores.Add(score);
         }
@@ -352,9 +366,15 @@ public sealed class SearchTool
         // Over-fetch (same cap as symbol search) so the "… N more" overflow note is accurate without paging.
         SearchFilters filters = SearchFilters.Parse(filePattern, language);
         int overFetch = filters.HasAny ? 500 : Math.Min(limit * 4 + 10, 500);
-        IReadOnlyList<ContentSearchHit> hits = index.Search(query, overFetch)
-            .Where(hit => filters.Allows(hit.Path, hit.Language))
-            .ToArray();
+        var hits = new List<ContentSearchHit>();
+        var outsideScope = new List<ContentSearchHit>(OutsideScopeHintLimit);
+        foreach (ContentSearchHit hit in index.Search(query, overFetch))
+        {
+            if (filters.Allows(hit.Path, hit.Language))
+                hits.Add(hit);
+            else if (filters.HasAny && outsideScope.Count < OutsideScopeHintLimit)
+                outsideScope.Add(hit);
+        }
 
         int total = hits.Count;
         int page = Math.Min(limit, total);
@@ -363,7 +383,11 @@ public sealed class SearchTool
         if (total == 0)
         {
             sourceBytes = 0;
-            return json ? "[]" : ReadToolWorkspaceRouting.PrefixCompact("No results.", compactBanner);
+            if (json)
+                return "[]";
+            return outsideScope.Count > 0
+                ? RenderFilteredMissContentCompact(filters, compactBanner, outsideScope)
+                : ReadToolWorkspaceRouting.PrefixCompact("No results.", compactBanner);
         }
 
         sourceBytes = hits
@@ -400,9 +424,15 @@ public sealed class SearchTool
 
         SearchFilters filters = SearchFilters.Parse(filePattern, language);
         int overFetch = filters.HasAny ? 500 : Math.Min(limit * 4 + 10, 500);
-        IReadOnlyList<RegionSearchHit> hits = index.Search(query, kinds, overFetch, excludeTests)
-            .Where(hit => filters.Allows(hit.Path, hit.Language))
-            .ToArray();
+        var hits = new List<RegionSearchHit>();
+        var outsideScope = new List<RegionSearchHit>(OutsideScopeHintLimit);
+        foreach (RegionSearchHit hit in index.Search(query, kinds, overFetch, excludeTests))
+        {
+            if (filters.Allows(hit.Path, hit.Language))
+                hits.Add(hit);
+            else if (filters.HasAny && outsideScope.Count < OutsideScopeHintLimit)
+                outsideScope.Add(hit);
+        }
 
         int total = hits.Count;
         int page = Math.Min(limit, total);
@@ -410,7 +440,13 @@ public sealed class SearchTool
 
         string? prefix = CombineCompactPrefix(compactBanner, modeNote);
         if (total == 0)
-            return json ? "[]" : ReadToolWorkspaceRouting.PrefixCompact("No results.", prefix);
+        {
+            if (json)
+                return "[]";
+            return outsideScope.Count > 0
+                ? RenderFilteredMissRegionCompact(filters, prefix, outsideScope)
+                : ReadToolWorkspaceRouting.PrefixCompact("No results.", prefix);
+        }
 
         return json
             ? RenderRegionJson(hits, page)
@@ -480,6 +516,67 @@ public sealed class SearchTool
         {
             return new HashSet<string>(StringComparer.Ordinal);
         }
+    }
+
+    private static string RenderFilteredMissCompact(
+        SearchFilters filters,
+        string? compactBanner,
+        IReadOnlyList<IndexedSymbol> outsideScope)
+    {
+        var sb = FilteredMissHeader(filters, compactBanner);
+        foreach (IndexedSymbol s in outsideScope)
+        {
+            sb.Append('\n')
+              .Append(s.Name).Append("  ").Append(s.Kind).Append("  ")
+              .Append(s.FilePath).Append(':').Append(s.StartLine);
+            if (IsLowSignalKind(s.Kind))
+                sb.Append("  low_signal");
+            else if (!string.IsNullOrEmpty(s.Signature))
+                sb.Append("  ").Append(Truncate(s.Signature!, SignatureMaxLength));
+        }
+        return sb.ToString();
+    }
+
+    private static string RenderFilteredMissContentCompact(
+        SearchFilters filters,
+        string? compactBanner,
+        IReadOnlyList<ContentSearchHit> outsideScope)
+    {
+        var sb = FilteredMissHeader(filters, compactBanner);
+        foreach (ContentSearchHit h in outsideScope)
+        {
+            sb.Append('\n').Append(h.Path).Append(':').Append(h.Line);
+            foreach (string line in h.Snippet.Split('\n'))
+                sb.Append('\n').Append("    ").Append(line);
+        }
+        return sb.ToString();
+    }
+
+    private static string RenderFilteredMissRegionCompact(
+        SearchFilters filters,
+        string? compactPrefix,
+        IReadOnlyList<RegionSearchHit> outsideScope)
+    {
+        var sb = FilteredMissHeader(filters, compactPrefix);
+        foreach (RegionSearchHit h in outsideScope)
+        {
+            sb.Append('\n').Append(h.Path).Append(':').Append(h.Line).Append("  ").Append(h.Kind);
+            if (!string.IsNullOrWhiteSpace(h.ContainingSymbolName))
+                sb.Append("  ").Append(h.ContainingSymbolName);
+            foreach (string line in h.Snippet.Split('\n'))
+                sb.Append('\n').Append("    ").Append(line);
+        }
+        return sb.ToString();
+    }
+
+    private static StringBuilder FilteredMissHeader(SearchFilters filters, string? compactPrefix)
+    {
+        var sb = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(compactPrefix))
+            sb.Append(compactPrefix).Append('\n');
+        sb.Append("No results within ").Append(filters.ScopeDescription).Append('.')
+          .Append('\n').Append("Outside scope:");
+        return sb;
     }
 
     private static string RenderCompact(
@@ -892,36 +989,56 @@ public sealed class SearchTool
         private readonly GlobMatcher[] _filePatterns;
         private readonly HashSet<string>? _languages;
 
-        private SearchFilters(GlobMatcher[] filePatterns, HashSet<string>? languages)
+        private SearchFilters(GlobMatcher[] filePatterns, HashSet<string>? languages, string? scopeDescription)
         {
             _filePatterns = filePatterns;
             _languages = languages;
+            ScopeDescription = scopeDescription ?? "the requested scope";
         }
 
         public bool HasAny => _filePatterns.Length > 0 || _languages is not null;
 
+        public string ScopeDescription { get; }
+
         public static SearchFilters Parse(string? filePattern, string? language)
         {
-            GlobMatcher[] filePatterns = string.IsNullOrWhiteSpace(filePattern)
-                ? Array.Empty<GlobMatcher>()
+            string[] filePatternParts = string.IsNullOrWhiteSpace(filePattern)
+                ? Array.Empty<string>()
                 : filePattern
                     .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                     .Where(static pattern => pattern.Length > 0)
-                    .Select(static pattern => new GlobMatcher(pattern))
                     .ToArray();
+            GlobMatcher[] filePatterns = filePatternParts
+                .Select(static pattern => new GlobMatcher(pattern))
+                .ToArray();
 
             HashSet<string>? languages = null;
+            var languageParts = new List<string>();
             if (!string.IsNullOrWhiteSpace(language))
             {
                 languages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (string part in language.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                {
                     if (part.Length > 0)
+                    {
                         languages.Add(part);
+                        languageParts.Add(part);
+                    }
+                }
                 if (languages.Count == 0)
                     languages = null;
             }
 
-            return new SearchFilters(filePatterns, languages);
+            var scopeParts = new List<string>(capacity: 2);
+            if (filePatternParts.Length > 0)
+                scopeParts.Add("file_pattern=" + string.Join(",", filePatternParts));
+            if (languageParts.Count > 0)
+                scopeParts.Add("language=" + string.Join(",", languageParts));
+
+            return new SearchFilters(
+                filePatterns,
+                languages,
+                scopeParts.Count == 0 ? null : string.Join(", ", scopeParts));
         }
 
         public bool Allows(string path, string language)

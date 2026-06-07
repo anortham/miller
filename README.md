@@ -330,6 +330,8 @@ For beta, text output is a compact human-facing contract and JSON output is the 
 - Search result kinds are deliberately separate: symbol search ranks `name + signature`, `--mode content`
   searches docs-like file content, and `--regions` searches explicit source regions when region indexing
   is enabled.
+- Search defaults to 6 results. Compact symbol rows include name, kind, file, line, and signature when available;
+  use `--limit N` when you need a wider page.
 
 ## Build & test
 
