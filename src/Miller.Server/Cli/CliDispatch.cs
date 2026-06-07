@@ -67,6 +67,8 @@ public static class CliDispatch
                     return 0;
                 case "search":
                     return Search(rest, context, stdout, stderr);
+                case "content":
+                    return Content(rest, context, stdout, stderr);
                 case "inspect":
                     return Inspect(rest, context, stdout, stderr);
                 case "context":
@@ -262,6 +264,53 @@ public static class CliDispatch
             return 3;
         outw.WriteLine(SearchTool.Run(index, o.Query, mode, limit, excludeTests, json, out _,
             filePattern: o.Value("file-pattern"), language: o.Value("language")));
+        return 0;
+    }
+
+    private static int Content(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
+    {
+        if (args.Count == 0)
+            return Usage(err, "miller content <import|search|read|list|remove> [args] [--json]");
+
+        string operation = args[0];
+        CliOptions o = CliOptions.Parse(args.Skip(1).ToArray(), "json");
+        bool json = o.Has("json");
+
+        string? path = null;
+        string? query = null;
+        if (string.Equals(operation, "import", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(operation, "add", StringComparison.OrdinalIgnoreCase))
+        {
+            path = o.Query;
+            if (string.IsNullOrWhiteSpace(path))
+                return Usage(err, "miller content import <path> [--max-bytes N] [--json]");
+        }
+        else if (string.Equals(operation, "search", StringComparison.OrdinalIgnoreCase))
+        {
+            query = o.Query;
+            if (string.IsNullOrWhiteSpace(query))
+                return Usage(err, "miller content search <query> [--limit N] [--json]");
+        }
+
+        var tool = new ContentTool(ctx, new ContentCorpusExternalStore());
+        string output = tool.Content(
+            operation,
+            path: path,
+            query: query,
+            source_id: o.Value("source-id"),
+            line: o.Has("line") ? o.Int("line", 0) : null,
+            context_lines: o.Has("context-lines") ? o.Int("context-lines", ContentCorpusExternalStore.DefaultContextLines) : null,
+            limit: o.Int("limit", SearchTool.DefaultLimit),
+            max_bytes: LongOption(o, "max-bytes"),
+            format: json ? "json" : "compact");
+
+        if (output.StartsWith("content failed:", StringComparison.Ordinal))
+        {
+            err.WriteLine(output);
+            return 3;
+        }
+
+        outw.WriteLine(output);
         return 0;
     }
 
@@ -923,6 +972,18 @@ public static class CliDispatch
         return false;
     }
 
+    private static long? LongOption(CliOptions options, string name)
+    {
+        string? value = options.Value(name);
+        return long.TryParse(
+            value,
+            System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out long parsed)
+            ? parsed
+            : null;
+    }
+
     private static int Usage(TextWriter err, string usage)
     {
         err.WriteLine("usage: " + usage);
@@ -938,6 +999,12 @@ public static class CliDispatch
         Commands:
           search <query>     Find code by name, identifier, or phrase.
                              [--workspace-id SELECTOR] [--workspace DIR] [--mode auto|text|symbol|file|content] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--include-tests|--exclude-tests]
+          content <op>       Import/search/read/list/remove external text in content.db.
+                             import <path> [--max-bytes N] [--json]
+                             search <query> [--limit N] [--json]
+                             read --source-id ID --line N [--context-lines N] [--json]
+                             list [--json]
+                             remove --source-id ID [--json]
           inspect <target>   List a file's symbols, or show a symbol's definition.
                              [--workspace-id SELECTOR] [--workspace DIR] [--depth summary|full] [--kind K] [--scope FILE] [--limit N] [--json]
           context <query>    Token-budgeted bundle of the most relevant code for a task.

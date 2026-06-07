@@ -312,14 +312,14 @@ Out of scope for this plan:
 **Approach:** `ContentTool` imports external files into `content.db` with `content_kind=external_file`, a stable `source_id`, full content hash, source byte count, and chunked raw text. It must not require `julie-extract`; it must not print full content. The read action accepts source id plus line/window or hit id and returns bounded text only. CLI mirrors the MCP operations for local debugging.
 
 **Acceptance criteria:**
-- [ ] A large external log file can be imported without printing its full content.
-- [ ] Search returns concise snippets from imported external files.
-- [ ] Read returns a bounded line window by source id and line number.
-- [ ] Remove deletes source/chunk/FTS rows for one imported source.
-- [ ] List shows imported sources with kind, display path, bytes, chunks, and indexed time.
-- [ ] Hard caps prevent accidental huge imports unless the caller passes an explicit max-byte override.
-- [ ] The large-file skill instructs agents to use the tool instead of `cat`/full reads for large text.
-- [ ] Worker-scope verification and plugin skill tests pass, and changes are committed.
+- [x] A large external log file can be imported without printing its full content.
+- [x] Search returns concise snippets from imported external files.
+- [x] Read returns a bounded line window by source id and line number.
+- [x] Remove deletes source/chunk/FTS rows for one imported source.
+- [x] List shows imported sources with kind, display path, bytes, chunks, and indexed time.
+- [x] Hard caps prevent accidental huge imports unless the caller passes an explicit max-byte override.
+- [x] The large-file skill instructs agents to use the tool instead of `cat`/full reads for large text.
+- [x] Worker-scope verification and plugin skill tests pass, and changes are committed.
 
 ## Phase 4: Web Research Workflow
 

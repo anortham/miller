@@ -1,0 +1,337 @@
+using System.Buffers;
+using System.ComponentModel;
+using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
+using Miller.Core.Search;
+using Miller.Indexing;
+using Miller.Server.Telemetry;
+using ModelContextProtocol.Server;
+
+namespace Miller.Server.Tools;
+
+[McpServerToolType]
+public sealed class ContentTool
+{
+    private readonly WorkspaceContext _workspace;
+    private readonly ContentCorpusExternalStore _store;
+
+    public ContentTool(WorkspaceContext workspace, ContentCorpusExternalStore store)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        ArgumentNullException.ThrowIfNull(store);
+        _workspace = workspace;
+        _store = store;
+    }
+
+    [McpServerTool(Name = "content")]
+    [Description(
+        "Import, search, read, list, and remove external text files in Miller's content corpus. Use for logs, " +
+        "CI output, reports, and large text files without printing full file content.")]
+    public string Content(
+        [Description("import|search|read|list|remove.")] string operation,
+        [Description("Path to import for operation=import.")] string? path = null,
+        [Description("Search query for operation=search.")] string? query = null,
+        [Description("Imported source id for operation=read/remove.")] string? source_id = null,
+        [Description("1-based center line for operation=read.")] int? line = null,
+        [Description("Context lines before/after the read line. Default 10, maximum bounded by Miller.")] int? context_lines = null,
+        [Description("Max search results. Default 6.")] int limit = SearchTool.DefaultLimit,
+        [Description("Max import bytes. Required to intentionally import files over the default cap.")] long? max_bytes = null,
+        [Description("Output format: compact|json. Default compact.")] string format = "compact")
+    {
+        var telemetry = TelemetryContext.Current;
+        try
+        {
+            string contentDbPath = ContentCorpusSidecar.ContentDbPathFor(_workspace.ExtractDbPath);
+            bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
+            string op = string.IsNullOrWhiteSpace(operation) ? "list" : operation.Trim().ToLowerInvariant();
+
+            return op switch
+            {
+                "import" or "add" => Import(contentDbPath, path, max_bytes, json, telemetry),
+                "search" => Search(contentDbPath, query, limit, json, telemetry),
+                "read" => Read(contentDbPath, source_id, line, context_lines, json, telemetry),
+                "list" => List(contentDbPath, json, telemetry),
+                "remove" or "delete" => Remove(contentDbPath, source_id, json, telemetry),
+                _ => throw new InvalidOperationException("content operation must be import, search, read, list, or remove."),
+            };
+        }
+        catch (Exception ex)
+        {
+            if (telemetry is not null)
+            {
+                telemetry.Outcome = TelemetryOutcome.Error;
+                telemetry.ErrorKind = ex.GetType().Name;
+            }
+            return $"content failed: {ex.Message}";
+        }
+    }
+
+    private string Import(
+        string contentDbPath,
+        string? path,
+        long? maxBytes,
+        bool json,
+        TelemetryScope? telemetry)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            throw new InvalidOperationException("content import requires path.");
+
+        ExternalContentImportResult result = _store.Import(contentDbPath, path, maxBytes);
+        if (telemetry is not null)
+        {
+            telemetry.SetTarget(result.DisplayPath);
+            telemetry.ResultCount = 1;
+            telemetry.SourceBytes = result.SourceBytes;
+            telemetry.Outcome = TelemetryOutcome.Ok;
+        }
+
+        return json ? RenderImportJson(result) : RenderImportCompact(result);
+    }
+
+    private string Search(
+        string contentDbPath,
+        string? query,
+        int limit,
+        bool json,
+        TelemetryScope? telemetry)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            throw new InvalidOperationException("content search requires query.");
+        if (limit < 1) limit = 1;
+
+        IReadOnlyList<TextContentSearchHit> hits = _store.Search(contentDbPath, query, limit);
+        if (telemetry is not null)
+        {
+            telemetry.SetTarget(query);
+            telemetry.ResultCount = hits.Count;
+            telemetry.SourceBytes = hits
+                .GroupBy(static hit => hit.SourceId, StringComparer.Ordinal)
+                .Sum(static group => group.Max(static hit => hit.SourceBytes));
+            telemetry.Outcome = hits.Count == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
+        }
+
+        return json ? RenderSearchJson(hits) : RenderSearchCompact(hits);
+    }
+
+    private string Read(
+        string contentDbPath,
+        string? sourceId,
+        int? line,
+        int? contextLines,
+        bool json,
+        TelemetryScope? telemetry)
+    {
+        if (string.IsNullOrWhiteSpace(sourceId))
+            throw new InvalidOperationException("content read requires source_id.");
+        if (line is null)
+            throw new InvalidOperationException("content read requires line.");
+
+        ExternalContentReadResult result = _store.ReadWindow(
+            contentDbPath,
+            sourceId,
+            line.Value,
+            contextLines ?? ContentCorpusExternalStore.DefaultContextLines);
+        if (telemetry is not null)
+        {
+            telemetry.SetTarget(sourceId);
+            telemetry.ResultCount = result.Lines.Count;
+            telemetry.Outcome = result.Lines.Count == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
+        }
+
+        return json ? RenderReadJson(result) : RenderReadCompact(result);
+    }
+
+    private string List(string contentDbPath, bool json, TelemetryScope? telemetry)
+    {
+        IReadOnlyList<ExternalContentSource> sources = _store.List(contentDbPath);
+        if (telemetry is not null)
+        {
+            telemetry.ResultCount = sources.Count;
+            telemetry.Outcome = sources.Count == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
+        }
+
+        return json ? RenderListJson(sources) : RenderListCompact(sources);
+    }
+
+    private string Remove(string contentDbPath, string? sourceId, bool json, TelemetryScope? telemetry)
+    {
+        if (string.IsNullOrWhiteSpace(sourceId))
+            throw new InvalidOperationException("content remove requires source_id.");
+
+        ExternalContentRemoveResult result = _store.Remove(contentDbPath, sourceId);
+        if (telemetry is not null)
+        {
+            telemetry.SetTarget(sourceId);
+            telemetry.ResultCount = result.SourceCount;
+            telemetry.Outcome = result.Removed ? TelemetryOutcome.Ok : TelemetryOutcome.Empty;
+        }
+
+        return json ? RenderRemoveJson(result) : RenderRemoveCompact(result);
+    }
+
+    private static string RenderImportCompact(ExternalContentImportResult result) =>
+        $"{(result.Replaced ? "replaced" : "imported")} {result.ContentKind}\n" +
+        $"source_id: {result.SourceId}\n" +
+        $"display_path: {result.DisplayPath}\n" +
+        $"source_bytes: {result.SourceBytes}\n" +
+        $"chunks: {result.ChunkCount}";
+
+    private static string RenderSearchCompact(IReadOnlyList<TextContentSearchHit> hits)
+    {
+        if (hits.Count == 0)
+            return "No results.";
+
+        var blocks = new List<string>(hits.Count);
+        foreach (TextContentSearchHit hit in hits)
+        {
+            var block = new StringBuilder();
+            block.Append(hit.DisplayPath).Append(':').Append(hit.Line).Append("  ").Append(hit.ContentKind);
+            foreach (string line in hit.Snippet.Split('\n'))
+                block.Append('\n').Append("    ").Append(line);
+            blocks.Add(block.ToString());
+        }
+
+        return string.Join("\n\n", blocks);
+    }
+
+    private static string RenderReadCompact(ExternalContentReadResult result)
+    {
+        var sb = new StringBuilder();
+        sb.Append(result.DisplayPath).Append(':').Append(result.LineStart).Append('-').Append(result.LineEnd);
+        foreach (ExternalContentLine line in result.Lines)
+            sb.Append('\n').Append("    ").Append(line.LineNumber).Append(": ").Append(line.Text);
+        return sb.ToString();
+    }
+
+    private static string RenderListCompact(IReadOnlyList<ExternalContentSource> sources)
+    {
+        if (sources.Count == 0)
+            return "No imported content.";
+
+        var lines = new List<string>(sources.Count);
+        foreach (ExternalContentSource source in sources)
+        {
+            lines.Add(
+                $"{source.SourceId}  {source.ContentKind}  {source.SourceBytes} bytes  " +
+                $"{source.ChunkCount} chunks  {source.DisplayPath}");
+        }
+
+        return string.Join('\n', lines);
+    }
+
+    private static string RenderRemoveCompact(ExternalContentRemoveResult result) =>
+        result.Removed
+            ? $"removed {result.SourceId} ({result.ChunkCount} chunks)"
+            : $"not found: {result.SourceId}";
+
+    private static string RenderImportJson(ExternalContentImportResult result)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("source_id", result.SourceId);
+            writer.WriteString("content_kind", result.ContentKind);
+            writer.WriteString("display_path", result.DisplayPath);
+            writer.WriteString("content_hash", result.ContentHash);
+            writer.WriteNumber("source_bytes", result.SourceBytes);
+            writer.WriteNumber("chunk_count", result.ChunkCount);
+            writer.WriteBoolean("replaced", result.Replaced);
+            writer.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    private static string RenderSearchJson(IReadOnlyList<TextContentSearchHit> hits)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = JsonWriter(buffer))
+        {
+            writer.WriteStartArray();
+            foreach (TextContentSearchHit hit in hits)
+            {
+                writer.WriteStartObject();
+                writer.WriteString("source_id", hit.SourceId);
+                writer.WriteString("chunk_id", hit.ChunkId);
+                writer.WriteString("content_kind", hit.ContentKind);
+                writer.WriteString("display_path", hit.DisplayPath);
+                writer.WriteNumber("line", hit.Line);
+                writer.WriteNumber("line_start", hit.LineStart);
+                writer.WriteNumber("line_end", hit.LineEnd);
+                writer.WriteNumber("score", hit.Score);
+                writer.WriteString("snippet", hit.Snippet);
+                writer.WriteNumber("source_bytes", hit.SourceBytes);
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+        }
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    private static string RenderReadJson(ExternalContentReadResult result)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("source_id", result.SourceId);
+            writer.WriteString("display_path", result.DisplayPath);
+            writer.WriteNumber("line_start", result.LineStart);
+            writer.WriteNumber("line_end", result.LineEnd);
+            writer.WriteStartArray("lines");
+            foreach (ExternalContentLine line in result.Lines)
+            {
+                writer.WriteStartObject();
+                writer.WriteNumber("line", line.LineNumber);
+                writer.WriteString("text", line.Text);
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    private static string RenderListJson(IReadOnlyList<ExternalContentSource> sources)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = JsonWriter(buffer))
+        {
+            writer.WriteStartArray();
+            foreach (ExternalContentSource source in sources)
+            {
+                writer.WriteStartObject();
+                writer.WriteString("source_id", source.SourceId);
+                writer.WriteString("content_kind", source.ContentKind);
+                writer.WriteString("display_path", source.DisplayPath);
+                writer.WriteString("content_hash", source.ContentHash);
+                writer.WriteNumber("source_bytes", source.SourceBytes);
+                writer.WriteNumber("line_count", source.LineCount);
+                writer.WriteNumber("chunk_count", source.ChunkCount);
+                writer.WriteString("indexed_at_utc", source.IndexedAtUtc);
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+        }
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    private static string RenderRemoveJson(ExternalContentRemoveResult result)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("source_id", result.SourceId);
+            writer.WriteBoolean("removed", result.Removed);
+            writer.WriteNumber("source_count", result.SourceCount);
+            writer.WriteNumber("chunk_count", result.ChunkCount);
+            writer.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    private static Utf8JsonWriter JsonWriter(ArrayBufferWriter<byte> buffer) =>
+        new(buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+}

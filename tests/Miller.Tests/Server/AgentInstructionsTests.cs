@@ -51,6 +51,7 @@ public sealed class AgentInstructionsTests
     [InlineData("trace")]
     [InlineData("impact")]
     [InlineData("edit")]
+    [InlineData("content")]
     [InlineData("workspace")]
     public void Load_DocumentsEveryTool(string toolName)
     {
@@ -130,6 +131,7 @@ public sealed class AgentInstructionsTests
             ToolMethod<TraceTool>(nameof(TraceTool.Trace)),
             ToolMethod<ImpactTool>(nameof(ImpactTool.Impact)),
             ToolMethod<EditTool>(nameof(EditTool.Edit)),
+            ToolMethod<ContentTool>(nameof(ContentTool.Content)),
             ToolMethod<WorkspaceTool>(nameof(WorkspaceTool.Workspace)),
         };
     }

@@ -58,6 +58,10 @@ the tokens.
   `rename_symbol`, `insert_before`, `insert_after`, `add_doc`. Previews a diff and writes nothing unless
   `apply=true`. Blocked when the index is stale for the target file — `workspace refresh` first (or
   `allow_stale=true` if you accept the risk).
+- `content` — Import, search, read, list, and remove external text files in Miller's content corpus. Use it for
+  logs, CI output, generated reports, large JSON/text dumps, and other non-workspace text that would waste
+  context if read in full. `import` reports metadata only; `search` returns snippets; `read` returns a bounded
+  line window by `source_id` and `line`; `remove` deletes an imported source.
 - `workspace` — Index lifecycle. `status` (default), `refresh` (reconcile stale files), `full` (rebuild from
   scratch), `list`, `open` (prime a different path's index), `remove`, `dashboard` (start/reuse the local
   loopback dashboard). `status`, `refresh`, `full`, and `remove` accept `workspace_id` or `path`; `list` shows
@@ -74,6 +78,8 @@ the tokens.
   returns `path:line` + snippet, where symbol search would find nothing.
 - **Find source-body text**: `search mode=source "<literal or phrase>"` — searches verified source files and
   returns `path:line`, content kind, containing symbol when known, and a snippet.
+- **Inspect a large log/report**: `content import path=/tmp/build.log` → `content search query="error text"` →
+  `content read source_id=... line=... context_lines=10`. Do not read or paste the full file.
 - **Scope noisy search**: add `file_pattern=src/ui/**` or `language=typescript` when you know the likely area.
 - **Find text only inside comments or strings**: `search "<phrase>" regions=comment` or
   `search "<phrase>" regions=string_literal` — requires `MILLER_REGION_INDEX=1` and a refreshed workspace.
@@ -100,6 +106,7 @@ code, paste this block into the prompt:
     - trace(target, mode?, to?, scope?) before manual caller/callee file hopping; use scope for ambiguous names.
     - impact(target?|changed_paths?|diff?) before refactors and to choose tests.
     - edit(operation, target, ...) to preview index-aware edits (apply=true to commit).
+    - content(import|search|read|list|remove, ...) for large logs, CI output, and external text; read bounded windows only.
     - workspace(status|refresh|full|list|open|remove|dashboard) to refresh stale indexes, open another repo, or
       start the local dashboard from the session.
     Do NOT fall back to Glob/Read/Grep chains when a Miller tool fits. Miller returns targeted context in 1-2 calls.

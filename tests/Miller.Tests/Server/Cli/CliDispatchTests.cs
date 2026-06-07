@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using System.Text.Json;
 using Miller.Indexing;
 using Miller.Server;
 using Miller.Server.Cli;
@@ -367,6 +368,52 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Contains("KnownContentMarker", outText);
         Assert.DoesNotContain(TextContentKind.WorkspaceDocs, outText);
         Assert.DoesNotContain("src/Source.cs", outText);
+    }
+
+    [Fact]
+    public void Content_ImportSearchReadListAndRemove_WorkWithoutSymbolsDb()
+    {
+        string logPath = Path.Combine(_dir, "ci.log");
+        File.WriteAllText(logPath, """
+            build started
+            CliExternalMarker failed in integration
+            build finished
+            """);
+        var ctx = Context(Path.Combine(_dir, ".miller", "symbols.db"), _dir);
+
+        var (importCode, importOut, importErr) = Run(new[] { "content", "import", logPath, "--json" }, ctx);
+
+        Assert.False(File.Exists(ctx.ExtractDbPath));
+        Assert.Equal(0, importCode);
+        Assert.Empty(importErr);
+        Assert.DoesNotContain("CliExternalMarker", importOut);
+        using JsonDocument importDoc = JsonDocument.Parse(importOut);
+        string sourceId = importDoc.RootElement.GetProperty("source_id").GetString()!;
+
+        var (searchCode, searchOut, searchErr) = Run(new[] { "content", "search", "CliExternalMarker" }, ctx);
+        Assert.Equal(0, searchCode);
+        Assert.Empty(searchErr);
+        Assert.Contains("ci.log:2  external_file", searchOut);
+        Assert.Contains("CliExternalMarker failed", searchOut);
+
+        var (readCode, readOut, readErr) = Run(
+            new[] { "content", "read", "--source-id", sourceId, "--line", "2", "--context-lines", "0" },
+            ctx);
+        Assert.Equal(0, readCode);
+        Assert.Empty(readErr);
+        Assert.Contains("2: CliExternalMarker failed in integration", readOut);
+        Assert.DoesNotContain("build started", readOut);
+
+        var (listCode, listOut, listErr) = Run(new[] { "content", "list", "--json" }, ctx);
+        Assert.Equal(0, listCode);
+        Assert.Empty(listErr);
+        using JsonDocument listDoc = JsonDocument.Parse(listOut);
+        Assert.Equal(sourceId, listDoc.RootElement[0].GetProperty("source_id").GetString());
+
+        var (removeCode, removeOut, removeErr) = Run(new[] { "content", "remove", "--source-id", sourceId }, ctx);
+        Assert.Equal(0, removeCode);
+        Assert.Empty(removeErr);
+        Assert.Contains("removed", removeOut);
     }
 
     [Theory]

@@ -61,8 +61,9 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex
 
         if (meta.WorkspaceRevision != expectedRevision)
         {
+            string actualRevision = meta.WorkspaceRevision?.ToString(CultureInfo.InvariantCulture) ?? "none";
             throw new InvalidOperationException(
-                $"content.db at '{absPath}' is stale: revision {meta.WorkspaceRevision}, expected {expectedRevision}. " +
+                $"content.db at '{absPath}' is stale: revision {actualRevision}, expected {expectedRevision}. " +
                 "Refresh or rebuild the content corpus.");
         }
 
@@ -71,7 +72,41 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex
             connectionString,
             ReadChunks(connection, absPath),
             ReadSymbolSpans(connection, absPath),
-            meta.WorkspaceRevision);
+            meta.WorkspaceRevision.GetValueOrDefault());
+    }
+
+    public static FtsTextContentSearchIndex OpenUnversioned(string contentDbPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(contentDbPath);
+
+        string absPath = Path.GetFullPath(contentDbPath);
+        if (!File.Exists(absPath))
+            throw new FileNotFoundException($"content.db not found at '{absPath}'. Import content first.", absPath);
+
+        string connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = absPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString();
+
+        using var connection = new SqliteConnection(connectionString);
+        connection.Open();
+
+        ContentMeta meta = ReadMeta(connection, absPath);
+        if (meta.SchemaVersion != ContentCorpusSchema.SchemaVersion)
+        {
+            throw new InvalidOperationException(
+                $"content.db at '{absPath}' has schema_version {meta.SchemaVersion}; " +
+                $"this build expects {ContentCorpusSchema.SchemaVersion}.");
+        }
+
+        EnsureSchema(connection, absPath);
+        return new FtsTextContentSearchIndex(
+            connectionString,
+            ReadChunks(connection, absPath),
+            ReadSymbolSpans(connection, absPath),
+            meta.WorkspaceRevision.GetValueOrDefault());
     }
 
     public IReadOnlyList<TextContentSearchHit> Search(
@@ -198,7 +233,7 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex
                 throw MalformedMeta(absPath, "no meta row");
 
             int schemaVersion = checked((int)ReadInt64(reader, 0, absPath, "schema_version"));
-            long workspaceRevision = ReadInt64(reader, 1, absPath, "workspace_revision");
+            long? workspaceRevision = reader.IsDBNull(1) ? null : ReadInt64(reader, 1, absPath, "workspace_revision");
             if (reader.Read())
                 throw MalformedMeta(absPath, "multiple meta rows");
             return new ContentMeta(schemaVersion, workspaceRevision);
@@ -432,7 +467,7 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex
     private static InvalidOperationException MalformedChunk(string absPath, string detail) =>
         new($"content.db at '{absPath}' has malformed content_chunks data: {detail}. Rebuild the content corpus.");
 
-    private sealed record ContentMeta(int SchemaVersion, long WorkspaceRevision);
+    private sealed record ContentMeta(int SchemaVersion, long? WorkspaceRevision);
 
     private sealed record BestLine(int Line, string Snippet);
 

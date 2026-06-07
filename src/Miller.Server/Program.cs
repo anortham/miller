@@ -92,6 +92,7 @@ builder.Services
     .WithTools<TraceTool>()
     .WithTools<ImpactTool>()
     .WithTools<EditTool>()
+    .WithTools<ContentTool>()
     .WithTools<WorkspaceTool>()
     // The ONE central telemetry interceptor — wraps every tools/call.
     .WithRequestFilters(filters => filters.AddCallToolFilter(TelemetryCallToolFilter.Create()));
