@@ -139,6 +139,8 @@ The single `miller` binary runs two ways:
   dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvider" --limit 5
   dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvider" --workspace-id miller
   dotnet run --project src/Miller.Server -c Release -- search "source-checkout beta" --mode content --limit 5
+  dotnet run --project src/Miller.Server -c Release -- content add-markdown /tmp/page.md --url https://example.com/page --display-path "Example page" --json
+  dotnet run --project src/Miller.Server -c Release -- content search "important phrase" --kind web --limit 5
   dotnet run --project src/Miller.Server -c Release -- inspect src/Miller.Server/AgentInstructions.cs --depth full
   dotnet run --project src/Miller.Server -c Release -- context "CLI workspace routing" --token-budget 2000
   dotnet run --project src/Miller.Server -c Release -- trace AgentInstructions --depth 2
@@ -330,6 +332,9 @@ For beta, text output is a compact human-facing contract and JSON output is the 
 - Search result kinds are deliberately separate: symbol search ranks `name + signature`, `--mode content`
   searches docs-like file content, and `--regions` searches explicit source regions when region indexing
   is enabled.
+- The `content` CLI stores non-workspace text in `.miller/content.db`. Use `content import` for logs/reports
+  and `content add-markdown <path> --url <url>` for browser-fetched pages. Search web imports with
+  `content search "<phrase>" --kind web`, then read bounded windows with `content read --source-id <id>`.
 - Search defaults to 6 results. Compact symbol rows include name, kind, file, line, and signature when available;
   use `--limit N` when you need a wider page.
 

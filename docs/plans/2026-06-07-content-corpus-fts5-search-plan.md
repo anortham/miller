@@ -338,13 +338,13 @@ Out of scope for this plan:
 **Approach:** Keep network/browser fetching outside the Miller binary. The skill checks for `browser39`, fetches markdown to a temp file without leaking full content to stdout, then calls `content add_markdown` or the MCP equivalent with `content_kind=web`, URL metadata, and display path. Add `search mode=web` or `content search --kind web` once web sources exist.
 
 **Acceptance criteria:**
-- [ ] The web skill fetches a URL with `browser39`, imports markdown, and reports source id, byte count, and chunk count.
-- [ ] Web search returns concise snippets scoped to `content_kind=web`.
-- [ ] Web read returns bounded windows or sections from imported markdown.
-- [ ] The workflow does not create or modify `docs/web/**`.
-- [ ] Missing `browser39` produces an actionable prerequisite message.
-- [ ] Plugin skill mirror tests pass.
-- [ ] Worker-scope verification passes and changes are committed.
+- [x] The web skill fetches a URL with `browser39`, imports markdown, and reports source id, byte count, and chunk count.
+- [x] Web search returns concise snippets scoped to `content_kind=web`.
+- [x] Web read returns bounded windows or sections from imported markdown.
+- [x] The workflow does not create or modify `docs/web/**`.
+- [x] Missing `browser39` produces an actionable prerequisite message.
+- [x] Plugin skill mirror tests pass.
+- [x] Worker-scope verification passes and changes are committed.
 
 ## Phase 5: Eros Semantic Search Feed
 

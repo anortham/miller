@@ -82,3 +82,17 @@ test('plugin skills are a byte-for-byte mirror of the repo agent skills', () => 
     assert.equal(pluginContent, agentContent, `${file} should be synced`);
   }
 });
+
+test('web research skill fetches through browser39 and imports through Miller content', () => {
+  const skill = fs.readFileSync(
+    path.join(repoRoot, '.agents/skills/miller-web-research/SKILL.md'),
+    'utf8',
+  );
+
+  assert.match(skill, /command -v browser39/);
+  assert.match(skill, /cargo install browser39/);
+  assert.match(skill, /browser39 batch/);
+  assert.match(skill, /miller content add-markdown/);
+  assert.match(skill, /--kind web/);
+  assert.doesNotMatch(skill, /docs\/web/);
+});

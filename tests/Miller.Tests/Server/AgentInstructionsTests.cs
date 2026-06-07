@@ -98,6 +98,16 @@ public sealed class AgentInstructionsTests
         Assert.Contains("Do NOT fall back to Glob/Read/Grep chains", instructions);
     }
 
+    [Fact]
+    public void Load_DocumentsWebContentWorkflow()
+    {
+        string instructions = AgentInstructions.Load();
+        Assert.Contains("miller-web-research", instructions);
+        Assert.Contains("browser39", instructions);
+        Assert.Contains("add_markdown", instructions);
+        Assert.Contains("content_kind=web", instructions);
+    }
+
     [Theory]
     [MemberData(nameof(ToolMethods))]
     public void ToolDescriptions_StayWithinClaudeCodeBudgets(MethodInfo method)

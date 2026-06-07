@@ -82,4 +82,48 @@ public sealed class ContentCorpusExternalStoreTests : IDisposable
         ExternalContentImportResult imported = store.Import(_contentDbPath, logPath, maxBytes: 10);
         Assert.Equal(10, imported.SourceBytes);
     }
+
+    [Fact]
+    public void ImportMarkdown_StoresWebContentWithUrlMetadata_AndKindScopedSearch()
+    {
+        string markdownPath = Path.Combine(_dir, "page.md");
+        File.WriteAllText(markdownPath, """
+            # Example Page
+
+            WebResearchMarker appears in the body.
+            """);
+        string logPath = Path.Combine(_dir, "build.log");
+        File.WriteAllText(logPath, "WebResearchMarker appears in an external log.");
+        var store = new ContentCorpusExternalStore();
+
+        store.Import(_contentDbPath, logPath);
+        ExternalContentImportResult imported = store.ImportMarkdown(
+            _contentDbPath,
+            markdownPath,
+            url: "https://example.test/page",
+            displayPath: "Example Page");
+
+        Assert.Equal(TextContentKind.Web, imported.ContentKind);
+        Assert.Equal("https://example.test/page", imported.Url);
+        Assert.Equal("Example Page", imported.DisplayPath);
+        Assert.StartsWith("web:", imported.SourceId, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(Path.Combine(_dir, "docs", "web")));
+
+        TextContentSearchHit hit = Assert.Single(store.Search(
+            _contentDbPath,
+            "WebResearchMarker",
+            TextContentKind.Web,
+            limit: 5));
+        Assert.Equal(imported.SourceId, hit.SourceId);
+        Assert.Equal(TextContentKind.Web, hit.ContentKind);
+        Assert.Equal("https://example.test/page", hit.Url);
+        Assert.Equal("Example Page", hit.DisplayPath);
+
+        ExternalContentSource listed = Assert.Single(store.List(_contentDbPath, TextContentKind.Web));
+        Assert.Equal(imported.SourceId, listed.SourceId);
+        Assert.Equal("https://example.test/page", listed.Url);
+
+        Assert.DoesNotContain(store.Search(_contentDbPath, "WebResearchMarker", TextContentKind.ExternalFile, limit: 5),
+            static h => h.ContentKind == TextContentKind.Web);
+    }
 }

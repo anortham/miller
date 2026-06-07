@@ -270,7 +270,7 @@ public static class CliDispatch
     private static int Content(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
         if (args.Count == 0)
-            return Usage(err, "miller content <import|search|read|list|remove> [args] [--json]");
+            return Usage(err, "miller content <import|add-markdown|search|read|list|remove> [args] [--json]");
 
         string operation = args[0];
         CliOptions o = CliOptions.Parse(args.Skip(1).ToArray(), "json");
@@ -285,6 +285,17 @@ public static class CliDispatch
             if (string.IsNullOrWhiteSpace(path))
                 return Usage(err, "miller content import <path> [--max-bytes N] [--json]");
         }
+        else if (string.Equals(operation, "add-markdown", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(operation, "add_markdown", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(operation, "import-markdown", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(operation, "import_markdown", StringComparison.OrdinalIgnoreCase))
+        {
+            path = o.Query;
+            if (string.IsNullOrWhiteSpace(path))
+                return Usage(err, "miller content add-markdown <path> --url URL [--display-path NAME] [--json]");
+            if (string.IsNullOrWhiteSpace(o.Value("url")))
+                return Usage(err, "miller content add-markdown <path> --url URL [--display-path NAME] [--json]");
+        }
         else if (string.Equals(operation, "search", StringComparison.OrdinalIgnoreCase))
         {
             query = o.Query;
@@ -298,6 +309,9 @@ public static class CliDispatch
             path: path,
             query: query,
             source_id: o.Value("source-id"),
+            url: o.Value("url"),
+            display_path: o.Value("display-path"),
+            content_kind: o.Value("kind", o.Value("content-kind", TextContentKind.ExternalFile))!,
             line: o.Has("line") ? o.Int("line", 0) : null,
             context_lines: o.Has("context-lines") ? o.Int("context-lines", ContentCorpusExternalStore.DefaultContextLines) : null,
             limit: o.Int("limit", SearchTool.DefaultLimit),
@@ -998,12 +1012,13 @@ public static class CliDispatch
 
         Commands:
           search <query>     Find code by name, identifier, or phrase.
-                             [--workspace-id SELECTOR] [--workspace DIR] [--mode auto|text|symbol|file|content] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--include-tests|--exclude-tests]
-          content <op>       Import/search/read/list/remove external text in content.db.
-                             import <path> [--max-bytes N] [--json]
-                             search <query> [--limit N] [--json]
+                             [--workspace-id SELECTOR] [--workspace DIR] [--mode auto|text|symbol|file|content|source] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--include-tests|--exclude-tests]
+          content <op>       Import/search/read/list/remove external and web text in content.db.
+                             import <path> [--max-bytes N] [--display-path NAME] [--json]
+                             add-markdown <path> --url URL [--display-path NAME] [--json]
+                             search <query> [--kind external_file|web] [--limit N] [--json]
                              read --source-id ID --line N [--context-lines N] [--json]
-                             list [--json]
+                             list [--kind external_file|web] [--json]
                              remove --source-id ID [--json]
           inspect <target>   List a file's symbols, or show a symbol's definition.
                              [--workspace-id SELECTOR] [--workspace DIR] [--depth summary|full] [--kind K] [--scope FILE] [--limit N] [--json]

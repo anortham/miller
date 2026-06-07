@@ -26,13 +26,16 @@ public sealed class ContentTool
 
     [McpServerTool(Name = "content")]
     [Description(
-        "Import, search, read, list, and remove external text files in Miller's content corpus. Use for logs, " +
-        "CI output, reports, and large text files without printing full file content.")]
+        "Import, search, read, list, and remove external/web text in Miller's content corpus. Use for logs, " +
+        "CI output, web markdown, reports, and large text files without printing full content.")]
     public string Content(
-        [Description("import|search|read|list|remove.")] string operation,
-        [Description("Path to import for operation=import.")] string? path = null,
+        [Description("import|add_markdown|search|read|list|remove.")] string operation,
+        [Description("Path to import for operation=import/add_markdown.")] string? path = null,
         [Description("Search query for operation=search.")] string? query = null,
         [Description("Imported source id for operation=read/remove.")] string? source_id = null,
+        [Description("URL metadata for operation=add_markdown with web content.")] string? url = null,
+        [Description("Human display path/title for imported content. Optional.")] string? display_path = null,
+        [Description("Content kind for search/list. Default external_file; use web for web imports.")] string content_kind = TextContentKind.ExternalFile,
         [Description("1-based center line for operation=read.")] int? line = null,
         [Description("Context lines before/after the read line. Default 10, maximum bounded by Miller.")] int? context_lines = null,
         [Description("Max search results. Default 6.")] int limit = SearchTool.DefaultLimit,
@@ -48,12 +51,14 @@ public sealed class ContentTool
 
             return op switch
             {
-                "import" or "add" => Import(contentDbPath, path, max_bytes, json, telemetry),
-                "search" => Search(contentDbPath, query, limit, json, telemetry),
+                "import" or "add" => Import(contentDbPath, path, max_bytes, display_path, json, telemetry),
+                "add_markdown" or "add-markdown" or "import_markdown" or "import-markdown" =>
+                    AddMarkdown(contentDbPath, path, url, max_bytes, display_path, json, telemetry),
+                "search" => Search(contentDbPath, query, ContentKind(content_kind), limit, json, telemetry),
                 "read" => Read(contentDbPath, source_id, line, context_lines, json, telemetry),
-                "list" => List(contentDbPath, json, telemetry),
+                "list" => List(contentDbPath, ContentKind(content_kind), json, telemetry),
                 "remove" or "delete" => Remove(contentDbPath, source_id, json, telemetry),
-                _ => throw new InvalidOperationException("content operation must be import, search, read, list, or remove."),
+                _ => throw new InvalidOperationException("content operation must be import, add_markdown, search, read, list, or remove."),
             };
         }
         catch (Exception ex)
@@ -71,13 +76,40 @@ public sealed class ContentTool
         string contentDbPath,
         string? path,
         long? maxBytes,
+        string? displayPath,
         bool json,
         TelemetryScope? telemetry)
     {
         if (string.IsNullOrWhiteSpace(path))
             throw new InvalidOperationException("content import requires path.");
 
-        ExternalContentImportResult result = _store.Import(contentDbPath, path, maxBytes);
+        ExternalContentImportResult result = _store.Import(contentDbPath, path, maxBytes, displayPath);
+        if (telemetry is not null)
+        {
+            telemetry.SetTarget(result.DisplayPath);
+            telemetry.ResultCount = 1;
+            telemetry.SourceBytes = result.SourceBytes;
+            telemetry.Outcome = TelemetryOutcome.Ok;
+        }
+
+        return json ? RenderImportJson(result) : RenderImportCompact(result);
+    }
+
+    private string AddMarkdown(
+        string contentDbPath,
+        string? path,
+        string? url,
+        long? maxBytes,
+        string? displayPath,
+        bool json,
+        TelemetryScope? telemetry)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            throw new InvalidOperationException("content add_markdown requires path.");
+        if (string.IsNullOrWhiteSpace(url))
+            throw new InvalidOperationException("content add_markdown requires url.");
+
+        ExternalContentImportResult result = _store.ImportMarkdown(contentDbPath, path, url, maxBytes, displayPath);
         if (telemetry is not null)
         {
             telemetry.SetTarget(result.DisplayPath);
@@ -92,6 +124,7 @@ public sealed class ContentTool
     private string Search(
         string contentDbPath,
         string? query,
+        string contentKind,
         int limit,
         bool json,
         TelemetryScope? telemetry)
@@ -100,7 +133,7 @@ public sealed class ContentTool
             throw new InvalidOperationException("content search requires query.");
         if (limit < 1) limit = 1;
 
-        IReadOnlyList<TextContentSearchHit> hits = _store.Search(contentDbPath, query, limit);
+        IReadOnlyList<TextContentSearchHit> hits = _store.Search(contentDbPath, query, contentKind, limit);
         if (telemetry is not null)
         {
             telemetry.SetTarget(query);
@@ -142,9 +175,9 @@ public sealed class ContentTool
         return json ? RenderReadJson(result) : RenderReadCompact(result);
     }
 
-    private string List(string contentDbPath, bool json, TelemetryScope? telemetry)
+    private string List(string contentDbPath, string contentKind, bool json, TelemetryScope? telemetry)
     {
-        IReadOnlyList<ExternalContentSource> sources = _store.List(contentDbPath);
+        IReadOnlyList<ExternalContentSource> sources = _store.List(contentDbPath, contentKind);
         if (telemetry is not null)
         {
             telemetry.ResultCount = sources.Count;
@@ -170,10 +203,18 @@ public sealed class ContentTool
         return json ? RenderRemoveJson(result) : RenderRemoveCompact(result);
     }
 
+    private static string ContentKind(string value) => value.Trim().ToLowerInvariant() switch
+    {
+        "external" or "external_file" or "file" => TextContentKind.ExternalFile,
+        "web" => TextContentKind.Web,
+        _ => throw new InvalidOperationException("content_kind must be external_file or web."),
+    };
+
     private static string RenderImportCompact(ExternalContentImportResult result) =>
         $"{(result.Replaced ? "replaced" : "imported")} {result.ContentKind}\n" +
         $"source_id: {result.SourceId}\n" +
         $"display_path: {result.DisplayPath}\n" +
+        (string.IsNullOrWhiteSpace(result.Url) ? "" : $"url: {result.Url}\n") +
         $"source_bytes: {result.SourceBytes}\n" +
         $"chunks: {result.ChunkCount}";
 
@@ -234,6 +275,8 @@ public sealed class ContentTool
             writer.WriteString("source_id", result.SourceId);
             writer.WriteString("content_kind", result.ContentKind);
             writer.WriteString("display_path", result.DisplayPath);
+            if (result.Url is null) writer.WriteNull("url");
+            else writer.WriteString("url", result.Url);
             writer.WriteString("content_hash", result.ContentHash);
             writer.WriteNumber("source_bytes", result.SourceBytes);
             writer.WriteNumber("chunk_count", result.ChunkCount);
@@ -256,6 +299,8 @@ public sealed class ContentTool
                 writer.WriteString("chunk_id", hit.ChunkId);
                 writer.WriteString("content_kind", hit.ContentKind);
                 writer.WriteString("display_path", hit.DisplayPath);
+                if (hit.Url is null) writer.WriteNull("url");
+                else writer.WriteString("url", hit.Url);
                 writer.WriteNumber("line", hit.Line);
                 writer.WriteNumber("line_start", hit.LineStart);
                 writer.WriteNumber("line_end", hit.LineEnd);
@@ -305,6 +350,8 @@ public sealed class ContentTool
                 writer.WriteString("source_id", source.SourceId);
                 writer.WriteString("content_kind", source.ContentKind);
                 writer.WriteString("display_path", source.DisplayPath);
+                if (source.Url is null) writer.WriteNull("url");
+                else writer.WriteString("url", source.Url);
                 writer.WriteString("content_hash", source.ContentHash);
                 writer.WriteNumber("source_bytes", source.SourceBytes);
                 writer.WriteNumber("line_count", source.LineCount);

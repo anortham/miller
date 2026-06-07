@@ -30,10 +30,53 @@ public sealed class ContentCorpusExternalStore
         long? maxBytes = null,
         string? displayPath = null)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(contentDbPath);
-        ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
-
         string absFile = Path.GetFullPath(filePath);
+        return ImportFile(
+            contentDbPath,
+            absFile,
+            TextContentKind.ExternalFile,
+            SourceIdFor(absFile),
+            path: absFile,
+            url: null,
+            displayPath,
+            maxBytes);
+    }
+
+    public ExternalContentImportResult ImportMarkdown(
+        string contentDbPath,
+        string filePath,
+        string url,
+        long? maxBytes = null,
+        string? displayPath = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(url);
+        string normalizedUrl = url.Trim();
+        return ImportFile(
+            contentDbPath,
+            Path.GetFullPath(filePath),
+            TextContentKind.Web,
+            SourceIdForWeb(normalizedUrl),
+            path: null,
+            url: normalizedUrl,
+            displayPath ?? normalizedUrl,
+            maxBytes);
+    }
+
+    private ExternalContentImportResult ImportFile(
+        string contentDbPath,
+        string absFile,
+        string contentKind,
+        string sourceId,
+        string? path,
+        string? url,
+        string? displayPath,
+        long? maxBytes)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(contentDbPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(absFile);
+        ArgumentException.ThrowIfNullOrWhiteSpace(contentKind);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceId);
+
         if (!File.Exists(absFile))
             throw new FileNotFoundException($"External content file not found at '{absFile}'.", absFile);
 
@@ -67,14 +110,13 @@ public sealed class ContentCorpusExternalStore
             throw new InvalidOperationException("External content import supports UTF-8 text files only.", ex);
         }
 
-        string sourceId = SourceIdFor(absFile);
         string renderedPath = string.IsNullOrWhiteSpace(displayPath) ? absFile : displayPath!;
         string contentHash = "blake3:" + ContentHasher.Blake3Hex(bytes);
         IReadOnlyList<TextContentDocument> chunks = ContentCorpusChunker.Chunk(
             sourceId,
-            TextContentKind.ExternalFile,
-            path: absFile,
-            url: null,
+            contentKind,
+            path,
+            url,
             renderedPath,
             LanguageFor(absFile),
             text,
@@ -85,51 +127,60 @@ public sealed class ContentCorpusExternalStore
         using var connection = OpenWritable(contentDbPath);
         using var tx = connection.BeginTransaction();
         bool replaced = DeleteSource(connection, sourceId).SourceCount > 0;
-        InsertSource(connection, sourceId, absFile, renderedPath, LanguageFor(absFile), contentHash, bytes.LongLength, text, chunks);
+        InsertSource(connection, sourceId, contentKind, path, url, renderedPath, LanguageFor(absFile), contentHash, bytes.LongLength, text, chunks);
         UpdateMeta(connection);
         tx.Commit();
 
         return new ExternalContentImportResult(
             sourceId,
-            TextContentKind.ExternalFile,
+            contentKind,
             renderedPath,
             contentHash,
             bytes.LongLength,
             chunks.Count,
-            replaced);
+            replaced,
+            url);
     }
 
-    public IReadOnlyList<TextContentSearchHit> Search(string contentDbPath, string query, int limit = 10)
+    public IReadOnlyList<TextContentSearchHit> Search(
+        string contentDbPath,
+        string query,
+        string contentKind = TextContentKind.ExternalFile,
+        int limit = 10)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(contentDbPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
+        ArgumentException.ThrowIfNullOrWhiteSpace(contentKind);
         if (limit <= 0 || !File.Exists(Path.GetFullPath(contentDbPath)))
             return Array.Empty<TextContentSearchHit>();
 
         return FtsTextContentSearchIndex
             .OpenUnversioned(contentDbPath)
-            .Search(query, TextContentKind.ExternalFile, limit, excludeTests: false);
+            .Search(query, contentKind, limit, excludeTests: false);
     }
 
-    public IReadOnlyList<ExternalContentSource> List(string contentDbPath)
+    public IReadOnlyList<ExternalContentSource> List(
+        string contentDbPath,
+        string contentKind = TextContentKind.ExternalFile)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(contentDbPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(contentKind);
         if (!File.Exists(Path.GetFullPath(contentDbPath)))
             return Array.Empty<ExternalContentSource>();
 
         using var connection = OpenReadOnly(contentDbPath);
         using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT s.source_id, s.content_kind, s.display_path, s.content_hash, s.source_bytes,
+            SELECT s.source_id, s.content_kind, s.display_path, s.content_hash, s.source_bytes, s.url,
                    s.line_count, s.indexed_at_utc, COUNT(c.chunk_id) AS chunk_count
             FROM content_sources s
             LEFT JOIN content_chunks c ON c.source_id = s.source_id
             WHERE s.content_kind = $kind
             GROUP BY s.source_id, s.content_kind, s.display_path, s.content_hash, s.source_bytes,
-                     s.line_count, s.indexed_at_utc
+                     s.url, s.line_count, s.indexed_at_utc
             ORDER BY s.display_path, s.source_id;
             """;
-        command.Parameters.AddWithValue("$kind", TextContentKind.ExternalFile);
+        command.Parameters.AddWithValue("$kind", contentKind);
 
         var sources = new List<ExternalContentSource>();
         using var reader = command.ExecuteReader();
@@ -141,9 +192,10 @@ public sealed class ContentCorpusExternalStore
                 reader.GetString(2),
                 reader.GetString(3),
                 reader.GetInt64(4),
-                reader.GetInt32(5),
-                reader.GetString(6),
-                reader.GetInt32(7)));
+                reader.GetInt32(6),
+                reader.GetString(7),
+                reader.GetInt32(8),
+                reader.IsDBNull(5) ? null : reader.GetString(5)));
         }
 
         return sources;
@@ -235,6 +287,13 @@ public sealed class ContentCorpusExternalStore
         return TextContentKind.ExternalFile + ":" + Convert.ToHexStringLower(SHA256.HashData(input));
     }
 
+    public static string SourceIdForWeb(string url)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(url);
+        byte[] input = Encoding.UTF8.GetBytes(url.Trim());
+        return TextContentKind.Web + ":" + Convert.ToHexStringLower(SHA256.HashData(input));
+    }
+
     private static SqliteConnection OpenWritable(string contentDbPath)
     {
         string absPath = Path.GetFullPath(contentDbPath);
@@ -316,17 +375,18 @@ public sealed class ContentCorpusExternalStore
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT s.source_id, s.content_kind, s.display_path, s.content_hash, s.source_bytes,
+            SELECT s.source_id, s.content_kind, s.display_path, s.content_hash, s.source_bytes, s.url,
                    s.line_count, s.indexed_at_utc, COUNT(c.chunk_id) AS chunk_count
             FROM content_sources s
             LEFT JOIN content_chunks c ON c.source_id = s.source_id
-            WHERE s.source_id = $source AND s.content_kind = $kind
+            WHERE s.source_id = $source AND s.content_kind IN ($external, $web)
             GROUP BY s.source_id, s.content_kind, s.display_path, s.content_hash, s.source_bytes,
-                     s.line_count, s.indexed_at_utc
+                     s.url, s.line_count, s.indexed_at_utc
             LIMIT 1;
             """;
         command.Parameters.AddWithValue("$source", sourceId);
-        command.Parameters.AddWithValue("$kind", TextContentKind.ExternalFile);
+        command.Parameters.AddWithValue("$external", TextContentKind.ExternalFile);
+        command.Parameters.AddWithValue("$web", TextContentKind.Web);
         using var reader = command.ExecuteReader();
         if (!reader.Read())
             throw new KeyNotFoundException($"External content source '{sourceId}' was not found.");
@@ -337,15 +397,18 @@ public sealed class ContentCorpusExternalStore
             reader.GetString(2),
             reader.GetString(3),
             reader.GetInt64(4),
-            reader.GetInt32(5),
-            reader.GetString(6),
-            reader.GetInt32(7));
+            reader.GetInt32(6),
+            reader.GetString(7),
+            reader.GetInt32(8),
+            reader.IsDBNull(5) ? null : reader.GetString(5));
     }
 
     private static void InsertSource(
         SqliteConnection connection,
         string sourceId,
-        string path,
+        string contentKind,
+        string? path,
+        string? url,
         string displayPath,
         string language,
         string contentHash,
@@ -359,12 +422,13 @@ public sealed class ContentCorpusExternalStore
             INSERT INTO content_sources
                 (source_id, content_kind, workspace_id, workspace_revision, path, url, display_path,
                  language, content_hash, source_bytes, line_count, is_test, status, indexed_at_utc)
-            VALUES ($id, $kind, NULL, NULL, $path, NULL, $display, $language, $hash,
+            VALUES ($id, $kind, NULL, NULL, $path, $url, $display, $language, $hash,
                     $bytes, $lines, 0, 'active', $indexed);
             """;
         source.Parameters.AddWithValue("$id", sourceId);
-        source.Parameters.AddWithValue("$kind", TextContentKind.ExternalFile);
-        source.Parameters.AddWithValue("$path", path);
+        source.Parameters.AddWithValue("$kind", contentKind);
+        source.Parameters.AddWithValue("$path", (object?)path ?? DBNull.Value);
+        source.Parameters.AddWithValue("$url", (object?)url ?? DBNull.Value);
         source.Parameters.AddWithValue("$display", displayPath);
         source.Parameters.AddWithValue("$language", language);
         source.Parameters.AddWithValue("$hash", contentHash);
@@ -379,13 +443,14 @@ public sealed class ContentCorpusExternalStore
                 (chunk_id, source_id, content_kind, path, url, display_path, language, line_start,
                  line_end, byte_start, byte_end, raw_text, doc_len, is_test, source_bytes,
                  containing_symbol_id, containing_symbol_name)
-            VALUES ($chunk, $source, $kind, $path, NULL, $display, $language, $line_start, $line_end,
+            VALUES ($chunk, $source, $kind, $path, $url, $display, $language, $line_start, $line_end,
                     $byte_start, $byte_end, $raw, $doc_len, 0, $source_bytes, NULL, NULL);
             """;
         var pcChunk = chunk.Parameters.Add("$chunk", SqliteType.Text);
         var pcSource = chunk.Parameters.Add("$source", SqliteType.Text);
         var pcKind = chunk.Parameters.Add("$kind", SqliteType.Text);
         var pcPath = chunk.Parameters.Add("$path", SqliteType.Text);
+        var pcUrl = chunk.Parameters.Add("$url", SqliteType.Text);
         var pcDisplay = chunk.Parameters.Add("$display", SqliteType.Text);
         var pcLanguage = chunk.Parameters.Add("$language", SqliteType.Text);
         var pcLineStart = chunk.Parameters.Add("$line_start", SqliteType.Integer);
@@ -407,7 +472,8 @@ public sealed class ContentCorpusExternalStore
             pcChunk.Value = doc.ChunkId;
             pcSource.Value = doc.SourceId;
             pcKind.Value = doc.ContentKind;
-            pcPath.Value = path;
+            pcPath.Value = (object?)path ?? DBNull.Value;
+            pcUrl.Value = (object?)url ?? DBNull.Value;
             pcDisplay.Value = doc.DisplayPath;
             pcLanguage.Value = doc.Language;
             pcLineStart.Value = doc.LineStart;
@@ -433,10 +499,11 @@ public sealed class ContentCorpusExternalStore
         count.CommandText = """
             SELECT COUNT(*), COALESCE((SELECT COUNT(*) FROM content_chunks WHERE source_id = $source), 0)
             FROM content_sources
-            WHERE source_id = $source AND content_kind = $kind;
+            WHERE source_id = $source AND content_kind IN ($external, $web);
             """;
         count.Parameters.AddWithValue("$source", sourceId);
-        count.Parameters.AddWithValue("$kind", TextContentKind.ExternalFile);
+        count.Parameters.AddWithValue("$external", TextContentKind.ExternalFile);
+        count.Parameters.AddWithValue("$web", TextContentKind.Web);
         using var reader = count.ExecuteReader();
         reader.Read();
         int sourceCount = reader.GetInt32(0);
@@ -472,9 +539,10 @@ public sealed class ContentCorpusExternalStore
 
         using (var sources = connection.CreateCommand())
         {
-            sources.CommandText = "DELETE FROM content_sources WHERE source_id = $source AND content_kind = $kind;";
+            sources.CommandText = "DELETE FROM content_sources WHERE source_id = $source AND content_kind IN ($external, $web);";
             sources.Parameters.AddWithValue("$source", sourceId);
-            sources.Parameters.AddWithValue("$kind", TextContentKind.ExternalFile);
+            sources.Parameters.AddWithValue("$external", TextContentKind.ExternalFile);
+            sources.Parameters.AddWithValue("$web", TextContentKind.Web);
             sources.ExecuteNonQuery();
         }
 
@@ -513,7 +581,8 @@ public sealed record ExternalContentImportResult(
     string ContentHash,
     long SourceBytes,
     int ChunkCount,
-    bool Replaced);
+    bool Replaced,
+    string? Url = null);
 
 public sealed record ExternalContentSource(
     string SourceId,
@@ -523,7 +592,8 @@ public sealed record ExternalContentSource(
     long SourceBytes,
     int LineCount,
     string IndexedAtUtc,
-    int ChunkCount);
+    int ChunkCount,
+    string? Url = null);
 
 public sealed record ExternalContentReadResult(
     string SourceId,

@@ -71,4 +71,47 @@ public sealed class ContentToolTests : IDisposable
         string afterRemove = tool.Content("search", query: "SecretToken42");
         Assert.Equal("No results.", afterRemove.Trim());
     }
+
+    [Fact]
+    public void Content_AddMarkdownSearchAndRead_WebKind_StaysOutOfDocsWeb()
+    {
+        string markdownPath = Path.Combine(_dir, "page.md");
+        File.WriteAllText(markdownPath, """
+            # Example Page
+
+            WebToolMarker appears in markdown.
+            """);
+        string logPath = Path.Combine(_dir, "ci.log");
+        File.WriteAllText(logPath, "WebToolMarker appears in an external log.");
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        tool.Content("import", path: logPath);
+
+        string importJson = tool.Content(
+            "add_markdown",
+            path: markdownPath,
+            url: "https://example.test/web-tool",
+            display_path: "Example Web Tool",
+            format: "json");
+
+        Assert.DoesNotContain("WebToolMarker", importJson);
+        Assert.False(Directory.Exists(Path.Combine(_dir, "docs", "web")));
+        using JsonDocument importedDoc = JsonDocument.Parse(importJson);
+        string sourceId = importedDoc.RootElement.GetProperty("source_id").GetString()!;
+        Assert.Equal(TextContentKind.Web, importedDoc.RootElement.GetProperty("content_kind").GetString());
+        Assert.Equal("https://example.test/web-tool", importedDoc.RootElement.GetProperty("url").GetString());
+
+        string webSearch = tool.Content("search", query: "WebToolMarker", content_kind: TextContentKind.Web);
+        Assert.Contains("Example Web Tool:3  web", webSearch);
+        Assert.Contains("WebToolMarker appears in markdown", webSearch);
+        Assert.DoesNotContain("ci.log", webSearch);
+
+        string read = tool.Content("read", source_id: sourceId, line: 3, context_lines: 0);
+        Assert.Contains("Example Web Tool:3-3", read);
+        Assert.Contains("3: WebToolMarker appears in markdown.", read);
+
+        string listJson = tool.Content("list", content_kind: TextContentKind.Web, format: "json");
+        using JsonDocument listDoc = JsonDocument.Parse(listJson);
+        Assert.Equal(sourceId, listDoc.RootElement[0].GetProperty("source_id").GetString());
+        Assert.Equal("https://example.test/web-tool", listDoc.RootElement[0].GetProperty("url").GetString());
+    }
 }

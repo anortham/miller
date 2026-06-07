@@ -416,6 +416,54 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Contains("removed", removeOut);
     }
 
+    [Fact]
+    public void Content_AddMarkdownSearchAndRead_WebKind()
+    {
+        string markdownPath = Path.Combine(_dir, "page.md");
+        File.WriteAllText(markdownPath, """
+            # CLI Page
+
+            CliWebMarker appears in fetched markdown.
+            """);
+        string logPath = Path.Combine(_dir, "ci.log");
+        File.WriteAllText(logPath, "CliWebMarker appears in an external log.");
+        var ctx = Context(Path.Combine(_dir, ".miller", "symbols.db"), _dir);
+        Run(new[] { "content", "import", logPath }, ctx);
+
+        var (importCode, importOut, importErr) = Run(
+            new[]
+            {
+                "content", "add-markdown", markdownPath,
+                "--url", "https://example.test/cli-page",
+                "--display-path", "CLI Page",
+                "--json",
+            },
+            ctx);
+
+        Assert.Equal(0, importCode);
+        Assert.Empty(importErr);
+        Assert.DoesNotContain("CliWebMarker", importOut);
+        Assert.False(Directory.Exists(Path.Combine(_dir, "docs", "web")));
+        using JsonDocument importDoc = JsonDocument.Parse(importOut);
+        string sourceId = importDoc.RootElement.GetProperty("source_id").GetString()!;
+        Assert.Equal(TextContentKind.Web, importDoc.RootElement.GetProperty("content_kind").GetString());
+
+        var (searchCode, searchOut, searchErr) = Run(
+            new[] { "content", "search", "CliWebMarker", "--kind", "web" },
+            ctx);
+        Assert.Equal(0, searchCode);
+        Assert.Empty(searchErr);
+        Assert.Contains("CLI Page:3  web", searchOut);
+        Assert.DoesNotContain("ci.log", searchOut);
+
+        var (readCode, readOut, readErr) = Run(
+            new[] { "content", "read", "--source-id", sourceId, "--line", "3", "--context-lines", "0" },
+            ctx);
+        Assert.Equal(0, readCode);
+        Assert.Empty(readErr);
+        Assert.Contains("3: CliWebMarker appears in fetched markdown.", readOut);
+    }
+
     [Theory]
     [InlineData("search", "GetUser", "auth/UserService.cs")]
     [InlineData("inspect", "GetUser", "Gets a user by id.")]
