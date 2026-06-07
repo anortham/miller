@@ -311,6 +311,44 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void Search_ExcludeTestsFlag_FiltersExactIdentifierTestHits()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow(
+                    "b0000000000000000000000000000001",
+                    "Flask",
+                    "class",
+                    "python",
+                    "tests/test_config.py",
+                    "class Flask",
+                    202,
+                    ParentId: null),
+                new JulieDbFixture.SymbolRow(
+                    "b0000000000000000000000000000002",
+                    "Flask",
+                    "class",
+                    "python",
+                    "src/flask/app.py",
+                    "class Flask",
+                    47,
+                    ParentId: null),
+            });
+
+        var (code, outText, errText) = Run(
+            new[] { "search", "Flask", "--exclude-tests" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("src/flask/app.py", outText);
+        Assert.DoesNotContain("tests/test_config.py", outText);
+    }
+
+    [Fact]
     public void Search_Json_EmitsAJsonArray()
     {
         using var fx = JulieDbFixture.CreateDefault();

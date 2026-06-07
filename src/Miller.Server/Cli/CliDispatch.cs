@@ -137,9 +137,9 @@ public static class CliDispatch
 
     private static int Search(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
-        CliOptions o = CliOptions.Parse(args, "json", "include-tests");
+        CliOptions o = CliOptions.Parse(args, "json", "include-tests", "exclude-tests");
         if (string.IsNullOrWhiteSpace(o.Query))
-            return Usage(err, "miller search <query> [--workspace-id SELECTOR] [--workspace DIR] [--mode auto|text|symbol|file|content] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--include-tests]");
+            return Usage(err, "miller search <query> [--workspace-id SELECTOR] [--workspace DIR] [--mode auto|text|symbol|file|content] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--include-tests|--exclude-tests]");
         if (!TryResolveReadContext(ctx, o, err, out ctx))
             return 2;
 
@@ -157,8 +157,8 @@ public static class CliDispatch
             err.WriteLine(ex.Message);
             return 2;
         }
-        // exclude_tests tri-state: --include-tests forces them in; otherwise leave unset (the tool auto-hides for NL).
-        bool? excludeTests = o.Has("include-tests") ? false : null;
+        // exclude_tests tri-state: explicit CLI flags force a choice; otherwise the tool auto-hides for NL.
+        bool? excludeTests = o.Has("exclude-tests") ? true : o.Has("include-tests") ? false : null;
 
         if (regionKinds is not null)
         {

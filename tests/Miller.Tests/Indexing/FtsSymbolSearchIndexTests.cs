@@ -336,6 +336,29 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
     }
 
     [Fact]
+    public void Search_ExactNameConcreteDefinitionOutranksManifestProperty_ParityWithInMemory()
+    {
+        var syms = Corpus(
+            ("a", "flask", "flask = \"flask.cli:main\"", "property", "toml", "pyproject.toml"),
+            ("b", "Flask", "class Flask extends App", "class", "python", "src/flask/app.py"));
+        SearchIndexWriter.Write(_dbPath, syms, 1);
+
+        var fts = FtsSymbolSearchIndex.Open(_dbPath);
+        var memory = SymbolSearchProjection.Build(syms);
+
+        var expected = memory.Search("Flask", limit: 10);
+        var actual = fts.Search("Flask", limit: 10);
+
+        Assert.Equal("class", actual[0].Document.Kind);
+        Assert.Equal("src/flask/app.py", actual[0].Document.FilePath);
+        Assert.Equal(
+            expected.Select(h => h.Document.DocId).ToArray(),
+            actual.Select(h => h.Document.DocId).ToArray());
+        for (int i = 0; i < expected.Count; i++)
+            Assert.Equal(expected[i].Score, actual[i].Score, precision: 9);
+    }
+
+    [Fact]
     public void Search_AndMode_RequiresAllDistinctTerms()
     {
         var syms = Corpus(

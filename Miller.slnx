@@ -8,4 +8,7 @@
   <Folder Name="/tests/">
     <Project Path="tests/Miller.Tests/Miller.Tests.csproj" />
   </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/Miller.SearchQuality/Miller.SearchQuality.csproj" />
+  </Folder>
 </Solution>

@@ -19,6 +19,13 @@ public static class Bm25
     public const double ExactNameBoost = 1.5;
 
     /// <summary>
+    /// Multiplicative boost applied to concrete code definitions after <see cref="ExactNameBoost"/>.
+    /// This keeps exact class/function/type definitions ahead of same-name manifest/config rows without
+    /// hiding those rows from the result set.
+    /// </summary>
+    public const double ExactNameDefinitionKindBoost = 1.2;
+
+    /// <summary>
     /// Multiplicative penalty applied to low-signal exact-name rows after <see cref="ExactNameBoost"/>.
     /// This keeps import/module rows visible for identifier queries without letting duplicate query terms
     /// in import signatures outrank the concrete definition with the same name.
@@ -67,11 +74,23 @@ public static class Bm25
             return score;
 
         score *= ExactNameBoost;
+        if (IsConcreteDefinitionKind(documentKind))
+            score *= ExactNameDefinitionKindBoost;
         if (IsLowSignalKind(documentKind))
             score *= ExactNameLowSignalKindPenalty;
 
         return score;
     }
+
+    private static bool IsConcreteDefinitionKind(string kind) =>
+        string.Equals(kind, "class", StringComparison.Ordinal) ||
+        string.Equals(kind, "struct", StringComparison.Ordinal) ||
+        string.Equals(kind, "interface", StringComparison.Ordinal) ||
+        string.Equals(kind, "trait", StringComparison.Ordinal) ||
+        string.Equals(kind, "enum", StringComparison.Ordinal) ||
+        string.Equals(kind, "function", StringComparison.Ordinal) ||
+        string.Equals(kind, "method", StringComparison.Ordinal) ||
+        string.Equals(kind, "constructor", StringComparison.Ordinal);
 
     private static bool IsLowSignalKind(string kind) =>
         string.Equals(kind, "import", StringComparison.Ordinal) ||

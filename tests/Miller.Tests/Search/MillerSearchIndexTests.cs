@@ -172,8 +172,12 @@ public sealed class MillerSearchIndexTests
         var hits = index.Search("parse", limit: 10);
         Assert.Equal(2, hits.Count);
         Assert.Equal(1, hits[0].Document.DocId);
-        // The boost is real and isolated: equal raw scores => leader is exactly 1.5x the runner-up.
-        Assert.Equal(hits[1].Score * 1.5, hits[0].Score, precision: 10);
+        // The boost is real and isolated: equal raw scores => leader gets the exact-name boost and the
+        // concrete-definition boost, while the non-exact runner-up gets neither.
+        Assert.Equal(
+            hits[1].Score * Bm25.ExactNameBoost * Bm25.ExactNameDefinitionKindBoost,
+            hits[0].Score,
+            precision: 10);
     }
 
     [Fact]
@@ -217,6 +221,36 @@ public sealed class MillerSearchIndexTests
         Assert.Equal(2, hits.Count);
         Assert.Equal("struct", hits[0].Document.Kind);
         Assert.Equal("src/daemon/workspace_pool.rs", hits[0].Document.FilePath);
+    }
+
+    [Fact]
+    public void Search_ExactNameConcreteDefinitionOutranksManifestProperty()
+    {
+        var index = MillerSearchIndex.Build(new[]
+        {
+            new SearchableDocument(
+                1,
+                "flask",
+                "flask = \"flask.cli:main\"",
+                "property",
+                "toml",
+                "pyproject.toml",
+                83),
+            new SearchableDocument(
+                2,
+                "Flask",
+                "class Flask extends App",
+                "class",
+                "python",
+                "src/flask/app.py",
+                109),
+        });
+
+        var hits = index.Search("Flask", limit: 10);
+
+        Assert.Equal(2, hits.Count);
+        Assert.Equal("class", hits[0].Document.Kind);
+        Assert.Equal("src/flask/app.py", hits[0].Document.FilePath);
     }
 
     [Fact]
