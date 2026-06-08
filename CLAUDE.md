@@ -146,9 +146,12 @@ scripts/test.ps1 all
   [`docs/m8-design.md`](docs/m8-design.md)).
 - **Workspace registry.** Index DBs stay local at `<workspace>/.miller/symbols.db`; the central discovery
   surface is `~/.miller/workspaces.db`. Read tools accept `workspace_id` selectors: display ID, unique prefix,
-  full ID, `current`, or `primary`; explicit `workspace_id` defaults to refresh-first. The dashboard reads the
-  registry, shared telemetry DB, and read-only aggregate facts from workspace artifacts. It must not hydrate full
-  indexes just to render list/detail views.
+  full ID, registered root path, `current`, or `primary`; explicit `workspace_id` defaults to refresh-first.
+  When a user asks from workspace A to inspect workspace B, keep the session in A, run `workspace list`, and pass
+  B's selector to `search`/`inspect`/`context`/`impact`/`trace`. If B is not registered, run `workspace open`
+  with its root path first. `workspace_id=all` is only for `content search` text audits, not symbol/code read
+  tools. The dashboard reads the registry, shared telemetry DB, and read-only aggregate facts from workspace
+  artifacts. It must not hydrate full indexes just to render list/detail views.
 - **Hash split.** Stable `workspace_id` is SHA-256 of the canonical root. File freshness uses
   `files.content_hash` (`blake3:<hex>`, normalized before comparison) and is guarded by
   `artifact_metadata.hash_algorithm=blake3`.

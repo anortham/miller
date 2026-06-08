@@ -92,6 +92,19 @@ Capabilities advertise this feed as:
 `~/.miller/telemetry.db`. The default is all workspaces; `--workspace-id` is an exact stored workspace ID
 filter, not a display-id selector.
 
+## Workspace selector rules
+
+Code read commands (`search`, `inspect`, `context`, `impact`, and `trace`) target one workspace per call. Their
+`--workspace-id <selector>` accepts a display ID, unique prefix, full workspace ID, registered root path,
+`current`, or `primary`. The path alias `--workspace <path>` is normalized before selection.
+
+If a caller needs workspace B while running from workspace A, it should call `workspace list --json`, choose B's
+selector, and pass that selector to the read command. If B is not listed, call
+`workspace open --path /absolute/repo --full --json` first, then retry the read command. The special
+`--workspace-id all` selector is reserved for cross-workspace content/telemetry surfaces such as
+`content search --workspace-id all` and `telemetry export --workspace-id all`; it is not a symbol/code read
+selector.
+
 Telemetry JSONL fields:
 
 | Field | Required | Description |

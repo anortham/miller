@@ -98,9 +98,11 @@ the tokens.
   re-run `impact` if the surface changed.
 - **Edit a symbol**: `inspect` it → `edit …` (preview, the default) → `edit … apply=true`.
 - **Index looks stale**: `workspace refresh` (or `workspace full` to force a clean rebuild).
-- **Need another repo**: `workspace list` → pass the displayed ID, a unique prefix, or the root path as
-  `workspace_id` to `search`/`inspect`/`context`/`impact`/`trace`. Use `ensure_fresh=false` only when a fast best-effort stale
-  read is acceptable.
+- **Need another repo**: `workspace list` → if the repo is registered, pass the displayed ID, a unique prefix,
+  full ID, or root path as `workspace_id` to `search`/`inspect`/`context`/`impact`/`trace`. If it is not listed,
+  run `workspace operation=open path=/absolute/repo` first, then retry the read. Use `ensure_fresh=false` only
+  when a fast best-effort stale read is acceptable. `workspace_id=all` is only for `content search` text audits,
+  not code read tools.
 
 ## Subagent Dispatching
 

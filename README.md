@@ -193,9 +193,15 @@ UX such as next-action guidance, confidence/evidence views, semantic/vector retr
 
 Eight MCP tools, each with smart defaults so the common path is the simplest call: `search`, `inspect`,
 `context`, `trace`, `impact`, `edit`, `content`, and `workspace`. Read tools accept a `workspace_id`
-selector: display ID, unique prefix, full ID, `current`, or `primary`. Explicit `workspace_id` defaults
+selector: display ID, unique prefix, full ID, registered root path, `current`, or `primary`. Explicit `workspace_id` defaults
 `ensure_fresh=true`. Targets are smart strings, not JSON objects. See
 [docs/findings/miller-toolbox.md](docs/findings/miller-toolbox.md).
+
+For cross-workspace code reading, stay in the current session and run `workspace list`. If the target repo is
+registered, pass its display ID, unique prefix, full ID, or root path as `workspace_id` to `search`, `inspect`,
+`context`, `impact`, or `trace`. If it is not registered yet, run `workspace operation=open path=/absolute/repo`
+from MCP or `miller workspace open --path /absolute/repo --full` from the CLI, then retry the read tool. The
+`workspace_id=all` selector is only for `content search` text audits across registered workspace content DBs.
 
 ## Using Miller
 
@@ -219,6 +225,8 @@ The single `miller` binary runs two ways:
   ```bash
   dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvider" --limit 5
   dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvider" --workspace-id miller
+  dotnet run --project src/Miller.Server -c Release -- workspace open --path /path/to/other/repo --full
+  dotnet run --project src/Miller.Server -c Release -- search "routing bug" --workspace-id /path/to/other/repo
   dotnet run --project src/Miller.Server -c Release -- search "release archive" --mode content --limit 5
   dotnet run --project src/Miller.Server -c Release -- content add-markdown /tmp/page.md --url https://example.com/page --display-path "Example page" --json
   dotnet run --project src/Miller.Server -c Release -- content search "important phrase" --kind web --limit 5
@@ -372,7 +380,8 @@ Text output is a compact human-facing contract and JSON output is the integratio
 - `refresh --json --wait [--workspace-id SELECTOR|--workspace DIR] [--full]` is the Eros-friendly top-level
   convergence command. It wraps the existing registered-workspace refresh path and includes sidecar facts.
 - `search`, `inspect`, `context`, `impact`, and `trace` accept `--workspace-id <selector>`; selectors are the
-  same registry IDs/display IDs/path selectors used by MCP `workspace_id`.
+  same registry IDs/display IDs/path selectors used by MCP `workspace_id`: display ID, unique prefix, full ID,
+  registered root path, `current`, or `primary`.
 - Text headings and ordering are intended to be stable enough for humans and logs, not for strict parsers.
   Use `--json` when a caller needs fields.
 - Search result kinds are deliberately separate: symbol search ranks `name + signature`, `--mode content`
@@ -465,7 +474,8 @@ Warnings are errors (`Directory.Build.props`).
 ## Troubleshooting
 
 - `no Miller index`: run `miller workspace full`, or open the folder in the Miller MCP server so the
-  index can be created.
+  index can be created. If the missing target is another repo, run `miller workspace open --path /absolute/repo --full`
+  or MCP `workspace operation=open path=/absolute/repo`, then pass that repo's selector as `workspace_id`.
 - Missing `julie-extract`: run the restore script for your platform, then rerun the scale or refresh path.
 - Unsure which server is live: run `miller version` or `miller workspace status`; compare the git SHA suffix
   with the build you expect, and compare `workspace status`'s `pid` before/after a restart.
