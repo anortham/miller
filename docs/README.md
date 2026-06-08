@@ -10,8 +10,9 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`contracts/cli-eros-v1.md`](contracts/cli-eros-v1.md) - active Eros-facing CLI/export contract.
 - [`contracts/content-corpus-v1.md`](contracts/content-corpus-v1.md) - active content corpus schema/export contract.
 - [`release-process.md`](release-process.md) - current release validation and promotion flow.
-- [`release-notes/v0.3.2.md`](release-notes/v0.3.2.md) - upcoming `v0.3.2` patch release notes.
-- [`release-notes/v0.3.1.md`](release-notes/v0.3.1.md) - latest published release notes.
+- [`release-notes/v0.3.2.md`](release-notes/v0.3.2.md) - latest published release notes.
+- [`findings/2026-06-08-v0.3.2-release-verification.md`](findings/2026-06-08-v0.3.2-release-verification.md) - live `v0.3.2` release verification.
+- [`release-notes/v0.3.1.md`](release-notes/v0.3.1.md) - historical `v0.3.1` release notes.
 - [`findings/2026-06-08-v0.3.1-release-verification.md`](findings/2026-06-08-v0.3.1-release-verification.md) - live `v0.3.1` release verification.
 - [`findings/2026-06-08-v0.3.0-release-verification.md`](findings/2026-06-08-v0.3.0-release-verification.md) - live `v0.3.0` release verification.
 - [`findings/2026-06-08-v0.3.0-release-prep-review.md`](findings/2026-06-08-v0.3.0-release-prep-review.md) - `0.3.0` release-prep review.

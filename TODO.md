@@ -115,5 +115,5 @@ Fix plan/status:
   `tools/list` response, but the workflow assertion used `echo "$out" | grep -q` under `set -o pipefail`, so
   `grep -q` closed early and `echo` failed with SIGPIPE. Fixed the release workflow to use Bash string matching
   and pinned the guard in `MillerExtractContractTests.ReleaseWorkflowPublishesVerifiablePrereleasePackages`.
-- [ ] After `v0.3.2` is published and verified from live GitHub release facts, update README/site current-release
-  links from `v0.3.1` to `v0.3.2`.
+- [x] 2026-06-08 completed: `v0.3.2` was published from validated package-only run `27153317515` through
+  promotion run `27153759953`; README/site/docs current-release links now point at live `v0.3.2` facts.

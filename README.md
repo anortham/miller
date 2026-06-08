@@ -18,11 +18,11 @@ The practical difference from a one-time graph dump is that Miller is built for 
   opt out with `MILLER_SEARCH_SIDECAR=0` when debugging the in-memory fallback;
 - cross-language bridge evidence stays structural and provider-scoped, not embedding-driven.
 
-> **Current release: v0.3.1.** Miller ships as agent plugins, self-contained per-platform release archives,
+> **Current release: v0.3.2.** Miller ships as agent plugins, self-contained per-platform release archives,
 > and a source-checkout workflow.
 >
 > Website: [anortham.github.io/miller](https://anortham.github.io/miller/) · Release:
-> [v0.3.1](https://github.com/anortham/miller/releases/tag/v0.3.1)
+> [v0.3.2](https://github.com/anortham/miller/releases/tag/v0.3.2)
 
 ## Quickstart
 
@@ -62,28 +62,28 @@ impact with Miller. Miller writes its local index under that workspace's `.mille
 Use this path when your MCP client does not use Miller's plugin package.
 
 1. Download the archive for your platform from the
-   [v0.3.1 release](https://github.com/anortham/miller/releases/tag/v0.3.1), plus the matching `.sha256`
+   [v0.3.2 release](https://github.com/anortham/miller/releases/tag/v0.3.2), plus the matching `.sha256`
    sidecar:
 
-   - `miller-0.3.1-aarch64-apple-darwin.tar.gz`
-   - `miller-0.3.1-x86_64-apple-darwin.tar.gz`
-   - `miller-0.3.1-x86_64-unknown-linux-gnu.tar.gz`
-   - `miller-0.3.1-x86_64-pc-windows-msvc.zip`
+   - `miller-0.3.2-aarch64-apple-darwin.tar.gz`
+   - `miller-0.3.2-x86_64-apple-darwin.tar.gz`
+   - `miller-0.3.2-x86_64-unknown-linux-gnu.tar.gz`
+   - `miller-0.3.2-x86_64-pc-windows-msvc.zip`
 
 2. Verify and extract it:
 
    ```bash
-   shasum -a 256 -c miller-0.3.1-aarch64-apple-darwin.tar.gz.sha256
-   tar -xzf miller-0.3.1-aarch64-apple-darwin.tar.gz
-   cd miller-0.3.1-aarch64-apple-darwin
+   shasum -a 256 -c miller-0.3.2-aarch64-apple-darwin.tar.gz.sha256
+   tar -xzf miller-0.3.2-aarch64-apple-darwin.tar.gz
+   cd miller-0.3.2-aarch64-apple-darwin
    ./miller version
    ```
 
    ```powershell
-   (Get-FileHash .\miller-0.3.1-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash
-   # compare against miller-0.3.1-x86_64-pc-windows-msvc.zip.sha256, then extract
-   Expand-Archive .\miller-0.3.1-x86_64-pc-windows-msvc.zip -DestinationPath .
-   .\miller-0.3.1-x86_64-pc-windows-msvc\miller.exe version
+   (Get-FileHash .\miller-0.3.2-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash
+   # compare against miller-0.3.2-x86_64-pc-windows-msvc.zip.sha256, then extract
+   Expand-Archive .\miller-0.3.2-x86_64-pc-windows-msvc.zip -DestinationPath .
+   .\miller-0.3.2-x86_64-pc-windows-msvc\miller.exe version
    ```
 
    Keep the extracted directory together. The native library files beside `miller`/`miller.exe`, the `.tools/`
@@ -96,7 +96,7 @@ Use this path when your MCP client does not use Miller's plugin package.
    {
       "mcpServers": {
         "miller": {
-          "command": "/absolute/path/to/miller-0.3.1-aarch64-apple-darwin/miller",
+          "command": "/absolute/path/to/miller-0.3.2-aarch64-apple-darwin/miller",
           "args": ["serve"]
         }
       }
