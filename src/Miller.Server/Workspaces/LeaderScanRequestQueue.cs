@@ -1,8 +1,9 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Miller.Server.Workspaces;
 
-internal static class LeaderScanRequestQueue
+internal static partial class LeaderScanRequestQueue
 {
     private const int SchemaVersion = 1;
     private const string OperationFullScan = "full_scan";
@@ -35,7 +36,9 @@ internal static class LeaderScanRequestQueue
 
         try
         {
-            File.WriteAllText(tempPath, JsonSerializer.Serialize(request));
+            File.WriteAllText(
+                tempPath,
+                JsonSerializer.Serialize(request, LeaderScanRequestJsonContext.Default.FullScanRequest));
             File.Move(tempPath, finalPath);
         }
         finally
@@ -58,7 +61,9 @@ internal static class LeaderScanRequestQueue
             try
             {
                 string json = File.ReadAllText(path);
-                FullScanRequest? request = JsonSerializer.Deserialize<FullScanRequest>(json);
+                FullScanRequest? request = JsonSerializer.Deserialize(
+                    json,
+                    LeaderScanRequestJsonContext.Default.FullScanRequest);
                 if (request is { SchemaVersion: SchemaVersion, Operation: OperationFullScan })
                     requested = true;
                 TryDelete(path);
@@ -97,4 +102,8 @@ internal static class LeaderScanRequestQueue
         long BaselineRevision,
         DateTimeOffset RequestedAtUtc,
         int RequestingProcessId);
+
+    [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
+    [JsonSerializable(typeof(FullScanRequest))]
+    private sealed partial class LeaderScanRequestJsonContext : JsonSerializerContext;
 }
