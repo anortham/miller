@@ -49,6 +49,14 @@ public sealed class SearchQualityCliTests : IDisposable
         Assert.Contains(cases, c =>
             c.GetProperty("mode").GetString() == "web"
             && c.GetProperty("tags").EnumerateArray().Any(t => t.GetString() == "web"));
+        Assert.Contains(cases, c =>
+            c.GetProperty("id").GetString() == "openclaw-typescript-media-server"
+            && c.GetProperty("query").GetString() == "media/server"
+            && c.GetProperty("mode").GetString() == "file"
+            && c.GetProperty("filePattern").GetString() == "src/media/**"
+            && c.GetProperty("language").GetString() == "typescript");
+        Assert.DoesNotContain(cases, c =>
+            string.Equals(c.GetProperty("query").GetString(), "WorkspacePool", StringComparison.Ordinal));
         Assert.Contains(casesPath, stdout.ToString(), StringComparison.Ordinal);
     }
 

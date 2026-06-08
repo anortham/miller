@@ -15,8 +15,14 @@ This writes `.miller/eval/search-quality/cases.json` with starter cases for:
 - `~/source/hermes-agent` — Python-heavy agent project.
 - `~/source/openclaw` — large TypeScript/Swift/Kotlin-style app/tooling workspace.
 - `~/source/MyraNext` — C#/Vue/SQL app.
+- this Miller checkout — explicit source/content/imported-text mode coverage.
 
 Use `--cases <path>` to put the case file somewhere else, or `--force` to overwrite it.
+
+The starter suite is Miller-native. Do not copy old Julie matrix rows verbatim without revalidating them against
+current source; `WorkspacePool` is a historical regression case now covered by unit tests, not a live benchmark
+case. Path-oriented file cases should use path-shaped queries such as `media/server` plus a scope like
+`filePattern=src/media/**`.
 
 ## Run A Slice
 
@@ -63,3 +69,8 @@ name.
 - Generated reports should stay in `.miller/`.
 - Miller indexes must be current before trusting scores. If a repo has an incompatible or stale Miller DB,
   rebuild it before running the suite.
+- Imported external/web cases require the matching content corpus rows to exist before scoring them. When those
+  rows have not been seeded, run a narrower slice such as `--tag file`, `--tag source`, or the maintained local
+  case file.
+- `mode=file --json` currently scores against normal symbol rows from matching files. There is no separate
+  versioned file-result JSON object for this release; compact output provides the file-first human rendering.

@@ -382,6 +382,10 @@ Text output is a compact human-facing contract and JSON output is the integratio
 - `search`, `inspect`, `context`, `impact`, and `trace` accept `--workspace-id <selector>`; selectors are the
   same registry IDs/display IDs/path selectors used by MCP `workspace_id`: display ID, unique prefix, full ID,
   registered root path, `current`, or `primary`.
+- `search --mode file --json` intentionally returns symbol rows from matching files (`name`, `kind`, `file`,
+  `line`, `symbol_id`) for compatibility with the normal search JSON contract. Use compact text when an
+  interactive caller wants the file-first rendering, or `mode=content|source|all-text` when the caller needs
+  path/line/snippet text hits.
 - Text headings and ordering are intended to be stable enough for humans and logs, not for strict parsers.
   Use `--json` when a caller needs fields.
 - Search result kinds are deliberately separate: symbol search ranks `name + signature`, `--mode content`

@@ -58,8 +58,32 @@ Mode checks:
 - `content export` with `mode=all-text` in Miller returned the active CLI/Eros contract and relevant source files.
 - `content corpus sidecar` and `browser39` with `mode=content` in Miller returned the expected docs/skills guidance.
 
-## Follow-Up
+## Release Follow-Up Closure
 
-Keep default symbol search narrow. The remaining search-quality work is not broadening symbol ranking; it is the
-structured runner cleanup already tracked in `TODO.md`: retire or refresh stale copied Julie cases such as
-`WorkspacePool`, and decide whether `mode=file --json` needs a versioned file-result object.
+2026-06-08 item-2 cleanup:
+
+- Refreshed the starter OpenClaw file-mode cases to use path-shaped queries and scope fields:
+  `media/server`, `mode=file`, `filePattern=src/media/**`, `language=typescript`.
+- Guarded the starter suite against reintroducing the stale copied Julie `WorkspacePool` case. That identifier is
+  historical regression coverage now, pinned by exact-name definition-vs-import unit tests rather than live
+  benchmark rows.
+- Kept `mode=file --json` on the existing search JSON contract: symbol rows from matching files. No versioned
+  file-result JSON object is needed for this release because compact output already gives file-first human
+  rendering, and path/line/snippet contracts live in `mode=content|source|all-text`.
+
+Verification:
+
+```bash
+dotnet test tests/Miller.Tests/Miller.Tests.csproj -c Release --filter 'FullyQualifiedName~SearchQualityCliTests.Init_WritesStarterSuiteToRequestedPath' --no-restore
+dotnet run -c Release --project tools/Miller.SearchQuality -- run --providers miller --limit 10 --tag file --timeout-seconds 120
+dotnet run -c Release --project tools/Miller.SearchQuality -- run --providers miller --limit 10 --timeout-seconds 120
+```
+
+Results:
+
+| run | total | top1 | top3 | top5 | misses | mrr | artifact |
+|---|---:|---:|---:|---:|---:|---:|---|
+| file slice | 3 | 3 | 3 | 3 | 0 | 1.0000 | `.miller/eval/search-quality/runs/20260608T130009Z.json` |
+| Miller-only maintained local cases | 7 | 7 | 7 | 7 | 0 | 1.0000 | `.miller/eval/search-quality/runs/20260608T130023Z.json` |
+
+Release decision: keep default symbol search narrow and keep file-mode JSON compatible for the next release.
