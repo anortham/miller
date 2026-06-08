@@ -33,15 +33,8 @@ as an MCP server.
 Claude Code:
 
 ```bash
-claude plugin marketplace add anortham/miller
-claude plugin install miller@miller
-```
-
-Codex:
-
-```bash
-codex plugin marketplace add anortham/miller
-codex plugin add miller@miller
+/plugin marketplace add anortham/miller
+/plugin install miller@miller
 ```
 
 After installing, open a code workspace and ask your agent to search, inspect, build context, trace, or check
@@ -286,25 +279,14 @@ The plugin launcher consumes the release version in `miller-plugin.json`. Use
 Claude Code local-checkout install:
 
 ```bash
-claude plugin marketplace add /path/to/miller
-claude plugin install miller@miller
-```
-
-Codex local-checkout install:
-
-```bash
-codex plugin marketplace add /path/to/miller
-codex plugin add miller@miller
+claude plugin install /path/to/miller
 ```
 
 For the GitHub-hosted plugin source, use:
 
 ```bash
-claude plugin marketplace add anortham/miller
-claude plugin install miller@miller
-
-codex plugin marketplace add anortham/miller
-codex plugin add miller@miller
+/plugin marketplace add anortham/miller
+/plugin install miller@miller
 ```
 
 For local development against this checkout:
