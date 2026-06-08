@@ -41,18 +41,21 @@ Cursor local plugin install:
 
 ```bash
 mkdir -p ~/.cursor/plugins/local
-ln -s /path/to/miller ~/.cursor/plugins/local/miller
+rm -rf ~/.cursor/plugins/local/miller
+cp -R /path/to/miller ~/.cursor/plugins/local/miller
 ```
 
 ```powershell
 New-Item -ItemType Directory -Force "$env:USERPROFILE\.cursor\plugins\local"
-New-Item -ItemType Junction -Path "$env:USERPROFILE\.cursor\plugins\local\miller" -Target "C:\path\to\miller"
+Remove-Item -Recurse -Force "$env:USERPROFILE\.cursor\plugins\local\miller" -ErrorAction SilentlyContinue
+Copy-Item -Recurse -Force "C:\path\to\miller" "$env:USERPROFILE\.cursor\plugins\local\miller"
 ```
 
-Reload Cursor after installing. Cursor expects `.cursor-plugin/plugin.json` at the plugin root; Miller's Cursor
-manifest points at the same release launcher used by the Claude Code and Codex plugin paths and passes Cursor's
-`${workspaceFolder}` to the launcher as `MILLER_WORKSPACE_ROOT`. If Cursor previously auto-discovered Miller from
-an older Claude plugin cache, reinstall from a package that contains `.cursor-plugin/plugin.json`.
+Reload Cursor after installing. Cursor rejects local plugin symlinks that point outside
+`~/.cursor/plugins/local`, so this must be a real directory copy. Miller's Cursor manifest starts the launcher
+through Cursor's `${CURSOR_PLUGIN_ROOT}` path interpolation. The launcher uses Cursor's project cwd when there is
+one; if Cursor starts Miller from an empty/global window with `/`, the home directory, or another sensitive root as
+cwd, the launcher falls back to the plugin root instead of indexing a broad system path.
 
 After installing, open a code workspace and ask your agent to search, inspect, build context, trace, or check
 impact with Miller. Miller writes its local index under that workspace's `.miller/` directory.
@@ -305,18 +308,22 @@ Cursor local-checkout install:
 
 ```bash
 mkdir -p ~/.cursor/plugins/local
-ln -s /path/to/miller ~/.cursor/plugins/local/miller
+rm -rf ~/.cursor/plugins/local/miller
+cp -R /path/to/miller ~/.cursor/plugins/local/miller
 ```
 
 ```powershell
 New-Item -ItemType Directory -Force "$env:USERPROFILE\.cursor\plugins\local"
-New-Item -ItemType Junction -Path "$env:USERPROFILE\.cursor\plugins\local\miller" -Target "C:\path\to\miller"
+Remove-Item -Recurse -Force "$env:USERPROFILE\.cursor\plugins\local\miller" -ErrorAction SilentlyContinue
+Copy-Item -Recurse -Force "C:\path\to\miller" "$env:USERPROFILE\.cursor\plugins\local\miller"
 ```
 
 Then reload Cursor and confirm Miller appears under Settings > Plugins. The Cursor manifest uses
-`node ./bin/miller-plugin-launcher.cjs` with `cwd: "."` and passes `${workspaceFolder}` as
-`MILLER_WORKSPACE_ROOT`, so it does not depend on Claude-specific `${CLAUDE_PLUGIN_ROOT}` expansion and can start
-`miller serve` in the opened project directory.
+`${CURSOR_PLUGIN_ROOT}` because Cursor resolves relative MCP args against the current Cursor workspace, not the
+plugin root. Cursor rejects symlinks/junctions for local plugins when the target is outside
+`~/.cursor/plugins/local`, so use a real directory copy for local testing. The manifest intentionally does not use
+`${workspaceFolder}` because Cursor's no-folder Settings window treats that as an unresolved-variable error before
+the launcher can run.
 
 For the GitHub-hosted plugin source, use:
 
@@ -494,9 +501,11 @@ Warnings are errors (`Directory.Build.props`).
 - `no Miller index`: run `miller workspace full`, or open the folder in the Miller MCP server so the
   index can be created. If the missing target is another repo, run `miller workspace open --path /absolute/repo --full`
   or MCP `workspace operation=open path=/absolute/repo`, then pass that repo's selector as `workspace_id`.
-- Cursor shows Miller as imported but errored: install a package with `.cursor-plugin/plugin.json`, reload Cursor
-  with a project folder open, and prefer the Cursor plugin entry over any stale Claude-plugin import. The Cursor
-  manifest passes the project folder through `MILLER_WORKSPACE_ROOT`.
+- Cursor shows Miller as imported but errored: check the Cursor MCP log for `miller-plugin-launcher.cjs`. If it
+  points at the open workspace, Cursor is still using an old relative launcher config. If the log says
+  `Variable workspaceFolder can not be resolved`, Cursor is still using a manifest with a stale `${workspaceFolder}`
+  env var. Update/reinstall the Miller plugin, then reload Cursor. For local plugin testing, use a real directory
+  copy under `~/.cursor/plugins/local/miller`; Cursor rejects symlinks that point outside that tree.
 - Missing `julie-extract`: run the restore script for your platform, then rerun the scale or refresh path.
 - Unsure which server is live: run `miller version` or `miller workspace status`; compare the git SHA suffix
   with the build you expect, and compare `workspace status`'s `pid` before/after a restart.

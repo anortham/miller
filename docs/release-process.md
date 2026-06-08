@@ -51,6 +51,9 @@ Use `--dry-run` to verify artifacts without creating or updating a release.
   in sync before package validation.
 - When plugin manifests or `bin/miller-plugin-launcher.cjs` change, run `scripts/test-plugin.sh` and a
   Cursor-style smoke from `.cursor-plugin/plugin.json` against a local `MILLER_BINARY` to confirm `initialize` and
-  `tools/list` complete.
+  `tools/list` complete. Run one smoke from `/` with no workspace env to prove Cursor's no-folder Settings launch
+  does not fail, and one smoke from a non-Miller repo cwd to prove project launches still bind to that repo.
+  Expand `${CURSOR_PLUGIN_ROOT}` to the package root in the smoke; Cursor rejects local plugin symlinks, so local
+  Cursor UI testing needs a real directory copy under `~/.cursor/plugins/local/miller`.
 - For a stable release, use `prerelease=false`; for a hyphenated version such as `0.2.1-beta.1`, use
   `prerelease=true`.

@@ -110,3 +110,12 @@ test('resolveLaunchCwd accepts Claude and Cursor workspace env fallbacks', () =>
     path.resolve(cursorWorkspace),
   );
 });
+
+test('resolveLaunchCwd uses plugin root instead of a sensitive current directory', () => {
+  const root = path.parse(process.cwd()).root;
+
+  assert.equal(
+    launcher.resolveLaunchCwd({}, root),
+    repoRoot,
+  );
+});

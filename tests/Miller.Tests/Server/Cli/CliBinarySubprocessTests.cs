@@ -60,7 +60,7 @@ public sealed class CliBinarySubprocessTests : IDisposable
         // version → exit 0, prints the build version.
         ProcessResult version = RunMiller(millerDll, _root, "version");
         Assert.Equal(0, version.ExitCode);
-        Assert.StartsWith("0.3.3", version.Stdout.Trim());
+        Assert.StartsWith("0.3.4", version.Stdout.Trim());
 
         // search → resolves <cwd>/.miller/symbols.db and finds the symbol.
         ProcessResult search = RunMiller(millerDll, _root, "search", "WidgetFromCli");

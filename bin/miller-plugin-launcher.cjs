@@ -228,6 +228,87 @@ function isUnresolvedPlaceholder(value) {
   return /\$\{[^}]+}/.test(value);
 }
 
+function normalizeComparablePath(value) {
+  const text = String(value || '').trim();
+  if (!text) {
+    return null;
+  }
+
+  let full;
+  try {
+    full = path.resolve(text);
+  } catch {
+    return null;
+  }
+
+  const trimmed = full.replace(/[\\/]+$/, '');
+  return trimmed || full;
+}
+
+function pathEquals(left, right) {
+  const a = normalizeComparablePath(left);
+  const b = normalizeComparablePath(right);
+  if (!a || !b) {
+    return false;
+  }
+
+  return process.platform === 'win32' || process.platform === 'darwin'
+    ? a.toLowerCase() === b.toLowerCase()
+    : a === b;
+}
+
+function windowsSensitiveRoots(env = process.env) {
+  const systemDrive = String(env.SystemDrive || 'C:').replace(/[\\/]$/, '');
+  const driveRoot = `${systemDrive}\\`;
+  const roots = [
+    `${driveRoot}Users`,
+    `${driveRoot}Windows`,
+    `${driveRoot}Windows\\System32`,
+    `${driveRoot}Program Files`,
+    `${driveRoot}Program Files (x86)`,
+    `${driveRoot}ProgramData`,
+  ];
+
+  for (const key of ['SystemRoot', 'ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432', 'ProgramData', 'PUBLIC']) {
+    if (env[key]) {
+      roots.push(env[key]);
+    }
+  }
+
+  return roots;
+}
+
+function sensitiveRootCandidates(env = process.env) {
+  const roots = [];
+  if (os.homedir()) {
+    roots.push(os.homedir());
+  }
+
+  if (process.platform === 'darwin') {
+    roots.push('/Users', '/var/root', '/private/var/root');
+  } else if (process.platform === 'linux') {
+    roots.push('/home', '/root');
+  } else if (process.platform === 'win32') {
+    roots.push(...windowsSensitiveRoots(env));
+  }
+
+  return roots;
+}
+
+function isSensitiveLaunchCwd(candidate, env = process.env) {
+  const resolved = normalizeComparablePath(candidate);
+  if (!resolved) {
+    return false;
+  }
+
+  const parsed = path.parse(resolved);
+  if (pathEquals(resolved, parsed.root)) {
+    return true;
+  }
+
+  return sensitiveRootCandidates(env).some((root) => pathEquals(resolved, root));
+}
+
 function pathCandidates(value) {
   const text = String(value || '').trim();
   if (!text || isUnresolvedPlaceholder(text)) {
@@ -291,16 +372,17 @@ function resolveLaunchCwd(env = process.env, currentDirectory = process.cwd()) {
     env.WORKSPACE_FOLDER_PATH,
     ...(env.WORKSPACE_FOLDER_PATHS ? pathCandidates(env.WORKSPACE_FOLDER_PATHS) : []),
     currentDirectory,
+    pluginRoot(),
   ];
 
   for (const candidate of candidates) {
     const resolved = normalizeLaunchCwd(candidate);
-    if (resolved) {
+    if (resolved && !isSensitiveLaunchCwd(resolved, env)) {
       return resolved;
     }
   }
 
-  return path.resolve(currentDirectory);
+  return pluginRoot();
 }
 
 async function ensureMillerPackage(config, platformInfo, cacheRoot = defaultCacheRoot()) {

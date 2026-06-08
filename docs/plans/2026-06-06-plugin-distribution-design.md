@@ -50,11 +50,24 @@ The plugin manifest tests verify the mirror is byte-for-byte identical.
 ## Cursor
 
 Cursor needs a first-class `.cursor-plugin/plugin.json`; importing the Claude manifest leaves
-`${CLAUDE_PLUGIN_ROOT}` unexpanded and Node tries to launch a literal non-existent path. The Cursor manifest uses a
-relative `./bin/miller-plugin-launcher.cjs` command with `cwd: "."`, matching Cursor's plugin-root execution model
-and avoiding Claude-specific environment variables.
+`${CLAUDE_PLUGIN_ROOT}` unexpanded and Node tries to launch a literal non-existent path.
 
-For local Cursor testing, install this checkout or a packaged plugin under `~/.cursor/plugins/local/miller` and
+**Superseded 2026-06-08:** Cursor does not reliably launch plugin MCP commands with the plugin root as cwd. Local
+logs showed relative args resolving against the open workspace (`/Users/murphy/source/julie/bin/...`) or `/bin/...`
+for an empty window. Cursor's loader expands `${CURSOR_PLUGIN_ROOT}` to the actual plugin install/cache path, so
+the Cursor manifest must use `${CURSOR_PLUGIN_ROOT}/bin/miller-plugin-launcher.cjs` instead of `./bin/...` plus
+`cwd: "."`.
+
+**Superseded 2026-06-08:** Cursor rejects `~/.cursor/plugins/local` symlinks that point outside that directory.
+For local Cursor testing, use a real directory copy under `~/.cursor/plugins/local/miller` or test the
+Claude-imported plugin cache path.
+
+**Superseded 2026-06-08:** Do not set `MILLER_WORKSPACE_ROOT="${workspaceFolder}"` in the Cursor manifest. Cursor
+resolves manifest env vars before launching the process, and the no-folder Settings window fails before the
+launcher can ignore the placeholder. The launcher owns cwd selection: normal project cwd wins, sensitive roots
+fall back to the plugin root.
+
+For local Cursor testing, install a real copy of this checkout or a packaged plugin under `~/.cursor/plugins/local/miller` and
 reload Cursor. The package root must contain `.cursor-plugin/plugin.json`, `skills/`, `miller-plugin.json`, and
 `bin/miller-plugin-launcher.cjs`.
 

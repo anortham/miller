@@ -2,7 +2,7 @@
   "name": "miller",
   "displayName": "Miller",
   "description": "Local SQLite-backed code intelligence, content search, and workspace freshness for coding agents.",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "author": {
     "name": "Alan Northam"
   },
@@ -26,12 +26,8 @@
     "miller": {
       "command": "node",
       "args": [
-        "./bin/miller-plugin-launcher.cjs"
-      ],
-      "cwd": ".",
-      "env": {
-        "MILLER_WORKSPACE_ROOT": "${workspaceFolder}"
-      }
+        "${CURSOR_PLUGIN_ROOT}/bin/miller-plugin-launcher.cjs"
+      ]
     }
   }
 }
