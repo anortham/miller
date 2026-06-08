@@ -55,15 +55,14 @@ The README/onboarding and documentation cleanup is now locally in progress: READ
 Use `TODO.md` for the active queue. Durable priorities are:
 
 1. Site metrics: add real token-savings metrics to the GitHub Pages site from open-source repos cloned under `~/source`.
-2. Search-quality dogfood after content corpus FTS: keep symbol search narrow by default, exercise explicit `mode=content|source|external|web|all-text` plus `regions=...` on real workflows, and only widen symbol ranking if those explicit routes fail concrete agent tasks.
-3. Structured search-output cleanup: replace or mark stale copied Julie cases such as `WorkspacePool`, and decide whether `mode=file --json` needs a versioned file-result shape. Scoped-miss UX is closed; content corpus modes already return path/line/snippet hits.
-4. Julie backlog transfer: triage `~/source/julie/TODO.md` ideas for Miller fit, especially self-improvement/searchability scoring, tree-sitter pattern queries, AST complexity metrics, and body-hash duplication detection.
-5. Cross-workspace access UX: clarify how an agent in `workspace_A` should examine code in `workspace_B` through Miller selectors, registry state, and MCP/CLI affordances.
-6. Eros contract additions: only add new CLI/export surfaces when Eros has a concrete workflow need beyond the current documented public contracts.
+2. Structured search-output cleanup: replace or mark stale copied Julie cases such as `WorkspacePool`, and decide whether `mode=file --json` needs a versioned file-result shape. The 2026-06-08 post-content-corpus retest found no current need to widen default symbol ranking. Scoped-miss UX is closed; content corpus modes already return path/line/snippet hits.
+3. Julie backlog transfer: triage `~/source/julie/TODO.md` ideas for Miller fit, especially self-improvement/searchability scoring, tree-sitter pattern queries, AST complexity metrics, and body-hash duplication detection.
+4. Cross-workspace access UX: clarify how an agent in `workspace_A` should examine code in `workspace_B` through Miller selectors, registry state, and MCP/CLI affordances.
+5. Eros contract additions: only add new CLI/export surfaces when Eros has a concrete workflow need beyond the current documented public contracts.
 
 ## Search And Read-Path State
 
-Symbol search is in the solved beta bucket and should remain narrow (`name + signature`) unless fresh dogfood shows explicit text modes failing real agent tasks. FTS5 remains recall-only for symbol search, with C# BM25 ranking retained for parity.
+Symbol search is in the solved beta bucket and should remain narrow (`name + signature`). The 2026-06-08 post-content-corpus search-quality retest found Miller 7/7 top-1 on the starter runner cases and no evidence that default symbol ranking should absorb docs/source/comment/literal text. FTS5 remains recall-only for symbol search, with C# BM25 ranking retained for parity.
 
 The post-beta file-content FTS work is implemented through the content corpus sidecar. Use explicit modes by intent: `mode=content` for docs/config prose, `mode=source` for workspace source-body text, `mode=external|web|all-text` for imported or all corpus text, and `regions=comment|doc_comment|string_literal` for scoped source-region text. Do not treat old pre-content-corpus search TODOs as open requirements to add doc comments, literals, or path tokens directly into symbol ranking.
 
