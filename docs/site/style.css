@@ -325,6 +325,99 @@ h3 {
   color: rgba(255, 255, 255, 0.88);
 }
 
+.metrics-summary {
+  width: min(1120px, 100%);
+  margin: 0 auto 24px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border: 1px solid var(--rule);
+  background: var(--panel);
+}
+
+.metrics-summary div {
+  min-height: 150px;
+  padding: 24px;
+  border-right: 1px solid var(--rule);
+}
+
+.metrics-summary div:last-child {
+  border-right: 0;
+}
+
+.metrics-summary strong {
+  display: block;
+  margin-bottom: 12px;
+  color: var(--accent-strong);
+  font-size: 44px;
+  line-height: 1;
+}
+
+.metrics-summary span {
+  color: var(--ink-soft);
+}
+
+.metrics-table-wrap {
+  width: min(1120px, 100%);
+  margin: 0 auto;
+  overflow-x: auto;
+  border: 1px solid var(--rule);
+  background: var(--panel);
+}
+
+.metrics-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 760px;
+}
+
+.metrics-table caption {
+  padding: 18px 20px;
+  color: var(--ink-soft);
+  text-align: left;
+  border-bottom: 1px solid var(--rule);
+}
+
+.metrics-table th,
+.metrics-table td {
+  padding: 14px 16px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--rule);
+}
+
+.metrics-table th {
+  color: var(--accent-strong);
+  font-family: var(--mono);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.metrics-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.metrics-table td:last-child {
+  color: var(--accent-strong);
+  font-weight: 800;
+}
+
+.metrics-table code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.metrics-note {
+  margin: 0;
+  padding: 16px 20px;
+  color: var(--ink-soft);
+  border-top: 1px solid var(--rule);
+}
+
+.metrics-note a {
+  color: var(--accent-strong);
+  font-weight: 700;
+}
+
 .tool-list {
   width: min(1120px, 100%);
   margin: 0 auto;
@@ -447,7 +540,8 @@ h3 {
   }
 
   .nav-links a:nth-child(4),
-  .nav-links a:nth-child(5) {
+  .nav-links a:nth-child(5),
+  .nav-links a:nth-child(6) {
     display: none;
   }
 
@@ -462,17 +556,20 @@ h3 {
 
   .split-copy,
   .feature-strip,
+  .metrics-summary,
   .tool-list,
   .install-panel {
     grid-template-columns: 1fr;
   }
 
-  .feature-strip div {
+  .feature-strip div,
+  .metrics-summary div {
     border-right: 0;
     border-bottom: 1px solid var(--rule);
   }
 
-  .feature-strip div:last-child {
+  .feature-strip div:last-child,
+  .metrics-summary div:last-child {
     border-bottom: 0;
   }
 

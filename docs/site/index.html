@@ -25,6 +25,7 @@
     <a class="brand" href="#top">Miller</a>
     <div class="nav-links">
       <a href="#why">Why</a>
+      <a href="#metrics">Metrics</a>
       <a href="#proof">Proof</a>
       <a href="#tools">Tools</a>
       <a href="#dashboard">Dashboard</a>
@@ -79,6 +80,84 @@
           <strong>Structural</strong>
           <span>symbol search, inspect, context, trace, impact, bridge evidence</span>
         </div>
+      </div>
+    </section>
+
+    <section id="metrics" class="section metrics-section">
+      <div class="section-heading">
+        <p class="eyebrow">Measured context savings</p>
+        <h2>Structure first, source only when it is needed.</h2>
+      </div>
+      <div class="metrics-summary" aria-label="Token savings summary">
+        <div>
+          <strong>97.1%</strong>
+          <span>less context than reading the sampled files directly</span>
+        </div>
+        <div>
+          <strong>75K</strong>
+          <span>estimated tokens avoided across six orientation workflows</span>
+        </div>
+        <div>
+          <strong>6 repos</strong>
+          <span>Flask, Express, Zod, Newtonsoft.Json, Gson, and jq</span>
+        </div>
+      </div>
+      <div class="metrics-table-wrap">
+        <table class="metrics-table">
+          <caption>
+            Compact <code>inspect &lt;file&gt; --limit 20</code> output compared with reading the same source file.
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col">Repo</th>
+              <th scope="col">Language</th>
+              <th scope="col">File</th>
+              <th scope="col">Savings</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Flask</td>
+              <td>Python</td>
+              <td><code>src/flask/app.py</code></td>
+              <td>97.4%</td>
+            </tr>
+            <tr>
+              <td>Express</td>
+              <td>JavaScript</td>
+              <td><code>lib/application.js</code></td>
+              <td>90.5%</td>
+            </tr>
+            <tr>
+              <td>Zod</td>
+              <td>TypeScript</td>
+              <td><code>packages/zod/src/v4/classic/schemas.ts</code></td>
+              <td>98.2%</td>
+            </tr>
+            <tr>
+              <td>Newtonsoft.Json</td>
+              <td>C#</td>
+              <td><code>Src/Newtonsoft.Json/JsonConvert.cs</code></td>
+              <td>97.1%</td>
+            </tr>
+            <tr>
+              <td>Gson</td>
+              <td>Java</td>
+              <td><code>gson/src/main/java/com/google/gson/Gson.java</code></td>
+              <td>97.2%</td>
+            </tr>
+            <tr>
+              <td>jq</td>
+              <td>C</td>
+              <td><code>src/jv_parse.c</code></td>
+              <td>95.7%</td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="metrics-note">
+          Evidence and commands are recorded in
+          <a href="https://github.com/anortham/miller/blob/main/docs/findings/2026-06-08-site-token-savings.md" target="_blank" rel="noopener">the measurement note</a>.
+        </p>
       </div>
     </section>
 
