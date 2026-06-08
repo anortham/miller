@@ -10,9 +10,10 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`contracts/cli-eros-v1.md`](contracts/cli-eros-v1.md) - active Eros-facing CLI/export contract.
 - [`contracts/content-corpus-v1.md`](contracts/content-corpus-v1.md) - active content corpus schema/export contract.
 - [`release-process.md`](release-process.md) - current release validation and promotion flow.
-- [`release-notes/v0.3.0.md`](release-notes/v0.3.0.md) - candidate release notes for the next stable release.
-- [`release-notes/v0.2.0.md`](release-notes/v0.2.0.md) - latest published release notes.
-- [`findings/2026-06-08-v0.3.0-release-prep-review.md`](findings/2026-06-08-v0.3.0-release-prep-review.md) - current `0.3.0` release-prep review.
+- [`release-notes/v0.3.0.md`](release-notes/v0.3.0.md) - latest published release notes.
+- [`findings/2026-06-08-v0.3.0-release-verification.md`](findings/2026-06-08-v0.3.0-release-verification.md) - live `v0.3.0` release verification.
+- [`findings/2026-06-08-v0.3.0-release-prep-review.md`](findings/2026-06-08-v0.3.0-release-prep-review.md) - `0.3.0` release-prep review.
+- [`release-notes/v0.2.0.md`](release-notes/v0.2.0.md) - historical `v0.2.0` release notes.
 - [`search-quality-runner.md`](search-quality-runner.md) - current search-quality comparison runner.
 - [`plans/2026-06-04-symbol-search-collapsed-trigram-design.md`](plans/2026-06-04-symbol-search-collapsed-trigram-design.md) - active symbol-search sidecar design history, with current fail-visible behavior noted.
 - [`plans/2026-06-07-content-corpus-fts5-search-plan.md`](plans/2026-06-07-content-corpus-fts5-search-plan.md) - implemented content corpus plan; current contract is in `contracts/content-corpus-v1.md`.

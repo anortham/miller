@@ -8,7 +8,7 @@ Run the release workflow with publication disabled:
 
 ```bash
 gh workflow run release.yml \
-  -f version=0.3.0 \
+  -f version=<version> \
   -f prerelease=false \
   -f publish=false \
   -f allow_overwrite=false
@@ -23,7 +23,7 @@ Promote the successful package-only run by ID:
 
 ```bash
 gh workflow run release.yml \
-  -f version=0.3.0 \
+  -f version=<version> \
   -f prerelease=false \
   -f publish=true \
   -f allow_overwrite=false \
@@ -36,7 +36,7 @@ release without rebuilding the platform matrix.
 For local promotion with the same checks:
 
 ```bash
-scripts/release-promote.sh --version 0.3.0 --run-id <successful-package-run-id>
+scripts/release-promote.sh --version <version> --run-id <successful-package-run-id>
 ```
 
 Use `--dry-run` to verify artifacts without creating or updating a release.
