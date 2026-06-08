@@ -272,6 +272,43 @@ public sealed class SearchIndexWriterTests : IDisposable
     }
 
     [Fact]
+    public void ApplyFileChanges_WhenNewEarlierSymbolPrecedesExistingChangedSymbol_ReservesExistingDocId()
+    {
+        const string earlierPath = "src/A.cs";
+        const string laterPath = "src/B.cs";
+        SearchIndexWriter.Write(_dbPath, new[]
+        {
+            Sym(0, "old-later", "OldLater", null, "class", "csharp", laterPath, 1, 2),
+        }, revision: 1);
+
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow("new-earlier", "NewEarlier", "class", "csharp",
+                    earlierPath, null, 1, ParentId: null),
+                new JulieDbFixture.SymbolRow("old-later", "OldLater", "class", "csharp",
+                    laterPath, null, 1, ParentId: null),
+            });
+
+        SearchIndexWriter.ApplyFileChanges(
+            _dbPath,
+            fx.DbPath,
+            [earlierPath, laterPath],
+            revision: 2,
+            workspaceRoot: null,
+            RegionIndexOptions.Disabled);
+
+        using var c = OpenRead();
+        Assert.Equal(2L, Long(Scalar(c, "SELECT COUNT(*) FROM search_symbols")));
+        Assert.Equal(2L, Long(Scalar(c, "SELECT COUNT(DISTINCT doc_id) FROM search_symbols")));
+        Assert.Equal(0L, Long(Scalar(c, "SELECT doc_id FROM search_symbols WHERE symbol_id='old-later'")));
+        Assert.Equal(1L, Long(Scalar(c, "SELECT doc_id FROM search_symbols WHERE symbol_id='new-earlier'")));
+        Assert.Equal(2L, Long(Scalar(c, "SELECT revision FROM meta")));
+    }
+
+    [Fact]
     public void Write_EmptySymbols_ProducesValidEmptyIndex()
     {
         SearchIndexWriter.Write(_dbPath, Array.Empty<IndexedSymbol>(), revision: 3);

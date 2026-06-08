@@ -418,10 +418,14 @@ public static class SearchIndexWriter
             return Array.Empty<IndexedSymbol>();
 
         var oldBySymbolId = oldSymbols.ToDictionary(static s => s.SymbolId, static s => s.DocId, StringComparer.Ordinal);
-        var reusableDocIds = new SortedSet<int>(oldSymbols.Select(static s => s.DocId));
+        var currentSymbolIds = currentSymbols.Select(static s => s.SymbolId).ToHashSet(StringComparer.Ordinal);
+        var reusableDocIds = new SortedSet<int>(
+            oldSymbols
+                .Where(s => !currentSymbolIds.Contains(s.SymbolId))
+                .Select(static s => s.DocId));
         int maxResidentDocId = ReadMaxDocId(connection);
-        int maxReusableDocId = oldSymbols.Count == 0 ? -1 : oldSymbols.Max(static s => s.DocId);
-        int nextDocId = checked(Math.Max(maxResidentDocId, maxReusableDocId) + 1);
+        int maxOldDocId = oldSymbols.Count == 0 ? -1 : oldSymbols.Max(static s => s.DocId);
+        int nextDocId = checked(Math.Max(maxResidentDocId, maxOldDocId) + 1);
         var assigned = new List<IndexedSymbol>(currentSymbols.Count);
 
         foreach (IndexedSymbol symbol in currentSymbols)
