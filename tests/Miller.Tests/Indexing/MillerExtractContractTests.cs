@@ -143,6 +143,7 @@ public sealed class MillerExtractContractTests
         Assert.Contains("\"${publish_dir}/miller\" version", workflow, StringComparison.Ordinal);
         Assert.Contains("& $millerBinary version", workflow, StringComparison.Ordinal);
         Assert.Contains("search inspect context impact trace edit content workspace", workflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("echo \"$out\" | grep -q", workflow, StringComparison.Ordinal);
         Assert.Contains("$outLines = & { $reqs; Start-Sleep -Seconds 20 } | & $millerBinary serve", workflow, StringComparison.Ordinal);
         Assert.Contains("foreach ($tool in @(\"search\", \"inspect\", \"context\", \"impact\", \"trace\", \"edit\", \"content\", \"workspace\"))", workflow, StringComparison.Ordinal);
 

@@ -111,5 +111,9 @@ Fix plan/status:
   metadata. Release notes added at `docs/release-notes/v0.3.2.md`.
 - [x] 2026-06-08 completed: strengthened `plugin-manifest.test.cjs` so future version bumps must keep
   `Directory.Build.props`, `miller-plugin.json`, plugin manifests, and Claude marketplace metadata aligned.
+- [x] 2026-06-08 completed: package-only run `27152945415` was not promoted. ARM macOS returned a valid
+  `tools/list` response, but the workflow assertion used `echo "$out" | grep -q` under `set -o pipefail`, so
+  `grep -q` closed early and `echo` failed with SIGPIPE. Fixed the release workflow to use Bash string matching
+  and pinned the guard in `MillerExtractContractTests.ReleaseWorkflowPublishesVerifiablePrereleasePackages`.
 - [ ] After `v0.3.2` is published and verified from live GitHub release facts, update README/site current-release
   links from `v0.3.1` to `v0.3.2`.

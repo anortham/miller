@@ -151,17 +151,18 @@ jobs:
           out=$( ( printf '%s\n' "$reqs"; sleep 20 ) | "${publish_dir}/miller" serve 2>"${stderr_file}" || true )
           # Assert against the tools/list RESPONSE (id:2), not the initialize capabilities — "tools" alone
           # would false-positive on the {"tools":{"listChanged":true}} capability in the initialize reply.
-          echo "$out" | grep -q '"id":2' || {
+          if [[ "$out" != *'"id":2'* ]]; then
             echo "AOT MCP serve smoke failed: no tools/list response"
             sed -n '1,120p' "${stderr_file}"
             exit 1
-          }
+          fi
           for tool in search inspect context impact trace edit content workspace; do
-            echo "$out" | grep -q "\"name\":\"${tool}\"" || {
+            needle="\"name\":\"${tool}\""
+            if [[ "$out" != *"$needle"* ]]; then
               echo "AOT MCP serve smoke failed: ${tool} tool missing"
               sed -n '1,120p' "${stderr_file}"
               exit 1
-            }
+            fi
           done
 
       - name: Verify packaged Windows extractor
