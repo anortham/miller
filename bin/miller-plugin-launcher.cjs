@@ -7,6 +7,7 @@ const fs = require('node:fs');
 const https = require('node:https');
 const os = require('node:os');
 const path = require('node:path');
+const { fileURLToPath } = require('node:url');
 
 function normalizeVersion(version) {
   const text = String(version || '').trim();
@@ -223,6 +224,85 @@ function clearMacQuarantine(packageDir) {
   childProcess.spawnSync('xattr', ['-dr', 'com.apple.quarantine', packageDir], { stdio: 'ignore' });
 }
 
+function isUnresolvedPlaceholder(value) {
+  return /\$\{[^}]+}/.test(value);
+}
+
+function pathCandidates(value) {
+  const text = String(value || '').trim();
+  if (!text || isUnresolvedPlaceholder(text)) {
+    return [];
+  }
+
+  if (text.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) {
+        return parsed.flatMap(pathCandidates);
+      }
+    } catch {
+      return [text];
+    }
+  }
+
+  if (text.includes('\n')) {
+    return text.split(/\r?\n/).flatMap(pathCandidates);
+  }
+
+  if (!text.startsWith('file:') && text.includes(path.delimiter)) {
+    return text.split(path.delimiter).flatMap(pathCandidates);
+  }
+
+  return [text];
+}
+
+function normalizeLaunchCwd(candidate) {
+  if (!candidate) {
+    return null;
+  }
+
+  let text = String(candidate).trim();
+  if (!text || isUnresolvedPlaceholder(text)) {
+    return null;
+  }
+
+  if (text.startsWith('file:')) {
+    try {
+      text = fileURLToPath(text);
+    } catch {
+      return null;
+    }
+  }
+
+  const resolved = path.resolve(text);
+  try {
+    return fs.statSync(resolved).isDirectory() ? resolved : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveLaunchCwd(env = process.env, currentDirectory = process.cwd()) {
+  const candidates = [
+    env.MILLER_WORKSPACE_ROOT,
+    env.CLAUDE_PROJECT_DIR,
+    env.CURSOR_WORKSPACE_ROOT,
+    env.WORKSPACE_FOLDER,
+    env.WORKSPACE_FOLDER_PATH,
+    ...(env.WORKSPACE_FOLDER_PATHS ? pathCandidates(env.WORKSPACE_FOLDER_PATHS) : []),
+    currentDirectory,
+  ];
+
+  for (const candidate of candidates) {
+    const resolved = normalizeLaunchCwd(candidate);
+    if (resolved) {
+      return resolved;
+    }
+  }
+
+  return path.resolve(currentDirectory);
+}
+
 async function ensureMillerPackage(config, platformInfo, cacheRoot = defaultCacheRoot()) {
   const targetRoot = path.join(cacheRoot, config.version, platformInfo.target);
   const packageDir = path.join(targetRoot, 'package');
@@ -263,7 +343,7 @@ async function ensureMillerPackage(config, platformInfo, cacheRoot = defaultCach
 
 function runMiller(binaryPath, argv = process.argv.slice(2)) {
   const child = childProcess.spawn(binaryPath, ['serve', ...argv], {
-    cwd: process.cwd(),
+    cwd: resolveLaunchCwd(),
     env: process.env,
     stdio: 'inherit',
   });
@@ -301,6 +381,7 @@ module.exports = {
   normalizeVersion,
   parseSha256Sidecar,
   releaseArchiveName,
+  resolveLaunchCwd,
   readPluginConfig,
 };
 

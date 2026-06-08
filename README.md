@@ -50,9 +50,9 @@ New-Item -ItemType Junction -Path "$env:USERPROFILE\.cursor\plugins\local\miller
 ```
 
 Reload Cursor after installing. Cursor expects `.cursor-plugin/plugin.json` at the plugin root; Miller's Cursor
-manifest points at the same release launcher used by the Claude Code and Codex plugin paths. If Cursor previously
-auto-discovered Miller from an older Claude plugin cache, reinstall from a package that contains
-`.cursor-plugin/plugin.json`.
+manifest points at the same release launcher used by the Claude Code and Codex plugin paths and passes Cursor's
+`${workspaceFolder}` to the launcher as `MILLER_WORKSPACE_ROOT`. If Cursor previously auto-discovered Miller from
+an older Claude plugin cache, reinstall from a package that contains `.cursor-plugin/plugin.json`.
 
 After installing, open a code workspace and ask your agent to search, inspect, build context, trace, or check
 impact with Miller. Miller writes its local index under that workspace's `.miller/` directory.
@@ -314,8 +314,9 @@ New-Item -ItemType Junction -Path "$env:USERPROFILE\.cursor\plugins\local\miller
 ```
 
 Then reload Cursor and confirm Miller appears under Settings > Plugins. The Cursor manifest uses
-`node ./bin/miller-plugin-launcher.cjs` with `cwd: "."` so it does not depend on Claude-specific
-`${CLAUDE_PLUGIN_ROOT}` expansion.
+`node ./bin/miller-plugin-launcher.cjs` with `cwd: "."` and passes `${workspaceFolder}` as
+`MILLER_WORKSPACE_ROOT`, so it does not depend on Claude-specific `${CLAUDE_PLUGIN_ROOT}` expansion and can start
+`miller serve` in the opened project directory.
 
 For the GitHub-hosted plugin source, use:
 
@@ -493,6 +494,9 @@ Warnings are errors (`Directory.Build.props`).
 - `no Miller index`: run `miller workspace full`, or open the folder in the Miller MCP server so the
   index can be created. If the missing target is another repo, run `miller workspace open --path /absolute/repo --full`
   or MCP `workspace operation=open path=/absolute/repo`, then pass that repo's selector as `workspace_id`.
+- Cursor shows Miller as imported but errored: install a package with `.cursor-plugin/plugin.json`, reload Cursor
+  with a project folder open, and prefer the Cursor plugin entry over any stale Claude-plugin import. The Cursor
+  manifest passes the project folder through `MILLER_WORKSPACE_ROOT`.
 - Missing `julie-extract`: run the restore script for your platform, then rerun the scale or refresh path.
 - Unsure which server is live: run `miller version` or `miller workspace status`; compare the git SHA suffix
   with the build you expect, and compare `workspace status`'s `pid` before/after a restart.

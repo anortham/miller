@@ -1,6 +1,8 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
@@ -72,5 +74,39 @@ test('parseSha256Sidecar rejects malformed sidecars', () => {
   assert.throws(
     () => launcher.parseSha256Sidecar('not a sha256 sidecar\n'),
     /Invalid Miller SHA-256 sidecar/,
+  );
+});
+
+test('resolveLaunchCwd prefers explicit Miller workspace env over process cwd', () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'miller-launcher-cwd-'));
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'miller-launcher-workspace-'));
+
+  assert.equal(
+    launcher.resolveLaunchCwd({ MILLER_WORKSPACE_ROOT: workspace }, cwd),
+    path.resolve(workspace),
+  );
+});
+
+test('resolveLaunchCwd falls back to cwd when Cursor leaves workspace placeholder unresolved', () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'miller-launcher-cwd-'));
+
+  assert.equal(
+    launcher.resolveLaunchCwd({ MILLER_WORKSPACE_ROOT: '${workspaceFolder}' }, cwd),
+    path.resolve(cwd),
+  );
+});
+
+test('resolveLaunchCwd accepts Claude and Cursor workspace env fallbacks', () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'miller-launcher-cwd-'));
+  const claudeWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'miller-launcher-claude-'));
+  const cursorWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'miller-launcher-cursor-'));
+
+  assert.equal(
+    launcher.resolveLaunchCwd({ CLAUDE_PROJECT_DIR: claudeWorkspace }, cwd),
+    path.resolve(claudeWorkspace),
+  );
+  assert.equal(
+    launcher.resolveLaunchCwd({ WORKSPACE_FOLDER_PATHS: JSON.stringify([cursorWorkspace]) }, cwd),
+    path.resolve(cursorWorkspace),
   );
 });

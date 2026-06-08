@@ -66,6 +66,9 @@ test('Claude, Cursor, and Codex plugin manifests point at the release launcher',
   assert.equal(cursor.mcpServers.miller.command, 'node');
   assert.deepEqual(cursor.mcpServers.miller.args, ['./bin/miller-plugin-launcher.cjs']);
   assert.equal(cursor.mcpServers.miller.cwd, '.');
+  assert.deepEqual(cursor.mcpServers.miller.env, {
+    MILLER_WORKSPACE_ROOT: '${workspaceFolder}',
+  });
   assert.doesNotMatch(JSON.stringify(cursor.mcpServers.miller), /CLAUDE_PLUGIN_ROOT/);
   assert.ok(
     fs.existsSync(path.join(repoRoot, cursor.mcpServers.miller.cwd, cursor.mcpServers.miller.args[0])),
