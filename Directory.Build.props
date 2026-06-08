@@ -8,13 +8,13 @@
     <!-- Single source of truth for the Miller build version. Surfaced at runtime via MillerVersion.Current
          (MCP ServerInfo.Version, `miller version`, and `workspace status`) so a session can tell WHICH build is
          live. The git short SHA is appended to InformationalVersion below when building inside the repo. -->
-    <Version>0.2.0</Version>
+    <Version>0.3.0</Version>
     <!-- We stamp the short SHA into InformationalVersion ourselves (below); stop the SDK from ALSO appending the
-         full 40-char SourceRevisionId, which would double the suffix (0.2.0+<short>.<full>). -->
+         full 40-char SourceRevisionId, which would double the suffix (0.3.0+<short>.<full>). -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
-  <!-- Stamp the git short SHA into InformationalVersion (=> "0.2.0+<sha>") so two builds off different commits are
+  <!-- Stamp the git short SHA into InformationalVersion (=> "0.3.0+<sha>") so two builds off different commits are
        distinguishable in a running process. Guarded on a .git directory so a source/published build with no repo
        still builds cleanly (InformationalVersion then defaults to $(Version)). IgnoreExitCode (NOT ContinueOnError)
        silently tolerates a git failure — git not on PATH, a broken repo, a worktree/submodule .git-file — WITHOUT

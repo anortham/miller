@@ -245,7 +245,7 @@ The single `miller` binary runs two ways:
 
 **Dogfooding the server.** Because MCP runs over stdio, a new build takes effect only after the MCP client
 restarts the subprocess. A build made inside the repo carries its git short SHA — `miller version` prints
-`0.2.0+<sha>` (just `0.2.0` for a build with no `.git`), and the same string heads the `# workspace` block of
+`0.3.0+<sha>` (just `0.3.0` for a build with no `.git`), and the same string heads the `# workspace` block of
 `workspace status`. The status header also includes the process id (`pid <n>`), which is the quickest way to
 confirm a restarted MCP client is talking to a new Miller subprocess when you rebuilt uncommitted changes and
 the SHA suffix stayed the same.
@@ -355,7 +355,7 @@ The release workflow builds one archive per pinned `julie-extract` platform:
 - `x86_64-pc-windows-msvc`
 
 Each archive extracts to a versioned top-level directory such as
-`miller-0.2.0-aarch64-apple-darwin/`. Keep that directory together: it contains `miller`, native runtime
+`miller-<version>-aarch64-apple-darwin/`. Keep that directory together: it contains `miller`, native runtime
 libraries such as SQLite and BLAKE3 bindings, the matching `.tools/julie-extract` binary, the loopback dashboard
 under `dashboard/`, `LICENSE`, and `THIRD-PARTY-NOTICES.md`. The workflow also uploads a `.sha256` sidecar for
 each archive and smoke-runs both `julie-extract --version` and `miller version` before packaging.
