@@ -3,6 +3,7 @@ using System.Text.Json;
 using Miller.Indexing;
 using Miller.Server;
 using Miller.Server.Cli;
+using Miller.Server.Telemetry;
 using Miller.Server.Tools;
 using Miller.Server.Workspaces;
 using Miller.Tests.Indexing;
@@ -201,6 +202,131 @@ public sealed class CliDispatchTests : IDisposable
         var (code, outText, _) = Run(new[] { "version" }, Context(Path.Combine(_dir, "symbols.db")));
         Assert.Equal(0, code);
         Assert.StartsWith("0.2.0", outText.Trim());
+    }
+
+    [Fact]
+    public void Capabilities_Json_ReportsErosContractSurface()
+    {
+        var (code, outText, errText) = Run(
+            new[] { "capabilities", "--json" },
+            Context(Path.Combine(_dir, "symbols.db")));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        JsonElement root = doc.RootElement;
+
+        Assert.StartsWith("0.2.0", root.GetProperty("miller").GetProperty("version").GetString());
+
+        JsonElement julie = root.GetProperty("julie_extract");
+        Assert.Equal("2.1.3", julie.GetProperty("pinned_version").GetString());
+        Assert.Equal(2, julie.GetProperty("sqlite_schema_version").GetInt64());
+        Assert.Equal(2, julie.GetProperty("extract_contract_version").GetInt64());
+        Assert.Equal(2, julie.GetProperty("report_schema_version").GetInt64());
+        Assert.Equal("blake3", julie.GetProperty("hash_algorithm").GetString());
+
+        JsonElement artifacts = root.GetProperty("artifacts");
+        Assert.Equal(SearchIndexWriter.SchemaVersion, artifacts.GetProperty("search_sidecar_schema_version").GetInt32());
+        Assert.Equal(ContentCorpusSchema.SchemaVersion, artifacts.GetProperty("content_corpus_schema_version").GetInt32());
+        Assert.Equal(ContentCorpusSchema.ChunkerVersion, artifacts.GetProperty("content_corpus_chunker_version").GetString());
+
+        JsonElement optional = root.GetProperty("optional_features");
+        Assert.True(optional.GetProperty("content_corpus").GetBoolean());
+        Assert.True(optional.TryGetProperty("symbol_search_sidecar", out _));
+        Assert.True(optional.TryGetProperty("source_region_index", out _));
+
+        string[] commands = root.GetProperty("json_commands")
+            .EnumerateArray()
+            .Select(static item => item.GetString()!)
+            .ToArray();
+        Assert.Contains("workspace status --json", commands);
+        Assert.Contains("workspace refresh --json", commands);
+        Assert.Contains("refresh --json --wait", commands);
+        Assert.Contains("content export", commands);
+        Assert.Contains("telemetry export --jsonl", commands);
+        Assert.Contains("impact --json", commands);
+        Assert.DoesNotContain("trace --json", commands);
+
+        JsonElement[] exports = root.GetProperty("supported_export_formats").EnumerateArray().ToArray();
+        JsonElement export = Assert.Single(exports, item => item.GetProperty("name").GetString() == "content_corpus");
+        Assert.Equal("jsonl", export.GetProperty("format").GetString());
+        Assert.Equal(ContentCorpusSchema.SchemaVersion, export.GetProperty("schema_version").GetInt32());
+        Assert.Contains(
+            TextContentKind.WorkspaceSource,
+            export.GetProperty("content_kinds").EnumerateArray().Select(static item => item.GetString()));
+
+        JsonElement telemetryExport = Assert.Single(exports, item => item.GetProperty("name").GetString() == "telemetry");
+        Assert.Equal("miller telemetry export --jsonl", telemetryExport.GetProperty("command").GetString());
+        Assert.Equal("jsonl", telemetryExport.GetProperty("format").GetString());
+    }
+
+    [Fact]
+    public void Telemetry_Export_WritesJsonLinesAndSupportsExactWorkspaceFilter()
+    {
+        var ctx = Context(Path.Combine(_dir, "symbols.db"));
+        using (var ledger = TelemetryLedger.Open(ctx.TelemetryDbPath, workspaceId: null))
+        {
+            var alpha = new TelemetryRecord(
+                Tool: "search",
+                Op: "symbol",
+                WorkspaceId: "ws-alpha",
+                WorkspaceRoot: Path.Combine(_dir, "alpha"),
+                DurationMs: 12,
+                Outcome: "ok",
+                ErrorKind: null,
+                ResultCount: 3,
+                BytesExamined: 40,
+                BytesReturned: 120,
+                SourceBytes: 512,
+                EstTokens: 30,
+                IndexFresh: true,
+                TargetHash: "abc123",
+                MetadataJson: "{\"search_backend\":\"disk\"}");
+            ledger.Record(in alpha, id: "alpha-row");
+
+            var beta = alpha with
+            {
+                Tool = "inspect",
+                WorkspaceId = "ws-beta",
+                WorkspaceRoot = Path.Combine(_dir, "beta"),
+                Outcome = "error",
+                ErrorKind = "InvalidOperationException",
+                IndexFresh = false,
+                TargetHash = null,
+                MetadataJson = "{}",
+            };
+            ledger.Record(in beta, id: "beta-row");
+        }
+
+        var (code, outText, errText) = Run(
+            new[] { "telemetry", "export", "--jsonl", "--workspace-id", "ws-alpha" },
+            ctx);
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.EndsWith("\n", outText, StringComparison.Ordinal);
+        string line = Assert.Single(outText.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries));
+        using JsonDocument doc = JsonDocument.Parse(line);
+        JsonElement row = doc.RootElement;
+        Assert.Equal("alpha-row", row.GetProperty("id").GetString());
+        Assert.Equal("search", row.GetProperty("tool").GetString());
+        Assert.Equal("symbol", row.GetProperty("op").GetString());
+        Assert.Equal("ws-alpha", row.GetProperty("workspace_id").GetString());
+        Assert.Equal("ok", row.GetProperty("outcome").GetString());
+        Assert.Equal(12, row.GetProperty("duration_ms").GetInt64());
+        Assert.Equal(3, row.GetProperty("result_count").GetInt32());
+        Assert.Equal(40, row.GetProperty("bytes_examined").GetInt64());
+        Assert.Equal(120, row.GetProperty("bytes_returned").GetInt64());
+        Assert.Equal(512, row.GetProperty("source_bytes").GetInt64());
+        Assert.Equal(30, row.GetProperty("est_tokens").GetInt64());
+        Assert.True(row.GetProperty("index_fresh").GetBoolean());
+        Assert.Equal("abc123", row.GetProperty("target_hash").GetString());
+        Assert.Equal("{\"search_backend\":\"disk\"}", row.GetProperty("metadata_json").GetString());
+
+        var (allCode, allOut, allErr) = Run(new[] { "telemetry", "export", "--jsonl" }, ctx);
+        Assert.Equal(0, allCode);
+        Assert.Empty(allErr);
+        Assert.Equal(2, allOut.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length);
     }
 
     [Fact]
@@ -1004,6 +1130,36 @@ public sealed class CliDispatchTests : IDisposable
             Context(Path.Combine(_dir, "symbols.db")));
         Assert.Equal(2, code);
         Assert.False(string.IsNullOrWhiteSpace(errText));
+    }
+
+    [Fact]
+    public void Refresh_TopLevelAlias_AcceptsJsonWaitAndUsesCurrentWorkspaceRouting()
+    {
+        var (code, _, errText) = Run(
+            new[] { "refresh", "--json", "--wait" },
+            Context(Path.Combine(_dir, "symbols.db")));
+
+        Assert.Equal(2, code);
+        Assert.Contains("current workspace is not registered", errText);
+        Assert.DoesNotContain("unknown command", errText);
+    }
+
+    [Fact]
+    public void Refresh_TopLevelAlias_MissingToolIsOperationalExitThree()
+    {
+        string root = Path.Combine(_dir, "target");
+        Directory.CreateDirectory(root);
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        SeedRegisteredWorkspace("target-ws", "target-111111111111", root, dbPath);
+
+        var (code, outText, errText) = Run(
+            new[] { "refresh", "--json", "--wait", "--workspace-id", "target-ws" },
+            Context(Path.Combine(_dir, "current", ".miller", "symbols.db")));
+
+        Assert.Equal(3, code);
+        Assert.Empty(outText);
+        Assert.Contains("cannot refresh", errText);
+        Assert.Contains("julie-extract", errText);
     }
 
     [Theory]

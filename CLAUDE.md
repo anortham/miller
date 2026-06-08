@@ -97,6 +97,17 @@ scripts/test.ps1 all
 - Do not publish, retag, delete, or overwrite a release without explicit user approval. README current-release
   metadata and release-evidence docs must come from live GitHub release facts, not guessed values.
 
+## Public docs & onboarding
+
+- `README.md` is the public first-use entry point, not only a developer architecture note. Keep the quickstart near
+  the top and make the install paths clear for non-developers: plugin install, manual release archive install,
+  manual MCP config, then source-checkout development.
+- The public site is `https://anortham.github.io/miller/`; keep README linked to it.
+- Release-facing README facts must come from live GitHub release data. For `v0.2.0`, the live release has four
+  platform archives plus four `.sha256` sidecars.
+- When updating harness guidance, edit `CLAUDE.md` first, run `scripts/sync-agents.sh` or
+  `scripts/sync-agents.ps1`, then confirm `cmp -s CLAUDE.md AGENTS.md`.
+
 ## Server host & startup
 
 - **Host lifecycle gotcha (load-bearing).** The .NET Generic Host CONSTRUCTS every `IHostedService` up
@@ -122,6 +133,11 @@ scripts/test.ps1 all
   (cross-platform; no shell script). Build version is single-sourced in `Directory.Build.props` (`<Version>` + git
   short SHA → `MillerVersion.Current`), surfaced in MCP `ServerInfo.Version`, `miller version`, and the `workspace`
   status header.
+- **Eros-facing CLI/export contracts.** Keep Eros on public process/artifact contracts, not Miller private .NET
+  internals. Current documented surfaces live in [`docs/contracts/cli-eros-v1.md`](docs/contracts/cli-eros-v1.md):
+  `capabilities --json`, `refresh --json --wait`, `workspace status --json`, `content export`, `telemetry export
+  --jsonl`, and stable read-command JSON such as `impact --json`. Add or harden new surfaces only when a concrete
+  Eros workflow needs facts the documented contracts do not cover.
 - **Logging.** All processes append to ONE shared daily pair (`.miller/logs/miller-<YYYYMMDD>.log` +
   `.jsonl`, Serilog `shared:true`); `pid`/`role`/`cid` are line properties, not file-name segments. There
   is no per-pid file and no startup reaper (both removed 2026-05-31; see the superseded D1/D6 notes in
@@ -143,6 +159,16 @@ scripts/test.ps1 all
   Ranking stays in C# (`Miller.Core.Search.Bm25`, shared by both backends); FTS5 is recall-only (a word arm plus a
   collapsed-trigram arm for interior substrings). See
   [`docs/plans/2026-06-04-symbol-search-collapsed-trigram-design.md`](docs/plans/2026-06-04-symbol-search-collapsed-trigram-design.md).
+- **Content corpus and text search.** File/content text search is served from the Miller-owned content corpus
+  sidecar `<workspace>/.miller/content.db`, plus explicit external/web imports. Keep symbol search narrow
+  (`name + signature`) unless real dogfood shows the explicit text modes fail an agent task. Route by intent:
+  `mode=content` for docs/config prose, `mode=source` for workspace source-body text,
+  `mode=external|web|all-text` for imported or full corpus text, and
+  `regions=comment|doc_comment|string_literal` for source-region text. Do not add doc comments, literals, or broad
+  source text directly to symbol ranking just because an old TODO predates content corpus FTS.
+- **Web research.** Miller has a mirrored `miller-web-research` skill. Web fetching stays outside Miller in the
+  skill layer via `browser39`; Miller imports fetched markdown as `web` content and supports bounded
+  search/read through the content corpus.
 - **Agent instructions.** The MCP server-level guidance is
   [`MILLER_AGENT_INSTRUCTIONS.md`](src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md), embedded in the binary
   and set as `ServerInstructions`. Edit the markdown; `AgentInstructionsTests` guards that every tool stays

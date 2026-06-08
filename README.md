@@ -17,18 +17,107 @@ The practical difference from a one-time graph dump is that Miller is built for 
 - stale or corrupt search sidecars self-heal to correct in-memory search instead of silently lying;
 - cross-language bridge evidence stays structural and provider-scoped, not embedding-driven.
 
-> **Current release: v0.2.0.** Miller ships as a source-checkout workflow and as self-contained
-> per-platform release archives.
+> **Current release: v0.2.0.** Miller ships as agent plugins, self-contained per-platform release archives,
+> and a source-checkout workflow.
+>
+> Website: [anortham.github.io/miller](https://anortham.github.io/miller/) · Release:
+> [v0.2.0](https://github.com/anortham/miller/releases/tag/v0.2.0)
 
-## Requirements
+## Quickstart
 
-- **.NET 10 SDK** installed and on `PATH` for source-checkout use, including the checked-in
-  [`mcp-config.json`](mcp-config.json). `dotnet --version` should report a `10.x` SDK.
-- A restored pinned `julie-extract` binary in `.tools/` for indexing and scale tests. The restore scripts
-  download the platform-matched binary and verify its pinned SHA-256 digest.
-- Release archives are built from the same .NET 10 projects and are self-contained per platform. The main
-  `miller` binary publishes with Native AOT, so it runs without a .NET SDK; only the packaged dashboard
-  helper stays self-contained/non-AOT because ASP.NET Razor Components do not yet support Native AOT.
+Most users should start with the agent plugin. The plugin launcher downloads the matching Miller release
+archive, verifies its `.sha256` sidecar, caches it under `~/.miller/plugin-cache/`, and starts `miller serve`
+as an MCP server.
+
+Claude Code:
+
+```bash
+claude plugin marketplace add anortham/miller
+claude plugin install miller@miller
+```
+
+Codex:
+
+```bash
+codex plugin marketplace add anortham/miller
+codex plugin add miller@miller
+```
+
+After installing, open a code workspace and ask your agent to search, inspect, build context, trace, or check
+impact with Miller. Miller writes its local index under that workspace's `.miller/` directory.
+
+### Manual Binary Install
+
+Use this path when your MCP client does not use Miller's plugin package.
+
+1. Download the archive for your platform from the
+   [v0.2.0 release](https://github.com/anortham/miller/releases/tag/v0.2.0), plus the matching `.sha256`
+   sidecar:
+
+   - `miller-0.2.0-aarch64-apple-darwin.tar.gz`
+   - `miller-0.2.0-x86_64-apple-darwin.tar.gz`
+   - `miller-0.2.0-x86_64-unknown-linux-gnu.tar.gz`
+   - `miller-0.2.0-x86_64-pc-windows-msvc.zip`
+
+2. Verify and extract it:
+
+   ```bash
+   shasum -a 256 -c miller-0.2.0-aarch64-apple-darwin.tar.gz.sha256
+   tar -xzf miller-0.2.0-aarch64-apple-darwin.tar.gz
+   ./miller version
+   ```
+
+   ```powershell
+   (Get-FileHash .\miller-0.2.0-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash
+   # compare against miller-0.2.0-x86_64-pc-windows-msvc.zip.sha256, then extract
+   Expand-Archive .\miller-0.2.0-x86_64-pc-windows-msvc.zip -DestinationPath .\miller
+   .\miller\miller.exe version
+   ```
+
+3. Point your MCP client at the extracted binary. Use an absolute path and the explicit `serve` argument:
+
+   ```json
+   {
+     "mcpServers": {
+       "miller": {
+         "command": "/absolute/path/to/extracted/miller",
+         "args": ["serve"]
+       }
+     }
+   }
+   ```
+
+   On Windows, use the full path to `miller.exe` as `command`.
+
+### Source Checkout
+
+Use this path for Miller development or for trying unreleased local changes. It requires the .NET 10 SDK on
+`PATH`.
+
+```bash
+bash scripts/restore-julie-extract.sh
+dotnet build Miller.slnx -c Release
+dotnet run --project src/Miller.Server -c Release -- workspace open --path /path/to/repo --full
+dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvider" --limit 5
+```
+
+On Windows:
+
+```powershell
+scripts/restore-julie-extract.ps1
+dotnet build Miller.slnx -c Release
+dotnet run --project src/Miller.Server -c Release -- workspace open --path C:\source\repo --full
+dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvider" --limit 5
+```
+
+## Requirements By Install Path
+
+- **Plugin or release archive:** no .NET SDK is required to run the main `miller` binary. The release archive
+  includes the matching pinned `.tools/julie-extract` binary and dashboard helper.
+- **Source checkout:** the .NET 10 SDK must be installed and on `PATH`; `dotnet --version` should report a
+  `10.x` SDK. Run the restore script once to download the pinned `julie-extract` binary into `.tools/`.
+- **Dashboard:** the packaged dashboard helper is self-contained/non-AOT because ASP.NET Razor Components do
+  not currently support Native AOT.
 
 ## How it works
 
@@ -41,7 +130,7 @@ relationships into a SQLite database. Miller is the pure-.NET host on top:
 │  Claude Code / MCP client  │◀──────────────────┐
 └───────────────────────────┘                    │
                                        ┌──────────────────────┐
-                                       │   Miller.Server       │  MCP host + 7 tools + telemetry ledger
+                                       │   Miller.Server       │  MCP host + tool surface + telemetry ledger
                                        └──────────────────────┘
                                                   │
                           ┌───────────────────────┼───────────────────────┐
@@ -76,7 +165,7 @@ Design choices that follow from this:
 src/
   Miller.Core/       pure logic, ZERO I/O deps: contract record types, in-memory index + BM25, the resolver
   Miller.Indexing/   infrastructure: julie-extract subprocess, SQLite (WAL) read layer, watcher/indexer
-  Miller.Server/     MCP stdio host, the 7 tools, the telemetry interceptor + ledger
+  Miller.Server/     MCP stdio host, the tool surface, the telemetry interceptor + ledger
   Miller.Dashboard/  narrow loopback ops dashboard reading the registry + telemetry DB
 tests/
   Miller.Tests/      unit (Core, fast) + contract (against a committed extract-DB fixture) + tagged scale set
@@ -92,30 +181,13 @@ confidence/evidence views, semantic/vector retrieval, and commercial workflows.
 
 ## The tool surface
 
-Seven tools, each with smart defaults so the common path is the simplest call: `search`, `inspect`, `context`,
-`trace`, `impact`, `edit`, `workspace`. Read tools accept a `workspace_id` selector: display ID, unique prefix,
-full ID, `current`, or `primary`. Explicit `workspace_id` defaults `ensure_fresh=true`. Targets are smart strings, not JSON objects. See
+Eight MCP tools, each with smart defaults so the common path is the simplest call: `search`, `inspect`,
+`context`, `trace`, `impact`, `edit`, `content`, and `workspace`. Read tools accept a `workspace_id`
+selector: display ID, unique prefix, full ID, `current`, or `primary`. Explicit `workspace_id` defaults
+`ensure_fresh=true`. Targets are smart strings, not JSON objects. See
 [docs/findings/miller-toolbox.md](docs/findings/miller-toolbox.md).
 
-## Running Miller
-
-From a source checkout, restore the extractor once, build, then open or refresh a workspace:
-
-```bash
-bash scripts/restore-julie-extract.sh
-dotnet build Miller.slnx -c Release
-dotnet run --project src/Miller.Server -c Release -- workspace open --path /path/to/repo --full
-dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvider" --limit 5
-```
-
-On Windows:
-
-```powershell
-scripts/restore-julie-extract.ps1
-dotnet build Miller.slnx -c Release
-dotnet run --project src/Miller.Server -c Release -- workspace open --path C:\source\repo --full
-dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvider" --limit 5
-```
+## Using Miller
 
 The single `miller` binary runs two ways:
 
@@ -151,7 +223,7 @@ The single `miller` binary runs two ways:
 
   Build once and run the binary directly (`src/Miller.Server/bin/Release/net10.0/miller <verb>`) to skip the
   `dotnet run` up-to-date check. `miller help` lists every verb: `search`, `inspect`, `context`, `impact`,
-  `trace`, `content`, `workspace`, `dashboard`, `version`, `serve`.
+  `trace`, `content`, `workspace`, `refresh`, `capabilities`, `telemetry`, `dashboard`, `version`, `serve`.
 
 **Dogfooding the server.** Because MCP runs over stdio, a new build takes effect only after the MCP client
 restarts the subprocess. A build made inside the repo carries its git short SHA — `miller version` prints
@@ -179,7 +251,7 @@ workspace(operation="dashboard", port=4977)
 Open the printed URL to view registered workspaces and scoped per-tool telemetry. Set `MILLER_REGISTRY_DB`,
 `MILLER_TELEMETRY_DB`, or `MILLER_DASHBOARD_WEBROOT` only when testing non-default paths.
 
-## Agent plugins
+## Agent Plugin Details
 
 Miller's first plugin distribution path lives in this repository, not a separate `miller-plugin` repo:
 
@@ -206,7 +278,7 @@ codex plugin marketplace add /path/to/miller
 codex plugin add miller@miller
 ```
 
-After the marketplace is published from GitHub, use the repo source instead:
+For the GitHub-hosted plugin source, use:
 
 ```bash
 claude plugin marketplace add anortham/miller
@@ -248,7 +320,8 @@ What these prove:
 
 - `workspace status` and `workspace list` read cheap registry/freshness metadata instead of hydrating the full
   graph.
-- Symbol search stays narrow and structural (`name + signature`); prose uses `--mode content`.
+- Symbol search stays narrow and structural (`name + signature`). Docs/config use `--mode content`; source
+  bodies and imported text use the explicit content corpus modes.
 - `inspect`, `context`, and `impact` use the same projection-specific read paths exposed to MCP tools.
 - The dashboard is operational evidence, not a separate product UI: it shows registered workspaces, index facts,
   telemetry, latency/failure signals, and scoped JSON endpoints from the same local state.
@@ -321,12 +394,16 @@ does **not** need the .NET SDK to run it.
 
 ## CLI output expectations
 
-For beta, text output is a compact human-facing contract and JSON output is the integration contract.
+Text output is a compact human-facing contract and JSON output is the integration contract.
 
 - Exit code `0` means success, `2` means usage/argument error, and `3` means no usable index, refused
   workspace operation, missing restore, or another operational failure a script should not ignore.
-- `--json` is supported by `search`, `inspect`, `context`, `impact`, and `workspace` operations. `trace`
-  is text-only for now.
+- `capabilities --json` reports the Miller build, `julie-extract` contract versions, optional feature flags,
+  supported JSON commands, and export feeds for Eros/local integrations.
+- `--json` is supported by `search`, `inspect`, `context`, `impact`, `dashboard`, `content` operations, and
+  `workspace` operations. `trace` is text-only for now.
+- `refresh --json --wait [--workspace-id SELECTOR|--workspace DIR] [--full]` is the Eros-friendly top-level
+  convergence command. It wraps the existing registered-workspace refresh path and includes sidecar facts.
 - `search`, `inspect`, `context`, `impact`, and `trace` accept `--workspace-id <selector>`; selectors are the
   same registry IDs/display IDs/path selectors used by MCP `workspace_id`.
 - Text headings and ordering are intended to be stable enough for humans and logs, not for strict parsers.
@@ -342,6 +419,10 @@ For beta, text output is a compact human-facing contract and JSON output is the 
 - `content export [--kind KIND] [--content-workspace-id ID]` writes deterministic JSONL chunk rows for Eros
   and other local consumers. It includes raw chunk text; use it as an integration feed, not as an interactive
   reading shortcut.
+- `telemetry export --jsonl [--workspace-id ID|all]` writes machine-global telemetry rows as JSONL for local
+  dashboard/history consumers. It exports stored target hashes, not raw queries.
+- Eros-facing CLI contracts live in `docs/contracts/cli-eros-v1.md`; content export fields live in
+  `docs/contracts/content-corpus-v1.md`.
 - Search defaults to 6 results. Compact symbol rows include name, kind, file, line, and signature when available;
   use `--limit N` when you need a wider page.
 

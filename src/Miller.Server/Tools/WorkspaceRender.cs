@@ -81,7 +81,10 @@ public readonly record struct WorkspaceActionResult(
     string? Note,
     string? WorkspaceId = null,
     string? Root = null,
-    string? Status = null);
+    string? Status = null,
+    bool? IndexFresh = null,
+    SearchSidecarFacts? SearchSidecar = null,
+    ContentCorpusFacts? ContentCorpus = null);
 
 /// <summary>The result of starting or reusing the local loopback dashboard from the <c>workspace</c> tool.</summary>
 internal readonly record struct WorkspaceDashboardResult(
@@ -540,8 +543,14 @@ public static class WorkspaceRender
             w.WriteBoolean("scanned", result.Scanned);
             w.WriteBoolean("swapped", result.Swapped);
             w.WriteNumber("revision", result.Revision);
+            if (result.IndexFresh is { } fresh) w.WriteBoolean("index_fresh", fresh);
+            else w.WriteNull("index_fresh");
             if (string.IsNullOrEmpty(result.Note)) w.WriteNull("note");
             else w.WriteString("note", result.Note);
+            w.WritePropertyName("search_sidecar");
+            WriteSearchSidecarJson(w, result.SearchSidecar);
+            w.WritePropertyName("content_corpus");
+            WriteContentCorpusJson(w, result.ContentCorpus);
             w.WriteEndObject();
         }
         return Utf8(buffer);

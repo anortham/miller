@@ -65,10 +65,16 @@ public static class CliDispatch
                 case "help" or "--help" or "-h":
                     stdout.WriteLine(HelpText);
                     return 0;
+                case "capabilities":
+                    return Capabilities(rest, stdout, stderr);
                 case "search":
                     return Search(rest, context, stdout, stderr);
                 case "content":
                     return Content(rest, context, stdout, stderr);
+                case "telemetry":
+                    return Telemetry(rest, context, stdout, stderr);
+                case "refresh":
+                    return Refresh(rest, context, stdout, stderr);
                 case "inspect":
                     return Inspect(rest, context, stdout, stderr);
                 case "context":
@@ -93,6 +99,16 @@ public static class CliDispatch
             stderr.WriteLine($"{verb} failed: {ex.Message}");
             return 1;
         }
+    }
+
+    private static int Capabilities(IReadOnlyList<string> args, TextWriter outw, TextWriter err)
+    {
+        CliOptions o = CliOptions.Parse(args, "json");
+        if (o.Positionals.Count > 0)
+            return Usage(err, "miller capabilities [--json]");
+
+        outw.WriteLine(CliCapabilities.Render(o.Has("json")));
+        return 0;
     }
 
     private static int Dashboard(
@@ -340,6 +356,39 @@ public static class CliDispatch
             writer.Write(output);
         else
             writer.WriteLine(output);
+    }
+
+    private static int Telemetry(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
+    {
+        if (args.Count == 0)
+            return Usage(err, "miller telemetry export [--jsonl] [--workspace-id ID|all]");
+
+        string operation = args[0].ToLowerInvariant();
+        CliOptions o = CliOptions.Parse(args.Skip(1).ToArray(), "jsonl");
+        if (operation != "export" || o.Positionals.Count > 0)
+            return Usage(err, "miller telemetry export [--jsonl] [--workspace-id ID|all]");
+
+        string output = TelemetryExportReader.ExportJsonLines(ctx.TelemetryDbPath, o.Value("workspace-id"));
+        if (output.Length > 0)
+            outw.Write(output);
+        return 0;
+    }
+
+    private static int Refresh(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
+    {
+        CliOptions o = CliOptions.Parse(args, "json", "wait", "full");
+        if (o.Positionals.Count > 0)
+            return Usage(err, "miller refresh [--json] [--wait] [--workspace-id SELECTOR|--workspace DIR] [--full]");
+
+        string? id = o.Value("workspace-id", o.Value("id"));
+        string? path = o.Value("workspace", o.Value("path"));
+        if (!string.IsNullOrWhiteSpace(path) && o.Has("workspace"))
+            path = Path.GetFullPath(path, ctx.WorkspaceRoot);
+
+        // The CLI refresh path is already synchronous: it returns only after the lock-holding refresh attempt
+        // either converges, observes another writer, or reports an operational failure. --wait is accepted as the
+        // Eros-facing contract flag and does not need a second code path.
+        return WorkspaceRefresh(ctx, id, path, force: o.Has("full"), json: o.Has("json"), outw, err);
     }
 
     private static int Inspect(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
@@ -642,23 +691,53 @@ public static class CliDispatch
         // The lock-holding cross-workspace refresh path (same one the dashboard uses): acquire the workspace
         // single-writer lock, run julie-extract, rebuild the search sidecar. If a live Miller already holds the
         // lock, Refresh reports lock_busy honestly rather than racing a second writer.
-        var runner = JulieExtractRunner.Locate(ctx.ToolsRoot);
+        JulieExtractRunner runner;
+        try
+        {
+            runner = JulieExtractRunner.Locate(ctx.ToolsRoot);
+        }
+        catch (FileNotFoundException ex)
+        {
+            err.WriteLine($"cannot refresh: {ex.Message}");
+            return 3;
+        }
         var sidecar = SymbolSearchSidecar.FromEnvironment();
         var refresh = new CrossWorkspaceRefreshService(registry, runner, sidecar);
         WorkspaceRefreshResult result = refresh.Refresh(row.WorkspaceId, force);
 
-        string? note = result.Error ?? result.WarningText;
-        var action = new WorkspaceActionResult(
+        var action = WorkspaceRefreshAction(result, force, sidecar);
+        outw.WriteLine(WorkspaceRender.Action(action, json));
+        return RefreshExitCode(result.Status);
+    }
+
+    private static WorkspaceActionResult WorkspaceRefreshAction(
+        WorkspaceRefreshResult result,
+        bool force,
+        SymbolSearchSidecar sidecar)
+    {
+        long revision = result.Revision ?? 0;
+        bool? indexFresh = result.Status switch
+        {
+            WorkspaceRefreshStatus.Refreshed or WorkspaceRefreshStatus.Unchanged => true,
+            WorkspaceRefreshStatus.LockBusy
+                or WorkspaceRefreshStatus.MissingRoot
+                or WorkspaceRefreshStatus.MissingIndex
+                or WorkspaceRefreshStatus.Failed => false,
+            _ => null,
+        };
+
+        return new WorkspaceActionResult(
             Operation: force ? "full" : "refresh",
             Scanned: result.Scanned,
             Swapped: false,
-            Revision: result.Revision ?? 0,
-            Note: note,
+            Revision: revision,
+            Note: result.Error ?? result.WarningText,
             WorkspaceId: result.WorkspaceId,
             Root: result.WorkspaceRoot,
-            Status: result.StatusText);
-        outw.WriteLine(WorkspaceRender.Action(action, json));
-        return RefreshExitCode(result.Status);
+            Status: result.StatusText,
+            IndexFresh: indexFresh,
+            SearchSidecar: sidecar.Inspect(result.IndexDbPath, revision),
+            ContentCorpus: new ContentCorpusSidecar().Inspect(result.IndexDbPath, revision));
     }
 
     // ---------- open (bootstrap a fresh directory) ----------
@@ -1025,6 +1104,8 @@ public static class CliDispatch
         Usage: miller <command> [args]
 
         Commands:
+          capabilities      Print Miller build, extract-contract, optional feature, and export-format facts.
+                             [--json]
           search <query>     Find code by name, identifier, or phrase.
                              [--workspace-id SELECTOR] [--workspace DIR] [--mode auto|text|symbol|file|content|source|external|web|all-text] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--include-tests|--exclude-tests]
           content <op>       Import/search/read/list/remove/export external and web text in content.db.
@@ -1035,6 +1116,10 @@ public static class CliDispatch
                              list [--kind KIND] [--json]
                              remove --source-id ID [--json]
                              export [--kind KIND] [--content-workspace-id ID]   # JSONL
+          telemetry <op>     Export machine-global Miller telemetry.
+                             export [--jsonl] [--workspace-id ID|all]
+          refresh            Refresh a registered workspace index and return after convergence attempt.
+                             [--json] [--wait] [--workspace-id SELECTOR|--workspace DIR] [--full]
           inspect <target>   List a file's symbols, or show a symbol's definition.
                              [--workspace-id SELECTOR] [--workspace DIR] [--depth summary|full] [--kind K] [--scope FILE] [--limit N] [--json]
           context <query>    Token-budgeted bundle of the most relevant code for a task.

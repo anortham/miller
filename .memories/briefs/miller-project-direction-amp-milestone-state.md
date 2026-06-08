@@ -1,90 +1,92 @@
 ---
 id: miller-project-direction-amp-milestone-state
-title: Miller — product direction & beta candidate state
+title: Miller — product direction & post-v0.2.0 work queue
 status: active
 created: 2026-05-30T16:32:42.067Z
-updated: 2026-06-06T14:01:25.694Z
+updated: 2026-06-08T00:34:24.729Z
 tags:
   - miller
   - project-direction
   - status
-  - beta
-  - read-path
+  - v0.2.0
+  - eros-integration
   - search-quality
+  - docs
+  - content-corpus
 ---
 
 ## What Miller Is
 
 - Miller is the read-only .NET 10 SQLite/MCP consumer of `julie-extract` output: the open-source/free local code-intelligence core.
-- Eros remains the commercial extension above Miller. Eros should consume public contracts and process/tool surfaces, not Miller private .NET internals.
-- Miller answers structural/local questions: where code is, what symbols exist, and how they connect. Eros owns higher-level guidance, confidence, and semantic/vector workflows.
+- Eros remains the commercial extension above Miller. Eros should consume public contracts, process surfaces, and exported artifacts, not Miller private .NET internals.
+- Miller answers structural/local questions: where code is, what symbols exist, what content exists, and how code connects. Eros owns higher-level guidance, confidence, semantic/vector workflows, and commercial dashboard/history views.
 - Keep the free core deterministic, lexical/structural, daemon-light, and embedding-free.
 
-Architecture contracts: workspace DBs live at `<workspace>/.miller/symbols.db`; central discovery is `~/.miller/workspaces.db`; `workspace_id` is SHA-256 of canonical root; file freshness uses `files.content_hash` with `blake3:`; read tools accept workspace selectors. Current pin: `julie-extract` v2.1.3, SQLite schema 2, extract contract 2, report schema 2.
+Architecture contracts: workspace DBs live at `<workspace>/.miller/symbols.db`; central discovery is `~/.miller/workspaces.db`; `workspace_id` is SHA-256 of the canonical root; file freshness uses `files.content_hash` with `blake3:`; read tools accept workspace selectors. Current pin: `julie-extract` v2.1.3. Current Miller release version: `0.2.0`.
 
 ## Product Positioning
 
 Miller is a living, up-to-date agent assistant, not just a graph extraction tool.
 
-That means Miller should be framed around freshness and workflow integration, not just graph extraction:
+Frame Miller around freshness and workflow integration:
 
 - current workspace state, freshness, and refresh lifecycle
 - MCP + CLI surfaces designed for agents in the loop
-- live registry, telemetry, dashboard, and workspace selection
+- live registry, telemetry, dashboard, workspace selection, and content corpus search
 - stale/corrupt sidecar self-healing instead of one-time artifact generation
 - structural answers that can be re-run against the current checkout during active work
 
 Public positioning should stay focused on the Miller/Eros vision: Miller as the free local code-intelligence core, Eros as the higher-level guidance and workflow layer.
 
-## Current State - 2026-06-06
+## Current State - 2026-06-07
 
-M0-M8 are complete. The source-checkout beta code candidate is `91288557137a1711e148628b374863526ae4b3ab` (`0.1.0+91288557137a`). The branch-tip status/documentation commit is `004cfac35cdc60c7bd700c763f42a9ee53213550`, and it has been pushed to `origin/main`.
+Miller `v0.2.0` has been published. Verified GitHub release facts: tag `v0.2.0`, non-draft, non-prerelease, published `2026-06-07T23:43:09Z`, target commit `8bceb137b880eaafb723ff69e886a893f5d799f8`, URL `https://github.com/anortham/miller/releases/tag/v0.2.0`. A fresh release check on 2026-06-08 confirmed the live release is still non-draft/non-prerelease and has four platform archives plus four `.sha256` sidecars.
 
-Verification on the pushed commit:
+The current `main` tip is `a1f7f99 Streamline release artifact promotion`, which is post-release process work. Future releases should use `docs/release-process.md` and the `promote_run_id` artifact-promotion workflow path. Do not tag, publish, overwrite, or release without explicit user approval.
 
-- Local macOS: `dotnet build Miller.slnx -c Release` passed with 0 warnings/errors; `scripts/test.sh` passed 1,631 fast tests; `scripts/test.sh scale` passed 25 scale tests; `git diff --check` was clean.
-- GitHub Actions run `27063713900` passed on commit `91288557137a1711e148628b374863526ae4b3ab`: main build/test passed, and `windows-fast` restored `julie-extract`, built, and passed `scripts/test.ps1`.
-- GitHub Actions run `27063900807` passed on commit `004cfac35cdc60c7bd700c763f42a9ee53213550`: main build/test passed, and `windows-fast` restored `julie-extract`, built, and passed `scripts/test.ps1`.
+`TODO.md` is the active routing surface for post-`v0.2.0` work. Preserve the user's local `TODO.md` changes when doing implementation or documentation work.
+
+Local post-release contract work has added Eros-facing CLI coverage for `capabilities --json`, `refresh --json --wait`, `telemetry export --jsonl`, and documented existing `workspace status --json`, `content export`, and `impact --json` behavior in `docs/contracts/cli-eros-v1.md`. Treat remaining Eros integration work as demand-driven contract hardening: add or extend public Miller surfaces only when a concrete Eros workflow needs facts the documented contracts do not cover.
+
+The README onboarding pass is complete locally: README now links the public GitHub Pages site, starts with Quickstart, and documents plugin install, manual release archive install, manual MCP config, and source-checkout development before architecture/build details. `CLAUDE.md` was updated with public-doc, Eros-contract, and content-corpus guidance, then `AGENTS.md` was regenerated from it.
+
+## Near-Term Routing
+
+Use `TODO.md` for the active queue. The durable priorities are:
+
+1. Site metrics: add real token-savings metrics to the GitHub Pages site from open-source repos cloned under `~/source`.
+2. Search-quality dogfood after content corpus FTS: keep symbol search narrow by default, exercise explicit `mode=content|source|external|web|all-text` plus `regions=...` on real workflows, and only widen symbol ranking if those explicit routes fail concrete agent tasks.
+3. Structured search-output cleanup: replace or mark stale copied Julie cases such as `WorkspacePool`, and decide whether `mode=file --json` needs a versioned file-result shape. Scoped-miss UX is closed; content corpus modes already return path/line/snippet hits.
+4. Julie backlog transfer: triage `~/source/julie/TODO.md` ideas for Miller fit, especially self-improvement/searchability scoring, tree-sitter pattern queries, AST complexity metrics, and body-hash duplication detection.
+5. Eros contract additions: only add new CLI/export surfaces when Eros has a concrete workflow need beyond the current documented public contracts.
 
 ## Search And Read-Path State
 
-Symbol search is in the solved beta bucket. Miller keeps symbol ranking narrow (`name + signature`), with FTS5 as recall-only and C# BM25 ranking retained for parity. Prose/docs use `mode=content`; comments/literals/env vars use explicit `regions=`. Do not widen the beta symbol projection without fresh dogfood evidence.
+Symbol search is in the solved beta bucket and should remain narrow (`name + signature`) unless fresh dogfood shows explicit text modes failing real agent tasks. FTS5 remains recall-only for symbol search, with C# BM25 ranking retained for parity.
 
-The prior large-repo graph-heavy read-path gap is closed for the beta CLI path. CLI `search`, `inspect`, graph-only `context`, `impact`, and non-bridge `trace` now avoid full graph/bridge hydration by using lazy disk symbol lookup plus on-demand SQLite graph reachability where appropriate.
+The post-beta file-content FTS work is implemented through the content corpus sidecar. Use explicit modes by intent: `mode=content` for docs/config prose, `mode=source` for workspace source-body text, `mode=external|web|all-text` for imported or all corpus text, and `regions=comment|doc_comment|string_literal` for scoped source-region text. Do not treat the old pre-content-corpus TODO as an open requirement to add doc comments, literals, or path tokens directly into symbol ranking.
 
-OpenClaw evidence from the 2026-06-05/06 reruns:
+The remaining search TODO is quality/process cleanup: dogfood current modes with real workflows, refresh stale Julie-derived cases, and decide whether `mode=file --json` needs a versioned file-result object. Scoped-miss compact fallback hints are already implemented and documented.
 
-- ambiguous full inspect: `8.75s` / ~1.45GB max RSS -> `0.60s` / ~69MB
-- scoped unique full inspect: `0.38s` / ~68MB
-- broad graph-only context: `0.77s` / ~119MB
-- impact: `0.31s` / ~69MB
-- trace auto: `0.32s` / ~69MB
+The prior large-repo graph-heavy read-path gap is closed for the CLI path. CLI `search`, `inspect`, graph-only `context`, `impact`, and non-bridge `trace` avoid full graph/bridge hydration by using lazy disk symbol lookup plus on-demand SQLite graph reachability where appropriate. Bridge trace still intentionally uses the full bridge graph.
 
-Bridge trace still intentionally uses the full bridge graph. Do not add incremental in-memory patching unless new evidence says the current projection-specific paths are insufficient.
+## Content Corpus And Web Research
+
+Miller has an implemented content corpus for source/docs/config/external/web text, plus a mirrored `miller-web-research` skill. Web fetching stays outside Miller in the skill layer via `browser39`; Miller imports fetched markdown as `web` content and supports bounded search/read through `.miller/content.db`. The old question of whether Miller should implement a web-research skill is resolved; future work should dogfood and refine the existing skill, not restart the design.
 
 ## Source Regions
 
 Miller consumes `julie-extractors` source regions. `SearchIndexWriter` schema v4 creates `regions_fts` and `search_regions`, populated when `MILLER_REGION_INDEX=1`; explicit `search regions=comment|doc_comment|string_literal` / CLI `--regions` routes to fail-closed disk region search.
 
-Decision for beta: keep region indexing opt-in. The source-region cap remeasurement is closed. `MILLER_REGION_MAX_BYTES` is a useful safety guardrail, but not a default-on size solution for string-heavy repos because the cost is many small `string_literal` regions. If default-on region search is reopened, design kind-level indexing controls first, likely comment/doc-comment by default with `string_literal` still explicit.
-
-## Beta Routing
-
-Use `docs/plans/2026-06-05-beta-readiness-checklist.md` and `TODO.md` as routing surfaces. Current practical state: the source-checkout beta is technically ready from the Miller side after the pushed CI run. Remaining decisions are product/release decisions, not known implementation blockers.
-
-Next recommended work:
-
-1. Decide whether to tag/publish a prerelease beta. Do not tag, publish, overwrite, or release without explicit approval.
-2. Turn the living, up-to-date agent assistant positioning into README/release language and one or two concrete proof examples.
-3. Post-beta: measure whether symbol projection widening (`doc_comment`, identifiers, bounded context/literals/path tokens) helps real workflows; keep it out of the current beta unless fresh dogfood changes the decision.
+Decision for now: keep region indexing opt-in. `MILLER_REGION_MAX_BYTES` is a useful safety guardrail, but not a default-on size solution for string-heavy repos because the cost is many small `string_literal` regions. If default-on region search is reopened, design kind-level indexing controls first, likely comment/doc-comment by default with `string_literal` still explicit.
 
 ## Guardrails
 
 - Daemon-light: no Julie-style filewatcher/resource sink.
 - Do not reintroduce full-index loads into `workspace status`, dashboard list/read paths, symbol search, content search, summary inspect, or graph-only CLI reads.
 - Ranking stays in Miller's C# (`Miller.Core.Search.Bm25`); FTS5 is recall-only.
-- Content search stays docs-like; comments/literals route through explicit `regions=`.
-- Region indexing remains opt-in and fail-closed for beta.
+- Content search stays explicit by mode; comments/literals route through explicit `regions=`.
+- Region indexing remains opt-in and fail-closed unless a fresh design changes that.
 - `Miller.Core` stays pure logic with zero I/O dependencies.
 - Build must stay 0 warnings / 0 errors.
 - Test split is load-bearing: `scripts/test.sh` fast, `scripts/test.sh scale` opt-in; julie-spawning tests must be `[Trait("Category","Scale")]` through `ScaleTestSupport.RequireJulieServer()`.

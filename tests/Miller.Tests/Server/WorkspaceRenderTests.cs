@@ -338,6 +338,35 @@ public sealed class WorkspaceRenderTests
         Assert.Equal(JsonValueKind.Null, root.GetProperty("note").ValueKind);
     }
 
+    [Fact]
+    public void Action_Json_CanCarryPostRefreshArtifactFacts()
+    {
+        var result = new WorkspaceActionResult(
+            Operation: "refresh",
+            Scanned: true,
+            Swapped: false,
+            Revision: 42,
+            Note: null,
+            WorkspaceId: "ws-123",
+            Root: "/repo",
+            Status: "refreshed",
+            IndexFresh: true,
+            SearchSidecar: new SearchSidecarFacts(
+                "current", "/repo/.miller/search.db", Revision: 42, ExpectedRevision: 42, DocumentCount: 10, Error: null),
+            ContentCorpus: new ContentCorpusFacts(
+                "current", "/repo/.miller/content.db", SchemaVersion: 1, WorkspaceRevision: 42,
+                SourceCount: 2, ChunkCount: 8, IndexedSourceBytes: 1024, StoredRawBytes: 2048));
+
+        using var doc = JsonDocument.Parse(WorkspaceRender.Action(result, json: true));
+        JsonElement root = doc.RootElement;
+
+        Assert.True(root.GetProperty("index_fresh").GetBoolean());
+        Assert.Equal("current", root.GetProperty("search_sidecar").GetProperty("state").GetString());
+        Assert.Equal("/repo/.miller/search.db", root.GetProperty("search_sidecar").GetProperty("path").GetString());
+        Assert.Equal("current", root.GetProperty("content_corpus").GetProperty("state").GetString());
+        Assert.Equal(8, root.GetProperty("content_corpus").GetProperty("chunk_count").GetInt32());
+    }
+
     // ---- open (prime) ----
 
     [Fact]
