@@ -88,7 +88,9 @@ public sealed class WorkspaceRegistry : IDisposable
         DateTimeOffset seen = NormalizeUtc(seenAtUtc ?? DateTimeOffset.UtcNow);
         lock (_gate)
         {
+            using var tx = _connection.BeginTransaction();
             using var cmd = _connection.CreateCommand();
+            cmd.Transaction = tx;
             cmd.CommandText = """
                 INSERT INTO workspaces
                     (workspace_id, display_id, canonical_root, index_db_path, last_seen_at, state, last_error)
@@ -109,6 +111,9 @@ public sealed class WorkspaceRegistry : IDisposable
             cmd.Parameters.AddWithValue("$last_seen_at", FormatTimestamp(seen));
             cmd.Parameters.AddWithValue("$state", state.ToStorageString());
             cmd.ExecuteNonQuery();
+
+            PruneDuplicatePathRowsUnderLock(tx, workspaceId, canonicalRoot, indexDbPath);
+            tx.Commit();
 
             return GetRequiredUnderLock(workspaceId);
         }
@@ -317,6 +322,34 @@ public sealed class WorkspaceRegistry : IDisposable
         cmd.Parameters.AddWithValue("$workspace_id", workspaceId);
         using var reader = cmd.ExecuteReader();
         return reader.Read() ? ReadRow(reader) : null;
+    }
+
+    private void PruneDuplicatePathRowsUnderLock(
+        SqliteTransaction transaction,
+        string workspaceId,
+        string canonicalRoot,
+        string indexDbPath)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.Transaction = transaction;
+        string pathPredicate = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+            ? """
+              canonical_root COLLATE NOCASE = $canonical_root COLLATE NOCASE
+              AND index_db_path COLLATE NOCASE = $index_db_path COLLATE NOCASE
+              """
+            : """
+              canonical_root = $canonical_root
+              AND index_db_path = $index_db_path
+              """;
+        cmd.CommandText = $$"""
+            DELETE FROM workspaces
+            WHERE workspace_id <> $workspace_id
+              AND {{pathPredicate}};
+            """;
+        cmd.Parameters.AddWithValue("$workspace_id", workspaceId);
+        cmd.Parameters.AddWithValue("$canonical_root", canonicalRoot);
+        cmd.Parameters.AddWithValue("$index_db_path", indexDbPath);
+        cmd.ExecuteNonQuery();
     }
 
     private static WorkspaceRegistryRow ReadRow(SqliteDataReader reader) =>

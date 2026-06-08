@@ -121,6 +121,69 @@ public sealed class WorkspaceRegistryTests : IDisposable
     }
 
     [Fact]
+    public void UpsertSeen_PrunesLegacyRowsForTheSameCanonicalRootAndIndexDb()
+    {
+        using var registry = WorkspaceRegistry.Open(_dbPath);
+
+        registry.UpsertSeen(
+            "legacy-id",
+            "same-root-aaaaaaaaaaaa",
+            "/work/same",
+            "/work/same/.miller/symbols.db",
+            WorkspaceRegistryState.Ready,
+            Utc(1));
+        registry.MarkScanned("legacy-id", revision: 7, scannedAtUtc: Utc(2));
+
+        WorkspaceRegistryRow current = registry.UpsertSeen(
+            "current-id",
+            "same-root-bbbbbbbbbbbb",
+            "/work/same",
+            "/work/same/.miller/symbols.db",
+            WorkspaceRegistryState.Current,
+            Utc(3));
+
+        Assert.Equal("current-id", current.WorkspaceId);
+        Assert.Null(registry.Get("legacy-id"));
+        WorkspaceRegistryRow only = Assert.Single(registry.List());
+        Assert.Equal("current-id", only.WorkspaceId);
+        Assert.Equal("/work/same", only.CanonicalRoot);
+        Assert.Equal("/work/same/.miller/symbols.db", only.IndexDbPath);
+    }
+
+    [Fact]
+    public void UpsertSeen_PrunesCaseVariantDuplicates_OnCaseInsensitivePlatforms()
+    {
+        using var registry = WorkspaceRegistry.Open(_dbPath);
+
+        registry.UpsertSeen(
+            "legacy-id",
+            "repo-aaaaaaaaaaaa",
+            "/Work/Repo",
+            "/Work/Repo/.miller/symbols.db",
+            WorkspaceRegistryState.Ready,
+            Utc(1));
+
+        registry.UpsertSeen(
+            "current-id",
+            "repo-bbbbbbbbbbbb",
+            "/work/repo",
+            "/work/repo/.miller/symbols.db",
+            WorkspaceRegistryState.Current,
+            Utc(2));
+
+        if (OperatingSystem.IsWindows() || OperatingSystem.IsMacOS())
+        {
+            Assert.Null(registry.Get("legacy-id"));
+            Assert.Single(registry.List());
+        }
+        else
+        {
+            Assert.NotNull(registry.Get("legacy-id"));
+            Assert.Equal(2, registry.List().Count);
+        }
+    }
+
+    [Fact]
     public void MarkScannedMarkMissingAndMarkError_UpdateStableStateStrings()
     {
         using var registry = WorkspaceRegistry.Open(_dbPath);

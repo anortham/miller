@@ -1124,6 +1124,36 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void WorkspaceStatus_CurrentWorkspacePrefersStableIdWhenLegacyDuplicateExists()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(fx.WorkspaceRoot);
+        string canonicalDb = Path.Combine(canonicalRoot, ".miller", "symbols.db");
+        string stableId = WorkspaceId.FromCanonicalRoot(canonicalRoot);
+        InsertRawRegistryRow(
+            "legacy-id",
+            "aaa-legacy",
+            canonicalRoot,
+            canonicalDb,
+            revision: 1);
+        InsertRawRegistryRow(
+            stableId,
+            WorkspaceId.Display(canonicalRoot, stableId),
+            canonicalRoot,
+            canonicalDb,
+            revision: 1);
+
+        var (code, outText, errText) = Run(
+            new[] { "workspace", "status", "--json" },
+            Context(canonicalDb, canonicalRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        Assert.Equal(stableId, doc.RootElement.GetProperty("workspace").GetProperty("workspace_id").GetString());
+    }
+
+    [Fact]
     public void WorkspaceStatus_UnknownId_IsUsageErrorExitTwo()
     {
         var (code, _, errText) = Run(new[] { "workspace", "status", "--id", "does-not-exist" },
@@ -1475,6 +1505,38 @@ public sealed class CliDispatchTests : IDisposable
         using WorkspaceRegistry registry = WorkspaceRegistry.Open(_registryDb);
         registry.UpsertSeen(workspaceId, displayId, root, dbPath, WorkspaceRegistryState.Ready);
         registry.MarkScanned(workspaceId, revision: 1);
+    }
+
+    private void InsertRawRegistryRow(string workspaceId, string displayId, string root, string dbPath, long revision)
+    {
+        using (WorkspaceRegistry.Open(_registryDb))
+        {
+        }
+
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _registryDb,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO workspaces
+                (workspace_id, display_id, canonical_root, index_db_path, last_seen_at, last_scan_at,
+                 last_revision, state, last_error)
+            VALUES
+                ($workspace_id, $display_id, $canonical_root, $index_db_path, $last_seen_at, $last_scan_at,
+                 $last_revision, 'ready', NULL);
+            """;
+        cmd.Parameters.AddWithValue("$workspace_id", workspaceId);
+        cmd.Parameters.AddWithValue("$display_id", displayId);
+        cmd.Parameters.AddWithValue("$canonical_root", root);
+        cmd.Parameters.AddWithValue("$index_db_path", dbPath);
+        cmd.Parameters.AddWithValue("$last_seen_at", "2026-06-08T00:00:00.0000000Z");
+        cmd.Parameters.AddWithValue("$last_scan_at", "2026-06-08T00:00:00.0000000Z");
+        cmd.Parameters.AddWithValue("$last_revision", revision);
+        cmd.ExecuteNonQuery();
     }
 
     // Whether `julie-extract` is resolvable on PATH (so an empty ToolsRoot would NOT fail Locate). Used to skip

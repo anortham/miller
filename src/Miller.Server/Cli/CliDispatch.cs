@@ -544,6 +544,7 @@ public static class CliDispatch
     {
         using WorkspaceRegistry registry = WorkspaceRegistry.Open(ctx.RegistryDbPath);
         IReadOnlyList<WorkspaceRegistryRow> rows = registry.List();
+        WorkspaceRegistryRow? currentRow = FindCurrentWorkspaceRow(registry, ctx);
         var entries = new List<WorkspaceListEntry>(rows.Count);
         foreach (WorkspaceRegistryRow row in rows)
         {
@@ -554,7 +555,9 @@ public static class CliDispatch
                 DbPath: row.IndexDbPath,
                 State: row.StateText,
                 LastRevision: row.LastRevision,
-                Current: WorkspaceSafety.IsLiveWorkspace(row.CanonicalRoot, ctx.WorkspaceRoot),
+                Current: currentRow is not null
+                    ? string.Equals(row.WorkspaceId, currentRow.WorkspaceId, StringComparison.Ordinal)
+                    : WorkspaceSafety.IsLiveWorkspace(row.CanonicalRoot, ctx.WorkspaceRoot),
                 LastError: row.LastError));
         }
         outw.WriteLine(WorkspaceRender.List(entries, json));
@@ -584,8 +587,7 @@ public static class CliDispatch
         }
 
         // Default: the current workspace. Enrich from its registry row when present, else read the local db.
-        WorkspaceRegistryRow? currentRow = registry.List()
-            .FirstOrDefault(r => WorkspaceSafety.IsLiveWorkspace(r.CanonicalRoot, ctx.WorkspaceRoot));
+        WorkspaceRegistryRow? currentRow = FindCurrentWorkspaceRow(registry, ctx);
         if (currentRow is not null)
         {
             outw.WriteLine(WorkspaceRender.Status(FactsFromRow(registry, ctx, currentRow), TelemetrySummary.Empty, json));
@@ -676,8 +678,7 @@ public static class CliDispatch
         }
         else
         {
-            WorkspaceRegistryRow? currentRow = registry.List()
-                .FirstOrDefault(r => WorkspaceSafety.IsLiveWorkspace(r.CanonicalRoot, ctx.WorkspaceRoot));
+            WorkspaceRegistryRow? currentRow = FindCurrentWorkspaceRow(registry, ctx);
             if (currentRow is null)
             {
                 err.WriteLine(
@@ -708,6 +709,37 @@ public static class CliDispatch
         var action = WorkspaceRefreshAction(result, force, sidecar);
         outw.WriteLine(WorkspaceRender.Action(action, json));
         return RefreshExitCode(result.Status);
+    }
+
+    private static WorkspaceRegistryRow? FindCurrentWorkspaceRow(WorkspaceRegistry registry, WorkspaceContext ctx)
+    {
+        string currentRoot = CurrentRootForRegistrySelection(ctx);
+        string stableId = WorkspaceId.FromCanonicalRoot(currentRoot);
+        WorkspaceRegistryRow? stableRow = registry.Get(stableId);
+        if (stableRow is not null && WorkspaceSafety.IsLiveWorkspace(stableRow.CanonicalRoot, currentRoot))
+            return stableRow;
+
+        return registry.List()
+            .Where(r => WorkspaceSafety.IsLiveWorkspace(r.CanonicalRoot, currentRoot))
+            .OrderByDescending(r => r.LastSeenAt)
+            .ThenBy(r => r.DisplayId, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(r => r.WorkspaceId, StringComparer.Ordinal)
+            .FirstOrDefault();
+    }
+
+    private static string CurrentRootForRegistrySelection(WorkspaceContext ctx)
+    {
+        if (!string.IsNullOrWhiteSpace(ctx.CanonicalRoot))
+            return ctx.CanonicalRoot;
+
+        try
+        {
+            return PathCanonicalizer.CanonicalizeRoot(ctx.WorkspaceRoot);
+        }
+        catch (Exception ex) when (ex is ArgumentException or DirectoryNotFoundException or IOException or UnauthorizedAccessException)
+        {
+            return ctx.WorkspaceRoot;
+        }
     }
 
     private static WorkspaceActionResult WorkspaceRefreshAction(
