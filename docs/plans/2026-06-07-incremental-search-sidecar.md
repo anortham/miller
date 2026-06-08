@@ -1,5 +1,8 @@
 # Incremental Search Sidecar Implementation Plan
 
+> Status: implemented. Current behavior is default-on `search.db`, incremental convergence, and fail-visible
+> stale/missing/corrupt sidecars unless explicitly opted out with `MILLER_SEARCH_SIDECAR=0`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use razorback:subagent-driven-development when subagent delegation is available. Fall back to razorback:executing-plans for single-task, tightly-sequential, or no-delegation runs.
 
 **Goal:** Keep Miller's `search.db` sidecar fresh through the same incremental watcher/write-through path that keeps `symbols.db` fresh, while making stale sidecar state visible instead of silently loading large in-memory search projections.

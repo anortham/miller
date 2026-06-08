@@ -14,7 +14,8 @@ The practical difference from a one-time graph dump is that Miller is built for 
 - workspace state, freshness, refresh, and selectors are first-class;
 - CLI and MCP calls share the same read cores, so examples can be dogfooded in a shell and used by agents;
 - the registry, telemetry, and dashboard show what Miller knows right now;
-- stale or corrupt search sidecars self-heal to correct in-memory search instead of silently lying;
+- stale or corrupt search sidecars fail visibly instead of silently lying; refresh the workspace or explicitly
+  opt out with `MILLER_SEARCH_SIDECAR=0` when debugging the in-memory fallback;
 - cross-language bridge evidence stays structural and provider-scoped, not embedding-driven.
 
 > **Current release: v0.2.0.** Miller ships as agent plugins, self-contained per-platform release archives,
@@ -64,26 +65,31 @@ Use this path when your MCP client does not use Miller's plugin package.
    ```bash
    shasum -a 256 -c miller-0.2.0-aarch64-apple-darwin.tar.gz.sha256
    tar -xzf miller-0.2.0-aarch64-apple-darwin.tar.gz
+   cd miller-0.2.0-aarch64-apple-darwin
    ./miller version
    ```
 
    ```powershell
    (Get-FileHash .\miller-0.2.0-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash
    # compare against miller-0.2.0-x86_64-pc-windows-msvc.zip.sha256, then extract
-   Expand-Archive .\miller-0.2.0-x86_64-pc-windows-msvc.zip -DestinationPath .\miller
-   .\miller\miller.exe version
+   Expand-Archive .\miller-0.2.0-x86_64-pc-windows-msvc.zip -DestinationPath .
+   .\miller-0.2.0-x86_64-pc-windows-msvc\miller.exe version
    ```
 
-3. Point your MCP client at the extracted binary. Use an absolute path and the explicit `serve` argument:
+   Keep the extracted directory together. The native library files beside `miller`/`miller.exe`, the `.tools/`
+   directory, and `dashboard/` are part of the runtime layout.
+
+3. Point your MCP client at the extracted binary. Use an absolute path inside the versioned directory and the
+   explicit `serve` argument:
 
    ```json
    {
-     "mcpServers": {
-       "miller": {
-         "command": "/absolute/path/to/extracted/miller",
-         "args": ["serve"]
-       }
-     }
+      "mcpServers": {
+        "miller": {
+          "command": "/absolute/path/to/miller-0.2.0-aarch64-apple-darwin/miller",
+          "args": ["serve"]
+        }
+      }
    }
    ```
 
@@ -130,7 +136,7 @@ relationships into a SQLite database. Miller is the pure-.NET host on top:
 │  Claude Code / MCP client  │◀──────────────────┐
 └───────────────────────────┘                    │
                                        ┌──────────────────────┐
-                                       │   Miller.Server       │  MCP host + tool surface + telemetry ledger
+                                       │   Miller.Server       │  MCP host + CLI + telemetry
                                        └──────────────────────┘
                                                   │
                           ┌───────────────────────┼───────────────────────┐
@@ -138,24 +144,27 @@ relationships into a SQLite database. Miller is the pure-.NET host on top:
               ┌──────────────────────┐                        ┌──────────────────────┐
               │     Miller.Core       │                        │   Miller.Indexing     │
               │  (pure logic, no I/O) │                        │  (infrastructure)     │
-              │  • in-memory index    │                        │  • julie-extract      │
-              │    + BM25 ranking     │◀──── populated from ───│    subprocess         │
-              │  • cross-lang resolver│                        │  • SQLite (WAL) read  │
-              └──────────────────────┘                        │  • watcher / indexer  │
+              │  • BM25 ranking       │                        │  • julie-extract      │
+              │  • resolver + graph   │                        │    subprocess         │
+              │  • result contracts   │                        │  • SQLite readers     │
+              └──────────────────────┘                        │  • sidecar writers    │
                                                                └──────────────────────┘
                                                                           │
-                                                              ┌──────────────────────┐
-                                                              │  SQLite extract DB    │
-                                                              │  (from julie-extract) │
-                                                              └──────────────────────┘
+                          ┌───────────────────────────────────────────────┼───────────────────────────────────────────────┐
+                          ▼                                               ▼                                               ▼
+              ┌──────────────────────┐                        ┌──────────────────────┐                        ┌──────────────────────┐
+              │ .miller/symbols.db    │                        │ .miller/search.db     │                        │ .miller/content.db    │
+              │ julie-extract output  │                        │ symbol FTS recall     │                        │ source/docs/web text  │
+              └──────────────────────┘                        └──────────────────────┘                        └──────────────────────┘
 ```
 
 Design choices that follow from this:
-- **No embeddings in the default path** — search is BM25 over an in-memory inverted index rebuilt from SQLite at
-  startup. Indexes are small and rebuild in seconds.
-- **No custom daemon** — SQLite WAL is the read-concurrency primitive, so many reader instances (agent teams, git
-  worktrees, the dashboard) share one index. The writer/indexer is a separate, optional process whose death
-  degrades freshness, not reads.
+- **No embeddings in the default path** — ranking stays deterministic in C#. Symbol search uses Miller's BM25
+  over candidates recalled from the on-disk symbol sidecar, with an in-memory fallback. Explicit file/text search
+  uses the content corpus sidecar.
+- **No standalone daemon to manage** — SQLite WAL is the read-concurrency primitive, so many reader instances
+  (agent teams, git worktrees, the dashboard) share local artifacts. Refresh and sidecar writes are explicit
+  Miller operations; if no writer is active, reads still work but freshness does not advance.
 - **Hard logic↔infrastructure seam** — `Miller.Core` has zero I/O dependencies, so the ranking and the resolver
   are unit-tested in milliseconds with no live DB, subprocess, or transport. This keeps the default test suite fast.
 
@@ -163,21 +172,22 @@ Design choices that follow from this:
 
 ```
 src/
-  Miller.Core/       pure logic, ZERO I/O deps: contract record types, in-memory index + BM25, the resolver
-  Miller.Indexing/   infrastructure: julie-extract subprocess, SQLite (WAL) read layer, watcher/indexer
+  Miller.Core/       pure logic, ZERO I/O deps: ranking, resolver, graph, and result contracts
+  Miller.Indexing/   infrastructure: julie-extract subprocess, SQLite readers, search/content sidecar writers
   Miller.Server/     MCP stdio host, the tool surface, the telemetry interceptor + ledger
-  Miller.Dashboard/  narrow loopback ops dashboard reading the registry + telemetry DB
+  Miller.Dashboard/  narrow loopback ops dashboard reading registry, telemetry, and workspace artifact facts
 tests/
   Miller.Tests/      unit (Core, fast) + contract (against a committed extract-DB fixture) + tagged scale set
 docs/
-  miller-mvp-plan.md           milestone history
-  plans/                       beta/readiness/design routing docs
+  README.md                    current-vs-historical documentation map
+  contracts/                   active integration contracts
+  plans/                       design and implementation records
   findings/                    dogfood evidence and investigation notes
 ```
 
-Miller keeps only the local operational dashboard: registered workspaces, freshness, telemetry, sidecar
-health, and refresh/troubleshooting actions. Eros owns richer product UX such as next-action guidance,
-confidence/evidence views, semantic/vector retrieval, and commercial workflows.
+Miller keeps only the local operational dashboard: registered workspaces, freshness, read-only aggregate facts
+from workspace artifacts, telemetry, sidecar health, and refresh/troubleshooting actions. Eros owns richer product
+UX such as next-action guidance, confidence/evidence views, semantic/vector retrieval, and commercial workflows.
 
 ## The tool surface
 
@@ -232,11 +242,12 @@ restarts the subprocess. A build made inside the repo carries its git short SHA 
 confirm a restarted MCP client is talking to a new Miller subprocess when you rebuilt uncommitted changes and
 the SHA suffix stayed the same.
 
-**Dashboard.** The local dashboard binds to loopback and reads only the workspace registry plus telemetry DB.
-Use the CLI launcher so multiple Miller sessions reuse one machine-global dashboard process while opening the
-current workspace selector. From an MCP session, use the `workspace` tool's dashboard operation to start or
-reuse the same dashboard without leaving the session. `--port` selects the launch port only when no healthy
-dashboard is already running:
+**Dashboard.** The local dashboard binds to loopback and reads the workspace registry, shared telemetry DB, and
+read-only aggregate facts from each workspace's Miller artifacts. It does not hydrate full indexes. Use the CLI
+launcher so multiple Miller sessions reuse one machine-global dashboard process while opening the current
+workspace selector. From an MCP session, use the `workspace` tool's dashboard operation to start or reuse the
+same dashboard without leaving the session. `--port` selects the launch port only when no healthy dashboard is
+already running:
 
 ```bash
 miller dashboard
@@ -335,62 +346,18 @@ The release workflow builds one archive per pinned `julie-extract` platform:
 - `x86_64-unknown-linux-gnu`
 - `x86_64-pc-windows-msvc`
 
-Each archive contains `miller`, the matching `.tools/julie-extract` binary, the loopback dashboard binary
-under `dashboard/`, `dashboard/wwwroot/dashboard.css`, `LICENSE`, and `THIRD-PARTY-NOTICES.md`. The workflow
-also uploads a `.sha256` sidecar for each archive and smoke-runs both `julie-extract --version` and
-`miller version` before packaging.
+Each archive extracts to a versioned top-level directory such as
+`miller-0.2.0-aarch64-apple-darwin/`. Keep that directory together: it contains `miller`, native runtime
+libraries such as SQLite and BLAKE3 bindings, the matching `.tools/julie-extract` binary, the loopback dashboard
+under `dashboard/`, `LICENSE`, and `THIRD-PARTY-NOTICES.md`. The workflow also uploads a `.sha256` sidecar for
+each archive and smoke-runs both `julie-extract --version` and `miller version` before packaging.
 
 Maintainers should use the two-step validation/promote flow in
 [`docs/release-process.md`](docs/release-process.md) so publishing reuses already validated artifacts instead
 of rebuilding the platform matrix.
 
-### Install from a release archive
-
 Release archives are self-contained: the main `miller` binary is built with Native AOT, so a release machine
-does **not** need the .NET SDK to run it.
-
-1. Download the archive for your platform from the GitHub release, plus its matching `.sha256` sidecar
-   (for example `miller-<version>-aarch64-apple-darwin.tar.gz` and `…​.tar.gz.sha256`).
-2. Verify the checksum, then extract:
-
-   ```bash
-   # macOS / Linux
-   shasum -a 256 -c miller-<version>-aarch64-apple-darwin.tar.gz.sha256
-   tar -xzf miller-<version>-aarch64-apple-darwin.tar.gz
-   ```
-
-   ```powershell
-   # Windows
-   (Get-FileHash .\miller-<version>-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash
-   # compare against the .sha256 sidecar, then extract
-   Expand-Archive .\miller-<version>-x86_64-pc-windows-msvc.zip -DestinationPath .\miller
-   ```
-
-3. The extracted layout puts the `miller` binary next to its tooling and dashboard:
-
-   ```text
-   miller                 # the AOT binary
-   .tools/julie-extract   # the matching pinned extractor
-   dashboard/             # the packaged loopback dashboard helper (+ wwwroot/dashboard.css)
-   LICENSE
-   THIRD-PARTY-NOTICES.md
-   ```
-
-4. Point your MCP client at the **absolute path** of the extracted `miller` binary with the `serve` arg.
-   No `dotnet run` and no .NET SDK are required for the AOT binary:
-
-   ```json
-   {
-     "mcpServers": {
-       "miller": {
-         "command": "/absolute/path/to/extracted/miller",
-         "args": ["serve"]
-       }
-     }
-   }
-   ```
-
-   On Windows, use the full path to `miller.exe` as `command`.
+does **not** need the .NET SDK to run it. The manual install steps are in the Quickstart above.
 
 ## CLI output expectations
 
@@ -451,7 +418,7 @@ scripts/test.sh scale      # scale suite only (needs .tools/julie-extract — se
 scripts/test.sh all        # both suites
 ```
 
-Windows PowerShell mirrors are available for the beta-critical scripts:
+Windows PowerShell mirrors are available for cross-platform scripts:
 
 ```powershell
 scripts/test.ps1
@@ -462,7 +429,7 @@ scripts/test.ps1 all
 Two guards keep the split honest: a convention test
 ([`ScaleTraitConventionTests`](tests/Miller.Tests/Conventions/ScaleTraitConventionTests.cs)) fails the
 build if any julie-spawning test is missing `[Trait("Category","Scale")]`, and CI time-budgets the fast
-suite. A second convention guard requires Windows PowerShell mirrors for beta-critical scripts. To enable
+suite. A second convention guard requires Windows PowerShell mirrors for critical scripts. To enable
 the scale suite locally:
 
 ```bash

@@ -60,7 +60,7 @@ the tokens.
   `rename_symbol`, `insert_before`, `insert_after`, `add_doc`. Previews a diff and writes nothing unless
   `apply=true`. Blocked when the index is stale for the target file — `workspace refresh` first (or
   `allow_stale=true` if you accept the risk).
-- `content` — Import, search, read, list, and remove external/web text in Miller's content corpus. Use it for
+- `content` — Import, search, read, list, remove, and export external/web text in Miller's content corpus. Use it for
   logs, CI output, generated reports, large JSON/text dumps, browser-fetched markdown, and other non-workspace
   text that would waste context if read in full. `import` and `add_markdown` report metadata only; `search`
   returns snippets; `read` returns a bounded line window by `source_id` and `line`; `remove` deletes an imported

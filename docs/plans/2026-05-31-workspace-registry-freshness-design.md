@@ -1,6 +1,9 @@
 # Workspace Registry and Freshness Design
 
-Status: **review required**. This spec records the agreed replacement direction for the pieces where Miller must do
+> Historical status: implemented/superseded design record. Current workspace behavior is summarized in
+> [`../../README.md`](../../README.md), [`../../CLAUDE.md`](../../CLAUDE.md), and active CLI/MCP docs.
+
+Status: **implemented historical design**. This spec records the agreed replacement direction for the pieces where Miller must do
 better than Julie without recreating Julie's daemon and resource sink.
 
 ## Goal

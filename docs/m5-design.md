@@ -1,7 +1,12 @@
 # M5 design — `context` + `impact` (kept fast)
 
-Status: **design, ready to build**. Decision-driven, grounded against the pinned `julie-server` v7.12.2
-(schema 26 / contract 1) on a real extract. House style matches [m3-design](m3-design.md) /
+> Historical status: this milestone design is implementation history. It may mention old graph/loading
+> assumptions. For current behavior, start with [`docs/README.md`](README.md), [`README.md`](../README.md),
+> and active contracts under [`docs/contracts/`](contracts/).
+
+Status: **historical implemented design**. This was grounded against the pinned `julie-server` v7.12.2
+(schema 26 / contract 1) on a real extract and is retained as implementation history. Current context/impact
+read paths no longer use every loading assumption below. House style matches [m3-design](m3-design.md) /
 [m6-design](m6-design.md). Confidence ~86.
 
 ## Goal

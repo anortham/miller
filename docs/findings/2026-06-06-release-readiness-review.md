@@ -1,5 +1,9 @@
 # Miller Pre-Release Readiness Review
 
+> Historical status: pre-release review evidence for the first public release path. Findings here were
+> triaged/resolved before later release work; do not treat the must-fix list below as current blockers without
+> re-verifying against current `main`.
+
 - **Date:** 2026-06-06
 - **Scope:** Whole project, "should we cut the first public release and invite testers?"
 - **Method:** Empirical build/test/AOT verification (run locally) + an 11-dimension static

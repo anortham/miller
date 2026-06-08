@@ -1,7 +1,7 @@
 {
   "name": "miller",
   "version": "0.2.0",
-  "description": "Local SQLite-backed code intelligence server for coding agents.",
+  "description": "Local SQLite-backed code intelligence, content search, and workspace freshness for coding agents.",
   "author": {
     "name": "Alan Northam"
   },
@@ -14,6 +14,9 @@
     "search",
     "navigation",
     "impact-analysis",
+    "content-search",
+    "workspace-freshness",
+    "telemetry",
     "sqlite"
   ],
   "mcpServers": "./.mcp.json",
@@ -21,13 +24,16 @@
   "interface": {
     "displayName": "Miller",
     "shortDescription": "Local code intelligence for agent workflows",
-    "longDescription": "Miller provides a local SQLite-backed MCP server and CLI for code search, symbol inspection, context packing, impact analysis, trace paths, edits, and workspace freshness checks.",
+    "longDescription": "Miller provides a local SQLite-backed MCP server and CLI for symbol search, source/docs/content search, web and large-file imports, symbol inspection, context packing, trace paths, impact analysis, edits, workspace freshness checks, telemetry, and JSON/JSONL export contracts.",
     "developerName": "Alan Northam",
     "category": "Developer Tools",
     "capabilities": [
       "MCP",
       "Code search",
-      "Impact analysis"
+      "Content corpus search",
+      "Impact analysis",
+      "Workspace freshness",
+      "Telemetry export"
     ],
     "websiteURL": "https://github.com/anortham/miller#readme",
     "defaultPrompt": [

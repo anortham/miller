@@ -1,5 +1,9 @@
 # source_regions / pillar-3 scope-aware lexical search — design
 
+> Historical implementation design. The 2.1.1 unblock evidence below is preserved for provenance; current Miller
+> pins `julie-extract` v2.1.3 and exposes source-region search through explicit `regions=` when the region index is
+> enabled.
+
 - **Date:** 2026-06-04
 - **Status:** ✅ **UNBLOCKED by julie-extract 2.1.1.** The pinned 2.1.1 binary was restored and a fresh extract
   of this repo verified `source_regions` for C# (`comment=3607`, `doc_comment=5505`,

@@ -1,5 +1,8 @@
 # Architecture decision (2026-05-28)
 
+> Historical origin decision. This predates the Miller naming/release state and records why the project avoided
+> embeddings/FFI. Use current README, harness docs, and active contracts for current behavior.
+
 Status: **accepted** (supersedes the frozen 2026-01-28 design). Confidence ~89/100.
 
 ## Context

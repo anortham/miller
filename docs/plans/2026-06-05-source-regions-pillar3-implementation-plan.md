@@ -1,5 +1,8 @@
 # Source Regions Pillar 3 Implementation Plan
 
+> Historical status: implemented. Current behavior is explicit `regions=comment|doc_comment|string_literal` search
+> backed by the Miller-owned sidecar when region indexing is enabled.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use razorback:subagent-driven-development when subagent delegation is available. Fall back to razorback:executing-plans for single-task, tightly-sequential, or no-delegation runs.
 
 **Goal:** Build Miller's first `source_regions` consumer: explicit `regions=` search over comments, doc-comments, and string literals, backed by the Miller-owned `search.db` sidecar.

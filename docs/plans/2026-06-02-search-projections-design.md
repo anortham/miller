@@ -1,5 +1,9 @@
 # Search Projections Design
 
+> Historical status: implemented projection-era design. It explains why Miller avoided full graph hydration for
+> common read paths, but current search behavior also includes the later default-on `search.db` sidecar and
+> content corpus sidecar.
+
 ## Context
 
 Miller currently routes `search`, `inspect`, `context`, `trace`, and `impact`

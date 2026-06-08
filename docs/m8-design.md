@@ -1,7 +1,12 @@
 # M8 design — logging polish (debuggability for a multi-process product)
 
-Status: **design, ready to build**. Decision-driven, grounded against the live code. House style matches
-[m5](m5-design.md)/[m6](m6-design.md)/[m7](m7-design.md). Confidence ~86.
+> Historical status: this milestone design is implementation history. The current logging contract is summarized
+> in [`CLAUDE.md`](../CLAUDE.md): Miller uses one shared daily `.miller/logs/miller-<YYYYMMDD>` pair with
+> `pid`/`role`/`cid` as line properties, not per-pid files or a startup log reaper.
+
+Status: **historical implemented design**. This was grounded against the live code and is retained as
+implementation history. Current logging behavior is the shared daily log pair described above. House style
+matches [m5](m5-design.md)/[m6](m6-design.md)/[m7](m7-design.md). Confidence ~86.
 
 ## Goal
 

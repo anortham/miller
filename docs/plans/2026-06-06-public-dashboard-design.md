@@ -1,7 +1,11 @@
 # Miller Public Dashboard Design
 
+> Historical status: implemented public-dashboard design. Current dashboard behavior is summarized in
+> [`../../README.md`](../../README.md), [`../../CLAUDE.md`](../../CLAUDE.md), and
+> [`../findings/2026-06-06-public-dashboard-dogfood.md`](../findings/2026-06-06-public-dashboard-dogfood.md).
+
 - **Date:** 2026-06-06
-- **Status:** Approved design
+- **Status:** Implemented historical design
 - **Decision level:** Public-release readiness slice
 - **Primary owner:** Miller dashboard
 

@@ -1,5 +1,9 @@
 # Parsing, search & storage findings (2026-05-28)
 
+> Historical origin research. This predates the `julie-extract` migration, symbol/content sidecars, and current
+> release packaging. Use [`../README.md`](../README.md) and [`../../README.md`](../../README.md) for current
+> behavior.
+
 Machine: Apple M2 Ultra. Runtime: .NET 10 (SDK 10.0.300). Microsoft.Data.Sqlite 10.0.8,
 System.Numerics.Tensors 10.0.8, LLamaSharp 0.25.0.
 

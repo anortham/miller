@@ -1,5 +1,8 @@
 # Public Dashboard Implementation Plan
 
+> Historical status: completed implementation plan. Keep as implementation evidence; use current README/harness docs
+> for the dashboard read-path contract.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use razorback:subagent-driven-development when subagent delegation is available. Fall back to razorback:executing-plans for single-task, tightly-sequential, or no-delegation runs.
 
 **Goal:** Build the approved public-ready Miller dashboard slice: local workspace/index transparency, basic operations, telemetry, and defensible context-savings metrics without adding Eros-owned intelligence views.

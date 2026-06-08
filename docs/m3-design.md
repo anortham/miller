@@ -1,5 +1,9 @@
 # M3 — Freshness: single-writer indexer + file watcher + mutation gate
 
+> Historical status: this milestone design is implementation history. It may mention old schema versions,
+> command names, or startup assumptions. For current behavior, start with [`docs/README.md`](README.md),
+> [`README.md`](../README.md), and active contracts under [`docs/contracts/`](contracts/).
+
 Implementation spec for M3. Every contract below is **verified against the live pinned `julie-server` v7.12.2
 (schema 26 / contract 1)** by running `extract scan|update|delete` and probing the DB — not read from julie
 source (which is ahead at schema 27). Grounded; no placeholders. Corpus: `docs/findings/julie-eros-audit.md`

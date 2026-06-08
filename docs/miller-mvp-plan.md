@@ -1,5 +1,9 @@
 # Miller MVP implementation plan (2026-05-29)
 
+> Historical status: this was the original MVP plan. It is useful design history, but it is not the current
+> behavior contract. Start with [`docs/README.md`](README.md), [`README.md`](../README.md), and active docs under
+> [`docs/contracts/`](contracts/) for current Miller behavior.
+
 The build plan for **Miller**, the .NET personal/local code-intelligence MCP server. Grounded in the settled
 design: [architecture-decision](findings/architecture-decision.md), [miller-toolbox](findings/miller-toolbox.md),
 [julie-eros-audit](findings/julie-eros-audit.md).

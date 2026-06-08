@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Miller - Local Code Intelligence for Coding Agents</title>
-  <meta name="description" content="Miller is the free local code-intelligence core for coding agents: MCP and CLI search, inspect, context, trace, impact, workspace freshness, and telemetry.">
+  <meta name="description" content="Miller is the free local code-intelligence core for coding agents: MCP and CLI search, inspect, context, trace, impact, edit, content search, workspace freshness, and telemetry.">
   <link rel="canonical" href="https://anortham.github.io/miller/">
 
   <meta property="og:type" content="website">
@@ -127,11 +127,15 @@
         </article>
         <article>
           <h3>trace</h3>
-          <p>Structural call and dependency paths, including provider-scoped bridge evidence for `dotnet-web`.</p>
+          <p>Structural call and dependency paths, including provider-scoped bridge evidence for <code>dotnet-web</code>.</p>
         </article>
         <article>
           <h3>impact</h3>
           <p>Reverse reachability and likely tests so agents can choose focused verification.</p>
+        </article>
+        <article>
+          <h3>edit</h3>
+          <p>Preview-first, index-aware text and symbol edits with stale-target checks.</p>
         </article>
         <article>
           <h3>content</h3>
@@ -161,21 +165,21 @@
     <section id="install" class="section install-section">
       <div class="section-heading">
         <p class="eyebrow">Try it</p>
-        <h2>Use the source checkout or a release archive.</h2>
+        <h2>Start with the agent plugin.</h2>
       </div>
       <div class="install-panel">
-        <pre><code>bash scripts/restore-julie-extract.sh
-dotnet build Miller.slnx -c Release
-dotnet run --project src/Miller.Server -c Release -- workspace open --path /path/to/repo --full
-dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvider" --limit 5
-dotnet run --project src/Miller.Server -c Release -- dashboard</code></pre>
+        <pre><code>claude plugin marketplace add anortham/miller
+claude plugin install miller@miller
+
+codex plugin marketplace add anortham/miller
+codex plugin add miller@miller</code></pre>
         <div class="limits">
-          <h3>Known limits</h3>
+          <h3>Other install paths</h3>
           <ul>
+            <li><a href="https://github.com/anortham/miller/releases/tag/v0.2.0" target="_blank" rel="noopener">Download a release archive</a> for manual MCP setup.</li>
+            <li>Use the source checkout only for Miller development or unreleased local changes.</li>
             <li>No embeddings or semantic/vector retrieval in Miller.</li>
             <li>Source-region search is opt-in with <code>MILLER_REGION_INDEX=1</code>.</li>
-            <li>The release workflow packages the main <code>miller</code> binary with Native AOT.</li>
-            <li>The dashboard helper stays self-contained/non-AOT because Razor Components do not currently support Native AOT.</li>
           </ul>
         </div>
       </div>

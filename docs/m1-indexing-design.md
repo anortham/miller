@@ -1,5 +1,9 @@
 # M1 — Miller.Indexing design (read layer + extract wrapper + restore)
 
+> Historical status: this milestone design is implementation history. It may mention old schema versions,
+> command names, or startup assumptions. For current behavior, start with [`docs/README.md`](README.md),
+> [`README.md`](../README.md), and active contracts under [`docs/contracts/`](contracts/).
+
 Implementation spec for M1. Architecture is settled here; the exact literal strings (connection string,
 SELECT column list, extract argv, report JSON field names, release asset names) are marked `«recon»` and
 filled from the `m1-indexing-recon` workflow (wp4odbrjx) before implementation starts.

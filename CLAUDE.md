@@ -2,8 +2,8 @@
 
 Miller is a read-only .NET 10 SQLite/MCP consumer of `julie-extract` output. It does not parse
 source or use embeddings; extraction is delegated to the pinned `julie-extract` binary. See
-[README.md](README.md) for the architecture and [docs/miller-mvp-plan.md](docs/miller-mvp-plan.md) for
-the milestone plan.
+[README.md](README.md) for the current architecture and [docs/README.md](docs/README.md) for the
+current-vs-historical documentation map.
 
 ## Language parity (load-bearing product rule)
 
@@ -40,7 +40,7 @@ scripts/test.sh scale   # scale suite only
 scripts/test.sh all     # both
 ```
 
-Windows PowerShell mirrors exist for beta-critical scripts:
+Windows PowerShell mirrors exist for cross-platform scripts:
 
 ```powershell
 scripts/test.ps1
@@ -91,7 +91,7 @@ scripts/test.ps1 all
   `julie-extract --version` and `miller version`, then uploads a `.sha256` sidecar for each archive.
 - Manual workflow dispatch defaults to package-only validation; set `publish: true` to create or update the
   GitHub release. Manual publish defaults to a prerelease. Tag pushes infer prerelease status from a
-  hyphenated version such as `v0.1.0-beta.1`. The main `miller` binary is published with Native AOT; the
+  hyphenated version such as `v0.2.1-beta.1`. The main `miller` binary is published with Native AOT; the
   dashboard executable remains self-contained/non-AOT because ASP.NET Razor Components do not currently support
   Native AOT.
 - Do not publish, retag, delete, or overwrite a release without explicit user approval. README current-release
@@ -103,6 +103,8 @@ scripts/test.ps1 all
   the top and make the install paths clear for non-developers: plugin install, manual release archive install,
   manual MCP config, then source-checkout development.
 - The public site is `https://anortham.github.io/miller/`; keep README linked to it.
+- `docs/README.md` is the documentation map. Keep active contracts/current operating docs separate from historical
+  design notes and dogfood evidence.
 - Release-facing README facts must come from live GitHub release data. For `v0.2.0`, the live release has four
   platform archives plus four `.sha256` sidecars.
 - When updating harness guidance, edit `CLAUDE.md` first, run `scripts/sync-agents.sh` or
@@ -145,7 +147,8 @@ scripts/test.ps1 all
 - **Workspace registry.** Index DBs stay local at `<workspace>/.miller/symbols.db`; the central discovery
   surface is `~/.miller/workspaces.db`. Read tools accept `workspace_id` selectors: display ID, unique prefix,
   full ID, `current`, or `primary`; explicit `workspace_id` defaults to refresh-first. The dashboard reads the
-  registry and shared telemetry DB, not the filesystem.
+  registry, shared telemetry DB, and read-only aggregate facts from workspace artifacts. It must not hydrate full
+  indexes just to render list/detail views.
 - **Hash split.** Stable `workspace_id` is SHA-256 of the canonical root. File freshness uses
   `files.content_hash` (`blake3:<hex>`, normalized before comparison) and is guarded by
   `artifact_metadata.hash_algorithm=blake3`.

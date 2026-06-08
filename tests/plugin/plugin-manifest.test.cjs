@@ -52,7 +52,10 @@ test('Claude and Codex plugin manifests point at the release launcher', () => {
   assert.deepEqual(codex.interface.capabilities, [
     'MCP',
     'Code search',
+    'Content corpus search',
     'Impact analysis',
+    'Workspace freshness',
+    'Telemetry export',
   ]);
   assert.equal(codexMcp.mcpServers.miller.command, 'node');
   assert.deepEqual(codexMcp.mcpServers.miller.args, ['./bin/miller-plugin-launcher.cjs']);

@@ -1,7 +1,13 @@
 # M7 design — `workspace` + soft budgets (dashboard deferred)
 
-Status: **design, ready to build**. Decision-driven, grounded against the live code + pinned `julie-server`
-v7.12.2. House style matches [m3](m3-design.md)/[m5](m5-design.md)/[m6](m6-design.md). Confidence ~85.
+> Historical status: this milestone design is implementation history. It may mention old tool counts or
+> dashboard assumptions. For current behavior, start with [`docs/README.md`](README.md), [`README.md`](../README.md),
+> and active contracts under [`docs/contracts/`](contracts/).
+
+Status: **historical implemented design**. This was grounded against the live code + pinned `julie-server`
+v7.12.2 and is retained as implementation history. Current workspace and dashboard behavior is summarized in
+the active docs map and README. House style matches [m3](m3-design.md)/[m5](m5-design.md)/[m6](m6-design.md).
+Confidence ~85.
 
 ## Goal
 

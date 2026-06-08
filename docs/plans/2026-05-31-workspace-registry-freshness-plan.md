@@ -1,5 +1,9 @@
 # Workspace Registry and Freshness Implementation Plan
 
+> Historical status: completed implementation plan. The registry/freshness architecture is now part of current
+> Miller behavior; use [`../../README.md`](../../README.md), [`../../CLAUDE.md`](../../CLAUDE.md), and active
+> tool docs for current contracts.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use razorback:subagent-driven-development when subagent delegation is available. Fall back to razorback:executing-plans for single-task, tightly-sequential, or no-delegation runs.
 
 **Goal:** Implement the approved workspace registry, cross-workspace freshness, stable workspace identity, BLAKE3 freshness, and dashboard discovery design.

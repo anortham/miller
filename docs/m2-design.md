@@ -1,5 +1,9 @@
 # M2 — MCP host + `search` + `inspect` + telemetry (first dogfood)
 
+> Historical status: this milestone design is implementation history. It may mention old schema versions,
+> command names, or startup assumptions. For current behavior, start with [`docs/README.md`](README.md),
+> [`README.md`](../README.md), and active contracts under [`docs/contracts/`](contracts/).
+
 Implementation spec for M2. All contracts below are verified against the ModelContextProtocol C# SDK 1.3.0
 (decompiled + empirically run), `docs/findings/miller-toolbox.md` (the agreed tool surface), and the M1 read
 layer. Grounded; no `«recon»` placeholders.

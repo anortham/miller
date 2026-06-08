@@ -1,5 +1,8 @@
 # julie-extractors Migration — Implementation Plan
 
+> Historical status: completed migration plan. Miller now consumes pinned `julie-extract`; keep this document for
+> reconciliation evidence, not as an open work queue.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use razorback:subagent-driven-development when subagent delegation is available. Fall back to razorback:executing-plans for single-task, tightly-sequential, or no-delegation runs.
 
 **Goal:** Move Miller's julie-facing seam off the pinned `julie-server` 7.13.2 (schema 28 / contract 3) onto the new `julie-extract` v1 CLI + SQLite artifact (schema 1 / contract 1), at parity.

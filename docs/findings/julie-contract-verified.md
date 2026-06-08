@@ -1,5 +1,9 @@
 # julie ⇄ Miller contract — VERIFIED ground truth (2026-05-29)
 
+> Historical origin evidence. This predates the `julie-extract` migration and may mention `julie-server`, schema 26,
+> or old contract versions. Current extractor contract facts are surfaced by `miller capabilities --json` and active
+> Miller contracts under [`../contracts/`](../contracts/).
+
 Source-of-truth verification for everything Miller M1 builds against. Produced by a 6-agent recon over
 `~/source/julie` source **and** by running the prebuilt `julie-server extract` binary end-to-end. Every fact below
 is cited to a `file:line` in julie or a NuGet/SQLite doc URL. Pinned versions: **julie v7.12.2, SQLite schema

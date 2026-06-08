@@ -290,7 +290,7 @@ public static class CliDispatch
     private static int Content(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
         if (args.Count == 0)
-            return Usage(err, "miller content <import|add-markdown|search|read|list|remove> [args] [--json]");
+            return Usage(err, "miller content <import|add-markdown|search|read|list|remove|export> [args] [--json]");
 
         string operation = args[0];
         CliOptions o = CliOptions.Parse(args.Skip(1).ToArray(), "json");
@@ -320,7 +320,7 @@ public static class CliDispatch
         {
             query = o.Query;
             if (string.IsNullOrWhiteSpace(query))
-                return Usage(err, "miller content search <query> [--limit N] [--json]");
+                return Usage(err, "miller content search <query> [--kind KIND] [--workspace-id all|SELECTOR] [--limit N] [--json]");
         }
 
         var tool = new ContentTool(ctx, new ContentCorpusExternalStore());

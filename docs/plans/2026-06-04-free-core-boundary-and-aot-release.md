@@ -1,5 +1,9 @@
 # Miller Free-Core Boundary And AOT Release Plan
 
+> Historical/current hybrid: the Miller/Eros boundary remains current, but release packaging details have evolved.
+> For the current archive layout and release flow, use [`../../README.md`](../../README.md) and
+> [`../release-process.md`](../release-process.md).
+
 - **Date:** 2026-06-04
 - **Status:** Handoff for alignment work
 - **Repos involved:** `miller`, `eros`, `julie-extractors`
@@ -185,14 +189,17 @@ targets the release matrix packages. If a new Miller target is added, add the ma
 Each release archive should contain:
 
 ```text
+miller-<version>-<target>/
 miller[.exe]
 .tools/julie-extract[.exe]
 libe_sqlite3.<platform-extension>
 libblake3_dotnet.<platform-extension>
+dashboard/
 LICENSE
 THIRD-PARTY-NOTICES.md
-external .sha256 sidecar
 ```
+
+The `.sha256` file is an adjacent release asset, not a file inside the archive.
 
 The runtime should keep locating `julie-extract` from `AppContext.BaseDirectory/.tools` first, then
 fall back to `PATH` only as a convenience.

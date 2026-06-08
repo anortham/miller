@@ -1,5 +1,9 @@
 # Miller Content Corpus and FTS5 Search Implementation Plan
 
+> Status: implemented through Phase 6. Current consumer contract lives in
+> [`../contracts/content-corpus-v1.md`](../contracts/content-corpus-v1.md); use this plan as implementation history
+> and future-work context.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use razorback:subagent-driven-development when subagent delegation is available. Fall back to razorback:executing-plans for single-task, tightly-sequential, or no-delegation runs.
 
 **Goal:** Build a Miller-owned content corpus and FTS5 search path that can find source-body text, docs/config text, large external files, browser-fetched web content, and Eros-ready semantic chunks without pushing full source contents into `julie-extractors`.

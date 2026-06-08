@@ -1,5 +1,9 @@
 # M4 — implementation plan (v3.2)
 
+> Historical status: implementation plan for the original cross-language resolver. Provider-scoped bridge behavior
+> is the current direction; see [`2026-06-05-bridge-provider-scope-design.md`](2026-06-05-bridge-provider-scope-design.md)
+> and current tool docs before treating any unchecked task below as open.
+
 Companion to [2026-05-30-m4-cross-language-resolver-design.md](2026-05-30-m4-cross-language-resolver-design.md).
 **Read the design first, and read [findings/m4-extract-reality-28-2.md](../findings/m4-extract-reality-28-2.md)** —
 every task is written against *verified* julie 28/2 output, triangulated by a codex review + an 8-agent verification

@@ -1,5 +1,9 @@
 # julie + eros source audit (2026-05-29)
 
+> Historical source audit. This predates the `julie-extract` migration, current sidecar contracts, and the
+> Miller/Eros product-boundary docs. Use [`../README.md`](../README.md), [`../../README.md`](../../README.md),
+> and current contracts for behavior today.
+
 Grounding pass before Miller implementation. Four parallel agents read the actual code in
 `~/source/julie` (Rust) and `~/source/eros` (Python). Every claim below is from source, file:line cited
 in the agent transcripts. Two findings overturn prior assumptions (marked 🔄). Confidence ~88.

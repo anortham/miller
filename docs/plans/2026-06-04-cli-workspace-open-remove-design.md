@@ -1,7 +1,10 @@
 # CLI `workspace open` / `workspace remove` — design
 
+> Historical status: implemented design. Current CLI behavior is documented by `miller help`,
+> [`../../README.md`](../../README.md), and active CLI contract docs.
+
 Date: 2026-06-04
-Status: approved-pending-review
+Status: implemented historical design
 Scope: close the CLI/server parity gap for workspace lifecycle. Add `miller workspace open`
 (bootstrap + index a fresh directory from the CLI) and `miller workspace remove` (delete a
 workspace's `.miller` index dir from the CLI).
@@ -70,11 +73,11 @@ load-bearing** — see the two review fixes inline (R1, R3):
    WorkspaceRefreshResult result = refresh.Refresh(id, force: full);
    ```
    `Refresh` acquires the single-writer lock (which `Directory.CreateDirectory`s `.miller` on first run),
-   runs julie-extract (creating `symbols.db`), reads the revision, **best-effort builds the search sidecar
-   when enabled** (R2 — `MarkScanned` happens first and a sidecar failure is swallowed by design; reads
-   self-heal to in-memory BM25, and `MILLER_SEARCH_SIDECAR=0` skips it), and marks the row scanned. A scan
-   that *fails* now marks the **existing** row error (visible in `list`) — that is the property register-
-   before-scan buys us. `--full` → `force:true` (from-scratch rebuild); default → `force:false` (delta on
+   runs julie-extract (creating `symbols.db`), reads the revision, builds derived sidecars when enabled, and
+   marks the row scanned. The old R2 assumption that sidecar failures would be swallowed and reads would
+   self-heal to memory was superseded by the current fail-visible sidecar contract. A scan that *fails* now
+   marks the **existing** row error (visible in `list`) — that is the property register-before-scan buys us.
+   `--full` → `force:true` (from-scratch rebuild); default → `force:false` (delta on
    re-open; a fresh dir has no DB so it is a full initial scan regardless).
 9. **Render + exit** via `WorkspaceRender.Action(operation: "open", …)` for **all** outcomes, exit via
    the existing `RefreshExitCode(result.Status)`:
@@ -219,9 +222,9 @@ an index in a fresh dir via a real second process):
   `force:true` (a delta re-open without `--full` reports `unchanged`/`scanned: no`).
 - `miller workspace remove --path <root>` → exit 0; assert `<root>/.miller` is gone.
 
-Note (R2): the open Scale test asserts `symbols.db` + that `search` works, but does **not** assert the
-`search.db` sidecar exists — `search` self-heals to in-memory BM25, so a sidecar miss would not fail it
-(a false positive). The sidecar's on-disk build is already pinned by `CrossWorkspaceRefreshServiceTests`.
+Note (R2): the open Scale test originally avoided asserting the `search.db` sidecar because the sidecar
+contract was best-effort. That assumption is superseded; current sidecar freshness and failure behavior is
+covered by the dedicated workspace/provider sidecar tests.
 
 ## Acceptance criteria
 

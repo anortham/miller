@@ -161,6 +161,9 @@ inherit our scorer unless it wants to.
 
 ### Self-heal
 
+> Superseded behavior: current default-on sidecars fail visibly when missing, stale, corrupt, or schema-incompatible.
+> Use `MILLER_SEARCH_SIDECAR=0` to opt into the in-memory fallback for debugging.
+
 If `search.db` is missing / stale-revision / schema-incompatible / FTS5 unavailable, fall back to the
 current in-memory `SymbolSearchProjection` and (leader only) trigger a rebuild — mirrors the existing
 auto-heal posture. Correctness never depends on the sidecar. **Guard:** a Scale test must assert the disk
@@ -246,6 +249,9 @@ re-tokenization drops FTS false positives; only scores can shift). ASCII parity 
 before defaulting the sidecar on (e.g. `tokenize='unicode61 remove_diacritics 0'` on `symbols_fts`).
 
 ### As built — Phase 3 (2026-06-04, TDD + adversarial review)
+
+> Superseded by later default-on/fail-visible sidecar work. The route/flag details below describe the earlier
+> rollout state, not the current operational contract.
 
 Route + flag landed test-first; full fast suite green (1400 tests, 0 warnings), scale suite 21/21. A 5-lens
 adversarial review (routing/self-heal, caching/concurrency, OFF-path parity, flag/DI/lifecycle, test quality)

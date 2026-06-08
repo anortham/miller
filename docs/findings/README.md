@@ -1,5 +1,9 @@
 # codesearch — research findings (2026-05)
 
+> Historical origin research. These docs predate the Miller name and `julie-extract` product split, and may mention
+> `codesearch`, `julie-server`, or old schema versions. Use [`../README.md`](../README.md) for the docs map and
+> [`../../README.md`](../../README.md) for current behavior.
+
 Durable record of the viability investigation that decided whether to revive this project and how to build it.
 **Purpose: so we never have to re-run these experiments.** Each doc states the question, the method, the
 measured data, the conclusion, and how to reproduce.

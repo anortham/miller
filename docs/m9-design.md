@@ -1,5 +1,9 @@
 # M9 design — the ad-hoc big-file tool (julie-parses, Miller segregates + merges the UX)
 
+> Historical status: this design was a precursor to the implemented content corpus. Current file/content text
+> behavior is documented in [`contracts/content-corpus-v1.md`](contracts/content-corpus-v1.md), [`README.md`](../README.md),
+> and the `miller-large-file`, `miller-web-research`, and `miller-text-audit` skills.
+
 Status: **PARKED — spec complete, build decision deferred.** The architecture is sound and v1 is buildable now
 (no julie change for v1). What is NOT yet decided is whether it is **worth building** — that hinges on one
 unmeasured cost (see "Viability" + "Gating experiments"). Revisit after thinking it through. Grounded against the

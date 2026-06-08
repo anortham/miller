@@ -1,5 +1,9 @@
 # M6 — `edit`: index-aware, preview-first, freshness-gated
 
+> Historical status: this milestone design is implementation history. It may mention old schema versions,
+> command names, or startup assumptions. For current behavior, start with [`docs/README.md`](README.md),
+> [`README.md`](../README.md), and active contracts under [`docs/contracts/`](contracts/).
+
 Implementation spec for M6. Every contract is **verified against the live pinned `julie-server` v7.12.2 /
 schema 26** (probed the `symbols` + `identifiers` + `files` tables directly) and against the M2/M3 code M6
 builds on (`SmartTargetResolver`, `ExtractReader`, `StalenessCheck`, `SingleWriterLock`, `IExtractOps`). The

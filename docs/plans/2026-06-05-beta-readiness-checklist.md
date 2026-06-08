@@ -1,7 +1,11 @@
 # Miller Beta Readiness Checklist
 
+> Historical status: completed beta-readiness evidence. This is not the current release status; use
+> [`../release-notes/v0.2.0.md`](../release-notes/v0.2.0.md), [`../release-process.md`](../release-process.md),
+> and [`../../README.md`](../../README.md) for current release-facing docs.
+
 - **Date:** 2026-06-05
-- **Status:** Active checklist
+- **Status:** Completed historical checklist
 - **Repos involved:** `miller`, `julie-extractors`
 - **Decision level:** Product readiness gate
 
@@ -120,9 +124,9 @@ status workspaces. It should read the workspace registry, telemetry DB, and ligh
 
 - [x] Keep the MCP server launch path cross-platform: `mcp-config.json` invokes the `miller`
   binary with `serve`, not a shell script.
-- [x] Provide PowerShell mirrors for beta-critical scripts: `restore-julie-extract.ps1`,
+- [x] Provide PowerShell mirrors for cross-platform critical scripts: `restore-julie-extract.ps1`,
   `test.ps1`, `sync-agents.ps1`, and `install-hooks.ps1`.
-- [x] Add a convention guard so beta-critical shell scripts cannot drift back to Unix-only
+- [x] Add a convention guard so cross-platform critical shell scripts cannot drift back to Unix-only
   entry points.
 - [x] Add a Windows fast-suite CI job that uses the PowerShell test wrapper.
 - [x] Verify the Windows restore/test path on a Windows host or CI run for the 2.1.1 beta candidate:
