@@ -195,6 +195,26 @@ jobs:
           }
           & $windowsBinary --version
           & $millerBinary version
+          $reqs = @(
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}',
+            '{"jsonrpc":"2.0","method":"notifications/initialized"}',
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+          )
+          $stderrFile = Join-Path $env:RUNNER_TEMP "miller-serve-stderr.txt"
+          $outLines = & { $reqs; Start-Sleep -Seconds 20 } | & $millerBinary serve 2> $stderrFile
+          $out = $outLines -join "`n"
+          if (-not $out.Contains('"id":2')) {
+            Write-Host "AOT MCP serve smoke failed: no tools/list response"
+            Get-Content $stderrFile -ErrorAction SilentlyContinue | Select-Object -First 120
+            throw "AOT MCP serve smoke failed: no tools/list response"
+          }
+          foreach ($tool in @("search", "inspect", "context", "impact", "trace", "edit", "content", "workspace")) {
+            if (-not $out.Contains("`"name`":`"$tool`"")) {
+              Write-Host "AOT MCP serve smoke failed: $tool tool missing"
+              Get-Content $stderrFile -ErrorAction SilentlyContinue | Select-Object -First 120
+              throw "AOT MCP serve smoke failed: $tool tool missing"
+            }
+          }
 
       - name: Package Unix artifact
         if: runner.os != 'Windows'

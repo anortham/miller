@@ -89,6 +89,9 @@ scripts/test.ps1 all
 - Release archives include `miller`, the matching `.tools/julie-extract` binary, the packaged dashboard
   executable under `dashboard/`, and `dashboard/wwwroot/dashboard.css`. The workflow smoke-runs
   `julie-extract --version` and `miller version`, then uploads a `.sha256` sidecar for each archive.
+- Plugin support is first-class for Claude Code (`.claude-plugin/plugin.json`), Cursor
+  (`.cursor-plugin/plugin.json`), and Codex (`.codex-plugin/plugin.json` plus `.mcp.json`). Keep those manifests
+  and `miller-plugin.json` version-aligned on every release.
 - Manual workflow dispatch defaults to package-only validation; set `publish: true` to create or update the
   GitHub release. Manual publish defaults to a prerelease. Tag pushes infer prerelease status from a
   hyphenated version such as `v0.2.1-beta.1`. The main `miller` binary is published with Native AOT; the
@@ -100,8 +103,8 @@ scripts/test.ps1 all
 ## Public docs & onboarding
 
 - `README.md` is the public first-use entry point, not only a developer architecture note. Keep the quickstart near
-  the top and make the install paths clear for non-developers: plugin install, manual release archive install,
-  manual MCP config, then source-checkout development.
+  the top and make the install paths clear for non-developers: Claude Code/Cursor/Codex plugin install, manual
+  release archive install, manual MCP config, then source-checkout development.
 - The public site is `https://anortham.github.io/miller/`; keep README linked to it.
 - `docs/README.md` is the documentation map. Keep active contracts/current operating docs separate from historical
   design notes and dogfood evidence.

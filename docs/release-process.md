@@ -47,7 +47,10 @@ Use `--dry-run` to verify artifacts without creating or updating a release.
 - Do not overwrite an existing stable release unless explicitly intended; pass `allow_overwrite=true` or
   `--allow-overwrite` only for that case.
 - Keep `Directory.Build.props`, `miller-plugin.json`, `.claude-plugin/plugin.json`,
-  `.codex-plugin/plugin.json`, `.claude-plugin/marketplace.json`, and release notes in sync before package
-  validation.
+  `.cursor-plugin/plugin.json`, `.codex-plugin/plugin.json`, `.claude-plugin/marketplace.json`, and release notes
+  in sync before package validation.
+- When plugin manifests or `bin/miller-plugin-launcher.cjs` change, run `scripts/test-plugin.sh` and a
+  Cursor-style smoke from `.cursor-plugin/plugin.json` against a local `MILLER_BINARY` to confirm `initialize` and
+  `tools/list` complete.
 - For a stable release, use `prerelease=false`; for a hyphenated version such as `0.2.1-beta.1`, use
   `prerelease=true`.

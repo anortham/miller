@@ -26,9 +26,9 @@ The practical difference from a one-time graph dump is that Miller is built for 
 
 ## Quickstart
 
-Most users should start with the agent plugin. The plugin launcher downloads the matching Miller release
-archive, verifies its `.sha256` sidecar, caches it under `~/.miller/plugin-cache/`, and starts `miller serve`
-as an MCP server.
+Most users should start with the agent plugin. Miller's plugin package supports Claude Code, Cursor, and Codex.
+The plugin launcher downloads the matching Miller release archive, verifies its `.sha256` sidecar, caches it
+under `~/.miller/plugin-cache/`, and starts `miller serve` as an MCP server.
 
 Claude Code:
 
@@ -36,6 +36,23 @@ Claude Code:
 /plugin marketplace add anortham/miller
 /plugin install miller@miller
 ```
+
+Cursor local plugin install:
+
+```bash
+mkdir -p ~/.cursor/plugins/local
+ln -s /path/to/miller ~/.cursor/plugins/local/miller
+```
+
+```powershell
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.cursor\plugins\local"
+New-Item -ItemType Junction -Path "$env:USERPROFILE\.cursor\plugins\local\miller" -Target "C:\path\to\miller"
+```
+
+Reload Cursor after installing. Cursor expects `.cursor-plugin/plugin.json` at the plugin root; Miller's Cursor
+manifest points at the same release launcher used by the Claude Code and Codex plugin paths. If Cursor previously
+auto-discovered Miller from an older Claude plugin cache, reinstall from a package that contains
+`.cursor-plugin/plugin.json`.
 
 After installing, open a code workspace and ask your agent to search, inspect, build context, trace, or check
 impact with Miller. Miller writes its local index under that workspace's `.miller/` directory.
@@ -126,7 +143,7 @@ relationships into a SQLite database. Miller is the pure-.NET host on top:
 
 ```
 ┌───────────────────────────┐     stdio / MCP
-│  Claude Code / MCP client  │◀──────────────────┐
+│ Claude Code / Cursor / MCP │◀──────────────────┐
 └───────────────────────────┘                    │
                                        ┌──────────────────────┐
                                        │   Miller.Server       │  MCP host + CLI + telemetry
@@ -201,7 +218,8 @@ from MCP or `miller workspace open --path /absolute/repo --full` from the CLI, t
 The single `miller` binary runs two ways:
 
 - **MCP server (default).** With no arguments — or the explicit `serve` verb — Miller speaks the MCP protocol
-  over stdio. This is how an MCP client (Claude Code, etc.) connects; see [`mcp-config.json`](mcp-config.json):
+  over stdio. This is how an MCP client (Claude Code, Cursor, Codex, etc.) connects; see
+  [`mcp-config.json`](mcp-config.json):
 
   ```bash
   dotnet run --project src/Miller.Server -c Release -- serve
@@ -238,7 +256,7 @@ The single `miller` binary runs two ways:
 
 **Dogfooding the server.** Because MCP runs over stdio, a new build takes effect only after the MCP client
 restarts the subprocess. A build made inside the repo carries its git short SHA — `miller version` prints
-`0.3.1+<sha>` (just `0.3.1` for a build with no `.git`), and the same string heads the `# workspace` block of
+`0.3.2+<sha>` (just `0.3.2` for a build with no `.git`), and the same string heads the `# workspace` block of
 `workspace status`. The status header also includes the process id (`pid <n>`), which is the quickest way to
 confirm a restarted MCP client is talking to a new Miller subprocess when you rebuilt uncommitted changes and
 the SHA suffix stayed the same.
@@ -268,6 +286,7 @@ Open the printed URL to view registered workspaces and scoped per-tool telemetry
 Miller's first plugin distribution path lives in this repository, not a separate `miller-plugin` repo:
 
 - `.claude-plugin/plugin.json` exposes Miller to Claude Code.
+- `.cursor-plugin/plugin.json` exposes Miller to Cursor.
 - `.codex-plugin/plugin.json` and `.mcp.json` expose Miller to Codex.
 - `skills/` is generated from `.agents/skills/` by `scripts/sync-plugin-skills.sh`.
 - `bin/miller-plugin-launcher.cjs` downloads the configured GitHub release archive, verifies the `.sha256`
@@ -281,6 +300,22 @@ Claude Code local-checkout install:
 ```bash
 claude plugin install /path/to/miller
 ```
+
+Cursor local-checkout install:
+
+```bash
+mkdir -p ~/.cursor/plugins/local
+ln -s /path/to/miller ~/.cursor/plugins/local/miller
+```
+
+```powershell
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.cursor\plugins\local"
+New-Item -ItemType Junction -Path "$env:USERPROFILE\.cursor\plugins\local\miller" -Target "C:\path\to\miller"
+```
+
+Then reload Cursor and confirm Miller appears under Settings > Plugins. The Cursor manifest uses
+`node ./bin/miller-plugin-launcher.cjs` with `cwd: "."` so it does not depend on Claude-specific
+`${CLAUDE_PLUGIN_ROOT}` expansion.
 
 For the GitHub-hosted plugin source, use:
 
@@ -296,10 +331,6 @@ dotnet build Miller.slnx -c Release
 export MILLER_BINARY="$PWD/src/Miller.Server/bin/Release/net10.0/miller"
 claude
 ```
-
-Cursor plugin support is intentionally deferred until Miller has an npm launcher or another reliable way for Cursor
-to locate the installed plugin root. See
-[docs/plans/2026-06-06-plugin-distribution-design.md](docs/plans/2026-06-06-plugin-distribution-design.md).
 
 ## Local proof commands
 

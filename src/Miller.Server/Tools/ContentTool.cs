@@ -31,7 +31,7 @@ public sealed class ContentTool
         "Import, search, read, list, remove, and export text in Miller's content corpus. Use for logs, " +
         "CI output, web markdown, reports, large text files, and Eros JSONL chunk feeds.")]
     public string Content(
-        [Description("import|add_markdown|search|read|list|remove|export.")] string operation,
+        [Description("import|add_markdown|search|read|list|remove|export. Default list.")] string? operation = "list",
         [Description("Path to import for operation=import/add_markdown.")] string? path = null,
         [Description("Search query for operation=search.")] string? query = null,
         [Description("Imported source id for operation=read/remove.")] string? source_id = null,

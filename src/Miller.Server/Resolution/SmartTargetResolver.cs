@@ -111,14 +111,10 @@ public sealed partial class SmartTargetResolver
 
     private TargetResolution ResolveByName(string name, string? scope)
     {
-        IReadOnlyList<IndexedSymbol> matches = Index.FindByName(name);
+        IReadOnlyList<IndexedSymbol> matches = ScopeMatches(Index.FindByName(name), scope);
 
-        if (!string.IsNullOrWhiteSpace(scope))
-        {
-            // Constrain to the scoped file before counting (ordinal — file paths are case-sensitive on the
-            // platforms julie targets and the extract stores them verbatim).
-            matches = matches.Where(s => string.Equals(s.FilePath, scope, StringComparison.Ordinal)).ToList();
-        }
+        if (matches.Count == 0)
+            matches = ResolveQualifiedMember(name, scope);
 
         return matches.Count switch
         {
@@ -126,6 +122,36 @@ public sealed partial class SmartTargetResolver
             1 => new TargetResolution.Symbol(matches[0]),
             _ => new TargetResolution.Candidates(matches),
         };
+    }
+
+    private IReadOnlyList<IndexedSymbol> ResolveQualifiedMember(string name, string? scope)
+    {
+        int lastDot = name.LastIndexOf('.');
+        if (lastDot <= 0 || lastDot >= name.Length - 1)
+            return [];
+
+        string parentName = name[..lastDot];
+        string memberName = name[(lastDot + 1)..];
+        string expectedParent = parentName.Contains('.')
+            ? parentName[(parentName.LastIndexOf('.') + 1)..]
+            : parentName;
+
+        var members = ScopeMatches(Index.FindByName(memberName), scope);
+        return members
+            .Where(s => s.ParentId is { } parentId
+                        && Index.FindBySymbolId(parentId) is { } parent
+                        && string.Equals(parent.Name, expectedParent, StringComparison.Ordinal))
+            .ToList();
+    }
+
+    private static IReadOnlyList<IndexedSymbol> ScopeMatches(IReadOnlyList<IndexedSymbol> matches, string? scope)
+    {
+        if (string.IsNullOrWhiteSpace(scope))
+            return matches;
+
+        // Constrain to the scoped file before counting (ordinal — file paths are case-sensitive on the
+        // platforms julie targets and the extract stores them verbatim).
+        return matches.Where(s => string.Equals(s.FilePath, scope, StringComparison.Ordinal)).ToList();
     }
 
     // A non-empty extension (beyond the dot) that appears among the indexed file paths. Derived, not hardcoded.

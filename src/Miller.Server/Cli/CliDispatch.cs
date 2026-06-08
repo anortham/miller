@@ -1166,7 +1166,7 @@ public static class CliDispatch
                              open   [--path DIR] [--full]   Register + index a directory (creates .miller/symbols.db).
                              remove (--id ID | --path DIR)  Delete a workspace's .miller index dir.
                              [--id DISPLAY-ID] [--path DIR] [--json]
-          version            Print the build version (e.g. 0.3.1+<sha>).
+          version            Print the build version (e.g. 0.3.2+<sha>).
           help               Show this help.
           serve              Run the MCP stdio server (the default when launched with no arguments).
         """;

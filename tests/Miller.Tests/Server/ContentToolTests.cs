@@ -1,9 +1,15 @@
+using System.IO.Pipelines;
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Miller.Server;
 using Miller.Server.Tools;
 using Miller.Tests.Indexing;
+using ModelContextProtocol.Client;
+using ModelContextProtocol.Protocol;
+using ModelContextProtocol.Server;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -30,6 +36,44 @@ public sealed class ContentToolTests : IDisposable
     {
         SqliteConnection.ClearAllPools();
         try { Directory.Delete(_dir, recursive: true); } catch { /* best effort */ }
+    }
+
+    [Fact]
+    public async Task Content_McpCallWithNoArguments_DefaultsToListInsteadOfThrowing()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        var clientToServer = new Pipe();
+        var serverToClient = new Pipe();
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton(_workspace);
+        services.AddSingleton(new ContentCorpusExternalStore());
+        services
+            .AddMcpServer(o => { o.ServerInfo = new() { Name = "content-test", Version = "0" }; })
+            .WithStreamServerTransport(clientToServer.Reader.AsStream(), serverToClient.Writer.AsStream())
+            .WithTools<ContentTool>();
+
+        await using var provider = services.BuildServiceProvider();
+        var server = provider.GetRequiredService<McpServer>();
+        var serverTask = server.RunAsync(ct);
+
+        var clientTransport = new StreamClientTransport(
+            clientToServer.Writer.AsStream(), serverToClient.Reader.AsStream(), NullLoggerFactory.Instance);
+        await using var client = await McpClient.CreateAsync(clientTransport, cancellationToken: ct);
+
+        var result = await client.CallToolAsync("content", new Dictionary<string, object?>(), cancellationToken: ct);
+
+        string text = Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text;
+        Assert.NotEqual(true, result.IsError);
+        Assert.Contains("No imported content", text, StringComparison.OrdinalIgnoreCase);
+
+        await client.DisposeAsync();
+        await clientToServer.Writer.CompleteAsync();
+        await serverToClient.Writer.CompleteAsync();
+        try { await serverTask.WaitAsync(TimeSpan.FromSeconds(5), ct); }
+        catch (Exception) { /* server loop teardown is not what this test asserts */ }
     }
 
     [Fact]

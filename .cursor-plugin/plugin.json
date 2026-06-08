@@ -1,5 +1,6 @@
 {
   "name": "miller",
+  "displayName": "Miller",
   "description": "Local SQLite-backed code intelligence, content search, and workspace freshness for coding agents.",
   "version": "0.3.2",
   "author": {
@@ -17,15 +18,17 @@
     "content-search",
     "workspace-freshness",
     "telemetry",
-    "sqlite"
+    "sqlite",
+    "cursor"
   ],
+  "skills": "./skills/",
   "mcpServers": {
     "miller": {
       "command": "node",
       "args": [
-        "${CLAUDE_PLUGIN_ROOT}/bin/miller-plugin-launcher.cjs"
-      ]
+        "./bin/miller-plugin-launcher.cjs"
+      ],
+      "cwd": "."
     }
-  },
-  "skills": "./skills/"
+  }
 }

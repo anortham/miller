@@ -8,6 +8,7 @@ separate `miller-plugin` repository yet.
 The plugin layer is intentionally thin:
 
 - Claude Code reads `.claude-plugin/plugin.json`.
+- Cursor reads `.cursor-plugin/plugin.json`.
 - Codex reads `.codex-plugin/plugin.json` plus the root `.mcp.json` companion.
 - Both surfaces expose the repo's Miller skills through root `skills/`.
 - A Node launcher downloads, verifies, caches, and runs the matching Miller release archive.
@@ -48,9 +49,14 @@ The plugin manifest tests verify the mirror is byte-for-byte identical.
 
 ## Cursor
 
-Cursor plugin support is deferred. The local context-mode repo uses an `npx` package entry point for Cursor because
-Cursor does not provide the same reliable plugin-root environment variable that Claude uses. Miller should add Cursor
-support after there is either an npm launcher package or another reliable way to locate the installed plugin root.
+Cursor needs a first-class `.cursor-plugin/plugin.json`; importing the Claude manifest leaves
+`${CLAUDE_PLUGIN_ROOT}` unexpanded and Node tries to launch a literal non-existent path. The Cursor manifest uses a
+relative `./bin/miller-plugin-launcher.cjs` command with `cwd: "."`, matching Cursor's plugin-root execution model
+and avoiding Claude-specific environment variables.
+
+For local Cursor testing, install this checkout or a packaged plugin under `~/.cursor/plugins/local/miller` and
+reload Cursor. The package root must contain `.cursor-plugin/plugin.json`, `skills/`, `miller-plugin.json`, and
+`bin/miller-plugin-launcher.cjs`.
 
 ## Verification
 

@@ -196,6 +196,31 @@ public sealed class SmartTargetResolverTests
     }
 
     [Fact]
+    public void Resolve_ClassQualifiedMember_ResolvesThroughParentNameAndScope()
+    {
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
+        {
+            new JulieDbFixture.SymbolRow("aa11223344556677889900aabbccddee", "WorkspaceTool", "class", "csharp",
+                "src/Miller.Server/Tools/WorkspaceTool.cs", "public sealed class WorkspaceTool", 31, null),
+            new JulieDbFixture.SymbolRow("bb11223344556677889900aabbccddee", "ResolveTarget", "method", "csharp",
+                "src/Miller.Server/Tools/WorkspaceTool.cs", "private TargetWorkspace ResolveTarget(string? workspaceId, string? path)", 592,
+                "aa11223344556677889900aabbccddee"),
+            new JulieDbFixture.SymbolRow("cc11223344556677889900aabbccddee", "ResolveTarget", "method", "csharp",
+                "src/Other/WorkspaceTool.cs", "private TargetWorkspace ResolveTarget()", 12, null),
+        });
+        var index = BuildIndex(fx);
+        var resolver = new SmartTargetResolver(index);
+
+        var result = resolver.Resolve(
+            "WorkspaceTool.ResolveTarget",
+            scope: "src/Miller.Server/Tools/WorkspaceTool.cs");
+
+        var sym = Assert.IsType<TargetResolution.Symbol>(result);
+        Assert.Equal("ResolveTarget", sym.Value.Name);
+        Assert.Equal("src/Miller.Server/Tools/WorkspaceTool.cs", sym.Value.FilePath);
+    }
+
+    [Fact]
     public void Resolve_AsFile_ForcesNameLikeStringToFile()
     {
         using var fx = JulieDbFixture.CreateDefault();
