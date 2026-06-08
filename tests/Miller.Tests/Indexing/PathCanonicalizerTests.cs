@@ -40,6 +40,38 @@ public sealed class PathCanonicalizerTests
     }
 
     [Fact]
+    public void CanonicalizeRoot_FilesystemRoot_IsStableRootForm_NotDriveRelative()
+    {
+        // Regression: a bare filesystem/drive root must canonicalize to a ROOT form — "C:\" or "/" — not the
+        // drive-RELATIVE "C:" that the trailing-separator trim produced. Path.GetFullPath("C:") re-resolves the
+        // drive-relative form to the per-drive CURRENT directory (e.g. C:\source\miller), so the canonical "root"
+        // was neither stable nor an actual root — which silently defeated the workspace-open sensitive-root guard
+        // on Windows (IsSensitiveRoot saw the cwd, not the drive root).
+        string fsRoot = Path.GetPathRoot(Path.GetTempPath())!; // "C:\" on Windows, "/" on POSIX
+
+        string canonical = PathCanonicalizer.CanonicalizeRoot(fsRoot);
+
+        // Stable: re-fullpathing the canonical root must not wander to the process cwd.
+        Assert.Equal(fsRoot, Path.GetFullPath(canonical));
+        if (OperatingSystem.IsWindows())
+            Assert.EndsWith(@":\", canonical, StringComparison.Ordinal); // "C:\", never the bare "C:"
+    }
+
+    [Fact]
+    public void CanonicalizeRoot_WindowsVerbatimInput_ReturnsCleanCanonicalRoot()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        using var dir = new TempDir();
+        string clean = PathCanonicalizer.CanonicalizeRoot(dir.Path);
+        string verbatim = PathCanonicalizer.CanonicalizeRoot(@"\\?\" + clean);
+
+        Assert.Equal(clean, verbatim);
+        Assert.False(verbatim.StartsWith(@"\\?\", StringComparison.Ordinal), verbatim);
+    }
+
+    [Fact]
     public void CanonicalizeRoot_MissingDirectory_Throws()
     {
         // The workspace root MUST exist to canonicalize (it is resolved once at startup against a real tree).
@@ -192,6 +224,29 @@ public sealed class PathCanonicalizerTests
         string root = PathCanonicalizer.CanonicalizeRoot(tmp.Path);
         Assert.Throws<ArgumentNullException>(() => PathCanonicalizer.CanonicalizeFile(root, null!));
         Assert.Throws<ArgumentNullException>(() => PathCanonicalizer.CanonicalizeFile(null!, "x.cs"));
+    }
+
+    [Theory]
+    [InlineData(@"\\?\C:\source\AccessIQ", @"C:\source\AccessIQ")]      // Rust canonicalize drive prefix (the bug)
+    [InlineData(@"\\?\D:\a\b", @"D:\a\b")]                              // any drive letter
+    [InlineData(@"\\?\UNC\server\share\repo", @"\\server\share\repo")] // Rust canonicalize UNC prefix
+    [InlineData(@"\\?\Volume{abc}\repo", @"\\?\Volume{abc}\repo")]      // unknown device form: no safe clean spelling
+    [InlineData(@"\\?\C:", @"\\?\C:")]                                  // drive-relative form: stripping would make "C:"
+    [InlineData(@"C:\source\AccessIQ", @"C:\source\AccessIQ")]          // already clean: no-op
+    [InlineData("/work/repo", "/work/repo")]                            // POSIX: no-op
+    [InlineData(@"\\server\share", @"\\server\share")]                  // plain UNC (no verbatim): no-op
+    [InlineData("", "")]                                                // empty: no-op
+    public void StripWindowsVerbatimPrefix_RemovesRustCanonicalizePrefix(string input, string expected)
+    {
+        // julie-extract (Rust) can record the workspace root WITH the \\?\ verbatim prefix; Miller strips the
+        // safe drive/UNC forms before storing roots or deriving workspace identity.
+        Assert.Equal(expected, PathCanonicalizer.StripWindowsVerbatimPrefix(input));
+    }
+
+    [Fact]
+    public void StripWindowsVerbatimPrefix_Null_Throws()
+    {
+        Assert.Throws<ArgumentNullException>(() => PathCanonicalizer.StripWindowsVerbatimPrefix(null!));
     }
 
     private static void SkipIfNoSymlinks()

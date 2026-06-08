@@ -42,7 +42,33 @@ public static class PathCanonicalizer
                 $"Workspace root '{root}' (resolved '{full}') is not an existing directory. Miller " +
                 "canonicalizes the root against a real tree at startup.");
 
-        return resolved;
+        return StripWindowsVerbatimPrefix(resolved);
+    }
+
+    /// <summary>
+    /// Strip the Windows extended-length ("verbatim") path prefix from the two forms that have a safe clean
+    /// spelling: <c>\\?\C:\dir</c> and <c>\\?\UNC\server\share</c>. Rust's <c>std::fs::canonicalize</c> emits
+    /// these on Windows; <see cref="Path.GetFullPath(string)"/> preserves them when its input already has one.
+    /// julie-extract (Rust) records the workspace <c>root_path</c> WITH this prefix; Miller's
+    /// <see cref="CanonicalizeRoot"/> records it WITHOUT. The two
+    /// canonical roots are otherwise identical, so without this strip a Windows workspace force-rescans on EVERY
+    /// startup (the root compare in <c>IndexBootstrapService.RootPathsEqual</c> never matches → a 30s+ rescan that
+    /// trips the MCP client's connect timeout). A pure string transform — NO filesystem access, so it is safe for a
+    /// recorded root that does not exist on this machine (e.g. a copied DB) — and a no-op on POSIX paths (which
+    /// never carry the prefix) and on already-clean paths.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="path"/> is null.</exception>
+    public static string StripWindowsVerbatimPrefix(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+
+        const string uncPrefix = @"\\?\UNC\";   // \\?\UNC\server\share -> \\server\share
+        const string drivePrefix = @"\\?\";     // \\?\C:\dir           -> C:\dir
+        if (path.StartsWith(uncPrefix, StringComparison.Ordinal))
+            return @"\\" + path.Substring(uncPrefix.Length);
+        if (IsDriveVerbatimPath(path, drivePrefix.Length))
+            return path.Substring(drivePrefix.Length);
+        return path;
     }
 
     /// <summary>
@@ -65,8 +91,21 @@ public static class PathCanonicalizer
             : Path.GetFullPath(path, canonicalRoot);
 
         string resolved = ResolveExistingPrefix(full, out string remainder);
-        return remainder.Length == 0 ? resolved : Path.Combine(resolved, remainder);
+        string canonical = remainder.Length == 0 ? resolved : Path.Combine(resolved, remainder);
+        return StripWindowsVerbatimPrefix(canonical);
     }
+
+    private static bool IsDriveVerbatimPath(string path, int driveOffset) =>
+        path.Length >= driveOffset + 3
+        && IsAsciiLetter(path[driveOffset])
+        && path[driveOffset + 1] == ':'
+        && IsDirectorySeparator(path[driveOffset + 2]);
+
+    private static bool IsAsciiLetter(char ch) =>
+        ch is >= 'A' and <= 'Z' or >= 'a' and <= 'z';
+
+    private static bool IsDirectorySeparator(char ch) =>
+        ch is '\\' or '/';
 
     /// <summary>
     /// Walk <paramref name="absolutePath"/> from its root, resolving each symlink component, until a component
@@ -81,6 +120,17 @@ public static class PathCanonicalizer
         string[] parts = rest.Split(
             new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
             StringSplitOptions.RemoveEmptyEntries);
+
+        // A bare filesystem/drive root has no components to walk: it IS its own canonical form ("C:\" or "/").
+        // Return the root verbatim — the trailing-separator trim below turns the Windows drive root "C:\" into the
+        // drive-RELATIVE "C:", which Path.GetFullPath later re-resolves to the per-drive CURRENT directory, so the
+        // canonical "root" would be neither stable nor a real root (and the workspace-open sensitive-root guard
+        // would see the cwd, not the drive root). POSIX "/" was already safe via the trim-to-empty guard below.
+        if (parts.Length == 0)
+        {
+            remainder = string.Empty;
+            return root;
+        }
 
         // Seed the walk at the filesystem root. Trim a trailing separator so Path.Combine composes cleanly,
         // but keep a bare "/" on POSIX.

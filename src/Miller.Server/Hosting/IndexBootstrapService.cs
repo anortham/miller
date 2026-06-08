@@ -317,13 +317,30 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     /// <summary>
     /// Whether the DB's recorded <c>root_path</c> identifies the same workspace root Miller is indexing. Both
     /// julie (when it writes the artifact) and Miller (<see cref="PathCanonicalizer.CanonicalizeRoot"/>) record an
-    /// absolute, symlink-resolved canonical root, so this is an ordinal comparison — the stored root is NOT re-
-    /// canonicalized here (it may not exist on this machine, e.g. a copied DB). A missing/empty recorded root
-    /// (a pre-v1 artifact) never matches, forcing a clean rescan.
+    /// absolute, symlink-resolved canonical root, but they do NOT spell it identically on Windows: Rust's
+    /// <c>std::fs::canonicalize</c> emits the extended-length verbatim prefix (<c>\\?\C:\repo</c>) and reflects the
+    /// on-disk casing, while Miller's canonical root strips that prefix and preserves the as-launched casing. So
+    /// BOTH operands are normalized — verbatim prefix stripped
+    /// (<see cref="PathCanonicalizer.StripWindowsVerbatimPrefix"/>), then compared case-insensitively on Windows
+    /// and default macOS, and case-sensitively on Linux/POSIX — BEFORE the equality check. The normalization is
+    /// pure string work: the recorded root is NOT re-canonicalized against the filesystem (it may not exist on this
+    /// machine, e.g. a copied DB). A missing/empty recorded root (a pre-v1 artifact) never
+    /// matches, forcing a clean rescan. Without this, a Windows workspace force-rescanned on every startup because
+    /// <c>\\?\C:\repo</c> never matched <c>C:\repo</c> ordinally — a 30s+ rescan that tripped the MCP connect timeout.
     /// </summary>
-    internal static bool RootPathsEqual(string? recordedRootPath, string canonicalRoot) =>
-        !string.IsNullOrEmpty(recordedRootPath) &&
-        string.Equals(recordedRootPath, canonicalRoot, StringComparison.Ordinal);
+    internal static bool RootPathsEqual(string? recordedRootPath, string canonicalRoot)
+    {
+        if (string.IsNullOrEmpty(recordedRootPath))
+            return false;
+
+        string recorded = PathCanonicalizer.StripWindowsVerbatimPrefix(recordedRootPath);
+        string current = PathCanonicalizer.StripWindowsVerbatimPrefix(canonicalRoot);
+        var comparison = RootPathComparison(OperatingSystem.IsWindows(), OperatingSystem.IsMacOS());
+        return string.Equals(recorded, current, comparison);
+    }
+
+    internal static StringComparison RootPathComparison(bool isWindows, bool isMacOS) =>
+        isWindows || isMacOS ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
     /// <summary>
     /// Load the in-memory index, AUTO-HEALING a reused-but-incompatible DB. <paramref name="load"/> runs first; if

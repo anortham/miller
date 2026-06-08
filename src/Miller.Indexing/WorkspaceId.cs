@@ -10,6 +10,10 @@ public static class WorkspaceId
     public static string FromCanonicalRoot(string root)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
+        // On Windows, the same canonical root can be spelled with or without the extended-length verbatim prefix.
+        // Strip it before hashing so .NET-launched and Rust-recorded spellings map to one workspace_id.
+        root = PathCanonicalizer.StripWindowsVerbatimPrefix(root);
+
         // On the case-insensitive release targets (Windows, default macOS) the same directory can be reached via
         // differently-cased paths; fold case before hashing so one directory maps to ONE workspace_id (the
         // registry PK), matching WorkspaceSafety's case-insensitive path comparison. POSIX stays case-sensitive.

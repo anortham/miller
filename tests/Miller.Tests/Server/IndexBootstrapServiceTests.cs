@@ -44,6 +44,22 @@ public sealed class IndexBootstrapServiceTests
         Assert.Equal(WorkspaceRegistryState.LoadedExisting, decision.RegistryStateAfterLoad);
     }
 
+    [Fact]
+    public void DecideBootstrapScan_ExistingDbWithWindowsVerbatimRootPath_LoadsExistingWithoutScan()
+    {
+        // The exact AccessIQ failure: julie-extract recorded root_path=\\?\C:\source\AccessIQ (Rust canonicalize
+        // verbatim prefix) but Miller's canonical root is C:\source\AccessIQ. These identify the SAME workspace, so
+        // bootstrap must REUSE the DB — not force a 30s+ rescan that trips the MCP connect timeout on every launch.
+        var decision = IndexBootstrapService.DecideBootstrapScan(
+            dbExists: true,
+            existingRootPath: @"\\?\C:\source\AccessIQ",
+            canonicalRoot: @"C:\source\AccessIQ");
+
+        Assert.False(decision.ShouldScan);
+        Assert.False(decision.Force);
+        Assert.Equal(WorkspaceRegistryState.LoadedExisting, decision.RegistryStateAfterLoad);
+    }
+
     [Theory]
     [InlineData(null)]                       // pre-v1 artifact with no root_path key
     [InlineData("")]                         // empty recorded root
@@ -66,9 +82,45 @@ public sealed class IndexBootstrapServiceTests
     [InlineData("", "/work/repo", false)]              // empty never matches
     [InlineData("/work/repo", "/work/repo", true)]     // exact canonical match
     [InlineData("/work/other", "/work/repo", false)]   // different root
-    public void RootPathsEqual_IsOrdinalCanonicalMatch(string? recorded, string canonical, bool expected)
+    // Rust's std::fs::canonicalize (julie-extract) records the Windows extended-length verbatim prefix `\\?\`.
+    // The two canonical roots are otherwise identical, so the recorded root MUST match after the prefix is
+    // stripped — else a Windows workspace force-rescans every startup. Cross-platform: stripping leaves identical
+    // case-identical strings.
+    [InlineData(@"\\?\C:\source\AccessIQ", @"C:\source\AccessIQ", true)]
+    [InlineData(@"\\?\UNC\server\share\repo", @"\\server\share\repo", true)]
+    public void RootPathsEqual_NormalizesWindowsVerbatimPrefixBeforeMatch(string? recorded, string canonical, bool expected)
     {
         Assert.Equal(expected, IndexBootstrapService.RootPathsEqual(recorded, canonical));
+    }
+
+    [Theory]
+    [InlineData(true, false, StringComparison.OrdinalIgnoreCase)]
+    [InlineData(false, true, StringComparison.OrdinalIgnoreCase)]
+    [InlineData(false, false, StringComparison.Ordinal)]
+    public void RootPathComparison_MatchesWorkspaceIdentityPolicy(
+        bool isWindows, bool isMacOS, StringComparison expected)
+    {
+        Assert.Equal(expected, IndexBootstrapService.RootPathComparison(isWindows, isMacOS));
+    }
+
+    [Fact]
+    public void RootPathsEqual_OnCaseInsensitiveHosts_IsCaseInsensitive()
+    {
+        // Windows/macOS-default filesystems are case-insensitive; Rust's canonicalize (on-disk case) and Miller's GetFullPath
+        // (as-launched case) can disagree on case for the SAME root, which must NOT force a rescan.
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS())
+            return; // POSIX is case-sensitive — covered by RootPathsEqual_OnPosix_IsCaseSensitive.
+        Assert.True(IndexBootstrapService.RootPathsEqual(@"\\?\C:\Source\AccessIQ", @"C:\source\accessiq"));
+    }
+
+    [Fact]
+    public void RootPathsEqual_OnPosix_IsCaseSensitive()
+    {
+        // POSIX filesystems are case-sensitive: /work/Repo and /work/repo are DIFFERENT directories, so the
+        // recorded root must not match — Windows case-folding must never leak to POSIX.
+        if (OperatingSystem.IsWindows() || OperatingSystem.IsMacOS())
+            return;
+        Assert.False(IndexBootstrapService.RootPathsEqual("/work/Repo", "/work/repo"));
     }
 
     // ---- auto-rebuild: an incompatible-but-root-matching DB force-rescans once instead of crashing startup ----

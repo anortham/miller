@@ -41,6 +41,18 @@ public sealed class WorkspaceIdTests
     }
 
     [Fact]
+    public void FromCanonicalRoot_StripsWindowsVerbatimPrefix_BeforeHashing()
+    {
+        string clean = WorkspaceId.FromCanonicalRoot(@"C:\source\miller");
+        string verbatim = WorkspaceId.FromCanonicalRoot(@"\\?\C:\source\miller");
+        string unc = WorkspaceId.FromCanonicalRoot(@"\\server\share\repo");
+        string verbatimUnc = WorkspaceId.FromCanonicalRoot(@"\\?\UNC\server\share\repo");
+
+        Assert.Equal(clean, verbatim);
+        Assert.Equal(unc, verbatimUnc);
+    }
+
+    [Fact]
     public void Display_UsesSanitizedLeafAndShortHashPrefix()
     {
         const string id = "a0efc97f7ea34ca9673db9e8a54459b869b3de0f386f8140de8177c6b947a311";
