@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Miller.Core.Freshness;
 using Miller.Indexing;
 using Miller.Server.Logging;
+using Miller.Server.Workspaces;
 
 // IndexBootstrapService + WorkspaceContext live in the Miller.Server namespace (M2).
 using Miller.Server;
@@ -36,6 +37,7 @@ public sealed class IndexerService : BackgroundService
     private readonly ILoggerFactory _loggerFactory;
     private readonly Func<string, IDisposable?> _tryAcquireLeadership;
     private readonly Func<WorkspaceContext, string, string, IExtractOps> _createOps;
+    private readonly Func<string, bool> _drainFullScanRequests;
     private readonly TimeSpan _leaderRetryInterval;
     private readonly bool _attachFileWatchers;
 
@@ -80,7 +82,8 @@ public sealed class IndexerService : BackgroundService
             DefaultLeaderRetryInterval,
             sidecar,
             contentSidecar,
-            attachFileWatchers: true)
+            attachFileWatchers: true,
+            drainFullScanRequests: LeaderScanRequestQueue.DrainFullScanRequests)
     {
     }
 
@@ -93,7 +96,8 @@ public sealed class IndexerService : BackgroundService
         TimeSpan leaderRetryInterval,
         SymbolSearchSidecar sidecar,
         ContentCorpusSidecar? contentSidecar = null,
-        bool attachFileWatchers = true)
+        bool attachFileWatchers = true,
+        Func<string, bool>? drainFullScanRequests = null)
     {
         ArgumentNullException.ThrowIfNull(bootstrap);
         ArgumentNullException.ThrowIfNull(logger);
@@ -109,6 +113,7 @@ public sealed class IndexerService : BackgroundService
         _loggerFactory = loggerFactory;
         _tryAcquireLeadership = tryAcquireLeadership;
         _createOps = createOps;
+        _drainFullScanRequests = drainFullScanRequests ?? LeaderScanRequestQueue.DrainFullScanRequests;
         _leaderRetryInterval = leaderRetryInterval;
         _sidecar = sidecar;
         _contentSidecar = contentSidecar ?? new ContentCorpusSidecar();
@@ -209,6 +214,8 @@ public sealed class IndexerService : BackgroundService
 
                 try
                 {
+                    TryProcessLeaderFullScanRequests(millerDir);
+
                     // Hold _opsGate across the drain so the debounce-loop drain and the on-demand Try* scans
                     // (TryScanAsLeader / TryReindexAsLeader) share ONE serialization: two julie `extract`
                     // subprocesses must never run against the same .miller DB at once (the M3 single-writer
@@ -344,34 +351,62 @@ public sealed class IndexerService : BackgroundService
     {
         lock (_opsGate)
         {
-            if (_ops is not { } ops)
-                return ScanOutcome.NotLeader; // not the leader — must not write (M3 single-writer guard)
-
-            ExtractReport report;
-            try
-            {
-                report = ops.Scan(force);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex,
-                    "On-demand {Kind} scan failed; keeping the prior index (the next scan/poll reconciles).",
-                    force ? "full (force)" : "refresh (delta)");
-                return ScanOutcome.Failed;
-            }
-
-            if (PartialExtractLog.DescribePartial(report) is { } partial)
-                _logger.LogWarning(
-                    "On-demand {Kind} scan: {Partial}", force ? "full (force)" : "refresh (delta)", partial);
-
-            // Converge derived sidecars after a successful scan, still under _opsGate. Deliberately OUTSIDE the
-            // scan's try/catch so sidecar issues can never be misreported as scan failures. Some pure unit seams
-            // publish fake ops without seeding bootstrap workspace state; those still test scan dispatch only.
-            if (TryGetWorkspaceForSidecarConvergence() is { CanonicalExtractDbPath: { } symbolsDbPath })
-                TryConvergeSidecar(symbolsDbPath, report, fullRebuild: true);
-
-            return ScanOutcome.Scanned(report);
+            return ScanAsLeaderUnderGate(force, "On-demand");
         }
+    }
+
+    private bool TryProcessLeaderFullScanRequests(string millerDir)
+    {
+        bool requested;
+        try
+        {
+            requested = _drainFullScanRequests(millerDir);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            _logger.LogWarning(ex, "Leader full-scan request drain failed; will retry on a later tick.");
+            return false;
+        }
+
+        if (!requested)
+            return false;
+
+        lock (_opsGate)
+        {
+            ScanOutcome outcome = ScanAsLeaderUnderGate(force: true, source: "Leader-requested");
+            return outcome.Result == ScanOutcome.Kind.Scanned;
+        }
+    }
+
+    private ScanOutcome ScanAsLeaderUnderGate(bool force, string source)
+    {
+        if (_ops is not { } ops)
+            return ScanOutcome.NotLeader; // not the leader — must not write (M3 single-writer guard)
+
+        ExtractReport report;
+        try
+        {
+            report = ops.Scan(force);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "{Source} {Kind} scan failed; keeping the prior index (the next scan/poll reconciles).",
+                source, force ? "full (force)" : "refresh (delta)");
+            return ScanOutcome.Failed;
+        }
+
+        if (PartialExtractLog.DescribePartial(report) is { } partial)
+            _logger.LogWarning(
+                "{Source} {Kind} scan: {Partial}", source, force ? "full (force)" : "refresh (delta)", partial);
+
+        // Converge derived sidecars after a successful scan, still under _opsGate. Deliberately OUTSIDE the
+        // scan's try/catch so sidecar issues can never be misreported as scan failures. Some pure unit seams
+        // publish fake ops without seeding bootstrap workspace state; those still test scan dispatch only.
+        if (TryGetWorkspaceForSidecarConvergence() is { CanonicalExtractDbPath: { } symbolsDbPath })
+            TryConvergeSidecar(symbolsDbPath, report, fullRebuild: true);
+
+        return ScanOutcome.Scanned(report);
     }
 
     private WorkspaceContext? TryGetWorkspaceForSidecarConvergence()
@@ -501,6 +536,14 @@ public sealed class IndexerService : BackgroundService
         lock (_opsGate)
             core.DrainAndProcess(headChanged);
     }
+
+    /// <summary>
+    /// Test seam: drain leader full-scan request files and service them through the same force-scan path the
+    /// production debounce loop uses. Requires <see cref="PublishOpsForTest"/> when the caller expects a scan.
+    /// Not used in production.
+    /// </summary>
+    internal bool ProcessLeaderFullScanRequestsForTest(string millerDir) =>
+        TryProcessLeaderFullScanRequests(millerDir);
 
     private void AttachWatchers(string canonicalRoot)
     {

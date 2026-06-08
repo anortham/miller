@@ -186,6 +186,74 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
     }
 
     [Fact]
+    public void Refresh_ForceLockBusy_RequestsLeaderFullScanAndReturnsRefreshedWhenRevisionAppears()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("busy-force-request");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        File.WriteAllText(dbPath, "readable index placeholder");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 7);
+        int scanCount = 0;
+        int requestCount = 0;
+        int pollCount = 0;
+        var clock = new FakeClock();
+        var service = NewService(
+            registry,
+            scan: (_, _, _) =>
+            {
+                scanCount++;
+                throw new InvalidOperationException("scan should not run while the lock is busy");
+            },
+            acquireLock: _ => null,
+            readLatestRevision: _ => ++pollCount < 2 ? 7 : 8,
+            clock: clock,
+            requestFullScan: (millerDir, workspaceId, baselineRevision) =>
+            {
+                requestCount++;
+                Assert.Equal(Path.Combine(root, ".miller"), millerDir);
+                Assert.Equal("target-ws", workspaceId);
+                Assert.Equal(7, baselineRevision);
+            });
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws", force: true);
+
+        Assert.Equal(WorkspaceRefreshStatus.Refreshed, result.Status);
+        Assert.False(result.Scanned);
+        Assert.Equal(8, result.Revision);
+        Assert.Equal(0, scanCount);
+        Assert.Equal(1, requestCount);
+        Assert.Equal(8, registry.Get("target-ws")?.LastRevision);
+    }
+
+    [Fact]
+    public void Refresh_DeltaLockBusy_DoesNotRequestLeaderFullScan()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("busy-delta-no-request");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        File.WriteAllText(dbPath, "readable index placeholder");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 7);
+        int requestCount = 0;
+        var clock = new FakeClock();
+        var service = NewService(
+            registry,
+            scan: (_, _, _) => throw new InvalidOperationException("scan should not run while the lock is busy"),
+            acquireLock: _ => null,
+            readLatestRevision: _ => 7,
+            clock: clock,
+            requestFullScan: (_, _, _) => requestCount++);
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws");
+
+        Assert.Equal(WorkspaceRefreshStatus.LockBusy, result.Status);
+        Assert.Equal(0, requestCount);
+    }
+
+    [Fact]
     public void Refresh_LockBusyWithMissingDb_ReturnsMissingIndexBecauseNothingReadableCanBeServed()
     {
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
@@ -459,7 +527,8 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         Func<string, IDisposable?> acquireLock,
         Func<string, long>? readLatestRevision = null,
         FakeClock? clock = null,
-        SymbolSearchSidecar? sidecar = null)
+        SymbolSearchSidecar? sidecar = null,
+        Action<string, string, long>? requestFullScan = null)
     {
         clock ??= new FakeClock();
         return new CrossWorkspaceRefreshService(
@@ -471,7 +540,8 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
             lockBusyPollInterval: TimeSpan.FromMilliseconds(100),
             sleep: clock.Sleep,
             utcNow: clock.UtcNow,
-            sidecar: sidecar ?? SymbolSearchSidecar.Disabled);
+            sidecar: sidecar ?? SymbolSearchSidecar.Disabled,
+            requestFullScan: requestFullScan);
     }
 
     private string NewRoot(string name)

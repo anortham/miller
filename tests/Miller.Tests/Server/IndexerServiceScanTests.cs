@@ -86,9 +86,17 @@ public sealed class IndexerServiceScanTests
     // A never-started IndexerService: TryScanAsLeader reads only the published _ops under _opsGate (it never
     // touches the bootstrap), so an un-started instance is the correct, I/O-free unit-test surface. The sidecar
     // defaults OFF, so the disabled (byte-identical) path is what these no-workspace tests exercise.
-    private static IndexerService NewService() =>
-        new(new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance),
-            NullLogger<IndexerService>.Instance, NullLoggerFactory.Instance, SymbolSearchSidecar.Disabled);
+    private static IndexerService NewService(Func<string, bool>? drainFullScanRequests = null) =>
+        new(
+            new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance),
+            NullLogger<IndexerService>.Instance,
+            NullLoggerFactory.Instance,
+            tryAcquireLeadership: _ => null,
+            createOps: static (_, _, _) => throw new InvalidOperationException("not used by this test seam"),
+            leaderRetryInterval: TimeSpan.FromHours(1),
+            SymbolSearchSidecar.Disabled,
+            attachFileWatchers: false,
+            drainFullScanRequests: drainFullScanRequests);
 
     // A leader-capable instance whose bootstrap is SEEDED with a workspace (so TryScanAsLeader can read its
     // CanonicalExtractDbPath for the sidecar build) and whose sidecar gate is the caller's choice. Not started —
@@ -262,6 +270,19 @@ public sealed class IndexerServiceScanTests
 
         Assert.Equal(ScanOutcome.Kind.Scanned, outcome.Result);
         Assert.Equal(new[] { true }, ops.ScanForce); // full = from-scratch rebuild (--force)
+    }
+
+    [Fact]
+    public void ProcessLeaderFullScanRequests_WhenRequestExists_RunsForceScanAsLeader()
+    {
+        var service = NewService(drainFullScanRequests: _ => true);
+        var ops = new RecordingScanOps { Revision = 12 };
+        service.PublishOpsForTest(ops);
+
+        bool processed = service.ProcessLeaderFullScanRequestsForTest("/repo/.miller");
+
+        Assert.True(processed);
+        Assert.Equal(new[] { true }, ops.ScanForce);
     }
 
     [Fact]

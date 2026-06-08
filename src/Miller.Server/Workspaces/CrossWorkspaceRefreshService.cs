@@ -8,13 +8,16 @@ namespace Miller.Server.Workspaces;
 public sealed class CrossWorkspaceRefreshService
 {
     private static readonly TimeSpan DefaultLockBusyWait = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan DefaultFullScanRequestWait = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan DefaultLockBusyPollInterval = TimeSpan.FromMilliseconds(100);
 
     private readonly WorkspaceRegistry _registry;
     private readonly Func<string, string, bool, ExtractReport> _scan;
     private readonly Func<string, IDisposable?> _acquireLock;
     private readonly Func<string, long> _readLatestRevision;
+    private readonly Action<string, string, long> _requestFullScan;
     private readonly TimeSpan _lockBusyWait;
+    private readonly TimeSpan _fullScanRequestWait;
     private readonly TimeSpan _lockBusyPollInterval;
     private readonly Action<TimeSpan> _sleep;
     private readonly Func<DateTimeOffset> _utcNow;
@@ -33,7 +36,9 @@ public sealed class CrossWorkspaceRefreshService
             Thread.Sleep,
             () => DateTimeOffset.UtcNow,
             sidecar,
-            contentSidecar)
+            contentSidecar,
+            LeaderScanRequestQueue.RequestFullScan,
+            DefaultFullScanRequestWait)
     {
     }
 
@@ -47,7 +52,9 @@ public sealed class CrossWorkspaceRefreshService
         Action<TimeSpan> sleep,
         Func<DateTimeOffset> utcNow,
         SymbolSearchSidecar sidecar,
-        ContentCorpusSidecar? contentSidecar = null)
+        ContentCorpusSidecar? contentSidecar = null,
+        Action<string, string, long>? requestFullScan = null,
+        TimeSpan? fullScanRequestWait = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(scan);
@@ -61,12 +68,17 @@ public sealed class CrossWorkspaceRefreshService
         if (lockBusyPollInterval <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(
                 nameof(lockBusyPollInterval), lockBusyPollInterval, "Poll interval must be positive.");
+        if (fullScanRequestWait is { } requestWait && requestWait < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(
+                nameof(fullScanRequestWait), fullScanRequestWait, "Wait must be non-negative.");
 
         _registry = registry;
         _scan = scan;
         _acquireLock = acquireLock;
         _readLatestRevision = readLatestRevision;
+        _requestFullScan = requestFullScan ?? LeaderScanRequestQueue.RequestFullScan;
         _lockBusyWait = lockBusyWait;
+        _fullScanRequestWait = fullScanRequestWait ?? DefaultFullScanRequestWait;
         _lockBusyPollInterval = lockBusyPollInterval;
         _sleep = sleep;
         _utcNow = utcNow;
@@ -116,7 +128,7 @@ public sealed class CrossWorkspaceRefreshService
 
         using IDisposable? lease = _acquireLock(millerDir);
         if (lease is null)
-            return WaitForExternalRevision(row);
+            return WaitForExternalRevision(row, force, millerDir);
 
         try
         {
@@ -189,11 +201,28 @@ public sealed class CrossWorkspaceRefreshService
         }
     }
 
-    private WorkspaceRefreshResult WaitForExternalRevision(WorkspaceRegistryRow row)
+    private WorkspaceRefreshResult WaitForExternalRevision(WorkspaceRegistryRow row, bool force, string millerDir)
     {
         long baseline = row.LastRevision ?? 0;
         long? lastReadableRevision = row.LastRevision;
-        DateTimeOffset deadline = _utcNow() + _lockBusyWait;
+        string? requestWarning = null;
+
+        if (force)
+        {
+            try
+            {
+                _requestFullScan(millerDir, row.WorkspaceId, baseline);
+            }
+            catch (Exception ex) when (
+                ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                requestWarning = "Target workspace indexer lock is busy, and Miller could not write a leader " +
+                    $"full-scan request: {ex.Message}";
+            }
+        }
+
+        TimeSpan wait = force ? _fullScanRequestWait : _lockBusyWait;
+        DateTimeOffset deadline = _utcNow() + wait;
 
         while (_utcNow() < deadline)
         {
@@ -230,8 +259,11 @@ public sealed class CrossWorkspaceRefreshService
                 Error: error);
         }
 
-        string warning =
-            "Target workspace indexer lock is busy; freshness was not confirmed before serving the latest readable DB.";
+        string warning = requestWarning ??
+            (force
+                ? "Target workspace indexer lock is busy; requested the leader to run a full scan, but freshness " +
+                  "was not confirmed before serving the latest readable DB."
+                : "Target workspace indexer lock is busy; freshness was not confirmed before serving the latest readable DB.");
         return new WorkspaceRefreshResult(
             WorkspaceRefreshStatus.LockBusy,
             row.WorkspaceId,
