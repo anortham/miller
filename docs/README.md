@@ -8,6 +8,8 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`../README.md`](../README.md) - public entry point, install paths, current architecture summary, CLI surface.
 - [`../CLAUDE.md`](../CLAUDE.md) / [`../AGENTS.md`](../AGENTS.md) - source-of-truth agent working notes and generated mirror.
 - [`contracts/cli-eros-v1.md`](contracts/cli-eros-v1.md) - active Eros-facing CLI/export contract.
+- [`contracts/workspace-health-v1.md`](contracts/workspace-health-v1.md) - active workspace health JSON contract.
+- [`contracts/trace-json-v1.md`](contracts/trace-json-v1.md) - active trace JSON contract for auto/path/bridge output.
 - [`contracts/content-corpus-v1.md`](contracts/content-corpus-v1.md) - active content corpus schema/export contract.
 - [`release-process.md`](release-process.md) - current release validation and promotion flow.
 - [`release-notes/v0.3.5.md`](release-notes/v0.3.5.md) - latest published release notes.

@@ -17,6 +17,7 @@ internal static class CliCapabilities
         "inspect --json",
         "context --json",
         "impact --json",
+        "trace --json",
         "refresh --json --wait",
         "content import --json",
         "content add-markdown --json",
@@ -27,6 +28,7 @@ internal static class CliCapabilities
         "content export",
         "telemetry export --jsonl",
         "workspace status --json",
+        "workspace health --json",
         "workspace list --json",
         "workspace refresh --json",
         "workspace full --json",
@@ -41,6 +43,12 @@ internal static class CliCapabilities
         TextContentKind.WorkspaceConfig,
         TextContentKind.ExternalFile,
         TextContentKind.Web,
+    ];
+
+    private static readonly (string Name, string Command, int SchemaVersion, string Doc)[] JsonContracts =
+    [
+        ("workspace_health", "workspace health --json", 1, "docs/contracts/workspace-health-v1.md"),
+        ("trace", "trace --json", 1, "docs/contracts/trace-json-v1.md"),
     ];
 
     public static string Render(bool json)
@@ -65,12 +73,16 @@ internal static class CliCapabilities
         sb.AppendLine($"content_corpus_chunker_version: {ContentCorpusSchema.ChunkerVersion}");
         sb.AppendLine($"symbol_search_sidecar: {(sidecar.Enabled ? "enabled" : "disabled")}");
         sb.AppendLine($"source_region_index: {(sidecar.RegionOptions.Enabled ? "enabled" : "disabled")}");
+        sb.AppendLine("reference_aware_context: enabled");
         sb.AppendLine("supported_export_formats:");
         sb.AppendLine("  - content_corpus jsonl via `miller content export`");
         sb.AppendLine("  - telemetry jsonl via `miller telemetry export --jsonl`");
         sb.AppendLine("json_commands:");
         foreach (string command in JsonCommands)
             sb.AppendLine("  - " + command);
+        sb.AppendLine("json_contracts:");
+        foreach (var jsonContract in JsonContracts)
+            sb.AppendLine($"  - {jsonContract.Name} v{jsonContract.SchemaVersion}: `{jsonContract.Command}` ({jsonContract.Doc})");
         return sb.ToString().TrimEnd();
     }
 
@@ -110,6 +122,7 @@ internal static class CliCapabilities
             w.WriteBoolean("source_region_index", sidecar.RegionOptions.Enabled);
             w.WriteNumber("source_region_max_bytes", sidecar.RegionOptions.MaxRegionBytes);
             w.WriteBoolean("content_corpus", true);
+            w.WriteBoolean("reference_aware_context", true);
             w.WriteBoolean("dashboard", true);
             w.WriteEndObject();
 
@@ -117,6 +130,19 @@ internal static class CliCapabilities
             w.WriteStartArray();
             foreach (string command in JsonCommands)
                 w.WriteStringValue(command);
+            w.WriteEndArray();
+
+            w.WritePropertyName("json_contracts");
+            w.WriteStartArray();
+            foreach (var jsonContract in JsonContracts)
+            {
+                w.WriteStartObject();
+                w.WriteString("name", jsonContract.Name);
+                w.WriteString("command", jsonContract.Command);
+                w.WriteNumber("schema_version", jsonContract.SchemaVersion);
+                w.WriteString("doc", jsonContract.Doc);
+                w.WriteEndObject();
+            }
             w.WriteEndArray();
 
             w.WritePropertyName("supported_export_formats");

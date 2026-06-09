@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
@@ -427,9 +428,9 @@ public static class CliDispatch
 
     private static int Context(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
-        CliOptions o = CliOptions.Parse(args, "json");
+        CliOptions o = CliOptions.Parse(args, "json", "exclude-tests");
         if (string.IsNullOrWhiteSpace(o.Query))
-            return Usage(err, "miller context <query> [--workspace-id SELECTOR] [--workspace DIR] [--token-budget N] [--max-hops 0-2] [--json]");
+            return Usage(err, "miller context <query> [--workspace-id SELECTOR] [--workspace DIR] [--token-budget N] [--max-hops 0-2] [--reference-mode off|usage] [--reference-depth 0-1] [--exclude-tests] [--json]");
         if (!TryResolveReadContext(ctx, o, err, out ctx))
             return 2;
 
@@ -438,9 +439,34 @@ public static class CliDispatch
 
         using var graph = new SqliteSymbolGraphIndex(ctx.ExtractDbPath);
         var resolver = new SmartTargetResolver(index);
-        string output = ContextTool.Run(
-            index, graph, resolver, query: o.Query, tokenBudget: o.Int("token-budget", 4000), maxHops: o.Int("max-hops", 1),
-            entrySymbols: null, failingTest: null, stackTrace: null, json: o.Has("json"), out _, out _);
+        string referenceMode = o.Value("reference-mode", "off")!;
+        string output;
+        if (string.Equals(referenceMode, "usage", StringComparison.OrdinalIgnoreCase))
+        {
+            output = ContextTool.RunReferenceAware(
+                index, graph, resolver, query: o.Query, tokenBudget: o.Int("token-budget", 4000), maxHops: o.Int("max-hops", 1),
+                entrySymbols: null, failingTest: null, stackTrace: null,
+                referenceDepth: o.Int("reference-depth", 1), excludeTests: o.Has("exclude-tests"), json: o.Has("json"),
+                readReferences: symbol => ExtractReader.ReadReferences(ctx.ExtractDbPath, symbol.Name).Take(ContextTool.ReferenceRowsPerSymbol).ToArray(),
+                readCallees: symbol => ExtractReader.ReadCallees(ctx.ExtractDbPath, symbol.SymbolId).Take(ContextTool.ReferenceRowsPerSymbol).ToArray(),
+                readContentChunks: (symbols, excludeTests) => ContentCorpusContextReader.ReadContainingSymbolChunks(
+                    ContentCorpusSidecar.ContentDbPathFor(ctx.ExtractDbPath),
+                    symbols,
+                    excludeTests,
+                    ContextTool.ContentChunksPerSymbol),
+                out _, out _);
+        }
+        else if (string.Equals(referenceMode, "off", StringComparison.OrdinalIgnoreCase))
+        {
+            output = ContextTool.Run(
+                index, graph, resolver, query: o.Query, tokenBudget: o.Int("token-budget", 4000), maxHops: o.Int("max-hops", 1),
+                entrySymbols: null, failingTest: null, stackTrace: null, json: o.Has("json"), out _, out _);
+        }
+        else
+        {
+            err.WriteLine("reference-mode must be off or usage.");
+            return 2;
+        }
         outw.WriteLine(output);
         return 0;
     }
@@ -467,15 +493,14 @@ public static class CliDispatch
 
     private static int Trace(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
-        // trace is text-only: --full selects the compact|full form (full adds per-bridge-link signals). There is
-        // no JSON output for trace, so --json is intentionally not a flag here.
-        CliOptions o = CliOptions.Parse(args, "full");
+        CliOptions o = CliOptions.Parse(args, "full", "json");
         if (string.IsNullOrWhiteSpace(o.Query))
-            return Usage(err, "miller trace <symbol> [--workspace-id SELECTOR] [--workspace DIR] [--scope FILE] [--mode auto|path|bridge] [--to SYMBOL] [--depth N] [--limit N] [--full]");
+            return Usage(err, "miller trace <symbol> [--workspace-id SELECTOR] [--workspace DIR] [--scope FILE] [--mode auto|path|bridge] [--to SYMBOL] [--depth N] [--limit N] [--full] [--json]");
         if (!TryResolveReadContext(ctx, o, err, out ctx))
             return 2;
 
         string mode = o.Value("mode", "auto")!;
+        bool json = o.Has("json");
         if (string.Equals(mode, "bridge", StringComparison.OrdinalIgnoreCase))
         {
             if (!TryLoadIndex(ctx, err, out MillerRepositoryIndex fullIndex))
@@ -484,7 +509,7 @@ public static class CliDispatch
             var fullResolver = new SmartTargetResolver(fullIndex);
             string bridgeOutput = TraceTool.Run(
                 fullIndex, fullResolver, target: o.Query, scope: o.Value("scope"), mode: mode, to: o.Value("to"),
-                depth: o.Int("depth", 3), limit: o.Int("limit", 20), fullFormat: o.Has("full"), out _, out _);
+                depth: o.Int("depth", 3), limit: o.Int("limit", 20), fullFormat: o.Has("full"), json: json, out _, out _);
             outw.WriteLine(bridgeOutput);
             return 0;
         }
@@ -496,7 +521,7 @@ public static class CliDispatch
         var resolver = new SmartTargetResolver(index);
         string output = TraceTool.RunGraph(
             index, graph, resolver, target: o.Query, scope: o.Value("scope"), mode: mode, to: o.Value("to"),
-            depth: o.Int("depth", 3), limit: o.Int("limit", 20), fullFormat: o.Has("full"), out _, out _);
+            depth: o.Int("depth", 3), limit: o.Int("limit", 20), fullFormat: o.Has("full"), json: json, out _, out _);
         outw.WriteLine(output);
         return 0;
     }
@@ -526,6 +551,8 @@ public static class CliDispatch
                 return WorkspaceList(ctx, json, outw);
             case "status":
                 return WorkspaceStatus(ctx, id, path, json, outw, err);
+            case "health":
+                return WorkspaceHealth(ctx, id, path, json, outw, err);
             case "refresh":
                 return WorkspaceRefresh(ctx, id, path, force: false, json, outw, err);
             case "full":
@@ -535,7 +562,7 @@ public static class CliDispatch
             case "remove":
                 return WorkspaceRemove(ctx, id, path, json, outw, err);
             default:
-                err.WriteLine($"unknown workspace operation '{operation}'. Use status|list|refresh|full|open|remove.");
+                err.WriteLine($"unknown workspace operation '{operation}'. Use status|health|list|refresh|full|open|remove.");
                 return 2;
         }
     }
@@ -617,6 +644,72 @@ public static class CliDispatch
         return 0;
     }
 
+    private static int WorkspaceHealth(
+        WorkspaceContext ctx, string? id, string? path, bool json, TextWriter outw, TextWriter err)
+    {
+        using WorkspaceRegistry registry = WorkspaceRegistry.Open(ctx.RegistryDbPath);
+
+        if (!string.IsNullOrWhiteSpace(id) || !string.IsNullOrWhiteSpace(path))
+        {
+            WorkspaceRegistryRow row;
+            try
+            {
+                row = WorkspaceRegistrySelector.Resolve(registry, (id ?? path)!);
+            }
+            catch (KeyNotFoundException ex)
+            {
+                err.WriteLine(ex.Message);
+                return 2;
+            }
+
+            WorkspaceFacts facts = FactsFromRowForHealth(registry, ctx, row);
+            WorkspaceExtractionHealthFacts extraction = ReadHealthOrUnavailable(row.IndexDbPath, facts.WarningText);
+            outw.WriteLine(WorkspaceRender.Health(
+                WorkspaceHealthFacts.Create(facts, TelemetrySummary.Empty, new TelemetryHealthFacts(0, 0, 0), extraction),
+                json));
+            return 0;
+        }
+
+        WorkspaceRegistryRow? currentRow = FindCurrentWorkspaceRow(registry, ctx);
+        if (currentRow is not null)
+        {
+            WorkspaceFacts facts = FactsFromRowForHealth(registry, ctx, currentRow);
+            WorkspaceExtractionHealthFacts extraction = ReadHealthOrUnavailable(currentRow.IndexDbPath, facts.WarningText);
+            outw.WriteLine(WorkspaceRender.Health(
+                WorkspaceHealthFacts.Create(facts, TelemetrySummary.Empty, new TelemetryHealthFacts(0, 0, 0), extraction),
+                json));
+            return 0;
+        }
+
+        if (!RequireIndex(ctx, err))
+            return 3;
+        WorkspaceIndexFacts indexFacts = WorkspaceIndexFactsReader.Read(ctx.ExtractDbPath);
+        var localFacts = new WorkspaceFacts(
+            Root: ctx.WorkspaceRoot,
+            WorkspaceId: null,
+            DbPath: ctx.ExtractDbPath,
+            IsLeader: false,
+            DocumentCount: indexFacts.DocumentCount,
+            KnownExtensionsCount: indexFacts.KnownExtensionsCount,
+            BuiltRevision: 0,
+            LatestObservedRevision: 0,
+            IndexFresh: null,
+            QueueEmpty: true,
+            FreshnessStatus: "unregistered",
+            ServerVersion: MillerVersion.Current,
+            ServerProcessId: Environment.ProcessId,
+            SearchSidecar: SymbolSearchSidecar.FromEnvironment().Inspect(ctx.ExtractDbPath, expectedRevision: 0),
+            ContentCorpus: new ContentCorpusSidecar().Inspect(ctx.ExtractDbPath, expectedRevision: 0));
+        outw.WriteLine(WorkspaceRender.Health(
+            WorkspaceHealthFacts.Create(
+                localFacts,
+                TelemetrySummary.Empty,
+                new TelemetryHealthFacts(0, 0, 0),
+                WorkspaceHealthReader.Read(ctx.ExtractDbPath)),
+            json));
+        return 0;
+    }
+
     // Facts for a registered workspace: identity + revision/state from the registry row, counts from its index db.
     // Freshness is "unknown" (null) — the CLI is one-shot and does not run the freshness poller. ServerVersion is
     // THIS binary's (the responder), set so `miller workspace status` shows which build produced the output.
@@ -656,6 +749,66 @@ public static class CliDispatch
             SearchSidecar: SymbolSearchSidecar.FromEnvironment().Inspect(row.IndexDbPath, revision),
             ContentCorpus: new ContentCorpusSidecar().Inspect(row.IndexDbPath, revision));
     }
+
+    private static WorkspaceFacts FactsFromRowForHealth(WorkspaceRegistry registry, WorkspaceContext ctx, WorkspaceRegistryRow row)
+    {
+        try
+        {
+            WorkspaceFacts facts = FactsFromRow(registry, ctx, row);
+            if (facts.WarningText is not null &&
+                facts.WarningText.StartsWith("index DB not found:", StringComparison.OrdinalIgnoreCase))
+            {
+                return facts with { IndexFresh = false, FreshnessStatus = "missing_index" };
+            }
+
+            return facts;
+        }
+        catch (Exception ex) when (ex is FileNotFoundException || IsHealthIndexReadException(ex))
+        {
+            string error = ex is FileNotFoundException
+                ? $"index DB not found: {row.IndexDbPath}"
+                : $"could not read workspace index DB '{row.IndexDbPath}': {ex.Message}";
+            return new WorkspaceFacts(
+                Root: row.CanonicalRoot,
+                WorkspaceId: row.WorkspaceId,
+                DbPath: row.IndexDbPath,
+                IsLeader: false,
+                DocumentCount: 0,
+                KnownExtensionsCount: 0,
+                BuiltRevision: row.LastRevision ?? 0,
+                LatestObservedRevision: row.LastRevision ?? 0,
+                IndexFresh: false,
+                QueueEmpty: true,
+                FreshnessStatus: ex is FileNotFoundException ? "missing_index" : "unreadable_index",
+                WarningText: error,
+                DisplayId: row.DisplayId,
+                ServerVersion: MillerVersion.Current,
+                ServerProcessId: Environment.ProcessId,
+                SearchSidecar: SymbolSearchSidecar.FromEnvironment().Inspect(row.IndexDbPath, row.LastRevision ?? 0),
+                ContentCorpus: new ContentCorpusSidecar().Inspect(row.IndexDbPath, row.LastRevision ?? 0));
+        }
+    }
+
+    private static WorkspaceExtractionHealthFacts ReadHealthOrUnavailable(string dbPath, string? error)
+    {
+        try
+        {
+            return WorkspaceHealthReader.Read(dbPath);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException || IsHealthIndexReadException(ex))
+        {
+            return UnavailableExtraction(string.IsNullOrWhiteSpace(error) ? ex.Message : error);
+        }
+    }
+
+    private static WorkspaceExtractionHealthFacts UnavailableExtraction(string error) => new(
+        ParseDiagnostics: HealthFactSection<ParseDiagnosticGroup>.Unavailable(error),
+        CapabilityGaps: HealthFactSection<CapabilityGapGroup>.Unavailable(error),
+        LanguageCapabilities: HealthFactSection<LanguageCapabilitySummary>.Unavailable(error),
+        Files: HealthFactSection<FileStatusGroup>.Unavailable(error));
+
+    private static bool IsHealthIndexReadException(Exception ex) =>
+        ex is SqliteException or InvalidOperationException;
 
     private static int WorkspaceRefresh(
         WorkspaceContext ctx, string? id, string? path, bool force, bool json, TextWriter outw, TextWriter err)
@@ -1155,14 +1308,14 @@ public static class CliDispatch
           inspect <target>   List a file's symbols, or show a symbol's definition.
                              [--workspace-id SELECTOR] [--workspace DIR] [--depth summary|full] [--kind K] [--scope FILE] [--limit N] [--json]
           context <query>    Token-budgeted bundle of the most relevant code for a task.
-                             [--workspace-id SELECTOR] [--workspace DIR] [--token-budget N] [--max-hops 0-2] [--json]
+                             [--workspace-id SELECTOR] [--workspace DIR] [--token-budget N] [--max-hops 0-2] [--reference-mode off|usage] [--reference-depth 0-1] [--exclude-tests] [--json]
           impact <symbol>    Downstream symbols + tests a change would affect.
                              [--workspace-id SELECTOR] [--workspace DIR] [--max-depth N] [--limit N] [--json]
           trace <symbol>     Follow callers/callees, a path, or a cross-language bridge.
-                             [--workspace-id SELECTOR] [--workspace DIR] [--scope FILE] [--mode auto|path|bridge] [--to SYMBOL] [--depth N] [--limit N] [--full]
+                             [--workspace-id SELECTOR] [--workspace DIR] [--scope FILE] [--mode auto|path|bridge] [--to SYMBOL] [--depth N] [--limit N] [--full] [--json]
           dashboard          Start or reuse the machine-global loopback dashboard.
                              [--port N] [--json]
-          workspace [op]     Index lifecycle. op = status (default) | list | refresh | full | open | remove.
+          workspace [op]     Index lifecycle. op = status (default) | health | list | refresh | full | open | remove.
                              open   [--path DIR] [--full]   Register + index a directory (creates .miller/symbols.db).
                              remove (--id ID | --path DIR)  Delete a workspace's .miller index dir.
                              [--id DISPLAY-ID] [--path DIR] [--json]
@@ -1179,6 +1332,7 @@ public static class CliDispatch
 
         Operations:
           status   Show the live index status + build version (the default when no op is given).
+          health   Show a short workspace readiness verdict plus stable JSON with quality warnings.
           list     List every registered workspace in ~/.miller/workspaces.db.
           refresh  Incrementally refresh the index if the working tree changed.
           full     Force a full re-index (ignores the freshness check).

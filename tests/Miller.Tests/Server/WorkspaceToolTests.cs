@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
 using Miller.Indexing;
 using Miller.Server;
@@ -164,6 +165,39 @@ public sealed class WorkspaceToolTests : IDisposable
             revisions: workspaceId is null
                 ? null
                 : new[] { new JulieDbFixture.RevisionRow(revision) });
+
+    private static void SeedHealthRows(string dbPath)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+
+        Exec(connection, """
+            INSERT INTO parse_diagnostics
+                (diagnostic_id, file_id, path, language, kind, message, start_line, start_column,
+                 end_line, end_column, start_byte, end_byte, metadata_json)
+            VALUES
+                ('diag-1', 'file:src/A.cs', 'src/A.cs', 'csharp', 'parse_error', 'first', 1, 1, 1, 1, 0, 1, NULL),
+                ('diag-2', 'file:src/A.cs', 'src/A.cs', 'csharp', 'parse_error', 'second', 2, 1, 2, 1, 2, 3, NULL);
+            """);
+        Exec(connection, """
+            INSERT INTO language_capability_gaps
+                (gap_id, language, capability, status, reason, required_closure, evidence_json)
+            VALUES
+                ('gap-1', 'csharp', 'relationships', 'open', 'fixture missing', 'fixture', '{}');
+            """);
+    }
+
+    private static void Exec(SqliteConnection connection, string sql)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
+    }
 
     // A fake leader: publish recording ops so the indexer reports Scanned for refresh/full.
     private sealed class RecordingScanOps : IExtractOps
@@ -470,6 +504,129 @@ public sealed class WorkspaceToolTests : IDisposable
         Assert.Contains("other-111111111111", output);
         Assert.DoesNotContain(OtherWs, output);
         Assert.Contains("freshness: ready", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // ---- health ----
+
+    [Fact]
+    public void Health_CurrentWorkspace_RendersStatusSidecarsExtractionWarningsAndTelemetry()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        SeedHealthRows(fx.DbPath);
+        WorkspaceToolHarness harness = BuildHarness(fx, builtRevision: 4, workspaceId: Ws);
+        harness.Ledger.Record(new TelemetryRecord(
+            Tool: "search",
+            Op: null,
+            WorkspaceId: Ws,
+            WorkspaceRoot: harness.Root,
+            DurationMs: 10,
+            Outcome: "ok",
+            ErrorKind: null,
+            ResultCount: 1,
+            BytesExamined: 0,
+            BytesReturned: 0,
+            SourceBytes: 0,
+            EstTokens: 1,
+            IndexFresh: true,
+            TargetHash: null,
+            MetadataJson: "{}"));
+        harness.Ledger.Record(new TelemetryRecord(
+            Tool: "trace",
+            Op: null,
+            WorkspaceId: Ws,
+            WorkspaceRoot: harness.Root,
+            DurationMs: 20,
+            Outcome: "error",
+            ErrorKind: "InvalidOperationException",
+            ResultCount: 0,
+            BytesExamined: 0,
+            BytesReturned: 0,
+            SourceBytes: 0,
+            EstTokens: 1,
+            IndexFresh: true,
+            TargetHash: null,
+            MetadataJson: "{}"));
+
+        using var doc = JsonDocument.Parse(harness.Tool.Workspace(operation: "health", format: "json"));
+        JsonElement root = doc.RootElement;
+
+        Assert.Equal("usable_with_warnings", root.GetProperty("verdict").GetProperty("state").GetString());
+        Assert.Equal(Ws, root.GetProperty("workspace").GetProperty("workspace_id").GetString());
+        Assert.Equal(1, root.GetProperty("telemetry").GetProperty("outcomes").GetProperty("error_count").GetInt64());
+        Assert.Equal(2, root.GetProperty("extraction_quality")
+            .GetProperty("parse_diagnostics").GetProperty("rows")[0].GetProperty("count").GetInt64());
+        Assert.Equal("capability_gaps", root.GetProperty("warnings")[0].GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public void Health_ByWorkspaceId_ReadsRegisteredFactsWithoutHydratingFullIndex()
+    {
+        using var current = CreateSynth(revision: 4, workspaceId: Ws);
+        using var other = CreateSynth(revision: 9, workspaceId: OtherWs);
+        SeedHealthRows(other.DbPath);
+        SqliteFixtureMutator.DropRelationshipsTable(other.DbPath);
+        WorkspaceToolHarness harness = BuildHarness(current, builtRevision: 4, workspaceId: Ws);
+        string otherRoot = Path.GetDirectoryName(other.DbPath)!;
+        harness.Registry.UpsertSeen(OtherWs, "other-111111111111", otherRoot, other.DbPath, WorkspaceRegistryState.Ready);
+        harness.Registry.MarkScanned(OtherWs, revision: 9);
+
+        using var doc = JsonDocument.Parse(harness.Tool.Workspace(
+            operation: "health",
+            workspace_id: OtherWs,
+            format: "json"));
+
+        Assert.Equal(OtherWs, doc.RootElement.GetProperty("workspace").GetProperty("workspace_id").GetString());
+        Assert.Equal(9, doc.RootElement.GetProperty("index").GetProperty("built_revision").GetInt64());
+        Assert.Equal(2, doc.RootElement.GetProperty("extraction_quality")
+            .GetProperty("parse_diagnostics").GetProperty("rows")[0].GetProperty("count").GetInt64());
+    }
+
+    [Fact]
+    public void Health_MissingIndex_ReturnsUnavailableVerdictAndMarksRegistry()
+    {
+        using var current = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(current, builtRevision: 4, workspaceId: Ws);
+        string otherRoot = NewTempDir("health-missing-db");
+        string missingDb = Path.Combine(otherRoot, ".miller", "symbols.db");
+        harness.Registry.UpsertSeen(OtherWs, "other-111111111111", otherRoot, missingDb, WorkspaceRegistryState.Ready);
+        harness.Registry.MarkScanned(OtherWs, revision: 9);
+
+        using var doc = JsonDocument.Parse(harness.Tool.Workspace(
+            operation: "health",
+            workspace_id: OtherWs,
+            format: "json"));
+
+        Assert.Equal("unavailable", doc.RootElement.GetProperty("verdict").GetProperty("state").GetString());
+        Assert.Contains(missingDb, doc.RootElement.GetProperty("warnings")[0].GetProperty("message").GetString(),
+            StringComparison.Ordinal);
+        WorkspaceRegistryRow? row = harness.Registry.Get(OtherWs);
+        Assert.NotNull(row);
+        Assert.Equal(WorkspaceRegistryState.Missing, row.State);
+    }
+
+    [Fact]
+    public void Health_CorruptIndex_ReturnsUnavailableVerdict()
+    {
+        using var current = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(current, builtRevision: 4, workspaceId: Ws);
+        string otherRoot = NewTempDir("health-corrupt-db");
+        string millerDir = Path.Combine(otherRoot, ".miller");
+        Directory.CreateDirectory(millerDir);
+        string corruptDb = Path.Combine(millerDir, "symbols.db");
+        File.WriteAllText(corruptDb, "not a sqlite database");
+        harness.Registry.UpsertSeen(OtherWs, "other-111111111111", otherRoot, corruptDb, WorkspaceRegistryState.Ready);
+        harness.Registry.MarkScanned(OtherWs, revision: 9);
+
+        string output = harness.Tool.Workspace(
+            operation: "health",
+            workspace_id: OtherWs,
+            format: "json");
+        using var doc = JsonDocument.Parse(output);
+
+        Assert.DoesNotContain("workspace failed", output, StringComparison.Ordinal);
+        Assert.Equal("unavailable", doc.RootElement.GetProperty("verdict").GetProperty("state").GetString());
+        Assert.Contains("could not read", doc.RootElement.GetProperty("warnings")[0].GetProperty("message").GetString(),
+            StringComparison.OrdinalIgnoreCase);
     }
 
     // ---- open / remove arg guards ----

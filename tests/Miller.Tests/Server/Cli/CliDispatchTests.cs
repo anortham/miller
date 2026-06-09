@@ -232,6 +232,7 @@ public sealed class CliDispatchTests : IDisposable
 
         JsonElement optional = root.GetProperty("optional_features");
         Assert.True(optional.GetProperty("content_corpus").GetBoolean());
+        Assert.True(optional.GetProperty("reference_aware_context").GetBoolean());
         Assert.True(optional.TryGetProperty("symbol_search_sidecar", out _));
         Assert.True(optional.TryGetProperty("source_region_index", out _));
 
@@ -240,12 +241,19 @@ public sealed class CliDispatchTests : IDisposable
             .Select(static item => item.GetString()!)
             .ToArray();
         Assert.Contains("workspace status --json", commands);
+        Assert.Contains("workspace health --json", commands);
         Assert.Contains("workspace refresh --json", commands);
         Assert.Contains("refresh --json --wait", commands);
         Assert.Contains("content export", commands);
         Assert.Contains("telemetry export --jsonl", commands);
         Assert.Contains("impact --json", commands);
-        Assert.DoesNotContain("trace --json", commands);
+        Assert.Contains("trace --json", commands);
+
+        JsonElement traceContract = Assert.Single(
+            root.GetProperty("json_contracts").EnumerateArray(),
+            item => item.GetProperty("name").GetString() == "trace");
+        Assert.Equal("trace --json", traceContract.GetProperty("command").GetString());
+        Assert.Equal(1, traceContract.GetProperty("schema_version").GetInt32());
 
         JsonElement[] exports = root.GetProperty("supported_export_formats").EnumerateArray().ToArray();
         JsonElement export = Assert.Single(exports, item => item.GetProperty("name").GetString() == "content_corpus");
@@ -996,6 +1004,29 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void Context_ReferenceModeUsage_JsonIncludesReasonAndConfidence()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+
+        var (code, outText, errText) = Run(
+            new[] { "context", "GetUser", "--reference-mode", "usage", "--max-hops", "0", "--token-budget", "100000", "--json" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using var doc = JsonDocument.Parse(outText);
+        var bundle = doc.RootElement.GetProperty("bundle");
+        Assert.Contains(bundle.EnumerateArray(), item =>
+            item.GetProperty("reason").GetString() == "possible_reference"
+            && item.GetProperty("confidence").GetString() == "name_based"
+            && item.GetProperty("file").GetString() == "web/Controller.cs");
+        Assert.Contains(bundle.EnumerateArray(), item =>
+            item.GetProperty("reason").GetString() == "callee_identifier"
+            && item.GetProperty("confidence").GetString() == "containing_symbol"
+            && item.GetProperty("name").GetString() == "Find");
+    }
+
+    [Fact]
     public void Impact_Symbol_RendersDependents()
     {
         using var fx = JulieDbFixture.CreateForInspect();
@@ -1061,6 +1092,29 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void Trace_Auto_Json_UsesSymbolProjectionAndSqliteGraphWithoutFullGraphLoad()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        SqliteFixtureMutator.DropTypeArgumentsTable(fx.DbPath);
+
+        var (code, outText, errText) = Run(
+            new[] { "trace", "GetUser", "--depth", "1", "--json" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using var doc = JsonDocument.Parse(outText);
+        JsonElement root = doc.RootElement;
+        Assert.Equal("auto", root.GetProperty("mode").GetString());
+        Assert.Equal("GetUser", root.GetProperty("target").GetString());
+        Assert.Equal("GetUser", root.GetProperty("resolved_target").GetProperty("name").GetString());
+        Assert.Contains(
+            root.GetProperty("nodes").EnumerateArray(),
+            node => node.GetProperty("name").GetString() == "Find" &&
+                    node.GetProperty("file").GetString() == "auth/Repo.cs");
+    }
+
+    [Fact]
     public void Trace_Path_UsesSymbolProjectionAndSqliteGraphWithoutFullGraphLoad()
     {
         using var fx = JulieDbFixture.CreateForInspect();
@@ -1075,6 +1129,28 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Contains("# trace path GetUser -> Find", outText);
         Assert.Contains("GetUser", outText);
         Assert.Contains("Find", outText);
+    }
+
+    [Fact]
+    public void Trace_Path_Json_UsesSymbolProjectionAndSqliteGraphWithoutFullGraphLoad()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        SqliteFixtureMutator.DropTypeArgumentsTable(fx.DbPath);
+
+        var (code, outText, errText) = Run(
+            new[] { "trace", "GetUser", "--mode", "path", "--to", "Find", "--depth", "2", "--json" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using var doc = JsonDocument.Parse(outText);
+        JsonElement root = doc.RootElement;
+        Assert.Equal("path", root.GetProperty("mode").GetString());
+        Assert.Equal("Find", root.GetProperty("to").GetString());
+        Assert.Equal("Find", root.GetProperty("resolved_to").GetProperty("name").GetString());
+        Assert.Contains(
+            root.GetProperty("links").EnumerateArray(),
+            link => link.GetProperty("kind").GetString() == "dependency_path");
     }
 
     [Fact]
@@ -1151,6 +1227,28 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Empty(errText);
         using JsonDocument doc = JsonDocument.Parse(outText);
         Assert.Equal(stableId, doc.RootElement.GetProperty("workspace").GetProperty("workspace_id").GetString());
+    }
+
+    [Fact]
+    public void WorkspaceHealth_Json_RendersRegisteredWorkspace()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+        SeedHealthRows(fx.DbPath);
+        SeedRegisteredWorkspace("target-ws", "target-111111111111", fx.WorkspaceRoot, fx.DbPath);
+
+        var (code, outText, errText) = Run(
+            new[] { "workspace", "health", "--id", "target-ws", "--json" },
+            Context(Path.Combine(_dir, "current", ".miller", "symbols.db")));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        JsonElement root = doc.RootElement;
+        Assert.Equal("target-ws", root.GetProperty("workspace").GetProperty("workspace_id").GetString());
+        Assert.Equal("usable_with_warnings", root.GetProperty("verdict").GetProperty("state").GetString());
+        Assert.Equal(2, root.GetProperty("extraction_quality")
+            .GetProperty("parse_diagnostics").GetProperty("rows")[0].GetProperty("count").GetInt64());
+        Assert.Equal("capability_gaps", root.GetProperty("warnings")[0].GetProperty("code").GetString());
     }
 
     [Fact]
@@ -1505,6 +1603,41 @@ public sealed class CliDispatchTests : IDisposable
         using WorkspaceRegistry registry = WorkspaceRegistry.Open(_registryDb);
         registry.UpsertSeen(workspaceId, displayId, root, dbPath, WorkspaceRegistryState.Ready);
         registry.MarkScanned(workspaceId, revision: 1);
+    }
+
+    private static void SeedHealthRows(string dbPath)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+
+        Exec(connection, """
+            INSERT INTO parse_diagnostics
+                (diagnostic_id, file_id, path, language, kind, message, start_line, start_column,
+                 end_line, end_column, start_byte, end_byte, metadata_json)
+            VALUES
+                ('diag-1', 'file:auth/UserService.cs', 'auth/UserService.cs', 'csharp', 'parse_error',
+                 'first', 1, 1, 1, 1, 0, 1, NULL),
+                ('diag-2', 'file:auth/UserService.cs', 'auth/UserService.cs', 'csharp', 'parse_error',
+                 'second', 2, 1, 2, 1, 2, 3, NULL);
+            """);
+        Exec(connection, """
+            INSERT INTO language_capability_gaps
+                (gap_id, language, capability, status, reason, required_closure, evidence_json)
+            VALUES
+                ('gap-1', 'csharp', 'relationships', 'open', 'fixture missing', 'fixture', '{}');
+            """);
+    }
+
+    private static void Exec(SqliteConnection connection, string sql)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
     }
 
     private void InsertRawRegistryRow(string workspaceId, string displayId, string root, string dbPath, long revision)

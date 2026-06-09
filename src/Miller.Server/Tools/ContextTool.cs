@@ -62,6 +62,12 @@ public sealed partial class ContextTool
         [Description("A stack trace; its symbol tokens are folded into the seeds. Optional.")]
         string? stack_trace = null,
         [Description("Output format: compact|json. Default compact.")] string format = "compact",
+        [Description("Reference enrichment mode: off|usage. Default off.")]
+        string reference_mode = "off",
+        [Description("Reference expansion depth for reference_mode=usage, clamped 0–1. Default 1.")]
+        int reference_depth = 1,
+        [Description("When reference_mode=usage, filter test symbols, test-path references, and test content chunks. Default false.")]
+        bool exclude_tests = false,
         [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")] string? workspace_id = null,
         [Description("Refresh a registered workspace before reading. Defaults true when workspace_id is supplied.")]
         bool? ensure_fresh = null)
@@ -73,9 +79,32 @@ public sealed partial class ContextTool
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
             WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
             string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
-            string output = Run(context.Index, context.Resolver,
-                query, token_budget, max_hops, entry_symbols, failing_test, stack_trace, json,
-                out int selectedCount, out int candidatesExamined);
+            int selectedCount;
+            int candidatesExamined;
+            string output;
+            switch (ParseReferenceMode(reference_mode))
+            {
+                case ReferenceMode.Off:
+                    output = Run(context.Index, context.Resolver,
+                        query, token_budget, max_hops, entry_symbols, failing_test, stack_trace, json,
+                        out selectedCount, out candidatesExamined);
+                    break;
+                case ReferenceMode.Usage:
+                    output = RunReferenceAware(context.Index, context.Index.Graph, context.Resolver,
+                        query, token_budget, max_hops, entry_symbols, failing_test, stack_trace,
+                        reference_depth, exclude_tests, json,
+                        readReferences: symbol => ExtractReader.ReadReferences(context.IndexDbPath, symbol.Name).Take(ReferenceRowsPerSymbol).ToArray(),
+                        readCallees: symbol => ExtractReader.ReadCallees(context.IndexDbPath, symbol.SymbolId).Take(ReferenceRowsPerSymbol).ToArray(),
+                        readContentChunks: (symbols, excludeTests) => ContentCorpusContextReader.ReadContainingSymbolChunks(
+                            ContentCorpusSidecar.ContentDbPathFor(context.IndexDbPath),
+                            symbols,
+                            excludeTests,
+                            ContentChunksPerSymbol),
+                        out selectedCount, out candidatesExamined);
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(reference_mode));
+            }
             output = ReadToolWorkspaceRouting.PrefixCompact(output, compactBanner);
 
             if (telemetry is not null)
@@ -106,6 +135,22 @@ public sealed partial class ContextTool
     // A generous internal reach cap so the budget — not an arbitrary count — bounds the bundle. The token pack
     // is the real limiter; this only guards against a pathological fan-out feeding the packer a huge candidate set.
     private const int ReachCap = 500;
+    internal const int ReferenceRowsPerSymbol = 12;
+    internal const int ContentChunksPerSymbol = 2;
+
+    private enum ReferenceMode
+    {
+        Off,
+        Usage,
+    }
+
+    private static ReferenceMode ParseReferenceMode(string? mode) =>
+        mode?.ToLowerInvariant() switch
+        {
+            null or "" or "off" => ReferenceMode.Off,
+            "usage" => ReferenceMode.Usage,
+            _ => throw new ArgumentException("reference_mode must be off or usage."),
+        };
 
     /// <summary>
     /// The pure execution core (no MCP/DI/telemetry; no DB — search + graph are in-memory). Builds the ordered
@@ -138,6 +183,101 @@ public sealed partial class ContextTool
         ArgumentNullException.ThrowIfNull(index);
         ArgumentNullException.ThrowIfNull(graph);
         ArgumentNullException.ThrowIfNull(resolver);
+        IReadOnlyList<Candidate> candidates = BuildCandidates(
+            index, graph, resolver, query, maxHops, entrySymbols, failingTest, stackTrace, out candidatesExamined);
+
+        if (candidates.Count == 0)
+        {
+            selectedCount = 0;
+            return json
+                ? "{\"note\":\"no seeds — nothing to anchor on. Give a query, entry_symbols, or a failing test / stack trace.\",\"bundle\":[]}"
+                : "No seeds — nothing to anchor on. Give a query, entry_symbols, or a failing test / stack trace.";
+        }
+
+        // --- 4. Cost each candidate conservatively, then pack (D6). The compact renderer groups selected rows by
+        // file path, so per-candidate costing intentionally includes the file path even though the grouped output
+        // prints it once per file. This keeps packing under budget while the rendered output gets the token savings.
+        var packCandidates = new List<PackCandidate<Candidate>>(candidates.Count);
+        foreach (var c in candidates)
+        {
+            int cost = (int)TokenEstimator.Count(CompactCostLine(c));
+            packCandidates.Add(new PackCandidate<Candidate>(c, cost));
+        }
+
+        IReadOnlyList<Candidate> selected = ContextPacker.Pack(packCandidates, tokenBudget);
+        selectedCount = selected.Count;
+
+        return json ? RenderJson(selected) : RenderCompact(selected);
+    }
+
+    internal static string RunReferenceAware(
+        ISymbolLookupIndex index, ISymbolGraphReachability graph, SmartTargetResolver resolver,
+        string query, int tokenBudget, int maxHops,
+        IReadOnlyList<string>? entrySymbols, string? failingTest, string? stackTrace,
+        int referenceDepth, bool excludeTests, bool json,
+        Func<IndexedSymbol, IReadOnlyList<SymbolRef>> readReferences,
+        Func<IndexedSymbol, IReadOnlyList<SymbolRef>> readCallees,
+        Func<IReadOnlyList<IndexedSymbol>, bool, IReadOnlyList<TextContentSearchHit>> readContentChunks,
+        out int selectedCount, out int candidatesExamined)
+    {
+        ArgumentNullException.ThrowIfNull(index);
+        ArgumentNullException.ThrowIfNull(graph);
+        ArgumentNullException.ThrowIfNull(resolver);
+        ArgumentNullException.ThrowIfNull(readReferences);
+        ArgumentNullException.ThrowIfNull(readCallees);
+        ArgumentNullException.ThrowIfNull(readContentChunks);
+
+        if (referenceDepth < 0) referenceDepth = 0;
+        if (referenceDepth > 1) referenceDepth = 1;
+
+        IReadOnlyList<Candidate> candidates = BuildCandidates(
+            index, graph, resolver, query, maxHops, entrySymbols, failingTest, stackTrace, out candidatesExamined);
+
+        if (candidates.Count == 0)
+        {
+            selectedCount = 0;
+            return json
+                ? "{\"note\":\"no seeds — nothing to anchor on. Give a query, entry_symbols, or a failing test / stack trace.\",\"bundle\":[]}"
+                : "No seeds — nothing to anchor on. Give a query, entry_symbols, or a failing test / stack trace.";
+        }
+
+        IReadOnlyList<ReferenceContextItem> items = BuildReferenceItems(
+            candidates, referenceDepth, excludeTests, readReferences, readCallees, readContentChunks);
+        var packCandidates = new List<PackCandidate<ReferenceContextItem>>(items.Count);
+        foreach (ReferenceContextItem item in items)
+            packCandidates.Add(new PackCandidate<ReferenceContextItem>(item, (int)TokenEstimator.Count(ReferenceCostLine(item))));
+
+        IReadOnlyList<ReferenceContextItem> selected = ContextPacker.Pack(packCandidates, tokenBudget);
+        selectedCount = selected.Count;
+        return json ? RenderReferenceJson(selected) : RenderReferenceCompact(selected);
+    }
+
+    /// <summary>One member of the context bundle: a symbol and its hop distance from the nearest seed (0 = seed).</summary>
+    private readonly record struct Candidate(IndexedSymbol Symbol, int Hop);
+
+    private sealed record ReferenceContextItem(
+        string ItemType,
+        string Reason,
+        string Confidence,
+        string Name,
+        string Kind,
+        string File,
+        int Line,
+        int? Hop = null,
+        string? Signature = null,
+        string? SymbolId = null,
+        string? ContainingSymbolId = null,
+        string? SourceId = null,
+        string? ChunkId = null,
+        int? LineStart = null,
+        int? LineEnd = null,
+        string? Snippet = null);
+
+    private static IReadOnlyList<Candidate> BuildCandidates(
+        ISymbolLookupIndex index, ISymbolGraphReachability graph, SmartTargetResolver resolver,
+        string query, int maxHops, IReadOnlyList<string>? entrySymbols, string? failingTest, string? stackTrace,
+        out int candidatesExamined)
+    {
         if (maxHops < 0) maxHops = 0;
         if (maxHops > 2) maxHops = 2; // D6: max_hops range 0–2
         candidatesExamined = 0;
@@ -182,12 +322,7 @@ public sealed partial class ContextTool
         }
 
         if (seedOrder.Count == 0)
-        {
-            selectedCount = 0;
-            return json
-                ? "{\"note\":\"no seeds — nothing to anchor on. Give a query, entry_symbols, or a failing test / stack trace.\",\"bundle\":[]}"
-                : "No seeds — nothing to anchor on. Give a query, entry_symbols, or a failing test / stack trace.";
-        }
+            return Array.Empty<Candidate>();
 
         // --- 2. Expand both directions to maxHops. Reach excludes the starts and returns min-hop per node. ---
         IReadOnlyList<ReachedNode> reached =
@@ -210,27 +345,116 @@ public sealed partial class ContextTool
                 candidates.Add(new Candidate(symbol, node.Hop));
         }
 
-        // --- 4. Cost each candidate conservatively, then pack (D6). The compact renderer groups selected rows by
-        // file path, so per-candidate costing intentionally includes the file path even though the grouped output
-        // prints it once per file. This keeps packing under budget while the rendered output gets the token savings.
-        var packCandidates = new List<PackCandidate<Candidate>>(candidates.Count);
-        foreach (var c in candidates)
-        {
-            int cost = (int)TokenEstimator.Count(CompactCostLine(c));
-            packCandidates.Add(new PackCandidate<Candidate>(c, cost));
-        }
-
         // D10 work proxy: the full candidate set the packer considered (seeds + reached), before truncation.
         candidatesExamined = candidates.Count;
-
-        IReadOnlyList<Candidate> selected = ContextPacker.Pack(packCandidates, tokenBudget);
-        selectedCount = selected.Count;
-
-        return json ? RenderJson(selected) : RenderCompact(selected);
+        return candidates;
     }
 
-    /// <summary>One member of the context bundle: a symbol and its hop distance from the nearest seed (0 = seed).</summary>
-    private readonly record struct Candidate(IndexedSymbol Symbol, int Hop);
+    private static IReadOnlyList<ReferenceContextItem> BuildReferenceItems(
+        IReadOnlyList<Candidate> candidates,
+        int referenceDepth,
+        bool excludeTests,
+        Func<IndexedSymbol, IReadOnlyList<SymbolRef>> readReferences,
+        Func<IndexedSymbol, IReadOnlyList<SymbolRef>> readCallees,
+        Func<IReadOnlyList<IndexedSymbol>, bool, IReadOnlyList<TextContentSearchHit>> readContentChunks)
+    {
+        var items = new List<ReferenceContextItem>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var usableCandidates = candidates
+            .Where(candidate => !excludeTests || !candidate.Symbol.IsTest)
+            .ToArray();
+
+        foreach (Candidate candidate in usableCandidates)
+        {
+            IndexedSymbol symbol = candidate.Symbol;
+            AddItem(new ReferenceContextItem(
+                ItemType: "symbol",
+                Reason: candidate.Hop == 0 ? "definition" : "graph_neighbor",
+                Confidence: "exact",
+                Name: symbol.Name,
+                Kind: symbol.Kind,
+                File: symbol.FilePath,
+                Line: symbol.StartLine,
+                Hop: candidate.Hop,
+                Signature: symbol.Signature,
+                SymbolId: symbol.SymbolId));
+        }
+
+        IReadOnlyList<IndexedSymbol> symbols = usableCandidates.Select(static candidate => candidate.Symbol).ToArray();
+        foreach (TextContentSearchHit hit in readContentChunks(symbols, excludeTests))
+        {
+            if (excludeTests && IsTestPath.Check(hit.Path ?? hit.DisplayPath))
+                continue;
+            AddItem(new ReferenceContextItem(
+                ItemType: "content_chunk",
+                Reason: "containing_chunk",
+                Confidence: symbols.Any(symbol => string.Equals(symbol.SymbolId, hit.ContainingSymbolId, StringComparison.Ordinal))
+                    ? "exact"
+                    : "name_based",
+                Name: hit.ContainingSymbolName ?? hit.DisplayPath,
+                Kind: hit.ContentKind,
+                File: hit.Path ?? hit.DisplayPath,
+                Line: hit.Line,
+                SourceId: hit.SourceId,
+                ChunkId: hit.ChunkId,
+                ContainingSymbolId: hit.ContainingSymbolId,
+                LineStart: hit.LineStart,
+                LineEnd: hit.LineEnd,
+                Snippet: hit.Snippet));
+        }
+
+        if (referenceDepth >= 1)
+        {
+            foreach (Candidate candidate in usableCandidates)
+            {
+                IndexedSymbol symbol = candidate.Symbol;
+                foreach (SymbolRef callee in readCallees(symbol))
+                {
+                    if (excludeTests && IsTestPath.Check(callee.FilePath))
+                        continue;
+                    AddItem(new ReferenceContextItem(
+                        ItemType: "identifier",
+                        Reason: "callee_identifier",
+                        Confidence: "containing_symbol",
+                        Name: callee.Name,
+                        Kind: callee.Kind,
+                        File: callee.FilePath,
+                        Line: callee.StartLine,
+                        ContainingSymbolId: callee.ContainingSymbolId));
+                }
+
+                foreach (SymbolRef reference in readReferences(symbol))
+                {
+                    if (excludeTests && IsTestPath.Check(reference.FilePath))
+                        continue;
+                    AddItem(new ReferenceContextItem(
+                        ItemType: "identifier",
+                        Reason: "possible_reference",
+                        Confidence: "name_based",
+                        Name: reference.Name,
+                        Kind: reference.Kind,
+                        File: reference.FilePath,
+                        Line: reference.StartLine,
+                        ContainingSymbolId: reference.ContainingSymbolId));
+                }
+            }
+        }
+
+        return items;
+
+        void AddItem(ReferenceContextItem item)
+        {
+            string key = item.ItemType switch
+            {
+                "symbol" => "symbol:" + item.SymbolId,
+                "content_chunk" => "chunk:" + item.SourceId + ":" + item.ChunkId,
+                "identifier" => "identifier:" + item.Reason + ":" + item.File + ":" + item.Line + ":" + item.Name + ":" + item.Kind + ":" + item.ContainingSymbolId,
+                _ => item.ItemType + ":" + item.File + ":" + item.Line + ":" + item.Name,
+            };
+            if (seen.Add(key))
+                items.Add(item);
+        }
+    }
 
     // ---------- identifier-token extraction (failing_test / stack_trace) ----------
 
@@ -335,6 +559,113 @@ public sealed partial class ContextTool
                 if (s.Signature is null) w.WriteNull("signature");
                 else w.WriteString("signature", s.Signature);
                 w.WriteString("symbol_id", s.SymbolId);
+                w.WriteEndObject();
+            }
+            w.WriteEndArray();
+            w.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    private static string ReferenceCostLine(ReferenceContextItem item)
+    {
+        var sb = new StringBuilder();
+        sb.Append(item.ItemType).Append(' ')
+          .Append(item.Reason).Append(' ')
+          .Append(item.Confidence).Append(' ')
+          .Append(item.Name).Append(' ')
+          .Append(item.Kind).Append(' ')
+          .Append(item.File).Append(':').Append(item.Line);
+        if (item.Hop is not null)
+            sb.Append(" hop=").Append(item.Hop.Value);
+        if (!string.IsNullOrEmpty(item.Signature))
+            sb.Append(' ').Append(Truncate(item.Signature!, SignatureMaxLength));
+        if (!string.IsNullOrEmpty(item.Snippet))
+            sb.Append(' ').Append(Truncate(item.Snippet!, SignatureMaxLength));
+        return sb.ToString();
+    }
+
+    private static string ReferenceCompactLine(ReferenceContextItem item)
+    {
+        var sb = new StringBuilder();
+        sb.Append("  :").Append(item.Line).Append(' ')
+          .Append(item.Name).Append(' ')
+          .Append(item.Kind)
+          .Append(" reason=").Append(item.Reason)
+          .Append(" confidence=").Append(item.Confidence);
+        if (item.Hop is not null)
+            sb.Append(" hop=").Append(item.Hop.Value);
+        if (!string.IsNullOrEmpty(item.Signature))
+            sb.Append("  ").Append(Truncate(item.Signature!, SignatureMaxLength));
+        else if (!string.IsNullOrEmpty(item.Snippet))
+            sb.Append("  ").Append(Truncate(item.Snippet!, SignatureMaxLength));
+        return sb.ToString();
+    }
+
+    private static string RenderReferenceCompact(IReadOnlyList<ReferenceContextItem> selected)
+    {
+        if (selected.Count == 0)
+            return "Bundle empty — raise token_budget.";
+
+        var sb = new StringBuilder();
+        sb.Append("# context bundle (").Append(selected.Count).Append(")\n");
+        var groups = new List<(string FilePath, List<ReferenceContextItem> Items)>();
+        foreach (ReferenceContextItem item in selected)
+        {
+            int groupIndex = groups.FindIndex(group => group.FilePath == item.File);
+            if (groupIndex >= 0)
+                groups[groupIndex].Items.Add(item);
+            else
+                groups.Add((item.File, new List<ReferenceContextItem> { item }));
+        }
+
+        foreach (var group in groups)
+        {
+            sb.Append(group.FilePath).Append(':').Append('\n');
+            foreach (ReferenceContextItem item in group.Items)
+                sb.Append(ReferenceCompactLine(item)).Append('\n');
+        }
+
+        return sb.ToString().TrimEnd('\n');
+    }
+
+    private static string RenderReferenceJson(IReadOnlyList<ReferenceContextItem> selected)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var w = new Utf8JsonWriter(buffer,
+            new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
+        {
+            w.WriteStartObject();
+            w.WritePropertyName("bundle");
+            w.WriteStartArray();
+            foreach (ReferenceContextItem item in selected)
+            {
+                w.WriteStartObject();
+                w.WriteString("item_type", item.ItemType);
+                w.WriteString("reason", item.Reason);
+                w.WriteString("confidence", item.Confidence);
+                w.WriteString("name", item.Name);
+                w.WriteString("kind", item.Kind);
+                w.WriteString("file", item.File);
+                w.WriteNumber("line", item.Line);
+                if (item.Hop is int hop)
+                    w.WriteNumber("hop", hop);
+                if (item.Signature is null) w.WriteNull("signature");
+                else w.WriteString("signature", item.Signature);
+                if (item.SymbolId is not null)
+                    w.WriteString("symbol_id", item.SymbolId);
+                if (item.ContainingSymbolId is not null)
+                    w.WriteString("containing_symbol_id", item.ContainingSymbolId);
+                if (item.SourceId is not null)
+                    w.WriteString("source_id", item.SourceId);
+                if (item.ChunkId is not null)
+                    w.WriteString("chunk_id", item.ChunkId);
+                if (item.LineStart is int lineStart)
+                    w.WriteNumber("line_start", lineStart);
+                if (item.LineEnd is int lineEnd)
+                    w.WriteNumber("line_end", lineEnd);
+                if (item.Snippet is not null)
+                    w.WriteString("snippet", item.Snippet);
                 w.WriteEndObject();
             }
             w.WriteEndArray();

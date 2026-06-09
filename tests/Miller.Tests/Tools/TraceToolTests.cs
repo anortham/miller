@@ -5,6 +5,7 @@ using Miller.Indexing;
 using Miller.Server.Resolution;
 using Miller.Server.Tools;
 using Miller.Tests;
+using System.Text.Json;
 using Xunit;
 
 namespace Miller.Tests.Tools;
@@ -118,6 +119,46 @@ public sealed class TraceToolTests
     }
 
     [Fact]
+    public void Auto_Json_RendersStructuredNeighbours()
+    {
+        var index = BuildSymbolIndex(
+            new[]
+            {
+                ("a", "Alpha", "method", "src/A.cs", 10),
+                ("b", "Beta", "method", "src/B.cs", 20),
+                ("c", "Gamma", "method", "src/C.cs", 30),
+            },
+            new[] { ("a", "b"), ("c", "a") });
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "Alpha", mode: "auto", to: null, depth: 3, limit: 20, fullFormat: false, json: true,
+            out int emitted, out int visited);
+
+        Assert.Equal(2, emitted);
+        Assert.Equal(2, visited);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement root = doc.RootElement;
+        Assert.Equal("auto", root.GetProperty("mode").GetString());
+        Assert.Equal("Alpha", root.GetProperty("target").GetString());
+        Assert.Equal(2, root.GetProperty("emitted").GetInt32());
+        Assert.Equal(2, root.GetProperty("nodes_visited").GetInt32());
+        Assert.Equal("Alpha", root.GetProperty("resolved_target").GetProperty("name").GetString());
+
+        JsonElement[] nodes = root.GetProperty("nodes").EnumerateArray().ToArray();
+        Assert.Equal(3, nodes.Length);
+        Assert.Contains(nodes, node => node.GetProperty("id").GetString() == "a" &&
+                                       node.GetProperty("role").GetString() == "target");
+        Assert.Contains(nodes, node => node.GetProperty("name").GetString() == "Beta" &&
+                                       node.GetProperty("hop").GetInt32() == 1);
+
+        JsonElement[] links = root.GetProperty("links").EnumerateArray().ToArray();
+        Assert.Equal(2, links.Length);
+        Assert.Contains(links, link => link.GetProperty("source").GetString() == "a" &&
+                                       link.GetProperty("target").GetString() == "b" &&
+                                       link.GetProperty("kind").GetString() == "neighbour");
+    }
+
+    [Fact]
     public void Auto_RespectsLimit()
     {
         var index = BuildSymbolIndex(
@@ -210,6 +251,31 @@ public sealed class TraceToolTests
         Assert.Contains("scope=<file>", outp);
     }
 
+    [Fact]
+    public void Auto_AmbiguousTarget_JsonCarriesDiagnostic()
+    {
+        var index = BuildSymbolIndex(
+            new[]
+            {
+                ("a1", "Handle", "method", "src/First.cs", 1),
+                ("a2", "Handle", "method", "src/Second.cs", 1),
+            },
+            Array.Empty<(string, string)>());
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "Handle", scope: null, mode: "auto", to: null, depth: 3, limit: 20,
+            fullFormat: false, json: true, emitted: out int emitted, nodesVisited: out _);
+
+        Assert.Equal(0, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement root = doc.RootElement;
+        Assert.Contains("Multiple candidates", root.GetProperty("note").GetString());
+        JsonElement diagnostic = Assert.Single(root.GetProperty("diagnostics").EnumerateArray());
+        Assert.Equal("ambiguous_target", diagnostic.GetProperty("code").GetString());
+        Assert.Empty(root.GetProperty("nodes").EnumerateArray());
+        Assert.Empty(root.GetProperty("links").EnumerateArray());
+    }
+
     // ---------- mode: path ----------
 
     [Fact]
@@ -246,6 +312,42 @@ public sealed class TraceToolTests
     }
 
     [Fact]
+    public void Path_Json_RendersStructuredPathLinks()
+    {
+        var index = BuildSymbolIndex(
+            new[]
+            {
+                ("a", "Alpha", "method", "src/A.cs", 1),
+                ("b", "Beta", "method", "src/B.cs", 2),
+                ("c", "Gamma", "method", "src/C.cs", 3),
+            },
+            new[] { ("a", "b"), ("b", "c") });
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "Alpha", mode: "path", to: "Gamma", depth: 5, limit: 20, fullFormat: false, json: true,
+            out int emitted, out int visited);
+
+        Assert.Equal(3, emitted);
+        Assert.Equal(3, visited);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement root = doc.RootElement;
+        Assert.Equal("path", root.GetProperty("mode").GetString());
+        Assert.Equal("Gamma", root.GetProperty("to").GetString());
+        Assert.Equal("Gamma", root.GetProperty("resolved_to").GetProperty("name").GetString());
+        Assert.Equal(2, root.GetProperty("hops").GetInt32());
+
+        JsonElement[] nodes = root.GetProperty("nodes").EnumerateArray().ToArray();
+        Assert.Equal(new[] { "Alpha", "Beta", "Gamma" }, nodes.Select(node => node.GetProperty("name").GetString()).ToArray());
+
+        JsonElement[] links = root.GetProperty("links").EnumerateArray().ToArray();
+        Assert.Equal(2, links.Length);
+        Assert.Equal("a", links[0].GetProperty("source").GetString());
+        Assert.Equal("b", links[0].GetProperty("target").GetString());
+        Assert.Equal("dependency_path", links[0].GetProperty("kind").GetString());
+        Assert.Equal(1, links[0].GetProperty("hop").GetInt32());
+    }
+
+    [Fact]
     public void Path_NoConnection_CleanMessage()
     {
         // a and c are not connected.
@@ -263,6 +365,32 @@ public sealed class TraceToolTests
 
         Assert.Equal(0, emitted);
         Assert.Contains("No path from 'Alpha' to 'Gamma'", outp);
+    }
+
+    [Fact]
+    public void Path_NoConnection_JsonCarriesDiagnostic()
+    {
+        var index = BuildSymbolIndex(
+            new[]
+            {
+                ("a", "Alpha", "method", "src/A.cs", 1),
+                ("c", "Gamma", "method", "src/C.cs", 3),
+            },
+            Array.Empty<(string, string)>());
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "Alpha", mode: "path", to: "Gamma", depth: 5, limit: 20, fullFormat: false, json: true,
+            out int emitted, out int visited);
+
+        Assert.Equal(0, emitted);
+        Assert.Equal(0, visited);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement root = doc.RootElement;
+        Assert.Contains("No path from 'Alpha' to 'Gamma'", root.GetProperty("note").GetString());
+        Assert.Equal("Alpha", root.GetProperty("resolved_target").GetProperty("name").GetString());
+        Assert.Equal("Gamma", root.GetProperty("resolved_to").GetProperty("name").GetString());
+        JsonElement diagnostic = Assert.Single(root.GetProperty("diagnostics").EnumerateArray());
+        Assert.Equal("no_path", diagnostic.GetProperty("code").GetString());
     }
 
     [Fact]
@@ -339,6 +467,74 @@ public sealed class TraceToolTests
         Assert.Contains("0.95 (High)", outp);
         Assert.Contains("ApplicationUser  --DbSet-->  ApplicationUsers", outp);
         Assert.Contains("0.90 (High)", outp);
+    }
+
+    [Fact]
+    public void Bridge_Json_RendersProviderNodesLinksConfidenceAndFlags()
+    {
+        string tableNodeId = BridgeGraph.SynthesizeId(BridgeNodeKind.DbTable, "ApplicationUsers");
+        var dtoEntity = MakeScored(
+            BridgeKind.MapsTo,
+            SymbolRef("dto", "UserDto", "src/UserDto.cs"),
+            SymbolRef("ent", "ApplicationUser", "src/ApplicationUser.cs"),
+            ConfidenceBand.High, 0.95,
+            signals: new Signal[] { new StructuralSignal(SignalRule.CreateMap, Present: true, new Evidence("src/Profile.cs", 7)) });
+        var entityTable = MakeScored(
+            BridgeKind.StoredIn,
+            SymbolRef("ent", "ApplicationUser", "src/ApplicationUser.cs"),
+            NonSymbolRef("ApplicationUsers"),
+            ConfidenceBand.Medium, 0.75, ambiguous: true, verbUnknown: true,
+            signals: new Signal[] { new NameResolutionSignal(EndpointSide.Target, ResolutionStatus.Ambiguous, MatchCount: 2) });
+
+        var extra = new Dictionary<string, BridgeNode>(StringComparer.Ordinal)
+        {
+            [tableNodeId] = new BridgeNode(tableNodeId, BridgeNodeKind.DbTable, "ApplicationUsers", null, 0),
+        };
+        var capability = new BridgeCapabilityReport(
+            ActiveProviders: ["dotnet-web"],
+            SkippedProviders: [new BridgeProviderSkip("other-provider", "disabled")],
+            Notes: ["dotnet-web bridge evidence loaded"],
+            EvidenceCounts: new Dictionary<string, int>(StringComparer.Ordinal) { ["routes"] = 1 });
+        var index = BuildBridgeIndex(
+            new[] { ("dto", "UserDto", "src/UserDto.cs", 1), ("ent", "ApplicationUser", "src/ApplicationUser.cs", 2) },
+            new[] { dtoEntity, entityTable },
+            extra,
+            capability);
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "UserDto", mode: "bridge", to: null, depth: 3, limit: 20, fullFormat: false, json: true,
+            out int emitted, out int visited);
+
+        Assert.Equal(2, emitted);
+        Assert.Equal(2, visited);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement root = doc.RootElement;
+        Assert.Equal("bridge", root.GetProperty("mode").GetString());
+        Assert.Equal("UserDto", root.GetProperty("resolved_target").GetProperty("display").GetString());
+
+        JsonElement provider = root.GetProperty("provider");
+        Assert.Equal("dotnet-web", provider.GetProperty("active_providers")[0].GetString());
+        Assert.Equal("other-provider", provider.GetProperty("skipped_providers")[0].GetProperty("provider_id").GetString());
+        Assert.Equal("routes", provider.GetProperty("evidence_counts")[0].GetProperty("name").GetString());
+
+        JsonElement[] nodes = root.GetProperty("nodes").EnumerateArray().ToArray();
+        Assert.Contains(nodes, node => node.GetProperty("id").GetString() == tableNodeId &&
+                                       node.GetProperty("kind").GetString() == "db_table" &&
+                                       node.GetProperty("line").GetInt32() == 0);
+
+        JsonElement[] links = root.GetProperty("links").EnumerateArray().ToArray();
+        Assert.Equal(2, links.Length);
+        Assert.Equal("maps_to", links[0].GetProperty("kind").GetString());
+        Assert.Equal("CreateMap", links[0].GetProperty("label").GetString());
+        Assert.Equal("high", links[0].GetProperty("confidence").GetString());
+        Assert.Equal(0.95, links[0].GetProperty("score").GetDouble(), precision: 5);
+        Assert.Equal("CreateMap", links[0].GetProperty("signals")[0].GetProperty("rule").GetString());
+        Assert.Equal("src/Profile.cs", links[0].GetProperty("signals")[0].GetProperty("evidence").GetProperty("file").GetString());
+
+        Assert.Equal("stored_in", links[1].GetProperty("kind").GetString());
+        Assert.Equal("medium", links[1].GetProperty("confidence").GetString());
+        Assert.Equal(new[] { "ambiguous", "verb_unknown" },
+            links[1].GetProperty("flags").EnumerateArray().Select(flag => flag.GetString()).ToArray());
     }
 
     [Fact]
@@ -518,6 +714,33 @@ public sealed class TraceToolTests
         Assert.Equal(0, emitted);
         Assert.Contains("bridge providers active: none", outp);
         Assert.Contains("dotnet-web skipped: no dotnet-web bridge evidence", outp);
+    }
+
+    [Fact]
+    public void Bridge_NotOnBridge_JsonIncludesCapabilityDiagnostics()
+    {
+        var capability = new BridgeCapabilityReport(
+            ActiveProviders: [],
+            SkippedProviders: [new BridgeProviderSkip("dotnet-web", "no dotnet-web bridge evidence")],
+            Notes: [],
+            EvidenceCounts: new Dictionary<string, int>(StringComparer.Ordinal));
+        var index = BuildBridgeIndex(
+            new[] { ("x", "Loner", "src/Loner.cs", 1) },
+            Array.Empty<ScoredEdge>(),
+            new Dictionary<string, BridgeNode>(StringComparer.Ordinal),
+            capability);
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "Loner", mode: "bridge", to: null, depth: 3, limit: 20, fullFormat: false, json: true,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement root = doc.RootElement;
+        Assert.Contains("not on a cross-language bridge", root.GetProperty("note").GetString());
+        Assert.Equal("dotnet-web", root.GetProperty("provider").GetProperty("skipped_providers")[0].GetProperty("provider_id").GetString());
+        JsonElement diagnostic = Assert.Single(root.GetProperty("diagnostics").EnumerateArray());
+        Assert.Equal("not_on_bridge", diagnostic.GetProperty("code").GetString());
     }
 
     [Fact]

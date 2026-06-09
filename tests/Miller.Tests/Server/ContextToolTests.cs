@@ -1,9 +1,12 @@
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 using Miller.Core.Graph;
+using Miller.Core.Search;
 using Miller.Indexing;
 using Miller.Server.Resolution;
 using Miller.Server.Tools;
 using Miller.Tests;
+using Miller.Tests.Indexing;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -55,6 +58,75 @@ public sealed class ContextToolTests
 
     private static MillerRepositoryIndex EmptyIndex() =>
         MillerRepositoryIndex.Build(Array.Empty<IndexedSymbol>(), Array.Empty<GraphEdge>());
+
+    private static TextContentSearchHit SourceHit(
+        string path,
+        int line,
+        string snippet,
+        string sourceId = "source-a",
+        string chunkId = "chunk-a",
+        string? containingSymbolId = null,
+        string? containingSymbolName = null) =>
+        new(
+            sourceId,
+            chunkId,
+            TextContentKind.WorkspaceSource,
+            path,
+            Url: null,
+            DisplayPath: path,
+            Language: "csharp",
+            Score: 0.0,
+            Line: line,
+            LineStart: line,
+            LineEnd: line,
+            ByteStart: 0,
+            ByteEnd: snippet.Length,
+            Snippet: snippet,
+            SourceBytes: snippet.Length,
+            ContainingSymbolId: containingSymbolId,
+            ContainingSymbolName: containingSymbolName);
+
+    private static void WriteContentChunk(
+        string contentDbPath,
+        string chunkId,
+        string path,
+        string rawText,
+        string containingSymbolId,
+        string containingSymbolName)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = contentDbPath,
+            Mode = SqliteOpenMode.ReadWriteCreate,
+        }.ToString());
+        connection.Open();
+        using (var schema = connection.CreateCommand())
+        {
+            schema.CommandText = ContentCorpusSchema.SchemaDdl;
+            schema.ExecuteNonQuery();
+        }
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO content_chunks(
+                chunk_id, source_id, content_kind, path, url, display_path, language,
+                line_start, line_end, byte_start, byte_end, raw_text, doc_len, is_test,
+                source_bytes, containing_symbol_id, containing_symbol_name)
+            VALUES(
+                $chunk_id, $source_id, $content_kind, $path, NULL, $path, 'csharp',
+                2, 4, 20, 100, $raw_text, 12, 0,
+                $source_bytes, $containing_symbol_id, $containing_symbol_name);
+            """;
+        command.Parameters.AddWithValue("$chunk_id", chunkId);
+        command.Parameters.AddWithValue("$source_id", "source-" + path);
+        command.Parameters.AddWithValue("$content_kind", TextContentKind.WorkspaceSource);
+        command.Parameters.AddWithValue("$path", path);
+        command.Parameters.AddWithValue("$raw_text", rawText);
+        command.Parameters.AddWithValue("$source_bytes", rawText.Length);
+        command.Parameters.AddWithValue("$containing_symbol_id", containingSymbolId);
+        command.Parameters.AddWithValue("$containing_symbol_name", containingSymbolName);
+        command.ExecuteNonQuery();
+    }
 
     private static (MillerRepositoryIndex index, SmartTargetResolver resolver) BuildSharedFileFixture()
     {
@@ -375,6 +447,152 @@ public sealed class ContextToolTests
         Assert.Equal("src/Shared.cs", bundle[1].GetProperty("file").GetString());
     }
 
+    // ---- reference-aware usage mode ----
+
+    [Fact]
+    public void RunReferenceAware_Json_LabelsNameBasedReferencesAndContainingChunks()
+    {
+        var (index, resolver) = BuildFixture();
+
+        string output = ContextTool.RunReferenceAware(
+            index, index.Graph, resolver,
+            query: "zzz no lexical match zzz", tokenBudget: 100000, maxHops: 0,
+            entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
+            referenceDepth: 1, excludeTests: false, json: true,
+            readReferences: symbol => symbol.SymbolId == ServiceId
+                ? new[] { new SymbolRef("OrderService", "type_usage", "web/OrderController.cs", 12, ControllerId) }
+                : Array.Empty<SymbolRef>(),
+            readCallees: symbol => symbol.SymbolId == ServiceId
+                ? new[] { new SymbolRef("OrderRepo", "call", "src/OrderService.cs", 20, ServiceId) }
+                : Array.Empty<SymbolRef>(),
+            readContentChunks: (symbols, _) => new[]
+            {
+                SourceHit(
+                    "src/OrderService.cs",
+                    line: 15,
+                    snippet: "public void PlaceOrder() { _repo.Save(); }",
+                    containingSymbolId: ServiceId,
+                    containingSymbolName: "OrderService"),
+            },
+            out int count,
+            out int candidatesExamined);
+
+        Assert.True(count >= 4);
+        Assert.Equal(1, candidatesExamined);
+        using var doc = JsonDocument.Parse(output);
+        var bundle = doc.RootElement.GetProperty("bundle");
+        Assert.Contains(bundle.EnumerateArray(), item =>
+            item.GetProperty("item_type").GetString() == "symbol"
+            && item.GetProperty("reason").GetString() == "definition"
+            && item.GetProperty("confidence").GetString() == "exact"
+            && item.GetProperty("symbol_id").GetString() == ServiceId);
+        Assert.Contains(bundle.EnumerateArray(), item =>
+            item.GetProperty("item_type").GetString() == "identifier"
+            && item.GetProperty("reason").GetString() == "possible_reference"
+            && item.GetProperty("confidence").GetString() == "name_based"
+            && item.GetProperty("file").GetString() == "web/OrderController.cs");
+        Assert.Contains(bundle.EnumerateArray(), item =>
+            item.GetProperty("item_type").GetString() == "identifier"
+            && item.GetProperty("reason").GetString() == "callee_identifier"
+            && item.GetProperty("confidence").GetString() == "containing_symbol"
+            && item.GetProperty("name").GetString() == "OrderRepo");
+        Assert.Contains(bundle.EnumerateArray(), item =>
+            item.GetProperty("item_type").GetString() == "content_chunk"
+            && item.GetProperty("reason").GetString() == "containing_chunk"
+            && item.GetProperty("confidence").GetString() == "exact"
+            && item.GetProperty("chunk_id").GetString() == "chunk-a");
+    }
+
+    [Fact]
+    public void RunReferenceAware_Compact_RendersReasonsAndConfidence()
+    {
+        var (index, resolver) = BuildFixture();
+
+        string output = ContextTool.RunReferenceAware(
+            index, index.Graph, resolver,
+            query: "zzz no lexical match zzz", tokenBudget: 100000, maxHops: 0,
+            entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
+            referenceDepth: 1, excludeTests: false, json: false,
+            readReferences: _ => new[] { new SymbolRef("OrderService", "type_usage", "web/OrderController.cs", 12, ControllerId) },
+            readCallees: _ => Array.Empty<SymbolRef>(),
+            readContentChunks: (_, _) => Array.Empty<TextContentSearchHit>(),
+            out _, out _);
+
+        Assert.Contains("# context bundle", output);
+        Assert.Contains("reason=definition confidence=exact", output);
+        Assert.Contains("reason=possible_reference confidence=name_based", output);
+    }
+
+    [Fact]
+    public void RunReferenceAware_ExcludeTests_FiltersTestSymbolsReferencesAndChunks()
+    {
+        var (index, resolver) = BuildFixture();
+
+        string output = ContextTool.RunReferenceAware(
+            index, index.Graph, resolver,
+            query: "zzz no lexical match zzz", tokenBudget: 100000, maxHops: 1,
+            entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
+            referenceDepth: 1, excludeTests: true, json: false,
+            readReferences: _ => new[]
+            {
+                new SymbolRef("OrderService", "type_usage", "tests/OrderServiceTests.cs", 8, TestId),
+                new SymbolRef("OrderService", "type_usage", "web/OrderController.cs", 12, ControllerId),
+            },
+            readCallees: _ => Array.Empty<SymbolRef>(),
+            readContentChunks: (_, excludeTests) => new[]
+            {
+                SourceHit("tests/OrderServiceTests.cs", 5, "OrderService test reference"),
+                SourceHit("src/OrderService.cs", 15, "OrderService production chunk"),
+            }.Where(hit => !excludeTests || !IsTestPath.Check(hit.Path ?? hit.DisplayPath)).ToArray(),
+            out _, out _);
+
+        Assert.DoesNotContain("OrderServiceTests", output);
+        Assert.DoesNotContain("tests/OrderServiceTests.cs", output);
+        Assert.Contains("web/OrderController.cs", output);
+        Assert.Contains("src/OrderService.cs", output);
+    }
+
+    [Fact]
+    public void RunReferenceAware_DedupesDuplicateReferenceRows()
+    {
+        var (index, resolver) = BuildFixture();
+        var duplicate = new SymbolRef("OrderService", "type_usage", "web/OrderController.cs", 12, ControllerId);
+
+        string output = ContextTool.RunReferenceAware(
+            index, index.Graph, resolver,
+            query: "zzz no lexical match zzz", tokenBudget: 100000, maxHops: 0,
+            entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
+            referenceDepth: 1, excludeTests: false, json: true,
+            readReferences: _ => new[] { duplicate, duplicate },
+            readCallees: _ => Array.Empty<SymbolRef>(),
+            readContentChunks: (_, _) => Array.Empty<TextContentSearchHit>(),
+            out _, out _);
+
+        using var doc = JsonDocument.Parse(output);
+        int possibleReferenceCount = doc.RootElement.GetProperty("bundle").EnumerateArray()
+            .Count(item => item.GetProperty("reason").GetString() == "possible_reference");
+        Assert.Equal(1, possibleReferenceCount);
+    }
+
+    [Fact]
+    public void RunReferenceAware_ZeroBudget_ReturnsEmptyBundle()
+    {
+        var (index, resolver) = BuildFixture();
+
+        string output = ContextTool.RunReferenceAware(
+            index, index.Graph, resolver,
+            query: "zzz no lexical match zzz", tokenBudget: 0, maxHops: 0,
+            entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
+            referenceDepth: 1, excludeTests: false, json: false,
+            readReferences: _ => new[] { new SymbolRef("OrderService", "type_usage", "web/OrderController.cs", 12, ControllerId) },
+            readCallees: _ => Array.Empty<SymbolRef>(),
+            readContentChunks: (_, _) => Array.Empty<TextContentSearchHit>(),
+            out int count, out _);
+
+        Assert.Equal(0, count);
+        Assert.Equal("Bundle empty — raise token_budget.", output);
+    }
+
     // ---- routed wrapper / ctor shape ----
 
     [Fact]
@@ -396,6 +614,72 @@ public sealed class ContextToolTests
         Assert.StartsWith("workspace: target-ws\n", output);
         Assert.DoesNotContain(targetRoot, output);
         Assert.Contains("OrderService", output);
+    }
+
+    [Fact]
+    public void Context_ReferenceModeUsage_ReadsNameReferencesAndCalleesFromWorkspaceArtifact()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, fx.DbPath, "current-ws", fx.WorkspaceRoot));
+        var tool = new ContextTool(provider);
+
+        string output = tool.Context(
+            "zzz no lexical match zzz",
+            entry_symbols: new[] { "GetUser" },
+            max_hops: 0,
+            token_budget: 100000,
+            format: "json",
+            reference_mode: "usage");
+
+        using var doc = JsonDocument.Parse(output);
+        var bundle = doc.RootElement.GetProperty("bundle");
+        Assert.Contains(bundle.EnumerateArray(), item =>
+            item.GetProperty("reason").GetString() == "definition"
+            && item.GetProperty("symbol_id").GetString() == JulieDbFixture.GetUserId);
+        Assert.Contains(bundle.EnumerateArray(), item =>
+            item.GetProperty("reason").GetString() == "possible_reference"
+            && item.GetProperty("confidence").GetString() == "name_based"
+            && item.GetProperty("file").GetString() == "web/Controller.cs");
+        Assert.Contains(bundle.EnumerateArray(), item =>
+            item.GetProperty("reason").GetString() == "callee_identifier"
+            && item.GetProperty("confidence").GetString() == "containing_symbol"
+            && item.GetProperty("name").GetString() == "Find");
+    }
+
+    [Fact]
+    public void Context_ReferenceModeUsage_ReadsContainingChunksFromContentSidecar()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        WriteContentChunk(
+            ContentCorpusSidecar.ContentDbPathFor(fx.DbPath),
+            chunkId: "chunk-get-user",
+            path: "auth/UserService.cs",
+            rawText: "public User GetUser(int id)\n{\n    return _repo.Find(id);\n}",
+            containingSymbolId: JulieDbFixture.GetUserId,
+            containingSymbolName: "GetUser");
+        var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, fx.DbPath, "current-ws", fx.WorkspaceRoot));
+        var tool = new ContextTool(provider);
+
+        string output = tool.Context(
+            "zzz no lexical match zzz",
+            entry_symbols: new[] { "GetUser" },
+            max_hops: 0,
+            token_budget: 100000,
+            format: "json",
+            reference_mode: "usage");
+
+        using var doc = JsonDocument.Parse(output);
+        var bundle = doc.RootElement.GetProperty("bundle");
+        Assert.Contains(bundle.EnumerateArray(), item =>
+            item.GetProperty("item_type").GetString() == "content_chunk"
+            && item.GetProperty("reason").GetString() == "containing_chunk"
+            && item.GetProperty("confidence").GetString() == "exact"
+            && item.GetProperty("chunk_id").GetString() == "chunk-get-user"
+            && item.GetProperty("snippet").GetString()!.Contains("GetUser", StringComparison.Ordinal));
     }
 
     [Fact]

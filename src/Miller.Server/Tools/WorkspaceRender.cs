@@ -405,6 +405,254 @@ public static class WorkspaceRender
         w.WriteEndObject();
     }
 
+    // ---------- health ----------
+
+    public static string Health(WorkspaceHealthFacts facts, bool json) =>
+        json ? HealthJson(facts) : HealthCompact(facts);
+
+    private static string HealthCompact(WorkspaceHealthFacts facts)
+    {
+        WorkspaceFacts status = facts.StatusFacts;
+        var sb = new StringBuilder();
+        sb.Append("# workspace health  ").Append(WorkspaceHealthFacts.StateName(facts.State)).Append('\n');
+        sb.Append("workspace: ").Append(DisplayId(status.Root, status.WorkspaceId, status.DisplayId))
+          .Append("  ").Append(status.Root).Append('\n');
+        sb.Append("index: ").Append(FreshLabel(status))
+          .Append(" rev ").Append(status.BuiltRevision.ToString(CultureInfo.InvariantCulture))
+          .Append("  symbols ").Append(status.DocumentCount.ToString(CultureInfo.InvariantCulture))
+          .Append("  ext ").Append(status.KnownExtensionsCount.ToString(CultureInfo.InvariantCulture))
+          .Append("  queue ").Append(status.QueueEmpty ? "empty" : "pending")
+          .Append('\n');
+        if (status.SearchSidecar is { } sidecar)
+            sb.Append("search_db: ").Append(SearchSidecarLabel(sidecar)).Append('\n');
+        if (status.ContentCorpus is { } corpus)
+            sb.Append("content_db: ").Append(ContentCorpusLabel(corpus, status.BuiltRevision)).Append('\n');
+        sb.Append("quality: ")
+          .Append(ParseDiagnosticCount(facts.Extraction).ToString(CultureInfo.InvariantCulture))
+          .Append(" parse diagnostics  ")
+          .Append(OpenCapabilityGapCount(facts.Extraction).ToString(CultureInfo.InvariantCulture))
+          .Append(" open capability gaps")
+          .Append('\n');
+        sb.Append("telemetry: ")
+          .Append(facts.TelemetryHealth.TotalCalls.ToString(CultureInfo.InvariantCulture))
+          .Append(" calls  errors=")
+          .Append(facts.TelemetryHealth.ErrorCount.ToString(CultureInfo.InvariantCulture))
+          .Append("  empty=")
+          .Append(facts.TelemetryHealth.EmptyCount.ToString(CultureInfo.InvariantCulture))
+          .Append('\n');
+        if (facts.Warnings.Count > 0)
+            sb.Append("warning: ").Append(facts.Warnings[0].Message).Append('\n');
+        if (facts.RecommendedActions.Count > 0)
+            sb.Append("recommended: ").Append(facts.RecommendedActions[0]).Append('\n');
+        return sb.ToString().TrimEnd('\n');
+    }
+
+    private static string HealthJson(WorkspaceHealthFacts facts)
+    {
+        WorkspaceFacts status = facts.StatusFacts;
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var w = NewWriter(buffer))
+        {
+            w.WriteStartObject();
+
+            w.WritePropertyName("verdict");
+            w.WriteStartObject();
+            w.WriteString("state", WorkspaceHealthFacts.StateName(facts.State));
+            w.WriteString("summary", facts.Summary);
+            w.WriteEndObject();
+
+            w.WritePropertyName("workspace");
+            w.WriteStartObject();
+            w.WriteString("root", status.Root);
+            if (status.WorkspaceId is null) w.WriteNull("workspace_id");
+            else w.WriteString("workspace_id", status.WorkspaceId);
+            if (status.DisplayId is null) w.WriteNull("display_id");
+            else w.WriteString("display_id", status.DisplayId);
+            w.WriteString("db", status.DbPath);
+            w.WriteBoolean("leader", status.IsLeader);
+            if (status.ServerVersion is null) w.WriteNull("server_version");
+            else w.WriteString("server_version", status.ServerVersion);
+            if (status.ServerProcessId is { } pid) w.WriteNumber("server_pid", pid);
+            else w.WriteNull("server_pid");
+            w.WriteEndObject();
+
+            w.WritePropertyName("index");
+            w.WriteStartObject();
+            w.WriteNumber("document_count", status.DocumentCount);
+            w.WriteNumber("known_extensions", status.KnownExtensionsCount);
+            w.WriteNumber("built_revision", status.BuiltRevision);
+            w.WriteNumber("latest_revision", status.LatestObservedRevision);
+            if (status.IndexFresh is { } fresh) w.WriteBoolean("index_fresh", fresh);
+            else w.WriteNull("index_fresh");
+            if (status.FreshnessStatus is null) w.WriteNull("freshness_status");
+            else w.WriteString("freshness_status", status.FreshnessStatus);
+            if (status.WarningText is null) w.WriteNull("warning");
+            else w.WriteString("warning", status.WarningText);
+            w.WriteBoolean("queue_empty", status.QueueEmpty);
+            w.WritePropertyName("search_sidecar");
+            WriteSearchSidecarJson(w, status.SearchSidecar);
+            w.WritePropertyName("content_corpus");
+            WriteContentCorpusJson(w, status.ContentCorpus);
+            w.WriteEndObject();
+
+            w.WritePropertyName("extraction_quality");
+            WriteExtractionHealthJson(w, facts.Extraction);
+
+            w.WritePropertyName("telemetry");
+            w.WriteStartObject();
+            w.WritePropertyName("outcomes");
+            w.WriteStartObject();
+            w.WriteNumber("ok_count", facts.TelemetryHealth.OkCount);
+            w.WriteNumber("empty_count", facts.TelemetryHealth.EmptyCount);
+            w.WriteNumber("error_count", facts.TelemetryHealth.ErrorCount);
+            w.WriteNumber("total_calls", facts.TelemetryHealth.TotalCalls);
+            w.WriteEndObject();
+            w.WritePropertyName("summary");
+            using (var telemetryDoc = JsonDocument.Parse(TelemetryRender.Json(facts.Telemetry)))
+                telemetryDoc.RootElement.WriteTo(w);
+            w.WriteEndObject();
+
+            w.WritePropertyName("warnings");
+            w.WriteStartArray();
+            foreach (HealthWarning warning in facts.Warnings)
+            {
+                w.WriteStartObject();
+                w.WriteString("code", warning.Code);
+                w.WriteString("severity", warning.Severity);
+                w.WriteString("message", warning.Message);
+                w.WriteEndObject();
+            }
+            w.WriteEndArray();
+
+            w.WritePropertyName("recommended_actions");
+            w.WriteStartArray();
+            foreach (string action in facts.RecommendedActions)
+                w.WriteStringValue(action);
+            w.WriteEndArray();
+
+            w.WriteEndObject();
+        }
+        return Utf8(buffer);
+    }
+
+    private static void WriteExtractionHealthJson(Utf8JsonWriter w, WorkspaceExtractionHealthFacts facts)
+    {
+        w.WriteStartObject();
+        WriteParseDiagnosticsJson(w, facts.ParseDiagnostics);
+        WriteCapabilityGapsJson(w, facts.CapabilityGaps);
+        WriteLanguageCapabilitiesJson(w, facts.LanguageCapabilities);
+        WriteFileStatusesJson(w, facts.Files);
+        w.WriteEndObject();
+    }
+
+    private static void WriteParseDiagnosticsJson(
+        Utf8JsonWriter w,
+        HealthFactSection<ParseDiagnosticGroup> section)
+    {
+        w.WritePropertyName("parse_diagnostics");
+        w.WriteStartObject();
+        WriteSectionHeaderJson(w, section.Available, section.Error);
+        w.WritePropertyName("rows");
+        w.WriteStartArray();
+        foreach (ParseDiagnosticGroup row in section.Rows)
+        {
+            w.WriteStartObject();
+            w.WriteString("language", row.Language);
+            w.WriteString("kind", row.Kind);
+            w.WriteNumber("count", row.Count);
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+        w.WriteEndObject();
+    }
+
+    private static void WriteCapabilityGapsJson(
+        Utf8JsonWriter w,
+        HealthFactSection<CapabilityGapGroup> section)
+    {
+        w.WritePropertyName("capability_gaps");
+        w.WriteStartObject();
+        WriteSectionHeaderJson(w, section.Available, section.Error);
+        w.WritePropertyName("rows");
+        w.WriteStartArray();
+        foreach (CapabilityGapGroup row in section.Rows)
+        {
+            w.WriteStartObject();
+            w.WriteString("language", row.Language);
+            w.WriteString("capability", row.Capability);
+            w.WriteString("status", row.Status);
+            w.WriteNumber("count", row.Count);
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+        w.WriteEndObject();
+    }
+
+    private static void WriteLanguageCapabilitiesJson(
+        Utf8JsonWriter w,
+        HealthFactSection<LanguageCapabilitySummary> section)
+    {
+        w.WritePropertyName("language_capabilities");
+        w.WriteStartObject();
+        WriteSectionHeaderJson(w, section.Available, section.Error);
+        w.WritePropertyName("rows");
+        w.WriteStartArray();
+        foreach (LanguageCapabilitySummary row in section.Rows)
+        {
+            w.WriteStartObject();
+            w.WriteString("language", row.Language);
+            w.WriteNumber("target_symbols", row.TargetSymbols);
+            w.WriteNumber("actual_symbols", row.ActualSymbols);
+            w.WriteNumber("target_relationships", row.TargetRelationships);
+            w.WriteNumber("actual_relationships", row.ActualRelationships);
+            w.WriteNumber("target_pending_relationships", row.TargetPendingRelationships);
+            w.WriteNumber("actual_pending_relationships", row.ActualPendingRelationships);
+            w.WriteNumber("target_identifiers", row.TargetIdentifiers);
+            w.WriteNumber("actual_identifiers", row.ActualIdentifiers);
+            w.WriteNumber("target_types", row.TargetTypes);
+            w.WriteNumber("actual_types", row.ActualTypes);
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+        w.WriteEndObject();
+    }
+
+    private static void WriteFileStatusesJson(
+        Utf8JsonWriter w,
+        HealthFactSection<FileStatusGroup> section)
+    {
+        w.WritePropertyName("files");
+        w.WriteStartObject();
+        WriteSectionHeaderJson(w, section.Available, section.Error);
+        w.WritePropertyName("rows");
+        w.WriteStartArray();
+        foreach (FileStatusGroup row in section.Rows)
+        {
+            w.WriteStartObject();
+            w.WriteString("language", row.Language);
+            w.WriteString("status", row.Status);
+            w.WriteNumber("count", row.Count);
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+        w.WriteEndObject();
+    }
+
+    private static void WriteSectionHeaderJson(Utf8JsonWriter w, bool available, string? error)
+    {
+        w.WriteBoolean("available", available);
+        if (error is null) w.WriteNull("error");
+        else w.WriteString("error", error);
+    }
+
+    private static long ParseDiagnosticCount(WorkspaceExtractionHealthFacts facts) =>
+        facts.ParseDiagnostics.Rows.Sum(static row => row.Count);
+
+    private static long OpenCapabilityGapCount(WorkspaceExtractionHealthFacts facts) =>
+        facts.CapabilityGaps.Rows
+            .Where(static row => string.Equals(row.Status, "open", StringComparison.OrdinalIgnoreCase))
+            .Sum(static row => row.Count);
+
     // ---------- list ----------
 
     /// <summary>

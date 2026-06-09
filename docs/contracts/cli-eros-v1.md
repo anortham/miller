@@ -28,6 +28,7 @@ Required top-level fields:
 | `optional_features.source_region_index` | Whether this process will populate/search source-region text. |
 | `optional_features.source_region_max_bytes` | Per-region byte cap used when source-region indexing is enabled. |
 | `json_commands` | CLI commands with stable JSON output. |
+| `json_contracts` | Versioned JSON contracts with command, schema version, and doc path. |
 | `supported_export_formats` | Streaming export feeds supported by this build. |
 
 ## Stable JSON commands
@@ -37,6 +38,7 @@ Current `json_commands` include:
 | Command | Purpose |
 |---|---|
 | `workspace status --json` | Workspace identity, index DB path, revision/freshness facts, sidecar facts, and telemetry summary. |
+| `workspace health --json` | Workspace readiness verdict, warnings/actions, sidecar state, extraction-quality aggregates, and telemetry outcome counts. See [`workspace-health-v1.md`](workspace-health-v1.md). |
 | `workspace list --json` | Registered workspaces from `~/.miller/workspaces.db`. |
 | `workspace refresh --json` | Incremental convergence result for a registered workspace. |
 | `workspace full --json` | Forced full re-index result for a registered workspace. |
@@ -45,8 +47,9 @@ Current `json_commands` include:
 | `workspace remove --json` | Delete a workspace `.miller` index directory and unregister it. |
 | `search --json` | Symbol/default search or explicit content/source/external/web/all-text search results. |
 | `inspect --json` | File/symbol summary or full inspect result. |
-| `context --json` | Token-budgeted code bundle. |
+| `context --json` | Token-budgeted code bundle. `--reference-mode usage` adds reason/confidence-labeled usage evidence. |
 | `impact --json` | Downstream impact result for a symbol, changed paths, or diff. |
+| `trace --json` | Structured auto/path/bridge trace result. See [`trace-json-v1.md`](trace-json-v1.md). |
 | `content import --json` | Import local external text into `content.db`. |
 | `content add-markdown --json` | Import browser/fetched markdown with URL metadata into `content.db`. |
 | `content search --json` | Search content DB rows. |
@@ -57,7 +60,8 @@ Current `json_commands` include:
 | `dashboard --json` | Start/reuse the local dashboard helper and return its URL. |
 | `capabilities --json` | Discover this contract surface. |
 
-`trace` is text-only in contract v1.
+`capabilities --json` reports `optional_features.reference_aware_context=true` when `context --reference-mode usage`
+is available.
 
 The `refresh --json --wait` response uses the same action shape as `workspace refresh --json`, plus
 post-refresh artifact facts when available:
@@ -104,6 +108,10 @@ selector, and pass that selector to the read command. If B is not listed, call
 `--workspace-id all` selector is reserved for cross-workspace content/telemetry surfaces such as
 `content search --workspace-id all` and `telemetry export --workspace-id all`; it is not a symbol/code read
 selector.
+
+`miller context <query> --reference-mode usage --json` keeps the normal `bundle` array but adds mixed item types:
+`symbol`, `identifier`, and `content_chunk`. Each item includes `reason` and `confidence`; `confidence=name_based`
+means the identifier came from a same-name row and is a possible reference, not a resolved target-symbol edge.
 
 Telemetry JSONL fields:
 

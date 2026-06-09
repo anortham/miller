@@ -229,6 +229,10 @@ public sealed class TelemetryLedger : IDisposable
 
     public TelemetrySummary SummarizeForWorkspace(string? workspaceId) => Summarize(workspaceId);
 
+    public TelemetryHealthFacts SummarizeOutcomes() => SummarizeOutcomes(WorkspaceId);
+
+    public TelemetryHealthFacts SummarizeOutcomesForWorkspace(string? workspaceId) => SummarizeOutcomes(workspaceId);
+
     private TelemetrySummary Summarize(string? workspaceId)
     {
         lock (_gate)
@@ -287,6 +291,47 @@ public sealed class TelemetryLedger : IDisposable
             }
 
             return new TelemetrySummary(stats, totalCalls, windowStart, windowEnd, DroppedWrites);
+        }
+    }
+
+    private TelemetryHealthFacts SummarizeOutcomes(string? workspaceId)
+    {
+        lock (_gate)
+        {
+            if (_disposed)
+                return new TelemetryHealthFacts(0, 0, 0);
+
+            long ok = 0;
+            long empty = 0;
+            long error = 0;
+            using var command = _connection.CreateCommand();
+            command.CommandText = """
+                SELECT outcome, COUNT(*) AS calls
+                FROM tool_telemetry
+                WHERE workspace_id IS $ws
+                GROUP BY outcome;
+                """;
+            command.Parameters.AddWithValue("$ws", (object?)workspaceId ?? DBNull.Value);
+            using SqliteDataReader reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                string outcome = reader.GetString(0);
+                long calls = reader.GetInt64(1);
+                switch (outcome)
+                {
+                    case "ok":
+                        ok = calls;
+                        break;
+                    case "empty":
+                        empty = calls;
+                        break;
+                    case "error":
+                        error = calls;
+                        break;
+                }
+            }
+
+            return new TelemetryHealthFacts(ok, empty, error);
         }
     }
 

@@ -44,11 +44,15 @@ the tokens.
 - `context` — A token-budgeted bundle of the most relevant code for a task or question. Give a description of
   what you're working on (optionally a `failing_test` or `stack_trace`) and get a bounded, provenance-tagged set
   of symbols. Use for orientation in an UNFAMILIAR area; if you already know the symbol, use `inspect`.
-  Optional `workspace_id` and `ensure_fresh` route the bundle through the registry-backed provider.
+  `reference_mode=usage` is opt-in and adds reason/confidence-labeled definitions, possible name-based
+  references, call identifiers, and containing source chunks; treat `confidence=name_based` as a possible
+  reference, not an exact target-symbol edge. `exclude_tests=true` filters tests only in usage mode. Optional
+  `workspace_id` and `ensure_fresh` route the bundle through the registry-backed provider.
 - `trace` — Follow a thread of code. `mode=auto` (callers + callees), `mode=path` (shortest path from `target`
   to `to`), `mode=bridge` (cross-language chain: TS call → endpoint → DTO → entity → table). Reduced-confidence
   links are flagged `[verb-unknown]`/`[ambiguous]` — never trust an unflagged link less than a flagged one.
-  Pass `scope=<file>` to disambiguate duplicate symbol names before falling back to symbol IDs. Optional
+  Pass `format=json` when a downstream tool needs structured nodes, links, provider status, confidence, and
+  diagnostics. Pass `scope=<file>` to disambiguate duplicate symbol names before falling back to symbol IDs. Optional
   `workspace_id` and `ensure_fresh` work for cross-workspace traces. **`mode=bridge` is provider-scoped, not a
   general all-language feature: it currently covers the `dotnet-web` stack (ASP.NET controllers ↔
   TypeScript/JS client URL calls ↔ AutoMapper ↔ Entity Framework). On another stack, do not expect
@@ -67,10 +71,11 @@ the tokens.
   source. Use `content_kind=web` for web-only `search`/`list`, or `workspace_id=all` on `search` to audit all
   registered workspaces with workspace/display IDs on every hit. `export` writes deterministic JSONL chunks for
   Eros/local integration; it includes raw chunk text, so do not use it as an interactive reading shortcut.
-- `workspace` — Index lifecycle. `status` (default), `refresh` (reconcile stale files), `full` (rebuild from
-  scratch), `list`, `open` (prime a different path's index), `remove`, `dashboard` (start/reuse the local
-  loopback dashboard). `status`, `refresh`, `full`, and `remove` accept `workspace_id` or `path`; `list` shows
-  the central registry.
+- `workspace` — Index lifecycle. `status` (default), `health` (readiness verdict + quality warnings),
+  `refresh` (reconcile stale files), `full` (rebuild from scratch), `list`, `open` (prime a different path's index),
+  `remove`, `dashboard` (start/reuse the local
+  loopback dashboard). `status`, `health`, `refresh`, `full`, and `remove` accept `workspace_id` or `path`;
+  `list` shows the central registry.
 
 ## Workflows
 
@@ -98,6 +103,8 @@ the tokens.
   re-run `impact` if the surface changed.
 - **Edit a symbol**: `inspect` it → `edit …` (preview, the default) → `edit … apply=true`.
 - **Index looks stale**: `workspace refresh` (or `workspace full` to force a clean rebuild).
+- **Check index trust/readiness**: `workspace health` — reports stale/missing sidecars, parse diagnostics,
+  capability gaps, skipped content, and recent telemetry outcomes without hydrating the full graph.
 - **Need another repo**: `workspace list` → if the repo is registered, pass the displayed ID, a unique prefix,
   full ID, or root path as `workspace_id` to `search`/`inspect`/`context`/`impact`/`trace`. If it is not listed,
   run `workspace operation=open path=/absolute/repo` first, then retry the read. Use `ensure_fresh=false` only
@@ -119,8 +126,8 @@ code, paste this block into the prompt:
     - impact(target?|changed_paths?|diff?) before refactors and to choose tests.
     - edit(operation, target, ...) to preview index-aware edits (apply=true to commit).
     - content(import|add_markdown|search|read|list|remove|export, ...) for large logs, CI output, web markdown, external text, and workspace audits; use workspace_id=all for registered-workspace text audits and read bounded windows only.
-    - workspace(status|refresh|full|list|open|remove|dashboard) to refresh stale indexes, open another repo, or
-      start the local dashboard from the session.
+    - workspace(status|health|refresh|full|list|open|remove|dashboard) to check readiness, refresh stale indexes,
+      open another repo, or start the local dashboard from the session.
     Do NOT fall back to Glob/Read/Grep chains when a Miller tool fits. Miller returns targeted context in 1-2 calls.
 
 Do not use `grep`/`find`/`rg` when a Miller tool fits. Do not read a whole file before `inspect`. Do not chain

@@ -1,7 +1,9 @@
 # Miller — agent working notes
 
-Miller is a read-only .NET 10 SQLite/MCP consumer of `julie-extract` output. It does not parse
-source or use embeddings; extraction is delegated to the pinned `julie-extract` binary. See
+Miller is a read-only .NET 10 SQLite/MCP consumer of `julie-extract` output. It does not own
+tree-sitter extraction or embeddings; parser-backed extraction is delegated to the pinned
+`julie-extract` binary. Miller can re-read workspace source text for content corpus, source-region
+snippets, and explicit text search using extractor hashes/spans as freshness guards. See
 [README.md](README.md) for the current architecture and [docs/README.md](docs/README.md) for the
 current-vs-historical documentation map.
 
@@ -140,9 +142,10 @@ scripts/test.ps1 all
   status header.
 - **Eros-facing CLI/export contracts.** Keep Eros on public process/artifact contracts, not Miller private .NET
   internals. Current documented surfaces live in [`docs/contracts/cli-eros-v1.md`](docs/contracts/cli-eros-v1.md):
-  `capabilities --json`, `refresh --json --wait`, `workspace status --json`, `content export`, `telemetry export
-  --jsonl`, and stable read-command JSON such as `impact --json`. Add or harden new surfaces only when a concrete
-  Eros workflow needs facts the documented contracts do not cover.
+  `capabilities --json`, `refresh --json --wait`, `workspace status --json`, `workspace health --json`,
+  `content export`, `telemetry export --jsonl`, and stable read-command JSON such as `impact --json` and
+  `trace --json`. Add or harden new surfaces only when a concrete Eros workflow needs facts the documented
+  contracts do not cover.
 - **Logging.** All processes append to ONE shared daily pair (`.miller/logs/miller-<YYYYMMDD>.log` +
   `.jsonl`, Serilog `shared:true`); `pid`/`role`/`cid` are line properties, not file-name segments. There
   is no per-pid file and no startup reaper (both removed 2026-05-31; see the superseded D1/D6 notes in

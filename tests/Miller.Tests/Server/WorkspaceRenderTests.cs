@@ -36,6 +36,24 @@ public sealed class WorkspaceRenderTests
         TotalCalls: 11, WindowStartTs: "2026-05-01T00:00:00.000Z", WindowEndTs: "2026-05-01T01:00:00.000Z",
         DroppedWrites: 0);
 
+    private static WorkspaceExtractionHealthFacts ExtractionHealth() => new(
+        ParseDiagnostics: HealthFactSection<ParseDiagnosticGroup>.FromRows(new[]
+        {
+            new ParseDiagnosticGroup("csharp", "parse_error", 2),
+        }),
+        CapabilityGaps: HealthFactSection<CapabilityGapGroup>.FromRows(new[]
+        {
+            new CapabilityGapGroup("typescript", "relationships", "open", 1),
+        }),
+        LanguageCapabilities: HealthFactSection<LanguageCapabilitySummary>.FromRows(new[]
+        {
+            new LanguageCapabilitySummary("csharp", 8, 7, 3, 2, 1, 1, 6, 5, 2, 1),
+        }),
+        Files: HealthFactSection<FileStatusGroup>.FromRows(new[]
+        {
+            new FileStatusGroup("csharp", "indexed", 1),
+        }));
+
     // ---- status ----
 
     [Fact]
@@ -190,6 +208,75 @@ public sealed class WorkspaceRenderTests
         Assert.Equal(12, corpus.GetProperty("source_count").GetInt32());
         Assert.Equal(48, corpus.GetProperty("chunk_count").GetInt32());
         Assert.Equal(2, corpus.GetProperty("non_utf8_skipped").GetInt32());
+    }
+
+    // ---- health ----
+
+    [Fact]
+    public void Health_Compact_LeadsWithVerdictAndShortWarnings()
+    {
+        var health = new WorkspaceHealthFacts(
+            StatusFacts: Facts() with
+            {
+                SearchSidecar = new SearchSidecarFacts(
+                    "current", "/repo/.miller/search.db", Revision: 42, ExpectedRevision: 42,
+                    DocumentCount: 565, Error: null),
+                ContentCorpus = new ContentCorpusFacts(
+                    "current", "/repo/.miller/content.db", SchemaVersion: 1, WorkspaceRevision: 42,
+                    SourceCount: 12, ChunkCount: 48, IndexedSourceBytes: 1200, StoredRawBytes: 1600),
+            },
+            Telemetry: TelemetrySummary.Empty,
+            TelemetryHealth: new TelemetryHealthFacts(OkCount: 5, EmptyCount: 1, ErrorCount: 2),
+            Extraction: ExtractionHealth(),
+            Warnings: new[]
+            {
+                new HealthWarning("parse_diagnostics", "usable_with_warnings", "2 parse diagnostics reported"),
+            },
+            RecommendedActions: new[] { "inspect parse diagnostics before relying on unsupported language facts" },
+            State: HealthState.UsableWithWarnings,
+            Summary: "index readable with warnings");
+
+        string text = WorkspaceRender.Health(health, json: false);
+
+        Assert.StartsWith("# workspace health  usable_with_warnings", text, StringComparison.Ordinal);
+        Assert.Contains("workspace: ws-123  /repo", text);
+        Assert.Contains("index: fresh rev 42", text);
+        Assert.Contains("search_db: current rev 42", text);
+        Assert.Contains("content_db: current rev 42", text);
+        Assert.Contains("quality: 2 parse diagnostics  1 open capability gaps", text);
+        Assert.Contains("telemetry: 8 calls  errors=2  empty=1", text);
+        Assert.Contains("recommended: inspect parse diagnostics", text);
+    }
+
+    [Fact]
+    public void Health_Json_RendersStableSections()
+    {
+        var health = new WorkspaceHealthFacts(
+            StatusFacts: Facts(),
+            Telemetry: TelemetrySummary.Empty,
+            TelemetryHealth: new TelemetryHealthFacts(OkCount: 5, EmptyCount: 1, ErrorCount: 2),
+            Extraction: ExtractionHealth(),
+            Warnings: new[]
+            {
+                new HealthWarning("parse_diagnostics", "usable_with_warnings", "2 parse diagnostics reported"),
+            },
+            RecommendedActions: new[] { "inspect parse diagnostics" },
+            State: HealthState.UsableWithWarnings,
+            Summary: "index readable with warnings");
+
+        using var doc = JsonDocument.Parse(WorkspaceRender.Health(health, json: true));
+        JsonElement root = doc.RootElement;
+
+        Assert.Equal("usable_with_warnings", root.GetProperty("verdict").GetProperty("state").GetString());
+        Assert.Equal("ws-123", root.GetProperty("workspace").GetProperty("workspace_id").GetString());
+        Assert.Equal(565, root.GetProperty("index").GetProperty("document_count").GetInt64());
+        Assert.Equal(2, root.GetProperty("telemetry").GetProperty("outcomes").GetProperty("error_count").GetInt64());
+        Assert.Equal("csharp", root.GetProperty("extraction_quality")
+            .GetProperty("parse_diagnostics").GetProperty("rows")[0].GetProperty("language").GetString());
+        Assert.Equal("relationships", root.GetProperty("extraction_quality")
+            .GetProperty("capability_gaps").GetProperty("rows")[0].GetProperty("capability").GetString());
+        Assert.Equal("parse_diagnostics", root.GetProperty("warnings")[0].GetProperty("code").GetString());
+        Assert.Equal("inspect parse diagnostics", root.GetProperty("recommended_actions")[0].GetString());
     }
 
     // ---- list ----

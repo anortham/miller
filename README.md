@@ -140,9 +140,10 @@ dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvi
 
 ## How it works
 
-Miller does **not** parse source code itself and does **not** use embeddings. Extraction is delegated to a
-prebuilt `julie-extract` binary (Rust + tree-sitter) that writes symbols, identifiers, files, and
-relationships into a SQLite database. Miller is the pure-.NET host on top:
+Miller does not own tree-sitter extraction and does **not** use embeddings. Parser-backed extraction is
+delegated to a prebuilt `julie-extract` binary (Rust + tree-sitter) that writes symbols, identifiers, files,
+and relationships into a SQLite database. Miller is the pure-.NET host on top; it can re-read workspace source
+text for explicit content/source search and source-region snippets, guarded by extractor hashes and spans:
 
 ```
 ┌───────────────────────────┐     stdio / MCP
@@ -249,6 +250,7 @@ The single `miller` binary runs two ways:
   dotnet run --project src/Miller.Server -c Release -- trace AgentInstructions --depth 2
   dotnet run --project src/Miller.Server -c Release -- impact AgentInstructions --max-depth 2
   dotnet run --project src/Miller.Server -c Release -- workspace status
+  dotnet run --project src/Miller.Server -c Release -- workspace health --json
   dotnet run --project src/Miller.Server -c Release -- workspace list
   dotnet run --project src/Miller.Server -c Release -- version
   ```
@@ -348,6 +350,7 @@ binary:
 
 ```bash
 dotnet run --project src/Miller.Server -c Release -- workspace status
+dotnet run --project src/Miller.Server -c Release -- workspace health --json
 dotnet run --project src/Miller.Server -c Release -- workspace list
 dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvider" --limit 5
 dotnet run --project src/Miller.Server -c Release -- search "release archive" --mode content --limit 5
@@ -358,8 +361,8 @@ dotnet run --project src/Miller.Server -c Release -- impact src/Miller.Server/To
 
 What these prove:
 
-- `workspace status` and `workspace list` read cheap registry/freshness metadata instead of hydrating the full
-  graph.
+- `workspace status`, `workspace health`, and `workspace list` read cheap registry/freshness/aggregate metadata
+  instead of hydrating the full graph.
 - Symbol search stays narrow and structural (`name + signature`). Docs/config use `--mode content`; source
   bodies and imported text use the explicit content corpus modes.
 - `inspect`, `context`, and `impact` use the same projection-specific read paths exposed to MCP tools.
@@ -396,8 +399,8 @@ Text output is a compact human-facing contract and JSON output is the integratio
   workspace operation, missing restore, or another operational failure a script should not ignore.
 - `capabilities --json` reports the Miller build, `julie-extract` contract versions, optional feature flags,
   supported JSON commands, and export feeds for Eros/local integrations.
-- `--json` is supported by `search`, `inspect`, `context`, `impact`, `dashboard`, `content` operations, and
-  `workspace` operations. `trace` is text-only for now.
+- `--json` is supported by `search`, `inspect`, `context`, `impact`, `trace`, `dashboard`, `content`
+  operations, and `workspace` operations.
 - `refresh --json --wait [--workspace-id SELECTOR|--workspace DIR] [--full]` is the Eros-friendly top-level
   convergence command. It wraps the existing registered-workspace refresh path and includes sidecar facts.
 - `search`, `inspect`, `context`, `impact`, and `trace` accept `--workspace-id <selector>`; selectors are the
@@ -422,8 +425,8 @@ Text output is a compact human-facing contract and JSON output is the integratio
   reading shortcut.
 - `telemetry export --jsonl [--workspace-id ID|all]` writes machine-global telemetry rows as JSONL for local
   dashboard/history consumers. It exports stored target hashes, not raw queries.
-- Eros-facing CLI contracts live in `docs/contracts/cli-eros-v1.md`; content export fields live in
-  `docs/contracts/content-corpus-v1.md`.
+- Eros-facing CLI contracts live in `docs/contracts/cli-eros-v1.md`; trace JSON fields live in
+  `docs/contracts/trace-json-v1.md`; content export fields live in `docs/contracts/content-corpus-v1.md`.
 - Search defaults to 6 results. Compact symbol rows include name, kind, file, line, and signature when available;
   use `--limit N` when you need a wider page.
 

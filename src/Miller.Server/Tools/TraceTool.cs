@@ -57,7 +57,8 @@ public sealed class TraceTool
         "shows the shortest dependency path from target to 'to'; mode=bridge follows provider-scoped cross-language " +
         "chains (currently dotnet-web: client call to endpoint to DTO/entity/table) with a confidence band. Reduced-confidence " +
         "links are flagged [verb-unknown] / [ambiguous] — never trust an unflagged link more than a flagged one. " +
-        "Use before manual caller/callee file hopping. Pass format=full to also see the signals behind each bridge link.")]
+        "Use before manual caller/callee file hopping. Pass format=json for structured output, or format=full to also " +
+        "see the signals behind each bridge link in compact output.")]
     public string Trace(
         [Description("A symbol name/id where the trace starts. In bridge mode, route/table nodes and single-symbol files are also accepted.")]
         string target,
@@ -69,7 +70,7 @@ public sealed class TraceTool
         string? to = null,
         [Description("How many hops to follow. Default 3.")] int depth = 3,
         [Description("Max links/neighbours to return. Default 20.")] int limit = 20,
-        [Description("Output format: compact|full. full adds the firing signals per bridge link. Default compact.")]
+        [Description("Output format: compact|json|full. full adds the firing signals per bridge link in compact output. Default compact.")]
         string format = "compact",
         [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")] string? workspace_id = null,
         [Description("Refresh a registered workspace before reading. Defaults true when workspace_id is supplied.")]
@@ -78,12 +79,14 @@ public sealed class TraceTool
         var telemetry = TelemetryContext.Current;
         try
         {
+            bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
             bool full = string.Equals(format, "full", StringComparison.OrdinalIgnoreCase);
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
             WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
-            string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json: false);
+            string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
             string output = Run(context.Index, context.Resolver,
                 target, scope, mode, to, depth, limit, full,
+                json,
                 out int emitted, out int nodesVisited);
             output = ReadToolWorkspaceRouting.PrefixCompact(output, compactBanner);
 
@@ -125,6 +128,13 @@ public sealed class TraceTool
     public static string Run(
         MillerRepositoryIndex index, SmartTargetResolver resolver,
         string target, string? scope, string mode, string? to, int depth, int limit, bool fullFormat,
+        out int emitted, out int nodesVisited) =>
+        Run(index, resolver, target, scope, mode, to, depth, limit, fullFormat, json: false,
+            out emitted, out nodesVisited);
+
+    public static string Run(
+        MillerRepositoryIndex index, SmartTargetResolver resolver,
+        string target, string? scope, string mode, string? to, int depth, int limit, bool fullFormat, bool json,
         out int emitted, out int nodesVisited)
     {
         ArgumentNullException.ThrowIfNull(index);
@@ -135,18 +145,25 @@ public sealed class TraceTool
         return normalizedMode switch
         {
             ModeAuto => RunGraph(index, index.Graph, resolver, target, scope, normalizedMode, to, depth, limit, fullFormat,
-                out emitted, out nodesVisited),
+                json, out emitted, out nodesVisited),
             ModePath => RunGraph(index, index.Graph, resolver, target, scope, normalizedMode, to, depth, limit, fullFormat,
-                out emitted, out nodesVisited),
-            ModeBridge => RunBridge(index, resolver, target, scope, depth, limit, fullFormat, out emitted, out nodesVisited),
+                json, out emitted, out nodesVisited),
+            ModeBridge => RunBridge(index, resolver, target, scope, depth, limit, fullFormat, json, out emitted, out nodesVisited),
             _ =>
-                UnknownMode(mode, out emitted, out nodesVisited),
+                UnknownMode(mode, json, target, to, depth, limit, out emitted, out nodesVisited),
         };
     }
 
     public static string RunGraph(
         ISymbolLookupIndex index, ISymbolGraphReachability graph, SmartTargetResolver resolver,
         string target, string? scope, string mode, string? to, int depth, int limit, bool fullFormat,
+        out int emitted, out int nodesVisited) =>
+        RunGraph(index, graph, resolver, target, scope, mode, to, depth, limit, fullFormat, json: false,
+            out emitted, out nodesVisited);
+
+    public static string RunGraph(
+        ISymbolLookupIndex index, ISymbolGraphReachability graph, SmartTargetResolver resolver,
+        string target, string? scope, string mode, string? to, int depth, int limit, bool fullFormat, bool json,
         out int emitted, out int nodesVisited)
     {
         ArgumentNullException.ThrowIfNull(index);
@@ -161,10 +178,14 @@ public sealed class TraceTool
 
         return normalizedMode switch
         {
-            ModeAuto => RunAuto(index, graph, resolver, target, scope, depth, limit, out emitted, out nodesVisited),
-            ModePath => RunPath(index, graph, resolver, target, scope, to, depth, limit, out emitted, out nodesVisited),
-            ModeBridge => "trace mode=bridge requires the full repository bridge graph.",
-            _ => UnknownMode(mode, out emitted, out nodesVisited),
+            ModeAuto => RunAuto(index, graph, resolver, target, scope, depth, limit, json, out emitted, out nodesVisited),
+            ModePath => RunPath(index, graph, resolver, target, scope, to, depth, limit, json, out emitted, out nodesVisited),
+            ModeBridge => json
+                ? RenderTraceJson(ModeBridge, target, to, depth, limit, emitted: 0, nodesVisited: 0,
+                    note: "trace mode=bridge requires the full repository bridge graph.",
+                    diagnosticCode: "bridge_requires_full_index")
+                : "trace mode=bridge requires the full repository bridge graph.",
+            _ => UnknownMode(mode, json, target, to, depth, limit, out emitted, out nodesVisited),
         };
     }
 
@@ -174,24 +195,44 @@ public sealed class TraceTool
         out int emitted, out int nodesVisited) =>
         Run(index, resolver, target, scope: null, mode, to, depth, limit, fullFormat, out emitted, out nodesVisited);
 
+    public static string Run(
+        MillerRepositoryIndex index, SmartTargetResolver resolver,
+        string target, string mode, string? to, int depth, int limit, bool fullFormat, bool json,
+        out int emitted, out int nodesVisited) =>
+        Run(index, resolver, target, scope: null, mode, to, depth, limit, fullFormat, json,
+            out emitted, out nodesVisited);
+
     // ---------- mode: auto (callers + callees neighbourhood) ----------
 
     private static string RunAuto(
         ISymbolLookupIndex index, ISymbolGraphReachability graph, SmartTargetResolver resolver, string target, string? scope,
-        int depth, int limit, out int emitted, out int nodesVisited)
+        int depth, int limit, bool json, out int emitted, out int nodesVisited)
     {
         emitted = 0;
         nodesVisited = 0;
 
         if (!ResolveSymbol(index, resolver, target, scope, out string seedId, out string? note))
-            return note!;
+            return json
+                ? RenderTraceJson(ModeAuto, target, to: null, depth, limit, emitted, nodesVisited, note, DiagnosticCode(note!))
+                : note!;
 
         IReadOnlyList<ReachedNode> reached =
             graph.Reach([seedId], depth, limit, Direction.Both);
         nodesVisited = reached.Count;
 
         if (reached.Count == 0)
-            return $"No neighbours — nothing connects to '{target}' within {depth} hop(s).";
+        {
+            string message = $"No neighbours — nothing connects to '{target}' within {depth} hop(s).";
+            return json
+                ? RenderAutoJson(index, target, to: null, depth, limit, emitted, nodesVisited, seedId, reached, message, "no_neighbours")
+                : message;
+        }
+
+        if (json)
+        {
+            emitted = reached.Count;
+            return RenderAutoJson(index, target, to: null, depth, limit, emitted: reached.Count, nodesVisited, seedId, reached, note: null, diagnosticCode: null);
+        }
 
         var seed = index.FindBySymbolId(seedId);
         var sb = new StringBuilder();
@@ -216,25 +257,50 @@ public sealed class TraceTool
 
     private static string RunPath(
         ISymbolLookupIndex index, ISymbolGraphReachability graph, SmartTargetResolver resolver, string target, string? scope, string? to,
-        int depth, int limit, out int emitted, out int nodesVisited)
+        int depth, int limit, bool json, out int emitted, out int nodesVisited)
     {
         emitted = 0;
         nodesVisited = 0;
 
         if (string.IsNullOrWhiteSpace(to))
-            return "Usage: mode=path requires 'to' (the destination symbol to find a path to).";
+        {
+            string message = "Usage: mode=path requires 'to' (the destination symbol to find a path to).";
+            return json
+                ? RenderTraceJson(ModePath, target, to, depth, limit, emitted, nodesVisited, message, "missing_to")
+                : message;
+        }
 
         if (!ResolveSymbol(index, resolver, target, scope, out string fromId, out string? fromNote))
-            return fromNote!;
+            return json
+                ? RenderTraceJson(ModePath, target, to, depth, limit, emitted, nodesVisited, fromNote!, DiagnosticCode(fromNote!))
+                : fromNote!;
         if (!ResolveSymbol(index, resolver, to, scope: null, out string toId, out string? toNote))
-            return toNote!;
+            return json
+                ? RenderPathJson(index, target, to, depth, limit, emitted, nodesVisited, fromId, toId: null, path: null,
+                    note: toNote!, diagnosticCode: DiagnosticCode(toNote!))
+                : toNote!;
 
         IReadOnlyList<string>? path = graph.ShortestPath(fromId, toId, depth);
         if (path is null)
-            return $"No path from '{target}' to '{to}' within {depth} hop(s).";
+        {
+            string message = $"No path from '{target}' to '{to}' within {depth} hop(s).";
+            return json
+                ? RenderPathJson(index, target, to, depth, limit, emitted, nodesVisited, fromId, toId, path: null,
+                    note: message, diagnosticCode: "no_path")
+                : message;
+        }
 
         // The path is from..to inclusive (ShortestPath includes both endpoints). Hops = path.Count - 1.
         nodesVisited = path.Count;
+        if (json)
+        {
+            int shownCount = Math.Min(path.Count, limit);
+            emitted = shownCount;
+            return RenderPathJson(index, target, to, depth, limit, emitted, nodesVisited, fromId, toId, path,
+                note: shownCount < path.Count ? "path truncated by limit." : null,
+                diagnosticCode: shownCount < path.Count ? "limit_truncated" : null);
+        }
+
         var sb = new StringBuilder();
         sb.Append("# trace path ").Append(target).Append(" -> ").Append(to)
           .Append(" (").Append(path.Count - 1).Append(" hop(s))\n");
@@ -257,13 +323,16 @@ public sealed class TraceTool
 
     private static string RunBridge(
         MillerRepositoryIndex index, SmartTargetResolver resolver, string target, string? scope,
-        int depth, int limit, bool fullFormat, out int emitted, out int nodesVisited)
+        int depth, int limit, bool fullFormat, bool json, out int emitted, out int nodesVisited)
     {
         emitted = 0;
         nodesVisited = 0;
 
         if (!ResolveBridgeStart(index, resolver, target, scope, out string startId, out string? note))
-            return note!;
+            return json
+                ? RenderBridgeJson(index.BridgeGraph, target, to: null, depth, limit, emitted, nodesVisited, startId: null,
+                    edges: [], note!, DiagnosticCode(note!))
+                : note!;
 
         // A symbol with no incident bridge edges is not on any cross-language thread — whether it is absent from the
         // bridge node lookup entirely or present but edge-less, the honest answer is the same. Incident subsumes both.
@@ -273,7 +342,11 @@ public sealed class TraceTool
             message.Append($"'{target}' is not on a cross-language bridge. trace bridge follows DTO/entity/table/route links; ")
               .Append("this symbol has none.");
             AppendBridgeCapabilityStatus(message, index.BridgeGraph.CapabilityReport);
-            return message.ToString();
+            return json
+                ? RenderBridgeJson(index.BridgeGraph, target, to: null, depth, limit, emitted, nodesVisited, startId,
+                    edges: [], $"'{target}' is not on a cross-language bridge. trace bridge follows DTO/entity/table/route links; this symbol has none.",
+                    "not_on_bridge")
+                : message.ToString();
         }
 
         IReadOnlyList<ScoredEdge> edges = index.BridgeGraph.Walk(startId, depth);
@@ -281,7 +354,23 @@ public sealed class TraceTool
 
         // The start has direct incident edges (checked above), so an empty Walk means depth could not reach them.
         if (edges.Count == 0)
-            return $"No bridge links from '{target}' within {depth} hop(s).";
+        {
+            string message = $"No bridge links from '{target}' within {depth} hop(s).";
+            return json
+                ? RenderBridgeJson(index.BridgeGraph, target, to: null, depth, limit, emitted, nodesVisited, startId,
+                    edges: [], message, "no_bridge_links")
+                : message;
+        }
+
+        if (json)
+        {
+            int shownCount = Math.Min(edges.Count, limit);
+            emitted = shownCount;
+            return RenderBridgeJson(index.BridgeGraph, target, to: null, depth, limit, emitted, nodesVisited, startId,
+                edges.Take(shownCount).ToArray(),
+                note: shownCount < edges.Count ? "bridge trace truncated by limit." : null,
+                diagnosticCode: shownCount < edges.Count ? "limit_truncated" : null);
+        }
 
         var startNode = index.BridgeGraph.Node(startId);
         var sb = new StringBuilder();
@@ -665,10 +754,425 @@ public sealed class TraceTool
         return sb.ToString().TrimEnd('\n');
     }
 
-    private static string UnknownMode(string? mode, out int emitted, out int nodesVisited)
+    private static string UnknownMode(string? mode, bool json, string target, string? to, int depth, int limit, out int emitted, out int nodesVisited)
     {
         emitted = 0;
         nodesVisited = 0;
-        return $"Unknown mode '{mode}'. Use one of: auto, path, bridge.";
+        string message = $"Unknown mode '{mode}'. Use one of: auto, path, bridge.";
+        return json
+            ? RenderTraceJson(mode ?? string.Empty, target, to, depth, limit, emitted, nodesVisited, message, "unknown_mode")
+            : message;
     }
+
+    // ---------- JSON rendering ----------
+
+    private static string RenderAutoJson(
+        ISymbolLookupIndex index, string target, string? to, int depth, int limit, int emitted, int nodesVisited,
+        string seedId, IReadOnlyList<ReachedNode> reached, string? note, string? diagnosticCode)
+    {
+        var symbolsById = SymbolLookupBatch.FindBySymbolIds(index, reached.Select(static node => node.Id).Prepend(seedId));
+        symbolsById.TryGetValue(seedId, out IndexedSymbol? seed);
+        return RenderTraceJson(ModeAuto, target, to, depth, limit, emitted, nodesVisited, note, diagnosticCode,
+            writeResolvedTarget: w => WriteSymbolOrNull(w, seed),
+            writeNodes: w =>
+            {
+                w.WriteStartArray();
+                if (seed is not null)
+                    WriteSymbolNode(w, seed, "target", hop: 0);
+                foreach (var node in reached)
+                {
+                    if (symbolsById.TryGetValue(node.Id, out IndexedSymbol? symbol))
+                        WriteSymbolNode(w, symbol, "neighbour", node.Hop);
+                }
+                w.WriteEndArray();
+            },
+            writeLinks: w =>
+            {
+                w.WriteStartArray();
+                foreach (var node in reached)
+                {
+                    w.WriteStartObject();
+                    w.WriteString("source", seedId);
+                    w.WriteString("target", node.Id);
+                    w.WriteString("kind", "neighbour");
+                    w.WriteString("direction", "both");
+                    w.WriteNumber("hop", node.Hop);
+                    w.WriteEndObject();
+                }
+                w.WriteEndArray();
+            });
+    }
+
+    private static string RenderPathJson(
+        ISymbolLookupIndex index, string target, string? to, int depth, int limit, int emitted, int nodesVisited,
+        string? fromId, string? toId, IReadOnlyList<string>? path, string? note, string? diagnosticCode)
+    {
+        var ids = new List<string>();
+        if (fromId is not null)
+            ids.Add(fromId);
+        if (toId is not null)
+            ids.Add(toId);
+        if (path is not null)
+            ids.AddRange(path);
+
+        var symbolsById = SymbolLookupBatch.FindBySymbolIds(index, ids);
+        symbolsById.TryGetValue(fromId ?? string.Empty, out IndexedSymbol? fromSymbol);
+        symbolsById.TryGetValue(toId ?? string.Empty, out IndexedSymbol? toSymbol);
+        int shownCount = path is null ? 0 : Math.Min(path.Count, limit);
+
+        return RenderTraceJson(ModePath, target, to, depth, limit, emitted, nodesVisited, note, diagnosticCode,
+            writeExtraRootProperties: w =>
+            {
+                if (path is null)
+                    w.WriteNull("hops");
+                else
+                    w.WriteNumber("hops", path.Count - 1);
+            },
+            writeResolvedTarget: w => WriteSymbolOrNull(w, fromSymbol),
+            writeResolvedTo: w => WriteSymbolOrNull(w, toSymbol),
+            writeNodes: w =>
+            {
+                w.WriteStartArray();
+                if (path is not null)
+                {
+                    for (int i = 0; i < shownCount; i++)
+                    {
+                        if (symbolsById.TryGetValue(path[i], out IndexedSymbol? symbol))
+                            WriteSymbolNode(w, symbol, i == 0 ? "target" : i == path.Count - 1 ? "destination" : "path", hop: i);
+                    }
+                }
+                w.WriteEndArray();
+            },
+            writeLinks: w =>
+            {
+                w.WriteStartArray();
+                if (path is not null)
+                {
+                    for (int i = 1; i < shownCount; i++)
+                    {
+                        w.WriteStartObject();
+                        w.WriteString("source", path[i - 1]);
+                        w.WriteString("target", path[i]);
+                        w.WriteString("kind", "dependency_path");
+                        w.WriteNumber("hop", i);
+                        w.WriteEndObject();
+                    }
+                }
+                w.WriteEndArray();
+            });
+    }
+
+    private static string RenderBridgeJson(
+        BridgeGraph graph, string target, string? to, int depth, int limit, int emitted, int nodesVisited,
+        string? startId, IReadOnlyList<ScoredEdge> edges, string? note, string? diagnosticCode)
+    {
+        BridgeNode? startNode = startId is null ? null : graph.Node(startId);
+        var nodeIds = new SortedSet<string>(StringComparer.Ordinal);
+        if (startId is not null)
+            nodeIds.Add(startId);
+        foreach (var edge in edges)
+        {
+            string? sourceId = BridgeGraph.NodeIdOf(edge.Edge.SourceRef, edge.Edge.Kind, EndpointSide.Source);
+            string? targetId = BridgeGraph.NodeIdOf(edge.Edge.TargetRef, edge.Edge.Kind, EndpointSide.Target);
+            if (sourceId is not null)
+                nodeIds.Add(sourceId);
+            if (targetId is not null)
+                nodeIds.Add(targetId);
+        }
+
+        return RenderTraceJson(ModeBridge, target, to, depth, limit, emitted, nodesVisited, note, diagnosticCode,
+            writeResolvedTarget: w => WriteBridgeNodeOrNull(w, startNode),
+            writeProvider: w => WriteProvider(w, graph.CapabilityReport),
+            writeNodes: w =>
+            {
+                w.WriteStartArray();
+                foreach (string id in nodeIds)
+                {
+                    BridgeNode? node = graph.Node(id);
+                    if (node is not null)
+                        WriteBridgeNode(w, node, string.Equals(id, startId, StringComparison.Ordinal) ? "target" : "bridge");
+                }
+                w.WriteEndArray();
+            },
+            writeLinks: w =>
+            {
+                w.WriteStartArray();
+                foreach (var edge in edges)
+                    WriteBridgeLink(w, graph, edge);
+                w.WriteEndArray();
+            });
+    }
+
+    private static string RenderTraceJson(
+        string mode, string target, string? to, int depth, int limit, int emitted, int nodesVisited,
+        string? note, string? diagnosticCode,
+        Action<Utf8JsonWriter>? writeExtraRootProperties = null,
+        Action<Utf8JsonWriter>? writeResolvedTarget = null,
+        Action<Utf8JsonWriter>? writeResolvedTo = null,
+        Action<Utf8JsonWriter>? writeProvider = null,
+        Action<Utf8JsonWriter>? writeNodes = null,
+        Action<Utf8JsonWriter>? writeLinks = null)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var w = NewWriter(buffer))
+        {
+            w.WriteStartObject();
+            w.WriteString("mode", mode);
+            w.WriteString("target", target);
+            if (to is null) w.WriteNull("to"); else w.WriteString("to", to);
+            w.WriteNumber("depth", depth);
+            w.WriteNumber("limit", limit);
+            w.WriteNumber("emitted", emitted);
+            w.WriteNumber("nodes_visited", nodesVisited);
+            if (note is null) w.WriteNull("note"); else w.WriteString("note", note);
+            writeExtraRootProperties?.Invoke(w);
+
+            w.WritePropertyName("resolved_target");
+            if (writeResolvedTarget is null) w.WriteNullValue(); else writeResolvedTarget(w);
+            w.WritePropertyName("resolved_to");
+            if (writeResolvedTo is null) w.WriteNullValue(); else writeResolvedTo(w);
+            w.WritePropertyName("provider");
+            if (writeProvider is null) w.WriteNullValue(); else writeProvider(w);
+            w.WritePropertyName("nodes");
+            if (writeNodes is null) w.WriteStartArray(); else writeNodes(w);
+            if (writeNodes is null) w.WriteEndArray();
+            w.WritePropertyName("links");
+            if (writeLinks is null) w.WriteStartArray(); else writeLinks(w);
+            if (writeLinks is null) w.WriteEndArray();
+            w.WritePropertyName("diagnostics");
+            WriteDiagnostics(w, diagnosticCode, note);
+            w.WriteEndObject();
+        }
+        return Utf8(buffer);
+    }
+
+    private static void WriteDiagnostics(Utf8JsonWriter w, string? code, string? message)
+    {
+        w.WriteStartArray();
+        if (!string.IsNullOrWhiteSpace(code) && !string.IsNullOrWhiteSpace(message))
+        {
+            w.WriteStartObject();
+            w.WriteString("code", code);
+            w.WriteString("message", message);
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+    }
+
+    private static void WriteSymbolOrNull(Utf8JsonWriter w, IndexedSymbol? symbol)
+    {
+        if (symbol is null)
+        {
+            w.WriteNullValue();
+            return;
+        }
+        WriteSymbolNode(w, symbol, role: null, hop: null);
+    }
+
+    private static void WriteSymbolNode(Utf8JsonWriter w, IndexedSymbol symbol, string? role, int? hop)
+    {
+        w.WriteStartObject();
+        w.WriteString("id", symbol.SymbolId);
+        w.WriteString("symbol_id", symbol.SymbolId);
+        w.WriteString("name", symbol.Name);
+        w.WriteString("kind", symbol.Kind);
+        w.WriteString("file", symbol.FilePath);
+        w.WriteNumber("line", symbol.StartLine);
+        if (role is null) w.WriteNull("role"); else w.WriteString("role", role);
+        if (hop is null) w.WriteNull("hop"); else w.WriteNumber("hop", hop.Value);
+        w.WriteEndObject();
+    }
+
+    private static void WriteBridgeNodeOrNull(Utf8JsonWriter w, BridgeNode? node)
+    {
+        if (node is null)
+        {
+            w.WriteNullValue();
+            return;
+        }
+        WriteBridgeNode(w, node, role: null);
+    }
+
+    private static void WriteBridgeNode(Utf8JsonWriter w, BridgeNode node, string? role)
+    {
+        w.WriteStartObject();
+        w.WriteString("id", node.Id);
+        w.WriteString("kind", BridgeNodeKindJson(node.Kind));
+        w.WriteString("display", node.Display);
+        if (node.FilePath is null) w.WriteNull("file"); else w.WriteString("file", node.FilePath);
+        w.WriteNumber("line", node.Line);
+        if (role is null) w.WriteNull("role"); else w.WriteString("role", role);
+        w.WriteEndObject();
+    }
+
+    private static void WriteProvider(Utf8JsonWriter w, BridgeCapabilityReport report)
+    {
+        w.WriteStartObject();
+        w.WritePropertyName("active_providers");
+        w.WriteStartArray();
+        foreach (string provider in report.ActiveProviders)
+            w.WriteStringValue(provider);
+        w.WriteEndArray();
+
+        w.WritePropertyName("skipped_providers");
+        w.WriteStartArray();
+        foreach (var skipped in report.SkippedProviders)
+        {
+            w.WriteStartObject();
+            w.WriteString("provider_id", skipped.ProviderId);
+            w.WriteString("reason", skipped.Reason);
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+
+        w.WritePropertyName("notes");
+        w.WriteStartArray();
+        foreach (string providerNote in report.Notes)
+            w.WriteStringValue(providerNote);
+        w.WriteEndArray();
+
+        w.WritePropertyName("evidence_counts");
+        w.WriteStartArray();
+        foreach (var item in report.EvidenceCounts.OrderBy(static kv => kv.Key, StringComparer.Ordinal))
+        {
+            w.WriteStartObject();
+            w.WriteString("name", item.Key);
+            w.WriteNumber("count", item.Value);
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+        w.WriteEndObject();
+    }
+
+    private static void WriteBridgeLink(Utf8JsonWriter w, BridgeGraph graph, ScoredEdge edge)
+    {
+        string? sourceId = BridgeGraph.NodeIdOf(edge.Edge.SourceRef, edge.Edge.Kind, EndpointSide.Source);
+        string? targetId = BridgeGraph.NodeIdOf(edge.Edge.TargetRef, edge.Edge.Kind, EndpointSide.Target);
+
+        w.WriteStartObject();
+        if (sourceId is null) w.WriteNull("source"); else w.WriteString("source", sourceId);
+        if (targetId is null) w.WriteNull("target"); else w.WriteString("target", targetId);
+        w.WriteString("source_display", EndpointDisplay(graph, edge.Edge.SourceRef, edge.Edge.Kind, EndpointSide.Source));
+        w.WriteString("target_display", EndpointDisplay(graph, edge.Edge.TargetRef, edge.Edge.Kind, EndpointSide.Target));
+        w.WriteString("kind", BridgeKindJson(edge.Edge.Kind));
+        w.WriteString("label", KindLabel(edge.Edge.Kind));
+        w.WriteNumber("score", edge.Score);
+        w.WriteString("confidence", edge.Band.ToString().ToLowerInvariant());
+        w.WriteBoolean("multi_signal", edge.IsMultiSignal);
+        w.WritePropertyName("flags");
+        WriteFlags(w, edge);
+        w.WritePropertyName("evidence");
+        WriteEvidenceArray(w, edge.Edge.Evidence);
+        w.WritePropertyName("signals");
+        WriteSignalsArray(w, edge.Edge.Signals);
+        w.WriteEndObject();
+    }
+
+    private static void WriteFlags(Utf8JsonWriter w, ScoredEdge edge)
+    {
+        w.WriteStartArray();
+        if (edge.HasAmbiguousName)
+            w.WriteStringValue("ambiguous");
+        if (edge.IsVerbUnknown)
+            w.WriteStringValue("verb_unknown");
+        w.WriteEndArray();
+    }
+
+    private static void WriteEvidenceArray(Utf8JsonWriter w, IReadOnlyList<Miller.Core.Contracts.Evidence> evidence)
+    {
+        w.WriteStartArray();
+        foreach (var item in evidence)
+            WriteEvidence(w, item);
+        w.WriteEndArray();
+    }
+
+    private static void WriteSignalsArray(Utf8JsonWriter w, IReadOnlyList<Signal> signals)
+    {
+        w.WriteStartArray();
+        foreach (var signal in signals)
+        {
+            w.WriteStartObject();
+            w.WriteString("rule", signal.Rule.ToString());
+            switch (signal)
+            {
+                case StructuralSignal structural:
+                    w.WriteString("type", "structural");
+                    w.WriteBoolean("present", structural.Present);
+                    break;
+                case FieldSetSignal fieldSet:
+                    w.WriteString("type", "field_set");
+                    w.WriteNumber("field_count", fieldSet.FieldCount);
+                    w.WriteNumber("jaccard", fieldSet.Jaccard);
+                    break;
+                case NameSignal name:
+                    w.WriteString("type", "name");
+                    w.WriteString("tier", name.Tier.ToString().ToLowerInvariant());
+                    break;
+                case NameResolutionSignal resolution:
+                    w.WriteString("type", "name_resolution");
+                    w.WriteString("endpoint", resolution.Endpoint.ToString().ToLowerInvariant());
+                    w.WriteString("status", resolution.Status.ToString().ToLowerInvariant());
+                    w.WriteNumber("match_count", resolution.MatchCount);
+                    break;
+                default:
+                    w.WriteString("type", "unknown");
+                    break;
+            }
+            w.WritePropertyName("evidence");
+            if (signal.Evidence is null)
+                w.WriteNullValue();
+            else
+                WriteEvidence(w, signal.Evidence);
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+    }
+
+    private static void WriteEvidence(Utf8JsonWriter w, Miller.Core.Contracts.Evidence evidence)
+    {
+        w.WriteStartObject();
+        w.WriteString("file", evidence.FilePath);
+        w.WriteNumber("line", evidence.Line);
+        w.WriteEndObject();
+    }
+
+    private static string BridgeKindJson(BridgeKind kind) => kind switch
+    {
+        BridgeKind.StoredIn => "stored_in",
+        BridgeKind.MapsTo => "maps_to",
+        BridgeKind.Hits => "hits",
+        BridgeKind.Responds => "responds",
+        BridgeKind.Consumes => "consumes",
+        BridgeKind.NameMatch => "name_match",
+        _ => kind.ToString().ToLowerInvariant(),
+    };
+
+    private static string BridgeNodeKindJson(BridgeNodeKind kind) => kind switch
+    {
+        BridgeNodeKind.TsType => "ts_type",
+        BridgeNodeKind.CsDto => "cs_dto",
+        BridgeNodeKind.CsEntity => "cs_entity",
+        BridgeNodeKind.DbTable => "db_table",
+        BridgeNodeKind.Endpoint => "endpoint",
+        _ => kind.ToString().ToLowerInvariant(),
+    };
+
+    private static string DiagnosticCode(string note)
+    {
+        if (note.StartsWith("trace: a target symbol is required.", StringComparison.Ordinal))
+            return "missing_target";
+        if (note.Contains("Multiple candidates", StringComparison.Ordinal) ||
+            note.Contains("Multiple bridge", StringComparison.Ordinal))
+            return "ambiguous_target";
+        if (note.Contains("not found", StringComparison.Ordinal))
+            return "target_not_found";
+        if (note.Contains("is a file", StringComparison.Ordinal))
+            return "file_target";
+        return "trace_note";
+    }
+
+    private static Utf8JsonWriter NewWriter(ArrayBufferWriter<byte> buffer) =>
+        new(buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+
+    private static string Utf8(ArrayBufferWriter<byte> buffer) => Encoding.UTF8.GetString(buffer.WrittenSpan);
 }

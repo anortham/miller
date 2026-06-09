@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Miller.Indexing;
 using Miller.Server.Cli;
@@ -126,9 +127,9 @@ public sealed class WorkspaceTool
     [McpServerTool(Name = "workspace")]
     [Description(
         "Manage the workspace index. Defaults to status. Use refresh to update stale files, full to rebuild " +
-        "from scratch, list to see registered workspaces, dashboard to start the local dashboard.")]
+        "from scratch, list to see registered workspaces, health for a readiness report, dashboard to start the local dashboard.")]
     public string Workspace(
-        [Description("status|refresh|full|list|open|remove|dashboard. Default status.")] string operation = "status",
+        [Description("status|refresh|full|list|open|remove|health|dashboard. Default status.")] string operation = "status",
         [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")]
         string? workspace_id = null,
         [Description("A workspace root path. Required for open; optional for status/refresh/full/remove.")]
@@ -177,6 +178,8 @@ public sealed class WorkspaceTool
         {
             case null or "" or "status":
                 return RenderTargetStatus(workspaceId, path, json);
+            case "health":
+                return RenderTargetHealth(workspaceId, path, json);
             case "list":
                 return (RenderRegistryList(json), _registry.List().Count, TelemetryOutcome.Ok);
             case "refresh":
@@ -198,6 +201,16 @@ public sealed class WorkspaceTool
 
     private string RenderStatus(bool json) =>
         WorkspaceRender.Status(AssembleFacts(), _ledger.Summarize(), json);
+
+    private string RenderHealth(bool json)
+    {
+        WorkspaceHealthFacts health = WorkspaceHealthFacts.Create(
+            AssembleFacts(),
+            _ledger.Summarize(),
+            _ledger.SummarizeOutcomes(),
+            WorkspaceHealthReader.Read(_workspace.ExtractDbPath));
+        return WorkspaceRender.Health(health, json);
+    }
 
     private (string output, int resultCount, TelemetryOutcome outcome) RenderTargetStatus(
         string? workspaceId, string? path, bool json)
@@ -263,6 +276,102 @@ public sealed class WorkspaceTool
             ContentCorpus: _contentSidecar.Inspect(row.IndexDbPath, revision));
         return (WorkspaceRender.Status(facts, _ledger.SummarizeForWorkspace(row.WorkspaceId), json),
             1, TelemetryOutcome.Ok);
+    }
+
+    private (string output, int resultCount, TelemetryOutcome outcome) RenderTargetHealth(
+        string? workspaceId, string? path, bool json)
+    {
+        TargetWorkspace target = ResolveTarget(workspaceId, path);
+        if (target.UnknownNote is { } note)
+            return (Note(note, json), 0, TelemetryOutcome.Empty);
+
+        if (target.IsCurrent)
+            return (RenderHealth(json), 1, TelemetryOutcome.Ok);
+
+        WorkspaceRegistryRow row = target.Row
+            ?? throw new InvalidOperationException($"Workspace registry row '{target.WorkspaceId}' was not resolved.");
+        VerifyRegisteredRoot(row);
+        long revision = row.LastRevision ?? 0;
+        WorkspaceFacts statusFacts;
+        WorkspaceExtractionHealthFacts extraction;
+        try
+        {
+            WorkspaceIndexFacts indexFacts = WorkspaceIndexFactsReader.Read(row.IndexDbPath);
+            statusFacts = new WorkspaceFacts(
+                Root: row.CanonicalRoot,
+                WorkspaceId: row.WorkspaceId,
+                DbPath: row.IndexDbPath,
+                IsLeader: false,
+                DocumentCount: indexFacts.DocumentCount,
+                KnownExtensionsCount: indexFacts.KnownExtensionsCount,
+                BuiltRevision: revision,
+                LatestObservedRevision: revision,
+                IndexFresh: WorkspaceFreshnessView.IndexFreshFor(refreshResult: null, row),
+                QueueEmpty: true,
+                FreshnessStatus: WorkspaceFreshnessView.FreshnessStatusFor(refreshResult: null, row),
+                WarningText: WorkspaceFreshnessView.WarningTextFor(refreshResult: null),
+                DisplayId: row.DisplayId,
+                ServerVersion: MillerVersion.Current,
+                ServerProcessId: Environment.ProcessId,
+                SearchSidecar: _sidecar.Inspect(row.IndexDbPath, revision),
+                ContentCorpus: _contentSidecar.Inspect(row.IndexDbPath, revision));
+            extraction = WorkspaceHealthReader.Read(row.IndexDbPath);
+        }
+        catch (FileNotFoundException)
+        {
+            string error = $"Workspace index DB not found: {row.IndexDbPath}";
+            _registry.MarkMissing(row.WorkspaceId, error);
+            statusFacts = new WorkspaceFacts(
+                Root: row.CanonicalRoot,
+                WorkspaceId: row.WorkspaceId,
+                DbPath: row.IndexDbPath,
+                IsLeader: false,
+                DocumentCount: 0,
+                KnownExtensionsCount: 0,
+                BuiltRevision: revision,
+                LatestObservedRevision: revision,
+                IndexFresh: false,
+                QueueEmpty: true,
+                FreshnessStatus: "missing_index",
+                WarningText: error,
+                DisplayId: row.DisplayId,
+                ServerVersion: MillerVersion.Current,
+                ServerProcessId: Environment.ProcessId,
+                SearchSidecar: _sidecar.Inspect(row.IndexDbPath, revision),
+                ContentCorpus: _contentSidecar.Inspect(row.IndexDbPath, revision));
+            extraction = UnavailableExtraction(error);
+        }
+        catch (Exception ex) when (IsHealthIndexReadException(ex))
+        {
+            string error = $"could not read workspace index DB '{row.IndexDbPath}': {ex.Message}";
+            _registry.MarkError(row.WorkspaceId, error);
+            statusFacts = new WorkspaceFacts(
+                Root: row.CanonicalRoot,
+                WorkspaceId: row.WorkspaceId,
+                DbPath: row.IndexDbPath,
+                IsLeader: false,
+                DocumentCount: 0,
+                KnownExtensionsCount: 0,
+                BuiltRevision: revision,
+                LatestObservedRevision: revision,
+                IndexFresh: false,
+                QueueEmpty: true,
+                FreshnessStatus: "unreadable_index",
+                WarningText: error,
+                DisplayId: row.DisplayId,
+                ServerVersion: MillerVersion.Current,
+                ServerProcessId: Environment.ProcessId,
+                SearchSidecar: _sidecar.Inspect(row.IndexDbPath, revision),
+                ContentCorpus: _contentSidecar.Inspect(row.IndexDbPath, revision));
+            extraction = UnavailableExtraction(error);
+        }
+
+        WorkspaceHealthFacts health = WorkspaceHealthFacts.Create(
+            statusFacts,
+            _ledger.SummarizeForWorkspace(row.WorkspaceId),
+            _ledger.SummarizeOutcomesForWorkspace(row.WorkspaceId),
+            extraction);
+        return (WorkspaceRender.Health(health, json), 1, TelemetryOutcome.Ok);
     }
 
     private string RenderRegistryList(bool json)
@@ -732,8 +841,17 @@ public sealed class WorkspaceTool
             "remove" => "workspace remove requires a path: workspace(operation=\"remove\", path=\"/repo\"). " +
                         "It deletes that path's .miller index dir (the live workspace is refused).",
             _ => $"unknown workspace operation '{operation}'. " +
-                 "Use status|refresh|full|list|open|remove|dashboard (default status).",
+                 "Use status|refresh|full|list|open|remove|health|dashboard (default status).",
         };
         return json ? ServerJson.Note(message) : message;
     }
+
+    private static WorkspaceExtractionHealthFacts UnavailableExtraction(string error) => new(
+        ParseDiagnostics: HealthFactSection<ParseDiagnosticGroup>.Unavailable(error),
+        CapabilityGaps: HealthFactSection<CapabilityGapGroup>.Unavailable(error),
+        LanguageCapabilities: HealthFactSection<LanguageCapabilitySummary>.Unavailable(error),
+        Files: HealthFactSection<FileStatusGroup>.Unavailable(error));
+
+    private static bool IsHealthIndexReadException(Exception ex) =>
+        ex is SqliteException or InvalidOperationException;
 }

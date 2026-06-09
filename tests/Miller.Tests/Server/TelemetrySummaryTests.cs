@@ -139,6 +139,23 @@ public sealed class TelemetrySummaryTests : IDisposable
     }
 
     [Fact]
+    public void SummarizeOutcomesForWorkspace_GroupsOkEmptyAndError()
+    {
+        using var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ws1");
+        InsertRow("search", 100, "ok", 10, "2026-05-01T00:00:00.000Z", workspaceId: "ws1");
+        InsertRow("inspect", 200, "empty", 20, "2026-05-01T00:00:01.000Z", workspaceId: "ws1");
+        InsertRow("trace", 300, "error", 30, "2026-05-01T00:00:02.000Z", workspaceId: "ws1");
+        InsertRow("other-search", 400, "error", 40, "2026-05-01T00:00:03.000Z", workspaceId: "ws2");
+
+        TelemetryHealthFacts facts = ledger.SummarizeOutcomesForWorkspace("ws1");
+
+        Assert.Equal(1, facts.OkCount);
+        Assert.Equal(1, facts.EmptyCount);
+        Assert.Equal(1, facts.ErrorCount);
+        Assert.Equal(3, facts.TotalCalls);
+    }
+
+    [Fact]
     public void Summarize_P95_UsesDocumentedOffset_OnAKnownDistribution()
     {
         using var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ws1");
