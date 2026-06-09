@@ -106,9 +106,9 @@ For the first slice:
 Add MCP:
 
 ```text
-patterns(operation="list", language=null, format="compact")
-patterns(operation="search", pattern_id="htmx.attribute.v1", language="html", path="Views/**", where={"name":"hx-get"}, limit=50, format="json")
-patterns(operation="summary", pattern_id=null, language=null, path=null, format="json")
+patterns(operation="list", workspace_id=null, language=null, format="compact")
+patterns(operation="search", workspace_id=null, pattern_id="htmx.attribute.v1", language="html", path="Views/**", where="name=hx-get", limit=50, format="json")
+patterns(operation="summary", workspace_id=null, pattern_id=null, language=null, path=null, format="json")
 ```
 
 Add CLI:
@@ -116,6 +116,7 @@ Add CLI:
 ```bash
 miller patterns list
 miller patterns list --json
+miller patterns list --workspace-id other-repo --json
 miller patterns summary --json
 miller patterns search --pattern htmx.attribute.v1 --where name=hx-get --json
 miller patterns search --pattern csharp.attribute_usage.v1 --where name=Authorize --path "src/**"
@@ -124,10 +125,12 @@ miller patterns search --pattern csharp.attribute_usage.v1 --where name=Authoriz
 Parameter rules:
 
 - `operation`: `list`, `summary`, or `search`.
+- `workspace_id` / `--workspace-id`: optional read-workspace selector, matching `search`, `inspect`, `context`,
+  `impact`, and `trace`. CLI should also accept `--workspace DIR`.
 - `pattern_id` / `--pattern`: required for `search`.
 - `language`: optional exact language filter.
 - `path`: optional workspace-relative glob filter.
-- `where`: optional top-level metadata equality filters. Requires `pattern_id`.
+- `where`: optional top-level metadata equality filter as `key=value`. Requires `pattern_id`.
 - `limit`: applies to `search`; default `50`, maximum `500`.
 - `format`: `compact` or `json`.
 
@@ -310,4 +313,3 @@ This is the main design guarantee.
 - `src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md` explains the tool in plain language.
 - Fast tests pass with `scripts/test.sh`.
 - Build passes with `dotnet build Miller.slnx -c Release`.
-
