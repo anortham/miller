@@ -8,6 +8,12 @@ AST queries here. It lists, groups, filters, and renders known extractor facts b
 Unknown future `pattern_id` values are valid observed facts. Consumers must not require a hard-coded Miller
 catalog entry before accepting a row.
 
+Common extractor-backed examples include:
+
+- `aspnet.minimal_api.route.v1` for ASP.NET minimal API route mappings in C#.
+- `htmx.attribute.v1` for htmx attributes in HTML and Razor.
+- `alpine.directive.v1` for Alpine directives in HTML and Razor.
+
 ## Commands
 
 ```bash
@@ -81,8 +87,11 @@ MCP uses the same names with snake_case parameters: `operation`, `pattern_id`, `
         "end_byte": 24
       },
       "metadata": {
-        "name": "hx-get",
-        "value": "/orders"
+        "framework": "htmx",
+        "verb": "GET",
+        "attribute_name": "hx-get",
+        "attribute_value": "/orders",
+        "target_path": "/orders"
       }
     }
   ]

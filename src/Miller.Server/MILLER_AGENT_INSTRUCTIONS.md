@@ -59,7 +59,8 @@ the tokens.
   for web-only reads, or `workspace_id=all` on `search` to audit registered workspaces. `export` writes raw JSONL
   chunks for Eros/local integration, so do not use it as an interactive reading shortcut.
 - `patterns` — List, summarize, and search extractor-recognized code shapes from `structural_facts`. Use it for
-  known patterns such as framework attributes, unsafe blocks, or async/await facts when the extractor emits them.
+  known patterns such as ASP.NET minimal API routes, htmx attributes, Alpine directives, unsafe blocks, or
+  async/await facts when the extractor emits them.
   This is not raw AST query execution. Use `operation=list|summary|search`, `pattern_id`, `where=key=value`,
   `path`, and `language` to narrow results. Optional `workspace_id` and `ensure_fresh` work for registered workspaces.
 - `workspace` — Index lifecycle. `status` (default), `health` (readiness verdict + quality warnings),
@@ -82,7 +83,7 @@ the tokens.
 - **Audit registered workspaces for exact text**: `content search query="dangerous term" workspace_id=all content_kind=source`
   or `content_kind=docs|config|external_file|web`, then bounded `content read`.
 - **Find known code shapes**: `patterns operation=list` to discover observed pattern ids, then
-  `patterns operation=search pattern_id=<id> where=name=hx-get path=Views/**` to inspect matching facts.
+  `patterns operation=search pattern_id=<id> where=attribute_name=hx-get path=Views/**` to inspect matching facts.
 - **Inspect a large log/report**: `content import path=/tmp/build.log` → `content search query="error text"` →
   `content read source_id=... line=... context_lines=10`. Do not read or paste the full file.
 - **Research a web page**: use the `miller-web-research` skill to fetch markdown with `browser39` into a temp

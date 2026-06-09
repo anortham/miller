@@ -219,12 +219,14 @@ from the CLI, then retry the read tool. The `workspace_id=all` selector is only 
 across registered workspace content DBs.
 
 `patterns` is the structural-facts surface. It lists and searches known code-shape facts emitted by
-`julie-extractors`, such as framework attributes when extractor support exists. It is intentionally not a raw AST
-query language:
+`julie-extractors`, such as ASP.NET minimal API routes, htmx attributes, Alpine directives, unsafe blocks, or
+async/await facts when extractor support exists. It is intentionally not a raw AST query language:
 
 ```text
 patterns()
-patterns(operation="search", pattern_id="htmx.attribute.v1", where="name=hx-get", path="Views/**")
+patterns(operation="search", pattern_id="aspnet.minimal_api.route.v1", where="verb=GET", path="Program.cs")
+patterns(operation="search", pattern_id="htmx.attribute.v1", where="attribute_name=hx-get", path="Views/**")
+patterns(operation="search", pattern_id="alpine.directive.v1", where="directive=x-data", path="Views/**")
 ```
 
 ## Using Miller
@@ -256,7 +258,7 @@ The single `miller` binary runs two ways:
   dotnet run --project src/Miller.Server -c Release -- content add-markdown /tmp/page.md --url https://example.com/page --display-path "Example page" --json
   dotnet run --project src/Miller.Server -c Release -- content search "important phrase" --kind web --limit 5
   dotnet run --project src/Miller.Server -c Release -- patterns --json
-  dotnet run --project src/Miller.Server -c Release -- patterns search --pattern htmx.attribute.v1 --where name=hx-get --path "Views/**" --json
+  dotnet run --project src/Miller.Server -c Release -- patterns search --pattern htmx.attribute.v1 --where attribute_name=hx-get --path "Views/**" --json
   dotnet run --project src/Miller.Server -c Release -- inspect src/Miller.Server/AgentInstructions.cs --depth full
   dotnet run --project src/Miller.Server -c Release -- context "CLI workspace routing" --token-budget 2000
   dotnet run --project src/Miller.Server -c Release -- trace AgentInstructions --depth 2
@@ -379,8 +381,8 @@ What these prove:
   instead of hydrating the full graph.
 - Symbol search stays narrow and structural (`name + signature`). Docs/config use `--mode content`; source
   bodies and imported text use the explicit content corpus modes.
-- `patterns --json` discovers extractor-recognized code-shape facts without private SQLite reads or raw AST
-  queries.
+- `patterns --json` discovers extractor-recognized code-shape facts, including ASP.NET minimal API routes, htmx
+  attributes, and Alpine directives when present, without private SQLite reads or raw AST queries.
 - `inspect`, `context`, and `impact` use the same projection-specific read paths exposed to MCP tools.
 - The dashboard is operational evidence, not a separate product UI: it shows registered workspaces, index facts,
   telemetry, latency/failure signals, and scoped JSON endpoints from the same local state.

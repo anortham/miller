@@ -230,7 +230,7 @@ Workers must not edit shared contract/docs files concurrently with implementatio
    - Implemented in this branch as opt-in `reference_mode=usage`, with explicit reason/confidence labels and
      dogfood evidence in `docs/plans/2026-06-09-reference-aware-context-design.md`.
 
-## Extractor-Backed Opportunities After v2.2.0
+## Extractor-Backed Opportunities After v2.2.x
 
 These ideas started in `julie-extractors`, not Miller, because they are parser-backed facts:
 
@@ -238,14 +238,15 @@ These ideas started in `julie-extractors`, not Miller, because they are parser-b
 - AST complexity metrics,
 - normalized body-hash or near-duplicate detection.
 
-`julie-extractors` v2.2.0 now exposes the required primitives under SQLite/report contract v3:
-`structural_facts`, `complexity_metrics`, and clone-ready `symbols.body_hash` semantics. Miller's first consume slice
-is intentionally narrow: pin `julie-extract` v2.2.0, accept schema/contract/report version 3, keep fast fixtures in
-step, and report structural/complexity fact availability through `workspace health --json`.
+`julie-extractors` v2.2.x exposes the required primitives under SQLite/report contract v3:
+`structural_facts`, `complexity_metrics`, and clone-ready `symbols.body_hash` semantics. Miller pins
+`julie-extract` v2.2.1, accepts schema/contract/report version 3, keeps fast fixtures in step, and reports
+structural/complexity fact availability through `workspace health --json`. v2.2.1 also emits framework-aware
+patterns for ASP.NET minimal API routes, htmx attributes, and Alpine directives.
 
 Future Miller-owned slices should be designed separately:
 
-- structural-fact search/filtering over stable `pattern_id` values,
+- structural-fact search/filtering over stable `pattern_id` values (implemented as `patterns` in this branch),
 - complexity reporting/ranking with Miller-owned thresholds and no extractor-side quality labels,
 - duplicate/clone discovery over normalized `body_hash`.
 
