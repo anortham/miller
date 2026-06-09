@@ -20,6 +20,8 @@ public static class WorkspaceHealthReader
             ParseDiagnostics: ReadSection(connection, "parse_diagnostics", ReadParseDiagnostics),
             CapabilityGaps: ReadSection(connection, "language_capability_gaps", ReadCapabilityGaps),
             LanguageCapabilities: ReadSection(connection, "language_capabilities", ReadLanguageCapabilities),
+            StructuralFacts: ReadSection(connection, "structural_facts", ReadStructuralFacts),
+            ComplexityMetrics: ReadSection(connection, "complexity_metrics", ReadComplexityMetrics),
             Files: ReadSection(connection, "files", ReadFileStatuses));
     }
 
@@ -143,12 +145,71 @@ public static class WorkspaceHealthReader
 
         return rows;
     }
+
+    private static IReadOnlyList<StructuralFactGroup> ReadStructuralFacts(SqliteConnection connection)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT language, pattern_id, capture_name, COUNT(*) AS count
+            FROM structural_facts
+            GROUP BY language, pattern_id, capture_name
+            ORDER BY language, pattern_id, capture_name;
+            """;
+        var rows = new List<StructuralFactGroup>();
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            rows.Add(new StructuralFactGroup(
+                Language: reader.GetString(0),
+                PatternId: reader.GetString(1),
+                CaptureName: reader.GetString(2),
+                Count: reader.GetInt64(3)));
+        }
+
+        return rows;
+    }
+
+    private static IReadOnlyList<ComplexityMetricGroup> ReadComplexityMetrics(SqliteConnection connection)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT language,
+                   scope,
+                   algorithm_id,
+                   COUNT(*) AS count,
+                   MAX(decision_count) AS max_decision_count,
+                   MAX(loop_count) AS max_loop_count,
+                   MAX(max_nesting_depth) AS max_nesting_depth,
+                   MAX(parameter_count) AS max_parameter_count
+            FROM complexity_metrics
+            GROUP BY language, scope, algorithm_id
+            ORDER BY language, scope, algorithm_id;
+            """;
+        var rows = new List<ComplexityMetricGroup>();
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            rows.Add(new ComplexityMetricGroup(
+                Language: reader.GetString(0),
+                Scope: reader.GetString(1),
+                AlgorithmId: reader.GetString(2),
+                Count: reader.GetInt64(3),
+                MaxDecisionCount: reader.GetInt64(4),
+                MaxLoopCount: reader.GetInt64(5),
+                MaxNestingDepth: reader.GetInt64(6),
+                MaxParameterCount: reader.IsDBNull(7) ? null : reader.GetInt64(7)));
+        }
+
+        return rows;
+    }
 }
 
 public sealed record WorkspaceExtractionHealthFacts(
     HealthFactSection<ParseDiagnosticGroup> ParseDiagnostics,
     HealthFactSection<CapabilityGapGroup> CapabilityGaps,
     HealthFactSection<LanguageCapabilitySummary> LanguageCapabilities,
+    HealthFactSection<StructuralFactGroup> StructuralFacts,
+    HealthFactSection<ComplexityMetricGroup> ComplexityMetrics,
     HealthFactSection<FileStatusGroup> Files);
 
 public sealed record HealthFactSection<T>(bool Available, IReadOnlyList<T> Rows, string? Error)
@@ -176,3 +237,15 @@ public sealed record LanguageCapabilitySummary(
     long ActualTypes);
 
 public sealed record FileStatusGroup(string Language, string Status, long Count);
+
+public sealed record StructuralFactGroup(string Language, string PatternId, string CaptureName, long Count);
+
+public sealed record ComplexityMetricGroup(
+    string Language,
+    string Scope,
+    string AlgorithmId,
+    long Count,
+    long MaxDecisionCount,
+    long MaxLoopCount,
+    long MaxNestingDepth,
+    long? MaxParameterCount);

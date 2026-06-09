@@ -21,6 +21,9 @@ quality, security status, semantic search quality, or enterprise readiness.
 }
 ```
 
+This v1 contract is additive: consumers must ignore unknown fields and unknown `extraction_quality` subsections.
+Removing or renaming documented fields requires a new contract version.
+
 ## Sections
 
 - `workspace`: `root`, `workspace_id`, `display_id`, `db`, `leader`, `server_version`, `server_pid`.
@@ -31,6 +34,11 @@ quality, security status, semantic search quality, or enterprise readiness.
   `status`, `count`.
 - `extraction_quality.language_capabilities`: `available`, `error`, and target/actual counts by language for
   symbols, relationships, pending relationships, identifiers, and types.
+- `extraction_quality.structural_facts`: `available`, `error`, and grouped rows with `language`, `pattern_id`,
+  `capture_name`, `count`.
+- `extraction_quality.complexity_metrics`: `available`, `error`, and grouped rows with `language`, `scope`,
+  `algorithm_id`, `count`, `max_decision_count`, `max_loop_count`, `max_nesting_depth`, and
+  `max_parameter_count`.
 - `extraction_quality.files`: `available`, `error`, and grouped rows with `language`, `status`, `count`.
 - `telemetry.outcomes`: `ok_count`, `empty_count`, `error_count`, `total_calls`.
 - `telemetry.summary`: the same per-tool summary shape used by `workspace status --json`.
@@ -47,4 +55,6 @@ quality, security status, semantic search quality, or enterprise readiness.
 - `unavailable`: the target index DB is missing or otherwise cannot provide the basic workspace report.
 
 The health path must not hydrate the full repository index. It reads cheap status facts, sidecar metadata,
-telemetry aggregates, and grouped SQLite counts from `symbols.db`.
+telemetry aggregates, and grouped SQLite counts from `symbols.db`. Parser-backed structural facts and complexity
+metrics are reported as primitive extractor facts only; Miller does not assign quality scores, risk thresholds, or
+commercial dashboard labels in this contract.

@@ -429,7 +429,7 @@ public sealed class JulieExtractRunnerTests
     }
 
     [Theory]
-    [InlineData(3)]      // a future/incompatible report envelope (> the pinned-current 2)
+    [InlineData(2)]      // an older/incompatible report envelope (< the pinned-current 3)
     [InlineData(null)]   // absent report_schema_version
     public void VerifyReport_WrongOrMissingReportSchemaVersion_Throws(int? reportSchemaVersion)
     {

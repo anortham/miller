@@ -5,9 +5,9 @@ namespace Miller.Indexing;
 
 /// <summary>
 /// The D5 compatibility gate. Runs on an open read-only connection BEFORE any read to confirm the DB is a
-/// compatible julie-extract v2 artifact (sqlite schema <see cref="MillerExtractContract.ExpectedSchemaVersion"/>,
+/// compatible julie-extract artifact (sqlite schema <see cref="MillerExtractContract.ExpectedSchemaVersion"/>,
 /// contract <see cref="MillerExtractContract.ExpectedExtractContractVersion"/>, and hash algorithm
-/// <see cref="MillerExtractContract.ExpectedHashAlgorithm"/>). v2 carries all of these as keys in the single
+/// <see cref="MillerExtractContract.ExpectedHashAlgorithm"/>). Current julie-extract artifacts carry all of these as keys in the single
 /// <c>artifact_metadata</c> table; a missing table fails fast on a non-julie / corrupt DB. Throws
 /// <see cref="IncompatibleExtractException"/> with an actionable message on any mismatch.
 /// </summary>
@@ -17,7 +17,7 @@ internal static class JulieSchemaGate
     private const int SqliteGenericError = 1;
 
     /// <summary>
-    /// Verify the DB on <paramref name="connection"/> is a compatible julie-extract v2 artifact. The connection
+    /// Verify the DB on <paramref name="connection"/> is a compatible julie-extract artifact. The connection
     /// must be open. Throws <see cref="IncompatibleExtractException"/> if the schema/contract/hash contract
     /// differs or a required table/key is missing.
     /// </summary>
@@ -50,12 +50,12 @@ internal static class JulieSchemaGate
         if (!StringComparer.Ordinal.Equals(hashAlgorithm, MillerExtractContract.ExpectedHashAlgorithm))
             throw new IncompatibleExtractException(
                 $"DB has hash_algorithm value '{hashAlgorithm}', expected '{MillerExtractContract.ExpectedHashAlgorithm}'; " +
-                $"it is not a julie-extract v2 artifact. Re-run restore + `scan` " +
+                $"it is not a julie-extract artifact compatible with this Miller build. Re-run restore + `scan` " +
                 $"with the pinned julie-extract (v{MillerExtractContract.PinnedJulieExtractVersion}).");
     }
 
-    // v2: the schema version is a metadata KEY (sqlite_schema_version), not a schema_version-table MAX. A
-    // non-integer value → typed error naming it.
+    // Current julie-extract artifacts store the schema version as a metadata KEY (sqlite_schema_version), not a
+    // schema_version-table MAX. A non-integer value → typed error naming it.
     private static long ReadSchemaVersion(SqliteConnection connection)
     {
         string text = ReadRequiredMetadataValue(
@@ -63,7 +63,7 @@ internal static class JulieSchemaGate
             MillerExtractContract.ExpectedSqliteSchemaVersion.ToString(CultureInfo.InvariantCulture));
         if (!long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out long value))
             throw new IncompatibleExtractException(
-                $"DB has a non-integer sqlite_schema_version value '{text}'; it is not a valid julie-extract v2 artifact.");
+                $"DB has a non-integer sqlite_schema_version value '{text}'; it is not a valid julie-extract artifact.");
         return value;
     }
 
@@ -78,7 +78,7 @@ internal static class JulieSchemaGate
         if (!long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out long value))
             throw new IncompatibleExtractException(
                 $"DB has a non-integer extract_contract_version value '{text}'; it is not a valid " +
-                $"julie-extract v2 artifact.");
+                $"julie-extract artifact.");
 
         return value;
     }
@@ -101,7 +101,7 @@ internal static class JulieSchemaGate
         if (result is null || result is DBNull)
             throw new IncompatibleExtractException(
                 $"DB is missing the '{key}' key in artifact_metadata; expected {expected} " +
-                $"metadata from a julie-extract v2 artifact. Re-run restore + `scan` " +
+                $"metadata from a compatible julie-extract artifact. Re-run restore + `scan` " +
                 $"with the pinned julie-extract (v{MillerExtractContract.PinnedJulieExtractVersion}).");
 
         return result.ToString() ?? string.Empty;
@@ -113,6 +113,6 @@ internal static class JulieSchemaGate
         ex.Message.Contains(table, StringComparison.Ordinal);
 
     private static IncompatibleExtractException MissingTable(string table, SqliteException inner) =>
-        new($"DB has no '{table}' table; it is not a julie-extract v2 artifact. " +
+        new($"DB has no '{table}' table; it is not a compatible julie-extract artifact. " +
             $"Re-run restore + `scan` with the pinned julie-extract.", inner);
 }

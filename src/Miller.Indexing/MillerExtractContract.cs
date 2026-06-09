@@ -5,21 +5,21 @@ namespace Miller.Indexing;
 /// <see cref="JulieSchemaGate"/> (reading the DB's artifact_metadata) and <see cref="ExtractVersionMismatch"/>
 /// (cross-checking the extract report's artifact block) gate on these constants. The runtime gate is the
 /// schema/contract versions, NOT the product binary_version (D7 — product version and schema/contract version
-/// are orthogonal: julie-extract 2.1.3 ships schema/contract 2, and a future product bump that keeps the
+/// are orthogonal: julie-extract 2.2.0 ships schema/contract 3, and a future product bump that keeps the
 /// contract must not break Miller); <see cref="PinnedJulieExtractVersion"/> is the download pin only.
 /// </summary>
 internal static class MillerExtractContract
 {
-    // julie-extract v2: sqlite_schema_version 2 / extract_contract_version 2 / report_schema_version 2.
-    // schema_version and sqlite_schema_version are both 2 in v2 (schema.rs). v2 adds the source_regions
-    // table; every table Miller reads is otherwise unchanged from v1.
-    public const long ExpectedSchemaVersion = 2;
-    public const long ExpectedSqliteSchemaVersion = 2;
-    public const long ExpectedExtractContractVersion = 2;
-    public const long ExpectedReportSchemaVersion = 2;
+    // julie-extract v3: sqlite_schema_version 3 / extract_contract_version 3 / report_schema_version 3.
+    // v3 adds parser-backed structural_facts and complexity_metrics, while keeping symbol body_hash as the
+    // clone-ready normalized body fingerprint.
+    public const long ExpectedSchemaVersion = 3;
+    public const long ExpectedSqliteSchemaVersion = 3;
+    public const long ExpectedExtractContractVersion = 3;
+    public const long ExpectedReportSchemaVersion = 3;
     public const string ExpectedHashAlgorithm = "blake3";
 
     // Download pin only (restore-script + julie-pins.json target). This is the PRODUCT version,
-    // orthogonal to the runtime schema/contract gate above (D7): product 2.1.3 ships schema/contract 2.
-    public const string PinnedJulieExtractVersion = "2.1.3"; // julie-extractors release tag v2.1.3 (published 2026-06-05).
+    // orthogonal to the runtime schema/contract gate above (D7): product 2.2.0 ships schema/contract 3.
+    public const string PinnedJulieExtractVersion = "2.2.0"; // julie-extractors release tag v2.2.0 (published 2026-06-09).
 }

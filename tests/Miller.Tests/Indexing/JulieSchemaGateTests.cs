@@ -99,14 +99,14 @@ public sealed class JulieSchemaGateTests
     [Fact]
     public void Verify_MissingMetadataTable_ThrowsNamingArtifactMetadata()
     {
-        // A non-julie / corrupt DB: no artifact_metadata table at all (the only metadata surface in v1). The
+        // A non-julie / corrupt DB: no artifact_metadata table at all (the only metadata surface). The
         // gate hits it on the FIRST metadata read (sqlite_schema_version) and rejects (fail-fast on non-julie DBs).
         using var fx = JulieDbFixture.Create(PinSchema, null, NoRows, createMetadataTable: false);
         using var conn = OpenReadOnly(fx.DbPath);
 
         var ex = Assert.Throws<IncompatibleExtractException>(() => JulieSchemaGate.Verify(conn));
         Assert.Contains("artifact_metadata", ex.Message);
-        Assert.Contains("not a julie-extract", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("not a compatible julie-extract artifact", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

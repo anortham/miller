@@ -1,12 +1,12 @@
 {
-  "version": "2.1.3",
+  "version": "2.2.0",
   "binary": "julie-extract",
   "archiveInnerPathTemplate": "dist/{triple}/julie-extract{exe}",
   "urlTemplate": "https://github.com/anortham/julie-extractors/releases/download/v{VER}/{asset}",
   "assets": {
-    "aarch64-apple-darwin":     { "name": "julie-extract-v{VER}-aarch64-apple-darwin.tar.gz",     "sha256": "c4a90671a66bcc5b002793b6d0acc2925c85152b9833e7dedcea6c47ab70c51d" },
-    "x86_64-apple-darwin":      { "name": "julie-extract-v{VER}-x86_64-apple-darwin.tar.gz",      "sha256": "f4e8c760b78db932caf895c5898b97fc540edcacd94063124d62561cdabe5875" },
-    "x86_64-unknown-linux-gnu": { "name": "julie-extract-v{VER}-x86_64-unknown-linux-gnu.tar.gz", "sha256": "c3e8fb896060fee59df0c6d89dead091bcc139a1118453693b1eadfc5295a4be" },
-    "x86_64-pc-windows-msvc":   { "name": "julie-extract-v{VER}-x86_64-pc-windows-msvc.zip",      "sha256": "45d5c501d8fdb50b293ed1c23fcc4a280421c5e8aa67fb4acae1e1ce046c7e34" }
+    "aarch64-apple-darwin":     { "name": "julie-extract-v{VER}-aarch64-apple-darwin.tar.gz",     "sha256": "4ad9f7803648fd39e1af6c8384da14ba5062e8fe1e259002d84382a3a7d6af8d" },
+    "x86_64-apple-darwin":      { "name": "julie-extract-v{VER}-x86_64-apple-darwin.tar.gz",      "sha256": "b23cae2047abbaf737c9df71f4d50f0d043621eff279571d2ac8b7a330c6c874" },
+    "x86_64-unknown-linux-gnu": { "name": "julie-extract-v{VER}-x86_64-unknown-linux-gnu.tar.gz", "sha256": "d012af2bd0d881e844233ed9d7da43fabb6f729307ab89dbeaabeaa3de992cab" },
+    "x86_64-pc-windows-msvc":   { "name": "julie-extract-v{VER}-x86_64-pc-windows-msvc.zip",      "sha256": "cd6123fbff1afb7d3aa245ae22341ea3f19e0eca55c005aa9bc91a98e515a21e" }
   }
 }

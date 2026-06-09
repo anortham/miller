@@ -5,7 +5,7 @@ using Xunit;
 namespace Miller.Tests.Indexing;
 
 /// <summary>
-/// Pins the source-region read layer against the julie-extract v2 <c>source_regions</c> table.
+/// Pins the source-region read layer against the julie-extract <c>source_regions</c> table.
 /// Fast suite only: temp SQLite fixture, no julie-extract subprocess.
 /// </summary>
 public sealed class SqliteSourceRegionReaderTests

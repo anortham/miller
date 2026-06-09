@@ -11,6 +11,15 @@ namespace Miller.Tests.Indexing;
 public sealed class WorkspaceHealthReaderTests
 {
     [Fact]
+    public void CreateDefault_UsesPinnedV3ExtractionFactTables()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+
+        Assert.True(TableExists(fx.DbPath, "structural_facts"));
+        Assert.True(TableExists(fx.DbPath, "complexity_metrics"));
+    }
+
+    [Fact]
     public void Read_GroupsParseDiagnosticsCapabilityGapsCapabilitiesAndFiles()
     {
         using var fx = JulieDbFixture.Create(
@@ -64,6 +73,26 @@ public sealed class WorkspaceHealthReaderTests
             row.Language == "csharp" && row.Status == "indexed" && row.Count == 1);
         Assert.Contains(facts.Files.Rows, row =>
             row.Language == "typescript" && row.Status == "indexed" && row.Count == 1);
+
+        object structuralSection = RequiredSection(facts, "StructuralFacts");
+        Assert.True(SectionAvailable(structuralSection));
+        object structural = SingleSectionRow(structuralSection);
+        Assert.Equal("typescript", RowProperty<string>(structural, "Language"));
+        Assert.Equal("typescript.await_expression.v1", RowProperty<string>(structural, "PatternId"));
+        Assert.Equal("await_expression", RowProperty<string>(structural, "CaptureName"));
+        Assert.Equal(2, RowProperty<long>(structural, "Count"));
+
+        object complexitySection = RequiredSection(facts, "ComplexityMetrics");
+        Assert.True(SectionAvailable(complexitySection));
+        object complexity = SingleSectionRow(complexitySection);
+        Assert.Equal("typescript", RowProperty<string>(complexity, "Language"));
+        Assert.Equal("symbol", RowProperty<string>(complexity, "Scope"));
+        Assert.Equal("julie-ast-complexity-v1", RowProperty<string>(complexity, "AlgorithmId"));
+        Assert.Equal(1, RowProperty<long>(complexity, "Count"));
+        Assert.Equal(3, RowProperty<long>(complexity, "MaxDecisionCount"));
+        Assert.Equal(1, RowProperty<long>(complexity, "MaxLoopCount"));
+        Assert.Equal(2, RowProperty<long>(complexity, "MaxNestingDepth"));
+        Assert.Equal(4, RowProperty<long?>(complexity, "MaxParameterCount"));
     }
 
     [Fact]
@@ -93,6 +122,23 @@ public sealed class WorkspaceHealthReaderTests
         }.ToString());
         connection.Open();
         Exec(connection, sql);
+    }
+
+    private static bool TableExists(string dbPath, string tableName)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $name LIMIT 1;";
+        command.Parameters.AddWithValue("$name", tableName);
+        object? result = command.ExecuteScalar();
+        return result is not null and not DBNull;
     }
 
     private static void SeedHealthRows(string dbPath)
@@ -132,6 +178,28 @@ public sealed class WorkspaceHealthReaderTests
                  7, 2, 1, 5, 1,
                  '{}');
             """);
+        Exec(connection, """
+            INSERT INTO structural_facts
+                (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                 containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                 confidence, metadata_json)
+            VALUES
+                ('struct-1', 'file:src/B.ts', 'src/B.ts', 'typescript', 'typescript.await_expression.v1',
+                 'await_expression', 'await_expression', 'sym-b', 1, 1, 1, 6, 0, 5, 1.0,
+                 '{"pattern_version":1,"query_family":"async"}'),
+                ('struct-2', 'file:src/B.ts', 'src/B.ts', 'typescript', 'typescript.await_expression.v1',
+                 'await_expression', 'await_expression', 'sym-b', 2, 1, 2, 6, 6, 11, 1.0,
+                 '{"pattern_version":1,"query_family":"async"}');
+            """);
+        Exec(connection, """
+            INSERT INTO complexity_metrics
+                (complexity_metric_id, file_id, path, language, scope, symbol_id, algorithm_id, covered_lines,
+                 covered_bytes, decision_count, loop_count, max_nesting_depth, parameter_count, start_line,
+                 start_column, end_line, end_column, start_byte, end_byte, metadata_json)
+            VALUES
+                ('complexity-1', 'file:src/B.ts', 'src/B.ts', 'typescript', 'symbol', 'sym-b',
+                 'julie-ast-complexity-v1', 5, 120, 3, 1, 2, 4, 1, 0, 5, 1, 0, 120, NULL);
+            """);
     }
 
     private static void Exec(SqliteConnection connection, string sql)
@@ -139,5 +207,33 @@ public sealed class WorkspaceHealthReaderTests
         using var command = connection.CreateCommand();
         command.CommandText = sql;
         command.ExecuteNonQuery();
+    }
+
+    private static object RequiredSection(WorkspaceExtractionHealthFacts facts, string propertyName)
+    {
+        var property = typeof(WorkspaceExtractionHealthFacts).GetProperty(propertyName);
+        Assert.NotNull(property);
+        object? section = property!.GetValue(facts);
+        Assert.NotNull(section);
+        return section!;
+    }
+
+    private static bool SectionAvailable(object section)
+    {
+        object? available = section.GetType().GetProperty("Available")?.GetValue(section);
+        return Assert.IsType<bool>(available);
+    }
+
+    private static object SingleSectionRow(object section)
+    {
+        object? rowsValue = section.GetType().GetProperty("Rows")?.GetValue(section);
+        var rows = Assert.IsAssignableFrom<System.Collections.IEnumerable>(rowsValue);
+        return Assert.Single(rows.Cast<object>());
+    }
+
+    private static T RowProperty<T>(object row, string propertyName)
+    {
+        object? value = row.GetType().GetProperty(propertyName)?.GetValue(row);
+        return Assert.IsAssignableFrom<T>(value);
     }
 }

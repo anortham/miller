@@ -11,14 +11,14 @@ namespace Miller.Tests.Indexing;
 public sealed class MillerExtractContractTests
 {
     [Fact]
-    public void ContractPinsJulieExtractV2Versions()
+    public void ContractPinsJulieExtractV3Versions()
     {
-        Assert.Equal(2, MillerExtractContract.ExpectedSchemaVersion);
-        Assert.Equal(2, MillerExtractContract.ExpectedSqliteSchemaVersion);
-        Assert.Equal(2, MillerExtractContract.ExpectedExtractContractVersion);
-        Assert.Equal(2, MillerExtractContract.ExpectedReportSchemaVersion);
+        Assert.Equal(3, MillerExtractContract.ExpectedSchemaVersion);
+        Assert.Equal(3, MillerExtractContract.ExpectedSqliteSchemaVersion);
+        Assert.Equal(3, MillerExtractContract.ExpectedExtractContractVersion);
+        Assert.Equal(3, MillerExtractContract.ExpectedReportSchemaVersion);
         Assert.Equal("blake3", MillerExtractContract.ExpectedHashAlgorithm);
-        Assert.Equal("2.1.3", MillerExtractContract.PinnedJulieExtractVersion);
+        Assert.Equal("2.2.0", MillerExtractContract.PinnedJulieExtractVersion);
         Assert.False(string.IsNullOrWhiteSpace(MillerExtractContract.PinnedJulieExtractVersion));
     }
 

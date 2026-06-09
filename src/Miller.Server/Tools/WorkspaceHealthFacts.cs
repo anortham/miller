@@ -60,6 +60,10 @@ public sealed record WorkspaceHealthFacts(
             "capability_gaps_unavailable");
         AddUnavailableSectionWarnings(warnings, extraction.LanguageCapabilities.Available, extraction.LanguageCapabilities.Error,
             "language_capabilities_unavailable");
+        AddUnavailableSectionWarnings(warnings, extraction.StructuralFacts.Available, extraction.StructuralFacts.Error,
+            "structural_facts_unavailable");
+        AddUnavailableSectionWarnings(warnings, extraction.ComplexityMetrics.Available, extraction.ComplexityMetrics.Error,
+            "complexity_metrics_unavailable");
         AddUnavailableSectionWarnings(warnings, extraction.Files.Available, extraction.Files.Error, "files_unavailable");
 
         if (statusFacts.IndexFresh == false)

@@ -49,6 +49,14 @@ public sealed class WorkspaceRenderTests
         {
             new LanguageCapabilitySummary("csharp", 8, 7, 3, 2, 1, 1, 6, 5, 2, 1),
         }),
+        StructuralFacts: HealthFactSection<StructuralFactGroup>.FromRows(new[]
+        {
+            new StructuralFactGroup("typescript", "typescript.await_expression.v1", "await_expression", 2),
+        }),
+        ComplexityMetrics: HealthFactSection<ComplexityMetricGroup>.FromRows(new[]
+        {
+            new ComplexityMetricGroup("typescript", "symbol", "julie-ast-complexity-v1", 1, 3, 1, 2, 4),
+        }),
         Files: HealthFactSection<FileStatusGroup>.FromRows(new[]
         {
             new FileStatusGroup("csharp", "indexed", 1),
@@ -275,6 +283,10 @@ public sealed class WorkspaceRenderTests
             .GetProperty("parse_diagnostics").GetProperty("rows")[0].GetProperty("language").GetString());
         Assert.Equal("relationships", root.GetProperty("extraction_quality")
             .GetProperty("capability_gaps").GetProperty("rows")[0].GetProperty("capability").GetString());
+        Assert.True(root.GetProperty("extraction_quality").TryGetProperty("structural_facts", out JsonElement structural));
+        Assert.True(structural.GetProperty("available").GetBoolean());
+        Assert.True(root.GetProperty("extraction_quality").TryGetProperty("complexity_metrics", out JsonElement complexity));
+        Assert.True(complexity.GetProperty("available").GetBoolean());
         Assert.Equal("parse_diagnostics", root.GetProperty("warnings")[0].GetProperty("code").GetString());
         Assert.Equal("inspect parse diagnostics", root.GetProperty("recommended_actions")[0].GetString());
     }

@@ -269,6 +269,8 @@ internal sealed class JulieDbFixture : IDisposable
             Exec(conn, RelationshipsDdl);
             Exec(conn, SourceRegionsDdl);
             Exec(conn, SourceRegionsIndexesDdl);
+            Exec(conn, StructuralFactsDdl);
+            Exec(conn, ComplexityMetricsDdl);
             // The v1 freshness tables (extraction_revisions/revision_file_changes) so the FreshnessReader can open.
             Exec(conn, ExtractionRevisionsDdl);
             Exec(conn, RevisionFileChangesDdl);
@@ -278,7 +280,7 @@ internal sealed class JulieDbFixture : IDisposable
             Exec(conn, TypeArgumentsDdl);
             Exec(conn, LiteralsDdl);
             Exec(conn, SymbolAnnotationsDdl);
-            // v1-only tables (created empty) so the synthetic artifact is a faithful v1 shape.
+            // Schema-versioned tables (created empty) so the synthetic artifact is a faithful current shape.
             Exec(conn, ParserInventoryDdl);
             Exec(conn, ParseDiagnosticsDdl);
             Exec(conn, LanguageCapabilitiesDdl);
@@ -845,7 +847,7 @@ internal sealed class JulieDbFixture : IDisposable
         _ = CultureInfo.InvariantCulture; // keep the using meaningful if trimmed later
     }
 
-    // --- v1 DDL transcribed from julie-extractors crates/julie-extract-artifact/src/schema.rs (SQLITE_SCHEMA_VERSION = 1) ---
+    // --- DDL transcribed from julie-extractors SQLite schema contract, with only fast-fixture relaxations. ---
     // Remaining deviations: files.last_revision_id has NO FK (so a files row can be seeded with no revision);
     // symbol/identifier position columns are nullable here (the synthetic DB relaxes julie's NOT NULL so the
     // existing NULL-discipline tests keep coverage). v1 files is content-free — body text re-sources from disk.
@@ -946,6 +948,52 @@ internal sealed class JulieDbFixture : IDisposable
         CREATE INDEX IF NOT EXISTS idx_source_regions_file_span ON source_regions(file_id, start_byte, end_byte);
         CREATE INDEX IF NOT EXISTS idx_source_regions_kind_file ON source_regions(kind, file_id, start_byte);
         CREATE INDEX IF NOT EXISTS idx_source_regions_symbol ON source_regions(containing_symbol_id);
+        """;
+
+    private const string StructuralFactsDdl = """
+        CREATE TABLE IF NOT EXISTS structural_facts (
+            structural_fact_id TEXT PRIMARY KEY,
+            file_id TEXT NOT NULL REFERENCES files(file_id) ON DELETE CASCADE,
+            path TEXT NOT NULL,
+            language TEXT NOT NULL,
+            pattern_id TEXT NOT NULL,
+            capture_name TEXT NOT NULL,
+            node_kind TEXT NOT NULL,
+            containing_symbol_id TEXT REFERENCES symbols(symbol_id) ON DELETE SET NULL,
+            start_line INTEGER NOT NULL,
+            start_column INTEGER NOT NULL,
+            end_line INTEGER NOT NULL,
+            end_column INTEGER NOT NULL,
+            start_byte INTEGER NOT NULL,
+            end_byte INTEGER NOT NULL,
+            confidence REAL NOT NULL,
+            metadata_json TEXT
+        );
+        """;
+
+    private const string ComplexityMetricsDdl = """
+        CREATE TABLE IF NOT EXISTS complexity_metrics (
+            complexity_metric_id TEXT PRIMARY KEY,
+            file_id TEXT NOT NULL REFERENCES files(file_id) ON DELETE CASCADE,
+            path TEXT NOT NULL,
+            language TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            symbol_id TEXT REFERENCES symbols(symbol_id) ON DELETE SET NULL,
+            algorithm_id TEXT NOT NULL,
+            covered_lines INTEGER NOT NULL,
+            covered_bytes INTEGER NOT NULL,
+            decision_count INTEGER NOT NULL,
+            loop_count INTEGER NOT NULL,
+            max_nesting_depth INTEGER NOT NULL,
+            parameter_count INTEGER,
+            start_line INTEGER NOT NULL,
+            start_column INTEGER NOT NULL,
+            end_line INTEGER NOT NULL,
+            end_column INTEGER NOT NULL,
+            start_byte INTEGER NOT NULL,
+            end_byte INTEGER NOT NULL,
+            metadata_json TEXT
+        );
         """;
 
     // ---- M4 bridge tables (v1 schema.rs:192-233) -----------------------------------------------------------

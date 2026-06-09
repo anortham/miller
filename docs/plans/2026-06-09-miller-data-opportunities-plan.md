@@ -230,15 +230,26 @@ Workers must not edit shared contract/docs files concurrently with implementatio
    - Implemented in this branch as opt-in `reference_mode=usage`, with explicit reason/confidence labels and
      dogfood evidence in `docs/plans/2026-06-09-reference-aware-context-design.md`.
 
-## Out Of Scope For Miller Until Extractors Expose More Data
+## Extractor-Backed Opportunities After v2.2.0
 
-These ideas should start in `julie-extractors`, not Miller:
+These ideas started in `julie-extractors`, not Miller, because they are parser-backed facts:
 
 - tree-sitter structural query,
 - AST complexity metrics,
 - normalized body-hash or near-duplicate detection.
 
-Miller already reads, chunks, and indexes source text for explicit content/source search, but it should consume parser-backed structural facts only after extractor contracts expose them across all supported languages. A Miller-only implementation of tree-sitter structural queries or AST metrics would duplicate extractor policy and could silently work for only a subset of languages.
+`julie-extractors` v2.2.0 now exposes the required primitives under SQLite/report contract v3:
+`structural_facts`, `complexity_metrics`, and clone-ready `symbols.body_hash` semantics. Miller's first consume slice
+is intentionally narrow: pin `julie-extract` v2.2.0, accept schema/contract/report version 3, keep fast fixtures in
+step, and report structural/complexity fact availability through `workspace health --json`.
+
+Future Miller-owned slices should be designed separately:
+
+- structural-fact search/filtering over stable `pattern_id` values,
+- complexity reporting/ranking with Miller-owned thresholds and no extractor-side quality labels,
+- duplicate/clone discovery over normalized `body_hash`.
+
+Eros should consume these through Miller CLI/MCP/export contracts, not by reading Miller private SQLite state.
 
 ## Verification Strategy For Any Future Implementation
 

@@ -5,11 +5,11 @@ using Xunit;
 namespace Miller.Tests.Indexing;
 
 /// <summary>
-/// Locks JulieDbFixture to the julie-extract schema-v2 artifact contract. This is the canonical synthetic
+/// Locks JulieDbFixture to the pinned julie-extract artifact contract. This is the canonical synthetic
 /// schema guard the readers rely on: if the fixture drifts off the pinned contract, tests would silently
 /// exercise the wrong SQLite shape.
 /// </summary>
-public sealed class JulieDbFixtureV2SchemaTests
+public sealed class JulieDbFixtureCurrentSchemaTests
 {
     private static SqliteConnection Open(string dbPath)
     {
@@ -44,7 +44,7 @@ public sealed class JulieDbFixtureV2SchemaTests
     }
 
     [Fact]
-    public void Fixture_EmitsV2ArtifactTables_AndDropsOldSchemaTables()
+    public void Fixture_EmitsCurrentArtifactTables_AndDropsOldSchemaTables()
     {
         using var fx = JulieDbFixture.CreateDefault();
         using var c = Open(fx.DbPath);
@@ -52,8 +52,9 @@ public sealed class JulieDbFixtureV2SchemaTests
         foreach (var t in new[] { "artifact_metadata", "files", "symbols", "identifiers",
             "relationships", "type_argument_usages", "type_arguments", "literals", "symbol_annotations",
             "parse_diagnostics", "parser_inventory", "language_capabilities",
-            "extraction_revisions", "revision_file_changes", "source_regions" })
-            Assert.True(TableExists(c, t), $"schema-v2 table '{t}' must exist");
+            "extraction_revisions", "revision_file_changes", "source_regions",
+            "structural_facts", "complexity_metrics" })
+            Assert.True(TableExists(c, t), $"pinned schema table '{t}' must exist");
 
         // Old-schema artifacts removed in v1 are gone.
         Assert.False(TableExists(c, "schema_version"), "schema_version table is dropped in v1");
@@ -62,7 +63,7 @@ public sealed class JulieDbFixtureV2SchemaTests
     }
 
     [Fact]
-    public void Fixture_SourceRegions_UseV2ColumnSetAndIndexes()
+    public void Fixture_SourceRegions_UseCurrentColumnSetAndIndexes()
     {
         using var fx = JulieDbFixture.CreateDefault();
         using var c = Open(fx.DbPath);

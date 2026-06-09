@@ -431,7 +431,11 @@ public static class WorkspaceRender
           .Append(ParseDiagnosticCount(facts.Extraction).ToString(CultureInfo.InvariantCulture))
           .Append(" parse diagnostics  ")
           .Append(OpenCapabilityGapCount(facts.Extraction).ToString(CultureInfo.InvariantCulture))
-          .Append(" open capability gaps")
+          .Append(" open capability gaps  ")
+          .Append(StructuralFactCount(facts.Extraction).ToString(CultureInfo.InvariantCulture))
+          .Append(" structural facts  ")
+          .Append(ComplexityMetricCount(facts.Extraction).ToString(CultureInfo.InvariantCulture))
+          .Append(" complexity metrics")
           .Append('\n');
         sb.Append("telemetry: ")
           .Append(facts.TelemetryHealth.TotalCalls.ToString(CultureInfo.InvariantCulture))
@@ -541,6 +545,8 @@ public static class WorkspaceRender
         WriteParseDiagnosticsJson(w, facts.ParseDiagnostics);
         WriteCapabilityGapsJson(w, facts.CapabilityGaps);
         WriteLanguageCapabilitiesJson(w, facts.LanguageCapabilities);
+        WriteStructuralFactsJson(w, facts.StructuralFacts);
+        WriteComplexityMetricsJson(w, facts.ComplexityMetrics);
         WriteFileStatusesJson(w, facts.Files);
         w.WriteEndObject();
     }
@@ -638,6 +644,57 @@ public static class WorkspaceRender
         w.WriteEndObject();
     }
 
+    private static void WriteStructuralFactsJson(
+        Utf8JsonWriter w,
+        HealthFactSection<StructuralFactGroup> section)
+    {
+        w.WritePropertyName("structural_facts");
+        w.WriteStartObject();
+        WriteSectionHeaderJson(w, section.Available, section.Error);
+        w.WritePropertyName("rows");
+        w.WriteStartArray();
+        foreach (StructuralFactGroup row in section.Rows)
+        {
+            w.WriteStartObject();
+            w.WriteString("language", row.Language);
+            w.WriteString("pattern_id", row.PatternId);
+            w.WriteString("capture_name", row.CaptureName);
+            w.WriteNumber("count", row.Count);
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+        w.WriteEndObject();
+    }
+
+    private static void WriteComplexityMetricsJson(
+        Utf8JsonWriter w,
+        HealthFactSection<ComplexityMetricGroup> section)
+    {
+        w.WritePropertyName("complexity_metrics");
+        w.WriteStartObject();
+        WriteSectionHeaderJson(w, section.Available, section.Error);
+        w.WritePropertyName("rows");
+        w.WriteStartArray();
+        foreach (ComplexityMetricGroup row in section.Rows)
+        {
+            w.WriteStartObject();
+            w.WriteString("language", row.Language);
+            w.WriteString("scope", row.Scope);
+            w.WriteString("algorithm_id", row.AlgorithmId);
+            w.WriteNumber("count", row.Count);
+            w.WriteNumber("max_decision_count", row.MaxDecisionCount);
+            w.WriteNumber("max_loop_count", row.MaxLoopCount);
+            w.WriteNumber("max_nesting_depth", row.MaxNestingDepth);
+            if (row.MaxParameterCount is { } parameterCount)
+                w.WriteNumber("max_parameter_count", parameterCount);
+            else
+                w.WriteNull("max_parameter_count");
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+        w.WriteEndObject();
+    }
+
     private static void WriteSectionHeaderJson(Utf8JsonWriter w, bool available, string? error)
     {
         w.WriteBoolean("available", available);
@@ -652,6 +709,12 @@ public static class WorkspaceRender
         facts.CapabilityGaps.Rows
             .Where(static row => string.Equals(row.Status, "open", StringComparison.OrdinalIgnoreCase))
             .Sum(static row => row.Count);
+
+    private static long StructuralFactCount(WorkspaceExtractionHealthFacts facts) =>
+        facts.StructuralFacts.Rows.Sum(static row => row.Count);
+
+    private static long ComplexityMetricCount(WorkspaceExtractionHealthFacts facts) =>
+        facts.ComplexityMetrics.Rows.Sum(static row => row.Count);
 
     // ---------- list ----------
 

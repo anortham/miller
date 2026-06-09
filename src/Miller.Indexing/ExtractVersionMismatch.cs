@@ -31,7 +31,7 @@ internal static class ExtractVersionMismatch
                    "is newer than this Miller build expects; upgrade Miller or re-pin julie-extract.";
 
         // Older / unexpected: name both observed versions so the operator sees the full picture. The usual
-        // case is a stale DB from an older julie-extract (e.g. a v1 DB after Miller's v2 pin); the fix is a
+        // case is a stale DB from an older julie-extract; the fix is a
         // FORCE rebuild, because julie's incremental scan cannot upgrade a schema-mismatched DB (it hard-fails
         // on open) — only `workspace full` (scan --force) removes and rebuilds it.
         long contractForMsg = contractVersionForMessage ?? MillerExtractContract.ExpectedExtractContractVersion;
@@ -45,7 +45,7 @@ internal static class ExtractVersionMismatch
     private static string Str(long value) => value.ToString(CultureInfo.InvariantCulture);
 
     /// <summary>
-    /// Cross-check a successfully-parsed extract report against <see cref="MillerExtractContract"/>. In v2 the
+    /// Cross-check a successfully-parsed extract report against <see cref="MillerExtractContract"/>. In the current contract the
     /// schema/contract/hash live in <c>report.artifact.*</c>; a null artifact block is itself a gate failure (a
     /// successful artifact-producing op must carry it). The report envelope version (<c>report_schema_version</c>)
     /// is gated too, since it frames the artifact/counts/revision shape (reconciliation #12). The product
@@ -56,7 +56,7 @@ internal static class ExtractVersionMismatch
     {
         ArgumentNullException.ThrowIfNull(report);
 
-        // The report envelope must be a v2 report. report_schema_version frames artifact/counts/revision; a
+        // The report envelope must match this Miller build. report_schema_version frames artifact/counts/revision; a
         // missing or different value means the producer's report contract changed (reports.rs:5,50). Gate it
         // alongside schema/contract/hash; keep tool.binary_version OUT of the gate (D7). (reconciliation #12)
         if (report.ReportSchemaVersion != MillerExtractContract.ExpectedReportSchemaVersion)
@@ -65,11 +65,11 @@ internal static class ExtractVersionMismatch
                 $"Miller build expects {MillerExtractContract.ExpectedReportSchemaVersion}: incompatible julie-extract " +
                 "report contract. Re-run restore + `julie-extract scan` with the pinned binary.");
 
-        // A v2 artifact-producing op MUST carry the artifact block. Its absence means the report is not a
-        // julie-extract v2 artifact report — fail loud, never a silent pass.
+        // An artifact-producing op MUST carry the artifact block. Its absence means the report is not a
+        // compatible julie-extract artifact report — fail loud, never a silent pass.
         if (report.Artifact is not { } artifact)
             throw new IncompatibleExtractException(
-                "Extract report has no artifact block; a julie-extract v2 scan/update/delete/info must carry " +
+                "Extract report has no artifact block; a julie-extract scan/update/delete/info must carry " +
                 "report.artifact (schema/contract/hash). Re-run restore + `julie-extract scan` with the pinned binary.");
 
         if (artifact.SqliteSchemaVersion != MillerExtractContract.ExpectedSqliteSchemaVersion)
@@ -98,7 +98,7 @@ internal static class ExtractVersionMismatch
         if (!StringComparer.Ordinal.Equals(artifact.HashAlgorithm, MillerExtractContract.ExpectedHashAlgorithm))
             throw new IncompatibleExtractException(
                 $"Extract report hash_algorithm is '{artifact.HashAlgorithm}' but this Miller build expects " +
-                $"'{MillerExtractContract.ExpectedHashAlgorithm}': not a julie-extract v2 artifact; " +
+                $"'{MillerExtractContract.ExpectedHashAlgorithm}': not a compatible julie-extract artifact; " +
                 "re-run restore + `julie-extract scan` with the pinned binary.");
     }
 }

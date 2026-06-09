@@ -850,6 +850,8 @@ public sealed class WorkspaceTool
         ParseDiagnostics: HealthFactSection<ParseDiagnosticGroup>.Unavailable(error),
         CapabilityGaps: HealthFactSection<CapabilityGapGroup>.Unavailable(error),
         LanguageCapabilities: HealthFactSection<LanguageCapabilitySummary>.Unavailable(error),
+        StructuralFacts: HealthFactSection<StructuralFactGroup>.Unavailable(error),
+        ComplexityMetrics: HealthFactSection<ComplexityMetricGroup>.Unavailable(error),
         Files: HealthFactSection<FileStatusGroup>.Unavailable(error));
 
     private static bool IsHealthIndexReadException(Exception ex) =>
