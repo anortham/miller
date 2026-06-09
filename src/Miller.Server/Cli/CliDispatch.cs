@@ -355,14 +355,18 @@ public static class CliDispatch
 
     private static int Patterns(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
-        string operation = args.Count == 0 ? "list" : args[0].ToLowerInvariant();
+        if (args.Count > 0 && args[0] is "--help" or "-h")
+            return Usage(err, "miller patterns <list|summary|search> [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]");
+
+        bool firstTokenIsFlag = args.Count > 0 && args[0].StartsWith("--", StringComparison.Ordinal);
+        string operation = args.Count == 0 || firstTokenIsFlag ? "list" : args[0].ToLowerInvariant();
         if (operation is "help" or "--help" or "-h")
             return Usage(err, "miller patterns <list|summary|search> [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]");
 
         if (operation is not ("list" or "summary" or "summarize" or "search"))
             return Usage(err, "miller patterns <list|summary|search> [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]");
 
-        CliOptions o = CliOptions.Parse(args.Skip(1).ToArray(), "json");
+        CliOptions o = CliOptions.Parse((firstTokenIsFlag ? args : args.Skip(1)).ToArray(), "json");
         string? patternId = o.Value("pattern", o.Value("pattern-id"));
         if (string.IsNullOrWhiteSpace(patternId) && o.Positionals.Count > 0)
             patternId = o.Query;

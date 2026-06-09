@@ -11,7 +11,7 @@ catalog entry before accepting a row.
 ## Commands
 
 ```bash
-miller patterns list [--workspace-id SELECTOR] [--workspace DIR] [--language LANG] [--json]
+miller patterns [list] [--workspace-id SELECTOR] [--workspace DIR] [--language LANG] [--json]
 miller patterns summary [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--language LANG] [--path GLOB] [--json]
 miller patterns search --pattern ID [--workspace-id SELECTOR] [--workspace DIR] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]
 ```

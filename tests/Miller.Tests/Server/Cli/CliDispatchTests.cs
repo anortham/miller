@@ -823,6 +823,24 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void Patterns_JsonWithoutOperation_DefaultsToList()
+    {
+        using var fx = DbWithPatterns();
+
+        var (code, outText, errText) = Run(
+            new[] { "patterns", "--json" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        Assert.Equal("list", doc.RootElement.GetProperty("operation").GetString());
+        Assert.Contains(
+            doc.RootElement.GetProperty("patterns").EnumerateArray(),
+            row => row.GetProperty("pattern_id").GetString() == "htmx.attribute.v1");
+    }
+
+    [Fact]
     public void Patterns_SearchJson_FiltersMetadataAndPath()
     {
         using var fx = DbWithPatterns();
@@ -858,6 +876,18 @@ public sealed class CliDispatchTests : IDisposable
 
         Assert.Equal(2, code);
         Assert.Contains("miller patterns search", errText);
+    }
+
+    [Fact]
+    public void Patterns_HelpFlag_DoesNotRequireIndex()
+    {
+        var (code, _, errText) = Run(
+            new[] { "patterns", "--help" },
+            Context(Path.Combine(_dir, "missing", ".miller", "symbols.db")));
+
+        Assert.Equal(2, code);
+        Assert.Contains("miller patterns", errText);
+        Assert.DoesNotContain("no Miller index", errText);
     }
 
     [Fact]

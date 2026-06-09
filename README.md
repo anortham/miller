@@ -205,17 +205,27 @@ UX such as next-action guidance, confidence/evidence views, semantic/vector retr
 
 ## The tool surface
 
-Eight MCP tools, each with smart defaults so the common path is the simplest call: `search`, `inspect`,
-`context`, `trace`, `impact`, `edit`, `content`, and `workspace`. Read tools accept a `workspace_id`
+Nine MCP tools, each with smart defaults so the common path is the simplest call: `search`, `inspect`,
+`context`, `trace`, `impact`, `edit`, `content`, `patterns`, and `workspace`. Read tools accept a `workspace_id`
 selector: display ID, unique prefix, full ID, registered root path, `current`, or `primary`. Explicit `workspace_id` defaults
 `ensure_fresh=true`. Targets are smart strings, not JSON objects. See
 [docs/findings/miller-toolbox.md](docs/findings/miller-toolbox.md).
 
 For cross-workspace code reading, stay in the current session and run `workspace list`. If the target repo is
 registered, pass its display ID, unique prefix, full ID, or root path as `workspace_id` to `search`, `inspect`,
-`context`, `impact`, or `trace`. If it is not registered yet, run `workspace operation=open path=/absolute/repo`
-from MCP or `miller workspace open --path /absolute/repo --full` from the CLI, then retry the read tool. The
-`workspace_id=all` selector is only for `content search` text audits across registered workspace content DBs.
+`context`, `impact`, `trace`, or `patterns`. If it is not registered yet, run
+`workspace operation=open path=/absolute/repo` from MCP or `miller workspace open --path /absolute/repo --full`
+from the CLI, then retry the read tool. The `workspace_id=all` selector is only for `content search` text audits
+across registered workspace content DBs.
+
+`patterns` is the structural-facts surface. It lists and searches known code-shape facts emitted by
+`julie-extractors`, such as framework attributes when extractor support exists. It is intentionally not a raw AST
+query language:
+
+```text
+patterns()
+patterns(operation="search", pattern_id="htmx.attribute.v1", where="name=hx-get", path="Views/**")
+```
 
 ## Using Miller
 
@@ -245,6 +255,8 @@ The single `miller` binary runs two ways:
   dotnet run --project src/Miller.Server -c Release -- search "release archive" --mode content --limit 5
   dotnet run --project src/Miller.Server -c Release -- content add-markdown /tmp/page.md --url https://example.com/page --display-path "Example page" --json
   dotnet run --project src/Miller.Server -c Release -- content search "important phrase" --kind web --limit 5
+  dotnet run --project src/Miller.Server -c Release -- patterns --json
+  dotnet run --project src/Miller.Server -c Release -- patterns search --pattern htmx.attribute.v1 --where name=hx-get --path "Views/**" --json
   dotnet run --project src/Miller.Server -c Release -- inspect src/Miller.Server/AgentInstructions.cs --depth full
   dotnet run --project src/Miller.Server -c Release -- context "CLI workspace routing" --token-budget 2000
   dotnet run --project src/Miller.Server -c Release -- trace AgentInstructions --depth 2
@@ -257,7 +269,8 @@ The single `miller` binary runs two ways:
 
   Build once and run the binary directly (`src/Miller.Server/bin/Release/net10.0/miller <verb>`) to skip the
   `dotnet run` up-to-date check. `miller help` lists every verb: `search`, `inspect`, `context`, `impact`,
-  `trace`, `content`, `workspace`, `refresh`, `capabilities`, `telemetry`, `dashboard`, `version`, `serve`.
+  `trace`, `content`, `patterns`, `workspace`, `refresh`, `capabilities`, `telemetry`, `dashboard`, `version`,
+  `serve`.
 
 **Dogfooding the server.** Because MCP runs over stdio, a new build takes effect only after the MCP client
 restarts the subprocess. A build made inside the repo carries its git short SHA — `miller version` prints
@@ -354,6 +367,7 @@ dotnet run --project src/Miller.Server -c Release -- workspace health --json
 dotnet run --project src/Miller.Server -c Release -- workspace list
 dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvider" --limit 5
 dotnet run --project src/Miller.Server -c Release -- search "release archive" --mode content --limit 5
+dotnet run --project src/Miller.Server -c Release -- patterns --json
 dotnet run --project src/Miller.Server -c Release -- inspect src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md
 dotnet run --project src/Miller.Server -c Release -- context "dashboard telemetry and workspace registry" --token-budget 1200
 dotnet run --project src/Miller.Server -c Release -- impact src/Miller.Server/Tools/WorkspaceTool.cs --max-depth 1 --limit 10
@@ -365,6 +379,8 @@ What these prove:
   instead of hydrating the full graph.
 - Symbol search stays narrow and structural (`name + signature`). Docs/config use `--mode content`; source
   bodies and imported text use the explicit content corpus modes.
+- `patterns --json` discovers extractor-recognized code-shape facts without private SQLite reads or raw AST
+  queries.
 - `inspect`, `context`, and `impact` use the same projection-specific read paths exposed to MCP tools.
 - The dashboard is operational evidence, not a separate product UI: it shows registered workspaces, index facts,
   telemetry, latency/failure signals, and scoped JSON endpoints from the same local state.
@@ -399,11 +415,11 @@ Text output is a compact human-facing contract and JSON output is the integratio
   workspace operation, missing restore, or another operational failure a script should not ignore.
 - `capabilities --json` reports the Miller build, `julie-extract` contract versions, optional feature flags,
   supported JSON commands, and export feeds for Eros/local integrations.
-- `--json` is supported by `search`, `inspect`, `context`, `impact`, `trace`, `dashboard`, `content`
-  operations, and `workspace` operations.
+- `--json` is supported by `search`, `inspect`, `context`, `impact`, `trace`, `patterns`, `dashboard`,
+  `content` operations, and `workspace` operations.
 - `refresh --json --wait [--workspace-id SELECTOR|--workspace DIR] [--full]` is the Eros-friendly top-level
   convergence command. It wraps the existing registered-workspace refresh path and includes sidecar facts.
-- `search`, `inspect`, `context`, `impact`, and `trace` accept `--workspace-id <selector>`; selectors are the
+- `search`, `inspect`, `context`, `impact`, `trace`, and `patterns` accept `--workspace-id <selector>`; selectors are the
   same registry IDs/display IDs/path selectors used by MCP `workspace_id`: display ID, unique prefix, full ID,
   registered root path, `current`, or `primary`.
 - `search --mode file --json` intentionally returns symbol rows from matching files (`name`, `kind`, `file`,

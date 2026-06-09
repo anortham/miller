@@ -143,9 +143,9 @@ scripts/test.ps1 all
 - **Eros-facing CLI/export contracts.** Keep Eros on public process/artifact contracts, not Miller private .NET
   internals. Current documented surfaces live in [`docs/contracts/cli-eros-v1.md`](docs/contracts/cli-eros-v1.md):
   `capabilities --json`, `refresh --json --wait`, `workspace status --json`, `workspace health --json`,
-  `content export`, `telemetry export --jsonl`, and stable read-command JSON such as `impact --json` and
-  `trace --json`. Add or harden new surfaces only when a concrete Eros workflow needs facts the documented
-  contracts do not cover.
+  `content export`, `telemetry export --jsonl`, and stable read-command JSON such as `impact --json`,
+  `trace --json`, and `patterns --json`. Add or harden new surfaces only when a concrete Eros workflow needs
+  facts the documented contracts do not cover.
 - **Logging.** All processes append to ONE shared daily pair (`.miller/logs/miller-<YYYYMMDD>.log` +
   `.jsonl`, Serilog `shared:true`); `pid`/`role`/`cid` are line properties, not file-name segments. There
   is no per-pid file and no startup reaper (both removed 2026-05-31; see the superseded D1/D6 notes in
@@ -154,10 +154,10 @@ scripts/test.ps1 all
   surface is `~/.miller/workspaces.db`. Read tools accept `workspace_id` selectors: display ID, unique prefix,
   full ID, registered root path, `current`, or `primary`; explicit `workspace_id` defaults to refresh-first.
   When a user asks from workspace A to inspect workspace B, keep the session in A, run `workspace list`, and pass
-  B's selector to `search`/`inspect`/`context`/`impact`/`trace`. If B is not registered, run `workspace open`
-  with its root path first. `workspace_id=all` is only for `content search` text audits, not symbol/code read
-  tools. The dashboard reads the registry, shared telemetry DB, and read-only aggregate facts from workspace
-  artifacts. It must not hydrate full indexes just to render list/detail views.
+  B's selector to `search`/`inspect`/`context`/`impact`/`trace`/`patterns`. If B is not registered, run
+  `workspace open` with its root path first. `workspace_id=all` is only for `content search` text audits, not
+  symbol/code read tools. The dashboard reads the registry, shared telemetry DB, and read-only aggregate facts
+  from workspace artifacts. It must not hydrate full indexes just to render list/detail views.
 - **Hash split.** Stable `workspace_id` is SHA-256 of the canonical root. File freshness uses
   `files.content_hash` (`blake3:<hex>`, normalized before comparison) and is guarded by
   `artifact_metadata.hash_algorithm=blake3`.
@@ -178,6 +178,10 @@ scripts/test.ps1 all
   `mode=external|web|all-text` for imported or full corpus text, and
   `regions=comment|doc_comment|string_literal` for source-region text. Do not add doc comments, literals, or broad
   source text directly to symbol ranking just because an old TODO predates content corpus FTS.
+- **Patterns and structural facts.** The `patterns` MCP/CLI surface reads `structural_facts` emitted by
+  `julie-extractors`. Miller may list, group, filter, and render generic `pattern_id` facts, but it must not own
+  parser recognition or raw AST query execution. When a new fact shape needs extractor support, add it across all
+  supported languages in `julie-extractors` first, then consume the stable artifact contract from Miller/Eros.
 - **Web research.** Miller has a mirrored `miller-web-research` skill. Web fetching stays outside Miller in the
   skill layer via `browser39`; Miller imports fetched markdown as `web` content and supports bounded
   search/read through the content corpus.

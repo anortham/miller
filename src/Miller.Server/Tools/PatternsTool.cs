@@ -29,15 +29,15 @@ public sealed class PatternsTool
 
     [McpServerTool(Name = "patterns")]
     [Description(
-        "List, summarize, and search code-shape facts emitted by julie-extractors. Use this for known patterns; " +
-        "it is not raw AST query execution.")]
+        "List, summarize, and search code-shape facts emitted by julie-extractors. Call with no args to discover " +
+        "observed pattern_id values, then search by pattern_id plus path/language/where filters. Not raw AST queries.")]
     public string Patterns(
         [Description("list|summary|search. Default list.")] string? operation = "list",
-        [Description("Pattern id, required for operation=search. Example: htmx.attribute.v1.")] string? pattern_id = null,
+        [Description("Pattern id. Required for search; optional for summary/list. Example: htmx.attribute.v1.")] string? pattern_id = null,
         [Description("Language filter such as csharp, html, or razor. Optional.")] string? language = null,
         [Description("Workspace-relative glob filter, e.g. Views/**. Optional.")] string? path = null,
         [Description("Top-level metadata equality filter as key=value. Requires pattern_id. Optional.")] string? where = null,
-        [Description("Workspace selector: display id, unique prefix, full id, root path, current, or primary.")] string? workspace_id = null,
+        [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")] string? workspace_id = null,
         [Description("Refresh selected workspace before reading. Defaults true when workspace_id is supplied.")] bool? ensure_fresh = null,
         [Description("Max search results. Default 50, maximum 500.")] int limit = DefaultLimit,
         [Description("Output format: compact|json. Default compact.")] string format = "compact")
@@ -207,7 +207,10 @@ public sealed class PatternsTool
     {
         int boundedLimit = Math.Clamp(limit, 1, MaxLimit);
         ToolSearchFilters filters = ToolSearchFilters.Parse(path, null);
-        PatternMatchRow[] rows = reader.Matches(dbPath, patternId, language, metadataFilter)
+        IEnumerable<PatternMatchRow> candidates = filters.HasAny
+            ? reader.EnumerateMatches(dbPath, patternId, language, metadataFilter)
+            : reader.EnumerateMatches(dbPath, patternId, language, metadataFilter, boundedLimit);
+        PatternMatchRow[] rows = candidates
             .Where(row => filters.Allows(row.Path, row.Language))
             .Take(boundedLimit)
             .ToArray();

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Miller - Local Code Intelligence for Coding Agents</title>
-  <meta name="description" content="Miller is the free local code-intelligence core for coding agents: MCP and CLI search, inspect, context, trace, impact, edit, content search, workspace freshness, and telemetry.">
+  <meta name="description" content="Miller is the free local code-intelligence core for coding agents: MCP and CLI search, inspect, context, trace, impact, edit, content search, structural patterns, workspace freshness, and telemetry.">
   <link rel="canonical" href="https://anortham.github.io/miller/">
 
   <meta property="og:type" content="website">
@@ -179,6 +179,10 @@
           <span>content search</span>
           <code>dotnet run --project src/Miller.Server -c Release -- search "release archive" --mode content --limit 5</code>
         </button>
+        <button class="command-line" type="button" data-copy="dotnet run --project src/Miller.Server -c Release -- patterns --json">
+          <span>patterns</span>
+          <code>dotnet run --project src/Miller.Server -c Release -- patterns --json</code>
+        </button>
         <button class="command-line" type="button" data-copy="dotnet run --project src/Miller.Server -c Release -- context &quot;dashboard telemetry and workspace registry&quot; --token-budget 1200">
           <span>context bundle</span>
           <code>dotnet run --project src/Miller.Server -c Release -- context "dashboard telemetry and workspace registry" --token-budget 1200</code>
@@ -219,6 +223,10 @@
         <article>
           <h3>content</h3>
           <p>Bounded search/read/export for source text, docs, logs, reports, and imported web markdown.</p>
+        </article>
+        <article>
+          <h3>patterns</h3>
+          <p>List and search extractor-recognized code-shape facts by <code>pattern_id</code>, metadata, path, and language without raw AST queries.</p>
         </article>
         <article>
           <h3>workspace</h3>

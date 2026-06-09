@@ -104,6 +104,14 @@ public sealed class PatternFactsReader
         string? patternId,
         string? language,
         PatternMetadataFilter? metadataFilter,
+        int? limit = null) =>
+        EnumerateMatches(dbPath, patternId, language, metadataFilter, limit).ToArray();
+
+    public IEnumerable<PatternMatchRow> EnumerateMatches(
+        string dbPath,
+        string? patternId,
+        string? language,
+        PatternMetadataFilter? metadataFilter,
         int? limit = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
@@ -124,7 +132,7 @@ public sealed class PatternFactsReader
             ORDER BY path, start_byte, structural_fact_id;
             """;
 
-        var rows = new List<PatternMatchRow>();
+        int emitted = 0;
         using SqliteDataReader reader = command.ExecuteReader();
         while (reader.Read())
         {
@@ -132,12 +140,11 @@ public sealed class PatternFactsReader
             if (metadataFilter is not null && !MetadataMatches(row, metadataFilter))
                 continue;
 
-            rows.Add(row);
-            if (boundedLimit is not null && rows.Count >= boundedLimit.Value)
+            yield return row;
+            emitted++;
+            if (boundedLimit is not null && emitted >= boundedLimit.Value)
                 break;
         }
-
-        return rows;
     }
 
     private static SqliteConnection OpenStructuralFacts(string dbPath)
