@@ -286,6 +286,31 @@ public sealed class IndexerServiceScanTests
     }
 
     [Fact]
+    public void WatcherIgnorePolicyFileChange_ForcesDeltaScan()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "miller-indexer-ignore-policy-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            WorkspaceContext workspace = CreateWorkspace(dir);
+            var service = NewSeededService(workspace, SymbolSearchSidecar.Disabled);
+            var ops = new RecordingScanOps { Revision = 13 };
+            service.PublishOpsForTest(ops);
+
+            service.HandleChangedForTest(
+                WatcherChangeTypes.Changed,
+                Path.Combine(workspace.CanonicalRoot!, ".gitignore"));
+            service.DrainForTest(headChanged: false);
+
+            Assert.Equal(new[] { false }, ops.ScanForce);
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void TryScanAsLeader_WhenLeaderScanThrows_ReportsFailed_NeverThrows()
     {
         var service = NewService();

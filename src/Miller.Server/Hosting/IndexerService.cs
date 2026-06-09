@@ -50,6 +50,7 @@ public sealed class IndexerService : BackgroundService
     private IDisposable? _lease;
     private FileSystemWatcher? _watcher;
     private FileSystemWatcher? _gitHeadWatcher;
+    private readonly List<FileSystemWatcher> _ancestorIgnorePolicyWatchers = new();
     private IndexerCore? _core;
 
     // The leader's extract ops, set once leadership is won (null on a non-leader). M6 write-through reaches
@@ -523,6 +524,13 @@ public sealed class IndexerService : BackgroundService
     }
 
     /// <summary>
+    /// Test seam: run the same watcher change routing that <see cref="FileSystemWatcher"/> invokes, without
+    /// requiring a live watcher. Requires <see cref="PublishOpsForTest"/> to have built the core.
+    /// </summary>
+    internal void HandleChangedForTest(WatcherChangeTypes changeType, string fullPath) =>
+        HandleChanged(changeType, fullPath);
+
+    /// <summary>
     /// Test seam: run ONE debounce drain exactly as the production loop does — under <see cref="_opsGate"/>, the
     /// same lock the on-demand <see cref="TryScanAsLeader"/> / <see cref="TryReindexAsLeader"/> take — so a test
     /// can drive a drain concurrently with a Try* call and assert they never run two extracts at once (the M3
@@ -577,16 +585,48 @@ public sealed class IndexerService : BackgroundService
             _gitHeadWatcher.Renamed += OnHeadChanged;
             _gitHeadWatcher.EnableRaisingEvents = true;
         }
+
+        foreach (string ignoreFile in WorkspaceIgnorePolicy.AncestorGitignoreFilesOutsideRoot(canonicalRoot))
+        {
+            string? directory = Path.GetDirectoryName(ignoreFile);
+            if (directory is null || !Directory.Exists(directory))
+                continue;
+
+            var watcher = new FileSystemWatcher(directory, ".gitignore")
+            {
+                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size,
+            };
+            watcher.Changed += OnIgnorePolicyChanged;
+            watcher.Created += OnIgnorePolicyChanged;
+            watcher.Deleted += OnIgnorePolicyChanged;
+            watcher.Renamed += OnIgnorePolicyChanged;
+            watcher.EnableRaisingEvents = true;
+            _ancestorIgnorePolicyWatchers.Add(watcher);
+        }
     }
 
     private void OnChanged(object sender, FileSystemEventArgs e)
     {
-        if (_core is null || !WatchPathFilter.ShouldProcess(_bootstrap.Workspace.CanonicalRoot!, e.FullPath))
+        HandleChanged(e.ChangeType, e.FullPath);
+    }
+
+    private void HandleChanged(WatcherChangeTypes changeType, string fullPath)
+    {
+        if (_core is null)
+            return;
+
+        string root = _bootstrap.Workspace.CanonicalRoot!;
+        if (WatchPathFilter.ShouldForceRescan(root, fullPath))
+        {
+            _core.SignalRescan();
+            return;
+        }
+        if (!WatchPathFilter.ShouldProcess(root, fullPath))
             return;
         // Drop directory events: julie operates on files; a dir create/delete surfaces as per-file events too.
-        if (Directory.Exists(e.FullPath))
+        if (Directory.Exists(fullPath))
             return;
-        _core.Enqueue(WatcherEventMapper.Map(e.ChangeType, e.FullPath));
+        _core.Enqueue(WatcherEventMapper.Map(changeType, fullPath));
     }
 
     private void OnRenamed(object sender, RenamedEventArgs e)
@@ -594,6 +634,13 @@ public sealed class IndexerService : BackgroundService
         if (_core is null)
             return;
         string root = _bootstrap.Workspace.CanonicalRoot!;
+        if (WatchPathFilter.ShouldForceRescan(root, e.OldFullPath)
+            || WatchPathFilter.ShouldForceRescan(root, e.FullPath))
+        {
+            _core.SignalRescan();
+            return;
+        }
+
         bool oldOk = WatchPathFilter.ShouldProcess(root, e.OldFullPath);
         bool newOk = WatchPathFilter.ShouldProcess(root, e.FullPath);
 
@@ -620,6 +667,11 @@ public sealed class IndexerService : BackgroundService
             _headChanged = true;
     }
 
+    private void OnIgnorePolicyChanged(object sender, FileSystemEventArgs e)
+    {
+        _core?.SignalRescan();
+    }
+
     private void DisposeWatchers()
     {
         if (_watcher is not null)
@@ -642,5 +694,15 @@ public sealed class IndexerService : BackgroundService
             _gitHeadWatcher.Dispose();
             _gitHeadWatcher = null;
         }
+        foreach (var watcher in _ancestorIgnorePolicyWatchers)
+        {
+            watcher.EnableRaisingEvents = false;
+            watcher.Changed -= OnIgnorePolicyChanged;
+            watcher.Created -= OnIgnorePolicyChanged;
+            watcher.Deleted -= OnIgnorePolicyChanged;
+            watcher.Renamed -= OnIgnorePolicyChanged;
+            watcher.Dispose();
+        }
+        _ancestorIgnorePolicyWatchers.Clear();
     }
 }

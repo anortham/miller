@@ -12,23 +12,30 @@ namespace Miller.Server.Hosting;
 ///
 /// <para>It only SKIPS noise directories that would either churn pointlessly or feed back on themselves:
 /// version-control internals (<c>.git</c> — the dedicated <c>.git/HEAD</c> watch handles branch switches),
-/// Miller's own <c>.miller</c> sidecar (its extract/telemetry/WAL writes must not re-enter as events), and the
-/// usual build-output trees (<c>node_modules</c>, <c>target</c>, <c>bin</c>, <c>obj</c>). Matching is on whole
-/// path SEGMENTS, so a <c>.github</c> dir or an <c>object.cs</c> file is not caught by a substring.</para>
+/// Miller's own <c>.miller</c> sidecar (its extract/telemetry/WAL writes must not re-enter as events), IDE
+/// caches (<c>.vs</c>), and the usual build-output trees (<c>node_modules</c>, <c>target</c>, <c>bin</c>,
+/// <c>obj</c>). Matching is on whole path SEGMENTS, so a <c>.github</c> dir or an <c>object.cs</c> file is not
+/// caught by a substring. It also applies workspace ignore files (<c>.gitignore</c> plus
+/// <c>.julieignore</c>) so live per-file updates do not churn on files a full scan would skip.</para>
 /// </summary>
 public static class WatchPathFilter
 {
-    // Whole-segment skip set. NOT an extension list — these are directory names anywhere in the path. Ordinal
-    // on the segment; case-sensitive matches the POSIX filesystems julie/Miller target (a Windows port would
-    // pass an OrdinalIgnoreCase comparer here — out of M3 scope, the segments are lowercase by convention).
-    private static readonly HashSet<string> SkipSegments = new(StringComparer.Ordinal)
+    // Whole-segment skip set. NOT an extension list — these are directory names anywhere in the path.
+    private static readonly HashSet<string> SkipSegments = new(SegmentComparer)
     {
         ".git",
         ".miller",
+        ".vs",
         "node_modules",
         "target",
         "bin",
         "obj",
+    };
+
+    private static readonly HashSet<string> IgnorePolicyFiles = new(SegmentComparer)
+    {
+        ".gitignore",
+        ".julieignore",
     };
 
     /// <summary>
@@ -48,6 +55,28 @@ public static class WatchPathFilter
             if (SkipSegments.Contains(segment))
                 return false;
         }
-        return true;
+        return !WorkspaceIgnorePolicy.IsIgnored(root, absolutePath);
     }
+
+    /// <summary>
+    /// True when this event changes ignore policy rather than indexable source. The watcher should force one scan
+    /// so previously-indexed files that just became ignored are pruned, and newly-unignored files are discovered.
+    /// </summary>
+    /// <exception cref="ArgumentNullException">Either argument is null.</exception>
+    public static bool ShouldForceRescan(string root, string absolutePath)
+    {
+        ArgumentNullException.ThrowIfNull(root);
+        ArgumentNullException.ThrowIfNull(absolutePath);
+        return IgnorePolicyFiles.Contains(LastPathSegment(absolutePath))
+            && !WorkspaceIgnorePolicy.IsOutsideRoot(root, absolutePath);
+    }
+
+    private static string LastPathSegment(string path)
+    {
+        string[] segments = path.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length == 0 ? string.Empty : segments[^1];
+    }
+
+    private static StringComparer SegmentComparer =>
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 }

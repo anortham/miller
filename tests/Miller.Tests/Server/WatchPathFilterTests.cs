@@ -16,6 +16,21 @@ public sealed class WatchPathFilterTests
 {
     private const string Root = "/repo";
 
+    private sealed class TempDir : IDisposable
+    {
+        public TempDir()
+        {
+            Path = System.IO.Path.Combine(
+                System.IO.Path.GetTempPath(),
+                "miller-watch-filter-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(Path);
+        }
+
+        public string Path { get; }
+
+        public void Dispose() => Directory.Delete(Path, recursive: true);
+    }
+
     [Theory]
     // Accepted: every plausible source path, regardless of language or extension, including none.
     [InlineData("/repo/src/Main.cs")]
@@ -39,6 +54,8 @@ public sealed class WatchPathFilterTests
     [InlineData("/repo/.miller/symbols.db")]    // our own DB — would feed back as events
     [InlineData("/repo/.miller/symbols.db-wal")]
     [InlineData("/repo/.miller/logs/miller-.log")]
+    [InlineData("/repo/.vs/AccessIQ/FileContentIndex/cache.vsidx")]
+    [InlineData(@"C:\source\AccessIQ\.vs\AccessIQ\FileContentIndex\8cfe21f6-17d4-4a7a-9a09-638f199e871b.vsidx")]
     [InlineData("/repo/node_modules/pkg/index.js")]
     [InlineData("/repo/target/debug/app")]      // rust build output
     [InlineData("/repo/bin/Debug/net10.0/x.dll")]
@@ -63,5 +80,99 @@ public sealed class WatchPathFilterTests
     {
         // A nested submodule's .git directory is still VCS noise.
         Assert.False(WatchPathFilter.ShouldProcess(Root, "/repo/vendor/lib/.git/index"));
+    }
+
+    [Fact]
+    public void ShouldProcess_RootGitignore_SkipsIgnoredFilesAndDirectories()
+    {
+        using var temp = new TempDir();
+        File.WriteAllText(System.IO.Path.Combine(temp.Path, ".gitignore"), "ignored.rs\nignored_dir/\n*.log\n");
+
+        Assert.False(WatchPathFilter.ShouldProcess(temp.Path, System.IO.Path.Combine(temp.Path, "ignored.rs")));
+        Assert.False(WatchPathFilter.ShouldProcess(temp.Path, System.IO.Path.Combine(temp.Path, "ignored_dir", "a.cs")));
+        Assert.False(WatchPathFilter.ShouldProcess(temp.Path, System.IO.Path.Combine(temp.Path, "daemon.log")));
+        Assert.True(WatchPathFilter.ShouldProcess(temp.Path, System.IO.Path.Combine(temp.Path, "src", "keep.rs")));
+    }
+
+    [Fact]
+    public void ShouldProcess_NestedGitignore_IsScopedToItsDirectory()
+    {
+        using var temp = new TempDir();
+        string sub = System.IO.Path.Combine(temp.Path, "sub");
+        Directory.CreateDirectory(sub);
+        File.WriteAllText(System.IO.Path.Combine(sub, ".gitignore"), "local_only/\n");
+
+        Assert.False(WatchPathFilter.ShouldProcess(temp.Path, System.IO.Path.Combine(sub, "local_only", "a.rs")));
+        Assert.True(WatchPathFilter.ShouldProcess(temp.Path, System.IO.Path.Combine(temp.Path, "local_only", "a.rs")));
+    }
+
+    [Fact]
+    public void ShouldProcess_Julieignore_SkipsIgnoredFiles()
+    {
+        using var temp = new TempDir();
+        File.WriteAllText(System.IO.Path.Combine(temp.Path, ".julieignore"), "julie_ignored.rs\njulie_dir/\n");
+
+        Assert.False(WatchPathFilter.ShouldProcess(temp.Path, System.IO.Path.Combine(temp.Path, "julie_ignored.rs")));
+        Assert.False(WatchPathFilter.ShouldProcess(temp.Path, System.IO.Path.Combine(temp.Path, "julie_dir", "a.rs")));
+        Assert.True(WatchPathFilter.ShouldProcess(temp.Path, System.IO.Path.Combine(temp.Path, "src", "keep.rs")));
+    }
+
+    [Fact]
+    public void ShouldProcess_AncestorGitignoreAboveWorkspaceRoot_IsInherited()
+    {
+        using var temp = new TempDir();
+        string repo = System.IO.Path.Combine(temp.Path, "repo");
+        string workspace = System.IO.Path.Combine(repo, "packages", "app");
+        Directory.CreateDirectory(workspace);
+        File.WriteAllText(System.IO.Path.Combine(repo, ".git"), "gitdir: .git/worktrees/app\n");
+        File.WriteAllText(System.IO.Path.Combine(repo, ".gitignore"), "private_data/\n");
+
+        Assert.False(WatchPathFilter.ShouldProcess(
+            workspace,
+            System.IO.Path.Combine(workspace, "private_data", "secret.rs")));
+        Assert.True(WatchPathFilter.ShouldProcess(workspace, System.IO.Path.Combine(workspace, "src", "keep.rs")));
+    }
+
+    [Fact]
+    public void ShouldProcess_GitignoreNegation_ReincludesFile()
+    {
+        using var temp = new TempDir();
+        File.WriteAllText(System.IO.Path.Combine(temp.Path, ".gitignore"), "*.cs\n!keep.cs\n");
+
+        Assert.False(WatchPathFilter.ShouldProcess(temp.Path, System.IO.Path.Combine(temp.Path, "drop.cs")));
+        Assert.True(WatchPathFilter.ShouldProcess(temp.Path, System.IO.Path.Combine(temp.Path, "keep.cs")));
+    }
+
+    [Theory]
+    [InlineData(".gitignore")]
+    [InlineData(".julieignore")]
+    [InlineData("sub/.gitignore")]
+    [InlineData("sub/.julieignore")]
+    public void ShouldForceRescan_IgnoresPolicyFileChanges(string relativePath)
+    {
+        using var temp = new TempDir();
+        string path = System.IO.Path.Combine(temp.Path, relativePath.Replace('/', System.IO.Path.DirectorySeparatorChar));
+
+        Assert.True(WatchPathFilter.ShouldForceRescan(temp.Path, path));
+    }
+
+    [Fact]
+    public void AncestorGitignoreFilesOutsideRoot_IncludesGitRootAndIntermediateParents()
+    {
+        using var temp = new TempDir();
+        string repo = System.IO.Path.Combine(temp.Path, "repo");
+        string workspace = System.IO.Path.Combine(repo, "packages", "app");
+        Directory.CreateDirectory(workspace);
+        File.WriteAllText(System.IO.Path.Combine(repo, ".git"), "gitdir: .git/worktrees/app\n");
+
+        string[] files = WorkspaceIgnorePolicy.AncestorGitignoreFilesOutsideRoot(workspace).ToArray();
+
+        Assert.Equal(
+            new[]
+            {
+                System.IO.Path.Combine(repo, ".gitignore"),
+                System.IO.Path.Combine(repo, "packages", ".gitignore"),
+            },
+            files);
     }
 }
