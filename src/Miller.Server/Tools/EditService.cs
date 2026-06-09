@@ -41,6 +41,7 @@ public sealed class EditService
     private readonly string _workspaceRoot;
     private readonly EditApplier _applier;
     private readonly IEditWriteThrough _writeThrough;
+    private readonly IndexedSourceTextReader _indexedSourceTextReader;
 
     /// <summary>
     /// Construct over the resolved workspace dependencies.
@@ -51,10 +52,11 @@ public sealed class EditService
     /// <param name="workspaceRoot">The absolute workspace root; relative indexed paths compose under it for disk I/O.</param>
     /// <param name="applier">The atomic apply transaction (writer-lock + TOCTOU + rollback).</param>
     /// <param name="writeThrough">Post-apply index convergence (leader reindex, else watcher backstop).</param>
+    /// <param name="indexedSourceTextReader">Advisory source-corpus reader for stale-index diagnostics.</param>
     /// <exception cref="ArgumentNullException">Any argument is null.</exception>
     public EditService(
         MillerRepositoryIndex index, SmartTargetResolver resolver, string dbPath, string workspaceRoot,
-        EditApplier applier, IEditWriteThrough writeThrough)
+        EditApplier applier, IEditWriteThrough writeThrough, IndexedSourceTextReader? indexedSourceTextReader = null)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentNullException.ThrowIfNull(resolver);
@@ -68,6 +70,7 @@ public sealed class EditService
         _workspaceRoot = workspaceRoot;
         _applier = applier;
         _writeThrough = writeThrough;
+        _indexedSourceTextReader = indexedSourceTextReader ?? new IndexedSourceTextReader();
     }
 
     /// <summary>The outcome of an <c>edit</c> call: the rendered output plus the structured flags the tool/telemetry need.</summary>
@@ -169,7 +172,7 @@ public sealed class EditService
         };
 
         if (!plan.IsSuccess)
-            return Error(plan.Error!.Message, json);
+            return Error(EditPlanFailureMessage(plan.Error!, op, relativePath, request.OldText), json);
 
         // replace_text edits carry empty replacements (the planner only decides spans); fill in new_text here.
         IReadOnlyList<TextEdit> edits = op == EditOperation.ReplaceText
@@ -623,6 +626,24 @@ public sealed class EditService
     }
 
     private static string ReadDisk(string absPath) => File.ReadAllText(absPath, Encoding.UTF8);
+
+    private string EditPlanFailureMessage(EditError error, EditOperation op, string relativePath, string? oldText)
+    {
+        if (op != EditOperation.ReplaceText ||
+            error.Kind != EditErrorKind.TextNotFound ||
+            string.IsNullOrEmpty(oldText))
+        {
+            return error.Message;
+        }
+
+        IndexedSourceTextMatch? match = _indexedSourceTextReader.FindLiteral(_dbPath, relativePath, oldText);
+        if (match is null)
+            return error.Message;
+
+        return $"old_text not found in current file: \"{oldText}\". The indexed source still contains it " +
+               $"near line {match.Line}, so the file likely changed after the index snapshot. Wait for the " +
+               "watcher or run workspace refresh, then retry with the current text.";
+    }
 
     // ---- operation / occurrence parsing ----
 

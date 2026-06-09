@@ -300,6 +300,35 @@ public sealed class EditToolTests : IDisposable
         Assert.Equal(JulieDbFixture.OrderServiceContent, File.ReadAllText(AbsPath("orders/OrderService.cs")));
     }
 
+    [Fact]
+    public void Execute_ReplaceText_NotFound_WhenIndexedSourceStillHasText_ReturnsStaleIndexHint()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        ContentCorpusWriter.Write(
+            ContentCorpusSidecar.ContentDbPathFor(fx.DbPath),
+            fx.DbPath,
+            _root,
+            workspaceId: "ws-edit-001",
+            revision: 1);
+        File.WriteAllText(AbsPath("orders/OrderService.cs"),
+            JulieDbFixture.OrderServiceContent.Replace("Total", "Amount", StringComparison.Ordinal));
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", "orders/OrderService.cs") with
+        {
+            OldText = "Total",
+            NewText = "Sum",
+            Apply = true,
+        });
+
+        Assert.False(result.Applied);
+        Assert.Contains("old_text not found in current file", result.Output);
+        Assert.Contains("indexed source still contains it near line 2", result.Output);
+        Assert.Contains("Wait for the watcher or run workspace refresh", result.Output);
+        Assert.Contains("Amount", File.ReadAllText(AbsPath("orders/OrderService.cs")));
+    }
+
     // ---- NULL-body symbol rejects body/signature ops ----
 
     [Fact]
