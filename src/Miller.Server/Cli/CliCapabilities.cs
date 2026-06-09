@@ -26,6 +26,7 @@ internal static class CliCapabilities
         "content list --json",
         "content remove --json",
         "content export",
+        "patterns --json",
         "telemetry export --jsonl",
         "workspace status --json",
         "workspace health --json",
@@ -49,6 +50,7 @@ internal static class CliCapabilities
     [
         ("workspace_health", "workspace health --json", 1, "docs/contracts/workspace-health-v1.md"),
         ("trace", "trace --json", 1, "docs/contracts/trace-json-v1.md"),
+        ("patterns", "patterns --json", 1, "docs/contracts/patterns-json-v1.md"),
     ];
 
     public static string Render(bool json)

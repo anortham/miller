@@ -108,9 +108,11 @@ public static class MillerServiceRegistration
         services.AddSingleton(_ => SymbolSearchSidecar.FromEnvironment());
         services.AddSingleton<ContentCorpusSidecar>();
         services.AddSingleton<ContentCorpusExternalStore>();
+        services.AddSingleton<PatternFactsReader>();
         services.AddSingleton<CrossWorkspaceRefreshService>();
         services.AddSingleton<WorkspaceIndexProvider>();
         services.AddSingleton<IWorkspaceIndexProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
+        services.AddSingleton<IWorkspaceArtifactProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
         services.AddSingleton<IWorkspaceSearchProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
         services.AddSingleton<IWorkspaceContentSearchProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
         services.AddSingleton<IWorkspaceRegionSearchProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());

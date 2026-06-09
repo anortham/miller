@@ -124,6 +124,51 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Assert.Equal("TargetType", context.Index.Resolve(hit.Document.DocId).Name);
     }
 
+    [Fact]
+    public void ResolveArtifact_RegisteredWorkspace_ReturnsDbFactsWithoutFullOrProjectionLoads()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 4, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-artifact");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 4);
+
+        int fullLoadCount = 0;
+        int searchLoadCount = 0;
+        int contentLoadCount = 0;
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            loadIndex: _ =>
+            {
+                fullLoadCount++;
+                throw new InvalidOperationException("full loader was not expected");
+            },
+            loadSymbolSearch: _ =>
+            {
+                searchLoadCount++;
+                throw new InvalidOperationException("symbol loader was not expected");
+            },
+            loadContentSearch: (_, _) =>
+            {
+                contentLoadCount++;
+                throw new InvalidOperationException("content loader was not expected");
+            });
+
+        WorkspaceArtifactContext context = provider.ResolveArtifact("target-ws", ensureFresh: false);
+
+        Assert.Equal("target-ws", context.WorkspaceId);
+        Assert.Equal("target-111111111111", context.DisplayId);
+        Assert.Equal(target.DbPath, context.IndexDbPath);
+        Assert.Equal(root, context.WorkspaceRoot);
+        Assert.Equal(4, context.Revision);
+        Assert.Equal(0, fullLoadCount);
+        Assert.Equal(0, searchLoadCount);
+        Assert.Equal(0, contentLoadCount);
+    }
+
     [Theory]
     [InlineData("target-111111111111")]
     [InlineData("target-1111")]

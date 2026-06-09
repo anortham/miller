@@ -186,6 +186,60 @@ public sealed class CliDispatchTests : IDisposable
                     ParentId: null))
                 .ToArray());
 
+    private static JulieDbFixture DbWithPatterns()
+    {
+        var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow("sym-orders", "OrdersView", "view", "razor",
+                    "Views/Orders.cshtml", null, 1, null),
+                new JulieDbFixture.SymbolRow("sym-index", "Index", "function", "html",
+                    "public/index.html", null, 1, null),
+                new JulieDbFixture.SymbolRow("sym-auth", "AuthorizeHandler", "method", "csharp",
+                    "src/Auth.cs", "void AuthorizeHandler()", 1, null),
+            },
+            fileContent: new Dictionary<string, string>
+            {
+                ["Views/Orders.cshtml"] = "<button hx-get=\"/orders\" hx-trigger=\"click\"></button>\n",
+                ["public/index.html"] = "<button hx-post=\"/orders\"></button>\n",
+                ["src/Auth.cs"] = "[Authorize]\npublic class Auth {}\n",
+            });
+
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = fx.DbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        Exec(connection, """
+            INSERT INTO structural_facts
+                (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                 containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                 confidence, metadata_json)
+            VALUES
+                ('fact-hx-get', 'file:Views/Orders.cshtml', 'Views/Orders.cshtml', 'razor',
+                 'htmx.attribute.v1', 'attribute', 'attribute', 'sym-orders',
+                 1, 9, 1, 25, 8, 24, 1.0, '{"name":"hx-get","value":"/orders"}'),
+                ('fact-hx-trigger', 'file:Views/Orders.cshtml', 'Views/Orders.cshtml', 'razor',
+                 'htmx.attribute.v1', 'attribute', 'attribute', 'sym-orders',
+                 1, 26, 1, 45, 25, 44, 1.0, '{"name":"hx-trigger","value":"click"}'),
+                ('fact-hx-post', 'file:public/index.html', 'public/index.html', 'html',
+                 'htmx.attribute.v1', 'attribute', 'attribute', 'sym-index',
+                 1, 9, 1, 26, 8, 25, 1.0, '{"name":"hx-post","value":"/orders"}'),
+                ('fact-malformed', 'file:public/index.html', 'public/index.html', 'html',
+                 'htmx.attribute.v1', 'attribute', 'attribute', 'sym-index',
+                 2, 1, 2, 10, 26, 35, 1.0, '{bad-json'),
+                ('fact-future', 'file:src/Auth.cs', 'src/Auth.cs', 'csharp',
+                 'future.custom_pattern.v1', 'custom', 'attribute', 'sym-auth',
+                 1, 1, 1, 12, 0, 11, 0.75, '{"name":"Authorize"}');
+            """);
+
+        return fx;
+    }
+
     [Fact]
     public void IsCliInvocation_ServeAndEmptyAreServer_EverythingElseIsCli()
     {
@@ -248,12 +302,19 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Contains("telemetry export --jsonl", commands);
         Assert.Contains("impact --json", commands);
         Assert.Contains("trace --json", commands);
+        Assert.Contains("patterns --json", commands);
 
         JsonElement traceContract = Assert.Single(
             root.GetProperty("json_contracts").EnumerateArray(),
             item => item.GetProperty("name").GetString() == "trace");
         Assert.Equal("trace --json", traceContract.GetProperty("command").GetString());
         Assert.Equal(1, traceContract.GetProperty("schema_version").GetInt32());
+
+        JsonElement patternsContract = Assert.Single(
+            root.GetProperty("json_contracts").EnumerateArray(),
+            item => item.GetProperty("name").GetString() == "patterns");
+        Assert.Equal("patterns --json", patternsContract.GetProperty("command").GetString());
+        Assert.Equal(1, patternsContract.GetProperty("schema_version").GetInt32());
 
         JsonElement[] exports = root.GetProperty("supported_export_formats").EnumerateArray().ToArray();
         JsonElement export = Assert.Single(exports, item => item.GetProperty("name").GetString() == "content_corpus");
@@ -344,6 +405,7 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Equal(0, code);
         Assert.Contains("Commands:", outText);
         Assert.Contains("search", outText);
+        Assert.Contains("patterns", outText);
         Assert.Contains("serve", outText);
     }
 
@@ -739,6 +801,82 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Empty(errText);
         Assert.Contains("alpha (ws-alpha)  alpha.log:1  external_file", outText);
         Assert.Contains("beta (ws-beta)  beta.log:1  external_file", outText);
+    }
+
+    [Fact]
+    public void Patterns_ListJson_ReturnsObservedPatterns()
+    {
+        using var fx = DbWithPatterns();
+
+        var (code, outText, errText) = Run(
+            new[] { "patterns", "list", "--json" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        Assert.Equal(1, doc.RootElement.GetProperty("schema_version").GetInt32());
+        Assert.Equal("list", doc.RootElement.GetProperty("operation").GetString());
+        JsonElement htmx = doc.RootElement.GetProperty("patterns").EnumerateArray()
+            .Single(row => row.GetProperty("pattern_id").GetString() == "htmx.attribute.v1");
+        Assert.Equal(4, htmx.GetProperty("count").GetInt64());
+    }
+
+    [Fact]
+    public void Patterns_SearchJson_FiltersMetadataAndPath()
+    {
+        using var fx = DbWithPatterns();
+
+        var (code, outText, errText) = Run(
+            new[]
+            {
+                "patterns", "search",
+                "--pattern", "htmx.attribute.v1",
+                "--path", "Views/**",
+                "--where", "name=hx-get",
+                "--json",
+            },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        JsonElement match = Assert.Single(doc.RootElement.GetProperty("matches").EnumerateArray());
+        Assert.Equal("fact-hx-get", match.GetProperty("fact_id").GetString());
+        Assert.Equal("Views/Orders.cshtml", match.GetProperty("path").GetString());
+        Assert.Equal("hx-get", match.GetProperty("metadata").GetProperty("name").GetString());
+    }
+
+    [Fact]
+    public void Patterns_SearchWithoutPattern_IsUsageErrorExitTwo()
+    {
+        using var fx = DbWithPatterns();
+
+        var (code, _, errText) = Run(
+            new[] { "patterns", "search", "--json" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(2, code);
+        Assert.Contains("miller patterns search", errText);
+    }
+
+    [Fact]
+    public void Patterns_WorkspaceIdSelector_ReadsRegisteredWorkspace()
+    {
+        using var fx = DbWithPatterns();
+        SeedRegisteredWorkspace("target-ws", "target-111111111111", fx.WorkspaceRoot, fx.DbPath);
+        string currentDb = Path.Combine(_dir, "current", ".miller", "symbols.db");
+
+        var (code, outText, errText) = Run(
+            new[] { "patterns", "list", "--workspace-id", "target-ws", "--json" },
+            Context(currentDb));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        Assert.Contains(
+            doc.RootElement.GetProperty("patterns").EnumerateArray(),
+            row => row.GetProperty("pattern_id").GetString() == "htmx.attribute.v1");
     }
 
     [Theory]

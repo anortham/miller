@@ -50,6 +50,7 @@ Current `json_commands` include:
 | `context --json` | Token-budgeted code bundle. `--reference-mode usage` adds reason/confidence-labeled usage evidence. |
 | `impact --json` | Downstream impact result for a symbol, changed paths, or diff. |
 | `trace --json` | Structured auto/path/bridge trace result. See [`trace-json-v1.md`](trace-json-v1.md). |
+| `patterns --json` | List, summarize, and search extractor-recognized code-shape facts. See [`patterns-json-v1.md`](patterns-json-v1.md). |
 | `content import --json` | Import local external text into `content.db`. |
 | `content add-markdown --json` | Import browser/fetched markdown with URL metadata into `content.db`. |
 | `content search --json` | Search content DB rows. |
@@ -62,6 +63,9 @@ Current `json_commands` include:
 
 `capabilities --json` reports `optional_features.reference_aware_context=true` when `context --reference-mode usage`
 is available.
+
+`patterns --json` is the stable way to consume `julie-extractors` structural facts. Eros should use this command
+for known code-shape signals instead of reading Miller private SQLite tables directly.
 
 The `refresh --json --wait` response uses the same action shape as `workspace refresh --json`, plus
 post-refresh artifact facts when available:
@@ -98,7 +102,7 @@ filter, not a display-id selector.
 
 ## Workspace selector rules
 
-Code read commands (`search`, `inspect`, `context`, `impact`, and `trace`) target one workspace per call. Their
+Code read commands (`search`, `inspect`, `context`, `impact`, `trace`, and `patterns`) target one workspace per call. Their
 `--workspace-id <selector>` accepts a display ID, unique prefix, full workspace ID, registered root path,
 `current`, or `primary`. The path alias `--workspace <path>` is normalized before selection.
 

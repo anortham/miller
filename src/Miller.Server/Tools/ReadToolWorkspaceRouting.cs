@@ -21,6 +21,18 @@ internal static class ReadToolWorkspaceRouting
             json);
     }
 
+    public static string? CompactBanner(WorkspaceArtifactContext context, string? requestedWorkspaceId, bool json)
+    {
+        return CompactBanner(
+            context.DisplayId,
+            context.WorkspaceId,
+            context.WorkspaceRoot,
+            context.IndexFresh,
+            context.FreshnessStatus,
+            requestedWorkspaceId,
+            json);
+    }
+
     public static string? CompactBanner(WorkspaceSymbolSearchContext context, string? requestedWorkspaceId, bool json)
     {
         return CompactBanner(
@@ -99,6 +111,11 @@ internal static class ReadToolWorkspaceRouting
         string.IsNullOrWhiteSpace(compactBanner) ? output : compactBanner + '\n' + output;
 
     public static void ApplyTelemetry(TelemetryScope? telemetry, WorkspaceReadContext context)
+    {
+        ApplyTelemetry(telemetry, context.WorkspaceId, context.WorkspaceRoot, context.IndexFresh);
+    }
+
+    public static void ApplyTelemetry(TelemetryScope? telemetry, WorkspaceArtifactContext context)
     {
         ApplyTelemetry(telemetry, context.WorkspaceId, context.WorkspaceRoot, context.IndexFresh);
     }

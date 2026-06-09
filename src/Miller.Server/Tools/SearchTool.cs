@@ -3,7 +3,6 @@ using System.ComponentModel;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using Miller.Core.Search;
 using Miller.Indexing;
 using Miller.Server.Resolution;
@@ -390,7 +389,7 @@ public sealed class SearchTool
 
         bool hideTests = ResolveExcludeTests(excludeTests, query, mode);
         bool hideLowSignalKinds = fileMode || ResolveHideLowSignalKinds(query, mode);
-        SearchFilters filters = SearchFilters.Parse(filePattern, language);
+        ToolSearchFilters filters = ToolSearchFilters.Parse(filePattern, language);
         // Pull enough to know whether there is an overflow beyond `limit` after post-search filters, so the
         // "… N more" note is accurate. Natural-language phrase search can be import/module-heavy, so use the cap.
         int overFetch = hideLowSignalKinds || filters.HasAny ? 500 : Math.Min(limit * 4 + 10, 500);
@@ -484,7 +483,7 @@ public sealed class SearchTool
         if (limit < 1) limit = 1;
 
         // Over-fetch (same cap as symbol search) so the "… N more" overflow note is accurate without paging.
-        SearchFilters filters = SearchFilters.Parse(filePattern, language);
+        ToolSearchFilters filters = ToolSearchFilters.Parse(filePattern, language);
         int overFetch = filters.HasAny ? 500 : Math.Min(limit * 4 + 10, 500);
         var hits = new List<ContentSearchHit>();
         var outsideScope = new List<ContentSearchHit>(OutsideScopeHintLimit);
@@ -546,7 +545,7 @@ public sealed class SearchTool
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
         if (limit < 1) limit = 1;
 
-        SearchFilters filters = SearchFilters.Parse(filePattern, language);
+        ToolSearchFilters filters = ToolSearchFilters.Parse(filePattern, language);
         int overFetch = filters.HasAny ? 500 : Math.Min(limit * 4 + 10, 500);
         var hits = new List<ContentSearchHit>();
         var outsideScope = new List<ContentSearchHit>(OutsideScopeHintLimit);
@@ -637,7 +636,7 @@ public sealed class SearchTool
             throw new ArgumentException("At least one content kind is required.", nameof(contentKinds));
         if (limit < 1) limit = 1;
 
-        SearchFilters filters = SearchFilters.Parse(filePattern, language);
+        ToolSearchFilters filters = ToolSearchFilters.Parse(filePattern, language);
         int overFetch = filters.HasAny ? 500 : Math.Min(limit * 4 + 10, 500);
         var hits = new List<TextContentSearchHit>();
         var outsideScope = new List<TextContentSearchHit>(OutsideScopeHintLimit);
@@ -691,7 +690,7 @@ public sealed class SearchTool
         ArgumentException.ThrowIfNullOrWhiteSpace(contentKind);
         if (limit < 1) limit = 1;
 
-        SearchFilters filters = SearchFilters.Parse(filePattern, language);
+        ToolSearchFilters filters = ToolSearchFilters.Parse(filePattern, language);
         int overFetch = filters.HasAny ? 500 : Math.Min(limit * 4 + 10, 500);
         var hits = new List<TextContentSearchHit>();
         var outsideScope = new List<TextContentSearchHit>(OutsideScopeHintLimit);
@@ -749,7 +748,7 @@ public sealed class SearchTool
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
         if (limit < 1) limit = 1;
 
-        SearchFilters filters = SearchFilters.Parse(filePattern, language);
+        ToolSearchFilters filters = ToolSearchFilters.Parse(filePattern, language);
         int overFetch = filters.HasAny ? 500 : Math.Min(limit * 4 + 10, 500);
         var hits = new List<RegionSearchHit>();
         var outsideScope = new List<RegionSearchHit>(OutsideScopeHintLimit);
@@ -846,7 +845,7 @@ public sealed class SearchTool
     }
 
     private static string RenderFilteredMissCompact(
-        SearchFilters filters,
+        ToolSearchFilters filters,
         string? compactBanner,
         IReadOnlyList<IndexedSymbol> outsideScope)
     {
@@ -865,7 +864,7 @@ public sealed class SearchTool
     }
 
     private static string RenderFilteredMissContentCompact(
-        SearchFilters filters,
+        ToolSearchFilters filters,
         string? compactBanner,
         IReadOnlyList<ContentSearchHit> outsideScope)
     {
@@ -880,7 +879,7 @@ public sealed class SearchTool
     }
 
     private static string RenderFilteredMissTextContentCompact(
-        SearchFilters filters,
+        ToolSearchFilters filters,
         string? compactBanner,
         IReadOnlyList<TextContentSearchHit> outsideScope)
     {
@@ -897,7 +896,7 @@ public sealed class SearchTool
     }
 
     private static string RenderFilteredMissRegionCompact(
-        SearchFilters filters,
+        ToolSearchFilters filters,
         string? compactPrefix,
         IReadOnlyList<RegionSearchHit> outsideScope)
     {
@@ -913,7 +912,7 @@ public sealed class SearchTool
         return sb.ToString();
     }
 
-    private static StringBuilder FilteredMissHeader(SearchFilters filters, string? compactPrefix)
+    private static StringBuilder FilteredMissHeader(ToolSearchFilters filters, string? compactPrefix)
     {
         var sb = new StringBuilder();
         if (!string.IsNullOrWhiteSpace(compactPrefix))
@@ -1392,132 +1391,6 @@ public sealed class SearchTool
 
     internal static string Truncate(string value, int max) =>
         value.Length <= max ? value : value[..(max - 1)] + "…";
-
-    private sealed class SearchFilters
-    {
-        private readonly GlobMatcher[] _filePatterns;
-        private readonly HashSet<string>? _languages;
-
-        private SearchFilters(GlobMatcher[] filePatterns, HashSet<string>? languages, string? scopeDescription)
-        {
-            _filePatterns = filePatterns;
-            _languages = languages;
-            ScopeDescription = scopeDescription ?? "the requested scope";
-        }
-
-        public bool HasAny => _filePatterns.Length > 0 || _languages is not null;
-
-        public string ScopeDescription { get; }
-
-        public static SearchFilters Parse(string? filePattern, string? language)
-        {
-            string[] filePatternParts = string.IsNullOrWhiteSpace(filePattern)
-                ? Array.Empty<string>()
-                : filePattern
-                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                    .Where(static pattern => pattern.Length > 0)
-                    .ToArray();
-            GlobMatcher[] filePatterns = filePatternParts
-                .Select(static pattern => new GlobMatcher(pattern))
-                .ToArray();
-
-            HashSet<string>? languages = null;
-            var languageParts = new List<string>();
-            if (!string.IsNullOrWhiteSpace(language))
-            {
-                languages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (string part in language.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                {
-                    if (part.Length > 0)
-                    {
-                        languages.Add(part);
-                        languageParts.Add(part);
-                    }
-                }
-                if (languages.Count == 0)
-                    languages = null;
-            }
-
-            var scopeParts = new List<string>(capacity: 2);
-            if (filePatternParts.Length > 0)
-                scopeParts.Add("file_pattern=" + string.Join(",", filePatternParts));
-            if (languageParts.Count > 0)
-                scopeParts.Add("language=" + string.Join(",", languageParts));
-
-            return new SearchFilters(
-                filePatterns,
-                languages,
-                scopeParts.Count == 0 ? null : string.Join(", ", scopeParts));
-        }
-
-        public bool Allows(string path, string language)
-        {
-            if (_filePatterns.Length > 0 && !_filePatterns.Any(pattern => pattern.IsMatch(path)))
-                return false;
-            if (_languages is not null && !_languages.Contains(language))
-                return false;
-            return true;
-        }
-    }
-
-    private sealed class GlobMatcher
-    {
-        private readonly Regex _regex;
-        private readonly bool _containsSlash;
-
-        public GlobMatcher(string pattern)
-        {
-            string normalized = NormalizePath(pattern);
-            _containsSlash = normalized.Contains('/', StringComparison.Ordinal);
-            _regex = new Regex("^" + GlobToRegex(normalized) + "$", RegexOptions.CultureInvariant);
-        }
-
-        public bool IsMatch(string path)
-        {
-            string normalized = NormalizePath(path);
-            if (_regex.IsMatch(normalized))
-                return true;
-            if (_containsSlash)
-                return false;
-
-            int lastSlash = normalized.LastIndexOf('/');
-            string basename = lastSlash >= 0 ? normalized[(lastSlash + 1)..] : normalized;
-            return _regex.IsMatch(basename);
-        }
-
-        private static string NormalizePath(string path) => path.Replace('\\', '/').Trim();
-
-        private static string GlobToRegex(string pattern)
-        {
-            var sb = new StringBuilder(pattern.Length * 2);
-            for (int i = 0; i < pattern.Length; i++)
-            {
-                char c = pattern[i];
-                if (c == '*')
-                {
-                    bool globstar = i + 1 < pattern.Length && pattern[i + 1] == '*';
-                    if (globstar)
-                    {
-                        sb.Append(".*");
-                        i++;
-                    }
-                    else
-                    {
-                        sb.Append("[^/]*");
-                    }
-                }
-                else if (c == '?')
-                {
-                    sb.Append("[^/]");
-                }
-                else
-                {
-                    sb.Append(Regex.Escape(c.ToString()));
-                }
-            }
-            return sb.ToString();
-        }
-    }
 
     private sealed class UnavailableRegionSearchProvider : IWorkspaceRegionSearchProvider
     {

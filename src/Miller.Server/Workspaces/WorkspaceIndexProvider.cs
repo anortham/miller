@@ -6,7 +6,7 @@ namespace Miller.Server.Workspaces;
 
 public sealed class WorkspaceIndexProvider
     : IWorkspaceIndexProvider, IWorkspaceSearchProvider, IWorkspaceContentSearchProvider,
-      IWorkspaceRegionSearchProvider, IWorkspaceTextContentSearchProvider
+      IWorkspaceRegionSearchProvider, IWorkspaceTextContentSearchProvider, IWorkspaceArtifactProvider
 {
     private readonly IndexHolder _holder;
     private readonly WorkspaceContext _currentWorkspace;
@@ -96,6 +96,18 @@ public sealed class WorkspaceIndexProvider
         return ResolveRegistered(workspaceId, ensureFresh);
     }
 
+    public WorkspaceArtifactContext ResolveArtifact(string? workspaceId, bool ensureFresh)
+    {
+        if (workspaceId is null)
+            return ResolveCurrentArtifact();
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
+        if (SelectorTargetsCurrent(workspaceId))
+            return ResolveCurrentArtifact();
+
+        return ResolveRegisteredArtifact(workspaceId, ensureFresh);
+    }
+
     public WorkspaceSymbolSearchContext ResolveSymbolSearch(string? workspaceId, bool ensureFresh)
     {
         if (workspaceId is null)
@@ -151,6 +163,20 @@ public sealed class WorkspaceIndexProvider
         return new WorkspaceReadContext(
             index,
             resolver,
+            _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath,
+            _currentWorkspace.WorkspaceId,
+            _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
+            revision,
+            _currentIndexFresh(revision),
+            "current",
+            WarningText: null,
+            DisplayId: CurrentDisplayId());
+    }
+
+    private WorkspaceArtifactContext ResolveCurrentArtifact()
+    {
+        (_, long revision) = _holder.Snapshot();
+        return new WorkspaceArtifactContext(
             _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath,
             _currentWorkspace.WorkspaceId,
             _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
@@ -224,6 +250,24 @@ public sealed class WorkspaceIndexProvider
         CachedSymbolSearch cached = GetOrLoadSymbolSearch(key, row.IndexDbPath, () => _loadSymbolSearch(row.IndexDbPath));
         return new WorkspaceSymbolSearchContext(
             cached.Index,
+            row.IndexDbPath,
+            row.WorkspaceId,
+            row.CanonicalRoot,
+            revision,
+            WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
+            WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
+            WorkspaceFreshnessView.WarningTextFor(refreshResult),
+            row.DisplayId);
+    }
+
+    private WorkspaceArtifactContext ResolveRegisteredArtifact(string workspaceId, bool ensureFresh)
+    {
+        RegisteredWorkspaceState state = ResolveRegisteredState(workspaceId, ensureFresh);
+        WorkspaceRegistryRow row = state.Row;
+        WorkspaceRefreshResult? refreshResult = state.RefreshResult;
+
+        long revision = row.LastRevision ?? 0;
+        return new WorkspaceArtifactContext(
             row.IndexDbPath,
             row.WorkspaceId,
             row.CanonicalRoot,

@@ -11,8 +11,9 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`contracts/workspace-health-v1.md`](contracts/workspace-health-v1.md) - active workspace health JSON contract.
 - [`contracts/trace-json-v1.md`](contracts/trace-json-v1.md) - active trace JSON contract for auto/path/bridge output.
 - [`contracts/content-corpus-v1.md`](contracts/content-corpus-v1.md) - active content corpus schema/export contract.
-- [`plans/2026-06-09-patterns-tool-design.md`](plans/2026-06-09-patterns-tool-design.md) - design for the future `patterns` tool over extractor structural facts.
-- [`plans/2026-06-09-patterns-tool-implementation-plan.md`](plans/2026-06-09-patterns-tool-implementation-plan.md) - implementation plan for the future `patterns` MCP/CLI surface.
+- [`contracts/patterns-json-v1.md`](contracts/patterns-json-v1.md) - active patterns JSON contract over extractor structural facts.
+- [`plans/2026-06-09-patterns-tool-design.md`](plans/2026-06-09-patterns-tool-design.md) - design record for the `patterns` tool over extractor structural facts.
+- [`plans/2026-06-09-patterns-tool-implementation-plan.md`](plans/2026-06-09-patterns-tool-implementation-plan.md) - implementation plan for the `patterns` MCP/CLI surface.
 - [`release-process.md`](release-process.md) - current release validation and promotion flow.
 - [`release-notes/v0.3.5.md`](release-notes/v0.3.5.md) - latest published release notes.
 - [`findings/2026-06-08-v0.3.5-release-verification.md`](findings/2026-06-08-v0.3.5-release-verification.md) - live `v0.3.5` release verification.

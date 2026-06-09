@@ -72,6 +72,8 @@ public static class CliDispatch
                     return Search(rest, context, stdout, stderr);
                 case "content":
                     return Content(rest, context, stdout, stderr);
+                case "patterns":
+                    return Patterns(rest, context, stdout, stderr);
                 case "telemetry":
                     return Telemetry(rest, context, stdout, stderr);
                 case "refresh":
@@ -349,6 +351,70 @@ public static class CliDispatch
 
         WriteOutput(outw, output);
         return 0;
+    }
+
+    private static int Patterns(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
+    {
+        string operation = args.Count == 0 ? "list" : args[0].ToLowerInvariant();
+        if (operation is "help" or "--help" or "-h")
+            return Usage(err, "miller patterns <list|summary|search> [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]");
+
+        if (operation is not ("list" or "summary" or "summarize" or "search"))
+            return Usage(err, "miller patterns <list|summary|search> [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]");
+
+        CliOptions o = CliOptions.Parse(args.Skip(1).ToArray(), "json");
+        string? patternId = o.Value("pattern", o.Value("pattern-id"));
+        if (string.IsNullOrWhiteSpace(patternId) && o.Positionals.Count > 0)
+            patternId = o.Query;
+
+        string? where = o.Value("where");
+        if (!string.IsNullOrWhiteSpace(where))
+        {
+            try
+            {
+                PatternsTool.ParseWhere(where);
+            }
+            catch (InvalidOperationException ex)
+            {
+                err.WriteLine(ex.Message);
+                return 2;
+            }
+
+            if (string.IsNullOrWhiteSpace(patternId))
+                return Usage(err, "miller patterns search --pattern ID [--where key=value] [--json]");
+        }
+
+        if (operation == "search" && string.IsNullOrWhiteSpace(patternId))
+            return Usage(err, "miller patterns search --pattern ID [--workspace-id SELECTOR] [--workspace DIR] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]");
+
+        if (!TryResolveReadContext(ctx, o, err, out ctx))
+            return 2;
+        if (!RequireIndex(ctx, err))
+            return 3;
+
+        try
+        {
+            PatternToolResult result = PatternsTool.Run(
+                new PatternFactsReader(),
+                ctx.ExtractDbPath,
+                operation,
+                patternId,
+                o.Value("language"),
+                o.Value("path", o.Value("file-pattern")),
+                where,
+                o.Int("limit", PatternsTool.DefaultLimit),
+                o.Has("json"));
+            WriteOutput(outw, result.Output);
+            return 0;
+        }
+        catch (Exception ex) when (
+            ex is FileNotFoundException or InvalidOperationException or IOException
+                or UnauthorizedAccessException or ArgumentException or NotSupportedException
+                or SqliteException)
+        {
+            err.WriteLine("patterns failed: " + ex.Message);
+            return 3;
+        }
     }
 
     private static void WriteOutput(TextWriter writer, string output)
@@ -1303,6 +1369,9 @@ public static class CliDispatch
                              list [--kind KIND] [--json]
                              remove --source-id ID [--json]
                              export [--kind KIND] [--content-workspace-id ID]   # JSONL
+          patterns <op>      List, summarize, or search extractor-recognized code-shape facts.
+                             op = list | summary | search
+                             [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]
           telemetry <op>     Export machine-global Miller telemetry.
                              export [--jsonl] [--workspace-id ID|all]
           refresh            Refresh a registered workspace index and return after convergence attempt.

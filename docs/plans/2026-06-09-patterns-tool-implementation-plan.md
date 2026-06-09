@@ -1,5 +1,8 @@
 # Patterns Tool Implementation Plan
 
+Status: implemented in `codex/miller-data-opportunities` on 2026-06-09. Verification completed with
+`git diff --check`, `scripts/test.sh`, `scripts/test.sh scale`, and `dotnet build Miller.slnx -c Release`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use razorback:subagent-driven-development when subagent delegation is available. Fall back to razorback:executing-plans for single-task, tightly-sequential, or no-delegation runs.
 
 **Goal:** Build a read-only `patterns` MCP/CLI surface over `julie-extractors` `structural_facts`, so agents and Eros can list and search known code-shape facts without raw AST queries.
