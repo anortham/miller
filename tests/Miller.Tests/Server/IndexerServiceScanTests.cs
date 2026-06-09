@@ -311,6 +311,44 @@ public sealed class IndexerServiceScanTests
     }
 
     [Fact]
+    public void WatcherDrain_MarksRegistryAtLatestRevision()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow("edit-new", "UpdatedType", "class", "csharp",
+                    "src/Edit.cs", "public class UpdatedType", 1, ParentId: null),
+            },
+            revisions: new[]
+            {
+                new JulieDbFixture.RevisionRow(1),
+                new JulieDbFixture.RevisionRow(2, Kind: "single_file"),
+            },
+            fileChanges: new[]
+            {
+                new JulieDbFixture.RevisionFileChangeRow(2, "src/Edit.cs", "updated"),
+            });
+        WorkspaceContext workspace = WorkspaceWithDb(julie.DbPath);
+        string workspaceId = workspace.WorkspaceId!;
+        IndexBootstrapService.RegisterBootstrapWorkspace(
+            workspace, workspaceId, WorkspaceRegistryState.LoadedExisting, revision: 1);
+        var service = NewSeededService(workspace, SymbolSearchSidecar.Disabled);
+        service.PublishOpsForTest(new RecordingScanOps { UpdateRevision = 2 });
+
+        service.HandleChangedForTest(
+            WatcherChangeTypes.Changed,
+            Path.Combine(workspace.CanonicalRoot!, "src", "Edit.cs"));
+        service.DrainForTest(headChanged: false);
+
+        using var registry = WorkspaceRegistry.Open(workspace.RegistryDbPath);
+        WorkspaceRegistryRow row = Assert.IsType<WorkspaceRegistryRow>(registry.Get(workspaceId));
+        Assert.Equal(WorkspaceRegistryState.Ready, row.State);
+        Assert.Equal(2, row.LastRevision);
+    }
+
+    [Fact]
     public void TryScanAsLeader_WhenLeaderScanThrows_ReportsFailed_NeverThrows()
     {
         var service = NewService();
@@ -500,6 +538,41 @@ public sealed class IndexerServiceScanTests
         Assert.Empty(index.Search("LegacyWidget", limit: 10));
         Assert.Equal("UpdatedType", index.Resolve(Assert.Single(index.Search("UpdatedType", limit: 10)).Document.DocId).Name);
         Assert.Equal("Anchor", index.Resolve(Assert.Single(index.Search("Anchor", limit: 10)).Document.DocId).Name);
+    }
+
+    [Fact]
+    public void TryReindexAsLeader_MarksRegistryAtUpdateRevision()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow("edit-new", "UpdatedType", "class", "csharp",
+                    "src/Edit.cs", "public class UpdatedType", 1, ParentId: null),
+            },
+            revisions: new[]
+            {
+                new JulieDbFixture.RevisionRow(1),
+                new JulieDbFixture.RevisionRow(2, Kind: "single_file"),
+            },
+            fileChanges: new[]
+            {
+                new JulieDbFixture.RevisionFileChangeRow(2, "src/Edit.cs", "updated"),
+            });
+        WorkspaceContext workspace = WorkspaceWithDb(julie.DbPath);
+        string workspaceId = workspace.WorkspaceId!;
+        IndexBootstrapService.RegisterBootstrapWorkspace(
+            workspace, workspaceId, WorkspaceRegistryState.LoadedExisting, revision: 1);
+        var service = NewSeededService(workspace, SymbolSearchSidecar.Disabled);
+        service.PublishOpsForTest(new RecordingScanOps { UpdateRevision = 2 });
+
+        Assert.True(service.TryReindexAsLeader("src/Edit.cs"));
+
+        using var registry = WorkspaceRegistry.Open(workspace.RegistryDbPath);
+        WorkspaceRegistryRow row = Assert.IsType<WorkspaceRegistryRow>(registry.Get(workspaceId));
+        Assert.Equal(WorkspaceRegistryState.Ready, row.State);
+        Assert.Equal(2, row.LastRevision);
     }
 
     [Fact]

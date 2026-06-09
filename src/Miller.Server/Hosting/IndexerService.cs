@@ -424,8 +424,6 @@ public sealed class IndexerService : BackgroundService
 
     private void TryConvergeSidecarToLatest(string? symbolsDbPath, bool fullRebuild)
     {
-        if (!_sidecar.Enabled)
-            return;
         if (symbolsDbPath is null)
             return;
 
@@ -472,23 +470,43 @@ public sealed class IndexerService : BackgroundService
                 "Content corpus sidecar convergence failed; source text search will remain unavailable or stale until the next successful convergence.");
         }
 
-        if (!_sidecar.Enabled)
+        if (_sidecar.Enabled)
+        {
+            try
+            {
+                bool changed = fullRebuild
+                    ? _sidecar.EnsureBuilt(symbolsDbPath, revision, workspaceRoot)
+                    : _sidecar.EnsureCurrent(symbolsDbPath, revision, workspaceRoot);
+                if (changed)
+                    _logger.LogInformation("Converged search sidecar at revision {Revision}.", revision);
+            }
+            catch (Exception ex) when (
+                ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException
+                    or ArgumentException or NotSupportedException or IncompatibleExtractException)
+            {
+                _logger.LogWarning(ex,
+                    "Search sidecar convergence failed; the sidecar will remain unavailable or stale until the next successful convergence.");
+            }
+        }
+
+        TryMarkRegistryScanned(workspaceId, revision);
+    }
+
+    private void TryMarkRegistryScanned(string? workspaceId, long revision)
+    {
+        if (string.IsNullOrWhiteSpace(workspaceId))
             return;
 
         try
         {
-            bool changed = fullRebuild
-                ? _sidecar.EnsureBuilt(symbolsDbPath, revision, workspaceRoot)
-                : _sidecar.EnsureCurrent(symbolsDbPath, revision, workspaceRoot);
-            if (changed)
-                _logger.LogInformation("Converged search sidecar at revision {Revision}.", revision);
+            IndexBootstrapService.MarkRegistryScanned(_bootstrap.Workspace, workspaceId, revision);
         }
         catch (Exception ex) when (
-            ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException
-                or ArgumentException or NotSupportedException or IncompatibleExtractException)
+            ex is SqliteException or IOException or UnauthorizedAccessException
+                or ArgumentException or InvalidOperationException or NotSupportedException)
         {
             _logger.LogWarning(ex,
-                "Search sidecar convergence failed; the sidecar will remain unavailable or stale until the next successful convergence.");
+                "Failed to update workspace registry revision after index convergence; status views may show stale revision metadata.");
         }
     }
 
@@ -542,7 +560,11 @@ public sealed class IndexerService : BackgroundService
         IndexerCore core = _core
             ?? throw new InvalidOperationException("PublishOpsForTest must run before DrainForTest.");
         lock (_opsGate)
-            core.DrainAndProcess(headChanged);
+        {
+            bool processed = core.DrainAndProcess(headChanged, out bool usedWholeRepoScan);
+            if (processed)
+                TryConvergeSidecarToLatest(_bootstrap.Workspace.CanonicalExtractDbPath, fullRebuild: usedWholeRepoScan);
+        }
     }
 
     /// <summary>
