@@ -487,6 +487,20 @@ public sealed class IndexerService : BackgroundService
 
         string workspaceRoot = _bootstrap.Workspace.CanonicalRoot ?? _bootstrap.Workspace.WorkspaceRoot;
         string? workspaceId = _bootstrap.Workspace.WorkspaceId;
+        // Resolve the derived-artifact paths once for the M5 corrupt-escalation below; a pathological
+        // symbols.db path simply disables the escalation (null), it never escapes as an exception.
+        string? contentDbPath = null;
+        string? searchDbPath = null;
+        try
+        {
+            contentDbPath = ContentCorpusSidecar.ContentDbPathFor(symbolsDbPath);
+            searchDbPath = SymbolSearchSidecar.SearchDbPathFor(symbolsDbPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+        {
+            // Leave the escalation off; the converge calls below surface the path problem themselves.
+        }
+
         try
         {
             if (_contentSidecar.EnsureBuilt(symbolsDbPath, workspaceRoot, workspaceId, revision))
@@ -496,8 +510,12 @@ public sealed class IndexerService : BackgroundService
             ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException
                 or ArgumentException or NotSupportedException or IncompatibleExtractException)
         {
-            _logger.LogWarning(ex,
-                "Content corpus sidecar convergence failed; source text search will remain unavailable or stale until the next successful convergence.");
+            if (contentDbPath is null || !TryRebuildCorruptSidecar(ex, contentDbPath,
+                    () => _contentSidecar.EnsureBuilt(symbolsDbPath, workspaceRoot, workspaceId, revision)))
+            {
+                _logger.LogWarning(ex,
+                    "Content corpus sidecar convergence failed; source text search will remain unavailable or stale until the next successful convergence.");
+            }
         }
 
         if (_sidecar.Enabled)
@@ -514,12 +532,78 @@ public sealed class IndexerService : BackgroundService
                 ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException
                     or ArgumentException or NotSupportedException or IncompatibleExtractException)
             {
-                _logger.LogWarning(ex,
-                    "Search sidecar convergence failed; the sidecar will remain unavailable or stale until the next successful convergence.");
+                if (searchDbPath is null || !TryRebuildCorruptSidecar(ex, searchDbPath,
+                        () => _sidecar.EnsureBuilt(symbolsDbPath, revision, workspaceRoot)))
+                {
+                    _logger.LogWarning(ex,
+                        "Search sidecar convergence failed; the sidecar will remain unavailable or stale until the next successful convergence.");
+                }
             }
         }
 
         TryMarkRegistryScanned(workspaceId, revision);
+    }
+
+    // M5 corrupt-escalation: a converge failure that is corruption-shaped means the EXISTING artifact is the
+    // problem (e.g. readable meta but corrupt FTS pages — the one shape the incremental path retries into
+    // forever, warning on every converge while every reader gets the stale-sidecar error). Sidecars are
+    // revision-keyed DERIVED artifacts, so deleting the file and rebuilding from scratch is always safe. One
+    // escalation per converge attempt — no loop; if the rebuild also fails, the caller keeps its existing
+    // warning path. Returns true only when the corrupt artifact was replaced by a successful rebuild.
+    private bool TryRebuildCorruptSidecar(Exception failure, string artifactPath, Action rebuild)
+    {
+        if (!IsSidecarCorruption(failure))
+            return false;
+
+        _logger.LogWarning(failure,
+            "Sidecar at {ArtifactPath} appears corrupt; deleting the derived artifact and rebuilding it from scratch.",
+            artifactPath);
+        try
+        {
+            // Release any pooled read handle so the delete is not blocked on Windows; readers self-heal by
+            // reopening the rebuilt artifact (it is revision-keyed derived state, never source of truth).
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(artifactPath))
+                File.Delete(artifactPath);
+            rebuild();
+            _logger.LogInformation("Rebuilt corrupt sidecar at {ArtifactPath}.", artifactPath);
+            return true;
+        }
+        catch (Exception ex) when (
+            ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException
+                or ArgumentException or NotSupportedException or IncompatibleExtractException)
+        {
+            _logger.LogWarning(ex,
+                "Corrupt-sidecar rebuild at {ArtifactPath} failed; will retry on the next convergence.",
+                artifactPath);
+            return false;
+        }
+    }
+
+    // Corruption-shaped: a SqliteException whose result code is SQLITE_CORRUPT (11) or SQLITE_NOTADB (26) —
+    // primary or extended (e.g. SQLITE_CORRUPT_VTAB = 267, whose low byte is 11) — anywhere in the exception
+    // chain, or a sidecar reader's malformed-meta error (FtsSymbolSearchIndex/FtsTextContentSearchIndex/
+    // FtsRegionSearchIndex all raise InvalidOperationException with this marker; matched by message because the
+    // sidecar layer deliberately has no bespoke exception type). Transient failures (locked file, IO, schema
+    // drift) are NOT corruption and keep the plain warn-and-retry path.
+    private static bool IsSidecarCorruption(Exception exception)
+    {
+        for (Exception? ex = exception; ex is not null; ex = ex.InnerException)
+        {
+            if (ex is SqliteException sqlite
+                && ((sqlite.SqliteErrorCode & 0xFF) is 11 or 26 || (sqlite.SqliteExtendedErrorCode & 0xFF) is 11 or 26))
+            {
+                return true;
+            }
+
+            if (ex is InvalidOperationException
+                && ex.Message.Contains("has malformed meta", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void TryMarkRegistryScanned(string? workspaceId, long revision)

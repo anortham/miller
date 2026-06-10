@@ -768,6 +768,112 @@ public sealed class IndexerServiceScanTests
         Assert.Equal("Anchor", index.Resolve(Assert.Single(index.Search("Anchor", limit: 10)).Document.DocId).Name);
     }
 
+    // Empty an FTS5 shadow table so the artifact's meta still reads fine (revision intact) but any later FTS
+    // write fails with SQLITE_CORRUPT ("database disk image is malformed") — the one corruption shape the
+    // incremental converge path would otherwise retry into forever (M5).
+    private static void CorruptFtsShadowData(string searchDb)
+    {
+        using (var rw = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = searchDb, Mode = SqliteOpenMode.ReadWrite, Pooling = false,
+        }.ToString()))
+        {
+            rw.Open();
+            using var cmd = rw.CreateCommand();
+            cmd.CommandText = "DELETE FROM symbols_fts_data;";
+            cmd.ExecuteNonQuery();
+        }
+        SqliteConnection.ClearAllPools();
+    }
+
+    private static void DropTrigramTable(string searchDb)
+    {
+        using (var rw = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = searchDb, Mode = SqliteOpenMode.ReadWrite, Pooling = false,
+        }.ToString()))
+        {
+            rw.Open();
+            using var cmd = rw.CreateCommand();
+            cmd.CommandText = "DROP TABLE symbols_trigram;";
+            cmd.ExecuteNonQuery();
+        }
+        SqliteConnection.ClearAllPools();
+    }
+
+    private static JulieDbFixture SingleFileUpdateFixture() => JulieDbFixture.Create(
+        JulieDbFixture.PinnedSchema,
+        JulieDbFixture.PinnedContract,
+        new[]
+        {
+            new JulieDbFixture.SymbolRow("edit-new", "UpdatedType", "class", "csharp",
+                "src/Edit.cs", "public class UpdatedType", 1, ParentId: null),
+            new JulieDbFixture.SymbolRow("keep", "Anchor", "class", "csharp",
+                "src/Keep.cs", "public class Anchor", 1, ParentId: null),
+        },
+        revisions: new[]
+        {
+            new JulieDbFixture.RevisionRow(1),
+            new JulieDbFixture.RevisionRow(2, Kind: "single_file"),
+        },
+        fileChanges: new[]
+        {
+            new JulieDbFixture.RevisionFileChangeRow(2, "src/Edit.cs", "updated"),
+        });
+
+    private static void WriteRevisionOneArtifact(string searchDb) =>
+        SearchIndexWriter.Write(searchDb, new[]
+        {
+            new IndexedSymbol(0, "edit-old", "LegacyWidget", "public class LegacyWidget", "class",
+                "csharp", "src/Edit.cs", 1, 1, ParentId: null, IsTest: false),
+            new IndexedSymbol(1, "keep", "Anchor", "public class Anchor", "class",
+                "csharp", "src/Keep.cs", 1, 1, ParentId: null, IsTest: false),
+        }, revision: 1);
+
+    [Fact]
+    public void TryReindexAsLeader_CorruptSearchSidecar_IsDeletedAndRebuilt_AndReaderCanOpenIt()
+    {
+        using var julie = SingleFileUpdateFixture();
+        string searchDb = SymbolSearchSidecar.SearchDbPathFor(julie.DbPath);
+        WriteRevisionOneArtifact(searchDb);
+        CorruptFtsShadowData(searchDb); // meta intact at revision 1; the FTS body is corrupt
+        var sidecar = new SymbolSearchSidecar(enabled: true);
+        var service = NewSeededService(WorkspaceWithDb(julie.DbPath), sidecar);
+        service.PublishOpsForTest(new RecordingScanOps { UpdateRevision = 2 });
+
+        Assert.True(service.TryReindexAsLeader("src/Edit.cs"));
+
+        // M5: the incremental converge hit SQLITE_CORRUPT; the escalation deleted the derived artifact and
+        // rebuilt it from scratch within the SAME converge call, so a reader's next open succeeds — instead of
+        // every converge warning forever while every reader gets the stale-sidecar error.
+        FtsSymbolSearchIndex? index = sidecar.TryOpen(julie.DbPath, expectedRevision: 2);
+        Assert.NotNull(index);
+        Assert.Equal(
+            "UpdatedType",
+            index!.Resolve(Assert.Single(index.Search("UpdatedType", limit: 10)).Document.DocId).Name);
+    }
+
+    [Fact]
+    public void TryReindexAsLeader_NonCorruptionSidecarFailure_DoesNotDeleteOrRebuild()
+    {
+        using var julie = SingleFileUpdateFixture();
+        string searchDb = SymbolSearchSidecar.SearchDbPathFor(julie.DbPath);
+        WriteRevisionOneArtifact(searchDb);
+        // A converge failure that is NOT corruption-shaped ("no such table", SQLITE_ERROR): the artifact file
+        // must be left alone — delete/rebuild is reserved for corruption, everything else keeps warn-and-retry.
+        DropTrigramTable(searchDb);
+        var sidecar = new SymbolSearchSidecar(enabled: true);
+        var service = NewSeededService(WorkspaceWithDb(julie.DbPath), sidecar);
+        service.PublishOpsForTest(new RecordingScanOps { UpdateRevision = 2 });
+
+        Assert.True(service.TryReindexAsLeader("src/Edit.cs")); // converge failures never fail the reindex
+
+        Assert.True(File.Exists(searchDb));
+        // No rebuild happened: a from-scratch rebuild would have recreated symbols_trigram and stamped rev 2.
+        Assert.False(TableExists(searchDb, "symbols_trigram"));
+        Assert.Null(sidecar.TryOpen(julie.DbPath, expectedRevision: 2));
+    }
+
     [Fact]
     public void TryReindexAsLeader_MarksRegistryAtUpdateRevision()
     {
