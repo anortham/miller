@@ -21,8 +21,10 @@ namespace Miller.Server.Hosting;
 /// </summary>
 public sealed class FreshnessService : BackgroundService
 {
-    // The poll cadence. Short enough that an external edit converges quickly, long enough to be near-free.
-    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2);
+    // The poll cadence. Agent-speed: an agent edits and re-reads well under a second later, and a READER-served
+    // session pays this poll twice (leader swap + reader swap), so it must stay inside the edit gate's recovery
+    // budget — FreshnessLatencyBudgetTests pins the chain. Each poll is one cheap SQLite revision read.
+    internal static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(500);
 
     private readonly IndexBootstrapService _bootstrap;
     private readonly ILogger<FreshnessService> _logger;

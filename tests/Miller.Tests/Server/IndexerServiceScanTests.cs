@@ -350,6 +350,29 @@ public sealed class IndexerServiceScanTests
     }
 
     [Fact]
+    public async Task StartAsync_AsLeader_RecordsLeaderIdentity_AndRemovesItOnStop()
+    {
+        using var julie = JulieDb();
+        var lease = new TestLease();
+        var ops = new RecordingScanOps { Revision = 13 };
+        WorkspaceContext workspace = WorkspaceWithDb(julie.DbPath);
+        string millerDir = Path.GetDirectoryName(workspace.ExtractDbPath)!;
+        var service = NewStartedService(workspace, _ => lease, (_, _, _) => ops);
+
+        await service.StartAsync(CancellationToken.None);
+        Assert.True(ops.ScanCalled.Wait(5000, CancellationToken.None));
+
+        LeaderIdentity? identity = LeaderIdentityFile.TryRead(millerDir);
+        Assert.NotNull(identity);
+        Assert.Equal(Environment.ProcessId, identity!.Pid);
+        Assert.Equal(MillerVersion.Current, identity.Version);
+
+        await service.StopAsync(CancellationToken.None);
+        // Graceful step-down removes the identity so a later health probe never sees OUR pid as a stale leader.
+        Assert.Null(LeaderIdentityFile.TryRead(millerDir));
+    }
+
+    [Fact]
     public void ProcessFileConvergeRequests_WhenNotLeader_DoesNotDrainRequests()
     {
         // A non-leader CANNOT reindex; draining would consume (delete) the request files without servicing

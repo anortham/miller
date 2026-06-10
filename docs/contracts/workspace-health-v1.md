@@ -13,6 +13,7 @@ quality, security status, semantic search quality, or enterprise readiness.
     "summary": "index readable with warnings"
   },
   "workspace": {},
+  "indexer_leader": {},
   "index": {},
   "extraction_quality": {},
   "telemetry": {},
@@ -27,6 +28,12 @@ Removing or renaming documented fields requires a new contract version.
 ## Sections
 
 - `workspace`: `root`, `workspace_id`, `display_id`, `db`, `leader`, `server_version`, `server_pid`.
+- `indexer_leader` (additive in v1; may be `null` when leader facts were not gathered): `this_process`, plus the
+  recorded leader identity from `.miller/leader.json` — `pid`, `version`, `process_path`, `started_at` (all null
+  when no identity is recorded) — and `alive` (a liveness probe of that pid; null without an identity). Index
+  convergence is owned by whichever process leads, so a dead pid or a version mismatch here explains stale-index
+  symptoms in multi-process setups. Related warning codes: `indexer_leader_unknown`, `indexer_leader_dead`,
+  `indexer_leader_version_mismatch`.
 - `index`: `document_count`, `known_extensions`, `built_revision`, `latest_revision`, `index_fresh`,
   `freshness_status`, `warning`, `queue_empty`, `search_sidecar`, and `content_corpus`.
 - `extraction_quality.parse_diagnostics`: `available`, `error`, and grouped rows with `language`, `kind`, `count`.
@@ -50,8 +57,8 @@ Removing or renaming documented fields requires a new contract version.
 - `ready`: no warnings.
 - `usable_with_warnings`: the index is readable, but non-blocking warnings exist, such as parse diagnostics,
   capability gaps, missing rebuildable sidecars, missing optional health-detail tables, or telemetry errors.
-- `degraded`: the workspace is readable, but an important freshness or sidecar warning should be investigated
-  before relying on results.
+- `degraded`: the workspace is readable, but an important freshness, sidecar, or indexer-leader warning (e.g. a
+  dead leader pid) should be investigated before relying on results.
 - `unavailable`: the target index DB is missing or otherwise cannot provide the basic workspace report.
 
 The health path must not hydrate the full repository index. It reads cheap status facts, sidecar metadata,

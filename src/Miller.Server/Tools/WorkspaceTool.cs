@@ -208,7 +208,8 @@ public sealed class WorkspaceTool
             AssembleFacts(),
             _ledger.Summarize(),
             _ledger.SummarizeOutcomes(),
-            WorkspaceHealthReader.Read(_workspace.ExtractDbPath));
+            WorkspaceHealthReader.Read(_workspace.ExtractDbPath),
+            LeaderHealthFacts.Read(Path.GetDirectoryName(_workspace.ExtractDbPath)!));
         return WorkspaceRender.Health(health, json);
     }
 
@@ -370,7 +371,8 @@ public sealed class WorkspaceTool
             statusFacts,
             _ledger.SummarizeForWorkspace(row.WorkspaceId),
             _ledger.SummarizeOutcomesForWorkspace(row.WorkspaceId),
-            extraction);
+            extraction,
+            LeaderHealthFacts.Read(Path.GetDirectoryName(row.IndexDbPath)!));
         return (WorkspaceRender.Health(health, json), 1, TelemetryOutcome.Ok);
     }
 

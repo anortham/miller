@@ -735,7 +735,9 @@ public static class CliDispatch
             WorkspaceFacts facts = FactsFromRowForHealth(registry, ctx, row);
             WorkspaceExtractionHealthFacts extraction = ReadHealthOrUnavailable(row.IndexDbPath, facts.WarningText);
             outw.WriteLine(WorkspaceRender.Health(
-                WorkspaceHealthFacts.Create(facts, TelemetrySummary.Empty, new TelemetryHealthFacts(0, 0, 0), extraction),
+                WorkspaceHealthFacts.Create(
+                    facts, TelemetrySummary.Empty, new TelemetryHealthFacts(0, 0, 0), extraction,
+                    LeaderHealthFacts.Read(Path.GetDirectoryName(row.IndexDbPath)!)),
                 json));
             return 0;
         }
@@ -746,7 +748,9 @@ public static class CliDispatch
             WorkspaceFacts facts = FactsFromRowForHealth(registry, ctx, currentRow);
             WorkspaceExtractionHealthFacts extraction = ReadHealthOrUnavailable(currentRow.IndexDbPath, facts.WarningText);
             outw.WriteLine(WorkspaceRender.Health(
-                WorkspaceHealthFacts.Create(facts, TelemetrySummary.Empty, new TelemetryHealthFacts(0, 0, 0), extraction),
+                WorkspaceHealthFacts.Create(
+                    facts, TelemetrySummary.Empty, new TelemetryHealthFacts(0, 0, 0), extraction,
+                    LeaderHealthFacts.Read(Path.GetDirectoryName(currentRow.IndexDbPath)!)),
                 json));
             return 0;
         }
@@ -775,7 +779,8 @@ public static class CliDispatch
                 localFacts,
                 TelemetrySummary.Empty,
                 new TelemetryHealthFacts(0, 0, 0),
-                WorkspaceHealthReader.Read(ctx.ExtractDbPath)),
+                WorkspaceHealthReader.Read(ctx.ExtractDbPath),
+                LeaderHealthFacts.Read(Path.GetDirectoryName(ctx.ExtractDbPath)!)),
             json));
         return 0;
     }

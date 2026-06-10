@@ -1,4 +1,5 @@
 using Miller.Indexing;
+using Miller.Server.Hosting;
 using Miller.Server.Telemetry;
 
 namespace Miller.Server.Tools;
@@ -13,6 +14,22 @@ public enum HealthState
 
 public sealed record HealthWarning(string Code, string Severity, string Message);
 
+/// <summary>
+/// The indexer-leader view for health: who recorded itself as leader (<see cref="Identity"/>, null when no
+/// identity file exists — e.g. an older build leads, or no leader runs) and whether that pid is alive right now
+/// (<see cref="Alive"/>, null when there is no identity to probe). Whether THIS process leads, and its version,
+/// already travel on <see cref="WorkspaceFacts"/>.
+/// </summary>
+public sealed record LeaderHealthFacts(LeaderIdentity? Identity, bool? Alive)
+{
+    /// <summary>Read the recorded identity under <paramref name="millerDir"/> and probe its pid's liveness.</summary>
+    public static LeaderHealthFacts Read(string millerDir)
+    {
+        LeaderIdentity? identity = LeaderIdentityFile.TryRead(millerDir);
+        return new LeaderHealthFacts(identity, identity is null ? null : LeaderIdentityFile.IsProcessAlive(identity.Pid));
+    }
+}
+
 public sealed record WorkspaceHealthFacts(
     WorkspaceFacts StatusFacts,
     TelemetrySummary Telemetry,
@@ -21,13 +38,15 @@ public sealed record WorkspaceHealthFacts(
     IReadOnlyList<HealthWarning> Warnings,
     IReadOnlyList<string> RecommendedActions,
     HealthState State,
-    string Summary)
+    string Summary,
+    LeaderHealthFacts? Leader = null)
 {
     public static WorkspaceHealthFacts Create(
         WorkspaceFacts statusFacts,
         TelemetrySummary telemetry,
         TelemetryHealthFacts telemetryHealth,
-        WorkspaceExtractionHealthFacts extraction)
+        WorkspaceExtractionHealthFacts extraction,
+        LeaderHealthFacts? leader = null)
     {
         var warnings = new List<HealthWarning>();
         var recommended = new List<string>();
@@ -73,6 +92,8 @@ public sealed record WorkspaceHealthFacts(
         AddSidecarWarning(warnings, "search_sidecar", statusFacts.SearchSidecar?.State, statusFacts.SearchSidecar?.Error);
         AddSidecarWarning(warnings, "content_corpus", statusFacts.ContentCorpus?.State, statusFacts.ContentCorpus?.Error);
 
+        AddLeaderWarnings(warnings, recommended, statusFacts, leader);
+
         if (telemetryHealth.ErrorCount > 0)
         {
             warnings.Add(new HealthWarning(
@@ -100,7 +121,8 @@ public sealed record WorkspaceHealthFacts(
             warnings,
             recommended.Distinct(StringComparer.Ordinal).ToArray(),
             state,
-            summary);
+            summary,
+            leader);
     }
 
     public static string StateName(HealthState state) => state switch
@@ -111,6 +133,53 @@ public sealed record WorkspaceHealthFacts(
         HealthState.Unavailable => "unavailable",
         _ => state.ToString().ToLowerInvariant(),
     };
+
+    // The indexer-leader diagnosis (the multi-process pile-up surface): this process's freshness depends on
+    // whichever process leads. When WE lead there is nothing to diagnose. Otherwise: no identity recorded ⇒ an
+    // older build may lead (it predates leader.json) or nothing leads; a dead recorded pid ⇒ convergence is
+    // stalled until a live leader takes over (degraded); a live leader on a different version ⇒ convergence is
+    // owned by another build (the stale-binary trap) — surface it.
+    private static void AddLeaderWarnings(
+        List<HealthWarning> warnings,
+        List<string> recommended,
+        WorkspaceFacts statusFacts,
+        LeaderHealthFacts? leader)
+    {
+        if (leader is null || statusFacts.IsLeader)
+            return;
+
+        if (leader.Identity is null)
+        {
+            warnings.Add(new HealthWarning(
+                "indexer_leader_unknown",
+                "usable_with_warnings",
+                "no indexer leader identity recorded — an older Miller build may be leading, or no leader is running"));
+            recommended.Add("restart Miller servers for this workspace so a current build records leadership");
+            return;
+        }
+
+        if (leader.Alive == false)
+        {
+            warnings.Add(new HealthWarning(
+                "indexer_leader_dead",
+                "degraded",
+                $"indexer leader pid {leader.Identity.Pid} is not running — the index will not converge until a live leader takes over"));
+            recommended.Add("restart a Miller server (or run workspace refresh) so a live leader resumes indexing");
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(statusFacts.ServerVersion) &&
+            !string.Equals(leader.Identity.Version, statusFacts.ServerVersion, StringComparison.Ordinal))
+        {
+            string path = leader.Identity.ProcessPath is { } processPath ? $" ({processPath})" : string.Empty;
+            warnings.Add(new HealthWarning(
+                "indexer_leader_version_mismatch",
+                "usable_with_warnings",
+                $"indexer leader pid {leader.Identity.Pid} runs {leader.Identity.Version} but this server is " +
+                $"{statusFacts.ServerVersion}{path} — index convergence is owned by the other build"));
+            recommended.Add("stop stale Miller processes so the current build leads indexing");
+        }
+    }
 
     private static void AddUnavailableSectionWarnings(
         List<HealthWarning> warnings,

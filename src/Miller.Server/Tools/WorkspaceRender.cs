@@ -423,6 +423,8 @@ public static class WorkspaceRender
           .Append("  ext ").Append(status.KnownExtensionsCount.ToString(CultureInfo.InvariantCulture))
           .Append("  queue ").Append(status.QueueEmpty ? "empty" : "pending")
           .Append('\n');
+        if (facts.Leader is { } leader)
+            sb.Append("leader: ").Append(LeaderLabel(status, leader)).Append('\n');
         if (status.SearchSidecar is { } sidecar)
             sb.Append("search_db: ").Append(SearchSidecarLabel(sidecar)).Append('\n');
         if (status.ContentCorpus is { } corpus)
@@ -449,6 +451,48 @@ public static class WorkspaceRender
         if (facts.RecommendedActions.Count > 0)
             sb.Append("recommended: ").Append(facts.RecommendedActions[0]).Append('\n');
         return sb.ToString().TrimEnd('\n');
+    }
+
+    // "leader: this process ..." / "pid N vX alive" / "pid N vX NOT RUNNING" / "unknown ..." — who owns index
+    // convergence for this workspace, honestly, because it is often NOT the serving process.
+    private static string LeaderLabel(WorkspaceFacts status, LeaderHealthFacts leader)
+    {
+        if (status.IsLeader)
+            return $"this process (pid {status.ServerProcessId?.ToString(CultureInfo.InvariantCulture) ?? "?"})";
+        if (leader.Identity is not { } identity)
+            return "unknown (no leader identity recorded — older build leading, or no leader running)";
+        string liveness = leader.Alive == false ? "NOT RUNNING (stale identity)" : "alive";
+        return $"pid {identity.Pid.ToString(CultureInfo.InvariantCulture)} v{identity.Version} {liveness}";
+    }
+
+    private static void WriteLeaderJson(Utf8JsonWriter w, WorkspaceFacts status, LeaderHealthFacts? leader)
+    {
+        if (leader is null)
+        {
+            w.WriteNullValue();
+            return;
+        }
+
+        w.WriteStartObject();
+        w.WriteBoolean("this_process", status.IsLeader);
+        if (leader.Identity is { } identity)
+        {
+            w.WriteNumber("pid", identity.Pid);
+            w.WriteString("version", identity.Version);
+            if (identity.ProcessPath is null) w.WriteNull("process_path");
+            else w.WriteString("process_path", identity.ProcessPath);
+            w.WriteString("started_at", identity.StartedAtUtc.UtcDateTime.ToString("O", CultureInfo.InvariantCulture));
+        }
+        else
+        {
+            w.WriteNull("pid");
+            w.WriteNull("version");
+            w.WriteNull("process_path");
+            w.WriteNull("started_at");
+        }
+        if (leader.Alive is { } alive) w.WriteBoolean("alive", alive);
+        else w.WriteNull("alive");
+        w.WriteEndObject();
     }
 
     private static string HealthJson(WorkspaceHealthFacts facts)
@@ -479,6 +523,9 @@ public static class WorkspaceRender
             if (status.ServerProcessId is { } pid) w.WriteNumber("server_pid", pid);
             else w.WriteNull("server_pid");
             w.WriteEndObject();
+
+            w.WritePropertyName("indexer_leader");
+            WriteLeaderJson(w, status, facts.Leader);
 
             w.WritePropertyName("index");
             w.WriteStartObject();

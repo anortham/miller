@@ -26,8 +26,10 @@ namespace Miller.Server.Hosting;
 /// </summary>
 public sealed class IndexerService : BackgroundService
 {
-    // julie's debounce tick: collect a burst, then drain once (decision §Components/3, "~1s, julie's tick").
-    private static readonly TimeSpan DebounceInterval = TimeSpan.FromSeconds(1);
+    // The debounce tick: collect a burst, then drain once (decision §Components/3). Originally ~1s (julie's
+    // tick); tightened to agent speed — an agent edits and re-reads in well under a second, and this tick is the
+    // first leg of the read-your-writes chain FreshnessLatencyBudgetTests pins. Still coalesces save-storms.
+    internal static readonly TimeSpan DebounceInterval = TimeSpan.FromMilliseconds(250);
 
     // How often a non-leader re-tries the writer lock so it can take over after the leader exits (failover).
     private static readonly TimeSpan DefaultLeaderRetryInterval = TimeSpan.FromSeconds(5);
@@ -193,6 +195,18 @@ public sealed class IndexerService : BackgroundService
             // (human + jsonl) is tagged role=leader, distinguishing it from the reader instances sharing the logs
             // directory. Readers leave the startup default (reader) untouched.
             MillerRole.SetLeader();
+            // Record WHO leads (pid/version/path) for `workspace health`: other processes are readers whose
+            // freshness depends on this one, and in real deployments the leader can be an older plugin-cache
+            // build — make that diagnosable instead of mysterious. Best-effort: identity is advisory only.
+            try
+            {
+                LeaderIdentityFile.Write(millerDir, new LeaderIdentity(
+                    Environment.ProcessId, MillerVersion.Current, Environment.ProcessPath, DateTimeOffset.UtcNow));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _logger.LogWarning(ex, "Could not record the leader identity; workspace health will report it as unknown.");
+            }
             if (_attachFileWatchers)
                 _logger.LogInformation("Indexer leader: watching {Root} (recursive) + .git/HEAD.", canonicalRoot);
 
@@ -260,6 +274,9 @@ public sealed class IndexerService : BackgroundService
             {
                 _logger.LogDebug("Indexer stepping down: releasing the writer lock.");
                 MillerRole.SetReader();
+                // Remove our identity BEFORE releasing the lock so no successor can have written its own file
+                // yet — a graceful step-down must not leave a stale "leader" for health to probe.
+                LeaderIdentityFile.TryDelete(millerDir);
             }
             _lease?.Dispose();
             _lease = null;
