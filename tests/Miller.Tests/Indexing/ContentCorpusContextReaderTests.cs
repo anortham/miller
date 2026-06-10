@@ -99,6 +99,11 @@ public sealed class ContentCorpusContextReaderTests : IDisposable
 
     public void Dispose()
     {
+        // The SUT opens its content.db connection internally (pooled), so the test cannot set Pooling=false on it.
+        // Release pooled handles before deleting the temp dir, or Windows fails the delete with a sharing violation
+        // (POSIX unlink tolerates open handles, which is why this only bit on Windows). Matches the sibling
+        // ContentCorpus*Tests teardown convention.
+        SqliteConnection.ClearAllPools();
         try
         {
             Directory.Delete(_dir, recursive: true);
