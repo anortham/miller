@@ -100,6 +100,31 @@ public static class TelemetryCallToolFilter
                 EvaluateBudgets(budgets, loggerFactory, tool, budgetStart, scope.EstTokens ?? 0);
                 return result;
             }
+            catch (ArgumentException ex) when (TryGetMissingRequiredParameter(ex, out string parameterName))
+            {
+                // The Microsoft.Extensions.AI argument marshaller throws this exact shape when a tools/call
+                // arrives without a required parameter ("The arguments dictionary is missing a value for the
+                // required parameter 'X'", ParamName = "arguments"). Rethrowing it surfaces an opaque
+                // protocol-level error the agent retry-loops on (seen live in a Windows dogfood session), so
+                // THIS one shape is shaped here — at the single choke point covering every tool — into a
+                // friendly IsError tool result naming the missing parameter. Telemetry still records an
+                // error row; everything else about the call is unchanged.
+                scope.Outcome = TelemetryOutcome.Error;
+                scope.ErrorKind = ex.GetType().Name;
+
+                var result = new CallToolResult
+                {
+                    IsError = true,
+                    Content = [new TextContentBlock { Text = MissingParameterHint(tool, parameterName) }],
+                };
+
+                long bytes = MeasureBytes(result);
+                scope.BytesReturned = bytes;
+                scope.EstTokens = TokenEstimator.CountFromBytes(bytes);
+
+                EvaluateBudgets(budgets, loggerFactory, tool, budgetStart, scope.EstTokens ?? 0);
+                return result;
+            }
             catch (Exception ex)
             {
                 // A tool threw past its own catch. Record an error row, then rethrow so the SDK does its
@@ -113,6 +138,56 @@ public static class TelemetryCallToolFilter
             }
         };
     }
+
+    /// <summary>
+    /// The marker the Microsoft.Extensions.AI marshaller puts in its missing-required-parameter
+    /// <see cref="ArgumentException"/>; the missing parameter's name follows in single quotes.
+    /// </summary>
+    private const string MissingParameterMarker = "missing a value for the required parameter '";
+
+    /// <summary>
+    /// One-line example calls for the tools whose required parameter has no sensible default. Unmapped tools
+    /// fall back to a generic "missing required parameter" hint, so a future tool is covered automatically.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, string> ToolUsageExamples =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["inspect"] = "inspect(target=\"WorkspaceTool.ResolveTarget\")",
+            ["search"] = "search(query=\"TelemetryLedger\")",
+            ["context"] = "context(query=\"how does workspace refresh converge\")",
+            ["trace"] = "trace(target=\"SearchTool.Run\")",
+            ["edit"] = "edit(operation=\"replace_text\", target=\"src/File.cs\", old_text=\"...\", new_text=\"...\")",
+        };
+
+    /// <summary>
+    /// True when <paramref name="ex"/> is the argument marshaller's missing-required-parameter shape:
+    /// an <see cref="ArgumentException"/> with <c>ParamName == "arguments"</c> whose message carries
+    /// "missing a value for the required parameter '&lt;name&gt;'". Extracts the parameter name on match.
+    /// </summary>
+    private static bool TryGetMissingRequiredParameter(ArgumentException ex, out string parameterName)
+    {
+        parameterName = string.Empty;
+        if (!string.Equals(ex.ParamName, "arguments", StringComparison.Ordinal))
+            return false;
+
+        string message = ex.Message;
+        int start = message.IndexOf(MissingParameterMarker, StringComparison.OrdinalIgnoreCase);
+        if (start < 0)
+            return false;
+        start += MissingParameterMarker.Length;
+        int end = message.IndexOf('\'', start);
+        if (end <= start)
+            return false;
+
+        parameterName = message[start..end];
+        return true;
+    }
+
+    /// <summary>Build the friendly one-line usage hint for a missing required parameter.</summary>
+    private static string MissingParameterHint(string tool, string parameterName) =>
+        ToolUsageExamples.TryGetValue(tool, out string? example)
+            ? $"{tool} requires '{parameterName}'. Example: {example}"
+            : $"{tool}: missing required parameter '{parameterName}'.";
 
     /// <summary>
     /// Evaluate the just-completed call against its soft budget and log a WARN per breach. WARN-ONLY and

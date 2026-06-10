@@ -5,7 +5,12 @@ using System.Text;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Miller.Indexing;
 using Miller.Server.Telemetry;
+using Miller.Server.Tools;
+using Miller.Server.Workspaces;
+using Miller.Tests.Indexing;
+using ModelContextProtocol;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
@@ -60,6 +65,13 @@ public static class PinProbeTool
         }
         return "no results";
     }
+
+    /// <summary>
+    /// Throws past any internal catch — the filter must RETHROW this (SDK redaction path), not shape it into
+    /// a friendly missing-parameter result. Pin for the non-marshalling branch of the central catch.
+    /// </summary>
+    [McpServerTool(Name = "pin_unhandled"), Description("Throws an unhandled exception (rethrow-path probe).")]
+    public static string Unhandled(string who) => throw new InvalidOperationException($"kaboom for {who}");
 
     [McpServerTool(Name = "pin_workspace_override"), Description("Sets target workspace telemetry fields.")]
     public static string WorkspaceOverride(string workspaceId, string workspaceRoot)
@@ -232,6 +244,148 @@ public sealed class CallToolFilterTelemetryTests : IDisposable
 
         var emptyRow = Assert.Single(rows, x => x.tool == "pin_empty");
         Assert.Equal("empty", emptyRow.outcome);
+    }
+
+    [Fact]
+    public async Task CentralFilter_MissingRequiredParam_OnInspect_ReturnsFriendlyToolError_AndRecordsErrorRow()
+    {
+        // Dogfood regression (Windows session): calling a tool without a required parameter surfaced the raw
+        // Microsoft.Extensions.AI marshalling ArgumentException ("The arguments dictionary is missing a value
+        // for the required parameter 'target'") as a protocol-level unhandled error, and agents retry-looped on
+        // it. The central filter must catch THAT shape and return a friendly IsError tool result naming the
+        // missing parameter, with a telemetry error row — not an unhandled exception.
+        var ct = TestContext.Current.CancellationToken;
+        using var ledger = TelemetryLedger.Open(_telemetryDb, workspaceId: "pin-ws");
+
+        // The REAL inspect tool with its real DI deps (an empty fixture index), so the call travels the real
+        // SDK marshalling layer and fails on the genuinely missing 'target'.
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            Array.Empty<JulieDbFixture.SymbolRow>(),
+            workspaceId: "pin-ws");
+        var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, fx.DbPath, "pin-ws", _dir));
+
+        var clientToServer = new Pipe();
+        var serverToClient = new Pipe();
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton(ledger);
+        services.AddSingleton<IWorkspaceIndexProvider>(provider);
+        services.AddSingleton<IWorkspaceSearchProvider>(provider);
+        services
+            .AddMcpServer(o => { o.ServerInfo = new() { Name = "pin", Version = "0" }; })
+            .WithStreamServerTransport(clientToServer.Reader.AsStream(), serverToClient.Writer.AsStream())
+            .WithTools<InspectTool>()
+            .WithRequestFilters(f => f.AddCallToolFilter(TelemetryCallToolFilter.Create()));
+
+        await using var provider2 = services.BuildServiceProvider();
+        var server = provider2.GetRequiredService<McpServer>();
+        var serverTask = server.RunAsync(ct);
+
+        var clientTransport = new StreamClientTransport(
+            clientToServer.Writer.AsStream(), serverToClient.Reader.AsStream(), NullLoggerFactory.Instance);
+        await using var client = await McpClient.CreateAsync(clientTransport, cancellationToken: ct);
+
+        // {} — no 'target'. Must come back as a normal tool result, NOT a protocol error / unhandled exception.
+        var result = await client.CallToolAsync(
+            "inspect", new Dictionary<string, object?>(), cancellationToken: ct);
+
+        Assert.Equal(true, result.IsError);
+        string text = Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text;
+        Assert.Contains("'target'", text);                                  // names the missing parameter
+        Assert.Contains("inspect", text, StringComparison.OrdinalIgnoreCase); // names the tool
+        Assert.Contains("Example:", text);                                  // mapped tools get a usage example
+
+        await client.DisposeAsync();
+        await clientToServer.Writer.CompleteAsync();
+        await serverToClient.Writer.CompleteAsync();
+        try { await serverTask.WaitAsync(TimeSpan.FromSeconds(5), ct); } catch (Exception) { }
+
+        using var conn = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _telemetryDb, Mode = SqliteOpenMode.ReadOnly, Pooling = false,
+        }.ToString());
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT tool, outcome, error_kind FROM tool_telemetry;";
+        using var reader = cmd.ExecuteReader();
+        Assert.True(reader.Read(), "the central CallToolFilter did not record a telemetry row");
+        Assert.Equal("inspect", reader.GetString(0));
+        Assert.Equal("error", reader.GetString(1));
+        Assert.Equal("ArgumentException", reader.GetString(2));
+        Assert.False(reader.Read(), "exactly one row expected (the filter must fire once per call)");
+    }
+
+    [Fact]
+    public async Task CentralFilter_NonMarshallingException_StillRethrows_NoFriendlyHint_ErrorRowRecorded()
+    {
+        // The friendly catch is ONLY for the marshaller's missing-required-parameter shape. Any other
+        // exception keeps the existing behavior: record an error row, rethrow for SDK redaction.
+        var ct = TestContext.Current.CancellationToken;
+        using var ledger = TelemetryLedger.Open(_telemetryDb, workspaceId: "pin-ws");
+
+        var clientToServer = new Pipe();
+        var serverToClient = new Pipe();
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton(ledger);
+        services
+            .AddMcpServer(o => { o.ServerInfo = new() { Name = "pin", Version = "0" }; })
+            .WithStreamServerTransport(clientToServer.Reader.AsStream(), serverToClient.Writer.AsStream())
+            .WithToolsFromAssembly(typeof(PinProbeTool).Assembly)
+            .WithRequestFilters(f => f.AddCallToolFilter(TelemetryCallToolFilter.Create()));
+
+        await using var provider = services.BuildServiceProvider();
+        var server = provider.GetRequiredService<McpServer>();
+        var serverTask = server.RunAsync(ct);
+
+        var clientTransport = new StreamClientTransport(
+            clientToServer.Writer.AsStream(), serverToClient.Reader.AsStream(), NullLoggerFactory.Instance);
+        await using var client = await McpClient.CreateAsync(clientTransport, cancellationToken: ct);
+
+        // pin_unhandled throws InvalidOperationException past the filter. Depending on the SDK layer the
+        // client sees either an error result or a protocol exception — either is fine, as long as it is NOT
+        // shaped into the friendly missing-parameter hint.
+        string? clientVisibleText = null;
+        try
+        {
+            var result = await client.CallToolAsync(
+                "pin_unhandled", new Dictionary<string, object?> { ["who"] = "x" }!, cancellationToken: ct);
+            Assert.Equal(true, result.IsError);
+            clientVisibleText = result.Content is [TextContentBlock t] ? t.Text : null;
+        }
+        catch (McpException ex)
+        {
+            clientVisibleText = ex.Message;
+        }
+
+        if (clientVisibleText is not null)
+        {
+            Assert.DoesNotContain("missing required parameter", clientVisibleText, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("Example:", clientVisibleText);
+        }
+
+        await client.DisposeAsync();
+        await clientToServer.Writer.CompleteAsync();
+        await serverToClient.Writer.CompleteAsync();
+        try { await serverTask.WaitAsync(TimeSpan.FromSeconds(5), ct); } catch (Exception) { }
+
+        using var conn = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _telemetryDb, Mode = SqliteOpenMode.ReadOnly, Pooling = false,
+        }.ToString());
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT tool, outcome, error_kind FROM tool_telemetry WHERE tool = 'pin_unhandled';";
+        using var reader = cmd.ExecuteReader();
+        Assert.True(reader.Read(), "the rethrow path must still record a telemetry error row");
+        Assert.Equal("error", reader.GetString(1));
+        Assert.Equal("InvalidOperationException", reader.GetString(2));
     }
 
     [Fact]
