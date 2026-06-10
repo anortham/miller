@@ -452,7 +452,7 @@ public sealed class TraceTool
                 return false;
 
             case TargetResolution.NotFound nf:
-                note = $"'{nf.Target}' not found. Try search to locate it.";
+                note = nf.RenderMessage();
                 return false;
 
             default:
@@ -735,7 +735,7 @@ public sealed class TraceTool
                 return false;
 
             case TargetResolution.NotFound nf:
-                note = $"'{nf.Target}' not found. Try search to locate it.";
+                note = nf.RenderMessage();
                 return false;
 
             default:

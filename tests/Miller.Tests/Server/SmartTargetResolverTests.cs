@@ -196,6 +196,126 @@ public sealed class SmartTargetResolverTests
     }
 
     [Fact]
+    public void Resolve_BackslashScope_NormalizesSeparatorsAndDisambiguates()
+    {
+        // Windows dogfood gap: a backslash-separated scope must match the verbatim '/'-separated indexed
+        // path instead of silently filtering every match to zero.
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
+        {
+            new JulieDbFixture.SymbolRow("aa11223344556677889900aabbccddee", "Handle", "method", "csharp",
+                "a/First.cs", "void Handle()", 3, null),
+            new JulieDbFixture.SymbolRow("bb11223344556677889900aabbccddee", "Handle", "method", "csharp",
+                "b/Second.cs", "void Handle()", 7, null),
+        });
+        var index = BuildIndex(fx);
+        var resolver = new SmartTargetResolver(index);
+
+        var result = resolver.Resolve("Handle", scope: @"b\Second.cs");
+
+        var sym = Assert.IsType<TargetResolution.Symbol>(result);
+        Assert.Equal("b/Second.cs", sym.Value.FilePath);
+    }
+
+    [Fact]
+    public void Resolve_ScopeCasingMismatch_StillDisambiguates()
+    {
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
+        {
+            new JulieDbFixture.SymbolRow("aa11223344556677889900aabbccddee", "Handle", "method", "csharp",
+                "a/First.cs", "void Handle()", 3, null),
+            new JulieDbFixture.SymbolRow("bb11223344556677889900aabbccddee", "Handle", "method", "csharp",
+                "b/Second.cs", "void Handle()", 7, null),
+        });
+        var index = BuildIndex(fx);
+        var resolver = new SmartTargetResolver(index);
+
+        var result = resolver.Resolve("Handle", scope: "B/SECOND.CS");
+
+        var sym = Assert.IsType<TargetResolution.Symbol>(result);
+        Assert.Equal("b/Second.cs", sym.Value.FilePath);
+    }
+
+    [Fact]
+    public void Resolve_WrongFileScope_SurfacesOutOfScopeMatches_NotBareNotFound()
+    {
+        // A wrong scope must never mask a resolvable name: the unscoped matches come back as suggestions
+        // with the missed scope recorded, so an agent can self-correct in one turn.
+        using var fx = JulieDbFixture.CreateDefault();
+        var index = BuildIndex(fx);
+        var resolver = new SmartTargetResolver(index);
+
+        var result = resolver.Resolve("parseToken", scope: "wrong/Other.cs");
+
+        var nf = Assert.IsType<TargetResolution.NotFound>(result);
+        Assert.Equal("wrong/Other.cs", nf.ScopeMissed);
+        var suggestion = Assert.Single(nf.Suggestions!);
+        Assert.Equal("parseToken", suggestion.Name);
+        Assert.Equal("auth/token.ts", suggestion.FilePath);
+        Assert.Contains("auth/token.ts", nf.RenderMessage());
+    }
+
+    [Fact]
+    public void Resolve_MisspelledName_SuggestsNearMissNames()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+        var index = BuildIndex(fx);
+        var resolver = new SmartTargetResolver(index);
+
+        // Truncated typo of "parseToken" — close enough that the agent gets a one-turn correction.
+        var nf = Assert.IsType<TargetResolution.NotFound>(resolver.Resolve("parseToke"));
+
+        Assert.Null(nf.ScopeMissed);
+        Assert.NotNull(nf.Suggestions);
+        Assert.Contains(nf.Suggestions!, s => s.Name == "parseToken");
+        string message = nf.RenderMessage();
+        Assert.Contains("Closest:", message);
+        Assert.Contains("parseToken", message);
+    }
+
+    [Fact]
+    public void Resolve_WrongCaseName_SuggestsCaseInsensitiveExactFirst()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+        var index = BuildIndex(fx);
+        var resolver = new SmartTargetResolver(index);
+
+        var nf = Assert.IsType<TargetResolution.NotFound>(resolver.Resolve("userservice"));
+
+        Assert.NotNull(nf.Suggestions);
+        Assert.Equal("UserService", nf.Suggestions![0].Name);
+    }
+
+    [Fact]
+    public void Resolve_NearMisses_AreCappedAtThree()
+    {
+        var rows = new List<JulieDbFixture.SymbolRow>();
+        for (int i = 0; i < 6; i++)
+            rows.Add(new JulieDbFixture.SymbolRow($"aa11223344556677889900aabbccdd0{i}", $"RunJob{i}", "method",
+                "csharp", $"f{i}/Jobs.cs", $"void RunJob{i}()", 3 + i, null));
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, rows);
+        var index = BuildIndex(fx);
+        var resolver = new SmartTargetResolver(index);
+
+        var nf = Assert.IsType<TargetResolution.NotFound>(resolver.Resolve("RunJob"));
+
+        Assert.NotNull(nf.Suggestions);
+        Assert.Equal(3, nf.Suggestions!.Count);
+    }
+
+    [Fact]
+    public void Resolve_UnknownName_WithNoCloseNames_KeepsBareNotFoundMessage()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+        var index = BuildIndex(fx);
+        var resolver = new SmartTargetResolver(index);
+
+        var nf = Assert.IsType<TargetResolution.NotFound>(resolver.Resolve("Zebraphone"));
+
+        Assert.True(nf.Suggestions is null or { Count: 0 });
+        Assert.Equal("'Zebraphone' not found. Try search to locate it.", nf.RenderMessage());
+    }
+
+    [Fact]
     public void Resolve_ClassQualifiedMember_ResolvesThroughParentNameAndScope()
     {
         using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]

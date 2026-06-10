@@ -236,7 +236,7 @@ public sealed class ImpactTool
                 return false;
 
             case TargetResolution.NotFound nf:
-                note = $"'{nf.Target}' not found. Try search to locate it.";
+                note = nf.RenderMessage();
                 return false;
 
             default:

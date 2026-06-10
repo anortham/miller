@@ -385,6 +385,37 @@ public sealed class InspectToolTests
         Assert.Contains("not found", output, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void Run_MisspelledName_SuggestsNearMissesInNote()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        var (index, resolver) = Build(fx);
+
+        // Truncated typo of "GetUser" — the note must offer the close name so the agent self-corrects.
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "GetUse", depth: "summary", kind: null, scope: null, limit: 50, json: false, out int count);
+
+        Assert.Equal(0, count);
+        Assert.Contains("not found", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Closest:", output);
+        Assert.Contains("GetUser", output);
+    }
+
+    [Fact]
+    public void Run_WrongFileScope_SurfacesWhereTheSymbolActuallyLives()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "GetUser", depth: "summary", kind: null, scope: "wrong/Other.cs", limit: 50, json: false,
+            out int count);
+
+        Assert.Equal(0, count);
+        Assert.Contains("not found", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("auth/UserService.cs", output);
+    }
+
     // ---- JSON ----
 
     [Fact]

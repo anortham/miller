@@ -209,6 +209,24 @@ public sealed class TraceToolTests
     }
 
     [Fact]
+    public void Auto_MisspelledTarget_SuggestsNearMissesInNote()
+    {
+        var index = BuildSymbolIndex(
+            new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
+            Array.Empty<(string, string)>());
+
+        // Wrong-case miss of "Alpha" — the note must offer the close name for a one-turn correction.
+        string outp = TraceTool.Run(index, ResolverFor(index),
+            target: "alpha", mode: "auto", to: null, depth: 3, limit: 20, fullFormat: false,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        Assert.Contains("not found", outp);
+        Assert.Contains("Closest:", outp);
+        Assert.Contains("Alpha", outp);
+    }
+
+    [Fact]
     public void Auto_ScopeDisambiguatesAmbiguousTarget()
     {
         var index = BuildSymbolIndex(

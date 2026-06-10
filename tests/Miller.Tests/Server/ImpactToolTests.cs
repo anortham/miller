@@ -336,6 +336,22 @@ public sealed class ImpactToolTests
     }
 
     [Fact]
+    public void Run_MisspelledTarget_SuggestsNearMissesInNote()
+    {
+        var (index, resolver) = BuildFixture();
+
+        // Wrong-case miss of "Validate" — the note must offer the close name for a one-turn correction.
+        string output = ImpactTool.Run(index, resolver,
+            target: "validate", changedPaths: null, diff: null, maxDepth: 2, limit: 100, json: false,
+            out int impactedCount, out _);
+
+        Assert.Equal(0, impactedCount);
+        Assert.Contains("not found", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Closest:", output);
+        Assert.Contains("Validate", output);
+    }
+
+    [Fact]
     public void Run_TargetFile_SeedsAllSymbolsInTheFile()
     {
         var (index, resolver) = BuildFixture();

@@ -111,17 +111,61 @@ public sealed partial class SmartTargetResolver
 
     private TargetResolution ResolveByName(string name, string? scope)
     {
-        IReadOnlyList<IndexedSymbol> matches = ScopeMatches(Index.FindByName(name), scope);
+        IReadOnlyList<IndexedSymbol> byName = Index.FindByName(name);
+        IReadOnlyList<IndexedSymbol> matches = ScopeMatches(byName, scope);
 
         if (matches.Count == 0)
             matches = ResolveQualifiedMember(name, scope);
 
-        return matches.Count switch
+        if (matches.Count == 1)
+            return new TargetResolution.Symbol(matches[0]);
+        if (matches.Count > 1)
+            return new TargetResolution.Candidates(matches);
+
+        // A wrong scope (wrong file, absolute path, separator the normalization could not bridge) must never
+        // mask a resolvable name as a bare not-found: surface the out-of-scope matches as suggestions so the
+        // agent self-corrects in one turn (Windows dogfood, 2026-06).
+        if (!string.IsNullOrWhiteSpace(scope))
         {
-            0 => new TargetResolution.NotFound(name),
-            1 => new TargetResolution.Symbol(matches[0]),
-            _ => new TargetResolution.Candidates(matches),
-        };
+            IReadOnlyList<IndexedSymbol> unscoped =
+                byName.Count > 0 ? byName : ResolveQualifiedMember(name, scope: null);
+            if (unscoped.Count > 0)
+                return new TargetResolution.NotFound(name, Cap(unscoped), scope);
+        }
+
+        return new TargetResolution.NotFound(name, NearMisses(name));
+    }
+
+    // Suggestion budget: enough to self-correct in one turn, small enough to stay a one-line note.
+    private const int MaxSuggestions = 3;
+
+    private static IReadOnlyList<IndexedSymbol> Cap(IReadOnlyList<IndexedSymbol> matches) =>
+        matches.Count <= MaxSuggestions ? matches : matches.Take(MaxSuggestions).ToList();
+
+    /// <summary>
+    /// Up to <see cref="MaxSuggestions"/> near-miss symbols for a truly-unresolvable name. Recall comes from
+    /// the search index (word/component arms in-memory; + the collapsed-trigram arm on the FTS5 sidecar);
+    /// only genuinely CLOSE names survive — a case-insensitive exact match first, then names containing the
+    /// target or its last dot segment. A BM25 hit that merely shares a token is noise here, not a suggestion.
+    /// </summary>
+    private IReadOnlyList<IndexedSymbol> NearMisses(string name)
+    {
+        var hits = Index.Search(name, MaxSuggestions * 4);
+        if (hits.Count == 0)
+            return [];
+
+        string tail = name[(name.LastIndexOf('.') + 1)..]; // == name when there is no dot
+        return hits
+            .Select(h => Index.Resolve(h.Document.DocId))
+            .Where(s => IsCloseName(s.Name, name, tail))
+            .DistinctBy(s => (s.Name, s.FilePath))
+            .OrderByDescending(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase))
+            .Take(MaxSuggestions)
+            .ToList();
+
+        static bool IsCloseName(string candidate, string target, string tail) =>
+            candidate.Contains(target, StringComparison.OrdinalIgnoreCase)
+            || (tail.Length > 0 && candidate.Contains(tail, StringComparison.OrdinalIgnoreCase));
     }
 
     private IReadOnlyList<IndexedSymbol> ResolveQualifiedMember(string name, string? scope)
@@ -149,10 +193,18 @@ public sealed partial class SmartTargetResolver
         if (string.IsNullOrWhiteSpace(scope))
             return matches;
 
-        // Constrain to the scoped file before counting (ordinal — file paths are case-sensitive on the
-        // platforms julie targets and the extract stores them verbatim).
-        return matches.Where(s => string.Equals(s.FilePath, scope, StringComparison.Ordinal)).ToList();
+        // Constrain to the scoped file before counting. Separators are normalized ('\' → '/', the repo's
+        // path-normalization convention — see ToolSearchFilters.NormalizePath) and casing is ignored so a
+        // Windows-shaped scope still narrows instead of silently zeroing out an otherwise-resolvable name.
+        // Worst case for a case-only collision on a case-sensitive filesystem is an extra candidate, never a
+        // wrong silent pick.
+        string normalizedScope = NormalizeScopePath(scope);
+        return matches
+            .Where(s => string.Equals(NormalizeScopePath(s.FilePath), normalizedScope, StringComparison.OrdinalIgnoreCase))
+            .ToList();
     }
+
+    private static string NormalizeScopePath(string path) => path.Replace('\\', '/').Trim();
 
     // A non-empty extension (beyond the dot) that appears among the indexed file paths. Derived, not hardcoded.
     private bool HasKnownExtension(string s)

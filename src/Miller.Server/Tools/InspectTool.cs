@@ -185,8 +185,8 @@ public sealed class InspectTool
             case TargetResolution.NotFound nf:
                 resultCount = 0;
                 string notFoundOutput = json
-                    ? $"{{\"not_found\":{JsonString(nf.Target)}}}"
-                    : $"'{nf.Target}' not found. Try search to locate it.";
+                    ? RenderNotFoundJson(nf)
+                    : nf.RenderMessage();
                 return ReadToolWorkspaceRouting.PrefixCompact(notFoundOutput, json ? null : compactBanner);
 
             default:
@@ -488,6 +488,26 @@ public sealed class InspectTool
         w.WriteStartObject();
         w.WritePropertyName("candidates");
         WriteSymbolArray(w, matches);
+        w.WriteEndObject();
+        w.Flush();
+        return Utf8(buffer);
+    }
+
+    // Additive JSON shape: `not_found` is unchanged; `closest` (near misses or scope-masked matches) and
+    // `scope_missed` appear only when the resolver produced them.
+    private static string RenderNotFoundJson(TargetResolution.NotFound nf)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using var w = NewWriter(buffer);
+        w.WriteStartObject();
+        w.WriteString("not_found", nf.Target);
+        if (nf.Suggestions is { Count: > 0 } suggestions)
+        {
+            w.WritePropertyName("closest");
+            WriteSymbolArray(w, suggestions);
+        }
+        if (nf.ScopeMissed is { } scopeMissed)
+            w.WriteString("scope_missed", scopeMissed);
         w.WriteEndObject();
         w.Flush();
         return Utf8(buffer);
