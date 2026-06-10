@@ -38,6 +38,7 @@ public sealed class IndexerService : BackgroundService
     private readonly Func<string, IDisposable?> _tryAcquireLeadership;
     private readonly Func<WorkspaceContext, string, string, IExtractOps> _createOps;
     private readonly Func<string, bool> _drainFullScanRequests;
+    private readonly Func<string, IReadOnlyList<string>> _drainFileConvergeRequests;
     private readonly TimeSpan _leaderRetryInterval;
     private readonly bool _attachFileWatchers;
 
@@ -84,7 +85,8 @@ public sealed class IndexerService : BackgroundService
             sidecar,
             contentSidecar,
             attachFileWatchers: true,
-            drainFullScanRequests: LeaderScanRequestQueue.DrainFullScanRequests)
+            drainFullScanRequests: LeaderScanRequestQueue.DrainFullScanRequests,
+            drainFileConvergeRequests: LeaderScanRequestQueue.DrainFileConvergeRequests)
     {
     }
 
@@ -98,7 +100,8 @@ public sealed class IndexerService : BackgroundService
         SymbolSearchSidecar sidecar,
         ContentCorpusSidecar? contentSidecar = null,
         bool attachFileWatchers = true,
-        Func<string, bool>? drainFullScanRequests = null)
+        Func<string, bool>? drainFullScanRequests = null,
+        Func<string, IReadOnlyList<string>>? drainFileConvergeRequests = null)
     {
         ArgumentNullException.ThrowIfNull(bootstrap);
         ArgumentNullException.ThrowIfNull(logger);
@@ -115,6 +118,7 @@ public sealed class IndexerService : BackgroundService
         _tryAcquireLeadership = tryAcquireLeadership;
         _createOps = createOps;
         _drainFullScanRequests = drainFullScanRequests ?? LeaderScanRequestQueue.DrainFullScanRequests;
+        _drainFileConvergeRequests = drainFileConvergeRequests ?? LeaderScanRequestQueue.DrainFileConvergeRequests;
         _leaderRetryInterval = leaderRetryInterval;
         _sidecar = sidecar;
         _contentSidecar = contentSidecar ?? new ContentCorpusSidecar();
@@ -216,6 +220,7 @@ public sealed class IndexerService : BackgroundService
                 try
                 {
                     TryProcessLeaderFullScanRequests(millerDir);
+                    TryProcessFileConvergeRequests(millerDir);
 
                     // Hold _opsGate across the drain so the debounce-loop drain and the on-demand Try* scans
                     // (TryScanAsLeader / TryReindexAsLeader) share ONE serialization: two julie `extract`
@@ -574,6 +579,43 @@ public sealed class IndexerService : BackgroundService
     /// </summary>
     internal bool ProcessLeaderFullScanRequestsForTest(string millerDir) =>
         TryProcessLeaderFullScanRequests(millerDir);
+
+    /// <summary>
+    /// Test seam: drain single-file converge request files and reindex each through the same write-through path
+    /// the production debounce loop uses. Requires <see cref="PublishOpsForTest"/> when the caller expects a
+    /// reindex. Not used in production.
+    /// </summary>
+    internal bool ProcessFileConvergeRequestsForTest(string millerDir) =>
+        TryProcessFileConvergeRequests(millerDir);
+
+    // Drain single-file converge requests (written by reader write-through / gate-time recovery) and reindex
+    // each through TryReindexAsLeader (one `extract update --file` + incremental sidecar converge per path).
+    // ONLY the leader may drain: a reader consuming requests would delete them unserviced. Never escalates to a
+    // whole-repo scan — these are targeted converges by design.
+    private bool TryProcessFileConvergeRequests(string millerDir)
+    {
+        lock (_opsGate)
+        {
+            if (_ops is null)
+                return false; // not the leader — leave the requests for the instance that can service them
+        }
+
+        IReadOnlyList<string> paths;
+        try
+        {
+            paths = _drainFileConvergeRequests(millerDir);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            _logger.LogWarning(ex, "File-converge request drain failed; will retry on a later tick.");
+            return false;
+        }
+
+        bool reindexedAny = false;
+        foreach (string path in paths)
+            reindexedAny |= TryReindexAsLeader(path);
+        return reindexedAny;
+    }
 
     private void AttachWatchers(string canonicalRoot)
     {

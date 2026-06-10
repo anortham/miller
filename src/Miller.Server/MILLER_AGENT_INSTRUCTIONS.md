@@ -51,8 +51,9 @@ the tokens.
   pick which tests to run. Optional `workspace_id` and `ensure_fresh` work for registered workspaces.
 - `edit` — Index-aware edits. Operations: `replace_text`, `replace_symbol_body`, `replace_symbol_signature`,
   `rename_symbol`, `insert_before`, `insert_after`, `add_doc`. Previews a diff and writes nothing unless
-  `apply=true`. Blocked when the index is stale for the target file — `workspace refresh` first (or
-  `allow_stale=true` if you accept the risk).
+  `apply=true`. A stale index for the target file self-heals: Miller converges that one file automatically
+  (briefly waiting when needed) and refuses only if convergence does not land — then `workspace refresh`
+  first (or `allow_stale=true` if you accept the risk).
 - `content` — Import, search, read, list, remove, and export external/web text. Use it for logs, CI output,
   reports, large JSON/text dumps, and browser-fetched markdown. `import`/`add_markdown` report metadata only;
   `search` returns snippets; `read` returns bounded windows; `remove` deletes an import. Use `content_kind=web`

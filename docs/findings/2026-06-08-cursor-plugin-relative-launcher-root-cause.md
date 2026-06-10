@@ -60,3 +60,18 @@ present. Cursor logs show both `loadUserLocalPlugin miller` and `loadClaudePlugi
 those plugin sources in Settings. In the Home tab those duplicate rows can remain at `Loading tools`, while the
 workspace tab shows both rows with `8 tools enabled`. The backend still uses the same MCP server identifier,
 `plugin-miller-miller`, and skips duplicate client creation after the first connected server.
+
+## 2026-06-10 Follow-up
+
+Cursor can start the shared MCP process from an empty/global window even while another Cursor workspace tab is open.
+In that state the launcher receives no usable workspace environment (`WORKSPACE_FOLDER_PATHS` can be blank, `PWD=/`,
+and `VSCODE_CWD=/`). Falling back to the plugin root then lets Miller index its own plugin/cache directory, so a
+later agent in `/Users/murphy/source/julie-extractors` sees `workspace: miller...` or plugin-cache paths instead of
+the editor workspace.
+
+The launcher now treats the whole plugin install trees (`~/.claude/plugins`, `~/.codex/plugins`,
+`~/.cursor/plugins`, and `~/.miller/plugin-cache`) as unsafe fallback cwd values — whole trees rather than only the
+`cache`/`local` subdirectories, because marketplace clones such as `~/.claude/plugins/marketplaces/miller` are full
+repo checkouts that Cursor's Claude-plugin import can launch from. If the client provides a real workspace root,
+Miller still uses it. If no workspace root is available, Miller fails with guidance instead of silently indexing the
+plugin directory.

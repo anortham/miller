@@ -43,8 +43,21 @@ public sealed class IndexerServiceScanTests
         public Exception? ThrowOnScan { get; set; }
         public Exception? ThrowOnUpdate { get; set; }
 
+        private readonly List<string> _updatePaths = new();
+
+        public IReadOnlyList<string> UpdatePaths
+        {
+            get
+            {
+                lock (_gate)
+                    return _updatePaths.ToArray();
+            }
+        }
+
         public ExtractReport Update(string path)
         {
+            lock (_gate)
+                _updatePaths.Add(path);
             if (ThrowOnUpdate is not null)
                 throw ThrowOnUpdate;
             return Stub(UpdateRevision ?? Revision);
@@ -86,7 +99,9 @@ public sealed class IndexerServiceScanTests
     // A never-started IndexerService: TryScanAsLeader reads only the published _ops under _opsGate (it never
     // touches the bootstrap), so an un-started instance is the correct, I/O-free unit-test surface. The sidecar
     // defaults OFF, so the disabled (byte-identical) path is what these no-workspace tests exercise.
-    private static IndexerService NewService(Func<string, bool>? drainFullScanRequests = null) =>
+    private static IndexerService NewService(
+        Func<string, bool>? drainFullScanRequests = null,
+        Func<string, IReadOnlyList<string>>? drainFileConvergeRequests = null) =>
         new(
             new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance),
             NullLogger<IndexerService>.Instance,
@@ -96,19 +111,34 @@ public sealed class IndexerServiceScanTests
             leaderRetryInterval: TimeSpan.FromHours(1),
             SymbolSearchSidecar.Disabled,
             attachFileWatchers: false,
-            drainFullScanRequests: drainFullScanRequests);
+            drainFullScanRequests: drainFullScanRequests,
+            drainFileConvergeRequests: drainFileConvergeRequests);
 
     // A leader-capable instance whose bootstrap is SEEDED with a workspace (so TryScanAsLeader can read its
     // CanonicalExtractDbPath for the sidecar build) and whose sidecar gate is the caller's choice. Not started —
     // PublishOpsForTest makes it the leader without the cross-process lock or a subprocess.
-    private static IndexerService NewSeededService(WorkspaceContext workspace, SymbolSearchSidecar sidecar)
+    private static IndexerService NewSeededService(
+        WorkspaceContext workspace,
+        SymbolSearchSidecar sidecar,
+        Func<string, IReadOnlyList<string>>? drainFileConvergeRequests = null)
     {
         var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
         bootstrap.SeedForTest(
             workspace,
             new IndexHolder(MillerRepositoryIndex.Build(System.Array.Empty<IndexedSymbol>()), builtRevision: 0));
+        if (drainFileConvergeRequests is null)
+            return new IndexerService(
+                bootstrap, NullLogger<IndexerService>.Instance, NullLoggerFactory.Instance, sidecar);
         return new IndexerService(
-            bootstrap, NullLogger<IndexerService>.Instance, NullLoggerFactory.Instance, sidecar);
+            bootstrap,
+            NullLogger<IndexerService>.Instance,
+            NullLoggerFactory.Instance,
+            tryAcquireLeadership: _ => null,
+            createOps: static (_, _, _) => throw new InvalidOperationException("not used by this test seam"),
+            leaderRetryInterval: TimeSpan.FromHours(1),
+            sidecar,
+            attachFileWatchers: false,
+            drainFileConvergeRequests: drainFileConvergeRequests);
     }
 
     private static IndexerService NewStartedService(
@@ -283,6 +313,56 @@ public sealed class IndexerServiceScanTests
 
         Assert.True(processed);
         Assert.Equal(new[] { true }, ops.ScanForce);
+    }
+
+    [Fact]
+    public void ProcessFileConvergeRequests_AsLeader_ReindexesEachRequestedFile()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow("edit-new", "UpdatedType", "class", "csharp",
+                    "src/Edit.cs", "public class UpdatedType", 1, ParentId: null),
+            },
+            revisions: new[]
+            {
+                new JulieDbFixture.RevisionRow(1),
+                new JulieDbFixture.RevisionRow(2, Kind: "single_file"),
+            },
+            fileChanges: new[]
+            {
+                new JulieDbFixture.RevisionFileChangeRow(2, "src/Edit.cs", "updated"),
+            });
+        var service = NewSeededService(
+            WorkspaceWithDb(julie.DbPath),
+            SymbolSearchSidecar.Disabled,
+            drainFileConvergeRequests: _ => new[] { "src/Edit.cs", "src/Keep.cs" });
+        var ops = new RecordingScanOps { UpdateRevision = 2 };
+        service.PublishOpsForTest(ops);
+
+        bool processed = service.ProcessFileConvergeRequestsForTest("/repo/.miller");
+
+        Assert.True(processed);
+        Assert.Equal(new[] { "src/Edit.cs", "src/Keep.cs" }, ops.UpdatePaths);
+        Assert.Empty(ops.ScanForce); // single-file converge must never escalate to a whole-repo scan
+    }
+
+    [Fact]
+    public void ProcessFileConvergeRequests_WhenNotLeader_DoesNotDrainRequests()
+    {
+        // A non-leader CANNOT reindex; draining would consume (delete) the request files without servicing
+        // them, losing the converge for the real leader. The drain must not even run.
+        bool drained = false;
+        var service = NewService(drainFileConvergeRequests: _ =>
+        {
+            drained = true;
+            return new[] { "src/Edit.cs" };
+        });
+
+        Assert.False(service.ProcessFileConvergeRequestsForTest("/repo/.miller"));
+        Assert.False(drained);
     }
 
     [Fact]

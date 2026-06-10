@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -42,6 +43,21 @@ public sealed class EditService
     private readonly EditApplier _applier;
     private readonly IEditWriteThrough _writeThrough;
     private readonly IndexedSourceTextReader _indexedSourceTextReader;
+    private readonly RecoveryOptions _recovery;
+
+    /// <summary>
+    /// Bounded-wait tuning for gate-time stale recovery: when the freshness gate finds a touched file stale and
+    /// the write-through reports <see cref="StaleRecoveryAttempt.Requested"/> (the leader will converge it
+    /// asynchronously), the gate re-checks every <paramref name="PollInterval"/> until fresh or until
+    /// <paramref name="Timeout"/> is spent. The budget is shared across ALL files of one Execute call (the
+    /// multi-file rename gate loop), so a pathological rename cannot stack per-file waits.
+    /// </summary>
+    public sealed record RecoveryOptions(TimeSpan Timeout, TimeSpan PollInterval)
+    {
+        /// <summary>2.5s budget (one leader debounce tick + a single-file extract + margin), 150ms polls.</summary>
+        public static RecoveryOptions Default { get; } = new(
+            Timeout: TimeSpan.FromMilliseconds(2500), PollInterval: TimeSpan.FromMilliseconds(150));
+    }
 
     /// <summary>
     /// Construct over the resolved workspace dependencies.
@@ -56,7 +72,8 @@ public sealed class EditService
     /// <exception cref="ArgumentNullException">Any argument is null.</exception>
     public EditService(
         MillerRepositoryIndex index, SmartTargetResolver resolver, string dbPath, string workspaceRoot,
-        EditApplier applier, IEditWriteThrough writeThrough, IndexedSourceTextReader? indexedSourceTextReader = null)
+        EditApplier applier, IEditWriteThrough writeThrough, IndexedSourceTextReader? indexedSourceTextReader = null,
+        RecoveryOptions? recoveryOptions = null)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentNullException.ThrowIfNull(resolver);
@@ -71,6 +88,7 @@ public sealed class EditService
         _applier = applier;
         _writeThrough = writeThrough;
         _indexedSourceTextReader = indexedSourceTextReader ?? new IndexedSourceTextReader();
+        _recovery = recoveryOptions ?? RecoveryOptions.Default;
     }
 
     /// <summary>The outcome of an <c>edit</c> call: the rendered output plus the structured flags the tool/telemetry need.</summary>
@@ -205,11 +223,16 @@ public sealed class EditService
         if (!IsApply(request))
             return Preview(diff, json, renameSummary: null, siteCount: 0);
 
-        // --- apply path: freshness gate, then atomic write, then write-through ---
+        // --- apply path: freshness gate (with gate-time self-heal), then atomic write, then write-through ---
         var gate = FreshnessGate.Check(_dbPath, relativePath, planned.FilePath, planned.OldContent);
         bool fresh = gate.Result == FreshnessResult.Fresh;
         if (!fresh && !request.AllowStale)
-            return StaleBlocked(relativePath, gate.IndexedContentFound, json);
+        {
+            TimeSpan recoveryBudget = _recovery.Timeout;
+            fresh = TryRecoverFreshness(relativePath, planned.FilePath, planned.OldContent, ref recoveryBudget);
+            if (!fresh)
+                return StaleBlocked(relativePath, gate.IndexedContentFound, json);
+        }
 
         var applyResult = _applier.Apply([planned]);
         if (!applyResult.Success)
@@ -265,17 +288,20 @@ public sealed class EditService
         if (!IsApply(request))
             return Preview(diff, json, summary, plan.TotalSites);
 
-        // --- apply: gate EVERY touched file, then atomic multi-file write, then per-file write-through ---
+        // --- apply: gate EVERY touched file (with gate-time self-heal under ONE shared budget), then atomic
+        // multi-file write, then per-file write-through ---
         bool anyStale = false;
+        TimeSpan renameRecoveryBudget = _recovery.Timeout;
         foreach (var pe in plan.PlannedEdits)
         {
             string rel = ToRelative(pe.FilePath);
             var gate = FreshnessGate.Check(_dbPath, rel, pe.FilePath, pe.OldContent);
             if (gate.Result != FreshnessResult.Fresh)
             {
-                if (!request.AllowStale)
+                if (request.AllowStale)
+                    anyStale = true;
+                else if (!TryRecoverFreshness(rel, pe.FilePath, pe.OldContent, ref renameRecoveryBudget))
                     return StaleBlocked(rel, gate.IndexedContentFound, json);
-                anyStale = true;
             }
         }
 
@@ -476,6 +502,42 @@ public sealed class EditService
                 w.WriteString("error", reason);
             }), false, false, false, "error", 0);
         return new EditResult(reason, false, false, IndexFresh: false, "error", 0);
+    }
+
+    /// <summary>
+    /// Gate-time self-heal (the fix for "index stale for a just-edited file"): ask the write-through to
+    /// converge the ONE stale file now, then re-check the gate — once, immediately, after a synchronous
+    /// (leader inline) reindex, or by polling within the shared per-call <paramref name="budget"/> after an
+    /// asynchronous (reader → leader request) converge. Returns true when the gate verdict turned Fresh; false
+    /// when recovery is unavailable (<see cref="StaleRecoveryAttempt.None"/>), did not land, or the budget ran
+    /// out — the caller then refuses exactly as it did before this seam existed. Time spent is deducted from
+    /// <paramref name="budget"/> so a multi-file gate loop cannot stack per-file waits.
+    /// </summary>
+    private bool TryRecoverFreshness(string relativePath, string absPath, string diskText, ref TimeSpan budget)
+    {
+        StaleRecoveryAttempt attempt = _writeThrough.TryRecoverStaleFile(absPath);
+        if (attempt == StaleRecoveryAttempt.None)
+            return false;
+
+        var elapsed = Stopwatch.StartNew();
+        try
+        {
+            while (true)
+            {
+                var gate = FreshnessGate.Check(_dbPath, relativePath, absPath, diskText);
+                if (gate.Result == FreshnessResult.Fresh)
+                    return true;
+                if (attempt == StaleRecoveryAttempt.Converged || elapsed.Elapsed >= budget)
+                    return false;
+                Thread.Sleep(_recovery.PollInterval);
+            }
+        }
+        finally
+        {
+            budget -= elapsed.Elapsed;
+            if (budget < TimeSpan.Zero)
+                budget = TimeSpan.Zero;
+        }
     }
 
     private string RenderRenameSummary(string oldName, string newName, RenamePlan plan)

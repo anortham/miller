@@ -257,6 +257,35 @@ function pathEquals(left, right) {
     : a === b;
 }
 
+function pathContains(root, candidate) {
+  const normalizedRoot = normalizeComparablePath(root);
+  const normalizedCandidate = normalizeComparablePath(candidate);
+  if (!normalizedRoot || !normalizedCandidate) {
+    return false;
+  }
+
+  const rootPrefix = normalizedRoot.endsWith(path.sep)
+    ? normalizedRoot
+    : `${normalizedRoot}${path.sep}`;
+
+  if (process.platform === 'win32' || process.platform === 'darwin') {
+    const rootLower = normalizedRoot.toLowerCase();
+    const prefixLower = rootPrefix.toLowerCase();
+    const candidateLower = normalizedCandidate.toLowerCase();
+    return candidateLower === rootLower || candidateLower.startsWith(prefixLower);
+  }
+
+  return normalizedCandidate === normalizedRoot || normalizedCandidate.startsWith(rootPrefix);
+}
+
+function homeDirCandidates(env = process.env) {
+  return [
+    env.HOME,
+    env.USERPROFILE,
+    os.homedir(),
+  ].filter(Boolean);
+}
+
 function windowsSensitiveRoots(env = process.env) {
   const systemDrive = String(env.SystemDrive || 'C:').replace(/[\\/]$/, '');
   const driveRoot = `${systemDrive}\\`;
@@ -280,9 +309,7 @@ function windowsSensitiveRoots(env = process.env) {
 
 function sensitiveRootCandidates(env = process.env) {
   const roots = [];
-  if (os.homedir()) {
-    roots.push(os.homedir());
-  }
+  roots.push(...homeDirCandidates(env));
 
   if (process.platform === 'darwin') {
     roots.push('/Users', '/var/root', '/private/var/root');
@@ -290,6 +317,29 @@ function sensitiveRootCandidates(env = process.env) {
     roots.push('/home', '/root');
   } else if (process.platform === 'win32') {
     roots.push(...windowsSensitiveRoots(env));
+  }
+
+  return roots;
+}
+
+function pluginInstallRootCandidates(env = process.env) {
+  const roots = [];
+  for (const home of homeDirCandidates(env)) {
+    // Whole plugin trees, not just cache/local subdirs: marketplace clones
+    // (e.g. ~/.claude/plugins/marketplaces/miller) are full repo checkouts and
+    // would otherwise pass the directory check.
+    roots.push(
+      path.join(home, '.claude', 'plugins'),
+      path.join(home, '.codex', 'plugins'),
+      path.join(home, '.cursor', 'plugins'),
+      path.join(home, '.miller', 'plugin-cache'),
+    );
+  }
+
+  for (const key of ['CLAUDE_PLUGIN_ROOT', 'CODEX_PLUGIN_ROOT', 'CURSOR_PLUGIN_ROOT', 'MILLER_PLUGIN_ROOT']) {
+    if (env[key]) {
+      roots.push(env[key]);
+    }
   }
 
   return roots;
@@ -306,7 +356,8 @@ function isSensitiveLaunchCwd(candidate, env = process.env) {
     return true;
   }
 
-  return sensitiveRootCandidates(env).some((root) => pathEquals(resolved, root));
+  return sensitiveRootCandidates(env).some((root) => pathEquals(resolved, root)) ||
+    pluginInstallRootCandidates(env).some((root) => pathContains(root, resolved));
 }
 
 function pathCandidates(value) {
@@ -363,7 +414,7 @@ function normalizeLaunchCwd(candidate) {
   }
 }
 
-function resolveLaunchCwd(env = process.env, currentDirectory = process.cwd()) {
+function resolveLaunchCwd(env = process.env, currentDirectory = process.cwd(), fallbackPluginRoot = pluginRoot()) {
   const candidates = [
     env.MILLER_WORKSPACE_ROOT,
     env.CLAUDE_PROJECT_DIR,
@@ -372,7 +423,7 @@ function resolveLaunchCwd(env = process.env, currentDirectory = process.cwd()) {
     env.WORKSPACE_FOLDER_PATH,
     ...(env.WORKSPACE_FOLDER_PATHS ? pathCandidates(env.WORKSPACE_FOLDER_PATHS) : []),
     currentDirectory,
-    pluginRoot(),
+    fallbackPluginRoot,
   ];
 
   for (const candidate of candidates) {
@@ -382,7 +433,9 @@ function resolveLaunchCwd(env = process.env, currentDirectory = process.cwd()) {
     }
   }
 
-  return pluginRoot();
+  throw new Error(
+    'Could not determine a Miller workspace root. Open a project window or set MILLER_WORKSPACE_ROOT; refusing to use a Miller plugin/cache directory as the workspace.',
+  );
 }
 
 async function ensureMillerPackage(config, platformInfo, cacheRoot = defaultCacheRoot()) {

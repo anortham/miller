@@ -55,6 +55,34 @@ public sealed class EditToolTests : IDisposable
         public void Converge(IReadOnlyList<string> changedFiles) => Converged.AddRange(changedFiles);
     }
 
+    /// <summary>A write-through whose gate-time recovery behavior is scripted per test.</summary>
+    private sealed class RecoveringWriteThrough(Func<string, StaleRecoveryAttempt> recover) : IEditWriteThrough
+    {
+        public List<string> Converged { get; } = [];
+        public List<string> RecoveryCalls { get; } = [];
+
+        public void Converge(IReadOnlyList<string> changedFiles) => Converged.AddRange(changedFiles);
+
+        public StaleRecoveryAttempt TryRecoverStaleFile(string fullPath)
+        {
+            RecoveryCalls.Add(fullPath);
+            return recover(fullPath);
+        }
+    }
+
+    // Simulate the leader converging the index for one file: stamp the indexed BLAKE3 hash to the file's
+    // CURRENT disk bytes, exactly what a single-file `extract update` leaves behind.
+    private void ConvergeIndexedHash(JulieDbFixture fx, string relPath)
+    {
+        using var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={fx.DbPath}");
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE files SET content_hash = $hash WHERE path = $path;";
+        cmd.Parameters.AddWithValue("$hash", "blake3:" + ContentHasher.Blake3FileHex(AbsPath(relPath)));
+        cmd.Parameters.AddWithValue("$path", relPath);
+        Assert.Equal(1, cmd.ExecuteNonQuery());
+    }
+
     private sealed class NoopLease : IDisposable { public void Dispose() { } }
 
     private (EditService service, RecordingWriteThrough wt) Build(JulieDbFixture fx)
@@ -65,6 +93,15 @@ public sealed class EditToolTests : IDisposable
         var wt = new RecordingWriteThrough();
         var service = new EditService(index, resolver, fx.DbPath, _root, applier, wt);
         return (service, wt);
+    }
+
+    private EditService Build(
+        JulieDbFixture fx, IEditWriteThrough wt, EditService.RecoveryOptions? recovery = null)
+    {
+        var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath));
+        var resolver = new SmartTargetResolver(index);
+        var applier = new EditApplier(() => new NoopLease());
+        return new EditService(index, resolver, fx.DbPath, _root, applier, wt, recoveryOptions: recovery);
     }
 
     private static EditRequest Req(string op, string target) => new(op, target);
@@ -396,6 +433,119 @@ public sealed class EditToolTests : IDisposable
         string disk = File.ReadAllText(AbsPath("orders/OrderService.cs"));
         Assert.Contains("{ return 7; }", disk);
         Assert.EndsWith("// drifted\n", disk); // the appended drift is preserved
+    }
+
+    // ---- gate-time stale recovery (the gate self-heals before refusing) ----
+
+    [Fact]
+    public void Execute_StaleTarget_InlineRecoveryConverges_ThenApplies()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        File.WriteAllText(AbsPath("orders/OrderService.cs"),
+            JulieDbFixture.OrderServiceContent + "// drifted\n");
+        // The leader path: recovery reindexes the file synchronously (here: stamps the indexed hash to disk).
+        var wt = new RecoveringWriteThrough(_ =>
+        {
+            ConvergeIndexedHash(fx, "orders/OrderService.cs");
+            return StaleRecoveryAttempt.Converged;
+        });
+        var svc = Build(fx, wt);
+
+        var result = svc.Execute(Req("replace_symbol_body", "OrderService.Total") with
+        {
+            NewText = "{ return 7; }",
+            Apply = true,
+        });
+
+        Assert.True(result.Applied);
+        Assert.False(result.StaleAllowed);          // recovered, NOT bypassed
+        Assert.Equal(true, result.IndexFresh);      // the verdict after recovery is fresh
+        Assert.Equal(new[] { AbsPath("orders/OrderService.cs") }, wt.RecoveryCalls);
+        string disk = File.ReadAllText(AbsPath("orders/OrderService.cs"));
+        Assert.Contains("{ return 7; }", disk);
+        Assert.EndsWith("// drifted\n", disk);
+    }
+
+    [Fact]
+    public void Execute_StaleTarget_RequestedRecovery_PollsGateUntilFresh_ThenApplies()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        File.WriteAllText(AbsPath("orders/OrderService.cs"),
+            JulieDbFixture.OrderServiceContent + "// drifted\n");
+        // The reader path: recovery only REQUESTS convergence; the "leader" lands it before the first re-check.
+        var wt = new RecoveringWriteThrough(_ =>
+        {
+            ConvergeIndexedHash(fx, "orders/OrderService.cs");
+            return StaleRecoveryAttempt.Requested;
+        });
+        var svc = Build(fx, wt, new EditService.RecoveryOptions(
+            Timeout: TimeSpan.FromSeconds(2), PollInterval: TimeSpan.FromMilliseconds(10)));
+
+        var result = svc.Execute(Req("replace_symbol_body", "OrderService.Total") with
+        {
+            NewText = "{ return 7; }",
+            Apply = true,
+        });
+
+        Assert.True(result.Applied);
+        Assert.False(result.StaleAllowed);
+        Assert.Equal(true, result.IndexFresh);
+        Assert.Contains("{ return 7; }", File.ReadAllText(AbsPath("orders/OrderService.cs")));
+    }
+
+    [Fact]
+    public void Execute_StaleTarget_RequestedRecovery_TimesOut_AndBlocks()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        File.WriteAllText(AbsPath("orders/OrderService.cs"),
+            JulieDbFixture.OrderServiceContent + "// drifted\n");
+        // Recovery is requested but the leader never converges: the bounded wait must expire and refuse.
+        var wt = new RecoveringWriteThrough(_ => StaleRecoveryAttempt.Requested);
+        var svc = Build(fx, wt, new EditService.RecoveryOptions(
+            Timeout: TimeSpan.FromMilliseconds(60), PollInterval: TimeSpan.FromMilliseconds(5)));
+
+        var result = svc.Execute(Req("replace_symbol_body", "OrderService.Total") with
+        {
+            NewText = "{ return 0; }",
+            Apply = true,
+        });
+
+        Assert.False(result.Applied);
+        Assert.Contains("stale", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Single(wt.RecoveryCalls);
+        Assert.EndsWith("// drifted\n", File.ReadAllText(AbsPath("orders/OrderService.cs")));
+    }
+
+    [Fact]
+    public void Execute_RenameSymbol_StaleFile_InlineRecoveryConverges_ThenApplies()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        // Drift ONE of the three rename-touched files by appending (sites' byte spans stay valid).
+        File.WriteAllText(AbsPath("billing/Invoice.cs"),
+            JulieDbFixture.InvoiceContent + "// drifted\n");
+        var wt = new RecoveringWriteThrough(_ =>
+        {
+            ConvergeIndexedHash(fx, "billing/Invoice.cs");
+            return StaleRecoveryAttempt.Converged;
+        });
+        var svc = Build(fx, wt);
+
+        var result = svc.Execute(Req("rename_symbol", "OrderService.Total") with
+        {
+            NewText = "GrandTotal",
+            Apply = true,
+        });
+
+        Assert.True(result.Applied);
+        Assert.False(result.StaleAllowed);
+        Assert.Equal(new[] { AbsPath("billing/Invoice.cs") }, wt.RecoveryCalls); // only the stale file needed recovery
+        string invoice = File.ReadAllText(AbsPath("billing/Invoice.cs"));
+        Assert.Contains("o.GrandTotal()", invoice);
+        Assert.EndsWith("// drifted\n", invoice);
     }
 
     [Fact]

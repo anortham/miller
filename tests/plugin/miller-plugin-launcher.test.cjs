@@ -119,3 +119,37 @@ test('resolveLaunchCwd uses plugin root instead of a sensitive current directory
     repoRoot,
   );
 });
+
+test('resolveLaunchCwd rejects plugin cache roots when no workspace is available', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'miller-launcher-home-'));
+  const pluginRoot = path.join(home, '.claude', 'plugins', 'cache', 'miller', 'miller', '0.3.5');
+  fs.mkdirSync(pluginRoot, { recursive: true });
+
+  assert.throws(
+    () => launcher.resolveLaunchCwd({ HOME: home }, pluginRoot, pluginRoot),
+    /Could not determine a Miller workspace root/,
+  );
+});
+
+test('resolveLaunchCwd rejects marketplace clone roots when no workspace is available', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'miller-launcher-home-'));
+  const marketplaceClone = path.join(home, '.claude', 'plugins', 'marketplaces', 'miller');
+  fs.mkdirSync(marketplaceClone, { recursive: true });
+
+  assert.throws(
+    () => launcher.resolveLaunchCwd({ HOME: home }, marketplaceClone, marketplaceClone),
+    /Could not determine a Miller workspace root/,
+  );
+});
+
+test('resolveLaunchCwd still prefers explicit workspace over plugin cache cwd', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'miller-launcher-home-'));
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'miller-launcher-workspace-'));
+  const pluginRoot = path.join(home, '.claude', 'plugins', 'cache', 'miller', 'miller', '0.3.5');
+  fs.mkdirSync(pluginRoot, { recursive: true });
+
+  assert.equal(
+    launcher.resolveLaunchCwd({ HOME: home, MILLER_WORKSPACE_ROOT: workspace }, pluginRoot, pluginRoot),
+    path.resolve(workspace),
+  );
+});

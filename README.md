@@ -55,7 +55,8 @@ Reload Cursor after installing. Cursor rejects local plugin symlinks that point 
 `~/.cursor/plugins/local`, so this must be a real directory copy. Miller's Cursor manifest starts the launcher
 through Cursor's `${CURSOR_PLUGIN_ROOT}` path interpolation. The launcher uses Cursor's project cwd when there is
 one; if Cursor starts Miller from an empty/global window with `/`, the home directory, or another sensitive root as
-cwd, the launcher falls back to the plugin root instead of indexing a broad system path.
+cwd, the launcher fails with guidance instead of indexing a broad system path or Miller's own plugin/cache
+directory.
 
 After installing, open a code workspace and ask your agent to search, inspect, build context, trace, or check
 impact with Miller. Miller writes its local index under that workspace's `.miller/` directory.
@@ -527,6 +528,10 @@ Warnings are errors (`Directory.Build.props`).
   `Variable workspaceFolder can not be resolved`, Cursor is still using a manifest with a stale `${workspaceFolder}`
   env var. Update/reinstall the Miller plugin, then reload Cursor. For local plugin testing, use a real directory
   copy under `~/.cursor/plugins/local/miller`; Cursor rejects symlinks that point outside that tree.
+- Cursor search results come from Miller's plugin/cache directory: Cursor started Miller without a workspace root.
+  Remove stale duplicate Miller plugin sources, reinstall/update the Cursor plugin copy, then reload Cursor. If the
+  workspace is already registered, pass its selector explicitly as `workspace_id` until the client relaunches Miller
+  from the right project root.
 - Missing `julie-extract`: run the restore script for your platform, then rerun the scale or refresh path.
 - Unsure which server is live: run `miller version` or `miller workspace status`; compare the git SHA suffix
   with the build you expect, and compare `workspace status`'s `pid` before/after a restart.

@@ -80,6 +80,7 @@ public static class MillerServiceRegistration
         services.AddSingleton<IEditWriteThrough>(sp =>
             new LeaderWriteThrough(
                 sp.GetRequiredService<IndexerService>(),
+                sp.GetRequiredService<IndexBootstrapService>(),
                 sp.GetRequiredService<ILoggerFactory>().CreateLogger<LeaderWriteThrough>()));
 
         // Soft budgets (M7 decision-4): per-tool latency + est-token warn thresholds the central telemetry filter
