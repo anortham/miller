@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 using Miller.Core.Editing;
 using Miller.Core.Freshness;
 using Miller.Indexing;
@@ -122,7 +123,10 @@ public sealed class EditService
 
     // ---------- single-file operations ----------
 
-    private EditResult ExecuteSingleFile(EditRequest request, EditOperation op, Occurrence occurrence, bool json)
+    // allowRecovery=false marks the ONE internal post-recovery retry: the gate is already known-fresh, so the
+    // retry must never re-enter TryRecoverFreshness (recursion guard) — a stale verdict there just refuses.
+    private EditResult ExecuteSingleFile(
+        EditRequest request, EditOperation op, Occurrence occurrence, bool json, bool allowRecovery = true)
     {
         // Resolve the target. Text ops act on a FILE; the symbol ops need a single resolved SYMBOL.
         if (op == EditOperation.ReplaceText)
@@ -130,7 +134,7 @@ public sealed class EditService
             var fileResolution = _resolver.Resolve(request.Target, request.Scope, TargetKind.File);
             if (fileResolution is not TargetResolution.File file)
                 return NotFound(request.Target, json);
-            return PlanAndFinishSingleFile(request, op, occurrence, file.Path, span: null, json);
+            return PlanAndFinishSingleFile(request, op, occurrence, file.Path, span: null, json, allowRecovery);
         }
 
         var resolution = ResolveSymbol(request.Target, request.Scope);
@@ -156,7 +160,7 @@ public sealed class EditService
                         $"symbol '{sym.Value.Name}' has no recorded span in the current index — the index is " +
                         "behind the file (its id changed since the last extract). Re-index (or wait for the " +
                         "freshness poll) and retry.", json);
-                return PlanAndFinishSingleFile(request, op, occurrence, sym.Value.FilePath, span, json);
+                return PlanAndFinishSingleFile(request, op, occurrence, sym.Value.FilePath, span, json, allowRecovery);
             }
             case TargetResolution.Candidates cands:
                 return Candidates(cands.Matches, json);
@@ -170,7 +174,7 @@ public sealed class EditService
 
     private EditResult PlanAndFinishSingleFile(
         EditRequest request, EditOperation op, Occurrence occurrence,
-        string relativePath, SymbolEditSpan? span, bool json)
+        string relativePath, SymbolEditSpan? span, bool json, bool allowRecovery)
     {
         string absPath = ToAbsolute(relativePath);
         if (!File.Exists(absPath))
@@ -213,10 +217,12 @@ public sealed class EditService
         }
 
         var planned = new PlannedEdit(absPath, content, newContent, edits);
-        return FinishSingleFile(request, relativePath, planned, json);
+        return FinishSingleFile(request, op, occurrence, relativePath, planned, json, allowRecovery);
     }
 
-    private EditResult FinishSingleFile(EditRequest request, string relativePath, PlannedEdit planned, bool json)
+    private EditResult FinishSingleFile(
+        EditRequest request, EditOperation op, Occurrence occurrence,
+        string relativePath, PlannedEdit planned, bool json, bool allowRecovery)
     {
         string diff = UnifiedDiff.Render(planned.OldContent, planned.NewContent, relativePath);
 
@@ -229,9 +235,20 @@ public sealed class EditService
         if (!fresh && !request.AllowStale)
         {
             TimeSpan recoveryBudget = _recovery.Timeout;
-            fresh = TryRecoverFreshness(relativePath, planned.FilePath, planned.OldContent, ref recoveryBudget);
+            fresh = allowRecovery &&
+                TryRecoverFreshness(relativePath, planned.FilePath, planned.OldContent, ref recoveryBudget);
             if (!fresh)
                 return StaleBlocked(relativePath, gate.IndexedContentFound, json);
+
+            // Recovery converged the index, but a SYMBOL op's byte spans were read from the PRE-recovery index —
+            // if the drift moved the symbol (e.g. lines prepended above it), those spans now point at the wrong
+            // bytes and splicing them would corrupt the file silently. Re-run resolve → span read → plan once
+            // against the converged index and apply THAT plan instead. replace_text derives its spans from the
+            // disk content itself, so its plan is safe to apply unchanged. The retry runs with the gate already
+            // known-fresh (allowRecovery=false): it never re-enters recovery, and if the symbol no longer
+            // resolves it returns the existing clean not-found/no-span error rather than applying a stale plan.
+            if (op != EditOperation.ReplaceText)
+                return ExecuteSingleFile(request, op, occurrence, json, allowRecovery: false);
         }
 
         var applyResult = _applier.Apply([planned]);
@@ -245,7 +262,9 @@ public sealed class EditService
 
     // ---------- workspace-wide rename ----------
 
-    private EditResult ExecuteRename(EditRequest request, bool json)
+    // allowRecovery=false marks the ONE internal post-recovery retry (see FinishSingleFile): the touched files
+    // were just converged, so the retry must never re-enter TryRecoverFreshness — a stale verdict just refuses.
+    private EditResult ExecuteRename(EditRequest request, bool json, bool allowRecovery = true)
     {
         if (string.IsNullOrWhiteSpace(request.NewText))
             return Error("new_text (the new name) is required for rename_symbol.", json);
@@ -291,6 +310,7 @@ public sealed class EditService
         // --- apply: gate EVERY touched file (with gate-time self-heal under ONE shared budget), then atomic
         // multi-file write, then per-file write-through ---
         bool anyStale = false;
+        bool anyRecovered = false;
         TimeSpan renameRecoveryBudget = _recovery.Timeout;
         foreach (var pe in plan.PlannedEdits)
         {
@@ -300,10 +320,20 @@ public sealed class EditService
             {
                 if (request.AllowStale)
                     anyStale = true;
-                else if (!TryRecoverFreshness(rel, pe.FilePath, pe.OldContent, ref renameRecoveryBudget))
+                else if (allowRecovery && TryRecoverFreshness(rel, pe.FilePath, pe.OldContent, ref renameRecoveryBudget))
+                    anyRecovered = true;
+                else
                     return StaleBlocked(rel, gate.IndexedContentFound, json);
             }
         }
+
+        // Recovery converged the index, but this plan's identifier/def-token sites were read from the
+        // PRE-recovery index — if the drift moved them (e.g. lines prepended above), splicing the stale sites
+        // would corrupt the file silently. Re-run resolve → site read → plan once against the converged index
+        // (the retry gates every file again, known-fresh, and never re-enters recovery). If the symbol no
+        // longer resolves the retry returns the existing clean not-found error rather than applying stale sites.
+        if (anyRecovered)
+            return ExecuteRename(request, json, allowRecovery: false);
 
         var applyResult = _applier.Apply(plan.PlannedEdits);
         if (!applyResult.Success)
@@ -524,8 +554,22 @@ public sealed class EditService
         {
             while (true)
             {
-                var gate = FreshnessGate.Check(_dbPath, relativePath, absPath, diskText);
-                if (gate.Result == FreshnessResult.Fresh)
+                bool fresh;
+                try
+                {
+                    fresh = FreshnessGate.Check(_dbPath, relativePath, absPath, diskText).Result
+                        == FreshnessResult.Fresh;
+                }
+                catch (Exception ex) when (
+                    ex is SqliteException or FileNotFoundException or InvalidOperationException)
+                {
+                    // A converge in flight can transiently break the gate read (the DB mid-swap/locked, the WAL
+                    // dir probe failing). Execute promises to never throw for an expected condition, so a
+                    // transient read failure reads as "not yet fresh": keep polling within the budget and let
+                    // the timeout refuse cleanly if it never settles.
+                    fresh = false;
+                }
+                if (fresh)
                     return true;
                 if (attempt == StaleRecoveryAttempt.Converged || elapsed.Elapsed >= budget)
                     return false;

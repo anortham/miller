@@ -83,6 +83,31 @@ public sealed class EditToolTests : IDisposable
         Assert.Equal(1, cmd.ExecuteNonQuery());
     }
 
+    // Simulate the rest of a real single-file converge for a file whose lines were PREPENDED: a re-extract
+    // moves every byte/line offset for the file's symbol + identifier rows to the new disk truth. NULL spans
+    // stay NULL (NULL + delta is NULL in SQLite), matching a real extract of a bodyless symbol.
+    private void ShiftIndexedSpans(JulieDbFixture fx, string relPath, int byteDelta, int lineDelta)
+    {
+        using var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={fx.DbPath}");
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            UPDATE symbols SET
+                start_byte = start_byte + $b, end_byte = end_byte + $b,
+                body_start_byte = body_start_byte + $b, body_end_byte = body_end_byte + $b,
+                start_line = start_line + $l, end_line = end_line + $l,
+                body_start_line = body_start_line + $l, body_end_line = body_end_line + $l
+            WHERE path = $path;
+            UPDATE identifiers SET
+                start_byte = start_byte + $b, end_byte = end_byte + $b, start_line = start_line + $l
+            WHERE path = $path;
+            """;
+        cmd.Parameters.AddWithValue("$b", byteDelta);
+        cmd.Parameters.AddWithValue("$l", lineDelta);
+        cmd.Parameters.AddWithValue("$path", relPath);
+        cmd.ExecuteNonQuery();
+    }
+
     private sealed class NoopLease : IDisposable { public void Dispose() { } }
 
     private (EditService service, RecordingWriteThrough wt) Build(JulieDbFixture fx)
@@ -546,6 +571,108 @@ public sealed class EditToolTests : IDisposable
         string invoice = File.ReadAllText(AbsPath("billing/Invoice.cs"));
         Assert.Contains("o.GrandTotal()", invoice);
         Assert.EndsWith("// drifted\n", invoice);
+    }
+
+    [Fact]
+    public void Execute_StaleTarget_PrependDrift_RecoveryConverges_AppliesAtConvergedOffsets()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        // PREPEND drift: every symbol's byte offsets shift by 11 ("// drifted\n"), so the PRE-recovery index
+        // spans point at the wrong bytes. Applying the pre-recovery plan would silently corrupt the file.
+        File.WriteAllText(AbsPath("orders/OrderService.cs"),
+            "// drifted\n" + JulieDbFixture.OrderServiceContent);
+        var wt = new RecoveringWriteThrough(_ =>
+        {
+            // A real single-file converge re-extracts: the hash AND the spans both move to disk truth.
+            ConvergeIndexedHash(fx, "orders/OrderService.cs");
+            ShiftIndexedSpans(fx, "orders/OrderService.cs", byteDelta: 11, lineDelta: 1);
+            return StaleRecoveryAttempt.Converged;
+        });
+        var svc = Build(fx, wt);
+
+        var result = svc.Execute(Req("replace_symbol_body", "OrderService.Total") with
+        {
+            NewText = "{ return 7; }",
+            Apply = true,
+        });
+
+        // The applied plan must come from the CONVERGED index (shifted offsets) — byte-exact, never corrupted.
+        Assert.True(result.Applied);
+        string expected = "// drifted\n" + JulieDbFixture.OrderServiceContent.Replace(
+            "{\n    return _items.Sum(i => i.Total);\n  }", "{ return 7; }", StringComparison.Ordinal);
+        Assert.Equal(expected, File.ReadAllText(AbsPath("orders/OrderService.cs")));
+    }
+
+    [Fact]
+    public void Execute_RenameSymbol_PrependDrift_RecoveryConverges_RewritesAtConvergedOffsets()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        // Same prepend-drift hazard for the rename path: the identifier sites were read from the PRE-recovery
+        // index, so after a successful recovery the plan must be rebuilt from the converged sites.
+        File.WriteAllText(AbsPath("billing/Invoice.cs"),
+            "// drifted\n" + JulieDbFixture.InvoiceContent);
+        var wt = new RecoveringWriteThrough(_ =>
+        {
+            ConvergeIndexedHash(fx, "billing/Invoice.cs");
+            ShiftIndexedSpans(fx, "billing/Invoice.cs", byteDelta: 11, lineDelta: 1);
+            return StaleRecoveryAttempt.Converged;
+        });
+        var svc = Build(fx, wt);
+
+        var result = svc.Execute(Req("rename_symbol", "OrderService.Total") with
+        {
+            NewText = "GrandTotal",
+            Apply = true,
+        });
+
+        Assert.True(result.Applied);
+        Assert.Equal(new[] { AbsPath("billing/Invoice.cs") }, wt.RecoveryCalls);
+        // Byte-exact: only the o.Total() call token moved (the homonym def is NOT an identifier site).
+        string expected = "// drifted\n" + JulieDbFixture.InvoiceContent.Replace(
+            "o.Total()", "o.GrandTotal()", StringComparison.Ordinal);
+        Assert.Equal(expected, File.ReadAllText(AbsPath("billing/Invoice.cs")));
+    }
+
+    [Fact]
+    public void Execute_StaleTarget_RecoveryPoll_SurvivesThrowingGateCheck_ThenApplies()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        File.WriteAllText(AbsPath("orders/OrderService.cs"),
+            JulieDbFixture.OrderServiceContent + "// drifted\n");
+        // Recovery is REQUESTED, and while the poll waits the extract DB transiently vanishes (a mid-converge
+        // swap): the in-poll gate check THROWS (FileNotFoundException). Execute must treat that as
+        // not-yet-fresh and keep polling — never escape — then apply once the DB returns converged.
+        string hiddenDb = fx.DbPath + ".hidden";
+        var wt = new RecoveringWriteThrough(fullPath =>
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); // release pooled read handles before the move
+            File.Move(fx.DbPath, hiddenDb);
+            Task restore = Task.Run(async () =>
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(100));
+                File.Move(hiddenDb, fx.DbPath);
+                ConvergeIndexedHash(fx, "orders/OrderService.cs");
+            });
+            GC.KeepAlive(restore);
+            return StaleRecoveryAttempt.Requested;
+        });
+        var svc = Build(fx, wt, new EditService.RecoveryOptions(
+            Timeout: TimeSpan.FromSeconds(5), PollInterval: TimeSpan.FromMilliseconds(10)));
+
+        var result = svc.Execute(Req("replace_symbol_body", "OrderService.Total") with
+        {
+            NewText = "{ return 7; }",
+            Apply = true,
+        });
+
+        Assert.True(result.Applied);
+        Assert.Equal(true, result.IndexFresh);
+        string disk = File.ReadAllText(AbsPath("orders/OrderService.cs"));
+        Assert.Contains("{ return 7; }", disk);
+        Assert.EndsWith("// drifted\n", disk);
     }
 
     [Fact]
