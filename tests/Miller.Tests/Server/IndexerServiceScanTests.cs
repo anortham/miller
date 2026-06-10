@@ -1,10 +1,12 @@
 using System.Threading;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Miller.Core.Freshness;
 using Miller.Indexing;
 using Miller.Server;
 using Miller.Server.Hosting;
+using Miller.Server.Workspaces;
 using Miller.Tests.Indexing;
 using Xunit;
 
@@ -96,12 +98,39 @@ public sealed class IndexerServiceScanTests
         public void Dispose() => Disposed = true;
     }
 
+    /// <summary>Captures log level + rendered message so a test can pin a log-throttle contract.</summary>
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        private readonly object _gate = new();
+        private readonly List<(LogLevel Level, string Message)> _entries = new();
+
+        public IReadOnlyList<(LogLevel Level, string Message)> Entries
+        {
+            get
+            {
+                lock (_gate)
+                    return _entries.ToArray();
+            }
+        }
+
+        IDisposable? ILogger.BeginScope<TState>(TState state) => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            lock (_gate)
+                _entries.Add((logLevel, formatter(state, exception)));
+        }
+    }
+
     // A never-started IndexerService: TryScanAsLeader reads only the published _ops under _opsGate (it never
     // touches the bootstrap), so an un-started instance is the correct, I/O-free unit-test surface. The sidecar
     // defaults OFF, so the disabled (byte-identical) path is what these no-workspace tests exercise.
     private static IndexerService NewService(
-        Func<string, bool>? drainFullScanRequests = null,
-        Func<string, IReadOnlyList<string>>? drainFileConvergeRequests = null) =>
+        Func<string, FullScanDrainResult>? drainFullScanRequests = null,
+        Func<string, FileConvergeDrainResult>? drainFileConvergeRequests = null) =>
         new(
             new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance),
             NullLogger<IndexerService>.Instance,
@@ -120,7 +149,7 @@ public sealed class IndexerServiceScanTests
     private static IndexerService NewSeededService(
         WorkspaceContext workspace,
         SymbolSearchSidecar sidecar,
-        Func<string, IReadOnlyList<string>>? drainFileConvergeRequests = null)
+        Func<string, FileConvergeDrainResult>? drainFileConvergeRequests = null)
     {
         var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
         bootstrap.SeedForTest(
@@ -305,7 +334,7 @@ public sealed class IndexerServiceScanTests
     [Fact]
     public void ProcessLeaderFullScanRequests_WhenRequestExists_RunsForceScanAsLeader()
     {
-        var service = NewService(drainFullScanRequests: _ => true);
+        var service = NewService(drainFullScanRequests: _ => new FullScanDrainResult(true, 0, 0));
         var ops = new RecordingScanOps { Revision = 12 };
         service.PublishOpsForTest(ops);
 
@@ -338,15 +367,59 @@ public sealed class IndexerServiceScanTests
         var service = NewSeededService(
             WorkspaceWithDb(julie.DbPath),
             SymbolSearchSidecar.Disabled,
-            drainFileConvergeRequests: _ => new[] { "src/Edit.cs", "src/Keep.cs" });
+            drainFileConvergeRequests: _ => new FileConvergeDrainResult(
+                new[] { "src/Edit.cs", "src/Keep.cs" }, 0, 0));
         var ops = new RecordingScanOps { UpdateRevision = 2 };
         service.PublishOpsForTest(ops);
 
+        // The drain enqueues into the core's coalescing queue; the same tick's debounce drain runs the extracts.
         bool processed = service.ProcessFileConvergeRequestsForTest("/repo/.miller");
+        service.DrainForTest(headChanged: false);
 
         Assert.True(processed);
         Assert.Equal(new[] { "src/Edit.cs", "src/Keep.cs" }, ops.UpdatePaths);
         Assert.Empty(ops.ScanForce); // single-file converge must never escalate to a whole-repo scan
+    }
+
+    [Fact]
+    public void ProcessFileConvergeRequests_RequestAndWatcherEventForSameFile_RunExactlyOneReindex()
+    {
+        // M3: a reader's converge request and the FileSystemWatcher event for the SAME file write land on the
+        // same debounce tick. Routing the drained request through the core's coalescing WatchEventQueue (instead
+        // of an immediate TryReindexAsLeader) must collapse them into ONE extract, not two.
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow("edit-new", "UpdatedType", "class", "csharp",
+                    "src/Edit.cs", "public class UpdatedType", 1, ParentId: null),
+            },
+            revisions: new[]
+            {
+                new JulieDbFixture.RevisionRow(1),
+                new JulieDbFixture.RevisionRow(2, Kind: "single_file"),
+            },
+            fileChanges: new[]
+            {
+                new JulieDbFixture.RevisionFileChangeRow(2, "src/Edit.cs", "updated"),
+            });
+        var service = NewSeededService(
+            WorkspaceWithDb(julie.DbPath),
+            SymbolSearchSidecar.Disabled,
+            drainFileConvergeRequests: _ => new FileConvergeDrainResult(new[] { "src/Edit.cs" }, 0, 0));
+        var ops = new RecordingScanOps { UpdateRevision = 2 };
+        service.PublishOpsForTest(ops);
+
+        // The watcher already queued a Modified event for the file write that made the reader's index stale...
+        service.EnqueueForTest(new WatchEvent("src/Edit.cs", WatchEventKind.Modified));
+        // ...and the same tick drains the reader's converge request, then the queue.
+        Assert.True(service.ProcessFileConvergeRequestsForTest("/repo/.miller"));
+        service.DrainForTest(headChanged: false);
+
+        string updated = Assert.Single(ops.UpdatePaths); // exactly ONE extract, not request + watcher = two
+        Assert.Equal("src/Edit.cs", updated);
+        Assert.Empty(ops.ScanForce);
     }
 
     [Fact]
@@ -398,6 +471,33 @@ public sealed class IndexerServiceScanTests
     }
 
     [Fact]
+    public void ProcessFileConvergeRequests_ClaimSkips_WarnOnceThenDebug()
+    {
+        // M4: an unclaimable (wedged) request is a real diagnostic the first time, but it recurs every 250ms
+        // tick until the TTL sweep clears it — the repeat must drop to Debug, not warn forever.
+        var logger = new RecordingLogger<IndexerService>();
+        var service = new IndexerService(
+            new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance),
+            logger,
+            NullLoggerFactory.Instance,
+            tryAcquireLeadership: _ => null,
+            createOps: static (_, _, _) => throw new InvalidOperationException("not used by this test seam"),
+            leaderRetryInterval: TimeSpan.FromHours(1),
+            SymbolSearchSidecar.Disabled,
+            attachFileWatchers: false,
+            drainFileConvergeRequests: _ => new FileConvergeDrainResult(System.Array.Empty<string>(), 0, 1));
+        service.PublishOpsForTest(new RecordingScanOps());
+
+        service.ProcessFileConvergeRequestsForTest("/repo/.miller");
+        service.ProcessFileConvergeRequestsForTest("/repo/.miller");
+
+        var skipLogs = logger.Entries.Where(e => e.Message.Contains("could not be claimed")).ToArray();
+        Assert.Equal(2, skipLogs.Length);
+        Assert.Equal(LogLevel.Warning, skipLogs[0].Level);
+        Assert.Equal(LogLevel.Debug, skipLogs[1].Level);
+    }
+
+    [Fact]
     public void ProcessFileConvergeRequests_WhenNotLeader_DoesNotDrainRequests()
     {
         // A non-leader CANNOT reindex; draining would consume (delete) the request files without servicing
@@ -406,7 +506,7 @@ public sealed class IndexerServiceScanTests
         var service = NewService(drainFileConvergeRequests: _ =>
         {
             drained = true;
-            return new[] { "src/Edit.cs" };
+            return new FileConvergeDrainResult(new[] { "src/Edit.cs" }, 0, 0);
         });
 
         Assert.False(service.ProcessFileConvergeRequestsForTest("/repo/.miller"));

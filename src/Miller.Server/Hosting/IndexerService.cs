@@ -39,8 +39,12 @@ public sealed class IndexerService : BackgroundService
     private readonly ILoggerFactory _loggerFactory;
     private readonly Func<string, IDisposable?> _tryAcquireLeadership;
     private readonly Func<WorkspaceContext, string, string, IExtractOps> _createOps;
-    private readonly Func<string, bool> _drainFullScanRequests;
-    private readonly Func<string, IReadOnlyList<string>> _drainFileConvergeRequests;
+    private readonly Func<string, FullScanDrainResult> _drainFullScanRequests;
+    private readonly Func<string, FileConvergeDrainResult> _drainFileConvergeRequests;
+
+    // M4 log throttle: the first request that cannot be claimed warns (something is pinning a request file);
+    // repeats on later ticks drop to Debug so a wedged file cannot spam a warning every 250ms.
+    private bool _requestClaimSkipWarned;
     private readonly TimeSpan _leaderRetryInterval;
     private readonly bool _attachFileWatchers;
 
@@ -102,8 +106,8 @@ public sealed class IndexerService : BackgroundService
         SymbolSearchSidecar sidecar,
         ContentCorpusSidecar? contentSidecar = null,
         bool attachFileWatchers = true,
-        Func<string, bool>? drainFullScanRequests = null,
-        Func<string, IReadOnlyList<string>>? drainFileConvergeRequests = null)
+        Func<string, FullScanDrainResult>? drainFullScanRequests = null,
+        Func<string, FileConvergeDrainResult>? drainFileConvergeRequests = null)
     {
         ArgumentNullException.ThrowIfNull(bootstrap);
         ArgumentNullException.ThrowIfNull(logger);
@@ -383,10 +387,10 @@ public sealed class IndexerService : BackgroundService
 
     private bool TryProcessLeaderFullScanRequests(string millerDir)
     {
-        bool requested;
+        FullScanDrainResult result;
         try
         {
-            requested = _drainFullScanRequests(millerDir);
+            result = _drainFullScanRequests(millerDir);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {
@@ -394,7 +398,8 @@ public sealed class IndexerService : BackgroundService
             return false;
         }
 
-        if (!requested)
+        LogRequestDrainStats("full-scan", result.ExpiredDiscarded, result.ClaimSkipped);
+        if (!result.Requested)
             return false;
 
         lock (_opsGate)
@@ -601,29 +606,40 @@ public sealed class IndexerService : BackgroundService
         TryProcessLeaderFullScanRequests(millerDir);
 
     /// <summary>
-    /// Test seam: drain single-file converge request files and reindex each through the same write-through path
-    /// the production debounce loop uses. Requires <see cref="PublishOpsForTest"/> when the caller expects a
-    /// reindex. Not used in production.
+    /// Test seam: drain single-file converge request files and enqueue them into the core's coalescing queue
+    /// exactly as the production debounce loop does; pair with <see cref="DrainForTest"/> to run the resulting
+    /// extracts. Requires <see cref="PublishOpsForTest"/> when the caller expects work to be enqueued. Not used
+    /// in production.
     /// </summary>
     internal bool ProcessFileConvergeRequestsForTest(string millerDir) =>
         TryProcessFileConvergeRequests(millerDir);
 
-    // Drain single-file converge requests (written by reader write-through / gate-time recovery) and reindex
-    // each through TryReindexAsLeader (one `extract update --file` + incremental sidecar converge per path).
-    // ONLY the leader may drain: a reader consuming requests would delete them unserviced. Never escalates to a
-    // whole-repo scan — these are targeted converges by design.
+    // Drain single-file converge requests (written by reader write-through / gate-time recovery) and enqueue
+    // each as a synthetic Changed event into the core's coalescing WatchEventQueue — the SAME queue the
+    // FileSystemWatcher feeds, drained by _core.DrainAndProcess later on the SAME debounce tick (this method
+    // runs before the drain in ExecuteAsync's loop, so converge latency stays within one tick). Routing through
+    // the queue instead of calling TryReindexAsLeader directly lets the queue's per-path coalescing collapse a
+    // reader's converge request and the watcher event for the same file write into ONE extract (M3). ONLY the
+    // leader may drain: a reader consuming requests would delete them unserviced. Never escalates to a
+    // whole-repo scan — these are targeted converges by design (queue overflow forcing a scan-reconcile is the
+    // shared lossy-stream backstop, not an escalation of these requests).
     private bool TryProcessFileConvergeRequests(string millerDir)
     {
+        IndexerCore? core;
         lock (_opsGate)
         {
             if (_ops is null)
                 return false; // not the leader — leave the requests for the instance that can service them
+            core = _core;
         }
 
-        IReadOnlyList<string> paths;
+        if (core is null)
+            return false; // leader ops without a core never happens in production; nothing can service the queue
+
+        FileConvergeDrainResult result;
         try
         {
-            paths = _drainFileConvergeRequests(millerDir);
+            result = _drainFileConvergeRequests(millerDir);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {
@@ -631,10 +647,38 @@ public sealed class IndexerService : BackgroundService
             return false;
         }
 
-        bool reindexedAny = false;
-        foreach (string path in paths)
-            reindexedAny |= TryReindexAsLeader(path);
-        return reindexedAny;
+        LogRequestDrainStats("file-converge", result.ExpiredDiscarded, result.ClaimSkipped);
+        foreach (string path in result.Paths)
+            core.Enqueue(new WatchEvent(path, WatchEventKind.Modified));
+        return result.Paths.Count > 0;
+    }
+
+    // M2/M4 drain bookkeeping: discarded-expired requests are an Information fact (a leader on an old build let
+    // them rot); a request that could not be claimed warns ONCE then drops to Debug (see _requestClaimSkipWarned).
+    private void LogRequestDrainStats(string kind, int expiredDiscarded, int claimSkipped)
+    {
+        if (expiredDiscarded > 0)
+            _logger.LogInformation(
+                "Discarded {Count} expired {Kind} request(s) older than {TtlMinutes} minutes without servicing.",
+                expiredDiscarded, kind, LeaderScanRequestQueue.RequestTtl.TotalMinutes);
+
+        if (claimSkipped > 0)
+        {
+            if (!_requestClaimSkipWarned)
+            {
+                _requestClaimSkipWarned = true;
+                _logger.LogWarning(
+                    "Skipped {Count} {Kind} request(s) that could not be claimed (file held or undeletable); " +
+                    "they will be retried on later ticks and swept after the TTL.",
+                    claimSkipped, kind);
+            }
+            else
+            {
+                _logger.LogDebug(
+                    "Skipped {Count} {Kind} request(s) that could not be claimed; still waiting on the TTL sweep.",
+                    claimSkipped, kind);
+            }
+        }
     }
 
     private void AttachWatchers(string canonicalRoot)

@@ -84,12 +84,18 @@ public sealed class LeaderWriteThroughTests : IDisposable
     private static string MillerDirOf(WorkspaceContext workspace) =>
         Path.GetDirectoryName(workspace.ExtractDbPath)!;
 
+    private static void RecordLeader(WorkspaceContext workspace, int pid = 4242) =>
+        LeaderIdentityFile.Write(MillerDirOf(workspace), new LeaderIdentity(
+            pid, MillerVersion.Current, ProcessPath: null, DateTimeOffset.UtcNow));
+
     [Fact]
-    public void TryRecoverStaleFile_AsReader_WritesConvergeRequest_AndReportsRequested()
+    public void TryRecoverStaleFile_AsReader_WithLiveLeader_WritesConvergeRequest_AndReportsRequested()
     {
         WorkspaceContext workspace = CreateWorkspace();
         var (indexer, bootstrap) = NewIndexer(workspace); // no ops published => a reader
-        var wt = new LeaderWriteThrough(indexer, bootstrap, NullLogger<LeaderWriteThrough>.Instance);
+        RecordLeader(workspace); // a live, converge-capable leader is recorded
+        var wt = new LeaderWriteThrough(
+            indexer, bootstrap, NullLogger<LeaderWriteThrough>.Instance, isLeaderAlive: _ => true);
         string changed = Path.Combine(workspace.CanonicalRoot!, "src", "A.cs");
 
         StaleRecoveryAttempt attempt = wt.TryRecoverStaleFile(changed);
@@ -97,7 +103,60 @@ public sealed class LeaderWriteThroughTests : IDisposable
         Assert.Equal(StaleRecoveryAttempt.Requested, attempt);
         Assert.Equal(
             new[] { changed },
-            LeaderScanRequestQueue.DrainFileConvergeRequests(MillerDirOf(workspace)));
+            LeaderScanRequestQueue.DrainFileConvergeRequests(MillerDirOf(workspace)).Paths);
+    }
+
+    [Fact]
+    public void TryRecoverStaleFile_AsReader_NoLeaderIdentity_ReportsNone_AndWritesNoRequest()
+    {
+        WorkspaceContext workspace = CreateWorkspace();
+        var (indexer, bootstrap) = NewIndexer(workspace);
+        // No leader.json: either no leader runs, or a pre-identity (and therefore pre-drain) build leads. A
+        // Requested here would make the gate burn its whole recovery poll with zero chance of converging.
+        var wt = new LeaderWriteThrough(
+            indexer, bootstrap, NullLogger<LeaderWriteThrough>.Instance, isLeaderAlive: _ => true);
+        string changed = Path.Combine(workspace.CanonicalRoot!, "src", "A.cs");
+
+        StaleRecoveryAttempt attempt = wt.TryRecoverStaleFile(changed);
+
+        Assert.Equal(StaleRecoveryAttempt.None, attempt);
+        Assert.Empty(LeaderScanRequestQueue.DrainFileConvergeRequests(MillerDirOf(workspace)).Paths);
+    }
+
+    [Fact]
+    public void TryRecoverStaleFile_AsReader_DeadLeader_ReportsNone_AndWritesNoRequest()
+    {
+        WorkspaceContext workspace = CreateWorkspace();
+        var (indexer, bootstrap) = NewIndexer(workspace);
+        RecordLeader(workspace); // recorded, but the probe says the process is gone (crashed leader)
+        var wt = new LeaderWriteThrough(
+            indexer, bootstrap, NullLogger<LeaderWriteThrough>.Instance, isLeaderAlive: _ => false);
+        string changed = Path.Combine(workspace.CanonicalRoot!, "src", "A.cs");
+
+        StaleRecoveryAttempt attempt = wt.TryRecoverStaleFile(changed);
+
+        Assert.Equal(StaleRecoveryAttempt.None, attempt);
+        Assert.Empty(LeaderScanRequestQueue.DrainFileConvergeRequests(MillerDirOf(workspace)).Paths);
+    }
+
+    [Fact]
+    public void TryRecoverStaleFile_AsReader_LivenessProbeThrows_AssumesCapable_AndReportsRequested()
+    {
+        WorkspaceContext workspace = CreateWorkspace();
+        var (indexer, bootstrap) = NewIndexer(workspace);
+        RecordLeader(workspace);
+        // Probe-unknown must collapse to "assume capable": a diagnostics hiccup never regresses the happy path.
+        var wt = new LeaderWriteThrough(
+            indexer, bootstrap, NullLogger<LeaderWriteThrough>.Instance,
+            isLeaderAlive: _ => throw new InvalidOperationException("probe denied"));
+        string changed = Path.Combine(workspace.CanonicalRoot!, "src", "A.cs");
+
+        StaleRecoveryAttempt attempt = wt.TryRecoverStaleFile(changed);
+
+        Assert.Equal(StaleRecoveryAttempt.Requested, attempt);
+        Assert.Equal(
+            new[] { changed },
+            LeaderScanRequestQueue.DrainFileConvergeRequests(MillerDirOf(workspace)).Paths);
     }
 
     [Fact]
@@ -113,7 +172,7 @@ public sealed class LeaderWriteThroughTests : IDisposable
 
         Assert.Equal(
             new[] { a, b },
-            LeaderScanRequestQueue.DrainFileConvergeRequests(MillerDirOf(workspace)));
+            LeaderScanRequestQueue.DrainFileConvergeRequests(MillerDirOf(workspace)).Paths);
     }
 
     [Fact]
@@ -131,6 +190,6 @@ public sealed class LeaderWriteThroughTests : IDisposable
         Assert.Equal(StaleRecoveryAttempt.Converged, attempt);
         Assert.Equal(new[] { changed }, ops.UpdatePaths);
         // No request file: the inline reindex already converged it.
-        Assert.Empty(LeaderScanRequestQueue.DrainFileConvergeRequests(MillerDirOf(workspace)));
+        Assert.Empty(LeaderScanRequestQueue.DrainFileConvergeRequests(MillerDirOf(workspace)).Paths);
     }
 }
