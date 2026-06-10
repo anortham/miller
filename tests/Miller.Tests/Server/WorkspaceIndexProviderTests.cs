@@ -853,6 +853,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
 
         int loadCount = 0;
         var loadStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseLoad = new ManualResetEventSlim(initialState: false);
         var provider = NewProvider(
             new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
             CurrentWorkspace(current.DbPath, "current-ws"),
@@ -861,7 +862,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             {
                 Interlocked.Increment(ref loadCount);
                 loadStarted.TrySetResult();
-                Thread.Sleep(200);
+                releaseLoad.Wait(TimeSpan.FromSeconds(5));
                 return RepositoryIndexLoader.Load(path);
             });
 
@@ -869,6 +870,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Task timeout = Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         Assert.Same(loadStarted.Task, await Task.WhenAny(loadStarted.Task, timeout));
         Task<WorkspaceReadContext> second = Task.Run(() => provider.Resolve("target-ws", ensureFresh: false));
+        releaseLoad.Set();
 
         WorkspaceReadContext[] contexts = await Task.WhenAll(first, second);
 
@@ -888,6 +890,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
 
         int loadCount = 0;
         var loadStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseLoad = new ManualResetEventSlim(initialState: false);
         var provider = NewProvider(
             new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
             CurrentWorkspace(current.DbPath, "current-ws"),
@@ -896,7 +899,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             {
                 Interlocked.Increment(ref loadCount);
                 loadStarted.TrySetResult();
-                Thread.Sleep(200);
+                releaseLoad.Wait(TimeSpan.FromSeconds(5));
                 return ContentSearchProjectionLoader.Load(dbPath, root);
             });
 
@@ -906,6 +909,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Assert.Same(loadStarted.Task, await Task.WhenAny(loadStarted.Task, timeout));
         Task<WorkspaceContentSearchContext> second =
             Task.Run(() => provider.ResolveContentSearch("target-ws", ensureFresh: false));
+        releaseLoad.Set();
 
         WorkspaceContentSearchContext[] contexts = await Task.WhenAll(first, second);
 

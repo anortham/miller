@@ -115,8 +115,9 @@ scripts/test.ps1 all
 - The public site is `https://anortham.github.io/miller/`; keep README linked to it.
 - `docs/README.md` is the documentation map. Keep active contracts/current operating docs separate from historical
   design notes and dogfood evidence.
-- Release-facing README facts must come from live GitHub release data. For `v0.3.2`, the live release has four
-  platform archives plus four `.sha256` sidecars.
+- Release-facing README facts must come from live GitHub release data. For `v0.3.6`, the live release has four
+  platform archives plus four `.sha256` sidecars (verified in
+  [`docs/findings/2026-06-09-v0.3.6-release-verification.md`](docs/findings/2026-06-09-v0.3.6-release-verification.md)).
 - When updating harness guidance, edit `CLAUDE.md` first, run `scripts/sync-agents.sh` or
   `scripts/sync-agents.ps1`, then confirm `cmp -s CLAUDE.md AGENTS.md`.
 
