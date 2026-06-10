@@ -406,6 +406,9 @@ public sealed class JulieExtractRunnerTests
         Assert.Contains("extract_contract_version", ex.Message);
         Assert.Contains("workspace full", ex.Message, StringComparison.OrdinalIgnoreCase); // force-rebuild remedy
         Assert.Contains("restore", ex.Message, StringComparison.OrdinalIgnoreCase);
+        // The remedy must cover a stale-but-PRESENT binary (older than the pin), not only a missing one — the
+        // "only if missing" wording misled a real diagnosis (a 2.1.x binary left in .tools after the 2.2.1 pin bump).
+        Assert.Contains("older", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

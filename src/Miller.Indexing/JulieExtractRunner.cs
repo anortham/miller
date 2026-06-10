@@ -273,6 +273,51 @@ public sealed class JulieExtractRunner
     }
 
     /// <summary>
+    /// Best-effort probe of the bundled binary's reported version (<c>--version</c>), parsed to <c>X.Y.Z</c> or
+    /// null if the probe fails for ANY reason (a wrong-arch/non-executable binary, a hang, an unrecognized format).
+    /// DIAGNOSTIC ONLY: the schema/contract gates remain the compatibility authority — callers use this to EXPLAIN a
+    /// mismatch (a stale bundled binary vs a stale DB), never to gate it, so it must never throw. Bounded + killed
+    /// like <see cref="Run"/> so a wedged binary cannot hang startup; <c>--version</c> output is a single short line
+    /// well under the pipe buffer, so the wait-then-read cannot deadlock.
+    /// </summary>
+    public string? QueryVersion()
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = _binaryPath,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            psi.ArgumentList.Add("--version");
+
+            using var process = Process.Start(psi);
+            if (process is null)
+                return null;
+
+            if (!process.WaitForExit(5_000))
+            {
+                try { process.Kill(entireProcessTree: true); }
+                catch (InvalidOperationException) { /* already exited between the wait and the kill */ }
+                return null;
+            }
+
+            return JulieExtractVersionProbe.ParseVersion(process.StandardOutput.ReadToEnd());
+        }
+        catch (Exception ex) when (
+            ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException
+               or PlatformNotSupportedException or ObjectDisposedException or NotSupportedException)
+        {
+            // A failed exec / unreadable stream / unsupported platform: the binary cannot self-report. Diagnostic
+            // only — degrade to "unknown" (null) rather than disturb startup; the schema/contract gates still fire.
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Run <c>julie-extract update --file</c> on a single CHANGED file. julie-extract blake3-checks the content
     /// and no-ops (<c>status=no_change</c>, no revision bump) if it is identical, so this is safe to call on any event.
     /// ALL THREE paths (<paramref name="canonicalDb"/>, <paramref name="canonicalRoot"/>,

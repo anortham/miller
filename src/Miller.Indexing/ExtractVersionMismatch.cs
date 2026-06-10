@@ -39,7 +39,9 @@ internal static class ExtractVersionMismatch
                $"julie-extract v{MillerExtractContract.PinnedJulieExtractVersion} artifact " +
                $"(schema {schemaVersion}, contract {contractForMsg}); rebuild the index with `workspace full` " +
                "(a force rebuild) — an incremental `workspace refresh` cannot upgrade a schema-mismatched DB. " +
-               "Re-run restore first only if the pinned julie-extract binary is missing.";
+               $"Re-run restore FIRST if the bundled julie-extract is missing OR older than v{MillerExtractContract.PinnedJulieExtractVersion} " +
+               "(a pre-pin binary emits this older schema, and being present it is easy to miss); the force rebuild only " +
+               "heals a stale DB once the binary itself matches the pin.";
     }
 
     private static string Str(long value) => value.ToString(CultureInfo.InvariantCulture);

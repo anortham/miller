@@ -118,6 +118,15 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 // (FileNotFoundException carrying the restore-script message) — Miller cannot index without it.
                 var runner = JulieExtractRunner.Locate(ctx.ToolsRoot);
 
+                // Locate only checks EXISTENCE, so a julie-extract left in .tools/ from before a pin bump passes it
+                // but then fails every scan with a schema mismatch. Probe the bundled version up front and warn
+                // loudly when it is older than the pin, so the operator sees the real cause ("re-run restore")
+                // instead of inferring it from a downstream schema-mismatch loop (the binary is PRESENT, so the
+                // "missing binary" hint misleads). Diagnostic only — the schema/contract gates still decide
+                // compatibility (a newer/same-contract binary is fine), so this never blocks startup.
+                if (JulieExtractVersionProbe.StaleBinaryWarning(runner.QueryVersion()) is { } staleBinaryWarning)
+                    _logger.LogWarning("julie-extract: {Warning}", staleBinaryWarning);
+
                 // Initial bootstrap scan decision. A missing DB gets the first delta scan. An existing DB with a
                 // missing/legacy/mismatched workspace_id is force-rebound before Miller loads it, so the in-memory
                 // index, freshness cursor, registry row, and julie metadata all converge on the stable root hash.

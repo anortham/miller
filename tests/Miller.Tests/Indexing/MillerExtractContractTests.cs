@@ -77,6 +77,36 @@ public sealed class MillerExtractContractTests
     }
 
     [Fact]
+    public void ServerProjectGuardsAgainstStaleJulieExtractVersion()
+    {
+        // The Content copy takes whatever sits in .tools with no version check (PreserveNewest). Without a build-time
+        // guard, a julie-extract left over from before a pin bump is copied silently and the contract-mismatched
+        // runtime loops on schema errors. This guard fails the build OFFLINE (reads the pin file + runs --version, no
+        // network) when the restored binary does not match the pin. See the VerifyPinnedJulieExtractVersion target.
+        string projectPath = Path.Combine(ScaleTestSupport.RepoRoot(), "src", "Miller.Server", "Miller.Server.csproj");
+        XDocument project = XDocument.Load(projectPath);
+
+        XElement? guard = project.Descendants("Target")
+            .FirstOrDefault(target => string.Equals(
+                (string?)target.Attribute("Name"), "VerifyPinnedJulieExtractVersion", StringComparison.Ordinal));
+        Assert.True(guard is not null,
+            "Miller.Server.csproj must define the VerifyPinnedJulieExtractVersion target so a stale .tools/julie-extract fails the build.");
+
+        // Must run as part of the build (before output is produced/published) so a stale binary cannot ship.
+        Assert.Contains("Build", (string?)guard!.Attribute("BeforeTargets") ?? string.Empty, StringComparison.Ordinal);
+
+        string guardXml = guard.ToString();
+        Assert.Contains("julie-pins.json", guardXml, StringComparison.Ordinal);   // reads the pin (the comparison source of truth)
+        Assert.Contains("--version", guardXml, StringComparison.Ordinal);          // checks the restored binary's reported version
+        Assert.Contains("<Error", guardXml, StringComparison.Ordinal);             // fails the build on mismatch
+
+        // Offline-only: the guard must NOT reach the network (that would break the no-restore/offline build guarantee).
+        Assert.DoesNotContain("github.com", guardXml, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Invoke-WebRequest", guardXml, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("System.Net", guardXml, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void ReleaseWorkflowBuildMatrixMatchesPinnedJulieExtractPlatforms()
     {
         string repoRoot = ScaleTestSupport.RepoRoot();

@@ -78,7 +78,12 @@ scripts/test.ps1 all
 - The build COPIES `.tools/julie-extract` next to the output binary (`<out>/.tools/`, via a `Content`
   item in [`Miller.Server.csproj`](src/Miller.Server/Miller.Server.csproj)) because production locates it
   at `AppContext.BaseDirectory/.tools` (`WorkspaceContext.ToolsRoot`), NOT the repo. A no-restore machine
-  still builds; the runtime then fails loudly with the restore-script message. To build from source, use
+  still builds; the runtime then fails loudly with the restore-script message. The copy takes whatever sits
+  in `.tools` with no version check, so the `VerifyPinnedJulieExtractVersion` build guard (in
+  `Miller.Server.csproj`) runs the restored binary's `--version` and FAILS the build offline if it does not
+  match `scripts/julie-pins.json` — this catches a stale binary left over from before a pin bump (missing ⟹
+  builds, runtime fails loud; stale ⟹ build fails; current ⟹ silent pass). After a pin bump, re-run restore.
+  To build from source, use
   `MILLER_JULIE_SOURCE=/path/to/julie-extractors scripts/restore-julie-extract.sh --from-source`
   or, on Windows, `$env:MILLER_JULIE_SOURCE='C:\path\to\julie-extractors';
   scripts/restore-julie-extract.ps1 -FromSource`.

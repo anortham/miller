@@ -71,4 +71,46 @@
           Condition="!$([MSBuild]::IsOSPlatform('Windows')) And Exists('$(OutDir).tools/julie-extract')">
     <Exec Command="chmod +x &quot;$(OutDir).tools/julie-extract&quot;" />
   </Target>
+
+  <!-- Stale-binary build guard. The Content copy above takes whatever sits in .tools (PreserveNewest) with NO version
+       check, so a julie-extract left over from before a pin bump is copied silently; the contract-mismatched runtime
+       then loops on schema errors while the "missing binary" recovery never fires (the binary is PRESENT, just one
+       schema behind). This target asks the restored binary for its reported version and FAILS the build with a
+       restore instruction when it does not match scripts/julie-pins.json. It is OFFLINE (reads the local pin file and
+       runs the binary's version flag; no network, integrity vs the GitHub release is already verified at restore
+       time) and a NO-OP when the binary is absent (same Exists gate as the copy), preserving the no-restore/offline
+       build guarantee:
+         missing  => builds (runtime fails loud);  stale => build fails loud HERE;  current => silent pass.
+       Guarded by ServerProjectGuardsAgainstStaleJulieExtractVersion in MillerExtractContractTests. -->
+  <Target Name="VerifyPinnedJulieExtractVersion" BeforeTargets="Build;Publish"
+          Condition="Exists('$(MSBuildThisFileDirectory)../../.tools/julie-extract.exe') Or Exists('$(MSBuildThisFileDirectory)../../.tools/julie-extract')">
+    <PropertyGroup>
+      <_JulieExtractBinary Condition="$([MSBuild]::IsOSPlatform('Windows'))">$(MSBuildThisFileDirectory)..\..\.tools\julie-extract.exe</_JulieExtractBinary>
+      <_JulieExtractBinary Condition="!$([MSBuild]::IsOSPlatform('Windows'))">$(MSBuildThisFileDirectory)../../.tools/julie-extract</_JulieExtractBinary>
+      <!-- First "version": "<x.y.z>" in the pins file is the top-level download pin (the only one). Nested function so
+           the JSON text is passed as a value, never spliced into the expression. -->
+      <_JuliePinnedJulieExtractVersion>$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)../../scripts/julie-pins.json')), '"version"\s*:\s*"([^"]*)"').Groups.get_Item(1).Value)</_JuliePinnedJulieExtractVersion>
+    </PropertyGroup>
+
+    <Error Condition="'$(_JuliePinnedJulieExtractVersion)' == ''"
+           Text="Could not read the pinned julie-extract version from scripts/julie-pins.json; the stale-binary build guard cannot verify .tools/julie-extract." />
+
+    <!-- IgnoreExitCode so a binary that cannot self-report version raises the clear Error below, not a raw MSB3073. -->
+    <Exec Condition="Exists('$(_JulieExtractBinary)')"
+          Command="&quot;$(_JulieExtractBinary)&quot; --version"
+          ConsoleToMSBuild="true" StandardOutputImportance="low" IgnoreExitCode="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_JulieExtractVersionRaw" />
+      <Output TaskParameter="ExitCode" PropertyName="_JulieExtractVersionExit" />
+    </Exec>
+
+    <PropertyGroup>
+      <_JulieExtractActualVersion>$([System.Text.RegularExpressions.Regex]::Match('$(_JulieExtractVersionRaw)', '[0-9]+\.[0-9]+\.[0-9]+').Value)</_JulieExtractActualVersion>
+    </PropertyGroup>
+
+    <Error Condition="Exists('$(_JulieExtractBinary)') And '$(_JulieExtractVersionExit)' != '0'"
+           Text="Could not run '$(_JulieExtractBinary) --version' (exit $(_JulieExtractVersionExit)) to verify the pinned julie-extract. Re-run scripts/restore-julie-extract.ps1 (Windows) or scripts/restore-julie-extract.sh." />
+
+    <Error Condition="Exists('$(_JulieExtractBinary)') And '$(_JulieExtractActualVersion)' != '$(_JuliePinnedJulieExtractVersion)'"
+           Text="Bundled julie-extract is v$(_JulieExtractActualVersion) but scripts/julie-pins.json pins v$(_JuliePinnedJulieExtractVersion). The build copies .tools/julie-extract as-is (no version check), so a stale binary would silently break the schema contract at runtime. Re-run scripts/restore-julie-extract.ps1 (Windows) or scripts/restore-julie-extract.sh, then rebuild." />
+  </Target>
 </Project>
