@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Text.Json;
 using Miller.Indexing;
 using Miller.Server.Hosting;
@@ -108,6 +109,36 @@ public sealed class WorkspaceHealthLeaderTests
         Assert.Null(health.Leader);
         Assert.Empty(health.Warnings);
         Assert.Equal(HealthState.Ready, health.State);
+    }
+
+    // ---- liveness probe failure (the Windows elevated-pid-reuse crash, M1) ----
+
+    [Fact]
+    public void Read_ProbeThrows_DoesNotCrash_AndDoesNotReportLeaderDead()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "miller-health-leader-" + Guid.NewGuid().ToString("N"));
+        string millerDir = Path.Combine(dir, ".miller");
+        try
+        {
+            LeaderIdentityFile.Write(millerDir, new LeaderIdentity(
+                4242, "0.4.0+cafe123", null, DateTimeOffset.UtcNow));
+
+            // Win32Exception is NOT ArgumentException/InvalidOperationException — before the M1 hardening this
+            // crashed `workspace health` on Windows when the recorded pid was reused by an elevated process.
+            LeaderHealthFacts facts = LeaderHealthFacts.Read(
+                millerDir, static _ => throw new Win32Exception(5 /* ERROR_ACCESS_DENIED */));
+
+            Assert.NotNull(facts.Identity);
+            // The collapse: a denied probe means a process with the pid exists but cannot be interrogated —
+            // never spuriously degrade health with indexer_leader_dead on a mere probe failure.
+            Assert.True(facts.Alive);
+            var health = Health(Facts(), facts);
+            Assert.DoesNotContain(health.Warnings, w => w.Code == "indexer_leader_dead");
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+        }
     }
 
     // ---- render ----

@@ -205,6 +205,9 @@ public sealed class IndexerService : BackgroundService
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
+                // A failed write must not leave a crashed predecessor's leader.json as the visible truth: health
+                // would report a dead/mismatched leader while THIS healthy process leads. Clear it (best-effort).
+                LeaderIdentityFile.TryDelete(millerDir);
                 _logger.LogWarning(ex, "Could not record the leader identity; workspace health will report it as unknown.");
             }
             if (_attachFileWatchers)

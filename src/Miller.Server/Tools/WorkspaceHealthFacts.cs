@@ -23,10 +23,13 @@ public sealed record HealthWarning(string Code, string Severity, string Message)
 public sealed record LeaderHealthFacts(LeaderIdentity? Identity, bool? Alive)
 {
     /// <summary>Read the recorded identity under <paramref name="millerDir"/> and probe its pid's liveness.</summary>
-    public static LeaderHealthFacts Read(string millerDir)
+    public static LeaderHealthFacts Read(string millerDir) => Read(millerDir, probe: null);
+
+    /// <summary>Test seam: <paramref name="probe"/> replaces the real process probe (null = real).</summary>
+    internal static LeaderHealthFacts Read(string millerDir, Func<int, LeaderProcessProbe>? probe)
     {
         LeaderIdentity? identity = LeaderIdentityFile.TryRead(millerDir);
-        return new LeaderHealthFacts(identity, identity is null ? null : LeaderIdentityFile.IsProcessAlive(identity.Pid));
+        return new LeaderHealthFacts(identity, identity is null ? null : LeaderIdentityFile.IsProcessAlive(identity, probe));
     }
 }
 

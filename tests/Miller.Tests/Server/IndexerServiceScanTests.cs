@@ -373,6 +373,31 @@ public sealed class IndexerServiceScanTests
     }
 
     [Fact]
+    public async Task StartAsync_AsLeader_WhenIdentityWriteFails_ClearsPredecessorIdentity()
+    {
+        using var julie = JulieDb();
+        var lease = new TestLease();
+        var ops = new RecordingScanOps { Revision = 13 };
+        WorkspaceContext workspace = WorkspaceWithDb(julie.DbPath);
+        string millerDir = Path.GetDirectoryName(workspace.ExtractDbPath)!;
+        // A crashed predecessor's identity is on disk...
+        LeaderIdentityFile.Write(millerDir, new LeaderIdentity(
+            987654, "0.0.1+dead123", null, DateTimeOffset.UtcNow.AddHours(-3)));
+        // ...and OUR identity write is sabotaged: the atomic-write temp slot is occupied by a directory, so
+        // File.WriteAllText throws UnauthorizedAccessException (the caught set in the leader's write guard).
+        Directory.CreateDirectory(LeaderIdentityFile.PathFor(millerDir) + ".tmp");
+        var service = NewStartedService(workspace, _ => lease, (_, _, _) => ops);
+
+        await service.StartAsync(CancellationToken.None);
+        Assert.True(ops.ScanCalled.Wait(5000, CancellationToken.None));
+
+        // L1: a failed write must never leave the predecessor's stale identity as the visible truth — health
+        // would report a dead/mismatched leader while a healthy one runs.
+        Assert.Null(LeaderIdentityFile.TryRead(millerDir));
+        await service.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
     public void ProcessFileConvergeRequests_WhenNotLeader_DoesNotDrainRequests()
     {
         // A non-leader CANNOT reindex; draining would consume (delete) the request files without servicing
