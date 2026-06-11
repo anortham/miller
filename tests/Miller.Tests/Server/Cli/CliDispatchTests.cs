@@ -1487,6 +1487,7 @@ public sealed class CliDispatchTests : IDisposable
     [InlineData(WorkspaceRefreshStatus.MissingIndex, 3)]
     [InlineData(WorkspaceRefreshStatus.LockBusy, 3)]
     [InlineData(WorkspaceRefreshStatus.Failed, 3)]
+    [InlineData(WorkspaceRefreshStatus.IneligibleExtractor, 3)]
     public void RefreshExitCode_NonSuccessIsAlwaysNonZero(WorkspaceRefreshStatus status, int expected) =>
         Assert.Equal(expected, CliDispatch.RefreshExitCode(status));
 

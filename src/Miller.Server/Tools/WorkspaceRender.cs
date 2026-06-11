@@ -174,9 +174,29 @@ public static class WorkspaceRender
     /// <c>workspace</c>, an <c>index</c>, and a <c>telemetry</c> section.
     /// </summary>
     public static string Status(WorkspaceFacts facts, TelemetrySummary telemetry, bool json) =>
-        json ? StatusJson(facts, telemetry) : StatusCompact(facts, telemetry);
+        Status(facts, telemetry, json, leader: null);
 
-    private static string StatusCompact(WorkspaceFacts facts, TelemetrySummary telemetry)
+    /// <summary>
+    /// Role-aware status overload (version-aware leadership D6): when <paramref name="leader"/> carries this
+    /// process's eligibility verdict, the compact role label can explain a permanently-outdated reader
+    /// (<c>reader (extractor outdated: own X &lt; index Y)</c>) instead of looking mysteriously idle.
+    /// </summary>
+    public static string Status(WorkspaceFacts facts, TelemetrySummary telemetry, bool json, LeaderHealthFacts? leader) =>
+        json ? StatusJson(facts, telemetry) : StatusCompact(facts, telemetry, leader);
+
+    // "leader" / "reader" / "reader (extractor outdated: own X < index Y)" — the D6 role string. The outdated
+    // form fires only when the verdict is ineligible AND both versions prove the downgrade direction.
+    private static string RoleLabel(WorkspaceFacts facts, LeaderHealthFacts? leader)
+    {
+        if (facts.IsLeader)
+            return "leader";
+        if (leader is { OwnVerdict.Eligible: false, OwnExtractorVersion: { } own, ArtifactExtractorVersion: { } artifact } &&
+            LeaderHealthFacts.IsExtractorOlder(own, artifact))
+            return $"reader (extractor outdated: own {own} < index {artifact})";
+        return "reader";
+    }
+
+    private static string StatusCompact(WorkspaceFacts facts, TelemetrySummary telemetry, LeaderHealthFacts? leader)
     {
         var sb = new StringBuilder();
         sb.Append("# workspace");
@@ -187,7 +207,7 @@ public static class WorkspaceRender
         sb.Append('\n');
         sb.Append(DisplayId(facts.Root, facts.WorkspaceId, facts.DisplayId))
           .Append("  ").Append(facts.Root)
-          .Append("  [").Append(facts.IsLeader ? "leader" : "reader").Append("]\n");
+          .Append("  [").Append(RoleLabel(facts, leader)).Append("]\n");
 
         sb.Append("symbols: ").Append(facts.DocumentCount)
           .Append("  ext: ").Append(facts.KnownExtensionsCount)
@@ -462,7 +482,8 @@ public static class WorkspaceRender
         if (leader.Identity is not { } identity)
             return "unknown (no leader identity recorded — older build leading, or no leader running)";
         string liveness = leader.Alive == false ? "NOT RUNNING (stale identity)" : "alive";
-        return $"pid {identity.Pid.ToString(CultureInfo.InvariantCulture)} v{identity.Version} {liveness}";
+        string extract = identity.ExtractorVersion is { } extractorVersion ? $" extract {extractorVersion}" : string.Empty;
+        return $"pid {identity.Pid.ToString(CultureInfo.InvariantCulture)} v{identity.Version}{extract} {liveness}";
     }
 
     private static void WriteLeaderJson(Utf8JsonWriter w, WorkspaceFacts status, LeaderHealthFacts? leader)
@@ -482,6 +503,8 @@ public static class WorkspaceRender
             if (identity.ProcessPath is null) w.WriteNull("process_path");
             else w.WriteString("process_path", identity.ProcessPath);
             w.WriteString("started_at", identity.StartedAtUtc.UtcDateTime.ToString("O", CultureInfo.InvariantCulture));
+            if (identity.ExtractorVersion is null) w.WriteNull("extractor_version");
+            else w.WriteString("extractor_version", identity.ExtractorVersion);
         }
         else
         {
@@ -489,9 +512,28 @@ public static class WorkspaceRender
             w.WriteNull("version");
             w.WriteNull("process_path");
             w.WriteNull("started_at");
+            w.WriteNull("extractor_version");
         }
         if (leader.Alive is { } alive) w.WriteBoolean("alive", alive);
         else w.WriteNull("alive");
+        // Additive version-aware-leadership fields (D6): this PROCESS's extractor, the artifact's recorded
+        // binary_version, and this process's eligibility verdict. All null when the caller did not gather them.
+        if (leader.OwnExtractorVersion is null) w.WriteNull("own_extractor_version");
+        else w.WriteString("own_extractor_version", leader.OwnExtractorVersion);
+        if (leader.ArtifactExtractorVersion is null) w.WriteNull("artifact_extractor_version");
+        else w.WriteString("artifact_extractor_version", leader.ArtifactExtractorVersion);
+        if (leader.OwnVerdict is { } verdict)
+        {
+            w.WritePropertyName("own_eligibility");
+            w.WriteStartObject();
+            w.WriteBoolean("eligible", verdict.Eligible);
+            w.WriteString("reason", verdict.Reason);
+            w.WriteEndObject();
+        }
+        else
+        {
+            w.WriteNull("own_eligibility");
+        }
         w.WriteEndObject();
     }
 

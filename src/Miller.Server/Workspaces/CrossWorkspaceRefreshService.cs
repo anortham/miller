@@ -23,6 +23,14 @@ public sealed class CrossWorkspaceRefreshService
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly SymbolSearchSidecar _sidecar;
     private readonly ContentCorpusSidecar _contentSidecar;
+    private readonly Func<string, LeadershipVerdict>? _eligibilityGate;
+
+    // Appended to the eligibility verdict's reason when a one-shot refresh is refused (D2): the remedy is a
+    // restore/upgrade, and the env hatch exists only for INTENTIONAL downgrades — never as a routine unblock.
+    internal const string IneligibleRemedy =
+        ". Refusing to rebuild the index with an outdated extractor: run scripts/restore-julie-extract.sh " +
+        "(or scripts/restore-julie-extract.ps1) or upgrade miller; set MILLER_ALLOW_EXTRACTOR_DOWNGRADE=1 " +
+        "only for an intentional downgrade.";
 
     public CrossWorkspaceRefreshService(
         WorkspaceRegistry registry, JulieExtractRunner runner, SymbolSearchSidecar sidecar, ContentCorpusSidecar? contentSidecar = null)
@@ -38,7 +46,15 @@ public sealed class CrossWorkspaceRefreshService
             sidecar,
             contentSidecar,
             LeaderScanRequestQueue.RequestFullScan,
-            DefaultFullScanRequestWait)
+            DefaultFullScanRequestWait,
+            // The production D2 gate for every one-shot writer (CLI refresh/full/open, MCP cross-workspace
+            // refresh, dashboard): probe the bundled binary, read the artifact's recorded binary_version, and
+            // let the shared eligibility matrix decide. Evaluated only after the lock is acquired, so the
+            // lock-busy enqueue-to-leader path is never affected.
+            dbPath => LeadershipEligibility.Evaluate(
+                runner.QueryVersion(),
+                ExtractBinaryVersionReader.TryRead(dbPath),
+                Environment.GetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE") == "1"))
     {
     }
 
@@ -54,7 +70,8 @@ public sealed class CrossWorkspaceRefreshService
         SymbolSearchSidecar sidecar,
         ContentCorpusSidecar? contentSidecar = null,
         Action<string, string, long>? requestFullScan = null,
-        TimeSpan? fullScanRequestWait = null)
+        TimeSpan? fullScanRequestWait = null,
+        Func<string, LeadershipVerdict>? eligibilityGate = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(scan);
@@ -84,6 +101,7 @@ public sealed class CrossWorkspaceRefreshService
         _utcNow = utcNow;
         _sidecar = sidecar;
         _contentSidecar = contentSidecar ?? new ContentCorpusSidecar();
+        _eligibilityGate = eligibilityGate;
     }
 
     public WorkspaceRefreshResult Refresh(string workspaceId, bool force = false)
@@ -129,6 +147,25 @@ public sealed class CrossWorkspaceRefreshService
         using IDisposable? lease = _acquireLock(millerDir);
         if (lease is null)
             return WaitForExternalRevision(row, force, millerDir);
+
+        // D2 gate, AFTER winning the lock (so a busy lock still enqueues to the live leader above, which
+        // enforces its own gate): an outdated extractor must never rewrite an artifact built by a newer one.
+        // A refusal is not a workspace error — the index stays valid, so the registry row is left untouched.
+        if (_eligibilityGate is { } gate)
+        {
+            LeadershipVerdict verdict = gate(row.IndexDbPath);
+            if (!verdict.Eligible)
+            {
+                return new WorkspaceRefreshResult(
+                    WorkspaceRefreshStatus.IneligibleExtractor,
+                    row.WorkspaceId,
+                    row.CanonicalRoot,
+                    row.IndexDbPath,
+                    row.LastRevision,
+                    Scanned: false,
+                    Error: verdict.Reason + IneligibleRemedy);
+            }
+        }
 
         try
         {

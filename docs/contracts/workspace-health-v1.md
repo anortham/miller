@@ -29,11 +29,23 @@ Removing or renaming documented fields requires a new contract version.
 
 - `workspace`: `root`, `workspace_id`, `display_id`, `db`, `leader`, `server_version`, `server_pid`.
 - `indexer_leader` (additive in v1; may be `null` when leader facts were not gathered): `this_process`, plus the
-  recorded leader identity from `.miller/leader.json` — `pid`, `version`, `process_path`, `started_at` (all null
-  when no identity is recorded) — and `alive` (a liveness probe of that pid; null without an identity). Index
-  convergence is owned by whichever process leads, so a dead pid or a version mismatch here explains stale-index
-  symptoms in multi-process setups. Related warning codes: `indexer_leader_unknown`, `indexer_leader_dead`,
-  `indexer_leader_version_mismatch`.
+  recorded leader identity from `.miller/leader.json` — `pid`, `version`, `process_path`, `started_at`,
+  `extractor_version` (the leader's bundled `julie-extract` version; all null when no identity is recorded, and
+  `extractor_version` is also null for identities written by builds that predate version-aware leadership) — and
+  `alive` (a liveness probe of that pid; null without an identity). Index convergence is owned by whichever
+  process leads, so a dead pid or a version mismatch here explains stale-index symptoms in multi-process setups.
+  Additive version-aware-leadership fields (null when the responding process could not gather them):
+  - `own_extractor_version`: the responding process's bundled `julie-extract` version.
+  - `artifact_extractor_version`: the `binary_version` recorded in the index artifact's `artifact_metadata`.
+  - `own_eligibility`: `null`, or `{ "eligible": bool, "reason": string }` — the responding process's
+    version-aware leadership verdict for this workspace (an older extractor never rewrites a newer artifact;
+    `MILLER_ALLOW_EXTRACTOR_DOWNGRADE=1` is the explicit override for intentional downgrades).
+
+  Related warning codes: `indexer_leader_unknown`, `indexer_leader_dead`, `indexer_leader_version_mismatch`,
+  `leader_extractor_older_than_artifact` (a live leader's bundled extractor is strictly older than the
+  artifact's `binary_version`, so it can never rebuild without regressing the index), and
+  `index_frozen_extractor_outdated` (the responding process is ineligible AND no live leader exists — nobody
+  can index; upgrade miller or restore the pinned extractor via `scripts/restore-julie-extract`).
 - `index`: `document_count`, `known_extensions`, `built_revision`, `latest_revision`, `index_fresh`,
   `freshness_status`, `warning`, `queue_empty`, `search_sidecar`, and `content_corpus`.
 - `extraction_quality.parse_diagnostics`: `available`, `error`, and grouped rows with `language`, `kind`, `count`.

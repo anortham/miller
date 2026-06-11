@@ -200,7 +200,8 @@ public sealed class WorkspaceTool
     // ---------- status / list facts ----------
 
     private string RenderStatus(bool json) =>
-        WorkspaceRender.Status(AssembleFacts(), _ledger.Summarize(), json);
+        WorkspaceRender.Status(
+            AssembleFacts(), _ledger.Summarize(), json, ReadLeaderFacts(_workspace.ExtractDbPath, ownWorkspace: true));
 
     private string RenderHealth(bool json)
     {
@@ -209,9 +210,21 @@ public sealed class WorkspaceTool
             _ledger.Summarize(),
             _ledger.SummarizeOutcomes(),
             WorkspaceHealthReader.Read(_workspace.ExtractDbPath),
-            LeaderHealthFacts.Read(Path.GetDirectoryName(_workspace.ExtractDbPath)!));
+            ReadLeaderFacts(_workspace.ExtractDbPath, ownWorkspace: true));
         return WorkspaceRender.Health(health, json);
     }
+
+    // Leader facts enriched with the version-aware-leadership view (D6): the recorded identity + liveness, this
+    // process's probed extractor version, and the artifact's recorded binary_version. The IndexerService verdict
+    // applies only to OUR workspace's artifact, so for a cross-workspace target it stays null (this process is
+    // not a writer candidate there — its eligibility says nothing about that workspace's convergence).
+    private LeaderHealthFacts ReadLeaderFacts(string indexDbPath, bool ownWorkspace) =>
+        LeaderHealthFacts.Read(Path.GetDirectoryName(indexDbPath)!) with
+        {
+            OwnExtractorVersion = _indexer.OwnExtractorVersion,
+            ArtifactExtractorVersion = ExtractBinaryVersionReader.TryRead(indexDbPath),
+            OwnVerdict = ownWorkspace ? _indexer.EligibilityVerdict : null,
+        };
 
     private (string output, int resultCount, TelemetryOutcome outcome) RenderTargetStatus(
         string? workspaceId, string? path, bool json)
@@ -372,7 +385,7 @@ public sealed class WorkspaceTool
             _ledger.SummarizeForWorkspace(row.WorkspaceId),
             _ledger.SummarizeOutcomesForWorkspace(row.WorkspaceId),
             extraction,
-            LeaderHealthFacts.Read(Path.GetDirectoryName(row.IndexDbPath)!));
+            ReadLeaderFacts(row.IndexDbPath, ownWorkspace: false));
         return (WorkspaceRender.Health(health, json), 1, TelemetryOutcome.Ok);
     }
 

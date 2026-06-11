@@ -29,6 +29,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
     [InlineData(WorkspaceRefreshStatus.MissingRoot, "missing_root")]
     [InlineData(WorkspaceRefreshStatus.MissingIndex, "missing_index")]
     [InlineData(WorkspaceRefreshStatus.Failed, "failed")]
+    [InlineData(WorkspaceRefreshStatus.IneligibleExtractor, "ineligible_extractor")]
     public void StatusText_ExposesTheApprovedStableRefreshContract(
         WorkspaceRefreshStatus status,
         string expected)
@@ -521,6 +522,95 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         Assert.False(File.Exists(SymbolSearchSidecar.SearchDbPathFor(dbPath)));
     }
 
+    // ---- version-aware leadership: the one-shot eligibility gate (D2 CLI-side) ----
+
+    [Fact]
+    public void Refresh_IneligibleExtractor_RefusesScanWithReasonAndRemedy()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("ineligible");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        int scanCount = 0;
+        var service = NewService(
+            registry,
+            scan: (_, _, _) => { scanCount++; return Report(root, dbPath, "target-ws", revision: 5); },
+            acquireLock: _ => new NoopLease(),
+            eligibilityGate: db =>
+            {
+                Assert.Equal(dbPath, db);
+                return LeadershipEligibility.Evaluate("2.1.3", "2.3.0", allowDowngrade: false);
+            });
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws", force: true);
+
+        Assert.Equal(WorkspaceRefreshStatus.IneligibleExtractor, result.Status);
+        Assert.False(result.Scanned);
+        Assert.Equal(0, scanCount);
+        Assert.Contains("older", result.Error);
+        Assert.Contains("restore-julie-extract", result.Error);
+        Assert.Contains("MILLER_ALLOW_EXTRACTOR_DOWNGRADE", result.Error);
+        // The refusal is not a workspace error: the artifact and registry row stay untouched.
+        Assert.Equal(1, registry.Get("target-ws")?.LastRevision);
+        Assert.Equal(WorkspaceRegistryState.Ready, registry.Get("target-ws")?.State);
+    }
+
+    [Fact]
+    public void Refresh_DowngradeOverride_AllowsScanDespiteOlderExtractor()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("downgrade-override");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        int scanCount = 0;
+        var service = NewService(
+            registry,
+            scan: (_, _, _) => { scanCount++; return Report(root, dbPath, "target-ws", revision: 5); },
+            acquireLock: _ => new NoopLease(),
+            eligibilityGate: _ => LeadershipEligibility.Evaluate("2.1.3", "2.3.0", allowDowngrade: true));
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws", force: true);
+
+        Assert.Equal(WorkspaceRefreshStatus.Refreshed, result.Status);
+        Assert.True(result.Scanned);
+        Assert.Equal(1, scanCount);
+    }
+
+    [Fact]
+    public void Refresh_LockBusy_SkipsGateAndStillRequestsLeaderFullScan()
+    {
+        // When a live leader holds the lock the one-shot must NOT veto on its own eligibility — the existing
+        // enqueue-to-leader behavior stays as is (the live leader enforces its own gate).
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("busy-ineligible");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        File.WriteAllText(dbPath, string.Empty);
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        bool gateInvoked = false;
+        int fullScanRequests = 0;
+        var service = NewService(
+            registry,
+            scan: (_, _, _) => throw new InvalidOperationException("must not scan while the lock is busy"),
+            acquireLock: _ => null,
+            readLatestRevision: _ => 1,
+            requestFullScan: (_, _, _) => fullScanRequests++,
+            eligibilityGate: _ =>
+            {
+                gateInvoked = true;
+                return LeadershipEligibility.Evaluate("2.1.3", "2.3.0", allowDowngrade: false);
+            });
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws", force: true);
+
+        Assert.Equal(WorkspaceRefreshStatus.LockBusy, result.Status);
+        Assert.False(gateInvoked);
+        Assert.Equal(1, fullScanRequests);
+    }
+
     private CrossWorkspaceRefreshService NewService(
         WorkspaceRegistry registry,
         Func<string, string, bool, ExtractReport> scan,
@@ -528,7 +618,8 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         Func<string, long>? readLatestRevision = null,
         FakeClock? clock = null,
         SymbolSearchSidecar? sidecar = null,
-        Action<string, string, long>? requestFullScan = null)
+        Action<string, string, long>? requestFullScan = null,
+        Func<string, LeadershipVerdict>? eligibilityGate = null)
     {
         clock ??= new FakeClock();
         return new CrossWorkspaceRefreshService(
@@ -541,7 +632,8 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
             sleep: clock.Sleep,
             utcNow: clock.UtcNow,
             sidecar: sidecar ?? SymbolSearchSidecar.Disabled,
-            requestFullScan: requestFullScan);
+            requestFullScan: requestFullScan,
+            eligibilityGate: eligibilityGate);
     }
 
     private string NewRoot(string name)

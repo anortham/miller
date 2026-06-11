@@ -43,8 +43,10 @@ public sealed class WorkspaceHealthLeaderTests
         WorkspaceHealthFacts.Create(
             status, TelemetrySummary.Empty, new TelemetryHealthFacts(0, 0, 0), EmptyExtraction(), leader);
 
-    private static LeaderIdentity Identity(int pid = 2222, string version = "0.4.0+cafe123") =>
-        new(pid, version, "/cache/0.3.6/miller", new DateTimeOffset(2026, 6, 10, 7, 0, 0, TimeSpan.Zero));
+    private static LeaderIdentity Identity(
+        int pid = 2222, string version = "0.4.0+cafe123", string? extractorVersion = null) =>
+        new(pid, version, "/cache/0.3.6/miller", new DateTimeOffset(2026, 6, 10, 7, 0, 0, TimeSpan.Zero),
+            extractorVersion);
 
     // ---- warning matrix ----
 
@@ -111,6 +113,113 @@ public sealed class WorkspaceHealthLeaderTests
         Assert.Equal(HealthState.Ready, health.State);
     }
 
+    // ---- version-aware leadership warnings (D6): leader_extractor_older_than_artifact ----
+
+    [Fact]
+    public void Create_LiveLeaderOlderExtractor_WarnsLeaderExtractorOlderThanArtifact()
+    {
+        var health = Health(Facts(), new LeaderHealthFacts(
+            Identity(extractorVersion: "2.1.3"), Alive: true,
+            ArtifactExtractorVersion: "2.3.0"));
+
+        HealthWarning warning = Assert.Single(health.Warnings, w => w.Code == "leader_extractor_older_than_artifact");
+        Assert.Equal("usable_with_warnings", warning.Severity);
+        Assert.Contains("2.1.3", warning.Message);
+        Assert.Contains("2.3.0", warning.Message);
+    }
+
+    [Fact]
+    public void Create_LiveLeaderCurrentExtractor_NoOutdatedLeaderWarning()
+    {
+        var health = Health(Facts(), new LeaderHealthFacts(
+            Identity(extractorVersion: "2.3.0"), Alive: true, ArtifactExtractorVersion: "2.3.0"));
+
+        Assert.DoesNotContain(health.Warnings, w => w.Code == "leader_extractor_older_than_artifact");
+    }
+
+    [Fact]
+    public void Create_LeaderExtractorUnknown_NoOutdatedLeaderWarning()
+    {
+        // A pre-extractor-version identity (older build) records no extractor version — never guess a downgrade.
+        var health = Health(Facts(), new LeaderHealthFacts(
+            Identity(), Alive: true, ArtifactExtractorVersion: "2.3.0"));
+
+        Assert.DoesNotContain(health.Warnings, w => w.Code == "leader_extractor_older_than_artifact");
+    }
+
+    [Fact]
+    public void Create_DeadLeaderOlderExtractor_NoOutdatedLeaderWarning()
+    {
+        // The warning is about a LIVE leader that would regress the artifact; a dead one already warns dead.
+        var health = Health(Facts(), new LeaderHealthFacts(
+            Identity(extractorVersion: "2.1.3"), Alive: false, ArtifactExtractorVersion: "2.3.0"));
+
+        Assert.DoesNotContain(health.Warnings, w => w.Code == "leader_extractor_older_than_artifact");
+        Assert.Single(health.Warnings, w => w.Code == "indexer_leader_dead");
+    }
+
+    // ---- version-aware leadership warnings (D6): index_frozen_extractor_outdated ----
+
+    [Fact]
+    public void Create_IneligibleAndNoLeader_WarnsIndexFrozen()
+    {
+        var health = Health(Facts(), new LeaderHealthFacts(
+            Identity: null, Alive: null,
+            OwnExtractorVersion: "2.1.3",
+            ArtifactExtractorVersion: "2.3.0",
+            OwnVerdict: LeadershipEligibility.Evaluate("2.1.3", "2.3.0", allowDowngrade: false)));
+
+        HealthWarning warning = Assert.Single(health.Warnings, w => w.Code == "index_frozen_extractor_outdated");
+        Assert.Equal("degraded", warning.Severity);
+        Assert.Equal(HealthState.Degraded, health.State);
+        Assert.Contains(health.RecommendedActions, a =>
+            a.Contains("restore-julie-extract") && a.Contains("MILLER_ALLOW_EXTRACTOR_DOWNGRADE"));
+    }
+
+    [Fact]
+    public void Create_IneligibleAndDeadLeader_WarnsIndexFrozenAndLeaderDead()
+    {
+        var health = Health(Facts(), new LeaderHealthFacts(
+            Identity(extractorVersion: "2.1.3"), Alive: false,
+            OwnExtractorVersion: "2.1.3", ArtifactExtractorVersion: "2.3.0",
+            OwnVerdict: LeadershipEligibility.Evaluate("2.1.3", "2.3.0", allowDowngrade: false)));
+
+        Assert.Single(health.Warnings, w => w.Code == "index_frozen_extractor_outdated");
+        Assert.Single(health.Warnings, w => w.Code == "indexer_leader_dead");
+    }
+
+    [Fact]
+    public void Create_IneligibleButLiveLeader_NoFrozenWarning()
+    {
+        // A live (presumably eligible) leader still converges the index — nothing is frozen.
+        var health = Health(Facts(), new LeaderHealthFacts(
+            Identity(extractorVersion: "2.3.0"), Alive: true,
+            OwnExtractorVersion: "2.1.3", ArtifactExtractorVersion: "2.3.0",
+            OwnVerdict: LeadershipEligibility.Evaluate("2.1.3", "2.3.0", allowDowngrade: false)));
+
+        Assert.DoesNotContain(health.Warnings, w => w.Code == "index_frozen_extractor_outdated");
+    }
+
+    [Fact]
+    public void Create_EligibleAndNoLeader_NoFrozenWarning()
+    {
+        var health = Health(Facts(), new LeaderHealthFacts(
+            Identity: null, Alive: null,
+            OwnExtractorVersion: "2.3.0", ArtifactExtractorVersion: "2.3.0",
+            OwnVerdict: LeadershipEligibility.Evaluate("2.3.0", "2.3.0", allowDowngrade: false)));
+
+        Assert.DoesNotContain(health.Warnings, w => w.Code == "index_frozen_extractor_outdated");
+    }
+
+    [Fact]
+    public void Create_NoVerdictGathered_NoFrozenWarning()
+    {
+        // Callers that cannot evaluate eligibility (no IndexerService, no probe) keep historical behavior.
+        var health = Health(Facts(), new LeaderHealthFacts(Identity: null, Alive: null));
+
+        Assert.DoesNotContain(health.Warnings, w => w.Code == "index_frozen_extractor_outdated");
+    }
+
     // ---- liveness probe failure (the Windows elevated-pid-reuse crash, M1) ----
 
     [Fact]
@@ -168,6 +277,39 @@ public sealed class WorkspaceHealthLeaderTests
         Assert.Equal("/cache/0.3.6/miller", leader.GetProperty("process_path").GetString());
         Assert.False(leader.GetProperty("alive").GetBoolean());
         Assert.False(leader.GetProperty("this_process").GetBoolean());
+    }
+
+    [Fact]
+    public void HealthJson_IndexerLeader_ExposesExtractorVersionAndOwnEligibility()
+    {
+        using var doc = JsonDocument.Parse(WorkspaceRender.Health(
+            Health(Facts(), new LeaderHealthFacts(
+                Identity(extractorVersion: "2.2.0"), Alive: true,
+                OwnExtractorVersion: "2.1.3", ArtifactExtractorVersion: "2.3.0",
+                OwnVerdict: LeadershipEligibility.Evaluate("2.1.3", "2.3.0", allowDowngrade: false))),
+            json: true));
+        var leader = doc.RootElement.GetProperty("indexer_leader");
+
+        Assert.Equal("2.2.0", leader.GetProperty("extractor_version").GetString());
+        Assert.Equal("2.1.3", leader.GetProperty("own_extractor_version").GetString());
+        Assert.Equal("2.3.0", leader.GetProperty("artifact_extractor_version").GetString());
+        var eligibility = leader.GetProperty("own_eligibility");
+        Assert.False(eligibility.GetProperty("eligible").GetBoolean());
+        Assert.False(string.IsNullOrWhiteSpace(eligibility.GetProperty("reason").GetString()));
+    }
+
+    [Fact]
+    public void HealthJson_IndexerLeader_NullExtractorFieldsWhenNotGathered()
+    {
+        using var doc = JsonDocument.Parse(WorkspaceRender.Health(
+            Health(Facts(), new LeaderHealthFacts(Identity(), Alive: true)),
+            json: true));
+        var leader = doc.RootElement.GetProperty("indexer_leader");
+
+        Assert.Equal(JsonValueKind.Null, leader.GetProperty("extractor_version").ValueKind);
+        Assert.Equal(JsonValueKind.Null, leader.GetProperty("own_extractor_version").ValueKind);
+        Assert.Equal(JsonValueKind.Null, leader.GetProperty("artifact_extractor_version").ValueKind);
+        Assert.Equal(JsonValueKind.Null, leader.GetProperty("own_eligibility").ValueKind);
     }
 
     [Fact]

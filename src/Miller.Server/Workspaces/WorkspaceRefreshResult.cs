@@ -8,6 +8,12 @@ public enum WorkspaceRefreshStatus
     MissingRoot,
     MissingIndex,
     Failed,
+
+    /// <summary>
+    /// The one-shot writer refused to scan: its bundled extractor is not eligible to rewrite this artifact
+    /// (version-aware leadership D2 — the artifact's <c>binary_version</c> never goes backwards).
+    /// </summary>
+    IneligibleExtractor,
 }
 
 public sealed record WorkspaceRefreshResult(
@@ -29,6 +35,7 @@ public sealed record WorkspaceRefreshResult(
             WorkspaceRefreshStatus.MissingRoot => "missing_root",
             WorkspaceRefreshStatus.MissingIndex => "missing_index",
             WorkspaceRefreshStatus.Failed => "failed",
+            WorkspaceRefreshStatus.IneligibleExtractor => "ineligible_extractor",
             _ => throw new ArgumentOutOfRangeException(nameof(Status), Status, "Unknown workspace refresh status."),
         };
 }

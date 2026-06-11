@@ -737,7 +737,7 @@ public static class CliDispatch
             outw.WriteLine(WorkspaceRender.Health(
                 WorkspaceHealthFacts.Create(
                     facts, TelemetrySummary.Empty, new TelemetryHealthFacts(0, 0, 0), extraction,
-                    LeaderHealthFacts.Read(Path.GetDirectoryName(row.IndexDbPath)!)),
+                    CliLeaderFacts(row.IndexDbPath)),
                 json));
             return 0;
         }
@@ -750,7 +750,7 @@ public static class CliDispatch
             outw.WriteLine(WorkspaceRender.Health(
                 WorkspaceHealthFacts.Create(
                     facts, TelemetrySummary.Empty, new TelemetryHealthFacts(0, 0, 0), extraction,
-                    LeaderHealthFacts.Read(Path.GetDirectoryName(currentRow.IndexDbPath)!)),
+                    CliLeaderFacts(currentRow.IndexDbPath)),
                 json));
             return 0;
         }
@@ -780,10 +780,20 @@ public static class CliDispatch
                 TelemetrySummary.Empty,
                 new TelemetryHealthFacts(0, 0, 0),
                 WorkspaceHealthReader.Read(ctx.ExtractDbPath),
-                LeaderHealthFacts.Read(Path.GetDirectoryName(ctx.ExtractDbPath)!)),
+                CliLeaderFacts(ctx.ExtractDbPath)),
             json));
         return 0;
     }
+
+    // The one-shot CLI's leader facts: identity + liveness + the artifact's recorded binary_version (cheap
+    // SQLite read — lets `leader_extractor_older_than_artifact` fire from the CLI too). The CLI does NOT probe
+    // its own bundled extractor here (that would spawn a subprocess per status/health call); its own eligibility
+    // is enforced — and explained — by the refresh/full gate when it actually tries to write.
+    private static LeaderHealthFacts CliLeaderFacts(string indexDbPath) =>
+        LeaderHealthFacts.Read(Path.GetDirectoryName(indexDbPath)!) with
+        {
+            ArtifactExtractorVersion = ExtractBinaryVersionReader.TryRead(indexDbPath),
+        };
 
     // Facts for a registered workspace: identity + revision/state from the registry row, counts from its index db.
     // Freshness is "unknown" (null) — the CLI is one-shot and does not run the freshness poller. ServerVersion is
@@ -984,7 +994,8 @@ public static class CliDispatch
             WorkspaceRefreshStatus.LockBusy
                 or WorkspaceRefreshStatus.MissingRoot
                 or WorkspaceRefreshStatus.MissingIndex
-                or WorkspaceRefreshStatus.Failed => false,
+                or WorkspaceRefreshStatus.Failed
+                or WorkspaceRefreshStatus.IneligibleExtractor => false,
             _ => null,
         };
 
@@ -1185,7 +1196,8 @@ public static class CliDispatch
         WorkspaceRefreshStatus.MissingRoot
             or WorkspaceRefreshStatus.MissingIndex
             or WorkspaceRefreshStatus.LockBusy
-            or WorkspaceRefreshStatus.Failed => 3,
+            or WorkspaceRefreshStatus.Failed
+            or WorkspaceRefreshStatus.IneligibleExtractor => 3,
         _ => 1,
     };
 

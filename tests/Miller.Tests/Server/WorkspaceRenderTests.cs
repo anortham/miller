@@ -89,6 +89,53 @@ public sealed class WorkspaceRenderTests
         Assert.Contains("250", text);            // a telemetry metric (p95)
     }
 
+    // ---- status role string (version-aware leadership D6) ----
+
+    [Fact]
+    public void Status_Compact_OutdatedReader_ExplainsRoleWithVersions()
+    {
+        var leader = new LeaderHealthFacts(
+            Identity: null, Alive: null,
+            OwnExtractorVersion: "2.1.3",
+            ArtifactExtractorVersion: "2.3.0",
+            OwnVerdict: LeadershipEligibility.Evaluate("2.1.3", "2.3.0", allowDowngrade: false));
+
+        string text = WorkspaceRender.Status(Facts() with { IsLeader = false }, Telemetry, json: false, leader);
+
+        Assert.Contains("[reader (extractor outdated: own 2.1.3 < index 2.3.0)]", text);
+    }
+
+    [Fact]
+    public void Status_Compact_EligibleReader_KeepsPlainReaderRole()
+    {
+        var leader = new LeaderHealthFacts(
+            Identity: null, Alive: null,
+            OwnExtractorVersion: "2.3.0",
+            ArtifactExtractorVersion: "2.3.0",
+            OwnVerdict: LeadershipEligibility.Evaluate("2.3.0", "2.3.0", allowDowngrade: false));
+
+        string text = WorkspaceRender.Status(Facts() with { IsLeader = false }, Telemetry, json: false, leader);
+
+        Assert.Contains("[reader]", text);
+    }
+
+    [Fact]
+    public void Status_Compact_Leader_KeepsLeaderRoleRegardlessOfLeaderFacts()
+    {
+        string text = WorkspaceRender.Status(
+            Facts(), Telemetry, json: false, new LeaderHealthFacts(Identity: null, Alive: null));
+
+        Assert.Contains("[leader]", text);
+    }
+
+    [Fact]
+    public void Status_Compact_NoLeaderFacts_KeepsPlainReaderRole()
+    {
+        string text = WorkspaceRender.Status(Facts() with { IsLeader = false }, Telemetry, json: false);
+
+        Assert.Contains("[reader]", text);
+    }
+
     [Fact]
     public void Status_Json_HasWorkspaceIndexAndTelemetrySections()
     {
@@ -445,6 +492,23 @@ public sealed class WorkspaceRenderTests
         Assert.False(root.GetProperty("swapped").GetBoolean());
         Assert.Equal(42, root.GetProperty("revision").GetInt64());
         Assert.Equal(JsonValueKind.Null, root.GetProperty("note").ValueKind);
+    }
+
+    [Fact]
+    public void Action_Json_IneligibleExtractorRefusal_IsValidJsonWithReasonNote()
+    {
+        // The CLI gate's refusal (refresh --full --json with an outdated extractor) must still emit valid JSON.
+        var result = new WorkspaceActionResult(
+            Operation: "full", Scanned: false, Swapped: false, Revision: 1,
+            Note: "extractor 2.1.3 is older than the index artifact 2.3.0; this instance serves reads only. " +
+                  "Run scripts/restore-julie-extract.sh (or .ps1) or upgrade miller.",
+            WorkspaceId: "ws-123", Root: "/repo", Status: "ineligible_extractor", IndexFresh: false);
+
+        using var doc = JsonDocument.Parse(WorkspaceRender.Action(result, json: true));
+        var root = doc.RootElement;
+        Assert.Equal("ineligible_extractor", root.GetProperty("status").GetString());
+        Assert.False(root.GetProperty("scanned").GetBoolean());
+        Assert.Contains("older", root.GetProperty("note").GetString());
     }
 
     [Fact]

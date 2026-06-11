@@ -186,6 +186,13 @@ public sealed class IndexerService : BackgroundService
     internal LeadershipVerdict? EligibilityVerdict { get; private set; }
 
     /// <summary>
+    /// This instance's probed bundled-extractor version, surfaced for status/health rendering. Reads the lazy
+    /// WITHOUT forcing it (null until the claim loop's first eligibility evaluation) so a tool call can never
+    /// trigger the subprocess probe itself.
+    /// </summary>
+    internal string? OwnExtractorVersion => _ownExtractorVersion.IsValueCreated ? _ownExtractorVersion.Value : null;
+
+    /// <summary>
     /// Whether the coalescing queue currently holds no pending events — the second half of <c>index_fresh</c>
     /// (decision-8). A non-leader instance has no watcher/queue, so it is vacuously empty (true); a leader
     /// reports its live queue count. Read by <see cref="IndexFreshProbe"/>.

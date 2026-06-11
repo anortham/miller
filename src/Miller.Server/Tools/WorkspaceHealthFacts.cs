@@ -18,10 +18,37 @@ public sealed record HealthWarning(string Code, string Severity, string Message)
 /// The indexer-leader view for health: who recorded itself as leader (<see cref="Identity"/>, null when no
 /// identity file exists — e.g. an older build leads, or no leader runs) and whether that pid is alive right now
 /// (<see cref="Alive"/>, null when there is no identity to probe). Whether THIS process leads, and its version,
-/// already travel on <see cref="WorkspaceFacts"/>.
+/// already travel on <see cref="WorkspaceFacts"/>. The additive version-aware-leadership fields (D6) are null
+/// when the caller could not gather them (older paths, one-shot CLI without a probe):
+/// <see cref="OwnExtractorVersion"/> is THIS process's bundled <c>julie-extract</c> version,
+/// <see cref="ArtifactExtractorVersion"/> is the artifact's recorded <c>binary_version</c>, and
+/// <see cref="OwnVerdict"/> is this process's <see cref="LeadershipVerdict"/> (the leader's extractor version
+/// travels on <see cref="Identity"/>).
 /// </summary>
-public sealed record LeaderHealthFacts(LeaderIdentity? Identity, bool? Alive)
+public sealed record LeaderHealthFacts(
+    LeaderIdentity? Identity,
+    bool? Alive,
+    string? OwnExtractorVersion = null,
+    string? ArtifactExtractorVersion = null,
+    LeadershipVerdict? OwnVerdict = null)
 {
+    /// <summary>
+    /// True iff both versions carry a parseable <c>X.Y.Z</c> token and <paramref name="version"/> is strictly
+    /// older than <paramref name="other"/> (shared comparison: <see cref="LeadershipEligibility.CompareVersions"/>).
+    /// An unparseable version can never prove a downgrade, so it reads as "not older".
+    /// </summary>
+    internal static bool IsExtractorOlder(string version, string other)
+    {
+        try
+        {
+            return LeadershipEligibility.CompareVersions(version, other) < 0;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
     /// <summary>Read the recorded identity under <paramref name="millerDir"/> and probe its pid's liveness.</summary>
     public static LeaderHealthFacts Read(string millerDir) => Read(millerDir, probe: null);
 
@@ -151,6 +178,22 @@ public sealed record WorkspaceHealthFacts(
         if (leader is null || statusFacts.IsLeader)
             return;
 
+        // D6 frozen-index diagnosis: THIS process may never index (ineligible verdict) AND nobody else does
+        // either (no recorded leader, or a dead one) — the index is stale-but-correct until someone eligible
+        // leads. Surfaced FIRST because it carries the remedy.
+        if (leader.OwnVerdict is { Eligible: false } ownVerdict &&
+            (leader.Identity is null || leader.Alive == false))
+        {
+            warnings.Add(new HealthWarning(
+                "index_frozen_extractor_outdated",
+                "degraded",
+                $"no eligible indexer can lead this workspace ({ownVerdict.Reason}) — the index is frozen until " +
+                "a current extractor leads"));
+            recommended.Add(
+                "upgrade miller or restore the pinned extractor (scripts/restore-julie-extract); " +
+                "MILLER_ALLOW_EXTRACTOR_DOWNGRADE=1 only for intentional downgrades");
+        }
+
         if (leader.Identity is null)
         {
             warnings.Add(new HealthWarning(
@@ -169,6 +212,20 @@ public sealed record WorkspaceHealthFacts(
                 $"indexer leader pid {leader.Identity.Pid} is not running — the index will not converge until a live leader takes over"));
             recommended.Add("restart a Miller server (or run workspace refresh) so a live leader resumes indexing");
             return;
+        }
+
+        // D6 outdated-LIVE-leader diagnosis: the leading process bundles an extractor strictly older than the
+        // one that built the artifact — it holds the lock but can never rebuild without regressing the data.
+        if (leader.Identity.ExtractorVersion is { } leaderExtractor &&
+            leader.ArtifactExtractorVersion is { } artifactExtractor &&
+            LeaderHealthFacts.IsExtractorOlder(leaderExtractor, artifactExtractor))
+        {
+            warnings.Add(new HealthWarning(
+                "leader_extractor_older_than_artifact",
+                "usable_with_warnings",
+                $"indexer leader pid {leader.Identity.Pid} bundles extractor {leaderExtractor}, older than the " +
+                $"index artifact's {artifactExtractor} — it cannot rebuild this index without regressing it"));
+            recommended.Add("upgrade or restart the leading Miller so a current extractor owns indexing");
         }
 
         if (!string.IsNullOrWhiteSpace(statusFacts.ServerVersion) &&
