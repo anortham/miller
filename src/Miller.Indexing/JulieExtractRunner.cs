@@ -138,6 +138,48 @@ public sealed class JulieExtractRunner
     }
 
     /// <summary>
+    /// Build the argv for <c>languages</c>: <c>languages --json</c>. A capability snapshot — no DB, no root,
+    /// no flock; safe to run anywhere. Consumed by the watcher's supported-extension gate.
+    /// </summary>
+    public static IReadOnlyList<string> BuildLanguagesArgs() => new[] { "languages", "--json" };
+
+    /// <summary>
+    /// Pure parse of the <c>languages --json</c> capability snapshot into the set of supported file
+    /// extensions (<c>languages.languages[].extensions[]</c>), normalized to lowercase without a leading dot,
+    /// under an <see cref="StringComparer.OrdinalIgnoreCase"/> comparer. Derives ONLY from the JSON — no
+    /// hardcoded extension list anywhere on this path (the multi-language rule: julie owns what is indexable).
+    /// Returns an EMPTY set when the shape is missing; throws only on syntactically invalid JSON.
+    /// </summary>
+    /// <exception cref="JsonException">The text is not valid JSON.</exception>
+    public static IReadOnlySet<string> ParseSupportedExtensions(string json)
+    {
+        ArgumentNullException.ThrowIfNull(json);
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using var doc = JsonDocument.Parse(json);
+        if (doc.RootElement.ValueKind == JsonValueKind.Object
+            && doc.RootElement.TryGetProperty("languages", out var wrapper)
+            && wrapper.ValueKind == JsonValueKind.Object
+            && wrapper.TryGetProperty("languages", out var languages)
+            && languages.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var language in languages.EnumerateArray())
+            {
+                if (language.ValueKind != JsonValueKind.Object
+                    || !language.TryGetProperty("extensions", out var extensions)
+                    || extensions.ValueKind != JsonValueKind.Array)
+                    continue;
+                foreach (var extension in extensions.EnumerateArray())
+                {
+                    if (extension.ValueKind == JsonValueKind.String
+                        && extension.GetString() is { Length: > 0 } value)
+                        set.Add(value.TrimStart('.').ToLowerInvariant());
+                }
+            }
+        }
+        return set;
+    }
+
+    /// <summary>
     /// Build the argv for a single-file <c>update</c>:
     /// <c>update --root &lt;absRoot&gt; --db &lt;absDb&gt; --file &lt;absFile&gt; --strict-schema --json</c>. All
     /// three paths must be CANONICAL (absolute + symlink-resolved — see <see cref="PathCanonicalizer"/>) so
@@ -262,6 +304,14 @@ public sealed class JulieExtractRunner
         if (!string.IsNullOrEmpty(dbDir))
             Directory.CreateDirectory(dbDir); // no mkdir in julie-extract's path; the .db itself may be absent (fresh)
 
+        // Consumer-side index hygiene: when the root has NO .julieignore, seed one (baseline noise patterns +
+        // auto-detected vendor dirs) BEFORE the scan so julie-extract's own ignore handling — it reads
+        // .gitignore/.julieignore from the root itself; Miller passes no --ignore-file — applies it on this
+        // very scan. Scan is the one chokepoint every indexing path funnels through (server bootstrap, leader
+        // startup/refresh, MCP `workspace open` prime, CLI `workspace open` via the cross-workspace refresh),
+        // so CLI and server both get it. Best-effort and never-overwrite (see JulieIgnoreSeeder).
+        JulieIgnoreSeeder.EnsureSeeded(absRoot);
+
         return Run(BuildScanArgs(absDb, absRoot, force));
     }
 
@@ -313,6 +363,65 @@ public sealed class JulieExtractRunner
         {
             // A failed exec / unreadable stream / unsupported platform: the binary cannot self-report. Diagnostic
             // only — degrade to "unknown" (null) rather than disturb startup; the schema/contract gates still fire.
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Best-effort probe of the bundled binary's supported extension set (<c>languages --json</c>, parsed via
+    /// <see cref="ParseSupportedExtensions"/>). DIAGNOSTIC/HYGIENE ONLY — consumed by the watcher's
+    /// supported-extension gate, which must FAIL SOFT: any failure (a wrong-arch binary, a hang, an
+    /// unrecognized JSON shape, an empty catalog) returns null so the caller gates NOTHING, exactly the
+    /// pre-gate behavior. Never throws. Bounded + killed like <see cref="Run"/>; the snapshot is ~50KB so the
+    /// pipes are drained asynchronously to avoid the pipe-buffer deadlock.
+    /// </summary>
+    public IReadOnlySet<string>? QuerySupportedExtensions()
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = _binaryPath,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            foreach (var arg in BuildLanguagesArgs())
+                psi.ArgumentList.Add(arg);
+
+            using var process = new Process { StartInfo = psi };
+            var stdout = new StringBuilder();
+            process.OutputDataReceived += (_, e) => { if (e.Data is not null) stdout.AppendLine(e.Data); };
+            process.ErrorDataReceived += (_, e) => { };
+
+            if (!process.Start())
+                return null;
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+
+            if (!process.WaitForExit(30_000))
+            {
+                try { process.Kill(entireProcessTree: true); }
+                catch (InvalidOperationException) { /* already exited between the wait and the kill */ }
+                return null;
+            }
+            process.WaitForExit(); // drain the async readers (same final-buffer contract as Run)
+
+            if (process.ExitCode != 0)
+                return null;
+
+            IReadOnlySet<string> extensions = ParseSupportedExtensions(stdout.ToString());
+            // An empty catalog would make the gate drop EVERYTHING — treat it as "no usable set" instead.
+            return extensions.Count == 0 ? null : extensions;
+        }
+        catch (Exception ex) when (
+            ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException
+               or PlatformNotSupportedException or ObjectDisposedException or NotSupportedException
+               or JsonException)
+        {
+            // A failed exec / unreadable stream / malformed snapshot: gate nothing rather than disturb the
+            // watcher — over-feeding julie remains harmless to the index (verified-fact 2).
             return null;
         }
     }

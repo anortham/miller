@@ -4,13 +4,17 @@ using Xunit;
 namespace Miller.Tests.Server;
 
 /// <summary>
-/// Pins the watcher's path filter (m3-design §Components/3): it is LANGUAGE-AGNOSTIC — it never whitelists
+/// Pins the watcher's path filter (m3-design §Components/3): it is LANGUAGE-AGNOSTIC — it never hand-picks
 /// source extensions (the multi-language rule: a feature scopes to every capable language, and julie decides
 /// what is indexable, not a hand-picked extension list). It only skips noise directories julie itself ignores:
-/// version-control internals (<c>.git</c>), the Miller-owned <c>.miller</c> sidecar (its own DB churn must not
-/// feed back as events), and common build output. Any other path — a <c>.rs</c>, <c>.vue</c>, <c>.zig</c>, a
-/// file with NO extension, a Dockerfile — is accepted, because julie's <c>update</c> no-ops harmlessly on a
-/// file it does not index (verified-fact 2) and an extension whitelist would silently drop a supported language.
+/// version-control internals (<c>.git</c>/<c>.hg</c>/<c>.svn</c>), the Miller-owned <c>.miller</c> sidecar
+/// (its own DB churn must not feed back as events), julie's <c>.julie</c> home, tool caches, and common build
+/// output. WITHOUT a supported-extension set, any other path — a <c>.rs</c>, <c>.vue</c>, <c>.zig</c>, a file
+/// with NO extension, a Dockerfile — is accepted, because julie's <c>update</c> no-ops harmlessly on a file it
+/// does not index (verified-fact 2) and a hardcoded whitelist would silently drop a supported language. WITH
+/// the set (julie's OWN claimed catalog from <c>languages --json</c>, injected here — fetching is the edge),
+/// events for extensions julie cannot parse are dropped before they spawn a subprocess; a null/empty set
+/// gates nothing (fail soft).
 /// </summary>
 public sealed class WatchPathFilterTests
 {
@@ -60,6 +64,13 @@ public sealed class WatchPathFilterTests
     [InlineData("/repo/target/debug/app")]      // rust build output
     [InlineData("/repo/bin/Debug/net10.0/x.dll")]
     [InlineData("/repo/obj/project.assets.json")]
+    // Parity with julie-extract's hard-excluded dirs: the extractor refuses these regardless of ignore
+    // files, so the watcher must not spawn subprocesses for them either.
+    [InlineData("/repo/.hg/store/data/x.i")]
+    [InlineData("/repo/.svn/pristine/ab/abc.svn-base")]
+    [InlineData("/repo/.cache/build/some.o")]
+    [InlineData("/repo/.julie/indexes/workspace/symbols.db")]
+    [InlineData("/repo/.memories/2026-06-11-checkpoint.md")]
     public void Skips_NoiseDirectories(string path)
     {
         Assert.False(WatchPathFilter.ShouldProcess(Root, path));
@@ -73,6 +84,68 @@ public sealed class WatchPathFilterTests
         Assert.True(WatchPathFilter.ShouldProcess(Root, "/repo/.github/workflows/ci.yml"));
         Assert.True(WatchPathFilter.ShouldProcess(Root, "/repo/src/object.cs"));
         Assert.True(WatchPathFilter.ShouldProcess(Root, "/repo/src/binformat.cs"));
+        Assert.True(WatchPathFilter.ShouldProcess(Root, "/repo/src/caches.cs"));      // not ".cache"
+        Assert.True(WatchPathFilter.ShouldProcess(Root, "/repo/memories/notes.md"));  // not ".memories"
+    }
+
+    // ---------- supported-extension gate (julie's claimed set, injected — pure, no process) ----------
+
+    // A miniature stand-in for the `languages --json` catalog: lowercase, dot-less, case-insensitive —
+    // exactly what JulieExtractRunner.ParseSupportedExtensions produces.
+    private static readonly IReadOnlySet<string> Extensions =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "cs", "rs", "vue", "md" };
+
+    [Theory]
+    [InlineData("/repo/src/Main.cs")]
+    [InlineData("/repo/core/math.rs")]
+    [InlineData("/repo/ui/App.vue")]
+    [InlineData("/repo/docs/readme.md")]
+    [InlineData("/repo/src/Main.CS")]           // extension case never matters
+    [InlineData("/repo/src/archive.tar.md")]    // last dot wins
+    public void ExtensionGate_AcceptsClaimedExtensions(string path)
+    {
+        Assert.True(WatchPathFilter.ShouldProcess(Root, path, Extensions));
+    }
+
+    [Theory]
+    [InlineData("/repo/daemon.log")]            // julie parses no logs — zero rows, wasted spawn
+    [InlineData("/repo/assets/logo.png")]
+    [InlineData("/repo/pkg/yarn.lock")]
+    [InlineData("/repo/Dockerfile")]            // extensionless: julie's catalog claims extensions only
+    [InlineData("/repo/Makefile")]
+    [InlineData("/repo/.env")]                  // dotfile = no extension (Rust Path::extension semantics)
+    [InlineData("/repo/src/trailingdot.")]
+    public void ExtensionGate_DropsUnclaimedAndExtensionless(string path)
+    {
+        Assert.False(WatchPathFilter.ShouldProcess(Root, path, Extensions));
+    }
+
+    [Theory]
+    // Fail soft: when the languages probe yielded nothing usable (null) — or, defensively, an EMPTY set
+    // that would otherwise drop everything — the gate must gate NOTHING (the historical behavior).
+    [InlineData("/repo/daemon.log")]
+    [InlineData("/repo/Dockerfile")]
+    [InlineData("/repo/k/main.zig")]
+    public void ExtensionGate_NullOrEmptySet_GatesNothing(string path)
+    {
+        Assert.True(WatchPathFilter.ShouldProcess(Root, path, null));
+        Assert.True(WatchPathFilter.ShouldProcess(Root, path, new HashSet<string>()));
+    }
+
+    [Fact]
+    public void ExtensionGate_IgnorePolicyFiles_StillForceRescan_EvenThoughGateDropsThem()
+    {
+        using var temp = new TempDir();
+        string gitignore = System.IO.Path.Combine(temp.Path, ".gitignore");
+        string julieignore = System.IO.Path.Combine(temp.Path, ".julieignore");
+
+        // The gate drops them from per-file extract dispatch (no supported extension)…
+        Assert.False(WatchPathFilter.ShouldProcess(temp.Path, gitignore, Extensions));
+        Assert.False(WatchPathFilter.ShouldProcess(temp.Path, julieignore, Extensions));
+
+        // …but the watcher consults ShouldForceRescan FIRST, and that path is untouched by the gate.
+        Assert.True(WatchPathFilter.ShouldForceRescan(temp.Path, gitignore));
+        Assert.True(WatchPathFilter.ShouldForceRescan(temp.Path, julieignore));
     }
 
     [Fact]

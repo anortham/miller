@@ -53,6 +53,12 @@ public sealed class IndexerService : BackgroundService
     private readonly Func<string, LeaderIdentity?> _readLeaderIdentity;
     private readonly Func<LeaderIdentity, bool> _leaderAliveProbe;
     private readonly Func<DateTimeOffset> _clock;
+    private readonly Func<WorkspaceContext, IReadOnlySet<string>?> _fetchSupportedExtensions;
+
+    // julie's claimed extension set for the watcher gate (null = gate nothing, the fail-soft default).
+    // Fetched ONCE per leadership claim, BEFORE the watchers attach, so every event handler observes the
+    // final value (the fetch itself is process-cached in SupportedExtensionCatalog).
+    private IReadOnlySet<string>? _supportedExtensions;
     private readonly YieldCooldown _cooldown;
 
     // Requester-side dedup: the one outstanding yield request (toward which leader, sent when). Re-enqueue only
@@ -113,7 +119,12 @@ public sealed class IndexerService : BackgroundService
             contentSidecar,
             attachFileWatchers: true,
             drainFullScanRequests: LeaderScanRequestQueue.DrainFullScanRequests,
-            drainFileConvergeRequests: LeaderScanRequestQueue.DrainFileConvergeRequests)
+            drainFileConvergeRequests: LeaderScanRequestQueue.DrainFileConvergeRequests,
+            // The watcher's extension gate: julie's own claimed set, fetched once per process, null on any
+            // failure (gate nothing). Production-only — the internal test ctor defaults to no gate so no
+            // fast test can ever spawn the languages probe.
+            fetchSupportedExtensions: static workspace =>
+                SupportedExtensionCatalog.ForToolsRoot(workspace.ToolsRoot))
     {
     }
 
@@ -137,7 +148,8 @@ public sealed class IndexerService : BackgroundService
         Func<string, LeaderIdentity?>? readLeaderIdentity = null,
         Func<LeaderIdentity, bool>? leaderAliveProbe = null,
         Func<DateTimeOffset>? clock = null,
-        Func<int, bool>? processAliveProbe = null)
+        Func<int, bool>? processAliveProbe = null,
+        Func<WorkspaceContext, IReadOnlySet<string>?>? fetchSupportedExtensions = null)
     {
         ArgumentNullException.ThrowIfNull(bootstrap);
         ArgumentNullException.ThrowIfNull(logger);
@@ -172,6 +184,9 @@ public sealed class IndexerService : BackgroundService
         _leaderAliveProbe = leaderAliveProbe ?? (static identity => LeaderIdentityFile.IsProcessAlive(identity));
         _clock = clock ?? (static () => DateTimeOffset.UtcNow);
         _cooldown = new YieldCooldown(_clock, processAliveProbe ?? LeaderIdentityFile.IsProcessAlive);
+        // Default = NO gate (null set). Unit tests reach this ctor; the gate's process probe must never run
+        // in the fast suite, so only the public production ctor binds the real catalog fetch.
+        _fetchSupportedExtensions = fetchSupportedExtensions ?? (static _ => null);
     }
 
     /// <summary>True once this instance holds the writer lock and is running the watcher. For diagnostics/tests.</summary>
@@ -302,6 +317,13 @@ public sealed class IndexerService : BackgroundService
         _core = new IndexerCore(
             new WatchEventQueue(), ops, File.Exists,
             _loggerFactory.CreateLogger<IndexerCore>());
+
+        // Resolve julie's claimed extension set BEFORE the watchers attach so every event handler sees the
+        // final value. Null (probe failed / binary missing) gates nothing — the historical behavior.
+        _supportedExtensions = _fetchSupportedExtensions(workspace);
+        if (_supportedExtensions is { Count: > 0 } gate)
+            _logger.LogInformation(
+                "Watcher extension gate active: {Count} extensions claimed by julie-extract.", gate.Count);
 
         if (_attachFileWatchers)
             AttachWatchers(canonicalRoot);
@@ -970,6 +992,13 @@ public sealed class IndexerService : BackgroundService
         HandleChanged(changeType, fullPath);
 
     /// <summary>
+    /// Test seam: install a supported-extension set for the watcher gate exactly as the leader path does
+    /// after winning the lease, without spawning the live <c>languages --json</c> probe. Not used in production.
+    /// </summary>
+    internal void SetSupportedExtensionsForTest(IReadOnlySet<string>? extensions) =>
+        _supportedExtensions = extensions;
+
+    /// <summary>
     /// Test seam: run ONE debounce drain exactly as the production loop does — under <see cref="_opsGate"/>, the
     /// same lock the on-demand <see cref="TryScanAsLeader"/> / <see cref="TryReindexAsLeader"/> take — so a test
     /// can drive a drain concurrently with a Try* call and assert they never run two extracts at once (the M3
@@ -1179,7 +1208,7 @@ public sealed class IndexerService : BackgroundService
             _core.SignalRescan();
             return;
         }
-        if (!WatchPathFilter.ShouldProcess(root, fullPath))
+        if (!WatchPathFilter.ShouldProcess(root, fullPath, _supportedExtensions))
             return;
         // Drop directory events: julie operates on files; a dir create/delete surfaces as per-file events too.
         if (Directory.Exists(fullPath))
@@ -1199,8 +1228,8 @@ public sealed class IndexerService : BackgroundService
             return;
         }
 
-        bool oldOk = WatchPathFilter.ShouldProcess(root, e.OldFullPath);
-        bool newOk = WatchPathFilter.ShouldProcess(root, e.FullPath);
+        bool oldOk = WatchPathFilter.ShouldProcess(root, e.OldFullPath, _supportedExtensions);
+        bool newOk = WatchPathFilter.ShouldProcess(root, e.FullPath, _supportedExtensions);
 
         // A rename can cross the filter boundary. Renamed INTO a watched area = a create; renamed OUT = a delete;
         // both watched = a true rename; neither = ignore.
