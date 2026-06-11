@@ -640,12 +640,16 @@ public sealed class WorkspaceTool
             return (WorkspaceRender.Remove(notFound, json), 0, TelemetryOutcome.Empty);
         }
 
-        using IDisposable? lease = _acquireWriterLock(millerDir);
+        IDisposable? lease = _acquireWriterLock(millerDir);
         if (lease is null)
         {
             var refused = WorkspaceRemoveResult.RefusedInUse(millerDir);
             return (WorkspaceRender.Remove(refused, json), 0, TelemetryOutcome.Empty);
         }
+        // Acquiring the lock proved no other instance is indexing here; release OUR handle BEFORE deleting so
+        // Windows can remove the indexer.lock file inside .miller (a FileShare.None handle blocks deleting the
+        // open file; POSIX unlinks it regardless). The lock is a liveness probe, not a delete latch.
+        lease.Dispose();
 
         Directory.Delete(millerDir, recursive: true);
         _logger.LogInformation("workspace remove: deleted index dir {Dir}.", millerDir);
@@ -672,12 +676,16 @@ public sealed class WorkspaceTool
             return (WorkspaceRender.Remove(notFound, json), 0, TelemetryOutcome.Empty);
         }
 
-        using IDisposable? lease = _acquireWriterLock(millerDir);
+        IDisposable? lease = _acquireWriterLock(millerDir);
         if (lease is null)
         {
             var refused = WorkspaceRemoveResult.RefusedInUse(millerDir, row.WorkspaceId, row.CanonicalRoot);
             return (WorkspaceRender.Remove(refused, json), 0, TelemetryOutcome.Empty);
         }
+        // Release OUR writer-lock handle before deleting so Windows can remove the indexer.lock file inside
+        // .miller (FileShare.None blocks deleting an open file on Windows; POSIX unlinks it). See the path-only
+        // Remove branch for the full rationale — the lock is a liveness probe, not a delete latch.
+        lease.Dispose();
 
         Directory.Delete(millerDir, recursive: true);
         _registry.Remove(row.WorkspaceId);
