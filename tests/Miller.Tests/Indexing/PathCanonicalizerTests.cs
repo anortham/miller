@@ -249,6 +249,43 @@ public sealed class PathCanonicalizerTests
         Assert.Throws<ArgumentNullException>(() => PathCanonicalizer.StripWindowsVerbatimPrefix(null!));
     }
 
+    [Theory]
+    [InlineData(@"C:\source\AccessIQ", @"\\?\C:\source\AccessIQ")]          // drive path -> Rust-canonicalize spelling
+    [InlineData(@"D:\a\b", @"\\?\D:\a\b")]                                  // any drive letter
+    [InlineData(@"\\server\share\repo", @"\\?\UNC\server\share\repo")]      // plain UNC -> \\?\UNC\ form
+    [InlineData(@"\\?\C:\already", @"\\?\C:\already")]                      // already verbatim: idempotent
+    [InlineData(@"\\?\UNC\server\share", @"\\?\UNC\server\share")]          // already UNC verbatim: idempotent
+    [InlineData(@"\\?\Volume{abc}\repo", @"\\?\Volume{abc}\repo")]          // device form already verbatim: idempotent
+    [InlineData("/work/repo", "/work/repo")]                               // POSIX: no drive/UNC to prefix -> no-op
+    [InlineData(@"C:", @"C:")]                                             // drive-relative (no separator): no safe spelling
+    [InlineData(@"relative\path", @"relative\path")]                       // relative: no-op
+    [InlineData("", "")]                                                    // empty: no-op
+    public void AddWindowsVerbatimPrefix_RestoresRustCanonicalizeSpelling(string input, string expected)
+    {
+        // On Windows, julie-extract canonicalizes --root (Rust std::fs::canonicalize adds the \\?\ verbatim prefix)
+        // but only LEXICALLY normalizes a non-existent --file, so a stripped file path fails julie's outside-root
+        // check on a deleted file (file_outside_root). Miller re-applies the prefix before passing julie a --file.
+        Assert.Equal(expected, PathCanonicalizer.AddWindowsVerbatimPrefix(input));
+    }
+
+    [Theory]
+    [InlineData(@"C:\source\AccessIQ")]
+    [InlineData(@"D:\a\b")]
+    [InlineData(@"\\server\share\repo")]
+    public void AddWindowsVerbatimPrefix_IsTheInverseOfStrip_ForCleanDriveAndUncForms(string clean)
+    {
+        // Add then Strip round-trips back to the clean spelling — the two are exact inverses for the safe forms.
+        string verbatim = PathCanonicalizer.AddWindowsVerbatimPrefix(clean);
+        Assert.StartsWith(@"\\?\", verbatim);
+        Assert.Equal(clean, PathCanonicalizer.StripWindowsVerbatimPrefix(verbatim));
+    }
+
+    [Fact]
+    public void AddWindowsVerbatimPrefix_Null_Throws()
+    {
+        Assert.Throws<ArgumentNullException>(() => PathCanonicalizer.AddWindowsVerbatimPrefix(null!));
+    }
+
     private static void SkipIfNoSymlinks()
     {
         if (OperatingSystem.IsWindows())

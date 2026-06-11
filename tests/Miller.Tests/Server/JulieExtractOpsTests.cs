@@ -82,14 +82,20 @@ public sealed class JulieExtractOpsTests
             var (ops, calls) = NewOps(canonicalReal, Path.Combine(canonicalReal, ".miller", "symbols.db"));
 
             // The file is already gone (a delete event). Canonicalization must still target a path INSIDE the
-            // resolved root (the not-yet-existing tail is appended lexically), never throw.
+            // resolved root (the not-yet-existing tail is appended lexically), never throw. On Windows the --file
+            // must carry the \\?\ verbatim prefix: julie canonicalizes --root (Rust adds the prefix) but only
+            // LEXICALLY normalizes a non-existent --file, so a stripped file fails julie's outside-root check
+            // (file_outside_root) on a delete. Miller re-applies the prefix so the containment check is consistent.
             ops.Delete("removed/Gone.cs");
 
+            string expectedFile =
+                PathCanonicalizer.AddWindowsVerbatimPrefix(Path.Combine(canonicalReal, "removed", "Gone.cs"));
             var rec = Assert.Single(calls);
             Assert.Equal("delete", rec.Op);
-            Assert.Equal(canonicalReal, rec.Root);
-            Assert.Equal(Path.Combine(canonicalReal, "removed", "Gone.cs"), rec.File);
-            Assert.StartsWith(canonicalReal, rec.File); // inside the canonical root (no outside-root trap)
+            Assert.Equal(canonicalReal, rec.Root); // root spelling is julie's call (it canonicalizes it); we leave it clean
+            Assert.Equal(expectedFile, rec.File);
+            // inside the canonical root (no outside-root trap), in the prefix-consistent spelling julie compares.
+            Assert.StartsWith(PathCanonicalizer.AddWindowsVerbatimPrefix(canonicalReal), rec.File);
         }
         finally
         {

@@ -83,7 +83,13 @@ public sealed class JulieExtractOps : IExtractOps
     public ExtractReport Delete(string path)
     {
         ArgumentNullException.ThrowIfNull(path);
-        string canonicalFile = PathCanonicalizer.CanonicalizeFile(_canonicalRoot, path);
+        // The deleted file no longer exists, so julie can only LEXICALLY normalize --file while it canonicalizes
+        // --root. On Windows that drops the \\?\ verbatim prefix julie's own canonicalize adds to the root, so a
+        // clean file path trips julie's outside-root check (file_outside_root) and the delete is silently dropped
+        // until a full scan. Re-apply the prefix (no-op on POSIX / for an already-verbatim path) so the file is
+        // seen as inside the root. update() does NOT need this — its file still exists, so julie canonicalizes it.
+        string canonicalFile = PathCanonicalizer.AddWindowsVerbatimPrefix(
+            PathCanonicalizer.CanonicalizeFile(_canonicalRoot, path));
         return _delete(_canonicalRoot, _db, canonicalFile);
     }
 

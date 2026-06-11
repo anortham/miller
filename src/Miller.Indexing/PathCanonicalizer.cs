@@ -72,6 +72,33 @@ public static class PathCanonicalizer
     }
 
     /// <summary>
+    /// Re-apply the Windows extended-length ("verbatim") <c>\\?\</c> prefix to a clean drive or UNC path — the exact
+    /// inverse of <see cref="StripWindowsVerbatimPrefix"/>. This is the spelling julie-extract's own
+    /// <c>std::fs::canonicalize</c> produces for <c>--root</c>: on a single-file <c>delete</c> julie canonicalizes
+    /// the (existing) root but only LEXICALLY normalizes the now-deleted <c>--file</c>, so a clean (stripped) file
+    /// path is NOT seen as inside the <c>\\?\</c>-prefixed root and the op fails with <c>file_outside_root</c> (the
+    /// Windows analogue of the macOS verified-fact-4 trap; an existing-file <c>update</c> is unaffected because julie
+    /// canonicalizes the file too). Miller therefore passes julie's file ops a verbatim <c>--file</c>. A pure string
+    /// transform — NO filesystem access — and a no-op on POSIX paths, relative paths, the drive-relative <c>C:</c>
+    /// form (no safe spelling), and an already-verbatim path (idempotent, incl. <c>\\?\UNC\</c> and device forms).
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="path"/> is null.</exception>
+    public static string AddWindowsVerbatimPrefix(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+
+        const string drivePrefix = @"\\?\";    // C:\dir           -> \\?\C:\dir
+        const string uncVerbatim = @"\\?\UNC\"; // \\server\share   -> \\?\UNC\server\share
+        if (path.StartsWith(drivePrefix, StringComparison.Ordinal))
+            return path; // already verbatim (incl. \\?\UNC\ and \\?\Volume{..}): idempotent
+        if (path.StartsWith(@"\\", StringComparison.Ordinal))
+            return uncVerbatim + path.Substring(2);
+        if (IsDriveVerbatimPath(path, 0))
+            return drivePrefix + path;
+        return path; // POSIX, relative, or drive-relative "C:" (no separator): nothing safe to prefix
+    }
+
+    /// <summary>
     /// Canonicalize a per-file <c>--file</c> argument under an already-canonical <paramref name="canonicalRoot"/>.
     /// A relative <paramref name="path"/> composes under the canonical root (NOT the process CWD); an absolute
     /// path is taken as given. Every existing component's symlinks are resolved; a non-existent tail (a deleted
