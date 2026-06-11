@@ -42,6 +42,27 @@ public sealed class IndexerService : BackgroundService
     private readonly Func<string, FullScanDrainResult> _drainFullScanRequests;
     private readonly Func<string, FileConvergeDrainResult> _drainFileConvergeRequests;
 
+    // --- version-aware leadership (D2–D4): every input is an injected func so the orchestration is pure-testable.
+    // Decisions live in LeadershipEligibility / YieldCooldown; this class only wires them into the claim loop,
+    // the debounce tick, and the reader retry tick.
+    private readonly Func<string, YieldDrainResult> _drainYieldRequests;
+    private readonly Lazy<string?> _ownExtractorVersion; // probed ONCE (the binary cannot change underneath us)
+    private readonly bool _allowExtractorDowngrade;
+    private readonly Func<string?, string?> _readArtifactExtractorVersion;
+    private readonly Action<string, string, int, string> _requestYield;
+    private readonly Func<string, LeaderIdentity?> _readLeaderIdentity;
+    private readonly Func<LeaderIdentity, bool> _leaderAliveProbe;
+    private readonly Func<DateTimeOffset> _clock;
+    private readonly YieldCooldown _cooldown;
+
+    // Requester-side dedup: the one outstanding yield request (toward which leader, sent when). Re-enqueue only
+    // after the request TTL elapses or the observed leader identity changes (D4 "at most one outstanding").
+    private (int LeaderPid, DateTimeOffset LeaderStartedAtUtc, DateTimeOffset SentAtUtc)? _outstandingYield;
+
+    // M8-style log throttle for the claim gate: the verdict reason is Information ONCE per transition, then
+    // Debug — an ineligible instance retries every 5s forever and must not spam.
+    private string? _lastVerdictReasonLogged;
+
     // M4 log throttle: the first request that cannot be claimed warns (something is pinning a request file);
     // repeats on later ticks drop to Debug so a wedged file cannot spam a warning every 250ms.
     private bool _requestClaimSkipWarned;
@@ -107,7 +128,16 @@ public sealed class IndexerService : BackgroundService
         ContentCorpusSidecar? contentSidecar = null,
         bool attachFileWatchers = true,
         Func<string, FullScanDrainResult>? drainFullScanRequests = null,
-        Func<string, FileConvergeDrainResult>? drainFileConvergeRequests = null)
+        Func<string, FileConvergeDrainResult>? drainFileConvergeRequests = null,
+        Func<string, YieldDrainResult>? drainYieldRequests = null,
+        Func<string?>? ownExtractorVersion = null,
+        bool? allowExtractorDowngrade = null,
+        Func<string?, string?>? readArtifactExtractorVersion = null,
+        Action<string, string, int, string>? requestYield = null,
+        Func<string, LeaderIdentity?>? readLeaderIdentity = null,
+        Func<LeaderIdentity, bool>? leaderAliveProbe = null,
+        Func<DateTimeOffset>? clock = null,
+        Func<int, bool>? processAliveProbe = null)
     {
         ArgumentNullException.ThrowIfNull(bootstrap);
         ArgumentNullException.ThrowIfNull(logger);
@@ -129,10 +159,31 @@ public sealed class IndexerService : BackgroundService
         _sidecar = sidecar;
         _contentSidecar = contentSidecar ?? new ContentCorpusSidecar();
         _attachFileWatchers = attachFileWatchers;
+        _drainYieldRequests = drainYieldRequests ?? LeaderScanRequestQueue.DrainYieldRequests;
+        // Lazy so the production probe (which reads the bootstrap's workspace for ToolsRoot) runs inside
+        // ExecuteAsync, never in this constructor — the host constructs every hosted service before ANY
+        // bootstrap StartAsync runs (the load-bearing host-lifecycle rule).
+        _ownExtractorVersion = new Lazy<string?>(ownExtractorVersion ?? ProbeBundledExtractorVersion);
+        _allowExtractorDowngrade = allowExtractorDowngrade
+            ?? Environment.GetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE") == "1";
+        _readArtifactExtractorVersion = readArtifactExtractorVersion ?? ExtractBinaryVersionReader.TryRead;
+        _requestYield = requestYield ?? LeaderScanRequestQueue.RequestYield;
+        _readLeaderIdentity = readLeaderIdentity ?? LeaderIdentityFile.TryRead;
+        _leaderAliveProbe = leaderAliveProbe ?? (static identity => LeaderIdentityFile.IsProcessAlive(identity));
+        _clock = clock ?? (static () => DateTimeOffset.UtcNow);
+        _cooldown = new YieldCooldown(_clock, processAliveProbe ?? LeaderIdentityFile.IsProcessAlive);
     }
 
     /// <summary>True once this instance holds the writer lock and is running the watcher. For diagnostics/tests.</summary>
     public bool IsLeader => _lease is not null;
+
+    /// <summary>
+    /// The most recent D2 eligibility verdict the claim loop evaluated (null until the first evaluation).
+    /// Surfaced for status/health rendering: a permanent reader can say WHY it will never index
+    /// ("extractor 2.1.3 is older than the index artifact 2.3.0") instead of looking mysteriously idle.
+    /// Reference assignment is atomic; readers may observe it from other threads.
+    /// </summary>
+    internal LeadershipVerdict? EligibilityVerdict { get; private set; }
 
     /// <summary>
     /// Whether the coalescing queue currently holds no pending events — the second half of <c>index_fresh</c>
@@ -154,114 +205,12 @@ public sealed class IndexerService : BackgroundService
 
         try
         {
-            // --- leader election: poll until we win the lock (or are asked to stop) ---
-            // M8 §D4: log the transition into the reader role ONCE at Information (the meaningful state change),
-            // then each subsequent failed re-try at Debug ("still a reader") so the 5s failover poll does not spam
-            // Information forever. Becoming the leader below is the other transition, logged at Information.
-            bool announcedReader = false;
-            while (!stoppingToken.IsCancellationRequested && _lease is null)
+            // The outer loop exists for the D4 yield protocol: a leader that abdicates to a newer-extractor
+            // challenger falls back into the claim loop as a reader (under the anti-flap cooldown) instead of
+            // exiting. A normal shutdown returns out of the session.
+            while (await RunLeadershipSessionAsync(
+                workspace, canonicalRoot, canonicalDbPath, millerDir, stoppingToken).ConfigureAwait(false))
             {
-                _lease = _tryAcquireLeadership(millerDir);
-                if (_lease is null)
-                {
-                    if (!announcedReader)
-                    {
-                        _logger.LogInformation(
-                            "Not the indexer leader (another miller holds the lock); idling as a reader.");
-                        announcedReader = true;
-                    }
-                    else
-                    {
-                        _logger.LogDebug(
-                            "Still a reader (the writer lock is still held); will re-try in {RetrySeconds}s.",
-                            _leaderRetryInterval.TotalSeconds);
-                    }
-                    await Task.Delay(_leaderRetryInterval, stoppingToken).ConfigureAwait(false);
-                }
-            }
-
-            if (stoppingToken.IsCancellationRequested)
-                return;
-
-            // --- leader: build the dispatch core + attach the watchers ---
-            // Pass the CANONICAL db (verified-fact 4): the single-file update/delete ops require an
-            // already-canonical --db (the runner no longer GetFullPath-mangles it).
-            IExtractOps ops = _createOps(workspace, canonicalRoot, canonicalDbPath);
-            lock (_opsGate)
-                _ops = ops; // publish for M6 write-through (TryReindexAsLeader)
-            _core = new IndexerCore(
-                new WatchEventQueue(), ops, File.Exists,
-                _loggerFactory.CreateLogger<IndexerCore>());
-
-            if (_attachFileWatchers)
-                AttachWatchers(canonicalRoot);
-            // M8 §D2: this instance won the lease — flip the live log role to leader so every subsequent log line
-            // (human + jsonl) is tagged role=leader, distinguishing it from the reader instances sharing the logs
-            // directory. Readers leave the startup default (reader) untouched.
-            MillerRole.SetLeader();
-            // Record WHO leads (pid/version/path) for `workspace health`: other processes are readers whose
-            // freshness depends on this one, and in real deployments the leader can be an older plugin-cache
-            // build — make that diagnosable instead of mysterious. Best-effort: identity is advisory only.
-            try
-            {
-                LeaderIdentityFile.Write(millerDir, new LeaderIdentity(
-                    Environment.ProcessId, MillerVersion.Current, Environment.ProcessPath, DateTimeOffset.UtcNow));
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                // A failed write must not leave a crashed predecessor's leader.json as the visible truth: health
-                // would report a dead/mismatched leader while THIS healthy process leads. Clear it (best-effort).
-                LeaderIdentityFile.TryDelete(millerDir);
-                _logger.LogWarning(ex, "Could not record the leader identity; workspace health will report it as unknown.");
-            }
-            if (_attachFileWatchers)
-                _logger.LogInformation("Indexer leader: watching {Root} (recursive) + .git/HEAD.", canonicalRoot);
-
-            // Yield once so BackgroundService.StartAsync can return after the watcher is attached: existing DBs
-            // are available immediately as loaded_existing, while this leader reconciles missed downtime edits in
-            // the background before the first debounce tick.
-            await Task.Yield();
-            if (stoppingToken.IsCancellationRequested)
-                return;
-
-            RunStartupDeltaScan(workspace);
-
-            // --- debounce loop: drain on each tick (collects bursts into a single coalesced batch) ---
-            while (!stoppingToken.IsCancellationRequested)
-            {
-                await Task.Delay(DebounceInterval, stoppingToken).ConfigureAwait(false);
-
-                bool headChanged;
-                lock (_headGate)
-                {
-                    headChanged = _headChanged;
-                    _headChanged = false;
-                }
-
-                try
-                {
-                    TryProcessLeaderFullScanRequests(millerDir);
-                    TryProcessFileConvergeRequests(millerDir);
-
-                    // Hold _opsGate across the drain so the debounce-loop drain and the on-demand Try* scans
-                    // (TryScanAsLeader / TryReindexAsLeader) share ONE serialization: two julie `extract`
-                    // subprocesses must never run against the same .miller DB at once (the M3 single-writer
-                    // corruption guard, D3). DrainAndProcess additionally serializes the queue on IndexerCore's
-                    // own gate; the lock order is always _opsGate -> _core gate (the Try* methods never take the
-                    // core gate, and the watcher enqueue only takes the core gate), so there is no inversion.
-                    lock (_opsGate)
-                    {
-                        bool processed = _core.DrainAndProcess(headChanged, out bool usedWholeRepoScan);
-                        if (processed)
-                            TryConvergeSidecarToLatest(workspace.CanonicalExtractDbPath, fullRebuild: usedWholeRepoScan);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    // DrainAndProcess isolates per-op failures itself; a throw here is a bug in routing, not an
-                    // extract failure. Log and keep the loop alive — the watcher must not die on one bad tick.
-                    _logger.LogError(ex, "Indexer drain tick failed; continuing.");
-                }
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -288,6 +237,357 @@ public sealed class IndexerService : BackgroundService
             _lease?.Dispose();
             _lease = null;
         }
+    }
+
+    /// <summary>
+    /// One full leadership session: claim loop (reader until the lock is won) → leader setup → debounce loop.
+    /// Returns true when the leader ABDICATED to a newer-extractor challenger (the caller re-enters as a
+    /// reader); false on cancellation (normal shutdown).
+    /// </summary>
+    private async Task<bool> RunLeadershipSessionAsync(
+        WorkspaceContext workspace,
+        string canonicalRoot,
+        string canonicalDbPath,
+        string millerDir,
+        CancellationToken stoppingToken)
+    {
+        // --- leader election: poll until we win the lock (or are asked to stop) ---
+        // M8 §D4: log the transition into the reader role ONCE at Information (the meaningful state change),
+        // then each subsequent failed re-try at Debug ("still a reader") so the 5s failover poll does not spam
+        // Information forever. Becoming the leader below is the other transition, logged at Information.
+        bool announcedReader = false;
+        LeadershipVerdict? claimVerdict = null;
+        while (!stoppingToken.IsCancellationRequested && _lease is null)
+        {
+            if (TryClaimLeadershipOnce(millerDir, canonicalDbPath, out LeadershipVerdict verdict))
+            {
+                claimVerdict = verdict; // the verdict that gated THIS claim drives the D3 upgrade rescan below
+                break;
+            }
+
+            // Reader retry tick: if a LIVE leader bundles a strictly older extractor, ask it to yield (D4).
+            MaybeRequestYield(millerDir, workspace.WorkspaceId, verdict);
+            if (!announcedReader)
+            {
+                _logger.LogInformation(
+                    "Not the indexer leader (ineligible, cooling down, or another miller holds the lock); " +
+                    "idling as a reader.");
+                announcedReader = true;
+            }
+            else
+            {
+                _logger.LogDebug(
+                    "Still a reader; will re-try in {RetrySeconds}s.",
+                    _leaderRetryInterval.TotalSeconds);
+            }
+            await Task.Delay(_leaderRetryInterval, stoppingToken).ConfigureAwait(false);
+        }
+
+        if (stoppingToken.IsCancellationRequested)
+            return false;
+
+        // --- leader: build the dispatch core + attach the watchers ---
+        // Pass the CANONICAL db (verified-fact 4): the single-file update/delete ops require an
+        // already-canonical --db (the runner no longer GetFullPath-mangles it).
+        IExtractOps ops = _createOps(workspace, canonicalRoot, canonicalDbPath);
+        lock (_opsGate)
+            _ops = ops; // publish for M6 write-through (TryReindexAsLeader)
+        _core = new IndexerCore(
+            new WatchEventQueue(), ops, File.Exists,
+            _loggerFactory.CreateLogger<IndexerCore>());
+
+        if (_attachFileWatchers)
+            AttachWatchers(canonicalRoot);
+        // M8 §D2: this instance won the lease — flip the live log role to leader so every subsequent log line
+        // (human + jsonl) is tagged role=leader, distinguishing it from the reader instances sharing the logs
+        // directory. Readers leave the startup default (reader) untouched.
+        MillerRole.SetLeader();
+        // Record WHO leads (pid/version/path/extractor version) for `workspace health` and for the D4 yield
+        // protocol: readers compare their extractor against ExtractorVersion to decide whether to challenge.
+        // Best-effort: identity is advisory only.
+        try
+        {
+            LeaderIdentityFile.Write(millerDir, new LeaderIdentity(
+                Environment.ProcessId, MillerVersion.Current, Environment.ProcessPath, DateTimeOffset.UtcNow,
+                _ownExtractorVersion.Value));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // A failed write must not leave a crashed predecessor's leader.json as the visible truth: health
+            // would report a dead/mismatched leader while THIS healthy process leads. Clear it (best-effort).
+            LeaderIdentityFile.TryDelete(millerDir);
+            _logger.LogWarning(ex, "Could not record the leader identity; workspace health will report it as unknown.");
+        }
+        if (_attachFileWatchers)
+            _logger.LogInformation("Indexer leader: watching {Root} (recursive) + .git/HEAD.", canonicalRoot);
+
+        // Yield once so BackgroundService.StartAsync can return after the watcher is attached: existing DBs
+        // are available immediately as loaded_existing, while this leader reconciles missed downtime edits in
+        // the background before the first debounce tick.
+        await Task.Yield();
+        if (stoppingToken.IsCancellationRequested)
+            return false;
+
+        RunStartupDeltaScan(workspace);
+
+        // D3 auto-upgrade rescan: this claim's verdict proved the artifact was produced by an OLDER extractor
+        // than ours, so reconcile the whole repo with the newer binary immediately — upgrades self-heal with
+        // zero user action. One forced scan per claim, never per tick.
+        if (claimVerdict is { ArtifactOlderThanOwn: true })
+        {
+            _logger.LogInformation(
+                "Extractor upgrade detected: bundled julie-extract {OwnVersion} is newer than the index artifact; " +
+                "running a forced full rescan.",
+                _ownExtractorVersion.Value);
+            lock (_opsGate)
+                ScanAsLeaderUnderGate(force: true, source: "extractor-upgrade");
+        }
+
+        // --- debounce loop: drain on each tick (collects bursts into a single coalesced batch) ---
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            await Task.Delay(DebounceInterval, stoppingToken).ConfigureAwait(false);
+
+            bool headChanged;
+            lock (_headGate)
+            {
+                headChanged = _headChanged;
+                _headChanged = false;
+            }
+
+            YieldDecision? yieldDecision = null;
+            try
+            {
+                // D4 leader side: drain yield requests alongside the other request kinds. The decision is
+                // evaluated first but ACTED on only after this tick's work finishes (below), so an in-flight
+                // converge batch is never abandoned mid-tick.
+                yieldDecision = EvaluateYieldRequests(millerDir);
+                TryProcessLeaderFullScanRequests(millerDir);
+                TryProcessFileConvergeRequests(millerDir);
+
+                // Hold _opsGate across the drain so the debounce-loop drain and the on-demand Try* scans
+                // (TryScanAsLeader / TryReindexAsLeader) share ONE serialization: two julie `extract`
+                // subprocesses must never run against the same .miller DB at once (the M3 single-writer
+                // corruption guard, D3). DrainAndProcess additionally serializes the queue on IndexerCore's
+                // own gate; the lock order is always _opsGate -> _core gate (the Try* methods never take the
+                // core gate, and the watcher enqueue only takes the core gate), so there is no inversion.
+                lock (_opsGate)
+                {
+                    bool processed = _core!.DrainAndProcess(headChanged, out bool usedWholeRepoScan);
+                    if (processed)
+                        TryConvergeSidecarToLatest(workspace.CanonicalExtractDbPath, fullRebuild: usedWholeRepoScan);
+                }
+            }
+            catch (Exception ex)
+            {
+                // DrainAndProcess isolates per-op failures itself; a throw here is a bug in routing, not an
+                // extract failure. Log and keep the loop alive — the watcher must not die on one bad tick.
+                _logger.LogError(ex, "Indexer drain tick failed; continuing.");
+            }
+
+            if (yieldDecision is { } decision)
+            {
+                AbdicateLeadership(millerDir, decision.RequesterPid, decision.RequesterVersion);
+                return true; // re-enter the claim loop as a reader, under the cooldown
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// One claim attempt, gated by the D2 eligibility verdict and the D4 post-yield cooldown. The acquire func
+    /// is invoked ONLY when both gates pass — an ineligible instance never touches the lock. Returns true when
+    /// the lease was acquired; <paramref name="verdict"/> always carries the evaluation that gated the attempt.
+    /// </summary>
+    private bool TryClaimLeadershipOnce(string millerDir, string? extractDbPath, out LeadershipVerdict verdict)
+    {
+        verdict = EvaluateEligibility(extractDbPath);
+        if (!verdict.Eligible)
+        {
+            if (_lastVerdictReasonLogged != verdict.Reason)
+            {
+                _lastVerdictReasonLogged = verdict.Reason;
+                _logger.LogInformation("Not claiming indexer leadership: {Reason}.", verdict.Reason);
+            }
+            else
+            {
+                _logger.LogDebug("Still ineligible for indexer leadership: {Reason}.", verdict.Reason);
+            }
+            return false;
+        }
+
+        _lastVerdictReasonLogged = null; // a NEW ineligibility period after this re-announces at Information
+        if (_cooldown.SuppressesClaim())
+        {
+            _logger.LogDebug(
+                "Suppressing a leadership claim during the post-yield cooldown (the newer instance should win the re-race).");
+            return false;
+        }
+
+        _lease = _tryAcquireLeadership(millerDir);
+        return _lease is not null;
+    }
+
+    /// <summary>
+    /// Evaluate the D2 verdict for THIS instance against the artifact at <paramref name="extractDbPath"/> and
+    /// publish it on <see cref="EligibilityVerdict"/> for status/health rendering.
+    /// </summary>
+    private LeadershipVerdict EvaluateEligibility(string? extractDbPath)
+    {
+        LeadershipVerdict verdict = LeadershipEligibility.Evaluate(
+            _ownExtractorVersion.Value,
+            _readArtifactExtractorVersion(extractDbPath),
+            _allowExtractorDowngrade);
+        EligibilityVerdict = verdict;
+        return verdict;
+    }
+
+    // Production own-version probe: locate the bundled binary once and ask it. Null on ANY failure (missing
+    // binary, failed exec) — the eligibility matrix then renders this instance a permanent reader with a clear
+    // reason, and the existing restore-script guidance applies. Runs lazily inside ExecuteAsync, never in the
+    // constructor (host-lifecycle rule: no bootstrap getters before bootstrap StartAsync).
+    private string? ProbeBundledExtractorVersion()
+    {
+        try
+        {
+            return JulieExtractRunner.Locate(_bootstrap.Workspace.ToolsRoot).QueryVersion();
+        }
+        catch (Exception ex) when (ex is IOException or ArgumentException or InvalidOperationException
+            or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(ex,
+                "Could not probe the bundled julie-extract version; this instance cannot claim indexer leadership.");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// D4 requester side, run on each reader retry tick: if this instance is eligible and a LIVE leader's
+    /// recorded extractor version is strictly older than ours, write a yield request — at most one outstanding
+    /// per observed leader until the request TTL elapses or the leader identity changes.
+    /// </summary>
+    private void MaybeRequestYield(string millerDir, string? workspaceId, LeadershipVerdict verdict)
+    {
+        if (!verdict.Eligible || workspaceId is null)
+            return; // an ineligible challenger dethroning a working leader could freeze the index
+        if (_ownExtractorVersion.Value is not { } ownVersion)
+            return;
+        if (_readLeaderIdentity(millerDir) is not { ExtractorVersion: { } leaderVersion } leader)
+            return; // no identity, or a pre-feature leader (D5): it could not drain a yield request anyway
+        if (!_leaderAliveProbe(leader))
+            return; // stale identity from a crash — the normal lock retry wins the lease instead
+
+        int comparison;
+        try
+        {
+            comparison = LeadershipEligibility.CompareVersions(ownVersion, leaderVersion);
+        }
+        catch (ArgumentException)
+        {
+            return; // unparseable recorded version: cannot prove superiority, so do not challenge
+        }
+        if (comparison <= 0)
+            return; // equal versions never yield (D4): same-version swarms must not thrash leadership
+
+        DateTimeOffset now = _clock();
+        if (_outstandingYield is { } outstanding
+            && outstanding.LeaderPid == leader.Pid
+            && outstanding.LeaderStartedAtUtc == leader.StartedAtUtc
+            && now - outstanding.SentAtUtc < LeaderScanRequestQueue.RequestTtl)
+        {
+            return; // one outstanding request per leader; re-enqueue only after TTL or leader change
+        }
+
+        try
+        {
+            _requestYield(millerDir, workspaceId, Environment.ProcessId, ownVersion);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            _logger.LogWarning(ex, "Could not write a leadership yield request; will retry on a later tick.");
+            return; // not recorded as outstanding, so the next retry tick tries again
+        }
+
+        _outstandingYield = (leader.Pid, leader.StartedAtUtc, now);
+        _logger.LogInformation(
+            "Requested leadership yield: own extractor {OwnVersion} is newer than leader pid {LeaderPid}'s {LeaderVersion}.",
+            ownVersion, leader.Pid, leaderVersion);
+    }
+
+    private readonly record struct YieldDecision(int RequesterPid, string RequesterVersion);
+
+    // D4 leader side: drain pending yield requests (mirroring the full-scan drain wiring, stats included) and
+    // decide whether the strongest challenger justifies abdication. STRICTLY greater than own wins; equal or
+    // lower is ignored at Debug. Decision only — the caller performs the abdication after the tick's work.
+    private YieldDecision? EvaluateYieldRequests(string millerDir)
+    {
+        YieldDrainResult result;
+        try
+        {
+            result = _drainYieldRequests(millerDir);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            _logger.LogWarning(ex, "Leader yield request drain failed; will retry on a later tick.");
+            return null;
+        }
+
+        LogRequestDrainStats("yield", result.ExpiredDiscarded, result.ClaimSkipped);
+        if (!result.Requested || result.MaxRequesterVersion is not { } requesterVersion)
+            return null;
+
+        if (_ownExtractorVersion.Value is not { } ownVersion)
+        {
+            // Only reachable when leading with an unprobeable binary under the explicit downgrade override:
+            // the operator forced this instance to index, and a challenger cannot prove it is newer than unknown.
+            _logger.LogDebug(
+                "Ignoring a yield request from pid {RequesterPid} (extractor {RequesterVersion}): own extractor version is unknown.",
+                result.RequesterPid, requesterVersion);
+            return null;
+        }
+
+        int comparison;
+        try
+        {
+            comparison = LeadershipEligibility.CompareVersions(requesterVersion, ownVersion);
+        }
+        catch (ArgumentException)
+        {
+            return null; // the drain already filters unparseable versions; defensive
+        }
+
+        if (comparison <= 0)
+        {
+            _logger.LogDebug(
+                "Ignoring a yield request from pid {RequesterPid}: requester extractor {RequesterVersion} is not newer than own {OwnVersion}.",
+                result.RequesterPid, requesterVersion, ownVersion);
+            return null;
+        }
+
+        return new YieldDecision(result.RequesterPid, requesterVersion);
+    }
+
+    // D4 abdication: tear down ALL leader-only state, remove our identity, release the lease so the challenger's
+    // 5s retry can win it, and arm the anti-flap cooldown toward the challenger. Mirrors the graceful step-down
+    // in ExecuteAsync's finally (identity removed BEFORE the lease is released).
+    private void AbdicateLeadership(string millerDir, int requesterPid, string requesterVersion)
+    {
+        _logger.LogInformation(
+            "Yielding indexer leadership: requester pid {RequesterPid} bundles extractor {RequesterVersion}, newer than own {OwnVersion}; " +
+            "abdicating and entering a {CooldownSeconds}s cooldown.",
+            requesterPid, requesterVersion, _ownExtractorVersion.Value, YieldCooldown.Duration.TotalSeconds);
+        DisposeWatchers();
+        lock (_opsGate)
+        {
+            _ops = null; // stop offering inline write-through; TryScanAsLeader reports NotLeader again
+            _core = null;
+        }
+        LeaderIdentityFile.TryDelete(millerDir);
+        MillerRole.SetReader();
+        _lease?.Dispose();
+        _lease = null;
+        _cooldown.Begin(requesterPid);
     }
 
     private void RunStartupDeltaScan(WorkspaceContext workspace)
@@ -697,6 +997,45 @@ public sealed class IndexerService : BackgroundService
     /// </summary>
     internal bool ProcessFileConvergeRequestsForTest(string millerDir) =>
         TryProcessFileConvergeRequests(millerDir);
+
+    /// <summary>
+    /// Test seam: run ONE gated claim attempt exactly as the production claim loop does (D2 eligibility gate →
+    /// D4 cooldown gate → acquire func). Returns true when the lease was acquired. Pure when the version/artifact
+    /// funcs are injected — no lock files, no bootstrap. Not used in production.
+    /// </summary>
+    internal bool AttemptClaimForTest(string millerDir, string? extractDbPath = null) =>
+        TryClaimLeadershipOnce(millerDir, extractDbPath, out _);
+
+    /// <summary>
+    /// Test seam: run ONE reader retry tick's yield-request side (D4 requester) — evaluate eligibility, then
+    /// challenge a live older leader at most once per TTL/leader. Not used in production.
+    /// </summary>
+    internal void MaybeRequestYieldForTest(string millerDir, string workspaceId, string? extractDbPath = null) =>
+        MaybeRequestYield(millerDir, workspaceId, EvaluateEligibility(extractDbPath));
+
+    /// <summary>
+    /// Test seam: mark THIS instance as holding the writer lease (as the production claim loop does on a win)
+    /// so a test can drive the leader-side yield path and assert the lease is disposed on abdication. Pair with
+    /// <see cref="PublishOpsForTest"/> for the ops/core state. Not used in production.
+    /// </summary>
+    internal void AssumeLeadershipForTest(IDisposable lease)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        _lease = lease;
+    }
+
+    /// <summary>
+    /// Test seam: drain yield requests and, when the strongest challenger is strictly newer, perform the full
+    /// abdication (leader-state teardown, identity delete, lease release, cooldown) exactly as the production
+    /// debounce tick does. Returns true when leadership was yielded. Not used in production.
+    /// </summary>
+    internal bool ProcessYieldRequestsForTest(string millerDir)
+    {
+        if (EvaluateYieldRequests(millerDir) is not { } decision)
+            return false;
+        AbdicateLeadership(millerDir, decision.RequesterPid, decision.RequesterVersion);
+        return true;
+    }
 
     // Drain single-file converge requests (written by reader write-through / gate-time recovery) and enqueue
     // each as a synthetic Changed event into the core's coalescing WatchEventQueue — the SAME queue the
