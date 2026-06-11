@@ -96,6 +96,13 @@ public static class CliDispatch
                     return 2;
             }
         }
+        catch (IncompatibleExtractException ex)
+        {
+            // cli-eros-v1 exit contract: an unusable index (schema/contract/hash mismatch) is an OPERATIONAL
+            // failure (3) the caller answers with a rebuild — not an unexpected failure (1) that pages someone.
+            stderr.WriteLine($"{verb} failed: {ex.Message}");
+            return 3;
+        }
         catch (Exception ex)
         {
             // Mirror the tools' "<verb> failed: <msg>" contract: a clean line + a non-zero code, never a raw throw.
@@ -603,8 +610,6 @@ public static class CliDispatch
         CliOptions o = CliOptions.Parse(args, "json", "full");
         string operation = (o.Query.Length > 0 ? o.Query : "status").ToLowerInvariant();
         bool json = o.Has("json");
-        string? id = o.Value("id");
-        string? path = o.Value("path");
 
         // A help request must NOT fall through to `status` (which opens the registry and stamps a version
         // header). Cover all three spellings: `workspace help` (positional), `workspace --help` (flag, leaves
@@ -614,6 +619,24 @@ public static class CliDispatch
             outw.WriteLine(WorkspaceHelpText);
             return 0;
         }
+
+        // Selector parity with the read verbs (cli-eros-v1): --workspace-id aliases --id and --workspace
+        // (a directory, resolved against the CLI's cwd root) aliases --path. A selector flag present without
+        // a value is a usage error — silently falling back to the current workspace would run the operation
+        // against the WRONG repo, the worst outcome for a fleet orchestrator (2026-06-11 Eros finding).
+        foreach (string flag in new[] { "id", "workspace-id", "path", "workspace" })
+        {
+            if (o.Has(flag) && string.IsNullOrWhiteSpace(o.Value(flag)))
+            {
+                err.WriteLine($"--{flag} requires a value.");
+                return 2;
+            }
+        }
+
+        string? id = o.Value("id") ?? o.Value("workspace-id");
+        string? path = o.Value("path");
+        if (path is null && o.Value("workspace") is { } workspaceDir)
+            path = Path.GetFullPath(workspaceDir, ctx.WorkspaceRoot);
 
         switch (operation)
         {
@@ -1411,7 +1434,7 @@ public static class CliDispatch
           workspace [op]     Index lifecycle. op = status (default) | health | list | refresh | full | open | remove.
                              open   [--path DIR] [--full]   Register + index a directory (creates .miller/symbols.db).
                              remove (--id ID | --path DIR)  Delete a workspace's .miller index dir.
-                             [--id DISPLAY-ID] [--path DIR] [--json]
+                             [--id|--workspace-id SELECTOR] [--path|--workspace DIR] [--json]
           version            Print the build version (e.g. 0.3.2+<sha>).
           help               Show this help.
           serve              Run the MCP stdio server (the default when launched with no arguments).
@@ -1432,6 +1455,8 @@ public static class CliDispatch
           open     Register + index a directory (creates .miller/symbols.db).  [--path DIR] [--full]
           remove   Delete a workspace's .miller index dir.                     (--id ID | --path DIR)
 
-        Selectors / flags: [--id DISPLAY-ID] [--path DIR] [--json]
+        Selectors / flags: [--id|--workspace-id SELECTOR] [--path|--workspace DIR] [--json]
+          --workspace-id aliases --id; --workspace (a directory, resolved against the cwd) aliases --path —
+          the same selector flags every read verb accepts.
         """;
 }

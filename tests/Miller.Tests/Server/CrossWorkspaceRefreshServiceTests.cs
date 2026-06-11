@@ -112,7 +112,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
             {
                 scanCount++;
                 Assert.False(force);
-                return Report(root, dbPath, "target-ws", revision: 7);
+                return NoChangeReport(root, dbPath, "target-ws", revision: 7);
             },
             acquireLock: _ => new NoopLease());
 
@@ -124,6 +124,34 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         Assert.Equal(7, result.Revision);
         Assert.Equal(1, scanCount);
         Assert.Equal(7, registry.Get("target-ws")?.LastRevision);
+    }
+
+    [Fact]
+    public void Refresh_ForceRebuildThatResetsTheRevisionCounter_ReportsRefreshed()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("force-rebuild");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 7);
+        var service = NewService(
+            registry,
+            scan: (_, _, force) =>
+            {
+                Assert.True(force);
+                // A --force scan of an incompatible artifact deletes and recreates the DB; the fresh
+                // artifact's revision counter restarts at 1 even though everything was re-extracted
+                // (the 2026-06-11 Eros fleet finding: this used to be misreported as "unchanged").
+                return Report(root, dbPath, "target-ws", revision: 1);
+            },
+            acquireLock: _ => new NoopLease());
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws", force: true);
+
+        Assert.Equal(WorkspaceRefreshStatus.Refreshed, result.Status);
+        Assert.True(result.Scanned);
+        Assert.Equal(1, result.Revision);
+        Assert.Equal(1, registry.Get("target-ws")?.LastRevision);
     }
 
     [Fact]
@@ -481,7 +509,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         registry.MarkScanned("target-ws", revision: 5);
         var service = NewService(
             registry,
-            scan: (_, _, _) => Report(julie.WorkspaceRoot, julie.DbPath, "target-ws", revision: 5),
+            scan: (_, _, _) => NoChangeReport(julie.WorkspaceRoot, julie.DbPath, "target-ws", revision: 5),
             acquireLock: _ => new NoopLease(),
             sidecar: new SymbolSearchSidecar(enabled: true));
 
@@ -661,6 +689,11 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
                 RowsWritten: new ExtractRowCounts(null, 1, null, null, null, null, null, null, null, null),
                 Totals: new ExtractRowCounts(1, 1, null, null, null, null, null, null, null, null)),
             Errors: Array.Empty<ReportDiagnostic>(), Warnings: Array.Empty<ReportDiagnostic>());
+
+    // julie returns status=="no_change" when a scan wrote nothing; Miller's unchanged verdict must come from
+    // THIS, not from a revision comparison (a force rebuild restarts the revision counter — see below).
+    private static ExtractReport NoChangeReport(string root, string dbPath, string workspaceId, long revision) =>
+        Report(root, dbPath, workspaceId, revision) with { Status = "no_change" };
 
     private static ExtractReport PartialReport(string root, string dbPath, string workspaceId, long revision) =>
         Report(root, dbPath, workspaceId, revision) with

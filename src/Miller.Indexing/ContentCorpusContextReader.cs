@@ -21,10 +21,13 @@ public static class ContentCorpusContextReader
         if (symbols.Count == 0 || limitPerSymbol <= 0 || !File.Exists(contentDbPath))
             return Array.Empty<TextContentSearchHit>();
 
+        // Pooling=false: content.db is a rebuildable derived artifact whose file can be replaced wholesale;
+        // a pooled handle would pin the unlinked old inode (same hazard as SqliteReadOnlyAccess).
         using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = contentDbPath,
             Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
         }.ToString());
         connection.Open();
 

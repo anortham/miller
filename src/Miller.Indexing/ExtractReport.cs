@@ -40,6 +40,14 @@ public sealed record ExtractReport(
     /// </summary>
     [JsonIgnore] public bool IsPartial => string.Equals(Status, "partial", StringComparison.Ordinal);
 
+    /// <summary>
+    /// True when julie-extract returned <c>status=="no_change"</c>: the scan wrote nothing. This — not a
+    /// revision comparison — is the signal for an "unchanged" refresh verdict: a force rebuild recreates the
+    /// artifact from scratch and restarts its revision counter, so the new revision can equal (or trail) the
+    /// registry's last-seen one even though every row was re-extracted.
+    /// </summary>
+    [JsonIgnore] public bool IsNoChange => string.Equals(Status, "no_change", StringComparison.Ordinal);
+
     [JsonIgnore] public ulong FilesScanned => ToU(Counts?.FilesScanned);
     [JsonIgnore] public ulong FilesUpdated => ToU(Counts?.FilesChanged);   // v1 calls it files_changed
     [JsonIgnore] public ulong FilesDeleted => ToU(Counts?.FilesDeleted);

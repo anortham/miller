@@ -879,6 +879,37 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void Patterns_IncompatibleExtractSchema_IsOperationalExitThree()
+    {
+        using var fx = DbWithPatterns();
+        DowngradeArtifactSchema(fx.DbPath);
+
+        var (code, _, errText) = Run(
+            new[] { "patterns", "summary", "--json" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        // cli-eros-v1: an unusable index (schema mismatch) is an OPERATIONAL failure (exit 3) the caller
+        // answers with a rebuild — not an unexpected failure (exit 1) that should page someone.
+        Assert.Equal(3, code);
+        Assert.Contains("patterns failed", errText);
+    }
+
+    private static void DowngradeArtifactSchema(string dbPath)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText =
+            "UPDATE artifact_metadata SET value = '2' WHERE key IN ('sqlite_schema_version', 'schema_version');";
+        cmd.ExecuteNonQuery();
+    }
+
+    [Fact]
     public void Patterns_HelpFlag_DoesNotRequireIndex()
     {
         var (code, _, errText) = Run(
@@ -1417,6 +1448,85 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Equal(2, root.GetProperty("extraction_quality")
             .GetProperty("parse_diagnostics").GetProperty("rows")[0].GetProperty("count").GetInt64());
         Assert.Equal("capability_gaps", root.GetProperty("warnings")[0].GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public void WorkspaceStatus_WorkspaceIdAlias_RendersRegisteredWorkspace()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+        SeedRegisteredWorkspace("target-ws", "target-111111111111", fx.WorkspaceRoot, fx.DbPath);
+
+        var (code, outText, errText) = Run(
+            new[] { "workspace", "status", "--workspace-id", "target-ws", "--json" },
+            Context(Path.Combine(_dir, "current", ".miller", "symbols.db")));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        Assert.Equal(
+            "target-ws",
+            doc.RootElement.GetProperty("workspace").GetProperty("workspace_id").GetString());
+    }
+
+    [Fact]
+    public void WorkspaceStatus_WorkspaceAlias_ResolvesPathRelativeToTheCliRoot()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+        string targetRoot = Path.Combine(_dir, "target-workspace");
+        Directory.CreateDirectory(targetRoot);
+        SeedRegisteredWorkspace("target-ws", "target-111111111111", targetRoot, fx.DbPath);
+
+        var (code, outText, errText) = Run(
+            new[] { "workspace", "status", "--workspace", "target-workspace", "--json" },
+            Context(Path.Combine(_dir, "current", ".miller", "symbols.db")));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        Assert.Equal(
+            "target-ws",
+            doc.RootElement.GetProperty("workspace").GetProperty("workspace_id").GetString());
+    }
+
+    [Fact]
+    public void WorkspaceFull_WorkspaceAlias_TargetsTheSelectedWorkspace()
+    {
+        string targetRoot = Path.Combine(_dir, "target");
+        Directory.CreateDirectory(targetRoot);
+        string dbPath = Path.Combine(targetRoot, ".miller", "symbols.db");
+        SeedRegisteredWorkspace("target-ws", "target-111111111111", targetRoot, dbPath);
+
+        var (code, _, errText) = Run(
+            new[] { "workspace", "full", "--workspace", targetRoot, "--json" },
+            Context(Path.Combine(_dir, "current", ".miller", "symbols.db")));
+
+        // The selector must reach the registered row (and then fail on the missing julie-extract tool,
+        // exit 3) rather than being silently dropped onto the unregistered current workspace (exit 2,
+        // "current workspace is not registered") — the 2026-06-11 Eros fleet wrong-target finding.
+        Assert.Equal(3, code);
+        Assert.Contains("cannot refresh", errText);
+    }
+
+    [Fact]
+    public void WorkspaceFull_UnknownWorkspaceIdSelector_IsUsageErrorExitTwo()
+    {
+        var (code, _, errText) = Run(
+            new[] { "workspace", "full", "--workspace-id", "does-not-exist" },
+            Context(Path.Combine(_dir, "current", ".miller", "symbols.db")));
+
+        Assert.Equal(2, code);
+        Assert.Contains("unknown workspace selector", errText);
+    }
+
+    [Fact]
+    public void Workspace_SelectorFlagWithoutValue_IsUsageErrorExitTwo()
+    {
+        var (code, _, errText) = Run(
+            new[] { "workspace", "status", "--workspace" },
+            Context(Path.Combine(_dir, "current", ".miller", "symbols.db")));
+
+        Assert.Equal(2, code);
+        Assert.Contains("--workspace requires a value", errText);
     }
 
     [Fact]

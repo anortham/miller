@@ -106,6 +106,11 @@ Code read commands (`search`, `inspect`, `context`, `impact`, `trace`, and `patt
 `--workspace-id <selector>` accepts a display ID, unique prefix, full workspace ID, registered root path,
 `current`, or `primary`. The path alias `--workspace <path>` is normalized before selection.
 
+The `workspace` lifecycle subcommands (`status`, `health`, `refresh`, `full`, `remove`) accept the same selector
+flags: `--workspace-id` aliases `--id`, and `--workspace <path>` (normalized against the CLI's cwd) aliases
+`--path`. A selector flag supplied without a value is a usage error (exit `2`); a command never falls back
+silently to the current workspace when a selector was attempted.
+
 If a caller needs workspace B while running from workspace A, it should call `workspace list --json`, choose B's
 selector, and pass that selector to the read command. If B is not listed, call
 `workspace open --path /absolute/repo --full --json` first, then retry the read command. The special

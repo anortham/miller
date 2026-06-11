@@ -40,9 +40,17 @@ internal static class SqliteReadOnlyAccess
             throw new InvalidOperationException($"Cannot determine the directory of DB path '{absDbPath}'.");
         EnsureDirectoryWritable(dir, absDbPath);
 
+        // Pooling=false (load-bearing): `julie-extract scan --force` heals an incompatible artifact by
+        // DELETING and RECREATING the DB file. A pooled connection survives Dispose() holding an fd to the
+        // unlinked old inode, so every later reader in this process would keep seeing the OLD database —
+        // and its schema error — long after the rebuild succeeded (2026-06-11 Eros fleet finding).
         var connectionString =
-            new SqliteConnectionStringBuilder { DataSource = absDbPath, Mode = SqliteOpenMode.ReadOnly }
-                .ToString();
+            new SqliteConnectionStringBuilder
+            {
+                DataSource = absDbPath,
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false,
+            }.ToString();
 
         var connection = new SqliteConnection(connectionString);
         try

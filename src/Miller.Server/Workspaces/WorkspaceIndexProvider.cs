@@ -406,6 +406,7 @@ public sealed class WorkspaceIndexProvider
         WorkspaceRefreshResult? refreshResult = null;
         if (ensureFresh)
         {
+            long revisionBeforeRefresh = row.LastRevision ?? 0;
             refreshResult = _refresh(row.WorkspaceId);
             if (refreshResult.Status == WorkspaceRefreshStatus.MissingRoot)
                 throw new DirectoryNotFoundException(refreshResult.Error ?? $"Workspace root not found: {row.CanonicalRoot}");
@@ -419,9 +420,42 @@ public sealed class WorkspaceIndexProvider
 
             row = WorkspaceRegistrySelector.Resolve(_registry, row.WorkspaceId);
             VerifyRegisteredRoot(row);
+
+            // A Refreshed scan whose revision did NOT advance is a from-scratch rebuild: julie deleted and
+            // recreated the DB and the fresh artifact's revision counter restarted on (or before) the number
+            // the registry already had. The (workspace, db, revision) cache keys collide with the pre-rebuild
+            // entries, so evict them explicitly — they describe a file that no longer exists (2026-06-11
+            // Eros fleet finding). A normally advancing revision changes the key and needs no eviction.
+            if (refreshResult.Status == WorkspaceRefreshStatus.Refreshed &&
+                (row.LastRevision ?? 0) <= revisionBeforeRefresh)
+            {
+                EvictWorkspaceEntries(row.WorkspaceId);
+            }
         }
 
         return new RegisteredWorkspaceState(row, refreshResult);
+    }
+
+    private void EvictWorkspaceEntries(string workspaceId)
+    {
+        lock (_cacheGate)
+        {
+            RemoveWorkspaceKeysUnderLock(_cache, workspaceId);
+            RemoveWorkspaceKeysUnderLock(_symbolSearchCache, workspaceId);
+            RemoveWorkspaceKeysUnderLock(_contentSearchCache, workspaceId);
+            RemoveWorkspaceKeysUnderLock(_textContentSearchCache, workspaceId);
+            RemoveWorkspaceKeysUnderLock(_regionSearchCache, workspaceId);
+        }
+    }
+
+    private static void RemoveWorkspaceKeysUnderLock<T>(Dictionary<CacheKey, Lazy<T>> cache, string workspaceId)
+    {
+        foreach (CacheKey key in cache.Keys
+                     .Where(key => string.Equals(key.WorkspaceId, workspaceId, StringComparison.Ordinal))
+                     .ToArray())
+        {
+            cache.Remove(key);
+        }
     }
 
     private CachedIndex GetOrLoad(WorkspaceRegistryRow row, long revision)

@@ -184,9 +184,13 @@ public sealed class CrossWorkspaceRefreshService
             // convergence.
             TryConvergeSidecar(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId, revision);
 
-            WorkspaceRefreshStatus status = revision > (row.LastRevision ?? 0)
-                ? WorkspaceRefreshStatus.Refreshed
-                : WorkspaceRefreshStatus.Unchanged;
+            // Refreshed-vs-unchanged comes from the REPORT, not a revision comparison: a force rebuild of an
+            // incompatible artifact deletes and recreates the DB, restarting its revision counter (often on
+            // the very number the registry already holds), so comparing revisions misreports a successful
+            // from-scratch rebuild as "unchanged" (2026-06-11 Eros fleet finding).
+            WorkspaceRefreshStatus status = report.IsNoChange
+                ? WorkspaceRefreshStatus.Unchanged
+                : WorkspaceRefreshStatus.Refreshed;
             return new WorkspaceRefreshResult(
                 status,
                 row.WorkspaceId,

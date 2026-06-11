@@ -88,6 +88,44 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     }
 
     [Fact]
+    public void Resolve_RegisteredWorkspace_ReloadsAfterARefreshedScanThatDidNotAdvanceTheRevision()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-rebuild");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+
+        int loadCount = 0;
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            refresh: workspaceId => new WorkspaceRefreshResult(
+                WorkspaceRefreshStatus.Refreshed,
+                workspaceId,
+                root,
+                target.DbPath,
+                Revision: 1,
+                Scanned: true),
+            loadIndex: path =>
+            {
+                loadCount++;
+                return RepositoryIndexLoader.Load(path);
+            });
+
+        WorkspaceReadContext first = provider.Resolve("target-ws", ensureFresh: false);
+        // A force rebuild recreates the DB from scratch, so its revision counter can land on the SAME
+        // number the cache key already holds — the entry must be evicted, not trusted to age out by key.
+        WorkspaceReadContext second = provider.Resolve("target-ws", ensureFresh: true);
+
+        Assert.Equal(1, second.Revision);
+        Assert.NotSame(first.Index, second.Index);
+        Assert.Equal(2, loadCount);
+    }
+
+    [Fact]
     public void ResolveSymbolSearch_RegisteredWorkspace_UsesSymbolProjectionLoaderWithoutFullLoad()
     {
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
