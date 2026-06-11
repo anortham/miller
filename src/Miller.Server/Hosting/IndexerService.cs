@@ -830,8 +830,13 @@ public sealed class IndexerService : BackgroundService
             try
             {
                 bool changed = fullRebuild
-                    ? _sidecar.EnsureBuilt(symbolsDbPath, revision, workspaceRoot)
-                    : _sidecar.EnsureCurrent(symbolsDbPath, revision, workspaceRoot);
+                    ? _sidecar.EnsureBuilt(symbolsDbPath, revision, workspaceRoot, out string? corruptionReason)
+                    : _sidecar.EnsureCurrent(symbolsDbPath, revision, workspaceRoot, out corruptionReason);
+                // A corruption/malformed-meta rebuild must be visible (a quiet self-repair hides artifact
+                // damage); plain staleness convergence stays at information level — it is normal operation.
+                if (corruptionReason is not null)
+                    _logger.LogWarning(
+                        "Search sidecar was corrupt and forced a full rebuild: {Reason}", corruptionReason);
                 if (changed)
                     _logger.LogInformation("Converged search sidecar at revision {Revision}.", revision);
             }
