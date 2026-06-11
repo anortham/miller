@@ -273,7 +273,7 @@ public sealed class CliDispatchTests : IDisposable
         Assert.StartsWith("0.4.0", root.GetProperty("miller").GetProperty("version").GetString());
 
         JsonElement julie = root.GetProperty("julie_extract");
-        Assert.Equal("2.3.0", julie.GetProperty("pinned_version").GetString());
+        Assert.Equal("2.4.0", julie.GetProperty("pinned_version").GetString());
         Assert.Equal(3, julie.GetProperty("sqlite_schema_version").GetInt64());
         Assert.Equal(3, julie.GetProperty("extract_contract_version").GetInt64());
         Assert.Equal(3, julie.GetProperty("report_schema_version").GetInt64());
