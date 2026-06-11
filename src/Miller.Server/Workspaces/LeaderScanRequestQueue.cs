@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Miller.Indexing;
 
 namespace Miller.Server.Workspaces;
 
@@ -18,14 +19,26 @@ internal sealed record FileConvergeDrainResult(IReadOnlyList<string> Paths, int 
     public static FileConvergeDrainResult Empty { get; } = new(Paths: [], ExpiredDiscarded: 0, ClaimSkipped: 0);
 }
 
+/// <summary>What one yield drain observed: whether a valid yield request was serviced, the highest requester
+/// extractor version seen this pass (numeric major.minor.patch order) with that requester's pid, plus the
+/// TTL/claim bookkeeping the caller (the leader's debounce tick) logs.</summary>
+internal sealed record YieldDrainResult(
+    bool Requested, string? MaxRequesterVersion, int RequesterPid, int ExpiredDiscarded, int ClaimSkipped)
+{
+    public static YieldDrainResult Empty { get; } = new(
+        Requested: false, MaxRequesterVersion: null, RequesterPid: 0, ExpiredDiscarded: 0, ClaimSkipped: 0);
+}
+
 internal static partial class LeaderScanRequestQueue
 {
     private const int SchemaVersion = 1;
     private const string OperationFullScan = "full_scan";
     private const string OperationFileConverge = "file_converge";
+    private const string OperationYield = "yield";
     private const string RequestDirectoryName = "requests";
     private const string FullScanSuffix = ".full-scan.json";
     private const string FileConvergeSuffix = ".file-converge.json";
+    private const string YieldSuffix = ".yield.json";
     private const string ClaimedSuffix = ".claimed";
     private const string StampFormat = "yyyyMMddHHmmssfffffff";
 
@@ -235,6 +248,131 @@ internal static partial class LeaderScanRequestQueue
         return new FileConvergeDrainResult((IReadOnlyList<string>?)paths ?? [], expired, skipped);
     }
 
+    /// <summary>
+    /// Ask the live indexer leader (another process) to abdicate so a newer-extractor reader can take over
+    /// (version-aware leadership D4). Written by a reader whose pinned extractor is newer than the leader's;
+    /// drained by the leader's debounce tick, which decides whether to yield (Task 3 orchestration).
+    /// </summary>
+    public static void RequestYield(string millerDir, string workspaceId, int requesterPid, string requesterExtractorVersion)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(millerDir);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(requesterExtractorVersion);
+        if (requesterPid <= 0)
+            throw new ArgumentOutOfRangeException(nameof(requesterPid), requesterPid, "Requester pid must be positive.");
+
+        string requestDir = RequestDirectoryFor(millerDir);
+        Directory.CreateDirectory(requestDir);
+
+        string requestId = Guid.NewGuid().ToString("N");
+        string stamp = DateTimeOffset.UtcNow.ToString(StampFormat, CultureInfo.InvariantCulture);
+        string finalPath = Path.Combine(requestDir, $"{stamp}-{Environment.ProcessId}-{requestId}{YieldSuffix}");
+        string tempPath = finalPath + ".tmp";
+        var request = new YieldRequest(
+            SchemaVersion,
+            OperationYield,
+            requestId,
+            workspaceId,
+            requesterPid,
+            requesterExtractorVersion,
+            DateTimeOffset.UtcNow);
+
+        try
+        {
+            File.WriteAllText(
+                tempPath,
+                JsonSerializer.Serialize(request, LeaderScanRequestJsonContext.Default.YieldRequest));
+            File.Move(tempPath, finalPath);
+        }
+        finally
+        {
+            TryDelete(tempPath);
+        }
+    }
+
+    /// <summary>
+    /// Drain pending yield requests. When several arrive in one pass, the result surfaces the HIGHEST requester
+    /// extractor version (numeric major.minor.patch order) and that requester's pid — the leader only needs to
+    /// know the strongest challenger. Requests older than <see cref="RequestTtl"/> are discarded without
+    /// servicing; a request that cannot be claimed (renamed) right now is skipped this tick.
+    /// </summary>
+    public static YieldDrainResult DrainYieldRequests(string millerDir)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(millerDir);
+
+        string requestDir = RequestDirectoryFor(millerDir);
+        if (!Directory.Exists(requestDir))
+            return YieldDrainResult.Empty;
+
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        int expired = SweepExpiredClaims(requestDir, YieldSuffix, now);
+        int skipped = 0;
+        string? maxVersion = null;
+        int maxVersionPid = 0;
+        foreach (string path in Directory.EnumerateFiles(requestDir, "*" + YieldSuffix).Order(StringComparer.Ordinal))
+        {
+            if (IsExpired(path, now))
+            {
+                TryDelete(path); // the requesting reader's poll gave up long ago; a stale yield must not dethrone a leader
+                expired++;
+                continue;
+            }
+
+            if (!TryClaim(path, out string claimedPath))
+            {
+                skipped++;
+                continue;
+            }
+            if (claimedPath.Length == 0)
+                continue; // vanished before the claim: another process raced us; nothing to service
+
+            try
+            {
+                string json = File.ReadAllText(claimedPath);
+                YieldRequest? request = JsonSerializer.Deserialize(
+                    json,
+                    LeaderScanRequestJsonContext.Default.YieldRequest);
+                if (request is { SchemaVersion: SchemaVersion, Operation: OperationYield }
+                    && IsStrongerChallenger(request.RequesterExtractorVersion, maxVersion))
+                {
+                    maxVersion = request.RequesterExtractorVersion;
+                    maxVersionPid = request.RequesterPid;
+                }
+            }
+            catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+            {
+                // Malformed or unreadable AFTER a successful claim: we own it now, so drop it rather than
+                // re-reading it forever. The TTL sweep is the backstop if even the delete below fails.
+            }
+            finally
+            {
+                TryDelete(claimedPath);
+            }
+        }
+
+        return new YieldDrainResult(maxVersion is not null, maxVersion, maxVersionPid, expired, skipped);
+    }
+
+    // Does this drained yield's version beat the strongest challenger seen so far this pass? Ordering is
+    // LeadershipEligibility.CompareVersions (numeric major.minor.patch, "2.10.1" > "2.3.0"), which THROWS on a
+    // version carrying no X.Y.Z token — a yield with an uncomparable version is dropped like malformed JSON
+    // rather than surfaced for the leader to compare garbage against its own version.
+    private static bool IsStrongerChallenger(string? candidateVersion, string? currentMax)
+    {
+        if (string.IsNullOrWhiteSpace(candidateVersion))
+            return false;
+        try
+        {
+            return currentMax is null
+                ? LeadershipEligibility.CompareVersions(candidateVersion, candidateVersion) == 0 // pure parse check
+                : LeadershipEligibility.CompareVersions(candidateVersion, currentMax) > 0;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
     // Claim a request for exclusive servicing by renaming it out of the drain's enumeration pattern. Returns
     // false when the file exists but cannot be moved (held open, undeletable, permission-denied) — the caller
     // must SKIP it this tick instead of servicing an unclaimed request every 250ms forever (M4). Returns true
@@ -326,8 +464,18 @@ internal static partial class LeaderScanRequestQueue
         DateTimeOffset RequestedAtUtc,
         int RequestingProcessId);
 
+    private sealed record YieldRequest(
+        int SchemaVersion,
+        string Operation,
+        string RequestId,
+        string WorkspaceId,
+        int RequesterPid,
+        string RequesterExtractorVersion,
+        DateTimeOffset CreatedAtUtc);
+
     [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
     [JsonSerializable(typeof(FullScanRequest))]
     [JsonSerializable(typeof(FileConvergeRequest))]
+    [JsonSerializable(typeof(YieldRequest))]
     private sealed partial class LeaderScanRequestJsonContext : JsonSerializerContext;
 }

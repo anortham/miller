@@ -197,6 +197,125 @@ public sealed class LeaderScanRequestQueueTests : IDisposable
         Assert.True(File.Exists(request));
     }
 
+    // ---- Yield (version-aware leadership D4): a newer-extractor reader asks the live leader to abdicate ------
+
+    [Fact]
+    public void RequestYield_RoundTripsVersionAndPid_AndDrainConsumesOnce()
+    {
+        string millerDir = Path.Combine(_dir, ".miller");
+
+        LeaderScanRequestQueue.RequestYield(millerDir, "workspace-1", requesterPid: 4242, requesterExtractorVersion: "2.3.0");
+
+        string requestDir = Path.Combine(millerDir, "requests");
+        Assert.Single(Directory.EnumerateFiles(requestDir, "*.yield.json"));
+
+        YieldDrainResult result = LeaderScanRequestQueue.DrainYieldRequests(millerDir);
+
+        Assert.True(result.Requested);
+        Assert.Equal("2.3.0", result.MaxRequesterVersion);
+        Assert.Equal(4242, result.RequesterPid);
+        Assert.Empty(Directory.EnumerateFiles(requestDir)); // serviced request removed, no .claimed leftover
+        Assert.False(LeaderScanRequestQueue.DrainYieldRequests(millerDir).Requested);
+    }
+
+    [Fact]
+    public void DrainYieldRequests_TwoVersions_ReportsNumericMaxNotLexicalMax()
+    {
+        string millerDir = Path.Combine(_dir, ".miller");
+        // "2.10.1" is numerically newer than "2.3.0" but lexically SMALLER — pins the major.minor.patch compare.
+        LeaderScanRequestQueue.RequestYield(millerDir, "workspace-1", requesterPid: 111, requesterExtractorVersion: "2.3.0");
+        LeaderScanRequestQueue.RequestYield(millerDir, "workspace-1", requesterPid: 222, requesterExtractorVersion: "2.10.1");
+
+        YieldDrainResult result = LeaderScanRequestQueue.DrainYieldRequests(millerDir);
+
+        Assert.True(result.Requested);
+        Assert.Equal("2.10.1", result.MaxRequesterVersion);
+        Assert.Equal(222, result.RequesterPid);
+    }
+
+    [Fact]
+    public void DrainYieldRequests_UncomparableVersion_IsDroppedLikeMalformedJson()
+    {
+        string millerDir = Path.Combine(_dir, ".miller");
+        // A version with no major.minor.patch token cannot be meaningfully compared against the leader's own
+        // version — surfacing it would hand the (Task 3) leader garbage to compare. Dropped, file consumed.
+        LeaderScanRequestQueue.RequestYield(millerDir, "workspace-1", requesterPid: 4242, requesterExtractorVersion: "not-a-version");
+
+        YieldDrainResult result = LeaderScanRequestQueue.DrainYieldRequests(millerDir);
+
+        Assert.False(result.Requested);
+        Assert.Null(result.MaxRequesterVersion);
+        Assert.Empty(Directory.EnumerateFiles(Path.Combine(millerDir, "requests")));
+    }
+
+    [Fact]
+    public void DrainYieldRequests_ExpiredRequest_IsDeletedWithoutServicing()
+    {
+        string millerDir = Path.Combine(_dir, ".miller");
+        string requestDir = Path.Combine(millerDir, "requests");
+        LeaderScanRequestQueue.RequestYield(millerDir, "workspace-1", requesterPid: 4242, requesterExtractorVersion: "2.3.0");
+        string agedPath = AgeSingleRequestBeyondTtl(requestDir, ".yield.json");
+
+        YieldDrainResult result = LeaderScanRequestQueue.DrainYieldRequests(millerDir);
+
+        Assert.False(result.Requested); // never serviced
+        Assert.Null(result.MaxRequesterVersion);
+        Assert.Equal(1, result.ExpiredDiscarded);
+        Assert.False(File.Exists(agedPath));
+    }
+
+    [Fact]
+    public void DrainYieldRequests_UnclaimableRequest_IsSkippedNotServiced()
+    {
+        string millerDir = Path.Combine(_dir, ".miller");
+        string requestDir = Path.Combine(millerDir, "requests");
+        LeaderScanRequestQueue.RequestYield(millerDir, "workspace-1", requesterPid: 4242, requesterExtractorVersion: "2.3.0");
+        string request = Directory.EnumerateFiles(requestDir, "*.yield.json").Single();
+        // Occupy the claim slot so File.Move(request, request + ".claimed") fails with IOException.
+        File.WriteAllText(request + ".claimed", "occupied");
+
+        YieldDrainResult result = LeaderScanRequestQueue.DrainYieldRequests(millerDir);
+
+        Assert.False(result.Requested);
+        Assert.Equal(1, result.ClaimSkipped);
+        Assert.True(File.Exists(request)); // left in place for a later tick / the TTL sweep
+    }
+
+    [Fact]
+    public void DrainYieldRequests_NoRequestDirectory_ReturnsEmpty()
+    {
+        Assert.False(LeaderScanRequestQueue.DrainYieldRequests(Path.Combine(_dir, ".miller")).Requested);
+    }
+
+    [Fact]
+    public void YieldRequests_DoNotConsumeOtherRequestKinds()
+    {
+        string millerDir = Path.Combine(_dir, ".miller");
+        LeaderScanRequestQueue.RequestFullScan(millerDir, "workspace-1", baselineRevision: 1);
+        LeaderScanRequestQueue.RequestYield(millerDir, "workspace-1", requesterPid: 4242, requesterExtractorVersion: "2.3.0");
+
+        Assert.True(LeaderScanRequestQueue.DrainYieldRequests(millerDir).Requested);
+        Assert.True(LeaderScanRequestQueue.DrainFullScanRequests(millerDir).Requested);
+    }
+
+    [Fact]
+    public void DrainYieldRequests_SweepsExpiredYieldClaims()
+    {
+        string millerDir = Path.Combine(_dir, ".miller");
+        string requestDir = Path.Combine(millerDir, "requests");
+        Directory.CreateDirectory(requestDir);
+        string oldStamp = DateTimeOffset.UtcNow
+            .Subtract(LeaderScanRequestQueue.RequestTtl + TimeSpan.FromMinutes(1))
+            .ToString("yyyyMMddHHmmssfffffff", System.Globalization.CultureInfo.InvariantCulture);
+        string staleClaim = Path.Combine(requestDir, oldStamp + "-1-dead.yield.json.claimed");
+        File.WriteAllText(staleClaim, "{}");
+
+        YieldDrainResult result = LeaderScanRequestQueue.DrainYieldRequests(millerDir);
+
+        Assert.False(File.Exists(staleClaim)); // swept
+        Assert.Equal(1, result.ExpiredDiscarded);
+    }
+
     [Fact]
     public void Drain_SweepsClaimedLeftoversOlderThanTtl()
     {

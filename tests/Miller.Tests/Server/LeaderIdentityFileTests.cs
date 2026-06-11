@@ -144,6 +144,39 @@ public sealed class LeaderIdentityFileTests : IDisposable
     }
 
     [Fact]
+    public void WriteThenRead_RoundTripsExtractorVersion()
+    {
+        var identity = new LeaderIdentity(
+            Pid: 4242,
+            Version: "0.9.9+abc1234",
+            ProcessPath: "/opt/miller/miller",
+            StartedAtUtc: new DateTimeOffset(2026, 6, 10, 12, 0, 0, TimeSpan.Zero),
+            ExtractorVersion: "2.3.0");
+
+        LeaderIdentityFile.Write(MillerDir, identity);
+
+        Assert.Equal(identity, LeaderIdentityFile.TryRead(MillerDir));
+        Assert.Equal("2.3.0", LeaderIdentityFile.TryRead(MillerDir)!.ExtractorVersion);
+    }
+
+    [Fact]
+    public void TryRead_LegacyFileWithoutExtractorVersion_ParsesWithNull()
+    {
+        // leader.json files written before ExtractorVersion existed must still parse, reading the unknown
+        // extractor version as null (the version-aware leadership path treats null as "unknown, do not compare").
+        Directory.CreateDirectory(MillerDir);
+        File.WriteAllText(
+            LeaderIdentityFile.PathFor(MillerDir),
+            """{"pid":4242,"version":"0.3.6+old1234","processPath":null,"startedAtUtc":"2026-06-10T12:00:00+00:00"}""");
+
+        LeaderIdentity? identity = LeaderIdentityFile.TryRead(MillerDir);
+
+        Assert.NotNull(identity);
+        Assert.Equal(4242, identity!.Pid);
+        Assert.Null(identity.ExtractorVersion);
+    }
+
+    [Fact]
     public void TryRead_LegacyFileWithoutStartedAtUtc_ParsesAndSkipsReuseCheck()
     {
         // Files written before StartedAtUtc existed must still parse (default timestamp) and must NOT trip the

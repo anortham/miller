@@ -14,7 +14,8 @@ public sealed record LeaderIdentity(
     int Pid,
     string Version,
     string? ProcessPath,
-    DateTimeOffset StartedAtUtc);
+    DateTimeOffset StartedAtUtc,
+    string? ExtractorVersion = null);
 
 /// <summary>
 /// What one liveness probe of a pid observed: whether a process wearing the pid runs right now, and when it
