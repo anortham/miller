@@ -283,10 +283,15 @@ public sealed class InspectTool
     {
         var sb = new StringBuilder();
         sb.Append(s.Name).Append("  :").Append(s.StartLine);
-        if (!string.IsNullOrEmpty(s.Signature))
+        if (SignatureAddsInfo(s))
             sb.Append("  ").Append(Truncate(s.Signature!, SignatureMaxLength));
         return sb.ToString();
     }
+
+    // Some extractors emit a signature that is just the symbol name again (e.g. bare fields); repeating it
+    // next to the name spends tokens on nothing.
+    private static bool SignatureAddsInfo(IndexedSymbol s) =>
+        !string.IsNullOrEmpty(s.Signature) && !string.Equals(s.Signature!.Trim(), s.Name, StringComparison.Ordinal);
 
     private static int KindRank(string kind) => kind switch
     {
@@ -328,7 +333,7 @@ public sealed class InspectTool
         var sb = new StringBuilder();
         sb.Append("# ").Append(sym.Name).Append("  (").Append(sym.Kind).Append(")\n");
         sb.Append(sym.FilePath).Append(':').Append(sym.StartLine).Append('\n');
-        if (!string.IsNullOrEmpty(sym.Signature))
+        if (SignatureAddsInfo(sym))
             sb.Append(Truncate(sym.Signature!, SignatureMaxLength)).Append('\n');
         if (detail is not null && !string.IsNullOrEmpty(detail.Visibility))
             sb.Append("visibility: ").Append(detail.Visibility).Append('\n');
@@ -553,7 +558,7 @@ public sealed class InspectTool
         var sb = new StringBuilder();
         sb.Append(s.Name).Append("  ").Append(s.Kind).Append("  ")
           .Append(s.FilePath).Append(':').Append(s.StartLine);
-        if (!string.IsNullOrEmpty(s.Signature))
+        if (SignatureAddsInfo(s))
             sb.Append("  ").Append(Truncate(s.Signature!, SignatureMaxLength));
         return sb.ToString();
     }

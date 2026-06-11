@@ -504,7 +504,9 @@ public sealed partial class ContextTool
         var sb = new StringBuilder();
         sb.Append("  :").Append(s.StartLine).Append(' ')
           .Append(s.Name).Append(' ')
-          .Append(s.Kind).Append(" hop=").Append(c.Hop);
+          .Append(s.Kind);
+        if (c.Hop > 0) // hop=0 is the seed/definition itself — the label only earns its tokens for neighbors
+            sb.Append(" hop=").Append(c.Hop);
         if (!string.IsNullOrEmpty(s.Signature))
             sb.Append("  ").Append(Truncate(s.Signature!, SignatureMaxLength));
         return sb.ToString();

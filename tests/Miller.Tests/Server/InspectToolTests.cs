@@ -129,6 +129,24 @@ public sealed class InspectToolTests
     }
 
     [Fact]
+    public void Run_FileSummary_Compact_OmitsSignatureThatJustEchoesTheName()
+    {
+        // Some extractors emit signature == name (e.g. bare fields); the row should not repeat it.
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
+        {
+            new JulieDbFixture.SymbolRow("a0000000000000000000000000000001", "MaxRetries", "field", "csharp",
+                "src/Config.cs", "MaxRetries", 5, null),
+        });
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "src/Config.cs", depth: "summary", kind: null, scope: null, limit: 50, json: false, out _);
+
+        Assert.Contains("MaxRetries  :5", output);
+        Assert.DoesNotContain("MaxRetries  :5  MaxRetries", output);
+    }
+
+    [Fact]
     public void Run_FileSummary_Compact_KindFilterShowsLowSignalRows()
     {
         using var fx = FixtureWithNoisyFileSummary();

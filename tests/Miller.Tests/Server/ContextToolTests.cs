@@ -398,12 +398,13 @@ public sealed class ContextToolTests
             query: "OrderService", tokenBudget: 100000, maxHops: 1,
             entrySymbols: null, failingTest: null, stackTrace: null, json: false, out _, out _);
 
-        // Provenance: name, file:line, hop annotation, and the signature.
+        // Provenance: name, file:line, and the signature. Seeds (hop 0) carry no hop label — only
+        // graph neighbors (hop >= 1) are annotated; the JSON shape still carries hop for every candidate.
         Assert.Contains("OrderService", output);
         Assert.Contains("src/OrderService.cs:", output);
         Assert.Contains(":1 OrderService", output);
         Assert.Contains("class OrderService", output);
-        Assert.Contains("hop", output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("hop=0", output);
     }
 
     [Fact]
@@ -420,10 +421,10 @@ public sealed class ContextToolTests
         Assert.Equal(
             "# context bundle (3)\n" +
             "src/Shared.cs:\n" +
-            "  :10 Alpha method hop=0  method Alpha()\n" +
-            "  :20 Beta method hop=0  method Beta()\n" +
+            "  :10 Alpha method  method Alpha()\n" +
+            "  :20 Beta method  method Beta()\n" +
             "src/Gamma.cs:\n" +
-            "  :30 Gamma class hop=0  class Gamma",
+            "  :30 Gamma class  class Gamma",
             output);
         Assert.Equal(1, output.Split("src/Shared.cs").Length - 1);
         Assert.DoesNotContain("Alpha  method  src/Shared.cs", output);

@@ -378,7 +378,7 @@ public sealed class ContentTool
             var block = new StringBuilder();
             block.Append(hit.DisplayPath).Append(':').Append(hit.Line).Append("  ").Append(hit.ContentKind);
             foreach (string line in hit.Snippet.Split('\n'))
-                block.Append('\n').Append("    ").Append(line);
+                block.Append('\n').Append("  ").Append(line);
             blocks.Add(block.ToString());
         }
 
@@ -405,7 +405,7 @@ public sealed class ContentTool
                 .Append("  ")
                 .Append(hit.ContentKind);
             foreach (string line in hit.Snippet.Split('\n'))
-                block.Append('\n').Append("    ").Append(line);
+                block.Append('\n').Append("  ").Append(line);
             blocks.Add(block.ToString());
         }
 
