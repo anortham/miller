@@ -76,6 +76,14 @@ public static class CliDispatch
                     return Patterns(rest, context, stdout, stderr);
                 case "telemetry":
                     return Telemetry(rest, context, stdout, stderr);
+                case "symbols":
+                    return ArtifactExport(rest, context, stdout, stderr,
+                        "miller symbols export [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]",
+                        SymbolExportReader.ExportJsonLines);
+                case "complexity":
+                    return ArtifactExport(rest, context, stdout, stderr,
+                        "miller complexity export [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]",
+                        ComplexityExportReader.ExportJsonLines);
                 case "refresh":
                     return Refresh(rest, context, stdout, stderr);
                 case "inspect":
@@ -447,6 +455,35 @@ public static class CliDispatch
             return Usage(err, "miller telemetry export [--jsonl] [--workspace-id ID|all]");
 
         string output = TelemetryExportReader.ExportJsonLines(ctx.TelemetryDbPath, o.Value("workspace-id"));
+        if (output.Length > 0)
+            outw.Write(output);
+        return 0;
+    }
+
+    // The bulk artifact JSONL feeds (`symbols export`, `complexity export`; cli-eros-v1): a fleet
+    // orchestrator's alternative to per-query reads or Miller-private SQLite. One subop (`export`), the
+    // standard read-context selectors, and an incompatible artifact surfaces through the shared
+    // IncompatibleExtractException → exit-3 mapping in Run.
+    private static int ArtifactExport(
+        IReadOnlyList<string> args,
+        WorkspaceContext ctx,
+        TextWriter outw,
+        TextWriter err,
+        string usage,
+        Func<string, string> export)
+    {
+        if (args.Count == 0 || args[0] is "--help" or "-h" or "help")
+            return Usage(err, usage);
+        string operation = args[0].ToLowerInvariant();
+        CliOptions o = CliOptions.Parse(args.Skip(1).ToArray(), "jsonl");
+        if (operation != "export" || o.Positionals.Count > 0)
+            return Usage(err, usage);
+        if (!TryResolveReadContext(ctx, o, err, out ctx))
+            return 2;
+        if (!RequireIndex(ctx, err))
+            return 3;
+
+        string output = export(ctx.ExtractDbPath);
         if (output.Length > 0)
             outw.Write(output);
         return 0;
@@ -1419,6 +1456,10 @@ public static class CliDispatch
                              [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]
           telemetry <op>     Export machine-global Miller telemetry.
                              export [--jsonl] [--workspace-id ID|all]
+          symbols <op>       Bulk-export every symbol row for fleet rollups.   # JSONL
+                             export [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]
+          complexity <op>    Bulk-export per-symbol/per-file complexity metrics.   # JSONL
+                             export [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]
           refresh            Refresh a registered workspace index and return after convergence attempt.
                              [--json] [--wait] [--workspace-id SELECTOR|--workspace DIR] [--full]
           inspect <target>   List a file's symbols, or show a symbol's definition.

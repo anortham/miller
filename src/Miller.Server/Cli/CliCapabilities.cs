@@ -28,6 +28,8 @@ internal static class CliCapabilities
         "content export",
         "patterns --json",
         "telemetry export --jsonl",
+        "symbols export --jsonl",
+        "complexity export --jsonl",
         "workspace status --json",
         "workspace health --json",
         "workspace list --json",
@@ -79,6 +81,8 @@ internal static class CliCapabilities
         sb.AppendLine("supported_export_formats:");
         sb.AppendLine("  - content_corpus jsonl via `miller content export`");
         sb.AppendLine("  - telemetry jsonl via `miller telemetry export --jsonl`");
+        sb.AppendLine("  - symbols jsonl via `miller symbols export --jsonl`");
+        sb.AppendLine("  - complexity_metrics jsonl via `miller complexity export --jsonl`");
         sb.AppendLine("json_commands:");
         foreach (string command in JsonCommands)
             sb.AppendLine("  - " + command);
@@ -175,6 +179,30 @@ internal static class CliCapabilities
             w.WritePropertyName("filters");
             w.WriteStartArray();
             w.WriteStringValue("--workspace-id");
+            w.WriteEndArray();
+            w.WriteEndObject();
+
+            w.WriteStartObject();
+            w.WriteString("name", "symbols");
+            w.WriteString("command", "miller symbols export --jsonl");
+            w.WriteString("format", "jsonl");
+            w.WriteNumber("schema_version", SymbolExportReader.SchemaVersion);
+            w.WritePropertyName("filters");
+            w.WriteStartArray();
+            w.WriteStringValue("--workspace-id");
+            w.WriteStringValue("--workspace");
+            w.WriteEndArray();
+            w.WriteEndObject();
+
+            w.WriteStartObject();
+            w.WriteString("name", "complexity_metrics");
+            w.WriteString("command", "miller complexity export --jsonl");
+            w.WriteString("format", "jsonl");
+            w.WriteNumber("schema_version", ComplexityExportReader.SchemaVersion);
+            w.WritePropertyName("filters");
+            w.WriteStartArray();
+            w.WriteStringValue("--workspace-id");
+            w.WriteStringValue("--workspace");
             w.WriteEndArray();
             w.WriteEndObject();
             w.WriteEndArray();

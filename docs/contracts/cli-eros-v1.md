@@ -58,6 +58,8 @@ Current `json_commands` include:
 | `content list --json` | List imported external/web content. |
 | `content remove --json` | Remove imported external/web content. |
 | `telemetry export --jsonl` | Export raw Miller telemetry rows for Eros dashboard/history ingestion. |
+| `symbols export --jsonl` | Bulk-export one row per symbol for fleet rollups (counts, kinds, doc coverage, clones). |
+| `complexity export --jsonl` | Bulk-export per-symbol/per-file complexity metric rows for fleet hotspot ranking. |
 | `dashboard --json` | Start/reuse the local dashboard helper and return its URL. |
 | `capabilities --json` | Discover this contract surface. |
 
@@ -99,6 +101,28 @@ Capabilities advertise this feed as:
 `miller telemetry export --jsonl [--workspace-id ID|all]` emits raw rows from the machine-global
 `~/.miller/telemetry.db`. The default is all workspaces; `--workspace-id` is an exact stored workspace ID
 filter, not a display-id selector.
+
+`miller symbols export --jsonl [--workspace-id SELECTOR] [--workspace DIR]` emits one JSON line per symbol of
+ONE workspace's index, ordered `(path, start_line, symbol_id)` so an unchanged artifact re-exports
+byte-identically. The selector flags are the normal read-command selectors. An incompatible artifact exits `3`
+with the standard rebuild message. Fields (`schema_version` 1):
+
+- `symbol_id`, `name`, `kind`, `language`, `path` — identity (strings; `symbol_id` is julie's stable id).
+- `start_line`, `end_line`, `start_byte`, `end_byte` — the symbol's whole span (1-based lines).
+- `visibility`, `parent_symbol_id`, `signature` — nullable strings (containment via `parent_symbol_id`).
+- `has_doc` — boolean; true when the symbol carries a non-empty doc comment (doc-coverage rollups).
+- `body_hash` — nullable string; julie's normalized body hash (clone-candidate rollups).
+- `is_test` — boolean; julie's cross-language test signal (prod/test splits).
+
+`miller complexity export --jsonl [--workspace-id SELECTOR] [--workspace DIR]` emits one JSON line per
+`complexity_metrics` row (file-scope and symbol-scope; emitted broadly since julie-extract 2.3.0), ordered
+`(path, start_byte, complexity_metric_id)`. Fields (`schema_version` 1):
+
+- `complexity_metric_id`, `path`, `language`, `scope` (`file`|`symbol`), `symbol_id` (nullable; set for
+  symbol scope), `algorithm_id`.
+- `covered_lines`, `covered_bytes`, `decision_count`, `loop_count`, `max_nesting_depth`,
+  `parameter_count` (nullable).
+- `start_line`, `end_line`, `start_byte`, `end_byte`.
 
 ## Workspace selector rules
 

@@ -879,6 +879,147 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void Symbols_Export_EmitsOneJsonlRowPerSymbol()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        StampBodyHash(fx.DbPath, JulieDbFixture.GetUserId, "blake3:feedfacefeedface");
+
+        var (code, outText, errText) = Run(
+            new[] { "symbols", "export", "--jsonl" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        string[] lines = outText.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.True(lines.Length >= 2, "expected one JSONL row per fixture symbol");
+        JsonElement getUser = lines
+            .Select(line => JsonDocument.Parse(line).RootElement.Clone())
+            .Single(row => row.GetProperty("symbol_id").GetString() == JulieDbFixture.GetUserId);
+        Assert.Equal(1, getUser.GetProperty("schema_version").GetInt32());
+        Assert.Equal("GetUser", getUser.GetProperty("name").GetString());
+        Assert.Equal("csharp", getUser.GetProperty("language").GetString());
+        Assert.Equal("auth/UserService.cs", getUser.GetProperty("path").GetString());
+        Assert.True(getUser.GetProperty("start_line").GetInt64() > 0);
+        Assert.True(getUser.GetProperty("has_doc").GetBoolean());
+        Assert.Equal("blake3:feedfacefeedface", getUser.GetProperty("body_hash").GetString());
+        Assert.False(getUser.GetProperty("is_test").GetBoolean());
+        Assert.True(getUser.TryGetProperty("kind", out _));
+        Assert.True(getUser.TryGetProperty("signature", out _));
+        Assert.True(getUser.TryGetProperty("visibility", out _));
+        Assert.True(getUser.TryGetProperty("parent_symbol_id", out _));
+        Assert.True(getUser.TryGetProperty("end_line", out _));
+    }
+
+    [Fact]
+    public void Symbols_Export_WorkspaceIdSelector_ReadsRegisteredWorkspace()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        SeedRegisteredWorkspace("target-ws", "target-111111111111", fx.WorkspaceRoot, fx.DbPath);
+
+        var (code, outText, errText) = Run(
+            new[] { "symbols", "export", "--jsonl", "--workspace-id", "target-ws" },
+            Context(Path.Combine(_dir, "current", ".miller", "symbols.db")));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("\"name\":\"GetUser\"", outText);
+    }
+
+    [Fact]
+    public void Symbols_UnknownOperation_IsUsageErrorExitTwo()
+    {
+        var (code, _, errText) = Run(
+            new[] { "symbols", "list" },
+            Context(Path.Combine(_dir, "current", ".miller", "symbols.db")));
+
+        Assert.Equal(2, code);
+        Assert.Contains("miller symbols export", errText);
+    }
+
+    [Fact]
+    public void Symbols_Export_IncompatibleExtractSchema_IsOperationalExitThree()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        DowngradeArtifactSchema(fx.DbPath);
+
+        var (code, _, errText) = Run(
+            new[] { "symbols", "export", "--jsonl" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(3, code);
+        Assert.Contains("symbols failed", errText);
+    }
+
+    [Fact]
+    public void Complexity_Export_EmitsMetricRows()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        SeedComplexityMetric(fx.DbPath, JulieDbFixture.GetUserId);
+
+        var (code, outText, errText) = Run(
+            new[] { "complexity", "export", "--jsonl" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        string[] lines = outText.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        JsonElement row = JsonDocument.Parse(Assert.Single(lines)).RootElement;
+        Assert.Equal(1, row.GetProperty("schema_version").GetInt32());
+        Assert.Equal("cx-1", row.GetProperty("complexity_metric_id").GetString());
+        Assert.Equal("auth/UserService.cs", row.GetProperty("path").GetString());
+        Assert.Equal("csharp", row.GetProperty("language").GetString());
+        Assert.Equal("symbol", row.GetProperty("scope").GetString());
+        Assert.Equal(JulieDbFixture.GetUserId, row.GetProperty("symbol_id").GetString());
+        Assert.Equal("julie-ast-complexity-v1", row.GetProperty("algorithm_id").GetString());
+        Assert.Equal(3, row.GetProperty("covered_lines").GetInt64());
+        Assert.Equal(2, row.GetProperty("decision_count").GetInt64());
+        Assert.Equal(1, row.GetProperty("loop_count").GetInt64());
+        Assert.Equal(2, row.GetProperty("max_nesting_depth").GetInt64());
+        Assert.Equal(2, row.GetProperty("parameter_count").GetInt64());
+        Assert.Equal(2, row.GetProperty("start_line").GetInt64());
+        Assert.Equal(4, row.GetProperty("end_line").GetInt64());
+    }
+
+    private static void StampBodyHash(string dbPath, string symbolId, string bodyHash)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "UPDATE symbols SET body_hash = $hash WHERE symbol_id = $id;";
+        cmd.Parameters.AddWithValue("$hash", bodyHash);
+        cmd.Parameters.AddWithValue("$id", symbolId);
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void SeedComplexityMetric(string dbPath, string symbolId)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO complexity_metrics
+                (complexity_metric_id, file_id, path, language, scope, symbol_id, algorithm_id, covered_lines,
+                 covered_bytes, decision_count, loop_count, max_nesting_depth, parameter_count, start_line,
+                 start_column, end_line, end_column, start_byte, end_byte, metadata_json)
+            VALUES
+                ('cx-1', 'file:auth/UserService.cs', 'auth/UserService.cs', 'csharp', 'symbol', $symbolId,
+                 'julie-ast-complexity-v1', 3, 80, 2, 1, 2, 2, 2, 1, 4, 3, 27, 107, NULL);
+            """;
+        cmd.Parameters.AddWithValue("$symbolId", symbolId);
+        cmd.ExecuteNonQuery();
+    }
+
+    [Fact]
     public void Patterns_IncompatibleExtractSchema_IsOperationalExitThree()
     {
         using var fx = DbWithPatterns();
