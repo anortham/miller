@@ -369,6 +369,49 @@ public sealed class SearchTool
     private const int OutsideScopeHintLimit = 3;
     private const int SignatureMaxLength = 110;
 
+    /// <summary>Longest accepted query. A pasted blob beyond this is never a real symbol/text search; reject it
+    /// BEFORE tokenization/CollapseName so it cannot heap-thrash the tokenizers.</summary>
+    internal const int MaxQueryLength = 1000;
+
+    // Same throw-pattern as the ThrowIfNullOrWhiteSpace guard: the MCP boundary catches and renders it as a
+    // clean `search failed:` line instead of a raw stack.
+    private static void ThrowIfQueryTooLong(string query)
+    {
+        if (query.Length > MaxQueryLength)
+        {
+            throw new ArgumentException(
+                $"query is too long ({query.Length} chars; max {MaxQueryLength}). Shorten the query.",
+                nameof(query));
+        }
+    }
+
+    // Cascading over-fetch windows. Post-search filters (test hiding, low-signal kinds, file_pattern/language)
+    // run AFTER the index window is cut, so a heavily filtered query can keep fewer than `limit` rows — even
+    // zero — while matches still exist past the window, with no hint that raising the window would help.
+    private static readonly int[] OverFetchEscalationWindows = [500, 2000, 10000];
+
+    /// <summary>
+    /// Run an index fetch with post-filter escalation: <paramref name="fetchAndFilter"/> queries the index with
+    /// the given window, resets and re-applies the caller's post-search filters in index order (filter, never
+    /// re-sort), and reports (rows the index returned, rows the filters kept). While the index FILLED the window
+    /// (so more rows may exist) and fewer than <paramref name="limit"/> were kept, retry with the next larger
+    /// window (500 → 2000 → 10000).
+    /// </summary>
+    private static void FetchWithEscalation(int overFetch, int limit, Func<int, (int Fetched, int Kept)> fetchAndFilter)
+    {
+        int window = overFetch;
+        (int fetched, int kept) = fetchAndFilter(window);
+        foreach (int nextWindow in OverFetchEscalationWindows)
+        {
+            if (nextWindow <= window)
+                continue;
+            if (kept >= limit || fetched < window)
+                return;
+            window = nextWindow;
+            (fetched, kept) = fetchAndFilter(window);
+        }
+    }
+
     /// <summary>
     /// The pure execution core (no MCP/DI/telemetry) the tool method delegates to. Returns the rendered
     /// string and sets <paramref name="renderedCount"/> to the number of rows actually shown (the page).
@@ -382,6 +425,7 @@ public sealed class SearchTool
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
+        ThrowIfQueryTooLong(query);
         if (limit < 1) limit = 1;
 
         bool fileMode = mode == SearchToolMode.File ||
@@ -398,22 +442,24 @@ public sealed class SearchTool
         var kept = new List<IndexedSymbol>();
         var scores = new List<double>();
         var outsideScope = new List<IndexedSymbol>(OutsideScopeHintLimit);
-        if (fileMode)
+        FetchWithEscalation(overFetch, limit, window =>
         {
-            IReadOnlyList<IndexedSymbol> symbols = index.FindByFilePathFragment(query, overFetch);
-            kept.Capacity = symbols.Count;
-            scores.Capacity = symbols.Count;
-            foreach (IndexedSymbol sym in symbols)
-                AddIfVisible(sym, score: 1.0);
-        }
-        else
-        {
-            IReadOnlyList<SearchHit> hits = index.Search(query, overFetch, SearchMode.Or);
-            kept.Capacity = hits.Count;
-            scores.Capacity = hits.Count;
+            kept.Clear();
+            scores.Clear();
+            outsideScope.Clear();
+            if (fileMode)
+            {
+                IReadOnlyList<IndexedSymbol> symbols = index.FindByFilePathFragment(query, window);
+                foreach (IndexedSymbol sym in symbols)
+                    AddIfVisible(sym, score: 1.0);
+                return (symbols.Count, kept.Count);
+            }
+
+            IReadOnlyList<SearchHit> hits = index.Search(query, window, SearchMode.Or);
             foreach (var hit in hits)
                 AddIfVisible(index.Resolve(hit.Document.DocId), hit.Score);
-        }
+            return (hits.Count, kept.Count);
+        });
 
         int total = kept.Count;
         int page = Math.Min(limit, total);
@@ -480,6 +526,7 @@ public sealed class SearchTool
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
+        ThrowIfQueryTooLong(query);
         if (limit < 1) limit = 1;
 
         // Over-fetch (same cap as symbol search) so the "… N more" overflow note is accurate without paging.
@@ -487,13 +534,20 @@ public sealed class SearchTool
         int overFetch = filters.HasAny ? 500 : Math.Min(limit * 4 + 10, 500);
         var hits = new List<ContentSearchHit>();
         var outsideScope = new List<ContentSearchHit>(OutsideScopeHintLimit);
-        foreach (ContentSearchHit hit in index.Search(query, overFetch))
+        FetchWithEscalation(overFetch, limit, window =>
         {
-            if (filters.Allows(hit.Path, hit.Language))
-                hits.Add(hit);
-            else if (filters.HasAny && outsideScope.Count < OutsideScopeHintLimit)
-                outsideScope.Add(hit);
-        }
+            hits.Clear();
+            outsideScope.Clear();
+            IReadOnlyList<ContentSearchHit> fetched = index.Search(query, window);
+            foreach (ContentSearchHit hit in fetched)
+            {
+                if (filters.Allows(hit.Path, hit.Language))
+                    hits.Add(hit);
+                else if (filters.HasAny && outsideScope.Count < OutsideScopeHintLimit)
+                    outsideScope.Add(hit);
+            }
+            return (fetched.Count, hits.Count);
+        });
 
         int total = hits.Count;
         int page = Math.Min(limit, total);
@@ -543,26 +597,35 @@ public sealed class SearchTool
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
+        ThrowIfQueryTooLong(query);
         if (limit < 1) limit = 1;
 
         ToolSearchFilters filters = ToolSearchFilters.Parse(filePattern, language);
         int overFetch = filters.HasAny ? 500 : Math.Min(limit * 4 + 10, 500);
         var hits = new List<ContentSearchHit>();
         var outsideScope = new List<ContentSearchHit>(OutsideScopeHintLimit);
-        foreach (TextContentSearchHit hit in index.Search(query, WorkspaceContentSearchKinds, overFetch, excludeTests: false))
+        FetchWithEscalation(overFetch, limit, window =>
         {
-            var contentHit = new ContentSearchHit(
-                hit.DisplayPath,
-                hit.Score,
-                hit.Line,
-                hit.Snippet,
-                hit.Language,
-                hit.SourceBytes);
-            if (filters.Allows(contentHit.Path, contentHit.Language))
-                hits.Add(contentHit);
-            else if (filters.HasAny && outsideScope.Count < OutsideScopeHintLimit)
-                outsideScope.Add(contentHit);
-        }
+            hits.Clear();
+            outsideScope.Clear();
+            IReadOnlyList<TextContentSearchHit> fetched =
+                index.Search(query, WorkspaceContentSearchKinds, window, excludeTests: false);
+            foreach (TextContentSearchHit hit in fetched)
+            {
+                var contentHit = new ContentSearchHit(
+                    hit.DisplayPath,
+                    hit.Score,
+                    hit.Line,
+                    hit.Snippet,
+                    hit.Language,
+                    hit.SourceBytes);
+                if (filters.Allows(contentHit.Path, contentHit.Language))
+                    hits.Add(contentHit);
+                else if (filters.HasAny && outsideScope.Count < OutsideScopeHintLimit)
+                    outsideScope.Add(contentHit);
+            }
+            return (fetched.Count, hits.Count);
+        });
 
         int total = hits.Count;
         int page = Math.Min(limit, total);
@@ -631,6 +694,7 @@ public sealed class SearchTool
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
+        ThrowIfQueryTooLong(query);
         ArgumentNullException.ThrowIfNull(contentKinds);
         if (contentKinds.Count == 0)
             throw new ArgumentException("At least one content kind is required.", nameof(contentKinds));
@@ -640,13 +704,20 @@ public sealed class SearchTool
         int overFetch = filters.HasAny ? 500 : Math.Min(limit * 4 + 10, 500);
         var hits = new List<TextContentSearchHit>();
         var outsideScope = new List<TextContentSearchHit>(OutsideScopeHintLimit);
-        foreach (TextContentSearchHit hit in index.Search(query, contentKinds, overFetch, excludeTests))
+        FetchWithEscalation(overFetch, limit, window =>
         {
-            if (filters.Allows(hit.DisplayPath, hit.Language))
-                hits.Add(hit);
-            else if (filters.HasAny && outsideScope.Count < OutsideScopeHintLimit)
-                outsideScope.Add(hit);
-        }
+            hits.Clear();
+            outsideScope.Clear();
+            IReadOnlyList<TextContentSearchHit> fetched = index.Search(query, contentKinds, window, excludeTests);
+            foreach (TextContentSearchHit hit in fetched)
+            {
+                if (filters.Allows(hit.DisplayPath, hit.Language))
+                    hits.Add(hit);
+                else if (filters.HasAny && outsideScope.Count < OutsideScopeHintLimit)
+                    outsideScope.Add(hit);
+            }
+            return (fetched.Count, hits.Count);
+        });
 
         int total = hits.Count;
         int page = Math.Min(limit, total);
@@ -687,6 +758,7 @@ public sealed class SearchTool
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
+        ThrowIfQueryTooLong(query);
         ArgumentException.ThrowIfNullOrWhiteSpace(contentKind);
         if (limit < 1) limit = 1;
 
@@ -694,13 +766,20 @@ public sealed class SearchTool
         int overFetch = filters.HasAny ? 500 : Math.Min(limit * 4 + 10, 500);
         var hits = new List<TextContentSearchHit>();
         var outsideScope = new List<TextContentSearchHit>(OutsideScopeHintLimit);
-        foreach (TextContentSearchHit hit in index.Search(query, contentKind, overFetch, excludeTests))
+        FetchWithEscalation(overFetch, limit, window =>
         {
-            if (filters.Allows(hit.DisplayPath, hit.Language))
-                hits.Add(hit);
-            else if (filters.HasAny && outsideScope.Count < OutsideScopeHintLimit)
-                outsideScope.Add(hit);
-        }
+            hits.Clear();
+            outsideScope.Clear();
+            IReadOnlyList<TextContentSearchHit> fetched = index.Search(query, contentKind, window, excludeTests);
+            foreach (TextContentSearchHit hit in fetched)
+            {
+                if (filters.Allows(hit.DisplayPath, hit.Language))
+                    hits.Add(hit);
+                else if (filters.HasAny && outsideScope.Count < OutsideScopeHintLimit)
+                    outsideScope.Add(hit);
+            }
+            return (fetched.Count, hits.Count);
+        });
 
         int total = hits.Count;
         int page = Math.Min(limit, total);
@@ -746,19 +825,27 @@ public sealed class SearchTool
         ArgumentNullException.ThrowIfNull(index);
         ArgumentNullException.ThrowIfNull(kinds);
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
+        ThrowIfQueryTooLong(query);
         if (limit < 1) limit = 1;
 
         ToolSearchFilters filters = ToolSearchFilters.Parse(filePattern, language);
         int overFetch = filters.HasAny ? 500 : Math.Min(limit * 4 + 10, 500);
         var hits = new List<RegionSearchHit>();
         var outsideScope = new List<RegionSearchHit>(OutsideScopeHintLimit);
-        foreach (RegionSearchHit hit in index.Search(query, kinds, overFetch, excludeTests))
+        FetchWithEscalation(overFetch, limit, window =>
         {
-            if (filters.Allows(hit.Path, hit.Language))
-                hits.Add(hit);
-            else if (filters.HasAny && outsideScope.Count < OutsideScopeHintLimit)
-                outsideScope.Add(hit);
-        }
+            hits.Clear();
+            outsideScope.Clear();
+            IReadOnlyList<RegionSearchHit> fetched = index.Search(query, kinds, window, excludeTests);
+            foreach (RegionSearchHit hit in fetched)
+            {
+                if (filters.Allows(hit.Path, hit.Language))
+                    hits.Add(hit);
+                else if (filters.HasAny && outsideScope.Count < OutsideScopeHintLimit)
+                    outsideScope.Add(hit);
+            }
+            return (fetched.Count, hits.Count);
+        });
 
         int total = hits.Count;
         int page = Math.Min(limit, total);
@@ -819,13 +906,36 @@ public sealed class SearchTool
         return false;
     }
 
+    // mode=auto routing: a bare separator is NOT enough to mean "file path" — `src/utils#helper`,
+    // `src/Run(query)`, and phrase queries containing a '/' must stay on the symbol/text arm. A query is
+    // path-SHAPED only when it ends in a known indexed extension, has multiple separators, or has exactly one
+    // separator with no whitespace and none of the symbol-syntax characters `< > # : ( )`.
     private static bool IsPathLikeQuery(string query, ISymbolLookupIndex index)
     {
-        if (query.Contains('/') || query.Contains('\\'))
+        string trimmed = query.Trim();
+
+        string ext = Path.GetExtension(trimmed);
+        if (ext.Length > 1 && index.KnownExtensions.Contains(ext))
             return true;
 
-        string ext = Path.GetExtension(query.Trim());
-        return ext.Length > 1 && index.KnownExtensions.Contains(ext);
+        int separators = 0;
+        foreach (char c in trimmed)
+        {
+            if (c is '/' or '\\')
+                separators++;
+        }
+
+        if (separators == 0)
+            return false;
+        if (separators > 1)
+            return true;
+
+        foreach (char c in trimmed)
+        {
+            if (char.IsWhiteSpace(c) || c is '<' or '>' or '#' or ':' or '(' or ')')
+                return false;
+        }
+        return true;
     }
 
     private static IReadOnlySet<string> ReadHasDocCommentBestEffort(

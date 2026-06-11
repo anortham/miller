@@ -283,11 +283,16 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
     private static IReadOnlyList<DiskSymbol> TrigramCandidates(SqliteConnection connection, string match, int limit)
     {
         using var cmd = connection.CreateCommand();
+        // The window must be cut by RELEVANCE, not doc_id: when more than `limit` symbols contain the trigram
+        // set, a doc_id-ordered window arbitrarily drops the best interior-substring match. FTS5's built-in
+        // bm25 rank (smaller = better) is a cheap proxy — a shorter collapsed name has higher trigram density
+        // for the same matched phrase — with shortest-name then doc_id tie-breaks for determinism. Final
+        // ordering of trigram-only hits stays doc_id ASC in Search(); only window MEMBERSHIP changes here.
         cmd.CommandText = SymbolSelect("""
             FROM symbols_trigram
             JOIN search_symbols s ON s.symbol_id = symbols_trigram.symbol_id
             WHERE symbols_trigram MATCH $q
-            ORDER BY s.doc_id
+            ORDER BY symbols_trigram.rank, length(s.name), s.doc_id
             LIMIT $lim
             """);
         cmd.Parameters.AddWithValue("$q", match);

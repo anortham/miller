@@ -251,8 +251,18 @@ public sealed class SymbolSearchSidecar
     /// (unreadable extract, write error) so the lock-holding writer can surface/log it; the build is one symbol
     /// read off the search hot path.
     /// </summary>
-    public bool EnsureBuilt(string symbolsDbPath, long revision, string? workspaceRoot = null)
+    public bool EnsureBuilt(string symbolsDbPath, long revision, string? workspaceRoot = null) =>
+        EnsureBuilt(symbolsDbPath, revision, workspaceRoot, out _);
+
+    /// <summary>
+    /// <see cref="EnsureBuilt(string,long,string?)"/>, additionally reporting WHY a rebuild was forced when the
+    /// existing artifact was corrupt/malformed (<paramref name="corruptionReason"/> non-null). A missing artifact
+    /// or plain revision/schema staleness rebuilds quietly — those are normal lifecycle states, not damage — so
+    /// the lock-holding writer can log corruption visibly without noise on every routine convergence.
+    /// </summary>
+    public bool EnsureBuilt(string symbolsDbPath, long revision, string? workspaceRoot, out string? corruptionReason)
     {
+        corruptionReason = null;
         if (!Enabled)
             return false;
         if (RegionOptions.Enabled)
@@ -266,7 +276,7 @@ public sealed class SymbolSearchSidecar
         // rejects a stale-schema artifact, so a revision-ONLY gate here would never rebuild a revision-matching
         // stale-schema artifact and the sidecar would self-heal to the in-memory index forever (the silent-disable
         // bug class of commit 5362b3d). Keeping the two gates in lockstep is the fix.
-        if (ReadFreshArtifactRevision(searchDbPath) == revision)
+        if (ReadFreshArtifactRevision(searchDbPath, out corruptionReason) == revision)
             return false;
 
         IReadOnlyList<IndexedSymbol> symbols = SqliteSymbolReader.Read(symbolsDbPath);
@@ -279,15 +289,24 @@ public sealed class SymbolSearchSidecar
     /// artifact is stale but otherwise healthy. Missing, corrupt, newer-than-target, or schema-stale artifacts
     /// are repaired with a full rebuild. The caller MUST hold the workspace single-writer lock.
     /// </summary>
-    public bool EnsureCurrent(string symbolsDbPath, long revision, string? workspaceRoot = null)
+    public bool EnsureCurrent(string symbolsDbPath, long revision, string? workspaceRoot = null) =>
+        EnsureCurrent(symbolsDbPath, revision, workspaceRoot, out _);
+
+    /// <summary>
+    /// <see cref="EnsureCurrent(string,long,string?)"/>, additionally reporting WHY a full repair rebuild was
+    /// forced when the existing artifact was corrupt/malformed (see
+    /// <see cref="EnsureBuilt(string,long,string?,out string?)"/> for the quiet-vs-warn split).
+    /// </summary>
+    public bool EnsureCurrent(string symbolsDbPath, long revision, string? workspaceRoot, out string? corruptionReason)
     {
+        corruptionReason = null;
         if (!Enabled)
             return false;
         if (RegionOptions.Enabled)
             ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
 
         string searchDbPath = SearchDbPathFor(symbolsDbPath);
-        long? artifactRevision = ReadFreshArtifactRevision(searchDbPath);
+        long? artifactRevision = ReadFreshArtifactRevision(searchDbPath, out corruptionReason);
         if (artifactRevision == revision)
             return false;
 
@@ -328,8 +347,13 @@ public sealed class SymbolSearchSidecar
     // SearchIndexWriter.SchemaVersion. Returns null when the artifact is absent, unreadable, or schema-stale (all
     // ⇒ needs rebuild). The schema gate keeps EnsureBuilt in lockstep with FtsSymbolSearchIndex.Open's version
     // rejection, so an old-schema artifact at a matching revision is rebuilt here rather than never-rebuilt/never-read.
-    private static long? ReadFreshArtifactRevision(string searchDbPath)
+    //
+    // corruptionReason is non-null ONLY when an artifact file EXISTS but cannot be read as a well-formed
+    // search.db (garbage bytes, missing/duplicated meta row, null revision). A missing file and schema-version
+    // staleness are normal lifecycle states and stay quiet — only damage should reach the writer's warning log.
+    private static long? ReadFreshArtifactRevision(string searchDbPath, out string? corruptionReason)
     {
+        corruptionReason = null;
         if (!File.Exists(searchDbPath))
             return null;
 
@@ -346,7 +370,10 @@ public sealed class SymbolSearchSidecar
             cmd.CommandText = "SELECT revision, schema_version FROM meta LIMIT 2;";
             using var reader = cmd.ExecuteReader();
             if (!reader.Read())
+            {
+                corruptionReason = $"search.db at '{searchDbPath}' has no meta row.";
                 return null;
+            }
 
             object schemaRaw = reader.GetValue(1);
             // A schema_version that is missing or != the current writer's ⇒ rebuild, even at a matching revision.
@@ -356,10 +383,18 @@ public sealed class SymbolSearchSidecar
 
             object revisionRaw = reader.GetValue(0);
             if (revisionRaw is DBNull)
+            {
+                corruptionReason = $"search.db at '{searchDbPath}' has a null meta.revision.";
                 return null;
+            }
 
             long revision = Convert.ToInt64(revisionRaw, CultureInfo.InvariantCulture);
-            return reader.Read() ? null : revision;
+            if (reader.Read())
+            {
+                corruptionReason = $"search.db at '{searchDbPath}' has multiple meta rows.";
+                return null;
+            }
+            return revision;
         }
         // A damaged artifact may hold a non-integer revision/schema_version, or lack the meta columns entirely:
         // Convert.ToInt64 can throw FormatException (text), OverflowException (out of range), or InvalidCastException
@@ -368,6 +403,7 @@ public sealed class SymbolSearchSidecar
             ex is SqliteException or InvalidOperationException or IOException or UnauthorizedAccessException
                 or FormatException or OverflowException or InvalidCastException)
         {
+            corruptionReason = $"search.db at '{searchDbPath}' is unreadable: {ex.Message}";
             return null;
         }
     }
