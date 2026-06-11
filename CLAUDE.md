@@ -131,6 +131,15 @@ scripts/test.ps1 all
   graph is registered in one testable place,
   [`MillerServiceRegistration.AddMillerServices`](src/Miller.Server/Hosting/MillerServiceRegistration.cs);
   `HostStartupRegistrationTests` resolves the hosted-service set before bootstrap to guard this.
+- **Version-aware leadership (load-bearing invariant).** The artifact's `artifact_metadata.binary_version`
+  NEVER goes backwards. An instance whose bundled `julie-extract` is older than the artifact never claims the
+  indexer lock (permanent reader, reason in `workspace status`/`health`); a newer-extractor leader auto-runs a
+  forced full rescan on claim; a newer reader displaces an older live leader via a `yield` request on the
+  converge queue (graceful abdication + 60s/requester-alive cooldown — never kill processes manually). Equal
+  versions never yield, so same-version agent swarms cannot thrash. Escape hatch for intentional downgrades:
+  `MILLER_ALLOW_EXTRACTOR_DOWNGRADE=1`. Decision logic lives in
+  [`LeadershipEligibility`](src/Miller.Indexing/LeadershipEligibility.cs); design in
+  [`docs/plans/2026-06-11-version-aware-leadership-design.md`](docs/plans/2026-06-11-version-aware-leadership-design.md).
 - **Sensitive-root guard.** [`WorkspaceRootSafety`](src/Miller.Server/Tools/WorkspaceRootSafety.cs) refuses
   to index the home dir, a filesystem/drive root, or a system dir. It runs at the very top of `Program.cs`
   (before any filesystem touch) and in `workspace open`. Ported from julie's `root_safety.rs` — keep the
