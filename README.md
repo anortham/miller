@@ -18,11 +18,11 @@ The practical difference from a one-time graph dump is that Miller is built for 
   opt out with `MILLER_SEARCH_SIDECAR=0` when debugging the in-memory fallback;
 - cross-language bridge evidence stays structural and provider-scoped, not embedding-driven.
 
-> **Current release: v0.4.0.** Miller ships as agent plugins, self-contained per-platform release archives,
+> **Current release: v0.4.1.** Miller ships as agent plugins, self-contained per-platform release archives,
 > and a source-checkout workflow.
 >
 > Website: [anortham.github.io/miller](https://anortham.github.io/miller/) · Release:
-> [v0.4.0](https://github.com/anortham/miller/releases/tag/v0.4.0)
+> [v0.4.1](https://github.com/anortham/miller/releases/tag/v0.4.1)
 
 ## Quickstart
 
@@ -66,28 +66,28 @@ impact with Miller. Miller writes its local index under that workspace's `.mille
 Use this path when your MCP client does not use Miller's plugin package.
 
 1. Download the archive for your platform from the
-   [v0.4.0 release](https://github.com/anortham/miller/releases/tag/v0.4.0), plus the matching `.sha256`
+   [v0.4.1 release](https://github.com/anortham/miller/releases/tag/v0.4.1), plus the matching `.sha256`
    sidecar:
 
-   - `miller-0.4.0-aarch64-apple-darwin.tar.gz`
-   - `miller-0.4.0-x86_64-apple-darwin.tar.gz`
-   - `miller-0.4.0-x86_64-unknown-linux-gnu.tar.gz`
-   - `miller-0.4.0-x86_64-pc-windows-msvc.zip`
+   - `miller-0.4.1-aarch64-apple-darwin.tar.gz`
+   - `miller-0.4.1-x86_64-apple-darwin.tar.gz`
+   - `miller-0.4.1-x86_64-unknown-linux-gnu.tar.gz`
+   - `miller-0.4.1-x86_64-pc-windows-msvc.zip`
 
 2. Verify and extract it:
 
    ```bash
-   shasum -a 256 -c miller-0.4.0-aarch64-apple-darwin.tar.gz.sha256
-   tar -xzf miller-0.4.0-aarch64-apple-darwin.tar.gz
-   cd miller-0.4.0-aarch64-apple-darwin
+   shasum -a 256 -c miller-0.4.1-aarch64-apple-darwin.tar.gz.sha256
+   tar -xzf miller-0.4.1-aarch64-apple-darwin.tar.gz
+   cd miller-0.4.1-aarch64-apple-darwin
    ./miller version
    ```
 
    ```powershell
-   (Get-FileHash .\miller-0.4.0-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash
-   # compare against miller-0.4.0-x86_64-pc-windows-msvc.zip.sha256, then extract
-   Expand-Archive .\miller-0.4.0-x86_64-pc-windows-msvc.zip -DestinationPath .
-   .\miller-0.4.0-x86_64-pc-windows-msvc\miller.exe version
+   (Get-FileHash .\miller-0.4.1-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash
+   # compare against miller-0.4.1-x86_64-pc-windows-msvc.zip.sha256, then extract
+   Expand-Archive .\miller-0.4.1-x86_64-pc-windows-msvc.zip -DestinationPath .
+   .\miller-0.4.1-x86_64-pc-windows-msvc\miller.exe version
    ```
 
    Keep the extracted directory together. The native library files beside `miller`/`miller.exe`, the `.tools/`
@@ -100,7 +100,7 @@ Use this path when your MCP client does not use Miller's plugin package.
    {
       "mcpServers": {
         "miller": {
-          "command": "/absolute/path/to/miller-0.4.0-aarch64-apple-darwin/miller",
+          "command": "/absolute/path/to/miller-0.4.1-aarch64-apple-darwin/miller",
           "args": ["serve"]
         }
       }
@@ -279,7 +279,7 @@ The single `miller` binary runs two ways:
 
 **Dogfooding the server.** Because MCP runs over stdio, a new build takes effect only after the MCP client
 restarts the subprocess. A build made inside the repo carries its git short SHA — `miller version` prints
-`0.4.0+<sha>` (just `0.4.0` for a build with no `.git`), and the same string heads the `# workspace` block of
+`0.4.1+<sha>` (just `0.4.1` for a build with no `.git`), and the same string heads the `# workspace` block of
 `workspace status`. The status header also includes the process id (`pid <n>`), which is the quickest way to
 confirm a restarted MCP client is talking to a new Miller subprocess when you rebuilt uncommitted changes and
 the SHA suffix stayed the same.
