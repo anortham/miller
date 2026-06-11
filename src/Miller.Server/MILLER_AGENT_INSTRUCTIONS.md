@@ -28,7 +28,8 @@ the tokens.
   a refreshed `search.db`. Symbol hits may include `has_doc`. Optional `workspace_id` accepts a display ID, unique
   prefix, full ID, registered root path, `current`, or `primary`; explicit `workspace_id` defaults `ensure_fresh=true`.
 - `inspect` — A file or symbol you can already name. A file path lists its symbols; a symbol name gives its
-  definition, signature, and docs. `depth=full` adds references, callers/callees, and the body. Use before
+  definition, signature, and docs. `depth=full` adds references, callers/callees, the body, and extractor
+  complexity facts (decision/loop counts, nesting depth, parameters) where the artifact records them. Use before
   reading an entire file. Optional `workspace_id` and `ensure_fresh` follow the same rules as `search`.
 - `context` — A token-budgeted bundle of the most relevant code for a task or question. Give a description of
   what you're working on (optionally a `failing_test` or `stack_trace`) and get a bounded, provenance-tagged set
@@ -59,9 +60,10 @@ the tokens.
   `search` returns snippets; `read` returns bounded windows; `remove` deletes an import. Use `content_kind=web`
   for web-only reads, or `workspace_id=all` on `search` to audit registered workspaces. `export` writes raw JSONL
   chunks for Eros/local integration, so do not use it as an interactive reading shortcut.
-- `patterns` — List, summarize, and search extractor-recognized code shapes from `structural_facts`. Use it for
-  known patterns such as ASP.NET minimal API routes, htmx attributes, Alpine directives, unsafe blocks, or
-  async/await facts when the extractor emits them.
+- `patterns` — List, summarize, and search extractor-recognized code shapes from `structural_facts`. Coverage is
+  broad (130+ pattern ids across ~36 languages): framework facts (ASP.NET routes, htmx, Alpine), language facts
+  (async/await, unsafe blocks, decorators, goroutines), SQL DDL shapes, and JSON/YAML/TOML/Markdown document
+  structure. Run `patterns()` with no arguments first to see what this workspace actually emits.
   This is not raw AST query execution. Use `operation=list|summary|search`, `pattern_id`, `where=key=value`,
   `path`, and `language` to narrow results. Optional `workspace_id` and `ensure_fresh` work for registered workspaces.
 - `workspace` — Index lifecycle. `status` (default), `health` (readiness verdict + quality warnings),

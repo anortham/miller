@@ -186,9 +186,11 @@ scripts/test.ps1 all
   source text directly to symbol ranking just because an old TODO predates content corpus FTS.
 - **Patterns and structural facts.** The `patterns` MCP/CLI surface reads `structural_facts` emitted by
   `julie-extractors`. Miller may list, group, filter, and render generic `pattern_id` facts, but it must not own
-  parser recognition or raw AST query execution. Current extractor examples include ASP.NET minimal API routes,
-  htmx attributes, and Alpine directives. When a new fact shape needs extractor support, add it across all
-  supported languages in `julie-extractors` first, then consume the stable artifact contract from Miller/Eros.
+  parser recognition or raw AST query execution. Since julie-extract 2.3.0 the catalog is broad (~130 pattern ids
+  across ~36 languages, from ASP.NET routes/htmx/Alpine through SQL DDL shapes, async/await, and JSON/YAML/TOML/
+  Markdown document structure) — keep Miller's surface generic over `pattern_id` rather than special-casing
+  examples. When a new fact shape needs extractor support, add it across all supported languages in
+  `julie-extractors` first, then consume the stable artifact contract from Miller/Eros.
 - **Web research.** Miller has a mirrored `miller-web-research` skill. Web fetching stays outside Miller in the
   skill layer via `browser39`; Miller imports fetched markdown as `web` content and supports bounded
   search/read through the content corpus.

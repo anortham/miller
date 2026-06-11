@@ -17,6 +17,19 @@ public sealed record SymbolDetail(
     int? BodyEndLine);
 
 /// <summary>
+/// One symbol-scoped <c>complexity_metrics</c> row (schema v3; emitted broadly since julie-extract 2.3.0).
+/// Read lazily for <c>inspect depth=full</c> like <see cref="SymbolDetail"/>. <see cref="ParameterCount"/> is
+/// nullable: julie writes NULL where a parameter list does not apply.
+/// </summary>
+public sealed record SymbolComplexity(
+    string AlgorithmId,
+    long CoveredLines,
+    long DecisionCount,
+    long LoopCount,
+    long MaxNestingDepth,
+    long? ParameterCount);
+
+/// <summary>
 /// One identifier-table row: a name-based reference, callable site, type usage, or member access. Refs are
 /// NAME-based because <c>identifiers.target_symbol_id</c> is ALWAYS NULL at extract — resolution is the
 /// consumer's job (M4). <see cref="ContainingSymbolId"/> (the enclosing symbol) IS populated and is the

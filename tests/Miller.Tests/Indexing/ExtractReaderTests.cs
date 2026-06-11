@@ -54,6 +54,68 @@ public sealed class ExtractReaderTests
         Assert.Null(ExtractReader.ReadDetail(fx.DbPath, "ffffffffffffffffffffffffffffffff"));
     }
 
+    // ---- ReadSymbolComplexity ----
+
+    [Fact]
+    public void ReadSymbolComplexity_ReturnsSymbolScopedRow()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        SeedComplexityRow(fx.DbPath, JulieDbFixture.GetUserId, parameterCount: 1);
+
+        var complexity = ExtractReader.ReadSymbolComplexity(fx.DbPath, JulieDbFixture.GetUserId);
+
+        Assert.NotNull(complexity);
+        Assert.Equal("julie-ast-complexity-v1", complexity!.AlgorithmId);
+        Assert.Equal(3, complexity.CoveredLines);
+        Assert.Equal(2, complexity.DecisionCount);
+        Assert.Equal(1, complexity.LoopCount);
+        Assert.Equal(2, complexity.MaxNestingDepth);
+        Assert.Equal(1, complexity.ParameterCount);
+    }
+
+    [Fact]
+    public void ReadSymbolComplexity_NullParameterCount_MapsToNull()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        SeedComplexityRow(fx.DbPath, JulieDbFixture.GetUserId, parameterCount: null);
+
+        var complexity = ExtractReader.ReadSymbolComplexity(fx.DbPath, JulieDbFixture.GetUserId);
+
+        Assert.NotNull(complexity);
+        Assert.Null(complexity!.ParameterCount);
+    }
+
+    [Fact]
+    public void ReadSymbolComplexity_NoRow_ReturnsNull()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        Assert.Null(ExtractReader.ReadSymbolComplexity(fx.DbPath, JulieDbFixture.GetUserId));
+    }
+
+    internal static void SeedComplexityRow(string dbPath, string symbolId, long? parameterCount)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO complexity_metrics
+                (complexity_metric_id, file_id, path, language, scope, symbol_id, algorithm_id, covered_lines,
+                 covered_bytes, decision_count, loop_count, max_nesting_depth, parameter_count, start_line,
+                 start_column, end_line, end_column, start_byte, end_byte, metadata_json)
+            VALUES
+                ('cx-1', 'file:auth/UserService.cs', 'auth/UserService.cs', 'csharp', 'symbol', $symbolId,
+                 'julie-ast-complexity-v1', 3, 80, 2, 1, 2, $parameterCount, 2, 1, 4, 3, 27, 107, NULL);
+            """;
+        command.Parameters.AddWithValue("$symbolId", symbolId);
+        command.Parameters.AddWithValue("$parameterCount", parameterCount is null ? DBNull.Value : parameterCount);
+        command.ExecuteNonQuery();
+    }
+
     // ---- ReadReferences (name-based) ----
 
     [Fact]

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 
 namespace Miller.Indexing;
@@ -99,7 +100,8 @@ public static class WorkspaceHealthReader
                    target_relationships, actual_relationships,
                    target_pending_relationships, actual_pending_relationships,
                    target_identifiers, actual_identifiers,
-                   target_types, actual_types
+                   target_types, actual_types,
+                   kind_coverage_json
             FROM language_capabilities
             ORDER BY language;
             """;
@@ -118,10 +120,61 @@ public static class WorkspaceHealthReader
                 TargetIdentifiers: reader.GetInt64(7),
                 ActualIdentifiers: reader.GetInt64(8),
                 TargetTypes: reader.GetInt64(9),
-                ActualTypes: reader.GetInt64(10)));
+                ActualTypes: reader.GetInt64(10),
+                KindCoverage: ParseKindCoverage(reader.IsDBNull(11) ? null : reader.GetString(11))));
         }
 
         return rows;
+    }
+
+    // The artifact contract guards kind_coverage_json shape upstream (julie golden contract); an
+    // unparseable cell degrades to "no depth facts" here rather than failing the whole health surface.
+    private static IReadOnlyList<KindCoverageDomain> ParseKindCoverage(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return Array.Empty<KindCoverageDomain>();
+
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                return Array.Empty<KindCoverageDomain>();
+
+            var domains = new List<KindCoverageDomain>();
+            foreach (JsonProperty domain in document.RootElement.EnumerateObject())
+            {
+                if (domain.Value.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                domains.Add(new KindCoverageDomain(
+                    Domain: domain.Name,
+                    Supported: ReadKindArray(domain.Value, "supported"),
+                    OpenGaps: ReadKindArray(domain.Value, "open_gaps"),
+                    NotApplicable: ReadKindArray(domain.Value, "not_applicable")));
+            }
+
+            domains.Sort(static (a, b) => string.CompareOrdinal(a.Domain, b.Domain));
+            return domains;
+        }
+        catch (JsonException)
+        {
+            return Array.Empty<KindCoverageDomain>();
+        }
+    }
+
+    private static IReadOnlyList<string> ReadKindArray(JsonElement domain, string propertyName)
+    {
+        if (!domain.TryGetProperty(propertyName, out JsonElement array) || array.ValueKind != JsonValueKind.Array)
+            return Array.Empty<string>();
+
+        var values = new List<string>();
+        foreach (JsonElement element in array.EnumerateArray())
+        {
+            if (element.ValueKind == JsonValueKind.String)
+                values.Add(element.GetString()!);
+        }
+
+        return values;
     }
 
     private static IReadOnlyList<FileStatusGroup> ReadFileStatuses(SqliteConnection connection)
@@ -234,7 +287,19 @@ public sealed record LanguageCapabilitySummary(
     long TargetIdentifiers,
     long ActualIdentifiers,
     long TargetTypes,
-    long ActualTypes);
+    long ActualTypes,
+    IReadOnlyList<KindCoverageDomain> KindCoverage);
+
+/// <summary>
+/// One extraction domain from the artifact's per-language kind_coverage depth contract
+/// (v2.3.0 carries ten domains: symbols, relationships, identifiers, body_spans, annotations,
+/// doc_comments, literals, source_regions, structural_facts, complexity_metrics).
+/// </summary>
+public sealed record KindCoverageDomain(
+    string Domain,
+    IReadOnlyList<string> Supported,
+    IReadOnlyList<string> OpenGaps,
+    IReadOnlyList<string> NotApplicable);
 
 public sealed record FileStatusGroup(string Language, string Status, long Count);
 

@@ -664,10 +664,36 @@ public static class WorkspaceRender
             w.WriteNumber("actual_identifiers", row.ActualIdentifiers);
             w.WriteNumber("target_types", row.TargetTypes);
             w.WriteNumber("actual_types", row.ActualTypes);
+            WriteKindCoverageJson(w, row.KindCoverage);
             w.WriteEndObject();
         }
         w.WriteEndArray();
         w.WriteEndObject();
+    }
+
+    private static void WriteKindCoverageJson(Utf8JsonWriter w, IReadOnlyList<KindCoverageDomain> domains)
+    {
+        w.WritePropertyName("kind_coverage");
+        w.WriteStartObject();
+        foreach (KindCoverageDomain domain in domains)
+        {
+            w.WritePropertyName(domain.Domain);
+            w.WriteStartObject();
+            WriteKindArray(w, "supported", domain.Supported);
+            WriteKindArray(w, "open_gaps", domain.OpenGaps);
+            WriteKindArray(w, "not_applicable", domain.NotApplicable);
+            w.WriteEndObject();
+        }
+        w.WriteEndObject();
+    }
+
+    private static void WriteKindArray(Utf8JsonWriter w, string propertyName, IReadOnlyList<string> values)
+    {
+        w.WritePropertyName(propertyName);
+        w.WriteStartArray();
+        foreach (string value in values)
+            w.WriteStringValue(value);
+        w.WriteEndArray();
     }
 
     private static void WriteFileStatusesJson(

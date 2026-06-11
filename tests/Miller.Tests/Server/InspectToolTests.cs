@@ -229,6 +229,56 @@ public sealed class InspectToolTests
     }
 
     [Fact]
+    public void Run_SymbolFull_WithComplexityRow_RendersComplexityLine()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        ExtractReaderTests.SeedComplexityRow(fx.DbPath, JulieDbFixture.GetUserId, parameterCount: 1);
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "GetUser", depth: "full", kind: null, scope: null, limit: 50, json: false, out _);
+
+        Assert.Contains("complexity: decisions=2  loops=1  nesting=2  params=1  lines=3", output);
+    }
+
+    [Fact]
+    public void Run_SymbolFull_NoComplexityRow_OmitsComplexityLine()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "GetUser", depth: "full", kind: null, scope: null, limit: 50, json: false, out _);
+
+        Assert.DoesNotContain("complexity:", output);
+    }
+
+    [Fact]
+    public void Run_SymbolFull_Json_ExposesComplexityOrNull()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        var (index, resolver) = Build(fx);
+
+        string withoutRow = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "GetUser", depth: "full", kind: null, scope: null, limit: 50, json: true, out _);
+        using (var doc = JsonDocument.Parse(withoutRow))
+            Assert.Equal(JsonValueKind.Null, doc.RootElement.GetProperty("complexity").ValueKind);
+
+        ExtractReaderTests.SeedComplexityRow(fx.DbPath, JulieDbFixture.GetUserId, parameterCount: 1);
+        string withRow = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "GetUser", depth: "full", kind: null, scope: null, limit: 50, json: true, out _);
+
+        using var withDoc = JsonDocument.Parse(withRow);
+        JsonElement complexity = withDoc.RootElement.GetProperty("complexity");
+        Assert.Equal("julie-ast-complexity-v1", complexity.GetProperty("algorithm_id").GetString());
+        Assert.Equal(2, complexity.GetProperty("decision_count").GetInt64());
+        Assert.Equal(1, complexity.GetProperty("loop_count").GetInt64());
+        Assert.Equal(2, complexity.GetProperty("max_nesting_depth").GetInt64());
+        Assert.Equal(1, complexity.GetProperty("parameter_count").GetInt64());
+        Assert.Equal(3, complexity.GetProperty("covered_lines").GetInt64());
+    }
+
+    [Fact]
     public void Run_FullDepth_FreshFile_RendersBody()
     {
         using var fx = JulieDbFixture.CreateForInspect();

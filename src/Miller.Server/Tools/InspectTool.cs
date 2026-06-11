@@ -338,6 +338,18 @@ public sealed class InspectTool
         if (!full)
             return sb.ToString().TrimEnd('\n');
 
+        // complexity (symbol-scoped extract fact; absent for older artifacts or uncovered kinds)
+        var complexity = ExtractReader.ReadSymbolComplexity(dbPath, sym.SymbolId);
+        if (complexity is not null)
+        {
+            sb.Append("complexity: decisions=").Append(complexity.DecisionCount)
+                .Append("  loops=").Append(complexity.LoopCount)
+                .Append("  nesting=").Append(complexity.MaxNestingDepth);
+            if (complexity.ParameterCount is { } parameters)
+                sb.Append("  params=").Append(parameters);
+            sb.Append("  lines=").Append(complexity.CoveredLines).Append('\n');
+        }
+
         // children
         var children = index.FindChildren(sym.SymbolId);
         if (children.Count > 0)
@@ -399,6 +411,27 @@ public sealed class InspectTool
 
             if (full)
             {
+                var complexity = ExtractReader.ReadSymbolComplexity(dbPath, sym.SymbolId);
+                if (complexity is null)
+                {
+                    w.WriteNull("complexity");
+                }
+                else
+                {
+                    w.WritePropertyName("complexity");
+                    w.WriteStartObject();
+                    w.WriteString("algorithm_id", complexity.AlgorithmId);
+                    w.WriteNumber("decision_count", complexity.DecisionCount);
+                    w.WriteNumber("loop_count", complexity.LoopCount);
+                    w.WriteNumber("max_nesting_depth", complexity.MaxNestingDepth);
+                    if (complexity.ParameterCount is { } parameters)
+                        w.WriteNumber("parameter_count", parameters);
+                    else
+                        w.WriteNull("parameter_count");
+                    w.WriteNumber("covered_lines", complexity.CoveredLines);
+                    w.WriteEndObject();
+                }
+
                 w.WritePropertyName("children");
                 WriteSymbolArray(w, index.FindChildren(sym.SymbolId));
 

@@ -68,6 +68,18 @@ public sealed class WorkspaceHealthReaderTests
         Assert.Equal(2, capability.TargetTypes);
         Assert.Equal(1, capability.ActualTypes);
 
+        Assert.Equal(2, capability.KindCoverage.Count);
+        KindCoverageDomain docComments = capability.KindCoverage[0];
+        Assert.Equal("doc_comments", docComments.Domain);
+        Assert.Equal(["method"], docComments.Supported);
+        Assert.Equal(["property"], docComments.OpenGaps);
+        Assert.Empty(docComments.NotApplicable);
+        KindCoverageDomain symbols = capability.KindCoverage[1];
+        Assert.Equal("symbols", symbols.Domain);
+        Assert.Equal(["class", "method"], symbols.Supported);
+        Assert.Empty(symbols.OpenGaps);
+        Assert.Equal(["import"], symbols.NotApplicable);
+
         Assert.True(facts.Files.Available);
         Assert.Contains(facts.Files.Rows, row =>
             row.Language == "csharp" && row.Status == "indexed" && row.Count == 1);
@@ -176,7 +188,7 @@ public sealed class WorkspaceHealthReaderTests
                 ('csharp', 'tree-sitter-c-sharp', '[".cs"]', 'ready',
                  8, 3, 1, 6, 2,
                  7, 2, 1, 5, 1,
-                 '{}');
+                 '{"symbols":{"supported":["class","method"],"open_gaps":[],"not_applicable":["import"]},"doc_comments":{"supported":["method"],"open_gaps":["property"],"not_applicable":[]}}');
             """);
         Exec(connection, """
             INSERT INTO structural_facts

@@ -47,7 +47,11 @@ public sealed class WorkspaceRenderTests
         }),
         LanguageCapabilities: HealthFactSection<LanguageCapabilitySummary>.FromRows(new[]
         {
-            new LanguageCapabilitySummary("csharp", 8, 7, 3, 2, 1, 1, 6, 5, 2, 1),
+            new LanguageCapabilitySummary("csharp", 8, 7, 3, 2, 1, 1, 6, 5, 2, 1,
+                KindCoverage:
+                [
+                    new KindCoverageDomain("doc_comments", Supported: ["method"], OpenGaps: ["property"], NotApplicable: []),
+                ]),
         }),
         StructuralFacts: HealthFactSection<StructuralFactGroup>.FromRows(new[]
         {
@@ -283,6 +287,12 @@ public sealed class WorkspaceRenderTests
             .GetProperty("parse_diagnostics").GetProperty("rows")[0].GetProperty("language").GetString());
         Assert.Equal("relationships", root.GetProperty("extraction_quality")
             .GetProperty("capability_gaps").GetProperty("rows")[0].GetProperty("capability").GetString());
+        JsonElement capabilityRow = root.GetProperty("extraction_quality")
+            .GetProperty("language_capabilities").GetProperty("rows")[0];
+        JsonElement docComments = capabilityRow.GetProperty("kind_coverage").GetProperty("doc_comments");
+        Assert.Equal("method", docComments.GetProperty("supported")[0].GetString());
+        Assert.Equal("property", docComments.GetProperty("open_gaps")[0].GetString());
+        Assert.Equal(0, docComments.GetProperty("not_applicable").GetArrayLength());
         Assert.True(root.GetProperty("extraction_quality").TryGetProperty("structural_facts", out JsonElement structural));
         Assert.True(structural.GetProperty("available").GetBoolean());
         Assert.True(root.GetProperty("extraction_quality").TryGetProperty("complexity_metrics", out JsonElement complexity));

@@ -220,8 +220,10 @@ from the CLI, then retry the read tool. The `workspace_id=all` selector is only 
 across registered workspace content DBs.
 
 `patterns` is the structural-facts surface. It lists and searches known code-shape facts emitted by
-`julie-extractors`, such as ASP.NET minimal API routes, htmx attributes, Alpine directives, unsafe blocks, or
-async/await facts when extractor support exists. It is intentionally not a raw AST query language:
+`julie-extractors` — 130+ pattern ids across ~36 languages as of julie-extract 2.3.0, spanning framework facts
+(ASP.NET minimal API routes, htmx attributes, Alpine directives), language facts (async/await, unsafe blocks,
+decorators, goroutines), SQL DDL shapes, and JSON/YAML/TOML/Markdown document structure. It is intentionally not
+a raw AST query language:
 
 ```text
 patterns()
@@ -382,8 +384,8 @@ What these prove:
   instead of hydrating the full graph.
 - Symbol search stays narrow and structural (`name + signature`). Docs/config use `--mode content`; source
   bodies and imported text use the explicit content corpus modes.
-- `patterns --json` discovers extractor-recognized code-shape facts, including ASP.NET minimal API routes, htmx
-  attributes, and Alpine directives when present, without private SQLite reads or raw AST queries.
+- `patterns --json` discovers extractor-recognized code-shape facts across the full pattern catalog (framework
+  routes, language constructs, SQL DDL, data-document structure) without private SQLite reads or raw AST queries.
 - `inspect`, `context`, and `impact` use the same projection-specific read paths exposed to MCP tools.
 - The dashboard is operational evidence, not a separate product UI: it shows registered workspaces, index facts,
   telemetry, latency/failure signals, and scoped JSON endpoints from the same local state.

@@ -40,7 +40,11 @@ Removing or renaming documented fields requires a new contract version.
 - `extraction_quality.capability_gaps`: `available`, `error`, and grouped rows with `language`, `capability`,
   `status`, `count`.
 - `extraction_quality.language_capabilities`: `available`, `error`, and target/actual counts by language for
-  symbols, relationships, pending relationships, identifiers, and types.
+  symbols, relationships, pending relationships, identifiers, and types. Each row also carries
+  `kind_coverage`: an object keyed by extraction domain (julie-extract v2.3.0 emits ten, e.g. `symbols`,
+  `doc_comments`, `structural_facts`), each with `supported`, `open_gaps`, and `not_applicable` kind arrays.
+  Consumers must treat the domain set as open-ended; absent or empty `kind_coverage` means the artifact
+  predates the depth contract.
 - `extraction_quality.structural_facts`: `available`, `error`, and grouped rows with `language`, `pattern_id`,
   `capture_name`, `count`.
 - `extraction_quality.complexity_metrics`: `available`, `error`, and grouped rows with `language`, `scope`,
