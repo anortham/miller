@@ -737,25 +737,66 @@ public sealed class SearchToolTests
     }
 
     [Fact]
+    public void Run_Compact_GroupsRepeatedFiles_AndKeepsDistinctFilesFlat()
+    {
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
+        {
+            new JulieDbFixture.SymbolRow("c0000000000000000000000000000001", "ParseHeader", "method", "csharp",
+                "src/Parser.cs", "string ParseHeader()", 10, ParentId: null),
+            new JulieDbFixture.SymbolRow("c0000000000000000000000000000002", "ParseBody", "method", "csharp",
+                "src/Parser.cs", "string ParseBody()", 20, ParentId: null),
+            new JulieDbFixture.SymbolRow("c0000000000000000000000000000003", "ParseFooter", "method", "csharp",
+                "src/Render.cs", "string ParseFooter()", 30, ParentId: null),
+        });
+        var index = BuildIndex(fx);
+
+        string grouped = SearchTool.Run(index, "Parse", SearchToolMode.Symbol, limit: 10,
+            excludeTests: false, json: false, out _);
+
+        // src/Parser.cs repeats, so its path renders once with rank-ordered rows under it.
+        Assert.Contains("src/Parser.cs:\n", grouped);
+        Assert.Contains(":10 ParseHeader method  string ParseHeader()", grouped);
+        Assert.Contains(":20 ParseBody method  string ParseBody()", grouped);
+        Assert.Contains("src/Render.cs:\n", grouped);
+        Assert.Equal(1, grouped.Split("src/Parser.cs").Length - 1);
+
+        string flat = SearchTool.Run(index, "ParseFooter", SearchToolMode.Symbol, limit: 10,
+            excludeTests: false, json: false, out _);
+
+        // A page of all-distinct files stays one-line-per-hit (no group header).
+        Assert.DoesNotContain("src/Render.cs:\n", flat);
+        Assert.Contains("src/Render.cs:30", flat);
+    }
+
+    [Fact]
     public void Run_PreservesIndexOrdering_DoesNotReSort()
     {
         using var fx = JulieDbFixture.CreateDefault();
         var index = BuildIndex(fx);
 
-        // Compare the tool's rendered order against the raw index order for the same query.
-        var rawOrder = index.Search("http", limit: 20)
-            .Select(h => index.Resolve(h.Document.DocId).Name)
+        // Compare the tool's rendered order against the raw index order for the same query. Compact output
+        // groups repeated files (path printed once), so the pinned invariant is: group order follows each
+        // file's best hit, and rows inside a group keep index order — still filter-only, never re-scored.
+        var rawHits = index.Search("http", limit: 20)
+            .Select(h => index.Resolve(h.Document.DocId))
+            .ToList();
+        var expectedNames = rawHits
+            .GroupBy(s => s.FilePath) // LINQ GroupBy preserves first-appearance key order
+            .SelectMany(g => g)
+            .Select(s => s.Name)
             .ToList();
 
         string output = SearchTool.Run(index, "http", SearchToolMode.Auto, limit: 20,
             excludeTests: false, json: false, out _);
 
         var renderedNames = output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
-            .Where(l => !l.StartsWith('…') && !l.Contains("more"))
-            .Select(l => l.Split("  ", StringSplitOptions.RemoveEmptyEntries)[0].Trim())
+            .Where(l => !l.StartsWith('…') && !l.Contains("more") && !l.EndsWith(':'))
+            .Select(l => l.StartsWith("  :")
+                ? l.TrimStart().Split(' ', StringSplitOptions.RemoveEmptyEntries)[1] // grouped row: ":line Name kind…"
+                : l.Split("  ", StringSplitOptions.RemoveEmptyEntries)[0].Trim())    // flat row: "Name  kind  path:line…"
             .ToList();
 
-        Assert.Equal(rawOrder, renderedNames);
+        Assert.Equal(expectedNames, renderedNames);
     }
 
     [Fact]

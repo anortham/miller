@@ -1044,27 +1044,63 @@ public sealed class SearchTool
         if (definitionIndex >= 0)
             return RenderDefinitionCompact(kept, page, total, definitionIndex, query, compactBanner, hasDocSymbolIds);
 
+        var groups = new List<(string FilePath, List<IndexedSymbol> Symbols)>();
+        for (int i = 0; i < page; i++)
+        {
+            IndexedSymbol symbol = kept[i];
+            int groupIndex = groups.FindIndex(group => group.FilePath == symbol.FilePath);
+            if (groupIndex >= 0)
+                groups[groupIndex].Symbols.Add(symbol);
+            else
+                groups.Add((symbol.FilePath, new List<IndexedSymbol> { symbol }));
+        }
+
         var sb = new StringBuilder();
         if (!string.IsNullOrWhiteSpace(compactBanner))
             sb.Append(compactBanner).Append('\n');
-        for (int i = 0; i < page; i++)
+        if (groups.Count == page)
         {
-            var s = kept[i];
-            sb.Append(s.Name).Append("  ").Append(s.Kind).Append("  ")
-              .Append(s.FilePath).Append(':').Append(s.StartLine);
-            if (IsLowSignalKind(s.Kind))
-                sb.Append("  low_signal");
-            else if (!string.IsNullOrEmpty(s.Signature))
-                sb.Append("  ").Append(Truncate(s.Signature!, SignatureMaxLength));
-            if (hasDocSymbolIds?.Contains(s.SymbolId) == true)
-                sb.Append("  has_doc");
-            if (i < page - 1)
-                sb.Append('\n');
+            // Every hit is in a distinct file: a path-per-row line is strictly cheaper than a group header.
+            for (int i = 0; i < page; i++)
+            {
+                var s = kept[i];
+                sb.Append(s.Name).Append("  ").Append(s.Kind).Append("  ")
+                  .Append(s.FilePath).Append(':').Append(s.StartLine);
+                AppendSymbolAnnotations(sb, s, hasDocSymbolIds);
+                if (i < page - 1)
+                    sb.Append('\n');
+            }
+        }
+        else
+        {
+            // A file repeats: print its path once and rank-ordered rows under it (group order = best hit's rank).
+            for (int g = 0; g < groups.Count; g++)
+            {
+                if (g > 0)
+                    sb.Append('\n');
+                sb.Append(groups[g].FilePath).Append(':');
+                foreach (IndexedSymbol s in groups[g].Symbols)
+                {
+                    sb.Append('\n').Append("  :").Append(s.StartLine)
+                      .Append(' ').Append(s.Name).Append(' ').Append(s.Kind);
+                    AppendSymbolAnnotations(sb, s, hasDocSymbolIds);
+                }
+            }
         }
         int remainder = total - page;
         if (remainder > 0)
             sb.Append('\n').Append("… ").Append(remainder).Append(" more (raise limit)");
         return sb.ToString();
+    }
+
+    private static void AppendSymbolAnnotations(StringBuilder sb, IndexedSymbol s, IReadOnlySet<string>? hasDocSymbolIds)
+    {
+        if (IsLowSignalKind(s.Kind))
+            sb.Append("  low_signal");
+        else if (!string.IsNullOrEmpty(s.Signature))
+            sb.Append("  ").Append(Truncate(s.Signature!, SignatureMaxLength));
+        if (hasDocSymbolIds?.Contains(s.SymbolId) == true)
+            sb.Append("  has_doc");
     }
 
     private static string RenderFileCompact(

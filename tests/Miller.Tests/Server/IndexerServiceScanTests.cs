@@ -189,7 +189,10 @@ public sealed class IndexerServiceScanTests
             createOps,
             TimeSpan.FromHours(1),
             sidecar ?? SymbolSearchSidecar.Disabled,
-            attachFileWatchers: false);
+            attachFileWatchers: false,
+            // Stub the own-version probe: the production default execs the bundled julie-extract, which
+            // both spawns a subprocess in the fast suite and fails (5s timeout each) when .tools is absent.
+            ownExtractorVersion: static () => MillerExtractContract.PinnedJulieExtractVersion);
     }
 
     // A tiny real julie artifact (synthetic, no subprocess) the sidecar build can read symbols from. The interior
