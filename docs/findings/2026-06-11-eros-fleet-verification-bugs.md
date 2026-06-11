@@ -84,6 +84,15 @@ schema 3, `status: refreshed` → `patterns` exit 0).
   every verb's exit-3 catch into the generic exit-1 handler. `CliDispatch.Run` now maps it to
   exit 3 for all verbs.
 
+A pre-release adversarial review (Codex) caught two residual gaps in the fixes above, closed the
+same day: (a) Bug 1's cache eviction only fired when *this process's* refresh did the rebuild —
+but the fleet shape is a CLI rebuild in another process beside a live server, whose own scan then
+legitimately reports `no_change`; the cache key now includes the `symbols.db` file identity
+(last-write stamp + length) so an externally rewritten artifact can never collide with a cached
+parse. (b) Bug 2's valueless-selector rule was enforced for lifecycle verbs only; the shared read
+selector still let `--workspace-id` (no value) be masked by `--workspace` or fall back to the
+current workspace — now exit 2 in every combination.
+
 ## Contract-coverage note (not a bug)
 
 While verifying dependency-inventory feasibility: `json.property.v1` facts cover `package.json`

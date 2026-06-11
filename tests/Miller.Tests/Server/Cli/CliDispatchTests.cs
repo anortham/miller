@@ -926,6 +926,34 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void ReadCommand_WorkspaceIdFlagWithoutValue_IsUsageErrorExitTwo()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+
+        // The valueless flag must be a hard usage error, never a silent fallback to the current workspace.
+        var (code, _, errText) = Run(
+            new[] { "symbols", "export", "--jsonl", "--workspace-id" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(2, code);
+        Assert.Contains("--workspace-id requires a value", errText);
+    }
+
+    [Fact]
+    public void ReadCommand_ValuelessWorkspaceIdFlag_IsNotMaskedByTheWorkspaceFlag()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        SeedRegisteredWorkspace("target-ws", "target-111111111111", fx.WorkspaceRoot, fx.DbPath);
+
+        var (code, _, errText) = Run(
+            new[] { "symbols", "export", "--jsonl", "--workspace-id", "--workspace", fx.WorkspaceRoot },
+            Context(Path.Combine(_dir, "current", ".miller", "symbols.db")));
+
+        Assert.Equal(2, code);
+        Assert.Contains("--workspace-id requires a value", errText);
+    }
+
+    [Fact]
     public void Symbols_UnknownOperation_IsUsageErrorExitTwo()
     {
         var (code, _, errText) = Run(

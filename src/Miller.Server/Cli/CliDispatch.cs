@@ -1331,23 +1331,30 @@ public static class CliDispatch
         out WorkspaceContext readContext)
     {
         readContext = ctx;
-        string? selector = options.Value("workspace-id");
-        bool selectorFlagPresent = options.Has("workspace-id");
-        if (string.IsNullOrWhiteSpace(selector))
-        {
-            selector = options.Value("workspace");
-            if (!string.IsNullOrWhiteSpace(selector))
-                selector = Path.GetFullPath(selector, ctx.WorkspaceRoot);
-            selectorFlagPresent = options.Has("workspace");
-        }
-
-        if (!selectorFlagPresent)
+        bool idFlagPresent = options.Has("workspace-id");
+        bool pathFlagPresent = options.Has("workspace");
+        if (!idFlagPresent && !pathFlagPresent)
             return true;
 
+        // A valueless selector flag is a usage error in every combination — it must never be masked by the
+        // other flag or fall back silently to the current workspace (the lifecycle verbs already enforce this).
+        string? selector = options.Value("workspace-id");
+        if (idFlagPresent && string.IsNullOrWhiteSpace(selector))
+        {
+            err.WriteLine("--workspace-id requires a value.");
+            return false;
+        }
+
         if (string.IsNullOrWhiteSpace(selector))
         {
-            err.WriteLine("workspace selector requires a value: --workspace-id <selector>.");
-            return false;
+            string? path = options.Value("workspace");
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                err.WriteLine("--workspace requires a value.");
+                return false;
+            }
+
+            selector = Path.GetFullPath(path, ctx.WorkspaceRoot);
         }
 
         if (IsCurrentReadSelector(ctx, selector))

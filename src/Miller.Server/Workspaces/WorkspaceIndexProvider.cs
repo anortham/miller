@@ -214,7 +214,7 @@ public sealed class WorkspaceIndexProvider
 
         string dbPath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
         string workspaceKey = string.IsNullOrEmpty(_currentWorkspace.WorkspaceId) ? dbPath : _currentWorkspace.WorkspaceId;
-        var key = new CacheKey(workspaceKey, dbPath, revision);
+        var key = KeyFor(workspaceKey, dbPath, revision);
         return GetOrLoadSymbolSearch(key, dbPath, () => holderIndex).Index;
     }
 
@@ -246,7 +246,7 @@ public sealed class WorkspaceIndexProvider
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
         long revision = row.LastRevision ?? 0;
-        var key = new CacheKey(row.WorkspaceId, row.IndexDbPath, revision);
+        var key = KeyFor(row.WorkspaceId, row.IndexDbPath, revision);
         CachedSymbolSearch cached = GetOrLoadSymbolSearch(key, row.IndexDbPath, () => _loadSymbolSearch(row.IndexDbPath));
         return new WorkspaceSymbolSearchContext(
             cached.Index,
@@ -326,7 +326,7 @@ public sealed class WorkspaceIndexProvider
         string dbPath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
         string root = _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot;
         string workspaceKey = string.IsNullOrEmpty(_currentWorkspace.WorkspaceId) ? dbPath : _currentWorkspace.WorkspaceId;
-        CachedTextContentSearch cached = GetOrLoadTextContentSearch(new CacheKey(workspaceKey, dbPath, revision), dbPath);
+        CachedTextContentSearch cached = GetOrLoadTextContentSearch(KeyFor(workspaceKey, dbPath, revision), dbPath);
         return new WorkspaceTextContentSearchContext(
             cached.Index,
             dbPath,
@@ -346,7 +346,7 @@ public sealed class WorkspaceIndexProvider
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
         long revision = row.LastRevision ?? 0;
-        CachedTextContentSearch cached = GetOrLoadTextContentSearch(new CacheKey(row.WorkspaceId, row.IndexDbPath, revision), row.IndexDbPath);
+        CachedTextContentSearch cached = GetOrLoadTextContentSearch(KeyFor(row.WorkspaceId, row.IndexDbPath, revision), row.IndexDbPath);
         return new WorkspaceTextContentSearchContext(
             cached.Index,
             row.IndexDbPath,
@@ -365,7 +365,7 @@ public sealed class WorkspaceIndexProvider
         string dbPath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
         string root = _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot;
         string workspaceKey = string.IsNullOrEmpty(_currentWorkspace.WorkspaceId) ? dbPath : _currentWorkspace.WorkspaceId;
-        CachedRegionSearch cached = GetOrLoadRegionSearch(new CacheKey(workspaceKey, dbPath, revision), dbPath);
+        CachedRegionSearch cached = GetOrLoadRegionSearch(KeyFor(workspaceKey, dbPath, revision), dbPath);
         return new WorkspaceRegionSearchContext(
             cached.Index,
             dbPath,
@@ -385,7 +385,7 @@ public sealed class WorkspaceIndexProvider
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
         long revision = row.LastRevision ?? 0;
-        CachedRegionSearch cached = GetOrLoadRegionSearch(new CacheKey(row.WorkspaceId, row.IndexDbPath, revision), row.IndexDbPath);
+        CachedRegionSearch cached = GetOrLoadRegionSearch(KeyFor(row.WorkspaceId, row.IndexDbPath, revision), row.IndexDbPath);
         return new WorkspaceRegionSearchContext(
             cached.Index,
             row.IndexDbPath,
@@ -460,7 +460,7 @@ public sealed class WorkspaceIndexProvider
 
     private CachedIndex GetOrLoad(WorkspaceRegistryRow row, long revision)
     {
-        var key = new CacheKey(row.WorkspaceId, row.IndexDbPath, revision);
+        var key = KeyFor(row.WorkspaceId, row.IndexDbPath, revision);
         Lazy<CachedIndex> lazy;
         lock (_cacheGate)
         {
@@ -571,7 +571,7 @@ public sealed class WorkspaceIndexProvider
 
     private CachedContentSearch GetOrLoadContentSearch(string workspaceId, string dbPath, string root, long revision)
     {
-        var key = new CacheKey(workspaceId, dbPath, revision);
+        var key = KeyFor(workspaceId, dbPath, revision);
         Lazy<CachedContentSearch> lazy;
         lock (_cacheGate)
         {
@@ -775,7 +775,27 @@ public sealed class WorkspaceIndexProvider
             row.CanonicalRoot,
             _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot);
 
-    private readonly record struct CacheKey(string WorkspaceId, string IndexDbPath, long Revision);
+    private readonly record struct CacheKey(
+        string WorkspaceId,
+        string IndexDbPath,
+        long Revision,
+        long FileWriteStampTicks,
+        long FileLength);
+
+    // The symbols.db file identity (last-write ticks + length) is part of every cache key because the revision
+    // alone cannot be trusted across processes: a force rebuild in ANOTHER process deletes and recreates the
+    // file, and the fresh artifact's restarted revision counter can land on the number already cached here
+    // while this process's own scan legitimately reports no_change (sources unchanged after the rebuild). The
+    // in-process eviction in ResolveRegisteredState never sees that rewrite; the file stamp does (2026-06-11
+    // Eros fleet finding, cross-process case). A stat per resolve is cheap; a same-stamp rewrite would need an
+    // identical length AND an identical last-write tick, which a delete+recreate cannot produce in practice.
+    private static CacheKey KeyFor(string workspaceId, string dbPath, long revision)
+    {
+        var info = new FileInfo(dbPath);
+        return info.Exists
+            ? new CacheKey(workspaceId, dbPath, revision, info.LastWriteTimeUtc.Ticks, info.Length)
+            : new CacheKey(workspaceId, dbPath, revision, FileWriteStampTicks: 0, FileLength: 0);
+    }
 
     private sealed record RegisteredWorkspaceState(WorkspaceRegistryRow Row, WorkspaceRefreshResult? RefreshResult);
 

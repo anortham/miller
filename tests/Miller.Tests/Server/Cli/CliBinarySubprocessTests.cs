@@ -57,10 +57,13 @@ public sealed class CliBinarySubprocessTests : IDisposable
         ExtractReport report = JulieExtractRunner.Locate(toolsRoot).Scan(_root, dbPath, force: true);
         Assert.True(File.Exists(dbPath), $"julie scan produced no {dbPath} (symbols={report.SymbolsExtracted}).");
 
-        // version → exit 0, prints the build version.
+        // version → exit 0, prints the build version. The spawned binary comes from the SAME build as this
+        // test assembly, so assert against MillerVersion.Current instead of a literal — a literal here is a
+        // Scale-suite-only landmine that survives a version bump until someone runs `scripts/test.sh scale`
+        // (it did exactly that on the 0.4.0 → 0.4.1 bump).
         ProcessResult version = RunMiller(millerDll, _root, "version");
         Assert.Equal(0, version.ExitCode);
-        Assert.StartsWith("0.4.0", version.Stdout.Trim());
+        Assert.Equal(Miller.Server.MillerVersion.Current, version.Stdout.Trim());
 
         // search → resolves <cwd>/.miller/symbols.db and finds the symbol.
         ProcessResult search = RunMiller(millerDll, _root, "search", "WidgetFromCli");

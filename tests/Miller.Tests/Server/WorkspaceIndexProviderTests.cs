@@ -126,6 +126,53 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     }
 
     [Fact]
+    public void Resolve_RegisteredWorkspace_ReloadsAfterAnExternalRebuildAtTheSameRevision()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
+        using var rebuilt = DbWithSymbol("target-ws", revision: 1, "RebuiltTargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-external-rebuild");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+
+        int loadCount = 0;
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            refresh: workspaceId => new WorkspaceRefreshResult(
+                WorkspaceRefreshStatus.Unchanged,
+                workspaceId,
+                root,
+                target.DbPath,
+                Revision: 1,
+                Scanned: true),
+            loadIndex: path =>
+            {
+                loadCount++;
+                return RepositoryIndexLoader.Load(path);
+            });
+
+        WorkspaceReadContext first = provider.Resolve("target-ws", ensureFresh: false);
+
+        // ANOTHER process force-rebuilds the workspace: the DB file is deleted and recreated, and the fresh
+        // artifact's restarted revision counter lands on the number this process already cached. This
+        // process's own next scan legitimately reports no_change (the sources did not change after the
+        // rebuild), so eviction-on-Refreshed never fires — only the file identity baked into the cache key
+        // can catch the rewrite.
+        File.Copy(rebuilt.DbPath, target.DbPath, overwrite: true);
+        File.SetLastWriteTimeUtc(target.DbPath, File.GetLastWriteTimeUtc(target.DbPath).AddSeconds(7));
+
+        WorkspaceReadContext second = provider.Resolve("target-ws", ensureFresh: true);
+
+        Assert.Equal(1, second.Revision);
+        Assert.NotSame(first.Index, second.Index);
+        Assert.NotEmpty(second.Index.FindByName("RebuiltTargetType"));
+        Assert.Equal(2, loadCount);
+    }
+
+    [Fact]
     public void ResolveSymbolSearch_RegisteredWorkspace_UsesSymbolProjectionLoaderWithoutFullLoad()
     {
         using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");

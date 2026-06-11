@@ -126,9 +126,12 @@ with the standard rebuild message. Fields (`schema_version` 1):
 
 ## Workspace selector rules
 
-Code read commands (`search`, `inspect`, `context`, `impact`, `trace`, and `patterns`) target one workspace per call. Their
-`--workspace-id <selector>` accepts a display ID, unique prefix, full workspace ID, registered root path,
-`current`, or `primary`. The path alias `--workspace <path>` is normalized before selection.
+Code read commands (`search`, `inspect`, `context`, `impact`, `trace`, `patterns`, and the `symbols`/`complexity`
+exports) target one workspace per call. Their `--workspace-id <selector>` accepts a display ID, unique prefix,
+full workspace ID, registered root path, `current`, or `primary`. The path alias `--workspace <path>` is
+normalized before selection. A selector flag supplied without a value is a usage error (exit `2`) in every
+combination — it is never masked by the other selector flag and never falls back silently to the current
+workspace.
 
 The `workspace` lifecycle subcommands (`status`, `health`, `refresh`, `full`, `remove`) accept the same selector
 flags: `--workspace-id` aliases `--id`, and `--workspace <path>` (normalized against the CLI's cwd) aliases
