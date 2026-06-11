@@ -4,28 +4,41 @@ namespace Miller.Server.Hosting;
 /// The language-agnostic path filter for the file watcher (m3-design §Components/3). It decides whether a
 /// FileSystemWatcher event for a given absolute path should be enqueued for an <c>extract</c> op.
 ///
-/// <para><b>It never whitelists source extensions.</b> The multi-language rule (CLAUDE.md): a cross-language
+/// <para><b>It never hand-picks source extensions.</b> The multi-language rule (CLAUDE.md): a cross-language
 /// feature scopes to every capable language, and julie — not a hand-picked extension list — owns what is
 /// indexable. An <c>update</c> on a file julie does not index simply no-ops (verified-fact 2), so over-feeding
-/// is harmless, while an extension whitelist would silently drop a supported language (a <c>.zig</c>, a
-/// <c>.vue</c>, a Dockerfile with no extension). The filter therefore ACCEPTS by default.</para>
+/// is harmless to the INDEX — but each over-fed event still spawns a julie-extract subprocess. The optional
+/// <paramref name="supportedExtensions"/> set therefore lets the caller gate events on julie's OWN claimed
+/// extension list (<c>julie-extract languages --json</c>, fetched once per process). That keeps julie the
+/// authority: a <c>.zig</c> or <c>.vue</c> passes because julie claims it, and when the set is unavailable
+/// (fetch failed, binary missing) the filter gates NOTHING — the historical accept-by-default behavior.</para>
 ///
-/// <para>It only SKIPS noise directories that would either churn pointlessly or feed back on themselves:
-/// version-control internals (<c>.git</c> — the dedicated <c>.git/HEAD</c> watch handles branch switches),
-/// Miller's own <c>.miller</c> sidecar (its extract/telemetry/WAL writes must not re-enter as events), IDE
-/// caches (<c>.vs</c>), and the usual build-output trees (<c>node_modules</c>, <c>target</c>, <c>bin</c>,
-/// <c>obj</c>). Matching is on whole path SEGMENTS, so a <c>.github</c> dir or an <c>object.cs</c> file is not
-/// caught by a substring. It also applies workspace ignore files (<c>.gitignore</c> plus
-/// <c>.julieignore</c>) so live per-file updates do not churn on files a full scan would skip.</para>
+/// <para>It also SKIPS noise directories that would either churn pointlessly or feed back on themselves:
+/// version-control internals (<c>.git</c> — the dedicated <c>.git/HEAD</c> watch handles branch switches —
+/// plus <c>.hg</c>/<c>.svn</c>), Miller's own <c>.miller</c> sidecar (its extract/telemetry/WAL writes must
+/// not re-enter as events), julie's <c>.julie</c> home, IDE/tool caches (<c>.vs</c>, <c>.cache</c>), agent
+/// memory checkpoints (<c>.memories</c>), and the usual build-output trees (<c>node_modules</c>,
+/// <c>target</c>, <c>bin</c>, <c>obj</c>) — parity with julie-extract's own hard-excluded directories, so
+/// the watcher never spawns a subprocess for a file julie would refuse anyway. Matching is on whole path
+/// SEGMENTS, so a <c>.github</c> dir or an <c>object.cs</c> file is not caught by a substring. It also
+/// applies workspace ignore files (<c>.gitignore</c> plus <c>.julieignore</c>) so live per-file updates do
+/// not churn on files a full scan would skip.</para>
 /// </summary>
 public static class WatchPathFilter
 {
     // Whole-segment skip set. NOT an extension list — these are directory names anywhere in the path.
+    // Keep in step with julie-extract's hard-excluded directories (the extractor refuses these regardless
+    // of ignore files; Miller's watcher should not spawn subprocesses for them either).
     private static readonly HashSet<string> SkipSegments = new(SegmentComparer)
     {
         ".git",
+        ".hg",
+        ".svn",
         ".miller",
+        ".julie",
         ".vs",
+        ".cache",
+        ".memories",
         "node_modules",
         "target",
         "bin",
@@ -44,7 +57,20 @@ public static class WatchPathFilter
     /// rules; the decision is made on the path's segments.
     /// </summary>
     /// <exception cref="ArgumentNullException">Either argument is null.</exception>
-    public static bool ShouldProcess(string root, string absolutePath)
+    public static bool ShouldProcess(string root, string absolutePath) =>
+        ShouldProcess(root, absolutePath, supportedExtensions: null);
+
+    /// <summary>
+    /// As <see cref="ShouldProcess(string,string)"/>, additionally gating on julie's claimed extension set
+    /// (<c>julie-extract languages --json</c>). A null or EMPTY set gates nothing — fail soft to the
+    /// historical accept-by-default behavior when the languages probe failed or returned nothing usable.
+    /// The set is membership-only here (pure, fast-suite-testable); fetching it is the caller's edge.
+    /// Note ignore-policy files (<c>.gitignore</c>/<c>.julieignore</c>) have no supported extension and ARE
+    /// dropped by this gate — their special handling runs through <see cref="ShouldForceRescan"/>, which the
+    /// watcher consults FIRST, so policy-change rescans still fire.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="root"/> or <paramref name="absolutePath"/> is null.</exception>
+    public static bool ShouldProcess(string root, string absolutePath, IReadOnlySet<string>? supportedExtensions)
     {
         ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(absolutePath);
@@ -55,7 +81,25 @@ public static class WatchPathFilter
             if (SkipSegments.Contains(segment))
                 return false;
         }
+        if (HasUnsupportedExtension(absolutePath, supportedExtensions))
+            return false;
         return !WorkspaceIgnorePolicy.IsIgnored(root, absolutePath);
+    }
+
+    // Pure extension gate over julie's claimed set. The set holds lowercase, dot-less extensions exactly as
+    // `languages --json` reports them — nothing is hardcoded here. A file with no extension (Dockerfile, a
+    // dotfile like .gitignore, a trailing dot) is dropped only BECAUSE julie's catalog claims extensions
+    // exclusively; if a future julie ever claimed an extensionless form, this derives from the JSON, not a list.
+    private static bool HasUnsupportedExtension(string absolutePath, IReadOnlySet<string>? supportedExtensions)
+    {
+        if (supportedExtensions is null || supportedExtensions.Count == 0)
+            return false; // no usable set — gate nothing (fail soft)
+
+        string name = LastPathSegment(absolutePath);
+        int dot = name.LastIndexOf('.');
+        if (dot <= 0 || dot == name.Length - 1)
+            return true; // extensionless / dotfile / trailing dot — julie claims none of these via extensions
+        return !supportedExtensions.Contains(name[(dot + 1)..].ToLowerInvariant());
     }
 
     /// <summary>

@@ -58,6 +58,58 @@ public sealed class JulieExtractRunnerTests
         Assert.DoesNotContain("extract", args);
     }
 
+    [Fact]
+    public void BuildLanguagesArgs_CapabilitySnapshot_NoDbNoRoot()
+    {
+        var args = JulieExtractRunner.BuildLanguagesArgs();
+        Assert.Equal(new[] { "languages", "--json" }, args);
+    }
+
+    // ---- supported-extension parsing (the watcher gate's catalog; pure — the live probe is Scale) ----
+
+    private const string LanguagesJson = """
+        { "report_schema_version": 3, "status": "ok", "operation": "languages", "mode": "capability_snapshot",
+          "languages": { "languages": [
+            { "language": "rust",   "extensions": ["rs"] },
+            { "language": "c",      "extensions": ["c", "h"] },
+            { "language": "r",      "extensions": ["r", "R"] },
+            { "language": "dotted", "extensions": [".tsx", ""] }
+          ] } }
+        """;
+
+    [Fact]
+    public void ParseSupportedExtensions_FlattensAllLanguages_LowercaseDotless_CaseInsensitiveSet()
+    {
+        IReadOnlySet<string> set = JulieExtractRunner.ParseSupportedExtensions(LanguagesJson);
+
+        // Derived purely from the JSON: every claimed extension, normalized (leading dot stripped,
+        // lowercased), under a case-insensitive comparer; the empty entry is dropped, "R"/"r" collapse.
+        Assert.Equal(5, set.Count);
+        Assert.Contains("rs", set);
+        Assert.Contains("c", set);
+        Assert.Contains("h", set);
+        Assert.Contains("r", set);
+        Assert.Contains("tsx", set);
+        Assert.Contains("TSX", set); // comparer, not data
+    }
+
+    [Fact]
+    public void ParseSupportedExtensions_MissingShape_ReturnsEmpty_NotThrow()
+    {
+        // A report without the languages block (or non-object/array shapes) parses to an EMPTY set; the live
+        // caller maps empty → null so the gate fails soft rather than dropping everything.
+        Assert.Empty(JulieExtractRunner.ParseSupportedExtensions("""{ "status": "ok" }"""));
+        Assert.Empty(JulieExtractRunner.ParseSupportedExtensions("""{ "languages": { "languages": [] } }"""));
+        Assert.Empty(JulieExtractRunner.ParseSupportedExtensions("""{ "languages": 42 }"""));
+    }
+
+    [Fact]
+    public void ParseSupportedExtensions_InvalidJson_Throws()
+    {
+        Assert.ThrowsAny<System.Text.Json.JsonException>(
+            () => JulieExtractRunner.ParseSupportedExtensions("not json"));
+    }
+
     // ---- (2) report parser (nested v1) ----
 
     private const string ScanSuccessJson = """
