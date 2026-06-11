@@ -1159,10 +1159,10 @@ public static class CliDispatch
             return RemoveExitCode(WorkspaceRemoveResult.Outcome.NotFound);
         }
 
-        // Acquire the writer lock ONLY to prove no live Miller owns this workspace, then RELEASE it before the
-        // delete. `indexer.lock` lives inside millerDir and is held FileShare.None, so on Windows our OWN handle
-        // would block Directory.Delete (it would throw and the CLI would wrongly report exit 1 instead of 0).
-        // Acquire-release-delete keeps the no-concurrent-writer guard on every platform.
+        // Delete the index data while HOLDING the writer lock, so no Miller process can start writing this
+        // index mid-delete. Only the held lock file itself is skipped (an open FileShare.None handle cannot be
+        // deleted on Windows); after release, the leftover lock file + empty dir are removed best-effort — a
+        // writer that sneaks in after release finds an already-empty index and does a clean rebuild.
         using (IDisposable? lease = SingleWriterLock.TryAcquire(millerDir))
         {
             if (lease is null)
@@ -1170,9 +1170,10 @@ public static class CliDispatch
                 outw.WriteLine(WorkspaceRender.Remove(WorkspaceRemoveResult.RefusedInUse(millerDir, workspaceId, root), json));
                 return RemoveExitCode(WorkspaceRemoveResult.Outcome.RefusedInUse);
             }
+            SingleWriterLock.DeleteContentsExceptLock(millerDir);
         }
 
-        Directory.Delete(millerDir, recursive: true);
+        SingleWriterLock.TryDeleteEmptiedDir(millerDir);
         if (workspaceId is not null)
             registry.Remove(workspaceId);
         outw.WriteLine(WorkspaceRender.Remove(WorkspaceRemoveResult.Removed(millerDir, workspaceId, root), json));

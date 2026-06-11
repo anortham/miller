@@ -121,4 +121,55 @@ public sealed class SingleWriterLockTests
         Assert.Throws<ArgumentNullException>(() => SingleWriterLock.TryAcquire(null!));
         Assert.Throws<ArgumentException>(() => SingleWriterLock.TryAcquire("   "));
     }
+
+    [Fact]
+    public void DeleteContentsExceptLock_UnderTheHeldLock_GutsTheIndexButKeepsExclusion()
+    {
+        // The remove flow's destructive step runs while HOLDING the lock: index files and subdirs are deleted,
+        // the held lock file survives (Windows cannot delete an open FileShare.None file), and — the point of
+        // the design — no other writer can acquire leadership mid-delete.
+        using var dir = new TempMillerDir();
+        File.WriteAllText(Path.Combine(dir.Path, "symbols.db"), "db");
+        Directory.CreateDirectory(Path.Combine(dir.Path, "logs"));
+        File.WriteAllText(Path.Combine(dir.Path, "logs", "miller.log"), "log");
+
+        using var lease = SingleWriterLock.TryAcquire(dir.Path);
+        Assert.NotNull(lease);
+
+        SingleWriterLock.DeleteContentsExceptLock(dir.Path);
+
+        Assert.Equal(
+            new[] { Path.Combine(dir.Path, SingleWriterLock.LockFileName) },
+            Directory.GetFileSystemEntries(dir.Path));
+        Assert.Null(SingleWriterLock.TryAcquire(dir.Path)); // exclusion held throughout the delete
+    }
+
+    [Fact]
+    public void TryDeleteEmptiedDir_AfterRelease_RemovesTheLockFileAndDir()
+    {
+        using var dir = new TempMillerDir();
+        File.WriteAllText(Path.Combine(dir.Path, "symbols.db"), "db");
+
+        using (var lease = SingleWriterLock.TryAcquire(dir.Path))
+        {
+            Assert.NotNull(lease);
+            SingleWriterLock.DeleteContentsExceptLock(dir.Path);
+        }
+
+        SingleWriterLock.TryDeleteEmptiedDir(dir.Path);
+        Assert.False(Directory.Exists(dir.Path));
+    }
+
+    [Fact]
+    public void TryDeleteEmptiedDir_WhenANewWriterSneaksIn_DoesNotThrow()
+    {
+        // The residual race: another writer acquires the lock between our release and the final dir delete.
+        // The data was already deleted under OUR lock; the shell delete must never throw — on Windows the open
+        // lock file blocks it (dir is left to the new writer), on POSIX the unlink succeeds.
+        using var dir = new TempMillerDir();
+        using var newWriter = SingleWriterLock.TryAcquire(dir.Path);
+        Assert.NotNull(newWriter);
+
+        SingleWriterLock.TryDeleteEmptiedDir(dir.Path);
+    }
 }

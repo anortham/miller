@@ -661,12 +661,20 @@ public sealed class WorkspaceTool
             var refused = WorkspaceRemoveResult.RefusedInUse(millerDir);
             return (WorkspaceRender.Remove(refused, json), 0, TelemetryOutcome.Empty);
         }
-        // Acquiring the lock proved no other instance is indexing here; release OUR handle BEFORE deleting so
-        // Windows can remove the indexer.lock file inside .miller (a FileShare.None handle blocks deleting the
-        // open file; POSIX unlinks it regardless). The lock is a liveness probe, not a delete latch.
-        lease.Dispose();
+        // Delete the index data while HOLDING the lock so no other instance can start writing here mid-delete.
+        // Only the held lock file is skipped (a FileShare.None handle blocks deleting the open file on Windows);
+        // after release, the leftover lock file + empty dir are removed best-effort — a writer that sneaks in
+        // after release finds an already-empty index and does a clean rebuild.
+        try
+        {
+            SingleWriterLock.DeleteContentsExceptLock(millerDir);
+        }
+        finally
+        {
+            lease.Dispose();
+        }
 
-        Directory.Delete(millerDir, recursive: true);
+        SingleWriterLock.TryDeleteEmptiedDir(millerDir);
         _logger.LogInformation("workspace remove: deleted index dir {Dir}.", millerDir);
         var removed = WorkspaceRemoveResult.Removed(millerDir);
         return (WorkspaceRender.Remove(removed, json), 1, TelemetryOutcome.Ok);
@@ -697,12 +705,18 @@ public sealed class WorkspaceTool
             var refused = WorkspaceRemoveResult.RefusedInUse(millerDir, row.WorkspaceId, row.CanonicalRoot);
             return (WorkspaceRender.Remove(refused, json), 0, TelemetryOutcome.Empty);
         }
-        // Release OUR writer-lock handle before deleting so Windows can remove the indexer.lock file inside
-        // .miller (FileShare.None blocks deleting an open file on Windows; POSIX unlinks it). See the path-only
-        // Remove branch for the full rationale — the lock is a liveness probe, not a delete latch.
-        lease.Dispose();
+        // Delete index data under the held lock, then best-effort remove the lock file + empty dir after
+        // release. See the path-only Remove branch for the full rationale.
+        try
+        {
+            SingleWriterLock.DeleteContentsExceptLock(millerDir);
+        }
+        finally
+        {
+            lease.Dispose();
+        }
 
-        Directory.Delete(millerDir, recursive: true);
+        SingleWriterLock.TryDeleteEmptiedDir(millerDir);
         _registry.Remove(row.WorkspaceId);
         _logger.LogInformation(
             "workspace remove: unregistered {WorkspaceId} and deleted index dir {Dir}.",

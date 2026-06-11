@@ -62,6 +62,46 @@ public sealed class SingleWriterLock : IDisposable
         return new SingleWriterLock(stream, lockFilePath);
     }
 
+    /// <summary>
+    /// Delete everything inside <paramref name="millerDir"/> EXCEPT the lock file. Call ONLY while HOLDING the
+    /// writer lock: the destructive part of a workspace remove must happen under mutual exclusion so a writer
+    /// that acquires the lock later finds an already-empty index (clean rebuild), never a half-deleted live one.
+    /// The held lock file is skipped because an open <see cref="FileShare.None"/> handle cannot be deleted on
+    /// Windows; the caller releases the lease and then calls <see cref="TryDeleteEmptiedDir"/>.
+    /// </summary>
+    public static void DeleteContentsExceptLock(string millerDir)
+    {
+        foreach (string entry in Directory.EnumerateFileSystemEntries(millerDir))
+        {
+            if (string.Equals(Path.GetFileName(entry), LockFileName, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (Directory.Exists(entry))
+                Directory.Delete(entry, recursive: true);
+            else
+                File.Delete(entry);
+        }
+    }
+
+    /// <summary>
+    /// Best-effort removal of a <c>.miller</c> dir already gutted by <see cref="DeleteContentsExceptLock"/>,
+    /// after the lease is released. If another writer acquires the lock in the window after release, the dir is
+    /// left to it (it rebuilds a fresh index in place) — the index data itself was deleted under the lock, so
+    /// nothing live is ever lost here.
+    /// </summary>
+    public static void TryDeleteEmptiedDir(string millerDir)
+    {
+        try
+        {
+            Directory.Delete(millerDir, recursive: true);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
     /// <summary>Release leadership: close the exclusive handle so another instance can acquire it. Idempotent.</summary>
     public void Dispose()
     {
