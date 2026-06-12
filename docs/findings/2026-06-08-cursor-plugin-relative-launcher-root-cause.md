@@ -75,3 +75,27 @@ The launcher now treats the whole plugin install trees (`~/.claude/plugins`, `~/
 repo checkouts that Cursor's Claude-plugin import can launch from. If the client provides a real workspace root,
 Miller still uses it. If no workspace root is available, Miller fails with guidance instead of silently indexing the
 plugin directory.
+
+## 2026-06-12 Follow-up
+
+Cursor's reliable user-wide install path is a global `~/.cursor/mcp.json` server entry that runs the Miller launcher
+and sets `MILLER_WORKSPACE_ROOT="${workspaceFolder}"` in `env`. Cursor's MCP docs currently list `env` as an
+interpolated field and support `${workspaceFolder}` for the active project root. Miller must still run through the
+launcher rather than directly through `miller.exe`, because `miller.exe serve` derives its workspace from `cwd`; the
+launcher reads `MILLER_WORKSPACE_ROOT` and starts Miller with the resolved workspace as `cwd`.
+
+Local evidence on Windows:
+
+- A global `user-miller` entry that launched `miller.exe` directly failed from `C:\Users\CHS300372` with Miller's
+  sensitive-root guard.
+- A Cursor-local plugin copy also failed as `plugin-miller-miller` from an empty/global launch with
+  `Could not determine a Miller workspace root`.
+- A standalone launcher root under `~/.miller/plugin-cache/cursor-global-miller`, plus global `~/.cursor/mcp.json`
+  env `MILLER_WORKSPACE_ROOT="${workspaceFolder}"`, resolved a real workspace to `C:\source\miller` and failed
+  closed when `${workspaceFolder}` was unresolved.
+- A real MCP smoke from a home-directory `cwd` with `MILLER_WORKSPACE_ROOT=C:/source/miller` completed
+  `initialize` and `tools/list`, returning the nine Miller tools.
+
+Decision: document the global MCP config as the recommended Cursor path. Treat `~/.cursor/plugins/local/miller` as a
+package/testing artifact, not the normal user install, because Cursor can launch plugin MCP servers before a workspace
+exists and can auto-import Claude plugin copies as duplicate Miller rows.
