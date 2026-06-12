@@ -174,7 +174,9 @@ public sealed class MillerExtractContractTests
         Assert.Contains("& $millerBinary version", workflow, StringComparison.Ordinal);
         Assert.Contains("search inspect context impact trace edit content workspace", workflow, StringComparison.Ordinal);
         Assert.DoesNotContain("echo \"$out\" | grep -q", workflow, StringComparison.Ordinal);
-        Assert.Contains("$outLines = & { $reqs; Start-Sleep -Seconds 20 } | & $millerBinary serve", workflow, StringComparison.Ordinal);
+        // 90s: the stdin window must cover a FULL no-DB bootstrap scan of the checkout, not just AOT cold
+        // start (35s measured on a slow x86_64 macOS runner — v0.4.3 package run 27391446333).
+        Assert.Contains("$outLines = & { $reqs; Start-Sleep -Seconds 90 } | & $millerBinary serve", workflow, StringComparison.Ordinal);
         Assert.Contains("foreach ($tool in @(\"search\", \"inspect\", \"context\", \"impact\", \"trace\", \"edit\", \"content\", \"workspace\"))", workflow, StringComparison.Ordinal);
 
         Assert.Contains("dashboard/Miller.Dashboard", workflow, StringComparison.Ordinal);
