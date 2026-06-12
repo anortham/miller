@@ -27,9 +27,13 @@ public enum RevisionChangeKind
 public sealed record RevisionFileChange(long RevisionId, string Path, RevisionChangeKind ChangeKind);
 
 /// <summary>
-/// Owns the long-lived <c>Mode=ReadOnly</c> connection that every Miller instance polls for freshness
-/// (decision-2). On an interval (and right after the leader's own <c>extract</c>) the freshness service calls
-/// <see cref="LatestRevision"/>; when it exceeds the held index's built revision, the instance rebuilds + swaps.
+/// Owns the ONE <c>Mode=ReadOnly</c> connection a freshness poll reads through (decision-2): the freshness
+/// service calls <see cref="LatestRevision"/> (and <see cref="ArtifactId"/>); when the writer moved ahead — or
+/// the artifact file was replaced by a full rebuild — the instance rebuilds + swaps. The hosted poll constructs
+/// a TRANSIENT reader per tick: a connection that outlives a <see cref="FullRebuildPromotion"/> promote keeps
+/// an fd to the unlinked OLD inode and would silently freeze freshness forever (the same trap behind the
+/// <see cref="SqliteReadOnlyAccess"/> <c>Pooling=false</c> rule). Holding one instance across polls remains
+/// valid ONLY while the underlying file cannot be replaced.
 ///
 /// <para><b>The no-lingering-transaction contract (verified-fact 8).</b> The connection holds NO open explicit
 /// transaction between polls: each query auto-commits, so the next <see cref="LatestRevision"/> command sees a
@@ -109,6 +113,30 @@ public sealed class FreshnessReader : IDisposable
         }
 
         return changes;
+    }
+
+    /// <summary>
+    /// The artifact's identity: <c>artifact_metadata.artifact_id</c>, stamped by julie-extract when the DB file
+    /// is CREATED and stable across in-place delta updates — so a changed id means the file was replaced by a
+    /// full rebuild (<see cref="FullRebuildPromotion"/>), whose restarted revision counter makes
+    /// <see cref="LatestRevision"/> alone unable to signal the change. Null when the key or table is absent
+    /// (a synthetic/legacy DB) — callers must treat null as "unknown", never as "unchanged".
+    /// </summary>
+    /// <exception cref="ObjectDisposedException">The reader has been disposed.</exception>
+    public string? ArtifactId()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT value FROM artifact_metadata WHERE key = 'artifact_id';";
+        try
+        {
+            return cmd.ExecuteScalar() as string;
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 1 /* SQLITE_ERROR: no such table */)
+        {
+            return null;
+        }
     }
 
     // v1's revision_file_changes.change_kind has NO CHECK constraint (julie-extractors schema.rs:47) — Miller is

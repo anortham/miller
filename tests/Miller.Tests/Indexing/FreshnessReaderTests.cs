@@ -56,6 +56,40 @@ public sealed class FreshnessReaderTests
     }
 
     [Fact]
+    public void ArtifactId_ReturnsTheStampedIdentity()
+    {
+        // The fixture stamps artifact_id = "artifact-" + workspaceId, mirroring julie's per-created-file id.
+        // The freshness poll uses a CHANGED id to detect a full-rebuild file replacement that a restarted
+        // revision counter hides (2026-06-11 Eros field report #2).
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, NoSymbols, workspaceId: "ws-artifact");
+        using var reader = new FreshnessReader(fx.DbPath);
+
+        Assert.Equal("artifact-ws-artifact", reader.ArtifactId());
+    }
+
+    [Fact]
+    public void ArtifactId_MissingKey_ReturnsNull()
+    {
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, NoSymbols);
+        using (var rw = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = fx.DbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString()))
+        {
+            rw.Open();
+            using var cmd = rw.CreateCommand();
+            cmd.CommandText = "DELETE FROM artifact_metadata WHERE key = 'artifact_id';";
+            cmd.ExecuteNonQuery();
+        }
+        using var reader = new FreshnessReader(fx.DbPath);
+
+        Assert.Null(reader.ArtifactId()); // unknown, not an error — callers degrade to revision-only polling
+    }
+
+    [Fact]
     public void ChangedSince_ReturnsOnlyRowsAfterTheGivenRevision()
     {
         using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, NoSymbols,

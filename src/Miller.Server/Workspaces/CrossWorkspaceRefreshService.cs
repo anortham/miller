@@ -16,6 +16,7 @@ public sealed class CrossWorkspaceRefreshService
     private readonly Func<string, string, bool, ExtractReport> _scan;
     private readonly Func<string, IDisposable?> _acquireLock;
     private readonly Func<string, long> _readLatestRevision;
+    private readonly Func<string, string?> _readArtifactId;
     private readonly Action<string, string, long> _requestFullScan;
     private readonly TimeSpan _lockBusyWait;
     private readonly TimeSpan _fullScanRequestWait;
@@ -55,7 +56,8 @@ public sealed class CrossWorkspaceRefreshService
             dbPath => LeadershipEligibility.Evaluate(
                 runner.QueryVersion(),
                 ExtractBinaryVersionReader.TryRead(dbPath),
-                Environment.GetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE") == "1"))
+                Environment.GetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE") == "1"),
+            ReadArtifactId)
     {
     }
 
@@ -72,7 +74,8 @@ public sealed class CrossWorkspaceRefreshService
         ContentCorpusSidecar? contentSidecar = null,
         Action<string, string, long>? requestFullScan = null,
         TimeSpan? fullScanRequestWait = null,
-        Func<string, LeadershipVerdict>? eligibilityGate = null)
+        Func<string, LeadershipVerdict>? eligibilityGate = null,
+        Func<string, string?>? readArtifactId = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(scan);
@@ -94,6 +97,7 @@ public sealed class CrossWorkspaceRefreshService
         _scan = scan;
         _acquireLock = acquireLock;
         _readLatestRevision = readLatestRevision;
+        _readArtifactId = readArtifactId ?? ReadArtifactId;
         _requestFullScan = requestFullScan ?? LeaderScanRequestQueue.RequestFullScan;
         _lockBusyWait = lockBusyWait;
         _fullScanRequestWait = fullScanRequestWait ?? DefaultFullScanRequestWait;
@@ -260,6 +264,10 @@ public sealed class CrossWorkspaceRefreshService
         WorkspaceRegistryRow row, bool force, string millerDir, Stopwatch total)
     {
         long baseline = row.LastRevision ?? 0;
+        // The artifact identity BEFORE the leader acts: a full rebuild PROMOTES a fresh file whose revision
+        // counter restarts, so `latest > baseline` alone can never confirm it — a CHANGED artifact_id does
+        // (2026-06-11 Eros field report #2). Null (an unreadable/legacy artifact) degrades to revision-only.
+        string? baselineArtifactId = TryReadArtifactId(row);
         long? lastReadableRevision = row.LastRevision;
         string? requestWarning = null;
 
@@ -285,7 +293,10 @@ public sealed class CrossWorkspaceRefreshService
             if (TryReadLatestRevision(row, out long latest))
             {
                 lastReadableRevision = latest;
-                if (latest > baseline)
+                bool artifactReplaced = baselineArtifactId is not null
+                    && TryReadArtifactId(row) is { } currentArtifactId
+                    && !string.Equals(currentArtifactId, baselineArtifactId, StringComparison.Ordinal);
+                if (latest > baseline || artifactReplaced)
                 {
                     _registry.MarkScanned(row.WorkspaceId, latest, _utcNow());
                     return new WorkspaceRefreshResult(
@@ -348,6 +359,21 @@ public sealed class CrossWorkspaceRefreshService
         }
     }
 
+    // Best-effort identity probe for the rebuild-confirmation arm: null = unknown (a missing/locked/legacy
+    // artifact), which degrades the wait to the historical revision-only comparison, never to a false confirm.
+    private string? TryReadArtifactId(WorkspaceRegistryRow row)
+    {
+        try
+        {
+            return _readArtifactId(row.IndexDbPath);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or IOException or InvalidOperationException
+                                       or SqliteException)
+        {
+            return null;
+        }
+    }
+
     private WorkspaceRegistryRow GetRequiredRow(string workspaceId) =>
         _registry.Get(workspaceId) ?? throw new KeyNotFoundException(
             $"Workspace registry row '{workspaceId}' was not found.");
@@ -356,5 +382,11 @@ public sealed class CrossWorkspaceRefreshService
     {
         using var reader = new FreshnessReader(dbPath);
         return reader.LatestRevision();
+    }
+
+    private static string? ReadArtifactId(string dbPath)
+    {
+        using var reader = new FreshnessReader(dbPath);
+        return reader.ArtifactId();
     }
 }

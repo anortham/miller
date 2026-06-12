@@ -237,7 +237,11 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 ledger = OpenAndPrune(
                     workspace.TelemetryDbPath, stableWorkspaceId, workspace.WorkspaceRoot, retentionDays: 30, out int pruned);
 
-                var holder = new IndexHolder(index, builtRevision);
+                // Seed the artifact identity alongside the revision: a later full rebuild PROMOTES a fresh file
+                // whose restarted revision counter can land at or below builtRevision, and the freshness poll
+                // detects that replacement by the artifact_id changing (FreshnessPoller). Without the seed the
+                // held id is unknown and an exact-revision-tie rebuild would go unnoticed.
+                var holder = new IndexHolder(index, builtRevision, ReadArtifactIdOrNull(canonicalDbPath));
                 _holder = holder;
                 _resolver = new SmartTargetResolver(holder); // holder-backed: live freshness per call (M3 step 10)
                 _workspace = workspace;
@@ -514,6 +518,23 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         }
         // InvalidOperationException (D4 writable-dir guard) and SqliteException (corruption/lock/permission)
         // propagate loudly per decision-10 — a misconfigured DB must fail bootstrap, not degrade to revision 0.
+    }
+
+    // The artifact identity for the holder seed. Best-effort by design (null = unknown, the freshness poll
+    // then falls back to revision-only comparisons): the index was ALREADY loaded successfully by this point,
+    // so an unreadable metadata row must not fail bootstrap over a diagnostic-grade signal.
+    private static string? ReadArtifactIdOrNull(string dbPath)
+    {
+        try
+        {
+            using var reader = new FreshnessReader(dbPath);
+            return reader.ArtifactId();
+        }
+        catch (Exception ex) when (
+            ex is FileNotFoundException or InvalidOperationException or Microsoft.Data.Sqlite.SqliteException)
+        {
+            return null;
+        }
     }
 
     /// <summary>

@@ -95,55 +95,37 @@ public sealed class FreshnessServicePollNowTests
     }
 
     [Fact]
-    public void DisposeOfReader_SerializesAgainstAnInFlightPoll_NeverClosesUnderAQuery()
+    public void PollNow_ArtifactFileReplacedWithARestartedRevisionCounter_StillSwaps()
     {
-        // The dispose-vs-read race fix: ExecuteAsync's shutdown disposal of the single-connection reader must run
-        // UNDER _pollGate, the same lock PollNow holds while it drives that reader. Otherwise a shutdown can close
-        // the SqliteConnection out from under an in-flight query. We stand in for an in-flight poll by holding the
-        // gate (RunUnderPollGateForTest) and assert a concurrent disposal cannot complete until the gate releases.
+        // The full-rebuild promote (FullRebuildPromotion, 2026-06-11 Eros field report #2): a force scan
+        // REPLACES symbols.db with a fresh artifact whose revision counter restarts — here landing BELOW the
+        // held revision, where the historical revision-only rule would keep serving the pre-rebuild index
+        // forever. The poll must detect the replacement via the changed artifact_id. The transient per-poll
+        // reader is load-bearing too: a long-lived connection would still be reading the OLD unlinked inode.
         using var fx = JulieDbFixture.Create(
             JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, JulieDbFixture.DefaultRows, workspaceId: Ws,
-            revisions: new[] { new JulieDbFixture.RevisionRow(1) });
-        var holder = HolderAt(fx, builtRevision: 1);
+            revisions: new[] { new JulieDbFixture.RevisionRow(7) });
+        var holder = new IndexHolder(
+            MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath)), builtRevision: 7,
+            builtArtifactId: "artifact-" + Ws); // the fixture's stamped id — what the bootstrap seeds
         var service = NewServiceOverDb(fx.DbPath, Ws, holder);
-        service.InitReaderForTest();
 
-        var pollHoldsGate = new ManualResetEventSlim(false);
-        var releaseGate = new ManualResetEventSlim(false);
-        var disposeReturned = new ManualResetEventSlim(false);
-        bool gateStillHeldWhenDisposeReturned = false;
-
-        var pollThread = new Thread(() => service.RunUnderPollGateForTest(() =>
+        // Replace the file wholesale, as a promote does: fresh artifact, NEW artifact_id, counter back at 1.
+        string dbPath = fx.DbPath;
+        using (var rebuilt = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, JulieDbFixture.DefaultRows,
+            workspaceId: "ws-pollnow-rebuilt",
+            revisions: new[] { new JulieDbFixture.RevisionRow(1) }))
         {
-            pollHoldsGate.Set();      // we now hold _pollGate, as an in-flight PollNow would
-            releaseGate.Wait();       // keep holding it until the test lets go
-        }));
-        pollThread.Start();
-        // These waits are the test's own deliberate deadlines, not cancellation points; pass CancellationToken.None
-        // explicitly (matching the disposeReturned waits below) so the xUnit1051 analyzer is satisfied.
-        Assert.True(pollHoldsGate.Wait(5000, CancellationToken.None));
+            File.Copy(rebuilt.DbPath, dbPath, overwrite: true);
+        }
 
-        var disposeThread = new Thread(() =>
-        {
-            service.DisposeReaderForTest();
-            // Capture, at the instant the dispose returns, whether the poll still held the gate. With the fix the
-            // dispose blocks on _pollGate until releaseGate is set, so this reads false; the buggy (lock-free)
-            // disposal returns immediately and reads true (it closed the reader mid-poll — the race).
-            gateStillHeldWhenDisposeReturned = !releaseGate.IsSet;
-            disposeReturned.Set();
-        });
-        disposeThread.Start();
+        PollResult result = service.PollNow();
 
-        // The dispose must NOT complete while the poll still holds the gate. If it signals within this window, the
-        // serialization is missing (the race). 300ms is ample for the lock-free disposal to return.
-        Assert.False(disposeReturned.Wait(300, CancellationToken.None),
-            "dispose completed while a poll held _pollGate — it closed the reader mid-query (the race).");
-
-        releaseGate.Set();
-        pollThread.Join();
-        Assert.True(disposeReturned.Wait(5000, CancellationToken.None));
-        disposeThread.Join();
-        Assert.False(gateStillHeldWhenDisposeReturned);
+        Assert.True(result.Swapped);
+        Assert.Equal(1, result.Revision);
+        Assert.Equal(1, holder.BuiltRevision);
+        Assert.Equal("artifact-ws-pollnow-rebuilt", holder.BuiltArtifactId); // the held identity follows the swap
     }
 
     [Fact]

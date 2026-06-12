@@ -1,0 +1,340 @@
+Analysis of sampling julie-extract (pid 28249) every 1 millisecond
+Process:         julie-extract [28249]
+Path:            /Users/USER/*/julie-extract
+Load Address:    0x100464000
+Identifier:      julie-extract
+Version:         0
+Code Type:       ARM64
+Platform:        macOS
+Parent Process:  miller [28247]
+Target Type:     live task
+
+Date/Time:       2026-06-11 20:27:56.723 -0500
+Launch Time:     2026-06-11 19:34:46.977 -0500
+OS Version:      macOS 26.5.1 (25F80)
+Report Version:  7
+Analysis Tool:   /usr/bin/sample
+
+Physical footprint:         352.0M
+Physical footprint (peak):  626.5M
+Idle exit:                  untracked
+----
+
+Call graph:
+    2478 Thread_16342828   DispatchQueue_1: com.apple.main-thread  (serial)
+      2478 start  (in dyld) + 6992  [0x189167e00]
+        2478 main  (in julie-extract) + 52  [0x1005120c4]
+          2478 _RNvNtCsaLOjE9VYtxK_3std2rt19lang_start_internal  (in julie-extract) + 952  [0x100d29f54]
+            2478 std::rt::lang_start::_$u7b$$u7b$closure$u7d$$u7d$::h910a2fa72e85c05c  (in julie-extract) + 16  [0x1004ecd38]
+              2478 std::sys::backtrace::__rust_begin_short_backtrace::h9298cce236e9a6dc  (in julie-extract) + 12  [0x1004fd35c]
+                2478 julie_extract::commands::run_from_env::h7c1064d2cd5aff6a  (in julie-extract) + 152  [0x1004a2ca4]
+                  2478 julie_extract::commands::scan::hea0aae59d27c1281  (in julie-extract) + 7720  [0x1004b1f4c]
+                    2478 julie_extract_artifact::writer::ArtifactWriter::write_scan_spooled_preserving_missing_paths::hf0f1328aa4098b75  (in julie-extract) + 152  [0x100b1e808]
+                      2477 julie_extract_artifact::writer::ArtifactWriter::write_scan_spooled_snapshot::h834153c78d9416b2  (in julie-extract) + 5300  [0x100b1d9c0]
+                      + 2421 julie_extract_artifact::writer::delete_file_rows::h5c454016a10691c6  (in julie-extract) + 552  [0x100b1fdf8]
+                      + ! 2421 rusqlite::Connection::execute::hc8882f8d85fe9eeb  (in julie-extract) + 284  [0x100b2be08]
+                      + !   2421 rusqlite::statement::Statement::execute_with_bound_parameters::habcea41cbd6822c1  (in julie-extract) + 40  [0x100b2c314]
+                      + !     2421 sqlite3_step  (in julie-extract) + 608  [0x100b5af30]
+                      + !       1789 sqlite3VdbeExec  (in julie-extract) + 4468  [0x100b9911c]
+                      + !       : 1735 sqlite3BtreeNext  (in julie-extract) + 160  [0x100ba7a30]
+                      + !       : | 1730 moveToChild  (in julie-extract) + 184  [0x100baf394]
+                      + !       : | + 1716 getAndInitPage  (in julie-extract) + 136  [0x100baf51c]
+                      + !       : | + ! 1619 getPageNormal  (in julie-extract) + 568  [0x100b860ec]
+                      + !       : | + ! : 1231 readDbPage  (in julie-extract) + 192  [0x100b866a0]
+                      + !       : | + ! : | 1228 unixRead  (in julie-extract) + 136  [0x100b788f4]
+                      + !       : | + ! : | + 1228 pread  (in libsystem_kernel.dylib) + 8,0  [0x1894e3650,0x1894e3648]
+                      + !       : | + ! : | 3 unixRead  (in julie-extract) + 44,136,...  [0x100b78898,0x100b788f4,...]
+                      + !       : | + ! : 384 readDbPage  (in julie-extract) + 48  [0x100b86610]
+                      + !       : | + ! : | 384 walFindFrame  (in julie-extract) + 380,164,...  [0x100b86380,0x100b862a8,...]
+                      + !       : | + ! : 3 readDbPage  (in julie-extract) + 192,20  [0x100b866a0,0x100b865f4]
+                      + !       : | + ! : 1 unixRead  (in julie-extract) + 436  [0x100b78a20]
+                      + !       : | + ! 83 getPageNormal  (in julie-extract) + 76  [0x100b85f00]
+                      + !       : | + ! : 69 pcache1Fetch  (in julie-extract) + 76,96,...  [0x100c60300,0x100c60314,...]
+                      + !       : | + ! : 6 pcache1Fetch  (in julie-extract) + 116  [0x100c60328]
+                      + !       : | + ! : | 6 pcache1FetchStage2  (in julie-extract) + 524,712,...  [0x100c60e58,0x100c60f14,...]
+                      + !       : | + ! : 4 pcache1Fetch  (in julie-extract) + 312  [0x100c603ec]
+                      + !       : | + ! : | 4 pthread_mutex_unlock  (in libsystem_pthread.dylib) + 24,48,...  [0x18952095c,0x189520974,...]
+                      + !       : | + ! : 2 pthread_mutex_lock  (in libsystem_pthread.dylib) + 136  [0x189520484]
+                      + !       : | + ! : 1 pcache1Fetch  (in julie-extract) + 52  [0x100c602e8]
+                      + !       : | + ! : | 1 pthread_mutex_lock  (in libsystem_pthread.dylib) + 48  [0x18952042c]
+                      + !       : | + ! : 1 pcache1FetchStage2  (in julie-extract) + 572  [0x100c60e88]
+                      + !       : | + ! 7 getPageNormal  (in julie-extract) + 64,524,...  [0x100b85ef4,0x100b860c0,...]
+                      + !       : | + ! 4 getPageNormal  (in julie-extract) + 360  [0x100b8601c]
+                      + !       : | + ! : 4 pcacheFetchFinishWithInit  (in julie-extract) + 56,20,...  [0x100b84d54,0x100b84d30,...]
+                      + !       : | + ! 1 getPageNormal  (in julie-extract) + 308  [0x100b85fe8]
+                      + !       : | + ! : 1 pagerStress  (in julie-extract) + 92  [0x100bb1660]
+                      + !       : | + ! :   1 subjournalPageIfRequired  (in julie-extract) + 668  [0x100b8a270]
+                      + !       : | + ! :     1 memjrnlWrite  (in julie-extract) + 356  [0x100b857dc]
+                      + !       : | + ! :       1 _platform_memmove  (in libsystem_platform.dylib) + 180  [0x18952f414]
+                      + !       : | + ! 1 pcache1Fetch  (in julie-extract) + 324  [0x100c603f8]
+                      + !       : | + ! 1 readDbPage  (in julie-extract) + 56  [0x100b86618]
+                      + !       : | + 7 getAndInitPage  (in julie-extract) + 260  [0x100baf598]
+                      + !       : | + ! 4 btreeInitPage  (in julie-extract) + 28,284,...  [0x100b8fb68,0x100b8fc68,...]
+                      + !       : | + ! 3 btreeInitPage  (in julie-extract) + 44  [0x100b8fb78]
+                      + !       : | + !   3 decodeFlags  (in julie-extract) + 8,24,...  [0x100b8939c,0x100b893ac,...]
+                      + !       : | + 7 getAndInitPage  (in julie-extract) + 136,24,...  [0x100baf51c,0x100baf4ac,...]
+                      + !       : | 5 moveToChild  (in julie-extract) + 20,184,...  [0x100baf2f0,0x100baf394,...]
+                      + !       : 33 sqlite3BtreeNext  (in julie-extract) + 32,192,...  [0x100ba79b0,0x100ba7a50,...]
+                      + !       : 12 btreeNext  (in julie-extract) + 632  [0x100bb1e98]
+                      + !       : | 4 pcache1Unpin  (in julie-extract) + 52  [0x100c60480]
+                      + !       : | + 2 DYLD-STUB$$pthread_mutex_lock  (in julie-extract) + 4  [0x100d6bb98]
+                      + !       : | + 2 pthread_mutex_lock  (in libsystem_pthread.dylib) + 12  [0x189520408]
+                      + !       : | 4 pthread_mutex_unlock  (in libsystem_pthread.dylib) + 0,32,...  [0x189520944,0x189520964,...]
+                      + !       : | 2 pcache1Unpin  (in julie-extract) + 60,276  [0x100c60488,0x100c60560]
+                      + !       : | 2 sqlite3PcacheRelease  (in julie-extract) + 24  [0x100b80bd8]
+                      + !       : 7 btreeNext  (in julie-extract) + 872  [0x100bb1f88]
+                      + !       : | 7 moveToChild  (in julie-extract) + 184  [0x100baf394]
+                      + !       : |   6 getAndInitPage  (in julie-extract) + 136  [0x100baf51c]
+                      + !       : |   + 5 getPageNormal  (in julie-extract) + 568  [0x100b860ec]
+                      + !       : |   + ! 4 readDbPage  (in julie-extract) + 192  [0x100b866a0]
+                      + !       : |   + ! : 4 unixRead  (in julie-extract) + 136  [0x100b788f4]
+                      + !       : |   + ! :   4 pread  (in libsystem_kernel.dylib) + 8  [0x1894e3650]
+                      + !       : |   + ! 1 readDbPage  (in julie-extract) + 48  [0x100b86610]
+                      + !       : |   + !   1 walFindFrame  (in julie-extract) + 380  [0x100b86380]
+                      + !       : |   + 1 getPageNormal  (in julie-extract) + 308  [0x100b85fe8]
+                      + !       : |   +   1 pagerStress  (in julie-extract) + 276  [0x100bb1718]
+                      + !       : |   +     1 pagerWalFrames  (in julie-extract) + 760  [0x100b8b534]
+                      + !       : |   +       1 unixWrite  (in julie-extract) + 76  [0x100b78a74]
+                      + !       : |   +         1 pwrite  (in libsystem_kernel.dylib) + 8  [0x1894e5430]
+                      + !       : |   1 getAndInitPage  (in julie-extract) + 260  [0x100baf598]
+                      + !       : |     1 btreeInitPage  (in julie-extract) + 44  [0x100b8fb78]
+                      + !       : |       1 decodeFlags  (in julie-extract) + 24  [0x100b893ac]
+                      + !       : 2 btreeNext  (in julie-extract) + 4,812  [0x100bb1c24,0x100bb1f4c]
+                      + !       386 sqlite3VdbeExec  (in julie-extract) + 512,38844,...  [0x100b981a8,0x100ba1764,...]
+                      + !       82 sqlite3VdbeExec  (in julie-extract) + 30500  [0x100b9f6cc]
+                      + !       : 46 binCollFunc  (in julie-extract) + 36  [0x100c1734c]
+                      + !       : | 28 _platform_memcmp  (in libsystem_platform.dylib) + 8,128,...  [0x18952cf18,0x18952cf90,...]
+                      + !       : | 18 DYLD-STUB$$memcmp  (in julie-extract) + 4  [0x100d6ba54]
+                      + !       : 24 sqlite3MemCompare  (in julie-extract) + 4,132,...  [0x100ba3f00,0x100ba3f80,...]
+                      + !       : 12 vdbeCompareMemString  (in julie-extract) + 32,4  [0x100bae560,0x100bae544]
+                      + !       70 sqlite3VdbeExec  (in julie-extract) + 31932  [0x100b9fc64]
+                      + !       : 40 btreeParseCellPtr  (in julie-extract) + 476,244,...  [0x100b898a4,0x100b897bc,...]
+                      + !       : 30 getCellInfo  (in julie-extract) + 0,56,...  [0x100b8d21c,0x100b8d254,...]
+                      + !       60 sqlite3VdbeExec  (in julie-extract) + 41464  [0x100ba21a0]
+                      + !       : 57 _platform_memmove  (in libsystem_platform.dylib) + 428,460,...  [0x18952f50c,0x18952f52c,...]
+                      + !       : 3 DYLD-STUB$$memcpy  (in julie-extract) + 4  [0x100d6ba60]
+                      + !       13 binCollFunc  (in julie-extract) + 48,52  [0x100c17358,0x100c1735c]
+                      + !       8 sqlite3BtreeNext  (in julie-extract) + 100,184  [0x100ba79f4,0x100ba7a48]
+                      + !       8 sqlite3VdbeExec  (in julie-extract) + 2736  [0x100b98a58]
+                      + !       : 7 sqlite3BtreeIndexMoveto  (in julie-extract) + 1240  [0x100ba76c4]
+                      + !       : | 7 getAndInitPage  (in julie-extract) + 136  [0x100baf51c]
+                      + !       : |   7 getPageNormal  (in julie-extract) + 568  [0x100b860ec]
+                      + !       : |     5 readDbPage  (in julie-extract) + 192  [0x100b866a0]
+                      + !       : |     + 5 unixRead  (in julie-extract) + 136  [0x100b788f4]
+                      + !       : |     +   5 pread  (in libsystem_kernel.dylib) + 8  [0x1894e3650]
+                      + !       : |     2 readDbPage  (in julie-extract) + 140  [0x100b8666c]
+                      + !       : |       2 unixRead  (in julie-extract) + 136  [0x100b788f4]
+                      + !       : |         2 pread  (in libsystem_kernel.dylib) + 8  [0x1894e3650]
+                      + !       : 1 sqlite3BtreeIndexMoveto  (in julie-extract) + 1008  [0x100ba75dc]
+                      + !       :   1 vdbeRecordCompareString  (in julie-extract) + 156  [0x100bb1ae8]
+                      + !       2 sqlite3VdbeExec  (in julie-extract) + 2096  [0x100b987d8]
+                      + !       : 1 sqlite3BtreeOpen  (in julie-extract) + 1416  [0x100ba58bc]
+                      + !       : | 1 sqlite3Malloc  (in julie-extract) + 340  [0x100b542e4]
+                      + !       : |   1 sqlite3MemMalloc  (in julie-extract) + 36  [0x100c5fd70]
+                      + !       : |     1 <deduplicated_symbol>  (in libsystem_malloc.dylib) + 216  [0x1893421ac]
+                      + !       : 1 sqlite3BtreeOpen  (in julie-extract) + 3500  [0x100ba60e0]
+                      + !       1 sqlite3VdbeExec  (in julie-extract) + 2136  [0x100b98800]
+                      + !       : 1 btreeBeginTrans  (in julie-extract) + 1556  [0x100b8180c]
+                      + !       1 sqlite3VdbeExec  (in julie-extract) + 4840  [0x100b99290]
+                      + !       : 1 sqlite3BtreeIndexMoveto  (in julie-extract) + 1240  [0x100ba76c4]
+                      + !       :   1 getAndInitPage  (in julie-extract) + 136  [0x100baf51c]
+                      + !       :     1 getPageNormal  (in julie-extract) + 568  [0x100b860ec]
+                      + !       :       1 readDbPage  (in julie-extract) + 192  [0x100b866a0]
+                      + !       :         1 unixRead  (in julie-extract) + 136  [0x100b788f4]
+                      + !       :           1 pread  (in libsystem_kernel.dylib) + 8  [0x1894e3650]
+                      + !       1 sqlite3VdbeExec  (in julie-extract) + 15152  [0x100b9bad8]
+                      + !         1 allocateCursor  (in julie-extract) + 108  [0x100ba4e44]
+                      + !           1 sqlite3VdbeFreeCursorNN  (in julie-extract) + 676  [0x100b92a6c]
+                      + !             1 btreeReleaseAllCursorPages  (in julie-extract) + 164  [0x100b8d060]
+                      + 22 julie_extract_artifact::writer::delete_file_rows::h5c454016a10691c6  (in julie-extract) + 620  [0x100b1fe3c]
+                      + ! 22 rusqlite::Connection::execute::he41e77e125721e85  (in julie-extract) + 252  [0x100b2bfb0]
+                      + !   22 rusqlite::statement::Statement::execute_with_bound_parameters::habcea41cbd6822c1  (in julie-extract) + 40  [0x100b2c314]
+                      + !     22 sqlite3_step  (in julie-extract) + 608  [0x100b5af30]
+                      + !       11 sqlite3VdbeExec  (in julie-extract) + 4468  [0x100b9911c]
+                      + !       : 11 sqlite3BtreeNext  (in julie-extract) + 160  [0x100ba7a30]
+                      + !       :   11 moveToChild  (in julie-extract) + 184  [0x100baf394]
+                      + !       :     11 getAndInitPage  (in julie-extract) + 136  [0x100baf51c]
+                      + !       :       11 getPageNormal  (in julie-extract) + 568  [0x100b860ec]
+                      + !       :         8 readDbPage  (in julie-extract) + 192  [0x100b866a0]
+                      + !       :         | 8 unixRead  (in julie-extract) + 136  [0x100b788f4]
+                      + !       :         |   8 pread  (in libsystem_kernel.dylib) + 8  [0x1894e3650]
+                      + !       :         3 readDbPage  (in julie-extract) + 48  [0x100b86610]
+                      + !       :           3 walFindFrame  (in julie-extract) + 300,324,...  [0x100b86330,0x100b86348,...]
+                      + !       7 sqlite3VdbeExec  (in julie-extract) + 512,536,...  [0x100b981a8,0x100b981c0,...]
+                      + !       3 sqlite3VdbeExec  (in julie-extract) + 41464  [0x100ba21a0]
+                      + !       : 2 _platform_memmove  (in libsystem_platform.dylib) + 428,452  [0x18952f50c,0x18952f524]
+                      + !       : 1 DYLD-STUB$$memcpy  (in julie-extract) + 4  [0x100d6ba60]
+                      + !       1 sqlite3VdbeExec  (in julie-extract) + 30500  [0x100b9f6cc]
+                      + !         1 sqlite3MemCompare  (in julie-extract) + 132  [0x100ba3f80]
+                      + 19 julie_extract_artifact::writer::delete_file_rows::h5c454016a10691c6  (in julie-extract) + 432  [0x100b1fd80]
+                      + ! 19 rusqlite::Connection::execute::hc8882f8d85fe9eeb  (in julie-extract) + 284  [0x100b2be08]
+                      + !   19 rusqlite::statement::Statement::execute_with_bound_parameters::habcea41cbd6822c1  (in julie-extract) + 40  [0x100b2c314]
+                      + !     19 sqlite3_step  (in julie-extract) + 608  [0x100b5af30]
+                      + !       9 sqlite3VdbeExec  (in julie-extract) + 14804  [0x100b9b97c]
+                      + !       : 5 sqlite3BtreeIndexMoveto  (in julie-extract) + 1020,640,...  [0x100ba75e8,0x100ba746c,...]
+                      + !       : 3 sqlite3BtreeIndexMoveto  (in julie-extract) + 1008  [0x100ba75dc]
+                      + !       : | 3 sqlite3VdbeRecordCompareWithSkip  (in julie-extract) + 44,764,...  [0x100ba9e28,0x100baa0f8,...]
+                      + !       : 1 sqlite3VdbeRecordCompareWithSkip  (in julie-extract) + 2348  [0x100baa728]
+                      + !       4 sqlite3VdbeExec  (in julie-extract) + 4468  [0x100b9911c]
+                      + !       : 2 sqlite3BtreeNext  (in julie-extract) + 160  [0x100ba7a30]
+                      + !       : | 2 moveToChild  (in julie-extract) + 184  [0x100baf394]
+                      + !       : |   2 getAndInitPage  (in julie-extract) + 136  [0x100baf51c]
+                      + !       : |     2 getPageNormal  (in julie-extract) + 568  [0x100b860ec]
+                      + !       : |       2 readDbPage  (in julie-extract) + 192  [0x100b866a0]
+                      + !       : |         2 unixRead  (in julie-extract) + 136  [0x100b788f4]
+                      + !       : |           2 pread  (in libsystem_kernel.dylib) + 8  [0x1894e3650]
+                      + !       : 1 btreeNext  (in julie-extract) + 632  [0x100bb1e98]
+                      + !       : | 1 sqlite3PcacheRelease  (in julie-extract) + 24  [0x100b80bd8]
+                      + !       : 1 sqlite3BtreeNext  (in julie-extract) + 20  [0x100ba79a4]
+                      + !       4 sqlite3VdbeExec  (in julie-extract) + 512,11784,...  [0x100b981a8,0x100b9adb0,...]
+                      + !       1 sqlite3VdbeExec  (in julie-extract) + 31932  [0x100b9fc64]
+                      + !       : 1 btreeParseCellPtr  (in julie-extract) + 432  [0x100b89878]
+                      + !       1 sqlite3VdbeExec  (in julie-extract) + 38184  [0x100ba14d0]
+                      + !         1 sqlite3VdbeFinishMoveto  (in julie-extract) + 40  [0x100ba4104]
+                      + !           1 sqlite3BtreeTableMoveto  (in julie-extract) + 648  [0x100ba715c]
+                      + !             1 sqlite3BtreeNext  (in julie-extract) + 192  [0x100ba7a50]
+                      + 9 julie_extract_artifact::writer::delete_file_rows::h5c454016a10691c6  (in julie-extract) + 352  [0x100b1fd30]
+                      + ! 9 rusqlite::Connection::execute::hc8882f8d85fe9eeb  (in julie-extract) + 284  [0x100b2be08]
+                      + !   9 rusqlite::statement::Statement::execute_with_bound_parameters::habcea41cbd6822c1  (in julie-extract) + 40  [0x100b2c314]
+                      + !     9 sqlite3_step  (in julie-extract) + 608  [0x100b5af30]
+                      + !       4 sqlite3VdbeExec  (in julie-extract) + 4468  [0x100b9911c]
+                      + !       : 4 sqlite3BtreeNext  (in julie-extract) + 160  [0x100ba7a30]
+                      + !       :   4 moveToChild  (in julie-extract) + 184  [0x100baf394]
+                      + !       :     4 getAndInitPage  (in julie-extract) + 136  [0x100baf51c]
+                      + !       :       4 getPageNormal  (in julie-extract) + 568  [0x100b860ec]
+                      + !       :         4 readDbPage  (in julie-extract) + 192  [0x100b866a0]
+                      + !       :           4 unixRead  (in julie-extract) + 136  [0x100b788f4]
+                      + !       :             4 pread  (in libsystem_kernel.dylib) + 8  [0x1894e3650]
+                      + !       3 sqlite3VdbeExec  (in julie-extract) + 608,39308,...  [0x100b98208,0x100ba1934,...]
+                      + !       1 sqlite3VdbeExec  (in julie-extract) + 30500  [0x100b9f6cc]
+                      + !       : 1 sqlite3MemCompare  (in julie-extract) + 132  [0x100ba3f80]
+                      + !       1 sqlite3VdbeExec  (in julie-extract) + 41464  [0x100ba21a0]
+                      + !         1 _platform_memmove  (in libsystem_platform.dylib) + 452  [0x18952f524]
+                      + 4 julie_extract_artifact::writer::delete_file_rows::h5c454016a10691c6  (in julie-extract) + 72  [0x100b1fc18]
+                      + ! 3 rusqlite::Connection::execute::hc8882f8d85fe9eeb  (in julie-extract) + 284  [0x100b2be08]
+                      + ! : 3 rusqlite::statement::Statement::execute_with_bound_parameters::habcea41cbd6822c1  (in julie-extract) + 40  [0x100b2c314]
+                      + ! :   3 sqlite3_step  (in julie-extract) + 608  [0x100b5af30]
+                      + ! :     2 sqlite3VdbeExec  (in julie-extract) + 38876,39080  [0x100ba1784,0x100ba1850]
+                      + ! :     1 sqlite3VdbeExec  (in julie-extract) + 4468  [0x100b9911c]
+                      + ! :       1 sqlite3BtreeNext  (in julie-extract) + 160  [0x100ba7a30]
+                      + ! :         1 moveToChild  (in julie-extract) + 184  [0x100baf394]
+                      + ! :           1 getAndInitPage  (in julie-extract) + 136  [0x100baf51c]
+                      + ! :             1 getPageNormal  (in julie-extract) + 568  [0x100b860ec]
+                      + ! :               1 readDbPage  (in julie-extract) + 192  [0x100b866a0]
+                      + ! :                 1 unixRead  (in julie-extract) + 136  [0x100b788f4]
+                      + ! :                   1 pread  (in libsystem_kernel.dylib) + 8  [0x1894e3650]
+                      + ! 1 rusqlite::Connection::execute::hc8882f8d85fe9eeb  (in julie-extract) + 364  [0x100b2be58]
+                      + !   1 core::ptr::drop_in_place$LT$rusqlite..statement..Statement$GT$::h5b31bd57fc241d84  (in julie-extract) + 68  [0x100b2a0dc]
+                      + !     1 sqlite3_finalize  (in julie-extract) + 100  [0x100b5ce7c]
+                      + !       1 sqlite3VdbeDelete  (in julie-extract) + 1264  [0x100b52990]
+                      + !         1 vdbeFreeOpArray  (in julie-extract) + 76  [0x100b905f0]
+                      + !           1 freeP4  (in julie-extract) + 356  [0x100b90860]
+                      + !             1 sqlite3DbFree  (in julie-extract) + 20  [0x100b57cf0]
+                      + 1 julie_extract_artifact::writer::delete_file_rows::h5c454016a10691c6  (in julie-extract) + 192  [0x100b1fc90]
+                      + ! 1 rusqlite::Connection::execute::hc8882f8d85fe9eeb  (in julie-extract) + 284  [0x100b2be08]
+                      + !   1 rusqlite::statement::Statement::execute_with_bound_parameters::habcea41cbd6822c1  (in julie-extract) + 40  [0x100b2c314]
+                      + !     1 sqlite3_step  (in julie-extract) + 608  [0x100b5af30]
+                      + !       1 sqlite3VdbeExec  (in julie-extract) + 2736  [0x100b98a58]
+                      + !         1 sqlite3BtreeIndexMoveto  (in julie-extract) + 1240  [0x100ba76c4]
+                      + !           1 getAndInitPage  (in julie-extract) + 136  [0x100baf51c]
+                      + !             1 getPageNormal  (in julie-extract) + 568  [0x100b860ec]
+                      + !               1 readDbPage  (in julie-extract) + 192  [0x100b866a0]
+                      + !                 1 unixRead  (in julie-extract) + 136  [0x100b788f4]
+                      + !                   1 pread  (in libsystem_kernel.dylib) + 8  [0x1894e3650]
+                      + 1 julie_extract_artifact::writer::delete_file_rows::h5c454016a10691c6  (in julie-extract) + 232  [0x100b1fcb8]
+                      +   1 rusqlite::Connection::execute::hc8882f8d85fe9eeb  (in julie-extract) + 284  [0x100b2be08]
+                      +     1 rusqlite::statement::Statement::execute_with_bound_parameters::habcea41cbd6822c1  (in julie-extract) + 40  [0x100b2c314]
+                      +       1 sqlite3_step  (in julie-extract) + 608  [0x100b5af30]
+                      +         1 sqlite3VdbeExec  (in julie-extract) + 4840  [0x100b99290]
+                      +           1 sqlite3BtreeIndexMoveto  (in julie-extract) + 1240  [0x100ba76c4]
+                      +             1 getAndInitPage  (in julie-extract) + 136  [0x100baf51c]
+                      +               1 getPageNormal  (in julie-extract) + 568  [0x100b860ec]
+                      +                 1 readDbPage  (in julie-extract) + 140  [0x100b8666c]
+                      +                   1 unixRead  (in julie-extract) + 136  [0x100b788f4]
+                      +                     1 pread  (in libsystem_kernel.dylib) + 8  [0x1894e3650]
+                      1 julie_extract_artifact::writer::ArtifactWriter::write_scan_spooled_snapshot::h834153c78d9416b2  (in julie-extract) + 5380  [0x100b1da10]
+                        1 julie_extract_artifact::writer::FileRowInserters::insert_symbols::h8bb128eee8640246  (in julie-extract) + 276  [0x100b1f284]
+
+Total number in stack (recursive counted multiple, when >=5):
+        11       pread  (in libsystem_kernel.dylib) + 0  [0x1894e3648]
+        11       unixRead  (in julie-extract) + 136  [0x100b788f4]
+        10       getAndInitPage  (in julie-extract) + 136  [0x100baf51c]
+        10       getPageNormal  (in julie-extract) + 568  [0x100b860ec]
+        9       readDbPage  (in julie-extract) + 192  [0x100b866a0]
+        7       rusqlite::statement::Statement::execute_with_bound_parameters::habcea41cbd6822c1  (in julie-extract) + 40  [0x100b2c314]
+        7       sqlite3_step  (in julie-extract) + 608  [0x100b5af30]
+        6       moveToChild  (in julie-extract) + 184  [0x100baf394]
+        6       rusqlite::Connection::execute::hc8882f8d85fe9eeb  (in julie-extract) + 284  [0x100b2be08]
+        5       sqlite3BtreeNext  (in julie-extract) + 160  [0x100ba7a30]
+        5       sqlite3VdbeExec  (in julie-extract) + 0  [0x100b97fa8]
+        5       sqlite3VdbeExec  (in julie-extract) + 4468  [0x100b9911c]
+
+Sort by top of stack, same collapsed (when >= 5):
+        pread  (in libsystem_kernel.dylib)        1257
+        sqlite3VdbeExec  (in julie-extract)        402
+        walFindFrame  (in julie-extract)        388
+        pcache1Fetch  (in julie-extract)        70
+        _platform_memmove  (in libsystem_platform.dylib)        61
+        sqlite3BtreeNext  (in julie-extract)        43
+        btreeParseCellPtr  (in julie-extract)        41
+        getCellInfo  (in julie-extract)        30
+        _platform_memcmp  (in libsystem_platform.dylib)        28
+        sqlite3MemCompare  (in julie-extract)        26
+        DYLD-STUB$$memcmp  (in julie-extract)        18
+        binCollFunc  (in julie-extract)        13
+        vdbeCompareMemString  (in julie-extract)        12
+        pthread_mutex_unlock  (in libsystem_pthread.dylib)        8
+        getAndInitPage  (in julie-extract)        7
+        getPageNormal  (in julie-extract)        7
+        pcache1FetchStage2  (in julie-extract)        7
+        moveToChild  (in julie-extract)        5
+        pthread_mutex_lock  (in libsystem_pthread.dylib)        5
+        sqlite3BtreeIndexMoveto  (in julie-extract)        5
+
+Binary Images:
+       0x100464000 -        0x1042fe41f +julie-extract (0) <700DC368-1151-31C0-9E7C-A4338C2A9BA1> /Users/*/julie-extract
+       0x1890c0000 -        0x189112b4b  libobjc.A.dylib (951.7) <FF1D8AE4-ABEF-35F1-A30A-1183B9CB414F> /usr/lib/libobjc.A.dylib
+       0x189113000 -        0x189147d07  libdyld.dylib (1378) <B147D877-D0C2-388F-B38D-D3132E39905F> /usr/lib/system/libdyld.dylib
+       0x189148000 -        0x1891ee217  dyld (1.0.0 - 1378) <A237EF81-B68B-37BA-A165-92C965529534> /usr/lib/dyld
+       0x1891ef000 -        0x1891f2228  libsystem_blocks.dylib (96) <CC947089-488D-316B-A9C7-46DEC0F73145> /usr/lib/system/libsystem_blocks.dylib
+       0x1891f3000 -        0x18924755f  libxpc.dylib (3102.120.13) <C40FCAE8-7A17-3D82-87CB-3DA4802ADEF1> /usr/lib/system/libxpc.dylib
+       0x189248000 -        0x1892689ff  libsystem_trace.dylib (1861.120.4) <D0FABAB3-5AE7-3F10-8C62-60CBF5D70850> /usr/lib/system/libsystem_trace.dylib
+       0x189269000 -        0x1893175f7  libcorecrypto.dylib (1922.121.1) <A01A158D-6FE7-3B1C-A2C4-6BCB90D7314A> /usr/lib/system/libcorecrypto.dylib
+       0x189318000 -        0x1893681d7  libsystem_malloc.dylib (812.100.31) <5FAE4807-4D2B-3A95-A63A-DD96D3DA11B4> /usr/lib/system/libsystem_malloc.dylib
+       0x189369000 -        0x1893b023f  libdispatch.dylib (1542.100.32) <F071EFE4-299F-3089-ACC4-0025B8FFB52A> /usr/lib/system/libdispatch.dylib
+       0x1893b1000 -        0x1893b3ffb  libsystem_featureflags.dylib (103) <71FCFFBD-85F8-3365-AFE0-BECEA4369122> /usr/lib/system/libsystem_featureflags.dylib
+       0x1893b4000 -        0x189434d9f  libsystem_c.dylib (1752.120.2) <694B7881-1BF3-3D0F-8F19-B50AE4E8EF8A> /usr/lib/system/libsystem_c.dylib
+       0x189435000 -        0x1894c5ae7  libc++.1.dylib (2100.43) <5013C0F8-84A9-3B56-9FEB-C353816A750F> /usr/lib/libc++.1.dylib
+       0x1894c6000 -        0x1894e075f  libc++abi.dylib (2100.43) <E482D257-E5A0-3816-BD97-7B39342958DA> /usr/lib/libc++abi.dylib
+       0x1894e1000 -        0x18951e2af  libsystem_kernel.dylib (12377.121.6) <CC1CF985-BC65-3725-809F-4C1E36B8F4BA> /usr/lib/system/libsystem_kernel.dylib
+       0x18951f000 -        0x18952bb3b  libsystem_pthread.dylib (539.100.4) <4F33683C-18C8-39A1-800B-2E3BD43BCC13> /usr/lib/system/libsystem_pthread.dylib
+       0x18952c000 -        0x189534963  libsystem_platform.dylib (375.120.2) <160FD864-8D15-36FC-9E97-9725388CFAFE> /usr/lib/system/libsystem_platform.dylib
+       0x189535000 -        0x1895646eb  libsystem_info.dylib (600) <3D62F2D9-F516-31BF-83C7-E203D872300B> /usr/lib/system/libsystem_info.dylib
+       0x18d4fc000 -        0x18d505e5f  libsystem_darwin.dylib (1752.120.2) <8858F025-745A-388E-9544-080781CC9A69> /usr/lib/system/libsystem_darwin.dylib
+       0x18d967000 -        0x18d9791b6  libsystem_notify.dylib (348.120.4) <64D76451-1E0C-369B-A631-54DA3140E083> /usr/lib/system/libsystem_notify.dylib
+       0x18fc34000 -        0x18fc4ef7b  libsystem_networkextension.dylib (2226.121.1) <0331EE20-A1FB-3C0D-990A-F65939CFF505> /usr/lib/system/libsystem_networkextension.dylib
+       0x18fcd1000 -        0x18fce8fdf  libsystem_asl.dylib (406) <F40838DF-2F15-3F62-970F-DEE25706BF1B> /usr/lib/system/libsystem_asl.dylib
+       0x19188f000 -        0x191897387  libsystem_symptoms.dylib (2169.120.7) <F5029F5C-1BF3-31C7-892E-BC8606AC829E> /usr/lib/system/libsystem_symptoms.dylib
+       0x195b33000 -        0x195b6b257  libsystem_containermanager.dylib (725.120.2) <518BE44D-AA31-31E6-B44B-A37AD5E47040> /usr/lib/system/libsystem_containermanager.dylib
+       0x196f44000 -        0x196f485d7  libsystem_configuration.dylib (1405.120.5) <0F7BBC1C-3D50-3E59-A31F-E4672A80BCEB> /usr/lib/system/libsystem_configuration.dylib
+       0x196f49000 -        0x196f4f8cf  libsystem_sandbox.dylib (2680.120.12) <EC3A75EA-44C0-3A0B-9BF7-71C117B0A9C6> /usr/lib/system/libsystem_sandbox.dylib
+       0x1985a3000 -        0x1985a61fb  libquarantine.dylib (196.120.2) <5849009B-ACA3-3796-94C4-BBDF8D300EBA> /usr/lib/system/libquarantine.dylib
+       0x198d42000 -        0x198d48d03  libsystem_coreservices.dylib (191.4.5) <9576143B-C303-35A3-BA63-1FD06EDA2BB1> /usr/lib/system/libsystem_coreservices.dylib
+       0x1992cd000 -        0x19930aa77  libsystem_m.dylib (3312.100.1) <A7E0863C-101A-31A0-922B-ED9B02626151> /usr/lib/system/libsystem_m.dylib
+       0x19930c000 -        0x19930f527  libmacho.dylib (1378) <755441B4-C034-3E3A-8E3C-F424FBB28261> /usr/lib/system/libmacho.dylib
+       0x199329000 -        0x1993363a7  libcommonCrypto.dylib (600035) <CE357BB1-2D49-37CC-9FFE-D093936B1475> /usr/lib/system/libcommonCrypto.dylib
+       0x199337000 -        0x199340ca3  libunwind.dylib (2100.2) <FC8F0C4E-6FB0-3E27-ABEF-B0FA720CD5E4> /usr/lib/system/libunwind.dylib
+       0x199349000 -        0x1993537ff  libcopyfile.dylib (240) <8ACFAC7A-88E9-3EF4-853F-A9140FF110E5> /usr/lib/system/libcopyfile.dylib
+       0x199354000 -        0x199357987  libcompiler_rt.dylib (103.3) <AA79151F-C19D-3C7C-92F8-B10F04D82C1C> /usr/lib/system/libcompiler_rt.dylib
+       0x199358000 -        0x19935c78b  libsystem_collections.dylib (1752.120.2) <72DB5BE7-EF78-37D0-8AAD-53E37CFE4287> /usr/lib/system/libsystem_collections.dylib
+       0x19935d000 -        0x1993604cf  libsystem_secinit.dylib (168.100.7) <E525C566-CDA4-3D99-B12B-1615FD54A1F3> /usr/lib/system/libsystem_secinit.dylib
+       0x199361000 -        0x199363bf7  libremovefile.dylib (85.100.6) <635E661D-80A7-340D-A165-3F7D318FDFC9> /usr/lib/system/libremovefile.dylib
+       0x199364000 -        0x199364f27  libkeymgr.dylib (31) <8C08891A-DF1C-3DCC-AB64-4742FD6BE9BA> /usr/lib/system/libkeymgr.dylib
+       0x199365000 -        0x19936de37  libsystem_dnssd.dylib (2881.120.11) <6F45DF3F-233B-3BC3-BA8C-B43E7DA884BF> /usr/lib/system/libsystem_dnssd.dylib
+       0x19936e000 -        0x19937309b  libcache.dylib (95) <189B576E-6176-3F82-8FA4-5914B0BEAEE7> /usr/lib/system/libcache.dylib
+       0x199374000 -        0x199375ce3  libSystem.B.dylib (1356) <D65E4112-C151-3FF8-BEB7-4841436012D6> /usr/lib/libSystem.B.dylib
+       0x28c5ab000 -        0x28c5b2349  libRosetta.dylib (367.9) <8651ED4F-6506-3788-B56B-32EE414A85CA> /usr/lib/libRosetta.dylib
+       0x28e1c8000 -        0x28e1cba4b  libsystem_darwindirectory.dylib (122) <CF277A2C-C818-3F16-8B3F-3C7B39FCD164> /usr/lib/system/libsystem_darwindirectory.dylib
+       0x28e1cc000 -        0x28e1d55d3  libsystem_eligibility.dylib (319.121.1) <DDAC0531-0262-3DDC-8EC8-80EB9438847A> /usr/lib/system/libsystem_eligibility.dylib
+       0x28e1d6000 -        0x28e1dd88b  libsystem_sanitizers.dylib (26.1) <44C4234F-8B2D-38D3-A774-B4B3C75AF3A7> /usr/lib/system/libsystem_sanitizers.dylib
+       0x28e1de000 -        0x28e1debb7  libsystem_trial.dylib (474.2.18.2) <68C583BA-AFF5-3916-86AE-6E38BFEF98D6> /usr/lib/system/libsystem_trial.dylib

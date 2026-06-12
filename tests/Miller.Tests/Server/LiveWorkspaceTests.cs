@@ -81,7 +81,12 @@ public sealed class LiveWorkspaceTests : IDisposable
         };
 
         var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(dbPath));
-        var holder = new IndexHolder(index, scan.Revision ?? 0);
+        // Seed the artifact identity exactly as the production bootstrap does: a `full` force rebuild PROMOTES
+        // a fresh file whose revision counter restarts, and the freshness swap is detected by the id changing.
+        string? builtArtifactId;
+        using (var freshnessSeed = new FreshnessReader(dbPath))
+            builtArtifactId = freshnessSeed.ArtifactId();
+        var holder = new IndexHolder(index, scan.Revision ?? 0, builtArtifactId);
 
         var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
         bootstrap.SeedForTest(workspace, holder);
@@ -153,16 +158,18 @@ public sealed class LiveWorkspaceTests : IDisposable
         IExtractOps ops = JulieExtractOps.Create(canonicalRoot, dbPath, runner);
         indexer.PublishOpsForTest(ops);
 
-        long before = holder.BuiltRevision;
+        string? beforeArtifactId = holder.BuiltArtifactId;
+        Assert.False(string.IsNullOrWhiteSpace(beforeArtifactId)); // the real extract stamps an identity
 
         string output = tool.Workspace(operation: "full");
 
-        // A from-scratch force rebuild bumps julie's canonical_revisions cursor; PollNow then rebuilds + swaps the
-        // in-memory index to the advanced revision. So the held revision moves forward and the tool reports both.
+        // A force rebuild PROMOTES a fresh artifact (FullRebuildPromotion) whose revision counter RESTARTS, so
+        // the held revision does not advance — the swap is confirmed by the artifact identity changing. PollNow
+        // detects exactly that and rebuilds + swaps the in-memory index onto the promoted file.
         Assert.Contains("scanned: yes", output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("swapped: yes", output, StringComparison.OrdinalIgnoreCase);
-        Assert.True(holder.BuiltRevision > before,
-            $"expected the index to swap to a higher revision; before={before}, after={holder.BuiltRevision}");
+        Assert.NotEqual(beforeArtifactId, holder.BuiltArtifactId);
+        Assert.True(holder.BuiltRevision > 0, "the swapped index must carry the promoted artifact's revision");
     }
 
     [Fact]

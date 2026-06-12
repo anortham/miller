@@ -147,3 +147,34 @@ Fix plan/status:
   (2): `workspace full --json` already exits 3 on `status: failed` at HEAD (verified empirically on
   0.4.1+86c7529 via an injected sensitive-root registry row; exit-0 did not reproduce) — Eros likely hit a
   pre-0.4.1 binary.
+- [x] 2026-06-11 Eros field report #2 (openclaw `workspace full` — root cause profile): the 0.4.2
+  progress-aware wait kept the rebuild alive 50+ min, but it could never finish. A 3s `sample` of the
+  julie-extract scan at ~98% CPU shows it is NOT extracting (the scan spool .jsonl is complete) — it is
+  in the DB merge phase doing random indexed READS against the existing 2.0GB symbols.db: top-of-stack
+  pread (1257 samples), walFindFrame (388), sqlite3BtreeNext/btreeParseCellPtr/vdbeCompareMemString,
+  pcache1Fetch thrash. The WAL was 380MB and could not checkpoint because the running `miller serve`
+  processes hold read snapshots; effective write throughput was ~7KB/s (days to complete). This explains
+  the 90s-isolated vs 50min-live gap in the earlier triage: isolated = bulk insert into a FRESH db;
+  live = in-place merge into the served 2GB artifact under readers, with per-page walFindFrame overhead
+  growing as the WAL grows. Eros killed the doomed scan after capturing the profile; the raw profile is
+  preserved at docs/investigation-jx-openclaw-sample.txt.
+  FIXED 2026-06-12 (build-to-temp + atomic promote, plus a freshness gap the report could not see):
+  - `JulieExtractRunner.Scan(force:true)` now extracts into `symbols.db.rebuild` and
+    `FullRebuildPromotion.Promote` replaces the live artifact (folds any temp WAL, removes the stale live
+    -wal/-shm, overwrite-move with bounded Windows retry). A failed force scan leaves the live artifact
+    untouched. Escape hatch: `MILLER_FULL_REBUILD_INPLACE=1`. Covers every force path through the single
+    scan chokepoint (leader full scan, extractor-upgrade rescan, cross-workspace `workspace full`,
+    bootstrap auto-rebuild).
+  - The promote makes rebuilds restart julie's revision counter, which the serve freshness pipeline could
+    not see: `FreshnessService` now opens a TRANSIENT reader per poll (a long-lived connection would
+    freeze on the old unlinked inode) and `FreshnessPoller`/`IndexHolder` track
+    `artifact_metadata.artifact_id`, swapping when the identity changes even when the revision went
+    backwards or tied. `CrossWorkspaceRefreshService.WaitForExternalRevision` (lock-busy `workspace full`
+    routed to a live leader) confirms via the same artifact-id arm. Registered-workspace caches were
+    already rebuild-safe (file-stamp keys, b54510e).
+  - Residual (accepted): sidecar `EnsureBuilt` skips when the rebuilt artifact's revision EXACTLY ties the
+    sidecar's stamped revision (same source ⟹ same content-derived symbols, so the artifact stays valid);
+    predates this change via julie's incompatible-heal delete+recreate.
+  - Verified: fast suite 2178 green, scale 28 green (new `FullRebuildPromotionTests`,
+    `FullRebuildScanScaleTests`, artifact-id poller/PollNow/cross-workspace cases), plus a live re-run of
+    the failing openclaw `workspace full` with the fixed binary.

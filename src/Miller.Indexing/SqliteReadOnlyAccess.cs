@@ -6,7 +6,7 @@ namespace Miller.Indexing;
 /// <summary>
 /// Shared <c>Mode=ReadOnly</c> open discipline for julie WAL extract DBs (the M1 D4 rules), reused by every
 /// reader (<see cref="SqliteSymbolReader"/>'s one-shot startup pass and <see cref="FreshnessReader"/>'s
-/// long-lived poll connection).
+/// per-poll connection).
 ///
 /// <para>The WAL trap (D4): a <c>Mode=ReadOnly</c> reader of a WAL DB still needs to write the wal-index
 /// sidecar (<c>-shm</c>) into the DB's directory. A read-only directory makes Open()/first read throw

@@ -140,6 +140,15 @@ scripts/test.ps1 all
   `MILLER_ALLOW_EXTRACTOR_DOWNGRADE=1`. Decision logic lives in
   [`LeadershipEligibility`](src/Miller.Indexing/LeadershipEligibility.cs); design in
   [`docs/plans/2026-06-11-version-aware-leadership-design.md`](docs/plans/2026-06-11-version-aware-leadership-design.md).
+- **Full rebuilds promote, never merge (load-bearing).** A force scan (`workspace full`, extractor-upgrade
+  rescan, bootstrap auto-rebuild) extracts into `symbols.db.rebuild` and atomically promotes it over the live
+  artifact ([`FullRebuildPromotion`](src/Miller.Indexing/FullRebuildPromotion.cs), via the single
+  `JulieExtractRunner.Scan` chokepoint). Never point julie-extract's force scan at the live served DB: serve
+  readers keep its WAL from checkpointing and the in-place merge collapses to ~7KB/s on a multi-GB artifact
+  (2026-06-11 Eros field report #2). The promote restarts julie's revision counter, so freshness/refresh
+  convergence detects rebuilds by `artifact_metadata.artifact_id` changing — never by revision comparison alone
+  — and `FreshnessService` must keep opening its reader per poll (a long-lived connection freezes on the
+  replaced file's old inode). Escape hatch for in-place merges: `MILLER_FULL_REBUILD_INPLACE=1`.
 - **Sensitive-root guard.** [`WorkspaceRootSafety`](src/Miller.Server/Tools/WorkspaceRootSafety.cs) refuses
   to index the home dir, a filesystem/drive root, or a system dir. It runs at the very top of `Program.cs`
   (before any filesystem touch) and in `workspace open`. Ported from julie's `root_safety.rs` — keep the

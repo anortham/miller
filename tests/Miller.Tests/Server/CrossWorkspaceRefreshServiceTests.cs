@@ -257,6 +257,38 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
     }
 
     [Fact]
+    public void Refresh_ForceLockBusy_LeaderPromotedAFreshArtifactWithARestartedCounter_ReturnsRefreshed()
+    {
+        // The leader serviced our full-scan request with a build-to-temp PROMOTE (FullRebuildPromotion): the
+        // fresh artifact's revision counter RESTARTED below the baseline, so the revision comparison alone can
+        // never confirm the rebuild — the changed artifact_id must (2026-06-11 Eros field report #2).
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("busy-force-promote");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        File.WriteAllText(dbPath, "readable index placeholder");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 7);
+        int idReads = 0;
+        var clock = new FakeClock();
+        var service = NewService(
+            registry,
+            scan: (_, _, _) => throw new InvalidOperationException("scan should not run while the lock is busy"),
+            acquireLock: _ => null,
+            readLatestRevision: _ => 1, // the promoted fresh artifact restarted its counter BELOW the baseline
+            clock: clock,
+            requestFullScan: (_, _, _) => { },
+            readArtifactId: _ => ++idReads == 1 ? "artifact-old" : "artifact-new"); // baseline read, then polls
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws", force: true);
+
+        Assert.Equal(WorkspaceRefreshStatus.Refreshed, result.Status);
+        Assert.False(result.Scanned);
+        Assert.Equal(1, result.Revision);
+        Assert.Equal(1, registry.Get("target-ws")?.LastRevision); // MarkScanned followed the rebuilt artifact
+    }
+
+    [Fact]
     public void Refresh_DeltaLockBusy_DoesNotRequestLeaderFullScan()
     {
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
@@ -686,7 +718,8 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         FakeClock? clock = null,
         SymbolSearchSidecar? sidecar = null,
         Action<string, string, long>? requestFullScan = null,
-        Func<string, LeadershipVerdict>? eligibilityGate = null)
+        Func<string, LeadershipVerdict>? eligibilityGate = null,
+        Func<string, string?>? readArtifactId = null)
     {
         clock ??= new FakeClock();
         return new CrossWorkspaceRefreshService(
@@ -700,7 +733,8 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
             utcNow: clock.UtcNow,
             sidecar: sidecar ?? SymbolSearchSidecar.Disabled,
             requestFullScan: requestFullScan,
-            eligibilityGate: eligibilityGate);
+            eligibilityGate: eligibilityGate,
+            readArtifactId: readArtifactId ?? (_ => null));
     }
 
     private string NewRoot(string name)

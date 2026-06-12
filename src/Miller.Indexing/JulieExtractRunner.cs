@@ -299,6 +299,13 @@ public sealed class JulieExtractRunner
     /// Run <c>julie-extract scan</c>. Ensures the DB's parent directory exists (julie-extract does not mkdir),
     /// resolves both paths to absolute, invokes the binary, and interprets the result. The first call on a fresh
     /// DB MUST be a scan (binds the root); pass <paramref name="force"/> for a full rebuild / root change.
+    ///
+    /// <para>A force scan never merges in-place into an existing DB: it extracts into the sibling
+    /// <see cref="FullRebuildPromotion.RebuildDbPathFor"/> file and promotes the finished artifact over
+    /// <paramref name="db"/> (2026-06-11 Eros field report #2 — an in-place force merge into a served 2GB
+    /// artifact ran at ~7KB/s because live readers kept its WAL from checkpointing, while the same scan into a
+    /// fresh DB bulk-inserts in ~90s). A failed force scan leaves the live artifact untouched. Escape hatch:
+    /// <c>MILLER_FULL_REBUILD_INPLACE=1</c> restores the historical in-place force merge.</para>
     /// </summary>
     public ExtractReport Scan(string root, string db, bool force = false)
     {
@@ -319,8 +326,36 @@ public sealed class JulieExtractRunner
         // so CLI and server both get it. Best-effort and never-overwrite (see JulieIgnoreSeeder).
         JulieIgnoreSeeder.EnsureSeeded(absRoot);
 
-        return Run(BuildScanArgs(absDb, absRoot, force));
+        if (!force || ForceScanInPlace())
+            return Run(BuildScanArgs(absDb, absRoot, force));
+
+        // Full rebuild: extract into a fresh sibling DB (bulk-insert fast, invisible to readers), then promote.
+        // Callers hold Miller's single-writer lock, so the deterministic rebuild path cannot be contended; a
+        // returned PARTIAL report still promotes (a consistent artifact — same semantics as in-place).
+        FullRebuildPromotion.PrepareRebuildTarget(absDb);
+        ExtractReport report;
+        try
+        {
+            report = Run(BuildScanArgs(FullRebuildPromotion.RebuildDbPathFor(absDb), absRoot, force));
+        }
+        catch
+        {
+            // Reclaim the (possibly multi-GB) partial rebuild now rather than at the next force scan. Best
+            // effort only — never mask the scan failure.
+            try { FullRebuildPromotion.PrepareRebuildTarget(absDb); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* leftover trio */ }
+            throw;
+        }
+
+        FullRebuildPromotion.Promote(absDb);
+        return report;
     }
+
+    // The in-place escape hatch for the build-to-temp force scan (same pattern as
+    // MILLER_ALLOW_EXTRACTOR_DOWNGRADE): set MILLER_FULL_REBUILD_INPLACE=1 to restore the historical
+    // merge-into-the-live-DB behavior, e.g. when the .miller directory cannot hold two artifacts at once.
+    private static bool ForceScanInPlace() =>
+        Environment.GetEnvironmentVariable("MILLER_FULL_REBUILD_INPLACE") == "1";
 
     /// <summary>Run <c>julie-extract info</c> (read-only, no flock) and return the parsed report.</summary>
     public ExtractReport Info(string db)
