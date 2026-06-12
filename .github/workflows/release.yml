@@ -145,10 +145,12 @@ jobs:
           # printf '%s\n' (not '%s'): $(...) strips trailing newlines, so the final tools/list request
           # would otherwise reach the line-delimited MCP transport unterminated and never be parsed.
           stderr_file="$(mktemp)"
-          # Linux Native AOT cold startup on GitHub runners can exceed the old 6s window even though
-          # the binary is valid. Keep stdin open long enough for a real tools/list response, and
-          # preserve stderr so a future failure shows the server-side reason.
-          out=$( ( printf '%s\n' "$reqs"; sleep 20 ) | "${publish_dir}/miller" serve 2>"${stderr_file}" || true )
+          # The window must dominate the FULL bootstrap, not just Native AOT cold start: the serve smoke
+          # boots over the repo checkout with no extract DB, so the server answers tools/list only after a
+          # complete julie-extract scan — measured at 35s on a slow x86_64 macOS runner (v0.4.3 package run
+          # 27391446333 failed the old 20s window there while the binary was healthy). Keep stdin open long
+          # enough for that, and preserve stderr so a future failure shows the server-side reason.
+          out=$( ( printf '%s\n' "$reqs"; sleep 90 ) | "${publish_dir}/miller" serve 2>"${stderr_file}" || true )
           # Assert against the tools/list RESPONSE (id:2), not the initialize capabilities — "tools" alone
           # would false-positive on the {"tools":{"listChanged":true}} capability in the initialize reply.
           if [[ "$out" != *'"id":2'* ]]; then
@@ -202,7 +204,9 @@ jobs:
             '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
           )
           $stderrFile = Join-Path $env:RUNNER_TEMP "miller-serve-stderr.txt"
-          $outLines = & { $reqs; Start-Sleep -Seconds 20 } | & $millerBinary serve 2> $stderrFile
+          # Same full-bootstrap window as the Unix smoke: the no-DB serve boot scans the whole checkout
+          # before it can answer tools/list (35s observed on a slow macOS runner; Windows runners vary too).
+          $outLines = & { $reqs; Start-Sleep -Seconds 90 } | & $millerBinary serve 2> $stderrFile
           $out = $outLines -join "`n"
           if (-not $out.Contains('"id":2')) {
             Write-Host "AOT MCP serve smoke failed: no tools/list response"
