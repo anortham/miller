@@ -73,20 +73,4 @@
 
     private string ToolWidth(long savedBytes) =>
         (Math.Max(8, savedBytes * 100 / MaxSavedBytes)).ToString(CultureInfo.InvariantCulture) + "%";
-
-    private static string FormatCount(long value, string singular) =>
-        value.ToString("N0", CultureInfo.InvariantCulture) + " " + (value == 1 ? singular : singular + "s");
-
-    private static string FormatBytes(long bytes)
-    {
-        if (bytes < 1000)
-            return bytes.ToString("N0", CultureInfo.InvariantCulture) + " B";
-
-        double kb = bytes / 1000d;
-        if (kb < 1000)
-            return kb.ToString("0.0", CultureInfo.InvariantCulture) + " KB";
-
-        double mb = kb / 1000d;
-        return mb.ToString("0.0", CultureInfo.InvariantCulture) + " MB";
-    }
 }

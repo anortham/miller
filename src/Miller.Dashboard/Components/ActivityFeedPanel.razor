@@ -1,0 +1,61 @@
+@namespace Miller.Dashboard.Components
+
+<section id="activity-feed-panel"
+         class="panel activity-panel"
+         hx-get="/fragments/activity?workspace_id=@Esc(Feed.WorkspaceId)"
+         hx-trigger="every 2s"
+         hx-swap="outerHTML">
+    <div class="panel-heading">
+        <div>
+            <h2>Live activity</h2>
+            <p>@Subtitle</p>
+        </div>
+        <span class="live-dot" aria-label="Updating every 2 seconds"></span>
+    </div>
+
+    @if (Feed.Entries.Count == 0)
+    {
+        <p class="empty">No tool calls recorded yet. Activity appears here as agents use Miller.</p>
+    }
+    else
+    {
+        <ol class="activity-feed">
+            @foreach (DashboardActivityEntry entry in Feed.Entries)
+            {
+                <li class="activity-row">
+                    <time class="rel-ts timestamp" datetime="@entry.Ts" data-ts="@entry.Ts">@entry.Ts</time>
+                    <code class="activity-tool">@entry.Tool</code>
+                    @if (!string.IsNullOrWhiteSpace(entry.Op))
+                    {
+                        <span class="muted">@entry.Op</span>
+                    }
+                    @if (MachineWide && entry.WorkspaceDisplayId is not null)
+                    {
+                        <span class="activity-ws">@entry.WorkspaceDisplayId</span>
+                    }
+                    <span class="outcome @OutcomeClass(entry.Outcome)">@entry.Outcome</span>
+                    @if (entry.ErrorKind is not null)
+                    {
+                        <span class="error-kind">@entry.ErrorKind</span>
+                    }
+                    <span class="muted">@entry.DurationMs.ToString("N0", CultureInfo.InvariantCulture) ms</span>
+                    @if (entry.ResultCount is not null)
+                    {
+                        <span class="muted">@entry.ResultCount.Value.ToString("N0", CultureInfo.InvariantCulture) results</span>
+                    }
+                </li>
+            }
+        </ol>
+    }
+</section>
+
+@code {
+    [Parameter, EditorRequired] public DashboardActivityFeed Feed { get; set; } =
+        new(null, Array.Empty<DashboardActivityEntry>());
+
+    private bool MachineWide => Feed.WorkspaceId is null;
+
+    private string Subtitle => MachineWide
+        ? "latest tool calls across every workspace"
+        : "latest tool calls in this workspace";
+}

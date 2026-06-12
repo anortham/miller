@@ -1,0 +1,34 @@
+@namespace Miller.Dashboard.Components
+@using Miller.Server.Workspaces
+
+@* Swap target for the workspace refresh button. Rendered empty on the page; the
+   POST /fragments/refresh response replaces it with the refresh outcome. *@
+<span id="refresh-status" class="refresh-status @CssClass">@Label</span>
+
+@code {
+    [Parameter] public WorkspaceRefreshResult? Result { get; set; }
+
+    private string CssClass => Result switch
+    {
+        null => string.Empty,
+        { Status: WorkspaceRefreshStatus.Refreshed or WorkspaceRefreshStatus.Unchanged } => "ok",
+        // The live server leader holds the lock and converges on its own — not a failure.
+        { Status: WorkspaceRefreshStatus.LockBusy } => "neutral",
+        _ => "bad",
+    };
+
+    private string Label
+    {
+        get
+        {
+            if (Result is null)
+                return string.Empty;
+            string label = Result.StatusText;
+            if (Result.Revision is { } revision)
+                label += $" · rev {revision.ToString("N0", CultureInfo.InvariantCulture)}";
+            if (!string.IsNullOrWhiteSpace(Result.Error))
+                label += $" · {Result.Error}";
+            return label;
+        }
+    }
+}

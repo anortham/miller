@@ -50,8 +50,6 @@
     [Parameter, EditorRequired] public DashboardWorkspaceIndex Index { get; set; } =
         new(Array.Empty<DashboardWorkspaceIndexEntry>(), 0, 0, 0, 0);
 
-    private static string Esc(string? value) => Uri.EscapeDataString(value ?? string.Empty);
-
     private static string Stat(DashboardWorkspaceIndexEntry entry, long value) =>
         entry.HasFacts ? value.ToString("N0", CultureInfo.InvariantCulture) : "—";
 
@@ -65,11 +63,4 @@
         string head = string.Join(" · ", names);
         return extra > 0 ? $"{head} +{extra}" : head;
     }
-
-    private static string StateClass(string state) => state switch
-    {
-        "ready" or "current" or "loaded_existing" => "ok",
-        "missing" or "error" or "unreadable" => "bad",
-        _ => "neutral",
-    };
 }

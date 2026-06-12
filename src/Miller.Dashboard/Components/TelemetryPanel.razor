@@ -23,7 +23,7 @@
     }
     else if (Telemetry.Tools.Count == 0)
     {
-        <p class="empty">No telemetry recorded for this workspace yet.</p>
+        <p class="empty">@(AllWorkspaces ? "No telemetry recorded yet." : "No telemetry recorded for this workspace yet.")</p>
     }
     else
     {
@@ -54,7 +54,14 @@
                             <td>@tool.ErrorCount.ToString("N0", CultureInfo.InvariantCulture)</td>
                             <td>
                                 <span class="outcome @OutcomeClass(tool.LastOutcome)">@DisplayOutcome(tool.LastOutcome)</span>
-                                <span class="timestamp">@DisplayTs(tool.LastCallTs)</span>
+                                @if (tool.LastCallTs is null)
+                                {
+                                    <span class="timestamp">n/a</span>
+                                }
+                                else
+                                {
+                                    <time class="rel-ts timestamp" datetime="@tool.LastCallTs" data-ts="@tool.LastCallTs">@tool.LastCallTs</time>
+                                }
                             </td>
                             <td>
                                 @if (tool.LastErrorTs is null)
@@ -64,7 +71,7 @@
                                 else
                                 {
                                     <span class="error-kind">@tool.LastErrorKind</span>
-                                    <span class="timestamp">@DisplayTs(tool.LastErrorTs)</span>
+                                    <time class="rel-ts timestamp" datetime="@tool.LastErrorTs" data-ts="@tool.LastErrorTs">@tool.LastErrorTs</time>
                                 }
                             </td>
                             <td>@tool.SumEstTokens.ToString("N0", CultureInfo.InvariantCulture)</td>
@@ -82,7 +89,7 @@
                     @foreach (DashboardRecentError error in Telemetry.RecentErrors)
                     {
                         <li>
-                            <span class="timestamp">@DisplayTs(error.Ts)</span>
+                            <time class="rel-ts timestamp" datetime="@error.Ts" data-ts="@error.Ts">@error.Ts</time>
                             <code>@error.Tool</code>
                             @if (!string.IsNullOrWhiteSpace(error.Op))
                             {
@@ -104,23 +111,13 @@
 
     [Parameter] public string? SelectedWorkspaceId { get; set; }
 
+    private bool AllWorkspaces => string.Equals(SelectedWorkspaceId, "all", StringComparison.Ordinal);
+
     private string WindowLabel =>
         Telemetry.WindowStartTs is null || Telemetry.WindowEndTs is null
             ? string.Empty
             : $"from {Telemetry.WindowStartTs} to {Telemetry.WindowEndTs}";
 
-    private static string Esc(string? value) => Uri.EscapeDataString(value ?? string.Empty);
-
-    private static string DisplayTs(string? value) =>
-        string.IsNullOrWhiteSpace(value) ? "n/a" : value;
-
     private static string DisplayOutcome(string? value) =>
         string.IsNullOrWhiteSpace(value) ? "unknown" : value;
-
-    private static string OutcomeClass(string? value) =>
-        string.Equals(value, "error", StringComparison.Ordinal)
-            ? "error"
-            : string.Equals(value, "ok", StringComparison.Ordinal)
-                ? "ok"
-                : "neutral";
 }

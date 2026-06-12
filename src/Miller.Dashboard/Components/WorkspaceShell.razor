@@ -44,16 +44,23 @@
         <div class="main-stack detail-stack">
             <WorkspaceDetailPanel Facts="Snapshot.SelectedWorkspaceFacts" />
             <ContextSavingsPanel Summary="Snapshot.ContextSavings" />
+            <ActivityFeedPanel Feed="EffectiveActivity" />
             <TelemetryPanel Telemetry="Snapshot.Telemetry" SelectedWorkspaceId="@Snapshot.SelectedWorkspaceId" />
         </div>
     </main>
     <ThemeToggleScript />
+    <RelativeTimeScript />
 </body>
 </html>
 
 @code {
     [Parameter, EditorRequired] public DashboardSnapshot Snapshot { get; set; } =
         new(Array.Empty<DashboardWorkspaceRow>(), new DashboardTelemetrySummary(null, [], 0, null, null, []), null);
+
+    [Parameter] public DashboardActivityFeed? Activity { get; set; }
+
+    private DashboardActivityFeed EffectiveActivity =>
+        Activity ?? new DashboardActivityFeed(Snapshot.SelectedWorkspaceId, Array.Empty<DashboardActivityEntry>());
 
     private string Heading => Snapshot.SelectedWorkspaceFacts?.DisplayId
         ?? Snapshot.Workspaces.FirstOrDefault(w =>
@@ -66,9 +73,4 @@
         ?? "No workspace selected.";
 
     private string PageTitle => $"Miller — {Heading}";
-
-    private static string Esc(string? value) => Uri.EscapeDataString(value ?? string.Empty);
-
-    private static string FormatNullableCount(long? value) =>
-        value?.ToString("N0", CultureInfo.InvariantCulture) ?? "—";
 }

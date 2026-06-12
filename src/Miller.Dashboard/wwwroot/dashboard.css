@@ -5,6 +5,24 @@
    a decisive teal accent + flat semantic status tints.
    ===================================================================== */
 
+/* Vendored variable fonts (latin subsets) — the dashboard is a local-first tool and must not
+   call out to a CDN; weights cover every usage below via the variable wght axis. */
+@font-face {
+  font-family: 'Archivo';
+  font-style: normal;
+  font-weight: 400 800;
+  font-display: swap;
+  src: url('/fonts/archivo-latin.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('/fonts/jetbrains-mono-latin.woff2') format('woff2');
+}
+
 :root {
   color-scheme: light dark;
 
@@ -922,6 +940,88 @@ tr.has-errors td:nth-child(6) {
 }
 
 .recent-errors code { justify-self: start; }
+
+/* ---- Workspace refresh action ---------------------------------------- */
+.detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.refresh-status {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.refresh-status.ok { color: var(--ok); }
+.refresh-status.bad { color: var(--err); }
+.refresh-status.neutral { color: var(--muted); }
+
+/* ---- Live activity feed --------------------------------------------- */
+.live-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse { 50% { opacity: 0.35; } }
+
+.activity-feed {
+  margin: 0;
+  padding: 4px 18px 14px;
+  list-style: none;
+  max-height: 420px;
+  overflow-y: auto;
+  background: var(--surface);
+}
+
+.activity-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: baseline;
+  padding: 8px 0;
+  border-top: 1px solid var(--rule);
+}
+
+.activity-row:first-child { border-top: 0; }
+
+.activity-row .rel-ts {
+  display: inline;
+  margin-top: 0;
+  min-width: 72px;
+}
+
+.activity-tool {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.activity-ws {
+  padding: 1px 6px;
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border-radius: 2px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.activity-row .muted {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-dot { animation: none; }
+}
 
 /* ---- HTMX request state -------------------------------------------- */
 .htmx-request {

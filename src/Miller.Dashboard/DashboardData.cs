@@ -47,6 +47,23 @@ public sealed record DashboardRecentError(
     [property: JsonPropertyName("error_kind")] string? ErrorKind,
     [property: JsonPropertyName("duration_ms")] long DurationMs);
 
+public sealed record DashboardActivityEntry(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("ts")] string Ts,
+    [property: JsonPropertyName("tool")] string Tool,
+    [property: JsonPropertyName("op")] string? Op,
+    [property: JsonPropertyName("workspace_id")] string? WorkspaceId,
+    [property: JsonPropertyName("workspace_display_id")] string? WorkspaceDisplayId,
+    [property: JsonPropertyName("duration_ms")] long DurationMs,
+    [property: JsonPropertyName("outcome")] string Outcome,
+    [property: JsonPropertyName("error_kind")] string? ErrorKind,
+    [property: JsonPropertyName("result_count")] long? ResultCount,
+    [property: JsonPropertyName("est_tokens")] long? EstTokens);
+
+public sealed record DashboardActivityFeed(
+    [property: JsonPropertyName("workspace_id")] string? WorkspaceId,
+    [property: JsonPropertyName("entries")] IReadOnlyList<DashboardActivityEntry> Entries);
+
 public sealed record DashboardLanguageStat(
     [property: JsonPropertyName("language")] string Language,
     [property: JsonPropertyName("file_count")] long FileCount,
@@ -236,9 +253,16 @@ public static class DashboardData
         return rows;
     }
 
+    /// <summary>
+    /// Per-tool telemetry rollup. <paramref name="workspaceId"/> follows the content-search convention:
+    /// the sentinel <c>all</c> aggregates across every workspace (workspace ids are SHA-256 hex, so the
+    /// sentinel cannot collide); any other value scopes with <c>workspace_id IS $ws</c>.
+    /// </summary>
     public static DashboardTelemetrySummary ReadTelemetrySummary(string telemetryDbPath, string? workspaceId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(telemetryDbPath);
+        bool allWorkspaces = string.Equals(workspaceId, "all", StringComparison.Ordinal);
+        string? scope = allWorkspaces ? null : workspaceId;
         if (!File.Exists(telemetryDbPath))
         {
             return new DashboardTelemetrySummary(
@@ -262,11 +286,91 @@ public static class DashboardData
                 Array.Empty<DashboardRecentError>());
         }
 
-        var tools = ReadToolStats(connection, workspaceId);
-        (long totalCalls, string? windowStart, string? windowEnd) = ReadTotals(connection, workspaceId);
-        IReadOnlyList<DashboardRecentError> recentErrors = ReadRecentErrors(connection, workspaceId);
+        var tools = ReadToolStats(connection, scope, allWorkspaces);
+        (long totalCalls, string? windowStart, string? windowEnd) = ReadTotals(connection, scope, allWorkspaces);
+        IReadOnlyList<DashboardRecentError> recentErrors = ReadRecentErrors(connection, scope, allWorkspaces);
         return new DashboardTelemetrySummary(workspaceId, tools, totalCalls, windowStart, windowEnd, recentErrors);
     }
+
+    /// <summary>
+    /// Newest-first per-call rows for the live activity feed. A null/blank <paramref name="workspaceId"/>
+    /// returns the machine-wide feed (every workspace, including rows with no workspace), each entry annotated
+    /// with the registered display id when the registry knows the workspace (raw id otherwise).
+    /// </summary>
+    public static DashboardActivityFeed ReadRecentActivity(
+        string telemetryDbPath,
+        string registryDbPath,
+        string? workspaceId,
+        int limit = 20)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(telemetryDbPath);
+        string? scope = string.IsNullOrWhiteSpace(workspaceId) ? null : workspaceId;
+        limit = Math.Clamp(limit, 1, 100);
+        if (!File.Exists(telemetryDbPath))
+            return new DashboardActivityFeed(scope, Array.Empty<DashboardActivityEntry>());
+
+        using var connection = OpenReadOnly(telemetryDbPath);
+        if (!TableExists(connection, "tool_telemetry"))
+            return new DashboardActivityFeed(scope, Array.Empty<DashboardActivityEntry>());
+
+        var displayIds = scope is null
+            ? ReadWorkspaces(registryDbPath).ToDictionary(
+                row => row.WorkspaceId,
+                row => row.DisplayId,
+                StringComparer.Ordinal)
+            : new Dictionary<string, string>(StringComparer.Ordinal);
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = scope is null
+            ? """
+              SELECT id, ts, tool, op, workspace_id, duration_ms, outcome, error_kind, result_count, est_tokens
+              FROM tool_telemetry
+              ORDER BY ts DESC, id DESC
+              LIMIT $limit;
+              """
+            : """
+              SELECT id, ts, tool, op, workspace_id, duration_ms, outcome, error_kind, result_count, est_tokens
+              FROM tool_telemetry
+              WHERE workspace_id IS $ws
+              ORDER BY ts DESC, id DESC
+              LIMIT $limit;
+              """;
+        if (scope is not null)
+            cmd.Parameters.AddWithValue("$ws", scope);
+        cmd.Parameters.AddWithValue("$limit", limit);
+        using var reader = cmd.ExecuteReader();
+        var entries = new List<DashboardActivityEntry>();
+        while (reader.Read())
+        {
+            string? rowWorkspaceId = reader.IsDBNull(4) ? null : reader.GetString(4);
+            string? displayId = rowWorkspaceId is null
+                ? null
+                : displayIds.TryGetValue(rowWorkspaceId, out string? registered) ? registered : rowWorkspaceId;
+            entries.Add(new DashboardActivityEntry(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                rowWorkspaceId,
+                displayId,
+                reader.GetInt64(5),
+                reader.GetString(6),
+                reader.IsDBNull(7) ? null : reader.GetString(7),
+                reader.IsDBNull(8) ? null : reader.GetInt64(8),
+                reader.IsDBNull(9) ? null : reader.GetInt64(9)));
+        }
+
+        return new DashboardActivityFeed(scope, entries);
+    }
+
+    public static string RenderActivityJson(
+        string telemetryDbPath,
+        string registryDbPath,
+        string? workspaceId,
+        int limit = 20) =>
+        JsonSerializer.Serialize(
+            ReadRecentActivity(telemetryDbPath, registryDbPath, workspaceId, limit),
+            JsonContext.DashboardActivityFeed);
 
     private static DashboardContextSavingsSummary ReadContextSavings(string telemetryDbPath, string? workspaceId)
     {
@@ -500,6 +604,28 @@ public static class DashboardData
         return refresh.Refresh(workspaceId);
     }
 
+    /// <summary>
+    /// <see cref="RefreshWorkspace"/> for UI swap targets: any failure (unregistered workspace, missing
+    /// extractor, scan fault) renders as a <see cref="WorkspaceRefreshStatus.Failed"/> result instead of
+    /// throwing — a 500 with an empty body would leave the htmx refresh button looking dead.
+    /// </summary>
+    public static WorkspaceRefreshResult TryRefreshWorkspace(string registryDbPath, string toolsRoot, string workspaceId)
+    {
+        try
+        {
+            return RefreshWorkspace(registryDbPath, toolsRoot, workspaceId);
+        }
+        catch (Exception ex)
+        {
+            return new WorkspaceRefreshResult(
+                WorkspaceRefreshStatus.Failed,
+                workspaceId,
+                WorkspaceRoot: string.Empty,
+                IndexDbPath: string.Empty,
+                Error: ex.Message);
+        }
+    }
+
     private static SqliteConnection OpenReadOnly(string dbPath)
     {
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder
@@ -525,7 +651,10 @@ public static class DashboardData
         return cmd.ExecuteScalar() is not null;
     }
 
-    private static IReadOnlyList<DashboardToolStat> ReadToolStats(SqliteConnection connection, string? workspaceId)
+    private static IReadOnlyList<DashboardToolStat> ReadToolStats(
+        SqliteConnection connection,
+        string? workspaceId,
+        bool allWorkspaces)
     {
         using var cmd = connection.CreateCommand();
         cmd.CommandText = """
@@ -538,23 +667,23 @@ public static class DashboardData
                    MAX(ts) AS last_call_ts,
                    (SELECT latest.outcome
                     FROM tool_telemetry latest
-                    WHERE latest.workspace_id IS $ws AND latest.tool = tool_telemetry.tool
+                    WHERE ($all = 1 OR latest.workspace_id IS $ws) AND latest.tool = tool_telemetry.tool
                     ORDER BY latest.ts DESC, latest.id DESC
                     LIMIT 1) AS last_outcome,
                    MAX(CASE WHEN outcome = 'error' THEN ts END) AS last_error_ts,
                    (SELECT latest_error.error_kind
                     FROM tool_telemetry latest_error
-                    WHERE latest_error.workspace_id IS $ws
+                    WHERE ($all = 1 OR latest_error.workspace_id IS $ws)
                       AND latest_error.tool = tool_telemetry.tool
                       AND latest_error.outcome = 'error'
                     ORDER BY latest_error.ts DESC, latest_error.id DESC
                     LIMIT 1) AS last_error_kind
             FROM tool_telemetry
-            WHERE workspace_id IS $ws
+            WHERE ($all = 1 OR workspace_id IS $ws)
             GROUP BY tool
             ORDER BY tool;
             """;
-        cmd.Parameters.AddWithValue("$ws", (object?)workspaceId ?? DBNull.Value);
+        AddScopeParameters(cmd, workspaceId, allWorkspaces);
         using var reader = cmd.ExecuteReader();
         var stats = new List<DashboardToolStat>();
         while (reader.Read())
@@ -565,7 +694,7 @@ public static class DashboardData
                 tool,
                 calls,
                 reader.GetDouble(2),
-                ComputeP95(connection, workspaceId, tool, calls),
+                ComputeP95(connection, workspaceId, allWorkspaces, tool, calls),
                 reader.GetInt64(3),
                 reader.GetInt64(4),
                 reader.GetInt64(5),
@@ -580,17 +709,18 @@ public static class DashboardData
 
     private static IReadOnlyList<DashboardRecentError> ReadRecentErrors(
         SqliteConnection connection,
-        string? workspaceId)
+        string? workspaceId,
+        bool allWorkspaces)
     {
         using var cmd = connection.CreateCommand();
         cmd.CommandText = """
             SELECT ts, tool, op, error_kind, duration_ms
             FROM tool_telemetry
-            WHERE workspace_id IS $ws AND outcome = 'error'
+            WHERE ($all = 1 OR workspace_id IS $ws) AND outcome = 'error'
             ORDER BY ts DESC, id DESC
             LIMIT 8;
             """;
-        cmd.Parameters.AddWithValue("$ws", (object?)workspaceId ?? DBNull.Value);
+        AddScopeParameters(cmd, workspaceId, allWorkspaces);
         using var reader = cmd.ExecuteReader();
         var errors = new List<DashboardRecentError>();
         while (reader.Read())
@@ -608,11 +738,13 @@ public static class DashboardData
 
     private static (long TotalCalls, string? WindowStart, string? WindowEnd) ReadTotals(
         SqliteConnection connection,
-        string? workspaceId)
+        string? workspaceId,
+        bool allWorkspaces)
     {
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT COUNT(*), MIN(ts), MAX(ts) FROM tool_telemetry WHERE workspace_id IS $ws;";
-        cmd.Parameters.AddWithValue("$ws", (object?)workspaceId ?? DBNull.Value);
+        cmd.CommandText =
+            "SELECT COUNT(*), MIN(ts), MAX(ts) FROM tool_telemetry WHERE ($all = 1 OR workspace_id IS $ws);";
+        AddScopeParameters(cmd, workspaceId, allWorkspaces);
         using var reader = cmd.ExecuteReader();
         if (!reader.Read())
             return (0, null, null);
@@ -623,18 +755,29 @@ public static class DashboardData
             reader.IsDBNull(2) ? null : reader.GetString(2));
     }
 
-    private static long ComputeP95(SqliteConnection connection, string? workspaceId, string tool, long count)
+    private static long ComputeP95(
+        SqliteConnection connection,
+        string? workspaceId,
+        bool allWorkspaces,
+        string tool,
+        long count)
     {
         long offset = (long)Math.Floor((count - 1) * 0.95);
         using var cmd = connection.CreateCommand();
         cmd.CommandText =
-            "SELECT duration_ms FROM tool_telemetry WHERE tool = $tool AND workspace_id IS $ws " +
+            "SELECT duration_ms FROM tool_telemetry WHERE tool = $tool AND ($all = 1 OR workspace_id IS $ws) " +
             "ORDER BY duration_ms ASC LIMIT 1 OFFSET $offset;";
         cmd.Parameters.AddWithValue("$tool", tool);
-        cmd.Parameters.AddWithValue("$ws", (object?)workspaceId ?? DBNull.Value);
+        AddScopeParameters(cmd, workspaceId, allWorkspaces);
         cmd.Parameters.AddWithValue("$offset", offset);
         object? value = cmd.ExecuteScalar();
         return value is null or DBNull ? 0 : Convert.ToInt64(value, CultureInfo.InvariantCulture);
+    }
+
+    private static void AddScopeParameters(SqliteCommand cmd, string? workspaceId, bool allWorkspaces)
+    {
+        cmd.Parameters.AddWithValue("$all", allWorkspaces ? 1 : 0);
+        cmd.Parameters.AddWithValue("$ws", (object?)workspaceId ?? DBNull.Value);
     }
 
 }
