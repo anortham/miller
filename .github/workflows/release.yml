@@ -135,6 +135,8 @@ jobs:
           test ! -e "${publish_dir}/.tools/julie-extract.exe"
           test -x "${publish_dir}/dashboard/Miller.Dashboard"
           test -f "${publish_dir}/dashboard/wwwroot/dashboard.css"
+          test -f "${publish_dir}/dashboard/wwwroot/fonts/archivo-latin.woff2"
+          test -f "${publish_dir}/dashboard/wwwroot/fonts/jetbrains-mono-latin.woff2"
           test ! -e "${publish_dir}/dashboard/.tools/julie-extract"
           "${publish_dir}/.tools/julie-extract" --version
           "${publish_dir}/miller" version
@@ -192,6 +194,11 @@ jobs:
           }
           if (-not (Test-Path $dashboardCss)) {
             throw "missing packaged dashboard CSS"
+          }
+          foreach ($font in @("archivo-latin.woff2", "jetbrains-mono-latin.woff2")) {
+            if (-not (Test-Path (Join-Path $publishDir "dashboard/wwwroot/fonts/$font"))) {
+              throw "missing packaged dashboard font $font"
+            }
           }
           if (Test-Path $dashboardTools) {
             throw "dashboard package must not include a duplicate .tools directory"

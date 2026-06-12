@@ -94,8 +94,10 @@ scripts/test.ps1 all
   `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`, and
   `x86_64-pc-windows-msvc`. Keep this matrix in step with `scripts/julie-pins.json`.
 - Release archives include `miller`, the matching `.tools/julie-extract` binary, the packaged dashboard
-  executable under `dashboard/`, and `dashboard/wwwroot/dashboard.css`. The workflow smoke-runs
-  `julie-extract --version` and `miller version`, then uploads a `.sha256` sidecar for each archive.
+  executable under `dashboard/`, and the dashboard web assets under `dashboard/wwwroot/` (`dashboard.css`
+  plus the vendored `fonts/*.woff2` — the dashboard is local-first and must not reach a font CDN). The
+  workflow smoke-runs `julie-extract --version` and `miller version`, verifies the dashboard assets, then
+  uploads a `.sha256` sidecar for each archive.
 - Plugin support is first-class for Claude Code (`.claude-plugin/plugin.json`), Cursor
   (`.cursor-plugin/plugin.json`), and Codex (`.codex-plugin/plugin.json` plus `.mcp.json`). Keep those manifests
   and `miller-plugin.json` version-aligned on every release.
