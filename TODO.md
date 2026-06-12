@@ -126,3 +126,24 @@ Fix plan/status:
   and pinned the guard in `MillerExtractContractTests.ReleaseWorkflowPublishesVerifiablePrereleasePackages`.
 - [x] 2026-06-08 completed: `v0.3.2` was published from validated package-only run `27153317515` through
   promotion run `27153759953`; README/site/docs current-release links now point at live `v0.3.2` facts.
+- [x] 2026-06-11 completed (Eros ask, cli-eros-v1 lock_busy exit code): chose option 2 — `lock_busy` now
+  exits 0 for `refresh`/`workspace refresh|full|open` (the latest readable DB is served and a live leader
+  owns convergence; the payload's `status`/`index_fresh: false` are the freshness gate). Exit 3 is reserved
+  for genuinely unusable-index outcomes (`missing_root`, `missing_index`, `failed`,
+  `ineligible_extractor`). `CliDispatch.RefreshExitCode` + the contract doc exit-code table updated;
+  pinned by `RefreshExitCode_MapsStatusesToContractExitCodes`.
+- [x] 2026-06-11 completed (Eros field report, "julie-extract hang" on openclaw): triaged — NOT a per-file
+  julie-extract hang. An isolated force scan of `/Users/murphy/source/openclaw` with the pinned 2.4.0
+  binary completes in ~90s (status ok, 13,308 files, 660,851 symbols, ~2.0GB artifact; no minimized repro
+  needed). Reconstructed timeline (registry stamps + Eros checkpoint 4019e1af): Eros's fleet sync
+  auto-rebuilt 11 schema-2 workspaces serially ending 22:14:00Z, then openclaw's force scan started
+  (artifact created 22:15:06Z), was killed by `JulieExtractRunner`'s fixed 600s TOTAL timeout at exactly
+  22:25:06Z, and Eros's pipeline retry then refreshed over the partial artifact in ~90s (scan-stamp
+  22:27:49Z) — so the scan was slow under the sweep's ingest/embedding churn, not hung (a deterministic
+  hang would have hung the retry too). Fixed by making the bounded wait progress-aware
+  (`ExtractWaitPolicy`): the child is killed only after 10 minutes with NO artifact/output progress
+  (db/-wal/-shm bytes + output activity), with a 60-minute absolute backstop; the two kill messages now
+  distinguish "no progress (likely hang)" from "progressing but over the hard cap (load)". On question
+  (2): `workspace full --json` already exits 3 on `status: failed` at HEAD (verified empirically on
+  0.4.1+86c7529 via an injected sensitive-root registry row; exit-0 did not reproduce) — Eros likely hit a
+  pre-0.4.1 binary.

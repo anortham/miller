@@ -31,11 +31,13 @@ public sealed class JulieExtractRunnerTimeoutTests
     [Fact]
     public void Run_HungProcess_TimesOut_KillsAndThrows_NeverHangs()
     {
-        // A real spawn with an impossibly small (1ms) timeout against a full force-scan of the whole repo: the
-        // child cannot finish in 1ms, so the bounded wait trips, the process tree is killed, and a typed
-        // timeout failure is thrown. A 1ms budget against any real subprocess startup is deterministic (it
-        // reliably trips before the child can exit). The outer wall-clock guard proves the call RETURNED (the
-        // failure mode we are defending against is a wait that never returns at all).
+        // A real spawn with an impossibly small (1ms) stall timeout against a full force-scan of the whole
+        // repo. The bounded wait is progress-aware (ExtractWaitPolicy): a 1ms stall window derives a 6ms
+        // absolute cap, so the FIRST poll trips the hard cap regardless of whether the child managed to write
+        // anything — deterministic kill before the child can exit. The process tree is killed and a typed
+        // timeout failure is thrown. The outer wall-clock guard proves the call RETURNED (the failure mode we
+        // are defending against is a wait that never returns at all). The progressing-survives-the-stall-window
+        // half of the policy is pure fast-suite coverage (ExtractWaitPolicyTests).
         string julie = ScaleTestSupport.RequireJulieServer();
         var runner = new JulieExtractRunner(julie, TimeSpan.FromMilliseconds(1));
 

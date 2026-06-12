@@ -27,13 +27,17 @@ public sealed class JulieExtractRunner
     // scan binds the workspace/root — `scan --root <ABS_ROOT> --db <ABS_DB> --strict-schema --json [--force]`.
     // update/delete touch one canonical file — `update|delete --root <ABS_ROOT> --db <ABS_DB> --file <ABS_CANON_FILE> --strict-schema --json` (M3).
     /// <summary>
-    /// The default bound on a single julie-extract invocation. Generous (a cold full scan of a large repo is
-    /// well under this); the purpose is to bound a truly hung child, not to clip a legitimate slow scan (§10A).
+    /// The default NO-PROGRESS bound on a single julie-extract invocation: the child is killed only after the
+    /// artifact (db/-wal/-shm bytes) and its output have been silent this long. A fixed TOTAL cap cannot tell a
+    /// hung child from a legitimately long scan — the same openclaw force-scan that takes ~90s idle exceeded
+    /// 600s under fleet load and was killed mid-rebuild (2026-06-11 Eros field report). The absolute backstop
+    /// is <see cref="ExtractWaitPolicy.HardTimeoutFor"/> of this value (§10A).
     /// </summary>
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(10);
 
     private readonly string _binaryPath;
     private readonly TimeSpan _timeout;
+    private readonly TimeSpan _hardTimeout;
 
     /// <summary>The resolved absolute path to the julie-extract binary this runner invokes.</summary>
     public string BinaryPath => _binaryPath;
@@ -49,8 +53,10 @@ public sealed class JulieExtractRunner
     }
 
     /// <summary>
-    /// Create a runner bound to a specific binary path and a per-invocation timeout (test seam — the Scale
-    /// timeout test passes a tiny value to force the hung-process kill path).
+    /// Create a runner bound to a specific binary path and a per-invocation stall timeout (test seam — the
+    /// Scale timeout test passes a tiny value to force the kill path). The absolute cap is derived
+    /// (<see cref="ExtractWaitPolicy.HardTimeoutFor"/>), so a tiny stall timeout still kills promptly even
+    /// when the child is producing output.
     /// </summary>
     /// <exception cref="FileNotFoundException">The binary does not exist at <paramref name="binaryPath"/>.</exception>
     public JulieExtractRunner(string binaryPath, TimeSpan timeout)
@@ -64,6 +70,7 @@ public sealed class JulieExtractRunner
                 $"v{MillerExtractContract.PinnedJulieExtractVersion} binary into .tools/.", abs);
         _binaryPath = abs;
         _timeout = timeout;
+        _hardTimeout = ExtractWaitPolicy.HardTimeoutFor(timeout);
     }
 
     /// <summary>
@@ -487,8 +494,15 @@ public sealed class JulieExtractRunner
 
         var stdout = new StringBuilder();
         var stderr = new StringBuilder();
-        process.OutputDataReceived += (_, e) => { if (e.Data is not null) stdout.AppendLine(e.Data); };
-        process.ErrorDataReceived += (_, e) => { if (e.Data is not null) stderr.AppendLine(e.Data); };
+        long outputActivity = 0; // folded into the progress stamp; Interlocked because handlers run on pool threads
+        process.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data is not null) { stdout.AppendLine(e.Data); Interlocked.Increment(ref outputActivity); }
+        };
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data is not null) { stderr.AppendLine(e.Data); Interlocked.Increment(ref outputActivity); }
+        };
 
         try
         {
@@ -512,16 +526,37 @@ public sealed class JulieExtractRunner
         process.BeginErrorReadLine();
 
         // Bound the wait: a hung julie-extract would otherwise block a hosted-service StartAsync forever and
-        // wedge the whole host graph (CLAUDE.md host-lifecycle gotcha; §10A). On timeout, kill the process
-        // tree and surface a typed, actionable failure — never a silent hang.
-        if (!process.WaitForExit((int)_timeout.TotalMilliseconds))
+        // wedge the whole host graph (CLAUDE.md host-lifecycle gotcha; §10A). The bound is progress-aware: a
+        // fixed total cap killed legitimately long scans under fleet load (the openclaw force-scan is ~90s
+        // idle but exceeded 600s when the fleet rebuilt concurrently — 2026-06-11 Eros field report). Kill
+        // only when the artifact and output stop moving for the stall window, with an absolute backstop.
+        string? dbPath = DbPathFromArgs(args);
+        var policy = new ExtractWaitPolicy(_timeout, _hardTimeout);
+        var clock = Stopwatch.StartNew();
+        int pollSlice = (int)Math.Clamp((long)_timeout.TotalMilliseconds, 50, 1000);
+        var verdict = ExtractWaitVerdict.Continue;
+        bool exited;
+        while (!(exited = process.WaitForExit(pollSlice)))
+        {
+            verdict = policy.Observe(
+                clock.Elapsed, ProgressStamp(dbPath, Interlocked.Read(ref outputActivity)));
+            if (verdict != ExtractWaitVerdict.Continue)
+                break;
+        }
+
+        if (!exited)
         {
             try { process.Kill(entireProcessTree: true); }
             catch (InvalidOperationException) { /* already exited between the wait and the kill */ }
             process.WaitForExit(); // reap the killed child so the handle is released
+            string reason = verdict == ExtractWaitVerdict.Stalled
+                ? $"timed out after {_timeout.TotalSeconds:0}s with no extraction progress and was killed " +
+                  "(likely hang / wrong binary). Re-run scripts/restore-julie-extract.sh if this persists."
+                : $"was still making progress but timed out at the {_hardTimeout.TotalSeconds:0}s hard cap and " +
+                  "was killed. Large workspaces under heavy concurrent load can take this long; retry when the " +
+                  "machine is less loaded.";
             throw new JulieExtractException(
-                $"julie-extract at '{_binaryPath}' timed out after {_timeout.TotalSeconds:0}s and was killed " +
-                "(possible hang / wrong binary). Re-run scripts/restore-julie-extract.sh if this persists.",
+                $"julie-extract at '{_binaryPath}' {reason}",
                 standardError: stderr.ToString().TrimEnd('\n', '\r'));
         }
 
@@ -541,5 +576,39 @@ public sealed class JulieExtractRunner
         // extract boundary with the same wording the read-path gate uses.
         ExtractVersionMismatch.VerifyReport(report);
         return report;
+    }
+
+    /// <summary>The `--db` value from an already-built argv, if present (all write verbs carry one).</summary>
+    internal static string? DbPathFromArgs(IReadOnlyList<string> args)
+    {
+        for (int i = 0; i + 1 < args.Count; i++)
+        {
+            if (args[i] == "--db")
+                return args[i + 1];
+        }
+        return null;
+    }
+
+    // The progress stamp the wait policy watches: total bytes of the artifact db + WAL/SHM sidecars plus the
+    // count of output lines received. ANY change (including WAL shrink on checkpoint) counts as progress.
+    private static long ProgressStamp(string? dbPath, long outputActivity)
+    {
+        long stamp = outputActivity;
+        if (dbPath is null)
+            return stamp;
+        foreach (string suffix in new[] { "", "-wal", "-shm" })
+        {
+            try
+            {
+                var info = new FileInfo(dbPath + suffix);
+                if (info.Exists)
+                    stamp += info.Length;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                // Unreadable sidecar: contribute nothing — output activity and the other files still count.
+            }
+        }
+        return stamp;
     }
 }

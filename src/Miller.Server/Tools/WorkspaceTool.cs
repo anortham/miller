@@ -488,7 +488,9 @@ public sealed class WorkspaceTool
             Note: noteText,
             WorkspaceId: refresh.WorkspaceId,
             Root: refresh.WorkspaceRoot,
-            Status: refresh.StatusText);
+            Status: refresh.StatusText,
+            ScanDurationMs: (long?)refresh.ScanDuration?.TotalMilliseconds,
+            DurationMs: (long?)refresh.TotalDuration?.TotalMilliseconds);
         return (WorkspaceRender.Action(result, json), 1, TelemetryOutcome.Ok);
     }
 

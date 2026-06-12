@@ -73,12 +73,23 @@ The `refresh --json --wait` response uses the same action shape as `workspace re
 post-refresh artifact facts when available:
 
 - `index_fresh`: `true` for `refreshed`/`unchanged`, `false` for lock-busy or failed convergence.
+- `scan_duration_ms`: wall milliseconds of the julie-extract scan attempt when one ran — present even for
+  `failed` (a timed-out, killed scan reports roughly the timeout), `null` when no scan ran (e.g. `lock_busy`).
+  Use this for fleet-sweep extract-duration telemetry.
+- `duration_ms`: wall milliseconds of the whole refresh attempt (lock wait, scan, sidecar convergence), when
+  measured; `null` on paths that do not measure it.
 - `search_sidecar`: state, path, revision, expected revision, document count, and error for `.miller/search.db`.
 - `content_corpus`: state, path, schema version, workspace revision, source/chunk counts, byte counts, skip counts,
   and error for `.miller/content.db`.
 
 `--wait` is a contract flag. The Miller CLI refresh path is already synchronous: it returns only after the
 lock-holding refresh attempt converges, observes another writer, or reports an operational failure.
+
+A `lock_busy` result exits `0` and its payload is ingestable: the latest readable DB is being served and a live
+leader owns convergence (for `full`, a leader full-scan request was enqueued). Freshness is NOT confirmed —
+consumers that need a confirmed-fresh index must gate on `status` (`refreshed`/`unchanged`) or `index_fresh:
+true` in the payload, not on the exit code alone. Exit `3` is reserved for genuinely unusable-index outcomes:
+`missing_root`, `missing_index`, `failed`, and `ineligible_extractor`.
 
 ## Export feeds
 
@@ -182,9 +193,9 @@ Miller CLI commands use the same process-level exit code contract:
 
 | Code | Meaning |
 |---:|---|
-| `0` | Success. |
+| `0` | Success — the JSON payload is ingestable. Includes `refresh`/`workspace refresh|full|open` returning `lock_busy` (index served, freshness unconfirmed; gate on `status`/`index_fresh`). |
 | `2` | Usage or selector error. |
-| `3` | Operational failure such as no usable index, missing restore, refused workspace operation, or failed refresh. |
+| `3` | Operational failure such as no usable index, missing restore, refused workspace operation, or failed refresh (`missing_root`, `missing_index`, `failed`, `ineligible_extractor`). |
 | `1` | Unexpected failure converted to a clean CLI error line. |
 
 Eros should treat non-zero as non-ingestable unless a command-specific workflow explicitly allows an idempotent

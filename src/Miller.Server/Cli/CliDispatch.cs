@@ -1070,7 +1070,9 @@ public static class CliDispatch
             Status: result.StatusText,
             IndexFresh: indexFresh,
             SearchSidecar: sidecar.Inspect(result.IndexDbPath, revision),
-            ContentCorpus: new ContentCorpusSidecar().Inspect(result.IndexDbPath, revision));
+            ContentCorpus: new ContentCorpusSidecar().Inspect(result.IndexDbPath, revision),
+            ScanDurationMs: (long?)result.ScanDuration?.TotalMilliseconds,
+            DurationMs: (long?)result.TotalDuration?.TotalMilliseconds);
     }
 
     // ---------- open (bootstrap a fresh directory) ----------
@@ -1136,7 +1138,9 @@ public static class CliDispatch
             Note: result.Error ?? result.WarningText,
             WorkspaceId: result.WorkspaceId,
             Root: result.WorkspaceRoot,
-            Status: result.StatusText);
+            Status: result.StatusText,
+            ScanDurationMs: (long?)result.ScanDuration?.TotalMilliseconds,
+            DurationMs: (long?)result.TotalDuration?.TotalMilliseconds);
         outw.WriteLine(WorkspaceRender.Action(action, json));
         return RefreshExitCode(result.Status);
     }
@@ -1247,16 +1251,20 @@ public static class CliDispatch
         string.Equals(row.CanonicalRoot, root, StringComparison.Ordinal)
         || WorkspaceSafety.IsLiveWorkspace(row.CanonicalRoot, root);
 
-    // Map a refresh/full outcome to a process exit code. EVERY non-success terminal state must be non-zero so a
-    // script (`miller workspace full && deploy`) can't proceed on a broken/never-refreshed workspace: only
-    // Refreshed/Unchanged (the index is current) are success (0); a missing root/index, a hard failure, or a busy
-    // single-writer lock (the refresh did NOT run) are operational failures (3); any future status is unexpected (1).
+    // Map a refresh/full outcome to a process exit code (cli-eros-v1: exit 0 = ingestable payload, exit 3 =
+    // genuinely unusable index). LockBusy is exit 0: the latest readable DB IS being served and a LIVE leader
+    // owns convergence — the payload says so (`status: lock_busy`, `index_fresh: false`), so a consumer that
+    // needs CONFIRMED freshness must gate on those fields, not the exit code (2026-06-11 Eros ask; previously 3,
+    // which forced Eros to parse exit-3 stdout against the "non-zero = non-ingestable" rule). A missing
+    // root/index, a hard failure, or an ineligible extractor (nothing usable was served or the rebuild broke)
+    // stay operational failures (3); any future status is unexpected (1).
     internal static int RefreshExitCode(WorkspaceRefreshStatus status) => status switch
     {
-        WorkspaceRefreshStatus.Refreshed or WorkspaceRefreshStatus.Unchanged => 0,
+        WorkspaceRefreshStatus.Refreshed
+            or WorkspaceRefreshStatus.Unchanged
+            or WorkspaceRefreshStatus.LockBusy => 0,
         WorkspaceRefreshStatus.MissingRoot
             or WorkspaceRefreshStatus.MissingIndex
-            or WorkspaceRefreshStatus.LockBusy
             or WorkspaceRefreshStatus.Failed
             or WorkspaceRefreshStatus.IneligibleExtractor => 3,
         _ => 1,

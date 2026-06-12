@@ -387,6 +387,45 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
     }
 
     [Fact]
+    public void Refresh_RecordsScanAndTotalDurations_OnlyWhenAScanActuallyRan()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("durations");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+
+        // Scanned: both durations are measured (real wall clock — assert presence, not magnitude).
+        WorkspaceRefreshResult scanned = NewService(
+            registry,
+            scan: (_, _, _) => Report(root, dbPath, "target-ws", revision: 5),
+            acquireLock: _ => new NoopLease()).Refresh("target-ws");
+        Assert.Equal(WorkspaceRefreshStatus.Refreshed, scanned.Status);
+        Assert.NotNull(scanned.ScanDuration);
+        Assert.NotNull(scanned.TotalDuration);
+
+        // Failed scan: the duration of the thrown attempt is KEPT — a fleet sweep needs it to tell a timeout
+        // kill (~the timeout) from an instant hard failure.
+        WorkspaceRefreshResult failed = NewService(
+            registry,
+            scan: (_, _, _) => throw new JulieExtractException("boom", standardError: string.Empty),
+            acquireLock: _ => new NoopLease()).Refresh("target-ws");
+        Assert.Equal(WorkspaceRefreshStatus.Failed, failed.Status);
+        Assert.NotNull(failed.ScanDuration);
+        Assert.NotNull(failed.TotalDuration);
+
+        // Lock busy: no scan ran, so scan duration is null; the wait itself is still measured as the total.
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        File.WriteAllText(dbPath, string.Empty);
+        WorkspaceRefreshResult busy = NewService(
+            registry,
+            scan: (_, _, _) => throw new InvalidOperationException("scan must not run when the lock is busy"),
+            acquireLock: _ => null).Refresh("target-ws");
+        Assert.Equal(WorkspaceRefreshStatus.LockBusy, busy.Status);
+        Assert.Null(busy.ScanDuration);
+        Assert.NotNull(busy.TotalDuration);
+    }
+
+    [Fact]
     public void Refresh_MissingDb_IsCreatedByTheScanWhenTheLockIsAvailable()
     {
         using var registry = WorkspaceRegistry.Open(_registryDbPath);

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Miller.Server.Logging;
@@ -108,6 +109,7 @@ public sealed class CrossWorkspaceRefreshService
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
         WorkspaceRegistryRow row = GetRequiredRow(workspaceId);
+        var total = Stopwatch.StartNew();
 
         if (!Directory.Exists(row.CanonicalRoot))
         {
@@ -120,7 +122,8 @@ public sealed class CrossWorkspaceRefreshService
                 row.IndexDbPath,
                 row.LastRevision,
                 Scanned: false,
-                Error: error);
+                Error: error,
+                TotalDuration: total.Elapsed);
         }
 
         try
@@ -137,7 +140,8 @@ public sealed class CrossWorkspaceRefreshService
                 row.IndexDbPath,
                 row.LastRevision,
                 Scanned: false,
-                Error: ex.Message);
+                Error: ex.Message,
+                TotalDuration: total.Elapsed);
         }
 
         string millerDir = Path.GetDirectoryName(row.IndexDbPath)
@@ -146,7 +150,7 @@ public sealed class CrossWorkspaceRefreshService
 
         using IDisposable? lease = _acquireLock(millerDir);
         if (lease is null)
-            return WaitForExternalRevision(row, force, millerDir);
+            return WaitForExternalRevision(row, force, millerDir, total);
 
         // D2 gate, AFTER winning the lock (so a busy lock still enqueues to the live leader above, which
         // enforces its own gate): an outdated extractor must never rewrite an artifact built by a newer one.
@@ -163,13 +167,16 @@ public sealed class CrossWorkspaceRefreshService
                     row.IndexDbPath,
                     row.LastRevision,
                     Scanned: false,
-                    Error: verdict.Reason + IneligibleRemedy);
+                    Error: verdict.Reason + IneligibleRemedy,
+                    TotalDuration: total.Elapsed);
             }
         }
 
+        var scanClock = Stopwatch.StartNew();
         try
         {
             ExtractReport report = _scan(row.CanonicalRoot, row.IndexDbPath, force);
+            scanClock.Stop();
 
             // No workspace_id echo to cross-check in v1: julie-extract self-rejects a DB built for a different
             // root (exit 3 RootMismatch, design §4.1), so a wrong-DB scan throws and is handled by the catch below.
@@ -198,10 +205,15 @@ public sealed class CrossWorkspaceRefreshService
                 row.IndexDbPath,
                 revision,
                 Scanned: true,
-                WarningText: warning);
+                WarningText: warning,
+                ScanDuration: scanClock.Elapsed,
+                TotalDuration: total.Elapsed);
         }
         catch (Exception ex)
         {
+            // Keep the duration of the FAILED scan attempt: a timeout kill reporting ~the timeout is exactly
+            // the fact a fleet sweep needs to tell "slow under load" from "instant hard failure".
+            scanClock.Stop();
             _registry.MarkError(row.WorkspaceId, ex.Message, _utcNow());
             return new WorkspaceRefreshResult(
                 WorkspaceRefreshStatus.Failed,
@@ -210,7 +222,9 @@ public sealed class CrossWorkspaceRefreshService
                 row.IndexDbPath,
                 row.LastRevision,
                 Scanned: false,
-                Error: ex.Message);
+                Error: ex.Message,
+                ScanDuration: scanClock.Elapsed,
+                TotalDuration: total.Elapsed);
         }
     }
 
@@ -242,7 +256,8 @@ public sealed class CrossWorkspaceRefreshService
         }
     }
 
-    private WorkspaceRefreshResult WaitForExternalRevision(WorkspaceRegistryRow row, bool force, string millerDir)
+    private WorkspaceRefreshResult WaitForExternalRevision(
+        WorkspaceRegistryRow row, bool force, string millerDir, Stopwatch total)
     {
         long baseline = row.LastRevision ?? 0;
         long? lastReadableRevision = row.LastRevision;
@@ -279,7 +294,8 @@ public sealed class CrossWorkspaceRefreshService
                         row.CanonicalRoot,
                         row.IndexDbPath,
                         latest,
-                        Scanned: false);
+                        Scanned: false,
+                        TotalDuration: total.Elapsed);
                 }
             }
 
@@ -297,7 +313,8 @@ public sealed class CrossWorkspaceRefreshService
                 row.IndexDbPath,
                 Revision: null,
                 Scanned: false,
-                Error: error);
+                Error: error,
+                TotalDuration: total.Elapsed);
         }
 
         string warning = requestWarning ??
@@ -312,7 +329,8 @@ public sealed class CrossWorkspaceRefreshService
             row.IndexDbPath,
             lastReadableRevision,
             Scanned: false,
-            WarningText: warning);
+            WarningText: warning,
+            TotalDuration: total.Elapsed);
     }
 
     private bool TryReadLatestRevision(WorkspaceRegistryRow row, out long revision)

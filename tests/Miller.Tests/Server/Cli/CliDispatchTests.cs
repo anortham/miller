@@ -255,7 +255,7 @@ public sealed class CliDispatchTests : IDisposable
     {
         var (code, outText, _) = Run(new[] { "version" }, Context(Path.Combine(_dir, "symbols.db")));
         Assert.Equal(0, code);
-        Assert.StartsWith("0.4.1", outText.Trim());
+        Assert.StartsWith("0.4.2", outText.Trim());
     }
 
     [Fact]
@@ -270,7 +270,7 @@ public sealed class CliDispatchTests : IDisposable
         using JsonDocument doc = JsonDocument.Parse(outText);
         JsonElement root = doc.RootElement;
 
-        Assert.StartsWith("0.4.1", root.GetProperty("miller").GetProperty("version").GetString());
+        Assert.StartsWith("0.4.2", root.GetProperty("miller").GetProperty("version").GetString());
 
         JsonElement julie = root.GetProperty("julie_extract");
         Assert.Equal("2.4.0", julie.GetProperty("pinned_version").GetString());
@@ -1562,7 +1562,7 @@ public sealed class CliDispatchTests : IDisposable
         // binary's version into the status header (the dogfooding "which build is live" signal).
         var (code, outText, _) = Run(new[] { "workspace", "status" }, Context(fx.DbPath));
         Assert.Equal(0, code);
-        Assert.Contains("miller 0.4.1", outText);
+        Assert.Contains("miller 0.4.2", outText);
         Assert.Contains("pid ", outText);
         Assert.Contains("symbols:", outText);
     }
@@ -1756,18 +1756,20 @@ public sealed class CliDispatchTests : IDisposable
         Assert.DoesNotContain("symbols:", outText);
     }
 
-    // refresh/full must surface EVERY non-success refresh status as a non-zero exit (a CI `... && deploy` guard):
-    // only Refreshed/Unchanged are success. This pins the status→code map directly (the live refresh path itself
-    // is exercised by the Scale subprocess test, which spawns julie).
+    // refresh/full status→exit-code map (cli-eros-v1): exit 0 = the payload is ingestable, which INCLUDES
+    // lock_busy — the latest readable DB is served and a live leader owns convergence; `status`/`index_fresh`
+    // in the payload are the freshness gate (2026-06-11 Eros ask). Unusable-index states (missing root/index,
+    // hard failure, ineligible extractor) must stay non-zero so `miller workspace full && deploy` can't proceed
+    // on a broken workspace. Pinned directly (the live refresh path is the Scale subprocess test).
     [Theory]
     [InlineData(WorkspaceRefreshStatus.Refreshed, 0)]
     [InlineData(WorkspaceRefreshStatus.Unchanged, 0)]
+    [InlineData(WorkspaceRefreshStatus.LockBusy, 0)]
     [InlineData(WorkspaceRefreshStatus.MissingRoot, 3)]
     [InlineData(WorkspaceRefreshStatus.MissingIndex, 3)]
-    [InlineData(WorkspaceRefreshStatus.LockBusy, 3)]
     [InlineData(WorkspaceRefreshStatus.Failed, 3)]
     [InlineData(WorkspaceRefreshStatus.IneligibleExtractor, 3)]
-    public void RefreshExitCode_NonSuccessIsAlwaysNonZero(WorkspaceRefreshStatus status, int expected) =>
+    public void RefreshExitCode_MapsStatusesToContractExitCodes(WorkspaceRefreshStatus status, int expected) =>
         Assert.Equal(expected, CliDispatch.RefreshExitCode(status));
 
     // ---------- workspace open (bootstrap a fresh dir) ----------

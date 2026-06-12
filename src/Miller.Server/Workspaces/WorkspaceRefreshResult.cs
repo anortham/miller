@@ -16,6 +16,12 @@ public enum WorkspaceRefreshStatus
     IneligibleExtractor,
 }
 
+/// <param name="ScanDuration">Wall time of the julie-extract scan attempt when one ran — including a FAILED or
+/// killed scan (a timeout kill reports ~the timeout). Null when no scan ran (lock busy, missing root, …).
+/// Recorded so fleet sweeps get per-workspace extract durations for free (2026-06-11 openclaw triage: a slow
+/// scan under sweep load was indistinguishable from a hang without a measured duration).</param>
+/// <param name="TotalDuration">Wall time of the whole refresh attempt (lock wait/poll + scan + sidecar
+/// convergence), when measured.</param>
 public sealed record WorkspaceRefreshResult(
     WorkspaceRefreshStatus Status,
     string WorkspaceId,
@@ -24,7 +30,9 @@ public sealed record WorkspaceRefreshResult(
     long? Revision = null,
     bool Scanned = false,
     string? WarningText = null,
-    string? Error = null)
+    string? Error = null,
+    TimeSpan? ScanDuration = null,
+    TimeSpan? TotalDuration = null)
 {
     public string StatusText =>
         Status switch

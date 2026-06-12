@@ -540,6 +540,46 @@ public sealed class WorkspaceRenderTests
         Assert.Equal(8, root.GetProperty("content_corpus").GetProperty("chunk_count").GetInt32());
     }
 
+    // Durations are cli-eros-v1 sweep telemetry: scan_duration_ms is the julie-extract attempt (set even for a
+    // failed/killed scan), duration_ms the whole refresh; both are null on paths that did not measure them.
+    [Fact]
+    public void Action_Json_CarriesDurations_AndNullsThemWhenUnmeasured()
+    {
+        var measured = new WorkspaceActionResult(
+            Operation: "full", Scanned: true, Swapped: false, Revision: 42, Note: null,
+            WorkspaceId: "ws-123", Root: "/repo", Status: "refreshed", IndexFresh: true,
+            ScanDurationMs: 91_000, DurationMs: 95_500);
+        using (var doc = JsonDocument.Parse(WorkspaceRender.Action(measured, json: true)))
+        {
+            Assert.Equal(91_000, doc.RootElement.GetProperty("scan_duration_ms").GetInt64());
+            Assert.Equal(95_500, doc.RootElement.GetProperty("duration_ms").GetInt64());
+        }
+
+        var unmeasured = new WorkspaceActionResult(
+            Operation: "refresh", Scanned: false, Swapped: false, Revision: 42, Note: null,
+            WorkspaceId: "ws-123", Root: "/repo", Status: "lock_busy", IndexFresh: false);
+        using (var doc = JsonDocument.Parse(WorkspaceRender.Action(unmeasured, json: true)))
+        {
+            Assert.Equal(JsonValueKind.Null, doc.RootElement.GetProperty("scan_duration_ms").ValueKind);
+            Assert.Equal(JsonValueKind.Null, doc.RootElement.GetProperty("duration_ms").ValueKind);
+        }
+    }
+
+    [Fact]
+    public void Action_Compact_ShowsDurationsOnlyWhenMeasured()
+    {
+        var measured = new WorkspaceActionResult(
+            Operation: "full", Scanned: true, Swapped: false, Revision: 42, Note: null,
+            Status: "refreshed", ScanDurationMs: 91_000, DurationMs: 95_500);
+        string text = WorkspaceRender.Action(measured, json: false);
+        Assert.Contains("scan_duration_ms: 91000", text);
+        Assert.Contains("duration_ms: 95500", text);
+
+        var unmeasured = new WorkspaceActionResult(
+            Operation: "refresh", Scanned: false, Swapped: false, Revision: 42, Note: null);
+        Assert.DoesNotContain("duration_ms", WorkspaceRender.Action(unmeasured, json: false));
+    }
+
     // ---- open (prime) ----
 
     [Fact]

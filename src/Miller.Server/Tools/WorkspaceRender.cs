@@ -73,6 +73,9 @@ public readonly record struct WorkspaceListEntry(
 /// <param name="Swapped">True iff the on-demand freshness poll rebuilt + swapped a newer index.</param>
 /// <param name="Revision">The revision the held index reflects after the action.</param>
 /// <param name="Note">An honesty note (non-leader cannot force a rescan / a scan failure), or null.</param>
+/// <param name="ScanDurationMs">Wall ms of the julie-extract scan attempt (set even for a failed/killed scan);
+/// null when no scan ran or the path does not measure it.</param>
+/// <param name="DurationMs">Wall ms of the whole refresh attempt, when measured.</param>
 public readonly record struct WorkspaceActionResult(
     string Operation,
     bool Scanned,
@@ -84,7 +87,9 @@ public readonly record struct WorkspaceActionResult(
     string? Status = null,
     bool? IndexFresh = null,
     SearchSidecarFacts? SearchSidecar = null,
-    ContentCorpusFacts? ContentCorpus = null);
+    ContentCorpusFacts? ContentCorpus = null,
+    long? ScanDurationMs = null,
+    long? DurationMs = null);
 
 /// <summary>The result of starting or reusing the local loopback dashboard from the <c>workspace</c> tool.</summary>
 internal readonly record struct WorkspaceDashboardResult(
@@ -948,6 +953,10 @@ public static class WorkspaceRender
         sb.Append("scanned: ").Append(result.Scanned ? "yes" : "no").Append('\n');
         sb.Append("swapped: ").Append(result.Swapped ? "yes" : "no").Append('\n');
         sb.Append("revision: ").Append(result.Revision);
+        if (result.ScanDurationMs is { } scanMs)
+            sb.Append('\n').Append("scan_duration_ms: ").Append(scanMs);
+        if (result.DurationMs is { } totalMs)
+            sb.Append('\n').Append("duration_ms: ").Append(totalMs);
         if (!string.IsNullOrEmpty(result.Note))
             sb.Append('\n').Append("note: ").Append(result.Note);
         return sb.ToString();
@@ -969,6 +978,10 @@ public static class WorkspaceRender
             w.WriteBoolean("scanned", result.Scanned);
             w.WriteBoolean("swapped", result.Swapped);
             w.WriteNumber("revision", result.Revision);
+            if (result.ScanDurationMs is { } scanMs) w.WriteNumber("scan_duration_ms", scanMs);
+            else w.WriteNull("scan_duration_ms");
+            if (result.DurationMs is { } totalMs) w.WriteNumber("duration_ms", totalMs);
+            else w.WriteNull("duration_ms");
             if (result.IndexFresh is { } fresh) w.WriteBoolean("index_fresh", fresh);
             else w.WriteNull("index_fresh");
             if (string.IsNullOrEmpty(result.Note)) w.WriteNull("note");
