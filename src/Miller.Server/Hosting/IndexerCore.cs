@@ -39,6 +39,18 @@ public sealed class IndexerCore
     public WatchEventQueue Queue { get; }
 
     /// <summary>
+    /// True when either per-file events or a forced-rescan signal are waiting for the next drain tick.
+    /// </summary>
+    public bool HasPendingWork
+    {
+        get
+        {
+            lock (_gate)
+                return Queue.Count > 0 || Queue.NeedsRescan || _overflowSignaled;
+        }
+    }
+
+    /// <summary>
     /// Construct the core over a fresh (or supplied) queue, the extract-op runner, and a file-existence stat.
     /// </summary>
     /// <exception cref="ArgumentNullException">Any required argument is null.</exception>

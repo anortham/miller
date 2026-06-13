@@ -98,6 +98,22 @@ public sealed class IndexerCoreTests
     }
 
     [Fact]
+    public void HasPendingWork_IncludesSignaledRescan_AndClearsAfterDrain()
+    {
+        var ops = new RecordingOps();
+        var core = NewCore(ops, _ => true);
+
+        core.SignalRescan();
+
+        Assert.True(core.HasPendingWork);
+
+        core.DrainAndProcess(headChanged: false);
+
+        Assert.Equal(new[] { "scan" }, ops.Calls);
+        Assert.False(core.HasPendingWork);
+    }
+
+    [Fact]
     public void DrainAndProcess_CreatedAndModified_ExistingFiles_BecomeUpdates()
     {
         var ops = new RecordingOps();

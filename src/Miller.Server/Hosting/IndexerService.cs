@@ -83,6 +83,7 @@ public sealed class IndexerService : BackgroundService
 
     private IDisposable? _lease;
     private FileSystemWatcher? _watcher;
+    private FileSystemWatcher? _directoryWatcher;
     private FileSystemWatcher? _gitHeadWatcher;
     private readonly List<FileSystemWatcher> _ancestorIgnorePolicyWatchers = new();
     private IndexerCore? _core;
@@ -208,11 +209,11 @@ public sealed class IndexerService : BackgroundService
     internal string? OwnExtractorVersion => _ownExtractorVersion.IsValueCreated ? _ownExtractorVersion.Value : null;
 
     /// <summary>
-    /// Whether the coalescing queue currently holds no pending events — the second half of <c>index_fresh</c>
-    /// (decision-8). A non-leader instance has no watcher/queue, so it is vacuously empty (true); a leader
-    /// reports its live queue count. Read by <see cref="IndexFreshProbe"/>.
+    /// Whether the coalescing queue and forced-rescan flag currently hold no pending work — the second half of
+    /// <c>index_fresh</c> (decision-8). A non-leader instance has no watcher/queue, so it is vacuously empty
+    /// (true); a leader reports its live pending-work state. Read by <see cref="IndexFreshProbe"/>.
     /// </summary>
-    public bool QueueEmpty => _core is null || _core.Queue.Count == 0;
+    public bool QueueEmpty => _core is null || !_core.HasPendingWork;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -348,7 +349,7 @@ public sealed class IndexerService : BackgroundService
             _logger.LogWarning(ex, "Could not record the leader identity; workspace health will report it as unknown.");
         }
         if (_attachFileWatchers)
-            _logger.LogInformation("Indexer leader: watching {Root} (recursive) + .git/HEAD.", canonicalRoot);
+            _logger.LogInformation("Indexer leader: watching {Root} (recursive files + directories) + .git/HEAD.", canonicalRoot);
 
         // Yield once so BackgroundService.StartAsync can return after the watcher is attached: existing DBs
         // are available immediately as loaded_existing, while this leader reconciles missed downtime edits in
@@ -997,6 +998,20 @@ public sealed class IndexerService : BackgroundService
         HandleChanged(changeType, fullPath);
 
     /// <summary>
+    /// Test seam: run the same directory-change routing that the directory <see cref="FileSystemWatcher"/>
+    /// invokes, without requiring a live watcher. Requires <see cref="PublishOpsForTest"/> to have built the core.
+    /// </summary>
+    internal void HandleDirectoryChangedForTest(string fullPath) =>
+        HandleDirectoryChanged(fullPath);
+
+    /// <summary>
+    /// Test seam: run the same directory-rename routing that the directory <see cref="FileSystemWatcher"/>
+    /// invokes, without requiring a live watcher. Requires <see cref="PublishOpsForTest"/> to have built the core.
+    /// </summary>
+    internal void HandleDirectoryRenamedForTest(string oldFullPath, string fullPath) =>
+        HandleDirectoryRenamed(oldFullPath, fullPath);
+
+    /// <summary>
     /// Test seam: install a supported-extension set for the watcher gate exactly as the leader path does
     /// after winning the lease, without spawning the live <c>languages --json</c> probe. Not used in production.
     /// </summary>
@@ -1150,9 +1165,9 @@ public sealed class IndexerService : BackgroundService
         _watcher = new FileSystemWatcher(canonicalRoot)
         {
             IncludeSubdirectories = true,
-            // Watch the change kinds that mean "content/structure moved". LastWrite catches edits; FileName
-            // catches create/delete/rename; DirectoryName catches dir moves that carry files.
-            NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite,
+            // File changes stay on the per-file path. Directory-name changes use the separate watcher below:
+            // subtree moves/deletes cannot be represented safely as a single update/delete --file.
+            NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite,
             InternalBufferSize = 64 * 1024, // largest the OS allows; overflow still self-heals via Error->scan
         };
         _watcher.Created += OnChanged;
@@ -1161,6 +1176,18 @@ public sealed class IndexerService : BackgroundService
         _watcher.Renamed += OnRenamed;
         _watcher.Error += OnError;
         _watcher.EnableRaisingEvents = true;
+
+        _directoryWatcher = new FileSystemWatcher(canonicalRoot)
+        {
+            IncludeSubdirectories = true,
+            NotifyFilter = NotifyFilters.DirectoryName,
+            InternalBufferSize = 64 * 1024,
+        };
+        _directoryWatcher.Created += OnDirectoryChanged;
+        _directoryWatcher.Deleted += OnDirectoryChanged;
+        _directoryWatcher.Renamed += OnDirectoryRenamed;
+        _directoryWatcher.Error += OnError;
+        _directoryWatcher.EnableRaisingEvents = true;
 
         // A dedicated watch on .git/HEAD: a branch switch/checkout flips HEAD once; we force ONE scan reconcile
         // instead of processing the thousands of per-file events a checkout produces (decision-7). The .git
@@ -1213,12 +1240,45 @@ public sealed class IndexerService : BackgroundService
             _core.SignalRescan();
             return;
         }
+        if (Directory.Exists(fullPath))
+        {
+            HandleDirectoryChanged(fullPath);
+            return;
+        }
         if (!WatchPathFilter.ShouldProcess(root, fullPath, _supportedExtensions))
             return;
-        // Drop directory events: julie operates on files; a dir create/delete surfaces as per-file events too.
-        if (Directory.Exists(fullPath))
-            return;
         _core.Enqueue(WatcherEventMapper.Map(changeType, fullPath));
+    }
+
+    private void OnDirectoryChanged(object sender, FileSystemEventArgs e)
+    {
+        HandleDirectoryChanged(e.FullPath);
+    }
+
+    private void HandleDirectoryChanged(string fullPath)
+    {
+        if (_core is null)
+            return;
+
+        string root = _bootstrap.Workspace.CanonicalRoot!;
+        if (WatchPathFilter.ShouldProcess(root, fullPath))
+            _core.SignalRescan();
+    }
+
+    private void OnDirectoryRenamed(object sender, RenamedEventArgs e)
+    {
+        HandleDirectoryRenamed(e.OldFullPath, e.FullPath);
+    }
+
+    private void HandleDirectoryRenamed(string oldFullPath, string fullPath)
+    {
+        if (_core is null)
+            return;
+
+        string root = _bootstrap.Workspace.CanonicalRoot!;
+        if (WatchPathFilter.ShouldProcess(root, oldFullPath)
+            || WatchPathFilter.ShouldProcess(root, fullPath))
+            _core.SignalRescan();
     }
 
     private void OnRenamed(object sender, RenamedEventArgs e)
@@ -1230,6 +1290,11 @@ public sealed class IndexerService : BackgroundService
             || WatchPathFilter.ShouldForceRescan(root, e.FullPath))
         {
             _core.SignalRescan();
+            return;
+        }
+        if (Directory.Exists(e.FullPath))
+        {
+            OnDirectoryRenamed(sender, e);
             return;
         }
 
@@ -1276,6 +1341,16 @@ public sealed class IndexerService : BackgroundService
             _watcher.Error -= OnError;
             _watcher.Dispose();
             _watcher = null;
+        }
+        if (_directoryWatcher is not null)
+        {
+            _directoryWatcher.EnableRaisingEvents = false;
+            _directoryWatcher.Created -= OnDirectoryChanged;
+            _directoryWatcher.Deleted -= OnDirectoryChanged;
+            _directoryWatcher.Renamed -= OnDirectoryRenamed;
+            _directoryWatcher.Error -= OnError;
+            _directoryWatcher.Dispose();
+            _directoryWatcher = null;
         }
         if (_gitHeadWatcher is not null)
         {

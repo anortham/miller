@@ -65,9 +65,10 @@ public static class WatchPathFilter
     /// (<c>julie-extract languages --json</c>). A null or EMPTY set gates nothing — fail soft to the
     /// historical accept-by-default behavior when the languages probe failed or returned nothing usable.
     /// The set is membership-only here (pure, fast-suite-testable); fetching it is the caller's edge.
-    /// Note ignore-policy files (<c>.gitignore</c>/<c>.julieignore</c>) have no supported extension and ARE
-    /// dropped by this gate — their special handling runs through <see cref="ShouldForceRescan"/>, which the
-    /// watcher consults FIRST, so policy-change rescans still fire.
+    /// Paths with no explicit extension are kept fail-soft because the extension-only catalog cannot prove they
+    /// are unsupported. Ignore-policy files (<c>.gitignore</c>/<c>.julieignore</c>) are still dropped from
+    /// per-file dispatch — their special handling runs through <see cref="ShouldForceRescan"/>, which the watcher
+    /// consults FIRST, so policy-change rescans still fire.
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="root"/> or <paramref name="absolutePath"/> is null.</exception>
     public static bool ShouldProcess(string root, string absolutePath, IReadOnlySet<string>? supportedExtensions)
@@ -88,8 +89,8 @@ public static class WatchPathFilter
 
     // Pure extension gate over julie's claimed set. The set holds lowercase, dot-less extensions exactly as
     // `languages --json` reports them — nothing is hardcoded here. A file with no extension (Dockerfile, a
-    // dotfile like .gitignore, a trailing dot) is dropped only BECAUSE julie's catalog claims extensions
-    // exclusively; if a future julie ever claimed an extensionless form, this derives from the JSON, not a list.
+    // dotfile, a trailing dot) remains fail-soft because the extension-only catalog cannot prove it is
+    // unsupported; julie can still no-op cheaply if it does not recognize the path.
     private static bool HasUnsupportedExtension(string absolutePath, IReadOnlySet<string>? supportedExtensions)
     {
         if (supportedExtensions is null || supportedExtensions.Count == 0)
@@ -98,7 +99,7 @@ public static class WatchPathFilter
         string name = LastPathSegment(absolutePath);
         int dot = name.LastIndexOf('.');
         if (dot <= 0 || dot == name.Length - 1)
-            return true; // extensionless / dotfile / trailing dot — julie claims none of these via extensions
+            return IgnorePolicyFiles.Contains(name);
         return !supportedExtensions.Contains(name[(dot + 1)..].ToLowerInvariant());
     }
 

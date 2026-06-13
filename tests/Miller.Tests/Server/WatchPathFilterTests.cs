@@ -13,8 +13,9 @@ namespace Miller.Tests.Server;
 /// with NO extension, a Dockerfile — is accepted, because julie's <c>update</c> no-ops harmlessly on a file it
 /// does not index (verified-fact 2) and a hardcoded whitelist would silently drop a supported language. WITH
 /// the set (julie's OWN claimed catalog from <c>languages --json</c>, injected here — fetching is the edge),
-/// events for extensions julie cannot parse are dropped before they spawn a subprocess; a null/empty set
-/// gates nothing (fail soft).
+/// events for explicit extensions julie cannot parse are dropped before they spawn a subprocess; extensionless
+/// paths remain fail-soft because the extension-only catalog cannot prove they are unsupported. A null/empty set
+/// gates nothing.
 /// </summary>
 public sealed class WatchPathFilterTests
 {
@@ -111,13 +112,19 @@ public sealed class WatchPathFilterTests
     [InlineData("/repo/daemon.log")]            // julie parses no logs — zero rows, wasted spawn
     [InlineData("/repo/assets/logo.png")]
     [InlineData("/repo/pkg/yarn.lock")]
-    [InlineData("/repo/Dockerfile")]            // extensionless: julie's catalog claims extensions only
-    [InlineData("/repo/Makefile")]
-    [InlineData("/repo/.env")]                  // dotfile = no extension (Rust Path::extension semantics)
-    [InlineData("/repo/src/trailingdot.")]
-    public void ExtensionGate_DropsUnclaimedAndExtensionless(string path)
+    public void ExtensionGate_DropsUnclaimedExtensions(string path)
     {
         Assert.False(WatchPathFilter.ShouldProcess(Root, path, Extensions));
+    }
+
+    [Theory]
+    [InlineData("/repo/Dockerfile")]            // extensionless: catalog cannot prove unsupported
+    [InlineData("/repo/Makefile")]
+    [InlineData("/repo/.env")]                  // dotfile = no extension
+    [InlineData("/repo/src/trailingdot.")]
+    public void ExtensionGate_KeepsExtensionlessPathsFailSoft(string path)
+    {
+        Assert.True(WatchPathFilter.ShouldProcess(Root, path, Extensions));
     }
 
     [Theory]

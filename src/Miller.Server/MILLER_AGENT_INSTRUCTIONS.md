@@ -17,6 +17,7 @@ the tokens.
    the dry-run looks right.
 6. **Trust the index.** Results are extracted and kept fresh — do NOT re-verify them with `grep`/`find`/`Read`.
    If the index is stale for a file, run `workspace refresh` rather than working around it.
+   If `inspect <file>` shows no indexed symbols for an expected code file, refresh and retry before raw reads.
 
 ## Tools
 

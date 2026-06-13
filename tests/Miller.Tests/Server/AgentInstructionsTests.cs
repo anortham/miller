@@ -42,6 +42,7 @@ public sealed class AgentInstructionsTests
         Assert.Contains("Reach for a Miller tool before a raw", instructions);
         Assert.Contains("Do not use `grep`/`find`/`rg` when a Miller tool fits", instructions);
         Assert.Contains("Do not read a whole file before `inspect`", instructions);
+        Assert.Contains("refresh and retry before raw reads", instructions);
     }
 
     [Theory]

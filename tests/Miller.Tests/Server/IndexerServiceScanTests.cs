@@ -517,6 +517,80 @@ public sealed class IndexerServiceScanTests
     }
 
     [Fact]
+    public void WatcherDirectoryDelete_ForcesDeltaScan()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "miller-indexer-dir-delete-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            WorkspaceContext workspace = CreateWorkspace(dir);
+            var service = NewSeededService(workspace, SymbolSearchSidecar.Disabled);
+            var ops = new RecordingScanOps { Revision = 13 };
+            service.PublishOpsForTest(ops);
+
+            service.HandleDirectoryChangedForTest(Path.Combine(workspace.CanonicalRoot!, "src"));
+            service.DrainForTest(headChanged: false);
+
+            Assert.Equal(new[] { false }, ops.ScanForce);
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void WatcherExistingDirectoryChange_WithExtensionGate_ForcesDeltaScan()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "miller-indexer-dir-change-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            WorkspaceContext workspace = CreateWorkspace(dir);
+            string srcDir = Path.Combine(workspace.CanonicalRoot!, "src");
+            Directory.CreateDirectory(srcDir);
+            var service = NewSeededService(workspace, SymbolSearchSidecar.Disabled);
+            var ops = new RecordingScanOps { Revision = 13 };
+            service.PublishOpsForTest(ops);
+            service.SetSupportedExtensionsForTest(new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "cs" });
+
+            service.HandleChangedForTest(WatcherChangeTypes.Changed, srcDir);
+            service.DrainForTest(headChanged: false);
+
+            Assert.Equal(new[] { false }, ops.ScanForce);
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void WatcherDirectoryRename_ForcesDeltaScan()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "miller-indexer-dir-rename-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            WorkspaceContext workspace = CreateWorkspace(dir);
+            var service = NewSeededService(workspace, SymbolSearchSidecar.Disabled);
+            var ops = new RecordingScanOps { Revision = 13 };
+            service.PublishOpsForTest(ops);
+
+            service.HandleDirectoryRenamedForTest(
+                Path.Combine(workspace.CanonicalRoot!, "old"),
+                Path.Combine(workspace.CanonicalRoot!, "new"));
+            service.DrainForTest(headChanged: false);
+
+            Assert.Equal(new[] { false }, ops.ScanForce);
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void WatcherIgnorePolicyFileChange_ForcesDeltaScan()
     {
         string dir = Path.Combine(Path.GetTempPath(), "miller-indexer-ignore-policy-" + Guid.NewGuid().ToString("N"));

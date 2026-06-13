@@ -114,6 +114,26 @@ public sealed class IndexerWatcherExtensionGateTests
     }
 
     [Fact]
+    public void GateActive_ExtensionlessFiles_RemainFailSoftAndReachExtractOps()
+    {
+        using var temp = new TempDir();
+        var (service, ops) = NewLeader(temp.Path);
+        service.SetSupportedExtensionsForTest(CsOnly);
+
+        service.HandleChangedForTest(WatcherChangeTypes.Changed, System.IO.Path.Combine(temp.Path, "Dockerfile"));
+        service.HandleChangedForTest(WatcherChangeTypes.Changed, System.IO.Path.Combine(temp.Path, ".env"));
+        service.DrainForTest(headChanged: false);
+
+        Assert.Equal(
+            new[]
+            {
+                System.IO.Path.Combine(temp.Path, "Dockerfile"),
+                System.IO.Path.Combine(temp.Path, ".env"),
+            },
+            ops.UpdatedPaths);
+    }
+
+    [Fact]
     public void NoGate_NullSet_KeepsTheHistoricalAcceptEverythingBehavior()
     {
         using var temp = new TempDir();
