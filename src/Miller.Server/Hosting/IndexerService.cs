@@ -37,7 +37,6 @@ public sealed class IndexerService : BackgroundService
     private readonly IndexBootstrapService _bootstrap;
     private readonly ILogger<IndexerService> _logger;
     private readonly ILoggerFactory _loggerFactory;
-    private readonly Func<string, IDisposable?> _tryAcquireLeadership;
     private readonly Func<WorkspaceContext, string, string, IExtractOps> _createOps;
     private readonly Func<string, FullScanDrainResult> _drainFullScanRequests;
     private readonly Func<string, FileConvergeDrainResult> _drainFileConvergeRequests;
@@ -45,47 +44,27 @@ public sealed class IndexerService : BackgroundService
     // --- version-aware leadership (D2–D4): every input is an injected func so the orchestration is pure-testable.
     // Decisions live in LeadershipEligibility / YieldCooldown; this class only wires them into the claim loop,
     // the debounce tick, and the reader retry tick.
-    private readonly Func<string, YieldDrainResult> _drainYieldRequests;
-    private readonly Lazy<string?> _ownExtractorVersion; // probed ONCE (the binary cannot change underneath us)
-    private readonly bool _allowExtractorDowngrade;
-    private readonly Func<string?, string?> _readArtifactExtractorVersion;
-    private readonly Action<string, string, int, string> _requestYield;
-    private readonly Func<string, LeaderIdentity?> _readLeaderIdentity;
-    private readonly Func<LeaderIdentity, bool> _leaderAliveProbe;
-    private readonly Func<DateTimeOffset> _clock;
     private readonly Func<WorkspaceContext, IReadOnlySet<string>?> _fetchSupportedExtensions;
+    private readonly IndexerLeadershipCoordinator _leadership;
 
     // julie's claimed extension set for the watcher gate (null = gate nothing, the fail-soft default).
     // Fetched ONCE per leadership claim, BEFORE the watchers attach, so every event handler observes the
     // final value (the fetch itself is process-cached in SupportedExtensionCatalog).
     private IReadOnlySet<string>? _supportedExtensions;
-    private readonly YieldCooldown _cooldown;
-
-    // Requester-side dedup: the one outstanding yield request (toward which leader, sent when). Re-enqueue only
-    // after the request TTL elapses or the observed leader identity changes (D4 "at most one outstanding").
-    private (int LeaderPid, DateTimeOffset LeaderStartedAtUtc, DateTimeOffset SentAtUtc)? _outstandingYield;
-
-    // M8-style log throttle for the claim gate: the verdict reason is Information ONCE per transition, then
-    // Debug — an ineligible instance retries every 5s forever and must not spam.
-    private string? _lastVerdictReasonLogged;
-
     // M4 log throttle: the first request that cannot be claimed warns (something is pinning a request file);
     // repeats on later ticks drop to Debug so a wedged file cannot spam a warning every 250ms.
     private bool _requestClaimSkipWarned;
     private readonly TimeSpan _leaderRetryInterval;
     private readonly bool _attachFileWatchers;
 
-    // The on-disk search.db sidecar. Default ON. When enabled, THIS instance — the writer-lock leader — is the one
-    // safe writer for the CURRENT workspace's search.db, so it converges it after scans and per-file updates under
+    // Current-workspace sidecar convergence. THIS instance — the writer-lock leader — is the one safe writer for
+    // the CURRENT workspace's content.db/search.db, so convergence runs after scans and per-file updates under
     // _opsGate.
-    private readonly SymbolSearchSidecar _sidecar;
-    private readonly ContentCorpusSidecar _contentSidecar;
+    private readonly IndexerSidecarConverger _sidecarConverger;
+    private readonly WorkspaceRegistryScanPublisher _registryPublisher;
 
     private IDisposable? _lease;
-    private FileSystemWatcher? _watcher;
-    private FileSystemWatcher? _directoryWatcher;
-    private FileSystemWatcher? _gitHeadWatcher;
-    private readonly List<FileSystemWatcher> _ancestorIgnorePolicyWatchers = new();
+    private IndexerWatcherSet? _watchers;
     private IndexerCore? _core;
 
     // The leader's extract ops, set once leadership is won (null on a non-leader). M6 write-through reaches
@@ -164,27 +143,33 @@ public sealed class IndexerService : BackgroundService
         _bootstrap = bootstrap;
         _logger = logger;
         _loggerFactory = loggerFactory;
-        _tryAcquireLeadership = tryAcquireLeadership;
         _createOps = createOps;
         _drainFullScanRequests = drainFullScanRequests ?? LeaderScanRequestQueue.DrainFullScanRequests;
         _drainFileConvergeRequests = drainFileConvergeRequests ?? LeaderScanRequestQueue.DrainFileConvergeRequests;
         _leaderRetryInterval = leaderRetryInterval;
-        _sidecar = sidecar;
-        _contentSidecar = contentSidecar ?? new ContentCorpusSidecar();
+        _sidecarConverger = new IndexerSidecarConverger(
+            sidecar,
+            contentSidecar ?? new ContentCorpusSidecar(),
+            logger);
+        _registryPublisher = new WorkspaceRegistryScanPublisher(logger);
         _attachFileWatchers = attachFileWatchers;
-        _drainYieldRequests = drainYieldRequests ?? LeaderScanRequestQueue.DrainYieldRequests;
         // Lazy so the production probe (which reads the bootstrap's workspace for ToolsRoot) runs inside
         // ExecuteAsync, never in this constructor — the host constructs every hosted service before ANY
         // bootstrap StartAsync runs (the load-bearing host-lifecycle rule).
-        _ownExtractorVersion = new Lazy<string?>(ownExtractorVersion ?? ProbeBundledExtractorVersion);
-        _allowExtractorDowngrade = allowExtractorDowngrade
-            ?? Environment.GetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE") == "1";
-        _readArtifactExtractorVersion = readArtifactExtractorVersion ?? ExtractBinaryVersionReader.TryRead;
-        _requestYield = requestYield ?? LeaderScanRequestQueue.RequestYield;
-        _readLeaderIdentity = readLeaderIdentity ?? LeaderIdentityFile.TryRead;
-        _leaderAliveProbe = leaderAliveProbe ?? (static identity => LeaderIdentityFile.IsProcessAlive(identity));
-        _clock = clock ?? (static () => DateTimeOffset.UtcNow);
-        _cooldown = new YieldCooldown(_clock, processAliveProbe ?? LeaderIdentityFile.IsProcessAlive);
+        var leadershipClock = clock ?? (static () => DateTimeOffset.UtcNow);
+        _leadership = new IndexerLeadershipCoordinator(
+            logger,
+            tryAcquireLeadership,
+            ownExtractorVersion ?? ProbeBundledExtractorVersion,
+            allowExtractorDowngrade
+                ?? Environment.GetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE") == "1",
+            readArtifactExtractorVersion ?? ExtractBinaryVersionReader.TryRead,
+            drainYieldRequests ?? LeaderScanRequestQueue.DrainYieldRequests,
+            requestYield ?? LeaderScanRequestQueue.RequestYield,
+            readLeaderIdentity ?? LeaderIdentityFile.TryRead,
+            leaderAliveProbe ?? (static identity => LeaderIdentityFile.IsProcessAlive(identity)),
+            leadershipClock,
+            processAliveProbe ?? LeaderIdentityFile.IsProcessAlive);
         // Default = NO gate (null set). Unit tests reach this ctor; the gate's process probe must never run
         // in the fast suite, so only the public production ctor binds the real catalog fetch.
         _fetchSupportedExtensions = fetchSupportedExtensions ?? (static _ => null);
@@ -199,14 +184,14 @@ public sealed class IndexerService : BackgroundService
     /// ("extractor 2.1.3 is older than the index artifact 2.3.0") instead of looking mysteriously idle.
     /// Reference assignment is atomic; readers may observe it from other threads.
     /// </summary>
-    internal LeadershipVerdict? EligibilityVerdict { get; private set; }
+    internal LeadershipVerdict? EligibilityVerdict => _leadership.EligibilityVerdict;
 
     /// <summary>
     /// This instance's probed bundled-extractor version, surfaced for status/health rendering. Reads the lazy
     /// WITHOUT forcing it (null until the claim loop's first eligibility evaluation) so a tool call can never
     /// trigger the subprocess probe itself.
     /// </summary>
-    internal string? OwnExtractorVersion => _ownExtractorVersion.IsValueCreated ? _ownExtractorVersion.Value : null;
+    internal string? OwnExtractorVersion => _leadership.OwnExtractorVersion;
 
     /// <summary>
     /// Whether the coalescing queue and forced-rescan flag currently hold no pending work — the second half of
@@ -282,14 +267,16 @@ public sealed class IndexerService : BackgroundService
         LeadershipVerdict? claimVerdict = null;
         while (!stoppingToken.IsCancellationRequested && _lease is null)
         {
-            if (TryClaimLeadershipOnce(millerDir, canonicalDbPath, out LeadershipVerdict verdict))
+            IndexerLeadershipClaimResult claim = _leadership.TryClaim(millerDir, canonicalDbPath);
+            if (claim.Claimed)
             {
-                claimVerdict = verdict; // the verdict that gated THIS claim drives the D3 upgrade rescan below
+                _lease = claim.Lease;
+                claimVerdict = claim.Verdict; // the verdict that gated THIS claim drives the D3 upgrade rescan below
                 break;
             }
 
             // Reader retry tick: if a LIVE leader bundles a strictly older extractor, ask it to yield (D4).
-            MaybeRequestYield(millerDir, workspace.WorkspaceId, verdict);
+            _leadership.MaybeRequestYield(millerDir, workspace.WorkspaceId, claim.Verdict);
             if (!announcedReader)
             {
                 _logger.LogInformation(
@@ -339,7 +326,7 @@ public sealed class IndexerService : BackgroundService
         {
             LeaderIdentityFile.Write(millerDir, new LeaderIdentity(
                 Environment.ProcessId, MillerVersion.Current, Environment.ProcessPath, DateTimeOffset.UtcNow,
-                _ownExtractorVersion.Value));
+                _leadership.ProbeOwnExtractorVersion()));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -368,7 +355,7 @@ public sealed class IndexerService : BackgroundService
             _logger.LogInformation(
                 "Extractor upgrade detected: bundled julie-extract {OwnVersion} is newer than the index artifact; " +
                 "running a forced full rescan.",
-                _ownExtractorVersion.Value);
+                _leadership.ProbeOwnExtractorVersion());
             lock (_opsGate)
                 ScanAsLeaderUnderGate(force: true, source: "extractor-upgrade");
         }
@@ -385,13 +372,13 @@ public sealed class IndexerService : BackgroundService
                 _headChanged = false;
             }
 
-            YieldDecision? yieldDecision = null;
+            IndexerLeadershipYieldDecision? yieldDecision = null;
             try
             {
                 // D4 leader side: drain yield requests alongside the other request kinds. The decision is
                 // evaluated first but ACTED on only after this tick's work finishes (below), so an in-flight
                 // converge batch is never abandoned mid-tick.
-                yieldDecision = EvaluateYieldRequests(millerDir);
+                yieldDecision = _leadership.EvaluateYieldRequests(millerDir, LogRequestDrainStats);
                 TryProcessLeaderFullScanRequests(millerDir);
                 TryProcessFileConvergeRequests(millerDir);
 
@@ -425,54 +412,6 @@ public sealed class IndexerService : BackgroundService
         return false;
     }
 
-    /// <summary>
-    /// One claim attempt, gated by the D2 eligibility verdict and the D4 post-yield cooldown. The acquire func
-    /// is invoked ONLY when both gates pass — an ineligible instance never touches the lock. Returns true when
-    /// the lease was acquired; <paramref name="verdict"/> always carries the evaluation that gated the attempt.
-    /// </summary>
-    private bool TryClaimLeadershipOnce(string millerDir, string? extractDbPath, out LeadershipVerdict verdict)
-    {
-        verdict = EvaluateEligibility(extractDbPath);
-        if (!verdict.Eligible)
-        {
-            if (_lastVerdictReasonLogged != verdict.Reason)
-            {
-                _lastVerdictReasonLogged = verdict.Reason;
-                _logger.LogInformation("Not claiming indexer leadership: {Reason}.", verdict.Reason);
-            }
-            else
-            {
-                _logger.LogDebug("Still ineligible for indexer leadership: {Reason}.", verdict.Reason);
-            }
-            return false;
-        }
-
-        _lastVerdictReasonLogged = null; // a NEW ineligibility period after this re-announces at Information
-        if (_cooldown.SuppressesClaim())
-        {
-            _logger.LogDebug(
-                "Suppressing a leadership claim during the post-yield cooldown (the newer instance should win the re-race).");
-            return false;
-        }
-
-        _lease = _tryAcquireLeadership(millerDir);
-        return _lease is not null;
-    }
-
-    /// <summary>
-    /// Evaluate the D2 verdict for THIS instance against the artifact at <paramref name="extractDbPath"/> and
-    /// publish it on <see cref="EligibilityVerdict"/> for status/health rendering.
-    /// </summary>
-    private LeadershipVerdict EvaluateEligibility(string? extractDbPath)
-    {
-        LeadershipVerdict verdict = LeadershipEligibility.Evaluate(
-            _ownExtractorVersion.Value,
-            _readArtifactExtractorVersion(extractDbPath),
-            _allowExtractorDowngrade);
-        EligibilityVerdict = verdict;
-        return verdict;
-    }
-
     // Production own-version probe: locate the bundled binary once and ask it. Null on ANY failure (missing
     // binary, failed exec) — the eligibility matrix then renders this instance a permanent reader with a clear
     // reason, and the existing restore-script guidance applies. Runs lazily inside ExecuteAsync, never in the
@@ -492,112 +431,6 @@ public sealed class IndexerService : BackgroundService
         }
     }
 
-    /// <summary>
-    /// D4 requester side, run on each reader retry tick: if this instance is eligible and a LIVE leader's
-    /// recorded extractor version is strictly older than ours, write a yield request — at most one outstanding
-    /// per observed leader until the request TTL elapses or the leader identity changes.
-    /// </summary>
-    private void MaybeRequestYield(string millerDir, string? workspaceId, LeadershipVerdict verdict)
-    {
-        if (!verdict.Eligible || workspaceId is null)
-            return; // an ineligible challenger dethroning a working leader could freeze the index
-        if (_ownExtractorVersion.Value is not { } ownVersion)
-            return;
-        if (_readLeaderIdentity(millerDir) is not { ExtractorVersion: { } leaderVersion } leader)
-            return; // no identity, or a pre-feature leader (D5): it could not drain a yield request anyway
-        if (!_leaderAliveProbe(leader))
-            return; // stale identity from a crash — the normal lock retry wins the lease instead
-
-        int comparison;
-        try
-        {
-            comparison = LeadershipEligibility.CompareVersions(ownVersion, leaderVersion);
-        }
-        catch (ArgumentException)
-        {
-            return; // unparseable recorded version: cannot prove superiority, so do not challenge
-        }
-        if (comparison <= 0)
-            return; // equal versions never yield (D4): same-version swarms must not thrash leadership
-
-        DateTimeOffset now = _clock();
-        if (_outstandingYield is { } outstanding
-            && outstanding.LeaderPid == leader.Pid
-            && outstanding.LeaderStartedAtUtc == leader.StartedAtUtc
-            && now - outstanding.SentAtUtc < LeaderScanRequestQueue.RequestTtl)
-        {
-            return; // one outstanding request per leader; re-enqueue only after TTL or leader change
-        }
-
-        try
-        {
-            _requestYield(millerDir, workspaceId, Environment.ProcessId, ownVersion);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
-        {
-            _logger.LogWarning(ex, "Could not write a leadership yield request; will retry on a later tick.");
-            return; // not recorded as outstanding, so the next retry tick tries again
-        }
-
-        _outstandingYield = (leader.Pid, leader.StartedAtUtc, now);
-        _logger.LogInformation(
-            "Requested leadership yield: own extractor {OwnVersion} is newer than leader pid {LeaderPid}'s {LeaderVersion}.",
-            ownVersion, leader.Pid, leaderVersion);
-    }
-
-    private readonly record struct YieldDecision(int RequesterPid, string RequesterVersion);
-
-    // D4 leader side: drain pending yield requests (mirroring the full-scan drain wiring, stats included) and
-    // decide whether the strongest challenger justifies abdication. STRICTLY greater than own wins; equal or
-    // lower is ignored at Debug. Decision only — the caller performs the abdication after the tick's work.
-    private YieldDecision? EvaluateYieldRequests(string millerDir)
-    {
-        YieldDrainResult result;
-        try
-        {
-            result = _drainYieldRequests(millerDir);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
-        {
-            _logger.LogWarning(ex, "Leader yield request drain failed; will retry on a later tick.");
-            return null;
-        }
-
-        LogRequestDrainStats("yield", result.ExpiredDiscarded, result.ClaimSkipped);
-        if (!result.Requested || result.MaxRequesterVersion is not { } requesterVersion)
-            return null;
-
-        if (_ownExtractorVersion.Value is not { } ownVersion)
-        {
-            // Only reachable when leading with an unprobeable binary under the explicit downgrade override:
-            // the operator forced this instance to index, and a challenger cannot prove it is newer than unknown.
-            _logger.LogDebug(
-                "Ignoring a yield request from pid {RequesterPid} (extractor {RequesterVersion}): own extractor version is unknown.",
-                result.RequesterPid, requesterVersion);
-            return null;
-        }
-
-        int comparison;
-        try
-        {
-            comparison = LeadershipEligibility.CompareVersions(requesterVersion, ownVersion);
-        }
-        catch (ArgumentException)
-        {
-            return null; // the drain already filters unparseable versions; defensive
-        }
-
-        if (comparison <= 0)
-        {
-            _logger.LogDebug(
-                "Ignoring a yield request from pid {RequesterPid}: requester extractor {RequesterVersion} is not newer than own {OwnVersion}.",
-                result.RequesterPid, requesterVersion, ownVersion);
-            return null;
-        }
-
-        return new YieldDecision(result.RequesterPid, requesterVersion);
-    }
-
     // D4 abdication: tear down ALL leader-only state, remove our identity, release the lease so the challenger's
     // 5s retry can win it, and arm the anti-flap cooldown toward the challenger. Mirrors the graceful step-down
     // in ExecuteAsync's finally (identity removed BEFORE the lease is released).
@@ -606,7 +439,7 @@ public sealed class IndexerService : BackgroundService
         _logger.LogInformation(
             "Yielding indexer leadership: requester pid {RequesterPid} bundles extractor {RequesterVersion}, newer than own {OwnVersion}; " +
             "abdicating and entering a {CooldownSeconds}s cooldown.",
-            requesterPid, requesterVersion, _ownExtractorVersion.Value, YieldCooldown.Duration.TotalSeconds);
+            requesterPid, requesterVersion, _leadership.ProbeOwnExtractorVersion(), YieldCooldown.Duration.TotalSeconds);
         DisposeWatchers();
         lock (_opsGate)
         {
@@ -617,7 +450,7 @@ public sealed class IndexerService : BackgroundService
         MillerRole.SetReader();
         _lease?.Dispose();
         _lease = null;
-        _cooldown.Begin(requesterPid);
+        _leadership.BeginCooldown(requesterPid);
     }
 
     private void RunStartupDeltaScan(WorkspaceContext workspace)
@@ -640,7 +473,7 @@ public sealed class IndexerService : BackgroundService
                 TryConvergeSidecar(workspace.CanonicalExtractDbPath, report, fullRebuild: true);
             }
 
-            IndexBootstrapService.MarkRegistryScanned(workspace, stableWorkspaceId, report.Revision);
+            _registryPublisher.MarkScanned(workspace, stableWorkspaceId, report.Revision);
             _logger.LogInformation(
                 "Startup delta scan complete: revision {Revision}, {Updated} files updated, {Deleted} files deleted.",
                 report.Revision, report.FilesUpdated, report.FilesDeleted);
@@ -807,9 +640,8 @@ public sealed class IndexerService : BackgroundService
             TryConvergeSidecar(symbolsDbPath, revision, fullRebuild);
     }
 
-    // search.db convergence for the CURRENT workspace. Enabled-and-stale ⇒ incremental update from julie's
-    // revision_file_changes; missing/corrupt/schema-stale ⇒ full repair rebuild; off/already-fresh/no-revision
-    // ⇒ no-op. MUST be called holding _opsGate: it reads symbols.db, which a concurrent extract could replace.
+    // Sidecar convergence for the CURRENT workspace. MUST be called holding _opsGate: it reads symbols.db, which
+    // a concurrent extract could replace.
     private void TryConvergeSidecar(string? symbolsDbPath, long revision, bool fullRebuild)
     {
         if (symbolsDbPath is null || revision <= 0)
@@ -817,146 +649,8 @@ public sealed class IndexerService : BackgroundService
 
         string workspaceRoot = _bootstrap.Workspace.CanonicalRoot ?? _bootstrap.Workspace.WorkspaceRoot;
         string? workspaceId = _bootstrap.Workspace.WorkspaceId;
-        // Resolve the derived-artifact paths once for the M5 corrupt-escalation below; a pathological
-        // symbols.db path simply disables the escalation (null), it never escapes as an exception.
-        string? contentDbPath = null;
-        string? searchDbPath = null;
-        try
-        {
-            contentDbPath = ContentCorpusSidecar.ContentDbPathFor(symbolsDbPath);
-            searchDbPath = SymbolSearchSidecar.SearchDbPathFor(symbolsDbPath);
-        }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
-        {
-            // Leave the escalation off; the converge calls below surface the path problem themselves.
-        }
-
-        try
-        {
-            if (_contentSidecar.EnsureBuilt(symbolsDbPath, workspaceRoot, workspaceId, revision))
-                _logger.LogInformation("Converged content corpus sidecar at revision {Revision}.", revision);
-        }
-        catch (Exception ex) when (
-            ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException
-                or ArgumentException or NotSupportedException or IncompatibleExtractException)
-        {
-            if (contentDbPath is null || !TryRebuildCorruptSidecar(ex, contentDbPath,
-                    () => _contentSidecar.EnsureBuilt(symbolsDbPath, workspaceRoot, workspaceId, revision)))
-            {
-                _logger.LogWarning(ex,
-                    "Content corpus sidecar convergence failed; source text search will remain unavailable or stale until the next successful convergence.");
-            }
-        }
-
-        if (_sidecar.Enabled)
-        {
-            try
-            {
-                bool changed = fullRebuild
-                    ? _sidecar.EnsureBuilt(symbolsDbPath, revision, workspaceRoot, out string? corruptionReason)
-                    : _sidecar.EnsureCurrent(symbolsDbPath, revision, workspaceRoot, out corruptionReason);
-                // A corruption/malformed-meta rebuild must be visible (a quiet self-repair hides artifact
-                // damage); plain staleness convergence stays at information level — it is normal operation.
-                if (corruptionReason is not null)
-                    _logger.LogWarning(
-                        "Search sidecar was corrupt and forced a full rebuild: {Reason}", corruptionReason);
-                if (changed)
-                    _logger.LogInformation("Converged search sidecar at revision {Revision}.", revision);
-            }
-            catch (Exception ex) when (
-                ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException
-                    or ArgumentException or NotSupportedException or IncompatibleExtractException)
-            {
-                if (searchDbPath is null || !TryRebuildCorruptSidecar(ex, searchDbPath,
-                        () => _sidecar.EnsureBuilt(symbolsDbPath, revision, workspaceRoot)))
-                {
-                    _logger.LogWarning(ex,
-                        "Search sidecar convergence failed; the sidecar will remain unavailable or stale until the next successful convergence.");
-                }
-            }
-        }
-
-        TryMarkRegistryScanned(workspaceId, revision);
-    }
-
-    // M5 corrupt-escalation: a converge failure that is corruption-shaped means the EXISTING artifact is the
-    // problem (e.g. readable meta but corrupt FTS pages — the one shape the incremental path retries into
-    // forever, warning on every converge while every reader gets the stale-sidecar error). Sidecars are
-    // revision-keyed DERIVED artifacts, so deleting the file and rebuilding from scratch is always safe. One
-    // escalation per converge attempt — no loop; if the rebuild also fails, the caller keeps its existing
-    // warning path. Returns true only when the corrupt artifact was replaced by a successful rebuild.
-    private bool TryRebuildCorruptSidecar(Exception failure, string artifactPath, Action rebuild)
-    {
-        if (!IsSidecarCorruption(failure))
-            return false;
-
-        _logger.LogWarning(failure,
-            "Sidecar at {ArtifactPath} appears corrupt; deleting the derived artifact and rebuilding it from scratch.",
-            artifactPath);
-        try
-        {
-            // Release any pooled read handle so the delete is not blocked on Windows; readers self-heal by
-            // reopening the rebuilt artifact (it is revision-keyed derived state, never source of truth).
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(artifactPath))
-                File.Delete(artifactPath);
-            rebuild();
-            _logger.LogInformation("Rebuilt corrupt sidecar at {ArtifactPath}.", artifactPath);
-            return true;
-        }
-        catch (Exception ex) when (
-            ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException
-                or ArgumentException or NotSupportedException or IncompatibleExtractException)
-        {
-            _logger.LogWarning(ex,
-                "Corrupt-sidecar rebuild at {ArtifactPath} failed; will retry on the next convergence.",
-                artifactPath);
-            return false;
-        }
-    }
-
-    // Corruption-shaped: a SqliteException whose result code is SQLITE_CORRUPT (11) or SQLITE_NOTADB (26) —
-    // primary or extended (e.g. SQLITE_CORRUPT_VTAB = 267, whose low byte is 11) — anywhere in the exception
-    // chain, or a sidecar reader's malformed-meta error (FtsSymbolSearchIndex/FtsTextContentSearchIndex/
-    // FtsRegionSearchIndex all raise InvalidOperationException with this marker; matched by message because the
-    // sidecar layer deliberately has no bespoke exception type). Transient failures (locked file, IO, schema
-    // drift) are NOT corruption and keep the plain warn-and-retry path.
-    private static bool IsSidecarCorruption(Exception exception)
-    {
-        for (Exception? ex = exception; ex is not null; ex = ex.InnerException)
-        {
-            if (ex is SqliteException sqlite
-                && ((sqlite.SqliteErrorCode & 0xFF) is 11 or 26 || (sqlite.SqliteExtendedErrorCode & 0xFF) is 11 or 26))
-            {
-                return true;
-            }
-
-            if (ex is InvalidOperationException
-                && ex.Message.Contains("has malformed meta", StringComparison.Ordinal))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private void TryMarkRegistryScanned(string? workspaceId, long revision)
-    {
-        if (string.IsNullOrWhiteSpace(workspaceId))
-            return;
-
-        try
-        {
-            IndexBootstrapService.MarkRegistryScanned(_bootstrap.Workspace, workspaceId, revision);
-        }
-        catch (Exception ex) when (
-            ex is SqliteException or IOException or UnauthorizedAccessException
-                or ArgumentException or InvalidOperationException or NotSupportedException)
-        {
-            _logger.LogWarning(ex,
-                "Failed to update workspace registry revision after index convergence; status views may show stale revision metadata.");
-        }
+        _sidecarConverger.Converge(symbolsDbPath, workspaceRoot, workspaceId, revision, fullRebuild);
+        _registryPublisher.TryMarkScanned(_bootstrap.Workspace, workspaceId, revision);
     }
 
     /// <summary>
@@ -1059,15 +753,23 @@ public sealed class IndexerService : BackgroundService
     /// D4 cooldown gate → acquire func). Returns true when the lease was acquired. Pure when the version/artifact
     /// funcs are injected — no lock files, no bootstrap. Not used in production.
     /// </summary>
-    internal bool AttemptClaimForTest(string millerDir, string? extractDbPath = null) =>
-        TryClaimLeadershipOnce(millerDir, extractDbPath, out _);
+    internal bool AttemptClaimForTest(string millerDir, string? extractDbPath = null)
+    {
+        IndexerLeadershipClaimResult claim = _leadership.TryClaim(millerDir, extractDbPath);
+        if (claim.Claimed)
+            _lease = claim.Lease;
+        return claim.Claimed;
+    }
 
     /// <summary>
     /// Test seam: run ONE reader retry tick's yield-request side (D4 requester) — evaluate eligibility, then
     /// challenge a live older leader at most once per TTL/leader. Not used in production.
     /// </summary>
     internal void MaybeRequestYieldForTest(string millerDir, string workspaceId, string? extractDbPath = null) =>
-        MaybeRequestYield(millerDir, workspaceId, EvaluateEligibility(extractDbPath));
+        _leadership.MaybeRequestYield(
+            millerDir,
+            workspaceId,
+            _leadership.EvaluateEligibility(extractDbPath));
 
     /// <summary>
     /// Test seam: mark THIS instance as holding the writer lease (as the production claim loop does on a win)
@@ -1087,7 +789,7 @@ public sealed class IndexerService : BackgroundService
     /// </summary>
     internal bool ProcessYieldRequestsForTest(string millerDir)
     {
-        if (EvaluateYieldRequests(millerDir) is not { } decision)
+        if (_leadership.EvaluateYieldRequests(millerDir, LogRequestDrainStats) is not { } decision)
             return false;
         AbdicateLeadership(millerDir, decision.RequesterPid, decision.RequesterVersion);
         return true;
@@ -1162,66 +864,16 @@ public sealed class IndexerService : BackgroundService
 
     private void AttachWatchers(string canonicalRoot)
     {
-        _watcher = new FileSystemWatcher(canonicalRoot)
-        {
-            IncludeSubdirectories = true,
-            // File changes stay on the per-file path. Directory-name changes use the separate watcher below:
-            // subtree moves/deletes cannot be represented safely as a single update/delete --file.
-            NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite,
-            InternalBufferSize = 64 * 1024, // largest the OS allows; overflow still self-heals via Error->scan
-        };
-        _watcher.Created += OnChanged;
-        _watcher.Changed += OnChanged;
-        _watcher.Deleted += OnChanged;
-        _watcher.Renamed += OnRenamed;
-        _watcher.Error += OnError;
-        _watcher.EnableRaisingEvents = true;
-
-        _directoryWatcher = new FileSystemWatcher(canonicalRoot)
-        {
-            IncludeSubdirectories = true,
-            NotifyFilter = NotifyFilters.DirectoryName,
-            InternalBufferSize = 64 * 1024,
-        };
-        _directoryWatcher.Created += OnDirectoryChanged;
-        _directoryWatcher.Deleted += OnDirectoryChanged;
-        _directoryWatcher.Renamed += OnDirectoryRenamed;
-        _directoryWatcher.Error += OnError;
-        _directoryWatcher.EnableRaisingEvents = true;
-
-        // A dedicated watch on .git/HEAD: a branch switch/checkout flips HEAD once; we force ONE scan reconcile
-        // instead of processing the thousands of per-file events a checkout produces (decision-7). The .git
-        // dir is excluded from the main watcher by WatchPathFilter, so this is the only HEAD signal.
-        string gitDir = Path.Combine(canonicalRoot, ".git");
-        if (Directory.Exists(gitDir))
-        {
-            _gitHeadWatcher = new FileSystemWatcher(gitDir, "HEAD")
-            {
-                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size,
-            };
-            _gitHeadWatcher.Changed += OnHeadChanged;
-            _gitHeadWatcher.Created += OnHeadChanged;
-            _gitHeadWatcher.Renamed += OnHeadChanged;
-            _gitHeadWatcher.EnableRaisingEvents = true;
-        }
-
-        foreach (string ignoreFile in WorkspaceIgnorePolicy.AncestorGitignoreFilesOutsideRoot(canonicalRoot))
-        {
-            string? directory = Path.GetDirectoryName(ignoreFile);
-            if (directory is null || !Directory.Exists(directory))
-                continue;
-
-            var watcher = new FileSystemWatcher(directory, ".gitignore")
-            {
-                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size,
-            };
-            watcher.Changed += OnIgnorePolicyChanged;
-            watcher.Created += OnIgnorePolicyChanged;
-            watcher.Deleted += OnIgnorePolicyChanged;
-            watcher.Renamed += OnIgnorePolicyChanged;
-            watcher.EnableRaisingEvents = true;
-            _ancestorIgnorePolicyWatchers.Add(watcher);
-        }
+        _watchers = IndexerWatcherSet.Attach(
+            canonicalRoot,
+            new IndexerWatcherCallbacks(
+                OnChanged,
+                OnRenamed,
+                OnError,
+                OnDirectoryChanged,
+                OnDirectoryRenamed,
+                OnHeadChanged,
+                OnIgnorePolicyChanged));
     }
 
     private void OnChanged(object sender, FileSystemEventArgs e)
@@ -1331,45 +983,7 @@ public sealed class IndexerService : BackgroundService
 
     private void DisposeWatchers()
     {
-        if (_watcher is not null)
-        {
-            _watcher.EnableRaisingEvents = false;
-            _watcher.Created -= OnChanged;
-            _watcher.Changed -= OnChanged;
-            _watcher.Deleted -= OnChanged;
-            _watcher.Renamed -= OnRenamed;
-            _watcher.Error -= OnError;
-            _watcher.Dispose();
-            _watcher = null;
-        }
-        if (_directoryWatcher is not null)
-        {
-            _directoryWatcher.EnableRaisingEvents = false;
-            _directoryWatcher.Created -= OnDirectoryChanged;
-            _directoryWatcher.Deleted -= OnDirectoryChanged;
-            _directoryWatcher.Renamed -= OnDirectoryRenamed;
-            _directoryWatcher.Error -= OnError;
-            _directoryWatcher.Dispose();
-            _directoryWatcher = null;
-        }
-        if (_gitHeadWatcher is not null)
-        {
-            _gitHeadWatcher.EnableRaisingEvents = false;
-            _gitHeadWatcher.Changed -= OnHeadChanged;
-            _gitHeadWatcher.Created -= OnHeadChanged;
-            _gitHeadWatcher.Renamed -= OnHeadChanged;
-            _gitHeadWatcher.Dispose();
-            _gitHeadWatcher = null;
-        }
-        foreach (var watcher in _ancestorIgnorePolicyWatchers)
-        {
-            watcher.EnableRaisingEvents = false;
-            watcher.Changed -= OnIgnorePolicyChanged;
-            watcher.Created -= OnIgnorePolicyChanged;
-            watcher.Deleted -= OnIgnorePolicyChanged;
-            watcher.Renamed -= OnIgnorePolicyChanged;
-            watcher.Dispose();
-        }
-        _ancestorIgnorePolicyWatchers.Clear();
+        _watchers?.Dispose();
+        _watchers = null;
     }
 }

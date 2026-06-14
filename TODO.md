@@ -6,7 +6,6 @@
      - 2026-06-11 completed (same day, ships in 0.4.1): `miller symbols export --jsonl [--workspace-id SELECTOR] [--workspace DIR]` emits one deterministic JSONL row per symbol (`schema_version` 1: id, name, kind, language, path, line+byte span, visibility, parent_symbol_id, signature, has_doc, body_hash, is_test), advertised in `capabilities --json` `supported_export_formats` and documented in `docs/contracts/cli-eros-v1.md`. Schema-mismatched artifacts exit 3.
    - 2026-06-11 contract ask (same Eros workflow): complexity-metrics export. julie-extract v2.x already extracts `complexity_metrics` (consumed at `workspace health` aggregate level only); expose per-symbol/per-file rows via a versioned export, e.g. `miller complexity export --jsonl` or a `--kind complexity` feed, so Eros can rank hotspots fleet-wide.
      - 2026-06-11 completed (same day, ships in 0.4.1): `miller complexity export --jsonl [--workspace-id SELECTOR] [--workspace DIR]` emits one deterministic JSONL row per `complexity_metrics` row (file- and symbol-scope; `schema_version` 1), advertised in `capabilities --json` and documented in `docs/contracts/cli-eros-v1.md`.
-   - 2026-06-12 contract follow-up (Eros .NET MillerBridge port): legacy Eros `content_export` fixture/tests expect document-shaped rows (`id`, `workspace_id`, `path`, `text`, `metadata`, optional `source_hash`/`miller_revision`), while live Miller 0.5.0 `content export --jsonl --kind workspace_docs` emits chunk-shaped `content_corpus` rows (`chunk_id`, `chunk_text`, line/byte spans, hashes, etc.). Decide whether `cli-eros-v1` should keep a document-shaped compatibility export, document the chunk-shaped row as the replacement Eros contract, or provide an explicit mode flag; then update Eros fixtures/bridge in a separate Eros session.
 2. [search follow-up] 2026-06-08 completed for next release: starter runner cases are Miller-native and scoped, the stale copied Julie `WorkspacePool` row is kept as historical/unit regression coverage instead of a live benchmark case, and `mode=file --json` intentionally keeps returning normal symbol rows from matching files for compatibility. No versioned file-result JSON object is needed for this release; compact file mode is the file-first human surface, while `mode=content|source|all-text` provide path/line/snippet text hits. Evidence: `.miller/eval/search-quality/runs/20260608T130009Z.json` (`--tag file`, 3/3 top1) and `.miller/eval/search-quality/runs/20260608T130023Z.json` (Miller-only maintained local cases, 7/7 top1); see `docs/findings/2026-06-08-post-content-corpus-search-quality.md`.
 3. [product follow-up] 2026-06-08 triaged for this release from `~/source/julie/TODO.md`: self-improvement/searchability scoring remains a future Miller product idea.
    - 2026-06-09 upstream complete: `julie-extractors` v2.2.0 exposes parser-backed `structural_facts`, `complexity_metrics`, and clone-ready normalized `symbols.body_hash` semantics under SQLite/report contract v3.
@@ -179,3 +178,65 @@ Fix plan/status:
   - Verified: fast suite 2178 green, scale 28 green (new `FullRebuildPromotionTests`,
     `FullRebuildScanScaleTests`, artifact-id poller/PollNow/cross-workspace cases), plus a live re-run of
     the failing openclaw `workspace full` with the fixed binary.
+
+----------------------------------------------------------------
+Architecture-quality follow-up from 2026-06-14 review:
+
+Fix plan/status:
+- [x] Shared search command routing: MCP `SearchTool` and CLI `CliDispatch.Search` both own mode routing
+  for regions/content/source/external/web/symbol search. Refactor toward one internal command core while
+  keeping MCP telemetry and CLI stdout/exit-code behavior as adapters.
+  - 2026-06-14 started: extracted `SearchRoutePlanner` so the shared mode/regions route decision now has
+    one owner; MCP and CLI adapters still own their provider/sidecar opening, telemetry, stdout, and exit
+    codes. Verified by focused route-planner tests plus existing MCP/CLI search tests.
+  - 2026-06-14 completed: added `SearchRouteExecutor` so route kinds map to the shared `SearchTool.Run*`
+    execution/rendering policy in one place, including content kinds, source bytes, test hiding, filters, and
+    region mode notes. MCP and CLI now keep only adapter-specific provider/sidecar opening, telemetry, stdout,
+    and exit-code behavior. Verified by focused executor tests plus existing MCP/CLI search tests.
+- [x] Shared graph traversal core: `SymbolGraph` and `SqliteSymbolGraphIndex` duplicate breadth-first
+  reachability and shortest-path algorithms; only node existence and neighbor lookup differ. Start here
+  because it is low-risk and has tight existing graph/SQLite parity tests.
+  - 2026-06-14 completed: added internal `GraphTraversal` in `Miller.Core` and routed both in-memory and
+    SQLite-backed graph implementations through it without changing `ISymbolGraphReachability`. Verified by
+    focused `GraphTraversalTests` and existing graph/SQLite parity tests.
+- [x] Indexer host orchestration split: `IndexerService` still mixes leadership session, yield handling,
+  watcher topology, sidecar convergence, registry marking, and many test hooks. `IndexerCore` already earns
+  its keep; look for the next internal module boundary before adding more policy to the hosted service.
+  - 2026-06-14 started: extracted `SidecarCorruptionRecovery` so derived-artifact corruption detection,
+    delete-and-rebuild retry, and logging live outside `IndexerService`. Existing sidecar convergence still lives
+    in the hosted service; next slice should target either a sidecar converger or registry-publishing adapter.
+    Verified by focused recovery and indexer sidecar tests.
+  - 2026-06-14 continued: added `IndexerSidecarConverger` so content/search sidecar path derivation,
+    full-vs-incremental convergence, corruption recovery, and sidecar logging live behind one internal hosting
+    interface. `IndexerService` now only supplies current-workspace inputs and keeps registry revision marking.
+    Remaining split candidates are registry publishing, leadership/yield handling, watcher topology, and test
+    hooks. Verified by focused converger/recovery/indexer sidecar tests.
+  - 2026-06-14 continued: added `WorkspaceRegistryScanPublisher` so required startup scan stamps and best-effort
+    convergence scan stamps have one registry-facing adapter. This preserves the existing behavior split:
+    startup stamp failures still flow through the startup-scan failure path, while convergence stamp failures log
+    and leave status views potentially stale. Remaining split candidates are leadership/yield handling, watcher
+    topology, and test hooks. Verified by focused publisher, bootstrap, and indexer scan tests.
+  - 2026-06-14 continued: added `IndexerWatcherSet` so `FileSystemWatcher` construction, HEAD watcher setup,
+    ancestor `.gitignore` watcher setup, event subscription, and disposal live behind one lifecycle container.
+    Event routing still stays in `IndexerService` for now. Remaining split candidates are leadership/yield
+    handling and the broad test-hook surface. Verified by focused watcher-set, watcher gate/filter, and indexer
+    scan tests.
+  - 2026-06-14 completed: added `IndexerLeadershipCoordinator` so extractor-version probing, claim eligibility,
+    ineligibility log throttling, post-yield cooldown, yield-request deduplication, and leader-side yield
+    decisions live outside `IndexerService`. `IndexerService` still owns the actual leader lifecycle resources
+    (`_lease`, `_ops`, `_core`, watchers, role state) and its remaining test hooks are adapter seams for those
+    service-owned resources rather than policy owners. Verified by focused coordinator and service leadership
+    tests.
+- [x] Shared workspace facts assembly: MCP `WorkspaceTool` and CLI `CliDispatch.Workspace*` share rendering
+  but still separately parse selector/status behavior and assemble workspace facts. Refactor toward a shared
+  pure facts/query layer while preserving CLI usage errors and MCP telemetry behavior.
+  - 2026-06-14 started: added `WorkspaceFactsAssembler` for registered-workspace status facts and registry list
+    entries. It preserves the adapter split explicitly: CLI status remains read-only on missing indexes, while
+    MCP status marks the registry row missing and reports typed `missing_index`. Verified by focused assembler,
+    workspace-tool, and CLI dispatch tests. Remaining duplicate facts paths are current-workspace fallback and
+    health-specific status facts.
+  - 2026-06-14 completed: extended `WorkspaceFactsAssembler` to own registered health facts, unreadable-index
+    health facts, and CLI unregistered-local facts. `WorkspaceTool` and `CliDispatch` now keep selector parsing,
+    telemetry, stdout, and health extraction adapters local while sharing facts assembly. The only remaining direct
+    `WorkspaceFacts` construction is the live MCP current-workspace snapshot over runtime services, which is not a
+    duplicated CLI/MCP path. Verified by focused workspace facts/tool/CLI tests.

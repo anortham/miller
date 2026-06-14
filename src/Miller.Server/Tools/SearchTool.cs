@@ -150,91 +150,83 @@ public sealed class SearchTool
         var scope = TelemetryContext.Current;
         try
         {
-            var parsedMode = ParseMode(mode);
+            SearchRoute route = SearchRoutePlanner.Plan(mode, regions);
             bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
-            IReadOnlySet<string>? regionKinds = ParseRegionKinds(regions);
 
             string output;
             int count;
-            if (regionKinds is not null)
+            if (route.Kind == SearchRouteKind.Regions)
             {
                 WorkspaceRegionSearchContext region = _regionProvider.ResolveRegionSearch(workspace_id, ensureFresh);
                 string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(region, workspace_id, json);
-                bool hideTests = ResolveExcludeTests(exclude_tests, query, parsedMode);
-                string? modeNote = parsedMode == SearchToolMode.Auto
-                    ? null
-                    : $"mode={mode} ignored; regions search uses source-region text.";
-                output = RunRegions(region.Index, query, regionKinds, limit, hideTests, json, out count, compactBanner, modeNote,
-                    filePattern: file_pattern, language: language);
+                SearchRouteExecutionResult result = SearchRouteExecutor.RunRegions(
+                    region.Index,
+                    route,
+                    new SearchRouteExecutionRequest(
+                        query,
+                        limit,
+                        json,
+                        exclude_tests,
+                        compactBanner,
+                        FilePattern: file_pattern,
+                        Language: language));
+                output = result.Output;
+                count = result.Count;
                 if (scope is not null)
                 {
                     ReadToolWorkspaceRouting.ApplyTelemetry(scope, region);
                     scope.MetadataJson = RegionBackendMetadata;
                 }
             }
-            else if (parsedMode == SearchToolMode.Content)
+            else if (route.Kind == SearchRouteKind.Content)
             {
                 // Content/docs search routes through the corpus sidecar but keeps the legacy content result shape.
                 WorkspaceTextContentSearchContext content =
                     _textContentProvider.ResolveTextContentSearch(workspace_id, ensureFresh);
                 string? contentBanner = ReadToolWorkspaceRouting.CompactBanner(content, workspace_id, json);
-                output = RunContentCorpus(content.Index, query, limit, json, out count, out long sourceBytes, contentBanner,
-                    filePattern: file_pattern, language: language);
+                SearchRouteExecutionResult result = SearchRouteExecutor.RunContent(
+                    content.Index,
+                    route,
+                    new SearchRouteExecutionRequest(
+                        query,
+                        limit,
+                        json,
+                        exclude_tests,
+                        contentBanner,
+                        FilePattern: file_pattern,
+                        Language: language));
+                output = result.Output;
+                count = result.Count;
                 if (scope is not null)
                 {
                     ReadToolWorkspaceRouting.ApplyTelemetry(scope, content);
-                    scope.SourceBytes = sourceBytes;
+                    scope.SourceBytes = result.SourceBytes;
                     scope.MetadataJson = TextContentBackendMetadata;
                 }
             }
-            else if (parsedMode == SearchToolMode.Source)
+            else if (route.Kind == SearchRouteKind.TextContent)
             {
                 WorkspaceTextContentSearchContext textContent =
                     _textContentProvider.ResolveTextContentSearch(workspace_id, ensureFresh);
                 string? contentBanner = ReadToolWorkspaceRouting.CompactBanner(textContent, workspace_id, json);
-                bool hideTests = ResolveExcludeTests(exclude_tests, query, parsedMode);
-                output = RunTextContent(
+                SearchRouteExecutionResult result = SearchRouteExecutor.RunTextContent(
                     textContent.Index,
-                    query,
-                    TextContentKind.WorkspaceSource,
-                    limit,
-                    hideTests,
-                    json,
-                    out count,
-                    out long sourceBytes,
-                    contentBanner,
-                    filePattern: file_pattern,
-                    language: language);
+                    route,
+                    new SearchRouteExecutionRequest(
+                        query,
+                        limit,
+                        json,
+                        exclude_tests,
+                        contentBanner,
+                        FilePattern: file_pattern,
+                        Language: language));
+                output = result.Output;
+                count = result.Count;
                 if (scope is not null)
                 {
                     ReadToolWorkspaceRouting.ApplyTelemetry(scope, textContent);
-                    scope.SourceBytes = sourceBytes;
-                    scope.MetadataJson = TextContentBackendMetadata;
-                }
-            }
-            else if (parsedMode is SearchToolMode.External or SearchToolMode.Web or SearchToolMode.AllText)
-            {
-                WorkspaceTextContentSearchContext textContent =
-                    _textContentProvider.ResolveTextContentSearch(workspace_id, ensureFresh);
-                string? contentBanner = ReadToolWorkspaceRouting.CompactBanner(textContent, workspace_id, json);
-                bool hideTests = ResolveExcludeTests(exclude_tests, query, parsedMode);
-                output = RunTextContent(
-                    textContent.Index,
-                    query,
-                    ContentKindsForMode(parsedMode),
-                    limit,
-                    hideTests,
-                    json,
-                    out count,
-                    out long sourceBytes,
-                    contentBanner,
-                    filePattern: file_pattern,
-                    language: language);
-                if (scope is not null)
-                {
-                    ReadToolWorkspaceRouting.ApplyTelemetry(scope, textContent);
-                    scope.SourceBytes = sourceBytes;
+                    scope.SourceBytes = result.SourceBytes;
                     scope.MetadataJson = TextContentBackendMetadata;
                 }
             }
@@ -242,18 +234,20 @@ public sealed class SearchTool
             {
                 WorkspaceSymbolSearchContext context = _workspaceProvider.ResolveSymbolSearch(workspace_id, ensureFresh);
                 string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
-                output = Run(
+                SearchRouteExecutionResult result = SearchRouteExecutor.RunSymbols(
                     context.Index,
-                    query,
-                    parsedMode,
-                    limit,
-                    exclude_tests,
-                    json,
-                    out count,
-                    compactBanner,
-                    symbolIds => ReadHasDocCommentBestEffort(context.IndexDbPath, symbolIds),
-                    filePattern: file_pattern,
-                    language: language);
+                    route,
+                    new SearchRouteExecutionRequest(
+                        query,
+                        limit,
+                        json,
+                        exclude_tests,
+                        compactBanner,
+                        HasDocLookup: symbolIds => ReadHasDocCommentBestEffort(context.IndexDbPath, symbolIds),
+                        FilePattern: file_pattern,
+                        Language: language));
+                output = result.Output;
+                count = result.Count;
                 if (scope is not null)
                 {
                     ReadToolWorkspaceRouting.ApplyTelemetry(scope, context);

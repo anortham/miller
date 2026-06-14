@@ -239,57 +239,18 @@ public sealed class WorkspaceTool
         WorkspaceRegistryRow row = target.Row
             ?? throw new InvalidOperationException($"Workspace registry row '{target.WorkspaceId}' was not resolved.");
         VerifyRegisteredRoot(row);
-        WorkspaceIndexFacts indexFacts;
-        try
-        {
-            indexFacts = WorkspaceIndexFactsReader.Read(row.IndexDbPath);
-        }
-        catch (FileNotFoundException)
-        {
-            string error = $"Workspace index DB not found: {row.IndexDbPath}";
-            _registry.MarkMissing(row.WorkspaceId, error);
-            var missingFacts = new WorkspaceFacts(
-                Root: row.CanonicalRoot,
-                WorkspaceId: row.WorkspaceId,
-                DbPath: row.IndexDbPath,
-                IsLeader: false,
-                DocumentCount: 0,
-                KnownExtensionsCount: 0,
-                BuiltRevision: row.LastRevision ?? 0,
-                LatestObservedRevision: row.LastRevision ?? 0,
-                IndexFresh: false,
-                QueueEmpty: true,
-                FreshnessStatus: "missing_index",
-                WarningText: error,
-                DisplayId: row.DisplayId,
-                ServerVersion: MillerVersion.Current,
-                ServerProcessId: Environment.ProcessId,
-                SearchSidecar: _sidecar.Inspect(row.IndexDbPath, row.LastRevision ?? 0),
-                ContentCorpus: _contentSidecar.Inspect(row.IndexDbPath, row.LastRevision ?? 0));
-            return (WorkspaceRender.Status(missingFacts, _ledger.SummarizeForWorkspace(row.WorkspaceId), json),
-                1, TelemetryOutcome.Empty);
-        }
-        long revision = row.LastRevision ?? 0;
-        var facts = new WorkspaceFacts(
-            Root: row.CanonicalRoot,
-            WorkspaceId: row.WorkspaceId,
-            DbPath: row.IndexDbPath,
-            IsLeader: false,
-            DocumentCount: indexFacts.DocumentCount,
-            KnownExtensionsCount: indexFacts.KnownExtensionsCount,
-            BuiltRevision: revision,
-            LatestObservedRevision: revision,
-            IndexFresh: WorkspaceFreshnessView.IndexFreshFor(refreshResult: null, row),
-            QueueEmpty: true,
-            FreshnessStatus: WorkspaceFreshnessView.FreshnessStatusFor(refreshResult: null, row),
-            WarningText: WorkspaceFreshnessView.WarningTextFor(refreshResult: null),
-            DisplayId: row.DisplayId,
-            ServerVersion: MillerVersion.Current,
-            ServerProcessId: Environment.ProcessId,
-            SearchSidecar: _sidecar.Inspect(row.IndexDbPath, revision),
-            ContentCorpus: _contentSidecar.Inspect(row.IndexDbPath, revision));
+
+        WorkspaceFacts facts = WorkspaceFactsAssembler.FromRegisteredRow(
+            _registry,
+            row,
+            WorkspaceRegisteredFactsProfile.McpStatus,
+            _sidecar,
+            _contentSidecar);
+        TelemetryOutcome outcome = string.Equals(facts.FreshnessStatus, "missing_index", StringComparison.Ordinal)
+            ? TelemetryOutcome.Empty
+            : TelemetryOutcome.Ok;
         return (WorkspaceRender.Status(facts, _ledger.SummarizeForWorkspace(row.WorkspaceId), json),
-            1, TelemetryOutcome.Ok);
+            1, outcome);
     }
 
     private (string output, int resultCount, TelemetryOutcome outcome) RenderTargetHealth(
@@ -305,79 +266,34 @@ public sealed class WorkspaceTool
         WorkspaceRegistryRow row = target.Row
             ?? throw new InvalidOperationException($"Workspace registry row '{target.WorkspaceId}' was not resolved.");
         VerifyRegisteredRoot(row);
-        long revision = row.LastRevision ?? 0;
-        WorkspaceFacts statusFacts;
+        WorkspaceFacts statusFacts = WorkspaceFactsAssembler.FromRegisteredRow(
+            _registry,
+            row,
+            WorkspaceRegisteredFactsProfile.McpHealth,
+            _sidecar,
+            _contentSidecar);
         WorkspaceExtractionHealthFacts extraction;
-        try
+        if (statusFacts.FreshnessStatus is "missing_index" or "unreadable_index")
         {
-            WorkspaceIndexFacts indexFacts = WorkspaceIndexFactsReader.Read(row.IndexDbPath);
-            statusFacts = new WorkspaceFacts(
-                Root: row.CanonicalRoot,
-                WorkspaceId: row.WorkspaceId,
-                DbPath: row.IndexDbPath,
-                IsLeader: false,
-                DocumentCount: indexFacts.DocumentCount,
-                KnownExtensionsCount: indexFacts.KnownExtensionsCount,
-                BuiltRevision: revision,
-                LatestObservedRevision: revision,
-                IndexFresh: WorkspaceFreshnessView.IndexFreshFor(refreshResult: null, row),
-                QueueEmpty: true,
-                FreshnessStatus: WorkspaceFreshnessView.FreshnessStatusFor(refreshResult: null, row),
-                WarningText: WorkspaceFreshnessView.WarningTextFor(refreshResult: null),
-                DisplayId: row.DisplayId,
-                ServerVersion: MillerVersion.Current,
-                ServerProcessId: Environment.ProcessId,
-                SearchSidecar: _sidecar.Inspect(row.IndexDbPath, revision),
-                ContentCorpus: _contentSidecar.Inspect(row.IndexDbPath, revision));
-            extraction = WorkspaceHealthReader.Read(row.IndexDbPath);
+            extraction = UnavailableExtraction(statusFacts.WarningText ?? statusFacts.FreshnessStatus);
         }
-        catch (FileNotFoundException)
+        else
         {
-            string error = $"Workspace index DB not found: {row.IndexDbPath}";
-            _registry.MarkMissing(row.WorkspaceId, error);
-            statusFacts = new WorkspaceFacts(
-                Root: row.CanonicalRoot,
-                WorkspaceId: row.WorkspaceId,
-                DbPath: row.IndexDbPath,
-                IsLeader: false,
-                DocumentCount: 0,
-                KnownExtensionsCount: 0,
-                BuiltRevision: revision,
-                LatestObservedRevision: revision,
-                IndexFresh: false,
-                QueueEmpty: true,
-                FreshnessStatus: "missing_index",
-                WarningText: error,
-                DisplayId: row.DisplayId,
-                ServerVersion: MillerVersion.Current,
-                ServerProcessId: Environment.ProcessId,
-                SearchSidecar: _sidecar.Inspect(row.IndexDbPath, revision),
-                ContentCorpus: _contentSidecar.Inspect(row.IndexDbPath, revision));
-            extraction = UnavailableExtraction(error);
-        }
-        catch (Exception ex) when (IsHealthIndexReadException(ex))
-        {
-            string error = $"could not read workspace index DB '{row.IndexDbPath}': {ex.Message}";
-            _registry.MarkError(row.WorkspaceId, error);
-            statusFacts = new WorkspaceFacts(
-                Root: row.CanonicalRoot,
-                WorkspaceId: row.WorkspaceId,
-                DbPath: row.IndexDbPath,
-                IsLeader: false,
-                DocumentCount: 0,
-                KnownExtensionsCount: 0,
-                BuiltRevision: revision,
-                LatestObservedRevision: revision,
-                IndexFresh: false,
-                QueueEmpty: true,
-                FreshnessStatus: "unreadable_index",
-                WarningText: error,
-                DisplayId: row.DisplayId,
-                ServerVersion: MillerVersion.Current,
-                ServerProcessId: Environment.ProcessId,
-                SearchSidecar: _sidecar.Inspect(row.IndexDbPath, revision),
-                ContentCorpus: _contentSidecar.Inspect(row.IndexDbPath, revision));
-            extraction = UnavailableExtraction(error);
+            try
+            {
+                extraction = WorkspaceHealthReader.Read(row.IndexDbPath);
+            }
+            catch (Exception ex) when (IsHealthIndexReadException(ex))
+            {
+                statusFacts = WorkspaceFactsAssembler.FromRegisteredHealthReadError(
+                    _registry,
+                    row,
+                    WorkspaceRegisteredFactsProfile.McpHealth,
+                    _sidecar,
+                    _contentSidecar,
+                    ex);
+                extraction = UnavailableExtraction(statusFacts.WarningText ?? ex.Message);
+            }
         }
 
         WorkspaceHealthFacts health = WorkspaceHealthFacts.Create(
@@ -392,19 +308,8 @@ public sealed class WorkspaceTool
     private string RenderRegistryList(bool json)
     {
         IReadOnlyList<WorkspaceRegistryRow> rows = _registry.List();
-        var entries = new List<WorkspaceListEntry>(rows.Count);
-        foreach (WorkspaceRegistryRow row in rows)
-        {
-            entries.Add(new WorkspaceListEntry(
-                WorkspaceId: row.WorkspaceId,
-                DisplayId: row.DisplayId,
-                Root: row.CanonicalRoot,
-                DbPath: row.IndexDbPath,
-                State: row.StateText,
-                LastRevision: row.LastRevision,
-                Current: IsCurrentWorkspace(row),
-                LastError: row.LastError));
-        }
+        IReadOnlyList<WorkspaceListEntry> entries =
+            WorkspaceFactsAssembler.ToListEntries(rows, IsCurrentWorkspace);
         return WorkspaceRender.List(entries, json);
     }
 

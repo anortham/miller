@@ -7,4 +7,9 @@
     milliseconds with no live components. Real types arrive in M1 (index/ranking) and M4 (resolver).
   -->
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Miller.Indexing" />
+    <InternalsVisibleTo Include="Miller.Tests" />
+  </ItemGroup>
+
 </Project>

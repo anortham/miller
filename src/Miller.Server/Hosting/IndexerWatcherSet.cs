@@ -1,0 +1,150 @@
+namespace Miller.Server.Hosting;
+
+internal sealed record IndexerWatcherCallbacks(
+    FileSystemEventHandler FileChanged,
+    RenamedEventHandler FileRenamed,
+    ErrorEventHandler Error,
+    FileSystemEventHandler DirectoryChanged,
+    RenamedEventHandler DirectoryRenamed,
+    FileSystemEventHandler HeadChanged,
+    FileSystemEventHandler IgnorePolicyChanged);
+
+internal sealed class IndexerWatcherSet : IDisposable
+{
+    private readonly IndexerWatcherCallbacks _callbacks;
+    private FileSystemWatcher? _fileWatcher;
+    private FileSystemWatcher? _directoryWatcher;
+    private FileSystemWatcher? _gitHeadWatcher;
+    private readonly List<FileSystemWatcher> _ancestorIgnorePolicyWatchers = new();
+
+    private IndexerWatcherSet(IndexerWatcherCallbacks callbacks) => _callbacks = callbacks;
+
+    public bool HasFileWatcher => _fileWatcher is not null;
+    public bool HasDirectoryWatcher => _directoryWatcher is not null;
+    public bool HasGitHeadWatcher => _gitHeadWatcher is not null;
+    public int AncestorIgnorePolicyWatcherCount => _ancestorIgnorePolicyWatchers.Count;
+
+    public static IndexerWatcherSet Attach(string canonicalRoot, IndexerWatcherCallbacks callbacks)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(canonicalRoot);
+        ArgumentNullException.ThrowIfNull(callbacks);
+
+        var watchers = new IndexerWatcherSet(callbacks);
+        watchers.AttachCore(canonicalRoot);
+        return watchers;
+    }
+
+    private void AttachCore(string canonicalRoot)
+    {
+        _fileWatcher = new FileSystemWatcher(canonicalRoot)
+        {
+            IncludeSubdirectories = true,
+            // File changes stay on the per-file path. Directory-name changes use the separate watcher below:
+            // subtree moves/deletes cannot be represented safely as a single update/delete --file.
+            NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite,
+            InternalBufferSize = 64 * 1024, // largest the OS allows; overflow still self-heals via Error->scan
+        };
+        _fileWatcher.Created += _callbacks.FileChanged;
+        _fileWatcher.Changed += _callbacks.FileChanged;
+        _fileWatcher.Deleted += _callbacks.FileChanged;
+        _fileWatcher.Renamed += _callbacks.FileRenamed;
+        _fileWatcher.Error += _callbacks.Error;
+        _fileWatcher.EnableRaisingEvents = true;
+
+        _directoryWatcher = new FileSystemWatcher(canonicalRoot)
+        {
+            IncludeSubdirectories = true,
+            NotifyFilter = NotifyFilters.DirectoryName,
+            InternalBufferSize = 64 * 1024,
+        };
+        _directoryWatcher.Created += _callbacks.DirectoryChanged;
+        _directoryWatcher.Deleted += _callbacks.DirectoryChanged;
+        _directoryWatcher.Renamed += _callbacks.DirectoryRenamed;
+        _directoryWatcher.Error += _callbacks.Error;
+        _directoryWatcher.EnableRaisingEvents = true;
+
+        // A dedicated watch on .git/HEAD: a branch switch/checkout flips HEAD once; we force ONE scan reconcile
+        // instead of processing the thousands of per-file events a checkout produces. The .git dir is excluded
+        // from the main watcher by WatchPathFilter, so this is the only HEAD signal.
+        string gitDir = Path.Combine(canonicalRoot, ".git");
+        if (Directory.Exists(gitDir))
+        {
+            _gitHeadWatcher = new FileSystemWatcher(gitDir, "HEAD")
+            {
+                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size,
+            };
+            _gitHeadWatcher.Changed += _callbacks.HeadChanged;
+            _gitHeadWatcher.Created += _callbacks.HeadChanged;
+            _gitHeadWatcher.Renamed += OnHeadRenamed;
+            _gitHeadWatcher.EnableRaisingEvents = true;
+        }
+
+        foreach (string ignoreFile in WorkspaceIgnorePolicy.AncestorGitignoreFilesOutsideRoot(canonicalRoot))
+        {
+            string? directory = Path.GetDirectoryName(ignoreFile);
+            if (directory is null || !Directory.Exists(directory))
+                continue;
+
+            var watcher = new FileSystemWatcher(directory, ".gitignore")
+            {
+                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size,
+            };
+            watcher.Changed += _callbacks.IgnorePolicyChanged;
+            watcher.Created += _callbacks.IgnorePolicyChanged;
+            watcher.Deleted += _callbacks.IgnorePolicyChanged;
+            watcher.Renamed += OnIgnorePolicyRenamed;
+            watcher.EnableRaisingEvents = true;
+            _ancestorIgnorePolicyWatchers.Add(watcher);
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_fileWatcher is not null)
+        {
+            _fileWatcher.EnableRaisingEvents = false;
+            _fileWatcher.Created -= _callbacks.FileChanged;
+            _fileWatcher.Changed -= _callbacks.FileChanged;
+            _fileWatcher.Deleted -= _callbacks.FileChanged;
+            _fileWatcher.Renamed -= _callbacks.FileRenamed;
+            _fileWatcher.Error -= _callbacks.Error;
+            _fileWatcher.Dispose();
+            _fileWatcher = null;
+        }
+        if (_directoryWatcher is not null)
+        {
+            _directoryWatcher.EnableRaisingEvents = false;
+            _directoryWatcher.Created -= _callbacks.DirectoryChanged;
+            _directoryWatcher.Deleted -= _callbacks.DirectoryChanged;
+            _directoryWatcher.Renamed -= _callbacks.DirectoryRenamed;
+            _directoryWatcher.Error -= _callbacks.Error;
+            _directoryWatcher.Dispose();
+            _directoryWatcher = null;
+        }
+        if (_gitHeadWatcher is not null)
+        {
+            _gitHeadWatcher.EnableRaisingEvents = false;
+            _gitHeadWatcher.Changed -= _callbacks.HeadChanged;
+            _gitHeadWatcher.Created -= _callbacks.HeadChanged;
+            _gitHeadWatcher.Renamed -= OnHeadRenamed;
+            _gitHeadWatcher.Dispose();
+            _gitHeadWatcher = null;
+        }
+        foreach (var watcher in _ancestorIgnorePolicyWatchers)
+        {
+            watcher.EnableRaisingEvents = false;
+            watcher.Changed -= _callbacks.IgnorePolicyChanged;
+            watcher.Created -= _callbacks.IgnorePolicyChanged;
+            watcher.Deleted -= _callbacks.IgnorePolicyChanged;
+            watcher.Renamed -= OnIgnorePolicyRenamed;
+            watcher.Dispose();
+        }
+        _ancestorIgnorePolicyWatchers.Clear();
+    }
+
+    private void OnHeadRenamed(object sender, RenamedEventArgs e) =>
+        _callbacks.HeadChanged(sender, e);
+
+    private void OnIgnorePolicyRenamed(object sender, RenamedEventArgs e) =>
+        _callbacks.IgnorePolicyChanged(sender, e);
+}

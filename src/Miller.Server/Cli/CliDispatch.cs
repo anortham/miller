@@ -182,11 +182,10 @@ public static class CliDispatch
         bool json = o.Has("json");
         int limit = o.Int("limit", SearchTool.DefaultLimit);
         string requestedMode = o.Value("mode", "auto")!;
-        SearchToolMode mode = SearchTool.ParseMode(requestedMode);
-        IReadOnlySet<string>? regionKinds;
+        SearchRoute route;
         try
         {
-            regionKinds = SearchTool.ParseRegionKinds(o.Value("regions"));
+            route = SearchRoutePlanner.Plan(requestedMode, o.Value("regions"));
         }
         catch (InvalidOperationException ex)
         {
@@ -195,8 +194,15 @@ public static class CliDispatch
         }
         // exclude_tests tri-state: explicit CLI flags force a choice; otherwise the tool auto-hides for NL.
         bool? excludeTests = o.Has("exclude-tests") ? true : o.Has("include-tests") ? false : null;
+        var executionRequest = new SearchRouteExecutionRequest(
+            o.Query,
+            limit,
+            json,
+            excludeTests,
+            FilePattern: o.Value("file-pattern"),
+            Language: o.Value("language"));
 
-        if (regionKinds is not null)
+        if (route.Kind == SearchRouteKind.Regions)
         {
             if (!RequireIndex(ctx, err))
                 return 3;
@@ -214,12 +220,10 @@ public static class CliDispatch
                 long revision = freshness.LatestRevision();
                 string searchDb = SymbolSearchSidecar.SearchDbPathFor(ctx.ExtractDbPath);
                 FtsRegionSearchIndex regionIndex = FtsRegionSearchIndex.Open(searchDb, revision);
-                bool hideTests = SearchTool.ResolveExcludeTests(excludeTests, o.Query, mode);
-                string? modeNote = mode == SearchToolMode.Auto
-                    ? null
-                    : $"mode={requestedMode} ignored; regions search uses source-region text.";
-                outw.WriteLine(SearchTool.RunRegions(regionIndex, o.Query, regionKinds, limit, hideTests, json, out _,
-                    modeNote: modeNote, filePattern: o.Value("file-pattern"), language: o.Value("language")));
+                outw.WriteLine(SearchRouteExecutor.RunRegions(
+                    regionIndex,
+                    route,
+                    executionRequest).Output);
                 return 0;
             }
             catch (Exception ex) when (
@@ -231,7 +235,7 @@ public static class CliDispatch
             }
         }
 
-        if (mode == SearchToolMode.Content)
+        if (route.Kind == SearchRouteKind.Content)
         {
             if (!RequireIndex(ctx, err))
                 return 3;
@@ -242,14 +246,10 @@ public static class CliDispatch
                 long revision = freshness.LatestRevision();
                 var contentSidecar = new ContentCorpusSidecar();
                 FtsTextContentSearchIndex contentIndex = contentSidecar.OpenRequired(ctx.ExtractDbPath, revision);
-                outw.WriteLine(SearchTool.RunContentCorpus(
+                outw.WriteLine(SearchRouteExecutor.RunContent(
                     contentIndex,
-                    o.Query,
-                    limit,
-                    json,
-                    out _,
-                    filePattern: o.Value("file-pattern"),
-                    language: o.Value("language")));
+                    route,
+                    executionRequest).Output);
                 return 0;
             }
             catch (Exception ex) when (
@@ -261,7 +261,7 @@ public static class CliDispatch
             }
         }
 
-        if (mode is SearchToolMode.Source or SearchToolMode.External or SearchToolMode.Web or SearchToolMode.AllText)
+        if (route.Kind == SearchRouteKind.TextContent)
         {
             if (!RequireIndex(ctx, err))
                 return 3;
@@ -272,21 +272,10 @@ public static class CliDispatch
                 long revision = freshness.LatestRevision();
                 var contentSidecar = new ContentCorpusSidecar();
                 FtsTextContentSearchIndex textIndex = contentSidecar.OpenRequired(ctx.ExtractDbPath, revision);
-                bool hideTests = SearchTool.ResolveExcludeTests(excludeTests, o.Query, mode);
-                IReadOnlyCollection<string> contentKinds = mode == SearchToolMode.Source
-                    ? [TextContentKind.WorkspaceSource]
-                    : SearchTool.ContentKindsForMode(mode);
-                outw.WriteLine(SearchTool.RunTextContent(
+                outw.WriteLine(SearchRouteExecutor.RunTextContent(
                     textIndex,
-                    o.Query,
-                    contentKinds,
-                    limit,
-                    hideTests,
-                    json,
-                    out _,
-                    out _,
-                    filePattern: o.Value("file-pattern"),
-                    language: o.Value("language")));
+                    route,
+                    executionRequest).Output);
                 return 0;
             }
             catch (Exception ex) when (
@@ -300,8 +289,7 @@ public static class CliDispatch
 
         if (!TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex index))
             return 3;
-        outw.WriteLine(SearchTool.Run(index, o.Query, mode, limit, excludeTests, json, out _,
-            filePattern: o.Value("file-pattern"), language: o.Value("language")));
+        outw.WriteLine(SearchRouteExecutor.RunSymbols(index, route, executionRequest).Output);
         return 0;
     }
 
@@ -702,21 +690,11 @@ public static class CliDispatch
         using WorkspaceRegistry registry = WorkspaceRegistry.Open(ctx.RegistryDbPath);
         IReadOnlyList<WorkspaceRegistryRow> rows = registry.List();
         WorkspaceRegistryRow? currentRow = FindCurrentWorkspaceRow(registry, ctx);
-        var entries = new List<WorkspaceListEntry>(rows.Count);
-        foreach (WorkspaceRegistryRow row in rows)
-        {
-            entries.Add(new WorkspaceListEntry(
-                WorkspaceId: row.WorkspaceId,
-                DisplayId: row.DisplayId,
-                Root: row.CanonicalRoot,
-                DbPath: row.IndexDbPath,
-                State: row.StateText,
-                LastRevision: row.LastRevision,
-                Current: currentRow is not null
-                    ? string.Equals(row.WorkspaceId, currentRow.WorkspaceId, StringComparison.Ordinal)
-                    : WorkspaceSafety.IsLiveWorkspace(row.CanonicalRoot, ctx.WorkspaceRoot),
-                LastError: row.LastError));
-        }
+        IReadOnlyList<WorkspaceListEntry> entries = WorkspaceFactsAssembler.ToListEntries(
+            rows,
+            row => currentRow is not null
+                ? string.Equals(row.WorkspaceId, currentRow.WorkspaceId, StringComparison.Ordinal)
+                : WorkspaceSafety.IsLiveWorkspace(row.CanonicalRoot, ctx.WorkspaceRoot));
         outw.WriteLine(WorkspaceRender.List(entries, json));
         return 0;
     }
@@ -725,6 +703,8 @@ public static class CliDispatch
         WorkspaceContext ctx, string? id, string? path, bool json, TextWriter outw, TextWriter err)
     {
         using WorkspaceRegistry registry = WorkspaceRegistry.Open(ctx.RegistryDbPath);
+        SymbolSearchSidecar sidecar = SymbolSearchSidecar.FromEnvironment();
+        var contentSidecar = new ContentCorpusSidecar();
 
         // A registry-targeted status (an --id or --path) renders the registered row's index facts.
         if (!string.IsNullOrWhiteSpace(id) || !string.IsNullOrWhiteSpace(path))
@@ -739,7 +719,15 @@ public static class CliDispatch
                 err.WriteLine(ex.Message);
                 return 2;
             }
-            outw.WriteLine(WorkspaceRender.Status(FactsFromRow(registry, ctx, row), TelemetrySummary.Empty, json));
+            outw.WriteLine(WorkspaceRender.Status(
+                WorkspaceFactsAssembler.FromRegisteredRow(
+                    registry,
+                    row,
+                    WorkspaceRegisteredFactsProfile.CliStatus,
+                    sidecar,
+                    contentSidecar),
+                TelemetrySummary.Empty,
+                json));
             return 0;
         }
 
@@ -747,29 +735,26 @@ public static class CliDispatch
         WorkspaceRegistryRow? currentRow = FindCurrentWorkspaceRow(registry, ctx);
         if (currentRow is not null)
         {
-            outw.WriteLine(WorkspaceRender.Status(FactsFromRow(registry, ctx, currentRow), TelemetrySummary.Empty, json));
+            outw.WriteLine(WorkspaceRender.Status(
+                WorkspaceFactsAssembler.FromRegisteredRow(
+                    registry,
+                    currentRow,
+                    WorkspaceRegisteredFactsProfile.CliStatus,
+                    sidecar,
+                    contentSidecar),
+                TelemetrySummary.Empty,
+                json));
             return 0;
         }
 
         if (!RequireIndex(ctx, err))
             return 3;
         WorkspaceIndexFacts indexFacts = WorkspaceIndexFactsReader.Read(ctx.ExtractDbPath);
-        var facts = new WorkspaceFacts(
-            Root: ctx.WorkspaceRoot,
-            WorkspaceId: null,
-            DbPath: ctx.ExtractDbPath,
-            IsLeader: false,
-            DocumentCount: indexFacts.DocumentCount,
-            KnownExtensionsCount: indexFacts.KnownExtensionsCount,
-            BuiltRevision: 0,
-            LatestObservedRevision: 0,
-            IndexFresh: null,                 // a one-shot CLI cannot poll freshness — honestly unknown
-            QueueEmpty: true,
-            FreshnessStatus: "unregistered",
-            ServerVersion: MillerVersion.Current,
-            ServerProcessId: Environment.ProcessId,
-            SearchSidecar: SymbolSearchSidecar.FromEnvironment().Inspect(ctx.ExtractDbPath, expectedRevision: 0),
-            ContentCorpus: new ContentCorpusSidecar().Inspect(ctx.ExtractDbPath, expectedRevision: 0));
+        WorkspaceFacts facts = WorkspaceFactsAssembler.FromUnregisteredLocal(
+            ctx,
+            indexFacts,
+            sidecar,
+            contentSidecar);
         outw.WriteLine(WorkspaceRender.Status(facts, TelemetrySummary.Empty, json));
         return 0;
     }
@@ -778,6 +763,8 @@ public static class CliDispatch
         WorkspaceContext ctx, string? id, string? path, bool json, TextWriter outw, TextWriter err)
     {
         using WorkspaceRegistry registry = WorkspaceRegistry.Open(ctx.RegistryDbPath);
+        SymbolSearchSidecar sidecar = SymbolSearchSidecar.FromEnvironment();
+        var contentSidecar = new ContentCorpusSidecar();
 
         if (!string.IsNullOrWhiteSpace(id) || !string.IsNullOrWhiteSpace(path))
         {
@@ -792,7 +779,12 @@ public static class CliDispatch
                 return 2;
             }
 
-            WorkspaceFacts facts = FactsFromRowForHealth(registry, ctx, row);
+            WorkspaceFacts facts = WorkspaceFactsAssembler.FromRegisteredRow(
+                registry,
+                row,
+                WorkspaceRegisteredFactsProfile.CliHealth,
+                sidecar,
+                contentSidecar);
             WorkspaceExtractionHealthFacts extraction = ReadHealthOrUnavailable(row.IndexDbPath, facts.WarningText);
             outw.WriteLine(WorkspaceRender.Health(
                 WorkspaceHealthFacts.Create(
@@ -805,7 +797,12 @@ public static class CliDispatch
         WorkspaceRegistryRow? currentRow = FindCurrentWorkspaceRow(registry, ctx);
         if (currentRow is not null)
         {
-            WorkspaceFacts facts = FactsFromRowForHealth(registry, ctx, currentRow);
+            WorkspaceFacts facts = WorkspaceFactsAssembler.FromRegisteredRow(
+                registry,
+                currentRow,
+                WorkspaceRegisteredFactsProfile.CliHealth,
+                sidecar,
+                contentSidecar);
             WorkspaceExtractionHealthFacts extraction = ReadHealthOrUnavailable(currentRow.IndexDbPath, facts.WarningText);
             outw.WriteLine(WorkspaceRender.Health(
                 WorkspaceHealthFacts.Create(
@@ -818,22 +815,11 @@ public static class CliDispatch
         if (!RequireIndex(ctx, err))
             return 3;
         WorkspaceIndexFacts indexFacts = WorkspaceIndexFactsReader.Read(ctx.ExtractDbPath);
-        var localFacts = new WorkspaceFacts(
-            Root: ctx.WorkspaceRoot,
-            WorkspaceId: null,
-            DbPath: ctx.ExtractDbPath,
-            IsLeader: false,
-            DocumentCount: indexFacts.DocumentCount,
-            KnownExtensionsCount: indexFacts.KnownExtensionsCount,
-            BuiltRevision: 0,
-            LatestObservedRevision: 0,
-            IndexFresh: null,
-            QueueEmpty: true,
-            FreshnessStatus: "unregistered",
-            ServerVersion: MillerVersion.Current,
-            ServerProcessId: Environment.ProcessId,
-            SearchSidecar: SymbolSearchSidecar.FromEnvironment().Inspect(ctx.ExtractDbPath, expectedRevision: 0),
-            ContentCorpus: new ContentCorpusSidecar().Inspect(ctx.ExtractDbPath, expectedRevision: 0));
+        WorkspaceFacts localFacts = WorkspaceFactsAssembler.FromUnregisteredLocal(
+            ctx,
+            indexFacts,
+            sidecar,
+            contentSidecar);
         outw.WriteLine(WorkspaceRender.Health(
             WorkspaceHealthFacts.Create(
                 localFacts,
@@ -854,85 +840,6 @@ public static class CliDispatch
         {
             ArtifactExtractorVersion = ExtractBinaryVersionReader.TryRead(indexDbPath),
         };
-
-    // Facts for a registered workspace: identity + revision/state from the registry row, counts from its index db.
-    // Freshness is "unknown" (null) — the CLI is one-shot and does not run the freshness poller. ServerVersion is
-    // THIS binary's (the responder), set so `miller workspace status` shows which build produced the output.
-    private static WorkspaceFacts FactsFromRow(WorkspaceRegistry registry, WorkspaceContext ctx, WorkspaceRegistryRow row)
-    {
-        long revision = row.LastRevision ?? 0;
-        long documentCount = 0;
-        int knownExtensions = 0;
-        string? warning = row.LastError;
-        try
-        {
-            WorkspaceIndexFacts facts = WorkspaceIndexFactsReader.Read(row.IndexDbPath);
-            documentCount = facts.DocumentCount;
-            knownExtensions = facts.KnownExtensionsCount;
-        }
-        catch (FileNotFoundException)
-        {
-            warning = $"index DB not found: {row.IndexDbPath}";
-        }
-
-        return new WorkspaceFacts(
-            Root: row.CanonicalRoot,
-            WorkspaceId: row.WorkspaceId,
-            DbPath: row.IndexDbPath,
-            IsLeader: false,
-            DocumentCount: documentCount,
-            KnownExtensionsCount: knownExtensions,
-            BuiltRevision: revision,
-            LatestObservedRevision: revision,
-            IndexFresh: null,
-            QueueEmpty: true,
-            FreshnessStatus: row.StateText,
-            WarningText: warning,
-            DisplayId: row.DisplayId,
-            ServerVersion: MillerVersion.Current,
-            ServerProcessId: Environment.ProcessId,
-            SearchSidecar: SymbolSearchSidecar.FromEnvironment().Inspect(row.IndexDbPath, revision),
-            ContentCorpus: new ContentCorpusSidecar().Inspect(row.IndexDbPath, revision));
-    }
-
-    private static WorkspaceFacts FactsFromRowForHealth(WorkspaceRegistry registry, WorkspaceContext ctx, WorkspaceRegistryRow row)
-    {
-        try
-        {
-            WorkspaceFacts facts = FactsFromRow(registry, ctx, row);
-            if (facts.WarningText is not null &&
-                facts.WarningText.StartsWith("index DB not found:", StringComparison.OrdinalIgnoreCase))
-            {
-                return facts with { IndexFresh = false, FreshnessStatus = "missing_index" };
-            }
-
-            return facts;
-        }
-        catch (Exception ex) when (ex is FileNotFoundException || IsHealthIndexReadException(ex))
-        {
-            string error = ex is FileNotFoundException
-                ? $"index DB not found: {row.IndexDbPath}"
-                : $"could not read workspace index DB '{row.IndexDbPath}': {ex.Message}";
-            return new WorkspaceFacts(
-                Root: row.CanonicalRoot,
-                WorkspaceId: row.WorkspaceId,
-                DbPath: row.IndexDbPath,
-                IsLeader: false,
-                DocumentCount: 0,
-                KnownExtensionsCount: 0,
-                BuiltRevision: row.LastRevision ?? 0,
-                LatestObservedRevision: row.LastRevision ?? 0,
-                IndexFresh: false,
-                QueueEmpty: true,
-                FreshnessStatus: ex is FileNotFoundException ? "missing_index" : "unreadable_index",
-                WarningText: error,
-                DisplayId: row.DisplayId,
-                ServerVersion: MillerVersion.Current,
-                ServerProcessId: Environment.ProcessId,
-                SearchSidecar: SymbolSearchSidecar.FromEnvironment().Inspect(row.IndexDbPath, row.LastRevision ?? 0),
-                ContentCorpus: new ContentCorpusSidecar().Inspect(row.IndexDbPath, row.LastRevision ?? 0));
-        }
-    }
 
     private static WorkspaceExtractionHealthFacts ReadHealthOrUnavailable(string dbPath, string? error)
     {

@@ -167,51 +167,8 @@ public sealed class SymbolGraph : ISymbolGraphReachability
     /// <param name="limit">Maximum number of reached nodes to return; <c>≤ 0</c> yields an empty result.</param>
     /// <param name="dir">Which adjacency to follow (<see cref="Direction"/>).</param>
     /// <exception cref="ArgumentNullException"><paramref name="starts"/> is null.</exception>
-    public IReadOnlyList<ReachedNode> Reach(IEnumerable<string> starts, int maxDepth, int limit, Direction dir)
-    {
-        ArgumentNullException.ThrowIfNull(starts);
-
-        if (maxDepth <= 0 || limit <= 0)
-            return [];
-
-        // Minimum hop discovered for each non-start node. Starts are seeded at hop 0 and never re-emitted.
-        var hop = new Dictionary<string, int>(StringComparer.Ordinal);
-        var frontier = new Queue<string>();
-
-        foreach (var start in starts)
-        {
-            if (!_isTest.ContainsKey(start)) // unknown start id: skip
-                continue;
-            if (hop.TryAdd(start, 0))
-                frontier.Enqueue(start);
-        }
-
-        while (frontier.Count > 0)
-        {
-            var current = frontier.Dequeue();
-            var currentHop = hop[current];
-            if (currentHop >= maxDepth)
-                continue; // its neighbours would exceed the depth cap
-
-            var nextHop = currentHop + 1;
-            foreach (var neighbour in Neighbours(current, dir))
-            {
-                if (hop.ContainsKey(neighbour))
-                    continue; // already discovered at an equal-or-shorter hop (BFS guarantees minimum)
-                hop[neighbour] = nextHop;
-                frontier.Enqueue(neighbour);
-            }
-        }
-
-        // Drop the starts (hop 0), order by (hop, id), cap at limit.
-        return hop
-            .Where(kv => kv.Value > 0)
-            .OrderBy(kv => kv.Value)
-            .ThenBy(kv => kv.Key, StringComparer.Ordinal)
-            .Take(limit)
-            .Select(kv => new ReachedNode(kv.Key, kv.Value))
-            .ToArray();
-    }
+    public IReadOnlyList<ReachedNode> Reach(IEnumerable<string> starts, int maxDepth, int limit, Direction dir) =>
+        GraphTraversal.Reach(starts, maxDepth, limit, dir, Contains, Neighbours);
 
     /// <summary>
     /// The shortest dependency path from <paramref name="from"/> to <paramref name="to"/> as an ordered id list
@@ -226,65 +183,8 @@ public sealed class SymbolGraph : ISymbolGraphReachability
     /// <param name="to">The goal vertex id; null/unknown yields null.</param>
     /// <param name="maxDepth">Maximum hop distance to explore; <c>≤ 0</c> yields null unless <c>from == to</c>.</param>
     /// <exception cref="ArgumentNullException"><paramref name="from"/> or <paramref name="to"/> is null.</exception>
-    public IReadOnlyList<string>? ShortestPath(string from, string to, int maxDepth)
-    {
-        ArgumentNullException.ThrowIfNull(from);
-        ArgumentNullException.ThrowIfNull(to);
-
-        if (!_isTest.ContainsKey(from) || !_isTest.ContainsKey(to))
-            return null; // an endpoint not in the graph: no path
-
-        if (string.Equals(from, to, StringComparison.Ordinal))
-            return [from]; // a vertex always reaches itself at distance 0 (even when maxDepth <= 0)
-
-        if (maxDepth <= 0)
-            return null;
-
-        // BFS over the forward adjacency, recording the parent each node was first discovered from (BFS guarantees the
-        // first discovery is along a shortest path). Neighbours are already id-sorted, so the parent chain is stable.
-        var parent = new Dictionary<string, string>(StringComparer.Ordinal);
-        var depth = new Dictionary<string, int>(StringComparer.Ordinal) { [from] = 0 };
-        var frontier = new Queue<string>();
-        frontier.Enqueue(from);
-
-        while (frontier.Count > 0)
-        {
-            var current = frontier.Dequeue();
-            var currentDepth = depth[current];
-            if (currentDepth >= maxDepth)
-                continue; // its neighbours would exceed the depth cap
-
-            foreach (var neighbour in Dependencies(current)) // id-sorted; deterministic tie-break
-            {
-                if (depth.ContainsKey(neighbour))
-                    continue; // already discovered at an equal-or-shorter distance
-
-                depth[neighbour] = currentDepth + 1;
-                parent[neighbour] = current;
-
-                if (string.Equals(neighbour, to, StringComparison.Ordinal))
-                    return Reconstruct(parent, from, to);
-
-                frontier.Enqueue(neighbour);
-            }
-        }
-
-        return null; // to was never reached within maxDepth
-    }
-
-    /// <summary>Rebuild the from→to path by walking the parent chain back from <paramref name="to"/> and reversing.</summary>
-    private static IReadOnlyList<string> Reconstruct(IReadOnlyDictionary<string, string> parent, string from, string to)
-    {
-        var reversed = new List<string> { to };
-        var node = to;
-        while (!string.Equals(node, from, StringComparison.Ordinal))
-        {
-            node = parent[node];
-            reversed.Add(node);
-        }
-        reversed.Reverse();
-        return reversed;
-    }
+    public IReadOnlyList<string>? ShortestPath(string from, string to, int maxDepth) =>
+        GraphTraversal.ShortestPath(from, to, maxDepth, Contains, Dependencies);
 
     /// <summary>The neighbour ids of <paramref name="id"/> in the requested direction (Both = forward ∪ reverse).</summary>
     private IEnumerable<string> Neighbours(string id, Direction dir) => dir switch
