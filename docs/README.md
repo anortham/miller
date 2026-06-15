@@ -41,6 +41,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`search-quality-runner.md`](search-quality-runner.md) - current search-quality comparison runner.
 - [`plans/2026-06-04-symbol-search-collapsed-trigram-design.md`](plans/2026-06-04-symbol-search-collapsed-trigram-design.md) - active symbol-search sidecar design history, with current fail-visible behavior noted.
 - [`plans/2026-06-07-content-corpus-fts5-search-plan.md`](plans/2026-06-07-content-corpus-fts5-search-plan.md) - implemented content corpus plan; current contract is in `contracts/content-corpus-v1.md`.
+- [`reference/static-ssr-htmx-alpine-pattern.md`](reference/static-ssr-htmx-alpine-pattern.md) - Miller UI pattern for static SSR Razor, Minimal API fragments, htmx, and Alpine CSP (`Miller.Dashboard` reference).
 
 ## Historical evidence
 

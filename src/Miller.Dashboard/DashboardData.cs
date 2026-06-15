@@ -45,7 +45,12 @@ public sealed record DashboardRecentError(
     [property: JsonPropertyName("tool")] string Tool,
     [property: JsonPropertyName("op")] string? Op,
     [property: JsonPropertyName("error_kind")] string? ErrorKind,
-    [property: JsonPropertyName("duration_ms")] long DurationMs);
+    [property: JsonPropertyName("duration_ms")] long DurationMs,
+    [property: JsonPropertyName("id")] string? Id = null,
+    [property: JsonPropertyName("workspace_id")] string? WorkspaceId = null,
+    [property: JsonPropertyName("workspace_display_id")] string? WorkspaceDisplayId = null,
+    [property: JsonPropertyName("error_message")] string? ErrorMessage = null,
+    [property: JsonPropertyName("error_detail")] string? ErrorDetail = null);
 
 public sealed record DashboardActivityEntry(
     [property: JsonPropertyName("id")] string Id,
@@ -58,11 +63,44 @@ public sealed record DashboardActivityEntry(
     [property: JsonPropertyName("outcome")] string Outcome,
     [property: JsonPropertyName("error_kind")] string? ErrorKind,
     [property: JsonPropertyName("result_count")] long? ResultCount,
-    [property: JsonPropertyName("est_tokens")] long? EstTokens);
+    [property: JsonPropertyName("est_tokens")] long? EstTokens,
+    [property: JsonPropertyName("error_message")] string? ErrorMessage = null,
+    [property: JsonPropertyName("error_detail")] string? ErrorDetail = null);
 
 public sealed record DashboardActivityFeed(
     [property: JsonPropertyName("workspace_id")] string? WorkspaceId,
     [property: JsonPropertyName("entries")] IReadOnlyList<DashboardActivityEntry> Entries);
+
+public sealed record DashboardRuntimeInfo(
+    [property: JsonPropertyName("registry_db_path")] string RegistryDbPath,
+    [property: JsonPropertyName("telemetry_db_path")] string TelemetryDbPath,
+    [property: JsonPropertyName("tools_root")] string ToolsRoot,
+    [property: JsonPropertyName("web_root")] string WebRoot,
+    [property: JsonPropertyName("url")] string Url,
+    [property: JsonPropertyName("preferred_workspace_root")] string PreferredWorkspaceRoot,
+    [property: JsonPropertyName("process_id")] int ProcessId,
+    [property: JsonPropertyName("version")] string Version,
+    [property: JsonPropertyName("executable_path")] string? ExecutablePath,
+    [property: JsonPropertyName("stdout_log_path")] string StdoutLogPath,
+    [property: JsonPropertyName("stderr_log_path")] string StderrLogPath);
+
+public sealed record DashboardDiagnostics(
+    [property: JsonPropertyName("registry_db_path")] string RegistryDbPath,
+    [property: JsonPropertyName("telemetry_db_path")] string TelemetryDbPath,
+    [property: JsonPropertyName("tools_root")] string ToolsRoot,
+    [property: JsonPropertyName("web_root")] string WebRoot,
+    [property: JsonPropertyName("url")] string Url,
+    [property: JsonPropertyName("preferred_workspace_root")] string PreferredWorkspaceRoot,
+    [property: JsonPropertyName("process_id")] int ProcessId,
+    [property: JsonPropertyName("version")] string Version,
+    [property: JsonPropertyName("executable_path")] string? ExecutablePath,
+    [property: JsonPropertyName("stdout_log_path")] string StdoutLogPath,
+    [property: JsonPropertyName("stderr_log_path")] string StderrLogPath,
+    [property: JsonPropertyName("registry_db_exists")] bool RegistryDbExists,
+    [property: JsonPropertyName("telemetry_db_exists")] bool TelemetryDbExists,
+    [property: JsonPropertyName("telemetry_table_exists")] bool TelemetryTableExists,
+    [property: JsonPropertyName("telemetry_error_details_available")] bool TelemetryErrorDetailsAvailable,
+    [property: JsonPropertyName("warnings")] IReadOnlyList<string> Warnings);
 
 public sealed record DashboardLanguageStat(
     [property: JsonPropertyName("language")] string Language,
@@ -89,7 +127,14 @@ public sealed record DashboardWorkspaceFacts(
     [property: JsonPropertyName("last_scan_at")] string? LastScanAt,
     [property: JsonPropertyName("search_sidecar_status")] string SearchSidecarStatus,
     [property: JsonPropertyName("languages")] IReadOnlyList<DashboardLanguageStat> Languages,
-    [property: JsonPropertyName("symbol_kinds")] IReadOnlyList<DashboardSymbolKindStat> SymbolKinds);
+    [property: JsonPropertyName("symbol_kinds")] IReadOnlyList<DashboardSymbolKindStat> SymbolKinds,
+    [property: JsonPropertyName("content_sidecar_status")] string ContentSidecarStatus = "unknown",
+    [property: JsonPropertyName("symbol_kind_count")] int SymbolKindCount = 0,
+    [property: JsonPropertyName("registry_last_error")] string? RegistryLastError = null,
+    [property: JsonPropertyName("extractor_version")] string? ExtractorVersion = null,
+    [property: JsonPropertyName("artifact_id")] string? ArtifactId = null,
+    [property: JsonPropertyName("index_revision")] long? IndexRevision = null,
+    [property: JsonPropertyName("freshness_status")] string FreshnessStatus = "unknown");
 
 public sealed record DashboardContextSavingsTool(
     [property: JsonPropertyName("tool")] string Tool,
@@ -107,7 +152,8 @@ public sealed record DashboardContextSavingsSummary(
     [property: JsonPropertyName("bytes_returned")] long BytesReturned,
     [property: JsonPropertyName("saved_bytes")] long SavedBytes,
     [property: JsonPropertyName("estimated_returned_tokens")] long EstimatedReturnedTokens,
-    [property: JsonPropertyName("tools")] IReadOnlyList<DashboardContextSavingsTool> Tools)
+    [property: JsonPropertyName("tools")] IReadOnlyList<DashboardContextSavingsTool> Tools,
+    [property: JsonPropertyName("savings_ratio")] double? SavingsRatio = null)
 {
     public static DashboardContextSavingsSummary NotTracked(string? workspaceId) =>
         new(
@@ -196,7 +242,7 @@ public static class DashboardData
 
         foreach (DashboardWorkspaceRow workspace in workspaces)
         {
-            DashboardWorkspaceFacts facts = DashboardIndexFactsReader.Read(workspace);
+            DashboardWorkspaceFacts facts = DashboardIndexFactsCache.Read(workspace);
             var entry = new DashboardWorkspaceIndexEntry(workspace, facts);
             entries.Add(entry);
             if (entry.HasFacts)
@@ -313,6 +359,13 @@ public static class DashboardData
         if (!TableExists(connection, "tool_telemetry"))
             return new DashboardActivityFeed(scope, Array.Empty<DashboardActivityEntry>());
 
+        string errorMessageSelect = ColumnExists(connection, "tool_telemetry", "error_message")
+            ? "error_message"
+            : "NULL AS error_message";
+        string errorDetailSelect = ColumnExists(connection, "tool_telemetry", "error_detail")
+            ? "error_detail"
+            : "NULL AS error_detail";
+
         var displayIds = scope is null
             ? ReadWorkspaces(registryDbPath).ToDictionary(
                 row => row.WorkspaceId,
@@ -322,14 +375,16 @@ public static class DashboardData
 
         using var cmd = connection.CreateCommand();
         cmd.CommandText = scope is null
-            ? """
-              SELECT id, ts, tool, op, workspace_id, duration_ms, outcome, error_kind, result_count, est_tokens
+            ? $"""
+              SELECT id, ts, tool, op, workspace_id, duration_ms, outcome, error_kind,
+                     {errorMessageSelect}, {errorDetailSelect}, result_count, est_tokens
               FROM tool_telemetry
               ORDER BY ts DESC, id DESC
               LIMIT $limit;
               """
-            : """
-              SELECT id, ts, tool, op, workspace_id, duration_ms, outcome, error_kind, result_count, est_tokens
+            : $"""
+              SELECT id, ts, tool, op, workspace_id, duration_ms, outcome, error_kind,
+                     {errorMessageSelect}, {errorDetailSelect}, result_count, est_tokens
               FROM tool_telemetry
               WHERE workspace_id IS $ws
               ORDER BY ts DESC, id DESC
@@ -356,8 +411,10 @@ public static class DashboardData
                 reader.GetInt64(5),
                 reader.GetString(6),
                 reader.IsDBNull(7) ? null : reader.GetString(7),
-                reader.IsDBNull(8) ? null : reader.GetInt64(8),
-                reader.IsDBNull(9) ? null : reader.GetInt64(9)));
+                reader.IsDBNull(10) ? null : reader.GetInt64(10),
+                reader.IsDBNull(11) ? null : reader.GetInt64(11),
+                reader.IsDBNull(8) ? null : reader.GetString(8),
+                reader.IsDBNull(9) ? null : reader.GetString(9)));
         }
 
         return new DashboardActivityFeed(scope, entries);
@@ -371,6 +428,60 @@ public static class DashboardData
         JsonSerializer.Serialize(
             ReadRecentActivity(telemetryDbPath, registryDbPath, workspaceId, limit),
             JsonContext.DashboardActivityFeed);
+
+    public static DashboardDiagnostics ReadDiagnostics(DashboardRuntimeInfo runtime)
+    {
+        ArgumentNullException.ThrowIfNull(runtime);
+        bool registryExists = File.Exists(runtime.RegistryDbPath);
+        bool telemetryExists = File.Exists(runtime.TelemetryDbPath);
+        bool telemetryTableExists = false;
+        bool errorDetailsAvailable = false;
+        var warnings = new List<string>();
+
+        if (telemetryExists)
+        {
+            try
+            {
+                using var connection = OpenReadOnly(runtime.TelemetryDbPath);
+                telemetryTableExists = TableExists(connection, "tool_telemetry");
+                errorDetailsAvailable = telemetryTableExists &&
+                    ColumnExists(connection, "tool_telemetry", "error_message") &&
+                    ColumnExists(connection, "tool_telemetry", "error_detail");
+            }
+            catch (SqliteException ex)
+            {
+                warnings.Add($"Telemetry DB is unreadable: {ex.Message}");
+            }
+            catch (IOException ex)
+            {
+                warnings.Add($"Telemetry DB is unreadable: {ex.Message}");
+            }
+        }
+
+        if (telemetryTableExists && !errorDetailsAvailable)
+        {
+            warnings.Add(
+                "Telemetry DB uses an older telemetry schema; restart a Miller server to migrate error_message/error_detail columns before issue details can be captured.");
+        }
+
+        return new DashboardDiagnostics(
+            runtime.RegistryDbPath,
+            runtime.TelemetryDbPath,
+            runtime.ToolsRoot,
+            runtime.WebRoot,
+            runtime.Url,
+            runtime.PreferredWorkspaceRoot,
+            runtime.ProcessId,
+            runtime.Version,
+            runtime.ExecutablePath,
+            runtime.StdoutLogPath,
+            runtime.StderrLogPath,
+            registryExists,
+            telemetryExists,
+            telemetryTableExists,
+            errorDetailsAvailable,
+            warnings);
+    }
 
     private static DashboardContextSavingsSummary ReadContextSavings(string telemetryDbPath, string? workspaceId)
     {
@@ -408,15 +519,18 @@ public static class DashboardData
             if (trackedCalls == 0)
                 return DashboardContextSavingsSummary.NotTracked(workspaceId);
 
+            long sourceBytes = reader.GetInt64(1);
+            long savedBytes = reader.GetInt64(3);
             return new DashboardContextSavingsSummary(
                 workspaceId,
                 "tracked",
                 trackedCalls,
-                reader.GetInt64(1),
+                sourceBytes,
                 reader.GetInt64(2),
-                reader.GetInt64(3),
+                savedBytes,
                 reader.GetInt64(4),
-                ReadContextSavingsTools(connection, workspaceId));
+                ReadContextSavingsTools(connection, workspaceId),
+                ComputeSavingsRatio(sourceBytes, savedBytes));
         }
         catch (SqliteException)
         {
@@ -477,7 +591,7 @@ public static class DashboardData
             row => string.Equals(row.WorkspaceId, selectedWorkspaceId, StringComparison.Ordinal));
         DashboardWorkspaceFacts? selectedFacts = selectedWorkspace is null
             ? null
-            : DashboardIndexFactsReader.Read(selectedWorkspace);
+            : DashboardIndexFactsCache.Read(selectedWorkspace);
         IReadOnlyList<DashboardWorkspaceFacts> workspaceFacts = selectedFacts is null
             ? Array.Empty<DashboardWorkspaceFacts>()
             : new[] { selectedFacts };
@@ -491,6 +605,17 @@ public static class DashboardData
             contextSavings);
     }
 
+    public static DashboardWorkspaceFacts? ReadWorkspaceFacts(string registryDbPath, string workspaceId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
+        DashboardWorkspaceRow? workspace = ReadWorkspaces(registryDbPath)
+            .FirstOrDefault(row => string.Equals(row.WorkspaceId, workspaceId, StringComparison.Ordinal));
+        return workspace is null ? null : DashboardIndexFactsCache.Read(workspace);
+    }
+
+    private static double? ComputeSavingsRatio(long sourceBytes, long savedBytes) =>
+        sourceBytes > 0 ? (double)savedBytes / sourceBytes : null;
+
     public static string RenderWorkspacesJson(string registryDbPath) =>
         JsonSerializer.Serialize(ReadWorkspaces(registryDbPath), JsonContext.IReadOnlyListDashboardWorkspaceRow);
 
@@ -502,6 +627,9 @@ public static class DashboardData
 
     public static string RenderRefreshJson(WorkspaceRefreshResult result) =>
         JsonSerializer.Serialize(result, JsonContext.WorkspaceRefreshResult);
+
+    public static string RenderDiagnosticsJson(DashboardRuntimeInfo runtime) =>
+        JsonSerializer.Serialize(ReadDiagnostics(runtime), JsonContext.DashboardDiagnostics);
 
     private static string? SelectWorkspace(
         IReadOnlyList<DashboardWorkspaceRow> workspaces,
@@ -651,6 +779,20 @@ public static class DashboardData
         return cmd.ExecuteScalar() is not null;
     }
 
+    private static bool ColumnExists(SqliteConnection connection, string tableName, string columnName)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = $"PRAGMA table_info({tableName});";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            if (string.Equals(reader.GetString(1), columnName, StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
     private static IReadOnlyList<DashboardToolStat> ReadToolStats(
         SqliteConnection connection,
         string? workspaceId,
@@ -712,9 +854,23 @@ public static class DashboardData
         string? workspaceId,
         bool allWorkspaces)
     {
+        string idSelect = ColumnExists(connection, "tool_telemetry", "id")
+            ? "id"
+            : "NULL AS id";
+        string workspaceIdSelect = ColumnExists(connection, "tool_telemetry", "workspace_id")
+            ? "workspace_id"
+            : "NULL AS workspace_id";
+        string errorMessageSelect = ColumnExists(connection, "tool_telemetry", "error_message")
+            ? "error_message"
+            : "NULL AS error_message";
+        string errorDetailSelect = ColumnExists(connection, "tool_telemetry", "error_detail")
+            ? "error_detail"
+            : "NULL AS error_detail";
+
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT ts, tool, op, error_kind, duration_ms
+        cmd.CommandText = $"""
+            SELECT ts, tool, op, error_kind, duration_ms,
+                   {idSelect}, {workspaceIdSelect}, {errorMessageSelect}, {errorDetailSelect}
             FROM tool_telemetry
             WHERE ($all = 1 OR workspace_id IS $ws) AND outcome = 'error'
             ORDER BY ts DESC, id DESC
@@ -730,7 +886,12 @@ public static class DashboardData
                 reader.GetString(1),
                 reader.IsDBNull(2) ? null : reader.GetString(2),
                 reader.IsDBNull(3) ? null : reader.GetString(3),
-                reader.GetInt64(4)));
+                reader.GetInt64(4),
+                reader.IsDBNull(5) ? null : reader.GetString(5),
+                reader.IsDBNull(6) ? null : reader.GetString(6),
+                WorkspaceDisplayId: null,
+                reader.IsDBNull(7) ? null : reader.GetString(7),
+                reader.IsDBNull(8) ? null : reader.GetString(8)));
         }
 
         return errors;

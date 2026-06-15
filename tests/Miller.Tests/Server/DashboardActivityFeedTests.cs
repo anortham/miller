@@ -106,6 +106,75 @@ public sealed class DashboardActivityFeedTests : IDisposable
     }
 
     [Fact]
+    public void ReadRecentActivity_IncludesErrorMessageAndDetail_WhenTelemetryHasDiagnostics()
+    {
+        const string detail = "System.ArgumentException: bad input\n   at Miller.Tests.Known()";
+        InsertTelemetryRow(
+            "ws-a",
+            "inspect",
+            "error",
+            "2026-06-12T10:00:00.000Z",
+            durationMs: 12,
+            errorKind: "ArgumentException",
+            errorMessage: "bad input",
+            errorDetail: detail);
+
+        DashboardActivityFeed feed = DashboardData.ReadRecentActivity(_telemetryDb, _registryDb, "ws-a");
+
+        DashboardActivityEntry entry = Assert.Single(feed.Entries);
+        Assert.Equal("ArgumentException", entry.ErrorKind);
+        Assert.Equal("bad input", entry.ErrorMessage);
+        Assert.Equal(detail, entry.ErrorDetail);
+    }
+
+    [Fact]
+    public void ReadRecentActivity_OldTelemetrySchemaWithoutErrorDetailsStillReads()
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _telemetryDb,
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using (var ddl = connection.CreateCommand())
+        {
+            ddl.CommandText = """
+                CREATE TABLE tool_telemetry (
+                    id TEXT PRIMARY KEY,
+                    ts TEXT NOT NULL,
+                    tool TEXT NOT NULL,
+                    op TEXT,
+                    workspace_id TEXT,
+                    duration_ms INTEGER NOT NULL,
+                    outcome TEXT NOT NULL,
+                    error_kind TEXT,
+                    result_count INTEGER,
+                    est_tokens INTEGER
+                ) STRICT;
+                """;
+            ddl.ExecuteNonQuery();
+        }
+        using (var insert = connection.CreateCommand())
+        {
+            insert.CommandText = """
+                INSERT INTO tool_telemetry
+                    (id, ts, tool, workspace_id, duration_ms, outcome, error_kind)
+                VALUES
+                    ('old-row', '2026-06-12T10:00:00.000Z', 'inspect', 'ws-a', 12, 'error', 'ArgumentException');
+                """;
+            insert.ExecuteNonQuery();
+        }
+
+        DashboardActivityFeed feed = DashboardData.ReadRecentActivity(_telemetryDb, _registryDb, "ws-a");
+
+        DashboardActivityEntry entry = Assert.Single(feed.Entries);
+        Assert.Equal("ArgumentException", entry.ErrorKind);
+        Assert.Null(entry.ErrorMessage);
+        Assert.Null(entry.ErrorDetail);
+    }
+
+    [Fact]
     public void RenderActivityJson_UsesStableSnakeCaseContract()
     {
         InsertTelemetryRow("ws-a", "search", "ok", "2026-06-12T10:00:00.000Z",
@@ -153,7 +222,7 @@ public sealed class DashboardActivityFeedTests : IDisposable
 
         Assert.Contains("id=\"activity-feed-panel\"", html);
         Assert.Contains("hx-get=\"/fragments/activity?workspace_id=ws-a\"", html);
-        Assert.Contains("every 2s", html);
+        Assert.Contains("every 5s", html);
         Assert.Contains("data-ts=\"2026-06-12T10:00:00.000Z\"", html);
         Assert.Contains("search", html);
         Assert.Contains("12 ms", html);
@@ -176,6 +245,8 @@ public sealed class DashboardActivityFeedTests : IDisposable
                 DurationMs: 40,
                 Outcome: "error",
                 ErrorKind: "KeyNotFoundException",
+                ErrorMessage: "missing key",
+                ErrorDetail: "System.Collections.Generic.KeyNotFoundException: missing key\n   at Miller.Tests.Known()",
                 ResultCount: null,
                 EstTokens: null),
         ]);
@@ -188,6 +259,17 @@ public sealed class DashboardActivityFeedTests : IDisposable
         Assert.Contains("hx-get=\"/fragments/activity?workspace_id=\"", html);
         Assert.Contains("alpha-abcd1234", html);
         Assert.Contains("KeyNotFoundException", html);
+        Assert.Contains("missing key", html);
+        Assert.Contains("System.Collections.Generic.KeyNotFoundException", html);
+        Assert.Contains("<details", html);
+        Assert.Contains("data-issue-details", html);
+        Assert.Contains("data-issue-id=\"0197a000-0000-7000-8000-000000000002\"", html);
+        Assert.Contains("<summary>view issue details</summary>", html);
+        Assert.Contains("class=\"copy-issue-button\"", html);
+        Assert.Contains("data-copy-target=\"issue-copy-0197a000-0000-7000-8000-000000000002\"", html);
+        Assert.Contains(">Copy</button>", html);
+        Assert.Contains("id=\"issue-copy-0197a000-0000-7000-8000-000000000002\"", html);
+        Assert.DoesNotContain("copy issue details", html);
         Assert.Contains("outcome error", html);
     }
 
@@ -286,7 +368,7 @@ public sealed class DashboardActivityFeedTests : IDisposable
     }
 
     [Fact]
-    public async Task Shells_IncludeRelativeTimeScript()
+    public async Task Shells_IncludeDashboardBehaviorScripts()
     {
         var index = new DashboardWorkspaceIndex(Array.Empty<DashboardWorkspaceIndexEntry>(), 0, 0, 0, 0);
         string landingHtml = await RenderComponentAsync<WorkspacesShell>(new Dictionary<string, object?>
@@ -294,7 +376,10 @@ public sealed class DashboardActivityFeedTests : IDisposable
             ["Index"] = index,
         });
 
-        Assert.Contains("updateRelativeTimes", landingHtml);
+        Assert.Contains("/js/dashboard-site.js", landingHtml);
+        Assert.Contains("/js/alpine-components.js", landingHtml);
+        Assert.Contains("/lib/alpine/cspalpine.min.js", landingHtml);
+        Assert.DoesNotContain("onclick=", landingHtml);
 
         var snapshot = new DashboardSnapshot(
             Array.Empty<DashboardWorkspaceRow>(),
@@ -305,21 +390,24 @@ public sealed class DashboardActivityFeedTests : IDisposable
             ["Snapshot"] = snapshot,
         });
 
-        Assert.Contains("updateRelativeTimes", workspaceHtml);
+        Assert.Contains("/js/dashboard-site.js", workspaceHtml);
+        Assert.Contains("data-toggle-theme", workspaceHtml);
+        Assert.DoesNotContain("onclick=", workspaceHtml);
     }
 
     [Fact]
     public void DashboardHost_ServesActivityRoutes()
     {
-        string program = File.ReadAllText(Path.Combine(
+        string endpoints = File.ReadAllText(Path.Combine(
             Miller.Tests.ScaleTestSupport.RepoRoot(),
             "src",
             "Miller.Dashboard",
-            "Program.cs"));
+            "Endpoints",
+            "DashboardEndpoints.cs"));
 
-        Assert.Contains("MapGet(\"/fragments/activity\"", program, StringComparison.Ordinal);
-        Assert.Contains("MapGet(\"/activity.json\"", program, StringComparison.Ordinal);
-        Assert.Contains("MapPost(\"/fragments/refresh\"", program, StringComparison.Ordinal);
+        Assert.Contains("MapGet(\"/fragments/activity\"", endpoints, StringComparison.Ordinal);
+        Assert.Contains("MapGet(\"/activity.json\"", endpoints, StringComparison.Ordinal);
+        Assert.Contains("MapPost(\"/fragments/refresh\"", endpoints, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -348,7 +436,7 @@ public sealed class DashboardActivityFeedTests : IDisposable
     {
         var facts = new DashboardWorkspaceFacts(
             "ws-a", "alpha-abcd1234", "/repo/a", "/repo/a/.miller/symbols.db",
-            "ready", null, 1, 1, 1, 100, 42, "2026-06-12T09:00:00Z", "current",
+            "ready", null, 1, 1, 1, 100, 42, "2026-06-12T09:00:00Z", "fresh",
             Array.Empty<DashboardLanguageStat>(), Array.Empty<DashboardSymbolKindStat>());
 
         string html = await RenderComponentAsync<WorkspaceDetailPanel>(new Dictionary<string, object?>
@@ -388,6 +476,8 @@ public sealed class DashboardActivityFeedTests : IDisposable
 
         Assert.DoesNotContain("fonts.googleapis.com", html);
         Assert.DoesNotContain("fonts.gstatic.com", html);
+        Assert.Contains("/js/theme-init.js", html);
+        Assert.DoesNotContain("<script>\n", html);
     }
 
     [Fact]
@@ -402,9 +492,26 @@ public sealed class DashboardActivityFeedTests : IDisposable
 
         Assert.Contains("/fonts/archivo-latin.woff2", program, StringComparison.Ordinal);
         Assert.Contains("/fonts/jetbrains-mono-latin.woff2", program, StringComparison.Ordinal);
+        Assert.Contains("/js/dashboard-site.js", program, StringComparison.Ordinal);
+        Assert.Contains("/lib/alpine/cspalpine.min.js", program, StringComparison.Ordinal);
         Assert.Contains("@font-face", css, StringComparison.Ordinal);
         Assert.True(File.Exists(Path.Combine(dashboardRoot, "wwwroot", "fonts", "archivo-latin.woff2")));
         Assert.True(File.Exists(Path.Combine(dashboardRoot, "wwwroot", "fonts", "jetbrains-mono-latin.woff2")));
+    }
+
+    [Fact]
+    public void ReleaseWorkflow_VerifiesVendoredDashboardScriptAssets()
+    {
+        string workflow = File.ReadAllText(Path.Combine(
+            Miller.Tests.ScaleTestSupport.RepoRoot(),
+            ".github",
+            "workflows",
+            "release.yml"));
+
+        Assert.Contains("dashboard/wwwroot/js/theme-init.js", workflow, StringComparison.Ordinal);
+        Assert.Contains("dashboard/wwwroot/js/dashboard-site.js", workflow, StringComparison.Ordinal);
+        Assert.Contains("dashboard/wwwroot/js/alpine-components.js", workflow, StringComparison.Ordinal);
+        Assert.Contains("dashboard/wwwroot/lib/alpine/cspalpine.min.js", workflow, StringComparison.Ordinal);
     }
 
     private static async Task<string> RenderComponentAsync<TComponent>(Dictionary<string, object?> parameters)
@@ -430,6 +537,8 @@ public sealed class DashboardActivityFeedTests : IDisposable
         string ts,
         long durationMs,
         string? errorKind = null,
+        string? errorMessage = null,
+        string? errorDetail = null,
         string? op = null,
         long? resultCount = null,
         long? estTokens = null)
@@ -450,9 +559,10 @@ public sealed class DashboardActivityFeedTests : IDisposable
         cmd.CommandText = """
             INSERT INTO tool_telemetry
                 (id, ts, tool, op, workspace_id, workspace_root, duration_ms, outcome, error_kind,
-                 result_count, est_tokens)
+                 error_message, error_detail, result_count, est_tokens)
             VALUES
-                ($id, $ts, $tool, $op, $ws, $root, $duration, $outcome, $error, $results, $tokens);
+                ($id, $ts, $tool, $op, $ws, $root, $duration, $outcome, $error,
+                 $message, $detail, $results, $tokens);
             """;
         cmd.Parameters.AddWithValue("$id", Guid.CreateVersion7().ToString());
         cmd.Parameters.AddWithValue("$ts", ts);
@@ -463,6 +573,8 @@ public sealed class DashboardActivityFeedTests : IDisposable
         cmd.Parameters.AddWithValue("$duration", durationMs);
         cmd.Parameters.AddWithValue("$outcome", outcome);
         cmd.Parameters.AddWithValue("$error", (object?)errorKind ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$message", (object?)errorMessage ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$detail", (object?)errorDetail ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$results", (object?)resultCount ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$tokens", (object?)estTokens ?? DBNull.Value);
         cmd.ExecuteNonQuery();

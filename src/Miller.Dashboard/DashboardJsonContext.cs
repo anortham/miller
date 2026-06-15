@@ -7,6 +7,7 @@ namespace Miller.Dashboard;
 [JsonSerializable(typeof(IReadOnlyList<DashboardWorkspaceRow>))]
 [JsonSerializable(typeof(DashboardTelemetrySummary))]
 [JsonSerializable(typeof(DashboardActivityFeed))]
+[JsonSerializable(typeof(DashboardDiagnostics))]
 [JsonSerializable(typeof(DashboardSnapshot))]
 [JsonSerializable(typeof(WorkspaceRefreshResult))]
 internal sealed partial class DashboardJsonContext : JsonSerializerContext;

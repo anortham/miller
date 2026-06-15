@@ -1,4 +1,3 @@
-using System.Text;
 using Miller.Core.Search;
 
 namespace Miller.Indexing;
@@ -15,9 +14,6 @@ public static class ContentSearchProjectionLoader
 {
     /// <summary>Per-file cap (1 MiB), matching the measured 2026-06-02 spike default.</summary>
     private const long MaxContentBytes = 1_048_576;
-
-    private static readonly UTF8Encoding StrictUtf8 =
-        new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     /// <summary>
     /// Load the content projection for <paramref name="dbPath"/>, re-sourcing file content from disk under
@@ -107,13 +103,6 @@ public static class ContentSearchProjectionLoader
                 ContentHasher.Blake3Hex(bytes), ContentHasher.NormalizeHash(storedHash)))
             return null;
 
-        try
-        {
-            return StrictUtf8.GetString(bytes);
-        }
-        catch (DecoderFallbackException)
-        {
-            return null;
-        }
+        return SourceTextDecoder.TryDecode(bytes, out string text) ? text : null;
     }
 }

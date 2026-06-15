@@ -15,12 +15,15 @@
             </div>
             <div class="hero-side">
                 <div class="theme-switch-wrapper">
-                    <button id="theme-toggle" class="theme-switcher-btn" type="button" onclick="toggleTheme()" aria-label="Toggle Theme">
+                    <button id="theme-toggle" class="theme-switcher-btn" type="button" data-toggle-theme aria-label="Toggle Theme">
                         <span id="theme-toggle-label">Dark</span>
                     </button>
                 </div>
                 <nav class="api-actions" aria-label="Dashboard JSON">
                     <a class="api-link" href="/workspaces.json">workspaces.json</a>
+                    <a class="api-link" href="/activity.json">activity.json</a>
+                    <a class="api-link" href="/telemetry.json?workspace_id=all">telemetry.json</a>
+                    <a class="api-link" href="/diagnostics.json">diagnostics.json</a>
                 </nav>
                 <div class="hero-metrics" aria-label="Machine-wide totals">
                     <div>
@@ -43,11 +46,16 @@
         <ActivityFeedPanel Feed="EffectiveActivity" />
         @if (Telemetry is not null)
         {
-            <TelemetryPanel Telemetry="Telemetry" SelectedWorkspaceId="all" />
+            <details class="panel-collapse telemetry-collapse">
+                <summary class="panel-collapse-summary">
+                    <span>Machine-wide telemetry</span>
+                    <span class="muted">optional rollup — per-workspace telemetry lives on each workspace page</span>
+                </summary>
+                <TelemetryPanel Telemetry="Telemetry" SelectedWorkspaceId="all" />
+            </details>
         }
     </main>
-    <ThemeToggleScript />
-    <RelativeTimeScript />
+    <DashboardScripts />
 </body>
 </html>
 

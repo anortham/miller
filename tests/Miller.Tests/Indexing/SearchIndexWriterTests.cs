@@ -384,6 +384,46 @@ public sealed class SearchIndexWriterTests : IDisposable
     }
 
     [Fact]
+    public void Write_RegionIndexEnabled_DecodesUtf16LeBomFileBeforeSlicingUtf8ByteSpan()
+    {
+        const string path = "dbo/SqlCommandType.sql";
+        const string symbolId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        const string text = "-- known UTF16 region\nCREATE TABLE dbo.SqlCommandType (Id int);\n";
+        const string expectedRegion = "-- known UTF16 region";
+        int start = Encoding.UTF8.GetByteCount(text[..text.IndexOf(expectedRegion, StringComparison.Ordinal)]);
+        int end = start + Encoding.UTF8.GetByteCount(expectedRegion);
+
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow(symbolId, "dbo", "class", "sql", path, "CREATE TABLE dbo", 2, ParentId: null),
+            },
+            fileContent: new Dictionary<string, string> { [path] = text },
+            sourceRegions: new[]
+            {
+                new JulieDbFixture.SourceRegionRow(
+                    "comment-region", "file:" + path, path, "sql", "comment", symbolId,
+                    1, 1, 1, expectedRegion.Length, start, end, null),
+            });
+        fx.ReplaceFileBytesAndRefreshHash(path, JulieDbFixture.Utf16LeBomBytes(text));
+
+        SearchIndexWriter.Write(
+            _dbPath,
+            SqliteSymbolReader.Read(fx.DbPath),
+            revision: 5,
+            symbolsDbPath: fx.DbPath,
+            workspaceRoot: fx.WorkspaceRoot,
+            regionOptions: RegionIndexOptions.EnabledDefault);
+
+        using var c = OpenRead();
+        Assert.Equal(1L, Long(Scalar(c, "SELECT region_count FROM meta")));
+        Assert.Equal(expectedRegion, Scalar(c, "SELECT raw_text FROM search_regions WHERE region_id='comment-region'"));
+        Assert.Equal("comment-region", Scalar(c, "SELECT region_id FROM regions_fts WHERE body MATCH 'UTF16'"));
+    }
+
+    [Fact]
     public void Write_RegionIndexEnabled_SkipsRegionsOverConfiguredMaxBytes()
     {
         const string path = "src/A.cs";

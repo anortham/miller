@@ -9,9 +9,6 @@ public static class ContentCorpusWriter
 {
     private const long MaxWorkspaceFileBytes = 1_048_576;
 
-    private static readonly UTF8Encoding StrictUtf8 =
-        new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
-
     public static ContentCorpusFacts Write(
         string contentDbPath,
         string symbolsDbPath,
@@ -312,12 +309,7 @@ public static class ContentCorpusWriter
                 continue;
             }
 
-            string text;
-            try
-            {
-                text = StrictUtf8.GetString(bytes);
-            }
-            catch (DecoderFallbackException)
+            if (!SourceTextDecoder.TryDecode(bytes, out string text))
             {
                 skippedUtf8++;
                 continue;

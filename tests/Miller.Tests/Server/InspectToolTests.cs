@@ -147,6 +147,23 @@ public sealed class InspectToolTests
     }
 
     [Fact]
+    public void Run_FileSummary_Compact_NormalizesMultilineSignatures()
+    {
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
+        {
+            new JulieDbFixture.SymbolRow("a0000000000000000000000000000011", "Search", "method", "csharp",
+                "src/SearchTool.cs", "public void Search(\n    string query)", 10, null),
+        });
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "src/SearchTool.cs", depth: "summary", kind: null, scope: null, limit: 50, json: false, out _);
+
+        Assert.Contains("public void Search( string query)", output);
+        Assert.DoesNotContain("\n    string query", output);
+    }
+
+    [Fact]
     public void Run_FileSummary_Compact_KindFilterShowsLowSignalRows()
     {
         using var fx = FixtureWithNoisyFileSummary();
@@ -438,6 +455,50 @@ public sealed class InspectToolTests
         Assert.Contains("a/First.cs", output);
         Assert.Contains("b/Second.cs", output);
         Assert.Contains("candidate", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Run_AmbiguousName_CompactCapsCandidatesWithRemainderNote()
+    {
+        var rows = Enumerable.Range(1, 25)
+            .Select(i => new JulieDbFixture.SymbolRow(
+                i.ToString("x32"),
+                "Search",
+                "method",
+                "csharp",
+                $"src/File{i:00}.cs",
+                "public void Search()",
+                i,
+                null))
+            .ToArray();
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, rows);
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "Search", depth: "summary", kind: null, scope: null, limit: 50, json: false, out _);
+
+        Assert.Contains("src/File20.cs", output);
+        Assert.DoesNotContain("src/File21.cs", output);
+        Assert.Contains("5 more candidates", output);
+    }
+
+    [Fact]
+    public void Run_AmbiguousScopedName_AsksForMoreSpecificTarget()
+    {
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
+        {
+            new JulieDbFixture.SymbolRow("cc11223344556677889900aabbccddee", "SearchTool", "class", "csharp",
+                "src/SearchTool.cs", "public sealed class SearchTool", 10, null),
+            new JulieDbFixture.SymbolRow("dd11223344556677889900aabbccddee", "SearchTool", "constructor", "csharp",
+                "src/SearchTool.cs", "public SearchTool()", 12, null),
+        });
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "SearchTool", depth: "summary", kind: null, scope: "src/SearchTool.cs", limit: 50, json: false, out _);
+
+        Assert.Contains("more specific target", output);
+        Assert.DoesNotContain("pass scope=<file>", output);
     }
 
     [Fact]

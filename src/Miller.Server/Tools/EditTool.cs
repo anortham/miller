@@ -105,7 +105,7 @@ public sealed class EditTool
             if (telemetry is not null)
             {
                 telemetry.Outcome = TelemetryOutcome.Error;
-                telemetry.ErrorKind = ex.GetType().Name;
+                telemetry.SetError(ex);
             }
             return $"edit failed: {ex.Message}";
         }

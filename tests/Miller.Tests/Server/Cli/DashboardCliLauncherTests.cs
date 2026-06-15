@@ -48,7 +48,7 @@ public sealed class DashboardCliLauncherTests : IDisposable
 
         Uri url = DashboardCliLauncher.WorkspaceUrl(DashboardCliLauncher.BaseUri(4977), ctx);
 
-        Assert.Equal($"http://127.0.0.1:4977/?workspace_id={id}", url.ToString());
+        Assert.Equal($"http://127.0.0.1:4977/workspace?workspace_id={id}", url.ToString());
     }
 
     [Fact]
@@ -104,7 +104,7 @@ public sealed class DashboardCliLauncherTests : IDisposable
             ctx, 5001, TimeSpan.FromMilliseconds(10)));
 
         Assert.Equal(DashboardLaunchOutcome.AlreadyRunning, result.Outcome);
-        Assert.Equal("http://127.0.0.1:4977/", result.Url.GetLeftPart(UriPartial.Path));
+        Assert.Equal("http://127.0.0.1:4977/workspace", result.Url.GetLeftPart(UriPartial.Path));
         Assert.Equal(0, starts);
     }
 

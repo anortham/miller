@@ -110,7 +110,7 @@ public static class TelemetryCallToolFilter
                 // friendly IsError tool result naming the missing parameter. Telemetry still records an
                 // error row; everything else about the call is unchanged.
                 scope.Outcome = TelemetryOutcome.Error;
-                scope.ErrorKind = ex.GetType().Name;
+                scope.SetError(ex);
 
                 var result = new CallToolResult
                 {
@@ -132,7 +132,7 @@ public static class TelemetryCallToolFilter
                 // that ALSO threw is exactly the kind of pathology a latency WARN should surface. est_tokens is
                 // 0 here (no result payload was produced), so only the latency dimension can breach.
                 scope.Outcome = TelemetryOutcome.Error;
-                scope.ErrorKind = ex.GetType().Name;
+                scope.SetError(ex);
                 EvaluateBudgets(budgets, loggerFactory, tool, budgetStart, scope.EstTokens ?? 0);
                 throw;
             }

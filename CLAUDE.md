@@ -214,6 +214,9 @@ scripts/test.ps1 all
 - **Web research.** Miller has a mirrored `miller-web-research` skill. Web fetching stays outside Miller in the
   skill layer via `browser39`; Miller imports fetched markdown as `web` content and supports bounded
   search/read through the content corpus.
+- **Dashboard launch requests.** If the user asks to start, open, or show the Miller dashboard, use the Miller
+  `workspace` tool with `operation=dashboard`. Do not search plugin cache directories for dashboard files; dashboard
+  launch is a workspace tool operation.
 - **Agent instructions.** The MCP server-level guidance is
   [`MILLER_AGENT_INSTRUCTIONS.md`](src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md), embedded in the binary
   and set as `ServerInstructions`. Edit the markdown; `AgentInstructionsTests` guards that every tool stays

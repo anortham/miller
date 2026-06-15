@@ -1,3 +1,4 @@
+using System.Text;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Xunit;
@@ -171,6 +172,36 @@ public sealed class ExtractReaderTests
         Assert.StartsWith("public User GetUser(int id)", body.Text);
         Assert.Contains("return _repo.Find(id);", body.Text!);
         Assert.EndsWith("}", body.Text.TrimEnd());
+    }
+
+    [Fact]
+    public void ReadBody_FreshUtf16LeBomFile_DecodesBeforeSlicingUtf8ByteSpan()
+    {
+        const string path = "dbo/SqlCommandType.sql";
+        const string decoded = "CREATE TABLE dbo.SqlCommandType (Id int);\nSELECT N'run';\n";
+        const string expectedBody = "dbo.SqlCommandType";
+        int start = Encoding.UTF8.GetByteCount(decoded[..decoded.IndexOf(expectedBody, StringComparison.Ordinal)]);
+        int end = start + Encoding.UTF8.GetByteCount(expectedBody);
+
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new JulieDbFixture.SymbolRow("sql-table", "dbo", "class", "sql", path, "CREATE TABLE dbo", 1, null)
+                {
+                    BodyStartByte = start,
+                    BodyEndByte = end,
+                    BodyStartLine = 1,
+                    BodyEndLine = 1,
+                },
+            ],
+            fileContent: new Dictionary<string, string> { [path] = decoded });
+        fx.ReplaceFileBytesAndRefreshHash(path, JulieDbFixture.Utf16LeBomBytes(decoded));
+
+        var body = ExtractReader.ReadBody(fx.DbPath, fx.WorkspaceRoot, path, start, end, 1, 1);
+
+        Assert.Null(body.UnavailableReason);
+        Assert.Equal(expectedBody, body.Text);
     }
 
     [Fact]

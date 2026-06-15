@@ -16,13 +16,15 @@
             </div>
             <div class="hero-side">
                 <div class="theme-switch-wrapper">
-                    <button id="theme-toggle" class="theme-switcher-btn" type="button" onclick="toggleTheme()" aria-label="Toggle Theme">
+                    <button id="theme-toggle" class="theme-switcher-btn" type="button" data-toggle-theme aria-label="Toggle Theme">
                         <span id="theme-toggle-label">Dark</span>
                     </button>
                 </div>
                 <nav class="api-actions" aria-label="Dashboard JSON">
                     <a class="api-link" href="/snapshot.json?workspace_id=@Esc(Snapshot.SelectedWorkspaceId)">snapshot.json</a>
                     <a class="api-link" href="/telemetry.json?workspace_id=@Esc(Snapshot.SelectedWorkspaceId)">telemetry.json</a>
+                    <a class="api-link" href="/activity.json?workspace_id=@Esc(Snapshot.SelectedWorkspaceId)">activity.json</a>
+                    <a class="api-link" href="/diagnostics.json">diagnostics.json</a>
                 </nav>
                 <div class="hero-metrics" aria-label="Workspace summary">
                     <div>
@@ -41,15 +43,9 @@
             </div>
         </header>
 
-        <div class="main-stack detail-stack">
-            <WorkspaceDetailPanel Facts="Snapshot.SelectedWorkspaceFacts" />
-            <ContextSavingsPanel Summary="Snapshot.ContextSavings" />
-            <ActivityFeedPanel Feed="EffectiveActivity" />
-            <TelemetryPanel Telemetry="Snapshot.Telemetry" SelectedWorkspaceId="@Snapshot.SelectedWorkspaceId" />
-        </div>
+        <WorkspaceDetailStack Snapshot="Snapshot" Activity="EffectiveActivity" />
     </main>
-    <ThemeToggleScript />
-    <RelativeTimeScript />
+    <DashboardScripts />
 </body>
 </html>
 

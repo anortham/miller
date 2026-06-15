@@ -98,7 +98,7 @@ public sealed class ImpactTool
             if (telemetry is not null)
             {
                 telemetry.Outcome = TelemetryOutcome.Error;
-                telemetry.ErrorKind = ex.GetType().Name;
+                telemetry.SetError(ex);
             }
             return $"impact failed: {ex.Message}";
         }
@@ -422,10 +422,14 @@ public sealed class ImpactTool
     private static string RenderCandidatesNote(IReadOnlyList<IndexedSymbol> matches)
     {
         var sb = new StringBuilder();
-        sb.Append("Multiple candidates — pass a more specific target (or a file path):\n");
-        foreach (var s in matches)
+        sb.Append(CandidateOutput.Header(
+            matches,
+            supportsScope: false,
+            fallback: "Multiple candidates — pass a more specific target (or a file path):")).Append('\n');
+        foreach (var s in CandidateOutput.Visible(matches))
             sb.Append(s.Name).Append("  ").Append(s.Kind).Append("  ")
               .Append(s.FilePath).Append(':').Append(s.StartLine).Append('\n');
+        CandidateOutput.AppendRemainderNote(sb, matches.Count);
         return sb.ToString().TrimEnd('\n');
     }
 

@@ -127,7 +127,8 @@ public sealed class WorkspaceTool
     [McpServerTool(Name = "workspace")]
     [Description(
         "Manage the workspace index. Defaults to status. Use refresh to update stale files, full to rebuild " +
-        "from scratch, list to see registered workspaces, health for a readiness report, dashboard to start the local dashboard.")]
+        "from scratch, list to see registered workspaces, health for readiness, and operation=dashboard for " +
+        "dashboard/start/open/show requests.")]
     public string Workspace(
         [Description("status|refresh|full|list|open|remove|health|dashboard. Default status.")] string operation = "status",
         [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")]
@@ -162,7 +163,7 @@ public sealed class WorkspaceTool
             if (telemetry is not null)
             {
                 telemetry.Outcome = TelemetryOutcome.Error;
-                telemetry.ErrorKind = ex.GetType().Name;
+                telemetry.SetError(ex);
             }
             _logger.LogError(ex, "workspace {Operation} failed.", operation);
             return $"workspace failed: {ex.Message}";

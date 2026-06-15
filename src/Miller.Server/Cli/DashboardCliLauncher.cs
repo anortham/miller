@@ -224,7 +224,7 @@ internal sealed class DashboardCliLauncher : IDashboardLauncher
         string workspaceId = ResolveWorkspaceId(context);
         var builder = new UriBuilder(baseUri)
         {
-            Path = "/",
+            Path = "/workspace",
             Query = "workspace_id=" + Uri.EscapeDataString(workspaceId),
         };
         return builder.Uri;

@@ -1,14 +1,25 @@
 using Microsoft.AspNetCore.Http.HttpResults;
 using Miller.Dashboard;
-using Miller.Dashboard.Components;
+using Miller.Dashboard.Endpoints;
+using Miller.Server;
 
 DashboardPaths paths = DashboardPaths.FromEnvironment(AppContext.BaseDirectory);
 string dashboardCssPath = Path.Combine(paths.WebRoot, "dashboard.css");
 string htmxPath = Path.Combine(paths.WebRoot, "lib", "htmx", "htmx.min.js");
+string alpinePath = Path.Combine(paths.WebRoot, "lib", "alpine", "cspalpine.min.js");
+string themeInitPath = Path.Combine(paths.WebRoot, "js", "theme-init.js");
+string siteJsPath = Path.Combine(paths.WebRoot, "js", "dashboard-site.js");
+string alpineComponentsPath = Path.Combine(paths.WebRoot, "js", "alpine-components.js");
 string archivoFontPath = Path.Combine(paths.WebRoot, "fonts", "archivo-latin.woff2");
 string jetbrainsMonoFontPath = Path.Combine(paths.WebRoot, "fonts", "jetbrains-mono-latin.woff2");
 string launchDirectory = Environment.GetEnvironmentVariable("MILLER_DASHBOARD_PREFERRED_ROOT")
     ?? Environment.CurrentDirectory;
+const string FaviconSvg = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" fill="#f7f2e8"/>
+  <path d="M7 8h18v3H7zM7 15h18v3H7zM7 22h12v3H7z" fill="#168276"/>
+</svg>
+""";
 
 var host = new HostBuilder()
     .ConfigureWebHost(webBuilder =>
@@ -36,6 +47,22 @@ var host = new HostBuilder()
                         ["GET", "HEAD"],
                         () => StaticAsset(htmxPath, "text/javascript; charset=utf-8"));
                     endpoints.MapMethods(
+                        "/lib/alpine/cspalpine.min.js",
+                        ["GET", "HEAD"],
+                        () => StaticAsset(alpinePath, "text/javascript; charset=utf-8"));
+                    endpoints.MapMethods(
+                        "/js/theme-init.js",
+                        ["GET", "HEAD"],
+                        () => StaticAsset(themeInitPath, "text/javascript; charset=utf-8"));
+                    endpoints.MapMethods(
+                        "/js/dashboard-site.js",
+                        ["GET", "HEAD"],
+                        () => StaticAsset(siteJsPath, "text/javascript; charset=utf-8"));
+                    endpoints.MapMethods(
+                        "/js/alpine-components.js",
+                        ["GET", "HEAD"],
+                        () => StaticAsset(alpineComponentsPath, "text/javascript; charset=utf-8"));
+                    endpoints.MapMethods(
                         "/fonts/archivo-latin.woff2",
                         ["GET", "HEAD"],
                         () => StaticAsset(archivoFontPath, "font/woff2"));
@@ -43,130 +70,14 @@ var host = new HostBuilder()
                         "/fonts/jetbrains-mono-latin.woff2",
                         ["GET", "HEAD"],
                         () => StaticAsset(jetbrainsMonoFontPath, "font/woff2"));
+                    endpoints.MapMethods("/favicon.ico", ["GET", "HEAD"], () =>
+                        Results.Text(FaviconSvg, "image/svg+xml; charset=utf-8"));
                     endpoints.MapGet("/healthz", () => Results.Text(
                         "miller-dashboard ok",
                         "text/plain; charset=utf-8"));
 
-                    // Landing page: full-width index of every registered workspace with stats,
-                    // plus the machine-wide live activity feed.
-                    endpoints.MapGet("/", () =>
-                        new RazorComponentResult<Miller.Dashboard.Components.WorkspacesShell>(new
-                        {
-                            Index = DashboardData.ReadIndex(paths.RegistryDbPath),
-                            Activity = DashboardData.ReadRecentActivity(
-                                paths.TelemetryDbPath,
-                                paths.RegistryDbPath,
-                                workspaceId: null),
-                            Telemetry = DashboardData.ReadTelemetrySummary(paths.TelemetryDbPath, "all"),
-                        })
-                        {
-                            PreventStreamingRendering = true,
-                        });
-
-                    // Per-workspace detail page: full-width index facts, context savings, telemetry.
-                    endpoints.MapGet("/workspace", (string? workspace_id) =>
-                    {
-                        DashboardSnapshot snapshot = DashboardData.ReadSnapshot(
-                            paths.RegistryDbPath,
-                            paths.TelemetryDbPath,
-                            workspace_id,
-                            launchDirectory);
-                        return new RazorComponentResult<Miller.Dashboard.Components.WorkspaceShell>(new
-                        {
-                            Snapshot = snapshot,
-                            Activity = DashboardData.ReadRecentActivity(
-                                paths.TelemetryDbPath,
-                                paths.RegistryDbPath,
-                                snapshot.SelectedWorkspaceId),
-                        })
-                        {
-                            PreventStreamingRendering = true,
-                        };
-                    });
-
-                    // Live activity feed fragment: the panel re-polls this every 2s.
-                    endpoints.MapGet("/fragments/activity", (string? workspace_id) =>
-                        new RazorComponentResult<Miller.Dashboard.Components.ActivityFeedPanel>(new
-                        {
-                            Feed = DashboardData.ReadRecentActivity(
-                                paths.TelemetryDbPath,
-                                paths.RegistryDbPath,
-                                workspace_id),
-                        })
-                        {
-                            PreventStreamingRendering = true,
-                        });
-
-                    // Legacy HTMX fragment routes retained for older dashboard links and dogfood evidence.
-                    endpoints.MapGet("/fragments/dashboard", (string? workspace_id) =>
-                        new RazorComponentResult<Miller.Dashboard.Components.DashboardContent>(new
-                        {
-                            Snapshot = DashboardData.ReadSnapshot(
-                                paths.RegistryDbPath,
-                                paths.TelemetryDbPath,
-                                workspace_id,
-                                launchDirectory),
-                        })
-                        {
-                            PreventStreamingRendering = true,
-                        });
-
-                    endpoints.MapGet("/fragments/workspaces", () =>
-                        new RazorComponentResult<Miller.Dashboard.Components.WorkspaceIndex>(new
-                        {
-                            Index = DashboardData.ReadIndex(paths.RegistryDbPath),
-                        })
-                        {
-                            PreventStreamingRendering = true,
-                        });
-
-                    endpoints.MapGet("/fragments/telemetry", (string? workspace_id) =>
-                        new RazorComponentResult<Miller.Dashboard.Components.TelemetryPanel>(new
-                        {
-                            Telemetry = DashboardData.ReadTelemetrySummary(paths.TelemetryDbPath, workspace_id),
-                            SelectedWorkspaceId = workspace_id,
-                        })
-                        {
-                            PreventStreamingRendering = true,
-                        });
-
-                    endpoints.MapGet("/workspaces.json", () => Results.Text(
-                        DashboardData.RenderWorkspacesJson(paths.RegistryDbPath),
-                        "application/json; charset=utf-8"));
-
-                    endpoints.MapGet("/index.json", () => Results.Text(
-                        DashboardData.RenderIndexJson(paths.RegistryDbPath),
-                        "application/json; charset=utf-8"));
-
-                    endpoints.MapGet("/activity.json", (string? workspace_id) => Results.Text(
-                        DashboardData.RenderActivityJson(paths.TelemetryDbPath, paths.RegistryDbPath, workspace_id),
-                        "application/json; charset=utf-8"));
-
-                    endpoints.MapGet("/telemetry.json", (string? workspace_id) => Results.Text(
-                        DashboardData.RenderTelemetryJson(paths.TelemetryDbPath, workspace_id),
-                        "application/json; charset=utf-8"));
-
-                    endpoints.MapGet("/snapshot.json", (string? workspace_id) => Results.Text(
-                        DashboardData.RenderSnapshotJson(paths.RegistryDbPath, paths.TelemetryDbPath, workspace_id),
-                        "application/json; charset=utf-8"));
-
-                    endpoints.MapPost("/workspaces/{workspace_id}/refresh", (string workspace_id) =>
-                    {
-                        var result = DashboardData.RefreshWorkspace(paths.RegistryDbPath, paths.ToolsRoot, workspace_id);
-                        return Results.Text(
-                            DashboardData.RenderRefreshJson(result),
-                            "application/json; charset=utf-8");
-                    });
-
-                    // htmx variant of the refresh action: swaps the workspace page's status snippet.
-                    endpoints.MapPost("/fragments/refresh", (string workspace_id) =>
-                        new RazorComponentResult<Miller.Dashboard.Components.RefreshStatusPanel>(new
-                        {
-                            Result = DashboardData.TryRefreshWorkspace(paths.RegistryDbPath, paths.ToolsRoot, workspace_id),
-                        })
-                        {
-                            PreventStreamingRendering = true,
-                        });
+                    DashboardEndpoints.MapDashboardEndpoints(endpoints, paths, launchDirectory);
+                    DashboardEndpoints.MapDashboardJsonEndpoints(endpoints, paths, launchDirectory);
                 });
             });
     })
@@ -176,35 +87,3 @@ host.Run();
 
 static IResult StaticAsset(string path, string contentType) =>
     File.Exists(path) ? Results.File(path, contentType) : Results.NotFound();
-
-internal sealed record DashboardPaths(
-    string RegistryDbPath,
-    string TelemetryDbPath,
-    string ToolsRoot,
-    string WebRoot,
-    string Url)
-{
-    public static DashboardPaths FromEnvironment(string appBaseDirectory)
-    {
-        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        string millerHome = Path.Combine(home, ".miller");
-        string registry = Environment.GetEnvironmentVariable("MILLER_REGISTRY_DB")
-            ?? Path.Combine(millerHome, "workspaces.db");
-        string telemetry = Environment.GetEnvironmentVariable("MILLER_TELEMETRY_DB")
-            ?? Path.Combine(millerHome, "telemetry.db");
-        string toolsRoot = Environment.GetEnvironmentVariable("MILLER_TOOLS_ROOT")
-            ?? Path.Combine(Path.GetFullPath(appBaseDirectory), ".tools");
-        string webRoot = Environment.GetEnvironmentVariable("MILLER_DASHBOARD_WEBROOT")
-            ?? Path.Combine(Path.GetFullPath(appBaseDirectory), "wwwroot");
-        string port = Environment.GetEnvironmentVariable("MILLER_DASHBOARD_PORT") ?? "4977";
-        if (!int.TryParse(port, out int parsedPort) || parsedPort is < 1 or > 65535)
-            parsedPort = 4977;
-
-        return new DashboardPaths(
-            Path.GetFullPath(registry),
-            Path.GetFullPath(telemetry),
-            Path.GetFullPath(toolsRoot),
-            Path.GetFullPath(webRoot),
-            $"http://127.0.0.1:{parsedPort}");
-    }
-}

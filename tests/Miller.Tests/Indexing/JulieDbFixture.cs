@@ -71,6 +71,43 @@ internal sealed class JulieDbFixture : IDisposable
         Rows = rows;
     }
 
+    public static byte[] Utf16LeBomBytes(string text)
+    {
+        byte[] encoded = System.Text.Encoding.Unicode.GetBytes(text);
+        byte[] bytes = new byte[encoded.Length + 2];
+        bytes[0] = 0xFF;
+        bytes[1] = 0xFE;
+        encoded.CopyTo(bytes, 2);
+        return bytes;
+    }
+
+    public void ReplaceFileBytesAndRefreshHash(string relPath, byte[] bytes)
+    {
+        string abs = Path.Combine(WorkspaceRoot, relPath);
+        System.IO.Directory.CreateDirectory(Path.GetDirectoryName(abs)!);
+        File.WriteAllBytes(abs, bytes);
+
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = DbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE files
+            SET content_hash = $hash, content_bytes = $bytes
+            WHERE path = $path;
+            """;
+        command.Parameters.AddWithValue("$hash", "blake3:" + ContentHasher.Blake3Hex(bytes));
+        command.Parameters.AddWithValue("$bytes", bytes.Length);
+        command.Parameters.AddWithValue("$path", relPath);
+        int updated = command.ExecuteNonQuery();
+        if (updated != 1)
+            throw new InvalidOperationException($"Expected one files row for '{relPath}', updated {updated}.");
+    }
+
     /// <summary>
     /// A row as written into the synthesized v1 <c>symbols</c> table. The first eight fields are the M1 read
     /// projection; the remaining detail/body columns (M2 <c>ReadDetail</c>/<c>ReadBody</c>) and the typed test

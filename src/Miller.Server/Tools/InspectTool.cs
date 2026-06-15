@@ -96,7 +96,7 @@ public sealed class InspectTool
             if (telemetry is not null)
             {
                 telemetry.Outcome = TelemetryOutcome.Error;
-                telemetry.ErrorKind = ex.GetType().Name;
+                telemetry.SetError(ex);
             }
             return $"inspect failed: {ex.Message}";
         }
@@ -284,7 +284,7 @@ public sealed class InspectTool
         var sb = new StringBuilder();
         sb.Append(s.Name).Append("  :").Append(s.StartLine);
         if (SignatureAddsInfo(s))
-            sb.Append("  ").Append(Truncate(s.Signature!, SignatureMaxLength));
+            sb.Append("  ").Append(Truncate(InlineSignature(s.Signature!), SignatureMaxLength));
         return sb.ToString();
     }
 
@@ -513,9 +513,13 @@ public sealed class InspectTool
     private static string RenderCandidatesCompact(IReadOnlyList<IndexedSymbol> matches)
     {
         var sb = new StringBuilder();
-        sb.Append("Multiple candidates — pass scope=<file> to disambiguate:\n");
-        foreach (var s in matches)
+        sb.Append(CandidateOutput.Header(
+            matches,
+            supportsScope: true,
+            fallback: "Multiple candidates — pass a more specific target:")).Append('\n');
+        foreach (var s in CandidateOutput.Visible(matches))
             sb.Append(SymbolLine(s)).Append('\n');
+        CandidateOutput.AppendRemainderNote(sb, matches.Count);
         return sb.ToString().TrimEnd('\n');
     }
 
@@ -559,7 +563,7 @@ public sealed class InspectTool
         sb.Append(s.Name).Append("  ").Append(s.Kind).Append("  ")
           .Append(s.FilePath).Append(':').Append(s.StartLine);
         if (SignatureAddsInfo(s))
-            sb.Append("  ").Append(Truncate(s.Signature!, SignatureMaxLength));
+            sb.Append("  ").Append(Truncate(InlineSignature(s.Signature!), SignatureMaxLength));
         return sb.ToString();
     }
 
@@ -608,6 +612,7 @@ public sealed class InspectTool
             ExtractReader.BodyUnavailableReason.MissingFile => "missing file",
             ExtractReader.BodyUnavailableReason.StaleFile => "stale file",
             ExtractReader.BodyUnavailableReason.EmptyFile => "empty file",
+            ExtractReader.BodyUnavailableReason.InvalidEncoding => "invalid encoding",
             ExtractReader.BodyUnavailableReason.InvalidSpan => "invalid span",
             _ => "unknown reason",
         };
@@ -621,10 +626,14 @@ public sealed class InspectTool
             ExtractReader.BodyUnavailableReason.MissingFile => "missing_file",
             ExtractReader.BodyUnavailableReason.StaleFile => "stale_file",
             ExtractReader.BodyUnavailableReason.EmptyFile => "empty_file",
+            ExtractReader.BodyUnavailableReason.InvalidEncoding => "invalid_encoding",
             ExtractReader.BodyUnavailableReason.InvalidSpan => "invalid_span",
             _ => "unknown",
         };
 
     internal static string Truncate(string value, int max) =>
         value.Length <= max ? value : value[..(max - 1)] + "…";
+
+    private static string InlineSignature(string value) =>
+        string.Join(' ', value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 }

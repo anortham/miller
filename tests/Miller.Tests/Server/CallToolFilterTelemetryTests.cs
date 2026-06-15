@@ -47,7 +47,7 @@ public static class PinProbeTool
             if (scope is not null)
             {
                 scope.Outcome = TelemetryOutcome.Error;
-                scope.ErrorKind = ex.GetType().Name;
+                scope.SetError(ex);
             }
             return $"pin_boom failed: {ex.Message}"; // clean string, not a thrown/error result
         }
@@ -231,15 +231,32 @@ public sealed class CallToolFilterTelemetryTests : IDisposable
         }.ToString());
         conn.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT tool, outcome, error_kind, index_fresh FROM tool_telemetry ORDER BY tool;";
-        var rows = new List<(string tool, string outcome, string? errorKind, bool indexFreshIsNull)>();
+        cmd.CommandText =
+            "SELECT tool, outcome, error_kind, error_message, error_detail, index_fresh " +
+            "FROM tool_telemetry ORDER BY tool;";
+        var rows = new List<(
+            string tool,
+            string outcome,
+            string? errorKind,
+            string? errorMessage,
+            string? errorDetail,
+            bool indexFreshIsNull)>();
         using (var r = cmd.ExecuteReader())
             while (r.Read())
-                rows.Add((r.GetString(0), r.GetString(1), r.IsDBNull(2) ? null : r.GetString(2), r.IsDBNull(3)));
+                rows.Add((
+                    r.GetString(0),
+                    r.GetString(1),
+                    r.IsDBNull(2) ? null : r.GetString(2),
+                    r.IsDBNull(3) ? null : r.GetString(3),
+                    r.IsDBNull(4) ? null : r.GetString(4),
+                    r.IsDBNull(5)));
 
         var boomRow = Assert.Single(rows, x => x.tool == "pin_boom");
         Assert.Equal("error", boomRow.outcome);                       // NOT 'ok' — the fix
         Assert.Equal("InvalidOperationException", boomRow.errorKind); // error_kind survives
+        Assert.Equal("kaboom", boomRow.errorMessage);
+        Assert.Contains("System.InvalidOperationException: kaboom", boomRow.errorDetail);
+        Assert.Contains(nameof(PinProbeTool.Boom), boomRow.errorDetail);
         Assert.True(boomRow.indexFreshIsNull, "index_fresh must be NULL (unknown) for M2, not a fabricated 1");
 
         var emptyRow = Assert.Single(rows, x => x.tool == "pin_empty");
@@ -311,12 +328,15 @@ public sealed class CallToolFilterTelemetryTests : IDisposable
         }.ToString());
         conn.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT tool, outcome, error_kind FROM tool_telemetry;";
+        cmd.CommandText = "SELECT tool, outcome, error_kind, error_message, error_detail FROM tool_telemetry;";
         using var reader = cmd.ExecuteReader();
         Assert.True(reader.Read(), "the central CallToolFilter did not record a telemetry row");
         Assert.Equal("inspect", reader.GetString(0));
         Assert.Equal("error", reader.GetString(1));
         Assert.Equal("ArgumentException", reader.GetString(2));
+        Assert.Contains("missing a value for the required parameter 'target'", reader.GetString(3));
+        Assert.Contains("System.ArgumentException", reader.GetString(4));
+        Assert.Contains("required parameter 'target'", reader.GetString(4));
         Assert.False(reader.Read(), "exactly one row expected (the filter must fire once per call)");
     }
 
@@ -381,11 +401,16 @@ public sealed class CallToolFilterTelemetryTests : IDisposable
         }.ToString());
         conn.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT tool, outcome, error_kind FROM tool_telemetry WHERE tool = 'pin_unhandled';";
+        cmd.CommandText =
+            "SELECT tool, outcome, error_kind, error_message, error_detail " +
+            "FROM tool_telemetry WHERE tool = 'pin_unhandled';";
         using var reader = cmd.ExecuteReader();
         Assert.True(reader.Read(), "the rethrow path must still record a telemetry error row");
         Assert.Equal("error", reader.GetString(1));
         Assert.Equal("InvalidOperationException", reader.GetString(2));
+        Assert.Equal("kaboom for x", reader.GetString(3));
+        Assert.Contains("System.InvalidOperationException: kaboom for x", reader.GetString(4));
+        Assert.Contains(nameof(PinProbeTool.Unhandled), reader.GetString(4));
     }
 
     [Fact]

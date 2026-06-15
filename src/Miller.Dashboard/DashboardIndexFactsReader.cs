@@ -6,6 +6,8 @@ namespace Miller.Dashboard;
 
 public static class DashboardIndexFactsReader
 {
+    private static readonly ContentCorpusSidecar ContentSidecar = new();
+
     public static IReadOnlyList<DashboardWorkspaceFacts> Read(IReadOnlyList<DashboardWorkspaceRow> workspaces)
     {
         ArgumentNullException.ThrowIfNull(workspaces);
@@ -27,7 +29,10 @@ public static class DashboardIndexFactsReader
                 workspace,
                 "missing",
                 $"Index DB not found: {workspace.IndexDbPath}",
-                searchSidecarStatus: "unknown");
+                searchSidecarStatus: "unknown",
+                contentSidecarStatus: "unknown",
+                indexRevision: null,
+                artifactId: null);
         }
 
         try
@@ -35,21 +40,42 @@ public static class DashboardIndexFactsReader
             using SqliteConnection connection = OpenReadOnly(workspace.IndexDbPath);
             if (!TableExists(connection, "files") || !TableExists(connection, "symbols"))
             {
+                string searchStatus = ReadSearchSidecarStatus(workspace);
+                long? unreadableRevision = TryReadIndexRevision(connection);
+                string contentStatus = ReadContentSidecarStatus(
+                    workspace,
+                    unreadableRevision ?? workspace.LastRevision ?? 0L);
                 return Empty(
                     workspace,
                     "unreadable",
                     "Index DB does not contain julie files and symbols tables.",
-                    searchSidecarStatus: ReadSearchSidecarStatus(workspace));
+                    searchSidecarStatus: searchStatus,
+                    contentSidecarStatus: contentStatus,
+                    indexRevision: unreadableRevision,
+                    artifactId: TryReadArtifactId(connection));
             }
 
             FileFacts fileFacts = ReadFileFacts(connection);
             Dictionary<string, long> symbolCountsByLanguage = ReadSymbolCountsByLanguage(connection);
-            IReadOnlyList<DashboardSymbolKindStat> symbolKinds = ReadSymbolKinds(connection);
+            (IReadOnlyList<DashboardSymbolKindStat> symbolKinds, int symbolKindCount) = ReadSymbolKinds(connection);
             int languageCount = CountLanguages(fileFacts.Languages, symbolCountsByLanguage);
             IReadOnlyList<DashboardLanguageStat> languages = BuildLanguageStats(
                 fileFacts.Languages,
                 symbolCountsByLanguage);
             long symbolCount = symbolCountsByLanguage.Values.Sum();
+            long? indexRevision = TryReadIndexRevision(connection);
+            string? artifactId = TryReadArtifactId(connection);
+            string? extractorVersion = ExtractBinaryVersionReader.TryRead(connection);
+            string searchSidecarStatus = ReadSearchSidecarStatus(workspace);
+            string contentSidecarStatus = ReadContentSidecarStatus(
+                workspace,
+                indexRevision ?? workspace.LastRevision ?? 0L);
+            string freshnessStatus = ComputeFreshnessStatus(
+                workspace,
+                workspace.State,
+                indexRevision,
+                searchSidecarStatus,
+                contentSidecarStatus);
 
             return new DashboardWorkspaceFacts(
                 workspace.WorkspaceId,
@@ -64,15 +90,29 @@ public static class DashboardIndexFactsReader
                 fileFacts.ContentBytes,
                 workspace.LastRevision,
                 workspace.LastScanAt,
-                ReadSearchSidecarStatus(workspace),
+                searchSidecarStatus,
                 languages,
-                symbolKinds);
+                symbolKinds,
+                contentSidecarStatus,
+                symbolKindCount,
+                workspace.LastError,
+                extractorVersion,
+                artifactId,
+                indexRevision,
+                freshnessStatus);
         }
         catch (Exception ex) when (
             ex is SqliteException or InvalidOperationException or IOException or UnauthorizedAccessException
                 or ArgumentException or NotSupportedException)
         {
-            return Empty(workspace, "unreadable", ex.Message, searchSidecarStatus: "unknown");
+            return Empty(
+                workspace,
+                "unreadable",
+                ex.Message,
+                searchSidecarStatus: "unknown",
+                contentSidecarStatus: "unknown",
+                indexRevision: null,
+                artifactId: null);
         }
     }
 
@@ -80,7 +120,10 @@ public static class DashboardIndexFactsReader
         DashboardWorkspaceRow workspace,
         string status,
         string? message,
-        string searchSidecarStatus) =>
+        string searchSidecarStatus,
+        string contentSidecarStatus,
+        long? indexRevision,
+        string? artifactId) =>
         new(
             workspace.WorkspaceId,
             workspace.DisplayId,
@@ -96,7 +139,19 @@ public static class DashboardIndexFactsReader
             workspace.LastScanAt,
             searchSidecarStatus,
             Array.Empty<DashboardLanguageStat>(),
-            Array.Empty<DashboardSymbolKindStat>());
+            Array.Empty<DashboardSymbolKindStat>(),
+            contentSidecarStatus,
+            SymbolKindCount: 0,
+            RegistryLastError: workspace.LastError,
+            ExtractorVersion: ExtractBinaryVersionReader.TryRead(workspace.IndexDbPath),
+            ArtifactId: artifactId,
+            IndexRevision: indexRevision,
+            FreshnessStatus: ComputeFreshnessStatus(
+                workspace,
+                status,
+                indexRevision,
+                searchSidecarStatus,
+                contentSidecarStatus));
 
     private static FileFacts ReadFileFacts(SqliteConnection connection)
     {
@@ -146,8 +201,9 @@ public static class DashboardIndexFactsReader
         return counts;
     }
 
-    private static IReadOnlyList<DashboardSymbolKindStat> ReadSymbolKinds(SqliteConnection connection)
+    private static (IReadOnlyList<DashboardSymbolKindStat> Kinds, int TotalCount) ReadSymbolKinds(SqliteConnection connection)
     {
+        int totalCount = CountSymbolKinds(connection);
         using var cmd = connection.CreateCommand();
         cmd.CommandText = """
             SELECT COALESCE(NULLIF(kind, ''), 'unknown') AS kind,
@@ -165,7 +221,105 @@ public static class DashboardIndexFactsReader
             kinds.Add(new DashboardSymbolKindStat(reader.GetString(0), reader.GetInt64(1)));
         }
 
-        return kinds;
+        return (kinds, totalCount);
+    }
+
+    private static int CountSymbolKinds(SqliteConnection connection)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT COUNT(*)
+            FROM (
+                SELECT 1
+                FROM symbols
+                WHERE name IS NOT NULL
+                GROUP BY COALESCE(NULLIF(kind, ''), 'unknown')
+            );
+            """;
+        object? value = cmd.ExecuteScalar();
+        return value is null or DBNull ? 0 : Convert.ToInt32(value, CultureInfo.InvariantCulture);
+    }
+
+    private static long? TryReadIndexRevision(SqliteConnection connection)
+    {
+        if (!TableExists(connection, "extraction_revisions"))
+            return null;
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT MAX(revision_id) FROM extraction_revisions;";
+        object? value = cmd.ExecuteScalar();
+        return value is null or DBNull ? 0L : Convert.ToInt64(value, CultureInfo.InvariantCulture);
+    }
+
+    private static string? TryReadArtifactId(SqliteConnection connection)
+    {
+        if (!TableExists(connection, "artifact_metadata"))
+            return null;
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT value FROM artifact_metadata WHERE key = 'artifact_id' LIMIT 1;";
+        object? value = cmd.ExecuteScalar();
+        return value is string s && !string.IsNullOrWhiteSpace(s) ? s : null;
+    }
+
+    private static string ReadContentSidecarStatus(DashboardWorkspaceRow workspace, long expectedRevision)
+    {
+        try
+        {
+            ContentCorpusFacts facts = ContentSidecar.Inspect(workspace.IndexDbPath, expectedRevision);
+            return MapContentSidecarStatus(facts.State);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+        {
+            return "unknown";
+        }
+    }
+
+    private static string MapContentSidecarStatus(string state) =>
+        state switch
+        {
+            "current" => "fresh",
+            "stale" => "stale",
+            "missing" => "missing",
+            "unreadable" => "unreadable",
+            _ => "unknown",
+        };
+
+    private static string ComputeFreshnessStatus(
+        DashboardWorkspaceRow workspace,
+        string indexStatus,
+        long? indexRevision,
+        string searchSidecarStatus,
+        string contentSidecarStatus)
+    {
+        if (!string.IsNullOrWhiteSpace(workspace.LastError))
+            return "registry_error";
+
+        if (indexStatus is "missing" or "unreadable")
+            return indexStatus;
+
+        if (searchSidecarStatus is "stale" or "stale_schema" or "unreadable")
+            return "stale_sidecar";
+
+        if (contentSidecarStatus is "stale" or "unreadable")
+            return "stale_sidecar";
+
+        if (searchSidecarStatus is "missing" || contentSidecarStatus is "missing")
+            return "stale_sidecar";
+
+        if (indexRevision is { } revision &&
+            workspace.LastRevision is { } registryRevision &&
+            revision > 0 &&
+            registryRevision != revision)
+            return "revision_mismatch";
+
+        if (string.Equals(workspace.State, "error", StringComparison.Ordinal))
+            return "error";
+
+        if (searchSidecarStatus == "fresh" && contentSidecarStatus == "fresh")
+            return "current";
+
+        return "unknown";
     }
 
     private static IReadOnlyList<DashboardLanguageStat> BuildLanguageStats(

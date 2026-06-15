@@ -1,4 +1,5 @@
 @namespace Miller.Dashboard.Components
+@using Miller.Server.Workspaces
 
 <section id="workspace-detail-panel" class="panel detail-panel" aria-label="Selected workspace index facts">
     <div class="panel-heading">
@@ -9,13 +10,17 @@
         @if (Facts is not null)
         {
             <div class="detail-actions">
-                <RefreshStatusPanel />
+                <RefreshStatusPanel Result="RefreshResult" />
                 <button class="refresh-button"
                         type="button"
                         hx-post="/fragments/refresh?workspace_id=@Esc(Facts.WorkspaceId)"
-                        hx-target="#refresh-status"
+                        hx-target="#workspace-detail-stack"
                         hx-swap="outerHTML"
                         hx-disabled-elt="this">Refresh index</button>
+                <button class="subtle-link open-folder-link"
+                        type="button"
+                        hx-post="/workspaces/@Esc(Facts.WorkspaceId)/open-folder"
+                        hx-swap="none">Open folder</button>
                 <span class="workspace-state @StateClass(Facts.Status)">@Facts.Status</span>
             </div>
         }
@@ -27,6 +32,20 @@
     }
     else
     {
+        <div class="copy-row" aria-label="Workspace selectors">
+            <span id="copy-display-id" class="copy-source">@Facts.DisplayId</span>
+            <button class="copy-issue-button" type="button" data-copy-target="copy-display-id" aria-label="Copy display id">Copy id</button>
+            <span id="copy-workspace-id" class="copy-source hidden-copy">@Facts.WorkspaceId</span>
+            <button class="copy-issue-button" type="button" data-copy-target="copy-workspace-id" aria-label="Copy workspace id">Copy workspace_id</button>
+            <span id="copy-root-path" class="copy-source hidden-copy">@Facts.CanonicalRoot</span>
+            <button class="copy-issue-button" type="button" data-copy-target="copy-root-path" aria-label="Copy root path">Copy path</button>
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(Facts.RegistryLastError))
+        {
+            <p class="notice error-notice"><strong>Registry error</strong> @Facts.RegistryLastError</p>
+        }
+
         <div class="stats-grid metric-band">
             <div class="metric">
                 <strong>@FormatCount(Facts.FileCount, "file")</strong>
@@ -46,18 +65,64 @@
             </div>
         </div>
 
-        <dl class="fact-list">
+        <dl class="fact-list fact-list-wide">
+            <div>
+                <dt>Freshness</dt>
+                <dd>
+                    <span class="workspace-state @FreshnessStateClass(Facts.FreshnessStatus)">@Facts.FreshnessStatus</span>
+                    <span class="muted freshness-hint">@FreshnessLabel(Facts.FreshnessStatus)</span>
+                </dd>
+            </div>
             <div>
                 <dt>Revision</dt>
-                <dd>@(Facts.LastRevision?.ToString("N0", CultureInfo.InvariantCulture) ?? "n/a")</dd>
+                <dd>
+                    @(Facts.IndexRevision?.ToString("N0", CultureInfo.InvariantCulture) ?? Facts.LastRevision?.ToString("N0", CultureInfo.InvariantCulture) ?? "n/a")
+                    @if (Facts.LastRevision is not null && Facts.IndexRevision is not null && Facts.LastRevision != Facts.IndexRevision)
+                    {
+                        <span class="muted">registry @Facts.LastRevision.Value.ToString("N0", CultureInfo.InvariantCulture)</span>
+                    }
+                </dd>
             </div>
             <div>
                 <dt>Last scan</dt>
-                <dd>@(string.IsNullOrWhiteSpace(Facts.LastScanAt) ? "n/a" : Facts.LastScanAt)</dd>
+                <dd>
+                    @if (string.IsNullOrWhiteSpace(Facts.LastScanAt))
+                    {
+                        <span class="muted">n/a</span>
+                    }
+                    else
+                    {
+                        <time class="rel-ts timestamp" datetime="@Facts.LastScanAt" data-ts="@Facts.LastScanAt">@Facts.LastScanAt</time>
+                    }
+                </dd>
+            </div>
+            <div>
+                <dt>Extractor</dt>
+                <dd>@(Facts.ExtractorVersion ?? "n/a")</dd>
+            </div>
+            <div>
+                <dt>Artifact</dt>
+                <dd>@(Facts.ArtifactId ?? "n/a")</dd>
             </div>
             <div>
                 <dt>Search sidecar</dt>
-                <dd>search.db @Facts.SearchSidecarStatus</dd>
+                <dd>
+                    search.db @Facts.SearchSidecarStatus
+                    @if (!string.IsNullOrWhiteSpace(SidecarRemediationHint(Facts.SearchSidecarStatus)))
+                    {
+                        <span class="muted sidecar-hint">@SidecarRemediationHint(Facts.SearchSidecarStatus)</span>
+                    }
+                </dd>
+            </div>
+            <div>
+                <dt>Content sidecar</dt>
+                <dd>
+                    content.db @Facts.ContentSidecarStatus
+                    @if (!string.IsNullOrWhiteSpace(SidecarRemediationHint(Facts.ContentSidecarStatus)))
+                    {
+                        <span class="muted sidecar-hint">@SidecarRemediationHint(Facts.ContentSidecarStatus)</span>
+                    }
+                </dd>
             </div>
         </dl>
 
@@ -128,6 +193,10 @@
                             </li>
                         }
                     </ol>
+                    @if (Facts.SymbolKindCount > Facts.SymbolKinds.Count)
+                    {
+                        <p class="truncation-note muted">+@(Facts.SymbolKindCount - Facts.SymbolKinds.Count) more kinds not shown</p>
+                    }
                 }
             </section>
         </div>
@@ -136,6 +205,8 @@
 
 @code {
     [Parameter] public DashboardWorkspaceFacts? Facts { get; set; }
+
+    [Parameter] public WorkspaceRefreshResult? RefreshResult { get; set; }
 
     private string Subtitle => Facts is null
         ? "No workspace selected"
@@ -151,5 +222,4 @@
 
     private string KindWidth(long count) =>
         (Math.Max(8, count * 100 / MaxSymbolKindCount)).ToString(CultureInfo.InvariantCulture) + "%";
-
 }

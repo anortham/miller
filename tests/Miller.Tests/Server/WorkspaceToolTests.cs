@@ -141,7 +141,7 @@ public sealed class WorkspaceToolTests : IDisposable
             acquireLock ?? (millerDir => SingleWriterLock.TryAcquire(millerDir)),
             dashboardLauncher ?? new RecordingDashboardLauncher(new DashboardLaunchResult(
                 DashboardLaunchOutcome.AlreadyRunning,
-                new Uri("http://127.0.0.1:4977/?workspace_id=ws-tool-001"),
+                new Uri("http://127.0.0.1:4977/workspace?workspace_id=ws-tool-001"),
                 ProcessId: null,
                 Message: "already running")),
             NullLogger<WorkspaceTool>.Instance);
@@ -816,7 +816,7 @@ public sealed class WorkspaceToolTests : IDisposable
         using var fx = CreateSynth(revision: 4, workspaceId: Ws);
         var launcher = new RecordingDashboardLauncher(new DashboardLaunchResult(
             DashboardLaunchOutcome.Started,
-            new Uri("http://127.0.0.1:4977/?workspace_id=ws-tool-001"),
+            new Uri("http://127.0.0.1:4977/workspace?workspace_id=ws-tool-001"),
             ProcessId: 4242,
             Message: "started"));
         WorkspaceToolHarness harness = BuildHarness(
@@ -831,7 +831,7 @@ public sealed class WorkspaceToolTests : IDisposable
         Assert.Equal("dashboard", root.GetProperty("operation").GetString());
         Assert.Equal("started", root.GetProperty("status").GetString());
         Assert.True(root.GetProperty("success").GetBoolean());
-        Assert.Equal("http://127.0.0.1:4977/?workspace_id=ws-tool-001", root.GetProperty("url").GetString());
+        Assert.Equal("http://127.0.0.1:4977/workspace?workspace_id=ws-tool-001", root.GetProperty("url").GetString());
         Assert.Equal(4242, root.GetProperty("pid").GetInt32());
         DashboardLaunchRequest request = launcher.Requests.Single();
         Assert.Equal(4977, request.Port);

@@ -1,6 +1,5 @@
 using Microsoft.Data.Sqlite;
 using Miller.Core.Tokenization;
-using System.Text;
 
 namespace Miller.Indexing;
 
@@ -28,8 +27,6 @@ namespace Miller.Indexing;
 /// </summary>
 public static class SearchIndexWriter
 {
-    private static readonly UTF8Encoding StrictUtf8 =
-        new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
     private const int ParameterChunkSize = 500;
 
     /// <summary>
@@ -602,7 +599,7 @@ public static class SearchIndexWriter
             return (0, 0.0);
 
         var symbolNames = symbols.ToDictionary(static s => s.SymbolId, static s => s.Name, StringComparer.Ordinal);
-        var fileCache = new Dictionary<string, byte[]?>(StringComparer.Ordinal);
+        var fileCache = new Dictionary<string, string?>(StringComparer.Ordinal);
 
         using var regionCmd = connection.CreateCommand();
         regionCmd.CommandText = """
@@ -643,19 +640,13 @@ public static class SearchIndexWriter
             if (region.StartByte < 0 || region.EndByte <= region.StartByte || regionBytes > options.MaxRegionBytes)
                 continue;
 
-            byte[]? fileBytes = ReadVerifiedFileBytes(workspaceRoot, region, fileCache);
-            if (fileBytes is null || region.EndByte > fileBytes.Length)
+            string? fileText = ReadVerifiedFileText(workspaceRoot, region, fileCache);
+            if (fileText is null)
                 continue;
 
-            string rawText;
-            try
-            {
-                rawText = StrictUtf8.GetString(fileBytes, region.StartByte, regionBytes);
-            }
-            catch (DecoderFallbackException)
-            {
+            string? rawText = SourceTextDecoder.SliceUtf8ByteSpan(fileText, region.StartByte, region.EndByte);
+            if (rawText is null)
                 continue;
-            }
 
             tokens.Clear();
             CodeTokenizer.Tokenize(rawText, tokens);
@@ -690,15 +681,15 @@ public static class SearchIndexWriter
         return (inserted, avgdl);
     }
 
-    private static byte[]? ReadVerifiedFileBytes(
+    private static string? ReadVerifiedFileText(
         string workspaceRoot,
         SourceRegionRow region,
-        Dictionary<string, byte[]?> fileCache)
+        Dictionary<string, string?> fileCache)
     {
-        if (fileCache.TryGetValue(region.Path, out byte[]? cached))
+        if (fileCache.TryGetValue(region.Path, out string? cached))
             return cached;
 
-        byte[]? result = null;
+        string? result = null;
         try
         {
             string? abs = WorkspaceRelativePath.ResolveUnderRoot(workspaceRoot, region.Path);
@@ -710,7 +701,7 @@ public static class SearchIndexWriter
                         ContentHasher.Blake3Hex(bytes),
                         ContentHasher.NormalizeHash(region.ContentHash)))
                 {
-                    result = bytes;
+                    result = SourceTextDecoder.TryDecode(bytes, out string text) ? text : null;
                 }
             }
         }

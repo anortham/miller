@@ -3,7 +3,8 @@
 <section id="telemetry-panel"
          class="panel telemetry"
          hx-get="/fragments/telemetry?workspace_id=@Esc(SelectedWorkspaceId)"
-         hx-trigger="every 10s"
+         data-poll-trigger="every 30s"
+         hx-trigger="every 30s"
          hx-swap="outerHTML">
     <div class="panel-heading">
         <div>
@@ -33,13 +34,13 @@
                     <tr>
                         <th>Tool</th>
                         <th>Calls</th>
-                        <th>Avg ms</th>
-                        <th>p95 ms</th>
-                        <th>Max ms</th>
+                        <th class="telemetry-col-optional">Avg ms</th>
+                        <th class="telemetry-col-optional">p95 ms</th>
+                        <th class="telemetry-col-optional">Max ms</th>
                         <th>Errors</th>
                         <th>Last call</th>
-                        <th>Last error</th>
-                        <th>Est tokens</th>
+                        <th class="telemetry-col-optional">Last error</th>
+                        <th class="telemetry-col-optional">Est tokens</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -48,9 +49,9 @@
                         <tr class="@(tool.ErrorCount > 0 ? "has-errors" : "")">
                             <td><code>@tool.Tool</code></td>
                             <td>@tool.Calls.ToString("N0", CultureInfo.InvariantCulture)</td>
-                            <td>@tool.AvgMs.ToString("0.0", CultureInfo.InvariantCulture)</td>
-                            <td><span aria-label="p95 latency">@tool.P95Ms.ToString("N0", CultureInfo.InvariantCulture)</span></td>
-                            <td>@tool.MaxMs.ToString("N0", CultureInfo.InvariantCulture)</td>
+                            <td class="telemetry-col-optional">@tool.AvgMs.ToString("0.0", CultureInfo.InvariantCulture)</td>
+                            <td class="telemetry-col-optional"><span aria-label="p95 latency">@tool.P95Ms.ToString("N0", CultureInfo.InvariantCulture)</span></td>
+                            <td class="telemetry-col-optional">@tool.MaxMs.ToString("N0", CultureInfo.InvariantCulture)</td>
                             <td>@tool.ErrorCount.ToString("N0", CultureInfo.InvariantCulture)</td>
                             <td>
                                 <span class="outcome @OutcomeClass(tool.LastOutcome)">@DisplayOutcome(tool.LastOutcome)</span>
@@ -63,7 +64,7 @@
                                     <time class="rel-ts timestamp" datetime="@tool.LastCallTs" data-ts="@tool.LastCallTs">@tool.LastCallTs</time>
                                 }
                             </td>
-                            <td>
+                            <td class="telemetry-col-optional">
                                 @if (tool.LastErrorTs is null)
                                 {
                                     <span class="muted">none</span>
@@ -74,7 +75,7 @@
                                     <time class="rel-ts timestamp" datetime="@tool.LastErrorTs" data-ts="@tool.LastErrorTs">@tool.LastErrorTs</time>
                                 }
                             </td>
-                            <td>@tool.SumEstTokens.ToString("N0", CultureInfo.InvariantCulture)</td>
+                            <td class="telemetry-col-optional">@tool.SumEstTokens.ToString("N0", CultureInfo.InvariantCulture)</td>
                         </tr>
                     }
                 </tbody>
@@ -97,6 +98,35 @@
                             }
                             <span class="error-kind">@error.ErrorKind</span>
                             <span class="muted">@error.DurationMs.ToString("N0", CultureInfo.InvariantCulture) ms</span>
+                            @if (HasIssueDetails(error))
+                            {
+                                string issueId = IssueId(error);
+                                string copyId = IssueCopyId(error);
+                                <details class="error-detail recent-error-detail"
+                                         data-issue-details
+                                         data-issue-id="@issueId">
+                                    <summary>view issue details</summary>
+                                    <div class="issue-actions">
+                                        <button class="copy-issue-button"
+                                                type="button"
+                                                data-copy-target="@copyId"
+                                                aria-label="Copy issue details">Copy</button>
+                                    </div>
+                                    @if (!string.IsNullOrWhiteSpace(error.Id))
+                                    {
+                                        <p><strong>cid</strong> <code>@error.Id</code></p>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(error.ErrorMessage))
+                                    {
+                                        <p>@error.ErrorMessage</p>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(error.ErrorDetail))
+                                    {
+                                        <pre>@error.ErrorDetail</pre>
+                                    }
+                                    <textarea id="@copyId" class="copy-box" readonly rows="7">@IssueBundle(error)</textarea>
+                                </details>
+                            }
                         </li>
                     }
                 </ol>
@@ -120,4 +150,43 @@
 
     private static string DisplayOutcome(string? value) =>
         string.IsNullOrWhiteSpace(value) ? "unknown" : value;
+
+    private static bool HasIssueDetails(DashboardRecentError error) =>
+        !string.IsNullOrWhiteSpace(error.Id) ||
+        !string.IsNullOrWhiteSpace(error.WorkspaceId) ||
+        !string.IsNullOrWhiteSpace(error.ErrorMessage) ||
+        !string.IsNullOrWhiteSpace(error.ErrorDetail);
+
+    private static string IssueId(DashboardRecentError error) =>
+        !string.IsNullOrWhiteSpace(error.Id)
+            ? error.Id
+            : $"{error.Tool}-{error.Ts}";
+
+    private static string IssueCopyId(DashboardRecentError error) =>
+        $"issue-copy-{IssueId(error)}";
+
+    private static string IssueBundle(DashboardRecentError error)
+    {
+        var lines = new List<string>
+        {
+            "Miller dashboard issue details",
+            $"cid: {error.Id ?? "n/a"}",
+            $"timestamp: {error.Ts}",
+            $"workspace_id: {error.WorkspaceId ?? "n/a"}",
+            $"tool: {error.Tool}",
+            $"operation: {error.Op ?? "n/a"}",
+            $"outcome: error",
+            $"error_kind: {error.ErrorKind ?? "n/a"}",
+            $"duration_ms: {error.DurationMs.ToString(CultureInfo.InvariantCulture)}",
+        };
+        if (!string.IsNullOrWhiteSpace(error.ErrorMessage))
+            lines.Add($"message: {error.ErrorMessage}");
+        if (!string.IsNullOrWhiteSpace(error.ErrorDetail))
+        {
+            lines.Add("detail:");
+            lines.Add(error.ErrorDetail);
+        }
+
+        return string.Join(Environment.NewLine, lines);
+    }
 }

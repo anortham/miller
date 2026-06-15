@@ -10,7 +10,10 @@
 
     @if (Summary.Status != "tracked")
     {
-        <p class="empty">Context savings are not yet tracked for this workspace.</p>
+        <div class="empty savings-empty">
+            <p>Context savings are not yet tracked for this workspace.</p>
+            <p class="muted">Miller records savings when read tools report <code>source_bytes</code> (bytes examined) alongside returned payload size. Until those telemetry fields are populated, this panel stays in the not-tracked state rather than showing zero savings.</p>
+        </div>
     }
     else
     {
@@ -18,6 +21,10 @@
             <div class="metric hero-metric">
                 <strong>@FormatBytes(Summary.SavedBytes)</strong>
                 <span>saved from tool responses</span>
+            </div>
+            <div class="metric">
+                <strong>@FormatSavingsRatio(Summary.SavingsRatio)</strong>
+                <span>of examined bytes saved</span>
             </div>
             <div class="metric">
                 <strong>@FormatBytes(Summary.SourceBytes)</strong>
@@ -66,7 +73,7 @@
         DashboardContextSavingsSummary.NotTracked(null);
 
     private string Subtitle => Summary.Status == "tracked"
-        ? FormatCount(Summary.TrackedCalls, "tracked call")
+        ? FormatCount(Summary.TrackedCalls, "tracked call") + " · " + FormatSavingsRatio(Summary.SavingsRatio) + " saved"
         : "source bytes not yet recorded";
 
     private long MaxSavedBytes => Math.Max(1, Summary.Tools.Count > 0 ? Summary.Tools.Max(t => t.SavedBytes) : 1);

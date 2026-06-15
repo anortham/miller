@@ -3,14 +3,15 @@
 <section id="activity-feed-panel"
          class="panel activity-panel"
          hx-get="/fragments/activity?workspace_id=@Esc(Feed.WorkspaceId)"
-         hx-trigger="every 2s"
+         data-poll-trigger="every 5s"
+         hx-trigger="every 5s"
          hx-swap="outerHTML">
     <div class="panel-heading">
         <div>
             <h2>Live activity</h2>
             <p>@Subtitle</p>
         </div>
-        <span class="live-dot" aria-label="Updating every 2 seconds"></span>
+        <span class="live-dot" aria-label="Updating every 5 seconds when tab is visible"></span>
     </div>
 
     @if (Feed.Entries.Count == 0)
@@ -43,6 +44,35 @@
                     {
                         <span class="muted">@entry.ResultCount.Value.ToString("N0", CultureInfo.InvariantCulture) results</span>
                     }
+                    @if (entry.EstTokens is not null)
+                    {
+                        <span class="muted">@entry.EstTokens.Value.ToString("N0", CultureInfo.InvariantCulture) est tokens</span>
+                    }
+                    @if (HasIssueDetails(entry))
+                    {
+                        string copyId = IssueCopyId(entry);
+                        <details class="error-detail"
+                                 data-issue-details
+                                 data-issue-id="@entry.Id">
+                            <summary>view issue details</summary>
+                            <div class="issue-actions">
+                                        <button class="copy-issue-button"
+                                                type="button"
+                                                data-copy-target="@copyId"
+                                                aria-label="Copy issue details">Copy</button>
+                            </div>
+                            <p><strong>cid</strong> <code>@entry.Id</code></p>
+                            @if (!string.IsNullOrWhiteSpace(entry.ErrorMessage))
+                            {
+                                <p>@entry.ErrorMessage</p>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(entry.ErrorDetail))
+                            {
+                                <pre>@entry.ErrorDetail</pre>
+                            }
+                            <textarea id="@copyId" class="copy-box" readonly rows="7">@IssueBundle(entry)</textarea>
+                        </details>
+                    }
                 </li>
             }
         </ol>
@@ -58,4 +88,39 @@
     private string Subtitle => MachineWide
         ? "latest tool calls across every workspace"
         : "latest tool calls in this workspace";
+
+    private static bool HasIssueDetails(DashboardActivityEntry entry) =>
+        string.Equals(entry.Outcome, "error", StringComparison.Ordinal) &&
+        (!string.IsNullOrWhiteSpace(entry.Id) ||
+         !string.IsNullOrWhiteSpace(entry.ErrorMessage) ||
+         !string.IsNullOrWhiteSpace(entry.ErrorDetail));
+
+    private static string IssueCopyId(DashboardActivityEntry entry) =>
+        $"issue-copy-{entry.Id}";
+
+    private static string IssueBundle(DashboardActivityEntry entry)
+    {
+        var lines = new List<string>
+        {
+            "Miller dashboard issue details",
+            $"cid: {entry.Id}",
+            $"timestamp: {entry.Ts}",
+            $"workspace_id: {entry.WorkspaceId ?? "n/a"}",
+            $"workspace: {entry.WorkspaceDisplayId ?? "n/a"}",
+            $"tool: {entry.Tool}",
+            $"operation: {entry.Op ?? "n/a"}",
+            $"outcome: {entry.Outcome}",
+            $"error_kind: {entry.ErrorKind ?? "n/a"}",
+            $"duration_ms: {entry.DurationMs.ToString(CultureInfo.InvariantCulture)}",
+        };
+        if (!string.IsNullOrWhiteSpace(entry.ErrorMessage))
+            lines.Add($"message: {entry.ErrorMessage}");
+        if (!string.IsNullOrWhiteSpace(entry.ErrorDetail))
+        {
+            lines.Add("detail:");
+            lines.Add(entry.ErrorDetail);
+        }
+
+        return string.Join(Environment.NewLine, lines);
+    }
 }

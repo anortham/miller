@@ -131,6 +131,43 @@ public sealed class ContentCorpusWriterTests : IDisposable
     }
 
     [Fact]
+    public void Write_DecodesUtf16LeBomWorkspaceSource_AndPreservesOriginalSourceBytes()
+    {
+        const string decoded = "CREATE TABLE dbo.SqlCommandType (Id int);\nSELECT N'run';\n";
+        byte[] diskBytes = JulieDbFixture.Utf16LeBomBytes(decoded);
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [],
+            extraFiles:
+            [
+                new JulieDbFixture.FileSpec("dbo/SqlCommandType.sql")
+                {
+                    Language = "sql",
+                    DiskBytes = diskBytes,
+                },
+            ]);
+
+        ContentCorpusFacts facts = ContentCorpusWriter.Write(
+            _contentDbPath,
+            fx.DbPath,
+            fx.WorkspaceRoot,
+            workspaceId: "workspace-1",
+            revision: 12);
+
+        Assert.Equal("current", facts.State);
+        Assert.Equal(1, facts.SourceCount);
+        Assert.Equal(1, facts.ChunkCount);
+        Assert.Equal(diskBytes.Length, facts.IndexedSourceBytes);
+        Assert.Equal(0, facts.NonUtf8Skipped);
+
+        using var connection = OpenRead();
+        Assert.Equal(TextContentKind.WorkspaceSource, ScalarString(connection, "SELECT content_kind FROM content_sources"));
+        Assert.Equal(diskBytes.Length, ScalarLong(connection, "SELECT source_bytes FROM content_sources"));
+        Assert.Contains("SqlCommandType", ScalarString(connection, "SELECT raw_text FROM content_chunks"));
+    }
+
+    [Fact]
     public void Write_ReplacesExistingContentDbAtomically()
     {
         File.WriteAllText(_contentDbPath, "not sqlite");

@@ -71,7 +71,7 @@ public sealed class ContentTool
             if (telemetry is not null)
             {
                 telemetry.Outcome = TelemetryOutcome.Error;
-                telemetry.ErrorKind = ex.GetType().Name;
+                telemetry.SetError(ex);
             }
             return $"content failed: {ex.Message}";
         }

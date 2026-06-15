@@ -101,6 +101,27 @@ public sealed class AgentInstructionsTests
     }
 
     [Fact]
+    public void Load_DocumentsDashboardLaunchWorkflow()
+    {
+        string instructions = AgentInstructions.Load();
+        Assert.Contains(
+            "If the user asks to start, open, or show the Miller dashboard, call `workspace` with `operation=dashboard`",
+            instructions);
+        Assert.Contains("dashboard request is a tool operation, not a file-finding task", instructions);
+        Assert.Contains("Do not search plugin cache directories for dashboard files", instructions);
+    }
+
+    [Fact]
+    public void WorkspaceToolDescription_RoutesDashboardLaunchRequests()
+    {
+        MethodInfo method = ToolMethod<WorkspaceTool>(nameof(WorkspaceTool.Workspace));
+        string description = method.GetCustomAttribute<DescriptionAttribute>()?.Description ?? string.Empty;
+
+        Assert.Contains("dashboard/start/open/show requests", description);
+        Assert.Contains("operation=dashboard", description);
+    }
+
+    [Fact]
     public void Load_DocumentsWebContentWorkflow()
     {
         string instructions = AgentInstructions.Load();

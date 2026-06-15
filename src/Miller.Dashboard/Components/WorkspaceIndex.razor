@@ -1,12 +1,22 @@
 @namespace Miller.Dashboard.Components
 
-<section id="workspace-index" class="panel ws-index-panel" aria-label="Registered workspaces">
+<section id="workspace-index" class="panel ws-index-panel" x-data="workspaceIndexFilter" aria-label="Registered workspaces">
     <div class="panel-heading">
         <div>
             <h2>Workspaces</h2>
             <p>@Index.WorkspaceCount.ToString("N0", CultureInfo.InvariantCulture) registered · click to inspect</p>
         </div>
-        <a href="/workspaces.json" class="subtle-link">json</a>
+        <div class="workspace-index-actions">
+            <label class="sr-only" for="workspace-filter">Filter workspaces</label>
+            <input id="workspace-filter"
+                   class="workspace-filter"
+                   type="search"
+                   placeholder="Filter workspaces"
+                   autocomplete="off"
+                   x-bind:value="query"
+                   x-on:input="onInput($event)">
+            <a href="/workspaces.json" class="subtle-link">json</a>
+        </div>
     </div>
 
     @if (Index.Entries.Count == 0)
@@ -32,6 +42,10 @@
                     <span class="workspace-row-main">
                         <span class="workspace-name">@entry.Workspace.DisplayId</span>
                         <code class="workspace-path">@entry.Workspace.CanonicalRoot</code>
+                        @if (!string.IsNullOrWhiteSpace(entry.Workspace.LastError))
+                        {
+                            <span class="workspace-error muted">@entry.Workspace.LastError</span>
+                        }
                     </span>
                     <span class="ws-cell">
                         <span class="workspace-state @StateClass(entry.Workspace.State)">@entry.Workspace.State</span>

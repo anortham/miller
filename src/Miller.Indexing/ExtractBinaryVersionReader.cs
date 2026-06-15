@@ -24,10 +24,7 @@ public static class ExtractBinaryVersionReader
         try
         {
             using var connection = SqliteReadOnlyAccess.Open(dbPath);
-            using var command = connection.CreateCommand();
-            command.CommandText = "SELECT value FROM artifact_metadata WHERE key = 'binary_version';";
-            object? value = command.ExecuteScalar();
-            return value is string s && !string.IsNullOrWhiteSpace(s) ? s : null;
+            return TryRead(connection);
         }
         catch (SqliteException)
         {
@@ -39,6 +36,32 @@ public static class ExtractBinaryVersionReader
             // File deleted between the Exists check and Open, an unwritable directory (the WAL sidecar probe
             // in SqliteReadOnlyAccess throws InvalidOperationException), or a locked file. All read as
             // "version unknown" for the eligibility gate.
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The artifact's recorded <c>binary_version</c> query using an already active database connection.
+    /// Never throws.
+    /// </summary>
+    public static string? TryRead(SqliteConnection connection)
+    {
+        if (connection is null)
+            return null;
+
+        try
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT value FROM artifact_metadata WHERE key = 'binary_version';";
+            object? value = command.ExecuteScalar();
+            return value is string s && !string.IsNullOrWhiteSpace(s) ? s : null;
+        }
+        catch (SqliteException)
+        {
+            return null;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException)
+        {
             return null;
         }
     }

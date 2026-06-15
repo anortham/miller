@@ -97,6 +97,7 @@ the tokens.
 - **Find text only inside comments or strings**: `search "<phrase>" regions=comment` or
   `search "<phrase>" regions=string_literal` — requires `MILLER_REGION_INDEX=1` and a refreshed workspace.
   Use `MILLER_REGION_MAX_BYTES=<n>` to tune oversized region indexing.
+- **Dashboard**: If the user asks to start, open, or show the Miller dashboard, call `workspace` with `operation=dashboard`. A dashboard request is a tool operation, not a file-finding task. Do not search plugin cache directories for dashboard files.
 - **Scope a change**: `impact target=…` → run the tests it lists → `edit` (preview) → `edit apply=true` →
   re-run `impact` if the surface changed.
 - **Edit a symbol**: `inspect` it → `edit …` (preview, the default) → `edit … apply=true`.
@@ -126,7 +127,7 @@ code, paste this block into the prompt:
     - content(import|add_markdown|search|read|list|remove|export, ...) for large logs, CI output, web markdown, external text, and workspace audits; use workspace_id=all for registered-workspace text audits and read bounded windows only.
     - patterns(operation?, pattern_id?, where?, path?, language?) for extractor-recognized code-shape facts; not raw AST queries.
     - workspace(status|health|refresh|full|list|open|remove|dashboard) to check readiness, refresh stale indexes,
-      open another repo, or start the local dashboard from the session.
+      open another repo, or start/open/show the local dashboard with operation=dashboard.
     Do NOT fall back to Glob/Read/Grep chains when a Miller tool fits. Miller returns targeted context in 1-2 calls.
 
 Do not use `grep`/`find`/`rg` when a Miller tool fits. Do not read a whole file before `inspect`. Do not chain

@@ -137,6 +137,10 @@ jobs:
           test -f "${publish_dir}/dashboard/wwwroot/dashboard.css"
           test -f "${publish_dir}/dashboard/wwwroot/fonts/archivo-latin.woff2"
           test -f "${publish_dir}/dashboard/wwwroot/fonts/jetbrains-mono-latin.woff2"
+          test -f "${publish_dir}/dashboard/wwwroot/js/theme-init.js"
+          test -f "${publish_dir}/dashboard/wwwroot/js/dashboard-site.js"
+          test -f "${publish_dir}/dashboard/wwwroot/js/alpine-components.js"
+          test -f "${publish_dir}/dashboard/wwwroot/lib/alpine/cspalpine.min.js"
           test ! -e "${publish_dir}/dashboard/.tools/julie-extract"
           "${publish_dir}/.tools/julie-extract" --version
           "${publish_dir}/miller" version
@@ -198,6 +202,16 @@ jobs:
           foreach ($font in @("archivo-latin.woff2", "jetbrains-mono-latin.woff2")) {
             if (-not (Test-Path (Join-Path $publishDir "dashboard/wwwroot/fonts/$font"))) {
               throw "missing packaged dashboard font $font"
+            }
+          }
+          foreach ($asset in @(
+            "js/theme-init.js",
+            "js/dashboard-site.js",
+            "js/alpine-components.js",
+            "lib/alpine/cspalpine.min.js"
+          )) {
+            if (-not (Test-Path (Join-Path $publishDir "dashboard/wwwroot/$asset"))) {
+              throw "missing packaged dashboard asset $asset"
             }
           }
           if (Test-Path $dashboardTools) {

@@ -1,0 +1,19 @@
+@namespace Miller.Dashboard.Components
+@using Miller.Server.Workspaces
+
+<div id="workspace-detail-stack" class="main-stack detail-stack">
+    <WorkspaceDetailPanel Facts="Snapshot.SelectedWorkspaceFacts" RefreshResult="RefreshResult" />
+    <ContextSavingsPanel Summary="Snapshot.ContextSavings" />
+    <ActivityFeedPanel Feed="Activity" />
+    <TelemetryPanel Telemetry="Snapshot.Telemetry" SelectedWorkspaceId="@Snapshot.SelectedWorkspaceId" />
+</div>
+
+@code {
+    [Parameter, EditorRequired] public DashboardSnapshot Snapshot { get; set; } =
+        new(Array.Empty<DashboardWorkspaceRow>(), new DashboardTelemetrySummary(null, [], 0, null, null, []), null);
+
+    [Parameter, EditorRequired] public DashboardActivityFeed Activity { get; set; } =
+        new(null, Array.Empty<DashboardActivityEntry>());
+
+    [Parameter] public WorkspaceRefreshResult? RefreshResult { get; set; }
+}

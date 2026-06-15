@@ -221,6 +221,38 @@ public sealed class TelemetryLedgerTests : IDisposable
     }
 
     [Fact]
+    public void Measure_SetError_PersistsMessageAndCopyableDetail()
+    {
+        using (var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ws1"))
+        {
+            using var scope = ledger.Measure("inspect", op: null);
+            try
+            {
+                ThrowKnownFailure();
+            }
+            catch (Exception ex)
+            {
+                scope.Outcome = TelemetryOutcome.Error;
+                scope.SetError(ex);
+            }
+        }
+
+        using var c = new SqliteConnection(ReadOnlyUnpooled(_dbPath));
+        c.Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT error_kind, error_message, error_detail FROM tool_telemetry LIMIT 1;";
+        using var r = cmd.ExecuteReader();
+        Assert.True(r.Read());
+        Assert.Equal("InvalidOperationException", r.GetString(0));
+        Assert.Equal("known ledger failure", r.GetString(1));
+        string detail = r.GetString(2);
+        Assert.Contains("System.InvalidOperationException: known ledger failure", detail);
+        Assert.Contains(nameof(ThrowKnownFailure), detail);
+
+        static void ThrowKnownFailure() => throw new InvalidOperationException("known ledger failure");
+    }
+
+    [Fact]
     public void Record_NeverThrows_OnABadRow_AndCountsTheDrop()
     {
         using var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ws1");

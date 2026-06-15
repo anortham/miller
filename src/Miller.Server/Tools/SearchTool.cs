@@ -268,7 +268,7 @@ public sealed class SearchTool
             if (scope is not null)
             {
                 scope.Outcome = TelemetryOutcome.Error;
-                scope.ErrorKind = ex.GetType().Name;
+                scope.SetError(ex);
             }
             // Return a clean compact error rather than throwing raw (which the SDK redacts to the client).
             return $"search failed: {ex.Message}";

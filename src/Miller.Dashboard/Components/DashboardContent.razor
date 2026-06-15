@@ -1,12 +1,13 @@
 @namespace Miller.Dashboard.Components
 
 <section id="dashboard-content" class="main-stack detail-stack" aria-label="Miller workspace detail">
-    <WorkspaceDetailPanel Facts="Snapshot.SelectedWorkspaceFacts" />
-    <ContextSavingsPanel Summary="Snapshot.ContextSavings" />
-    <TelemetryPanel Telemetry="Snapshot.Telemetry" SelectedWorkspaceId="@Snapshot.SelectedWorkspaceId" />
+    <WorkspaceDetailStack Snapshot="Snapshot" Activity="EffectiveActivity" />
 </section>
 
 @code {
     [Parameter, EditorRequired] public DashboardSnapshot Snapshot { get; set; } =
         new(Array.Empty<DashboardWorkspaceRow>(), new DashboardTelemetrySummary(null, [], 0, null, null, []), null);
+
+    private DashboardActivityFeed EffectiveActivity =>
+        new DashboardActivityFeed(Snapshot.SelectedWorkspaceId, Array.Empty<DashboardActivityEntry>());
 }

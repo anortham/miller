@@ -1,4 +1,3 @@
-using System.Text;
 using Microsoft.Data.Sqlite;
 using Miller.Core.Editing;
 
@@ -13,7 +12,8 @@ namespace Miller.Indexing;
 /// on-disk file by the symbol's byte span — but ONLY after verifying the disk file's BLAKE3 still matches the
 /// stored <c>files.content_hash</c> (the hard freshness invariant: a drifted file is never sliced; the caller
 /// gets <c>null</c>). It opens <c>Mode=ReadOnly</c> like the startup reader, never writes, and parameterizes
-/// every query.
+/// every query. Offsets are UTF-8 byte indices into decoded source text, while hashes and content byte counts
+/// remain over the original on-disk bytes.
 ///
 /// The schema gate already ran at startup (<see cref="SqliteSymbolReader.Read"/>), so these reads do not
 /// re-gate — they just re-open the read-only connection. All offsets follow julie's contract: byte offsets
@@ -344,6 +344,7 @@ public sealed class ExtractReader
         MissingFile,
         StaleFile,
         EmptyFile,
+        InvalidEncoding,
         InvalidSpan,
     }
 
@@ -351,9 +352,9 @@ public sealed class ExtractReader
     internal readonly record struct FileContentResult(string? Text, BodyUnavailableReason? UnavailableReason);
 
     // Re-source the on-disk file for <paramref name="relPath"/> (resolved against <paramref name="workspaceRoot"/>),
-    // returning its UTF-8 text ONLY if the disk bytes' BLAKE3 still matches the stored files.content_hash. On a
-    // missing manifest entry, missing file, or hash mismatch, returns an unavailable reason so the caller never
-    // slices drifted bytes (the §7 hard invariant). The hash compare is blake3-only (hash-domain split,
+    // returning decoded source text ONLY if the disk bytes' BLAKE3 still matches the stored files.content_hash. On a
+    // missing manifest entry, missing file, hash mismatch, or unsupported encoding, returns an unavailable reason
+    // so the caller never slices drifted or undecodable bytes (the §7 hard invariant). The hash compare is blake3-only (hash-domain split,
     // reconciliation #9): NormalizeHash strips a blake3: scheme token ONLY.
     private static FileContentResult ReadVerifiedFileContent(string dbPath, string workspaceRoot, string relPath)
     {
@@ -380,23 +381,15 @@ public sealed class ExtractReader
         if (!StringComparer.OrdinalIgnoreCase.Equals(diskHash, ContentHasher.NormalizeHash(storedHash)))
             return new FileContentResult(Text: null, UnavailableReason: BodyUnavailableReason.StaleFile);
 
-        return new FileContentResult(Text: Encoding.UTF8.GetString(bytes), UnavailableReason: null);
+        return SourceTextDecoder.TryDecode(bytes, out string text)
+            ? new FileContentResult(Text: text, UnavailableReason: null)
+            : new FileContentResult(Text: null, UnavailableReason: BodyUnavailableReason.InvalidEncoding);
     }
 
-    // julie byte offsets are absolute UTF-8 byte indices; C# strings are UTF-16. Encode, slice on bytes,
+    // julie byte offsets are absolute UTF-8 byte indices into decoded source text; C# strings are UTF-16. Encode, slice on bytes,
     // decode. Returns null on a degenerate or out-of-range span so the caller can degrade gracefully.
     private static string? SliceByBytes(string content, int startByte, int endByte)
-    {
-        if (startByte < 0 || endByte <= startByte)
-            return null;
-        byte[] bytes = Encoding.UTF8.GetBytes(content);
-        if (startByte >= bytes.Length)
-            return null;
-        int end = Math.Min(endByte, bytes.Length);
-        if (end <= startByte)
-            return null;
-        return Encoding.UTF8.GetString(bytes, startByte, end - startByte);
-    }
+        => SourceTextDecoder.SliceUtf8ByteSpan(content, startByte, endByte);
 
     // 1-based inclusive line slice. Splits on '\n' keeping the original newlines between joined lines.
     private static string? SliceByLines(string content, int startLine, int endLine)

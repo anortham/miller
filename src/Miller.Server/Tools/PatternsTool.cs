@@ -76,7 +76,7 @@ public sealed class PatternsTool
             if (telemetry is not null)
             {
                 telemetry.Outcome = TelemetryOutcome.Error;
-                telemetry.ErrorKind = ex.GetType().Name;
+                telemetry.SetError(ex);
             }
             return $"patterns failed: {ex.Message}";
         }

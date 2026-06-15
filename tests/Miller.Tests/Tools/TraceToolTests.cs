@@ -270,6 +270,44 @@ public sealed class TraceToolTests
     }
 
     [Fact]
+    public void Auto_AmbiguousTarget_CompactCapsCandidatesWithRemainderNote()
+    {
+        var symbols = Enumerable.Range(1, 25)
+            .Select(i => ($"a{i}", "Search", "method", $"src/File{i:00}.cs", i))
+            .ToArray();
+        var index = BuildSymbolIndex(symbols, Array.Empty<(string, string)>());
+
+        string outp = TraceTool.Run(index, ResolverFor(index),
+            target: "Search", scope: null, mode: "auto", to: null, depth: 3, limit: 20,
+            fullFormat: false, emitted: out int emitted, nodesVisited: out _);
+
+        Assert.Equal(0, emitted);
+        Assert.Contains("src/File20.cs", outp);
+        Assert.DoesNotContain("src/File21.cs", outp);
+        Assert.Contains("5 more candidates", outp);
+    }
+
+    [Fact]
+    public void Auto_ScopedAmbiguousTarget_AsksForMoreSpecificTarget()
+    {
+        var index = BuildSymbolIndex(
+            new[]
+            {
+                ("a1", "SearchTool", "class", "src/SearchTool.cs", 10),
+                ("a2", "SearchTool", "constructor", "src/SearchTool.cs", 12),
+            },
+            Array.Empty<(string, string)>());
+
+        string outp = TraceTool.Run(index, ResolverFor(index),
+            target: "SearchTool", scope: "src/SearchTool.cs", mode: "auto", to: null, depth: 3, limit: 20,
+            fullFormat: false, emitted: out int emitted, nodesVisited: out _);
+
+        Assert.Equal(0, emitted);
+        Assert.Contains("more specific target", outp);
+        Assert.DoesNotContain("pass scope=<file>", outp);
+    }
+
+    [Fact]
     public void Auto_AmbiguousTarget_JsonCarriesDiagnostic()
     {
         var index = BuildSymbolIndex(

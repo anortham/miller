@@ -68,6 +68,46 @@ public sealed class ExtractBinaryVersionReaderTests
         }
     }
 
+    [Fact]
+    public void TryRead_WithConnection_ReturnsTheRecordedBinaryVersion()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = fx.DbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+
+        Assert.Equal(MillerExtractContract.PinnedJulieExtractVersion, ExtractBinaryVersionReader.TryRead(connection));
+    }
+
+    [Fact]
+    public void TryRead_WithConnection_NullConnection_ReturnsNull()
+    {
+        Assert.Null(ExtractBinaryVersionReader.TryRead((SqliteConnection)null!));
+    }
+
+    [Fact]
+    public void TryRead_WithConnection_MissingMetadataTable_ReturnsNull()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            rows: [],
+            createMetadataTable: false);
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = fx.DbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+
+        Assert.Null(ExtractBinaryVersionReader.TryRead(connection));
+    }
+
     private static void DeleteBinaryVersionRow(string dbPath)
     {
         using var connection = new SqliteConnection(new SqliteConnectionStringBuilder

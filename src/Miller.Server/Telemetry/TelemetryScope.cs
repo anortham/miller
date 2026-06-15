@@ -13,6 +13,8 @@ namespace Miller.Server.Telemetry;
 /// </summary>
 public sealed class TelemetryScope : IDisposable
 {
+    private const int MaxErrorTextChars = 64_000;
+
     private readonly TelemetryLedger _ledger;
     private readonly long _startTimestamp;
     private readonly TelemetryScope? _previousCurrent;
@@ -92,6 +94,12 @@ public sealed class TelemetryScope : IDisposable
     /// <summary>An optional error-kind tag (e.g. the exception type) when <see cref="Outcome"/> is error.</summary>
     public string? ErrorKind { get; set; }
 
+    /// <summary>The exception message for dashboard issue reports, when available.</summary>
+    public string? ErrorMessage { get; private set; }
+
+    /// <summary>The copyable exception detail, usually <see cref="Exception.ToString"/>, when available.</summary>
+    public string? ErrorDetail { get; private set; }
+
     /// <summary>The number of results the tool returned (set by the tool body or the filter).</summary>
     public int? ResultCount { get; set; }
 
@@ -144,6 +152,27 @@ public sealed class TelemetryScope : IDisposable
         TargetHash = Convert.ToHexStringLower(hash);
     }
 
+    /// <summary>
+    /// Capture diagnostic detail for a failed call. This is intentionally local telemetry only: the dashboard uses
+    /// it to let users copy exception details for issue reports, while the tool result can stay concise.
+    /// </summary>
+    public void SetError(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        ErrorKind = exception.GetType().Name;
+        ErrorMessage = Truncate(exception.Message);
+        ErrorDetail = Truncate(exception.ToString());
+    }
+
+    private static string? Truncate(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return value;
+        return value.Length <= MaxErrorTextChars
+            ? value
+            : string.Concat(value.AsSpan(0, MaxErrorTextChars), "\n... truncated ...");
+    }
+
     public void Dispose()
     {
         if (_disposed)
@@ -169,7 +198,9 @@ public sealed class TelemetryScope : IDisposable
             EstTokens: EstTokens,
             IndexFresh: IndexFresh,
             TargetHash: TargetHash,
-            MetadataJson: MetadataJson);
+            MetadataJson: MetadataJson,
+            ErrorMessage: ErrorMessage,
+            ErrorDetail: ErrorDetail);
 
         _ledger.Record(in record, CorrelationId); // best-effort; never throws
     }

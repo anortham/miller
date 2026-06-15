@@ -20,4 +20,6 @@ public readonly record struct TelemetryRecord(
     long? EstTokens,
     bool? IndexFresh,
     string? TargetHash,
-    string MetadataJson);
+    string MetadataJson,
+    string? ErrorMessage = null,
+    string? ErrorDetail = null);

@@ -118,8 +118,15 @@ public sealed class DashboardRegistryReadTests : IDisposable
     public void ReadTelemetrySummary_IncludesLastCallLastErrorAndRecentErrors()
     {
         InsertTelemetryRow("ws-a", "search", "ok", "2026-05-31T10:00:00.000Z", durationMs: 12);
-        InsertTelemetryRow("ws-a", "search", "error", "2026-05-31T10:02:00.000Z",
-            durationMs: 20, errorKind: "InvalidOperationException");
+        string searchErrorId = InsertTelemetryRow(
+            "ws-a",
+            "search",
+            "error",
+            "2026-05-31T10:02:00.000Z",
+            durationMs: 20,
+            errorKind: "InvalidOperationException",
+            errorMessage: "bad argument",
+            errorDetail: "System.InvalidOperationException: bad argument\n   at Miller.Tests.Known()");
         InsertTelemetryRow("ws-a", "inspect", "error", "2026-05-31T10:04:00.000Z",
             durationMs: 7, errorKind: "KeyNotFoundException");
         InsertTelemetryRow("ws-a", "search", "ok", "2026-05-31T10:05:00.000Z", durationMs: 5);
@@ -139,6 +146,73 @@ public sealed class DashboardRegistryReadTests : IDisposable
         Assert.Equal("KeyNotFoundException", summary.RecentErrors[0].ErrorKind);
         Assert.Equal("search", summary.RecentErrors[1].Tool);
         Assert.Equal("InvalidOperationException", summary.RecentErrors[1].ErrorKind);
+        Assert.Equal(searchErrorId, summary.RecentErrors[1].Id);
+        Assert.Equal("ws-a", summary.RecentErrors[1].WorkspaceId);
+        Assert.Equal("bad argument", summary.RecentErrors[1].ErrorMessage);
+        Assert.Contains("Miller.Tests.Known", summary.RecentErrors[1].ErrorDetail);
+    }
+
+    [Fact]
+    public void ReadTelemetrySummary_OldTelemetrySchemaMarksDiagnosticsUnavailable()
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _telemetryDb,
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using (var ddl = connection.CreateCommand())
+        {
+            ddl.CommandText = """
+                CREATE TABLE tool_telemetry (
+                    id TEXT PRIMARY KEY,
+                    ts TEXT NOT NULL,
+                    tool TEXT NOT NULL,
+                    op TEXT,
+                    workspace_id TEXT,
+                    duration_ms INTEGER NOT NULL,
+                    outcome TEXT NOT NULL,
+                    error_kind TEXT,
+                    result_count INTEGER,
+                    est_tokens INTEGER
+                ) STRICT;
+                """;
+            ddl.ExecuteNonQuery();
+        }
+        using (var insert = connection.CreateCommand())
+        {
+            insert.CommandText = """
+                INSERT INTO tool_telemetry
+                    (id, ts, tool, workspace_id, duration_ms, outcome, error_kind)
+                VALUES
+                    ('old-error-row', '2026-05-31T10:01:00.000Z', 'search', 'ws-a', 24, 'error', 'ArgumentException');
+                """;
+            insert.ExecuteNonQuery();
+        }
+
+        DashboardTelemetrySummary summary = DashboardData.ReadTelemetrySummary(_telemetryDb, "ws-a");
+        DashboardDiagnostics diagnostics = DashboardData.ReadDiagnostics(new DashboardRuntimeInfo(
+            RegistryDbPath: _registryDb,
+            TelemetryDbPath: _telemetryDb,
+            ToolsRoot: Path.Combine(_dir, ".tools"),
+            WebRoot: Path.Combine(_dir, "wwwroot"),
+            Url: "http://127.0.0.1:4977",
+            PreferredWorkspaceRoot: "/repo/a",
+            ProcessId: 1234,
+            Version: "test-version",
+            ExecutablePath: "/tmp/Miller.Dashboard",
+            StdoutLogPath: Path.Combine(_dir, "dashboard.out.log"),
+            StderrLogPath: Path.Combine(_dir, "dashboard.err.log")));
+
+        DashboardRecentError error = Assert.Single(summary.RecentErrors);
+        Assert.Equal("old-error-row", error.Id);
+        Assert.Null(error.ErrorMessage);
+        Assert.Null(error.ErrorDetail);
+        Assert.False(diagnostics.TelemetryErrorDetailsAvailable);
+        Assert.Contains(
+            diagnostics.Warnings,
+            warning => warning.Contains("older telemetry schema", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -395,6 +469,7 @@ public sealed class DashboardRegistryReadTests : IDisposable
         Assert.Equal(7, facts.LastRevision);
         Assert.Equal(snapshot.Workspaces[0].LastScanAt, facts.LastScanAt);
         Assert.Equal("missing", facts.SearchSidecarStatus);
+        Assert.Equal("missing", facts.ContentSidecarStatus);
 
         DashboardLanguageStat csharp = Assert.Single(facts.Languages, language => language.Language == "csharp");
         Assert.Equal(2, csharp.FileCount);
@@ -415,11 +490,51 @@ public sealed class DashboardRegistryReadTests : IDisposable
         Assert.Equal(3_500, snapshot.ContextSavings.BytesReturned);
         Assert.Equal(14_500, snapshot.ContextSavings.SavedBytes);
         Assert.Equal(850, snapshot.ContextSavings.EstimatedReturnedTokens);
+        Assert.Equal(14500d / 18000d, snapshot.ContextSavings.SavingsRatio);
         Assert.Equal(2, snapshot.ContextSavings.Tools.Count);
         DashboardContextSavingsTool contextTool =
             Assert.Single(snapshot.ContextSavings.Tools, tool => tool.Tool == "context");
         Assert.Equal(10_000, contextTool.SourceBytes);
         Assert.Equal(8_000, contextTool.SavedBytes);
+    }
+
+    [Fact]
+    public void DashboardIndexFactsCache_ReusesFactsWithinTtl()
+    {
+        using JulieDbFixture fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            rows:
+            [
+                new JulieDbFixture.SymbolRow(
+                    "s1",
+                    "Cached",
+                    "class",
+                    "csharp",
+                    "src/Cached.cs",
+                    "class Cached",
+                    1,
+                    null),
+            ]);
+        var workspace = new DashboardWorkspaceRow(
+            "ws-cache",
+            "cache-abcd1234",
+            fixture.WorkspaceRoot,
+            fixture.DbPath,
+            "2026-05-31T10:00:00Z",
+            "2026-05-31T10:01:00Z",
+            3,
+            "ready",
+            null);
+
+        DashboardIndexFactsCache.Clear();
+        DashboardWorkspaceFacts first = DashboardIndexFactsCache.Read(workspace);
+        DashboardWorkspaceFacts second = DashboardIndexFactsCache.Read(workspace);
+
+        Assert.Same(first, second);
+        DashboardIndexFactsCache.Clear();
+        DashboardWorkspaceFacts third = DashboardIndexFactsCache.Read(workspace);
+        Assert.NotSame(first, third);
     }
 
     [Fact]
@@ -571,11 +686,16 @@ public sealed class DashboardRegistryReadTests : IDisposable
                 RecentErrors:
                 [
                     new DashboardRecentError(
-                        "2026-05-31T10:01:00Z",
-                        "search",
-                        "auto",
-                        "InvalidOperationException",
-                        DurationMs: 24)
+                        Id: "0197a000-0000-7000-8000-000000000001",
+                        Ts: "2026-05-31T10:01:00Z",
+                        Tool: "search",
+                        Op: "auto",
+                        ErrorKind: "InvalidOperationException",
+                        DurationMs: 24,
+                        WorkspaceId: "ws-a",
+                        WorkspaceDisplayId: "alpha-abcd1234",
+                        ErrorMessage: "bad argument",
+                        ErrorDetail: "System.InvalidOperationException: bad argument\n   at Miller.Tests.Known()")
                 ]),
             SelectedWorkspaceId: "ws-a");
 
@@ -597,6 +717,20 @@ public sealed class DashboardRegistryReadTests : IDisposable
         Assert.Contains("Last error", html);
         Assert.Contains("Recent errors", html);
         Assert.Contains("InvalidOperationException", html);
+        Assert.Contains("bad argument", html);
+        Assert.Contains("Miller.Tests.Known", html);
+        Assert.Contains("data-issue-details", html);
+        Assert.Contains("data-issue-id=\"0197a000-0000-7000-8000-000000000001\"", html);
+        Assert.Contains("<summary>view issue details</summary>", html);
+        Assert.Contains("class=\"copy-issue-button\"", html);
+        Assert.Contains("data-copy-target=\"issue-copy-0197a000-0000-7000-8000-000000000001\"", html);
+        Assert.Contains(">Copy</button>", html);
+        Assert.DoesNotContain("onclick=", html);
+        Assert.Contains("id=\"issue-copy-0197a000-0000-7000-8000-000000000001\"", html);
+        Assert.DoesNotContain("copy issue details", html);
+        Assert.Contains("cid", html);
+        Assert.Contains("/js/dashboard-site.js", html);
+        Assert.Contains("activity.json?workspace_id=ws-a", html);
     }
 
     [Fact]
@@ -669,6 +803,8 @@ public sealed class DashboardRegistryReadTests : IDisposable
         });
 
         Assert.Contains("snapshot.json?workspace_id=ws-a", html);
+        Assert.Contains("activity.json?workspace_id=ws-a", html);
+        Assert.Contains("diagnostics.json", html);
         Assert.Contains("Index transparency", html);
         Assert.Contains("4 files", html);
         Assert.Contains("3 symbols", html);
@@ -678,6 +814,7 @@ public sealed class DashboardRegistryReadTests : IDisposable
         Assert.Contains("markdown", html);
         Assert.Contains("class", html);
         Assert.Contains("Context saved", html);
+        Assert.Contains("hx-target=\"#workspace-detail-stack\"", html);
         Assert.Contains("14.5 KB", html);
         Assert.Contains("850 tokens", html);
         Assert.Contains("context", html);
@@ -829,20 +966,31 @@ public sealed class DashboardRegistryReadTests : IDisposable
         Assert.Contains("class=\"workspace-row-main\"", html);
         Assert.Contains("alpha-abcd1234", html);
         Assert.Contains("csharp", html);
+        Assert.Contains("id=\"workspace-filter\"", html);
+        Assert.Contains("x-data=\"workspaceIndexFilter\"", html);
         Assert.DoesNotContain("Index.Entries", html);
     }
 
     [Fact]
     public void DashboardHost_PreservesFragmentCompatibilityRoutes()
     {
+        string endpoints = File.ReadAllText(Path.Combine(
+            Miller.Tests.ScaleTestSupport.RepoRoot(),
+            "src",
+            "Miller.Dashboard",
+            "Endpoints",
+            "DashboardEndpoints.cs"));
         string program = File.ReadAllText(Path.Combine(
             Miller.Tests.ScaleTestSupport.RepoRoot(),
             "src",
             "Miller.Dashboard",
             "Program.cs"));
 
-        Assert.Contains("MapGet(\"/fragments/dashboard\"", program, StringComparison.Ordinal);
-        Assert.Contains("MapGet(\"/fragments/workspaces\"", program, StringComparison.Ordinal);
+        Assert.Contains("MapGet(\"/fragments/dashboard\"", endpoints, StringComparison.Ordinal);
+        Assert.Contains("MapGet(\"/fragments/workspaces\"", endpoints, StringComparison.Ordinal);
+        Assert.Contains("MapMethods(\"/favicon.ico\"", program, StringComparison.Ordinal);
+        Assert.Contains("MapGet(\"/diagnostics.json\"", endpoints, StringComparison.Ordinal);
+        Assert.Contains("MapDashboardEndpoints", program, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -873,25 +1021,15 @@ public sealed class DashboardRegistryReadTests : IDisposable
     [Fact]
     public void RenderTelemetryJson_UsesStableSnakeCaseContract()
     {
-        using (var ledger = TelemetryLedger.Open(_telemetryDb, "ws-json", "/repo/json"))
-        {
-            ledger.Record(new TelemetryRecord(
-                Tool: "search",
-                Op: null,
-                WorkspaceId: "ws-json",
-                WorkspaceRoot: "/repo/json",
-                DurationMs: 25,
-                Outcome: "empty",
-                ErrorKind: null,
-                ResultCount: 0,
-                BytesExamined: 0,
-                BytesReturned: 0,
-                SourceBytes: 0,
-                EstTokens: 7,
-                IndexFresh: true,
-                TargetHash: "hash-json",
-                MetadataJson: "{}"));
-        }
+        string errorId = InsertTelemetryRow(
+            "ws-json",
+            "search",
+            "error",
+            "2026-05-31T12:02:00.000Z",
+            durationMs: 25,
+            errorKind: "ArgumentException",
+            errorMessage: "missing query",
+            errorDetail: "System.ArgumentException: missing query");
 
         string json = DashboardData.RenderTelemetryJson(_telemetryDb, "ws-json");
 
@@ -903,9 +1041,41 @@ public sealed class DashboardRegistryReadTests : IDisposable
         Assert.Equal("search", tool.GetProperty("tool").GetString());
         Assert.Equal(1, tool.GetProperty("calls").GetInt64());
         Assert.Equal(25, tool.GetProperty("p95_ms").GetInt64());
-        Assert.Equal(7, tool.GetProperty("sum_est_tokens").GetInt64());
+        Assert.Equal(0, tool.GetProperty("sum_est_tokens").GetInt64());
         Assert.True(tool.TryGetProperty("last_call_ts", out _));
-        Assert.True(root.TryGetProperty("recent_errors", out _));
+        JsonElement error = root.GetProperty("recent_errors")[0];
+        Assert.Equal(errorId, error.GetProperty("id").GetString());
+        Assert.Equal("missing query", error.GetProperty("error_message").GetString());
+        Assert.Equal("System.ArgumentException: missing query", error.GetProperty("error_detail").GetString());
+    }
+
+    [Fact]
+    public void RenderDiagnosticsJson_ReportsResolvedPathsAndTelemetrySchema()
+    {
+        using (TelemetryLedger.Open(_telemetryDb, "ws-json", "/repo/json"))
+        {
+        }
+
+        string json = DashboardData.RenderDiagnosticsJson(new DashboardRuntimeInfo(
+            RegistryDbPath: _registryDb,
+            TelemetryDbPath: _telemetryDb,
+            ToolsRoot: Path.Combine(_dir, ".tools"),
+            WebRoot: Path.Combine(_dir, "wwwroot"),
+            Url: "http://127.0.0.1:4977",
+            PreferredWorkspaceRoot: "/repo/json",
+            ProcessId: 1234,
+            Version: "test-version",
+            ExecutablePath: "/tmp/Miller.Dashboard",
+            StdoutLogPath: Path.Combine(_dir, "dashboard.out.log"),
+            StderrLogPath: Path.Combine(_dir, "dashboard.err.log")));
+
+        using var doc = JsonDocument.Parse(json);
+        JsonElement root = doc.RootElement;
+        Assert.Equal(_registryDb, root.GetProperty("registry_db_path").GetString());
+        Assert.Equal(_telemetryDb, root.GetProperty("telemetry_db_path").GetString());
+        Assert.Equal("test-version", root.GetProperty("version").GetString());
+        Assert.True(root.GetProperty("telemetry_error_details_available").GetBoolean());
+        Assert.Empty(root.GetProperty("warnings").EnumerateArray());
     }
 
     [Fact]
@@ -992,7 +1162,7 @@ public sealed class DashboardRegistryReadTests : IDisposable
         });
     }
 
-    private void InsertTelemetryRow(
+    private string InsertTelemetryRow(
         string workspaceId,
         string tool,
         string outcome,
@@ -1002,7 +1172,10 @@ public sealed class DashboardRegistryReadTests : IDisposable
         string? op = null,
         long? estTokens = null,
         long bytesReturned = 0,
-        long sourceBytes = 0)
+        long sourceBytes = 0,
+        string? errorMessage = null,
+        string? errorDetail = null,
+        string? id = null)
     {
         using (TelemetryLedger.Open(_telemetryDb, workspaceId, "/repo/test"))
         {
@@ -1017,15 +1190,16 @@ public sealed class DashboardRegistryReadTests : IDisposable
         }.ToString());
         connection.Open();
         using var cmd = connection.CreateCommand();
+        string rowId = id ?? Guid.CreateVersion7().ToString();
         cmd.CommandText = """
             INSERT INTO tool_telemetry
                 (id, ts, tool, op, workspace_id, workspace_root, duration_ms, outcome, error_kind,
-                 bytes_returned, source_bytes, est_tokens)
+                 error_message, error_detail, bytes_returned, source_bytes, est_tokens)
             VALUES
                 ($id, $ts, $tool, $op, $ws, $root, $duration, $outcome, $error,
-                 $bytesReturned, $sourceBytes, $tokens);
+                 $message, $detail, $bytesReturned, $sourceBytes, $tokens);
             """;
-        cmd.Parameters.AddWithValue("$id", Guid.CreateVersion7().ToString());
+        cmd.Parameters.AddWithValue("$id", rowId);
         cmd.Parameters.AddWithValue("$ts", ts);
         cmd.Parameters.AddWithValue("$tool", tool);
         cmd.Parameters.AddWithValue("$op", (object?)op ?? DBNull.Value);
@@ -1034,9 +1208,12 @@ public sealed class DashboardRegistryReadTests : IDisposable
         cmd.Parameters.AddWithValue("$duration", durationMs);
         cmd.Parameters.AddWithValue("$outcome", outcome);
         cmd.Parameters.AddWithValue("$error", (object?)errorKind ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$message", (object?)errorMessage ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$detail", (object?)errorDetail ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$bytesReturned", bytesReturned);
         cmd.Parameters.AddWithValue("$sourceBytes", sourceBytes);
         cmd.Parameters.AddWithValue("$tokens", (object?)estTokens ?? DBNull.Value);
         cmd.ExecuteNonQuery();
+        return rowId;
     }
 }

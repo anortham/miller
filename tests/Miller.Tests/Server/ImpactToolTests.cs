@@ -336,6 +336,36 @@ public sealed class ImpactToolTests
     }
 
     [Fact]
+    public void Run_AmbiguousTarget_CompactCapsCandidatesWithRemainderNote()
+    {
+        var symbols = Enumerable.Range(1, 25)
+            .Select(i => new IndexedSymbol(
+                i - 1,
+                i.ToString("x32"),
+                "Search",
+                "void Search()",
+                "method",
+                "csharp",
+                $"src/File{i:00}.cs",
+                i,
+                i,
+                ParentId: null,
+                IsTest: false))
+            .ToArray();
+        var index = MillerRepositoryIndex.Build(symbols, Array.Empty<GraphEdge>());
+        var resolver = new SmartTargetResolver(index);
+
+        string output = ImpactTool.Run(index, resolver,
+            target: "Search", changedPaths: null, diff: null, maxDepth: 2, limit: 100, json: false,
+            out int impactedCount, out _);
+
+        Assert.Equal(0, impactedCount);
+        Assert.Contains("src/File20.cs", output);
+        Assert.DoesNotContain("src/File21.cs", output);
+        Assert.Contains("5 more candidates", output);
+    }
+
+    [Fact]
     public void Run_MisspelledTarget_SuggestsNearMissesInNote()
     {
         var (index, resolver) = BuildFixture();

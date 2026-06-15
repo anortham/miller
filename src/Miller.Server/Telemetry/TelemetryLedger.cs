@@ -21,6 +21,7 @@ public sealed class TelemetryLedger : IDisposable
             tool TEXT NOT NULL, op TEXT, workspace_id TEXT, workspace_root TEXT,
             duration_ms INTEGER NOT NULL CHECK (duration_ms >= 0),
             outcome TEXT NOT NULL CHECK (outcome IN ('ok','empty','error')), error_kind TEXT,
+            error_message TEXT, error_detail TEXT,
             result_count INTEGER,
             bytes_examined INTEGER NOT NULL DEFAULT 0 CHECK (bytes_examined >= 0),
             bytes_returned INTEGER NOT NULL DEFAULT 0 CHECK (bytes_returned >= 0),
@@ -55,10 +56,11 @@ public sealed class TelemetryLedger : IDisposable
         _insert.CommandText = """
             INSERT INTO tool_telemetry
                 (id, tool, op, workspace_id, workspace_root, duration_ms, outcome, error_kind, result_count,
-                 bytes_examined, bytes_returned, source_bytes, est_tokens, index_fresh, target_hash, metadata_json)
+                 error_message, error_detail, bytes_examined, bytes_returned, source_bytes, est_tokens, index_fresh,
+                 target_hash, metadata_json)
             VALUES
                 ($id, $tool, $op, $ws, $wsroot, $dur, $outcome, $errkind, $rc,
-                 $bex, $bret, $src, $est, $fresh, $hash, $meta);
+                 $errmsg, $errdetail, $bex, $bret, $src, $est, $fresh, $hash, $meta);
             """;
         // Declare parameters once; values are set per Record() call. Prepared and reused on the hot path.
         _insert.Parameters.Add("$id", SqliteType.Text);
@@ -70,6 +72,8 @@ public sealed class TelemetryLedger : IDisposable
         _insert.Parameters.Add("$outcome", SqliteType.Text);
         _insert.Parameters.Add("$errkind", SqliteType.Text);
         _insert.Parameters.Add("$rc", SqliteType.Integer);
+        _insert.Parameters.Add("$errmsg", SqliteType.Text);
+        _insert.Parameters.Add("$errdetail", SqliteType.Text);
         _insert.Parameters.Add("$bex", SqliteType.Integer);
         _insert.Parameters.Add("$bret", SqliteType.Integer);
         _insert.Parameters.Add("$src", SqliteType.Integer);
@@ -118,8 +122,25 @@ public sealed class TelemetryLedger : IDisposable
             ddl.CommandText = CreateTableDdl;
             ddl.ExecuteNonQuery();
         }
+        EnsureTextColumn(connection, "error_message");
+        EnsureTextColumn(connection, "error_detail");
 
         return new TelemetryLedger(connection, workspaceId, workspaceRoot);
+    }
+
+    private static void EnsureTextColumn(SqliteConnection connection, string columnName)
+    {
+        using (var exists = connection.CreateCommand())
+        {
+            exists.CommandText = "SELECT 1 FROM pragma_table_info('tool_telemetry') WHERE name = $name LIMIT 1;";
+            exists.Parameters.AddWithValue("$name", columnName);
+            if (exists.ExecuteScalar() is not null)
+                return;
+        }
+
+        using var alter = connection.CreateCommand();
+        alter.CommandText = $"ALTER TABLE tool_telemetry ADD COLUMN {columnName} TEXT;";
+        alter.ExecuteNonQuery();
     }
 
     /// <summary>
@@ -168,6 +189,8 @@ public sealed class TelemetryLedger : IDisposable
                 _insert.Parameters["$outcome"].Value = record.Outcome;
                 _insert.Parameters["$errkind"].Value = (object?)record.ErrorKind ?? DBNull.Value;
                 _insert.Parameters["$rc"].Value = (object?)record.ResultCount ?? DBNull.Value;
+                _insert.Parameters["$errmsg"].Value = (object?)record.ErrorMessage ?? DBNull.Value;
+                _insert.Parameters["$errdetail"].Value = (object?)record.ErrorDetail ?? DBNull.Value;
                 _insert.Parameters["$bex"].Value = record.BytesExamined;
                 _insert.Parameters["$bret"].Value = record.BytesReturned;
                 _insert.Parameters["$src"].Value = record.SourceBytes;
