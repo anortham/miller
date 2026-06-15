@@ -30,9 +30,10 @@ public sealed class AgentInstructionsTests
     public void Load_StaysUnderClaudeCodeInstructionBudget()
     {
         string instructions = AgentInstructions.Load();
+        int clientWorstCaseLength = instructions.ReplaceLineEndings("\r\n").Length;
         Assert.True(
-            instructions.Length <= MaxServerInstructionsChars,
-            $"Server instructions are {instructions.Length} chars; keep them under {MaxServerInstructionsChars} for MCP clients with instruction limits.");
+            clientWorstCaseLength <= MaxServerInstructionsChars,
+            $"Server instructions are {clientWorstCaseLength} chars after CRLF normalization; keep them under {MaxServerInstructionsChars} for MCP clients with instruction limits.");
     }
 
     [Fact]

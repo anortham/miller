@@ -78,6 +78,7 @@ public sealed class IndexerSidecarConvergerTests
     [Fact]
     public void Converge_ContentFailure_UsesRecoveryRebuild()
     {
+        string symbolsDbPath = Path.Combine(Path.GetTempPath(), "miller", "symbols.db");
         int contentCalls = 0;
         string? recoveryPath = null;
         var converger = NewConverger(
@@ -96,15 +97,16 @@ public sealed class IndexerSidecarConvergerTests
                 return true;
             });
 
-        converger.Converge("/tmp/miller/symbols.db", "/workspace", "workspace-1", 45, fullRebuild: false);
+        converger.Converge(symbolsDbPath, "/workspace", "workspace-1", 45, fullRebuild: false);
 
         Assert.Equal(2, contentCalls);
-        Assert.Equal("/tmp/miller/content.db", recoveryPath);
+        Assert.Equal(Path.Combine(Path.GetTempPath(), "miller", "content.db"), recoveryPath);
     }
 
     [Fact]
     public void Converge_SearchFailure_UsesFullSearchRecoveryRebuild()
     {
+        string symbolsDbPath = Path.Combine(Path.GetTempPath(), "miller", "symbols.db");
         int searchCurrentCalls = 0;
         int searchBuildCalls = 0;
         string? recoveryPath = null;
@@ -128,11 +130,11 @@ public sealed class IndexerSidecarConvergerTests
                 return true;
             });
 
-        converger.Converge("/tmp/miller/symbols.db", "/workspace", "workspace-1", 46, fullRebuild: false);
+        converger.Converge(symbolsDbPath, "/workspace", "workspace-1", 46, fullRebuild: false);
 
         Assert.Equal(1, searchCurrentCalls);
         Assert.Equal(1, searchBuildCalls);
-        Assert.Equal("/tmp/miller/search.db", recoveryPath);
+        Assert.Equal(Path.Combine(Path.GetTempPath(), "miller", "search.db"), recoveryPath);
     }
 
     private static IndexerSidecarConverger NewConverger(
