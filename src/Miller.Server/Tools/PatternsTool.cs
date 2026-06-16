@@ -63,9 +63,17 @@ public sealed class PatternsTool
             if (telemetry is not null)
             {
                 ReadToolWorkspaceRouting.ApplyTelemetry(telemetry, context);
+                telemetry.Op = NormalizeOperation(operation);
                 telemetry.SetTarget(TargetForTelemetry(operation, pattern_id));
                 telemetry.ResultCount = result.ResultCount;
                 telemetry.Outcome = result.ResultCount == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
+                telemetry.SetMetadata("has_pattern_id", !string.IsNullOrWhiteSpace(pattern_id));
+                telemetry.SetMetadata("has_language", !string.IsNullOrWhiteSpace(language));
+                telemetry.SetMetadata("has_path", !string.IsNullOrWhiteSpace(path));
+                telemetry.SetMetadata("has_where", !string.IsNullOrWhiteSpace(where));
+                telemetry.SetMetadata("limit_bucket", LimitBucket(limit));
+                if (result.ResultCount == 0)
+                    telemetry.SetEmptyReason("no_pattern_facts");
             }
 
             string? banner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
@@ -441,6 +449,16 @@ public sealed class PatternsTool
         string op = NormalizeOperation(operation);
         return string.IsNullOrWhiteSpace(patternId) ? op : op + " " + patternId.Trim();
     }
+
+    private static string LimitBucket(int limit) => limit switch
+    {
+        <= 0 => "0",
+        <= 5 => "1-5",
+        <= 10 => "6-10",
+        <= 25 => "11-25",
+        <= 50 => "26-50",
+        _ => "51+",
+    };
 
     private static Utf8JsonWriter NewWriter(ArrayBufferWriter<byte> buffer) =>
         new(buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });

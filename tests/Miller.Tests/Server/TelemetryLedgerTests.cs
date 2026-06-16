@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Miller.Server.Telemetry;
 using Xunit;
@@ -250,6 +251,35 @@ public sealed class TelemetryLedgerTests : IDisposable
         Assert.Contains(nameof(ThrowKnownFailure), detail);
 
         static void ThrowKnownFailure() => throw new InvalidOperationException("known ledger failure");
+    }
+
+    [Fact]
+    public void Measure_MergesStructuredMetadata_WithoutRawTarget()
+    {
+        using (var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ws1"))
+        {
+            using var scope = ledger.Measure("search", op: null);
+            scope.SetTarget("raw secret query");
+            scope.SetMetadata("route", "symbols");
+            scope.SetMetadata("has_regions", true);
+            scope.SetMetadata("limit_bucket", "11-25");
+            scope.SetEmptyReason("no_symbol_hits");
+            scope.Outcome = TelemetryOutcome.Empty;
+        }
+
+        using var c = new SqliteConnection(ReadOnlyUnpooled(_dbPath));
+        c.Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT metadata_json FROM tool_telemetry LIMIT 1;";
+        using var r = cmd.ExecuteReader();
+        Assert.True(r.Read());
+        string metadata = r.GetString(0);
+        using JsonDocument doc = JsonDocument.Parse(metadata);
+        Assert.Equal("symbols", doc.RootElement.GetProperty("route").GetString());
+        Assert.True(doc.RootElement.GetProperty("has_regions").GetBoolean());
+        Assert.Equal("11-25", doc.RootElement.GetProperty("limit_bucket").GetString());
+        Assert.Equal("no_symbol_hits", doc.RootElement.GetProperty("empty_reason").GetString());
+        Assert.DoesNotContain("raw secret query", metadata, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

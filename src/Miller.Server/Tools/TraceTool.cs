@@ -93,11 +93,20 @@ public sealed class TraceTool
             if (telemetry is not null)
             {
                 ReadToolWorkspaceRouting.ApplyTelemetry(telemetry, context);
+                string normalizedMode = NormalizeMode(mode);
+                telemetry.Op = normalizedMode;
                 telemetry.SetTarget(target);
                 telemetry.ResultCount = emitted;
                 // D10 work proxy (bytes_examined ≈ nodes visited): the edges/neighbours the walk produced.
                 telemetry.BytesExamined = nodesVisited;
                 telemetry.Outcome = emitted == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
+                telemetry.SetMetadata("format", full ? "full" : json ? "json" : "compact");
+                telemetry.SetMetadata("has_scope", !string.IsNullOrWhiteSpace(scope));
+                telemetry.SetMetadata("has_to", !string.IsNullOrWhiteSpace(to));
+                telemetry.SetMetadata("depth_bucket", DepthBucket(depth));
+                telemetry.SetMetadata("limit_bucket", LimitBucket(limit));
+                if (emitted == 0)
+                    telemetry.SetEmptyReason(TraceEmptyReason(normalizedMode));
             }
             return output;
         }
@@ -115,6 +124,35 @@ public sealed class TraceTool
     private const string ModeAuto = "auto";
     private const string ModePath = "path";
     private const string ModeBridge = "bridge";
+
+    private static string NormalizeMode(string? mode) =>
+        string.IsNullOrWhiteSpace(mode) ? ModeAuto : mode.Trim().ToLowerInvariant();
+
+    private static string TraceEmptyReason(string mode) => mode switch
+    {
+        ModePath => "no_path",
+        ModeBridge => "no_bridge_path",
+        _ => "no_trace_edges",
+    };
+
+    private static string LimitBucket(int limit) => limit switch
+    {
+        <= 0 => "0",
+        <= 5 => "1-5",
+        <= 10 => "6-10",
+        <= 25 => "11-25",
+        <= 50 => "26-50",
+        _ => "51+",
+    };
+
+    private static string DepthBucket(int depth) => depth switch
+    {
+        <= 0 => "0",
+        1 => "1",
+        2 => "2",
+        <= 5 => "3-5",
+        _ => "6+",
+    };
 
     /// <summary>
     /// The pure execution core (no MCP/DI/telemetry; no DB — the graphs are in-memory). Resolves the start

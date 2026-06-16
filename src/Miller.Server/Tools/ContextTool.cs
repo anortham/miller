@@ -82,7 +82,8 @@ public sealed partial class ContextTool
             int selectedCount;
             int candidatesExamined;
             string output;
-            switch (ParseReferenceMode(reference_mode))
+            ReferenceMode parsedReferenceMode = ParseReferenceMode(reference_mode);
+            switch (parsedReferenceMode)
             {
                 case ReferenceMode.Off:
                     output = Run(context.Index, context.Resolver,
@@ -110,12 +111,23 @@ public sealed partial class ContextTool
             if (telemetry is not null)
             {
                 ReadToolWorkspaceRouting.ApplyTelemetry(telemetry, context);
+                telemetry.Op = parsedReferenceMode == ReferenceMode.Usage ? "usage" : "off";
                 telemetry.SetTarget(query);
                 telemetry.ResultCount = selectedCount;
                 // D10 work proxy (bytes_examined ≈ nodes visited): the candidate set (seeds + reached) the packer
                 // considered, before the budget truncated it.
                 telemetry.BytesExamined = candidatesExamined;
                 telemetry.Outcome = selectedCount == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
+                telemetry.SetMetadata("format", json ? "json" : "compact");
+                telemetry.SetMetadata("token_budget_bucket", TokenBudgetBucket(token_budget));
+                telemetry.SetMetadata("max_hops_bucket", HopsBucket(max_hops));
+                telemetry.SetMetadata("has_entry_symbols", entry_symbols is { Length: > 0 });
+                telemetry.SetMetadata("has_failing_test", !string.IsNullOrWhiteSpace(failing_test));
+                telemetry.SetMetadata("has_stack_trace", !string.IsNullOrWhiteSpace(stack_trace));
+                telemetry.SetMetadata("reference_depth_bucket", HopsBucket(reference_depth));
+                telemetry.SetMetadata("exclude_tests", exclude_tests);
+                if (selectedCount == 0)
+                    telemetry.SetEmptyReason("no_context_symbols");
             }
             return output;
         }
@@ -151,6 +163,23 @@ public sealed partial class ContextTool
             "usage" => ReferenceMode.Usage,
             _ => throw new ArgumentException("reference_mode must be off or usage."),
         };
+
+    private static string TokenBudgetBucket(int tokenBudget) => tokenBudget switch
+    {
+        <= 0 => "0",
+        <= 1000 => "1-1000",
+        <= 4000 => "1001-4000",
+        <= 8000 => "4001-8000",
+        _ => "8001+",
+    };
+
+    private static string HopsBucket(int hops) => hops switch
+    {
+        <= 0 => "0",
+        1 => "1",
+        2 => "2",
+        _ => "3+",
+    };
 
     /// <summary>
     /// The pure execution core (no MCP/DI/telemetry; no DB — search + graph are in-memory). Builds the ordered

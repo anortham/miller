@@ -18,6 +18,16 @@ public sealed class SearchRoutePlannerTests
     }
 
     [Fact]
+    public void Plan_InvalidRegions_IncludesCompactExample()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            SearchRoutePlanner.Plan("source", "class"));
+
+        Assert.Contains("regions=comment", ex.Message);
+        Assert.Contains("doc_comment,string_literal", ex.Message);
+    }
+
+    [Fact]
     public void Plan_SourceRoutesToWorkspaceSourceContentKind()
     {
         SearchRoute route = SearchRoutePlanner.Plan("source", regions: null);

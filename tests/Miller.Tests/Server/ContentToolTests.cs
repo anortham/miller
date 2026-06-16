@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Miller.Server;
+using Miller.Server.Telemetry;
 using Miller.Server.Tools;
 using Miller.Tests.Indexing;
 using ModelContextProtocol.Client;
@@ -36,6 +37,22 @@ public sealed class ContentToolTests : IDisposable
     {
         SqliteConnection.ClearAllPools();
         try { Directory.Delete(_dir, recursive: true); } catch { /* best effort */ }
+    }
+
+    private static (string? Op, string MetadataJson, string Outcome) ReadTelemetryOpMetadata(string dbPath)
+    {
+        using var c = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        c.Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT op, metadata_json, outcome FROM tool_telemetry LIMIT 1;";
+        using var r = cmd.ExecuteReader();
+        Assert.True(r.Read(), "expected one telemetry row");
+        return (r.IsDBNull(0) ? null : r.GetString(0), r.GetString(1), r.GetString(2));
     }
 
     [Fact]
@@ -115,6 +132,33 @@ public sealed class ContentToolTests : IDisposable
 
         string afterRemove = tool.Content("search", query: "SecretToken42");
         Assert.Equal("No results.", afterRemove.Trim());
+    }
+
+    [Fact]
+    public void Content_Search_RecordsOperationShapeAndEmptyReason_InTelemetry()
+    {
+        string logPath = Path.Combine(_dir, "ci.log");
+        File.WriteAllText(logPath, "Known marker appears here.");
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        tool.Content("import", path: logPath);
+
+        using (var ledger = TelemetryLedger.Open(_workspace.TelemetryDbPath, _workspace.WorkspaceId, _workspace.WorkspaceRoot))
+        {
+            using var scope = ledger.Measure("content", op: null);
+            string output = tool.Content("search", query: "MissingSecretValue", content_kind: "web", limit: 7);
+            Assert.Equal("No results.", output.Trim());
+        }
+
+        var row = ReadTelemetryOpMetadata(_workspace.TelemetryDbPath);
+        Assert.Equal("search", row.Op);
+        Assert.Equal("empty", row.Outcome);
+        using JsonDocument doc = JsonDocument.Parse(row.MetadataJson);
+        Assert.Equal("web", doc.RootElement.GetProperty("content_kind").GetString());
+        Assert.Equal("compact", doc.RootElement.GetProperty("format").GetString());
+        Assert.Equal("6-10", doc.RootElement.GetProperty("limit_bucket").GetString());
+        Assert.False(doc.RootElement.GetProperty("workspace_all").GetBoolean());
+        Assert.Equal("no_content_hits", doc.RootElement.GetProperty("empty_reason").GetString());
+        Assert.DoesNotContain("MissingSecretValue", row.MetadataJson, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

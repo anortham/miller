@@ -1,7 +1,9 @@
 using System.ComponentModel;
 using System.IO.Pipelines;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
+using Miller.Server.Logging;
 using Miller.Server.Telemetry;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
@@ -28,6 +30,10 @@ public static class CorrelationProbeTool
         Log.Information("cid probe ran");
         return "ok";
     }
+
+    /// <summary>Returns without logging; the central filter must still write one correlated diagnostic line.</summary>
+    [McpServerTool(Name = "cid_silent_probe"), Description("Returns without emitting tool-body logs.")]
+    public static string SilentProbe() => "ok";
 }
 
 /// <summary>
@@ -163,6 +169,72 @@ public sealed class CorrelationFilterTests
     }
 
     [Fact]
+    public async Task ToolCall_WithNoToolBodyLogs_WritesOneJsonlLineWithTheTelemetryCid()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        string dir = Path.Combine(Path.GetTempPath(), "miller-cidjsonl-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string dbPath = Path.Combine(dir, "telemetry.db");
+        string logsDir = Path.Combine(dir, "logs");
+        Directory.CreateDirectory(logsDir);
+        using var ledger = TelemetryLedger.Open(dbPath, workspaceId: "cid-ws");
+
+        var previousLogger = Log.Logger;
+        Log.Logger = MillerLoggingSetup
+            .Configure(new LoggerConfiguration(), logsDir, pid: 1234, new LoggingLevelSwitch(LogEventLevel.Information))
+            .CreateLogger();
+
+        try
+        {
+            var clientToServer = new Pipe();
+            var serverToClient = new Pipe();
+
+            var services = new ServiceCollection();
+            services.AddSingleton(ledger);
+            services
+                .AddMcpServer(o => { o.ServerInfo = new() { Name = "cid", Version = "0" }; })
+                .WithStreamServerTransport(clientToServer.Reader.AsStream(), serverToClient.Writer.AsStream())
+                .WithToolsFromAssembly(typeof(CorrelationProbeTool).Assembly)
+                .WithRequestFilters(f => f.AddCallToolFilter(TelemetryCallToolFilter.Create()));
+
+            await using var provider = services.BuildServiceProvider();
+            var server = provider.GetRequiredService<McpServer>();
+            var serverTask = server.RunAsync(ct);
+
+            var clientTransport = new StreamClientTransport(
+                clientToServer.Writer.AsStream(), serverToClient.Reader.AsStream());
+            await using var client = await McpClient.CreateAsync(clientTransport, cancellationToken: ct);
+
+            _ = await client.CallToolAsync("cid_silent_probe", new Dictionary<string, object?>(), cancellationToken: ct);
+
+            await client.DisposeAsync();
+            await clientToServer.Writer.CompleteAsync();
+            await serverToClient.Writer.CompleteAsync();
+            try { await serverTask.WaitAsync(TimeSpan.FromSeconds(5), ct); } catch (Exception) { }
+        }
+        finally
+        {
+            Log.CloseAndFlush();
+            Log.Logger = previousLogger;
+        }
+
+        string rowId = ReadSingleRowId(dbPath);
+        string jsonFile = Directory.EnumerateFiles(logsDir, "miller-*.jsonl").Single();
+        string[] lines = ReadShared(jsonFile).Split('\n', StringSplitOptions.RemoveEmptyEntries);
+
+        Assert.Contains(lines, line =>
+        {
+            using var doc = JsonDocument.Parse(line);
+            return doc.RootElement.TryGetProperty("cid", out var cid)
+                && cid.GetString() == rowId
+                && doc.RootElement.TryGetProperty("Tool", out var tool)
+                && tool.GetString() == "cid_silent_probe";
+        });
+
+        try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+    }
+
+    [Fact]
     public async Task TwoToolCalls_GetDistinctCorrelationIds()
     {
         var (firstId, _) = await CallThroughFilterAsync("cid_probe");
@@ -215,5 +287,12 @@ public sealed class CorrelationFilterTests
         while (r.Read())
             ids.Add(r.GetString(0));
         return ids;
+    }
+
+    private static string ReadShared(string path)
+    {
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(fs);
+        return reader.ReadToEnd();
     }
 }

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json.Nodes;
 
 namespace Miller.Server.Telemetry;
 
@@ -124,6 +125,42 @@ public sealed class TelemetryScope : IDisposable
     /// <summary>Free-form JSON metadata. Defaults to <c>{}</c>.</summary>
     public string MetadataJson { get; set; } = "{}";
 
+    /// <summary>Add or replace a string metadata property without storing raw target/query text.</summary>
+    public void SetMetadata(string key, string? value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        JsonObject metadata = MetadataObject();
+        if (value is null)
+            metadata.Remove(key);
+        else
+            metadata[key] = value;
+        MetadataJson = metadata.ToJsonString();
+    }
+
+    /// <summary>Add or replace a boolean metadata property.</summary>
+    public void SetMetadata(string key, bool value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        JsonObject metadata = MetadataObject();
+        metadata[key] = value;
+        MetadataJson = metadata.ToJsonString();
+    }
+
+    /// <summary>Add or replace a numeric metadata property.</summary>
+    public void SetMetadata(string key, long value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        JsonObject metadata = MetadataObject();
+        metadata[key] = value;
+        MetadataJson = metadata.ToJsonString();
+    }
+
+    /// <summary>Classify an empty result with a compact, query-safe enum.</summary>
+    public void SetEmptyReason(string reason) => SetMetadata("empty_reason", reason);
+
+    /// <summary>Classify an error with a compact, query-safe enum independent of exception type.</summary>
+    public void SetErrorCategory(string category) => SetMetadata("error_category", category);
+
     /// <summary>
     /// Override the workspace attributed to this telemetry row. Cross-workspace tools call this when they serve
     /// data from a target workspace different from the process workspace.
@@ -162,7 +199,52 @@ public sealed class TelemetryScope : IDisposable
         ErrorKind = exception.GetType().Name;
         ErrorMessage = Truncate(exception.Message);
         ErrorDetail = Truncate(exception.ToString());
+        SetErrorCategory(ClassifyError(exception));
     }
+
+    private JsonObject MetadataObject()
+    {
+        if (!string.IsNullOrWhiteSpace(MetadataJson))
+        {
+            try
+            {
+                if (JsonNode.Parse(MetadataJson) is JsonObject metadata)
+                    return metadata;
+            }
+            catch
+            {
+                // Fall through to a clean object; malformed metadata must not break a tool call.
+            }
+        }
+
+        return new JsonObject();
+    }
+
+    private static string ClassifyError(Exception exception)
+    {
+        string message = exception.Message;
+        if (exception.GetType().Name == "IncompatibleExtractException")
+            return "stale_or_incompatible_index";
+        if (exception is KeyNotFoundException)
+            return message.StartsWith("unknown workspace selector", StringComparison.OrdinalIgnoreCase)
+                ? "unknown_workspace"
+                : "not_found";
+        if (exception is FileNotFoundException or DirectoryNotFoundException)
+            return "missing_file";
+        if (exception is UnauthorizedAccessException or IOException)
+            return "filesystem";
+        if (exception is ArgumentException or ArgumentOutOfRangeException or NotSupportedException)
+            return "bad_input";
+        if (exception is InvalidOperationException && LooksLikeInputError(message))
+            return "bad_input";
+
+        return "internal";
+    }
+
+    private static bool LooksLikeInputError(string message) =>
+        message.Contains(" requires ", StringComparison.OrdinalIgnoreCase)
+        || message.Contains(" must be ", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("missing a value for the required parameter", StringComparison.OrdinalIgnoreCase);
 
     private static string? Truncate(string? value)
     {
