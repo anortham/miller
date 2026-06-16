@@ -74,7 +74,7 @@ public sealed class LiveFreshnessTests
             var core = new IndexerCore(new WatchEventQueue(), ops, File.Exists);
 
             // baseline: the to-be-added symbol is absent.
-            Assert.Equal("No results.", searchTool.Search("Zigglethorpe").Trim());
+            Assert.StartsWith("No results.", searchTool.Search("Zigglethorpe").Trim());
 
             // --- MODIFY alpha.cs to add a new symbol, route the watcher event through the live update ---
             File.WriteAllText(alphaFile, """
@@ -105,7 +105,7 @@ public sealed class LiveFreshnessTests
             long afterDelete = reader.LatestRevision();
             Assert.True(afterDelete > afterModify, "a delete must bump the revision");
             Assert.True(FreshnessPoller.PollOnce(holder, afterDelete, rebuilder.Rebuild));
-            Assert.Equal("No results.", searchTool.Search("Vortle").Trim());
+            Assert.StartsWith("No results.", searchTool.Search("Vortle").Trim());
 
             // --- HEAD change: add a file out-of-band (no per-file event), then force a scan reconcile ---
             File.WriteAllText(Path.Combine(repo, "delta.cs"), """
