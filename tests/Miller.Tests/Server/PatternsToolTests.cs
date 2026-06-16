@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
+using Miller.Server.Telemetry;
 using Miller.Server.Tools;
 using Miller.Server.Workspaces;
 using Miller.Tests.Indexing;
@@ -10,6 +11,22 @@ namespace Miller.Tests.Server;
 
 public sealed class PatternsToolTests
 {
+    private static (string? Op, string MetadataJson, string Outcome) ReadTelemetryOpMetadata(string dbPath)
+    {
+        using var c = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        c.Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT op, metadata_json, outcome FROM tool_telemetry LIMIT 1;";
+        using var r = cmd.ExecuteReader();
+        Assert.True(r.Read(), "expected one telemetry row");
+        return (r.IsDBNull(0) ? null : r.GetString(0), r.GetString(1), r.GetString(2));
+    }
+
     [Fact]
     public void Patterns_ListJson_ReturnsObservedPatterns()
     {
@@ -59,6 +76,37 @@ public sealed class PatternsToolTests
         Assert.Equal(1.0, match.GetProperty("confidence").GetDouble());
         Assert.Equal("hx-get", match.GetProperty("metadata").GetProperty("name").GetString());
         Assert.Equal(8, match.GetProperty("span").GetProperty("start_byte").GetInt32());
+    }
+
+    [Fact]
+    public void Patterns_Search_RecordsOperationShape_InTelemetry()
+    {
+        using var fx = CreatePatternFixture();
+        string telemetryDb = Path.Combine(Path.GetDirectoryName(fx.DbPath)!, "telemetry.db");
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        using (var ledger = TelemetryLedger.Open(telemetryDb, "workspace-1", Path.GetDirectoryName(Path.GetDirectoryName(fx.DbPath))!))
+        {
+            using var scope = ledger.Measure("patterns", op: null);
+            string output = tool.Patterns(
+                operation: "search",
+                pattern_id: "htmx.attribute.v1",
+                path: "Views/**",
+                where: "name=hx-get",
+                limit: 10);
+            Assert.Contains("Views/Orders.cshtml", output);
+            Assert.Contains("hx-get", output);
+        }
+
+        var row = ReadTelemetryOpMetadata(telemetryDb);
+        Assert.Equal("search", row.Op);
+        Assert.Equal("ok", row.Outcome);
+        using JsonDocument doc = JsonDocument.Parse(row.MetadataJson);
+        Assert.True(doc.RootElement.GetProperty("has_pattern_id").GetBoolean());
+        Assert.True(doc.RootElement.GetProperty("has_path").GetBoolean());
+        Assert.True(doc.RootElement.GetProperty("has_where").GetBoolean());
+        Assert.Equal("6-10", doc.RootElement.GetProperty("limit_bucket").GetString());
+        Assert.DoesNotContain("htmx.attribute.v1", row.MetadataJson, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

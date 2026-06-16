@@ -16,7 +16,7 @@ namespace Miller.Tests.Server;
 /// <summary>
 /// Pins the <c>search</c> tool's behavior (M2 §4) against the M1 synthesized fixture index: compact + json
 /// rendering, <c>limit</c> + the <c>… N more</c> overflow note (never silently drop), the <c>exclude_tests</c>
-/// tri-state (null/true/false), empty → <c>No results.</c>, and ordering preserved (the renderer must NOT
+/// tri-state (null/true/false), empty → a compact one-line hint, and ordering preserved (the renderer must NOT
 /// re-sort — Core's score-DESC ordering is authoritative). Exercises <see cref="SearchTool.Run"/> directly
 /// (the pure core the MCP method delegates to), so it stays in the fast suite.
 /// </summary>
@@ -150,6 +150,22 @@ public sealed class SearchToolTests
         return r.GetString(0);
     }
 
+    private static (string? Op, string MetadataJson, string Outcome) ReadTelemetryOpMetadata(string dbPath)
+    {
+        using var c = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        c.Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT op, metadata_json, outcome FROM tool_telemetry LIMIT 1;";
+        using var r = cmd.ExecuteReader();
+        Assert.True(r.Read(), "expected one telemetry row");
+        return (r.IsDBNull(0) ? null : r.GetString(0), r.GetString(1), r.GetString(2));
+    }
+
     private static long ReadTelemetrySourceBytes(string dbPath)
     {
         using var c = new SqliteConnection(new SqliteConnectionStringBuilder
@@ -227,6 +243,50 @@ public sealed class SearchToolTests
         finally
         {
             SqliteConnection.ClearAllPools();
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void Search_RecordsModeRouteShapeAndEmptyReason_InTelemetry()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "miller-search-shape-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string telemetryDb = Path.Combine(dir, "telemetry.db");
+        var provider = new FixedSymbolSearchProvider(
+            SymbolSearchProjection.Build(Array.Empty<IndexedSymbol>()),
+            Path.Combine(dir, "root"));
+        var tool = new SearchTool(provider, provider);
+
+        try
+        {
+            using (var ledger = TelemetryLedger.Open(telemetryDb, "current-ws", Path.Combine(dir, "root")))
+            {
+                using var scope = ledger.Measure("search", op: null);
+                string output = tool.Search(
+                    "NoSuchSymbol",
+                    mode: "auto",
+                    limit: 3,
+                    file_pattern: "src/**",
+                    language: "csharp");
+                Assert.Contains("No results", output);
+            }
+
+            var row = ReadTelemetryOpMetadata(telemetryDb);
+            Assert.Equal("auto", row.Op);
+            Assert.Equal("empty", row.Outcome);
+            using JsonDocument doc = JsonDocument.Parse(row.MetadataJson);
+            Assert.Equal("symbols", doc.RootElement.GetProperty("route").GetString());
+            Assert.Equal("compact", doc.RootElement.GetProperty("format").GetString());
+            Assert.Equal("1-5", doc.RootElement.GetProperty("limit_bucket").GetString());
+            Assert.False(doc.RootElement.GetProperty("has_regions").GetBoolean());
+            Assert.True(doc.RootElement.GetProperty("has_file_pattern").GetBoolean());
+            Assert.True(doc.RootElement.GetProperty("has_language").GetBoolean());
+            Assert.Equal("no_symbol_hits", doc.RootElement.GetProperty("empty_reason").GetString());
+            Assert.False(row.MetadataJson.Contains("NoSuchSymbol", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
             try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
         }
     }
@@ -511,7 +571,9 @@ public sealed class SearchToolTests
             excludeTests: null, json: false, out int count);
 
         Assert.Equal(0, count);
-        Assert.Equal("No results.", output.Trim());
+        Assert.Equal(
+            "No results. Try a shorter symbol query, mode=source for code text, or mode=content for docs/config.",
+            output.Trim());
     }
 
     [Fact]

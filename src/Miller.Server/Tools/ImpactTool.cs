@@ -83,6 +83,7 @@ public sealed class ImpactTool
             if (telemetry is not null)
             {
                 ReadToolWorkspaceRouting.ApplyTelemetry(telemetry, context);
+                telemetry.Op = ImpactInputKind(target, changed_paths, diff);
                 // The target axis is whichever input was supplied (target wins, else the first changed path,
                 // else a diff marker) — privacy-hashed by SetTarget.
                 telemetry.SetTarget(TargetForTelemetry(target, changed_paths, diff));
@@ -90,6 +91,11 @@ public sealed class ImpactTool
                 // D10 work proxy (bytes_examined ≈ nodes visited): the reverse-reachability set the BFS produced.
                 telemetry.BytesExamined = nodesVisited;
                 telemetry.Outcome = impactedCount == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
+                telemetry.SetMetadata("format", json ? "json" : "compact");
+                telemetry.SetMetadata("limit_bucket", LimitBucket(limit));
+                telemetry.SetMetadata("max_depth_bucket", DepthBucket(max_depth));
+                if (impactedCount == 0)
+                    telemetry.SetEmptyReason("no_impacted_symbols");
             }
             return output;
         }
@@ -112,6 +118,35 @@ public sealed class ImpactTool
             return string.Join(',', changedPaths);
         return string.IsNullOrEmpty(diff) ? null : "diff";
     }
+
+    private static string ImpactInputKind(string? target, string[]? changedPaths, string? diff)
+    {
+        if (!string.IsNullOrWhiteSpace(target))
+            return "target";
+        if (changedPaths is { Length: > 0 })
+            return "changed_paths";
+        return string.IsNullOrWhiteSpace(diff) ? "missing_input" : "diff";
+    }
+
+    private static string LimitBucket(int limit) => limit switch
+    {
+        <= 0 => "0",
+        <= 5 => "1-5",
+        <= 10 => "6-10",
+        <= 25 => "11-25",
+        <= 50 => "26-50",
+        <= 100 => "51-100",
+        _ => "101+",
+    };
+
+    private static string DepthBucket(int depth) => depth switch
+    {
+        <= 0 => "0",
+        1 => "1",
+        2 => "2",
+        <= 5 => "3-5",
+        _ => "6+",
+    };
 
     /// <summary>
     /// The pure execution core (no MCP/DI/telemetry; no DB — the graph is in-memory). Resolves the seed symbols

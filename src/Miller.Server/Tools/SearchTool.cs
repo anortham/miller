@@ -54,6 +54,11 @@ public enum SearchToolMode
 public sealed class SearchTool
 {
     internal const int DefaultLimit = 6;
+    private const string SymbolNoResultsHint =
+        "No results. Try a shorter symbol query, mode=source for code text, or mode=content for docs/config.";
+    private const string RegionsUsageHint =
+        "regions must be comment, doc_comment, or string_literal. Example: regions=comment or regions=doc_comment,string_literal.";
+
     private static readonly string[] WorkspaceContentSearchKinds =
     [
         TextContentKind.WorkspaceDocs,
@@ -153,6 +158,8 @@ public sealed class SearchTool
             SearchRoute route = SearchRoutePlanner.Plan(mode, regions);
             bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
+            if (scope is not null)
+                ApplyTelemetryShape(scope, route, json, limit, regions, file_pattern, language, exclude_tests);
 
             string output;
             int count;
@@ -176,7 +183,7 @@ public sealed class SearchTool
                 if (scope is not null)
                 {
                     ReadToolWorkspaceRouting.ApplyTelemetry(scope, region);
-                    scope.MetadataJson = RegionBackendMetadata;
+                    scope.SetMetadata("search_backend", "region_disk");
                 }
             }
             else if (route.Kind == SearchRouteKind.Content)
@@ -202,7 +209,7 @@ public sealed class SearchTool
                 {
                     ReadToolWorkspaceRouting.ApplyTelemetry(scope, content);
                     scope.SourceBytes = result.SourceBytes;
-                    scope.MetadataJson = TextContentBackendMetadata;
+                    scope.SetMetadata("search_backend", "content_disk");
                 }
             }
             else if (route.Kind == SearchRouteKind.TextContent)
@@ -227,7 +234,7 @@ public sealed class SearchTool
                 {
                     ReadToolWorkspaceRouting.ApplyTelemetry(scope, textContent);
                     scope.SourceBytes = result.SourceBytes;
-                    scope.MetadataJson = TextContentBackendMetadata;
+                    scope.SetMetadata("search_backend", "content_disk");
                 }
             }
             else
@@ -251,7 +258,7 @@ public sealed class SearchTool
                 if (scope is not null)
                 {
                     ReadToolWorkspaceRouting.ApplyTelemetry(scope, context);
-                    scope.MetadataJson = SearchBackendMetadata(context.Index);
+                    scope.SetMetadata("search_backend", SearchBackendName(context.Index));
                 }
             }
 
@@ -260,6 +267,8 @@ public sealed class SearchTool
                 scope.SetTarget(query);
                 scope.ResultCount = count;
                 scope.Outcome = count == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
+                if (count == 0)
+                    scope.SetEmptyReason(EmptyReasonFor(route));
             }
             return output;
         }
@@ -322,16 +331,14 @@ public sealed class SearchTool
                 "comment" => "comment",
                 "doc_comment" or "docstring" => "doc_comment",
                 "string_literal" => "string_literal",
-                _ => throw new InvalidOperationException(
-                    "regions must be a comma list of comment, doc_comment, or string_literal.")
+                _ => throw new InvalidOperationException(RegionsUsageHint)
             };
             parsed.Add(normalized);
         }
 
         if (parsed.Count == 0)
         {
-            throw new InvalidOperationException(
-                "regions must be a comma list of comment, doc_comment, or string_literal.");
+            throw new InvalidOperationException(RegionsUsageHint);
         }
 
         return parsed;
@@ -359,6 +366,62 @@ public sealed class SearchTool
 
     private static string SearchBackendMetadata(ISymbolLookupIndex index) =>
         index is FtsSymbolSearchIndex ? DiskBackendMetadata : MemoryBackendMetadata;
+
+    private static string SearchBackendName(ISymbolLookupIndex index) =>
+        index is FtsSymbolSearchIndex ? "disk" : "memory";
+
+    private static void ApplyTelemetryShape(
+        TelemetryScope scope,
+        SearchRoute route,
+        bool json,
+        int limit,
+        string? regions,
+        string? filePattern,
+        string? language,
+        bool? excludeTests)
+    {
+        scope.Op = route.Kind == SearchRouteKind.Regions ? "regions" : ModeName(route.Mode);
+        scope.SetMetadata("route", RouteName(route.Kind));
+        scope.SetMetadata("format", json ? "json" : "compact");
+        scope.SetMetadata("limit_bucket", LimitBucket(limit));
+        scope.SetMetadata("has_regions", !string.IsNullOrWhiteSpace(regions));
+        scope.SetMetadata("has_file_pattern", !string.IsNullOrWhiteSpace(filePattern));
+        scope.SetMetadata("has_language", !string.IsNullOrWhiteSpace(language));
+        scope.SetMetadata("exclude_tests", excludeTests is null ? "default" : excludeTests.Value ? "true" : "false");
+    }
+
+    private static string RouteName(SearchRouteKind kind) => kind switch
+    {
+        SearchRouteKind.Regions => "regions",
+        SearchRouteKind.Content => "content",
+        SearchRouteKind.TextContent => "text_content",
+        SearchRouteKind.Symbols => "symbols",
+        _ => "unknown",
+    };
+
+    private static string ModeName(SearchToolMode mode) => mode switch
+    {
+        SearchToolMode.AllText => "all-text",
+        _ => mode.ToString().ToLowerInvariant(),
+    };
+
+    private static string LimitBucket(int limit) => limit switch
+    {
+        <= 0 => "0",
+        <= 5 => "1-5",
+        <= 10 => "6-10",
+        <= 25 => "11-25",
+        <= 50 => "26-50",
+        _ => "51+",
+    };
+
+    private static string EmptyReasonFor(SearchRoute route) => route.Kind switch
+    {
+        SearchRouteKind.Regions => "no_region_hits",
+        SearchRouteKind.Content or SearchRouteKind.TextContent => "no_text_hits",
+        SearchRouteKind.Symbols => "no_symbol_hits",
+        _ => "no_hits",
+    };
 
     private const int OutsideScopeHintLimit = 3;
     private const int SignatureMaxLength = 110;
@@ -465,7 +528,7 @@ public sealed class SearchTool
                 return "[]";
             return outsideScope.Count > 0
                 ? RenderFilteredMissCompact(filters, compactBanner, outsideScope)
-                : ReadToolWorkspaceRouting.PrefixCompact("No results.", compactBanner);
+                : ReadToolWorkspaceRouting.PrefixCompact(SymbolNoResultsHint, compactBanner);
         }
 
         IReadOnlySet<string>? hasDocSymbolIds = null;

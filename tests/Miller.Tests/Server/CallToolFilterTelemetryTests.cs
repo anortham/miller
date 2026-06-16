@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.IO.Pipelines;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -328,7 +329,7 @@ public sealed class CallToolFilterTelemetryTests : IDisposable
         }.ToString());
         conn.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT tool, outcome, error_kind, error_message, error_detail FROM tool_telemetry;";
+        cmd.CommandText = "SELECT tool, outcome, error_kind, error_message, error_detail, metadata_json FROM tool_telemetry;";
         using var reader = cmd.ExecuteReader();
         Assert.True(reader.Read(), "the central CallToolFilter did not record a telemetry row");
         Assert.Equal("inspect", reader.GetString(0));
@@ -337,6 +338,8 @@ public sealed class CallToolFilterTelemetryTests : IDisposable
         Assert.Contains("missing a value for the required parameter 'target'", reader.GetString(3));
         Assert.Contains("System.ArgumentException", reader.GetString(4));
         Assert.Contains("required parameter 'target'", reader.GetString(4));
+        using (JsonDocument metadata = JsonDocument.Parse(reader.GetString(5)))
+            Assert.Equal("bad_input", metadata.RootElement.GetProperty("error_category").GetString());
         Assert.False(reader.Read(), "exactly one row expected (the filter must fire once per call)");
     }
 

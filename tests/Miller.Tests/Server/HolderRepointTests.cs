@@ -44,7 +44,9 @@ public sealed class HolderRepointTests
             holder, before.DbPath, workspaceId: "test-ws", workspaceRoot: Path.GetTempPath());
         var tool = new SearchTool(provider, provider);
 
-        Assert.Equal("No results.", tool.Search("Zebraphone").Trim());
+        string beforeOut = tool.Search("Zebraphone");
+        Assert.Contains("No results.", beforeOut);
+        Assert.Contains("mode=source", beforeOut);
 
         holder.Swap(BuildIndex(after), revision: 2);
 

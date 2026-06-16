@@ -52,6 +52,8 @@ public sealed class ContentTool
             string contentDbPath = ContentCorpusSidecar.ContentDbPathFor(_workspace.ExtractDbPath);
             bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
             string op = string.IsNullOrWhiteSpace(operation) ? "list" : operation.Trim().ToLowerInvariant();
+            if (telemetry is not null)
+                telemetry.Op = op;
 
             return op switch
             {
@@ -138,6 +140,8 @@ public sealed class ContentTool
         if (string.IsNullOrWhiteSpace(query))
             throw new InvalidOperationException("content search requires query.");
         if (limit < 1) limit = 1;
+        if (telemetry is not null)
+            SetContentSearchTelemetryShape(telemetry, contentKind, json, limit, workspaceId);
 
         if (!string.IsNullOrWhiteSpace(workspaceId))
             return SearchWorkspaces(query, contentKind, limit, workspaceId, json, telemetry);
@@ -151,6 +155,8 @@ public sealed class ContentTool
                 .GroupBy(static hit => hit.SourceId, StringComparer.Ordinal)
                 .Sum(static group => group.Max(static hit => hit.SourceBytes));
             telemetry.Outcome = hits.Count == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
+            if (hits.Count == 0)
+                telemetry.SetEmptyReason("no_content_hits");
         }
 
         return json ? RenderSearchJson(hits) : RenderSearchCompact(hits);
@@ -189,6 +195,8 @@ public sealed class ContentTool
                 .GroupBy(static hit => hit.Workspace.WorkspaceId + "\0" + hit.Hit.SourceId, StringComparer.Ordinal)
                 .Sum(static group => group.Max(static hit => hit.Hit.SourceBytes));
             telemetry.Outcome = page.Length == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
+            if (page.Length == 0)
+                telemetry.SetEmptyReason("no_content_hits");
         }
 
         return json ? RenderWorkspaceSearchJson(page) : RenderWorkspaceSearchCompact(page);
@@ -261,6 +269,10 @@ public sealed class ContentTool
         {
             telemetry.ResultCount = sources.Count;
             telemetry.Outcome = sources.Count == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
+            telemetry.SetMetadata("content_kind", contentKind);
+            telemetry.SetMetadata("format", json ? "json" : "compact");
+            if (sources.Count == 0)
+                telemetry.SetEmptyReason("no_imported_content");
         }
 
         return json ? RenderListJson(sources) : RenderListCompact(sources);
@@ -277,6 +289,8 @@ public sealed class ContentTool
             telemetry.SetTarget(sourceId);
             telemetry.ResultCount = result.SourceCount;
             telemetry.Outcome = result.Removed ? TelemetryOutcome.Ok : TelemetryOutcome.Empty;
+            if (!result.Removed)
+                telemetry.SetEmptyReason("source_not_found");
         }
 
         return json ? RenderRemoveJson(result) : RenderRemoveCompact(result);
@@ -297,6 +311,9 @@ public sealed class ContentTool
                 .GroupBy(static row => row.SourceId, StringComparer.Ordinal)
                 .Sum(static group => group.Max(static row => row.SourceBytes));
             telemetry.Outcome = rows.Count == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
+            telemetry.SetMetadata("content_kind", contentKind ?? "all");
+            if (rows.Count == 0)
+                telemetry.SetEmptyReason("no_export_rows");
         }
 
         return ContentCorpusExportReader.ToJsonLines(rows);
@@ -339,6 +356,30 @@ public sealed class ContentTool
 
     private static string ContentKindOrDefault(string? value, string fallback) =>
         OptionalContentKind(value) ?? fallback;
+
+    private static void SetContentSearchTelemetryShape(
+        TelemetryScope telemetry,
+        string contentKind,
+        bool json,
+        int limit,
+        string? workspaceId)
+    {
+        telemetry.SetMetadata("content_kind", contentKind);
+        telemetry.SetMetadata("format", json ? "json" : "compact");
+        telemetry.SetMetadata("limit_bucket", LimitBucket(limit));
+        telemetry.SetMetadata("workspace_all", string.Equals(workspaceId, "all", StringComparison.OrdinalIgnoreCase));
+        telemetry.SetMetadata("has_workspace_selector", !string.IsNullOrWhiteSpace(workspaceId));
+    }
+
+    private static string LimitBucket(int limit) => limit switch
+    {
+        <= 0 => "0",
+        <= 5 => "1-5",
+        <= 10 => "6-10",
+        <= 25 => "11-25",
+        <= 50 => "26-50",
+        _ => "51+",
+    };
 
     private static string? OptionalContentKind(string? value)
     {

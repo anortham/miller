@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
+using Serilog;
 using Serilog.Context;
 
 namespace Miller.Server.Telemetry;
@@ -98,6 +99,7 @@ public static class TelemetryCallToolFilter
                 scope.EstTokens = TokenEstimator.CountFromBytes(bytes);
 
                 EvaluateBudgets(budgets, loggerFactory, tool, budgetStart, scope.EstTokens ?? 0);
+                LogCallDiagnostic(tool, scope, budgetStart);
                 return result;
             }
             catch (ArgumentException ex) when (TryGetMissingRequiredParameter(ex, out string parameterName))
@@ -123,6 +125,7 @@ public static class TelemetryCallToolFilter
                 scope.EstTokens = TokenEstimator.CountFromBytes(bytes);
 
                 EvaluateBudgets(budgets, loggerFactory, tool, budgetStart, scope.EstTokens ?? 0);
+                LogCallDiagnostic(tool, scope, budgetStart);
                 return result;
             }
             catch (Exception ex)
@@ -134,6 +137,7 @@ public static class TelemetryCallToolFilter
                 scope.Outcome = TelemetryOutcome.Error;
                 scope.SetError(ex);
                 EvaluateBudgets(budgets, loggerFactory, tool, budgetStart, scope.EstTokens ?? 0);
+                LogCallDiagnostic(tool, scope, budgetStart, ex);
                 throw;
             }
         };
@@ -228,6 +232,33 @@ public static class TelemetryCallToolFilter
         catch (Exception)
         {
             // The budget WARN is purely diagnostic; a fault here must never surface to the agent or the call.
+        }
+    }
+
+    private static void LogCallDiagnostic(
+        string tool, TelemetryScope scope, long budgetStart, Exception? exception = null)
+    {
+        try
+        {
+            long durationMs = Math.Max(0, (long)Stopwatch.GetElapsedTime(budgetStart).TotalMilliseconds);
+            var logger = Log.ForContext("SourceContext", typeof(TelemetryCallToolFilter).FullName);
+            if (exception is null)
+            {
+                logger.Information(
+                    "tool {Tool} completed with {Outcome} in {DurationMs}ms",
+                    tool, scope.Outcome.ToStorageString(), durationMs);
+            }
+            else
+            {
+                logger.Warning(
+                    exception,
+                    "tool {Tool} threw with {Outcome} in {DurationMs}ms",
+                    tool, scope.Outcome.ToStorageString(), durationMs);
+            }
+        }
+        catch (Exception)
+        {
+            // Diagnostic logging must never affect a tool call.
         }
     }
 

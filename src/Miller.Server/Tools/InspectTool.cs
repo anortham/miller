@@ -85,9 +85,17 @@ public sealed class InspectTool
 
             if (telemetry is not null)
             {
+                telemetry.Op = full ? "full" : "summary";
                 telemetry.SetTarget(target);
                 telemetry.ResultCount = count;
                 telemetry.Outcome = count == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
+                telemetry.SetMetadata("depth", full ? "full" : "summary");
+                telemetry.SetMetadata("format", json ? "json" : "compact");
+                telemetry.SetMetadata("has_kind", !string.IsNullOrWhiteSpace(kind));
+                telemetry.SetMetadata("has_scope", !string.IsNullOrWhiteSpace(scope));
+                telemetry.SetMetadata("limit_bucket", LimitBucket(limit));
+                if (count == 0)
+                    telemetry.SetEmptyReason("not_found");
             }
             return output;
         }
@@ -104,6 +112,16 @@ public sealed class InspectTool
 
     private const int SignatureMaxLength = 110;
     private const int RefLimit = 50;
+
+    private static string LimitBucket(int limit) => limit switch
+    {
+        <= 0 => "0",
+        <= 5 => "1-5",
+        <= 10 => "6-10",
+        <= 25 => "11-25",
+        <= 50 => "26-50",
+        _ => "51+",
+    };
 
     /// <summary>
     /// The pure execution core (no MCP/DI/telemetry). <paramref name="resultCount"/> is the count of the

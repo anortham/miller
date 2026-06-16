@@ -88,6 +88,7 @@ public sealed class EditTool
 
             if (telemetry is not null)
             {
+                telemetry.Op = string.IsNullOrWhiteSpace(operation) ? "unknown" : operation.Trim().ToLowerInvariant();
                 telemetry.SetTarget(target);
                 telemetry.ResultCount = result.ResultCount;
                 telemetry.IndexFresh = result.IndexFresh;
@@ -97,6 +98,12 @@ public sealed class EditTool
                     "empty" => TelemetryOutcome.Empty,
                     _ => TelemetryOutcome.Error,
                 };
+                telemetry.SetMetadata("format", string.Equals(format, "json", StringComparison.OrdinalIgnoreCase) ? "json" : "compact");
+                telemetry.SetMetadata("apply", apply);
+                telemetry.SetMetadata("allow_stale", allow_stale);
+                telemetry.SetMetadata("has_scope", !string.IsNullOrWhiteSpace(scope));
+                if (telemetry.Outcome == TelemetryOutcome.Empty)
+                    telemetry.SetEmptyReason("edit_noop");
             }
             return result.Output;
         }
