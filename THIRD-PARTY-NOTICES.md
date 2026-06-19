@@ -13,9 +13,10 @@ If you redistribute Miller (source or a release archive), keep this file alongsi
 
 | Component | Version | License | Notes |
 | --- | --- | --- | --- |
-| ModelContextProtocol (MCP C# SDK) | 1.3.0 | MIT | Model Context Protocol server/stdio implementation Miller uses to speak MCP. |
-| Microsoft.Extensions.Hosting | 10.0.8 | MIT | .NET Generic Host that runs Miller's server and hosted services. |
-| Microsoft.Data.Sqlite | 10.0.8 | MIT | ADO.NET provider Miller uses to read `julie-extract` artifacts and its own SQLite sidecars. |
+| ModelContextProtocol (MCP C# SDK) | 1.4.0 | MIT | Model Context Protocol server/stdio implementation Miller uses to speak MCP. |
+| Microsoft.Extensions.Hosting | 10.0.9 | MIT | .NET Generic Host that runs Miller's server and hosted services. |
+| Microsoft.Data.Sqlite | 10.0.9 | MIT | ADO.NET provider Miller uses to read `julie-extract` artifacts and its own SQLite sidecars. |
+| SQLitePCLRaw.bundle_e_sqlite3 | 3.0.3 | Apache-2.0 / SQLite public domain | Native SQLite provider bundle used by `Microsoft.Data.Sqlite`. |
 | Serilog.Extensions.Hosting | 10.0.0 | Apache-2.0 | Serilog integration with the .NET Generic Host. |
 | Serilog.Sinks.Console | 6.1.1 | Apache-2.0 | Serilog console sink. |
 | Serilog.Sinks.File | 7.0.0 | Apache-2.0 | Serilog file sink (the shared daily `.log` file). |
@@ -24,8 +25,9 @@ If you redistribute Miller (source or a release archive), keep this file alongsi
 
 ### SQLite native provider (SQLitePCLRaw)
 
-`Microsoft.Data.Sqlite` pulls in the `SQLitePCLRaw.*` family, including the `bundle_e_sqlite3` package that
-ships the native `e_sqlite3` provider. SQLitePCLRaw (maintained by Eric Sink) is licensed under the
+`Microsoft.Data.Sqlite` uses the `SQLitePCLRaw.*` family, including the `bundle_e_sqlite3` package that
+ships the native `e_sqlite3` provider. Miller pins the bundle explicitly so NuGet audit resolves the current
+non-vulnerable native SQLite package. SQLitePCLRaw (maintained by Eric Sink) is licensed under the
 **Apache License 2.0**. The native bundle embeds the **SQLite** engine itself, which is released into the
 **public domain** by its authors. These native binaries ship inside Miller's release archives.
 
@@ -48,7 +50,7 @@ inside Miller's release archives.
 ### julie-extract
 
 Miller delegates all source extraction to the pinned **`julie-extract`** binary
-(<https://github.com/anortham/julie-extractors>), currently pinned at version **2.1.3**
+(<https://github.com/anortham/julie-extractors>), currently pinned at version **2.5.1**
 (see [`scripts/julie-pins.json`](scripts/julie-pins.json)). It is the same author's own project (Alan
 Northam) and is shipped inside Miller's release archives under `.tools/julie-extract`. Refer to the
 julie-extractors repository for its license terms and for the licenses of the tree-sitter grammars it

@@ -57,9 +57,9 @@ jobs:
             runner: windows-2025
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.0
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v5.3.0
         with:
           dotnet-version: '10.0.x'
 
@@ -296,7 +296,7 @@ jobs:
           "$hash  $packageName.zip" | Set-Content -Encoding ascii (Join-Path $releaseDir "$packageName.zip.sha256")
           Get-ChildItem $releaseDir | Format-Table Name, Length
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.1
         with:
           name: miller-${{ matrix.target }}
           path: artifacts/release/*
@@ -309,9 +309,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.0
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8.0.1
         with:
           pattern: miller-*
           path: artifacts/release
@@ -365,7 +365,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.0
 
       - name: Promote existing package-only artifacts
         env:
