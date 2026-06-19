@@ -39,11 +39,12 @@ public static class VendorScan
     };
 
     /// <summary>
-    /// The always-recommended baseline ignore patterns, independent of detection. <c>*.log</c> is index
-    /// noise: julie parses no log files (zero artifact rows) and Miller has a separate ad-hoc log-scan tool,
-    /// so log churn should not even reach the watcher/scan paths.
+    /// The always-recommended baseline ignore patterns, independent of detection. <c>.miller/</c> is Miller's
+    /// generated sidecar and must never feed back into extraction. <c>*.log</c> is index noise: julie parses no
+    /// log files (zero artifact rows) and Miller has a separate ad-hoc log-scan tool, so log churn should not
+    /// even reach the watcher/scan paths.
     /// </summary>
-    public static IReadOnlyList<string> BaselinePatterns { get; } = new[] { "*.log" };
+    public static IReadOnlyList<string> BaselinePatterns { get; } = new[] { ".miller/", "*.log" };
 
     /// <summary>
     /// Detect vendor-ish directories in <paramref name="relativeFilePaths"/> (root-relative, either
