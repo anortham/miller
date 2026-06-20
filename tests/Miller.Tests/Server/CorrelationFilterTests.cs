@@ -46,6 +46,8 @@ public static class CorrelationProbeTool
 /// </summary>
 public sealed class CorrelationFilterTests
 {
+    private static readonly SemaphoreSlim LogLoggerGate = new(1, 1);
+
     /// <summary>A Serilog sink that captures emitted events so the test can read the enriched <c>cid</c>.</summary>
     private sealed class CapturingSink : ILogEventSink
     {
@@ -57,22 +59,20 @@ public sealed class CorrelationFilterTests
                 _events.Add(logEvent);
         }
 
-        /// <summary>The scalar string value of property <paramref name="name"/> on the most recent event, or null.</summary>
-        public string? LastPropertyValue(string name)
+        /// <summary>Scalar string values of property <paramref name="name"/> captured by this sink.</summary>
+        public IReadOnlyList<string> PropertyValues(string name)
         {
             lock (_events)
             {
-                for (int i = _events.Count - 1; i >= 0; i--)
-                {
-                    if (_events[i].Properties.TryGetValue(name, out var value)
-                        && value is ScalarValue { Value: string text })
-                    {
-                        return text;
-                    }
-                }
+                return _events
+                    .Select(e => e.Properties.TryGetValue(name, out var value)
+                        && value is ScalarValue { Value: string text }
+                            ? text
+                            : null)
+                    .Where(text => text is not null)
+                    .Cast<string>()
+                    .ToArray();
             }
-
-            return null;
         }
     }
 
@@ -84,62 +84,70 @@ public sealed class CorrelationFilterTests
     private static async Task<(string rowId, CapturingSink sink)> CallThroughFilterAsync(string toolName)
     {
         var ct = TestContext.Current.CancellationToken;
-
-        // The central filter short-circuits when no TelemetryLedger is registered, so a real ledger over a temp
-        // DB is required to even reach the cid path. Owned + disposed within this call.
-        string dir = Path.Combine(Path.GetTempPath(), "miller-cidfilter-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(dir);
-        string dbPath = Path.Combine(dir, "telemetry.db");
-        using var ledger = TelemetryLedger.Open(dbPath, workspaceId: "cid-ws");
-
-        var sink = new CapturingSink();
-        var previousLogger = Log.Logger;
-        Log.Logger = new LoggerConfiguration()
-            .MinimumLevel.Verbose()
-            .Enrich.FromLogContext()
-            .WriteTo.Sink(sink)
-            .CreateLogger();
+        await LogLoggerGate.WaitAsync(ct);
 
         try
         {
-            var clientToServer = new Pipe();
-            var serverToClient = new Pipe();
+            // The central filter short-circuits when no TelemetryLedger is registered, so a real ledger over a temp
+            // DB is required to even reach the cid path. Owned + disposed within this call.
+            string dir = Path.Combine(Path.GetTempPath(), "miller-cidfilter-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            string dbPath = Path.Combine(dir, "telemetry.db");
+            using var ledger = TelemetryLedger.Open(dbPath, workspaceId: "cid-ws");
 
-            var services = new ServiceCollection();
-            services.AddSingleton(ledger);
-            services
-                .AddMcpServer(o => { o.ServerInfo = new() { Name = "cid", Version = "0" }; })
-                .WithStreamServerTransport(clientToServer.Reader.AsStream(), serverToClient.Writer.AsStream())
-                .WithToolsFromAssembly(typeof(CorrelationProbeTool).Assembly)
-                .WithRequestFilters(f => f.AddCallToolFilter(TelemetryCallToolFilter.Create()));
+            var sink = new CapturingSink();
+            var previousLogger = Log.Logger;
+            Log.Logger = new LoggerConfiguration()
+                .MinimumLevel.Verbose()
+                .Enrich.FromLogContext()
+                .WriteTo.Sink(sink)
+                .CreateLogger();
 
-            await using var provider = services.BuildServiceProvider();
-            var server = provider.GetRequiredService<McpServer>();
-            var serverTask = server.RunAsync(ct);
+            try
+            {
+                var clientToServer = new Pipe();
+                var serverToClient = new Pipe();
 
-            var clientTransport = new StreamClientTransport(
-                clientToServer.Writer.AsStream(), serverToClient.Reader.AsStream());
-            await using var client = await McpClient.CreateAsync(clientTransport, cancellationToken: ct);
+                var services = new ServiceCollection();
+                services.AddSingleton(ledger);
+                services
+                    .AddMcpServer(o => { o.ServerInfo = new() { Name = "cid", Version = "0" }; })
+                    .WithStreamServerTransport(clientToServer.Reader.AsStream(), serverToClient.Writer.AsStream())
+                    .WithToolsFromAssembly(typeof(CorrelationProbeTool).Assembly)
+                    .WithRequestFilters(f => f.AddCallToolFilter(TelemetryCallToolFilter.Create()));
 
-            _ = await client.CallToolAsync(toolName, new Dictionary<string, object?>(), cancellationToken: ct);
+                await using var provider = services.BuildServiceProvider();
+                var server = provider.GetRequiredService<McpServer>();
+                var serverTask = server.RunAsync(ct);
 
-            await client.DisposeAsync();
-            await clientToServer.Writer.CompleteAsync();
-            await serverToClient.Writer.CompleteAsync();
-            try { await serverTask.WaitAsync(TimeSpan.FromSeconds(5), ct); } catch (Exception) { }
+                var clientTransport = new StreamClientTransport(
+                    clientToServer.Writer.AsStream(), serverToClient.Reader.AsStream());
+                await using var client = await McpClient.CreateAsync(clientTransport, cancellationToken: ct);
+
+                _ = await client.CallToolAsync(toolName, new Dictionary<string, object?>(), cancellationToken: ct);
+
+                await client.DisposeAsync();
+                await clientToServer.Writer.CompleteAsync();
+                await serverToClient.Writer.CompleteAsync();
+                try { await serverTask.WaitAsync(TimeSpan.FromSeconds(5), ct); } catch (Exception) { }
+            }
+            finally
+            {
+                (Log.Logger as IDisposable)?.Dispose();
+                Log.Logger = previousLogger;
+            }
+
+            string rowId = ReadSingleRowId(dbPath);
+
+            ledger.Dispose();
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+
+            return (rowId, sink);
         }
         finally
         {
-            (Log.Logger as IDisposable)?.Dispose();
-            Log.Logger = previousLogger;
+            LogLoggerGate.Release();
         }
-
-        string rowId = ReadSingleRowId(dbPath);
-
-        ledger.Dispose();
-        try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
-
-        return (rowId, sink);
     }
 
     private static string ReadSingleRowId(string dbPath)
@@ -162,76 +170,85 @@ public sealed class CorrelationFilterTests
     {
         var (rowId, sink) = await CallThroughFilterAsync("cid_probe");
 
-        string? loggedCid = sink.LastPropertyValue("cid");
+        IReadOnlyList<string> loggedCids = sink.PropertyValues("cid");
 
-        Assert.False(string.IsNullOrEmpty(loggedCid));
-        Assert.Equal(loggedCid, rowId);
+        Assert.NotEmpty(loggedCids);
+        Assert.All(loggedCids, loggedCid => Assert.Equal(rowId, loggedCid));
     }
 
     [Fact]
     public async Task ToolCall_WithNoToolBodyLogs_WritesOneJsonlLineWithTheTelemetryCid()
     {
         var ct = TestContext.Current.CancellationToken;
-        string dir = Path.Combine(Path.GetTempPath(), "miller-cidjsonl-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(dir);
-        string dbPath = Path.Combine(dir, "telemetry.db");
-        string logsDir = Path.Combine(dir, "logs");
-        Directory.CreateDirectory(logsDir);
-        using var ledger = TelemetryLedger.Open(dbPath, workspaceId: "cid-ws");
-
-        var previousLogger = Log.Logger;
-        Log.Logger = MillerLoggingSetup
-            .Configure(new LoggerConfiguration(), logsDir, pid: 1234, new LoggingLevelSwitch(LogEventLevel.Information))
-            .CreateLogger();
+        await LogLoggerGate.WaitAsync(ct);
 
         try
         {
-            var clientToServer = new Pipe();
-            var serverToClient = new Pipe();
+            string dir = Path.Combine(Path.GetTempPath(), "miller-cidjsonl-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            string dbPath = Path.Combine(dir, "telemetry.db");
+            string logsDir = Path.Combine(dir, "logs");
+            Directory.CreateDirectory(logsDir);
+            using var ledger = TelemetryLedger.Open(dbPath, workspaceId: "cid-ws");
 
-            var services = new ServiceCollection();
-            services.AddSingleton(ledger);
-            services
-                .AddMcpServer(o => { o.ServerInfo = new() { Name = "cid", Version = "0" }; })
-                .WithStreamServerTransport(clientToServer.Reader.AsStream(), serverToClient.Writer.AsStream())
-                .WithToolsFromAssembly(typeof(CorrelationProbeTool).Assembly)
-                .WithRequestFilters(f => f.AddCallToolFilter(TelemetryCallToolFilter.Create()));
+            var previousLogger = Log.Logger;
+            Log.Logger = MillerLoggingSetup
+                .Configure(new LoggerConfiguration(), logsDir, pid: 1234, new LoggingLevelSwitch(LogEventLevel.Information))
+                .CreateLogger();
 
-            await using var provider = services.BuildServiceProvider();
-            var server = provider.GetRequiredService<McpServer>();
-            var serverTask = server.RunAsync(ct);
+            try
+            {
+                var clientToServer = new Pipe();
+                var serverToClient = new Pipe();
 
-            var clientTransport = new StreamClientTransport(
-                clientToServer.Writer.AsStream(), serverToClient.Reader.AsStream());
-            await using var client = await McpClient.CreateAsync(clientTransport, cancellationToken: ct);
+                var services = new ServiceCollection();
+                services.AddSingleton(ledger);
+                services
+                    .AddMcpServer(o => { o.ServerInfo = new() { Name = "cid", Version = "0" }; })
+                    .WithStreamServerTransport(clientToServer.Reader.AsStream(), serverToClient.Writer.AsStream())
+                    .WithToolsFromAssembly(typeof(CorrelationProbeTool).Assembly)
+                    .WithRequestFilters(f => f.AddCallToolFilter(TelemetryCallToolFilter.Create()));
 
-            _ = await client.CallToolAsync("cid_silent_probe", new Dictionary<string, object?>(), cancellationToken: ct);
+                await using var provider = services.BuildServiceProvider();
+                var server = provider.GetRequiredService<McpServer>();
+                var serverTask = server.RunAsync(ct);
 
-            await client.DisposeAsync();
-            await clientToServer.Writer.CompleteAsync();
-            await serverToClient.Writer.CompleteAsync();
-            try { await serverTask.WaitAsync(TimeSpan.FromSeconds(5), ct); } catch (Exception) { }
+                var clientTransport = new StreamClientTransport(
+                    clientToServer.Writer.AsStream(), serverToClient.Reader.AsStream());
+                await using var client = await McpClient.CreateAsync(clientTransport, cancellationToken: ct);
+
+                _ = await client.CallToolAsync("cid_silent_probe", new Dictionary<string, object?>(), cancellationToken: ct);
+
+                await client.DisposeAsync();
+                await clientToServer.Writer.CompleteAsync();
+                await serverToClient.Writer.CompleteAsync();
+                try { await serverTask.WaitAsync(TimeSpan.FromSeconds(5), ct); } catch (Exception) { }
+            }
+            finally
+            {
+                Log.CloseAndFlush();
+                Log.Logger = previousLogger;
+            }
+
+            string rowId = ReadSingleRowId(dbPath);
+            string jsonFile = Directory.EnumerateFiles(logsDir, "miller-*.jsonl").Single();
+            string[] lines = ReadShared(jsonFile).Split('\n', StringSplitOptions.RemoveEmptyEntries);
+
+            Assert.Contains(lines, line =>
+            {
+                using var doc = JsonDocument.Parse(line);
+                return doc.RootElement.TryGetProperty("cid", out var cid)
+                    && cid.GetString() == rowId
+                    && doc.RootElement.TryGetProperty("Tool", out var tool)
+                    && tool.GetString() == "cid_silent_probe";
+            });
+
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
         }
         finally
         {
-            Log.CloseAndFlush();
-            Log.Logger = previousLogger;
+            LogLoggerGate.Release();
         }
-
-        string rowId = ReadSingleRowId(dbPath);
-        string jsonFile = Directory.EnumerateFiles(logsDir, "miller-*.jsonl").Single();
-        string[] lines = ReadShared(jsonFile).Split('\n', StringSplitOptions.RemoveEmptyEntries);
-
-        Assert.Contains(lines, line =>
-        {
-            using var doc = JsonDocument.Parse(line);
-            return doc.RootElement.TryGetProperty("cid", out var cid)
-                && cid.GetString() == rowId
-                && doc.RootElement.TryGetProperty("Tool", out var tool)
-                && tool.GetString() == "cid_silent_probe";
-        });
-
-        try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
     }
 
     [Fact]
