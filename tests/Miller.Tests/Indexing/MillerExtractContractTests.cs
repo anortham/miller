@@ -18,7 +18,7 @@ public sealed class MillerExtractContractTests
         Assert.Equal(3, MillerExtractContract.ExpectedExtractContractVersion);
         Assert.Equal(3, MillerExtractContract.ExpectedReportSchemaVersion);
         Assert.Equal("blake3", MillerExtractContract.ExpectedHashAlgorithm);
-        Assert.Equal("2.5.2", MillerExtractContract.PinnedJulieExtractVersion);
+        Assert.Equal("2.5.3", MillerExtractContract.PinnedJulieExtractVersion);
         Assert.False(string.IsNullOrWhiteSpace(MillerExtractContract.PinnedJulieExtractVersion));
     }
 

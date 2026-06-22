@@ -59,12 +59,18 @@ public sealed class CorrelationFilterTests
                 _events.Add(logEvent);
         }
 
-        /// <summary>Scalar string values of property <paramref name="name"/> captured by this sink.</summary>
-        public IReadOnlyList<string> PropertyValues(string name)
+        /// <summary>
+        /// Scalar string values of property <paramref name="name"/> captured by this sink, optionally limited to one
+        /// message template. The global Serilog logger can still receive unrelated events from parallel tests while
+        /// this sink is installed; callers that assert a specific probe event should filter to that event.
+        /// </summary>
+        public IReadOnlyList<string> PropertyValues(string name, string? messageTemplate = null)
         {
             lock (_events)
             {
                 return _events
+                    .Where(e => messageTemplate is null
+                        || string.Equals(e.MessageTemplate.Text, messageTemplate, StringComparison.Ordinal))
                     .Select(e => e.Properties.TryGetValue(name, out var value)
                         && value is ScalarValue { Value: string text }
                             ? text
@@ -170,7 +176,7 @@ public sealed class CorrelationFilterTests
     {
         var (rowId, sink) = await CallThroughFilterAsync("cid_probe");
 
-        IReadOnlyList<string> loggedCids = sink.PropertyValues("cid");
+        IReadOnlyList<string> loggedCids = sink.PropertyValues("cid", "cid probe ran");
 
         Assert.NotEmpty(loggedCids);
         Assert.All(loggedCids, loggedCid => Assert.Equal(rowId, loggedCid));
