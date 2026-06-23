@@ -3,8 +3,10 @@ using Miller.Core.Graph;
 using Miller.Core.Resolver;
 using Miller.Indexing;
 using Miller.Server.Resolution;
+using Miller.Server.Telemetry;
 using Miller.Server.Tools;
 using Miller.Tests;
+using Microsoft.Data.Sqlite;
 using System.Text.Json;
 using Xunit;
 
@@ -91,6 +93,20 @@ public sealed class TraceToolTests
     }
 
     private static SmartTargetResolver ResolverFor(MillerRepositoryIndex index) => new(index);
+
+    private static string ReadTelemetryMetadata(string telemetryDb)
+    {
+        using var conn = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = telemetryDb,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT metadata_json FROM tool_telemetry WHERE tool = 'trace';";
+        return (string)cmd.ExecuteScalar()!;
+    }
 
     // ---------- mode: auto ----------
 
@@ -191,6 +207,61 @@ public sealed class TraceToolTests
 
         Assert.Equal(0, emitted);
         Assert.Contains("No neighbours", outp);
+    }
+
+    [Fact]
+    public void Auto_NoNeighbours_OffersSameFileFallbacks()
+    {
+        var index = BuildSymbolIndex(
+            new[]
+            {
+                ("a", "Alpha", "method", "src/A.cs", 1),
+                ("b", "Beta", "method", "src/A.cs", 10),
+            },
+            Array.Empty<(string, string)>());
+
+        string outp = TraceTool.Run(index, ResolverFor(index),
+            target: "Alpha", mode: "auto", to: null, depth: 3, limit: 20, fullFormat: false,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        Assert.Contains("No neighbours", outp);
+        Assert.Contains("Resolved target: Alpha method src/A.cs:1", outp);
+        Assert.Contains("Same-file symbols:", outp);
+        Assert.Contains("Beta  method  src/A.cs:10", outp);
+        Assert.Contains("inspect src/A.cs", outp);
+    }
+
+    [Fact]
+    public void Trace_EmptyTelemetry_DistinguishesNoNeighbours()
+    {
+        var index = BuildSymbolIndex(
+            new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
+            Array.Empty<(string, string)>());
+        string dir = Path.Combine(Path.GetTempPath(), "miller-trace-empty-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string telemetryDb = Path.Combine(dir, "telemetry.db");
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "current.db", "current-ws", dir));
+        var tool = new TraceTool(provider);
+
+        try
+        {
+            using (var ledger = TelemetryLedger.Open(telemetryDb, "current-ws", dir))
+            {
+                using var scope = ledger.Measure("trace", op: null);
+                string output = tool.Trace("Alpha");
+                Assert.Contains("No neighbours", output);
+            }
+
+            using var doc = JsonDocument.Parse(ReadTelemetryMetadata(telemetryDb));
+            Assert.Equal("no_neighbours", doc.RootElement.GetProperty("empty_reason").GetString());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+        }
     }
 
     [Fact]

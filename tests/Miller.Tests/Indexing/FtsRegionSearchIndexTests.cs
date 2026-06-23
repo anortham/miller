@@ -219,9 +219,11 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
                 avgdl REAL,
                 schema_version INTEGER,
                 region_count INTEGER,
-                region_avgdl REAL);
-            INSERT INTO meta(revision, doc_count, avgdl, schema_version, region_count, region_avgdl)
-            VALUES (7, 0, 0.0, {SearchIndexWriter.SchemaVersion}, 0, 0.0);
+                region_avgdl REAL,
+                region_index_enabled INTEGER);
+            INSERT INTO meta(
+                revision, doc_count, avgdl, schema_version, region_count, region_avgdl, region_index_enabled)
+            VALUES (7, 0, 0.0, {SearchIndexWriter.SchemaVersion}, 0, 0.0, 1);
             """);
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
@@ -307,7 +309,8 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
                 avgdl REAL,
                 schema_version INTEGER,
                 region_count INTEGER,
-                region_avgdl REAL);
+                region_avgdl REAL,
+                region_index_enabled INTEGER);
             """);
 
         if (symbols is not null)
@@ -380,8 +383,9 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
         double avgdl = regions.Length == 0 ? 0.0 : (double)totalLength / regions.Length;
         using var metaCommand = connection.CreateCommand();
         metaCommand.CommandText = """
-            INSERT INTO meta(revision, doc_count, avgdl, schema_version, region_count, region_avgdl)
-            VALUES ($revision, 0, 0.0, $schemaVersion, $regionCount, $regionAvgdl);
+            INSERT INTO meta(
+                revision, doc_count, avgdl, schema_version, region_count, region_avgdl, region_index_enabled)
+            VALUES ($revision, 0, 0.0, $schemaVersion, $regionCount, $regionAvgdl, 1);
             """;
         metaCommand.Parameters.AddWithValue("$revision", revision);
         metaCommand.Parameters.AddWithValue("$schemaVersion", schemaVersion);

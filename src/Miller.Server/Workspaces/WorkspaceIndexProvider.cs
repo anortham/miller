@@ -670,13 +670,12 @@ public sealed class WorkspaceIndexProvider
         if (!_sidecar.Enabled)
         {
             throw new InvalidOperationException(
-                "region search requires the search sidecar. Set MILLER_SEARCH_SIDECAR=1 and " +
-                "MILLER_REGION_INDEX=1, then refresh the workspace.");
+                "region search requires the search sidecar. Set MILLER_SEARCH_SIDECAR=1, then refresh the workspace.");
         }
         if (!_sidecar.RegionOptions.Enabled)
         {
             throw new InvalidOperationException(
-                "region search requires MILLER_REGION_INDEX=1 and a refreshed search sidecar.");
+                "region search is disabled by MILLER_REGION_INDEX=0. Unset it or use a truthy value, then refresh the workspace.");
         }
     }
 
@@ -691,7 +690,7 @@ public sealed class WorkspaceIndexProvider
                 or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
             throw new InvalidOperationException(
-                "region search requires MILLER_REGION_INDEX=1 and a refreshed search sidecar: " + ex.Message,
+                "region search requires a refreshed source-region search sidecar: " + ex.Message,
                 ex);
         }
     }

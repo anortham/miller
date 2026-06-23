@@ -46,6 +46,7 @@ Current `json_commands` include:
 | `workspace open --json` | Register and index a workspace from the CLI. |
 | `workspace remove --json` | Delete a workspace `.miller` index directory and unregister it. |
 | `search --json` | Symbol/default search or explicit content/source/external/web/all-text search results. |
+| `todos --json` | Bounded TODO/FIXME/HACK/XXX marker audit over comment/doc-comment source regions. |
 | `inspect --json` | File/symbol summary or full inspect result. |
 | `context --json` | Token-budgeted code bundle. `--reference-mode usage` adds reason/confidence-labeled usage evidence. |
 | `impact --json` | Downstream impact result for a symbol, changed paths, or diff. |
@@ -68,6 +69,11 @@ is available.
 
 `patterns --json` is the stable way to consume `julie-extractors` structural facts. Eros should use this command
 for known code-shape signals instead of reading Miller private SQLite tables directly.
+
+`todos --json` uses the source-region search sidecar, so callers should check
+`optional_features.source_region_index` from `capabilities --json` and normal workspace sidecar health before
+depending on it. It is a marker-audit surface, not a task tracker: rows identify code comments by marker,
+file, line, region kind, language, containing symbol when known, and snippet text.
 
 The `refresh --json --wait` response uses the same action shape as `workspace refresh --json`, plus
 post-refresh artifact facts when available:
@@ -137,7 +143,7 @@ with the standard rebuild message. Fields (`schema_version` 1):
 
 ## Workspace selector rules
 
-Code read commands (`search`, `inspect`, `context`, `impact`, `trace`, `patterns`, and the `symbols`/`complexity`
+Code read commands (`search`, `todos`, `inspect`, `context`, `impact`, `trace`, `patterns`, and the `symbols`/`complexity`
 exports) target one workspace per call. Their `--workspace-id <selector>` accepts a display ID, unique prefix,
 full workspace ID, registered root path, `current`, or `primary`. The path alias `--workspace <path>` is
 normalized before selection. A selector flag supplied without a value is a usage error (exit `2`) in every

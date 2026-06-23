@@ -783,7 +783,8 @@ public sealed class IndexerServiceScanTests
                 "csharp", "src/Edit.cs", 1, 1, ParentId: null, IsTest: false),
             new IndexedSymbol(1, "keep", "Anchor", "public class Anchor", "class",
                 "csharp", "src/Keep.cs", 1, 1, ParentId: null, IsTest: false),
-        }, revision: 1);
+        }, revision: 1, symbolsDbPath: julie.DbPath, workspaceRoot: julie.WorkspaceRoot,
+            regionOptions: RegionIndexOptions.EnabledDefault);
         CreateSentinelTable(searchDb);
         var sidecar = new SymbolSearchSidecar(enabled: true);
         var service = NewSeededService(WorkspaceWithDb(julie.DbPath), sidecar);
@@ -829,7 +830,8 @@ public sealed class IndexerServiceScanTests
                 "csharp", "src/Edit.cs", 1, 1, ParentId: null, IsTest: false),
             new IndexedSymbol(1, "keep", "Anchor", "public class Anchor", "class",
                 "csharp", "src/Keep.cs", 1, 1, ParentId: null, IsTest: false),
-        }, revision: 1);
+        }, revision: 1, symbolsDbPath: julie.DbPath, workspaceRoot: julie.WorkspaceRoot,
+            regionOptions: RegionIndexOptions.EnabledDefault);
         CreateSentinelTable(searchDb);
         var sidecar = new SymbolSearchSidecar(enabled: true);
         var service = NewSeededService(WorkspaceWithDb(julie.DbPath), sidecar);
@@ -898,21 +900,22 @@ public sealed class IndexerServiceScanTests
             new JulieDbFixture.RevisionFileChangeRow(2, "src/Edit.cs", "updated"),
         });
 
-    private static void WriteRevisionOneArtifact(string searchDb) =>
+    private static void WriteRevisionOneArtifact(JulieDbFixture fixture, string searchDb) =>
         SearchIndexWriter.Write(searchDb, new[]
         {
             new IndexedSymbol(0, "edit-old", "LegacyWidget", "public class LegacyWidget", "class",
                 "csharp", "src/Edit.cs", 1, 1, ParentId: null, IsTest: false),
             new IndexedSymbol(1, "keep", "Anchor", "public class Anchor", "class",
                 "csharp", "src/Keep.cs", 1, 1, ParentId: null, IsTest: false),
-        }, revision: 1);
+        }, revision: 1, symbolsDbPath: fixture.DbPath, workspaceRoot: fixture.WorkspaceRoot,
+            regionOptions: RegionIndexOptions.EnabledDefault);
 
     [Fact]
     public void TryReindexAsLeader_CorruptSearchSidecar_IsDeletedAndRebuilt_AndReaderCanOpenIt()
     {
         using var julie = SingleFileUpdateFixture();
         string searchDb = SymbolSearchSidecar.SearchDbPathFor(julie.DbPath);
-        WriteRevisionOneArtifact(searchDb);
+        WriteRevisionOneArtifact(julie, searchDb);
         CorruptFtsShadowData(searchDb); // meta intact at revision 1; the FTS body is corrupt
         var sidecar = new SymbolSearchSidecar(enabled: true);
         var service = NewSeededService(WorkspaceWithDb(julie.DbPath), sidecar);
@@ -935,7 +938,7 @@ public sealed class IndexerServiceScanTests
     {
         using var julie = SingleFileUpdateFixture();
         string searchDb = SymbolSearchSidecar.SearchDbPathFor(julie.DbPath);
-        WriteRevisionOneArtifact(searchDb);
+        WriteRevisionOneArtifact(julie, searchDb);
         // A converge failure that is NOT corruption-shaped ("no such table", SQLITE_ERROR): the artifact file
         // must be left alone — delete/rebuild is reserved for corruption, everything else keeps warn-and-retry.
         DropTrigramTable(searchDb);

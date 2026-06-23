@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Miller.Indexing;
+using Miller.Server.Git;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
 using Miller.Server.Workspaces;
@@ -110,6 +111,7 @@ public static class MillerServiceRegistration
         services.AddSingleton<ContentCorpusSidecar>();
         services.AddSingleton<ContentCorpusExternalStore>();
         services.AddSingleton<PatternFactsReader>();
+        services.AddSingleton<IGitDiffReader, ProcessGitDiffReader>();
         services.AddSingleton<CrossWorkspaceRefreshService>();
         services.AddSingleton<WorkspaceIndexProvider>();
         services.AddSingleton<IWorkspaceIndexProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());

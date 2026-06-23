@@ -6,6 +6,7 @@ using System.Text.Json;
 using Miller.Core.Diff;
 using Miller.Core.Graph;
 using Miller.Indexing;
+using Miller.Server.Git;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
 using Miller.Server.Workspaces;
@@ -37,29 +38,44 @@ public sealed class ImpactTool
     private const int CompactLikelyTestsLimit = 20;
 
     private readonly IWorkspaceIndexProvider _workspaceProvider;
+    private readonly IGitDiffReader _gitDiffReader;
 
     /// <summary>Construct over the live index holder (production / freshness-aware). Unlike inspect, impact's
     /// <see cref="Run"/> core is DB-free (it traverses the in-memory graph), so it takes no WorkspaceContext.</summary>
     /// <exception cref="ArgumentNullException">Any argument is null.</exception>
     public ImpactTool(IWorkspaceIndexProvider workspaceProvider)
+        : this(workspaceProvider, new ProcessGitDiffReader())
+    {
+    }
+
+    public ImpactTool(IWorkspaceIndexProvider workspaceProvider, IGitDiffReader gitDiffReader)
     {
         ArgumentNullException.ThrowIfNull(workspaceProvider);
+        ArgumentNullException.ThrowIfNull(gitDiffReader);
         _workspaceProvider = workspaceProvider;
+        _gitDiffReader = gitDiffReader;
     }
 
     [McpServerTool(Name = "impact")]
     [Description(
         "Show what a change would affect — the symbols and tests downstream of editing a symbol or file. Use " +
         "before a refactor, or to find which tests to run for a change. Prefer this over grepping for usages. " +
-        "Pass exactly one of target (a symbol or file), changed_paths (a set of files), or diff (a unified " +
-        "diff). Returns compact text by default; pass format=json to chain results.")]
+        "Pass exactly one of target (a symbol or file), changed_paths (a set of files), diff (a unified " +
+        "diff), or git/base/staged to read the workspace's git diff and map it to impact. Returns compact " +
+        "text by default; pass format=json to chain results.")]
     public string Impact(
-        [Description("A symbol name/id or a file path (smart-resolved). One of target/changed_paths/diff.")]
+        [Description("A symbol name/id or a file path (smart-resolved). One of target/changed_paths/diff/git.")]
         string? target = null,
-        [Description("A set of changed file paths. One of target/changed_paths/diff.")]
+        [Description("A set of changed file paths. One of target/changed_paths/diff/git.")]
         string[]? changed_paths = null,
-        [Description("A unified diff; changed line ranges map to the symbols they touch. One of target/changed_paths/diff.")]
+        [Description("A unified diff; changed line ranges map to the symbols they touch. One of target/changed_paths/diff/git.")]
         string? diff = null,
+        [Description("Read git diff from the selected workspace and map changed ranges to impacted symbols.")]
+        bool git = false,
+        [Description("Base ref for git diff, for example origin/main or HEAD~1. Implies git=true.")]
+        string? @base = null,
+        [Description("Use the staged/index diff (`git diff --cached`). Implies git=true.")]
+        bool staged = false,
         [Description("Reverse-reachability radius (how many hops of dependents to follow). Default 2.")]
         int max_depth = 2,
         [Description("Max impacted symbols to return. Default 100.")] int limit = 100,
@@ -75,18 +91,60 @@ public sealed class ImpactTool
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
             WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
             string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
-            string output = Run(context.Index, context.Resolver,
-                target, changed_paths, diff, max_depth, limit, json,
-                out int impactedCount, out int nodesVisited);
+            bool useGitDiff = git || staged || !string.IsNullOrWhiteSpace(@base);
+            int provided =
+                (string.IsNullOrWhiteSpace(target) ? 0 : 1) +
+                (changed_paths is { Length: > 0 } ? 1 : 0) +
+                (string.IsNullOrWhiteSpace(diff) ? 0 : 1) +
+                (useGitDiff ? 1 : 0);
+
+            if (useGitDiff && provided != 1)
+            {
+                string usage = Usage(json);
+                return ReadToolWorkspaceRouting.PrefixCompact(usage, compactBanner);
+            }
+
+            bool emptyGitDiff = false;
+            if (useGitDiff)
+            {
+                GitDiffResult gitResult = _gitDiffReader.Read(new GitDiffRequest(context.WorkspaceRoot, @base, staged));
+                if (!gitResult.Success)
+                    throw new InvalidOperationException($"git diff failed in {context.WorkspaceRoot}: {gitResult.Error ?? "unknown error"}");
+
+                if (string.IsNullOrWhiteSpace(gitResult.Diff))
+                {
+                    emptyGitDiff = true;
+                }
+                else
+                {
+                    diff = gitResult.Diff;
+                }
+            }
+
+            string output;
+            int impactedCount;
+            int nodesVisited;
+            if (emptyGitDiff)
+            {
+                output = Note(json, "No impact — git diff is empty.");
+                impactedCount = 0;
+                nodesVisited = 0;
+            }
+            else
+            {
+                output = Run(context.Index, context.Resolver,
+                    target, changed_paths, diff, max_depth, limit, json,
+                    out impactedCount, out nodesVisited);
+            }
             output = ReadToolWorkspaceRouting.PrefixCompact(output, compactBanner);
 
             if (telemetry is not null)
             {
                 ReadToolWorkspaceRouting.ApplyTelemetry(telemetry, context);
-                telemetry.Op = ImpactInputKind(target, changed_paths, diff);
+                telemetry.Op = ImpactInputKind(target, changed_paths, diff, useGitDiff);
                 // The target axis is whichever input was supplied (target wins, else the first changed path,
                 // else a diff marker) — privacy-hashed by SetTarget.
-                telemetry.SetTarget(TargetForTelemetry(target, changed_paths, diff));
+                telemetry.SetTarget(TargetForTelemetry(target, changed_paths, diff, useGitDiff, @base, staged));
                 telemetry.ResultCount = impactedCount;
                 // D10 work proxy (bytes_examined ≈ nodes visited): the reverse-reachability set the BFS produced.
                 telemetry.BytesExamined = nodesVisited;
@@ -95,7 +153,7 @@ public sealed class ImpactTool
                 telemetry.SetMetadata("limit_bucket", LimitBucket(limit));
                 telemetry.SetMetadata("max_depth_bucket", DepthBucket(max_depth));
                 if (impactedCount == 0)
-                    telemetry.SetEmptyReason("no_impacted_symbols");
+                    telemetry.SetEmptyReason(ImpactEmptyReason(output));
             }
             return output;
         }
@@ -110,22 +168,46 @@ public sealed class ImpactTool
         }
     }
 
-    private static string? TargetForTelemetry(string? target, string[]? changedPaths, string? diff)
+    private static string? TargetForTelemetry(
+        string? target,
+        string[]? changedPaths,
+        string? diff,
+        bool gitDiff,
+        string? baseRef,
+        bool staged)
     {
         if (!string.IsNullOrWhiteSpace(target))
             return target;
         if (changedPaths is { Length: > 0 })
             return string.Join(',', changedPaths);
+        if (gitDiff)
+            return !string.IsNullOrWhiteSpace(baseRef) ? baseRef : staged ? "staged" : "working_tree";
         return string.IsNullOrEmpty(diff) ? null : "diff";
     }
 
-    private static string ImpactInputKind(string? target, string[]? changedPaths, string? diff)
+    private static string ImpactInputKind(string? target, string[]? changedPaths, string? diff, bool gitDiff)
     {
         if (!string.IsNullOrWhiteSpace(target))
             return "target";
         if (changedPaths is { Length: > 0 })
             return "changed_paths";
+        if (gitDiff)
+            return "git_diff";
         return string.IsNullOrWhiteSpace(diff) ? "missing_input" : "diff";
+    }
+
+    private static string ImpactEmptyReason(string output)
+    {
+        if (output.Contains("git diff is empty", StringComparison.Ordinal))
+            return "empty_git_diff";
+        if (output.Contains("No indexed symbols matched", StringComparison.Ordinal))
+            return "no_seed_symbols";
+        if (output.Contains("not found", StringComparison.OrdinalIgnoreCase) ||
+            output.StartsWith("Multiple candidates", StringComparison.Ordinal))
+            return "unresolved_target";
+        if (output.Contains("Resolved seed symbols:", StringComparison.Ordinal))
+            return "no_dependents";
+        return "no_impacted_symbols";
     }
 
     private static string LimitBucket(int limit) => limit switch
@@ -210,18 +292,29 @@ public sealed class ImpactTool
         }
         else if (changedPaths is { Count: > 0 })
         {
+            var unmatched = new List<string>();
             foreach (var path in changedPaths)
-                SeedFromFile(index, path, seedIds);
+            {
+                if (SeedFromFile(index, path, seedIds) == 0)
+                    unmatched.Add(path);
+            }
+            if (unmatched.Count > 0)
+                note = NoSeedSymbolsNote("changed path(s)", unmatched);
         }
         else // diff
         {
             note = SeedFromDiff(index, diff!, seedIds);
         }
 
+        if (seedIds.Count == 0 && note is null)
+            note = "No indexed symbols matched the impact input. Try search mode=file for the changed path.";
+
         // --- bounded REVERSE reachability over the in-memory graph (D3/D5). Starts are excluded by Reach. ---
         IReadOnlyList<ReachedNode> reached =
             graph.Reach(seedIds, maxDepth, limit, Direction.Reverse);
         nodesVisited = reached.Count; // D10 work proxy: the whole reached set (before the test partition)
+        if (seedIds.Count > 0 && reached.Count == 0 && note is null)
+            note = NoDependentsNote(index, seedIds);
 
         // --- partition the reached nodes into impacted symbols vs likely tests (D5). Hydrate ids → symbols;
         // an id absent from the index is skipped (defensive — the graph bounds edges to indexed nodes). ---
@@ -281,12 +374,14 @@ public sealed class ImpactTool
     }
 
     // Seed every indexed symbol of a file (D5: a file/changed-path seeds all its symbols).
-    private static void SeedFromFile(ISymbolLookupIndex index, string path, List<string> seedIds)
+    private static int SeedFromFile(ISymbolLookupIndex index, string path, List<string> seedIds)
     {
         // Canonicalize a bare basename to its indexed path when unambiguous (e.g. Service.cs → src/Service.cs).
         string resolved = index.ResolveIndexedFilePath(path) ?? path;
+        int before = seedIds.Count;
         foreach (var symbol in index.FindByFilePath(resolved))
             seedIds.Add(symbol.SymbolId);
+        return seedIds.Count - before;
     }
 
     // Seed from a unified diff (D5): per changed file, the symbols whose [start_line, end_line] intersect a
@@ -295,12 +390,16 @@ public sealed class ImpactTool
     private static string? SeedFromDiff(ISymbolLookupIndex index, string diff, List<string> seedIds)
     {
         var degradedFiles = new List<string>();
+        var unmatchedFiles = new List<string>();
         foreach (var file in DiffTargets.Parse(diff))
         {
             string resolved = index.ResolveIndexedFilePath(file.Path) ?? file.Path;
             var symbols = index.FindByFilePath(resolved);
             if (symbols.Count == 0)
+            {
+                unmatchedFiles.Add(file.Path);
                 continue; // a changed file with no indexed symbols contributes no seeds
+            }
 
             // Collect the symbols whose whole span intersects ANY changed range. A symbol with no recorded span
             // (StartLine 0 / EndLine 0) can never intersect, so it falls into the whole-file degradation below.
@@ -332,10 +431,47 @@ public sealed class ImpactTool
             }
         }
 
-        return degradedFiles.Count == 0
-            ? null
-            : "note: no line-precise span matched in " + string.Join(", ", degradedFiles) +
-              " — seeded the whole file(s).";
+        if (seedIds.Count == 0 && unmatchedFiles.Count > 0)
+            return NoSeedSymbolsNote("diff file(s)", unmatchedFiles);
+        if (degradedFiles.Count > 0)
+            return "note: no line-precise span matched in " + string.Join(", ", degradedFiles) +
+                   " — seeded the whole file(s).";
+        if (unmatchedFiles.Count > 0)
+            return "note: no indexed symbols matched diff file(s): " + string.Join(", ", unmatchedFiles) + ".";
+        return null;
+    }
+
+    private static string NoSeedSymbolsNote(string label, IReadOnlyList<string> values) =>
+        "No indexed symbols matched " + label + ": " + string.Join(", ", values) +
+        ". Try search mode=file for the path, or refresh the workspace if the file was just added.";
+
+    private static string NoDependentsNote(ISymbolLookupIndex index, IReadOnlyList<string> seedIds)
+    {
+        var symbolsById = SymbolLookupBatch.FindBySymbolIds(index, seedIds);
+        var seeds = seedIds
+            .Select(id => symbolsById.TryGetValue(id, out IndexedSymbol? symbol) ? symbol : null)
+            .Where(static symbol => symbol is not null)
+            .Cast<IndexedSymbol>()
+            .Take(5)
+            .ToArray();
+        if (seeds.Length == 0)
+            return "Resolved seed symbols, but no graph dependents were found.";
+
+        var sb = new StringBuilder();
+        sb.Append("Resolved seed symbols:");
+        foreach (IndexedSymbol seed in seeds)
+        {
+            sb.Append(' ')
+              .Append(seed.Name).Append(' ')
+              .Append(seed.Kind).Append(' ')
+              .Append(seed.FilePath).Append(':').Append(seed.StartLine)
+              .Append(';');
+        }
+        sb.Length--;
+        sb.Append(". Try trace ")
+          .Append(seeds[0].Name)
+          .Append(" to inspect graph edges, or search mode=source for text references not represented in the graph.");
+        return sb.ToString();
     }
 
     // Two inclusive line ranges [aStart,aEnd] and [bStart,bEnd] overlap when each starts at or before the other ends.
@@ -472,9 +608,9 @@ public sealed class ImpactTool
     // outcome (impactedCount 0), so the JSON shape uses the same "note" key the not-found path uses — an "error"
     // key is reserved for the Error outcome (matching EditService's convention). The compact text is unchanged.
     private static string Usage(bool json) => json
-        ? Note(json, "impact requires exactly one of target, changed_paths, or diff.")
+        ? Note(json, "impact requires exactly one of target, changed_paths, diff, or git.")
         : "Usage: pass exactly one of target (a symbol or file), changed_paths (a set of files), or diff " +
-          "(a unified diff).";
+          "(a unified diff), or git/base/staged.";
 
     private static string Note(bool json, string message) => json
         ? ServerJson.Note(message)

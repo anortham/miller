@@ -45,7 +45,7 @@ tree-sitter (via julie-extract).
 |---|---|---|
 | 1. Code graph | precise structural queries ("who implements X", "callers of Y") | **Exists** — symbol graph + trace/impact/references over julie's `symbols.db` |
 | 2. Meaning-based search | embeddings over AST-bounded chunks | **Missing by design** — this is Eros's commercial layer; free-core keeps embeddings out |
-| 3. Scope-aware lexical | keyword/trigram search tagged with code structure ("`TODO` only in comments") | **Partial / opt-in** — explicit `regions=comment|doc_comment|string_literal` search exists behind `MILLER_REGION_INDEX=1`; default-on waits for size and query-quality follow-up |
+| 3. Scope-aware lexical | keyword/trigram search tagged with code structure ("`TODO` only in comments") | **Built / default-on** — explicit `regions=comment|doc_comment|string_literal` search uses source-region indexing by default; `MILLER_REGION_INDEX=0` opts out |
 
 Next: ship pillar-3's *foundation* (this doc) without blocking pillars 1 and 2.
 
@@ -200,7 +200,7 @@ swapped in atomically so a reader never sees a half-built DB.
    self-heal to the in-memory projection. Default off until eval clears it.
 4. ✅ **External build** — build the sidecar in `CrossWorkspaceRefreshService` (holds the lock before scan;
    one extra symbol read).
-5. ✅ `source_regions` region-typed table → explicit opt-in region search.
+5. ✅ `source_regions` region-typed table → explicit region search (indexed by default, `MILLER_REGION_INDEX=0` opts out).
 6. ✅ Collapsed qualified-name trigram recall (`SchemaVersion` 4).
 7. *(later)* Widen the search interface to push filters into SQL if profiling wants it; tune ranking beyond
    BM25 parity when real-query dogfood justifies it.

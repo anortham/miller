@@ -328,6 +328,7 @@ public sealed class SearchIndexWriterTests : IDisposable
         Assert.Equal((long)SearchIndexWriter.SchemaVersion, Long(Scalar(c, "SELECT schema_version FROM meta")));
         Assert.Equal(0L, Long(Scalar(c, "SELECT region_count FROM meta")));
         Assert.Equal(0.0, Convert.ToDouble(Scalar(c, "SELECT region_avgdl FROM meta")), 5);
+        Assert.Equal(0L, Long(Scalar(c, "SELECT region_index_enabled FROM meta")));
         Assert.Equal(0L, Long(Scalar(c, "SELECT COUNT(*) FROM search_regions")));
         Assert.Equal(0L, Long(Scalar(c, "SELECT COUNT(*) FROM regions_fts")));
     }
@@ -375,6 +376,7 @@ public sealed class SearchIndexWriterTests : IDisposable
 
         using var c = OpenRead();
         Assert.Equal(2L, Long(Scalar(c, "SELECT region_count FROM meta")));
+        Assert.Equal(1L, Long(Scalar(c, "SELECT region_index_enabled FROM meta")));
         Assert.Equal("// TODO café", Scalar(c, "SELECT raw_text FROM search_regions WHERE region_id='comment-region'"));
         Assert.Equal("\"http://localhost\"", Scalar(c, "SELECT raw_text FROM search_regions WHERE region_id='literal-region'"));
         Assert.Equal("A", Scalar(c, "SELECT containing_symbol_name FROM search_regions WHERE region_id='comment-region'"));

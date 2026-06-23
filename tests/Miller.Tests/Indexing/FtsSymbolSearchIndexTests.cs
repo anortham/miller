@@ -543,8 +543,9 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
             rw.Open();
             using var cmd = rw.CreateCommand();
             cmd.CommandText = """
-                INSERT INTO meta(revision, doc_count, avgdl, schema_version, region_count, region_avgdl)
-                VALUES (1, 1, 1.0, $schema, 0, 0.0);
+                INSERT INTO meta(
+                    revision, doc_count, avgdl, schema_version, region_count, region_avgdl, region_index_enabled)
+                VALUES (1, 1, 1.0, $schema, 0, 0.0, 0);
                 """;
             cmd.Parameters.AddWithValue("$schema", SearchIndexWriter.SchemaVersion);
             cmd.ExecuteNonQuery();

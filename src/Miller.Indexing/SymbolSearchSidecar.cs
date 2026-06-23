@@ -18,7 +18,7 @@ public sealed class SymbolSearchSidecar
     public static SymbolSearchSidecar Disabled { get; } = new(enabled: false);
 
     public SymbolSearchSidecar(bool enabled)
-        : this(enabled, RegionIndexOptions.Disabled)
+        : this(enabled, RegionIndexOptions.EnabledDefault)
     {
     }
 
@@ -60,8 +60,8 @@ public sealed class SymbolSearchSidecar
     internal static SymbolSearchSidecar FromEnvValue(string? raw) => new(enabled: !IsDisabledValue(raw));
 
     /// <summary>
-    /// Pure env-value parser for both sidecar flags. Symbol search defaults on; region text defaults off and
-    /// enables only on an explicit truthy token.
+    /// Pure env-value parser for both sidecar flags. Symbol search and region text default on; both opt out on
+    /// explicit falsy tokens.
     /// </summary>
     internal static SymbolSearchSidecar FromEnvValue(
         string? sidecarRaw,
@@ -69,7 +69,7 @@ public sealed class SymbolSearchSidecar
         string? maxRegionBytesRaw = null)
     {
         bool enabled = !IsDisabledValue(sidecarRaw);
-        bool regionEnabled = IsTruthyValue(regionRaw);
+        bool regionEnabled = !IsDisabledValue(regionRaw);
         int maxRegionBytes = ParsePositiveInt(maxRegionBytesRaw, RegionIndexOptions.DefaultMaxRegionBytes);
         var regionOptions = regionEnabled
             ? new RegionIndexOptions(Enabled: true, maxRegionBytes)
@@ -141,18 +141,6 @@ public sealed class SymbolSearchSidecar
                 DocumentCount: null,
                 Error: ex.Message);
         }
-    }
-
-    private static bool IsTruthyValue(string? raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw))
-            return false;
-
-        return raw.Trim().ToLowerInvariant() switch
-        {
-            "1" or "true" or "on" or "yes" => true,
-            _ => false,
-        };
     }
 
     private static int ParsePositiveInt(string? raw, int fallback)
@@ -276,7 +264,7 @@ public sealed class SymbolSearchSidecar
         // rejects a stale-schema artifact, so a revision-ONLY gate here would never rebuild a revision-matching
         // stale-schema artifact and the sidecar would self-heal to the in-memory index forever (the silent-disable
         // bug class of commit 5362b3d). Keeping the two gates in lockstep is the fix.
-        if (ReadFreshArtifactRevision(searchDbPath, out corruptionReason) == revision)
+        if (ReadFreshArtifactRevision(searchDbPath, RegionOptions, out corruptionReason) == revision)
             return false;
 
         IReadOnlyList<IndexedSymbol> symbols = SqliteSymbolReader.Read(symbolsDbPath);
@@ -306,7 +294,7 @@ public sealed class SymbolSearchSidecar
             ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
 
         string searchDbPath = SearchDbPathFor(symbolsDbPath);
-        long? artifactRevision = ReadFreshArtifactRevision(searchDbPath, out corruptionReason);
+        long? artifactRevision = ReadFreshArtifactRevision(searchDbPath, RegionOptions, out corruptionReason);
         if (artifactRevision == revision)
             return false;
 
@@ -344,14 +332,19 @@ public sealed class SymbolSearchSidecar
     }
 
     // The revision a built search.db was stamped with — but ONLY when its meta.schema_version equals the current
-    // SearchIndexWriter.SchemaVersion. Returns null when the artifact is absent, unreadable, or schema-stale (all
-    // ⇒ needs rebuild). The schema gate keeps EnsureBuilt in lockstep with FtsSymbolSearchIndex.Open's version
-    // rejection, so an old-schema artifact at a matching revision is rebuilt here rather than never-rebuilt/never-read.
+    // SearchIndexWriter.SchemaVersion and its region-index option matches this sidecar. Returns null when the
+    // artifact is absent, unreadable, schema-stale, or option-stale (all ⇒ needs rebuild). The schema/option gate
+    // keeps EnsureBuilt in lockstep with FtsSymbolSearchIndex.Open's version rejection and prevents an option flip
+    // from leaving a matching-revision sidecar permanently fresh but missing the requested region rows.
     //
     // corruptionReason is non-null ONLY when an artifact file EXISTS but cannot be read as a well-formed
     // search.db (garbage bytes, missing/duplicated meta row, null revision). A missing file and schema-version
-    // staleness are normal lifecycle states and stay quiet — only damage should reach the writer's warning log.
-    private static long? ReadFreshArtifactRevision(string searchDbPath, out string? corruptionReason)
+    // staleness/option drift are normal lifecycle states and stay quiet — only damage should reach the writer's
+    // warning log.
+    private static long? ReadFreshArtifactRevision(
+        string searchDbPath,
+        RegionIndexOptions regionOptions,
+        out string? corruptionReason)
     {
         corruptionReason = null;
         if (!File.Exists(searchDbPath))
@@ -394,9 +387,21 @@ public sealed class SymbolSearchSidecar
                 corruptionReason = $"search.db at '{searchDbPath}' has multiple meta rows.";
                 return null;
             }
+
+            using var optionCmd = connection.CreateCommand();
+            optionCmd.CommandText = "SELECT region_index_enabled FROM meta LIMIT 1;";
+            object regionEnabledRaw = optionCmd.ExecuteScalar() ?? DBNull.Value;
+            if (regionEnabledRaw is DBNull)
+                return null;
+
+            bool regionIndexEnabled = Convert.ToInt64(regionEnabledRaw, CultureInfo.InvariantCulture) != 0;
+            if (regionIndexEnabled != regionOptions.Enabled)
+                return null;
+
             return revision;
         }
-        // A damaged artifact may hold a non-integer revision/schema_version, or lack the meta columns entirely:
+        // A damaged artifact may hold a non-integer revision/schema_version/region_index_enabled, or lack the
+        // meta columns entirely:
         // Convert.ToInt64 can throw FormatException (text), OverflowException (out of range), or InvalidCastException
         // (a BLOB); a missing column throws SqliteException. Treat every read failure as "unreadable ⇒ rebuild".
         catch (Exception ex) when (

@@ -23,7 +23,7 @@ Miller serves an always-fresh index of this workspace's code. Reach for a Miller
   Natural-language queries auto-hide tests (`exclude_tests=false` to include them). Use `mode=content`, alias `docs`,
   for docs/config; `mode=source` for source-body text; `mode=external|web|all-text` for imported/broad text. Scope with
   `file_pattern`, `language`, and `limit`. Use `regions=comment|doc_comment|string_literal` for comments/strings; it
-  requires `MILLER_REGION_INDEX=1` and a refreshed `search.db`. Symbol hits may include `has_doc`. Optional
+  uses the default source-region `search.db` path; `MILLER_REGION_INDEX=0` opts out. Symbol hits may include `has_doc`. Optional
   `workspace_id` accepts display ID, unique prefix, full ID, root path, `current`, or `primary`; explicit
   `workspace_id` defaults `ensure_fresh=true`.
 - `inspect` — A file or symbol you can already name. A file path lists symbols; a symbol name gives definition,
@@ -40,11 +40,14 @@ Miller serves an always-fresh index of this workspace's code. Reach for a Miller
   `workspace_id` and `ensure_fresh` work cross-workspace. **`mode=bridge` is provider-scoped to `dotnet-web`; on
   another stack use `mode=auto`/`mode=path`.**
 - `impact` — What a change affects: downstream symbols and linked tests. Pass exactly one of `target`,
-  `changed_paths`, or `diff`. Use before refactoring or choosing tests. Optional `workspace_id` and `ensure_fresh`
-  work for registered workspaces.
+  `changed_paths`, `diff`, or `git=true` (`base` and `staged` imply git). Use before refactoring, choosing tests,
+  or checking the current git diff. Optional `workspace_id` and `ensure_fresh` work for registered workspaces.
 - `edit` — Index-aware edits: `replace_text`, `replace_symbol_body`, `replace_symbol_signature`, `rename_symbol`,
   `insert_before`, `insert_after`, `add_doc`. Previews a diff unless `apply=true`. A stale target self-heals by
   converging that file; if it fails, run `workspace refresh` first or pass `allow_stale=true` if you accept risk.
+- `todos` — List TODO/FIXME/HACK/XXX markers in comments and doc comments. Returns marker, file:line, snippet,
+  and containing symbol when available. Use before raw marker greps. Scope with `markers`, `file_pattern`,
+  `language`, `exclude_tests`, `limit`, and optional `workspace_id`.
 - `content` — Import, search, read, list, remove, and export external/web text. Use for logs, CI output, reports,
   large dumps, and browser-fetched markdown. `import`/`add_markdown` report metadata; `search` returns snippets;
   `read` returns bounded windows. Use `content_kind=web` for web-only reads, or `workspace_id=all` on `search` for
@@ -78,9 +81,11 @@ Miller serves an always-fresh index of this workspace's code. Reach for a Miller
   `content search query="phrase" content_kind=web` → bounded `content read`. Do not create repo docs for pages.
 - **Scope noisy search**: add `file_pattern=src/ui/**` or `language=typescript` when you know the likely area.
 - **Find text only inside comments or strings**: `search "<phrase>" regions=comment` or `regions=string_literal` —
-  requires `MILLER_REGION_INDEX=1` and a refreshed workspace.
+  refresh the workspace if the region sidecar is stale or missing; `MILLER_REGION_INDEX=0` disables this path.
+- **List code markers**: `todos` for TODO/FIXME/HACK/XXX in comments/doc comments; add `markers=FIXME,HACK`,
+  `file_pattern=src/**`, or `language=csharp` to scope the audit.
 - **Dashboard**: If the user asks to start, open, or show the Miller dashboard, call `workspace` with `operation=dashboard`. A dashboard request is a tool operation, not a file-finding task. Do not search plugin cache directories for dashboard files.
-- **Scope a change**: `impact target=…` → run the tests it lists → `edit` (preview) → `edit apply=true` →
+- **Scope a change**: `impact git=true` for current diff, or `impact target=…` for a planned edit → run the tests it lists → `edit` (preview) → `edit apply=true` →
   re-run `impact` if the surface changed.
 - **Edit a symbol**: `inspect` it → `edit …` (preview, the default) → `edit … apply=true`.
 - **Index looks stale**: `workspace refresh` (or `workspace full` to force a clean rebuild).
@@ -102,8 +107,9 @@ code, paste this block into the prompt:
       mode=source/external/web/all-text for content text, regions=... for comments/strings, and filters to scope.
     - inspect(target, depth?) before reading files/symbols; depth=full adds refs/callers/callees/body.
     - trace(target, mode?, to?, scope?) before manual caller/callee file hopping; use scope for ambiguous names.
-    - impact(target?|changed_paths?|diff?) before refactors and to choose tests.
+    - impact(target?|changed_paths?|diff?|git?/base?/staged?) before refactors and to choose tests.
     - edit(operation, target, ...) to preview index-aware edits (apply=true to commit).
+    - todos(markers?, file_pattern?, language?) for TODO/FIXME/HACK/XXX comment audits.
     - content(import|add_markdown|search|read|list|remove|export, ...) for logs, CI, web markdown, external text, and audits; use workspace_id=all for registered-workspace text audits and bounded reads only.
     - patterns(operation?, pattern_id?, where?, path?, language?) for extractor-recognized code-shape facts.
     - workspace(status|health|refresh|full|list|open|remove|dashboard) for readiness, refresh, other repos, or dashboard with operation=dashboard.

@@ -301,10 +301,12 @@ The single `miller` binary runs two ways:
   dotnet run --project src/Miller.Server -c Release -- content search "important phrase" --kind web --limit 5
   dotnet run --project src/Miller.Server -c Release -- patterns --json
   dotnet run --project src/Miller.Server -c Release -- patterns search --pattern htmx.attribute.v1 --where attribute_name=hx-get --path "Views/**" --json
+  dotnet run --project src/Miller.Server -c Release -- todos --markers TODO,FIXME --file-pattern "src/**"
   dotnet run --project src/Miller.Server -c Release -- inspect src/Miller.Server/AgentInstructions.cs --depth full
   dotnet run --project src/Miller.Server -c Release -- context "CLI workspace routing" --token-budget 2000
   dotnet run --project src/Miller.Server -c Release -- trace AgentInstructions --depth 2
   dotnet run --project src/Miller.Server -c Release -- impact AgentInstructions --max-depth 2
+  dotnet run --project src/Miller.Server -c Release -- impact --git --base origin/main --max-depth 1
   dotnet run --project src/Miller.Server -c Release -- workspace status
   dotnet run --project src/Miller.Server -c Release -- workspace health --json
   dotnet run --project src/Miller.Server -c Release -- workspace list
@@ -312,9 +314,9 @@ The single `miller` binary runs two ways:
   ```
 
   Build once and run the binary directly (`src/Miller.Server/bin/Release/net10.0/miller <verb>`) to skip the
-  `dotnet run` up-to-date check. `miller help` lists every verb: `search`, `inspect`, `context`, `impact`,
-  `trace`, `content`, `patterns`, `workspace`, `refresh`, `capabilities`, `telemetry`, `dashboard`, `version`,
-  `serve`.
+  `dotnet run` up-to-date check. `miller help` lists every verb: `search`, `todos`, `inspect`, `context`,
+  `impact`, `trace`, `content`, `patterns`, `workspace`, `refresh`, `capabilities`, `telemetry`, `dashboard`,
+  `version`, `serve`.
 
 **Dogfooding the server.** Because MCP runs over stdio, a new build takes effect only after the MCP client
 restarts the subprocess. A build made inside the repo carries its git short SHA — `miller version` prints
@@ -448,6 +450,7 @@ dotnet run --project src/Miller.Server -c Release -- patterns --json
 dotnet run --project src/Miller.Server -c Release -- inspect src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md
 dotnet run --project src/Miller.Server -c Release -- context "dashboard telemetry and workspace registry" --token-budget 1200
 dotnet run --project src/Miller.Server -c Release -- impact src/Miller.Server/Tools/WorkspaceTool.cs --max-depth 1 --limit 10
+dotnet run --project src/Miller.Server -c Release -- impact --git --max-depth 1 --limit 20
 ```
 
 What these prove:
@@ -492,7 +495,7 @@ Text output is a compact human-facing contract and JSON output is the integratio
   workspace operation, missing restore, or another operational failure a script should not ignore.
 - `capabilities --json` reports the Miller build, `julie-extract` contract versions, optional feature flags,
   supported JSON commands, and export feeds for Eros/local integrations.
-- `--json` is supported by `search`, `inspect`, `context`, `impact`, `trace`, `patterns`, `dashboard`,
+- `--json` is supported by `search`, `todos`, `inspect`, `context`, `impact`, `trace`, `patterns`, `dashboard`,
   `content` operations, and `workspace` operations.
 - `refresh --json --wait [--workspace-id SELECTOR|--workspace DIR] [--full]` is the Eros-friendly top-level
   convergence command. It wraps the existing registered-workspace refresh path and includes sidecar facts.
@@ -508,6 +511,8 @@ Text output is a compact human-facing contract and JSON output is the integratio
 - Search result kinds are deliberately separate: symbol search ranks `name + signature`, `--mode content`
   searches docs-like file content, `--mode source|external|web|all-text` searches explicit content-corpus text,
   and `--regions` searches explicit source regions when region indexing is enabled.
+- `todos` is a bounded marker audit over comment/doc-comment source regions. It returns marker, file:line,
+  snippet, and containing symbol when available; use `--markers`, `--file-pattern`, and `--language` to scope.
 - The `content` CLI stores non-workspace text in `.miller/content.db`. Use `content import` for logs/reports
   and `content add-markdown <path> --url <url>` for browser-fetched pages. Search web imports with
   `content search "<phrase>" --kind web`, then read bounded windows with `content read --source-id <id>`.
@@ -577,9 +582,10 @@ Warnings are errors (`Directory.Build.props`).
 ## Known limits
 
 - No embeddings or semantic/vector retrieval in Miller. If that is needed, Eros owns the projection.
-- Region search is explicit and opt-in: set `MILLER_REGION_INDEX=1`, refresh the workspace, then
-  call `search --regions comment|doc_comment|string_literal`. Set `MILLER_REGION_MAX_BYTES=<n>` to lower
-  or raise the per-region byte cap for very large comment/string-literal corpora.
+- Region search is explicit at query time and indexed by default: call
+  `search --regions comment|doc_comment|string_literal`. Set `MILLER_REGION_INDEX=0` to opt out, or
+  `MILLER_REGION_MAX_BYTES=<n>` to lower or raise the per-region byte cap for very large comment/string-literal
+  corpora.
 - Ambiguous targets may need a file path, a more specific symbol, or a symbol ID. The CLI reports ambiguity
   instead of guessing.
 - Bridge trace (`trace mode=bridge`) is provider-scoped, not a general all-language feature. The current

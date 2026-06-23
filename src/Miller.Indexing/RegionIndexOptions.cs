@@ -1,12 +1,12 @@
 namespace Miller.Indexing;
 
 /// <summary>
-/// Build/read options for the source-region portion of <c>search.db</c>. Region indexing is deliberately
-/// separate from the symbol sidecar flag because slicing source files can add real build/storage cost.
+/// Build/read options for the source-region portion of <c>search.db</c>. Region indexing is default-on, with a
+/// separate opt-out flag because slicing source files can add real build/storage cost on unusually large corpora.
 /// </summary>
 public sealed record RegionIndexOptions(bool Enabled, int MaxRegionBytes)
 {
-    /// <summary>The environment variable that opts into region-text population in <c>search.db</c>.</summary>
+    /// <summary>The environment variable that opts out of region-text population in <c>search.db</c> when falsy.</summary>
     public const string EnvVar = "MILLER_REGION_INDEX";
 
     /// <summary>Optional environment variable overriding the per-region indexed byte cap.</summary>

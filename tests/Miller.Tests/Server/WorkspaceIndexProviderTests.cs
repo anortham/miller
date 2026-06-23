@@ -435,7 +435,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             CurrentWorkspace(current.DbPath, "current-ws"),
             registry,
             loadSymbolSearch: _ => throw new InvalidOperationException("in-memory fallback must not run when the sidecar serves"),
-            sidecar: new SymbolSearchSidecar(enabled: true));
+            sidecar: new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled));
 
         WorkspaceSymbolSearchContext first = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
         WorkspaceSymbolSearchContext second = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
@@ -462,7 +462,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             CurrentWorkspace(current.DbPath, "current-ws"),
             registry,
             loadSymbolSearch: _ => throw new InvalidOperationException("fallback must not run while a fresh sidecar exists"),
-            sidecar: new SymbolSearchSidecar(enabled: true));
+            sidecar: new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled));
 
         WorkspaceSymbolSearchContext first = provider.ResolveSymbolSearch("target-ws", ensureFresh: false);
         Assert.IsType<FtsSymbolSearchIndex>(first.Index);
@@ -886,12 +886,12 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
             CurrentWorkspaceAt(current.Directory, current.DbPath, "current-ws"),
             registry,
-            sidecar: new SymbolSearchSidecar(enabled: true));
+            sidecar: new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled));
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
             provider.ResolveRegionSearch(workspaceId: null, ensureFresh: false));
 
-        Assert.Contains("MILLER_REGION_INDEX=1", ex.Message);
+        Assert.Contains("MILLER_REGION_INDEX=0", ex.Message);
     }
 
     [Fact]

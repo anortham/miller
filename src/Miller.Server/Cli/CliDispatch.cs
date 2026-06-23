@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
+using Miller.Server.Git;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
@@ -39,19 +40,38 @@ public static class CliDispatch
     /// 1 an unexpected error. NEVER throws — every failure becomes an exit code + a written message.
     /// </summary>
     public static int Run(IReadOnlyList<string> args, WorkspaceContext context, TextWriter stdout, TextWriter stderr) =>
-        Run(args, context, stdout, stderr, new DashboardCliLauncher());
+        Run(args, context, stdout, stderr, new DashboardCliLauncher(), new ProcessGitDiffReader());
 
     internal static int Run(
         IReadOnlyList<string> args,
         WorkspaceContext context,
         TextWriter stdout,
         TextWriter stderr,
-        IDashboardLauncher dashboardLauncher)
+        IDashboardLauncher dashboardLauncher) =>
+        Run(args, context, stdout, stderr, dashboardLauncher, new ProcessGitDiffReader());
+
+    internal static int Run(
+        IReadOnlyList<string> args,
+        WorkspaceContext context,
+        TextWriter stdout,
+        TextWriter stderr,
+        IGitDiffReader gitDiffReader) =>
+        Run(args, context, stdout, stderr, new DashboardCliLauncher(), gitDiffReader);
+
+    internal static int Run(
+        IReadOnlyList<string> args,
+        WorkspaceContext context,
+        TextWriter stdout,
+        TextWriter stderr,
+        IDashboardLauncher dashboardLauncher,
+        IGitDiffReader gitDiffReader)
     {
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(stdout);
         ArgumentNullException.ThrowIfNull(stderr);
+        ArgumentNullException.ThrowIfNull(dashboardLauncher);
+        ArgumentNullException.ThrowIfNull(gitDiffReader);
 
         string verb = args.Count > 0 ? args[0] : "help";
         var rest = args.Skip(1).ToList();
@@ -70,6 +90,8 @@ public static class CliDispatch
                     return Capabilities(rest, stdout, stderr);
                 case "search":
                     return Search(rest, context, stdout, stderr);
+                case "todos":
+                    return Todos(rest, context, stdout, stderr);
                 case "content":
                     return Content(rest, context, stdout, stderr);
                 case "patterns":
@@ -91,7 +113,7 @@ public static class CliDispatch
                 case "context":
                     return Context(rest, context, stdout, stderr);
                 case "impact":
-                    return Impact(rest, context, stdout, stderr);
+                    return Impact(rest, context, stdout, stderr, gitDiffReader);
                 case "trace":
                     return Trace(rest, context, stdout, stderr);
                 case "dashboard":
@@ -116,6 +138,61 @@ public static class CliDispatch
             // Mirror the tools' "<verb> failed: <msg>" contract: a clean line + a non-zero code, never a raw throw.
             stderr.WriteLine($"{verb} failed: {ex.Message}");
             return 1;
+        }
+    }
+
+    private static int Todos(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
+    {
+        CliOptions o = CliOptions.Parse(args, "json", "exclude-tests");
+        if (o.Positionals.Count > 0)
+            return Usage(err, "miller todos [--markers TODO,FIXME,HACK,XXX] [--workspace-id SELECTOR] [--workspace DIR] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--exclude-tests]");
+        if (!TryResolveReadContext(ctx, o, err, out ctx))
+            return 2;
+        if (!RequireIndex(ctx, err))
+            return 3;
+
+        IReadOnlyList<string> markers;
+        try
+        {
+            markers = TodosTool.ParseMarkers(o.Value("markers"));
+        }
+        catch (InvalidOperationException ex)
+        {
+            err.WriteLine(ex.Message);
+            return Usage(err, "miller todos [--markers TODO,FIXME,HACK,XXX] [--workspace-id SELECTOR] [--workspace DIR] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--exclude-tests]");
+        }
+
+        SymbolSearchSidecar sidecar = SymbolSearchSidecar.FromEnvironment();
+        if (!sidecar.Enabled || !sidecar.RegionOptions.Enabled)
+        {
+            err.WriteLine("region search is disabled. Enable MILLER_SEARCH_SIDECAR and unset MILLER_REGION_INDEX=0, then refresh the workspace.");
+            return 3;
+        }
+
+        try
+        {
+            using var freshness = new FreshnessReader(ctx.ExtractDbPath);
+            long revision = freshness.LatestRevision();
+            string searchDb = SymbolSearchSidecar.SearchDbPathFor(ctx.ExtractDbPath);
+            FtsRegionSearchIndex regionIndex = FtsRegionSearchIndex.Open(searchDb, revision);
+            outw.WriteLine(TodosTool.Run(
+                regionIndex,
+                markers,
+                o.Int("limit", TodosTool.DefaultLimit),
+                o.Has("exclude-tests"),
+                o.Has("json"),
+                compactBanner: null,
+                filePattern: o.Value("file-pattern"),
+                language: o.Value("language"),
+                out _));
+            return 0;
+        }
+        catch (Exception ex) when (
+            ex is FileNotFoundException or InvalidOperationException or IOException
+                or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            err.WriteLine("todos requires a refreshed source-region search sidecar: " + ex.Message);
+            return 3;
         }
     }
 
@@ -210,7 +287,7 @@ public static class CliDispatch
             SymbolSearchSidecar sidecar = SymbolSearchSidecar.FromEnvironment();
             if (!sidecar.Enabled || !sidecar.RegionOptions.Enabled)
             {
-                err.WriteLine("region search requires MILLER_REGION_INDEX=1 and a refreshed search sidecar.");
+                err.WriteLine("region search is disabled. Enable MILLER_SEARCH_SIDECAR and unset MILLER_REGION_INDEX=0, then refresh the workspace.");
                 return 3;
             }
 
@@ -230,7 +307,7 @@ public static class CliDispatch
                 ex is FileNotFoundException or InvalidOperationException or IOException
                     or UnauthorizedAccessException or ArgumentException or NotSupportedException)
             {
-                err.WriteLine("region search requires MILLER_REGION_INDEX=1 and a refreshed search sidecar: " + ex.Message);
+                err.WriteLine("region search requires a refreshed source-region search sidecar: " + ex.Message);
                 return 3;
             }
         }
@@ -573,13 +650,50 @@ public static class CliDispatch
         return 0;
     }
 
-    private static int Impact(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
+    private static int Impact(
+        IReadOnlyList<string> args,
+        WorkspaceContext ctx,
+        TextWriter outw,
+        TextWriter err,
+        IGitDiffReader gitDiffReader)
     {
-        CliOptions o = CliOptions.Parse(args, "json");
-        if (string.IsNullOrWhiteSpace(o.Query))
-            return Usage(err, "miller impact <symbol> [--workspace-id SELECTOR] [--workspace DIR] [--max-depth N] [--limit N] [--json]");
+        CliOptions o = CliOptions.Parse(args, "json", "git", "staged");
+        string? target = string.IsNullOrWhiteSpace(o.Query) ? null : o.Query;
+        string[]? changedPaths = ImpactChangedPaths(o);
+        string? diff = o.Value("diff");
+        bool gitDiff = o.Has("git") || o.Has("staged") || o.Has("base");
+        if (o.Has("base") && string.IsNullOrWhiteSpace(o.Value("base")))
+            return Usage(err, "miller impact --git --base REF [--staged] [--workspace-id SELECTOR] [--workspace DIR] [--max-depth N] [--limit N] [--json]");
+
+        int provided =
+            (target is null ? 0 : 1) +
+            (changedPaths is null ? 0 : 1) +
+            (string.IsNullOrWhiteSpace(diff) ? 0 : 1) +
+            (gitDiff ? 1 : 0);
+        if (provided != 1)
+            return Usage(err, ImpactUsage);
         if (!TryResolveReadContext(ctx, o, err, out ctx))
             return 2;
+
+        if (gitDiff)
+        {
+            GitDiffResult result = gitDiffReader.Read(new GitDiffRequest(ctx.WorkspaceRoot, o.Value("base"), o.Has("staged")));
+            if (!result.Success)
+            {
+                err.WriteLine($"git diff failed in {ctx.WorkspaceRoot}: {result.Error ?? "unknown error"}");
+                return 3;
+            }
+
+            if (string.IsNullOrWhiteSpace(result.Diff))
+            {
+                outw.WriteLine(o.Has("json")
+                    ? ServerJson.Note("No impact — git diff is empty.")
+                    : "No impact — git diff is empty.");
+                return 0;
+            }
+
+            diff = result.Diff;
+        }
 
         if (!TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex index))
             return 3;
@@ -587,11 +701,24 @@ public static class CliDispatch
         using var graph = new SqliteSymbolGraphIndex(ctx.ExtractDbPath);
         var resolver = new SmartTargetResolver(index);
         string output = ImpactTool.Run(
-            index, graph, resolver, target: o.Query, changedPaths: null, diff: null,
+            index, graph, resolver, target, changedPaths, diff,
             maxDepth: o.Int("max-depth", 2), limit: o.Int("limit", 100), json: o.Has("json"), out _, out _);
         outw.WriteLine(output);
         return 0;
     }
+
+    private static string[]? ImpactChangedPaths(CliOptions options)
+    {
+        string? raw = options.Value("changed-paths") ?? options.Value("changed-path");
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+        string[] paths = raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return paths.Length == 0 ? null : paths;
+    }
+
+    private const string ImpactUsage =
+        "miller impact <symbol>|--changed-paths PATH[,PATH...]|--diff DIFF|--git [--base REF] [--staged] " +
+        "[--workspace-id SELECTOR] [--workspace DIR] [--max-depth N] [--limit N] [--json]";
 
     private static int Trace(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
@@ -1365,6 +1492,8 @@ public static class CliDispatch
                              [--json]
           search <query>     Find code by name, identifier, or phrase.
                              [--workspace-id SELECTOR] [--workspace DIR] [--mode auto|text|symbol|file|content|source|external|web|all-text] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--include-tests|--exclude-tests]
+          todos              List TODO/FIXME/HACK/XXX markers in comments and doc comments.
+                             [--markers TODO,FIXME,HACK,XXX] [--workspace-id SELECTOR] [--workspace DIR] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--exclude-tests]
           content <op>       Import/search/read/list/remove/export external and web text in content.db.
                              import <path> [--max-bytes N] [--display-path NAME] [--json]
                              add-markdown <path> --url URL [--display-path NAME] [--json]
@@ -1388,7 +1517,8 @@ public static class CliDispatch
                              [--workspace-id SELECTOR] [--workspace DIR] [--depth summary|full] [--kind K] [--scope FILE] [--limit N] [--json]
           context <query>    Token-budgeted bundle of the most relevant code for a task.
                              [--workspace-id SELECTOR] [--workspace DIR] [--token-budget N] [--max-hops 0-2] [--reference-mode off|usage] [--reference-depth 0-1] [--exclude-tests] [--json]
-          impact <symbol>    Downstream symbols + tests a change would affect.
+          impact <input>     Downstream symbols + tests a change would affect.
+                             <symbol> | --changed-paths PATH[,PATH...] | --diff DIFF | --git [--base REF] [--staged]
                              [--workspace-id SELECTOR] [--workspace DIR] [--max-depth N] [--limit N] [--json]
           trace <symbol>     Follow callers/callees, a path, or a cross-language bridge.
                              [--workspace-id SELECTOR] [--workspace DIR] [--scope FILE] [--mode auto|path|bridge] [--to SYMBOL] [--depth N] [--limit N] [--full] [--json]

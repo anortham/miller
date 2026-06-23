@@ -14,6 +14,7 @@ internal static class CliCapabilities
         "capabilities --json",
         "dashboard --json",
         "search --json",
+        "todos --json",
         "inspect --json",
         "context --json",
         "impact --json",

@@ -1,9 +1,12 @@
 using System.Text.Json;
 using Miller.Core.Graph;
 using Miller.Indexing;
+using Miller.Server.Git;
 using Miller.Server.Resolution;
+using Miller.Server.Telemetry;
 using Miller.Server.Tools;
 using Miller.Tests;
+using Microsoft.Data.Sqlite;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -107,6 +110,20 @@ public sealed class ImpactToolTests
 
     private static MillerRepositoryIndex EmptyIndex() =>
         MillerRepositoryIndex.Build(Array.Empty<IndexedSymbol>(), Array.Empty<GraphEdge>());
+
+    private static string ReadTelemetryMetadata(string telemetryDb)
+    {
+        using var conn = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = telemetryDb,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT metadata_json FROM tool_telemetry WHERE tool = 'impact';";
+        return (string)cmd.ExecuteScalar()!;
+    }
 
     // ---- reverse-closure correctness + test partition ----
 
@@ -262,6 +279,8 @@ public sealed class ImpactToolTests
 
         Assert.Equal(0, impactedCount);
         Assert.Contains("nothing", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Resolved seed symbols: Lonely method src/Other.cs:1", output);
+        Assert.Contains("Try trace Lonely", output);
     }
 
     // ---- exactly-one-input guard ----
@@ -427,6 +446,38 @@ public sealed class ImpactToolTests
 
         Assert.Equal(0, impactedCount);
         Assert.Contains("nothing", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("No indexed symbols matched changed path(s): does/not/exist.cs", output);
+        Assert.Contains("Try search mode=file", output);
+    }
+
+    [Fact]
+    public void Impact_EmptyTelemetry_DistinguishesNoSeedSymbols()
+    {
+        var (index, _) = BuildFixture();
+        string dir = Path.Combine(Path.GetTempPath(), "miller-impact-empty-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string telemetryDb = Path.Combine(dir, "telemetry.db");
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "current.db", "current-ws", dir));
+        var tool = new ImpactTool(provider);
+
+        try
+        {
+            using (var ledger = TelemetryLedger.Open(telemetryDb, "current-ws", dir))
+            {
+                using var scope = ledger.Measure("impact", op: null);
+                string output = tool.Impact(changed_paths: new[] { "does/not/exist.cs" });
+                Assert.Contains("No indexed symbols matched changed path(s): does/not/exist.cs", output);
+            }
+
+            using var doc = JsonDocument.Parse(ReadTelemetryMetadata(telemetryDb));
+            Assert.Equal("no_seed_symbols", doc.RootElement.GetProperty("empty_reason").GetString());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+        }
     }
 
     // ---- diff leg ----
@@ -608,6 +659,99 @@ public sealed class ImpactToolTests
     }
 
     [Fact]
+    public void Impact_GitFlag_UsesWorkspaceRootDiff()
+    {
+        var (index, _) = BuildFixture();
+        string root = Path.Combine(Path.GetTempPath(), "miller-git-impact-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "current.db", "current-ws", root));
+        var git = new RecordingGitDiffReader(GitDiffResult.Ok(ValidateDiff()));
+        var tool = new ImpactTool(provider, git);
+
+        string output = tool.Impact(git: true, max_depth: 2);
+
+        Assert.Single(git.Requests);
+        Assert.Equal(root, git.Requests[0].WorkspaceRoot);
+        Assert.Null(git.Requests[0].BaseRef);
+        Assert.False(git.Requests[0].Staged);
+        Assert.Contains("Process", output);
+        Assert.Contains("Handle", output);
+        Assert.Contains("ProcessWorks", output);
+    }
+
+    [Fact]
+    public void Impact_GitBaseAndStaged_ImplyGitAndRouteToSelectedWorkspace()
+    {
+        var currentIndex = EmptyIndex();
+        var (targetIndex, _) = BuildFixture();
+        string currentRoot = Path.Combine(Path.GetTempPath(), "miller-current-" + Guid.NewGuid().ToString("N"));
+        string targetRoot = Path.Combine(Path.GetTempPath(), "miller-target-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(currentIndex, "current.db", "current-ws", currentRoot),
+            ("target-ws", ReadToolRoutingTestSupport.ContextFor(targetIndex, "target.db", "target-ws", targetRoot)));
+        var git = new RecordingGitDiffReader(GitDiffResult.Ok(ValidateDiff()));
+        var tool = new ImpactTool(provider, git);
+
+        string output = tool.Impact(@base: "origin/main", staged: true, workspace_id: "target-ws");
+
+        Assert.Equal("target-ws", provider.LastWorkspaceId);
+        Assert.True(provider.LastEnsureFresh);
+        Assert.Single(git.Requests);
+        Assert.Equal(targetRoot, git.Requests[0].WorkspaceRoot);
+        Assert.Equal("origin/main", git.Requests[0].BaseRef);
+        Assert.True(git.Requests[0].Staged);
+        Assert.StartsWith("workspace: target-ws\n", output);
+        Assert.Contains("Process", output);
+    }
+
+    [Fact]
+    public void Impact_GitFlag_EmptyDiffReturnsNoImpactNote()
+    {
+        var (index, _) = BuildFixture();
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "current.db", "current-ws", "/repo"));
+        var git = new RecordingGitDiffReader(GitDiffResult.Ok(""));
+        var tool = new ImpactTool(provider, git);
+
+        string output = tool.Impact(git: true);
+
+        Assert.Single(git.Requests);
+        Assert.Contains("No impact", output);
+        Assert.Contains("git diff is empty", output);
+    }
+
+    [Fact]
+    public void Impact_GitFlag_FailedDiffReturnsFailure()
+    {
+        var (index, _) = BuildFixture();
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "current.db", "current-ws", "/repo"));
+        var git = new RecordingGitDiffReader(GitDiffResult.Fail("fatal: not a git repository"));
+        var tool = new ImpactTool(provider, git);
+
+        string output = tool.Impact(git: true);
+
+        Assert.Single(git.Requests);
+        Assert.Contains("impact failed: git diff failed", output);
+        Assert.Contains("fatal: not a git repository", output);
+    }
+
+    [Fact]
+    public void Impact_GitFlag_WithAnotherInputReturnsUsage()
+    {
+        var (index, _) = BuildFixture();
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "current.db", "current-ws", "/repo"));
+        var git = new RecordingGitDiffReader(GitDiffResult.Ok(ValidateDiff()));
+        var tool = new ImpactTool(provider, git);
+
+        string output = tool.Impact(target: "Validate", git: true);
+
+        Assert.Empty(git.Requests);
+        Assert.Contains("exactly one", output);
+    }
+
+    [Fact]
     public void Ctor_RequiresWorkspaceIndexProvider()
     {
         var (index, _) = BuildFixture();
@@ -619,4 +763,27 @@ public sealed class ImpactToolTests
 
         Assert.Throws<ArgumentNullException>(() => new ImpactTool(null!));
     }
+
+    private sealed class RecordingGitDiffReader(params GitDiffResult[] results) : IGitDiffReader
+    {
+        private readonly Queue<GitDiffResult> _results = new(results);
+        private readonly List<GitDiffRequest> _requests = new();
+
+        public IReadOnlyList<GitDiffRequest> Requests => _requests;
+
+        public GitDiffResult Read(GitDiffRequest request)
+        {
+            _requests.Add(request);
+            return _results.Count == 0 ? GitDiffResult.Ok("") : _results.Dequeue();
+        }
+    }
+
+    private static string ValidateDiff() =>
+        """
+        --- a/src/Service.cs
+        +++ b/src/Service.cs
+        @@ -11,1 +11,1 @@
+        -    old
+        +    new
+        """;
 }

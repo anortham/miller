@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Miller - Local Code Intelligence for Coding Agents</title>
-  <meta name="description" content="Miller is the free local code-intelligence core for coding agents: MCP and CLI search, inspect, context, trace, impact, edit, content search, structural patterns, workspace freshness, and telemetry.">
+  <meta name="description" content="Miller is the free local code-intelligence core for coding agents: MCP and CLI search, inspect, context, trace, impact, edit, TODO marker audits, content search, structural patterns, workspace freshness, and telemetry.">
   <link rel="canonical" href="https://anortham.github.io/miller/">
 
   <meta property="og:type" content="website">
@@ -221,6 +221,10 @@
           <p>Preview-first, index-aware text and symbol edits with stale-target checks.</p>
         </article>
         <article>
+          <h3>todos</h3>
+          <p>Bounded TODO/FIXME/HACK/XXX marker audits over comment and doc-comment source regions.</p>
+        </article>
+        <article>
           <h3>content</h3>
           <p>Bounded search/read/export for source text, docs, logs, reports, and imported web markdown.</p>
         </article>
@@ -265,7 +269,7 @@
             <li><a href="https://github.com/anortham/miller/releases/tag/v0.3.6" target="_blank" rel="noopener">Download a release archive</a> for manual MCP setup.</li>
             <li>Use the source checkout only for Miller development or unreleased local changes.</li>
             <li>No embeddings or semantic/vector retrieval in Miller.</li>
-            <li>Source-region search is opt-in with <code>MILLER_REGION_INDEX=1</code>.</li>
+            <li>Source-region indexing is default-on; opt out with <code>MILLER_REGION_INDEX=0</code>.</li>
           </ul>
         </div>
       </div>

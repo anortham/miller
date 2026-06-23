@@ -53,6 +53,7 @@ public sealed class AgentInstructionsTests
     [InlineData("trace")]
     [InlineData("impact")]
     [InlineData("edit")]
+    [InlineData("todos")]
     [InlineData("content")]
     [InlineData("patterns")]
     [InlineData("workspace")]
@@ -88,7 +89,7 @@ public sealed class AgentInstructionsTests
     {
         string instructions = AgentInstructions.Load();
         Assert.Contains("regions=comment|doc_comment|string_literal", instructions);
-        Assert.Contains("MILLER_REGION_INDEX=1", instructions);
+        Assert.Contains("MILLER_REGION_INDEX=0", instructions);
         Assert.Contains("has_doc", instructions);
     }
 
@@ -165,6 +166,7 @@ public sealed class AgentInstructionsTests
             ToolMethod<TraceTool>(nameof(TraceTool.Trace)),
             ToolMethod<ImpactTool>(nameof(ImpactTool.Impact)),
             ToolMethod<EditTool>(nameof(EditTool.Edit)),
+            ToolMethod<TodosTool>(nameof(TodosTool.Todos)),
             ToolMethod<ContentTool>(nameof(ContentTool.Content)),
             ToolMethod<PatternsTool>(nameof(PatternsTool.Patterns)),
             ToolMethod<WorkspaceTool>(nameof(WorkspaceTool.Workspace)),

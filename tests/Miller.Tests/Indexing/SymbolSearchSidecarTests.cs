@@ -82,22 +82,43 @@ public sealed class SymbolSearchSidecarTests : IDisposable
         Assert.Equal(expectedEnabled, SymbolSearchSidecar.FromEnvValue(raw).Enabled);
 
     [Theory]
-    [InlineData(null, true, false)]
-    [InlineData("", true, false)]
+    [InlineData(null, true, true)]
+    [InlineData("", true, true)]
     [InlineData("1", true, true)]
     [InlineData("true", true, true)]
     [InlineData("on", true, true)]
     [InlineData("yes", true, true)]
-    [InlineData("garbage", true, false)]
+    [InlineData("garbage", true, true)]
     [InlineData("0", true, false)]
     [InlineData("false", true, false)]
-    public void FromEnvValue_RegionIndexDefaultsOff_AndOptInTruthy(
+    [InlineData("off", true, false)]
+    [InlineData("no", true, false)]
+    public void FromEnvValue_RegionIndexDefaultsOn_AndOptsOutFalsy(
         string? regionRaw, bool expectedSidecarEnabled, bool expectedRegionEnabled)
     {
         SymbolSearchSidecar sidecar = SymbolSearchSidecar.FromEnvValue(sidecarRaw: null, regionRaw);
 
         Assert.Equal(expectedSidecarEnabled, sidecar.Enabled);
         Assert.Equal(expectedRegionEnabled, sidecar.RegionOptions.Enabled);
+    }
+
+    [Fact]
+    public void Constructor_EnabledSidecar_DefaultsRegionIndexOn()
+    {
+        var sidecar = new SymbolSearchSidecar(enabled: true);
+
+        Assert.True(sidecar.Enabled);
+        Assert.True(sidecar.RegionOptions.Enabled);
+        Assert.Equal(RegionIndexOptions.DefaultMaxRegionBytes, sidecar.RegionOptions.MaxRegionBytes);
+    }
+
+    [Fact]
+    public void FromEnvValue_DisabledSidecar_ForcesRegionIndexOff()
+    {
+        SymbolSearchSidecar sidecar = SymbolSearchSidecar.FromEnvValue(sidecarRaw: "0", regionRaw: null);
+
+        Assert.False(sidecar.Enabled);
+        Assert.False(sidecar.RegionOptions.Enabled);
     }
 
     [Theory]
@@ -219,7 +240,7 @@ public sealed class SymbolSearchSidecarTests : IDisposable
         var sidecar = new SymbolSearchSidecar(enabled: true);
         string searchDb = SymbolSearchSidecar.SearchDbPathFor(julie.DbPath);
 
-        bool built = sidecar.EnsureBuilt(julie.DbPath, revision: 5);
+        bool built = sidecar.EnsureBuilt(julie.DbPath, revision: 5, workspaceRoot: julie.WorkspaceRoot);
 
         Assert.True(built);
         Assert.True(File.Exists(searchDb));
@@ -277,13 +298,51 @@ public sealed class SymbolSearchSidecarTests : IDisposable
     }
 
     [Fact]
+    public void EnsureBuilt_RegionOptionChangedToEnabled_RebuildsAtMatchingRevision()
+    {
+        const string path = "src/A.cs";
+        const string text = "// region TODO\nclass A {}\n";
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow("sym-a", "A", "class", "csharp", path, "class A", 2, ParentId: null),
+            },
+            fileContent: new Dictionary<string, string> { [path] = text },
+            sourceRegions: new[]
+            {
+                new JulieDbFixture.SourceRegionRow(
+                    "region-a", "file:" + path, path, "csharp", "comment", "sym-a",
+                    1, 1, 1, 15, 0, text.IndexOf('\n'), null),
+            });
+        var disabledRegions = new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled);
+        var enabledRegions = new SymbolSearchSidecar(enabled: true);
+        Assert.True(disabledRegions.EnsureBuilt(julie.DbPath, revision: 5));
+
+        Assert.True(enabledRegions.EnsureBuilt(julie.DbPath, revision: 5, workspaceRoot: julie.WorkspaceRoot));
+
+        string searchDb = SymbolSearchSidecar.SearchDbPathFor(julie.DbPath);
+        using var c = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = searchDb,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        c.Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM search_regions WHERE region_id='region-a';";
+        Assert.Equal(1L, Convert.ToInt64(cmd.ExecuteScalar()));
+    }
+
+    [Fact]
     public void EnsureBuilt_EnabledAndArtifactAlreadyFresh_SkipsAndReturnsFalse()
     {
         using var julie = JulieDb();
         var sidecar = new SymbolSearchSidecar(enabled: true);
 
-        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 5));    // first build
-        Assert.False(sidecar.EnsureBuilt(julie.DbPath, revision: 5));   // already fresh → no rebuild
+        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 5, workspaceRoot: julie.WorkspaceRoot));    // first build
+        Assert.False(sidecar.EnsureBuilt(julie.DbPath, revision: 5, workspaceRoot: julie.WorkspaceRoot));   // already fresh → no rebuild
     }
 
     [Fact]
@@ -318,7 +377,8 @@ public sealed class SymbolSearchSidecarTests : IDisposable
                 "csharp", "src/Edit.cs", 1, 1, ParentId: null, IsTest: false),
             new IndexedSymbol(2, "keep", "Anchor", "public class Anchor", "class",
                 "csharp", "src/Keep.cs", 1, 1, ParentId: null, IsTest: false),
-        }, revision: 1);
+        }, revision: 1, symbolsDbPath: julie.DbPath, workspaceRoot: julie.WorkspaceRoot,
+            regionOptions: RegionIndexOptions.EnabledDefault);
         CreateSentinelTable(searchDb);
         var sidecar = new SymbolSearchSidecar(enabled: true);
 
@@ -363,7 +423,8 @@ public sealed class SymbolSearchSidecarTests : IDisposable
                 "csharp", "src/AParent.cs", 1, 1, ParentId: null, IsTest: false),
             new IndexedSymbol(1, "child", "ChildAction", "void ChildAction()", "method",
                 "csharp", "src/BChild.cs", 1, 1, ParentId: "parent", IsTest: false),
-        }, revision: 1);
+        }, revision: 1, symbolsDbPath: julie.DbPath, workspaceRoot: julie.WorkspaceRoot,
+            regionOptions: RegionIndexOptions.EnabledDefault);
         var sidecar = new SymbolSearchSidecar(enabled: true);
 
         Assert.Equal("ChildAction",
@@ -399,7 +460,8 @@ public sealed class SymbolSearchSidecarTests : IDisposable
         {
             new IndexedSymbol(0, "old", "LegacyWidget", "public class LegacyWidget", "class",
                 "csharp", "src/Edit.cs", 1, 1, ParentId: null, IsTest: false),
-        }, revision: 1);
+        }, revision: 1, symbolsDbPath: julie.DbPath, workspaceRoot: julie.WorkspaceRoot,
+            regionOptions: RegionIndexOptions.EnabledDefault);
         CreateSentinelTable(searchDb);
         var sidecar = new SymbolSearchSidecar(enabled: true);
 
@@ -417,7 +479,7 @@ public sealed class SymbolSearchSidecarTests : IDisposable
     {
         using var julie = JulieDb();
         var sidecar = new SymbolSearchSidecar(enabled: true);
-        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 5));
+        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 5, workspaceRoot: julie.WorkspaceRoot));
 
         // A partially-written / damaged artifact: meta.revision is non-numeric. The freshness peek must treat
         // it as "needs rebuild", not propagate a FormatException out of the lock-holding writer.
@@ -434,7 +496,7 @@ public sealed class SymbolSearchSidecarTests : IDisposable
         }
         SqliteConnection.ClearAllPools();
 
-        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 5));
+        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 5, workspaceRoot: julie.WorkspaceRoot));
         Assert.NotNull(sidecar.TryOpen(julie.DbPath, expectedRevision: 5));
     }
 
@@ -443,7 +505,7 @@ public sealed class SymbolSearchSidecarTests : IDisposable
     {
         using var julie = JulieDb();
         var sidecar = new SymbolSearchSidecar(enabled: true);
-        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 5));
+        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 5, workspaceRoot: julie.WorkspaceRoot));
 
         string searchDb = SymbolSearchSidecar.SearchDbPathFor(julie.DbPath);
         CreateSentinelTable(searchDb);
@@ -455,15 +517,16 @@ public sealed class SymbolSearchSidecarTests : IDisposable
             rw.Open();
             using var cmd = rw.CreateCommand();
             cmd.CommandText = """
-                INSERT INTO meta(revision, doc_count, avgdl, schema_version, region_count, region_avgdl)
-                VALUES (5, 2, 1.0, $schema, 0, 0.0);
+                INSERT INTO meta(
+                    revision, doc_count, avgdl, schema_version, region_count, region_avgdl, region_index_enabled)
+                VALUES (5, 2, 1.0, $schema, 0, 0.0, 1);
                 """;
             cmd.Parameters.AddWithValue("$schema", SearchIndexWriter.SchemaVersion);
             cmd.ExecuteNonQuery();
         }
         SqliteConnection.ClearAllPools();
 
-        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 5));
+        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 5, workspaceRoot: julie.WorkspaceRoot));
         Assert.False(TableExists(searchDb, "incremental_sentinel"));
         Assert.NotNull(sidecar.TryOpen(julie.DbPath, expectedRevision: 5));
     }
@@ -474,9 +537,9 @@ public sealed class SymbolSearchSidecarTests : IDisposable
         using var julie = JulieDb();
         var sidecar = new SymbolSearchSidecar(enabled: true);
 
-        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 5));
+        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 5, workspaceRoot: julie.WorkspaceRoot));
         Assert.Null(sidecar.TryOpen(julie.DbPath, expectedRevision: 6));   // stale for revision 6
-        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 6));       // rebuild to revision 6
+        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 6, workspaceRoot: julie.WorkspaceRoot));       // rebuild to revision 6
         Assert.NotNull(sidecar.TryOpen(julie.DbPath, expectedRevision: 6));
     }
 
@@ -485,7 +548,7 @@ public sealed class SymbolSearchSidecarTests : IDisposable
     {
         using var julie = JulieDb();
         var sidecar = new SymbolSearchSidecar(enabled: true);
-        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 5));
+        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 5, workspaceRoot: julie.WorkspaceRoot));
         Assert.NotNull(sidecar.TryOpen(julie.DbPath, expectedRevision: 5));   // fresh artifact opens before downgrade
 
         // Simulate an artifact left behind by an OLDER writer: SAME extract revision, but a schema_version that
@@ -497,7 +560,7 @@ public sealed class SymbolSearchSidecarTests : IDisposable
         SetSchemaVersion(searchDb, SearchIndexWriter.SchemaVersion - 1);
 
         Assert.Null(sidecar.TryOpen(julie.DbPath, expectedRevision: 5));      // read gate now rejects the stale schema
-        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 5));          // freshness gate rebuilds at the SAME revision
+        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 5, workspaceRoot: julie.WorkspaceRoot));          // freshness gate rebuilds at the SAME revision
         Assert.NotNull(sidecar.TryOpen(julie.DbPath, expectedRevision: 5));   // rebuilt artifact is current-schema again
     }
 

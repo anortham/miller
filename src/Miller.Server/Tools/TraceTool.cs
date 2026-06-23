@@ -106,7 +106,7 @@ public sealed class TraceTool
                 telemetry.SetMetadata("depth_bucket", DepthBucket(depth));
                 telemetry.SetMetadata("limit_bucket", LimitBucket(limit));
                 if (emitted == 0)
-                    telemetry.SetEmptyReason(TraceEmptyReason(normalizedMode));
+                    telemetry.SetEmptyReason(TraceEmptyReason(normalizedMode, output));
             }
             return output;
         }
@@ -128,10 +128,13 @@ public sealed class TraceTool
     private static string NormalizeMode(string? mode) =>
         string.IsNullOrWhiteSpace(mode) ? ModeAuto : mode.Trim().ToLowerInvariant();
 
-    private static string TraceEmptyReason(string mode) => mode switch
+    private static string TraceEmptyReason(string mode, string output) => mode switch
     {
         ModePath => "no_path",
         ModeBridge => "no_bridge_path",
+        _ when output.StartsWith("No neighbours", StringComparison.Ordinal) => "no_neighbours",
+        _ when output.Contains("not found", StringComparison.OrdinalIgnoreCase) ||
+               output.StartsWith("Multiple candidates", StringComparison.Ordinal) => "unresolved_target",
         _ => "no_trace_edges",
     };
 
@@ -260,7 +263,7 @@ public sealed class TraceTool
 
         if (reached.Count == 0)
         {
-            string message = $"No neighbours — nothing connects to '{target}' within {depth} hop(s).";
+            string message = RenderNoNeighboursMessage(index, target, depth, seedId);
             return json
                 ? RenderAutoJson(index, target, to: null, depth, limit, emitted, nodesVisited, seedId, reached, message, "no_neighbours")
                 : message;
@@ -290,6 +293,46 @@ public sealed class TraceTool
     // "Name  kind  file:line  (hop N)" — an auto-mode neighbour line.
     private static string NeighbourLine(IndexedSymbol s, int hop) =>
         $"{s.Name}  {s.Kind}  {s.FilePath}:{s.StartLine}  (hop {hop})";
+
+    private static string RenderNoNeighboursMessage(ISymbolLookupIndex index, string target, int depth, string seedId)
+    {
+        var sb = new StringBuilder();
+        sb.Append("No neighbours — nothing connects to '").Append(target).Append("' within ")
+          .Append(depth).Append(" hop(s).");
+
+        IndexedSymbol? seed = index.FindBySymbolId(seedId);
+        if (seed is null)
+            return sb.ToString();
+
+        sb.Append('\n')
+          .Append("Resolved target: ")
+          .Append(seed.Name).Append(' ')
+          .Append(seed.Kind).Append(' ')
+          .Append(seed.FilePath).Append(':').Append(seed.StartLine);
+
+        var sameFile = index.FindByFilePath(seed.FilePath)
+            .Where(symbol => !string.Equals(symbol.SymbolId, seed.SymbolId, StringComparison.Ordinal))
+            .Take(5)
+            .ToArray();
+        if (sameFile.Length > 0)
+        {
+            sb.Append('\n').Append("Same-file symbols:");
+            foreach (IndexedSymbol symbol in sameFile)
+            {
+                sb.Append('\n')
+                  .Append("  ")
+                  .Append(symbol.Name).Append("  ")
+                  .Append(symbol.Kind).Append("  ")
+                  .Append(symbol.FilePath).Append(':').Append(symbol.StartLine);
+            }
+        }
+
+        sb.Append('\n')
+          .Append("Next: inspect ")
+          .Append(seed.FilePath)
+          .Append(" for nearby symbols, or search mode=source for text references not represented in the graph.");
+        return sb.ToString();
+    }
 
     // ---------- mode: path (shortest dependency path target -> to) ----------
 

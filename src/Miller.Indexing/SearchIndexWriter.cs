@@ -18,7 +18,7 @@ namespace Miller.Indexing;
 /// the interior-substring arm over the separator-free <see cref="CollapseName"/> form.</item>
 /// <item><c>search_symbols(...)</c> — self-contained metadata: candidate filtering, Eros queries, AST chunk
 /// boundaries. <c>doc_len</c> is the word token count (BM25 length norm).</item>
-/// <item><c>meta(revision, doc_count, avgdl, schema_version)</c> — freshness key + corpus BM25 constants.</item>
+/// <item><c>meta(...)</c> — freshness key, sidecar options, and corpus BM25 constants.</item>
 /// </list>
 ///
 /// Build discipline: write a sibling temp DB, then atomically <see cref="File.Move(string,string,bool)"/> it
@@ -30,10 +30,10 @@ public static class SearchIndexWriter
     private const int ParameterChunkSize = 500;
 
     /// <summary>
-    /// The on-disk schema version stamped into <c>meta.schema_version</c>. Bumped 4→5 so artifacts that
-    /// derive symbol identity from SQLite row order are rejected and rebuilt with explicit <c>doc_id</c>.
+    /// The on-disk schema version stamped into <c>meta.schema_version</c>. Bumped 5→6 so artifacts built
+    /// with a different source-region option are rejected and rebuilt.
     /// </summary>
-    public const int SchemaVersion = 5;
+    public const int SchemaVersion = 6;
 
     private const string SchemaDdl = """
         CREATE VIRTUAL TABLE symbols_fts USING fts5(
@@ -73,7 +73,8 @@ public static class SearchIndexWriter
             avgdl REAL,
             schema_version INTEGER,
             region_count INTEGER,
-            region_avgdl REAL);
+            region_avgdl REAL,
+            region_index_enabled INTEGER);
         """;
 
     /// <summary>
@@ -193,7 +194,7 @@ public static class SearchIndexWriter
             }
         }
 
-        RewriteMeta(connection, revision);
+        RewriteMeta(connection, revision, regionOptions);
         tx.Commit();
     }
 
@@ -241,8 +242,9 @@ public static class SearchIndexWriter
         using (var metaCmd = connection.CreateCommand())
         {
             metaCmd.CommandText = """
-                INSERT INTO meta(revision, doc_count, avgdl, schema_version, region_count, region_avgdl)
-                VALUES ($rev, $n, $avg, $ver, $rn, $ravg);
+                INSERT INTO meta(
+                    revision, doc_count, avgdl, schema_version, region_count, region_avgdl, region_index_enabled)
+                VALUES ($rev, $n, $avg, $ver, $rn, $ravg, $regionEnabled);
                 """;
             metaCmd.Parameters.AddWithValue("$rev", revision);
             metaCmd.Parameters.AddWithValue("$n", symbols.Count);
@@ -250,6 +252,7 @@ public static class SearchIndexWriter
             metaCmd.Parameters.AddWithValue("$ver", SchemaVersion);
             metaCmd.Parameters.AddWithValue("$rn", regionCount);
             metaCmd.Parameters.AddWithValue("$ravg", regionAvgdl);
+            metaCmd.Parameters.AddWithValue("$regionEnabled", regionOptions.Enabled ? 1 : 0);
             metaCmd.ExecuteNonQuery();
         }
 
@@ -513,7 +516,7 @@ public static class SearchIndexWriter
             IsTest: !reader.IsDBNull(10) && reader.GetInt64(10) != 0);
     }
 
-    private static void RewriteMeta(SqliteConnection connection, long revision)
+    private static void RewriteMeta(SqliteConnection connection, long revision, RegionIndexOptions regionOptions)
     {
         (long docCount, double avgdl) = ReadStats(connection, "search_symbols");
         (long regionCount, double regionAvgdl) = ReadStats(connection, "search_regions");
@@ -521,8 +524,9 @@ public static class SearchIndexWriter
         using var cmd = connection.CreateCommand();
         cmd.CommandText = """
             DELETE FROM meta;
-            INSERT INTO meta(revision, doc_count, avgdl, schema_version, region_count, region_avgdl)
-            VALUES ($rev, $docs, $avg, $ver, $regions, $ravg);
+            INSERT INTO meta(
+                revision, doc_count, avgdl, schema_version, region_count, region_avgdl, region_index_enabled)
+            VALUES ($rev, $docs, $avg, $ver, $regions, $ravg, $regionEnabled);
             """;
         cmd.Parameters.AddWithValue("$rev", revision);
         cmd.Parameters.AddWithValue("$docs", docCount);
@@ -530,6 +534,7 @@ public static class SearchIndexWriter
         cmd.Parameters.AddWithValue("$ver", SchemaVersion);
         cmd.Parameters.AddWithValue("$regions", regionCount);
         cmd.Parameters.AddWithValue("$ravg", regionAvgdl);
+        cmd.Parameters.AddWithValue("$regionEnabled", regionOptions.Enabled ? 1 : 0);
         cmd.ExecuteNonQuery();
     }
 

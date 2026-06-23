@@ -30,7 +30,7 @@ public sealed class SymbolSearchSidecarCorruptionReasonTests
         File.WriteAllText(searchDb, "this is not a sqlite database");
         var sidecar = new SymbolSearchSidecar(enabled: true);
 
-        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 5, workspaceRoot: null, out string? reason));
+        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 5, workspaceRoot: julie.WorkspaceRoot, out string? reason));
 
         Assert.NotNull(reason);
         Assert.NotNull(sidecar.TryOpen(julie.DbPath, expectedRevision: 5));
@@ -44,7 +44,7 @@ public sealed class SymbolSearchSidecarCorruptionReasonTests
         File.WriteAllText(searchDb, "garbage bytes, not sqlite");
         var sidecar = new SymbolSearchSidecar(enabled: true);
 
-        Assert.True(sidecar.EnsureCurrent(julie.DbPath, revision: 5, workspaceRoot: null, out string? reason));
+        Assert.True(sidecar.EnsureCurrent(julie.DbPath, revision: 5, workspaceRoot: julie.WorkspaceRoot, out string? reason));
 
         Assert.NotNull(reason);
         Assert.NotNull(sidecar.TryOpen(julie.DbPath, expectedRevision: 5));
@@ -56,7 +56,7 @@ public sealed class SymbolSearchSidecarCorruptionReasonTests
         using var julie = JulieDb();
         var sidecar = new SymbolSearchSidecar(enabled: true);
 
-        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 5, workspaceRoot: null, out string? reason));
+        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 5, workspaceRoot: julie.WorkspaceRoot, out string? reason));
 
         Assert.Null(reason);
     }
@@ -66,9 +66,9 @@ public sealed class SymbolSearchSidecarCorruptionReasonTests
     {
         using var julie = JulieDb();
         var sidecar = new SymbolSearchSidecar(enabled: true);
-        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 1));
+        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 1, workspaceRoot: julie.WorkspaceRoot));
 
-        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 2, workspaceRoot: null, out string? reason));
+        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 2, workspaceRoot: julie.WorkspaceRoot, out string? reason));
 
         Assert.Null(reason);
     }
@@ -78,9 +78,9 @@ public sealed class SymbolSearchSidecarCorruptionReasonTests
     {
         using var julie = JulieDb();
         var sidecar = new SymbolSearchSidecar(enabled: true);
-        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 5));
+        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 5, workspaceRoot: julie.WorkspaceRoot));
 
-        Assert.False(sidecar.EnsureBuilt(julie.DbPath, revision: 5, workspaceRoot: null, out string? reason));
+        Assert.False(sidecar.EnsureBuilt(julie.DbPath, revision: 5, workspaceRoot: julie.WorkspaceRoot, out string? reason));
 
         Assert.Null(reason);
     }

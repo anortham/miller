@@ -2,7 +2,7 @@
   "name": "miller",
   "displayName": "Miller",
   "description": "Local SQLite-backed code intelligence, content search, and workspace freshness for coding agents.",
-  "version": "0.5.7",
+  "version": "0.5.8",
   "author": {
     "name": "Alan Northam"
   },

@@ -3,6 +3,7 @@ using System.Text.Json;
 using Miller.Indexing;
 using Miller.Server;
 using Miller.Server.Cli;
+using Miller.Server.Git;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
 using Miller.Server.Workspaces;
@@ -48,13 +49,18 @@ public sealed class CliDispatchTests : IDisposable
     private static (int Code, string Out, string Err) Run(
         IReadOnlyList<string> args,
         WorkspaceContext ctx,
-        IDashboardLauncher? dashboardLauncher = null)
+        IDashboardLauncher? dashboardLauncher = null,
+        IGitDiffReader? gitDiffReader = null)
     {
         var stdout = new StringWriter();
         var stderr = new StringWriter();
-        int code = dashboardLauncher is null
-            ? CliDispatch.Run(args, ctx, stdout, stderr)
-            : CliDispatch.Run(args, ctx, stdout, stderr, dashboardLauncher);
+        int code = (dashboardLauncher, gitDiffReader) switch
+        {
+            (null, null) => CliDispatch.Run(args, ctx, stdout, stderr),
+            (not null, null) => CliDispatch.Run(args, ctx, stdout, stderr, dashboardLauncher),
+            (null, not null) => CliDispatch.Run(args, ctx, stdout, stderr, gitDiffReader),
+            (not null, not null) => CliDispatch.Run(args, ctx, stdout, stderr, dashboardLauncher, gitDiffReader),
+        };
         return (code, stdout.ToString(), stderr.ToString());
     }
 
@@ -255,7 +261,7 @@ public sealed class CliDispatchTests : IDisposable
     {
         var (code, outText, _) = Run(new[] { "version" }, Context(Path.Combine(_dir, "symbols.db")));
         Assert.Equal(0, code);
-        Assert.StartsWith("0.5.7", outText.Trim());
+        Assert.StartsWith("0.5.8", outText.Trim());
     }
 
     [Fact]
@@ -270,7 +276,7 @@ public sealed class CliDispatchTests : IDisposable
         using JsonDocument doc = JsonDocument.Parse(outText);
         JsonElement root = doc.RootElement;
 
-        Assert.StartsWith("0.5.7", root.GetProperty("miller").GetProperty("version").GetString());
+        Assert.StartsWith("0.5.8", root.GetProperty("miller").GetProperty("version").GetString());
 
         JsonElement julie = root.GetProperty("julie_extract");
         Assert.Equal("2.5.3", julie.GetProperty("pinned_version").GetString());
@@ -300,6 +306,7 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Contains("refresh --json --wait", commands);
         Assert.Contains("content export", commands);
         Assert.Contains("telemetry export --jsonl", commands);
+        Assert.Contains("todos --json", commands);
         Assert.Contains("impact --json", commands);
         Assert.Contains("trace --json", commands);
         Assert.Contains("patterns --json", commands);
@@ -405,6 +412,7 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Equal(0, code);
         Assert.Contains("Commands:", outText);
         Assert.Contains("search", outText);
+        Assert.Contains("todos", outText);
         Assert.Contains("patterns", outText);
         Assert.Contains("serve", outText);
     }
@@ -1281,6 +1289,24 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void Todos_UsesFreshDiskRegionIndex()
+    {
+        const string path = "src/Target.cs";
+        const string text = "// HACK cli todo surface\nclass TargetType {}\n";
+        using var fx = DbWithRegion(path, text);
+        WriteRegionSearchDbFor(fx, revision: 1);
+
+        var (code, outText, errText) = Run(
+            new[] { "todos", "--markers", "HACK" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("src/Target.cs:1  HACK  comment  TargetType", outText);
+        Assert.Contains("// HACK cli todo surface", outText);
+    }
+
+    [Fact]
     public void Inspect_File_ListsItsSymbols()
     {
         using var fx = JulieDbFixture.CreateDefault();
@@ -1427,6 +1453,143 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void Impact_DiffFlag_MapsChangedRangesToImpactedSymbols()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        string diff = """
+            diff --git a/auth/UserService.cs b/auth/UserService.cs
+            --- a/auth/UserService.cs
+            +++ b/auth/UserService.cs
+            @@ -2,1 +2,1 @@
+            -  public User GetUser(int id) {
+            +  public User GetUser(int id) {
+            """;
+
+        var (code, outText, errText) = Run(
+            new[] { "impact", "--diff", diff, "--max-depth", "1" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("# impacted", outText);
+        Assert.Contains("Controller", outText);
+        Assert.Contains("web/Controller.cs", outText);
+    }
+
+    [Fact]
+    public void Impact_ChangedPathsFlag_SeedsChangedFiles()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+
+        var (code, outText, errText) = Run(
+            new[] { "impact", "--changed-paths", "auth/UserService.cs", "--max-depth", "1" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("# impacted", outText);
+        Assert.Contains("Controller", outText);
+    }
+
+    [Fact]
+    public void Impact_GitFlag_UsesWorkingTreeDiff()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        var git = new RecordingGitDiffReader(GitDiffResult.Ok(GetUserDiff()));
+
+        var (code, outText, errText) = Run(
+            new[] { "impact", "--git", "--max-depth", "1" },
+            Context(fx.DbPath, fx.WorkspaceRoot),
+            gitDiffReader: git);
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Single(git.Requests);
+        Assert.Equal(fx.WorkspaceRoot, git.Requests[0].WorkspaceRoot);
+        Assert.Null(git.Requests[0].BaseRef);
+        Assert.False(git.Requests[0].Staged);
+        Assert.Contains("# impacted", outText);
+        Assert.Contains("Controller", outText);
+        Assert.Contains("web/Controller.cs", outText);
+    }
+
+    [Fact]
+    public void Impact_GitBaseFlag_PassesBaseRef()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        var git = new RecordingGitDiffReader(GitDiffResult.Ok(GetUserDiff()));
+
+        var (code, outText, errText) = Run(
+            new[] { "impact", "--git", "--base", "HEAD~1", "--max-depth", "1" },
+            Context(fx.DbPath, fx.WorkspaceRoot),
+            gitDiffReader: git);
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Single(git.Requests);
+        Assert.Equal("HEAD~1", git.Requests[0].BaseRef);
+        Assert.False(git.Requests[0].Staged);
+        Assert.Contains("# impacted", outText);
+        Assert.Contains("Controller", outText);
+    }
+
+    [Fact]
+    public void Impact_GitStagedFlag_PassesCachedDiff()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        var git = new RecordingGitDiffReader(GitDiffResult.Ok(GetUserDiff()));
+
+        var (code, outText, errText) = Run(
+            new[] { "impact", "--git", "--staged", "--max-depth", "1" },
+            Context(fx.DbPath, fx.WorkspaceRoot),
+            gitDiffReader: git);
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Single(git.Requests);
+        Assert.True(git.Requests[0].Staged);
+        Assert.Null(git.Requests[0].BaseRef);
+        Assert.Contains("# impacted", outText);
+        Assert.Contains("Controller", outText);
+    }
+
+    [Fact]
+    public void Impact_GitFlag_EmptyDiffReturnsCleanNoImpact()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        var git = new RecordingGitDiffReader(GitDiffResult.Ok(""));
+
+        var (code, outText, errText) = Run(
+            new[] { "impact", "--git" },
+            Context(fx.DbPath, fx.WorkspaceRoot),
+            gitDiffReader: git);
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Single(git.Requests);
+        Assert.Contains("No impact", outText);
+        Assert.Contains("git diff is empty", outText);
+    }
+
+    [Fact]
+    public void Impact_GitFlag_FailedDiffReturnsOperationalError()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        var git = new RecordingGitDiffReader(GitDiffResult.Fail("fatal: not a git repository"));
+
+        var (code, outText, errText) = Run(
+            new[] { "impact", "--git" },
+            Context(fx.DbPath, fx.WorkspaceRoot),
+            gitDiffReader: git);
+
+        Assert.Equal(3, code);
+        Assert.Empty(outText);
+        Assert.Single(git.Requests);
+        Assert.Contains("git diff failed", errText);
+        Assert.Contains("fatal: not a git repository", errText);
+    }
+
+    [Fact]
     public void Trace_Symbol_RendersNeighbourhood()
     {
         using var fx = JulieDbFixture.CreateForInspect();
@@ -1562,7 +1725,7 @@ public sealed class CliDispatchTests : IDisposable
         // binary's version into the status header (the dogfooding "which build is live" signal).
         var (code, outText, _) = Run(new[] { "workspace", "status" }, Context(fx.DbPath));
         Assert.Equal(0, code);
-        Assert.Contains("miller 0.5.7", outText);
+        Assert.Contains("miller 0.5.8", outText);
         Assert.Contains("pid ", outText);
         Assert.Contains("symbols:", outText);
     }
@@ -2158,4 +2321,28 @@ public sealed class CliDispatchTests : IDisposable
             return _result;
         }
     }
+
+    private sealed class RecordingGitDiffReader(params GitDiffResult[] results) : IGitDiffReader
+    {
+        private readonly Queue<GitDiffResult> _results = new(results);
+        private readonly List<GitDiffRequest> _requests = new();
+
+        public IReadOnlyList<GitDiffRequest> Requests => _requests;
+
+        public GitDiffResult Read(GitDiffRequest request)
+        {
+            _requests.Add(request);
+            return _results.Count == 0 ? GitDiffResult.Ok("") : _results.Dequeue();
+        }
+    }
+
+    private static string GetUserDiff() =>
+        """
+        diff --git a/auth/UserService.cs b/auth/UserService.cs
+        --- a/auth/UserService.cs
+        +++ b/auth/UserService.cs
+        @@ -2,1 +2,1 @@
+        -  public User GetUser(int id) {
+        +  public User GetUser(int id) {
+        """;
 }
