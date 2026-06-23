@@ -43,12 +43,16 @@ public sealed class TelemetryLedger : IDisposable
     /// <summary>The workspace id stamped onto every row, or null if unknown at open time.</summary>
     public string? WorkspaceId { get; }
 
+    /// <summary>The shared telemetry database path opened by this ledger.</summary>
+    public string DbPath { get; }
+
     /// <summary>Count of telemetry rows that failed to persist and were swallowed (never throws).</summary>
     public long DroppedWrites { get; private set; }
 
-    private TelemetryLedger(SqliteConnection connection, string? workspaceId, string? workspaceRoot)
+    private TelemetryLedger(SqliteConnection connection, string dbPath, string? workspaceId, string? workspaceRoot)
     {
         _connection = connection;
+        DbPath = dbPath;
         WorkspaceId = workspaceId;
         _workspaceRoot = workspaceRoot;
 
@@ -125,7 +129,7 @@ public sealed class TelemetryLedger : IDisposable
         EnsureTextColumn(connection, "error_message");
         EnsureTextColumn(connection, "error_detail");
 
-        return new TelemetryLedger(connection, workspaceId, workspaceRoot);
+        return new TelemetryLedger(connection, Path.GetFullPath(dbPath), workspaceId, workspaceRoot);
     }
 
     private static void EnsureTextColumn(SqliteConnection connection, string columnName)

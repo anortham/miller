@@ -181,16 +181,12 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
             string normalizedQuery = query.Trim().ToLowerInvariant();
             int requiredTerms = distinctTerms.Count;
 
-            // Per-term document frequency. COUNT(*) over a single-term MATCH equals the in-memory postings
-            // length and needs no fts5vocab vtable (which a read-only DB couldn't create).
-            var df = new Dictionary<string, int>(StringComparer.Ordinal);
-            foreach (string term in distinctTerms)
-                df[term] = CountDocsMatching(connection, QuoteFts(term));
-
             string orMatch = string.Join(" OR ", distinctTerms.Select(QuoteFts));
             IReadOnlyList<DiskSymbol> candidates = WordCandidates(connection, orMatch);
 
             var tokens = new List<string>(16);
+            var df = new int[distinctTerms.Count];
+            var scoredCandidates = new List<WordCandidateScore>(candidates.Count);
             foreach (DiskSymbol candidate in candidates)
             {
                 IndexedSymbol symbol = candidate.Symbol;
@@ -198,20 +194,34 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
                 tokens.Clear();
                 string text = string.IsNullOrEmpty(symbol.Signature) ? symbol.Name : symbol.Name + " " + symbol.Signature;
                 CodeTokenizer.Tokenize(text, tokens);
-                int docLen = candidate.DocLen;
 
-                double score = 0.0;
+                var termFrequencies = new int[distinctTerms.Count];
                 int matched = 0;
-                foreach (string term in distinctTerms)
+                for (int i = 0; i < distinctTerms.Count; i++)
                 {
-                    int tf = CountOccurrences(tokens, term);
+                    int tf = CountOccurrences(tokens, distinctTerms[i]);
                     if (tf == 0) continue;
-                    score += Bm25.TermScore(Bm25.Idf(n, df[term]), tf, docLen, _avgdl);
+                    termFrequencies[i] = tf;
+                    df[i]++;
                     matched++;
                 }
 
                 if (matched == 0) continue;
-                if (mode == SearchMode.And && matched < requiredTerms) continue;   // AND: every distinct term must hit
+                scoredCandidates.Add(new WordCandidateScore(symbol, candidate.DocLen, termFrequencies, matched));
+            }
+
+            foreach (WordCandidateScore candidate in scoredCandidates)
+            {
+                if (mode == SearchMode.And && candidate.Matched < requiredTerms) continue;   // AND: every distinct term must hit
+
+                IndexedSymbol symbol = candidate.Symbol;
+                double score = 0.0;
+                for (int i = 0; i < distinctTerms.Count; i++)
+                {
+                    int tf = candidate.TermFrequencies[i];
+                    if (tf == 0) continue;
+                    score += Bm25.TermScore(Bm25.Idf(n, df[i]), tf, candidate.DocLen, _avgdl);
+                }
 
                 score = Bm25.ApplyExactNameAdjustments(
                     score,
@@ -260,13 +270,11 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
     /// <summary>How many trigram-arm candidates to window in (interior-substring recall is purely additive).</summary>
     private const int TrigramWindow = 200;
 
-    private static int CountDocsMatching(SqliteConnection connection, string match)
-    {
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT count(*) FROM symbols_fts WHERE body MATCH $q;";
-        cmd.Parameters.AddWithValue("$q", match);
-        return Convert.ToInt32(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
-    }
+    private sealed record WordCandidateScore(
+        IndexedSymbol Symbol,
+        int DocLen,
+        int[] TermFrequencies,
+        int Matched);
 
     private static IReadOnlyList<DiskSymbol> WordCandidates(SqliteConnection connection, string match)
     {

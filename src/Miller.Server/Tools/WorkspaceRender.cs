@@ -938,6 +938,263 @@ public static class WorkspaceRender
         return Utf8(buffer);
     }
 
+    // ---------- onboarding ----------
+
+    public static string Onboarding(WorkspaceOnboardingFacts facts, bool json) =>
+        json ? OnboardingJson(facts) : OnboardingCompact(facts);
+
+    private static string OnboardingCompact(WorkspaceOnboardingFacts facts)
+    {
+        var sb = new StringBuilder();
+        sb.Append("# workspace onboarding\n");
+        sb.Append("workspace: ").Append(DisplayId(
+                facts.StatusFacts.Root,
+                facts.StatusFacts.WorkspaceId,
+                facts.StatusFacts.DisplayId))
+            .Append("  ").Append(facts.StatusFacts.Root).Append('\n');
+        sb.Append("telemetry: ").Append(facts.Telemetry.State)
+            .Append("  calls ").Append(facts.Telemetry.TotalCalls.ToString(CultureInfo.InvariantCulture));
+        if (facts.Telemetry.WindowStartTs is not null && facts.Telemetry.WindowEndTs is not null)
+            sb.Append("  window ").Append(facts.Telemetry.WindowStartTs).Append("..").Append(facts.Telemetry.WindowEndTs);
+        if (!facts.Telemetry.Available && !string.IsNullOrWhiteSpace(facts.Telemetry.Error))
+            sb.Append("  error ").Append(facts.Telemetry.Error);
+        sb.Append('\n');
+
+        AppendLines(sb, "start here", facts.StartHere);
+
+        if (facts.Telemetry.ToolMix.Count > 0)
+        {
+            sb.Append("tool mix:\n");
+            foreach (TelemetryToolMix row in facts.Telemetry.ToolMix.Take(5))
+                sb.Append("- ").Append(OnboardingLabel(row.Tool, row.Op)).Append("  calls ")
+                    .Append(row.Calls.ToString(CultureInfo.InvariantCulture))
+                    .Append("  empty ").Append(row.EmptyCount.ToString(CultureInfo.InvariantCulture))
+                    .Append("  errors ").Append(row.ErrorCount.ToString(CultureInfo.InvariantCulture))
+                    .Append("  p95 ").Append(row.P95Ms.ToString(CultureInfo.InvariantCulture)).Append("ms\n");
+        }
+
+        if (facts.Telemetry.SuccessfulFlows.Count > 0)
+        {
+            sb.Append("successful flows:\n");
+            foreach (TelemetryFlow flow in facts.Telemetry.SuccessfulFlows.Take(5))
+                sb.Append("- ").Append(flow.From).Append(" -> ").Append(flow.To)
+                    .Append(" (").Append(flow.Calls.ToString(CultureInfo.InvariantCulture)).Append(")\n");
+        }
+
+        if (facts.HotTargets.Count > 0)
+        {
+            sb.Append("hot targets:\n");
+            foreach (RecoveredTargetHash target in facts.HotTargets.Take(5))
+                sb.Append("- ").Append(TargetLabel(target)).Append("  ")
+                    .Append(target.Confidence).Append("  calls ")
+                    .Append(target.Calls.ToString(CultureInfo.InvariantCulture))
+                    .Append(target.CandidateCount > 1
+                        ? $"  candidates {target.CandidateCount.ToString(CultureInfo.InvariantCulture)}"
+                        : string.Empty)
+                    .Append('\n');
+        }
+
+        if (facts.Telemetry.CommonMisses.Count > 0)
+        {
+            sb.Append("common misses:\n");
+            foreach (TelemetryMiss miss in facts.Telemetry.CommonMisses.Take(5))
+                sb.Append("- ").Append(OnboardingLabel(miss.Tool, miss.Op)).Append("  ")
+                    .Append(miss.Reason).Append(" (")
+                    .Append(miss.Calls.ToString(CultureInfo.InvariantCulture)).Append(")\n");
+        }
+
+        AppendLines(sb, "instruction notes", facts.InstructionNotes);
+        AppendLines(sb, "privacy", facts.PrivacyNotes);
+        return sb.ToString().TrimEnd('\n');
+    }
+
+    private static string OnboardingJson(WorkspaceOnboardingFacts facts)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var w = NewWriter(buffer))
+        {
+            w.WriteStartObject();
+            w.WriteString("operation", "onboarding");
+            w.WritePropertyName("workspace");
+            w.WriteStartObject();
+            w.WriteString("root", facts.StatusFacts.Root);
+            if (facts.StatusFacts.WorkspaceId is null) w.WriteNull("workspace_id");
+            else w.WriteString("workspace_id", facts.StatusFacts.WorkspaceId);
+            if (facts.StatusFacts.DisplayId is null) w.WriteNull("display_id");
+            else w.WriteString("display_id", facts.StatusFacts.DisplayId);
+            w.WriteString("db", facts.StatusFacts.DbPath);
+            w.WriteEndObject();
+
+            w.WritePropertyName("telemetry");
+            w.WriteStartObject();
+            w.WriteBoolean("available", facts.Telemetry.Available);
+            w.WriteString("state", facts.Telemetry.State);
+            w.WriteNumber("total_calls", facts.Telemetry.TotalCalls);
+            if (facts.Telemetry.WindowStartTs is null) w.WriteNull("window_start_ts");
+            else w.WriteString("window_start_ts", facts.Telemetry.WindowStartTs);
+            if (facts.Telemetry.WindowEndTs is null) w.WriteNull("window_end_ts");
+            else w.WriteString("window_end_ts", facts.Telemetry.WindowEndTs);
+            if (facts.Telemetry.Error is null) w.WriteNull("error");
+            else w.WriteString("error", facts.Telemetry.Error);
+            w.WriteEndObject();
+
+            WriteStringArray(w, "start_here", facts.StartHere);
+            WriteToolMixJson(w, facts.Telemetry.ToolMix);
+            WriteFlowsJson(w, facts.Telemetry.SuccessfulFlows);
+            WriteHotTargetsJson(w, facts.HotTargets);
+            WriteMissesJson(w, facts.Telemetry.CommonMisses);
+            WriteFrictionJson(w, facts.Telemetry.Friction);
+            WriteStringArray(w, "instruction_notes", facts.InstructionNotes);
+
+            w.WritePropertyName("privacy");
+            w.WriteStartObject();
+            w.WriteBoolean("raw_queries_stored", false);
+            w.WriteBoolean("raw_targets_stored", false);
+            WriteStringArray(w, "notes", facts.PrivacyNotes);
+            w.WriteEndObject();
+            w.WriteEndObject();
+        }
+        return Utf8(buffer);
+    }
+
+    private static void WriteToolMixJson(Utf8JsonWriter w, IReadOnlyList<TelemetryToolMix> rows)
+    {
+        w.WritePropertyName("tool_mix");
+        w.WriteStartArray();
+        foreach (TelemetryToolMix row in rows)
+        {
+            w.WriteStartObject();
+            w.WriteString("tool", row.Tool);
+            if (row.Op is null) w.WriteNull("op");
+            else w.WriteString("op", row.Op);
+            w.WriteNumber("calls", row.Calls);
+            w.WriteNumber("ok_count", row.OkCount);
+            w.WriteNumber("empty_count", row.EmptyCount);
+            w.WriteNumber("error_count", row.ErrorCount);
+            w.WriteNumber("avg_ms", row.AvgMs);
+            w.WriteNumber("p95_ms", row.P95Ms);
+            w.WriteNumber("max_ms", row.MaxMs);
+            w.WriteNumber("result_count", row.ResultCount);
+            w.WriteNumber("bytes_returned", row.BytesReturned);
+            w.WriteNumber("est_tokens", row.EstTokens);
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+    }
+
+    private static void WriteFlowsJson(Utf8JsonWriter w, IReadOnlyList<TelemetryFlow> flows)
+    {
+        w.WritePropertyName("successful_flows");
+        w.WriteStartArray();
+        foreach (TelemetryFlow flow in flows)
+        {
+            w.WriteStartObject();
+            w.WriteString("from", flow.From);
+            w.WriteString("to", flow.To);
+            w.WriteNumber("calls", flow.Calls);
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+    }
+
+    private static void WriteHotTargetsJson(Utf8JsonWriter w, IReadOnlyList<RecoveredTargetHash> targets)
+    {
+        w.WritePropertyName("hot_targets");
+        w.WriteStartArray();
+        foreach (RecoveredTargetHash target in targets)
+        {
+            w.WriteStartObject();
+            w.WriteString("label", TargetLabel(target));
+            w.WriteString("confidence", target.Confidence);
+            if (target.SymbolId is null) w.WriteNull("symbol_id");
+            else w.WriteString("symbol_id", target.SymbolId);
+            if (target.Name is null) w.WriteNull("name");
+            else w.WriteString("name", target.Name);
+            if (target.Kind is null) w.WriteNull("kind");
+            else w.WriteString("kind", target.Kind);
+            if (target.Path is null) w.WriteNull("path");
+            else w.WriteString("path", target.Path);
+            if (target.StartLine is { } startLine) w.WriteNumber("start_line", startLine);
+            else w.WriteNull("start_line");
+            w.WriteNumber("calls", target.Calls);
+            w.WriteNumber("candidate_count", target.CandidateCount);
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+    }
+
+    private static void WriteMissesJson(Utf8JsonWriter w, IReadOnlyList<TelemetryMiss> misses)
+    {
+        w.WritePropertyName("common_misses");
+        w.WriteStartArray();
+        foreach (TelemetryMiss miss in misses)
+        {
+            w.WriteStartObject();
+            w.WriteString("tool", miss.Tool);
+            if (miss.Op is null) w.WriteNull("op");
+            else w.WriteString("op", miss.Op);
+            w.WriteString("reason", miss.Reason);
+            w.WriteNumber("calls", miss.Calls);
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+    }
+
+    private static void WriteFrictionJson(Utf8JsonWriter w, IReadOnlyList<TelemetryFriction> friction)
+    {
+        w.WritePropertyName("friction");
+        w.WriteStartArray();
+        foreach (TelemetryFriction row in friction)
+        {
+            w.WriteStartObject();
+            w.WriteString("tool", row.Tool);
+            if (row.Op is null) w.WriteNull("op");
+            else w.WriteString("op", row.Op);
+            w.WriteNumber("calls", row.Calls);
+            w.WriteNumber("avg_ms", row.AvgMs);
+            w.WriteNumber("p95_ms", row.P95Ms);
+            w.WriteNumber("max_ms", row.MaxMs);
+            w.WriteNumber("bytes_returned", row.BytesReturned);
+            w.WriteNumber("est_tokens", row.EstTokens);
+            w.WriteNumber("empty_count", row.EmptyCount);
+            w.WriteNumber("error_count", row.ErrorCount);
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+    }
+
+    private static void WriteStringArray(Utf8JsonWriter w, string propertyName, IReadOnlyList<string> values)
+    {
+        w.WritePropertyName(propertyName);
+        w.WriteStartArray();
+        foreach (string value in values)
+            w.WriteStringValue(value);
+        w.WriteEndArray();
+    }
+
+    private static void AppendLines(StringBuilder sb, string heading, IReadOnlyList<string> lines)
+    {
+        if (lines.Count == 0)
+            return;
+        sb.Append(heading).Append(":\n");
+        foreach (string line in lines)
+            sb.Append("- ").Append(line).Append('\n');
+    }
+
+    private static string TargetLabel(RecoveredTargetHash target)
+    {
+        if (target.Path is not null && target.Name is not null)
+            return $"{target.Name}  {target.Path}";
+        if (target.Path is not null)
+            return target.Path;
+        if (target.Name is not null)
+            return target.Name;
+        return "unresolved repeated target";
+    }
+
+    private static string OnboardingLabel(string tool, string? op) =>
+        string.IsNullOrWhiteSpace(op) ? tool : tool + ":" + op;
+
     // ---------- refresh / full ----------
 
     /// <summary>Render a <c>refresh</c>/<c>full</c> action result (scanned? swapped? new revision? honesty note).</summary>

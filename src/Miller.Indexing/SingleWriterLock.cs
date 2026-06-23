@@ -67,11 +67,12 @@ public sealed class SingleWriterLock : IDisposable
 
     private static bool IsLockContention(IOException ex, bool isWindows)
     {
-        if (!isWindows)
-            return true; // preserve historical POSIX behavior: a failed exclusive open means "busy".
-
         int nativeError = ex.HResult & 0xFFFF;
-        return nativeError is 32 /* ERROR_SHARING_VIOLATION */ or 33 /* ERROR_LOCK_VIOLATION */;
+        if (isWindows)
+            return nativeError is 32 /* ERROR_SHARING_VIOLATION */ or 33 /* ERROR_LOCK_VIOLATION */;
+
+        return nativeError is 11 /* Linux EAGAIN/EWOULDBLOCK */
+            or 35 /* macOS EAGAIN/EWOULDBLOCK */;
     }
 
     /// <summary>

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Miller - Local Code Intelligence for Coding Agents</title>
-  <meta name="description" content="Miller is the free local code-intelligence core for coding agents: MCP and CLI search, inspect, context, refs, trace, impact, edit, TODO marker audits, content search, structural patterns, workspace freshness, and telemetry.">
+  <meta name="description" content="Miller is the free local code-intelligence core for coding agents: MCP and CLI search, inspect, context, refs, trace, impact, edit, TODO marker audits, content search, structural patterns, workspace freshness, telemetry, and onboarding.">
   <link rel="canonical" href="https://anortham.github.io/miller/">
 
   <meta property="og:type" content="website">
@@ -172,6 +172,10 @@
           <span>workspace status</span>
           <code>dotnet run --project src/Miller.Server -c Release -- workspace status</code>
         </button>
+        <button class="command-line" type="button" data-copy="dotnet run --project src/Miller.Server -c Release -- workspace onboarding --json">
+          <span>workspace onboarding</span>
+          <code>dotnet run --project src/Miller.Server -c Release -- workspace onboarding --json</code>
+        </button>
         <button class="command-line" type="button" data-copy="dotnet run --project src/Miller.Server -c Release -- search &quot;WorkspaceIndexProvider&quot; --limit 5">
           <span>symbol search</span>
           <code>dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvider" --limit 5</code>
@@ -235,7 +239,7 @@
         </article>
         <article>
           <h3>workspace</h3>
-          <p>Registry, freshness, refresh, dashboard launch, and cross-workspace selectors.</p>
+          <p>Registry, freshness, refresh, telemetry-derived onboarding, dashboard launch, and cross-workspace selectors.</p>
         </article>
       </div>
     </section>

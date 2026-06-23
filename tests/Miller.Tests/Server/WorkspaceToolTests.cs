@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -165,6 +167,51 @@ public sealed class WorkspaceToolTests : IDisposable
             revisions: workspaceId is null
                 ? null
                 : new[] { new JulieDbFixture.RevisionRow(revision) });
+
+    private static void SeedOnboardingTelemetry(TelemetryLedger ledger, string workspaceId, string workspaceRoot)
+    {
+        ledger.Record(TelemetryRow("search", "auto", workspaceId, workspaceRoot, "ok", 100, 3, Hash("GetUser")));
+        ledger.Record(TelemetryRow("inspect", "summary", workspaceId, workspaceRoot, "ok", 40, 1, Hash("GetUser")));
+        ledger.Record(TelemetryRow(
+            "search",
+            "auto",
+            workspaceId,
+            workspaceRoot,
+            "empty",
+            30,
+            0,
+            targetHash: null,
+            metadataJson: """{"empty_reason":"no_symbol_hits"}"""));
+    }
+
+    private static TelemetryRecord TelemetryRow(
+        string tool,
+        string? op,
+        string workspaceId,
+        string workspaceRoot,
+        string outcome,
+        long durationMs,
+        int resultCount,
+        string? targetHash,
+        string metadataJson = "{}") => new(
+            Tool: tool,
+            Op: op,
+            WorkspaceId: workspaceId,
+            WorkspaceRoot: workspaceRoot,
+            DurationMs: durationMs,
+            Outcome: outcome,
+            ErrorKind: null,
+            ResultCount: resultCount,
+            BytesExamined: 0,
+            BytesReturned: 100,
+            SourceBytes: 0,
+            EstTokens: 25,
+            IndexFresh: true,
+            TargetHash: targetHash,
+            MetadataJson: metadataJson);
+
+    private static string Hash(string raw) =>
+        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(raw)));
 
     private static void SeedHealthRows(string dbPath)
     {
@@ -556,6 +603,29 @@ public sealed class WorkspaceToolTests : IDisposable
         Assert.Equal(2, root.GetProperty("extraction_quality")
             .GetProperty("parse_diagnostics").GetProperty("rows")[0].GetProperty("count").GetInt64());
         Assert.Equal("capability_gaps", root.GetProperty("warnings")[0].GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public void Onboarding_CurrentWorkspace_RendersTelemetryGuidanceAndRecoveredTargets()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        WorkspaceToolHarness harness = BuildHarness(fx, builtRevision: 1, workspaceId: Ws);
+        SeedOnboardingTelemetry(harness.Ledger, Ws, harness.Root);
+
+        using var doc = JsonDocument.Parse(harness.Tool.Workspace(operation: "onboarding", format: "json"));
+        JsonElement root = doc.RootElement;
+
+        Assert.Equal("onboarding", root.GetProperty("operation").GetString());
+        Assert.Equal(Ws, root.GetProperty("workspace").GetProperty("workspace_id").GetString());
+        Assert.Equal("ready", root.GetProperty("telemetry").GetProperty("state").GetString());
+        Assert.Equal(3, root.GetProperty("telemetry").GetProperty("total_calls").GetInt64());
+        Assert.Contains(root.GetProperty("start_here").EnumerateArray(),
+            item => item.GetString()!.Contains("search", StringComparison.OrdinalIgnoreCase));
+        JsonElement hotTarget = Assert.Single(root.GetProperty("hot_targets").EnumerateArray());
+        Assert.Equal("GetUser", hotTarget.GetProperty("name").GetString());
+        Assert.Equal("auth/UserService.cs", hotTarget.GetProperty("path").GetString());
+        JsonElement miss = Assert.Single(root.GetProperty("common_misses").EnumerateArray());
+        Assert.Equal("no_symbol_hits", miss.GetProperty("reason").GetString());
     }
 
     [Fact]

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using Microsoft.Data.Sqlite;
 
 namespace Miller.Indexing;
@@ -8,10 +9,45 @@ internal readonly record struct FileOperationRetryOptions(
     TimeSpan InitialDelay,
     TimeSpan MaxDelay)
 {
-    public static FileOperationRetryOptions Default { get; } = new(
-        Timeout: TimeSpan.FromSeconds(10),
-        InitialDelay: TimeSpan.FromMilliseconds(20),
-        MaxDelay: TimeSpan.FromMilliseconds(500));
+    internal const string PromoteRetryTimeoutEnvironmentVariable = "MILLER_PROMOTE_RETRY_TIMEOUT";
+
+    private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan DefaultInitialDelay = TimeSpan.FromMilliseconds(20);
+    private static readonly TimeSpan DefaultMaxDelay = TimeSpan.FromMilliseconds(500);
+
+    public static FileOperationRetryOptions Default =>
+        DefaultForEnvironment(Environment.GetEnvironmentVariable);
+
+    internal static FileOperationRetryOptions DefaultForEnvironment(Func<string, string?> readEnvironmentVariable)
+    {
+        ArgumentNullException.ThrowIfNull(readEnvironmentVariable);
+        return new FileOperationRetryOptions(
+            Timeout: ReadTimeout(readEnvironmentVariable(PromoteRetryTimeoutEnvironmentVariable)),
+            InitialDelay: DefaultInitialDelay,
+            MaxDelay: DefaultMaxDelay);
+    }
+
+    private static TimeSpan ReadTimeout(string? value)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out double seconds) &&
+                seconds > 0 &&
+                !double.IsNaN(seconds) &&
+                !double.IsInfinity(seconds))
+            {
+                return TimeSpan.FromSeconds(seconds);
+            }
+
+            if (TimeSpan.TryParse(value, CultureInfo.InvariantCulture, out TimeSpan parsed) &&
+                parsed > TimeSpan.Zero)
+            {
+                return parsed;
+            }
+        }
+
+        return DefaultTimeout;
+    }
 }
 
 /// <summary>

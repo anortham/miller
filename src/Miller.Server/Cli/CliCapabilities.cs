@@ -30,9 +30,11 @@ internal static class CliCapabilities
         "patterns --json",
         "telemetry export --jsonl",
         "symbols export --jsonl",
+        "references export --jsonl",
         "complexity export --jsonl",
         "workspace status --json",
         "workspace health --json",
+        "workspace onboarding --json",
         "workspace list --json",
         "workspace refresh --json",
         "workspace full --json",
@@ -51,7 +53,10 @@ internal static class CliCapabilities
 
     private static readonly (string Name, string Command, int SchemaVersion, string Doc)[] JsonContracts =
     [
+        ("workspace_status", "workspace status --json", 1, "docs/contracts/workspace-status-v1.md"),
         ("workspace_health", "workspace health --json", 1, "docs/contracts/workspace-health-v1.md"),
+        ("workspace_onboarding", "workspace onboarding --json", 1, "docs/contracts/workspace-onboarding-v1.md"),
+        ("refresh_wait", "refresh --json --wait", 1, "docs/contracts/refresh-wait-v1.md"),
         ("trace", "trace --json", 1, "docs/contracts/trace-json-v1.md"),
         ("patterns", "patterns --json", 1, "docs/contracts/patterns-json-v1.md"),
     ];
@@ -83,6 +88,7 @@ internal static class CliCapabilities
         sb.AppendLine("  - content_corpus jsonl via `miller content export`");
         sb.AppendLine("  - telemetry jsonl via `miller telemetry export --jsonl`");
         sb.AppendLine("  - symbols jsonl via `miller symbols export --jsonl`");
+        sb.AppendLine("  - references jsonl via `miller references export --jsonl`");
         sb.AppendLine("  - complexity_metrics jsonl via `miller complexity export --jsonl`");
         sb.AppendLine("json_commands:");
         foreach (string command in JsonCommands)
@@ -188,6 +194,18 @@ internal static class CliCapabilities
             w.WriteString("command", "miller symbols export --jsonl");
             w.WriteString("format", "jsonl");
             w.WriteNumber("schema_version", SymbolExportReader.SchemaVersion);
+            w.WritePropertyName("filters");
+            w.WriteStartArray();
+            w.WriteStringValue("--workspace-id");
+            w.WriteStringValue("--workspace");
+            w.WriteEndArray();
+            w.WriteEndObject();
+
+            w.WriteStartObject();
+            w.WriteString("name", "references");
+            w.WriteString("command", "miller references export --jsonl");
+            w.WriteString("format", "jsonl");
+            w.WriteNumber("schema_version", ReferenceExportReader.SchemaVersion);
             w.WritePropertyName("filters");
             w.WriteStartArray();
             w.WriteStringValue("--workspace-id");

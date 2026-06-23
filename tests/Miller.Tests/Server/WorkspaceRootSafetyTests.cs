@@ -87,6 +87,36 @@ public sealed class WorkspaceRootSafetyTests
     }
 
     [Fact]
+    public void CanonicalizeAndRejectSensitiveRoot_SymlinkToHome_ThrowsWithCanonicalPath()
+    {
+        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        string parent = Path.Combine(Path.GetTempPath(), "miller-rootsafety-link-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(parent);
+        string link = Path.Combine(parent, "home-link");
+
+        try
+        {
+            Directory.CreateSymbolicLink(link, home);
+
+            var ex = Assert.Throws<InvalidOperationException>(
+                () => WorkspaceRootSafety.CanonicalizeAndRejectSensitiveRoot(link, fromCwd: true));
+
+            Assert.Contains("sensitive system path", ex.Message);
+            Assert.Contains(Path.GetFullPath(home), ex.Message);
+            Assert.DoesNotContain("home-link", ex.Message, StringComparison.Ordinal);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            Assert.Skip($"Symlink creation is unavailable on this host: {ex.Message}");
+        }
+        finally
+        {
+            try { if (Directory.Exists(link)) Directory.Delete(link); } catch { }
+            try { Directory.Delete(parent); } catch { }
+        }
+    }
+
+    [Fact]
     public void RejectSensitiveRoot_ExplicitPath_UsesNarrowerPathRemedy()
     {
         string driveRoot = Path.GetPathRoot(Environment.CurrentDirectory)!;

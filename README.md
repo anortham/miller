@@ -14,6 +14,7 @@ The practical difference from a one-time graph dump is that Miller is built for 
 - workspace state, freshness, refresh, and selectors are first-class;
 - CLI and MCP calls share the same read cores, so examples can be dogfooded in a shell and used by agents;
 - the registry, telemetry, and dashboard show what Miller knows right now;
+- telemetry-derived onboarding can summarize how agents have used this indexed repo without storing raw queries;
 - stale or corrupt search sidecars fail visibly instead of silently lying; refresh the workspace or explicitly
   opt out with `MILLER_SEARCH_SIDECAR=0` when debugging the in-memory fallback;
 - cross-language bridge evidence stays structural and provider-scoped, not embedding-driven.
@@ -325,6 +326,7 @@ The single `miller` binary runs two ways:
   dotnet run --project src/Miller.Server -c Release -- impact --git --base origin/main --max-depth 1
   dotnet run --project src/Miller.Server -c Release -- workspace status
   dotnet run --project src/Miller.Server -c Release -- workspace health --json
+  dotnet run --project src/Miller.Server -c Release -- workspace onboarding --json
   dotnet run --project src/Miller.Server -c Release -- workspace list
   dotnet run --project src/Miller.Server -c Release -- version
   ```
@@ -459,6 +461,7 @@ binary:
 ```bash
 dotnet run --project src/Miller.Server -c Release -- workspace status
 dotnet run --project src/Miller.Server -c Release -- workspace health --json
+dotnet run --project src/Miller.Server -c Release -- workspace onboarding --json
 dotnet run --project src/Miller.Server -c Release -- workspace list
 dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvider" --limit 5
 dotnet run --project src/Miller.Server -c Release -- search "release archive" --mode content --limit 5
@@ -471,8 +474,10 @@ dotnet run --project src/Miller.Server -c Release -- impact --git --max-depth 1 
 
 What these prove:
 
-- `workspace status`, `workspace health`, and `workspace list` read cheap registry/freshness/aggregate metadata
-  instead of hydrating the full graph.
+- `workspace status`, `workspace health`, `workspace onboarding`, and `workspace list` avoid source-file reads
+  and full graph hydration; onboarding adds a read-only telemetry summary plus current-index target recovery.
+- `workspace onboarding` turns local telemetry into starter commands, hot current-index targets, common misses,
+  and friction signals. Telemetry stores target hashes, not raw queries or raw target text.
 - Symbol search stays narrow and structural (`name + signature`). Docs/config use `--mode content`; source
   bodies and imported text use the explicit content corpus modes.
 - `patterns --json` discovers extractor-recognized code-shape facts across the full pattern catalog (framework
@@ -513,6 +518,9 @@ Text output is a compact human-facing contract and JSON output is the integratio
   supported JSON commands, and export feeds for Eros/local integrations.
 - `--json` is supported by `search`, `todos`, `inspect`, `context`, `impact`, `trace`, `patterns`, `dashboard`,
   `content` operations, and `workspace` operations.
+- `workspace onboarding --json [--workspace-id SELECTOR|--workspace DIR]` is a read-only, privacy-safe startup
+  view for an indexed repo. It summarizes tool mix, successful flows, repeated current-index targets, common
+  misses, and friction from the shared telemetry ledger.
 - `refresh --json --wait [--workspace-id SELECTOR|--workspace DIR] [--full]` is the Eros-friendly top-level
   convergence command. It wraps the existing registered-workspace refresh path and includes sidecar facts.
 - `search`, `inspect`, `context`, `impact`, `trace`, and `patterns` accept `--workspace-id <selector>`; selectors are the
@@ -542,8 +550,13 @@ Text output is a compact human-facing contract and JSON output is the integratio
   reading shortcut.
 - `telemetry export --jsonl [--workspace-id ID|all]` writes machine-global telemetry rows as JSONL for local
   dashboard/history consumers. It exports stored target hashes, not raw queries.
-- Eros-facing CLI contracts live in `docs/contracts/cli-eros-v1.md`; trace JSON fields live in
-  `docs/contracts/trace-json-v1.md`; content export fields live in `docs/contracts/content-corpus-v1.md`.
+- `symbols export --jsonl`, `references export --jsonl`, and `complexity export --jsonl` write deterministic
+  artifact fact feeds for fleet rollups and Eros workflows. `references export` is a usage-fact feed, not a
+  dead-code ranking tool.
+- Eros-facing CLI contracts live in `docs/contracts/cli-eros-v1.md`; workspace onboarding JSON fields live in
+  `docs/contracts/workspace-onboarding-v1.md`; trace JSON fields live in `docs/contracts/trace-json-v1.md`;
+  content export fields live in `docs/contracts/content-corpus-v1.md`; and references export fields live in
+  `docs/contracts/references-export-v1.md`.
 - Search defaults to 6 results. Compact symbol rows include name, kind, file, line, and signature when available;
   use `--limit N` when you need a wider page.
 

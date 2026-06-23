@@ -63,7 +63,7 @@ public sealed class IndexerService : BackgroundService
     private readonly IndexerSidecarConverger _sidecarConverger;
     private readonly WorkspaceRegistryScanPublisher _registryPublisher;
 
-    private IDisposable? _lease;
+    private volatile IDisposable? _lease;
     private IndexerWatcherSet? _watchers;
     private IndexerCore? _core;
 

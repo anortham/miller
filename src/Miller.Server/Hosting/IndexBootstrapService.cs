@@ -97,22 +97,17 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
                 var ctx = WorkspaceContext.Create(Environment.CurrentDirectory, AppContext.BaseDirectory);
 
-                // SAFETY: refuse to index a sensitive system root (the home dir, a filesystem/drive root, a
-                // platform system dir). A launcher that starts the MCP server with cwd set to '/' or '~' must not
-                // trigger a full julie scan of the home/system tree — fail loudly BEFORE creating .miller or
-                // scanning, with a message telling the operator to launch from a project directory.
-                WorkspaceRootSafety.RejectSensitiveRoot(ctx.WorkspaceRoot, fromCwd: true);
-
-                string millerDir = Path.GetDirectoryName(ctx.ExtractDbPath)!;
-                Directory.CreateDirectory(millerDir);
-
                 // The canonical (symlink-resolved) root for the watcher + extract calls (verified-fact 4).
-                // Resolved BEFORE the scan so the very first `extract` already receives canonical paths. The
+                // Resolved BEFORE the safety check and scan so a symlink to a sensitive root cannot slip past the
+                // guard and the very first `extract` already receives canonical paths. The
                 // canonical DB path is the canonical root composed with the M2 .miller/symbols.db convention —
                 // a non-canonical --db under a symlinked workspace trips the same outside-root family as --file.
-                string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(ctx.WorkspaceRoot);
+                string canonicalRoot = WorkspaceRootSafety.CanonicalizeAndRejectSensitiveRoot(
+                    ctx.WorkspaceRoot, fromCwd: true);
                 string canonicalDbPath = Path.Combine(canonicalRoot, ".miller", "symbols.db");
                 string stableWorkspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot);
+                string millerDir = Path.GetDirectoryName(canonicalDbPath)!;
+                Directory.CreateDirectory(millerDir);
 
                 // Locate the pinned julie-extract under the tools root (NOT the repo cwd). Absent → fail loudly
                 // (FileNotFoundException carrying the restore-script message) — Miller cannot index without it.

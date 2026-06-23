@@ -57,9 +57,9 @@ Miller serves an always-fresh index of this workspace's code. Reach for a Miller
   languages: framework facts, language facts, SQL DDL, and JSON/YAML/TOML/Markdown structure. Run `patterns()` first
   to see emitted ids. This is not raw AST query execution. Use `operation=list|summary|search`, `pattern_id`,
   `where=key=value`, `path`, and `language`. Optional `workspace_id` and `ensure_fresh` work for registered workspaces.
-- `workspace` — Index lifecycle: `status`, `health`, `refresh`, `full`, `list`, `open`, `remove`, `dashboard`
-  (start/reuse the loopback dashboard). `status`, `health`, `refresh`, `full`, and `remove` accept `workspace_id`
-  or `path`; `list` shows the registry.
+- `workspace` — Index lifecycle: `status`, `health`, `onboarding`, `refresh`, `full`, `list`, `open`, `remove`,
+  `dashboard` (start/reuse the loopback dashboard). `status`, `health`, `onboarding`, `refresh`, `full`, and
+  `remove` accept `workspace_id` or `path`; `list` shows the registry.
 
 ## Workflows
 
@@ -92,6 +92,8 @@ Miller serves an always-fresh index of this workspace's code. Reach for a Miller
 - **Index looks stale**: `workspace refresh` (or `workspace full` to force a clean rebuild).
 - **Check index trust/readiness**: `workspace health` — reports stale/missing sidecars, parse diagnostics,
   capability gaps, skipped content, and recent telemetry outcomes without hydrating the full graph.
+- **Start work in an indexed repo**: `workspace onboarding` — summarizes local tool telemetry into likely starter
+  commands, hot targets, common misses, and privacy-safe guidance for this repo.
 - **Need another repo**: `workspace list`; if registered, pass display ID, unique prefix, full ID, or root path as
   `workspace_id` to code tools. If absent, run `workspace operation=open path=/absolute/repo`, then retry.
   `workspace_id=all` is only for `content search` text audits, not code read tools.
@@ -113,7 +115,7 @@ code, paste this block into the prompt:
     - todos(markers?, file_pattern?, language?) for TODO/FIXME/HACK/XXX comment audits.
     - content(import|add_markdown|search|read|list|remove|export, ...) for logs, CI, web markdown, external text, and audits; use workspace_id=all for registered-workspace text audits and bounded reads only.
     - patterns(operation?, pattern_id?, where?, path?, language?) for extractor-recognized code-shape facts.
-    - workspace(status|health|refresh|full|list|open|remove|dashboard) for readiness, refresh, other repos, or dashboard with operation=dashboard.
+    - workspace(status|health|onboarding|refresh|full|list|open|remove|dashboard) for readiness, refresh, other repos, onboarding, or dashboard with operation=dashboard.
     Do NOT fall back to Glob/Read/Grep chains when a Miller tool fits. Miller returns targeted context in 1-2 calls.
 
 Do not use `grep`/`find`/`rg` when a Miller tool fits. Do not read a whole file before `inspect`. Do not chain

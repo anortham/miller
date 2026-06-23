@@ -1,4 +1,6 @@
 using Microsoft.Data.Sqlite;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Miller.Indexing;
 using Miller.Server;
@@ -302,6 +304,7 @@ public sealed class CliDispatchTests : IDisposable
             .ToArray();
         Assert.Contains("workspace status --json", commands);
         Assert.Contains("workspace health --json", commands);
+        Assert.Contains("workspace onboarding --json", commands);
         Assert.Contains("workspace refresh --json", commands);
         Assert.Contains("refresh --json --wait", commands);
         Assert.Contains("content export", commands);
@@ -310,6 +313,7 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Contains("impact --json", commands);
         Assert.Contains("trace --json", commands);
         Assert.Contains("patterns --json", commands);
+        Assert.Contains("references export --jsonl", commands);
 
         JsonElement traceContract = Assert.Single(
             root.GetProperty("json_contracts").EnumerateArray(),
@@ -323,6 +327,24 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Equal("patterns --json", patternsContract.GetProperty("command").GetString());
         Assert.Equal(1, patternsContract.GetProperty("schema_version").GetInt32());
 
+        JsonElement workspaceStatusContract = Assert.Single(
+            root.GetProperty("json_contracts").EnumerateArray(),
+            item => item.GetProperty("name").GetString() == "workspace_status");
+        Assert.Equal("workspace status --json", workspaceStatusContract.GetProperty("command").GetString());
+        Assert.Equal(1, workspaceStatusContract.GetProperty("schema_version").GetInt32());
+
+        JsonElement workspaceOnboardingContract = Assert.Single(
+            root.GetProperty("json_contracts").EnumerateArray(),
+            item => item.GetProperty("name").GetString() == "workspace_onboarding");
+        Assert.Equal("workspace onboarding --json", workspaceOnboardingContract.GetProperty("command").GetString());
+        Assert.Equal(1, workspaceOnboardingContract.GetProperty("schema_version").GetInt32());
+
+        JsonElement refreshWaitContract = Assert.Single(
+            root.GetProperty("json_contracts").EnumerateArray(),
+            item => item.GetProperty("name").GetString() == "refresh_wait");
+        Assert.Equal("refresh --json --wait", refreshWaitContract.GetProperty("command").GetString());
+        Assert.Equal(1, refreshWaitContract.GetProperty("schema_version").GetInt32());
+
         JsonElement[] exports = root.GetProperty("supported_export_formats").EnumerateArray().ToArray();
         JsonElement export = Assert.Single(exports, item => item.GetProperty("name").GetString() == "content_corpus");
         Assert.Equal("jsonl", export.GetProperty("format").GetString());
@@ -334,6 +356,10 @@ public sealed class CliDispatchTests : IDisposable
         JsonElement telemetryExport = Assert.Single(exports, item => item.GetProperty("name").GetString() == "telemetry");
         Assert.Equal("miller telemetry export --jsonl", telemetryExport.GetProperty("command").GetString());
         Assert.Equal("jsonl", telemetryExport.GetProperty("format").GetString());
+
+        JsonElement referencesExport = Assert.Single(exports, item => item.GetProperty("name").GetString() == "references");
+        Assert.Equal("miller references export --jsonl", referencesExport.GetProperty("command").GetString());
+        Assert.Equal("jsonl", referencesExport.GetProperty("format").GetString());
     }
 
     [Fact]
@@ -987,6 +1013,52 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void References_Export_EmitsOneJsonlRowPerIdentifier()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        MarkSymbolAsTest(fx.DbPath, "5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c00");
+        SetIdentifierTarget(fx.DbPath, "d100000000000000000000000000000c", JulieDbFixture.TotalMethodId);
+
+        var (code, outText, errText) = Run(
+            new[] { "references", "export", "--jsonl" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        string[] lines = outText.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(4, lines.Length);
+        JsonElement call = lines
+            .Select(line => JsonDocument.Parse(line).RootElement.Clone())
+            .Single(row => row.GetProperty("identifier_id").GetString() == "d100000000000000000000000000000c");
+        Assert.Equal(1, call.GetProperty("schema_version").GetInt32());
+        Assert.Equal("Total", call.GetProperty("name").GetString());
+        Assert.Equal("call", call.GetProperty("reference_kind").GetString());
+        Assert.Equal("csharp", call.GetProperty("language").GetString());
+        Assert.Equal("billing/Invoice.cs", call.GetProperty("path").GetString());
+        Assert.Equal(3, call.GetProperty("start_line").GetInt64());
+        Assert.Equal(71, call.GetProperty("start_byte").GetInt64());
+        Assert.Equal(76, call.GetProperty("end_byte").GetInt64());
+        Assert.Equal("5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c00", call.GetProperty("source_symbol_id").GetString());
+        Assert.Equal("Sum", call.GetProperty("source_symbol_name").GetString());
+        Assert.Equal("method", call.GetProperty("source_symbol_kind").GetString());
+        Assert.True(call.GetProperty("source_symbol_is_test").GetBoolean());
+        Assert.Equal(JulieDbFixture.TotalMethodId, call.GetProperty("target_symbol_id").GetString());
+        Assert.Equal("Total", call.GetProperty("target_symbol_name").GetString());
+        Assert.Equal("method", call.GetProperty("target_symbol_kind").GetString());
+        Assert.False(call.GetProperty("target_symbol_is_test").GetBoolean());
+        Assert.Equal("resolved", call.GetProperty("resolution_status").GetString());
+        Assert.Equal("artifact-ws-edit-001", call.GetProperty("artifact_id").GetString());
+        Assert.Equal(JsonValueKind.Null, call.GetProperty("workspace_revision").ValueKind);
+        Assert.Equal(JsonValueKind.Null, call.GetProperty("metadata_json").ValueKind);
+
+        JsonElement unresolved = lines
+            .Select(line => JsonDocument.Parse(line).RootElement.Clone())
+            .Single(row => row.GetProperty("identifier_id").GetString() == "d100000000000000000000000000000d");
+        Assert.Equal(JsonValueKind.Null, unresolved.GetProperty("target_symbol_id").ValueKind);
+        Assert.Equal("unresolved", unresolved.GetProperty("resolution_status").GetString());
+    }
+
+    [Fact]
     public void Complexity_Export_EmitsMetricRows()
     {
         using var fx = JulieDbFixture.CreateForInspect();
@@ -1028,6 +1100,37 @@ public sealed class CliDispatchTests : IDisposable
         using var cmd = connection.CreateCommand();
         cmd.CommandText = "UPDATE symbols SET body_hash = $hash WHERE symbol_id = $id;";
         cmd.Parameters.AddWithValue("$hash", bodyHash);
+        cmd.Parameters.AddWithValue("$id", symbolId);
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void SetIdentifierTarget(string dbPath, string identifierId, string targetSymbolId)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "UPDATE identifiers SET target_symbol_id = $target WHERE identifier_id = $id;";
+        cmd.Parameters.AddWithValue("$target", targetSymbolId);
+        cmd.Parameters.AddWithValue("$id", identifierId);
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void MarkSymbolAsTest(string dbPath, string symbolId)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "UPDATE symbols SET is_test = 1 WHERE symbol_id = $id;";
         cmd.Parameters.AddWithValue("$id", symbolId);
         cmd.ExecuteNonQuery();
     }
@@ -1810,6 +1913,34 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void WorkspaceOnboarding_Json_RendersRegisteredWorkspaceTelemetryGuidance()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        SeedRegisteredWorkspace("target-ws", "target-111111111111", fx.WorkspaceRoot, fx.DbPath);
+        WorkspaceContext ctx = Context(Path.Combine(_dir, "current", ".miller", "symbols.db"));
+        SeedOnboardingTelemetry(ctx.TelemetryDbPath, "target-ws", fx.WorkspaceRoot);
+
+        var (code, outText, errText) = Run(
+            new[] { "workspace", "onboarding", "--id", "target-ws", "--json" },
+            ctx);
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        JsonElement root = doc.RootElement;
+        Assert.Equal("onboarding", root.GetProperty("operation").GetString());
+        Assert.Equal("target-ws", root.GetProperty("workspace").GetProperty("workspace_id").GetString());
+        Assert.Equal("ready", root.GetProperty("telemetry").GetProperty("state").GetString());
+        Assert.Contains(root.GetProperty("start_here").EnumerateArray(),
+            item => item.GetString()!.Contains("search", StringComparison.OrdinalIgnoreCase));
+        JsonElement hotTarget = Assert.Single(root.GetProperty("hot_targets").EnumerateArray());
+        Assert.Equal("GetUser", hotTarget.GetProperty("name").GetString());
+        Assert.Equal("auth/UserService.cs", hotTarget.GetProperty("path").GetString());
+        JsonElement miss = Assert.Single(root.GetProperty("common_misses").EnumerateArray());
+        Assert.Equal("no_symbol_hits", miss.GetProperty("reason").GetString());
+    }
+
+    [Fact]
     public void WorkspaceStatus_WorkspaceIdAlias_RendersRegisteredWorkspace()
     {
         using var fx = JulieDbFixture.CreateDefault();
@@ -2244,6 +2375,52 @@ public sealed class CliDispatchTests : IDisposable
         registry.UpsertSeen(workspaceId, displayId, root, dbPath, WorkspaceRegistryState.Ready);
         registry.MarkScanned(workspaceId, revision: 1);
     }
+
+    private static void SeedOnboardingTelemetry(string telemetryDbPath, string workspaceId, string workspaceRoot)
+    {
+        using var ledger = TelemetryLedger.Open(telemetryDbPath, workspaceId: null);
+        ledger.Record(TelemetryRow("search", "auto", workspaceId, workspaceRoot, "ok", 100, 3, Hash("GetUser")));
+        ledger.Record(TelemetryRow("inspect", "summary", workspaceId, workspaceRoot, "ok", 40, 1, Hash("GetUser")));
+        ledger.Record(TelemetryRow(
+            "search",
+            "auto",
+            workspaceId,
+            workspaceRoot,
+            "empty",
+            30,
+            0,
+            targetHash: null,
+            metadataJson: """{"empty_reason":"no_symbol_hits"}"""));
+    }
+
+    private static TelemetryRecord TelemetryRow(
+        string tool,
+        string? op,
+        string workspaceId,
+        string workspaceRoot,
+        string outcome,
+        long durationMs,
+        int resultCount,
+        string? targetHash,
+        string metadataJson = "{}") => new(
+            Tool: tool,
+            Op: op,
+            WorkspaceId: workspaceId,
+            WorkspaceRoot: workspaceRoot,
+            DurationMs: durationMs,
+            Outcome: outcome,
+            ErrorKind: null,
+            ResultCount: resultCount,
+            BytesExamined: 0,
+            BytesReturned: 100,
+            SourceBytes: 0,
+            EstTokens: 25,
+            IndexFresh: true,
+            TargetHash: targetHash,
+            MetadataJson: metadataJson);
+
+    private static string Hash(string raw) =>
+        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(raw)));
 
     private static void SeedHealthRows(string dbPath)
     {

@@ -158,6 +158,34 @@ public sealed class FullRebuildPromotionTests : IDisposable
         Assert.Equal("after-rebuild", ReadMarker(DbPath));
     }
 
+    [Fact]
+    public void RetryOptions_DefaultForEnvironment_UsesPositiveTimeoutOverride()
+    {
+        FileOperationRetryOptions options = FileOperationRetryOptions.DefaultForEnvironment(
+            name => name == FileOperationRetryOptions.PromoteRetryTimeoutEnvironmentVariable
+                ? "00:00:42"
+                : null);
+
+        Assert.Equal(TimeSpan.FromSeconds(42), options.Timeout);
+        Assert.Equal(TimeSpan.FromMilliseconds(20), options.InitialDelay);
+        Assert.Equal(TimeSpan.FromMilliseconds(500), options.MaxDelay);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("0")]
+    [InlineData("-00:00:01")]
+    [InlineData("not-a-timespan")]
+    public void RetryOptions_DefaultForEnvironment_IgnoresInvalidTimeoutOverride(string? value)
+    {
+        FileOperationRetryOptions options = FileOperationRetryOptions.DefaultForEnvironment(
+            name => name == FileOperationRetryOptions.PromoteRetryTimeoutEnvironmentVariable
+                ? value
+                : null);
+
+        Assert.Equal(TimeSpan.FromSeconds(10), options.Timeout);
+    }
+
     private static SqliteConnection OpenReadWriteCreate(string dbPath)
     {
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder

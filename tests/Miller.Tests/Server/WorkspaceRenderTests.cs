@@ -67,6 +67,50 @@ public sealed class WorkspaceRenderTests
             new FileStatusGroup("csharp", "indexed", 1),
         }));
 
+    private static WorkspaceOnboardingFacts OnboardingFacts() =>
+        WorkspaceOnboardingFacts.Create(
+            Facts(),
+            new TelemetryOnboardingFacts(
+                Available: true,
+                State: "ready",
+                TotalCalls: 4,
+                WindowStartTs: "2026-06-23T10:00:00.000Z",
+                WindowEndTs: "2026-06-23T10:04:00.000Z",
+                ToolMix:
+                [
+                    new TelemetryToolMix("search", "auto", 2, 1, 1, 0, 67.5, 100, 100, 3, 720, 110),
+                    new TelemetryToolMix("inspect", "summary", 1, 1, 0, 0, 40, 40, 40, 1, 300, 45),
+                    new TelemetryToolMix("context", null, 1, 1, 0, 0, 900, 900, 900, 5, 3000, 700),
+                ],
+                SuccessfulFlows:
+                [
+                    new TelemetryFlow("search:auto", "inspect:summary", 1),
+                ],
+                TargetHashes:
+                [
+                    new TargetHashFrequency("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 2),
+                ],
+                CommonMisses:
+                [
+                    new TelemetryMiss("search", "auto", "no_symbol_hits", 1),
+                ],
+                Friction:
+                [
+                    new TelemetryFriction("context", null, 1, 900, 900, 900, 3000, 700, 0, 0),
+                ],
+                Error: null),
+            [
+                new RecoveredTargetHash(
+                    "symbol_name_hash",
+                    SymbolId: "sym-1",
+                    Name: "GetUser",
+                    Kind: "method",
+                    Path: "auth/UserService.cs",
+                    StartLine: 2,
+                    Calls: 2,
+                    CandidateCount: 1),
+            ]);
+
     // ---- status ----
 
     [Fact]
@@ -135,6 +179,56 @@ public sealed class WorkspaceRenderTests
         string text = WorkspaceRender.Status(Facts() with { IsLeader = false }, Telemetry, json: false);
 
         Assert.Contains("[reader]", text);
+    }
+
+    // ---- onboarding ----
+
+    [Fact]
+    public void Onboarding_Compact_RendersTelemetryGuidanceWithoutRawHashes()
+    {
+        string text = WorkspaceRender.Onboarding(OnboardingFacts(), json: false);
+
+        Assert.Contains("# workspace onboarding", text);
+        Assert.Contains("start here:", text);
+        Assert.Contains("search:auto -> inspect:summary", text);
+        Assert.Contains("GetUser", text);
+        Assert.Contains("auth/UserService.cs", text);
+        Assert.Contains("no_symbol_hits", text);
+        Assert.Contains("raw queries and targets are not stored", text);
+        Assert.DoesNotContain("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", text);
+    }
+
+    [Fact]
+    public void Onboarding_Json_RendersStableSections()
+    {
+        using var doc = JsonDocument.Parse(WorkspaceRender.Onboarding(OnboardingFacts(), json: true));
+
+        Assert.Equal("onboarding", doc.RootElement.GetProperty("operation").GetString());
+        Assert.Equal("ready", doc.RootElement.GetProperty("telemetry").GetProperty("state").GetString());
+        Assert.Equal(4, doc.RootElement.GetProperty("telemetry").GetProperty("total_calls").GetInt64());
+        Assert.NotEmpty(doc.RootElement.GetProperty("start_here").EnumerateArray());
+        Assert.NotEmpty(doc.RootElement.GetProperty("tool_mix").EnumerateArray());
+        JsonElement target = Assert.Single(doc.RootElement.GetProperty("hot_targets").EnumerateArray());
+        Assert.Equal("symbol_name_hash", target.GetProperty("confidence").GetString());
+        Assert.Equal("GetUser", target.GetProperty("name").GetString());
+        Assert.False(doc.RootElement.GetProperty("privacy").GetProperty("raw_targets_stored").GetBoolean());
+    }
+
+    [Fact]
+    public void Onboarding_NoTelemetry_StillRendersGenericStarterGuidance()
+    {
+        WorkspaceOnboardingFacts facts = WorkspaceOnboardingFacts.Create(
+            Facts(),
+            TelemetryOnboardingFacts.Unavailable("missing_telemetry_db"),
+            []);
+
+        string text = WorkspaceRender.Onboarding(facts, json: false);
+
+        Assert.Contains("workspace health", text);
+        Assert.Contains("search to find candidate symbols", text);
+        Assert.Contains("use context", text);
+        Assert.Contains("use impact before refactors", text);
+        Assert.Contains("telemetry is unavailable", text);
     }
 
     [Fact]

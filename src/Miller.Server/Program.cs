@@ -38,7 +38,7 @@ var workspacePath = Environment.CurrentDirectory;
 // '~' must not get so much as a .miller/logs dir written there, let alone a full julie scan of the home/system
 // tree. This runs BEFORE the logs dir is created and before the host is built, so a misconfigured launch fails
 // loudly on stderr (the MCP client sees the connect error + this message) instead of indexing the world.
-Miller.Server.Tools.WorkspaceRootSafety.RejectSensitiveRoot(workspacePath, fromCwd: true);
+Miller.Server.Tools.WorkspaceRootSafety.CanonicalizeAndRejectSensitiveRoot(workspacePath, fromCwd: true);
 
 var logsPath = Path.Combine(workspacePath, ".miller", "logs");
 Directory.CreateDirectory(logsPath);

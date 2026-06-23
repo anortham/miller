@@ -37,12 +37,13 @@ Current `json_commands` include:
 
 | Command | Purpose |
 |---|---|
-| `workspace status --json` | Workspace identity, index DB path, revision/freshness facts, sidecar facts, and telemetry summary. |
+| `workspace status --json` | Workspace identity, index DB path, revision/freshness facts, sidecar facts, and telemetry summary. See [`workspace-status-v1.md`](workspace-status-v1.md). |
 | `workspace health --json` | Workspace readiness verdict, warnings/actions, sidecar state, extraction-quality aggregates, and telemetry outcome counts. See [`workspace-health-v1.md`](workspace-health-v1.md). |
+| `workspace onboarding --json` | Privacy-safe startup guidance derived from local Miller telemetry: starter commands, hot current-index targets, common misses, and friction. See [`workspace-onboarding-v1.md`](workspace-onboarding-v1.md). |
 | `workspace list --json` | Registered workspaces from `~/.miller/workspaces.db`. |
 | `workspace refresh --json` | Incremental convergence result for a registered workspace. |
 | `workspace full --json` | Forced full re-index result for a registered workspace. |
-| `refresh --json --wait` | Eros-friendly top-level alias for registered-workspace convergence. Accepts `--workspace-id`, `--workspace`, and `--full`; returns after the synchronous refresh attempt. |
+| `refresh --json --wait` | Eros-friendly top-level alias for registered-workspace convergence. Accepts `--workspace-id`, `--workspace`, and `--full`; returns after the synchronous refresh attempt. See [`refresh-wait-v1.md`](refresh-wait-v1.md). |
 | `workspace open --json` | Register and index a workspace from the CLI. |
 | `workspace remove --json` | Delete a workspace `.miller` index directory and unregister it. |
 | `search --json` | Symbol/default search or explicit content/source/external/web/all-text search results. |
@@ -60,6 +61,7 @@ Current `json_commands` include:
 | `content remove --json` | Remove imported external/web content. |
 | `telemetry export --jsonl` | Export raw Miller telemetry rows for Eros dashboard/history ingestion. |
 | `symbols export --jsonl` | Bulk-export one row per symbol for fleet rollups (counts, kinds, doc coverage, clones). |
+| `references export --jsonl` | Bulk-export one row per identifier/reference usage fact for dead-code candidate workflows. |
 | `complexity export --jsonl` | Bulk-export per-symbol/per-file complexity metric rows for fleet hotspot ranking. |
 | `dashboard --json` | Start/reuse the local dashboard helper and return its URL. |
 | `capabilities --json` | Discover this contract surface. |
@@ -90,6 +92,10 @@ post-refresh artifact facts when available:
 
 `--wait` is a contract flag. The Miller CLI refresh path is already synchronous: it returns only after the
 lock-holding refresh attempt converges, observes another writer, or reports an operational failure.
+
+`workspace onboarding --json` is read-only. It summarizes the shared telemetry ledger for the selected
+workspace and may recover repeated target hashes only by matching them against the current local index. Raw
+queries and raw targets are not stored or emitted.
 
 A `lock_busy` result exits `0` and its payload is ingestable: the latest readable DB is being served and a live
 leader owns convergence (for `full`, a leader full-scan request was enqueued). Freshness is NOT confirmed —
@@ -131,6 +137,21 @@ with the standard rebuild message. Fields (`schema_version` 1):
 - `body_hash` — nullable string; julie's normalized body hash (clone-candidate rollups).
 - `is_test` — boolean; julie's cross-language test signal (prod/test splits).
 
+`miller references export --jsonl [--workspace-id SELECTOR] [--workspace DIR]` emits one JSON line per
+`identifiers` row, ordered `(path, start_byte, identifier_id)`. This is a fact feed for Eros dead-code and
+usage workflows, not a Miller ranking/workflow surface. See [`references-export-v1.md`](references-export-v1.md)
+for field-level guarantees. Fields (`schema_version` 1):
+
+- `identifier_id` — julie's identifier-row ID; this is the source fact ID.
+- `name`, `reference_kind`, `language`, `path` — identifier identity and file location.
+- `start_line`, `end_line`, `start_column`, `end_column`, `start_byte`, `end_byte` — exact occurrence span.
+- `source_symbol_id`, `source_symbol_name`, `source_symbol_kind`, `source_symbol_is_test` — nullable enclosing
+  symbol facts from `identifiers.containing_symbol_id`.
+- `target_symbol_id`, `target_symbol_name`, `target_symbol_kind`, `target_symbol_is_test` — nullable resolved
+  target facts when the artifact has `identifiers.target_symbol_id`.
+- `resolution_status` — `unresolved`, `resolved`, or `dangling_target`.
+- `confidence`, `metadata_json`, `artifact_id`, `workspace_revision`.
+
 `miller complexity export --jsonl [--workspace-id SELECTOR] [--workspace DIR]` emits one JSON line per
 `complexity_metrics` row (file-scope and symbol-scope; emitted broadly since julie-extract 2.3.0), ordered
 `(path, start_byte, complexity_metric_id)`. Fields (`schema_version` 1):
@@ -143,17 +164,17 @@ with the standard rebuild message. Fields (`schema_version` 1):
 
 ## Workspace selector rules
 
-Code read commands (`search`, `todos`, `inspect`, `context`, `impact`, `trace`, `patterns`, and the `symbols`/`complexity`
-exports) target one workspace per call. Their `--workspace-id <selector>` accepts a display ID, unique prefix,
-full workspace ID, registered root path, `current`, or `primary`. The path alias `--workspace <path>` is
-normalized before selection. A selector flag supplied without a value is a usage error (exit `2`) in every
-combination — it is never masked by the other selector flag and never falls back silently to the current
-workspace.
+Code read commands (`search`, `todos`, `inspect`, `context`, `impact`, `trace`, `patterns`, and the
+`symbols`/`references`/`complexity` exports) target one workspace per call. Their `--workspace-id <selector>`
+accepts a display ID, unique prefix, full workspace ID, registered root path, `current`, or `primary`. The path
+alias `--workspace <path>` is normalized before selection. A selector flag supplied without a value is a usage
+error (exit `2`) in every combination — it is never masked by the other selector flag and never falls back
+silently to the current workspace.
 
-The `workspace` lifecycle subcommands (`status`, `health`, `refresh`, `full`, `remove`) accept the same selector
-flags: `--workspace-id` aliases `--id`, and `--workspace <path>` (normalized against the CLI's cwd) aliases
-`--path`. A selector flag supplied without a value is a usage error (exit `2`); a command never falls back
-silently to the current workspace when a selector was attempted.
+The `workspace` lifecycle subcommands (`status`, `health`, `onboarding`, `refresh`, `full`, `remove`) accept
+the same selector flags: `--workspace-id` aliases `--id`, and `--workspace <path>` (normalized against the CLI's
+cwd) aliases `--path`. A selector flag supplied without a value is a usage error (exit `2`); a command never
+falls back silently to the current workspace when a selector was attempted.
 
 If a caller needs workspace B while running from workspace A, it should call `workspace list --json`, choose B's
 selector, and pass that selector to the read command. If B is not listed, call
@@ -211,3 +232,7 @@ result such as `workspace remove` returning `not_found` with exit code `0`.
 
 Miller should add new CLI JSON/export surfaces when Eros needs stable code facts or operations. Do not add a
 private Eros-to-Miller protocol until documented JSON, JSONL, and local artifacts are proven insufficient.
+
+The references export is intentionally narrow: Miller exports deterministic usage facts, while Eros owns
+dead-code ranking, generated/framework suppression, history, cleanup tasks, confidence views, and
+multi-workspace reporting.

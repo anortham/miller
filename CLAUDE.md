@@ -160,7 +160,9 @@ scripts/test.ps1 all
   (2026-06-11 Eros field report #2). The promote restarts julie's revision counter, so freshness/refresh
   convergence detects rebuilds by `artifact_metadata.artifact_id` changing — never by revision comparison alone
   — and `FreshnessService` must keep opening its reader per poll (a long-lived connection freezes on the
-  replaced file's old inode). Escape hatch for in-place merges: `MILLER_FULL_REBUILD_INPLACE=1`.
+  replaced file's old inode). Escape hatch for in-place merges: `MILLER_FULL_REBUILD_INPLACE=1`. If Windows
+  antivirus or held handles need longer promote retries, set `MILLER_PROMOTE_RETRY_TIMEOUT` to seconds (for
+  example `30`) or a `TimeSpan` value (for example `00:00:30`).
 - **Sensitive-root guard.** [`WorkspaceRootSafety`](src/Miller.Server/Tools/WorkspaceRootSafety.cs) refuses
   to index the home dir, a filesystem/drive root, or a system dir. It runs at the very top of `Program.cs`
   (before any filesystem touch) and in `workspace open`. Ported from julie's `root_safety.rs` — keep the

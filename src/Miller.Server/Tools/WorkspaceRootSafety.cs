@@ -1,4 +1,5 @@
 using System.Globalization;
+using Miller.Indexing;
 
 namespace Miller.Server.Tools;
 
@@ -40,6 +41,17 @@ public static class WorkspaceRootSafety
             : "Choose a project directory or pass a narrower path.";
         throw new InvalidOperationException(
             $"Refusing to use sensitive system path '{full}' as a Miller workspace root. {remedy}");
+    }
+
+    /// <summary>
+    /// Resolve <paramref name="root"/> through symlinks, reject it if the resolved path is sensitive, and return the
+    /// canonical root for callers that need to keep using the resolved form.
+    /// </summary>
+    internal static string CanonicalizeAndRejectSensitiveRoot(string root, bool fromCwd)
+    {
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(root);
+        RejectSensitiveRoot(canonicalRoot, fromCwd);
+        return canonicalRoot;
     }
 
     /// <summary>

@@ -102,6 +102,10 @@ public static class CliDispatch
                     return ArtifactExport(rest, context, stdout, stderr,
                         "miller symbols export [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]",
                         SymbolExportReader.ExportJsonLines);
+                case "references":
+                    return ArtifactExport(rest, context, stdout, stderr,
+                        "miller references export [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]",
+                        ReferenceExportReader.ExportJsonLines);
                 case "complexity":
                     return ArtifactExport(rest, context, stdout, stderr,
                         "miller complexity export [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]",
@@ -525,7 +529,7 @@ public static class CliDispatch
         return 0;
     }
 
-    // The bulk artifact JSONL feeds (`symbols export`, `complexity export`; cli-eros-v1): a fleet
+    // The bulk artifact JSONL feeds (`symbols export`, `references export`, `complexity export`; cli-eros-v1): a fleet
     // orchestrator's alternative to per-query reads or Miller-private SQLite. One subop (`export`), the
     // standard read-context selectors, and an incompatible artifact surfaces through the shared
     // IncompatibleExtractException → exit-3 mapping in Run.
@@ -767,7 +771,7 @@ public static class CliDispatch
 
     private static int Workspace(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
-        CliOptions o = CliOptions.Parse(args, "json", "full");
+        CliOptions o = CliOptions.Parse(args, "json", "full", "markdown");
         string operation = (o.Query.Length > 0 ? o.Query : "status").ToLowerInvariant();
         bool json = o.Has("json");
 
@@ -806,6 +810,8 @@ public static class CliDispatch
                 return WorkspaceStatus(ctx, id, path, json, outw, err);
             case "health":
                 return WorkspaceHealth(ctx, id, path, json, outw, err);
+            case "onboarding":
+                return WorkspaceOnboarding(ctx, id, path, json, outw, err);
             case "refresh":
                 return WorkspaceRefresh(ctx, id, path, force: false, json, outw, err);
             case "full":
@@ -815,7 +821,7 @@ public static class CliDispatch
             case "remove":
                 return WorkspaceRemove(ctx, id, path, json, outw, err);
             default:
-                err.WriteLine($"unknown workspace operation '{operation}'. Use status|health|list|refresh|full|open|remove.");
+                err.WriteLine($"unknown workspace operation '{operation}'. Use status|health|onboarding|list|refresh|full|open|remove.");
                 return 2;
         }
     }
@@ -962,6 +968,72 @@ public static class CliDispatch
                 new TelemetryHealthFacts(0, 0, 0),
                 WorkspaceHealthReader.Read(ctx.ExtractDbPath),
                 CliLeaderFacts(ctx.ExtractDbPath)),
+            json));
+        return 0;
+    }
+
+    private static int WorkspaceOnboarding(
+        WorkspaceContext ctx, string? id, string? path, bool json, TextWriter outw, TextWriter err)
+    {
+        using WorkspaceRegistry registry = WorkspaceRegistry.Open(ctx.RegistryDbPath);
+        SymbolSearchSidecar sidecar = SymbolSearchSidecar.FromEnvironment();
+        var contentSidecar = new ContentCorpusSidecar();
+
+        if (!string.IsNullOrWhiteSpace(id) || !string.IsNullOrWhiteSpace(path))
+        {
+            WorkspaceRegistryRow row;
+            try
+            {
+                row = WorkspaceRegistrySelector.Resolve(registry, (id ?? path)!);
+            }
+            catch (KeyNotFoundException ex)
+            {
+                err.WriteLine(ex.Message);
+                return 2;
+            }
+
+            WorkspaceFacts facts = WorkspaceFactsAssembler.FromRegisteredRow(
+                registry,
+                row,
+                WorkspaceRegisteredFactsProfile.CliHealth,
+                sidecar,
+                contentSidecar);
+            outw.WriteLine(WorkspaceRender.Onboarding(
+                WorkspaceOnboardingAssembler.Create(facts, ctx.TelemetryDbPath, row.WorkspaceId, row.IndexDbPath),
+                json));
+            return 0;
+        }
+
+        WorkspaceRegistryRow? currentRow = FindCurrentWorkspaceRow(registry, ctx);
+        if (currentRow is not null)
+        {
+            WorkspaceFacts facts = WorkspaceFactsAssembler.FromRegisteredRow(
+                registry,
+                currentRow,
+                WorkspaceRegisteredFactsProfile.CliHealth,
+                sidecar,
+                contentSidecar);
+            outw.WriteLine(WorkspaceRender.Onboarding(
+                WorkspaceOnboardingAssembler.Create(
+                    facts,
+                    ctx.TelemetryDbPath,
+                    currentRow.WorkspaceId,
+                    currentRow.IndexDbPath),
+                json));
+            return 0;
+        }
+
+        if (!RequireIndex(ctx, err))
+            return 3;
+
+        WorkspaceIndexFacts indexFacts = WorkspaceIndexFactsReader.Read(ctx.ExtractDbPath);
+        WorkspaceFacts localFacts = WorkspaceFactsAssembler.FromUnregisteredLocal(
+            ctx,
+            indexFacts,
+            sidecar,
+            contentSidecar);
+        outw.WriteLine(WorkspaceRender.Onboarding(
+            WorkspaceOnboardingAssembler.Create(localFacts, ctx.TelemetryDbPath, ctx.WorkspaceId, ctx.ExtractDbPath),
             json));
         return 0;
     }
@@ -1539,6 +1611,8 @@ public static class CliDispatch
                              export [--jsonl] [--workspace-id ID|all]
           symbols <op>       Bulk-export every symbol row for fleet rollups.   # JSONL
                              export [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]
+          references <op>    Bulk-export identifier/reference usage facts.   # JSONL
+                             export [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]
           complexity <op>    Bulk-export per-symbol/per-file complexity metrics.   # JSONL
                              export [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]
           refresh            Refresh a registered workspace index and return after convergence attempt.
@@ -1554,7 +1628,7 @@ public static class CliDispatch
                              [--workspace-id SELECTOR] [--workspace DIR] [--scope FILE] [--mode auto|path|refs|bridge] [--to SYMBOL] [--reference-kind KIND] [--no-definition] [--depth N] [--limit N] [--full] [--json]
           dashboard          Start or reuse the machine-global loopback dashboard.
                              [--port N] [--json]
-          workspace [op]     Index lifecycle. op = status (default) | health | list | refresh | full | open | remove.
+          workspace [op]     Index lifecycle. op = status (default) | health | onboarding | list | refresh | full | open | remove.
                              open   [--path DIR] [--full]   Register + index a directory (creates .miller/symbols.db).
                              remove (--id ID | --path DIR)  Delete a workspace's .miller index dir.
                              [--id|--workspace-id SELECTOR] [--path|--workspace DIR] [--json]
@@ -1572,6 +1646,8 @@ public static class CliDispatch
         Operations:
           status   Show the live index status + build version (the default when no op is given).
           health   Show a short workspace readiness verdict plus stable JSON with quality warnings.
+          onboarding
+                   Summarize local tool telemetry into starter guidance for an indexed repo.
           list     List every registered workspace in ~/.miller/workspaces.db.
           refresh  Incrementally refresh the index if the working tree changed.
           full     Force a full re-index (ignores the freshness check).

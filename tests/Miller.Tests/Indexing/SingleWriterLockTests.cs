@@ -134,10 +134,16 @@ public sealed class SingleWriterLockTests
     }
 
     [Fact]
-    public void IsLockContention_NonWindows_KeepsHistoricalIOExceptionAsBusy()
+    public void IsLockContention_NonWindows_OnlyLockUnavailableErrorsAreBusy()
     {
         Assert.True(SingleWriterLock.IsLockContentionForTest(
-            new IOExceptionWithHResult(unchecked((int)0x80131620)), isWindows: false));
+            new IOExceptionWithHResult(11), isWindows: false)); // Linux EAGAIN/EWOULDBLOCK
+        Assert.True(SingleWriterLock.IsLockContentionForTest(
+            new IOExceptionWithHResult(35), isWindows: false)); // macOS EAGAIN/EWOULDBLOCK
+        Assert.False(SingleWriterLock.IsLockContentionForTest(
+            new IOExceptionWithHResult(28), isWindows: false)); // ENOSPC
+        Assert.False(SingleWriterLock.IsLockContentionForTest(
+            new IOExceptionWithHResult(unchecked((int)0x80131620)), isWindows: false)); // generic IOException
     }
 
     [Fact]

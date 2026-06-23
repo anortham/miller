@@ -127,15 +127,15 @@ public sealed class WorkspaceTool
     [McpServerTool(Name = "workspace")]
     [Description(
         "Manage the workspace index. Defaults to status. Use refresh to update stale files, full to rebuild " +
-        "from scratch, list to see registered workspaces, health for readiness, and operation=dashboard for " +
-        "dashboard/start/open/show requests.")]
+        "from scratch, list to see registered workspaces, health for readiness, onboarding for telemetry-derived " +
+        "startup guidance, and operation=dashboard for dashboard/start/open/show requests.")]
     public string Workspace(
-        [Description("status|refresh|full|list|open|remove|health|dashboard. Default status.")] string operation = "status",
+        [Description("status|refresh|full|list|open|remove|health|onboarding|dashboard. Default status.")] string operation = "status",
         [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")]
         string? workspace_id = null,
-        [Description("A workspace root path. Required for open; optional for status/refresh/full/remove.")]
+        [Description("A workspace root path. Required for open; optional for status/health/onboarding/refresh/full/remove.")]
         string? path = null,
-        [Description("Output format: compact|json. Default compact.")] string format = "compact",
+        [Description("Output format: compact|json|markdown. Default compact.")] string format = "compact",
         [Description("Dashboard launch port. Used only with operation=dashboard when no dashboard is already running.")]
         int? port = null)
     {
@@ -181,6 +181,8 @@ public sealed class WorkspaceTool
                 return RenderTargetStatus(workspaceId, path, json);
             case "health":
                 return RenderTargetHealth(workspaceId, path, json);
+            case "onboarding":
+                return RenderTargetOnboarding(workspaceId, path, json);
             case "list":
                 return (RenderRegistryList(json), _registry.List().Count, TelemetryOutcome.Ok);
             case "refresh":
@@ -213,6 +215,17 @@ public sealed class WorkspaceTool
             WorkspaceHealthReader.Read(_workspace.ExtractDbPath),
             ReadLeaderFacts(_workspace.ExtractDbPath, ownWorkspace: true));
         return WorkspaceRender.Health(health, json);
+    }
+
+    private string RenderOnboarding(bool json)
+    {
+        WorkspaceFacts facts = AssembleFacts();
+        WorkspaceOnboardingFacts onboarding = WorkspaceOnboardingAssembler.Create(
+            facts,
+            _ledger.DbPath,
+            facts.WorkspaceId,
+            facts.DbPath);
+        return WorkspaceRender.Onboarding(onboarding, json);
     }
 
     // Leader facts enriched with the version-aware-leadership view (D6): the recorded identity + liveness, this
@@ -304,6 +317,36 @@ public sealed class WorkspaceTool
             extraction,
             ReadLeaderFacts(row.IndexDbPath, ownWorkspace: false));
         return (WorkspaceRender.Health(health, json), 1, TelemetryOutcome.Ok);
+    }
+
+    private (string output, int resultCount, TelemetryOutcome outcome) RenderTargetOnboarding(
+        string? workspaceId, string? path, bool json)
+    {
+        TargetWorkspace target = ResolveTarget(workspaceId, path);
+        if (target.UnknownNote is { } note)
+            return (Note(note, json), 0, TelemetryOutcome.Empty);
+
+        if (target.IsCurrent)
+            return (RenderOnboarding(json), 1, TelemetryOutcome.Ok);
+
+        WorkspaceRegistryRow row = target.Row
+            ?? throw new InvalidOperationException($"Workspace registry row '{target.WorkspaceId}' was not resolved.");
+        VerifyRegisteredRoot(row);
+        WorkspaceFacts statusFacts = WorkspaceFactsAssembler.FromRegisteredRow(
+            _registry,
+            row,
+            WorkspaceRegisteredFactsProfile.McpHealth,
+            _sidecar,
+            _contentSidecar);
+        WorkspaceOnboardingFacts onboarding = WorkspaceOnboardingAssembler.Create(
+            statusFacts,
+            _ledger.DbPath,
+            row.WorkspaceId,
+            row.IndexDbPath);
+        TelemetryOutcome outcome = onboarding.Telemetry.TotalCalls == 0
+            ? TelemetryOutcome.Empty
+            : TelemetryOutcome.Ok;
+        return (WorkspaceRender.Onboarding(onboarding, json), 1, outcome);
     }
 
     private string RenderRegistryList(bool json)
@@ -786,7 +829,7 @@ public sealed class WorkspaceTool
             "remove" => "workspace remove requires a path: workspace(operation=\"remove\", path=\"/repo\"). " +
                         "It deletes that path's .miller index dir (the live workspace is refused).",
             _ => $"unknown workspace operation '{operation}'. " +
-                 "Use status|refresh|full|list|open|remove|health|dashboard (default status).",
+                 "Use status|refresh|full|list|open|remove|health|onboarding|dashboard (default status).",
         };
         return json ? ServerJson.Note(message) : message;
     }
