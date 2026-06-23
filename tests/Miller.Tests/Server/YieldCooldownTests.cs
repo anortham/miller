@@ -60,7 +60,7 @@ public sealed class YieldCooldownTests
     {
         var now = new DateTimeOffset(2026, 6, 11, 12, 0, 0, TimeSpan.Zero);
         int probedPid = 0;
-        var cooldown = new YieldCooldown(() => now, pid =>
+        var cooldown = new YieldCooldown(() => now, (pid, _) =>
         {
             probedPid = pid;
             return true;
@@ -69,6 +69,24 @@ public sealed class YieldCooldownTests
         cooldown.Begin(777);
         Assert.True(cooldown.SuppressesClaim());
         Assert.Equal(777, probedPid);
+    }
+
+    [Fact]
+    public void SuppressesClaim_UsesRequesterObservedTime_ForPidReuseGuard()
+    {
+        var now = new DateTimeOffset(2026, 6, 11, 12, 0, 0, TimeSpan.Zero);
+        var requesterObserved = now.AddSeconds(-2);
+        DateTimeOffset? probedObserved = null;
+        var cooldown = new YieldCooldown(() => now, (_, observedAtUtc) =>
+        {
+            probedObserved = observedAtUtc;
+            return false;
+        });
+
+        cooldown.Begin(777, requesterObserved);
+
+        Assert.False(cooldown.SuppressesClaim());
+        Assert.Equal(requesterObserved, probedObserved);
     }
 
     [Fact]

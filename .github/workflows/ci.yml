@@ -103,3 +103,30 @@ jobs:
           # Keep the budget high enough for normal runner variance but low enough to catch a true runaway.
           FAST_BUDGET_SECONDS: 420
         run: ./scripts/test.ps1 fast --no-build
+
+  windows-scale-smoke:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.0
+
+      - uses: actions/setup-dotnet@v5.3.0
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore Miller.slnx
+
+      - name: Restore julie-extract (Windows)
+        shell: pwsh
+        run: ./scripts/restore-julie-extract.ps1
+
+      - name: Build (warnings are errors via Directory.Build.props)
+        run: dotnet build Miller.slnx --no-restore -c Release
+
+      - name: Test (Windows scale smoke: leadership, WAL, full rebuild)
+        shell: pwsh
+        run: >
+          dotnet test Miller.slnx --no-build -c Release
+          --filter "FullyQualifiedName~VersionAwareLeadershipScaleTests|FullyQualifiedName~MultiProcessWalTests|FullyQualifiedName~FullRebuildScanScaleTests"

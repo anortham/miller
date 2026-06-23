@@ -1,10 +1,11 @@
 # Miller trace JSON v1 contract
 
-`miller trace <target> --json` and MCP `trace(format="json")` return structured trace data for the same three
+`miller trace <target> --json` and MCP `trace(format="json")` return structured trace data for the same four
 trace modes as compact output:
 
 - `mode=auto`: bounded caller/callee neighbourhood around one symbol.
 - `mode=path`: shortest dependency path from `target` to `to`.
+- `mode=refs`: name-based identifier references for one resolved symbol.
 - `mode=bridge`: provider-scoped cross-language bridge links.
 
 Compact trace output remains the human reading surface. JSON is the stable machine surface for Eros and other
@@ -14,7 +15,7 @@ local integrations.
 
 ```json
 {
-  "mode": "auto | path | bridge",
+  "mode": "auto | path | refs | bridge",
   "target": "GetUser",
   "to": null,
   "depth": 3,
@@ -59,6 +60,31 @@ local integrations.
 - `hops`: full shortest-path hop count, or `null` when no path is available.
 - `nodes`: path symbols in order, truncated by `limit`.
 - `links`: ordered `dependency_path` links between adjacent rendered path nodes.
+
+## References mode
+
+`mode=refs` emits name-based identifier references from the extracted `identifiers` table. The result is honest
+about confidence: extractor rows currently match by identifier name, not by resolved target symbol id, so homonyms
+can appear.
+
+Mode-specific top-level fields:
+
+- `reference_kind`: normalized filter value (`call`, `variable_ref`, `type_usage`, `member_access`, or `import`),
+  or `null` when all kinds are included.
+- `include_definition`: whether the resolved definition is repeated in `nodes`.
+- `references`: rendered reference rows after filtering and `limit`.
+
+Reference row fields:
+
+- `name`: referenced identifier name.
+- `kind`: identifier/reference kind.
+- `file`: workspace-relative file path.
+- `line`: 1-based occurrence line.
+- `containing_symbol_id`: enclosing symbol id when the extractor reported one, otherwise `null`.
+- `confidence`: currently `name_based`.
+
+`resolved_target` is still the resolved symbol object. `nodes` contains the target symbol only when
+`include_definition` is true. `links` is empty because name-based reference occurrences are rows, not graph edges.
 
 ## Bridge mode
 

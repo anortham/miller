@@ -10,7 +10,7 @@ Miller serves an always-fresh index of this workspace's code. Reach for a Miller
    the whole file — it is far cheaper than a full read.
 3. **Impact before changing.** Run `impact` before a refactor to find the downstream symbols AND the tests to
    run. Prefer it over grepping for usages.
-4. **Trace to follow a thread.** Use `trace` for "who calls this?", "how does A reach B?", or a cross-language
+4. **Trace to follow a thread.** Use `trace` for "where is this referenced?", "who calls this?", "how does A reach B?", or a cross-language
    call chain — not manual file hopping.
 5. **Edit with a preview.** `edit` previews a diff and writes nothing by default; set `apply=true` only after
    the dry-run looks right.
@@ -34,11 +34,12 @@ Miller serves an always-fresh index of this workspace's code. Reach for a Miller
   `inspect`. `reference_mode=usage` adds confidence-labeled definitions, possible name-based refs, call IDs, and
   source chunks; treat `confidence=name_based` as possible, not exact. `exclude_tests=true` filters tests only in
   usage mode. Optional `workspace_id` and `ensure_fresh` route through the registry provider.
-- `trace` — Follow code. `mode=auto` (callers/callees), `mode=path` (shortest path), `mode=bridge` (TS call →
-  endpoint → DTO → entity → table). Reduced-confidence links are flagged `[verb-unknown]`/`[ambiguous]`. Use
-  `format=json` for structured nodes/links/diagnostics. Use `scope=<file>` to disambiguate duplicate names. Optional
+- `trace` — Follow code. `mode=auto` (callers/callees), `mode=refs` (name-based references, with optional
+  `reference_kind=call|variable_ref|type_usage|member_access|import`), `mode=path` (shortest path), `mode=bridge`
+  (TS call → endpoint → DTO → entity → table). Reduced-confidence links are flagged `[verb-unknown]`/`[ambiguous]`. Use
+  `format=json` for structured references/nodes/links/diagnostics. Use `scope=<file>` to disambiguate duplicate names. Optional
   `workspace_id` and `ensure_fresh` work cross-workspace. **`mode=bridge` is provider-scoped to `dotnet-web`; on
-  another stack use `mode=auto`/`mode=path`.**
+  another stack use `mode=auto`/`mode=refs`/`mode=path`.**
 - `impact` — What a change affects: downstream symbols and linked tests. Pass exactly one of `target`,
   `changed_paths`, `diff`, or `git=true` (`base` and `staged` imply git). Use before refactoring, choosing tests,
   or checking the current git diff. Optional `workspace_id` and `ensure_fresh` work for registered workspaces.
@@ -64,7 +65,7 @@ Miller serves an always-fresh index of this workspace's code. Reach for a Miller
 
 - **New task / unfamiliar area**: `context` → `inspect` the key symbols → implement.
 - **Understand a symbol**: `inspect target depth=full` (definition + refs + callers/callees + body in one call).
-- **Trace a flow**: `trace mode=auto` to fan out, `mode=path` for A→B, `mode=bridge` for `dotnet-web`
+- **Trace a flow**: `trace mode=refs` for usages, `mode=auto` to fan out, `mode=path` for A→B, `mode=bridge` for `dotnet-web`
   cross-language chains. If a name is ambiguous, retry with `scope=<file>`.
 - **Find something in docs/prose**: `search mode=content "<phrase>"` — searches markdown/config/text content and
   returns `path:line` + snippet, where symbol search would find nothing.
@@ -106,7 +107,7 @@ code, paste this block into the prompt:
     - search(query, mode?, regions?, file_pattern?, language?) before rg/grep/find; use mode=content for docs,
       mode=source/external/web/all-text for content text, regions=... for comments/strings, and filters to scope.
     - inspect(target, depth?) before reading files/symbols; depth=full adds refs/callers/callees/body.
-    - trace(target, mode?, to?, scope?) before manual caller/callee file hopping; use scope for ambiguous names.
+    - trace(target, mode?, to?, scope?, reference_kind?) before manual reference/caller/callee file hopping; use mode=refs for usages and scope for ambiguous names.
     - impact(target?|changed_paths?|diff?|git?/base?/staged?) before refactors and to choose tests.
     - edit(operation, target, ...) to preview index-aware edits (apply=true to commit).
     - todos(markers?, file_pattern?, language?) for TODO/FIXME/HACK/XXX comment audits.

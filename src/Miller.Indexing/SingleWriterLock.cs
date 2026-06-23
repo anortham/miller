@@ -52,14 +52,26 @@ public sealed class SingleWriterLock : IDisposable
             stream = new FileStream(
                 lockFilePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
         }
-        catch (IOException)
+        catch (IOException ex) when (IsLockContention(ex, OperatingSystem.IsWindows()))
         {
-            // Already held by another instance — this one stays a reader. (A genuine path/permission error
-            // would surface as UnauthorizedAccessException, which we deliberately do NOT swallow.)
+            // Already held by another instance — this one stays a reader. On Windows, only the sharing/lock
+            // violations produced by an existing holder are treated as contention; other IO failures surface.
             return null;
         }
 
         return new SingleWriterLock(stream, lockFilePath);
+    }
+
+    internal static bool IsLockContentionForTest(IOException ex, bool isWindows) =>
+        IsLockContention(ex, isWindows);
+
+    private static bool IsLockContention(IOException ex, bool isWindows)
+    {
+        if (!isWindows)
+            return true; // preserve historical POSIX behavior: a failed exclusive open means "busy".
+
+        int nativeError = ex.HResult & 0xFFFF;
+        return nativeError is 32 /* ERROR_SHARING_VIOLATION */ or 33 /* ERROR_LOCK_VIOLATION */;
     }
 
     /// <summary>

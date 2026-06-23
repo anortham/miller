@@ -5,13 +5,13 @@ namespace Miller.Server.Hosting;
 
 /// <summary>
 /// The M6 apply transaction (m6-design decision-4, Components/3, impl-order step 7): turns pure
-/// <see cref="PlannedEdit"/>s into atomic, all-or-nothing disk writes under the cross-process writer lock. The
+/// <see cref="PlannedEdit"/>s into atomic, all-or-nothing disk writes under the edit writer lock. The
 /// PLANNING is already done (the splicer produced each file's <see cref="PlannedEdit.NewContent"/>); this class
 /// is only the I/O + the transactional discipline:
 ///
 /// <list type="number">
-///   <item><b>Writer lock.</b> Acquire the leader lease (decision-1's <see cref="SingleWriterLock"/>) so only
-///   one writer mutates the tree at a time. If another instance holds it, refuse without writing.</item>
+///   <item><b>Writer lock.</b> Acquire the edit lease (<see cref="EditWriteLock"/>) so only one edit writer
+///   mutates the tree at a time. If another instance holds it, refuse without writing.</item>
 ///   <item><b>TOCTOU pre-check.</b> RE-READ every target file and confirm it still byte-equals the content the
 ///   plan was computed against (<see cref="PlannedEdit.OldContent"/>). If ANY file drifted, abort before any
 ///   write — this guards against the file changing between planning and committing, and is enforced EVEN when
@@ -24,7 +24,7 @@ namespace Miller.Server.Hosting;
 ///
 /// The writer-lock acquisition and the per-file write are injected seams so the transaction is unit-testable
 /// without a real cross-process lock or a real disk fault (the production factory binds them to
-/// <see cref="SingleWriterLock.TryAcquire"/> and an atomic temp-file move).
+/// <see cref="EditWriteLock.TryAcquire"/> and an atomic temp-file move).
 /// </summary>
 public sealed class EditApplier
 {
@@ -36,7 +36,7 @@ public sealed class EditApplier
     /// <summary>
     /// Construct over a writer-lock acquisition seam. <paramref name="acquireWriterLock"/> returns a held lease
     /// (disposed when the apply finishes) or <c>null</c> if another writer holds the lock — in which case the
-    /// apply refuses. Production binds this to <c>() =&gt; SingleWriterLock.TryAcquire(millerDir)</c>.
+    /// apply refuses. Production binds this to <c>() =&gt; EditWriteLock.TryAcquire(millerDir)</c>.
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="acquireWriterLock"/> is null.</exception>
     public EditApplier(Func<IDisposable?> acquireWriterLock)

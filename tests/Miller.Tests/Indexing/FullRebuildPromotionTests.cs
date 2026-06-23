@@ -129,6 +129,35 @@ public sealed class FullRebuildPromotionTests : IDisposable
         Assert.False(File.Exists(rebuild + "-shm"));
     }
 
+    [Fact]
+    public void Promote_RetriesTransientMoveFailuresLongEnoughForWindowsHeldHandles()
+    {
+        WriteMarkerDb(DbPath, "before-rebuild");
+        WriteMarkerDb(FullRebuildPromotion.RebuildDbPathFor(DbPath), "after-rebuild");
+
+        int moveAttempts = 0;
+        var sleeps = new List<TimeSpan>();
+        FullRebuildPromotion.Promote(
+            DbPath,
+            new FileOperationRetryOptions(
+                Timeout: TimeSpan.FromSeconds(10),
+                InitialDelay: TimeSpan.FromMilliseconds(20),
+                MaxDelay: TimeSpan.FromMilliseconds(500)),
+            sleeps.Add,
+            File.Delete,
+            (source, destination) =>
+            {
+                moveAttempts++;
+                if (moveAttempts <= 5)
+                    throw new IOException("simulated Windows sharing violation");
+                File.Move(source, destination, overwrite: true);
+            });
+
+        Assert.Equal(6, moveAttempts);
+        Assert.Equal(5, sleeps.Count);
+        Assert.Equal("after-rebuild", ReadMarker(DbPath));
+    }
+
     private static SqliteConnection OpenReadWriteCreate(string dbPath)
     {
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder

@@ -50,7 +50,7 @@ Current `json_commands` include:
 | `inspect --json` | File/symbol summary or full inspect result. |
 | `context --json` | Token-budgeted code bundle. `--reference-mode usage` adds reason/confidence-labeled usage evidence. |
 | `impact --json` | Downstream impact result for a symbol, changed paths, or diff. |
-| `trace --json` | Structured auto/path/bridge trace result. See [`trace-json-v1.md`](trace-json-v1.md). |
+| `trace --json` | Structured auto/path/refs/bridge trace result. See [`trace-json-v1.md`](trace-json-v1.md). |
 | `patterns --json` | List, summarize, and search extractor-recognized code-shape facts. See [`patterns-json-v1.md`](patterns-json-v1.md). |
 | `content import --json` | Import local external text into `content.db`. |
 | `content add-markdown --json` | Import browser/fetched markdown with URL metadata into `content.db`. |

@@ -222,6 +222,21 @@ Design choices that follow from this:
 - **Hard logic↔infrastructure seam** — `Miller.Core` has zero I/O dependencies, so the ranking and the resolver
   are unit-tested in milliseconds with no live DB, subprocess, or transport. This keeps the default test suite fast.
 
+## Replacing Julie
+
+The 1.0 replacement story is the product family, not Miller alone:
+
+- **Miller** replaces Julie's deterministic local agent-tool core: search, inspect, context, references, trace/path,
+  impact, editing, workspace lifecycle, content/web/text import, structural facts, marker audits, telemetry, and
+  JSON/JSONL feeds.
+- **`julie-extractors` / `julie-extract`** owns parser-backed extraction. Miller consumes its artifacts and ships a
+  pinned extractor for its own indexing workflow; standalone extraction workflows belong in `julie-extractors`.
+- **Eros** owns higher-level intelligence: semantic/vector retrieval, guidance, confidence/evidence views, signals
+  reports, dead-code/hotspot/clone workflows, history, and commercial orchestration.
+
+That boundary is deliberate. Miller should stay predictable and local; the product layer above it decides what the
+facts mean and what to do next.
+
 ## Project structure
 
 ```
@@ -245,7 +260,7 @@ UX such as next-action guidance, confidence/evidence views, semantic/vector retr
 
 ## The tool surface
 
-Nine MCP tools, each with smart defaults so the common path is the simplest call: `search`, `inspect`,
+Ten MCP tools, each with smart defaults so the common path is the simplest call: `search`, `todos`, `inspect`,
 `context`, `trace`, `impact`, `edit`, `content`, `patterns`, and `workspace`. Read tools accept a `workspace_id`
 selector: display ID, unique prefix, full ID, registered root path, `current`, or `primary`. Explicit `workspace_id` defaults
 `ensure_fresh=true`. Targets are smart strings, not JSON objects. See
@@ -305,6 +320,7 @@ The single `miller` binary runs two ways:
   dotnet run --project src/Miller.Server -c Release -- inspect src/Miller.Server/AgentInstructions.cs --depth full
   dotnet run --project src/Miller.Server -c Release -- context "CLI workspace routing" --token-budget 2000
   dotnet run --project src/Miller.Server -c Release -- trace AgentInstructions --depth 2
+  dotnet run --project src/Miller.Server -c Release -- trace AgentInstructions --mode refs --reference-kind call --limit 20 --json
   dotnet run --project src/Miller.Server -c Release -- impact AgentInstructions --max-depth 2
   dotnet run --project src/Miller.Server -c Release -- impact --git --base origin/main --max-depth 1
   dotnet run --project src/Miller.Server -c Release -- workspace status
@@ -511,6 +527,9 @@ Text output is a compact human-facing contract and JSON output is the integratio
 - Search result kinds are deliberately separate: symbol search ranks `name + signature`, `--mode content`
   searches docs-like file content, `--mode source|external|web|all-text` searches explicit content-corpus text,
   and `--regions` searches explicit source regions when region indexing is enabled.
+- `trace --mode refs` returns name-based identifier references for a resolved target symbol. Use
+  `--reference-kind call|variable_ref|type_usage|member_access|import` to narrow the result and `--no-definition`
+  when only reference rows are needed.
 - `todos` is a bounded marker audit over comment/doc-comment source regions. It returns marker, file:line,
   snippet, and containing symbol when available; use `--markers`, `--file-pattern`, and `--language` to scope.
 - The `content` CLI stores non-workspace text in `.miller/content.db`. Use `content import` for logs/reports

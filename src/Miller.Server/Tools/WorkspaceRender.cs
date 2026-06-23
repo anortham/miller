@@ -187,7 +187,7 @@ public static class WorkspaceRender
     /// (<c>reader (extractor outdated: own X &lt; index Y)</c>) instead of looking mysteriously idle.
     /// </summary>
     public static string Status(WorkspaceFacts facts, TelemetrySummary telemetry, bool json, LeaderHealthFacts? leader) =>
-        json ? StatusJson(facts, telemetry) : StatusCompact(facts, telemetry, leader);
+        json ? StatusJson(facts, telemetry, leader) : StatusCompact(facts, telemetry, leader);
 
     // "leader" / "reader" / "reader (extractor outdated: own X < index Y)" — the D6 role string. The outdated
     // form fires only when the verdict is ineligible AND both versions prove the downgrade direction.
@@ -324,7 +324,7 @@ public static class WorkspaceRender
         return sb.ToString();
     }
 
-    private static string StatusJson(WorkspaceFacts facts, TelemetrySummary telemetry)
+    private static string StatusJson(WorkspaceFacts facts, TelemetrySummary telemetry, LeaderHealthFacts? leader)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var w = NewWriter(buffer))
@@ -340,11 +340,15 @@ public static class WorkspaceRender
             else w.WriteString("display_id", facts.DisplayId);
             w.WriteString("db", facts.DbPath);
             w.WriteBoolean("leader", facts.IsLeader);
+            w.WriteString("role", RoleLabel(facts, leader));
             if (facts.ServerVersion is null) w.WriteNull("server_version");
             else w.WriteString("server_version", facts.ServerVersion);
             if (facts.ServerProcessId is { } pid) w.WriteNumber("server_pid", pid);
             else w.WriteNull("server_pid");
             w.WriteEndObject();
+
+            w.WritePropertyName("indexer_leader");
+            WriteLeaderJson(w, facts, leader);
 
             w.WritePropertyName("index");
             w.WriteStartObject();

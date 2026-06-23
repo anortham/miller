@@ -9,7 +9,10 @@ internal readonly record struct IndexerLeadershipClaimResult(
     IDisposable? Lease,
     LeadershipVerdict Verdict);
 
-internal readonly record struct IndexerLeadershipYieldDecision(int RequesterPid, string RequesterVersion);
+internal readonly record struct IndexerLeadershipYieldDecision(
+    int RequesterPid,
+    string RequesterVersion,
+    DateTimeOffset RequesterObservedAtUtc);
 
 internal sealed class IndexerLeadershipCoordinator
 {
@@ -39,7 +42,7 @@ internal sealed class IndexerLeadershipCoordinator
         Func<string, LeaderIdentity?> readLeaderIdentity,
         Func<LeaderIdentity, bool> leaderAliveProbe,
         Func<DateTimeOffset> clock,
-        Func<int, bool> processAliveProbe)
+        Func<int, DateTimeOffset?, bool> processAliveProbe)
     {
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(tryAcquireLeadership);
@@ -221,8 +224,14 @@ internal sealed class IndexerLeadershipCoordinator
             return null;
         }
 
-        return new IndexerLeadershipYieldDecision(result.RequesterPid, requesterVersion);
+        return new IndexerLeadershipYieldDecision(
+            result.RequesterPid,
+            requesterVersion,
+            result.RequesterObservedAtUtc ?? _clock());
     }
+
+    public void BeginCooldown(int requesterPid, DateTimeOffset requesterObservedAtUtc) =>
+        _cooldown.Begin(requesterPid, requesterObservedAtUtc);
 
     public void BeginCooldown(int requesterPid) => _cooldown.Begin(requesterPid);
 }

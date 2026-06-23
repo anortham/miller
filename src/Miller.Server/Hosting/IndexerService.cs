@@ -128,7 +128,7 @@ public sealed class IndexerService : BackgroundService
         Func<string, LeaderIdentity?>? readLeaderIdentity = null,
         Func<LeaderIdentity, bool>? leaderAliveProbe = null,
         Func<DateTimeOffset>? clock = null,
-        Func<int, bool>? processAliveProbe = null,
+        Func<int, DateTimeOffset?, bool>? processAliveProbe = null,
         Func<WorkspaceContext, IReadOnlySet<string>?>? fetchSupportedExtensions = null)
     {
         ArgumentNullException.ThrowIfNull(bootstrap);
@@ -404,7 +404,11 @@ public sealed class IndexerService : BackgroundService
 
             if (yieldDecision is { } decision)
             {
-                AbdicateLeadership(millerDir, decision.RequesterPid, decision.RequesterVersion);
+                AbdicateLeadership(
+                    millerDir,
+                    decision.RequesterPid,
+                    decision.RequesterVersion,
+                    decision.RequesterObservedAtUtc);
                 return true; // re-enter the claim loop as a reader, under the cooldown
             }
         }
@@ -434,7 +438,11 @@ public sealed class IndexerService : BackgroundService
     // D4 abdication: tear down ALL leader-only state, remove our identity, release the lease so the challenger's
     // 5s retry can win it, and arm the anti-flap cooldown toward the challenger. Mirrors the graceful step-down
     // in ExecuteAsync's finally (identity removed BEFORE the lease is released).
-    private void AbdicateLeadership(string millerDir, int requesterPid, string requesterVersion)
+    private void AbdicateLeadership(
+        string millerDir,
+        int requesterPid,
+        string requesterVersion,
+        DateTimeOffset requesterObservedAtUtc)
     {
         _logger.LogInformation(
             "Yielding indexer leadership: requester pid {RequesterPid} bundles extractor {RequesterVersion}, newer than own {OwnVersion}; " +
@@ -450,7 +458,7 @@ public sealed class IndexerService : BackgroundService
         MillerRole.SetReader();
         _lease?.Dispose();
         _lease = null;
-        _leadership.BeginCooldown(requesterPid);
+        _leadership.BeginCooldown(requesterPid, requesterObservedAtUtc);
     }
 
     private void RunStartupDeltaScan(WorkspaceContext workspace)
@@ -791,7 +799,11 @@ public sealed class IndexerService : BackgroundService
     {
         if (_leadership.EvaluateYieldRequests(millerDir, LogRequestDrainStats) is not { } decision)
             return false;
-        AbdicateLeadership(millerDir, decision.RequesterPid, decision.RequesterVersion);
+        AbdicateLeadership(
+            millerDir,
+            decision.RequesterPid,
+            decision.RequesterVersion,
+            decision.RequesterObservedAtUtc);
         return true;
     }
 

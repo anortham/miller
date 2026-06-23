@@ -722,14 +722,16 @@ public static class CliDispatch
 
     private static int Trace(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
-        CliOptions o = CliOptions.Parse(args, "full", "json");
+        CliOptions o = CliOptions.Parse(args, "full", "json", "no-definition");
         if (string.IsNullOrWhiteSpace(o.Query))
-            return Usage(err, "miller trace <symbol> [--workspace-id SELECTOR] [--workspace DIR] [--scope FILE] [--mode auto|path|bridge] [--to SYMBOL] [--depth N] [--limit N] [--full] [--json]");
+            return Usage(err, "miller trace <symbol> [--workspace-id SELECTOR] [--workspace DIR] [--scope FILE] [--mode auto|path|refs|bridge] [--to SYMBOL] [--reference-kind KIND] [--no-definition] [--depth N] [--limit N] [--full] [--json]");
         if (!TryResolveReadContext(ctx, o, err, out ctx))
             return 2;
 
         string mode = o.Value("mode", "auto")!;
         bool json = o.Has("json");
+        string? referenceKind = o.Value("reference-kind", o.Value("kind"));
+        bool includeDefinition = BoolOption(o, "include-definition", fallback: true) && !o.Has("no-definition");
         if (string.Equals(mode, "bridge", StringComparison.OrdinalIgnoreCase))
         {
             if (!TryLoadIndex(ctx, err, out MillerRepositoryIndex fullIndex))
@@ -738,7 +740,10 @@ public static class CliDispatch
             var fullResolver = new SmartTargetResolver(fullIndex);
             string bridgeOutput = TraceTool.Run(
                 fullIndex, fullResolver, target: o.Query, scope: o.Value("scope"), mode: mode, to: o.Value("to"),
-                depth: o.Int("depth", 3), limit: o.Int("limit", 20), fullFormat: o.Has("full"), json: json, out _, out _);
+                depth: o.Int("depth", 3), limit: o.Int("limit", 20), fullFormat: o.Has("full"), json: json,
+                referenceKind, includeDefinition,
+                symbol => ExtractReader.ReadReferences(ctx.ExtractDbPath, symbol.Name),
+                out _, out _);
             outw.WriteLine(bridgeOutput);
             return 0;
         }
@@ -750,7 +755,10 @@ public static class CliDispatch
         var resolver = new SmartTargetResolver(index);
         string output = TraceTool.RunGraph(
             index, graph, resolver, target: o.Query, scope: o.Value("scope"), mode: mode, to: o.Value("to"),
-            depth: o.Int("depth", 3), limit: o.Int("limit", 20), fullFormat: o.Has("full"), json: json, out _, out _);
+            depth: o.Int("depth", 3), limit: o.Int("limit", 20), fullFormat: o.Has("full"), json: json,
+            referenceKind, includeDefinition,
+            symbol => ExtractReader.ReadReferences(ctx.ExtractDbPath, symbol.Name),
+            out _, out _);
         outw.WriteLine(output);
         return 0;
     }
@@ -1475,6 +1483,28 @@ public static class CliDispatch
             : null;
     }
 
+    private static bool BoolOption(CliOptions options, string name, bool fallback)
+    {
+        if (!options.Has(name))
+            return fallback;
+
+        string? value = options.Value(name);
+        if (string.IsNullOrWhiteSpace(value))
+            return true;
+
+        if (bool.TryParse(value, out bool parsed))
+            return parsed;
+
+        return value.Trim() switch
+        {
+            "1" => true,
+            "0" => false,
+            var text when string.Equals(text, "yes", StringComparison.OrdinalIgnoreCase) => true,
+            var text when string.Equals(text, "no", StringComparison.OrdinalIgnoreCase) => false,
+            _ => fallback,
+        };
+    }
+
     private static int Usage(TextWriter err, string usage)
     {
         err.WriteLine("usage: " + usage);
@@ -1520,8 +1550,8 @@ public static class CliDispatch
           impact <input>     Downstream symbols + tests a change would affect.
                              <symbol> | --changed-paths PATH[,PATH...] | --diff DIFF | --git [--base REF] [--staged]
                              [--workspace-id SELECTOR] [--workspace DIR] [--max-depth N] [--limit N] [--json]
-          trace <symbol>     Follow callers/callees, a path, or a cross-language bridge.
-                             [--workspace-id SELECTOR] [--workspace DIR] [--scope FILE] [--mode auto|path|bridge] [--to SYMBOL] [--depth N] [--limit N] [--full] [--json]
+          trace <symbol>     Follow callers/callees, references, a path, or a cross-language bridge.
+                             [--workspace-id SELECTOR] [--workspace DIR] [--scope FILE] [--mode auto|path|refs|bridge] [--to SYMBOL] [--reference-kind KIND] [--no-definition] [--depth N] [--limit N] [--full] [--json]
           dashboard          Start or reuse the machine-global loopback dashboard.
                              [--port N] [--json]
           workspace [op]     Index lifecycle. op = status (default) | health | list | refresh | full | open | remove.

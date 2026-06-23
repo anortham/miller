@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Miller.Indexing;
+using Miller.Server.Hosting;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
 using Xunit;
@@ -159,6 +160,40 @@ public sealed class WorkspaceRenderTests
 
         // The telemetry breakdown is embedded as a nested object (the same shape TelemetryRender.Json emits).
         Assert.Equal(11, root.GetProperty("telemetry").GetProperty("total_calls").GetInt64());
+    }
+
+    [Fact]
+    public void Status_Json_IncludesIndexerLeaderFactsWhenProvided()
+    {
+        var leader = new LeaderHealthFacts(
+            new LeaderIdentity(
+                2222,
+                "0.5.8+cafe123",
+                "/cache/miller",
+                new DateTimeOffset(2026, 6, 23, 12, 0, 0, TimeSpan.Zero),
+                ExtractorVersion: "2.5.2"),
+            Alive: true,
+            OwnExtractorVersion: "2.5.1",
+            ArtifactExtractorVersion: "2.5.2",
+            OwnVerdict: LeadershipEligibility.Evaluate("2.5.1", "2.5.2", allowDowngrade: false));
+
+        using var doc = JsonDocument.Parse(WorkspaceRender.Status(
+            Facts() with { IsLeader = false },
+            TelemetrySummary.Empty,
+            json: true,
+            leader));
+        Assert.Equal(
+            "reader (extractor outdated: own 2.5.1 < index 2.5.2)",
+            doc.RootElement.GetProperty("workspace").GetProperty("role").GetString());
+        JsonElement leaderJson = doc.RootElement.GetProperty("indexer_leader");
+
+        Assert.False(leaderJson.GetProperty("this_process").GetBoolean());
+        Assert.Equal(2222, leaderJson.GetProperty("pid").GetInt32());
+        Assert.True(leaderJson.GetProperty("alive").GetBoolean());
+        Assert.Equal("2.5.2", leaderJson.GetProperty("extractor_version").GetString());
+        Assert.Equal("2.5.1", leaderJson.GetProperty("own_extractor_version").GetString());
+        Assert.Equal("2.5.2", leaderJson.GetProperty("artifact_extractor_version").GetString());
+        Assert.False(leaderJson.GetProperty("own_eligibility").GetProperty("eligible").GetBoolean());
     }
 
     [Fact]

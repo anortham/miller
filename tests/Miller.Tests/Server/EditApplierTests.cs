@@ -36,8 +36,8 @@ public sealed class EditApplierTests : IDisposable
         return path;
     }
 
-    // A no-op writer lock seam: production passes a SingleWriterLock acquisition; the unit tests pass a stub
-    // that always succeeds (the lock's cross-process semantics are covered by SingleWriterLockTests).
+    // A no-op writer lock seam: production passes an EditWriteLock acquisition; the unit tests pass a stub
+    // that always succeeds (the lock's cross-process semantics are covered by EditWriteLockTests).
     private static EditApplier NewApplier() => new(() => new NoopLease());
 
     private sealed class NoopLease : IDisposable { public void Dispose() { } }

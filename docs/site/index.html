@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Miller - Local Code Intelligence for Coding Agents</title>
-  <meta name="description" content="Miller is the free local code-intelligence core for coding agents: MCP and CLI search, inspect, context, trace, impact, edit, TODO marker audits, content search, structural patterns, workspace freshness, and telemetry.">
+  <meta name="description" content="Miller is the free local code-intelligence core for coding agents: MCP and CLI search, inspect, context, refs, trace, impact, edit, TODO marker audits, content search, structural patterns, workspace freshness, and telemetry.">
   <link rel="canonical" href="https://anortham.github.io/miller/">
 
   <meta property="og:type" content="website">
@@ -63,8 +63,9 @@
           through MCP and a matching CLI. It stays lexical, structural, daemon-light, and embedding-free.
         </p>
         <p>
-          Eros sits above Miller for higher-level guidance, semantic/vector retrieval, confidence views, and
-          commercial workflow orchestration.
+          Miller is one piece of the Julie replacement story: <code>julie-extractors</code> owns parser-backed
+          extraction, Miller owns the local deterministic agent-tool core, and Eros owns semantic retrieval,
+          guidance, signals reports, confidence views, and commercial workflow orchestration.
         </p>
       </div>
       <div class="feature-strip" aria-label="Miller product pillars">
@@ -210,7 +211,7 @@
         </article>
         <article>
           <h3>trace</h3>
-          <p>Structural call and dependency paths, including provider-scoped bridge evidence for <code>dotnet-web</code>.</p>
+          <p>Name-based references, structural call and dependency paths, and provider-scoped bridge evidence for <code>dotnet-web</code>.</p>
         </article>
         <article>
           <h3>impact</h3>
@@ -266,7 +267,7 @@
           <ul>
             <li>Claude Code and Codex plugin manifests ship in this repo.</li>
             <li>For Cursor, use a global <code>~/.cursor/mcp.json</code> entry with <code>MILLER_WORKSPACE_ROOT="${workspaceFolder}"</code>.</li>
-            <li><a href="https://github.com/anortham/miller/releases/tag/v0.3.6" target="_blank" rel="noopener">Download a release archive</a> for manual MCP setup.</li>
+            <li><a href="https://github.com/anortham/miller/releases/tag/v0.5.8" target="_blank" rel="noopener">Download a release archive</a> for manual MCP setup.</li>
             <li>Use the source checkout only for Miller development or unreleased local changes.</li>
             <li>No embeddings or semantic/vector retrieval in Miller.</li>
             <li>Source-region indexing is default-on; opt out with <code>MILLER_REGION_INDEX=0</code>.</li>
@@ -279,7 +280,7 @@
   <footer class="site-footer">
     <span>Miller</span>
     <a href="https://github.com/anortham/miller" target="_blank" rel="noopener">GitHub</a>
-    <a href="https://github.com/anortham/miller/blob/main/docs/release-notes/v0.3.6.md" target="_blank" rel="noopener">Release notes</a>
+    <a href="https://github.com/anortham/miller/blob/main/docs/release-notes/v0.5.8.md" target="_blank" rel="noopener">Release notes</a>
   </footer>
 
   <script src="script.js"></script>

@@ -1685,6 +1685,33 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void Trace_Refs_Json_UsesSymbolProjectionAndIdentifierRowsWithoutFullGraphLoad()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        SqliteFixtureMutator.DropTypeArgumentsTable(fx.DbPath);
+
+        var (code, outText, errText) = Run(
+            new[] { "trace", "GetUser", "--mode", "refs", "--reference-kind", "call", "--limit", "1", "--json" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using var doc = JsonDocument.Parse(outText);
+        JsonElement root = doc.RootElement;
+        Assert.Equal("refs", root.GetProperty("mode").GetString());
+        Assert.Equal("call", root.GetProperty("reference_kind").GetString());
+        Assert.Equal("GetUser", root.GetProperty("resolved_target").GetProperty("name").GetString());
+        Assert.Equal(1, root.GetProperty("emitted").GetInt32());
+
+        JsonElement reference = Assert.Single(root.GetProperty("references").EnumerateArray());
+        Assert.Equal("GetUser", reference.GetProperty("name").GetString());
+        Assert.Equal("call", reference.GetProperty("kind").GetString());
+        Assert.Equal("auth/Repo.cs", reference.GetProperty("file").GetString());
+        Assert.Equal(9, reference.GetProperty("line").GetInt32());
+        Assert.Equal("dd001122334455667788990a1b2c3d4e", reference.GetProperty("containing_symbol_id").GetString());
+    }
+
+    [Fact]
     public void Trace_ScopeFlag_IsAccepted()
     {
         using var fx = JulieDbFixture.CreateForInspect();

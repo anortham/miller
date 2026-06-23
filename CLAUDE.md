@@ -7,6 +7,16 @@ snippets, and explicit text search using extractor hashes/spans as freshness gua
 [README.md](README.md) for the current architecture and [docs/README.md](docs/README.md) for the
 current-vs-historical documentation map.
 
+## 1.0 replacement boundary
+
+The Julie replacement story is Miller + `julie-extractors` + Eros, not Miller alone. Miller replaces Julie's
+deterministic local agent-tool core: search, inspect, context, refs, trace/path, impact, editing, workspace
+lifecycle, content/web/text import, patterns, marker audits, telemetry, and JSON/JSONL feeds.
+`julie-extractors` / `julie-extract` owns parser-backed extraction and standalone extract workflows. Eros owns
+semantic/vector retrieval, guidance, confidence/evidence views, signals reports, dead-code/hotspot/clone workflows,
+history, and commercial orchestration. Do not add Miller surfaces merely to absorb Eros-level reports or
+`julie-extractors` extraction ownership.
+
 ## Language parity (load-bearing product rule)
 
 A feature built on `julie-extract` data (a new table/column/extraction capability) is **not done until it
@@ -117,9 +127,9 @@ scripts/test.ps1 all
 - The public site is `https://anortham.github.io/miller/`; keep README linked to it.
 - `docs/README.md` is the documentation map. Keep active contracts/current operating docs separate from historical
   design notes and dogfood evidence.
-- Release-facing README facts must come from live GitHub release data. For `v0.3.6`, the live release has four
+- Release-facing README facts must come from live GitHub release data. For `v0.5.8`, the live release has four
   platform archives plus four `.sha256` sidecars (verified in
-  [`docs/findings/2026-06-09-v0.3.6-release-verification.md`](docs/findings/2026-06-09-v0.3.6-release-verification.md)).
+  [`docs/findings/2026-06-23-v0.5.8-release-verification.md`](docs/findings/2026-06-23-v0.5.8-release-verification.md)).
 - When updating harness guidance, edit `CLAUDE.md` first, run `scripts/sync-agents.sh` or
   `scripts/sync-agents.ps1`, then confirm `cmp -s CLAUDE.md AGENTS.md`.
 

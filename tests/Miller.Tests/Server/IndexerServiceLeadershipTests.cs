@@ -113,6 +113,7 @@ public sealed class IndexerServiceLeadershipTests
         Func<LeaderIdentity, bool>? leaderAliveProbe = null,
         Func<DateTimeOffset>? clock = null,
         Func<int, bool>? processAliveProbe = null,
+        Func<int, DateTimeOffset?, bool>? processAliveProbeWithObserved = null,
         ILogger<IndexerService>? logger = null) =>
         new(
             new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance),
@@ -131,7 +132,8 @@ public sealed class IndexerServiceLeadershipTests
             readLeaderIdentity: readLeaderIdentity,
             leaderAliveProbe: leaderAliveProbe,
             clock: clock,
-            processAliveProbe: processAliveProbe);
+            processAliveProbe: processAliveProbeWithObserved
+                ?? (processAliveProbe is null ? null : (pid, _) => processAliveProbe(pid)));
 
     private static WorkspaceContext CreateWorkspace(string dir)
     {
@@ -551,6 +553,49 @@ public sealed class IndexerServiceLeadershipTests
             now += TimeSpan.FromSeconds(2); // 61s after the yield: the challenger never claimed — resume retries
             Assert.True(service.AttemptClaimForTest(dir));
             Assert.True(acquireAttempted);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void Abdication_Cooldown_ProbesRequesterAgainstYieldRequestTimestamp()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "miller-leadership-cooldown-pid-reuse-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var requesterObservedAtUtc = new DateTimeOffset(2026, 6, 11, 12, 0, 0, TimeSpan.Zero);
+            DateTimeOffset? probedObservedAtUtc = null;
+            bool acquireAttempted = false;
+            var service = NewService(
+                tryAcquireLeadership: _ =>
+                {
+                    acquireAttempted = true;
+                    return new TestLease();
+                },
+                drainYieldRequests: _ => new YieldDrainResult(
+                    true,
+                    "3.0.0",
+                    9999,
+                    requesterObservedAtUtc,
+                    0,
+                    0),
+                ownExtractorVersion: () => "2.0.0",
+                processAliveProbeWithObserved: (_, observedAtUtc) =>
+                {
+                    probedObservedAtUtc = observedAtUtc;
+                    return false;
+                });
+            service.PublishOpsForTest(new RecordingOps());
+            service.AssumeLeadershipForTest(new TestLease());
+            Assert.True(service.ProcessYieldRequestsForTest(dir));
+
+            Assert.True(service.AttemptClaimForTest(dir));
+            Assert.True(acquireAttempted);
+            Assert.Equal(requesterObservedAtUtc, probedObservedAtUtc);
         }
         finally
         {

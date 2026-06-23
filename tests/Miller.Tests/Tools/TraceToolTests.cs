@@ -13,8 +13,8 @@ using Xunit;
 namespace Miller.Tests.Tools;
 
 /// <summary>
-/// Fast/pure unit tests for the <c>trace</c> tool's <see cref="TraceTool.Run"/> core (M4 Task 10). All three modes
-/// (auto / path / bridge) plus the no-path case, the load-bearing honesty flags ([verb-unknown] / [ambiguous]),
+/// Fast/pure unit tests for the <c>trace</c> tool's <see cref="TraceTool.Run"/> core (M4 Task 10). The trace modes
+/// (auto / path / refs / bridge) plus the no-path case, the load-bearing honesty flags ([verb-unknown] / [ambiguous]),
 /// depth/limit bounds, and compact-vs-full rendering are exercised directly against in-memory fixtures — no MCP, no DI,
 /// no DB, no julie. Category!=Scale (the default fast suite).
 /// </summary>
@@ -554,6 +554,115 @@ public sealed class TraceToolTests
 
         Assert.Equal(0, emitted);
         Assert.Contains("mode=path requires 'to'", outp);
+    }
+
+    // ---------- mode: refs ----------
+
+    [Fact]
+    public void Refs_RendersDefinitionAndFilteredNameBasedReferences()
+    {
+        var index = BuildSymbolIndex(
+            new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
+            Array.Empty<(string, string)>());
+        var references = new[]
+        {
+            new SymbolRef("Alpha", "call", "src/Caller.cs", 10, "caller"),
+            new SymbolRef("Alpha", "type_usage", "src/Types.cs", 20, "types"),
+        };
+
+        string outp = TraceTool.Run(index, ResolverFor(index),
+            target: "Alpha", scope: null, mode: "refs", to: null, depth: 3, limit: 20,
+            fullFormat: false, json: false, referenceKind: "call", includeDefinition: true,
+            readReferences: _ => references,
+            out int emitted, out int visited);
+
+        Assert.Equal(1, emitted);
+        Assert.Equal(2, visited);
+        Assert.Contains("# trace refs Alpha (1 reference(s), kind=call, name-based)", outp);
+        Assert.Contains("definition:", outp);
+        Assert.Contains("Alpha  method  src/A.cs:1", outp);
+        Assert.Contains("src/Caller.cs:10  call  containing=caller", outp);
+        Assert.DoesNotContain("src/Types.cs", outp);
+    }
+
+    [Fact]
+    public void Refs_Json_RendersStructuredReferenceRows()
+    {
+        var index = BuildSymbolIndex(
+            new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
+            Array.Empty<(string, string)>());
+        var references = new[]
+        {
+            new SymbolRef("Alpha", "call", "src/Caller.cs", 10, "caller"),
+            new SymbolRef("Alpha", "type_usage", "src/Types.cs", 20, null),
+        };
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "Alpha", scope: null, mode: "refs", to: null, depth: 3, limit: 20,
+            fullFormat: false, json: true, referenceKind: null, includeDefinition: true,
+            readReferences: _ => references,
+            out int emitted, out int visited);
+
+        Assert.Equal(2, emitted);
+        Assert.Equal(2, visited);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement root = doc.RootElement;
+        Assert.Equal("refs", root.GetProperty("mode").GetString());
+        Assert.True(root.GetProperty("include_definition").GetBoolean());
+        Assert.Equal("Alpha", root.GetProperty("resolved_target").GetProperty("name").GetString());
+        Assert.Equal("Alpha", Assert.Single(root.GetProperty("nodes").EnumerateArray()).GetProperty("name").GetString());
+        Assert.Empty(root.GetProperty("links").EnumerateArray());
+
+        JsonElement[] refs = root.GetProperty("references").EnumerateArray().ToArray();
+        Assert.Equal(2, refs.Length);
+        Assert.Equal("Alpha", refs[0].GetProperty("name").GetString());
+        Assert.Equal("call", refs[0].GetProperty("kind").GetString());
+        Assert.Equal("src/Caller.cs", refs[0].GetProperty("file").GetString());
+        Assert.Equal(10, refs[0].GetProperty("line").GetInt32());
+        Assert.Equal("caller", refs[0].GetProperty("containing_symbol_id").GetString());
+        Assert.Equal("name_based", refs[0].GetProperty("confidence").GetString());
+        Assert.Equal(JsonValueKind.Null, refs[1].GetProperty("containing_symbol_id").ValueKind);
+    }
+
+    [Fact]
+    public void Refs_Json_CanOmitDefinitionNode()
+    {
+        var index = BuildSymbolIndex(
+            new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
+            Array.Empty<(string, string)>());
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "Alpha", scope: null, mode: "refs", to: null, depth: 0, limit: 20,
+            fullFormat: false, json: true, referenceKind: null, includeDefinition: false,
+            readReferences: _ => new[] { new SymbolRef("Alpha", "call", "src/Caller.cs", 10, "caller") },
+            out int emitted, out int visited);
+
+        Assert.Equal(1, emitted);
+        Assert.Equal(1, visited);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement root = doc.RootElement;
+        Assert.False(root.GetProperty("include_definition").GetBoolean());
+        Assert.Equal(1, root.GetProperty("depth").GetInt32());
+        Assert.Empty(root.GetProperty("nodes").EnumerateArray());
+        Assert.Single(root.GetProperty("references").EnumerateArray());
+    }
+
+    [Fact]
+    public void Refs_UnknownReferenceKind_RendersUsage()
+    {
+        var index = BuildSymbolIndex(
+            new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
+            Array.Empty<(string, string)>());
+
+        string outp = TraceTool.Run(index, ResolverFor(index),
+            target: "Alpha", scope: null, mode: "refs", to: null, depth: 3, limit: 20,
+            fullFormat: false, json: false, referenceKind: "definitely-not-a-kind", includeDefinition: true,
+            readReferences: _ => Array.Empty<SymbolRef>(),
+            out int emitted, out int visited);
+
+        Assert.Equal(0, emitted);
+        Assert.Equal(0, visited);
+        Assert.Contains("reference_kind must be one of", outp);
     }
 
     // ---------- mode: bridge ----------

@@ -88,6 +88,13 @@ public static partial class LeaderIdentityFile
     public static bool IsProcessAlive(int pid) => IsProcessAlive(pid, recordedAtUtc: null, probe: null);
 
     /// <summary>
+    /// Whether the process with <paramref name="pid"/> is alive and, when <paramref name="recordedAtUtc"/> is
+    /// known, old enough to be the same process that wrote the observed record.
+    /// </summary>
+    internal static bool IsProcessAlive(int pid, DateTimeOffset? recordedAtUtc) =>
+        IsProcessAlive(pid, recordedAtUtc, probe: null);
+
+    /// <summary>
     /// Whether the process that recorded <paramref name="identity"/> is still running: the pid must be alive AND
     /// must not have started significantly after the identity was recorded (pid reuse). Legacy identities without
     /// a recorded timestamp skip the reuse cross-check.

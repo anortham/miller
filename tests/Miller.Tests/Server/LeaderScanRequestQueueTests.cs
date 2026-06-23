@@ -203,8 +203,10 @@ public sealed class LeaderScanRequestQueueTests : IDisposable
     public void RequestYield_RoundTripsVersionAndPid_AndDrainConsumesOnce()
     {
         string millerDir = Path.Combine(_dir, ".miller");
+        DateTimeOffset beforeRequest = DateTimeOffset.UtcNow.AddSeconds(-1);
 
         LeaderScanRequestQueue.RequestYield(millerDir, "workspace-1", requesterPid: 4242, requesterExtractorVersion: "2.3.0");
+        DateTimeOffset afterRequest = DateTimeOffset.UtcNow.AddSeconds(1);
 
         string requestDir = Path.Combine(millerDir, "requests");
         Assert.Single(Directory.EnumerateFiles(requestDir, "*.yield.json"));
@@ -214,6 +216,8 @@ public sealed class LeaderScanRequestQueueTests : IDisposable
         Assert.True(result.Requested);
         Assert.Equal("2.3.0", result.MaxRequesterVersion);
         Assert.Equal(4242, result.RequesterPid);
+        Assert.NotNull(result.RequesterObservedAtUtc);
+        Assert.InRange(result.RequesterObservedAtUtc.Value, beforeRequest, afterRequest);
         Assert.Empty(Directory.EnumerateFiles(requestDir)); // serviced request removed, no .claimed leftover
         Assert.False(LeaderScanRequestQueue.DrainYieldRequests(millerDir).Requested);
     }

@@ -108,9 +108,10 @@ public sealed class IndexerLeadershipCoordinatorTests
     [Fact]
     public void EvaluateYieldRequests_StrictlyNewerRequester_ReturnsDecision()
     {
+        var requesterObservedAtUtc = new DateTimeOffset(2026, 6, 11, 12, 0, 0, TimeSpan.Zero);
         var coordinator = NewCoordinator(
             ownExtractorVersion: () => "2.0.0",
-            drainYieldRequests: _ => new YieldDrainResult(true, "3.0.0", 9999, 0, 0));
+            drainYieldRequests: _ => new YieldDrainResult(true, "3.0.0", 9999, requesterObservedAtUtc, 0, 0));
 
         IndexerLeadershipYieldDecision? decision = coordinator.EvaluateYieldRequests(
             "/repo/.miller",
@@ -119,6 +120,7 @@ public sealed class IndexerLeadershipCoordinatorTests
         Assert.NotNull(decision);
         Assert.Equal(9999, decision!.Value.RequesterPid);
         Assert.Equal("3.0.0", decision.Value.RequesterVersion);
+        Assert.Equal(requesterObservedAtUtc, decision.Value.RequesterObservedAtUtc);
     }
 
     [Fact]
@@ -158,7 +160,7 @@ public sealed class IndexerLeadershipCoordinatorTests
             readLeaderIdentity ?? (_ => null),
             leaderAliveProbe ?? (_ => false),
             clock ?? (() => DateTimeOffset.UtcNow),
-            processAliveProbe ?? (_ => false));
+            processAliveProbe is null ? (_, _) => false : (pid, _) => processAliveProbe(pid));
 
     private static LeaderIdentity LiveLeader(int pid, string? extractorVersion) => new(
         pid, "0.3.6", null, new DateTimeOffset(2026, 6, 11, 9, 0, 0, TimeSpan.Zero), extractorVersion);

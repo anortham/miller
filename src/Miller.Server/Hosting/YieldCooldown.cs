@@ -15,15 +15,22 @@ internal sealed class YieldCooldown
     internal static readonly TimeSpan Duration = TimeSpan.FromSeconds(60);
 
     private readonly Func<DateTimeOffset> _clock;
-    private readonly Func<int, bool> _aliveProbe;
+    private readonly Func<int, DateTimeOffset?, bool> _aliveProbe;
 
     private DateTimeOffset _beganAtUtc;
     private int _requesterPid; // <= 0 means no cooldown is active
+    private DateTimeOffset? _requesterObservedAtUtc;
 
     /// <param name="clock">UTC now source (injected for tests; production passes the system clock).</param>
-    /// <param name="aliveProbe">Whether a process with the given pid is running (production:
-    /// <see cref="LeaderIdentityFile.IsProcessAlive(int)"/>).</param>
+    /// <param name="aliveProbe">Whether a process with the given pid is running.</param>
     public YieldCooldown(Func<DateTimeOffset> clock, Func<int, bool> aliveProbe)
+        : this(clock, (pid, _) => aliveProbe(pid))
+    {
+    }
+
+    /// <param name="aliveProbe">Whether a process with the given pid is running, optionally checked against the
+    /// request timestamp to guard against PID reuse.</param>
+    public YieldCooldown(Func<DateTimeOffset> clock, Func<int, DateTimeOffset?, bool> aliveProbe)
     {
         ArgumentNullException.ThrowIfNull(clock);
         ArgumentNullException.ThrowIfNull(aliveProbe);
@@ -37,12 +44,23 @@ internal sealed class YieldCooldown
     /// </summary>
     public void Begin(int requesterPid)
     {
+        Begin(requesterPid, _clock());
+    }
+
+    /// <summary>
+    /// Start the cooldown toward <paramref name="requesterPid"/> and remember when that requester was observed.
+    /// The observed time lets the liveness probe reject a later process that reused the same pid.
+    /// </summary>
+    public void Begin(int requesterPid, DateTimeOffset requesterObservedAtUtc)
+    {
         if (requesterPid <= 0)
         {
             _requesterPid = 0;
+            _requesterObservedAtUtc = null;
             return;
         }
         _requesterPid = requesterPid;
+        _requesterObservedAtUtc = requesterObservedAtUtc;
         _beganAtUtc = _clock();
     }
 
@@ -55,9 +73,10 @@ internal sealed class YieldCooldown
         if (_requesterPid <= 0)
             return false;
 
-        if (_clock() - _beganAtUtc >= Duration || !_aliveProbe(_requesterPid))
+        if (_clock() - _beganAtUtc >= Duration || !_aliveProbe(_requesterPid, _requesterObservedAtUtc))
         {
             _requesterPid = 0; // expired or the challenger died: resume normal claim retries for good
+            _requesterObservedAtUtc = null;
             return false;
         }
 

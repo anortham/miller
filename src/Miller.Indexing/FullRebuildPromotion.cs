@@ -1,6 +1,18 @@
+using System.Diagnostics;
 using Microsoft.Data.Sqlite;
 
 namespace Miller.Indexing;
+
+internal readonly record struct FileOperationRetryOptions(
+    TimeSpan Timeout,
+    TimeSpan InitialDelay,
+    TimeSpan MaxDelay)
+{
+    public static FileOperationRetryOptions Default { get; } = new(
+        Timeout: TimeSpan.FromSeconds(10),
+        InitialDelay: TimeSpan.FromMilliseconds(20),
+        MaxDelay: TimeSpan.FromMilliseconds(500));
+}
 
 /// <summary>
 /// Build-to-temp-then-promote for full (force) rebuilds of a julie extract DB. A force scan that merges
@@ -45,15 +57,36 @@ public static class FullRebuildPromotion
     /// <summary>
     /// Promote the finished rebuild artifact over the live DB: fold a leftover rebuild WAL into the main file
     /// (so nothing committed is lost when only the single file moves), remove the live DB's old
-    /// <c>-wal</c>/<c>-shm</c>, then overwrite-move the rebuild file into place. Windows can transiently fail
-    /// the delete/move while another miller briefly holds the live file open read-only (SQLite opens without
-    /// FILE_SHARE_DELETE), so both retry briefly — per-operation readers are non-pooled and millisecond-scale.
+    /// <c>-wal</c>/<c>-shm</c>, then overwrite-move the rebuild file into place. Windows can fail the delete/move
+    /// while another miller, antivirus, or an indexer briefly holds the live file open (SQLite opens without
+    /// FILE_SHARE_DELETE), so both operations retry on a bounded seconds-scale backoff.
     /// </summary>
     /// <exception cref="InvalidOperationException">No rebuild artifact exists at <see cref="RebuildDbPathFor"/>.</exception>
     /// <exception cref="IOException">The live file stayed locked past the bounded retry (the live artifact is
     /// untouched; the rebuild trio is left for the next <see cref="PrepareRebuildTarget"/> to reclaim).</exception>
     public static void Promote(string absDbPath)
     {
+        Promote(
+            absDbPath,
+            FileOperationRetryOptions.Default,
+            Thread.Sleep,
+            File.Delete,
+            static (source, destination) => File.Move(source, destination, overwrite: true));
+    }
+
+    internal static void Promote(
+        string absDbPath,
+        FileOperationRetryOptions retryOptions,
+        Action<TimeSpan> sleep,
+        Action<string> deleteFile,
+        Action<string, string> moveFile)
+    {
+        ArgumentNullException.ThrowIfNull(sleep);
+        ArgumentNullException.ThrowIfNull(deleteFile);
+        ArgumentNullException.ThrowIfNull(moveFile);
+
+        ValidateRetryOptions(retryOptions);
+
         string rebuildDb = RebuildDbPathFor(absDbPath);
         if (!File.Exists(rebuildDb))
             throw new InvalidOperationException(
@@ -62,17 +95,17 @@ public static class FullRebuildPromotion
 
         FoldWalIfPresent(rebuildDb);
 
-        DeleteWithRetry(absDbPath + "-wal");
-        DeleteWithRetry(absDbPath + "-shm");
+        DeleteWithRetry(absDbPath + "-wal", retryOptions, sleep, deleteFile);
+        DeleteWithRetry(absDbPath + "-shm", retryOptions, sleep, deleteFile);
 
         // Belt-and-braces against any pooled handle to the soon-unlinked live inode surviving in this
         // process (all Miller opens are Pooling=false, but the pool is process-global state).
         SqliteConnection.ClearAllPools();
-        MoveWithRetry(rebuildDb, absDbPath);
+        MoveWithRetry(rebuildDb, absDbPath, retryOptions, sleep, moveFile);
 
         // The fold left the rebuild a single file; clear defensively in case a non-SQLite leftover snuck in.
-        DeleteWithRetry(rebuildDb + "-wal");
-        DeleteWithRetry(rebuildDb + "-shm");
+        DeleteWithRetry(rebuildDb + "-wal", retryOptions, sleep, deleteFile);
+        DeleteWithRetry(rebuildDb + "-shm", retryOptions, sleep, deleteFile);
     }
 
     // A clean julie-extract exit checkpoints and deletes its WAL on last close, so this is normally a no-op
@@ -97,23 +130,69 @@ public static class FullRebuildPromotion
 
     private static void DeleteWithRetry(string path)
     {
+        DeleteWithRetry(path, FileOperationRetryOptions.Default, Thread.Sleep, File.Delete);
+    }
+
+    private static void DeleteWithRetry(
+        string path,
+        FileOperationRetryOptions retryOptions,
+        Action<TimeSpan> sleep,
+        Action<string> deleteFile)
+    {
         if (!File.Exists(path))
             return;
-        for (int attempt = 1; ; attempt++)
+        RetryFileOperation(() => deleteFile(path), retryOptions, sleep);
+    }
+
+    private static void MoveWithRetry(
+        string source,
+        string destination,
+        FileOperationRetryOptions retryOptions,
+        Action<TimeSpan> sleep,
+        Action<string, string> moveFile)
+    {
+        RetryFileOperation(() => moveFile(source, destination), retryOptions, sleep);
+    }
+
+    private static void RetryFileOperation(
+        Action operation,
+        FileOperationRetryOptions retryOptions,
+        Action<TimeSpan> sleep)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        TimeSpan delay = retryOptions.InitialDelay;
+
+        for (;;)
         {
-            try { File.Delete(path); break; }
-            catch (IOException) when (attempt < 5) { Thread.Sleep(20 * attempt); }
-            catch (UnauthorizedAccessException) when (attempt < 5) { Thread.Sleep(20 * attempt); }
+            try
+            {
+                operation();
+                return;
+            }
+            catch (Exception ex) when (IsRetryable(ex) && stopwatch.Elapsed + delay <= retryOptions.Timeout)
+            {
+                sleep(delay);
+                delay = NextDelay(delay, retryOptions.MaxDelay);
+            }
         }
     }
 
-    private static void MoveWithRetry(string source, string destination)
+    private static bool IsRetryable(Exception ex) =>
+        ex is IOException or UnauthorizedAccessException;
+
+    private static TimeSpan NextDelay(TimeSpan current, TimeSpan max)
     {
-        for (int attempt = 1; ; attempt++)
-        {
-            try { File.Move(source, destination, overwrite: true); break; }
-            catch (IOException) when (attempt < 5) { Thread.Sleep(20 * attempt); }
-            catch (UnauthorizedAccessException) when (attempt < 5) { Thread.Sleep(20 * attempt); }
-        }
+        double doubledMs = Math.Min(current.TotalMilliseconds * 2, max.TotalMilliseconds);
+        return TimeSpan.FromMilliseconds(doubledMs);
+    }
+
+    private static void ValidateRetryOptions(FileOperationRetryOptions options)
+    {
+        if (options.Timeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(options), options.Timeout, "Retry timeout must be positive.");
+        if (options.InitialDelay <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(options), options.InitialDelay, "Initial delay must be positive.");
+        if (options.MaxDelay < options.InitialDelay)
+            throw new ArgumentOutOfRangeException(nameof(options), options.MaxDelay, "Max delay must be >= initial delay.");
     }
 }

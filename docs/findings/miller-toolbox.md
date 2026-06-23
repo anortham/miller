@@ -116,21 +116,23 @@ consumer, so the compact default and `limit` matter most here.
 **Perf mandate:** julie's was 439ms avg / 1.2s p95 and lightly used. Miller target: sub-100ms via the in-memory
 index, or agents will skip it.
 
-### 4. `trace` — follow edges (THE DIFFERENTIATOR; absorbs fast_refs + call_path + cross-language bridge)
+### 4. `trace` — follow edges (absorbs fast_refs + call_path + cross-language bridge)
 > **Description (draft):** "Trace relationships from a symbol: where it is referenced, what it calls and what calls
 > it, the shortest path between two symbols, or cross-language correspondences (e.g. a C# DTO to its TypeScript type
 > to its database table). Use this instead of grepping for usages."
 
 | param | req | default | type | notes |
 |---|---|---|---|---|
-| `from` | ✅ | — | string | smart-resolved symbol |
-| `to` | | `null` | string? | if set → shortest path / reachability from→to |
-| `mode` | | `auto` | `auto\|refs\|callers\|callees\|path\|bridge` | auto = refs + callers + callees; bridge = cross-language |
-| `max_hops` | | `8` | int | for path |
-| `limit` | | `50` | int | |
-| `format` | | `compact` | `compact\|json` | |
+| `target` | ✅ | — | string | smart-resolved symbol |
+| `to` | | `null` | string? | destination for `mode=path` |
+| `mode` | | `auto` | `auto\|refs\|path\|bridge` | refs = name-based identifier refs; bridge = provider-scoped cross-language |
+| `reference_kind` | | `null` | string? | refs filter: `call`, `variable_ref`, `type_usage`, `member_access`, `import` |
+| `include_definition` | | `true` | bool | include target definition in refs output |
+| `depth` | | `3` | int | hop bound for auto/path/bridge |
+| `limit` | | `20` | int | |
+| `format` | | `compact` | `compact\|json\|full` | full adds bridge signals |
 
-**80% call:** `trace("handleLogin")` → usages + callers + callees. `mode=bridge` is the unique cross-language capability.
+**80% call:** `trace("handleLogin", mode="refs")` for usages, `trace("handleLogin")` for callers/callees, and `mode=bridge` for cross-language chains.
 
 ### 5. `impact` — change-safety / blast radius (absorbs blast_radius)
 > **Description (draft):** "Show what a change would affect — the symbols and tests downstream of editing a symbol

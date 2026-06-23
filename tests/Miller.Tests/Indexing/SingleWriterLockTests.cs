@@ -123,6 +123,24 @@ public sealed class SingleWriterLockTests
     }
 
     [Fact]
+    public void IsLockContention_WindowsSharingViolationsOnly_AreBusy()
+    {
+        Assert.True(SingleWriterLock.IsLockContentionForTest(
+            new IOExceptionWithHResult(unchecked((int)0x80070020)), isWindows: true)); // ERROR_SHARING_VIOLATION
+        Assert.True(SingleWriterLock.IsLockContentionForTest(
+            new IOExceptionWithHResult(unchecked((int)0x80070021)), isWindows: true)); // ERROR_LOCK_VIOLATION
+        Assert.False(SingleWriterLock.IsLockContentionForTest(
+            new IOExceptionWithHResult(unchecked((int)0x8007007B)), isWindows: true)); // ERROR_INVALID_NAME
+    }
+
+    [Fact]
+    public void IsLockContention_NonWindows_KeepsHistoricalIOExceptionAsBusy()
+    {
+        Assert.True(SingleWriterLock.IsLockContentionForTest(
+            new IOExceptionWithHResult(unchecked((int)0x80131620)), isWindows: false));
+    }
+
+    [Fact]
     public void DeleteContentsExceptLock_UnderTheHeldLock_GutsTheIndexButKeepsExclusion()
     {
         // The remove flow's destructive step runs while HOLDING the lock: index files and subdirs are deleted,
@@ -171,5 +189,10 @@ public sealed class SingleWriterLockTests
         Assert.NotNull(newWriter);
 
         SingleWriterLock.TryDeleteEmptiedDir(dir.Path);
+    }
+
+    private sealed class IOExceptionWithHResult : IOException
+    {
+        public IOExceptionWithHResult(int hresult) => HResult = hresult;
     }
 }

@@ -23,10 +23,30 @@ internal sealed record FileConvergeDrainResult(IReadOnlyList<string> Paths, int 
 /// extractor version seen this pass (numeric major.minor.patch order) with that requester's pid, plus the
 /// TTL/claim bookkeeping the caller (the leader's debounce tick) logs.</summary>
 internal sealed record YieldDrainResult(
-    bool Requested, string? MaxRequesterVersion, int RequesterPid, int ExpiredDiscarded, int ClaimSkipped)
+    bool Requested,
+    string? MaxRequesterVersion,
+    int RequesterPid,
+    DateTimeOffset? RequesterObservedAtUtc,
+    int ExpiredDiscarded,
+    int ClaimSkipped)
 {
+    public YieldDrainResult(
+        bool Requested,
+        string? MaxRequesterVersion,
+        int RequesterPid,
+        int ExpiredDiscarded,
+        int ClaimSkipped)
+        : this(Requested, MaxRequesterVersion, RequesterPid, RequesterObservedAtUtc: null, ExpiredDiscarded, ClaimSkipped)
+    {
+    }
+
     public static YieldDrainResult Empty { get; } = new(
-        Requested: false, MaxRequesterVersion: null, RequesterPid: 0, ExpiredDiscarded: 0, ClaimSkipped: 0);
+        Requested: false,
+        MaxRequesterVersion: null,
+        RequesterPid: 0,
+        RequesterObservedAtUtc: null,
+        ExpiredDiscarded: 0,
+        ClaimSkipped: 0);
 }
 
 internal static partial class LeaderScanRequestQueue
@@ -309,6 +329,7 @@ internal static partial class LeaderScanRequestQueue
         int skipped = 0;
         string? maxVersion = null;
         int maxVersionPid = 0;
+        DateTimeOffset? maxVersionCreatedAtUtc = null;
         foreach (string path in Directory.EnumerateFiles(requestDir, "*" + YieldSuffix).Order(StringComparer.Ordinal))
         {
             if (IsExpired(path, now))
@@ -337,6 +358,7 @@ internal static partial class LeaderScanRequestQueue
                 {
                     maxVersion = request.RequesterExtractorVersion;
                     maxVersionPid = request.RequesterPid;
+                    maxVersionCreatedAtUtc = request.CreatedAtUtc;
                 }
             }
             catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
@@ -350,7 +372,13 @@ internal static partial class LeaderScanRequestQueue
             }
         }
 
-        return new YieldDrainResult(maxVersion is not null, maxVersion, maxVersionPid, expired, skipped);
+        return new YieldDrainResult(
+            maxVersion is not null,
+            maxVersion,
+            maxVersionPid,
+            maxVersionCreatedAtUtc,
+            expired,
+            skipped);
     }
 
     // Does this drained yield's version beat the strongest challenger seen so far this pass? Ordering is
