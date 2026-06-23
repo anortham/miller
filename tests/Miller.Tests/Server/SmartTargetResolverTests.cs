@@ -174,6 +174,53 @@ public sealed class SmartTargetResolverTests
         Assert.Contains(cands.Matches, c => c.FilePath == "b/Second.cs");
     }
 
+    [Fact]
+    public void Resolve_NameWithSingleTypeAndConstructors_ResolvesToType()
+    {
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
+        {
+            new JulieDbFixture.SymbolRow("aa11223344556677889900aabbccddee", "SearchTool", "class", "csharp",
+                "src/Miller.Server/Tools/SearchTool.cs", "public sealed class SearchTool", 54, null),
+            new JulieDbFixture.SymbolRow("bb11223344556677889900aabbccddee", "SearchTool", "constructor", "csharp",
+                "src/Miller.Server/Tools/SearchTool.cs", "public SearchTool(IWorkspaceSearchProvider workspaceProvider)",
+                74, "aa11223344556677889900aabbccddee"),
+            new JulieDbFixture.SymbolRow("cc11223344556677889900aabbccddee", "SearchTool", "constructor", "csharp",
+                "src/Miller.Server/Tools/SearchTool.cs",
+                "public SearchTool(IWorkspaceSearchProvider workspaceProvider, IWorkspaceRegionSearchProvider regionProvider)",
+                90, "aa11223344556677889900aabbccddee"),
+        });
+        var index = BuildIndex(fx);
+        var resolver = new SmartTargetResolver(index);
+
+        var result = resolver.Resolve("SearchTool");
+
+        var sym = Assert.IsType<TargetResolution.Symbol>(result);
+        Assert.Equal("class", sym.Value.Kind);
+        Assert.Equal("src/Miller.Server/Tools/SearchTool.cs", sym.Value.FilePath);
+    }
+
+    [Fact]
+    public void Resolve_NameWithSingleDefinitionAndImports_ResolvesToDefinition()
+    {
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
+        {
+            new JulieDbFixture.SymbolRow("aa11223344556677889900aabbccddee", "RegistryPaths", "struct", "rust",
+                "crates/julie-core/src/paths.rs", "pub struct RegistryPaths", 243, null),
+            new JulieDbFixture.SymbolRow("bb11223344556677889900aabbccddee", "RegistryPaths", "import", "rust",
+                "src/dashboard/standalone.rs", "use crate::paths::RegistryPaths;", 10, null),
+            new JulieDbFixture.SymbolRow("cc11223344556677889900aabbccddee", "RegistryPaths", "import", "rust",
+                "src/registry/shutdown.rs", "use crate::paths::RegistryPaths;", 18, null),
+        });
+        var index = BuildIndex(fx);
+        var resolver = new SmartTargetResolver(index);
+
+        var result = resolver.Resolve("RegistryPaths");
+
+        var sym = Assert.IsType<TargetResolution.Symbol>(result);
+        Assert.Equal("struct", sym.Value.Kind);
+        Assert.Equal("crates/julie-core/src/paths.rs", sym.Value.FilePath);
+    }
+
     // ---- overrides ----
 
     [Fact]

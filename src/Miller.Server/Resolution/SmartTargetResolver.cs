@@ -119,6 +119,8 @@ public sealed partial class SmartTargetResolver
 
         if (matches.Count == 1)
             return new TargetResolution.Symbol(matches[0]);
+        if (string.IsNullOrWhiteSpace(scope) && matches.Count > 1 && SingleDefinitionCandidate(matches) is { } symbol)
+            return new TargetResolution.Symbol(symbol);
         if (matches.Count > 1)
             return new TargetResolution.Candidates(matches);
 
@@ -141,6 +143,20 @@ public sealed partial class SmartTargetResolver
 
     private static IReadOnlyList<IndexedSymbol> Cap(IReadOnlyList<IndexedSymbol> matches) =>
         matches.Count <= MaxSuggestions ? matches : matches.Take(MaxSuggestions).ToList();
+
+    private static IndexedSymbol? SingleDefinitionCandidate(IReadOnlyList<IndexedSymbol> matches)
+    {
+        var definitions = matches
+            .Where(s => !IsNameLookupNoise(s.Kind))
+            .Take(2)
+            .ToArray();
+
+        return definitions.Length == 1 ? definitions[0] : null;
+    }
+
+    private static bool IsNameLookupNoise(string kind) =>
+        string.Equals(kind, "constructor", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(kind, "import", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Up to <see cref="MaxSuggestions"/> near-miss symbols for a truly-unresolvable name. Recall comes from

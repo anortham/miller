@@ -78,6 +78,24 @@ function parseSha256Sidecar(text) {
   return match[1].toLowerCase();
 }
 
+function validateArchiveEntryNames(entries) {
+  for (const rawEntry of entries) {
+    const entry = String(rawEntry || '').trim();
+    const normalized = entry.replace(/\\/g, '/').replace(/^\.\/+/, '');
+    const parts = normalized.split('/').filter(Boolean);
+
+    if (
+      !normalized ||
+      normalized.startsWith('/') ||
+      normalized.startsWith('//') ||
+      /^[A-Za-z]:\//.test(normalized) ||
+      parts.includes('..')
+    ) {
+      throw new Error(`Miller package archive contains unsafe entry path: ${entry || '<empty>'}`);
+    }
+  }
+}
+
 function pluginRoot() {
   return path.resolve(__dirname, '..');
 }
@@ -188,6 +206,17 @@ function extractArchive(archivePath, archiveExtension, destination) {
   const tarBinary = process.platform === 'win32'
     ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe')
     : 'tar';
+  const listArgs = archiveExtension === '.zip'
+    ? ['-tf', archivePath]
+    : ['-tzf', archivePath];
+  const list = childProcess.spawnSync(tarBinary, listArgs, { encoding: 'utf8' });
+  if (list.status !== 0) {
+    const detail = list.stderr || list.stdout || `exit ${list.status}`;
+    throw new Error(`Failed to list ${archivePath}: ${detail.trim()}`);
+  }
+
+  validateArchiveEntryNames(list.stdout.split(/\r?\n/).filter(Boolean));
+
   const args = archiveExtension === '.zip'
     ? ['-xf', archivePath, '-C', destination]
     : ['-xzf', archivePath, '-C', destination];
@@ -518,6 +547,7 @@ module.exports = {
   releaseArchiveName,
   resolveLaunchCwd,
   readPluginConfig,
+  validateArchiveEntryNames,
 };
 
 if (require.main === module) {

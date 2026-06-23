@@ -77,6 +77,30 @@ test('parseSha256Sidecar rejects malformed sidecars', () => {
   );
 });
 
+test('validateArchiveEntryNames accepts package-relative entries', () => {
+  assert.doesNotThrow(() => launcher.validateArchiveEntryNames([
+    'miller-0.5.8-aarch64-apple-darwin/',
+    'miller-0.5.8-aarch64-apple-darwin/miller',
+    './miller-0.5.8-aarch64-apple-darwin/dashboard/wwwroot/dashboard.css',
+  ]));
+});
+
+test('validateArchiveEntryNames rejects path traversal and absolute entries', () => {
+  for (const entry of [
+    '../outside',
+    'package/../../outside',
+    '/tmp/outside',
+    'C:\\temp\\outside',
+    '\\\\server\\share\\outside',
+  ]) {
+    assert.throws(
+      () => launcher.validateArchiveEntryNames([entry]),
+      /unsafe entry path/,
+      entry,
+    );
+  }
+});
+
 test('resolveLaunchCwd prefers explicit Miller workspace env over process cwd', () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'miller-launcher-cwd-'));
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'miller-launcher-workspace-'));
