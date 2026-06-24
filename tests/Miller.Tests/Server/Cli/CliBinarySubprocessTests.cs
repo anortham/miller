@@ -150,13 +150,18 @@ public sealed class CliBinarySubprocessTests : IDisposable
 
         using Process process = Process.Start(psi)
             ?? throw new InvalidOperationException("failed to start `dotnet` for the miller CLI.");
-        string stdout = process.StandardOutput.ReadToEnd();   // tiny CLI output — read-then-wait won't deadlock
-        string stderr = process.StandardError.ReadToEnd();
+
+        Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
+        Task<string> stderrTask = process.StandardError.ReadToEndAsync();
         if (!process.WaitForExit(30_000))
         {
             process.Kill(entireProcessTree: true);
+            process.WaitForExit();
             throw new TimeoutException("the miller CLI did not exit within 30s.");
         }
+
+        string stdout = stdoutTask.GetAwaiter().GetResult();
+        string stderr = stderrTask.GetAwaiter().GetResult();
         return new ProcessResult(process.ExitCode, stdout, stderr);
     }
 

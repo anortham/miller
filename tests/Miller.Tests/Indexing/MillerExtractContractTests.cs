@@ -53,6 +53,19 @@ public sealed class MillerExtractContractTests
     }
 
     [Fact]
+    public void WindowsRestoreScriptDetectsArchitectureWithoutProcessorArchitectureEnv()
+    {
+        string script = File.ReadAllText(Path.Combine(
+            ScaleTestSupport.RepoRoot(), "scripts", "restore-julie-extract.ps1"));
+
+        Assert.Contains(
+            "[System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains("'X64'", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ServerProjectCopiesPlatformSpecificRestoredJulieExtractBinaries()
     {
         string projectPath = Path.Combine(ScaleTestSupport.RepoRoot(), "src", "Miller.Server", "Miller.Server.csproj");

@@ -78,14 +78,13 @@ if ($FromSource -or -not [string]::IsNullOrWhiteSpace($sourceFromEnv)) {
 }
 
 # --- detect platform -> triple (only x64 Windows is published) ---
-$arch = $env:PROCESSOR_ARCHITECTURE
+$arch = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture
 $triple = $null
 switch ($arch) {
-    'AMD64' { $triple = 'x86_64-pc-windows-msvc' }
-    'x86'   { $triple = 'x86_64-pc-windows-msvc' }  # 32-bit host running the x64 asset is not supported; flagged below
+    'X64' { $triple = 'x86_64-pc-windows-msvc' }
 }
 
-if ($null -eq $triple -or $arch -ne 'AMD64') {
+if ($null -eq $triple) {
     Write-Error @"
 unsupported platform 'windows/$arch'. julie-extract v$($config.version) publishes only x86_64-pc-windows-msvc on
 Windows. No windows-arm64 prebuilt asset exists; build from source with cargo, or use a supported host.
