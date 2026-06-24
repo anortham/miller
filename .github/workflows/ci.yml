@@ -125,7 +125,7 @@ jobs:
       - name: Build (warnings are errors via Directory.Build.props)
         run: dotnet build Miller.slnx --no-restore -c Release
 
-      - name: Test (Windows scale smoke: leadership, WAL, full rebuild)
+      - name: "Test (Windows scale smoke: leadership, WAL, full rebuild)"
         shell: pwsh
         run: >
           dotnet test Miller.slnx --no-build -c Release
