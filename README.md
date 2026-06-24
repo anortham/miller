@@ -20,17 +20,18 @@ The practical difference from a one-time graph dump is that Miller is built for 
 - cross-language bridge evidence stays structural and provider-scoped, not embedding-driven.
 
 > **Current release: v1.0.0.** Miller ships as agent plugins, self-contained per-platform release archives,
-> and a source-checkout workflow.
+> and a source-checkout workflow. Plugin and release-archive installs include the pinned `julie-extract`
+> binary; users do not install it separately.
 >
 > Website: [anortham.github.io/miller](https://anortham.github.io/miller/) · Release:
 > [v1.0.0](https://github.com/anortham/miller/releases/tag/v1.0.0)
 
 ## Quickstart
 
-Most Claude Code and Codex users should start with the agent plugin. Cursor is different: use a global
-`~/.cursor/mcp.json` entry that passes the active workspace root to Miller. The plugin launcher downloads the
-matching Miller release archive, verifies its `.sha256` sidecar, caches it under `~/.miller/plugin-cache/`, and
-starts `miller serve` as an MCP server.
+Most Claude Code and Codex users should start with the agent plugin. The plugin launcher downloads the matching
+Miller release archive, verifies its `.sha256` sidecar, caches it under `~/.miller/plugin-cache/`, and starts
+`miller serve` as an MCP server. That archive includes Miller's pinned `.tools/julie-extract` binary, so plugin
+users do not install `julie-extract` or the .NET SDK separately.
 
 Claude Code:
 
@@ -38,6 +39,16 @@ Claude Code:
 /plugin marketplace add anortham/miller
 /plugin install miller@miller
 ```
+
+Codex:
+
+```bash
+codex plugin marketplace add anortham/miller
+codex
+# then open /plugins and install Miller from the miller marketplace
+```
+
+Cursor is different: use a global `~/.cursor/mcp.json` entry that passes the active workspace root to Miller.
 
 Cursor global MCP install:
 
@@ -131,7 +142,8 @@ Use this path when your MCP client does not use Miller's plugin package.
    ```
 
    Keep the extracted directory together. The native library files beside `miller`/`miller.exe`, the `.tools/`
-   directory, and `dashboard/` are part of the runtime layout.
+   directory, and `dashboard/` are part of the runtime layout. The `.tools/` directory contains the matching
+   pinned `julie-extract` binary; do not move it out or replace it with a separately installed copy.
 
 3. Point your MCP client at the extracted binary. Use an absolute path inside the versioned directory and the
    explicit `serve` argument:
@@ -152,7 +164,8 @@ Use this path when your MCP client does not use Miller's plugin package.
 ### Source Checkout
 
 Use this path for Miller development or for trying unreleased local changes. It requires the .NET 10 SDK on
-`PATH`.
+`PATH`, and the restore script downloads the pinned `julie-extract` binary into this checkout's `.tools/`
+directory.
 
 ```bash
 bash scripts/restore-julie-extract.sh
@@ -183,8 +196,10 @@ dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvi
 
 Miller does not own tree-sitter extraction and does **not** use embeddings. Parser-backed extraction is
 delegated to a prebuilt `julie-extract` binary (Rust + tree-sitter) that writes symbols, identifiers, files,
-and relationships into a SQLite database. Miller is the pure-.NET host on top; it can re-read workspace source
-text for explicit content/source search and source-region snippets, guarded by extractor hashes and spans:
+and relationships into a SQLite database. Plugin and release-archive installs bundle the matching extractor
+under `.tools/`; source checkouts restore it with `scripts/restore-julie-extract.*`. Miller is the pure-.NET
+host on top; it can re-read workspace source text for explicit content/source search and source-region
+snippets, guarded by extractor hashes and spans:
 
 ```
 ┌───────────────────────────┐     stdio / MCP
@@ -275,7 +290,7 @@ from the CLI, then retry the read tool. The `workspace_id=all` selector is only 
 across registered workspace content DBs.
 
 `patterns` is the structural-facts surface. It lists and searches known code-shape facts emitted by
-`julie-extractors` — 130+ pattern ids across ~36 languages as of julie-extract 2.3.0, spanning framework facts
+the pinned `julie-extract` catalog — 130+ pattern ids across ~36 languages, spanning framework facts
 (ASP.NET minimal API routes, htmx attributes, Alpine directives), language facts (async/await, unsafe blocks,
 decorators, goroutines), SQL DDL shapes, and JSON/YAML/TOML/Markdown document structure. It is intentionally not
 a raw AST query language:
@@ -647,7 +662,10 @@ Warnings are errors (`Directory.Build.props`).
   root. Update the global MCP config to pass `MILLER_WORKSPACE_ROOT="${workspaceFolder}"`, then reload Cursor from
   a project window. If the workspace is already registered, pass its selector explicitly as `workspace_id` until the
   client relaunches Miller from the right project root.
-- Missing `julie-extract`: run the restore script for your platform, then rerun the scale or refresh path.
+- Missing `julie-extract` from a plugin or release-archive install: reinstall or re-extract the full Miller
+  archive and keep its `.tools/` directory beside the `miller` binary.
+- Missing `julie-extract` from a source checkout: run the restore script for your platform, then rerun the scale
+  test or refresh path.
 - Unsure which server is live: run `miller version` or `miller workspace status`; compare the git SHA suffix
   with the build you expect, and compare `workspace status`'s `pid` before/after a restart.
 
