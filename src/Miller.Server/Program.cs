@@ -92,7 +92,6 @@ builder.Services
     .WithTools<TraceTool>()
     .WithTools<ImpactTool>()
     .WithTools<EditTool>()
-    .WithTools<TodosTool>()
     .WithTools<ContentTool>()
     .WithTools<PatternsTool>()
     .WithTools<WorkspaceTool>()

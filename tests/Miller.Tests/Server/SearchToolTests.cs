@@ -1206,6 +1206,12 @@ public sealed class SearchToolTests
     }
 
     [Fact]
+    public void ParseMode_Markers_UsesMarkerAuditMode()
+    {
+        Assert.Equal("Markers", SearchTool.ParseMode("markers").ToString());
+    }
+
+    [Fact]
     public void RunTextContent_Compact_RendersSourceHitMetadataAndSnippet()
     {
         var index = TextContentIndex(SourceHit(
@@ -1546,6 +1552,63 @@ public sealed class SearchToolTests
     }
 
     [Fact]
+    public void Search_ModeMarkers_RoutesToRegionProvider_AndRendersMarkerRows()
+    {
+        using var current = FixtureWithSymbol("current-ws", "CurrentOnly");
+        string root = Path.Combine(Path.GetTempPath(), "miller-current-" + Guid.NewGuid().ToString("N"));
+        var regionIndex = new StubRegionSearchIndex(
+            new RegionSearchHit("src/A.cs", 2.0, 7, "comment", "// TODO migrate", "// TODO migrate",
+                "region-todo", "sym-a", "A", "csharp"),
+            new RegionSearchHit("src/B.cs", 2.0, 11, "doc_comment", "/// HACK temporary", "/// HACK temporary",
+                "region-hack", "sym-b", "B", "csharp"),
+            new RegionSearchHit("src/C.cs", 2.0, 13, "string_literal", "\"HACK not a marker\"", "\"HACK not a marker\"",
+                "region-string", "sym-c", "C", "csharp"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(BuildIndex(current), current.DbPath, "current-ws", root),
+            ReadToolRoutingTestSupport.RegionContextFor(regionIndex, current.DbPath, "current-ws", root),
+            regionTargets: Array.Empty<(string, WorkspaceRegionSearchContext)>());
+        var tool = new SearchTool(provider, provider, provider);
+
+        string compact = tool.Search("HACK", mode: "markers");
+        string json = tool.Search("HACK", mode: "markers", format: "json");
+
+        Assert.Equal(2, provider.RegionSearchResolveCount);
+        Assert.Equal(0, provider.SymbolSearchResolveCount);
+        Assert.Equal(0, provider.ContentSearchResolveCount);
+        Assert.Contains("src/B.cs:11  HACK  doc_comment  B", compact);
+        Assert.DoesNotContain("TODO", compact);
+        Assert.DoesNotContain("string_literal", compact);
+
+        using JsonDocument doc = JsonDocument.Parse(json);
+        JsonElement item = Assert.Single(doc.RootElement.EnumerateArray());
+        Assert.Equal("HACK", item.GetProperty("marker").GetString());
+        Assert.Equal("src/B.cs", item.GetProperty("file").GetString());
+        Assert.Equal("B", item.GetProperty("containing_symbol_name").GetString());
+    }
+
+    [Fact]
+    public void Search_ModeMarkers_DoesNotAutoExcludeTestsForSpaceSeparatedMarkerList()
+    {
+        using var current = FixtureWithSymbol("current-ws", "CurrentOnly");
+        string root = Path.Combine(Path.GetTempPath(), "miller-current-" + Guid.NewGuid().ToString("N"));
+        var regionIndex = new StubRegionSearchIndex(
+            new RegionSearchHit("tests/A.cs", 2.0, 7, "comment", "// TODO test marker", "// TODO test marker",
+                "region-a", "sym-a", "A", "csharp"),
+            new RegionSearchHit("tests/B.cs", 2.0, 11, "comment", "// HACK test marker", "// HACK test marker",
+                "region-b", "sym-b", "B", "csharp"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(BuildIndex(current), current.DbPath, "current-ws", root),
+            ReadToolRoutingTestSupport.RegionContextFor(regionIndex, current.DbPath, "current-ws", root),
+            regionTargets: Array.Empty<(string, WorkspaceRegionSearchContext)>());
+        var tool = new SearchTool(provider, provider, provider);
+
+        _ = tool.Search("TODO HACK", mode: "markers");
+
+        Assert.Equal(2, regionIndex.SearchCalls.Count);
+        Assert.All(regionIndex.SearchCalls, call => Assert.False(call.ExcludeTests));
+    }
+
+    [Fact]
     public void Search_SymbolResultsAnnotateHasDocFromSymbolsDocComment()
     {
         using var fx = FixtureWithDocCommentSymbol();
@@ -1639,15 +1702,20 @@ public sealed class SearchToolTests
 
         public long Revision { get; } = 1;
 
+        public List<(string Query, bool ExcludeTests)> SearchCalls { get; } = [];
+
         public IReadOnlyList<RegionSearchHit> Search(
             string query,
             IReadOnlySet<string> kinds,
             int limit = 10,
-            bool excludeTests = false) =>
-            _hits
+            bool excludeTests = false)
+        {
+            SearchCalls.Add((query, excludeTests));
+            return _hits
                 .Where(hit => kinds.Contains(hit.Kind))
                 .Take(limit)
                 .ToArray();
+        }
     }
 
     private sealed class StubTextContentSearchIndex : ITextContentSearchIndex

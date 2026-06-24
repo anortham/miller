@@ -261,7 +261,7 @@ UX such as next-action guidance, confidence/evidence views, semantic/vector retr
 
 ## The tool surface
 
-Ten MCP tools, each with smart defaults so the common path is the simplest call: `search`, `todos`, `inspect`,
+Nine MCP tools, each with smart defaults so the common path is the simplest call: `search`, `inspect`,
 `context`, `trace`, `impact`, `edit`, `content`, `patterns`, and `workspace`. Read tools accept a `workspace_id`
 selector: display ID, unique prefix, full ID, registered root path, `current`, or `primary`. Explicit `workspace_id` defaults
 `ensure_fresh=true`. Targets are smart strings, not JSON objects. See
@@ -317,7 +317,7 @@ The single `miller` binary runs two ways:
   dotnet run --project src/Miller.Server -c Release -- content search "important phrase" --kind web --limit 5
   dotnet run --project src/Miller.Server -c Release -- patterns --json
   dotnet run --project src/Miller.Server -c Release -- patterns search --pattern htmx.attribute.v1 --where attribute_name=hx-get --path "Views/**" --json
-  dotnet run --project src/Miller.Server -c Release -- todos --markers TODO,FIXME --file-pattern "src/**"
+  dotnet run --project src/Miller.Server -c Release -- search "TODO,FIXME" --mode markers --file-pattern "src/**"
   dotnet run --project src/Miller.Server -c Release -- inspect src/Miller.Server/AgentInstructions.cs --depth full
   dotnet run --project src/Miller.Server -c Release -- context "CLI workspace routing" --token-budget 2000
   dotnet run --project src/Miller.Server -c Release -- trace AgentInstructions --depth 2
@@ -332,9 +332,9 @@ The single `miller` binary runs two ways:
   ```
 
   Build once and run the binary directly (`src/Miller.Server/bin/Release/net10.0/miller <verb>`) to skip the
-  `dotnet run` up-to-date check. `miller help` lists every verb: `search`, `todos`, `inspect`, `context`,
-  `impact`, `trace`, `content`, `patterns`, `workspace`, `refresh`, `capabilities`, `telemetry`, `dashboard`,
-  `version`, `serve`.
+  `dotnet run` up-to-date check. `miller help` lists every verb: `capabilities`, `search`, `todos`, `content`,
+  `patterns`, `telemetry`, `symbols`, `references`, `complexity`, `refresh`, `inspect`, `context`, `impact`,
+  `trace`, `dashboard`, `workspace`, `version`, `help`, and `serve`.
 
 **Dogfooding the server.** Because MCP runs over stdio, a new build takes effect only after the MCP client
 restarts the subprocess. A build made inside the repo carries its git short SHA — `miller version` prints
@@ -516,7 +516,7 @@ Text output is a compact human-facing contract and JSON output is the integratio
   workspace operation, missing restore, or another operational failure a script should not ignore.
 - `capabilities --json` reports the Miller build, `julie-extract` contract versions, optional feature flags,
   supported JSON commands, and export feeds for Eros/local integrations.
-- `--json` is supported by `search`, `todos`, `inspect`, `context`, `impact`, `trace`, `patterns`, `dashboard`,
+- `--json` is supported by `search`, `todos` (CLI alias for marker audits), `inspect`, `context`, `impact`, `trace`, `patterns`, `dashboard`,
   `content` operations, and `workspace` operations.
 - `workspace onboarding --json [--workspace-id SELECTOR|--workspace DIR]` is a read-only, privacy-safe startup
   view for an indexed repo. It summarizes tool mix, successful flows, repeated current-index targets, common
@@ -532,14 +532,16 @@ Text output is a compact human-facing contract and JSON output is the integratio
   path/line/snippet text hits.
 - Text headings and ordering are intended to be stable enough for humans and logs, not for strict parsers.
   Use `--json` when a caller needs fields.
-- Search result kinds are deliberately separate: symbol search ranks `name + signature`, `--mode content`
+- Search result kinds are deliberately separate: symbol search ranks `name + signature`, `--mode markers`
+  audits TODO/FIXME/HACK/XXX comment markers, `--mode content`
   searches docs-like file content, `--mode source|external|web|all-text` searches explicit content-corpus text,
   and `--regions` searches explicit source regions when region indexing is enabled.
 - `trace --mode refs` returns name-based identifier references for a resolved target symbol. Use
   `--reference-kind call|variable_ref|type_usage|member_access|import` to narrow the result and `--no-definition`
   when only reference rows are needed.
-- `todos` is a bounded marker audit over comment/doc-comment source regions. It returns marker, file:line,
-  snippet, and containing symbol when available; use `--markers`, `--file-pattern`, and `--language` to scope.
+- `todos --json` is a CLI compatibility alias over marker search for Eros/scripts. For agents and normal
+  interactive use, prefer `search "TODO,FIXME,HACK,XXX" --mode markers`; it returns marker, file:line,
+  snippet, and containing symbol when available, with `--file-pattern` and `--language` for scope.
 - The `content` CLI stores non-workspace text in `.miller/content.db`. Use `content import` for logs/reports
   and `content add-markdown <path> --url <url>` for browser-fetched pages. Search web imports with
   `content search "<phrase>" --kind web`, then read bounded windows with `content read --source-id <id>`.

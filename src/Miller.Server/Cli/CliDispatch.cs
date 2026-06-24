@@ -158,7 +158,7 @@ public static class CliDispatch
         IReadOnlyList<string> markers;
         try
         {
-            markers = TodosTool.ParseMarkers(o.Value("markers"));
+            markers = MarkerSearch.ParseMarkers(o.Value("markers"));
         }
         catch (InvalidOperationException ex)
         {
@@ -179,10 +179,10 @@ public static class CliDispatch
             long revision = freshness.LatestRevision();
             string searchDb = SymbolSearchSidecar.SearchDbPathFor(ctx.ExtractDbPath);
             FtsRegionSearchIndex regionIndex = FtsRegionSearchIndex.Open(searchDb, revision);
-            outw.WriteLine(TodosTool.Run(
+            outw.WriteLine(MarkerSearch.Run(
                 regionIndex,
                 markers,
-                o.Int("limit", TodosTool.DefaultLimit),
+                o.Int("limit", MarkerSearch.DefaultLimit),
                 o.Has("exclude-tests"),
                 o.Has("json"),
                 compactBanner: null,
@@ -256,7 +256,7 @@ public static class CliDispatch
     {
         CliOptions o = CliOptions.Parse(args, "json", "include-tests", "exclude-tests");
         if (string.IsNullOrWhiteSpace(o.Query))
-            return Usage(err, "miller search <query> [--workspace-id SELECTOR] [--workspace DIR] [--mode auto|text|symbol|file|content|source|external|web|all-text] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--include-tests|--exclude-tests]");
+            return Usage(err, "miller search <query> [--workspace-id SELECTOR] [--workspace DIR] [--mode auto|text|symbol|file|markers|content|source|external|web|all-text] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--include-tests|--exclude-tests]");
         if (!TryResolveReadContext(ctx, o, err, out ctx))
             return 2;
 
@@ -283,7 +283,7 @@ public static class CliDispatch
             FilePattern: o.Value("file-pattern"),
             Language: o.Value("language"));
 
-        if (route.Kind == SearchRouteKind.Regions)
+        if (route.Kind is SearchRouteKind.Regions or SearchRouteKind.Markers)
         {
             if (!RequireIndex(ctx, err))
                 return 3;
@@ -301,10 +301,10 @@ public static class CliDispatch
                 long revision = freshness.LatestRevision();
                 string searchDb = SymbolSearchSidecar.SearchDbPathFor(ctx.ExtractDbPath);
                 FtsRegionSearchIndex regionIndex = FtsRegionSearchIndex.Open(searchDb, revision);
-                outw.WriteLine(SearchRouteExecutor.RunRegions(
-                    regionIndex,
-                    route,
-                    executionRequest).Output);
+                SearchRouteExecutionResult result = route.Kind == SearchRouteKind.Markers
+                    ? SearchRouteExecutor.RunMarkers(regionIndex, route, executionRequest)
+                    : SearchRouteExecutor.RunRegions(regionIndex, route, executionRequest);
+                outw.WriteLine(result.Output);
                 return 0;
             }
             catch (Exception ex) when (
@@ -1593,8 +1593,8 @@ public static class CliDispatch
           capabilities      Print Miller build, extract-contract, optional feature, and export-format facts.
                              [--json]
           search <query>     Find code by name, identifier, or phrase.
-                             [--workspace-id SELECTOR] [--workspace DIR] [--mode auto|text|symbol|file|content|source|external|web|all-text] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--include-tests|--exclude-tests]
-          todos              List TODO/FIXME/HACK/XXX markers in comments and doc comments.
+                             [--workspace-id SELECTOR] [--workspace DIR] [--mode auto|text|symbol|file|markers|content|source|external|web|all-text] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--include-tests|--exclude-tests]
+          todos              CLI alias for search --mode markers over TODO/FIXME/HACK/XXX comment markers.
                              [--markers TODO,FIXME,HACK,XXX] [--workspace-id SELECTOR] [--workspace DIR] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--exclude-tests]
           content <op>       Import/search/read/list/remove/export external and web text in content.db.
                              import <path> [--max-bytes N] [--display-path NAME] [--json]

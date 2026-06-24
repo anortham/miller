@@ -116,6 +116,31 @@ internal static class SearchRouteExecutor
         return new SearchRouteExecutionResult(output, count);
     }
 
+    public static SearchRouteExecutionResult RunMarkers(
+        IRegionSearchIndex index,
+        SearchRoute route,
+        SearchRouteExecutionRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(route);
+        ArgumentNullException.ThrowIfNull(request);
+        EnsureKind(route, SearchRouteKind.Markers);
+
+        bool hideTests = request.ExcludeTests ?? false;
+        IReadOnlyList<string> markers = MarkerSearch.ParseMarkers(request.Query);
+        string output = MarkerSearch.Run(
+            index,
+            markers,
+            request.Limit,
+            hideTests,
+            request.Json,
+            request.CompactBanner,
+            request.FilePattern,
+            request.Language,
+            out int count);
+
+        return new SearchRouteExecutionResult(output, count);
+    }
+
     private static void EnsureKind(SearchRoute route, SearchRouteKind expected)
     {
         if (route.Kind != expected)

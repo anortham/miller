@@ -41,6 +41,9 @@ public enum SearchToolMode
 
     /// <summary>Search all content corpus text kinds. Explicit only; never the default.</summary>
     AllText,
+
+    /// <summary>Audit TODO/FIXME/HACK/XXX markers in comments and doc comments.</summary>
+    Markers,
 }
 
 /// <summary>
@@ -130,14 +133,15 @@ public sealed class SearchTool
     [Description(
         "Search indexed code and return ranked results. Use this before shell rg/grep/cat or reading whole " +
         "files. Pass a symbol name, an identifier, or a natural-language phrase. Test code is hidden for " +
-        "natural-language queries unless you ask for it. Use mode=content (alias docs) to search docs/prose " +
+        "natural-language queries unless you ask for it. Use mode=markers for TODO/FIXME/HACK/XXX audits " +
+        "over comments/doc comments. Use mode=content (alias docs) to search docs/prose " +
         "file content instead of symbols, or mode=source/external/web/all-text for content corpus text — these return " +
         "path + line + snippet hits. Pass regions=comment, " +
         "doc_comment, or string_literal to search only inside those source regions. Returns compact text by " +
         "default; pass format=json to chain results.")]
     public string Search(
         [Description("Symbol name, identifier, or natural-language phrase.")] string query,
-        [Description("Interpretation axis: auto|text|symbol|file|content|source|external|web|all-text. Default auto.")] string mode = "auto",
+        [Description("Interpretation axis: auto|text|symbol|file|markers|content|source|external|web|all-text. Default auto.")] string mode = "auto",
         [Description("Max results to return. Default 6.")] int limit = DefaultLimit,
         [Description("Hide test code: leave unset to auto-hide for natural-language queries; true/false to force.")]
         bool? exclude_tests = null,
@@ -168,6 +172,29 @@ public sealed class SearchTool
                 WorkspaceRegionSearchContext region = _regionProvider.ResolveRegionSearch(workspace_id, ensureFresh);
                 string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(region, workspace_id, json);
                 SearchRouteExecutionResult result = SearchRouteExecutor.RunRegions(
+                    region.Index,
+                    route,
+                    new SearchRouteExecutionRequest(
+                        query,
+                        limit,
+                        json,
+                        exclude_tests,
+                        compactBanner,
+                        FilePattern: file_pattern,
+                        Language: language));
+                output = result.Output;
+                count = result.Count;
+                if (scope is not null)
+                {
+                    ReadToolWorkspaceRouting.ApplyTelemetry(scope, region);
+                    scope.SetMetadata("search_backend", "region_disk");
+                }
+            }
+            else if (route.Kind == SearchRouteKind.Markers)
+            {
+                WorkspaceRegionSearchContext region = _regionProvider.ResolveRegionSearch(workspace_id, ensureFresh);
+                string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(region, workspace_id, json);
+                SearchRouteExecutionResult result = SearchRouteExecutor.RunMarkers(
                     region.Index,
                     route,
                     new SearchRouteExecutionRequest(
@@ -299,6 +326,7 @@ public sealed class SearchTool
         "web" => SearchToolMode.Web,
         "all-text" => SearchToolMode.AllText,
         "all_text" => SearchToolMode.AllText,
+        "markers" or "marker" => SearchToolMode.Markers,
         _ => SearchToolMode.Auto, // includes "auto", null, and anything unrecognized
     };
 
@@ -393,6 +421,7 @@ public sealed class SearchTool
     private static string RouteName(SearchRouteKind kind) => kind switch
     {
         SearchRouteKind.Regions => "regions",
+        SearchRouteKind.Markers => "markers",
         SearchRouteKind.Content => "content",
         SearchRouteKind.TextContent => "text_content",
         SearchRouteKind.Symbols => "symbols",
@@ -418,6 +447,7 @@ public sealed class SearchTool
     private static string EmptyReasonFor(SearchRoute route) => route.Kind switch
     {
         SearchRouteKind.Regions => "no_region_hits",
+        SearchRouteKind.Markers => "no_todo_markers",
         SearchRouteKind.Content or SearchRouteKind.TextContent => "no_text_hits",
         SearchRouteKind.Symbols => "no_symbol_hits",
         _ => "no_hits",

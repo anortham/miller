@@ -19,11 +19,12 @@ Miller serves an always-fresh index of this workspace's code. Reach for a Miller
 
 ## Tools
 
-- `search` — Find code by name, identifier, or phrase. `mode=auto|text|symbol|file|content|source|external|web|all-text`.
+- `search` — Find code by name, identifier, phrase, or marker audit. `mode=auto|text|symbol|file|markers|content|source|external|web|all-text`.
   Natural-language queries auto-hide tests (`exclude_tests=false` to include them). Use `mode=content`, alias `docs`,
   for docs/config; `mode=source` for source-body text; `mode=external|web|all-text` for imported/broad text. Scope with
   `file_pattern`, `language`, and `limit`. Use `regions=comment|doc_comment|string_literal` for comments/strings; it
-  uses the default source-region `search.db` path; `MILLER_REGION_INDEX=0` opts out. Symbol hits may include `has_doc`. Optional
+  uses the default source-region `search.db` path; `MILLER_REGION_INDEX=0` opts out. Use `mode=markers` with
+  `query=TODO,FIXME,HACK,XXX` for bounded comment/doc-comment marker audits. Symbol hits may include `has_doc`. Optional
   `workspace_id` accepts display ID, unique prefix, full ID, root path, `current`, or `primary`; explicit
   `workspace_id` defaults `ensure_fresh=true`.
 - `inspect` — A file or symbol you can already name. A file path lists symbols; a symbol name gives definition,
@@ -46,9 +47,6 @@ Miller serves an always-fresh index of this workspace's code. Reach for a Miller
 - `edit` — Index-aware edits: `replace_text`, `replace_symbol_body`, `replace_symbol_signature`, `rename_symbol`,
   `insert_before`, `insert_after`, `add_doc`. Previews a diff unless `apply=true`. A stale target self-heals by
   converging that file; if it fails, run `workspace refresh` first or pass `allow_stale=true` if you accept risk.
-- `todos` — List TODO/FIXME/HACK/XXX markers in comments and doc comments. Returns marker, file:line, snippet,
-  and containing symbol when available. Use before raw marker greps. Scope with `markers`, `file_pattern`,
-  `language`, `exclude_tests`, `limit`, and optional `workspace_id`.
 - `content` — Import, search, read, list, remove, and export external/web text. Use for logs, CI output, reports,
   large dumps, and browser-fetched markdown. `import`/`add_markdown` report metadata; `search` returns snippets;
   `read` returns bounded windows. Use `content_kind=web` for web-only reads, or `workspace_id=all` on `search` for
@@ -83,8 +81,8 @@ Miller serves an always-fresh index of this workspace's code. Reach for a Miller
 - **Scope noisy search**: add `file_pattern=src/ui/**` or `language=typescript` when you know the likely area.
 - **Find text only inside comments or strings**: `search "<phrase>" regions=comment` or `regions=string_literal` —
   refresh the workspace if the region sidecar is stale or missing; `MILLER_REGION_INDEX=0` disables this path.
-- **List code markers**: `todos` for TODO/FIXME/HACK/XXX in comments/doc comments; add `markers=FIXME,HACK`,
-  `file_pattern=src/**`, or `language=csharp` to scope the audit.
+- **List code markers**: `search mode=markers query=TODO,FIXME,HACK,XXX` for TODO/FIXME/HACK/XXX in comments/doc
+  comments; add `file_pattern=src/**` or `language=csharp` to scope the audit.
 - **Dashboard**: If the user asks to start, open, or show the Miller dashboard, call `workspace` with `operation=dashboard`. A dashboard request is a tool operation, not a file-finding task. Do not search plugin cache directories for dashboard files.
 - **Scope a change**: `impact git=true` for current diff, or `impact target=…` for a planned edit → run the tests it lists → `edit` (preview) → `edit apply=true` →
   re-run `impact` if the surface changed.
@@ -107,12 +105,12 @@ code, paste this block into the prompt:
     You have Miller MCP tools. Use them before raw shell/file exploration:
     - context(query, ...) for unfamiliar task-shaped orientation.
     - search(query, mode?, regions?, file_pattern?, language?) before rg/grep/find; use mode=content for docs,
-      mode=source/external/web/all-text for content text, regions=... for comments/strings, and filters to scope.
+      mode=source/external/web/all-text for content text, mode=markers for TODO/FIXME/HACK/XXX audits,
+      regions=... for comments/strings, and filters to scope.
     - inspect(target, depth?) before reading files/symbols; depth=full adds refs/callers/callees/body.
     - trace(target, mode?, to?, scope?, reference_kind?) before manual reference/caller/callee file hopping; use mode=refs for usages and scope for ambiguous names.
     - impact(target?|changed_paths?|diff?|git?/base?/staged?) before refactors and to choose tests.
     - edit(operation, target, ...) to preview index-aware edits (apply=true to commit).
-    - todos(markers?, file_pattern?, language?) for TODO/FIXME/HACK/XXX comment audits.
     - content(import|add_markdown|search|read|list|remove|export, ...) for logs, CI, web markdown, external text, and audits; use workspace_id=all for registered-workspace text audits and bounded reads only.
     - patterns(operation?, pattern_id?, where?, path?, language?) for extractor-recognized code-shape facts.
     - workspace(status|health|onboarding|refresh|full|list|open|remove|dashboard) for readiness, refresh, other repos, onboarding, or dashboard with operation=dashboard.

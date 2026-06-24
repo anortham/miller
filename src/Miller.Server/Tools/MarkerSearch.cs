@@ -1,92 +1,19 @@
 using System.Buffers;
-using System.ComponentModel;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using Miller.Core.Search;
 using Miller.Indexing;
-using Miller.Server.Telemetry;
-using Miller.Server.Workspaces;
-using ModelContextProtocol.Server;
 
 namespace Miller.Server.Tools;
 
-[McpServerToolType]
-public sealed class TodosTool
+internal static class MarkerSearch
 {
     internal const int DefaultLimit = 50;
     internal const int MaxLimit = 500;
     private static readonly string[] DefaultMarkers = ["TODO", "FIXME", "HACK", "XXX"];
     private static readonly HashSet<string> AllowedMarkers = new(DefaultMarkers, StringComparer.OrdinalIgnoreCase);
     private static readonly HashSet<string> CommentKinds = new(StringComparer.Ordinal) { "comment", "doc_comment" };
-
-    private readonly IWorkspaceRegionSearchProvider _regionProvider;
-
-    public TodosTool(IWorkspaceRegionSearchProvider regionProvider)
-    {
-        ArgumentNullException.ThrowIfNull(regionProvider);
-        _regionProvider = regionProvider;
-    }
-
-    [McpServerTool(Name = "todos")]
-    [Description(
-        "List TODO/FIXME/HACK/XXX markers from comment and doc-comment source regions. Returns marker, file:line, " +
-        "snippet, and containing symbol when available.")]
-    public string Todos(
-        [Description("Comma-separated markers to list. Default TODO,FIXME,HACK,XXX.")] string? markers = null,
-        [Description("Workspace-relative glob filter, e.g. src/ui/**. Optional.")] string? file_pattern = null,
-        [Description("Comma-separated language filter, e.g. csharp,typescript. Optional.")] string? language = null,
-        [Description("Hide test code. Default false.")] bool exclude_tests = false,
-        [Description("Max marker hits. Default 50, maximum 500.")] int limit = DefaultLimit,
-        [Description("Output format: compact|json. Default compact.")] string format = "compact",
-        [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")]
-        string? workspace_id = null,
-        [Description("Refresh selected workspace before reading. Defaults true when workspace_id is supplied.")]
-        bool? ensure_fresh = null)
-    {
-        TelemetryScope? telemetry = TelemetryContext.Current;
-        try
-        {
-            bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
-            IReadOnlyList<string> markerList = ParseMarkers(markers);
-            bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
-
-            WorkspaceRegionSearchContext context = _regionProvider.ResolveRegionSearch(workspace_id, ensureFresh);
-            string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
-            string output = Run(
-                context.Index,
-                markerList,
-                limit,
-                exclude_tests,
-                json,
-                compactBanner,
-                file_pattern,
-                language,
-                out int count);
-
-            if (telemetry is not null)
-            {
-                telemetry.Op = "list";
-                telemetry.SetTarget(string.Join(",", markerList));
-                telemetry.ResultCount = count;
-                telemetry.Outcome = count == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
-                if (count == 0)
-                    telemetry.SetEmptyReason("no_todo_markers");
-                ReadToolWorkspaceRouting.ApplyTelemetry(telemetry, context);
-            }
-
-            return output;
-        }
-        catch (Exception ex)
-        {
-            if (telemetry is not null)
-            {
-                telemetry.Outcome = TelemetryOutcome.Error;
-                telemetry.SetError(ex);
-            }
-            return $"todos failed: {ex.Message}";
-        }
-    }
 
     internal static string Run(
         IRegionSearchIndex index,
@@ -100,7 +27,7 @@ public sealed class TodosTool
         out int renderedCount)
     {
         int boundedLimit = Math.Clamp(limit, 1, MaxLimit);
-        IReadOnlyList<TodoMarkerHit> hits = FindMarkers(
+        IReadOnlyList<MarkerSearchHit> hits = FindMarkers(
             index,
             markers,
             boundedLimit,
@@ -113,7 +40,7 @@ public sealed class TodosTool
             : RenderCompact(hits, markers, compactBanner);
     }
 
-    internal static IReadOnlyList<TodoMarkerHit> FindMarkers(
+    internal static IReadOnlyList<MarkerSearchHit> FindMarkers(
         IRegionSearchIndex index,
         IReadOnlyList<string> markers,
         int limit,
@@ -126,7 +53,7 @@ public sealed class TodosTool
         if (limit < 1) limit = 1;
 
         ToolSearchFilters filters = ToolSearchFilters.Parse(filePattern, language);
-        var byKey = new Dictionary<string, TodoMarkerHit>(StringComparer.Ordinal);
+        var byKey = new Dictionary<string, MarkerSearchHit>(StringComparer.Ordinal);
         int fetchLimit = filters.HasAny ? MaxLimit : Math.Min(limit * 4 + 10, MaxLimit);
 
         foreach (string marker in markers)
@@ -140,7 +67,7 @@ public sealed class TodosTool
                     continue;
 
                 string key = marker + "\0" + hit.RegionId;
-                byKey.TryAdd(key, new TodoMarkerHit(marker, hit));
+                byKey.TryAdd(key, new MarkerSearchHit(marker, hit));
             }
         }
 
@@ -199,7 +126,7 @@ public sealed class TodosTool
     private static bool IsMarkerWordChar(char c) => char.IsLetterOrDigit(c) || c == '_';
 
     private static string RenderCompact(
-        IReadOnlyList<TodoMarkerHit> hits,
+        IReadOnlyList<MarkerSearchHit> hits,
         IReadOnlyList<string> markers,
         string? compactBanner)
     {
@@ -210,7 +137,7 @@ public sealed class TodosTool
         }
 
         var blocks = new List<string>(hits.Count);
-        foreach (TodoMarkerHit hit in hits)
+        foreach (MarkerSearchHit hit in hits)
         {
             RegionSearchHit region = hit.Region;
             var block = new StringBuilder();
@@ -228,7 +155,7 @@ public sealed class TodosTool
         return ReadToolWorkspaceRouting.PrefixCompact(body, compactBanner);
     }
 
-    private static string RenderJson(IReadOnlyList<TodoMarkerHit> hits)
+    private static string RenderJson(IReadOnlyList<MarkerSearchHit> hits)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = new Utf8JsonWriter(
@@ -236,7 +163,7 @@ public sealed class TodosTool
             new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
         {
             writer.WriteStartArray();
-            foreach (TodoMarkerHit hit in hits)
+            foreach (MarkerSearchHit hit in hits)
             {
                 RegionSearchHit region = hit.Region;
                 writer.WriteStartObject();
@@ -259,4 +186,4 @@ public sealed class TodosTool
     }
 }
 
-internal sealed record TodoMarkerHit(string Marker, RegionSearchHit Region);
+internal sealed record MarkerSearchHit(string Marker, RegionSearchHit Region);

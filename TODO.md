@@ -21,7 +21,8 @@ No active implementation items.
   - preserve explicit opt-out with `MILLER_REGION_INDEX=0`.
   - update stale docs and guidance that described region indexing as opt-in.
 - TODO/FIXME/HACK comment surface:
-  - add `todos` MCP and CLI surfaces over comment/doc-comment source-region data.
+  - add marker audits over comment/doc-comment source-region data via `search --mode markers`.
+  - preserve `todos` as a CLI compatibility alias for Eros/scripts, not as a standalone MCP tool.
   - return marker, file:line, snippet, and containing symbol when available.
   - support marker, file-pattern, language, test-exclusion, workspace, limit, and JSON options.
 

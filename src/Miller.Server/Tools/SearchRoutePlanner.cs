@@ -5,6 +5,7 @@ namespace Miller.Server.Tools;
 internal enum SearchRouteKind
 {
     Regions,
+    Markers,
     Content,
     TextContent,
     Symbols,
@@ -23,6 +24,9 @@ internal static class SearchRoutePlanner
     {
         string modeText = requestedMode ?? "auto";
         SearchToolMode mode = SearchTool.ParseMode(modeText);
+        if (mode == SearchToolMode.Markers)
+            return new SearchRoute(SearchRouteKind.Markers, mode);
+
         IReadOnlySet<string>? regionKinds = SearchTool.ParseRegionKinds(regions);
         if (regionKinds is not null)
         {

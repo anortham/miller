@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Reflection;
 using Miller.Server;
 using Miller.Server.Tools;
+using ModelContextProtocol.Server;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -47,20 +48,41 @@ public sealed class AgentInstructionsTests
     }
 
     [Theory]
-    [InlineData("search")]
-    [InlineData("inspect")]
-    [InlineData("context")]
-    [InlineData("trace")]
-    [InlineData("impact")]
-    [InlineData("edit")]
-    [InlineData("todos")]
-    [InlineData("content")]
-    [InlineData("patterns")]
-    [InlineData("workspace")]
+    [MemberData(nameof(ToolNames))]
     public void Load_DocumentsEveryTool(string toolName)
     {
         string instructions = AgentInstructions.Load();
         Assert.Contains("`" + toolName + "`", instructions);
+    }
+
+    [Fact]
+    public void PublicMcpToolNames_AreTheDocumented1_0Surface()
+    {
+        string[] toolNames = DiscoverToolMethods().Select(static method => ToolName(method)).ToArray();
+
+        Assert.Equal(
+            new[]
+            {
+                "content",
+                "context",
+                "edit",
+                "impact",
+                "inspect",
+                "patterns",
+                "search",
+                "trace",
+                "workspace",
+            },
+            toolNames);
+    }
+
+    [Fact]
+    public void Load_DoesNotAdvertiseTodosAsSeparateMcpTool()
+    {
+        string instructions = AgentInstructions.Load();
+
+        Assert.DoesNotContain("- `todos`", instructions);
+        Assert.DoesNotContain("todos(markers?", instructions);
     }
 
     [Theory]
@@ -75,12 +97,12 @@ public sealed class AgentInstructionsTests
 
     // The canonical inline search-mode enum must list `content` (the phase-3 mode the tool's [Description] and
     // SearchTool.ParseMode accept) so the doc can't drift back to `auto|text|symbol|file` while the tool supports
-    // content/docs. `file|content` is the adjacency that proves content is IN the enum, not just the prose.
+    // content/docs. `markers|content` is the adjacency that proves content is IN the enum, not just the prose.
     [Fact]
     public void Load_SearchModeEnum_IncludesContentMode()
     {
         string instructions = AgentInstructions.Load();
-        Assert.Contains("file|content", instructions);
+        Assert.Contains("markers|content", instructions);
         Assert.Contains("alias `docs`", instructions);
     }
 
@@ -158,24 +180,35 @@ public sealed class AgentInstructionsTests
 
     public static TheoryData<MethodInfo> ToolMethods()
     {
-        return new TheoryData<MethodInfo>
-        {
-            ToolMethod<SearchTool>(nameof(SearchTool.Search)),
-            ToolMethod<InspectTool>(nameof(InspectTool.Inspect)),
-            ToolMethod<ContextTool>(nameof(ContextTool.Context)),
-            ToolMethod<TraceTool>(nameof(TraceTool.Trace)),
-            ToolMethod<ImpactTool>(nameof(ImpactTool.Impact)),
-            ToolMethod<EditTool>(nameof(EditTool.Edit)),
-            ToolMethod<TodosTool>(nameof(TodosTool.Todos)),
-            ToolMethod<ContentTool>(nameof(ContentTool.Content)),
-            ToolMethod<PatternsTool>(nameof(PatternsTool.Patterns)),
-            ToolMethod<WorkspaceTool>(nameof(WorkspaceTool.Workspace)),
-        };
+        var data = new TheoryData<MethodInfo>();
+        foreach (MethodInfo method in DiscoverToolMethods())
+            data.Add(method);
+        return data;
     }
 
-    private static MethodInfo ToolMethod<TTool>(string name)
+    public static TheoryData<string> ToolNames()
     {
-        return typeof(TTool).GetMethod(name)
-            ?? throw new InvalidOperationException($"Could not find {typeof(TTool).Name}.{name}.");
+        var data = new TheoryData<string>();
+        foreach (MethodInfo method in DiscoverToolMethods())
+            data.Add(ToolName(method));
+        return data;
     }
+
+    private static IReadOnlyList<MethodInfo> DiscoverToolMethods() =>
+        typeof(SearchTool).Assembly
+            .GetTypes()
+            .Where(static type => type.GetCustomAttribute<McpServerToolTypeAttribute>() is not null)
+            .SelectMany(static type => type.GetMethods(
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static))
+            .Where(static method => method.GetCustomAttribute<McpServerToolAttribute>() is not null)
+            .OrderBy(static method => ToolName(method), StringComparer.Ordinal)
+            .ToArray();
+
+    private static string ToolName(MethodInfo method) =>
+        method.GetCustomAttribute<McpServerToolAttribute>()?.Name
+        ?? throw new InvalidOperationException($"{method.DeclaringType?.Name}.{method.Name} is missing a tool name.");
+
+    private static MethodInfo ToolMethod<TTool>(string name) =>
+        typeof(TTool).GetMethod(name)
+        ?? throw new InvalidOperationException($"Could not find {typeof(TTool).Name}.{name}.");
 }
