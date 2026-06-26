@@ -66,6 +66,7 @@ public sealed class IndexerService : BackgroundService
     private volatile IDisposable? _lease;
     private IndexerWatcherSet? _watchers;
     private IndexerCore? _core;
+    private string? _currentMillerDir;
 
     // The leader's extract ops, set once leadership is won (null on a non-leader). M6 write-through reaches
     // through TryReindexAsLeader to converge the index inline after an apply; guarded by _opsGate so an edit on
@@ -202,23 +203,42 @@ public sealed class IndexerService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var workspace = _bootstrap.Workspace;
-        string canonicalRoot = workspace.CanonicalRoot
-            ?? throw new InvalidOperationException(
-                "IndexerService started before the bootstrap resolved the canonical root.");
-        string canonicalDbPath = workspace.CanonicalExtractDbPath
-            ?? throw new InvalidOperationException(
-                "IndexerService started before the bootstrap resolved the canonical extract DB path.");
-        string millerDir = Path.GetDirectoryName(workspace.ExtractDbPath)!;
-
         try
         {
-            // The outer loop exists for the D4 yield protocol: a leader that abdicates to a newer-extractor
-            // challenger falls back into the claim loop as a reader (under the anti-flap cooldown) instead of
-            // exiting. A normal shutdown returns out of the session.
-            while (await RunLeadershipSessionAsync(
-                workspace, canonicalRoot, canonicalDbPath, millerDir, stoppingToken).ConfigureAwait(false))
+            while (!stoppingToken.IsCancellationRequested)
             {
+                await _bootstrap.WaitUntilBoundAsync(stoppingToken).ConfigureAwait(false);
+                int generation = _bootstrap.BindingGeneration;
+
+                var workspace = _bootstrap.Workspace;
+                string canonicalRoot = workspace.CanonicalRoot
+                    ?? throw new InvalidOperationException(
+                        "IndexerService started before the bootstrap resolved the canonical root.");
+                string canonicalDbPath = workspace.CanonicalExtractDbPath
+                    ?? throw new InvalidOperationException(
+                        "IndexerService started before the bootstrap resolved the canonical extract DB path.");
+                string millerDir = Path.GetDirectoryName(workspace.ExtractDbPath)!;
+                _currentMillerDir = millerDir;
+
+                // The inner loop exists for the D4 yield protocol: a leader that abdicates to a newer-extractor
+                // challenger falls back into the claim loop as a reader (under the anti-flap cooldown) instead of
+                // exiting. It also restarts when the primary workspace is rebound via MCP roots/list_changed.
+                while (!stoppingToken.IsCancellationRequested && generation == _bootstrap.BindingGeneration)
+                {
+                    if (!await RunLeadershipSessionAsync(
+                        workspace, canonicalRoot, canonicalDbPath, millerDir, generation, stoppingToken).ConfigureAwait(false))
+                    {
+                        if (generation == _bootstrap.BindingGeneration)
+                            return; // normal shutdown
+                        break; // primary workspace rebound mid-session
+                    }
+                }
+
+                if (stoppingToken.IsCancellationRequested)
+                    return;
+
+                StepDownLeadership(millerDir);
+                _logger.LogInformation("Primary workspace rebound; restarting indexer for the new root.");
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -227,24 +247,28 @@ public sealed class IndexerService : BackgroundService
         }
         finally
         {
-            DisposeWatchers();
-            lock (_opsGate)
-                _ops = null; // stop offering inline write-through once we step down
-            // M8 §D4: the leadership-loss transition at Debug (the inverse of the "Indexer leader: watching ..."
-            // Information line above). On a normal shutdown the host is stopping anyway; if a future failover ever
-            // releases the lease while running, this records the role change. M8 §D2: flip the live log role back
-            // to reader so any line emitted after step-down is tagged honestly (no stale role=leader).
-            if (_lease is not null)
+            StepDownLeadership(_currentMillerDir);
+        }
+    }
+
+    private void StepDownLeadership(string? millerDir)
+    {
+        DisposeWatchers();
+        lock (_opsGate)
+            _ops = null; // stop offering inline write-through once we step down
+        if (_lease is not null)
+        {
+            _logger.LogDebug("Indexer stepping down: releasing the writer lock.");
+            MillerRole.SetReader();
+            if (millerDir is not null)
             {
-                _logger.LogDebug("Indexer stepping down: releasing the writer lock.");
-                MillerRole.SetReader();
                 // Remove our identity BEFORE releasing the lock so no successor can have written its own file
                 // yet — a graceful step-down must not leave a stale "leader" for health to probe.
                 LeaderIdentityFile.TryDelete(millerDir);
             }
-            _lease?.Dispose();
-            _lease = null;
         }
+        _lease?.Dispose();
+        _lease = null;
     }
 
     /// <summary>
@@ -257,6 +281,7 @@ public sealed class IndexerService : BackgroundService
         string canonicalRoot,
         string canonicalDbPath,
         string millerDir,
+        int bindingGeneration,
         CancellationToken stoppingToken)
     {
         // --- leader election: poll until we win the lock (or are asked to stop) ---
@@ -265,7 +290,9 @@ public sealed class IndexerService : BackgroundService
         // Information forever. Becoming the leader below is the other transition, logged at Information.
         bool announcedReader = false;
         LeadershipVerdict? claimVerdict = null;
-        while (!stoppingToken.IsCancellationRequested && _lease is null)
+        while (!stoppingToken.IsCancellationRequested &&
+               bindingGeneration == _bootstrap.BindingGeneration &&
+               _lease is null)
         {
             IndexerLeadershipClaimResult claim = _leadership.TryClaim(millerDir, canonicalDbPath);
             if (claim.Claimed)
@@ -294,6 +321,8 @@ public sealed class IndexerService : BackgroundService
         }
 
         if (stoppingToken.IsCancellationRequested)
+            return false;
+        if (bindingGeneration != _bootstrap.BindingGeneration)
             return false;
 
         // --- leader: build the dispatch core + attach the watchers ---
@@ -344,8 +373,12 @@ public sealed class IndexerService : BackgroundService
         await Task.Yield();
         if (stoppingToken.IsCancellationRequested)
             return false;
+        if (bindingGeneration != _bootstrap.BindingGeneration)
+            return false;
 
         RunStartupDeltaScan(workspace);
+        if (bindingGeneration != _bootstrap.BindingGeneration)
+            return false;
 
         // D3 auto-upgrade rescan: this claim's verdict proved the artifact was produced by an OLDER extractor
         // than ours, so reconcile the whole repo with the newer binary immediately — upgrades self-heal with
@@ -361,7 +394,8 @@ public sealed class IndexerService : BackgroundService
         }
 
         // --- debounce loop: drain on each tick (collects bursts into a single coalesced batch) ---
-        while (!stoppingToken.IsCancellationRequested)
+        while (!stoppingToken.IsCancellationRequested &&
+               bindingGeneration == _bootstrap.BindingGeneration)
         {
             await Task.Delay(DebounceInterval, stoppingToken).ConfigureAwait(false);
 

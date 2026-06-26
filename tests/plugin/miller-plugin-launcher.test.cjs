@@ -144,6 +144,25 @@ test('resolveLaunchCwd uses plugin root instead of a sensitive current directory
   );
 });
 
+test('resolveSpawnCwd returns undefined when MILLER_WORKSPACE_ROOT is unset', () => {
+  assert.equal(launcher.resolveSpawnCwd({}), undefined);
+});
+
+test('resolveSpawnCwd honors explicit MILLER_WORKSPACE_ROOT', () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'miller-launcher-workspace-'));
+  assert.equal(
+    launcher.resolveSpawnCwd({ MILLER_WORKSPACE_ROOT: workspace }),
+    path.resolve(workspace),
+  );
+});
+
+test('resolveSpawnCwd ignores unresolved workspace placeholders', () => {
+  assert.equal(
+    launcher.resolveSpawnCwd({ MILLER_WORKSPACE_ROOT: '${workspaceFolder}' }),
+    undefined,
+  );
+});
+
 test('resolveLaunchCwd rejects plugin cache roots when no workspace is available', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'miller-launcher-home-'));
   const pluginRoot = path.join(home, '.claude', 'plugins', 'cache', 'miller', 'miller', '0.3.5');

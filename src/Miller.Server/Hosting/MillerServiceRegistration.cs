@@ -20,7 +20,8 @@ namespace Miller.Server.Hosting;
 /// <c>StartAsync</c>, NOT construction. The bootstrap getters (Holder/Resolver/Workspace/Ledger) throw until
 /// <see cref="IndexBootstrapService.StartAsync"/> has populated them, so NO hosted-service CONSTRUCTOR may read
 /// them (directly or via an injected singleton built from them) — read them lazily inside <c>ExecuteAsync</c>.
-/// Tools are built per-call (well after StartAsync), so the holder-backed singletons below are safe for them.
+    /// Tools are built per-call (well after StartAsync), so holder-backed current-workspace services can resolve
+    /// the latest bootstrap binding for each call.
 /// </summary>
 public static class MillerServiceRegistration
 {
@@ -28,19 +29,22 @@ public static class MillerServiceRegistration
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        // The bootstrap holds the built singletons. Registered as a singleton AND as the FIRST hosted service so
+        // The bootstrap holds the built current-workspace state. Registered as a singleton AND as the FIRST hosted service so
         // its StartAsync (index build + ledger open + holder seed + canonical-root resolve) completes before any
         // OTHER hosted service's StartAsync (the indexer, the freshness poller, the MCP transport) runs.
         services.AddSingleton<IndexBootstrapService>();
         services.AddHostedService(sp => sp.GetRequiredService<IndexBootstrapService>());
 
-        // Holder-backed singletons resolved from the bootstrap. These factories read the bootstrap getters, so
+        services.AddSingleton<WorkspaceBindingService>();
+        services.AddSingleton<IWorkspaceBindingService>(sp => sp.GetRequiredService<WorkspaceBindingService>());
+
+        // Holder-backed current-workspace services resolved from the bootstrap. These factories read the bootstrap getters, so
         // they MUST only be resolved after StartAsync — i.e. by per-call tools and the lazily-resolved probe
-        // below, NEVER by a hosted-service constructor (see the lifecycle contract above). Tools read
-        // holder.Current per call so a freshness Swap is seen (M3 step 10).
-        services.AddSingleton(sp => sp.GetRequiredService<IndexBootstrapService>().Holder);
-        services.AddSingleton(sp => sp.GetRequiredService<IndexBootstrapService>().Resolver);
-        services.AddSingleton(sp => sp.GetRequiredService<IndexBootstrapService>().Workspace);
+        // below, NEVER by a hosted-service constructor (see the lifecycle contract above). They are transient
+        // rather than singleton so MCP roots/list_changed rebinds resolve the latest primary workspace.
+        services.AddTransient(sp => sp.GetRequiredService<IndexBootstrapService>().Holder);
+        services.AddTransient(sp => sp.GetRequiredService<IndexBootstrapService>().Resolver);
+        services.AddTransient(sp => sp.GetRequiredService<IndexBootstrapService>().Workspace);
         services.AddSingleton(sp => sp.GetRequiredService<IndexBootstrapService>().Ledger);
 
         // M3 hosted services (registered AFTER the bootstrap so its StartAsync seeds the holder + canonical root
@@ -55,7 +59,7 @@ public static class MillerServiceRegistration
         // service's last-observed revision AND the indexer's queue-empty state. Resolved lazily (per call / by the
         // filter), well after StartAsync, so its GetRequiredService<IndexHolder>() is safe. Cheap — no SQLite on
         // the tool hot path.
-        services.AddSingleton(sp =>
+        services.AddTransient(sp =>
         {
             var holder = sp.GetRequiredService<IndexHolder>();
             var freshness = sp.GetRequiredService<FreshnessService>();
@@ -72,7 +76,7 @@ public static class MillerServiceRegistration
         //    edit never deadlocks against the running indexer leader — see EditWriteLock).
         //  - IEditWriteThrough: post-apply convergence — the leader reindexes inline, else the watcher reconciles.
         // EditTool itself is explicitly registered in Program.cs for Native AOT; it resolves these.
-        services.AddSingleton(sp =>
+        services.AddTransient(sp =>
         {
             var workspace = sp.GetRequiredService<WorkspaceContext>();
             string millerDir = Path.GetDirectoryName(workspace.ExtractDbPath)!;
@@ -90,12 +94,12 @@ public static class MillerServiceRegistration
         services.AddSingleton(SoftBudgets.Default);
 
         // M7 workspace tool (decision-1): the admin/index-lifecycle tool. Explicitly registered in Program.cs for
-        // Native AOT; it resolves the holder/workspace/indexer/freshness/probe/ledger singletons above plus a
+        // Native AOT; it resolves the current holder/workspace/indexer/freshness/probe/ledger services above plus a
         // JulieExtractRunner for the open(path) prime scan. The runner is located
         // under the SAME tools root the bootstrap + indexer use (the pinned julie-extract ships there, NOT the repo
         // cwd), so a missing binary fails loudly via JulieExtractRunner.Locate's restore-script message rather than
         // silently degrading.
-        services.AddSingleton(sp =>
+        services.AddTransient(sp =>
             JulieExtractRunner.Locate(sp.GetRequiredService<WorkspaceContext>().ToolsRoot));
 
         // Task 5 cross-workspace read seam. The registry is machine-global (<home>/.miller/workspaces.db); target
@@ -113,13 +117,13 @@ public static class MillerServiceRegistration
         services.AddSingleton<PatternFactsReader>();
         services.AddSingleton<IGitDiffReader, ProcessGitDiffReader>();
         services.AddSingleton<CrossWorkspaceRefreshService>();
-        services.AddSingleton<WorkspaceIndexProvider>();
-        services.AddSingleton<IWorkspaceIndexProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
-        services.AddSingleton<IWorkspaceArtifactProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
-        services.AddSingleton<IWorkspaceSearchProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
-        services.AddSingleton<IWorkspaceContentSearchProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
-        services.AddSingleton<IWorkspaceRegionSearchProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
-        services.AddSingleton<IWorkspaceTextContentSearchProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
+        services.AddTransient<WorkspaceIndexProvider>();
+        services.AddTransient<IWorkspaceIndexProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
+        services.AddTransient<IWorkspaceArtifactProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
+        services.AddTransient<IWorkspaceSearchProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
+        services.AddTransient<IWorkspaceContentSearchProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
+        services.AddTransient<IWorkspaceRegionSearchProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
+        services.AddTransient<IWorkspaceTextContentSearchProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());
 
         return services;
     }

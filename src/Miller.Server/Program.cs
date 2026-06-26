@@ -13,8 +13,8 @@ using Serilog;
 using Serilog.Core;
 
 // Miller MCP server host bootstrap (M2).
-// IndexBootstrapService (an IHostedService registered BEFORE the MCP host) builds the in-memory index from
-// the julie extract and opens the telemetry ledger before the stdio transport accepts any tools/call. Every
+// IndexBootstrapService builds the in-memory index before tools need it — eagerly when cwd/env is safe, or
+// deferred until MCP client roots arrive on the first tools/call. MCP transport starts even when deferred.
 // [McpServerToolType] tool is registered explicitly for Native AOT; each ctor's deps resolve from DI. The ONE
 // central telemetry CallToolFilter wraps every call.
 //
@@ -32,15 +32,28 @@ if (Miller.Server.Cli.CliDispatch.IsCliInvocation(args))
 }
 
 var workspacePath = Environment.CurrentDirectory;
+var startupWorkspace = WorkspaceBindingResolver.TryResolveStartup(workspacePath);
+bool eagerBootstrap = startupWorkspace is not null;
 
-// SAFETY (must precede ANY filesystem touch): refuse to run in a sensitive system root — the home dir, a
-// filesystem/drive root, or a platform system dir. A launcher that starts the MCP server with cwd set to '/' or
-// '~' must not get so much as a .miller/logs dir written there, let alone a full julie scan of the home/system
-// tree. This runs BEFORE the logs dir is created and before the host is built, so a misconfigured launch fails
-// loudly on stderr (the MCP client sees the connect error + this message) instead of indexing the world.
-Miller.Server.Tools.WorkspaceRootSafety.CanonicalizeAndRejectSensitiveRoot(workspacePath, fromCwd: true);
+// SAFETY (eager path only): refuse to run in a sensitive system root when cwd/env is the binding source.
+// Deferred MCP startup (bad plugin/global cwd) skips this guard and binds from MCP roots on the first tool call.
+if (startupWorkspace?.Source == WorkspaceBindingResolver.WorkspaceSource.Cwd)
+{
+    workspacePath = Miller.Server.Tools.WorkspaceRootSafety.CanonicalizeAndRejectSensitiveRoot(
+        startupWorkspace.Path, fromCwd: true);
+}
+else if (startupWorkspace is not null)
+{
+    workspacePath = startupWorkspace.Path;
+}
 
-var logsPath = Path.Combine(workspacePath, ".miller", "logs");
+// Deferred launches log to machine-global ~/.miller/logs until MCP roots bind the primary workspace.
+var logsPath = eagerBootstrap
+    ? Path.Combine(workspacePath, ".miller", "logs")
+    : Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+        ".miller",
+        "logs");
 Directory.CreateDirectory(logsPath);
 
 int processId = Environment.ProcessId;
@@ -69,7 +82,7 @@ if (!string.IsNullOrEmpty(logLevelEnv) && !LogLevelParse.WasRecognized(logLevelE
 var builder = Host.CreateApplicationBuilder(args);
 builder.Services.AddSerilog();
 
-// The full host service graph (bootstrap + holder-backed singletons + the M3 background services + the edit/
+// The full host service graph (bootstrap + holder-backed current-workspace services + the M3 background services + the edit/
 // workspace tool deps) lives in ONE testable place so the startup graph cannot drift from what the tests pin.
 // LIFECYCLE NOTE: the generic host CONSTRUCTS every hosted service before calling StartAsync on any of them, so
 // registration order orders StartAsync, NOT construction — no hosted-service constructor may read a bootstrap
@@ -95,8 +108,14 @@ builder.Services
     .WithTools<ContentTool>()
     .WithTools<PatternsTool>()
     .WithTools<WorkspaceTool>()
-    // The ONE central telemetry interceptor — wraps every tools/call.
-    .WithRequestFilters(filters => filters.AddCallToolFilter(TelemetryCallToolFilter.Create()));
+    .WithRequestFilters(filters =>
+    {
+        filters.AddCallToolFilter(WorkspaceBindingCallToolFilter.Create());
+        filters.AddCallToolFilter(TelemetryCallToolFilter.Create());
+    });
+
+builder.Services.AddSingleton<WorkspaceRootsNotificationService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<WorkspaceRootsNotificationService>());
 
 var host = builder.Build();
 await host.RunAsync();

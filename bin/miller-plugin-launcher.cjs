@@ -443,6 +443,19 @@ function normalizeLaunchCwd(candidate) {
   }
 }
 
+function resolveSpawnCwd(env = process.env) {
+  if (!env.MILLER_WORKSPACE_ROOT) {
+    return undefined;
+  }
+
+  const resolved = normalizeLaunchCwd(env.MILLER_WORKSPACE_ROOT);
+  if (resolved && !isSensitiveLaunchCwd(resolved, env)) {
+    return resolved;
+  }
+
+  return undefined;
+}
+
 function resolveLaunchCwd(env = process.env, currentDirectory = process.cwd(), fallbackPluginRoot = pluginRoot()) {
   const candidates = [
     env.MILLER_WORKSPACE_ROOT,
@@ -506,8 +519,9 @@ async function ensureMillerPackage(config, platformInfo, cacheRoot = defaultCach
 }
 
 function runMiller(binaryPath, argv = process.argv.slice(2)) {
+  const cwd = resolveSpawnCwd();
   const child = childProcess.spawn(binaryPath, ['serve', ...argv], {
-    cwd: resolveLaunchCwd(),
+    ...(cwd ? { cwd } : {}),
     env: process.env,
     stdio: 'inherit',
   });
@@ -546,6 +560,7 @@ module.exports = {
   parseSha256Sidecar,
   releaseArchiveName,
   resolveLaunchCwd,
+  resolveSpawnCwd,
   readPluginConfig,
   validateArchiveEntryNames,
 };

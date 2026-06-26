@@ -1,24 +1,19 @@
 #!/usr/bin/env bash
-# Configure Cursor to run Miller from this checkout via the global MCP config.
+# Configure Cursor to run Miller from this checkout via user-global MCP config.
 #
-# Implements the recommended Cursor path (README "Cursor global MCP install",
-# docs/findings/2026-06-08-cursor-plugin-relative-launcher-root-cause.md) with a
-# local-dev twist: MILLER_BINARY points at this checkout's Release build, so a
-# `dotnet build -c Release` updates the server Cursor runs without reinstalling.
+# Miller binds workspace roots from MCP client roots on the first tool call, so a
+# single ~/.cursor/mcp.json entry works per editor window (see
+# docs/plans/2026-06-25-mcp-roots-workspace-binding-design.md).
 #
-# - Copies the plugin launcher + manifest to a standalone root under
-#   ~/.miller/plugin-cache/cursor-global-miller (NOT the checkout — an
-#   empty-window launch must fail closed, never index the Miller repo).
-# - Merges a `miller` entry into ~/.cursor/mcp.json, preserving other servers.
+# - Writes ~/.cursor/mcp.json with the Release build path.
 # - Retires any legacy ~/.cursor/plugins/local/miller copy to a backup dir
 #   (local plugin installs start from empty/global windows and produce
 #   duplicate plugin-miller-miller rows).
 #
-# Re-run after changing bin/miller-plugin-launcher.cjs to refresh the snapshot.
+# Re-run after `dotnet build -c Release` to refresh the binary path.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LAUNCHER_ROOT="${HOME}/.miller/plugin-cache/cursor-global-miller"
 CURSOR_MCP_JSON="${HOME}/.cursor/mcp.json"
 LEGACY_PLUGIN="${HOME}/.cursor/plugins/local/miller"
 MILLER_BINARY="${REPO_ROOT}/src/Miller.Server/bin/Release/net10.0/miller"
@@ -31,12 +26,8 @@ if [[ ! -x "${MILLER_BINARY}" ]]; then
   exit 1
 fi
 
-echo "Snapshotting launcher to ${LAUNCHER_ROOT}..."
-mkdir -p "${LAUNCHER_ROOT}/bin" "${HOME}/.cursor"
-cp "${REPO_ROOT}/bin/miller-plugin-launcher.cjs" "${LAUNCHER_ROOT}/bin/"
-cp "${REPO_ROOT}/miller-plugin.json" "${LAUNCHER_ROOT}/"
-
-echo "Merging miller server into ${CURSOR_MCP_JSON}..."
+echo "Writing Cursor MCP config to ${CURSOR_MCP_JSON}..."
+mkdir -p "${HOME}/.cursor"
 node - "${CURSOR_MCP_JSON}" "${MILLER_BINARY}" <<'EOF'
 const fs = require('node:fs');
 
@@ -45,18 +36,18 @@ const millerBinary = process.argv[3];
 
 let config = {};
 if (fs.existsSync(mcpJsonPath)) {
-  config = JSON.parse(fs.readFileSync(mcpJsonPath, 'utf8'));
+  try {
+    config = JSON.parse(fs.readFileSync(mcpJsonPath, 'utf8'));
+  } catch {
+    config = {};
+  }
 }
 
 config.mcpServers ??= {};
 config.mcpServers.miller = {
   type: 'stdio',
-  command: 'node',
-  args: ['${userHome}/.miller/plugin-cache/cursor-global-miller/bin/miller-plugin-launcher.cjs'],
-  env: {
-    MILLER_WORKSPACE_ROOT: '${workspaceFolder}',
-    MILLER_BINARY: millerBinary,
-  },
+  command: millerBinary,
+  args: ['serve'],
 };
 
 fs.writeFileSync(mcpJsonPath, `${JSON.stringify(config, null, 2)}\n`);
@@ -70,9 +61,8 @@ if [[ -d "${LEGACY_PLUGIN}" ]]; then
 fi
 
 echo
-echo "Cursor global Miller MCP config installed."
+echo "Cursor Miller MCP config installed."
 echo "  config:   ${CURSOR_MCP_JSON}"
-echo "  launcher: ${LAUNCHER_ROOT}/bin/miller-plugin-launcher.cjs"
 echo "  binary:   ${MILLER_BINARY}"
 "${MILLER_BINARY}" version
 echo

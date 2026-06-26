@@ -37,11 +37,19 @@ public sealed class TelemetryLedger : IDisposable
     private readonly object _gate = new();
     private readonly SqliteConnection _connection;
     private readonly SqliteCommand _insert;
-    private readonly string? _workspaceRoot;
+    private string? _workspaceId;
+    private string? _workspaceRoot;
     private bool _disposed;
 
     /// <summary>The workspace id stamped onto every row, or null if unknown at open time.</summary>
-    public string? WorkspaceId { get; }
+    public string? WorkspaceId
+    {
+        get
+        {
+            lock (_gate)
+                return _workspaceId;
+        }
+    }
 
     /// <summary>The shared telemetry database path opened by this ledger.</summary>
     public string DbPath { get; }
@@ -53,7 +61,7 @@ public sealed class TelemetryLedger : IDisposable
     {
         _connection = connection;
         DbPath = dbPath;
-        WorkspaceId = workspaceId;
+        _workspaceId = workspaceId;
         _workspaceRoot = workspaceRoot;
 
         _insert = _connection.CreateCommand();
@@ -160,6 +168,21 @@ public sealed class TelemetryLedger : IDisposable
     }
 
     /// <summary>
+    /// Update the default workspace stamped on rows after the process rebinds its primary workspace.
+    /// Cross-workspace calls may still override these values per record.
+    /// </summary>
+    public void RebindWorkspace(string? workspaceId, string? workspaceRoot)
+    {
+        lock (_gate)
+        {
+            if (_disposed)
+                return;
+            _workspaceId = workspaceId;
+            _workspaceRoot = workspaceRoot;
+        }
+    }
+
+    /// <summary>
     /// Persist one row. Best-effort: ANY failure (a CHECK violation, a locked DB, a disposed ledger) is
     /// swallowed and counted in <see cref="DroppedWrites"/>. Telemetry must NEVER break a tool call.
     /// <paramref name="id"/> (M8 decision-2) is the row's primary key; the central filter supplies the call's
@@ -182,11 +205,14 @@ public sealed class TelemetryLedger : IDisposable
                     string.IsNullOrWhiteSpace(id) ? Guid.CreateVersion7().ToString() : id;
                 _insert.Parameters["$tool"].Value = record.Tool;
                 _insert.Parameters["$op"].Value = (object?)record.Op ?? DBNull.Value;
-                _insert.Parameters["$ws"].Value = (object?)record.WorkspaceId ?? DBNull.Value;
+                string? defaultWorkspaceId = _workspaceId;
+                string? defaultWorkspaceRoot = _workspaceRoot;
+
+                _insert.Parameters["$ws"].Value = (object?)(record.WorkspaceId ?? defaultWorkspaceId) ?? DBNull.Value;
                 // workspace_root normally falls back to the process workspace root. Cross-workspace calls may
                 // override it per-record so shared ledger rows attribute reads to the target workspace.
                 string? workspaceRoot = string.IsNullOrWhiteSpace(record.WorkspaceRoot)
-                    ? _workspaceRoot
+                    ? defaultWorkspaceRoot
                     : record.WorkspaceRoot;
                 _insert.Parameters["$wsroot"].Value = (object?)workspaceRoot ?? DBNull.Value;
                 _insert.Parameters["$dur"].Value = record.DurationMs;

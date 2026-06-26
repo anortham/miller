@@ -1,0 +1,6 @@
+interface:
+  display_name: "Miller Orientation"
+  short_description: "Pick the right Miller tool/mode first"
+  default_prompt: "Use $miller-orientation to pick the right Miller tool and mode for this task."
+policy:
+  allow_implicit_invocation: true

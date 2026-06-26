@@ -319,10 +319,95 @@ public sealed class IndexerServiceLeadershipTests
         }
     }
 
+    [Fact]
+    public async Task ReaderLoop_WhenPrimaryWorkspaceRebinds_RestartsClaimAttemptsForNewRoot()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "miller-leadership-rebind-" + Guid.NewGuid().ToString("N"));
+        var attempts = new List<string>();
+        var attemptsGate = new object();
+        try
+        {
+            var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
+            bootstrap.TestBootstrapInterceptor = (canonicalRoot, _) =>
+            {
+                var workspace = WorkspaceContext.Create(canonicalRoot, AppContext.BaseDirectory) with
+                {
+                    WorkspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot),
+                    CanonicalRoot = canonicalRoot,
+                    CanonicalExtractDbPath = Path.Combine(canonicalRoot, ".miller", "symbols.db"),
+                };
+                bootstrap.SeedForTest(
+                    workspace,
+                    new IndexHolder(
+                        MillerRepositoryIndex.Build(System.Array.Empty<IndexedSymbol>()),
+                        builtRevision: bootstrap.BindingGeneration + 1));
+                return true;
+            };
+
+            string rootA = Path.Combine(dir, "repo-a");
+            string rootB = Path.Combine(dir, "repo-b");
+            Directory.CreateDirectory(rootA);
+            Directory.CreateDirectory(rootB);
+            bootstrap.BootstrapForRoot(rootA, WorkspaceBindingResolver.WorkspaceSource.Roots);
+
+            var service = new IndexerService(
+                bootstrap,
+                NullLogger<IndexerService>.Instance,
+                NullLoggerFactory.Instance,
+                tryAcquireLeadership: millerDir =>
+                {
+                    lock (attemptsGate)
+                        attempts.Add(millerDir);
+                    return null;
+                },
+                createOps: (_, _, _) => new RecordingOps(),
+                leaderRetryInterval: TimeSpan.FromMilliseconds(20),
+                SymbolSearchSidecar.Disabled,
+                attachFileWatchers: false,
+                drainFullScanRequests: _ => FullScanDrainResult.Empty,
+                drainFileConvergeRequests: _ => FileConvergeDrainResult.Empty,
+                drainYieldRequests: _ => YieldDrainResult.Empty,
+                ownExtractorVersion: () => "3.0.0",
+                allowExtractorDowngrade: false,
+                readArtifactExtractorVersion: _ => "3.0.0");
+
+            await service.StartAsync(CancellationToken.None);
+            await WaitUntilAsync(
+                () => AttemptsContain(Path.Combine(PathCanonicalizer.CanonicalizeRoot(rootA), ".miller")),
+                TestContext.Current.CancellationToken);
+
+            bootstrap.BootstrapForRoot(rootB, WorkspaceBindingResolver.WorkspaceSource.Roots);
+
+            await WaitUntilAsync(
+                () => AttemptsContain(Path.Combine(PathCanonicalizer.CanonicalizeRoot(rootB), ".miller")),
+                TestContext.Current.CancellationToken);
+
+            await service.StopAsync(CancellationToken.None);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+        }
+
+        bool AttemptsContain(string expected)
+        {
+            lock (attemptsGate)
+                return attempts.Any(path => string.Equals(path, expected, StringComparison.Ordinal));
+        }
+    }
+
     // ---- D4 requester side: yield request dedup -----------------------------------------------------------
 
     private static LeaderIdentity LiveLeader(int pid, string? extractorVersion) => new(
         pid, "0.3.6", null, new DateTimeOffset(2026, 6, 11, 9, 0, 0, TimeSpan.Zero), extractorVersion);
+
+    private static async Task WaitUntilAsync(Func<bool> condition, CancellationToken cancellationToken)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+        while (!condition())
+            await Task.Delay(10, linked.Token).ConfigureAwait(false);
+    }
 
     [Fact]
     public void MaybeRequestYield_NewerThanLiveLeader_EnqueuesOnce_NoRepeatWithinTtl()

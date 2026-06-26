@@ -67,30 +67,44 @@ public sealed class FreshnessService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var workspace = _bootstrap.Workspace;
-        _workspaceId = workspace.WorkspaceId;
-
-        if (_workspaceId is null)
-        {
-            // No workspace id => a never-scanned / static extract with no revision cursor to poll. The bootstrap
-            // already built the initial index; there is nothing to converge on. Idle.
-            _logger.LogInformation(
-                "FreshnessService: no workspace_id; the index is static (no revision cursor to poll).");
-            return;
-        }
-
         try
         {
             while (!stoppingToken.IsCancellationRequested)
             {
-                await Task.Delay(PollInterval, stoppingToken).ConfigureAwait(false);
-                PollAndSwap(workspace.ExtractDbPath);
+                await _bootstrap.WaitUntilBoundAsync(stoppingToken).ConfigureAwait(false);
+                int generation = _bootstrap.BindingGeneration;
+                var workspace = _bootstrap.Workspace;
+                _workspaceId = workspace.WorkspaceId;
+
+                if (_workspaceId is null)
+                {
+                    // No workspace id => a never-scanned / static extract with no revision cursor to poll. The bootstrap
+                    // already built the initial index; there is nothing to converge on. Idle until rebind or shutdown.
+                    _logger.LogInformation(
+                        "FreshnessService: no workspace_id; the index is static (no revision cursor to poll).");
+                    await WaitForRebindOrCancelAsync(generation, stoppingToken).ConfigureAwait(false);
+                    continue;
+                }
+
+                Interlocked.Exchange(ref _lastObservedRevision, -1);
+
+                while (!stoppingToken.IsCancellationRequested && generation == _bootstrap.BindingGeneration)
+                {
+                    await Task.Delay(PollInterval, stoppingToken).ConfigureAwait(false);
+                    PollAndSwap(workspace.ExtractDbPath);
+                }
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
             // Normal shutdown.
         }
+    }
+
+    private async Task WaitForRebindOrCancelAsync(int generation, CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested && generation == _bootstrap.BindingGeneration)
+            await Task.Delay(PollInterval, stoppingToken).ConfigureAwait(false);
     }
 
     /// <summary>

@@ -2,6 +2,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Miller.Indexing;
+using Miller.Server.Hosting;
 using Miller.Server.Logging;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
@@ -13,8 +14,8 @@ namespace Miller.Server;
 /// The startup bootstrap (M2 §7). Registered as an <see cref="IHostedService"/> BEFORE the MCP host so its
 /// <see cref="StartAsync"/> runs to completion — building the in-memory index and opening the telemetry
 /// ledger — before <c>WithStdioServerTransport</c>'s own hosted service starts accepting <c>tools/call</c>.
-/// It also holds the built singletons (index, resolver, workspace context, ledger) which the DI container
-/// resolves through factory delegates. NOTE: the generic host CONSTRUCTS every hosted service before calling
+    /// It also holds the current workspace state (index, resolver, workspace context, ledger) which the DI container
+    /// resolves through factory delegates. NOTE: the generic host CONSTRUCTS every hosted service before calling
 /// <c>StartAsync</c> on any of them — registration order orders <c>StartAsync</c>, NOT construction. So the
 /// getters below throw if read before this <see cref="StartAsync"/> completes, and no hosted-service constructor
 /// may read them (the M3 services take only this bootstrap and read its getters lazily inside <c>ExecuteAsync</c>).
@@ -61,6 +62,29 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     public TelemetryLedger Ledger =>
         _ledger ?? throw new InvalidOperationException("TelemetryLedger requested before bootstrap completed.");
 
+    /// <summary>True once a primary workspace has been bootstrapped (eager or deferred).</summary>
+    public bool IsBound => _holder is not null;
+
+    /// <summary>True when startup deferred binding until MCP roots or the first tool call.</summary>
+    public bool IsDeferred { get; private set; }
+
+    /// <summary>Increments when the primary workspace is (re)bound; background services observe changes.</summary>
+    public int BindingGeneration => Volatile.Read(ref _bindingGeneration);
+
+    private int _bindingGeneration;
+    private TaskCompletionSource _bindingReady = CreateBindingGate();
+
+    private static TaskCompletionSource CreateBindingGate() =>
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>Awaits the first or subsequent primary workspace bind.</summary>
+    public Task WaitUntilBoundAsync(CancellationToken cancellationToken)
+    {
+        if (IsBound)
+            return Task.CompletedTask;
+        return _bindingReady.Task.WaitAsync(cancellationToken);
+    }
+
     internal sealed record BootstrapScanDecision(
         bool ShouldScan,
         bool Force,
@@ -75,188 +99,256 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        // Synchronous work (SQLite reads, a subprocess scan) wrapped in a Task — the host awaits this before
-        // the transport's hosted service starts, so the index is ready when the first tool call arrives.
-        Run();
+        var startup = WorkspaceBindingResolver.TryResolveStartup(Environment.CurrentDirectory);
+        if (startup is not null)
+        {
+            BootstrapForRoot(startup.Path, startup.Source);
+            return Task.CompletedTask;
+        }
+
+        IsDeferred = true;
+        _logger.LogInformation(
+            "Deferring workspace bootstrap until MCP client roots or the first tool call " +
+            "(startup cwd {Cwd} is not a usable workspace root).",
+            Environment.CurrentDirectory);
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Test-only hook: when set, invoked instead of <see cref="RunBootstrap"/> after canonical-root resolution.
+    /// Return true when the interceptor fully handled binding (including <see cref="SignalBound"/> if needed).
+    /// </summary>
+    internal Func<string, WorkspaceBindingResolver.WorkspaceSource, bool>? TestBootstrapInterceptor { get; set; }
+
+    /// <summary>
+    /// Bind and bootstrap the primary workspace. Idempotent when already bound to the same canonical root;
+    /// re-bootstraps when the canonical root changes (MCP roots/list_changed).
+    /// </summary>
+    internal void BootstrapForRoot(string workspaceRoot, WorkspaceBindingResolver.WorkspaceSource source)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
+
+        string canonicalRoot = source == WorkspaceBindingResolver.WorkspaceSource.Cwd
+            ? WorkspaceRootSafety.CanonicalizeAndRejectSensitiveRoot(workspaceRoot, fromCwd: true)
+            : PathCanonicalizer.CanonicalizeRoot(workspaceRoot);
+
+        lock (_gate)
+        {
+            if (_workspace?.CanonicalRoot is not null &&
+                IndexBootstrapService.RootPathsEqual(_workspace.CanonicalRoot, canonicalRoot))
+            {
+                return;
+            }
+
+            if (_holder is not null)
+            {
+                _logger.LogInformation(
+                    "Rebinding primary workspace from {OldRoot} to {NewRoot}.",
+                    _workspace?.CanonicalRoot ?? "(unknown)", canonicalRoot);
+            }
+
+            if (TestBootstrapInterceptor?.Invoke(canonicalRoot, source) == true)
+                return;
+
+            RunBootstrap(canonicalRoot, source);
+            SignalBound();
+        }
+    }
+
+    private void SignalBound()
+    {
+        int gen = Interlocked.Increment(ref _bindingGeneration);
+        var gate = Interlocked.Exchange(ref _bindingReady, CreateBindingGate());
+        gate.TrySetResult();
+        _logger.LogDebug("Primary workspace bound (generation {Generation}).", gen);
     }
 
     private void Run()
     {
-        lock (_gate)
+        var startup = WorkspaceBindingResolver.TryResolveStartup(Environment.CurrentDirectory);
+        if (startup is null)
+            throw WorkspaceBindingResolver.CreateBindingFailureException();
+        BootstrapForRoot(startup.Path, startup.Source);
+    }
+
+    private void RunBootstrap(string canonicalRoot, WorkspaceBindingResolver.WorkspaceSource source)
+    {
+        // The telemetry ledger is opened late but must be disposed if ANY later step throws (otherwise the
+        // ledger stays open + the telemetry DB locked, but is never assigned to _ledger so Dispose() misses
+        // it). Track it in a local and dispose on failure before the exception propagates.
+        TelemetryLedger? ledger = null;
+        try
         {
-            if (_holder is not null)
-                return; // idempotent
+            var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+            var ctx = WorkspaceContext.Create(canonicalRoot, AppContext.BaseDirectory);
 
-            // The telemetry ledger is opened late but must be disposed if ANY later step throws (otherwise the
-            // ledger stays open + the telemetry DB locked, but is never assigned to _ledger so Dispose() misses
-            // it). Track it in a local and dispose on failure before the exception propagates.
-            TelemetryLedger? ledger = null;
-            try
+            string canonicalDbPath = Path.Combine(canonicalRoot, ".miller", "symbols.db");
+            string stableWorkspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot);
+            string millerDir = Path.GetDirectoryName(canonicalDbPath)!;
+            Directory.CreateDirectory(millerDir);
+
+            // Locate the pinned julie-extract under the tools root (NOT the repo cwd). Absent → fail loudly
+            // (FileNotFoundException carrying the restore-script message) — Miller cannot index without it.
+            var runner = JulieExtractRunner.Locate(ctx.ToolsRoot);
+
+            // Locate only checks EXISTENCE, so a julie-extract left in .tools/ from before a pin bump passes it
+            // but then fails every scan with a schema mismatch. Probe the bundled version up front and warn
+            // loudly when it is older than the pin, so the operator sees the real cause ("re-run restore")
+            // instead of inferring it from a downstream schema-mismatch loop (the binary is PRESENT, so the
+            // "missing binary" hint misleads). Diagnostic only — the schema/contract gates still decide
+            // compatibility (a newer/same-contract binary is fine), so this never blocks startup.
+            if (JulieExtractVersionProbe.StaleBinaryWarning(runner.QueryVersion()) is { } staleBinaryWarning)
+                _logger.LogWarning("julie-extract: {Warning}", staleBinaryWarning);
+
+            // Initial bootstrap scan decision. A missing DB gets the first delta scan. An existing DB with a
+            // missing/legacy/mismatched workspace_id is force-rebound before Miller loads it, so the in-memory
+            // index, freshness cursor, registry row, and julie metadata all converge on the stable root hash.
+            long? scanRevision = null;
+            bool dbExists = File.Exists(canonicalDbPath);
+            // v1 identity is the recorded canonical root_path, not a stored workspace_id (reconciliation #14).
+            string? existingRootPath = dbExists ? ExtractReader.ReadRootPath(canonicalDbPath) : null;
+            var scanDecision = DecideBootstrapScan(dbExists, existingRootPath, canonicalRoot);
+            if (scanDecision.ShouldScan)
             {
-                var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
-                var ctx = WorkspaceContext.Create(Environment.CurrentDirectory, AppContext.BaseDirectory);
-
-                // The canonical (symlink-resolved) root for the watcher + extract calls (verified-fact 4).
-                // Resolved BEFORE the safety check and scan so a symlink to a sensitive root cannot slip past the
-                // guard and the very first `extract` already receives canonical paths. The
-                // canonical DB path is the canonical root composed with the M2 .miller/symbols.db convention —
-                // a non-canonical --db under a symlinked workspace trips the same outside-root family as --file.
-                string canonicalRoot = WorkspaceRootSafety.CanonicalizeAndRejectSensitiveRoot(
-                    ctx.WorkspaceRoot, fromCwd: true);
-                string canonicalDbPath = Path.Combine(canonicalRoot, ".miller", "symbols.db");
-                string stableWorkspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot);
-                string millerDir = Path.GetDirectoryName(canonicalDbPath)!;
-                Directory.CreateDirectory(millerDir);
-
-                // Locate the pinned julie-extract under the tools root (NOT the repo cwd). Absent → fail loudly
-                // (FileNotFoundException carrying the restore-script message) — Miller cannot index without it.
-                var runner = JulieExtractRunner.Locate(ctx.ToolsRoot);
-
-                // Locate only checks EXISTENCE, so a julie-extract left in .tools/ from before a pin bump passes it
-                // but then fails every scan with a schema mismatch. Probe the bundled version up front and warn
-                // loudly when it is older than the pin, so the operator sees the real cause ("re-run restore")
-                // instead of inferring it from a downstream schema-mismatch loop (the binary is PRESENT, so the
-                // "missing binary" hint misleads). Diagnostic only — the schema/contract gates still decide
-                // compatibility (a newer/same-contract binary is fine), so this never blocks startup.
-                if (JulieExtractVersionProbe.StaleBinaryWarning(runner.QueryVersion()) is { } staleBinaryWarning)
-                    _logger.LogWarning("julie-extract: {Warning}", staleBinaryWarning);
-
-                // Initial bootstrap scan decision. A missing DB gets the first delta scan. An existing DB with a
-                // missing/legacy/mismatched workspace_id is force-rebound before Miller loads it, so the in-memory
-                // index, freshness cursor, registry row, and julie metadata all converge on the stable root hash.
-                long? scanRevision = null;
-                bool dbExists = File.Exists(canonicalDbPath);
-                // v1 identity is the recorded canonical root_path, not a stored workspace_id (reconciliation #14).
-                string? existingRootPath = dbExists ? ExtractReader.ReadRootPath(canonicalDbPath) : null;
-                var scanDecision = DecideBootstrapScan(dbExists, existingRootPath, canonicalRoot);
-                if (scanDecision.ShouldScan)
+                if (scanDecision.Force)
                 {
-                    if (scanDecision.Force)
-                    {
-                        _logger.LogInformation(
-                            "Extract DB at {Db} has root_path={ExistingRootPath}; force-scanning {Root} with stable workspace_id={StableWorkspaceId}.",
-                            canonicalDbPath, existingRootPath ?? "(missing)", canonicalRoot, stableWorkspaceId);
-                    }
-                    else
-                    {
-                        _logger.LogInformation(
-                            "No extract DB at {Db}; scanning {Root} with stable workspace_id={StableWorkspaceId}.",
-                            canonicalDbPath, canonicalRoot, stableWorkspaceId);
-                    }
-                    var report = runner.Scan(canonicalRoot, canonicalDbPath, scanDecision.Force);
-                    scanRevision = report.Revision;
                     _logger.LogInformation(
-                        "Scan complete: {Symbols} symbols extracted (revision {Rev}).",
-                        report.SymbolsExtracted, report.Revision);
-                    // A partial scan (some files failed to parse) is a CONSISTENT artifact loaded with rows
-                    // missing — surface it as a WARNING so the clean "Scan complete" above never hides silent
-                    // symbol loss (julie-extract migration review finding).
-                    if (PartialExtractLog.DescribePartial(report) is { } partial)
-                        _logger.LogWarning("Bootstrap scan: {Partial}", partial);
+                        "Extract DB at {Db} has root_path={ExistingRootPath}; force-scanning {Root} with stable workspace_id={StableWorkspaceId}.",
+                        canonicalDbPath, existingRootPath ?? "(missing)", canonicalRoot, stableWorkspaceId);
                 }
                 else
                 {
-                    _logger.LogInformation("Reusing existing extract DB at {Db}.", canonicalDbPath);
+                    _logger.LogInformation(
+                        "No extract DB at {Db}; scanning {Root} with stable workspace_id={StableWorkspaceId}.",
+                        canonicalDbPath, canonicalRoot, stableWorkspaceId);
                 }
-
-                // Read → build the in-memory index + dependency graph as one unit via the single production path
-                // (M5 D9; read-path opens the same DB file; canonical is fine). The bootstrap and the freshness
-                // rebuild both route through RepositoryIndexLoader so each gets the graph identically.
-                //
-                // AUTO-HEAL: a reused DB whose root_path matched (so DecideBootstrapScan did NOT rescan) can still
-                // be an INCOMPATIBLE artifact — e.g. a julie-extract schema/contract bump raised the expected
-                // version since the DB was written. Rather than crash the whole host (which surfaces to the client
-                // as "MCP failed to connect"), force-rebuild the index ONCE with the bundled julie-extract and
-                // reload. A second incompatibility means the bundled tool does not match this build — fail loudly.
-                var loadResult = LoadIndexWithAutoRebuild(
-                    load: () => RepositoryIndexLoader.Load(canonicalDbPath),
-                    forceRescan: () =>
-                    {
-                        var rebuild = runner.Scan(canonicalRoot, canonicalDbPath, force: true);
-                        _logger.LogInformation(
-                            "Auto-rebuild scan complete: {Symbols} symbols extracted (revision {Rev}).",
-                            rebuild.SymbolsExtracted, rebuild.Revision);
-                        if (PartialExtractLog.DescribePartial(rebuild) is { } partial)
-                            _logger.LogWarning("Auto-rebuild scan: {Partial}", partial);
-                        return rebuild.Revision;
-                    },
-                    // The rebuild replaced the DB file; drop pooled read connections so the retry below opens a
-                    // fresh handle on the rebuilt artifact instead of re-reading the old inode's stale snapshot.
-                    onBeforeRetry: SqliteConnection.ClearAllPools,
-                    onIncompatible: ex => _logger.LogWarning(
-                        "Existing extract DB at {Db} is incompatible ({Message}); force-rebuilding once with the " +
-                        "bundled julie-extract.",
-                        canonicalDbPath, ex.Message),
-                    onCorrupt: ex => _logger.LogWarning(
-                        "Existing extract DB at {Db} is corrupt ({Message}); force-rebuilding once with the bundled " +
-                        "julie-extract (a writer likely died mid-scan).",
-                        canonicalDbPath, ex.Message));
-                var index = loadResult.Index;
-
-                // An auto-rebuild counts as a scan for the holder's seed revision + the registry's scanned-at
-                // bookkeeping below, even though DecideBootstrapScan chose to reuse: julie just (re)wrote the DB.
-                bool didScan = scanDecision.ShouldScan || loadResult.Rebuilt;
-                if (loadResult.Rebuilt)
-                    scanRevision = loadResult.RebuiltRevision;
-
-                // The workspace id is derived from the canonical root (stableWorkspaceId), NOT read back from the
-                // DB: v1 stores no workspace_id, and the pre-load DecideBootstrapScan already force-rescanned any
-                // DB whose recorded root_path did not match this root (reconciliation #14 — the post-load workspace_id
-                // assertion is gone with the metadata key).
-                var workspace = ctx with
-                {
-                    WorkspaceId = stableWorkspaceId,
-                    CanonicalRoot = canonicalRoot,
-                    CanonicalExtractDbPath = canonicalDbPath,
-                };
-
-                // Seed the holder's BuiltRevision: the scan report's revision when we just scanned, else the
-                // latest persisted revision (a reused DB) so the freshness poll does not rebuild on first tick.
-                long builtRevision = scanRevision
-                    ?? ReadLatestRevisionOrZero(canonicalDbPath, stableWorkspaceId);
-
-                if (didScan)
-                    MarkRegistryScanned(workspace, stableWorkspaceId, scanRevision ?? builtRevision);
-                else
-                    RegisterBootstrapWorkspace(
-                        workspace, stableWorkspaceId, scanDecision.RegistryStateAfterLoad, builtRevision);
-
-                // Open the SEPARATE, writable telemetry ledger (never the read-only extract) + prune old rows.
-                // The ledger is MACHINE-GLOBAL (shared <home>/.miller/telemetry.db across every workspace), so its
-                // directory is NOT the per-repo .miller created above — ensure it exists before opening. Each row
-                // is stamped with this workspace's id + root so the shared ledger stays attributable.
-                // OpenAndPrune disposes the just-opened ledger if Prune throws, so a prune failure cannot leak
-                // the open connection (the outer catch covers every OTHER post-open step the same way).
-                Directory.CreateDirectory(Path.GetDirectoryName(workspace.TelemetryDbPath)!);
-                ledger = OpenAndPrune(
-                    workspace.TelemetryDbPath, stableWorkspaceId, workspace.WorkspaceRoot, retentionDays: 30, out int pruned);
-
-                // Seed the artifact identity alongside the revision: a later full rebuild PROMOTES a fresh file
-                // whose restarted revision counter can land at or below builtRevision, and the freshness poll
-                // detects that replacement by the artifact_id changing (FreshnessPoller). Without the seed the
-                // held id is unknown and an exact-revision-tie rebuild would go unnoticed.
-                var holder = new IndexHolder(index, builtRevision, ReadArtifactIdOrNull(canonicalDbPath));
-                _holder = holder;
-                _resolver = new SmartTargetResolver(holder); // holder-backed: live freshness per call (M3 step 10)
-                _workspace = workspace;
-                _ledger = ledger; // only published once every preceding step succeeded
-
-                var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(startedAt);
+                var report = runner.Scan(canonicalRoot, canonicalDbPath, scanDecision.Force);
+                scanRevision = report.Revision;
                 _logger.LogInformation(
-                    "Bootstrap ready: {Count} symbols indexed at revision {Rev}, workspace_id={Ws}, " +
-                    "{Pruned} telemetry rows pruned, in {Ms}ms.",
-                    index.DocumentCount, builtRevision, stableWorkspaceId, pruned,
-                    (long)elapsed.TotalMilliseconds);
+                    "Scan complete: {Symbols} symbols extracted (revision {Rev}).",
+                    report.SymbolsExtracted, report.Revision);
+                // A partial scan (some files failed to parse) is a CONSISTENT artifact loaded with rows
+                // missing — surface it as a WARNING so the clean "Scan complete" above never hides silent
+                // symbol loss (julie-extract migration review finding).
+                if (PartialExtractLog.DescribePartial(report) is { } partial)
+                    _logger.LogWarning("Bootstrap scan: {Partial}", partial);
             }
-            catch
+            else
             {
-                // Partial-initialization cleanup: if the ledger was opened but a later step threw, dispose it so
-                // the telemetry DB is not left locked / its WAL in an indeterminate state. _ledger was not yet
-                // assigned, so Dispose() would otherwise leak it.
-                ledger?.Dispose();
-                throw;
+                _logger.LogInformation("Reusing existing extract DB at {Db}.", canonicalDbPath);
             }
+
+            // Read → build the in-memory index + dependency graph as one unit via the single production path
+            // (M5 D9; read-path opens the same DB file; canonical is fine). The bootstrap and the freshness
+            // rebuild both route through RepositoryIndexLoader so each gets the graph identically.
+            //
+            // AUTO-HEAL: a reused DB whose root_path matched (so DecideBootstrapScan did NOT rescan) can still
+            // be an INCOMPATIBLE artifact — e.g. a julie-extract schema/contract bump raised the expected
+            // version since the DB was written. Rather than crash the whole host (which surfaces to the client
+            // as "MCP failed to connect"), force-rebuild the index ONCE with the bundled julie-extract and
+            // reload. A second incompatibility means the bundled tool does not match this build — fail loudly.
+            var loadResult = LoadIndexWithAutoRebuild(
+                load: () => RepositoryIndexLoader.Load(canonicalDbPath),
+                forceRescan: () =>
+                {
+                    var rebuild = runner.Scan(canonicalRoot, canonicalDbPath, force: true);
+                    _logger.LogInformation(
+                        "Auto-rebuild scan complete: {Symbols} symbols extracted (revision {Rev}).",
+                        rebuild.SymbolsExtracted, rebuild.Revision);
+                    if (PartialExtractLog.DescribePartial(rebuild) is { } partial)
+                        _logger.LogWarning("Auto-rebuild scan: {Partial}", partial);
+                    return rebuild.Revision;
+                },
+                // The rebuild replaced the DB file; drop pooled read connections so the retry below opens a
+                // fresh handle on the rebuilt artifact instead of re-reading the old inode's stale snapshot.
+                onBeforeRetry: SqliteConnection.ClearAllPools,
+                onIncompatible: ex => _logger.LogWarning(
+                    "Existing extract DB at {Db} is incompatible ({Message}); force-rebuilding once with the " +
+                    "bundled julie-extract.",
+                    canonicalDbPath, ex.Message),
+                onCorrupt: ex => _logger.LogWarning(
+                    "Existing extract DB at {Db} is corrupt ({Message}); force-rebuilding once with the bundled " +
+                    "julie-extract (a writer likely died mid-scan).",
+                    canonicalDbPath, ex.Message));
+            var index = loadResult.Index;
+
+            // An auto-rebuild counts as a scan for the holder's seed revision + the registry's scanned-at
+            // bookkeeping below, even though DecideBootstrapScan chose to reuse: julie just (re)wrote the DB.
+            bool didScan = scanDecision.ShouldScan || loadResult.Rebuilt;
+            if (loadResult.Rebuilt)
+                scanRevision = loadResult.RebuiltRevision;
+
+            // The workspace id is derived from the canonical root (stableWorkspaceId), NOT read back from the
+            // DB: v1 stores no workspace_id, and the pre-load DecideBootstrapScan already force-rescanned any
+            // DB whose recorded root_path did not match this root (reconciliation #14 — the post-load workspace_id
+            // assertion is gone with the metadata key).
+            var workspace = ctx with
+            {
+                WorkspaceId = stableWorkspaceId,
+                CanonicalRoot = canonicalRoot,
+                CanonicalExtractDbPath = canonicalDbPath,
+            };
+
+            // Seed the holder's BuiltRevision: the scan report's revision when we just scanned, else the
+            // latest persisted revision (a reused DB) so the freshness poll does not rebuild on first tick.
+            long builtRevision = scanRevision
+                ?? ReadLatestRevisionOrZero(canonicalDbPath, stableWorkspaceId);
+
+            if (didScan)
+                MarkRegistryScanned(workspace, stableWorkspaceId, scanRevision ?? builtRevision);
+            else
+                RegisterBootstrapWorkspace(
+                    workspace, stableWorkspaceId, scanDecision.RegistryStateAfterLoad, builtRevision);
+
+            // Open the SEPARATE, writable telemetry ledger (never the read-only extract) + prune old rows.
+            // The ledger is MACHINE-GLOBAL (shared <home>/.miller/telemetry.db across every workspace), so its
+            // directory is NOT the per-repo .miller created above — ensure it exists before opening. Each row
+            // is stamped with this workspace's id + root so the shared ledger stays attributable.
+            // OpenAndPrune disposes the just-opened ledger if Prune throws, so a prune failure cannot leak
+            // the open connection (the outer catch covers every OTHER post-open step the same way).
+            Directory.CreateDirectory(Path.GetDirectoryName(workspace.TelemetryDbPath)!);
+            int pruned;
+            if (_ledger is null)
+            {
+                ledger = OpenAndPrune(
+                    workspace.TelemetryDbPath, stableWorkspaceId, workspace.WorkspaceRoot, retentionDays: 30, out pruned);
+            }
+            else
+            {
+                ledger = _ledger;
+                pruned = 0;
+            }
+
+            // Seed the artifact identity alongside the revision: a later full rebuild PROMOTES a fresh file
+            // whose restarted revision counter can land at or below builtRevision, and the freshness poll
+            // detects that replacement by the artifact_id changing (FreshnessPoller). Without the seed the
+            // held id is unknown and an exact-revision-tie rebuild would go unnoticed.
+            var holder = new IndexHolder(index, builtRevision, ReadArtifactIdOrNull(canonicalDbPath));
+            var resolver = new SmartTargetResolver(holder); // holder-backed: live freshness per call (M3 step 10)
+
+            if (ReferenceEquals(ledger, _ledger))
+                ledger.RebindWorkspace(stableWorkspaceId, workspace.WorkspaceRoot);
+
+            _holder = holder;
+            _resolver = resolver;
+            _workspace = workspace;
+            _ledger = ledger; // only published once every preceding step succeeded
+
+            var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(startedAt);
+            _logger.LogInformation(
+                "Bootstrap ready: {Count} symbols indexed at revision {Rev}, workspace_id={Ws}, " +
+                "{Pruned} telemetry rows pruned, in {Ms}ms.",
+                index.DocumentCount, builtRevision, stableWorkspaceId, pruned,
+                (long)elapsed.TotalMilliseconds);
+        }
+        catch
+        {
+            // Partial-initialization cleanup: if the ledger was opened but a later step threw, dispose it so
+            // the telemetry DB is not left locked / its WAL in an indeterminate state. _ledger was not yet
+            // assigned, so Dispose() would otherwise leak it.
+            if (ledger is not null && !ReferenceEquals(ledger, _ledger))
+                ledger.Dispose();
+            throw;
         }
     }
 
@@ -536,7 +628,8 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     /// Test seam: publish a workspace + holder directly, as if <see cref="StartAsync"/> had run, WITHOUT the
     /// SQLite reads / subprocess scan / ledger open. Lets a unit test exercise a collaborator that reads
     /// <see cref="Workspace"/> / <see cref="Holder"/> off the bootstrap (e.g. <see cref="FreshnessService.PollNow"/>)
-    /// over a synthesized DB, with no live host. Idempotent like <see cref="Run"/>: a second call is ignored.
+    /// over a synthesized DB, with no live host. Same-root calls are idempotent; different roots replace the
+    /// current test binding to model MCP roots/list_changed rebinds.
     /// Not used in production.
     /// </summary>
     internal void SeedForTest(WorkspaceContext workspace, IndexHolder holder)
@@ -545,10 +638,16 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         ArgumentNullException.ThrowIfNull(holder);
         lock (_gate)
         {
-            if (_holder is not null)
-                return; // already seeded / bootstrapped
+            if (_workspace?.CanonicalRoot is not null &&
+                workspace.CanonicalRoot is not null &&
+                IndexBootstrapService.RootPathsEqual(_workspace.CanonicalRoot, workspace.CanonicalRoot))
+            {
+                return;
+            }
             _workspace = workspace;
             _holder = holder;
+            _resolver = new SmartTargetResolver(holder);
+            SignalBound();
         }
     }
 

@@ -1,6 +1,8 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Miller.Indexing;
+using Miller.Server;
 using Miller.Server.Hosting;
 using Xunit;
 
@@ -41,5 +43,93 @@ public sealed class HostStartupRegistrationTests
         Assert.Contains(hosted, h => h is Miller.Server.IndexBootstrapService);
         Assert.Contains(hosted, h => h is FreshnessService);
         Assert.Contains(hosted, h => h is IndexerService);
+    }
+
+    [Fact]
+    public void CurrentWorkspaceServices_ResolveLatestBootstrapStateAfterRebind()
+    {
+        string rootA = CreateTempRoot();
+        string rootB = CreateTempRoot();
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddMillerServices();
+
+        using var provider = services.BuildServiceProvider();
+        var bootstrap = provider.GetRequiredService<IndexBootstrapService>();
+        bootstrap.TestBootstrapInterceptor = (canonicalRoot, _) =>
+        {
+            var workspace = WorkspaceContext.Create(canonicalRoot, AppContext.BaseDirectory) with
+            {
+                WorkspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot),
+                CanonicalRoot = canonicalRoot,
+                CanonicalExtractDbPath = Path.Combine(canonicalRoot, ".miller", "symbols.db"),
+            };
+            bootstrap.SeedForTest(
+                workspace,
+                new IndexHolder(
+                    MillerRepositoryIndex.Build(System.Array.Empty<IndexedSymbol>()),
+                    builtRevision: bootstrap.BindingGeneration + 1));
+            return true;
+        };
+
+        bootstrap.BootstrapForRoot(rootA, WorkspaceBindingResolver.WorkspaceSource.Roots);
+        var firstWorkspace = provider.GetRequiredService<WorkspaceContext>();
+        var firstHolder = provider.GetRequiredService<IndexHolder>();
+
+        bootstrap.BootstrapForRoot(rootB, WorkspaceBindingResolver.WorkspaceSource.Roots);
+        var secondWorkspace = provider.GetRequiredService<WorkspaceContext>();
+        var secondHolder = provider.GetRequiredService<IndexHolder>();
+
+        Assert.Equal(PathCanonicalizer.CanonicalizeRoot(rootA), firstWorkspace.CanonicalRoot);
+        Assert.Equal(PathCanonicalizer.CanonicalizeRoot(rootB), secondWorkspace.CanonicalRoot);
+        Assert.NotSame(firstHolder, secondHolder);
+    }
+
+    [Fact]
+    public void BootstrapForRoot_WhenRebindBootstrapFails_KeepsPreviousWorkspace()
+    {
+        string rootA = CreateTempRoot();
+        string rootB = CreateTempRoot();
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddMillerServices();
+
+        using var provider = services.BuildServiceProvider();
+        var bootstrap = provider.GetRequiredService<IndexBootstrapService>();
+        bootstrap.TestBootstrapInterceptor = (canonicalRoot, _) =>
+        {
+            if (PathCanonicalizer.CanonicalizeRoot(rootB) == canonicalRoot)
+                throw new InvalidOperationException("synthetic bootstrap failure");
+
+            var workspace = WorkspaceContext.Create(canonicalRoot, AppContext.BaseDirectory) with
+            {
+                WorkspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot),
+                CanonicalRoot = canonicalRoot,
+                CanonicalExtractDbPath = Path.Combine(canonicalRoot, ".miller", "symbols.db"),
+            };
+            bootstrap.SeedForTest(
+                workspace,
+                new IndexHolder(
+                    MillerRepositoryIndex.Build(System.Array.Empty<IndexedSymbol>()),
+                    builtRevision: 1));
+            return true;
+        };
+
+        bootstrap.BootstrapForRoot(rootA, WorkspaceBindingResolver.WorkspaceSource.Roots);
+        var firstHolder = bootstrap.Holder;
+
+        var error = Assert.Throws<InvalidOperationException>(
+            () => bootstrap.BootstrapForRoot(rootB, WorkspaceBindingResolver.WorkspaceSource.Roots));
+
+        Assert.Equal("synthetic bootstrap failure", error.Message);
+        Assert.Equal(PathCanonicalizer.CanonicalizeRoot(rootA), bootstrap.Workspace.CanonicalRoot);
+        Assert.Same(firstHolder, bootstrap.Holder);
+    }
+
+    private static string CreateTempRoot()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-host-registration-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        return root;
     }
 }

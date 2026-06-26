@@ -138,3 +138,22 @@ test('text audit skill uses cross-workspace content search and bounded reads', (
   assert.match(skill, /content read/);
   assert.match(skill, /context remains opt-in/i);
 });
+
+test('orientation skill uses literal MCP call forms', () => {
+  const skill = fs.readFileSync(
+    path.join(repoRoot, '.agents/skills/miller-orientation/SKILL.md'),
+    'utf8',
+  );
+
+  assert.match(
+    skill,
+    /^description: Use when starting a Miller task, choosing a Miller tool, or choosing a Miller search mode\.$/m,
+  );
+  assert.doesNotMatch(skill, /description:.*--/m);
+  assert.match(skill, /regions="comment,doc_comment,string_literal"/);
+  assert.doesNotMatch(skill, /regions="[^"]*\|[^"]*"/);
+  assert.match(skill, /content\(operation="search"/);
+  assert.match(skill, /content\(operation="read"/);
+  assert.doesNotMatch(skill, /content search/);
+  assert.doesNotMatch(skill, /content read/);
+});

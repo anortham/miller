@@ -1,25 +1,17 @@
-# Configure Cursor to run Miller from this checkout via the global MCP config.
+# Configure Cursor to run Miller from this checkout via user-global MCP config.
 #
 # PowerShell mirror of install-cursor-local-dev.sh — keep the two in step.
 #
-# Implements the recommended Cursor path (README "Cursor global MCP install",
-# docs/findings/2026-06-08-cursor-plugin-relative-launcher-root-cause.md) with a
-# local-dev twist: MILLER_BINARY points at this checkout's Release build, so a
-# `dotnet build -c Release` updates the server Cursor runs without reinstalling.
+# Miller binds workspace roots from MCP client roots on the first tool call (see
+# docs/plans/2026-06-25-mcp-roots-workspace-binding-design.md).
 #
-# - Copies the plugin launcher + manifest to a standalone root under
-#   ~/.miller/plugin-cache/cursor-global-miller (NOT the checkout — an
-#   empty-window launch must fail closed, never index the Miller repo).
-# - Merges a `miller` entry into ~/.cursor/mcp.json, preserving other servers.
-# - Retires any legacy ~/.cursor/plugins/local/miller copy to a backup dir
-#   (local plugin installs start from empty/global windows and produce
-#   duplicate plugin-miller-miller rows).
+# - Writes ~/.cursor/mcp.json with the Release build path.
+# - Retires any legacy ~/.cursor/plugins/local/miller copy.
 #
-# Re-run after changing bin/miller-plugin-launcher.cjs to refresh the snapshot.
+# Re-run after `dotnet build -c Release` to refresh the binary path.
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$launcherRoot = Join-Path $env:USERPROFILE '.miller\plugin-cache\cursor-global-miller'
 $cursorMcpJson = Join-Path $env:USERPROFILE '.cursor\mcp.json'
 $legacyPlugin = Join-Path $env:USERPROFILE '.cursor\plugins\local\miller'
 $millerBinary = Join-Path $repoRoot 'src\Miller.Server\bin\Release\net10.0\miller.exe'
@@ -32,29 +24,23 @@ if (-not (Test-Path $millerBinary)) {
     throw "Missing Miller binary: $millerBinary"
 }
 
-Write-Host "Snapshotting launcher to $launcherRoot..."
-New-Item -ItemType Directory -Force (Join-Path $launcherRoot 'bin'), (Join-Path $env:USERPROFILE '.cursor') | Out-Null
-Copy-Item (Join-Path $repoRoot 'bin\miller-plugin-launcher.cjs') (Join-Path $launcherRoot 'bin') -Force
-Copy-Item (Join-Path $repoRoot 'miller-plugin.json') $launcherRoot -Force
-
-Write-Host "Merging miller server into $cursorMcpJson..."
-$config = [ordered]@{}
+Write-Host "Writing Cursor MCP config to $cursorMcpJson..."
+New-Item -ItemType Directory -Force (Join-Path $env:USERPROFILE '.cursor') | Out-Null
+$config = @{}
 if (Test-Path $cursorMcpJson) {
-    $config = Get-Content $cursorMcpJson -Raw | ConvertFrom-Json -AsHashtable
+    try {
+        $config = Get-Content $cursorMcpJson -Raw | ConvertFrom-Json -AsHashtable
+    } catch {
+        $config = @{}
+    }
 }
 if (-not $config.Contains('mcpServers')) {
-    $config['mcpServers'] = [ordered]@{}
+    $config['mcpServers'] = @{}
 }
-# Single-quoted on purpose: ${userHome} / ${workspaceFolder} are Cursor config
-# interpolations, not PowerShell variables.
 $config['mcpServers']['miller'] = [ordered]@{
     type    = 'stdio'
-    command = 'node'
-    args    = @('${userHome}/.miller/plugin-cache/cursor-global-miller/bin/miller-plugin-launcher.cjs')
-    env     = [ordered]@{
-        MILLER_WORKSPACE_ROOT = '${workspaceFolder}'
-        MILLER_BINARY         = $millerBinary
-    }
+    command = $millerBinary
+    args    = @('serve')
 }
 $config | ConvertTo-Json -Depth 10 | Set-Content -Encoding utf8 $cursorMcpJson
 
@@ -66,9 +52,8 @@ if (Test-Path $legacyPlugin) {
 }
 
 Write-Host ''
-Write-Host 'Cursor global Miller MCP config installed.'
+Write-Host 'Cursor Miller MCP config installed.'
 Write-Host "  config:   $cursorMcpJson"
-Write-Host "  launcher: $(Join-Path $launcherRoot 'bin\miller-plugin-launcher.cjs')"
 Write-Host "  binary:   $millerBinary"
 & $millerBinary version
 Write-Host ''

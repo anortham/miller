@@ -48,69 +48,33 @@ codex
 # then open /plugins and install Miller from the miller marketplace
 ```
 
-Cursor is different: use a global `~/.cursor/mcp.json` entry that passes the active workspace root to Miller.
+Cursor: install Miller from the Cursor plugin marketplace, or add a user-global `~/.cursor/mcp.json`
+entry with an absolute path to `miller serve`. Miller binds its workspace from MCP client roots on the first
+tool call, so one global install works per editor window without `${workspaceFolder}` placeholders.
 
-Cursor global MCP install:
+After extracting a release archive (see [Manual Binary Install](#manual-binary-install)), add to
+`~/.cursor/mcp.json`:
 
-```bash
-version=v1.0.0
-base="https://raw.githubusercontent.com/anortham/miller/$version"
-launcher_root="$HOME/.miller/plugin-cache/cursor-global-miller"
-mkdir -p "$launcher_root/bin" "$HOME/.cursor"
-curl -fsSL "$base/bin/miller-plugin-launcher.cjs" -o "$launcher_root/bin/miller-plugin-launcher.cjs"
-curl -fsSL "$base/miller-plugin.json" -o "$launcher_root/miller-plugin.json"
-cat > ~/.cursor/mcp.json <<'JSON'
+```json
 {
   "mcpServers": {
     "miller": {
       "type": "stdio",
-      "command": "node",
-      "args": [
-        "${userHome}/.miller/plugin-cache/cursor-global-miller/bin/miller-plugin-launcher.cjs"
-      ],
-      "env": {
-        "MILLER_WORKSPACE_ROOT": "${workspaceFolder}"
-      }
+      "command": "/absolute/path/to/miller-1.0.0-aarch64-apple-darwin/miller",
+      "args": ["serve"]
     }
   }
 }
-JSON
 ```
 
-```powershell
-$version = "v1.0.0"
-$base = "https://raw.githubusercontent.com/anortham/miller/$version"
-$launcherRoot = "$env:USERPROFILE\.miller\plugin-cache\cursor-global-miller"
-New-Item -ItemType Directory -Force "$launcherRoot\bin", "$env:USERPROFILE\.cursor"
-Invoke-WebRequest -Uri "$base/bin/miller-plugin-launcher.cjs" -OutFile "$launcherRoot\bin\miller-plugin-launcher.cjs"
-Invoke-WebRequest -Uri "$base/miller-plugin.json" -OutFile "$launcherRoot\miller-plugin.json"
-@'
-{
-  "mcpServers": {
-    "miller": {
-      "type": "stdio",
-      "command": "node",
-      "args": [
-        "${userHome}/.miller/plugin-cache/cursor-global-miller/bin/miller-plugin-launcher.cjs"
-      ],
-      "env": {
-        "MILLER_WORKSPACE_ROOT": "${workspaceFolder}"
-      }
-    }
-  }
-}
-'@ | Set-Content -Encoding utf8 "$env:USERPROFILE\.cursor\mcp.json"
-```
+On Windows, use the full path to `miller.exe` as `command`. Optional override for clients without MCP roots:
+set `"env": { "MILLER_WORKSPACE_ROOT": "/absolute/path/to/project" }` on the server entry.
 
-Reload Cursor after installing. `MILLER_WORKSPACE_ROOT="${workspaceFolder}"` is required for a user-wide Cursor
-install: Cursor may start global MCP servers from the home directory or an empty/global window, and Miller refuses
-to index those broad roots. The launcher ignores an unresolved `${workspaceFolder}` value and fails closed if Cursor
-has no real project root, instead of indexing the launcher cache or a system path. Do not use
-`~/.cursor/plugins/local/miller` as the normal Cursor install path; Cursor can start plugin MCP servers before a
-workspace exists and can also auto-import Claude plugin copies, leaving duplicate or stale errored Miller rows.
+For Miller development in this checkout, run `scripts/install-cursor-local-dev.sh` (or `.ps1`) to write
+`~/.cursor/mcp.json` with your Release build path and retire legacy plugin-cache installs.
 
-After installing, open a code workspace and ask your agent to search, inspect, build context, trace, or check
-impact with Miller. Miller writes its local index under that workspace's `.miller/` directory.
+Reload Cursor after adding the entry, then ask your agent to search, inspect, build context, trace, or check impact
+with Miller. Miller writes its local index under that workspace's `.miller/` directory.
 
 ### Manual Binary Install
 
@@ -159,7 +123,8 @@ Use this path when your MCP client does not use Miller's plugin package.
    }
    ```
 
-   On Windows, use the full path to `miller.exe` as `command`.
+   On Windows, use the full path to `miller.exe` as `command`. For Cursor, put this in `~/.cursor/mcp.json` or
+   install the Miller plugin — Miller resolves the open project via MCP `roots/list` on the first tool call.
 
 ### Source Checkout
 
@@ -383,12 +348,12 @@ Open the printed URL to view registered workspaces and scoped per-tool telemetry
 Miller's first plugin distribution path lives in this repository, not a separate `miller-plugin` repo:
 
 - `.claude-plugin/plugin.json` exposes Miller to Claude Code.
-- `.cursor-plugin/plugin.json` is retained for Cursor package metadata and local testing; the recommended
-  Cursor user install is the global MCP config below.
+- `.cursor-plugin/plugin.json` exposes Miller to Cursor (plugin marketplace install).
 - `.codex-plugin/plugin.json` and `.mcp.json` expose Miller to Codex.
 - `skills/` is generated from `.agents/skills/` by `scripts/sync-plugin-skills.sh`.
 - `bin/miller-plugin-launcher.cjs` downloads the configured GitHub release archive, verifies the `.sha256`
-  sidecar, caches it under `~/.miller/plugin-cache/`, and runs `miller serve`.
+  sidecar, caches it under `~/.miller/plugin-cache/`, and runs `miller serve`. Workspace binding is handled
+  by Miller via MCP client roots; set `MILLER_WORKSPACE_ROOT` only when your client lacks roots support.
 
 The plugin launcher consumes the release version in `miller-plugin.json`. Use
 `MILLER_BINARY=/absolute/path/to/miller` when testing an unreleased local build.
@@ -399,58 +364,22 @@ Claude Code local-checkout install:
 claude plugin install /path/to/miller
 ```
 
-Cursor global MCP install from a local checkout:
+Cursor MCP install from a local checkout:
 
 ```bash
-mkdir -p ~/.miller/plugin-cache/cursor-global-miller/bin ~/.cursor
-cp /path/to/miller/bin/miller-plugin-launcher.cjs ~/.miller/plugin-cache/cursor-global-miller/bin/
-cp /path/to/miller/miller-plugin.json ~/.miller/plugin-cache/cursor-global-miller/
-cat > ~/.cursor/mcp.json <<'JSON'
-{
-  "mcpServers": {
-    "miller": {
-      "type": "stdio",
-      "command": "node",
-      "args": [
-        "${userHome}/.miller/plugin-cache/cursor-global-miller/bin/miller-plugin-launcher.cjs"
-      ],
-      "env": {
-        "MILLER_WORKSPACE_ROOT": "${workspaceFolder}"
-      }
-    }
-  }
-}
-JSON
+scripts/install-cursor-local-dev.sh
 ```
 
 ```powershell
-$launcherRoot = "$env:USERPROFILE\.miller\plugin-cache\cursor-global-miller"
-New-Item -ItemType Directory -Force "$launcherRoot\bin", "$env:USERPROFILE\.cursor"
-Copy-Item -Force "C:\path\to\miller\bin\miller-plugin-launcher.cjs" "$launcherRoot\bin\"
-Copy-Item -Force "C:\path\to\miller\miller-plugin.json" "$launcherRoot\"
-@'
-{
-  "mcpServers": {
-    "miller": {
-      "type": "stdio",
-      "command": "node",
-      "args": [
-        "${userHome}/.miller/plugin-cache/cursor-global-miller/bin/miller-plugin-launcher.cjs"
-      ],
-      "env": {
-        "MILLER_WORKSPACE_ROOT": "${workspaceFolder}"
-      }
-    }
-  }
-}
-'@ | Set-Content -Encoding utf8 "$env:USERPROFILE\.cursor\mcp.json"
+scripts/install-cursor-local-dev.ps1
 ```
 
-Then reload Cursor and confirm Miller appears under Settings > Tools & MCP. Keep this as a global MCP config, not a
-local Cursor plugin copy: the global config supports `${workspaceFolder}` in `env`, which lets the launcher bind
-Miller to the active project. The local Cursor plugin manifest is kept for package metadata/testing, but it is not
-the recommended install path because Cursor may load plugin MCP servers from an empty/global window and may import
-Claude plugin copies as a second Miller server.
+That writes `~/.cursor/mcp.json` with your Release build path and retires legacy `~/.cursor/plugins/local/miller`
+copies.
+
+Then reload Cursor and confirm Miller appears under Settings > Tools & MCP. The plugin launcher no longer guesses
+workspace cwd — Miller binds from MCP roots per open window. Use `MILLER_WORKSPACE_ROOT` in the MCP env block only
+for clients without roots support (for example Codex per-project config).
 
 For the GitHub-hosted plugin source, use:
 
@@ -652,16 +581,13 @@ Warnings are errors (`Directory.Build.props`).
 - `no Miller index`: run `miller workspace full`, or open the folder in the Miller MCP server so the
   index can be created. If the missing target is another repo, run `miller workspace open --path /absolute/repo --full`
   or MCP `workspace operation=open path=/absolute/repo`, then pass that repo's selector as `workspace_id`.
-- Cursor shows a stale `plugin-miller-miller` row: Cursor is still loading a local plugin copy or an imported
-  Claude plugin copy. Use the global `miller` server from `~/.cursor/mcp.json`, move aside
-  `~/.cursor/plugins/local/miller` if it exists, and reload Cursor.
-- Cursor global `miller` starts from the home directory or errors on a broad root: confirm `~/.cursor/mcp.json`
-  runs `node` with `~/.miller/plugin-cache/cursor-global-miller/bin/miller-plugin-launcher.cjs`, not `miller`
-  or `miller.exe` directly, and sets `MILLER_WORKSPACE_ROOT` to `${workspaceFolder}`.
-- Cursor search results come from Miller's plugin/cache directory: Cursor started Miller without a real workspace
-  root. Update the global MCP config to pass `MILLER_WORKSPACE_ROOT="${workspaceFolder}"`, then reload Cursor from
-  a project window. If the workspace is already registered, pass its selector explicitly as `workspace_id` until the
-  client relaunches Miller from the right project root.
+- Cursor shows duplicate or stale Miller rows (`user-miller`, `plugin-miller-miller`): remove extra `miller`
+  entries from `~/.cursor/mcp.json`, move aside `~/.cursor/plugins/local/miller` if it exists, and reload Cursor.
+- Cursor Miller fails with `Could not determine a Miller workspace root`: open a project folder (Miller binds via
+  MCP `roots/list` on the first tool call), or set `MILLER_WORKSPACE_ROOT` to an absolute project path in the MCP
+  server env. Do not use `${workspaceFolder}` in user-global config — it often stays unresolved.
+- Cursor search results come from the wrong repo: reload the window or run `workspace status` and confirm the
+  header root matches the open project. Pass an explicit `workspace_id` for another registered workspace when needed.
 - Missing `julie-extract` from a plugin or release-archive install: reinstall or re-extract the full Miller
   archive and keep its `.tools/` directory beside the `miller` binary.
 - Missing `julie-extract` from a source checkout: run the restore script for your platform, then rerun the scale

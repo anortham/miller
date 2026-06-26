@@ -3,7 +3,7 @@ using Miller.Indexing;
 namespace Miller.Server.Hosting;
 
 /// <summary>
-/// The singleton the telemetry filter reads to populate the coarse <c>index_fresh</c> column (decision-8). It
+/// The service the telemetry filter reads to populate the coarse <c>index_fresh</c> column (decision-8). It
 /// combines the two halves of freshness via <see cref="FreshnessState"/>: the held index's built revision vs.
 /// the latest persisted revision (the dominant term, from the freshness reader) AND the indexer's queue-empty
 /// state (no observed-but-unapplied events). Both inputs are injected suppliers so the probe is unit-tested
