@@ -157,3 +157,38 @@ test('orientation skill uses literal MCP call forms', () => {
   assert.doesNotMatch(skill, /content search/);
   assert.doesNotMatch(skill, /content read/);
 });
+
+test('metrics skill routes deterministic reports through the CLI', () => {
+  const skill = fs.readFileSync(
+    path.join(repoRoot, '.agents/skills/miller-metrics-audit/SKILL.md'),
+    'utf8',
+  );
+
+  assert.match(skill, /miller metrics churn/);
+  assert.match(skill, /miller metrics clones/);
+  assert.match(skill, /miller metrics complexity/);
+  assert.doesNotMatch(skill, /mcp__miller__metrics/);
+  assert.doesNotMatch(skill, /metrics\(operation=/);
+});
+
+test('patterns skill gives recipe-shaped structural fact workflows', () => {
+  const skill = fs.readFileSync(
+    path.join(repoRoot, '.agents/skills/miller-patterns-audit/SKILL.md'),
+    'utf8',
+  );
+
+  assert.match(skill, /patterns\(operation="list"/);
+  assert.match(skill, /aspnet\.minimal_api\.route\.v1/);
+  assert.match(skill, /htmx\.attribute\.v1/);
+  assert.match(skill, /where="verb=GET"/);
+});
+
+test('editing skill explains exact replace_text recovery', () => {
+  const skill = fs.readFileSync(
+    path.join(repoRoot, '.agents/skills/miller-editing/SKILL.md'),
+    'utf8',
+  );
+
+  assert.match(skill, /replace_text requires an exact old_text match/);
+  assert.match(skill, /inspect\(target="<file>"/);
+});

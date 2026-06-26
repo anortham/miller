@@ -17,6 +17,10 @@ semantic/vector retrieval, guidance, confidence/evidence views, signals reports,
 history, and commercial orchestration. Do not add Miller surfaces merely to absorb Eros-level reports or
 `julie-extractors` extraction ownership.
 
+Adding a new MCP tool requires **explicit user approval** before implementation. Keep the MCP surface stingy:
+prefer improving an existing tool, adding a CLI/export contract, writing a skill, or surfacing data on the
+dashboard when those paths satisfy the workflow without increasing agent-facing tool count.
+
 ## Language parity (load-bearing product rule)
 
 A feature built on `julie-extract` data (a new table/column/extraction capability) is **not done until it

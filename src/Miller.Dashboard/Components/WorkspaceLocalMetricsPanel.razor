@@ -1,0 +1,101 @@
+@namespace Miller.Dashboard.Components
+
+<section id="workspace-local-metrics-panel" class="panel local-metrics-panel" aria-label="Local metrics">
+    <div class="panel-heading">
+        <div>
+            <h2>Local metrics</h2>
+            <p>@Subtitle</p>
+        </div>
+        @if (Metrics is not null)
+        {
+            <span class="workspace-state @StateClass(Metrics.State)">@Metrics.State</span>
+        }
+    </div>
+
+    @if (Metrics is null)
+    {
+        <p class="empty">Select a workspace to view local metrics.</p>
+    }
+    else
+    {
+        @if (!string.IsNullOrWhiteSpace(Metrics.Error))
+        {
+            <p class="notice error-notice"><strong>Metrics unavailable</strong> @Metrics.Error</p>
+        }
+
+        <div class="stats-grid metric-band">
+            <div class="metric">
+                <strong>@FormatCount(Metrics.ComplexityHotspots.Count, "hotspot")</strong>
+                <span>moderate or higher</span>
+            </div>
+            <div class="metric">
+                <strong>@FormatCount(Metrics.CloneGroups.Count, "clone group")</strong>
+                <span>identical body hashes</span>
+            </div>
+        </div>
+
+        <div class="breakdown-grid detail-grid">
+            <section class="breakdown" aria-label="Complexity hotspots">
+                <h3>Complexity</h3>
+                @if (Metrics.ComplexityHotspots.Count == 0)
+                {
+                    <p class="empty-inline">No moderate hotspots.</p>
+                }
+                else
+                {
+                    <ol>
+                        @foreach (DashboardMetricComplexityHotspot hotspot in Metrics.ComplexityHotspots)
+                        {
+                            <li>
+                                <div class="breakdown-row">
+                                    <span>@HotspotName(hotspot)</span>
+                                    <span>@hotspot.Severity</span>
+                                </div>
+                                <small>@hotspot.Path:@hotspot.Line; decisions @hotspot.DecisionCount; nesting @hotspot.MaxNestingDepth</small>
+                            </li>
+                        }
+                    </ol>
+                }
+            </section>
+
+            <section class="breakdown" aria-label="Clone groups">
+                <h3>Clones</h3>
+                @if (Metrics.CloneGroups.Count == 0)
+                {
+                    <p class="empty-inline">No clone groups.</p>
+                }
+                else
+                {
+                    <ol>
+                        @foreach (DashboardMetricCloneGroup group in Metrics.CloneGroups)
+                        {
+                            <li>
+                                <div class="breakdown-row">
+                                    <code>@group.BodyHash</code>
+                                    <span>@FormatCount(group.Count, "symbol")</span>
+                                </div>
+                                <small>@CloneSummary(group)</small>
+                            </li>
+                        }
+                    </ol>
+                }
+            </section>
+        </div>
+    }
+</section>
+
+@code {
+    [Parameter] public DashboardLocalMetricsPanel? Metrics { get; set; }
+
+    private string Subtitle => Metrics is null
+        ? "No workspace selected"
+        : "Artifact facts from complexity metrics and body hashes";
+
+    private static string HotspotName(DashboardMetricComplexityHotspot hotspot) =>
+        string.IsNullOrWhiteSpace(hotspot.SymbolName) ? hotspot.Path : hotspot.SymbolName;
+
+    private static string CloneSummary(DashboardMetricCloneGroup group) =>
+        group.Symbols.Count == 0
+            ? "No symbol sample"
+            : string.Join(", ", group.Symbols.Select(static symbol => symbol.Name + " " + symbol.Path + ":" + symbol.Line.ToString(CultureInfo.InvariantCulture)));
+}

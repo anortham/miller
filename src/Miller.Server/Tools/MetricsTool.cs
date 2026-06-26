@@ -1,98 +1,17 @@
 using System.Buffers;
-using System.ComponentModel;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using Miller.Indexing;
 using Miller.Server.Git;
-using Miller.Server.Telemetry;
-using Miller.Server.Workspaces;
-using ModelContextProtocol.Server;
 
 namespace Miller.Server.Tools;
 
-[McpServerToolType]
-public sealed class MetricsTool
+public static class MetricsTool
 {
     public const int DefaultLimit = 50;
     public const int MaxLimit = 500;
     public const int DefaultCloneSymbolsPerGroup = CloneGroupReader.DefaultSymbolsPerGroup;
-
-    private readonly IWorkspaceArtifactProvider _workspaceProvider;
-    private readonly IGitHistoryReader _historyReader;
-
-    public MetricsTool(IWorkspaceArtifactProvider workspaceProvider, IGitHistoryReader historyReader)
-    {
-        ArgumentNullException.ThrowIfNull(workspaceProvider);
-        ArgumentNullException.ThrowIfNull(historyReader);
-        _workspaceProvider = workspaceProvider;
-        _historyReader = historyReader;
-    }
-
-    [McpServerTool(Name = "metrics")]
-    [Description(
-        "Report deterministic local metrics from the current workspace. Operations: churn, clones, complexity. " +
-        "These are raw local facts, not semantic ranking, cleanup advice, or history orchestration.")]
-    public string Metrics(
-        [Description("churn|clones|complexity. Default complexity.")] string operation = "complexity",
-        [Description("Max rows/groups. Default 50, maximum 500.")] int limit = DefaultLimit,
-        [Description("Clone minimum group size. Used by operation=clones. Default 2.")] int min_count = 2,
-        [Description("Max symbols listed per clone group. Used by operation=clones. Default 25, maximum 500. Count remains the full group size.")] int max_symbols_per_group = DefaultCloneSymbolsPerGroup,
-        [Description("Complexity minimum severity: low|moderate|high. Used by operation=complexity. Default moderate.")] string min_severity = "moderate",
-        [Description("Include test symbols/paths in complexity results. Default true.")] bool include_tests = true,
-        [Description("Git commit range for operation=churn. Default HEAD~20..HEAD.")] string range = "HEAD~20..HEAD",
-        [Description("Include commit ids in operation=churn JSON rows. Default false.")] bool include_commits = false,
-        [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")] string? workspace_id = null,
-        [Description("Refresh selected workspace before reading. Defaults true when workspace_id is supplied.")] bool? ensure_fresh = null,
-        [Description("Output format: compact|json. Default compact.")] string format = "compact")
-    {
-        var telemetry = TelemetryContext.Current;
-        try
-        {
-            bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
-            bool refresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
-            WorkspaceArtifactContext context = _workspaceProvider.ResolveArtifact(workspace_id, refresh);
-
-            MetricsToolResult result = Run(
-                context.IndexDbPath,
-                operation,
-                limit,
-                json,
-                min_count,
-                max_symbols_per_group,
-                min_severity,
-                include_tests,
-                context.WorkspaceRoot,
-                range,
-                include_commits,
-                _historyReader);
-
-            if (telemetry is not null)
-            {
-                ReadToolWorkspaceRouting.ApplyTelemetry(telemetry, context);
-                telemetry.Op = NormalizeOperation(operation);
-                telemetry.SetTarget(telemetry.Op);
-                telemetry.ResultCount = result.ResultCount;
-                telemetry.Outcome = result.ResultCount == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
-                telemetry.SetMetadata("limit_bucket", LimitBucket(limit));
-                telemetry.SetMetadata("include_tests", include_tests);
-                if (result.ResultCount == 0)
-                    telemetry.SetEmptyReason("no_metrics");
-            }
-
-            string? banner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
-            return ReadToolWorkspaceRouting.PrefixCompact(result.Output, banner);
-        }
-        catch (Exception ex)
-        {
-            if (telemetry is not null)
-            {
-                telemetry.Outcome = TelemetryOutcome.Error;
-                telemetry.SetError(ex);
-            }
-            return $"metrics failed: {ex.Message}";
-        }
-    }
 
     internal static MetricsToolResult Run(
         string dbPath,
@@ -399,16 +318,6 @@ public sealed class MetricsTool
             var normalized => normalized,
         };
     }
-
-    private static string LimitBucket(int limit) => limit switch
-    {
-        <= 0 => "0",
-        <= 5 => "1-5",
-        <= 10 => "6-10",
-        <= 25 => "11-25",
-        <= 50 => "26-50",
-        _ => "51+",
-    };
 
     private static Utf8JsonWriter NewWriter(ArrayBufferWriter<byte> buffer) =>
         new(buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });

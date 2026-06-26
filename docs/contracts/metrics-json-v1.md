@@ -1,7 +1,6 @@
 # Metrics JSON contract v1
 
-Status: active additive contract for `miller metrics <churn|clones|complexity> --json` and the MCP `metrics`
-tool with `format=json`.
+Status: active additive contract for the CLI-only `miller metrics <churn|clones|complexity> --json` commands.
 
 Miller metrics are deterministic local facts over the selected workspace. They are not semantic rankings, cleanup
 recommendations, suppressions, fleet history, or Eros workflow orchestration.

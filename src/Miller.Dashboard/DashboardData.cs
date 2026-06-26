@@ -180,6 +180,33 @@ public sealed record DashboardWorkspaceOnboardingPanel(
     [property: JsonPropertyName("notes")] IReadOnlyList<string> Notes,
     [property: JsonPropertyName("error")] string? Error = null);
 
+public sealed record DashboardMetricComplexityHotspot(
+    [property: JsonPropertyName("severity")] string Severity,
+    [property: JsonPropertyName("symbol_name")] string? SymbolName,
+    [property: JsonPropertyName("symbol_kind")] string? SymbolKind,
+    [property: JsonPropertyName("path")] string Path,
+    [property: JsonPropertyName("line")] int Line,
+    [property: JsonPropertyName("decision_count")] int DecisionCount,
+    [property: JsonPropertyName("max_nesting_depth")] int MaxNestingDepth);
+
+public sealed record DashboardMetricCloneSymbol(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("kind")] string Kind,
+    [property: JsonPropertyName("path")] string Path,
+    [property: JsonPropertyName("line")] int Line);
+
+public sealed record DashboardMetricCloneGroup(
+    [property: JsonPropertyName("body_hash")] string BodyHash,
+    [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("symbols")] IReadOnlyList<DashboardMetricCloneSymbol> Symbols);
+
+public sealed record DashboardLocalMetricsPanel(
+    [property: JsonPropertyName("workspace_id")] string? WorkspaceId,
+    [property: JsonPropertyName("state")] string State,
+    [property: JsonPropertyName("complexity_hotspots")] IReadOnlyList<DashboardMetricComplexityHotspot> ComplexityHotspots,
+    [property: JsonPropertyName("clone_groups")] IReadOnlyList<DashboardMetricCloneGroup> CloneGroups,
+    [property: JsonPropertyName("error")] string? Error = null);
+
 public sealed record DashboardContextSavingsTool(
     [property: JsonPropertyName("tool")] string Tool,
     [property: JsonPropertyName("tracked_calls")] long TrackedCalls,
@@ -221,7 +248,8 @@ public sealed record DashboardSnapshot
         DashboardWorkspaceFacts? SelectedWorkspaceFacts = null,
         DashboardContextSavingsSummary? ContextSavings = null,
         DashboardWorkspaceHealthPanel? Health = null,
-        DashboardWorkspaceOnboardingPanel? Onboarding = null)
+        DashboardWorkspaceOnboardingPanel? Onboarding = null,
+        DashboardLocalMetricsPanel? LocalMetrics = null)
     {
         this.Workspaces = Workspaces;
         this.Telemetry = Telemetry;
@@ -231,6 +259,7 @@ public sealed record DashboardSnapshot
         this.ContextSavings = ContextSavings ?? DashboardContextSavingsSummary.NotTracked(SelectedWorkspaceId);
         this.Health = Health;
         this.Onboarding = Onboarding;
+        this.LocalMetrics = LocalMetrics;
     }
 
     [JsonPropertyName("workspaces")]
@@ -256,6 +285,9 @@ public sealed record DashboardSnapshot
 
     [JsonPropertyName("onboarding")]
     public DashboardWorkspaceOnboardingPanel? Onboarding { get; init; }
+
+    [JsonPropertyName("local_metrics")]
+    public DashboardLocalMetricsPanel? LocalMetrics { get; init; }
 }
 
 public sealed record DashboardWorkspaceIndexEntry(
@@ -656,6 +688,9 @@ public static class DashboardData
         DashboardWorkspaceOnboardingPanel? onboarding = selectedWorkspace is null || selectedFacts is null
             ? null
             : ReadWorkspaceOnboardingPanel(selectedWorkspace, selectedFacts, telemetryDbPath);
+        DashboardLocalMetricsPanel? localMetrics = selectedWorkspace is null || selectedFacts is null
+            ? null
+            : ReadLocalMetricsPanel(selectedWorkspace);
         return new DashboardSnapshot(
             workspaces,
             telemetry,
@@ -664,7 +699,56 @@ public static class DashboardData
             selectedFacts,
             contextSavings,
             health,
-            onboarding);
+            onboarding,
+            localMetrics);
+    }
+
+    private static DashboardLocalMetricsPanel? ReadLocalMetricsPanel(DashboardWorkspaceRow workspace)
+    {
+        try
+        {
+            IReadOnlyList<ComplexityHotspot> hotspots = ComplexityRankingReader.Read(
+                workspace.IndexDbPath,
+                limit: 5,
+                minSeverity: ComplexitySeverity.Moderate,
+                includeTests: false);
+            IReadOnlyList<CloneGroup> cloneGroups = CloneGroupReader.Read(
+                workspace.IndexDbPath,
+                limit: 5,
+                minCount: 2,
+                symbolsPerGroup: 3);
+
+            return new DashboardLocalMetricsPanel(
+                workspace.WorkspaceId,
+                "ready",
+                hotspots.Select(static hotspot => new DashboardMetricComplexityHotspot(
+                    ComplexityRankingReader.SeverityName(hotspot.Severity),
+                    hotspot.SymbolName,
+                    hotspot.SymbolKind,
+                    hotspot.Path,
+                    hotspot.StartLine,
+                    hotspot.DecisionCount,
+                    hotspot.MaxNestingDepth)).ToArray(),
+                cloneGroups.Select(static group => new DashboardMetricCloneGroup(
+                    group.BodyHash,
+                    group.Count,
+                    group.Symbols.Select(static symbol => new DashboardMetricCloneSymbol(
+                        symbol.Name,
+                        symbol.Kind,
+                        symbol.Path,
+                        symbol.Line)).ToArray())).ToArray());
+        }
+        catch (Exception ex) when (
+            ex is KeyNotFoundException or SqliteException or IOException or InvalidOperationException
+                or UnauthorizedAccessException)
+        {
+            return new DashboardLocalMetricsPanel(
+                workspace.WorkspaceId,
+                "unavailable",
+                Array.Empty<DashboardMetricComplexityHotspot>(),
+                Array.Empty<DashboardMetricCloneGroup>(),
+                Error: ex.Message);
+        }
     }
 
     private static DashboardWorkspaceHealthPanel? ReadWorkspaceHealthPanel(

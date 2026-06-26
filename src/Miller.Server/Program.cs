@@ -107,7 +107,6 @@ builder.Services
     .WithTools<EditTool>()
     .WithTools<ContentTool>()
     .WithTools<PatternsTool>()
-    .WithTools<MetricsTool>()
     .WithTools<WorkspaceTool>()
     .WithRequestFilters(filters =>
     {

@@ -15,6 +15,18 @@ public sealed class PatternsTool
 {
     public const int DefaultLimit = 50;
     public const int MaxLimit = 500;
+    private static readonly string[] MetadataPriority =
+    [
+        "verb",
+        "route_template",
+        "name",
+        "attribute_name",
+        "directive",
+        "key",
+        "framework",
+        "query_family",
+        "api_style",
+    ];
 
     private readonly IWorkspaceArtifactProvider _workspaceProvider;
     private readonly PatternFactsReader _reader;
@@ -224,7 +236,13 @@ public sealed class PatternsTool
             .ToArray();
 
         return new PatternToolResult(
-            json ? RenderSearchJson(patternId, rows) : RenderSearchCompact(patternId, rows),
+            json
+                ? RenderSearchJson(patternId, rows)
+                : RenderSearchCompact(
+                    patternId,
+                    rows,
+                    metadataFilter,
+                    rows.Length == 0 ? SuggestPatternIds(reader, dbPath, patternId, language) : []),
             rows.Length);
     }
 
@@ -266,10 +284,22 @@ public sealed class PatternsTool
         return sb.ToString().TrimEnd();
     }
 
-    private static string RenderSearchCompact(string patternId, IReadOnlyList<PatternMatchRow> rows)
+    private static string RenderSearchCompact(
+        string patternId,
+        IReadOnlyList<PatternMatchRow> rows,
+        PatternMetadataFilter? metadataFilter,
+        IReadOnlyList<string> suggestions)
     {
         if (rows.Count == 0)
-            return $"No matches for {patternId}.";
+        {
+            if (suggestions.Count == 0)
+                return $"No matches for {patternId}.";
+
+            var empty = new StringBuilder();
+            empty.Append("No matches for ").Append(patternId).AppendLine(".");
+            empty.Append("Suggestions: ").Append(string.Join(", ", suggestions));
+            return empty.ToString();
+        }
 
         var sb = new StringBuilder();
         sb.Append("# patterns search ").AppendLine(patternId);
@@ -285,7 +315,7 @@ public sealed class PatternsTool
                   .Append(' ')
                   .Append(row.PatternId);
 
-                string metadata = MetadataCompact(row);
+                string metadata = MetadataCompact(row, metadataFilter);
                 if (metadata.Length > 0)
                     sb.Append(" metadata=").Append(metadata);
 
@@ -405,20 +435,82 @@ public sealed class PatternsTool
         writer.WriteEndArray();
     }
 
-    private static string MetadataCompact(PatternMatchRow row)
+    private static string MetadataCompact(PatternMatchRow row, PatternMetadataFilter? metadataFilter)
     {
         if (row.MetadataError is not null)
             return "error";
         if (row.Metadata.ValueKind != JsonValueKind.Object)
             return string.Empty;
 
+        var selected = new List<(string Name, JsonElement Value)>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        if (metadataFilter is not null)
+            Add(metadataFilter.Key);
+        foreach (string key in MetadataPriority)
+            Add(key);
+        foreach (JsonProperty property in row.Metadata.EnumerateObject())
+        {
+            if (selected.Count >= 4)
+                break;
+            if (seen.Add(property.Name))
+                selected.Add((property.Name, property.Value));
+        }
+
         return string.Join(
             ",",
-            row.Metadata
-                .EnumerateObject()
-                .Take(3)
-                .Select(static property => property.Name + "=" + MetadataValueCompact(property.Value)));
+            selected.Select(static property => property.Name + "=" + MetadataValueCompact(property.Value)));
+
+        void Add(string key)
+        {
+            if (selected.Count >= 4 || !seen.Add(key))
+                return;
+            if (row.Metadata.TryGetProperty(key, out JsonElement value))
+                selected.Add((key, value));
+        }
     }
+
+    private static IReadOnlyList<string> SuggestPatternIds(
+        PatternFactsReader reader,
+        string dbPath,
+        string patternId,
+        string? language)
+    {
+        string[] queryTokens = PatternTokens(patternId);
+        if (queryTokens.Length == 0)
+            return [];
+
+        return reader.List(dbPath, language)
+            .Select(row => (row.PatternId, Score: PatternSuggestionScore(queryTokens, row.PatternId)))
+            .Where(candidate => candidate.Score > 0)
+            .OrderByDescending(static candidate => candidate.Score)
+            .ThenBy(static candidate => candidate.PatternId, StringComparer.Ordinal)
+            .Take(5)
+            .Select(static candidate => candidate.PatternId)
+            .ToArray();
+    }
+
+    private static int PatternSuggestionScore(string[] queryTokens, string candidate)
+    {
+        string[] candidateTokens = PatternTokens(candidate);
+        if (candidateTokens.Length == 0)
+            return 0;
+
+        int overlap = queryTokens.Count(token => candidateTokens.Contains(token, StringComparer.Ordinal));
+        if (overlap < 2)
+            return 0;
+
+        int score = overlap * 10;
+        if (string.Equals(queryTokens.LastOrDefault(), candidateTokens.LastOrDefault(), StringComparison.Ordinal))
+            score += 2;
+        if (candidate.Contains(queryTokens[0], StringComparison.OrdinalIgnoreCase))
+            score += 1;
+        return score;
+    }
+
+    private static string[] PatternTokens(string patternId) =>
+        patternId.Split(['.', '_', '-'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(static token => token.ToLowerInvariant())
+            .ToArray();
 
     private static string MetadataValueCompact(JsonElement value) =>
         value.ValueKind == JsonValueKind.String ? value.GetString() ?? string.Empty : value.GetRawText();

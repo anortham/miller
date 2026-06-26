@@ -27,6 +27,13 @@ search(query="<symbol or file>")
 inspect(target="<symbol-or-file>")
 ```
 
+For file-level text edits where you already know the path, inspect the file first if the exact surrounding text is
+uncertain:
+
+```text
+inspect(target="<file>")
+```
+
 2. For refactors or public/shared symbols, run impact first:
 
 ```text
@@ -54,6 +61,17 @@ workspace(operation="refresh")
 ```
 
 Use `allow_stale=true` only when the user explicitly accepts the risk or the edit is purely mechanical and the current disk state was independently checked.
+
+## Match Recovery
+
+replace_text requires an exact old_text match. If it returns text-not-found:
+
+1. Inspect the target file or symbol to get the current text.
+2. Retry with a smaller exact snippet, preserving current whitespace.
+3. Use `occurrence="all"` only when every match should change.
+
+Do not pretend Miller has fuzzy `replace_text` matching. If fuzzy file edits become necessary, that should be an
+explicit Miller feature, not an assumption by the agent.
 
 ## Rules
 

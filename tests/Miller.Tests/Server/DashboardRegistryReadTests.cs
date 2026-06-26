@@ -509,6 +509,85 @@ public sealed class DashboardRegistryReadTests : IDisposable
     }
 
     [Fact]
+    public void ReadSnapshot_IncludesSelectedWorkspaceLocalMetrics()
+    {
+        using JulieDbFixture fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            rows:
+            [
+                new JulieDbFixture.SymbolRow(
+                    "aa11223344556677889900aabbccdd11",
+                    "HotPath",
+                    "method",
+                    "csharp",
+                    "src/HotPath.cs",
+                    "void HotPath()",
+                    5,
+                    null)
+                {
+                    EndLine = 9,
+                    StartByte = 50,
+                    EndByte = 90,
+                },
+                new JulieDbFixture.SymbolRow(
+                    "aa11223344556677889900aabbccdd12",
+                    "CopyA",
+                    "method",
+                    "csharp",
+                    "src/A.cs",
+                    "void CopyA()",
+                    3,
+                    null),
+                new JulieDbFixture.SymbolRow(
+                    "aa11223344556677889900aabbccdd13",
+                    "CopyB",
+                    "method",
+                    "csharp",
+                    "src/B.cs",
+                    "void CopyB()",
+                    7,
+                    null),
+            ],
+            revisions:
+            [
+                new JulieDbFixture.RevisionRow(7),
+            ]);
+        Exec(fixture.DbPath, """
+            UPDATE symbols SET body_hash = 'clone-hash' WHERE symbol_id IN
+                ('aa11223344556677889900aabbccdd12', 'aa11223344556677889900aabbccdd13');
+            INSERT INTO complexity_metrics
+                (complexity_metric_id, file_id, path, language, scope, symbol_id, algorithm_id, covered_lines,
+                 covered_bytes, decision_count, loop_count, max_nesting_depth, parameter_count, start_line,
+                 start_column, end_line, end_column, start_byte, end_byte)
+            VALUES
+                ('metric-hot', 'file:src/HotPath.cs', 'src/HotPath.cs', 'csharp', 'symbol',
+                 'aa11223344556677889900aabbccdd11', 'julie-ast-complexity-v1',
+                 12, 120, 18, 2, 2, 0, 5, 0, 9, 0, 50, 90);
+            """);
+        using (var registry = WorkspaceRegistry.Open(_registryDb))
+        {
+            registry.UpsertSeen(
+                "ws-a",
+                "alpha-abcd1234",
+                fixture.WorkspaceRoot,
+                fixture.DbPath,
+                WorkspaceRegistryState.Ready,
+                DateTimeOffset.Parse("2026-05-31T10:00:00Z"));
+            registry.MarkScanned("ws-a", 7, DateTimeOffset.Parse("2026-05-31T10:01:00Z"));
+        }
+
+        DashboardSnapshot snapshot = DashboardData.ReadSnapshot(_registryDb, _telemetryDb, "ws-a");
+
+        Assert.NotNull(snapshot.LocalMetrics);
+        Assert.Equal("ready", snapshot.LocalMetrics!.State);
+        Assert.Equal("HotPath", snapshot.LocalMetrics.ComplexityHotspots[0].SymbolName);
+        Assert.Equal("high", snapshot.LocalMetrics.ComplexityHotspots[0].Severity);
+        Assert.Equal("clone-hash", snapshot.LocalMetrics.CloneGroups[0].BodyHash);
+        Assert.Equal(2, snapshot.LocalMetrics.CloneGroups[0].Count);
+    }
+
+    [Fact]
     public void DashboardIndexFactsCache_ReusesFactsWithinTtl()
     {
         using JulieDbFixture fixture = JulieDbFixture.Create(
@@ -846,7 +925,31 @@ public sealed class DashboardRegistryReadTests : IDisposable
                 [
                     new DashboardOnboardingMiss("search", null, "empty", Calls: 2),
                 ],
-                Notes: ["search has recent empty results"]));
+                Notes: ["search has recent empty results"]),
+            LocalMetrics: new DashboardLocalMetricsPanel(
+                "ws-a",
+                "ready",
+                ComplexityHotspots:
+                [
+                    new DashboardMetricComplexityHotspot(
+                        "high",
+                        "HotPath",
+                        "method",
+                        "src/HotPath.cs",
+                        Line: 5,
+                        DecisionCount: 18,
+                        MaxNestingDepth: 2),
+                ],
+                CloneGroups:
+                [
+                    new DashboardMetricCloneGroup(
+                        "clone-hash",
+                        Count: 2,
+                        Symbols:
+                        [
+                            new DashboardMetricCloneSymbol("CopyA", "method", "src/A.cs", Line: 3),
+                        ]),
+                ]));
 
         string html = await RenderComponentAsync<WorkspaceShell>(new Dictionary<string, object?>
         {
@@ -877,6 +980,9 @@ public sealed class DashboardRegistryReadTests : IDisposable
         Assert.Contains("Workspace onboarding", html);
         Assert.Contains("ReadReferencesAsync", html);
         Assert.Contains("search has recent empty results", html);
+        Assert.Contains("Local metrics", html);
+        Assert.Contains("HotPath", html);
+        Assert.Contains("clone-hash", html);
     }
 
     [Fact]
@@ -1219,6 +1325,21 @@ public sealed class DashboardRegistryReadTests : IDisposable
             var output = await renderer.RenderComponentAsync<TComponent>(ParameterView.FromDictionary(parameters));
             return output.ToHtmlString();
         });
+    }
+
+    private static void Exec(string dbPath, string sql)
+    {
+        var csb = new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        };
+        using var connection = new SqliteConnection(csb.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
     }
 
     private string InsertTelemetryRow(

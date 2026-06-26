@@ -68,7 +68,6 @@ public sealed class AgentInstructionsTests
                 "edit",
                 "impact",
                 "inspect",
-                "metrics",
                 "patterns",
                 "search",
                 "trace",
@@ -84,6 +83,15 @@ public sealed class AgentInstructionsTests
 
         Assert.DoesNotContain("- `todos`", instructions);
         Assert.DoesNotContain("todos(markers?", instructions);
+    }
+
+    [Fact]
+    public void Load_DoesNotAdvertiseMetricsAsMcpTool()
+    {
+        string instructions = AgentInstructions.Load();
+
+        Assert.DoesNotContain("- `metrics`", instructions);
+        Assert.DoesNotContain("metrics(operation=", instructions);
     }
 
     [Theory]

@@ -55,9 +55,6 @@ Miller serves an always-fresh index of this workspace's code. Reach for a Miller
   languages: framework facts, language facts, SQL DDL, and JSON/YAML/TOML/Markdown structure. Run `patterns()` first
   to see emitted ids. This is not raw AST query execution. Use `operation=list|summary|search`, `pattern_id`,
   `where=key=value`, `path`, and `language`. Optional `workspace_id` and `ensure_fresh` work for registered workspaces.
-- `metrics` — Report deterministic local facts: `operation=churn` for git churn mapped to the current index,
-  `operation=clones` for identical body-hash groups, and `operation=complexity` for bounded complexity hotspots.
-  This is not semantic ranking, cleanup advice, suppressions, or fleet history.
 - `workspace` — Index lifecycle: `status`, `health`, `onboarding`, `refresh`, `full`, `list`, `open`, `remove`,
   `leader`, `dashboard` (start/reuse the loopback dashboard). `status`, `health`, `onboarding`, `leader`, `refresh`, `full`, and
   `remove` accept `workspace_id` or `path`; `list` shows the registry.
@@ -76,7 +73,6 @@ Miller serves an always-fresh index of this workspace's code. Reach for a Miller
   or `content_kind=docs|config|external_file|web`, then bounded `content read`.
 - **Find known code shapes**: `patterns operation=list` to discover ids, then
   `patterns operation=search pattern_id=<id> where=attribute_name=hx-get path=Views/**`.
-- **Find local metrics**: `metrics operation=churn|clones|complexity`. Treat output as local facts, not cleanup instructions.
 - **Inspect a large log/report**: `content import path=/tmp/build.log` → `content search query="error text"` →
   `content read source_id=... line=... context_lines=10`. Do not read or paste the full file.
 - **Research a web page**: use `miller-web-research` to fetch markdown with `browser39` into a temp file, then
@@ -119,7 +115,6 @@ code, paste this block into the prompt:
     - edit(operation, target, ...) to preview index-aware edits (apply=true to commit).
     - content(import|add_markdown|search|read|list|remove|export, ...) for logs, CI, web markdown, external text, and audits; use workspace_id=all for registered-workspace text audits and bounded reads only.
     - patterns(operation?, pattern_id?, where?, path?, language?) for extractor-recognized code-shape facts.
-    - metrics(operation=churn|clones|complexity, ...) for local churn, clone, and complexity facts.
     - workspace(status|health|onboarding|leader|refresh|full|list|open|remove|dashboard) for readiness, leader diagnostics/handoff, refresh, other repos, onboarding, or dashboard with operation=dashboard.
     Do NOT fall back to Glob/Read/Grep chains when a Miller tool fits. Miller returns targeted context in 1-2 calls.
 

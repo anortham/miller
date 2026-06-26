@@ -241,18 +241,19 @@ UX such as next-action guidance, confidence/evidence views, semantic/vector retr
 
 ## The tool surface
 
-Ten MCP tools, each with smart defaults so the common path is the simplest call: `search`, `inspect`,
-`context`, `trace`, `impact`, `edit`, `content`, `patterns`, `metrics`, and `workspace`. Read tools accept a `workspace_id`
+Nine MCP tools, each with smart defaults so the common path is the simplest call: `search`, `inspect`,
+`context`, `trace`, `impact`, `edit`, `content`, `patterns`, and `workspace`. Read tools accept a `workspace_id`
 selector: display ID, unique prefix, full ID, registered root path, `current`, or `primary`. Explicit `workspace_id` defaults
 `ensure_fresh=true`. Targets are smart strings, not JSON objects. See
 [docs/findings/miller-toolbox.md](docs/findings/miller-toolbox.md).
 
 For cross-workspace code reading, stay in the current session and run `workspace list`. If the target repo is
 registered, pass its display ID, unique prefix, full ID, or root path as `workspace_id` to `search`, `inspect`,
-`context`, `impact`, `trace`, `patterns`, or `metrics`. If it is not registered yet, run
+`context`, `impact`, `trace`, or `patterns`. If it is not registered yet, run
 `workspace operation=open path=/absolute/repo` from MCP or `miller workspace open --path /absolute/repo --full`
-from the CLI, then retry the read tool. The `workspace_id=all` selector is only for `content search` text audits
-across registered workspace content DBs.
+from the CLI, then retry the read tool. The CLI-only `miller metrics` commands accept the same single-workspace
+selectors. The `workspace_id=all` selector is only for `content search` text audits across registered workspace
+content DBs.
 
 `patterns` is the structural-facts surface. It lists and searches known code-shape facts emitted by
 the pinned `julie-extract` catalog — 130+ pattern ids across ~36 languages, spanning framework facts
@@ -267,13 +268,14 @@ patterns(operation="search", pattern_id="htmx.attribute.v1", where="attribute_na
 patterns(operation="search", pattern_id="alpine.directive.v1", where="directive=x-data", path="Views/**")
 ```
 
-`metrics` reports deterministic local facts: recent git churn mapped to current symbols, identical body-hash
-clone groups, and complexity hotspots with transparent thresholds. It is not semantic ranking or cleanup advice:
+The CLI-only `miller metrics` command reports deterministic local facts: recent git churn mapped to current
+symbols, identical body-hash clone groups, and complexity hotspots with transparent thresholds. It is not semantic
+ranking or cleanup advice:
 
-```text
-metrics(operation="churn", range="HEAD~20..HEAD", limit=25)
-metrics(operation="clones", min_count=2)
-metrics(operation="complexity", min_severity="moderate", include_tests=false)
+```bash
+miller metrics churn --range HEAD~20..HEAD --limit 25
+miller metrics clones --min-count 2
+miller metrics complexity --min-severity moderate --exclude-tests
 ```
 
 ## Using Miller
@@ -331,7 +333,7 @@ The single `miller` binary runs two ways:
 
 **Dogfooding the server.** Because MCP runs over stdio, a new build takes effect only after the MCP client
 restarts the subprocess. A build made inside the repo carries its git short SHA — `miller version` prints
-`1.1.0+<sha>` (just `1.1.0` for a build with no `.git`), and the same string heads the `# workspace` block of
+`1.1.1+<sha>` (just `1.1.1` for a build with no `.git`), and the same string heads the `# workspace` block of
 `workspace status`. The status header also includes the process id (`pid <n>`), which is the quickest way to
 confirm a restarted MCP client is talking to a new Miller subprocess when you rebuilt uncommitted changes and
 the SHA suffix stayed the same.
@@ -355,6 +357,8 @@ workspace(operation="dashboard", port=4977)
 
 Open the printed URL to view registered workspaces and scoped per-tool telemetry. Set `MILLER_REGISTRY_DB`,
 `MILLER_TELEMETRY_DB`, or `MILLER_DASHBOARD_WEBROOT` only when testing non-default paths.
+The selected-workspace detail view also surfaces local complexity hotspots and body-hash clone groups from the
+artifact. Git churn stays in the CLI-only `miller metrics churn` path because it reads a revision range from git.
 
 ## Agent Plugin Details
 
@@ -442,8 +446,8 @@ What these prove:
   bodies and imported text use the explicit content corpus modes.
 - `patterns --json` discovers extractor-recognized code-shape facts across the full pattern catalog (framework
   routes, language constructs, SQL DDL, data-document structure) without private SQLite reads or raw AST queries.
-- `metrics` exposes local churn, body-hash clone groups, and complexity reports without semantic ranking or
-  cleanup workflow ownership.
+- The dashboard surfaces local complexity and clone facts from workspace artifacts; `miller metrics` also exposes
+  local churn without semantic ranking or cleanup workflow ownership.
 - `inspect`, `context`, and `impact` use the same projection-specific read paths exposed to MCP tools.
 - The dashboard is operational evidence, not a separate product UI: it shows registered workspaces, index facts,
   telemetry, latency/failure signals, and scoped JSON endpoints from the same local state.

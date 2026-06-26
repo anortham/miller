@@ -79,6 +79,34 @@ public sealed class PatternsToolTests
     }
 
     [Fact]
+    public void Patterns_SearchCompact_IncludesWhereMetadataKey()
+    {
+        using var fx = CreatePatternFixture();
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        string output = tool.Patterns(
+            operation: "search",
+            pattern_id: "aspnet.minimal_api.route.v1",
+            where: "verb=GET",
+            limit: 10);
+
+        Assert.Contains("metadata=verb=GET", output);
+        Assert.Contains("route_template=/orders", output);
+    }
+
+    [Fact]
+    public void Patterns_SearchCompact_SuggestsNearMissPatternIds()
+    {
+        using var fx = CreatePatternFixture();
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        string output = tool.Patterns(operation: "search", pattern_id: "aspnet.route.v1", limit: 10);
+
+        Assert.Contains("No matches for aspnet.route.v1.", output);
+        Assert.Contains("aspnet.minimal_api.route.v1", output);
+    }
+
+    [Fact]
     public void Patterns_Search_RecordsOperationShape_InTelemetry()
     {
         using var fx = CreatePatternFixture();
@@ -215,7 +243,11 @@ public sealed class PatternsToolTests
                  2, 1, 2, 10, 26, 35, 1.0, '{bad-json'),
                 ('fact-future', 'file:src/Auth.cs', 'src/Auth.cs', 'csharp',
                  'future.custom_pattern.v1', 'custom', 'attribute', 'sym-auth',
-                 1, 1, 1, 12, 0, 11, 0.75, '{"name":"Authorize"}');
+                 1, 1, 1, 12, 0, 11, 0.75, '{"name":"Authorize"}'),
+                ('fact-route', 'file:src/Auth.cs', 'src/Auth.cs', 'csharp',
+                 'aspnet.minimal_api.route.v1', 'route_call', 'invocation_expression', 'sym-auth',
+                 3, 1, 3, 30, 36, 65, 1.0,
+                 '{"query_family":"framework","framework":"aspnet","route_template":"/orders","pattern_version":1,"verb":"GET"}');
             """);
         return fx;
     }
