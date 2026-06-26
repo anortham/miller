@@ -881,6 +881,10 @@ internal sealed class JulieDbFixture : IDisposable
         {
             // Best-effort temp cleanup; a held handle on a CI agent must not fail the test.
         }
+        catch (UnauthorizedAccessException)
+        {
+            // Best-effort temp cleanup; a held handle on a CI agent must not fail the test.
+        }
         _ = CultureInfo.InvariantCulture; // keep the using meaningful if trimmed later
     }
 
