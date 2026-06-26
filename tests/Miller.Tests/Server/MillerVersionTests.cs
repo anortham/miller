@@ -21,9 +21,9 @@ public sealed class MillerVersionTests
     [Fact]
     public void Current_StartsWithTheBaseVersion()
     {
-        // Directory.Build.props pins <Version>1.0.0</Version>; the optional git SHA is a "+<sha>" SUFFIX, so the
+        // Directory.Build.props pins <Version>1.0.1</Version>; the optional git SHA is a "+<sha>" SUFFIX, so the
         // string starts with the base version whether or not it was stamped.
-        Assert.StartsWith("1.0.0", MillerVersion.Current);
+        Assert.StartsWith("1.0.1", MillerVersion.Current);
     }
 
     [Fact]

@@ -29,6 +29,7 @@ models/*.bin
 # IDE
 .idea/
 .vscode/
+.cursor/
 *.swp
 
 # OS
@@ -37,6 +38,9 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Test results and crash dumps
+TestResults/
 
 # Generated bindings (uncomment if you want to regenerate each build)
 # src/Codesearch.Interop/Generated/
