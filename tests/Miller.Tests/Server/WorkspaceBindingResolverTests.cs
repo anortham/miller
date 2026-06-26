@@ -44,7 +44,7 @@ public sealed class WorkspaceBindingResolverTests
     public void TryResolveStartup_ReturnsNullForPluginCacheCwdWithoutEnv()
     {
         string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        string pluginCache = Path.Combine(home, ".miller", "plugin-cache", "miller", "1.0.1", "package");
+        string pluginCache = Path.Combine(home, ".miller", "plugin-cache", "miller", "1.1.0", "package");
 
         var resolved = WorkspaceBindingResolver.TryResolveStartup(cwd: pluginCache, envOverride: null);
 

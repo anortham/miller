@@ -94,7 +94,7 @@ test('repo marketplace metadata exposes the local plugin without auto-installing
 
   assert.equal(marketplace.name, 'miller');
   assert.ok(plugin, 'miller marketplace entry should exist');
-  assert.deepEqual(plugin.source, { source: 'url', url: './' });
+  assert.deepEqual(plugin.source, { source: 'local', path: './' });
   assert.equal(plugin.policy.installation, 'AVAILABLE');
   assert.equal(plugin.policy.authentication, 'ON_INSTALL');
   assert.equal(plugin.category, 'Developer Tools');

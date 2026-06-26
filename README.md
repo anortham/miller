@@ -331,7 +331,7 @@ The single `miller` binary runs two ways:
 
 **Dogfooding the server.** Because MCP runs over stdio, a new build takes effect only after the MCP client
 restarts the subprocess. A build made inside the repo carries its git short SHA — `miller version` prints
-`1.0.1+<sha>` (just `1.0.1` for a build with no `.git`), and the same string heads the `# workspace` block of
+`1.1.0+<sha>` (just `1.1.0` for a build with no `.git`), and the same string heads the `# workspace` block of
 `workspace status`. The status header also includes the process id (`pid <n>`), which is the quickest way to
 confirm a restarted MCP client is talking to a new Miller subprocess when you rebuilt uncommitted changes and
 the SHA suffix stayed the same.
