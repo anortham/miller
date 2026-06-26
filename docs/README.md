@@ -19,10 +19,12 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`plans/2026-06-09-patterns-tool-design.md`](plans/2026-06-09-patterns-tool-design.md) - design record for the `patterns` tool over extractor structural facts.
 - [`plans/2026-06-09-patterns-tool-implementation-plan.md`](plans/2026-06-09-patterns-tool-implementation-plan.md) - implementation plan for the `patterns` MCP/CLI surface.
 - [`release-process.md`](release-process.md) - current release validation and promotion flow.
-- [`release-notes/v1.0.0.md`](release-notes/v1.0.0.md) - latest release notes.
-- [`findings/2026-06-24-v1.0.0-release-verification.md`](findings/2026-06-24-v1.0.0-release-verification.md) - live `v1.0.0` release verification.
+- [`release-notes/v1.0.1.md`](release-notes/v1.0.1.md) - latest release notes.
+- [`findings/2026-06-26-v1.0.1-release-verification.md`](findings/2026-06-26-v1.0.1-release-verification.md) - live `v1.0.1` release verification.
 - [`plans/2026-06-25-mcp-roots-workspace-binding-design.md`](plans/2026-06-25-mcp-roots-workspace-binding-design.md) - current Cursor/MCP roots binding design and fallback-root guardrails.
 - [`findings/2026-06-25-cursor-project-local-mcp-config.md`](findings/2026-06-25-cursor-project-local-mcp-config.md) - superseded interim Cursor project-local MCP workaround.
+- [`release-notes/v1.0.0.md`](release-notes/v1.0.0.md) - historical `v1.0.0` release notes.
+- [`findings/2026-06-24-v1.0.0-release-verification.md`](findings/2026-06-24-v1.0.0-release-verification.md) - live `v1.0.0` release verification.
 - [`release-notes/v0.5.8.md`](release-notes/v0.5.8.md) - historical `v0.5.8` release notes.
 - [`findings/2026-06-23-v0.5.8-release-verification.md`](findings/2026-06-23-v0.5.8-release-verification.md) - live `v0.5.8` release verification.
 - [`release-notes/v0.5.7.md`](release-notes/v0.5.7.md) - historical `v0.5.7` release notes.
