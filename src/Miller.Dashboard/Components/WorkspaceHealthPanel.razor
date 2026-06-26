@@ -1,0 +1,114 @@
+@namespace Miller.Dashboard.Components
+
+<section id="workspace-health-panel" class="panel health-panel" aria-label="Workspace health">
+    <div class="panel-heading">
+        <div>
+            <h2>Workspace health</h2>
+            <p>@Subtitle</p>
+        </div>
+        @if (Health is not null)
+        {
+            <span class="workspace-state @HealthStateClass(Health.State)">@Health.State</span>
+        }
+    </div>
+
+    @if (Health is null)
+    {
+        <p class="empty">Select a workspace to view health.</p>
+    }
+    else
+    {
+        @if (!string.IsNullOrWhiteSpace(Health.Error))
+        {
+            <p class="notice error-notice"><strong>Health unavailable</strong> @Health.Error</p>
+        }
+
+        <div class="stats-grid metric-band">
+            <div class="metric">
+                <strong>@Health.State</strong>
+                <span>@Health.Summary</span>
+            </div>
+            <div class="metric">
+                <strong>@Health.Leader</strong>
+                <span>indexer leader</span>
+            </div>
+            <div class="metric">
+                <strong>@FormatCount(Health.ParseDiagnosticCount, "parse diagnostic")</strong>
+                <span>reported by extractor</span>
+            </div>
+            <div class="metric">
+                <strong>@FormatCount(Health.CapabilityGapCount, "capability gap")</strong>
+                <span>open capability gaps</span>
+            </div>
+        </div>
+
+        <dl class="fact-list fact-list-wide">
+            <div>
+                <dt>Search sidecar</dt>
+                <dd>@Health.SearchSidecarStatus</dd>
+            </div>
+            <div>
+                <dt>Content sidecar</dt>
+                <dd>@Health.ContentSidecarStatus</dd>
+            </div>
+        </dl>
+
+        <div class="breakdown-grid detail-grid">
+            <section class="breakdown" aria-label="Health warnings">
+                <h3>Warnings</h3>
+                @if (Health.Warnings.Count == 0)
+                {
+                    <p class="empty-inline">No warnings.</p>
+                }
+                else
+                {
+                    <ol>
+                        @foreach (DashboardHealthWarning warning in Health.Warnings)
+                        {
+                            <li>
+                                <div class="breakdown-row">
+                                    <code>@warning.Code</code>
+                                    <span class="workspace-state @HealthStateClass(warning.Severity)">@warning.Severity</span>
+                                </div>
+                                <small>@warning.Message</small>
+                            </li>
+                        }
+                    </ol>
+                }
+            </section>
+
+            <section class="breakdown" aria-label="Recommended actions">
+                <h3>Recommended actions</h3>
+                @if (Health.RecommendedActions.Count == 0)
+                {
+                    <p class="empty-inline">No actions.</p>
+                }
+                else
+                {
+                    <ol>
+                        @foreach (string action in Health.RecommendedActions)
+                        {
+                            <li>@action</li>
+                        }
+                    </ol>
+                }
+            </section>
+        </div>
+    }
+</section>
+
+@code {
+    [Parameter] public DashboardWorkspaceHealthPanel? Health { get; set; }
+
+    private string Subtitle => Health is null
+        ? "No workspace selected"
+        : Health.Summary;
+
+    private static string HealthStateClass(string state) => state switch
+    {
+        "ready" => "ok",
+        "usable_with_warnings" => "warn",
+        "degraded" or "unavailable" => "bad",
+        _ => "neutral",
+    };
+}

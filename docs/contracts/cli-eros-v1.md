@@ -40,6 +40,7 @@ Current `json_commands` include:
 | `workspace status --json` | Workspace identity, index DB path, revision/freshness facts, sidecar facts, and telemetry summary. See [`workspace-status-v1.md`](workspace-status-v1.md). |
 | `workspace health --json` | Workspace readiness verdict, warnings/actions, sidecar state, extraction-quality aggregates, and telemetry outcome counts. See [`workspace-health-v1.md`](workspace-health-v1.md). |
 | `workspace onboarding --json` | Privacy-safe startup guidance derived from local Miller telemetry: starter commands, hot current-index targets, common misses, and friction. See [`workspace-onboarding-v1.md`](workspace-onboarding-v1.md). |
+| `workspace leader --json` | Indexer-leader diagnostics and optional graceful handoff request status. See [`workspace-leader-json-v1.md`](workspace-leader-json-v1.md). |
 | `workspace list --json` | Registered workspaces from `~/.miller/workspaces.db`. |
 | `workspace refresh --json` | Incremental convergence result for a registered workspace. |
 | `workspace full --json` | Forced full re-index result for a registered workspace. |
@@ -53,6 +54,9 @@ Current `json_commands` include:
 | `impact --json` | Downstream impact result for a symbol, changed paths, or diff. |
 | `trace --json` | Structured auto/path/refs/bridge trace result. See [`trace-json-v1.md`](trace-json-v1.md). |
 | `patterns --json` | List, summarize, and search extractor-recognized code-shape facts. See [`patterns-json-v1.md`](patterns-json-v1.md). |
+| `metrics churn --json` | Local git commit-range churn mapped to the current index. See [`metrics-json-v1.md`](metrics-json-v1.md). |
+| `metrics clones --json` | Duplicate groups by identical non-empty body hash. See [`metrics-json-v1.md`](metrics-json-v1.md). |
+| `metrics complexity --json` | Bounded complexity hotspot report with transparent thresholds. See [`metrics-json-v1.md`](metrics-json-v1.md). |
 | `content import --json` | Import local external text into `content.db`. |
 | `content add-markdown --json` | Import browser/fetched markdown with URL metadata into `content.db`. |
 | `content search --json` | Search content DB rows. |
@@ -97,6 +101,16 @@ lock-holding refresh attempt converges, observes another writer, or reports an o
 `workspace onboarding --json` is read-only. It summarizes the shared telemetry ledger for the selected
 workspace and may recover repeated target hashes only by matching them against the current local index. Raw
 queries and raw targets are not stored or emitted.
+
+`workspace leader --json` is read-only unless `--handoff` is supplied. With `--handoff`, Miller writes a local
+request file asking the current leader to abdicate gracefully; with `--wait`, the command waits briefly for the
+request to be observed. It never kills processes. Older leaders may not understand the request and can leave it
+queued until timeout.
+
+`metrics --json` surfaces deterministic local facts only: git churn over a selected commit range, identical
+body-hash clone groups, and bounded complexity ranking. The churn mapper uses current-index symbols and labels
+that basis explicitly. Clone and complexity outputs do not include cleanup recommendations, suppressions,
+semantic similarity, or fleet history; Eros owns those workflows.
 
 A `lock_busy` result exits `0` and its payload is ingestable: the latest readable DB is being served and a live
 leader owns convergence (for `full`, a leader full-scan request was enqueued). Freshness is NOT confirmed —
@@ -165,14 +179,14 @@ for field-level guarantees. Fields (`schema_version` 1):
 
 ## Workspace selector rules
 
-Code read commands (`search`, `todos` CLI alias, `inspect`, `context`, `impact`, `trace`, `patterns`, and the
+Code read commands (`search`, `todos` CLI alias, `inspect`, `context`, `impact`, `trace`, `patterns`, `metrics`, and the
 `symbols`/`references`/`complexity` exports) target one workspace per call. Their `--workspace-id <selector>`
 accepts a display ID, unique prefix, full workspace ID, registered root path, `current`, or `primary`. The path
 alias `--workspace <path>` is normalized before selection. A selector flag supplied without a value is a usage
 error (exit `2`) in every combination — it is never masked by the other selector flag and never falls back
 silently to the current workspace.
 
-The `workspace` lifecycle subcommands (`status`, `health`, `onboarding`, `refresh`, `full`, `remove`) accept
+The `workspace` lifecycle subcommands (`status`, `health`, `onboarding`, `leader`, `refresh`, `full`, `remove`) accept
 the same selector flags: `--workspace-id` aliases `--id`, and `--workspace <path>` (normalized against the CLI's
 cwd) aliases `--path`. A selector flag supplied without a value is a usage error (exit `2`); a command never
 falls back silently to the current workspace when a selector was attempted.

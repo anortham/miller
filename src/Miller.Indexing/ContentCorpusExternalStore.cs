@@ -391,17 +391,15 @@ public sealed class ContentCorpusExternalStore
                    s.line_count, s.indexed_at_utc, COUNT(c.chunk_id) AS chunk_count
             FROM content_sources s
             LEFT JOIN content_chunks c ON c.source_id = s.source_id
-            WHERE s.source_id = $source AND s.content_kind IN ($external, $web)
+            WHERE s.source_id = $source
             GROUP BY s.source_id, s.content_kind, s.display_path, s.content_hash, s.source_bytes,
                      s.url, s.line_count, s.indexed_at_utc
             LIMIT 1;
             """;
         command.Parameters.AddWithValue("$source", sourceId);
-        command.Parameters.AddWithValue("$external", TextContentKind.ExternalFile);
-        command.Parameters.AddWithValue("$web", TextContentKind.Web);
         using var reader = command.ExecuteReader();
         if (!reader.Read())
-            throw new KeyNotFoundException($"External content source '{sourceId}' was not found.");
+            throw new KeyNotFoundException($"Content source '{sourceId}' was not found.");
 
         return new ExternalContentSource(
             reader.GetString(0),

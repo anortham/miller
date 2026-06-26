@@ -14,6 +14,10 @@ internal readonly record struct IndexerLeadershipYieldDecision(
     string RequesterVersion,
     DateTimeOffset RequesterObservedAtUtc);
 
+internal readonly record struct IndexerLeadershipHandoffDecision(
+    int RequesterPid,
+    DateTimeOffset RequesterObservedAtUtc);
+
 internal sealed class IndexerLeadershipCoordinator
 {
     private readonly ILogger _logger;
@@ -22,10 +26,12 @@ internal sealed class IndexerLeadershipCoordinator
     private readonly bool _allowExtractorDowngrade;
     private readonly Func<string?, string?> _readArtifactExtractorVersion;
     private readonly Func<string, YieldDrainResult> _drainYieldRequests;
+    private readonly Func<string, LeaderHandoffDrainResult> _drainLeaderHandoffRequests;
     private readonly Action<string, string, int, string> _requestYield;
     private readonly Func<string, LeaderIdentity?> _readLeaderIdentity;
     private readonly Func<LeaderIdentity, bool> _leaderAliveProbe;
     private readonly Func<DateTimeOffset> _clock;
+    private readonly Func<int, DateTimeOffset?, bool> _processAliveProbe;
     private readonly YieldCooldown _cooldown;
 
     private (int LeaderPid, DateTimeOffset LeaderStartedAtUtc, DateTimeOffset SentAtUtc)? _outstandingYield;
@@ -38,6 +44,7 @@ internal sealed class IndexerLeadershipCoordinator
         bool allowExtractorDowngrade,
         Func<string?, string?> readArtifactExtractorVersion,
         Func<string, YieldDrainResult> drainYieldRequests,
+        Func<string, LeaderHandoffDrainResult> drainLeaderHandoffRequests,
         Action<string, string, int, string> requestYield,
         Func<string, LeaderIdentity?> readLeaderIdentity,
         Func<LeaderIdentity, bool> leaderAliveProbe,
@@ -49,6 +56,7 @@ internal sealed class IndexerLeadershipCoordinator
         ArgumentNullException.ThrowIfNull(ownExtractorVersion);
         ArgumentNullException.ThrowIfNull(readArtifactExtractorVersion);
         ArgumentNullException.ThrowIfNull(drainYieldRequests);
+        ArgumentNullException.ThrowIfNull(drainLeaderHandoffRequests);
         ArgumentNullException.ThrowIfNull(requestYield);
         ArgumentNullException.ThrowIfNull(readLeaderIdentity);
         ArgumentNullException.ThrowIfNull(leaderAliveProbe);
@@ -61,10 +69,12 @@ internal sealed class IndexerLeadershipCoordinator
         _allowExtractorDowngrade = allowExtractorDowngrade;
         _readArtifactExtractorVersion = readArtifactExtractorVersion;
         _drainYieldRequests = drainYieldRequests;
+        _drainLeaderHandoffRequests = drainLeaderHandoffRequests;
         _requestYield = requestYield;
         _readLeaderIdentity = readLeaderIdentity;
         _leaderAliveProbe = leaderAliveProbe;
         _clock = clock;
+        _processAliveProbe = processAliveProbe;
         _cooldown = new YieldCooldown(_clock, processAliveProbe);
     }
 
@@ -228,6 +238,39 @@ internal sealed class IndexerLeadershipCoordinator
             result.RequesterPid,
             requesterVersion,
             result.RequesterObservedAtUtc ?? _clock());
+    }
+
+    public IndexerLeadershipHandoffDecision? EvaluateLeaderHandoffRequests(
+        string millerDir,
+        Action<string, int, int> logRequestDrainStats)
+    {
+        ArgumentNullException.ThrowIfNull(logRequestDrainStats);
+
+        LeaderHandoffDrainResult result;
+        try
+        {
+            result = _drainLeaderHandoffRequests(millerDir);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            _logger.LogWarning(ex, "Leader handoff request drain failed; will retry on a later tick.");
+            return null;
+        }
+
+        logRequestDrainStats("leader_handoff", result.ExpiredDiscarded, result.ClaimSkipped);
+        if (!result.Requested || result.RequesterPid <= 0)
+            return null;
+
+        DateTimeOffset observedAtUtc = result.RequesterObservedAtUtc ?? _clock();
+        if (!_processAliveProbe(result.RequesterPid, observedAtUtc))
+        {
+            _logger.LogDebug(
+                "Ignoring explicit leader handoff request from pid {RequesterPid}: requester is not running.",
+                result.RequesterPid);
+            return null;
+        }
+
+        return new IndexerLeadershipHandoffDecision(result.RequesterPid, observedAtUtc);
     }
 
     public void BeginCooldown(int requesterPid, DateTimeOffset requesterObservedAtUtc) =>

@@ -59,6 +59,7 @@ public sealed class SearchTool
     internal const int DefaultLimit = 6;
     private const string SymbolNoResultsHint =
         "No results. Try a shorter symbol query, mode=source for code text, or mode=content for docs/config.";
+    private const int EmptySuggestionLimit = 5;
     private const string RegionsUsageHint =
         "regions must be comment, doc_comment, or string_literal. Example: regions=comment or regions=doc_comment,string_literal.";
 
@@ -554,11 +555,15 @@ public sealed class SearchTool
 
         if (total == 0)
         {
+            IReadOnlyList<IndexedSymbol> suggestions =
+                !fileMode && outsideScope.Count == 0
+                    ? SymbolSuggestionEngine.Suggest(index, query, EmptySuggestionLimit)
+                    : [];
             if (json)
-                return "[]";
+                return suggestions.Count > 0 ? RenderEmptyJson(suggestions) : "[]";
             return outsideScope.Count > 0
                 ? RenderFilteredMissCompact(filters, compactBanner, outsideScope)
-                : ReadToolWorkspaceRouting.PrefixCompact(SymbolNoResultsHint, compactBanner);
+                : RenderEmptySymbolMissCompact(compactBanner, suggestions);
         }
 
         IReadOnlySet<string>? hasDocSymbolIds = null;
@@ -1180,6 +1185,18 @@ public sealed class SearchTool
         return sb.ToString();
     }
 
+    private static string RenderEmptySymbolMissCompact(
+        string? compactBanner,
+        IReadOnlyList<IndexedSymbol> suggestions)
+    {
+        string output = ReadToolWorkspaceRouting.PrefixCompact(SymbolNoResultsHint, compactBanner);
+        if (suggestions.Count == 0)
+            return output;
+
+        string list = string.Join(", ", suggestions.Select(static s => $"{s.Name} ({s.FilePath}:{s.StartLine})"));
+        return output + "\nTry: " + list;
+    }
+
     private static void AppendSymbolAnnotations(StringBuilder sb, IndexedSymbol s, IReadOnlySet<string>? hasDocSymbolIds)
     {
         if (IsLowSignalKind(s.Kind))
@@ -1441,6 +1458,33 @@ public sealed class SearchTool
                 writer.WriteEndObject();
             }
             writer.WriteEndArray();
+        }
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    private static string RenderEmptyJson(IReadOnlyList<IndexedSymbol> suggestions)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
+        {
+            writer.WriteStartObject();
+            writer.WriteStartArray("results");
+            writer.WriteEndArray();
+            writer.WriteStartArray("suggestions");
+            foreach (IndexedSymbol suggestion in suggestions)
+            {
+                writer.WriteStartObject();
+                writer.WriteString("name", suggestion.Name);
+                writer.WriteString("kind", suggestion.Kind);
+                writer.WriteString("file", suggestion.FilePath);
+                writer.WriteNumber("line", suggestion.StartLine);
+                if (suggestion.Signature is null) writer.WriteNull("signature");
+                else writer.WriteString("signature", suggestion.Signature);
+                writer.WriteString("symbol_id", suggestion.SymbolId);
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+            writer.WriteEndObject();
         }
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
     }

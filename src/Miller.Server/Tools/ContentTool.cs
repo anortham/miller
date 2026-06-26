@@ -247,8 +247,9 @@ public sealed class ContentTool
         if (line is null)
             throw new InvalidOperationException("content read requires line.");
 
+        string readContentDbPath = ResolveReadContentDbPath(contentDbPath, sourceId);
         ExternalContentReadResult result = _store.ReadWindow(
-            contentDbPath,
+            readContentDbPath,
             sourceId,
             line.Value,
             contextLines ?? ContentCorpusExternalStore.DefaultContextLines);
@@ -260,6 +261,28 @@ public sealed class ContentTool
         }
 
         return json ? RenderReadJson(result) : RenderReadCompact(result);
+    }
+
+    private string ResolveReadContentDbPath(string defaultContentDbPath, string sourceId)
+    {
+        int separator = sourceId.IndexOf(':', StringComparison.Ordinal);
+        if (separator <= 0)
+            return defaultContentDbPath;
+
+        string sourceWorkspaceId = sourceId[..separator];
+        try
+        {
+            using WorkspaceRegistry registry = WorkspaceRegistry.Open(_workspace.RegistryDbPath);
+            WorkspaceRegistryRow? row = registry.List()
+                .FirstOrDefault(r => string.Equals(r.WorkspaceId, sourceWorkspaceId, StringComparison.Ordinal));
+            return row is null
+                ? defaultContentDbPath
+                : ContentCorpusSidecar.ContentDbPathFor(row.IndexDbPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException)
+        {
+            return defaultContentDbPath;
+        }
     }
 
     private string List(string contentDbPath, string contentKind, bool json, TelemetryScope? telemetry)

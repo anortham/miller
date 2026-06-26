@@ -116,6 +116,7 @@ public static class MillerServiceRegistration
         services.AddSingleton<ContentCorpusExternalStore>();
         services.AddSingleton<PatternFactsReader>();
         services.AddSingleton<IGitDiffReader, ProcessGitDiffReader>();
+        services.AddSingleton<IGitHistoryReader, ProcessGitHistoryReader>();
         services.AddSingleton<CrossWorkspaceRefreshService>();
         services.AddTransient<WorkspaceIndexProvider>();
         services.AddTransient<IWorkspaceIndexProvider>(sp => sp.GetRequiredService<WorkspaceIndexProvider>());

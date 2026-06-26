@@ -577,6 +577,53 @@ public sealed class SearchToolTests
     }
 
     [Fact]
+    public void Run_Empty_WithNearMiss_RendersCompactSuggestions()
+    {
+        var candidate = Symbol(
+            0,
+            "aa11223344556677889900aabbccdd91",
+            "ReadReferencesAsync",
+            "method",
+            "src/References/Reader.cs",
+            12,
+            "Task ReadReferencesAsync()");
+        var index = StubSymbolSearchIndex.WithSymbolsOnly(candidate);
+
+        string output = SearchTool.Run(index, "ReadReferencesAsyncc", SearchToolMode.Auto, limit: 10,
+            excludeTests: null, json: false, out int count);
+
+        Assert.Equal(0, count);
+        Assert.Contains("No results.", output);
+        Assert.Contains("Try: ReadReferencesAsync (src/References/Reader.cs:12)", output);
+    }
+
+    [Fact]
+    public void Run_EmptyJson_WithNearMiss_ReturnsSuggestionsObject()
+    {
+        var candidate = Symbol(
+            0,
+            "aa11223344556677889900aabbccdd91",
+            "ReadReferencesAsync",
+            "method",
+            "src/References/Reader.cs",
+            12,
+            "Task ReadReferencesAsync()");
+        var index = StubSymbolSearchIndex.WithSymbolsOnly(candidate);
+
+        string output = SearchTool.Run(index, "ReadReferencesAsyncc", SearchToolMode.Auto, limit: 10,
+            excludeTests: null, json: true, out int count);
+
+        Assert.Equal(0, count);
+        using var doc = JsonDocument.Parse(output);
+        JsonElement root = doc.RootElement;
+        Assert.Equal(JsonValueKind.Object, root.ValueKind);
+        Assert.Equal(0, root.GetProperty("results").GetArrayLength());
+        JsonElement suggestion = root.GetProperty("suggestions")[0];
+        Assert.Equal("ReadReferencesAsync", suggestion.GetProperty("name").GetString());
+        Assert.Equal("src/References/Reader.cs", suggestion.GetProperty("file").GetString());
+    }
+
+    [Fact]
     public void Run_Json_IsAParseableArrayWithTheExpectedShape()
     {
         using var fx = JulieDbFixture.CreateDefault();
@@ -1658,6 +1705,28 @@ public sealed class SearchToolTests
                 .Where(static ext => ext.Length > 1)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
         }
+
+        private StubSymbolSearchIndex(IReadOnlyList<IndexedSymbol> symbols)
+        {
+            _symbols = symbols.ToDictionary(static symbol => symbol.DocId);
+            _byName = symbols
+                .GroupBy(static symbol => symbol.Name, StringComparer.Ordinal)
+                .ToDictionary(static group => group.Key, static group => group.ToList(), StringComparer.Ordinal);
+            _byFilePath = symbols
+                .GroupBy(static symbol => symbol.FilePath, StringComparer.Ordinal)
+                .ToDictionary(static group => group.Key, static group => group.ToList(), StringComparer.Ordinal);
+            _byParentId = symbols
+                .Where(static symbol => symbol.ParentId is not null)
+                .GroupBy(static symbol => symbol.ParentId!, StringComparer.Ordinal)
+                .ToDictionary(static group => group.Key, static group => group.ToList(), StringComparer.Ordinal);
+            _hits = [];
+            KnownExtensions = symbols
+                .Select(static symbol => Path.GetExtension(symbol.FilePath))
+                .Where(static ext => ext.Length > 1)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+
+        public static StubSymbolSearchIndex WithSymbolsOnly(params IndexedSymbol[] symbols) => new(symbols);
 
         public int DocumentCount => _symbols.Count;
 

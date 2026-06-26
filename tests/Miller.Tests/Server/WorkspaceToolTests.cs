@@ -606,6 +606,47 @@ public sealed class WorkspaceToolTests : IDisposable
     }
 
     [Fact]
+    public void Leader_Json_RendersLeaderDiagnostics()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(fx, builtRevision: 4, workspaceId: Ws);
+        LeaderIdentityFile.Write(Path.GetDirectoryName(fx.DbPath)!, new LeaderIdentity(
+            Environment.ProcessId,
+            "1.0.0",
+            ProcessPath: null,
+            StartedAtUtc: DateTimeOffset.UtcNow,
+            ExtractorVersion: "2.3.0"));
+
+        using var doc = JsonDocument.Parse(harness.Tool.Workspace(operation: "leader", format: "json"));
+        JsonElement root = doc.RootElement;
+
+        Assert.Equal(1, root.GetProperty("schema_version").GetInt32());
+        Assert.Equal(Ws, root.GetProperty("workspace").GetProperty("workspace_id").GetString());
+        Assert.Equal(Environment.ProcessId, root.GetProperty("indexer_leader").GetProperty("pid").GetInt32());
+        Assert.Equal("2.3.0", root.GetProperty("indexer_leader").GetProperty("extractor_version").GetString());
+        Assert.False(root.GetProperty("handoff").GetProperty("requested").GetBoolean());
+        Assert.Contains("No handoff requested", root.GetProperty("recommendation").GetString());
+    }
+
+    [Fact]
+    public void Leader_Handoff_QueuesGracefulRequest()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(fx, builtRevision: 4, workspaceId: Ws);
+
+        using var doc = JsonDocument.Parse(harness.Tool.Workspace(
+            operation: "leader",
+            format: "json",
+            handoff: true));
+        JsonElement root = doc.RootElement;
+
+        Assert.True(root.GetProperty("handoff").GetProperty("requested").GetBoolean());
+        Assert.False(root.GetProperty("handoff").GetProperty("observed").GetBoolean());
+        Assert.NotEqual(string.Empty, root.GetProperty("handoff").GetProperty("request_id").GetString());
+        Assert.Single(Directory.EnumerateFiles(Path.Combine(Path.GetDirectoryName(fx.DbPath)!, "requests"), "*.leader-handoff.json"));
+    }
+
+    [Fact]
     public void Onboarding_CurrentWorkspace_RendersTelemetryGuidanceAndRecoveredTargets()
     {
         using var fx = JulieDbFixture.CreateForInspect();

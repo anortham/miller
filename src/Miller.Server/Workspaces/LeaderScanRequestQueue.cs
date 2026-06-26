@@ -49,16 +49,35 @@ internal sealed record YieldDrainResult(
         ClaimSkipped: 0);
 }
 
+internal sealed record LeaderHandoffRequestReceipt(string RequestId, string RequestPath);
+
+internal sealed record LeaderHandoffDrainResult(
+    bool Requested,
+    int RequesterPid,
+    DateTimeOffset? RequesterObservedAtUtc,
+    int ExpiredDiscarded,
+    int ClaimSkipped)
+{
+    public static LeaderHandoffDrainResult Empty { get; } = new(
+        Requested: false,
+        RequesterPid: 0,
+        RequesterObservedAtUtc: null,
+        ExpiredDiscarded: 0,
+        ClaimSkipped: 0);
+}
+
 internal static partial class LeaderScanRequestQueue
 {
     private const int SchemaVersion = 1;
     private const string OperationFullScan = "full_scan";
     private const string OperationFileConverge = "file_converge";
     private const string OperationYield = "yield";
+    private const string OperationLeaderHandoff = "leader_handoff";
     private const string RequestDirectoryName = "requests";
     private const string FullScanSuffix = ".full-scan.json";
     private const string FileConvergeSuffix = ".file-converge.json";
     private const string YieldSuffix = ".yield.json";
+    private const string LeaderHandoffSuffix = ".leader-handoff.json";
     private const string ClaimedSuffix = ".claimed";
     private const string StampFormat = "yyyyMMddHHmmssfffffff";
 
@@ -381,6 +400,108 @@ internal static partial class LeaderScanRequestQueue
             skipped);
     }
 
+    public static LeaderHandoffRequestReceipt RequestLeaderHandoff(
+        string millerDir,
+        string workspaceId,
+        int requesterPid)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(millerDir);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
+        if (requesterPid <= 0)
+            throw new ArgumentOutOfRangeException(nameof(requesterPid), requesterPid, "Requester pid must be positive.");
+
+        string requestDir = RequestDirectoryFor(millerDir);
+        Directory.CreateDirectory(requestDir);
+
+        string requestId = Guid.NewGuid().ToString("N");
+        string stamp = DateTimeOffset.UtcNow.ToString(StampFormat, CultureInfo.InvariantCulture);
+        string finalPath = Path.Combine(requestDir, $"{stamp}-{Environment.ProcessId}-{requestId}{LeaderHandoffSuffix}");
+        string tempPath = finalPath + ".tmp";
+        var request = new LeaderHandoffRequest(
+            SchemaVersion,
+            OperationLeaderHandoff,
+            requestId,
+            workspaceId,
+            requesterPid,
+            DateTimeOffset.UtcNow);
+
+        try
+        {
+            File.WriteAllText(
+                tempPath,
+                JsonSerializer.Serialize(request, LeaderScanRequestJsonContext.Default.LeaderHandoffRequest));
+            File.Move(tempPath, finalPath);
+        }
+        finally
+        {
+            TryDelete(tempPath);
+        }
+
+        return new LeaderHandoffRequestReceipt(requestId, finalPath);
+    }
+
+    public static LeaderHandoffDrainResult DrainLeaderHandoffRequests(string millerDir)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(millerDir);
+
+        string requestDir = RequestDirectoryFor(millerDir);
+        if (!Directory.Exists(requestDir))
+            return LeaderHandoffDrainResult.Empty;
+
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        int expired = SweepExpiredClaims(requestDir, LeaderHandoffSuffix, now);
+        int skipped = 0;
+        int requesterPid = 0;
+        DateTimeOffset? requesterObservedAtUtc = null;
+        foreach (string path in Directory.EnumerateFiles(requestDir, "*" + LeaderHandoffSuffix).Order(StringComparer.Ordinal))
+        {
+            if (IsExpired(path, now))
+            {
+                TryDelete(path);
+                expired++;
+                continue;
+            }
+
+            if (!TryClaim(path, out string claimedPath))
+            {
+                skipped++;
+                continue;
+            }
+            if (claimedPath.Length == 0)
+                continue; // vanished before the claim: another process raced us; nothing to service
+
+            try
+            {
+                string json = File.ReadAllText(claimedPath);
+                LeaderHandoffRequest? request = JsonSerializer.Deserialize(
+                    json,
+                    LeaderScanRequestJsonContext.Default.LeaderHandoffRequest);
+                if (request is { SchemaVersion: SchemaVersion, Operation: OperationLeaderHandoff }
+                    && requesterPid == 0)
+                {
+                    requesterPid = request.RequesterPid;
+                    requesterObservedAtUtc = request.CreatedAtUtc;
+                }
+            }
+            catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+            {
+                // Malformed or unreadable AFTER a successful claim: we own it now, so drop it rather than
+                // re-reading it forever. The TTL sweep is the backstop if even the delete below fails.
+            }
+            finally
+            {
+                TryDelete(claimedPath);
+            }
+        }
+
+        return new LeaderHandoffDrainResult(
+            requesterPid > 0,
+            requesterPid,
+            requesterObservedAtUtc,
+            expired,
+            skipped);
+    }
+
     // Does this drained yield's version beat the strongest challenger seen so far this pass? Ordering is
     // LeadershipEligibility.CompareVersions (numeric major.minor.patch, "2.10.1" > "2.3.0"), which THROWS on a
     // version carrying no X.Y.Z token — a yield with an uncomparable version is dropped like malformed JSON
@@ -501,9 +622,18 @@ internal static partial class LeaderScanRequestQueue
         string RequesterExtractorVersion,
         DateTimeOffset CreatedAtUtc);
 
+    private sealed record LeaderHandoffRequest(
+        int SchemaVersion,
+        string Operation,
+        string RequestId,
+        string WorkspaceId,
+        int RequesterPid,
+        DateTimeOffset CreatedAtUtc);
+
     [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
     [JsonSerializable(typeof(FullScanRequest))]
     [JsonSerializable(typeof(FileConvergeRequest))]
     [JsonSerializable(typeof(YieldRequest))]
+    [JsonSerializable(typeof(LeaderHandoffRequest))]
     private sealed partial class LeaderScanRequestJsonContext : JsonSerializerContext;
 }

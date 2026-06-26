@@ -6,6 +6,7 @@ using Miller.Indexing;
 using Miller.Server;
 using Miller.Server.Cli;
 using Miller.Server.Git;
+using Miller.Server.Hosting;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
 using Miller.Server.Workspaces;
@@ -313,6 +314,8 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Contains("impact --json", commands);
         Assert.Contains("trace --json", commands);
         Assert.Contains("patterns --json", commands);
+        Assert.Contains("metrics clones --json", commands);
+        Assert.Contains("metrics complexity --json", commands);
         Assert.Contains("references export --jsonl", commands);
 
         JsonElement traceContract = Assert.Single(
@@ -326,6 +329,12 @@ public sealed class CliDispatchTests : IDisposable
             item => item.GetProperty("name").GetString() == "patterns");
         Assert.Equal("patterns --json", patternsContract.GetProperty("command").GetString());
         Assert.Equal(1, patternsContract.GetProperty("schema_version").GetInt32());
+
+        JsonElement metricsContract = Assert.Single(
+            root.GetProperty("json_contracts").EnumerateArray(),
+            item => item.GetProperty("name").GetString() == "metrics");
+        Assert.Equal("metrics <churn|clones|complexity> --json", metricsContract.GetProperty("command").GetString());
+        Assert.Equal(1, metricsContract.GetProperty("schema_version").GetInt32());
 
         JsonElement workspaceStatusContract = Assert.Single(
             root.GetProperty("json_contracts").EnumerateArray(),
@@ -1088,6 +1097,80 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Equal(4, row.GetProperty("end_line").GetInt64());
     }
 
+    [Fact]
+    public void Metrics_Clones_Json_EmitsCloneGroups()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        StampBodyHash(fx.DbPath, JulieDbFixture.UserServiceId, "clone-hash");
+        StampBodyHash(fx.DbPath, JulieDbFixture.GetUserId, "clone-hash");
+
+        var (code, outText, errText) = Run(
+            new[] { "metrics", "clones", "--json" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        JsonElement root = doc.RootElement;
+        Assert.Equal("clones", root.GetProperty("operation").GetString());
+        Assert.Equal("clone-hash", root.GetProperty("groups")[0].GetProperty("body_hash").GetString());
+    }
+
+    [Fact]
+    public void Metrics_Complexity_Json_EmitsRankedHotspots()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        SeedComplexityMetric(fx.DbPath, JulieDbFixture.GetUserId);
+
+        var (code, outText, errText) = Run(
+            new[] { "metrics", "complexity", "--json", "--min-severity", "low" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        JsonElement root = doc.RootElement;
+        Assert.Equal("complexity", root.GetProperty("operation").GetString());
+        Assert.Equal("GetUser", root.GetProperty("hotspots")[0].GetProperty("symbol_name").GetString());
+    }
+
+    [Fact]
+    public void Metrics_Churn_Json_MapsCommitRangeToCurrentSymbols()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        RunGit(fx.WorkspaceRoot, "init");
+        RunGit(fx.WorkspaceRoot, "config", "user.email", "miller-tests@example.test");
+        RunGit(fx.WorkspaceRoot, "config", "user.name", "Miller Tests");
+        RunGit(fx.WorkspaceRoot, "add", "auth/UserService.cs");
+        RunGit(fx.WorkspaceRoot, "commit", "-m", "initial");
+
+        string userServicePath = Path.Combine(fx.WorkspaceRoot, "auth", "UserService.cs");
+        File.WriteAllText(
+            userServicePath,
+            File.ReadAllText(userServicePath).Replace(
+                "return _repo.Find(id);",
+                "return _repo.Find(id + 1);",
+                StringComparison.Ordinal));
+        RunGit(fx.WorkspaceRoot, "add", "auth/UserService.cs");
+        RunGit(fx.WorkspaceRoot, "commit", "-m", "change get user");
+
+        var (code, outText, errText) = Run(
+            new[] { "metrics", "churn", "--json", "--range", "HEAD~1..HEAD", "--include-commits" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        JsonElement root = doc.RootElement;
+        Assert.Equal("churn", root.GetProperty("operation").GetString());
+        Assert.Equal("HEAD~1..HEAD", root.GetProperty("range").GetString());
+        JsonElement row = root.GetProperty("rows")[0];
+        Assert.Equal(JulieDbFixture.GetUserId, row.GetProperty("symbol_id").GetString());
+        Assert.Equal("GetUser", row.GetProperty("symbol_name").GetString());
+        Assert.Equal(1, row.GetProperty("commit_count").GetInt32());
+        Assert.Single(row.GetProperty("commits").EnumerateArray());
+    }
+
     private static void StampBodyHash(string dbPath, string symbolId, string bodyHash)
     {
         using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
@@ -1156,6 +1239,28 @@ public sealed class CliDispatchTests : IDisposable
             """;
         cmd.Parameters.AddWithValue("$symbolId", symbolId);
         cmd.ExecuteNonQuery();
+    }
+
+    private static void RunGit(string workingDirectory, params string[] args)
+    {
+        var startInfo = new System.Diagnostics.ProcessStartInfo("git")
+        {
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+
+        foreach (string arg in args)
+        {
+            startInfo.ArgumentList.Add(arg);
+        }
+
+        using var process = System.Diagnostics.Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start git.");
+        string output = process.StandardOutput.ReadToEnd();
+        string error = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        Assert.True(process.ExitCode == 0, $"git {string.Join(' ', args)} failed: {output}{error}");
     }
 
     [Fact]
@@ -1910,6 +2015,49 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Equal(2, root.GetProperty("extraction_quality")
             .GetProperty("parse_diagnostics").GetProperty("rows")[0].GetProperty("count").GetInt64());
         Assert.Equal("capability_gaps", root.GetProperty("warnings")[0].GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public void WorkspaceLeader_Json_RendersLeaderDiagnostics()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+        LeaderIdentityFile.Write(Path.GetDirectoryName(fx.DbPath)!, new LeaderIdentity(
+            Environment.ProcessId,
+            "1.0.0",
+            ProcessPath: null,
+            StartedAtUtc: DateTimeOffset.UtcNow,
+            ExtractorVersion: "2.3.0"));
+
+        var (code, outText, errText) = Run(
+            new[] { "workspace", "leader", "--json" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        JsonElement root = doc.RootElement;
+        Assert.Equal(1, root.GetProperty("schema_version").GetInt32());
+        Assert.Equal(Environment.ProcessId, root.GetProperty("indexer_leader").GetProperty("pid").GetInt32());
+        Assert.Equal("2.3.0", root.GetProperty("indexer_leader").GetProperty("extractor_version").GetString());
+        Assert.False(root.GetProperty("handoff").GetProperty("requested").GetBoolean());
+    }
+
+    [Fact]
+    public void WorkspaceLeader_Handoff_Json_QueuesRequest()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+
+        var (code, outText, errText) = Run(
+            new[] { "workspace", "leader", "--json", "--handoff" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        JsonElement root = doc.RootElement;
+        Assert.True(root.GetProperty("handoff").GetProperty("requested").GetBoolean());
+        Assert.False(root.GetProperty("handoff").GetProperty("observed").GetBoolean());
+        Assert.Single(Directory.EnumerateFiles(Path.Combine(Path.GetDirectoryName(fx.DbPath)!, "requests"), "*.leader-handoff.json"));
     }
 
     [Fact]

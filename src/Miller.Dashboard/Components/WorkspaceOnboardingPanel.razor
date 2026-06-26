@@ -1,0 +1,153 @@
+@namespace Miller.Dashboard.Components
+
+<section id="workspace-onboarding-panel" class="panel onboarding-panel" aria-label="Workspace onboarding">
+    <div class="panel-heading">
+        <div>
+            <h2>Workspace onboarding</h2>
+            <p>@Subtitle</p>
+        </div>
+        @if (Onboarding is not null)
+        {
+            <span class="workspace-state @StateClass(Onboarding.State)">@Onboarding.State</span>
+        }
+    </div>
+
+    @if (Onboarding is null)
+    {
+        <p class="empty">Select a workspace to view onboarding.</p>
+    }
+    else
+    {
+        @if (!string.IsNullOrWhiteSpace(Onboarding.Error))
+        {
+            <p class="notice error-notice"><strong>Onboarding unavailable</strong> @Onboarding.Error</p>
+        }
+
+        <div class="stats-grid metric-band">
+            <div class="metric">
+                <strong>@Onboarding.TotalCalls.ToString("N0", CultureInfo.InvariantCulture)</strong>
+                <span>telemetry calls</span>
+            </div>
+            <div class="metric">
+                <strong>@FormatCount(Onboarding.HotTargets.Count, "hot target")</strong>
+                <span>resolved from hashes</span>
+            </div>
+            <div class="metric">
+                <strong>@FormatCount(Onboarding.CommonMisses.Count, "common miss")</strong>
+                <span>recent empty results</span>
+            </div>
+            <div class="metric">
+                <strong>@FormatCount(Onboarding.StartHere.Count, "starter")</strong>
+                <span>workflow hints</span>
+            </div>
+        </div>
+
+        <div class="breakdown-grid detail-grid">
+            <section class="breakdown" aria-label="Starter commands">
+                <h3>Start here</h3>
+                @if (Onboarding.StartHere.Count == 0)
+                {
+                    <p class="empty-inline">No starter guidance.</p>
+                }
+                else
+                {
+                    <ol>
+                        @foreach (string item in Onboarding.StartHere)
+                        {
+                            <li>@item</li>
+                        }
+                    </ol>
+                }
+            </section>
+
+            <section class="breakdown" aria-label="Hot targets">
+                <h3>Hot targets</h3>
+                @if (Onboarding.HotTargets.Count == 0)
+                {
+                    <p class="empty-inline">No hot targets.</p>
+                }
+                else
+                {
+                    <ol>
+                        @foreach (DashboardOnboardingTarget target in Onboarding.HotTargets)
+                        {
+                            <li>
+                                <div class="breakdown-row">
+                                    <span>@TargetName(target)</span>
+                                    <span>@FormatCount(target.Calls, "call")</span>
+                                </div>
+                                <small>@TargetDetails(target)</small>
+                            </li>
+                        }
+                    </ol>
+                }
+            </section>
+
+            <section class="breakdown" aria-label="Common misses">
+                <h3>Common misses</h3>
+                @if (Onboarding.CommonMisses.Count == 0)
+                {
+                    <p class="empty-inline">No common misses.</p>
+                }
+                else
+                {
+                    <ol>
+                        @foreach (DashboardOnboardingMiss miss in Onboarding.CommonMisses)
+                        {
+                            <li>
+                                <div class="breakdown-row">
+                                    <code>@MissTool(miss)</code>
+                                    <span>@FormatCount(miss.Calls, "call")</span>
+                                </div>
+                                <small>@miss.Reason</small>
+                            </li>
+                        }
+                    </ol>
+                }
+            </section>
+
+            <section class="breakdown" aria-label="Onboarding notes">
+                <h3>Notes</h3>
+                @if (Onboarding.Notes.Count == 0)
+                {
+                    <p class="empty-inline">No notes.</p>
+                }
+                else
+                {
+                    <ol>
+                        @foreach (string note in Onboarding.Notes)
+                        {
+                            <li>@note</li>
+                        }
+                    </ol>
+                }
+            </section>
+        </div>
+    }
+</section>
+
+@code {
+    [Parameter] public DashboardWorkspaceOnboardingPanel? Onboarding { get; set; }
+
+    private string Subtitle => Onboarding is null
+        ? "No workspace selected"
+        : Onboarding.TotalCalls.ToString("N0", CultureInfo.InvariantCulture) + " calls in the local profile";
+
+    private static string TargetName(DashboardOnboardingTarget target) =>
+        string.IsNullOrWhiteSpace(target.Name) ? target.Confidence : target.Name;
+
+    private static string TargetDetails(DashboardOnboardingTarget target)
+    {
+        var parts = new List<string> { target.Confidence };
+        if (!string.IsNullOrWhiteSpace(target.Kind))
+            parts.Add(target.Kind);
+        if (!string.IsNullOrWhiteSpace(target.Path))
+            parts.Add(target.Line is { } line
+                ? target.Path + ":" + line.ToString(CultureInfo.InvariantCulture)
+                : target.Path);
+        return string.Join(" · ", parts);
+    }
+
+    private static string MissTool(DashboardOnboardingMiss miss) =>
+        string.IsNullOrWhiteSpace(miss.Op) ? miss.Tool : miss.Tool + " " + miss.Op;
+}

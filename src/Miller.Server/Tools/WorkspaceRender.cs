@@ -99,6 +99,16 @@ internal readonly record struct WorkspaceDashboardResult(
     int? ProcessId,
     string? Message);
 
+internal readonly record struct WorkspaceLeaderResult(
+    WorkspaceFacts Status,
+    LeaderHealthFacts Leader,
+    string Recommendation,
+    bool HandoffRequested,
+    bool HandoffWaited,
+    bool HandoffObserved,
+    string? HandoffRequestId,
+    string? HandoffNote);
+
 /// <summary>
 /// The result of an <c>open(path)</c> prime (M7 decision-1): an <c>extract scan</c> ran AT <paramref name="Path"/>
 /// so a future Miller launched there has a warm index. NOT a live switch — the served index/watcher/telemetry
@@ -432,6 +442,78 @@ public static class WorkspaceRender
         if (facts.Error is null) w.WriteNull("error");
         else w.WriteString("error", facts.Error);
         w.WriteEndObject();
+    }
+
+    // ---------- leader ----------
+
+    internal static string Leader(WorkspaceLeaderResult result, bool json) =>
+        json ? LeaderJson(result) : LeaderCompact(result);
+
+    private static string LeaderCompact(WorkspaceLeaderResult result)
+    {
+        WorkspaceFacts status = result.Status;
+        var sb = new StringBuilder();
+        sb.Append("# workspace leader\n");
+        sb.Append("workspace: ").Append(DisplayId(status.Root, status.WorkspaceId, status.DisplayId))
+          .Append("  ").Append(status.Root).Append('\n');
+        sb.Append("leader: ").Append(LeaderLabel(status, result.Leader)).Append('\n');
+        sb.Append("recommendation: ").Append(result.Recommendation).Append('\n');
+        if (result.HandoffRequested)
+        {
+            sb.Append("handoff: queued");
+            if (!string.IsNullOrWhiteSpace(result.HandoffRequestId))
+                sb.Append(" ").Append(result.HandoffRequestId);
+            sb.Append(result.HandoffObserved ? "  observed" : "  not observed");
+            if (!string.IsNullOrWhiteSpace(result.HandoffNote))
+                sb.Append("  ").Append(result.HandoffNote);
+            sb.Append('\n');
+        }
+        return sb.ToString().TrimEnd('\n');
+    }
+
+    private static string LeaderJson(WorkspaceLeaderResult result)
+    {
+        WorkspaceFacts status = result.Status;
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var w = NewWriter(buffer))
+        {
+            w.WriteStartObject();
+            w.WriteNumber("schema_version", 1);
+
+            w.WritePropertyName("workspace");
+            w.WriteStartObject();
+            w.WriteString("root", status.Root);
+            if (status.WorkspaceId is null) w.WriteNull("workspace_id");
+            else w.WriteString("workspace_id", status.WorkspaceId);
+            if (status.DisplayId is null) w.WriteNull("display_id");
+            else w.WriteString("display_id", status.DisplayId);
+            w.WriteString("db", status.DbPath);
+            w.WriteBoolean("leader", status.IsLeader);
+            if (status.ServerVersion is null) w.WriteNull("server_version");
+            else w.WriteString("server_version", status.ServerVersion);
+            if (status.ServerProcessId is { } pid) w.WriteNumber("server_pid", pid);
+            else w.WriteNull("server_pid");
+            w.WriteEndObject();
+
+            w.WritePropertyName("indexer_leader");
+            WriteLeaderJson(w, status, result.Leader);
+
+            w.WriteString("recommendation", result.Recommendation);
+
+            w.WritePropertyName("handoff");
+            w.WriteStartObject();
+            w.WriteBoolean("requested", result.HandoffRequested);
+            w.WriteBoolean("waited", result.HandoffWaited);
+            w.WriteBoolean("observed", result.HandoffObserved);
+            if (result.HandoffRequestId is null) w.WriteNull("request_id");
+            else w.WriteString("request_id", result.HandoffRequestId);
+            if (result.HandoffNote is null) w.WriteNull("note");
+            else w.WriteString("note", result.HandoffNote);
+            w.WriteEndObject();
+
+            w.WriteEndObject();
+        }
+        return Utf8(buffer);
     }
 
     // ---------- health ----------

@@ -101,6 +101,7 @@ public sealed class IndexerService : BackgroundService
             attachFileWatchers: true,
             drainFullScanRequests: LeaderScanRequestQueue.DrainFullScanRequests,
             drainFileConvergeRequests: LeaderScanRequestQueue.DrainFileConvergeRequests,
+            drainLeaderHandoffRequests: LeaderScanRequestQueue.DrainLeaderHandoffRequests,
             // The watcher's extension gate: julie's own claimed set, fetched once per process, null on any
             // failure (gate nothing). Production-only — the internal test ctor defaults to no gate so no
             // fast test can ever spawn the languages probe.
@@ -122,6 +123,7 @@ public sealed class IndexerService : BackgroundService
         Func<string, FullScanDrainResult>? drainFullScanRequests = null,
         Func<string, FileConvergeDrainResult>? drainFileConvergeRequests = null,
         Func<string, YieldDrainResult>? drainYieldRequests = null,
+        Func<string, LeaderHandoffDrainResult>? drainLeaderHandoffRequests = null,
         Func<string?>? ownExtractorVersion = null,
         bool? allowExtractorDowngrade = null,
         Func<string?, string?>? readArtifactExtractorVersion = null,
@@ -166,6 +168,7 @@ public sealed class IndexerService : BackgroundService
                 ?? Environment.GetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE") == "1",
             readArtifactExtractorVersion ?? ExtractBinaryVersionReader.TryRead,
             drainYieldRequests ?? LeaderScanRequestQueue.DrainYieldRequests,
+            drainLeaderHandoffRequests ?? LeaderScanRequestQueue.DrainLeaderHandoffRequests,
             requestYield ?? LeaderScanRequestQueue.RequestYield,
             readLeaderIdentity ?? LeaderIdentityFile.TryRead,
             leaderAliveProbe ?? (static identity => LeaderIdentityFile.IsProcessAlive(identity)),
@@ -407,12 +410,14 @@ public sealed class IndexerService : BackgroundService
             }
 
             IndexerLeadershipYieldDecision? yieldDecision = null;
+            IndexerLeadershipHandoffDecision? handoffDecision = null;
             try
             {
                 // D4 leader side: drain yield requests alongside the other request kinds. The decision is
                 // evaluated first but ACTED on only after this tick's work finishes (below), so an in-flight
                 // converge batch is never abandoned mid-tick.
                 yieldDecision = _leadership.EvaluateYieldRequests(millerDir, LogRequestDrainStats);
+                handoffDecision = _leadership.EvaluateLeaderHandoffRequests(millerDir, LogRequestDrainStats);
                 TryProcessLeaderFullScanRequests(millerDir);
                 TryProcessFileConvergeRequests(millerDir);
 
@@ -443,6 +448,15 @@ public sealed class IndexerService : BackgroundService
                     decision.RequesterPid,
                     decision.RequesterVersion,
                     decision.RequesterObservedAtUtc);
+                return true; // re-enter the claim loop as a reader, under the cooldown
+            }
+
+            if (handoffDecision is { } handoff)
+            {
+                AbdicateLeadershipForExplicitHandoff(
+                    millerDir,
+                    handoff.RequesterPid,
+                    handoff.RequesterObservedAtUtc);
                 return true; // re-enter the claim loop as a reader, under the cooldown
             }
         }
@@ -482,6 +496,25 @@ public sealed class IndexerService : BackgroundService
             "Yielding indexer leadership: requester pid {RequesterPid} bundles extractor {RequesterVersion}, newer than own {OwnVersion}; " +
             "abdicating and entering a {CooldownSeconds}s cooldown.",
             requesterPid, requesterVersion, _leadership.ProbeOwnExtractorVersion(), YieldCooldown.Duration.TotalSeconds);
+        TearDownLeadershipForRequester(millerDir, requesterPid, requesterObservedAtUtc);
+    }
+
+    private void AbdicateLeadershipForExplicitHandoff(
+        string millerDir,
+        int requesterPid,
+        DateTimeOffset requesterObservedAtUtc)
+    {
+        _logger.LogInformation(
+            "Explicit indexer leadership handoff requested by pid {RequesterPid}; abdicating and entering a {CooldownSeconds}s cooldown.",
+            requesterPid, YieldCooldown.Duration.TotalSeconds);
+        TearDownLeadershipForRequester(millerDir, requesterPid, requesterObservedAtUtc);
+    }
+
+    private void TearDownLeadershipForRequester(
+        string millerDir,
+        int requesterPid,
+        DateTimeOffset requesterObservedAtUtc)
+    {
         DisposeWatchers();
         lock (_opsGate)
         {
@@ -837,6 +870,17 @@ public sealed class IndexerService : BackgroundService
             millerDir,
             decision.RequesterPid,
             decision.RequesterVersion,
+            decision.RequesterObservedAtUtc);
+        return true;
+    }
+
+    internal bool ProcessLeaderHandoffRequestsForTest(string millerDir)
+    {
+        if (_leadership.EvaluateLeaderHandoffRequests(millerDir, LogRequestDrainStats) is not { } decision)
+            return false;
+        AbdicateLeadershipForExplicitHandoff(
+            millerDir,
+            decision.RequesterPid,
             decision.RequesterObservedAtUtc);
         return true;
     }

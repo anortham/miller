@@ -302,6 +302,76 @@ public sealed class LeaderScanRequestQueueTests : IDisposable
         Assert.True(LeaderScanRequestQueue.DrainFullScanRequests(millerDir).Requested);
     }
 
+    // ---- Explicit leader handoff: a user/operator asks the live leader to abdicate gracefully ----------------
+
+    [Fact]
+    public void RequestLeaderHandoff_RoundTripsRequesterPid_AndDrainConsumesOnce()
+    {
+        string millerDir = Path.Combine(_dir, ".miller");
+        DateTimeOffset beforeRequest = DateTimeOffset.UtcNow.AddSeconds(-1);
+
+        LeaderHandoffRequestReceipt receipt = LeaderScanRequestQueue.RequestLeaderHandoff(
+            millerDir, "workspace-1", requesterPid: 4242);
+        DateTimeOffset afterRequest = DateTimeOffset.UtcNow.AddSeconds(1);
+
+        string requestDir = Path.Combine(millerDir, "requests");
+        Assert.NotEqual(string.Empty, receipt.RequestId);
+        Assert.Single(Directory.EnumerateFiles(requestDir, "*.leader-handoff.json"));
+
+        LeaderHandoffDrainResult result = LeaderScanRequestQueue.DrainLeaderHandoffRequests(millerDir);
+
+        Assert.True(result.Requested);
+        Assert.Equal(4242, result.RequesterPid);
+        Assert.NotNull(result.RequesterObservedAtUtc);
+        Assert.InRange(result.RequesterObservedAtUtc.Value, beforeRequest, afterRequest);
+        Assert.Empty(Directory.EnumerateFiles(requestDir));
+        Assert.False(LeaderScanRequestQueue.DrainLeaderHandoffRequests(millerDir).Requested);
+    }
+
+    [Fact]
+    public void DrainLeaderHandoffRequests_ExpiredRequest_IsDeletedWithoutServicing()
+    {
+        string millerDir = Path.Combine(_dir, ".miller");
+        string requestDir = Path.Combine(millerDir, "requests");
+        LeaderScanRequestQueue.RequestLeaderHandoff(millerDir, "workspace-1", requesterPid: 4242);
+        string agedPath = AgeSingleRequestBeyondTtl(requestDir, ".leader-handoff.json");
+
+        LeaderHandoffDrainResult result = LeaderScanRequestQueue.DrainLeaderHandoffRequests(millerDir);
+
+        Assert.False(result.Requested);
+        Assert.Equal(1, result.ExpiredDiscarded);
+        Assert.False(File.Exists(agedPath));
+    }
+
+    [Fact]
+    public void DrainLeaderHandoffRequests_UnclaimableRequest_IsSkippedNotServiced()
+    {
+        string millerDir = Path.Combine(_dir, ".miller");
+        string requestDir = Path.Combine(millerDir, "requests");
+        LeaderScanRequestQueue.RequestLeaderHandoff(millerDir, "workspace-1", requesterPid: 4242);
+        string request = Directory.EnumerateFiles(requestDir, "*.leader-handoff.json").Single();
+        File.WriteAllText(request + ".claimed", "occupied");
+
+        LeaderHandoffDrainResult result = LeaderScanRequestQueue.DrainLeaderHandoffRequests(millerDir);
+
+        Assert.False(result.Requested);
+        Assert.Equal(1, result.ClaimSkipped);
+        Assert.True(File.Exists(request));
+    }
+
+    [Fact]
+    public void LeaderHandoffRequests_DoNotConsumeOtherRequestKinds()
+    {
+        string millerDir = Path.Combine(_dir, ".miller");
+        LeaderScanRequestQueue.RequestFullScan(millerDir, "workspace-1", baselineRevision: 1);
+        LeaderScanRequestQueue.RequestYield(millerDir, "workspace-1", requesterPid: 4242, requesterExtractorVersion: "2.3.0");
+        LeaderScanRequestQueue.RequestLeaderHandoff(millerDir, "workspace-1", requesterPid: 5151);
+
+        Assert.True(LeaderScanRequestQueue.DrainLeaderHandoffRequests(millerDir).Requested);
+        Assert.True(LeaderScanRequestQueue.DrainYieldRequests(millerDir).Requested);
+        Assert.True(LeaderScanRequestQueue.DrainFullScanRequests(millerDir).Requested);
+    }
+
     [Fact]
     public void DrainYieldRequests_SweepsExpiredYieldClaims()
     {

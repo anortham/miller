@@ -319,6 +319,48 @@ public sealed class SmartTargetResolverTests
         Assert.Contains("parseToken", message);
     }
 
+    [Theory]
+    [InlineData("parseTokenn")] // one extra trailing character
+    [InlineData("parseTkoen")]  // adjacent transposition
+    public void Resolve_OneEditTypo_SuggestsNearMissName(string query)
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+        var index = BuildIndex(fx);
+        var resolver = new SmartTargetResolver(index);
+
+        var nf = Assert.IsType<TargetResolution.NotFound>(resolver.Resolve(query));
+
+        Assert.NotNull(nf.Suggestions);
+        Assert.Contains(nf.Suggestions!, s => s.Name == "parseToken");
+    }
+
+    [Fact]
+    public void Resolve_CamelCaseSuffixTypo_SuggestsNearMissName()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow(
+                    "aa11223344556677889900aabbccdd91",
+                    "ReadReferencesAsync",
+                    "method",
+                    "csharp",
+                    "src/References/Reader.cs",
+                    "Task ReadReferencesAsync()",
+                    12,
+                    null),
+            });
+        var index = BuildIndex(fx);
+        var resolver = new SmartTargetResolver(index);
+
+        var nf = Assert.IsType<TargetResolution.NotFound>(resolver.Resolve("ReadReferencesAsyncc"));
+
+        Assert.NotNull(nf.Suggestions);
+        Assert.Contains(nf.Suggestions!, s => s.Name == "ReadReferencesAsync");
+    }
+
     [Fact]
     public void Resolve_WrongCaseName_SuggestsCaseInsensitiveExactFirst()
     {

@@ -496,6 +496,16 @@ public sealed class DashboardRegistryReadTests : IDisposable
             Assert.Single(snapshot.ContextSavings.Tools, tool => tool.Tool == "context");
         Assert.Equal(10_000, contextTool.SourceBytes);
         Assert.Equal(8_000, contextTool.SavedBytes);
+
+        Assert.NotNull(snapshot.Health);
+        Assert.Equal("ws-a", snapshot.Health.WorkspaceId);
+        Assert.Equal("usable_with_warnings", snapshot.Health.State);
+        Assert.Equal("missing", snapshot.Health.SearchSidecarStatus);
+        Assert.Equal("missing", snapshot.Health.ContentSidecarStatus);
+        Assert.NotNull(snapshot.Onboarding);
+        Assert.Equal("ws-a", snapshot.Onboarding.WorkspaceId);
+        Assert.Equal(3, snapshot.Onboarding.TotalCalls);
+        Assert.Contains(snapshot.Onboarding.StartHere, item => item.Contains("search", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -795,7 +805,48 @@ public sealed class DashboardRegistryReadTests : IDisposable
                         BytesReturned: 2_000,
                         SavedBytes: 8_000,
                         EstimatedReturnedTokens: 500),
-                ]));
+                ]),
+            Health: new DashboardWorkspaceHealthPanel(
+                "ws-a",
+                "usable_with_warnings",
+                "index readable with warnings",
+                Warnings:
+                [
+                    new DashboardHealthWarning(
+                        "search_sidecar",
+                        "usable_with_warnings",
+                        "search_sidecar is missing"),
+                ],
+                RecommendedActions: ["run workspace refresh"],
+                Leader: "unknown",
+                SearchSidecarStatus: "missing",
+                ContentSidecarStatus: "current",
+                ParseDiagnosticCount: 2,
+                CapabilityGapCount: 1),
+            Onboarding: new DashboardWorkspaceOnboardingPanel(
+                "ws-a",
+                "ready",
+                TotalCalls: 4,
+                StartHere:
+                [
+                    "run workspace health first when taking over this repo",
+                    "use search to find candidate symbols, then inspect the selected result before editing",
+                ],
+                HotTargets:
+                [
+                    new DashboardOnboardingTarget(
+                        "symbol",
+                        "ReadReferencesAsync",
+                        "method",
+                        "src/Miller.Indexing/ReferenceReader.cs",
+                        Line: 42,
+                        Calls: 3),
+                ],
+                CommonMisses:
+                [
+                    new DashboardOnboardingMiss("search", null, "empty", Calls: 2),
+                ],
+                Notes: ["search has recent empty results"]));
 
         string html = await RenderComponentAsync<WorkspaceShell>(new Dictionary<string, object?>
         {
@@ -818,6 +869,14 @@ public sealed class DashboardRegistryReadTests : IDisposable
         Assert.Contains("14.5 KB", html);
         Assert.Contains("850 tokens", html);
         Assert.Contains("context", html);
+        Assert.Contains("Workspace health", html);
+        Assert.Contains("usable_with_warnings", html);
+        Assert.Contains("parse diagnostics", html);
+        Assert.Contains("capability gaps", html);
+        Assert.Contains("run workspace refresh", html);
+        Assert.Contains("Workspace onboarding", html);
+        Assert.Contains("ReadReferencesAsync", html);
+        Assert.Contains("search has recent empty results", html);
     }
 
     [Fact]

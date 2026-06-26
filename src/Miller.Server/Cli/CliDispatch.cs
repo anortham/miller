@@ -1,6 +1,7 @@
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Miller.Server.Git;
+using Miller.Server.Hosting;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
@@ -96,6 +97,8 @@ public static class CliDispatch
                     return Content(rest, context, stdout, stderr);
                 case "patterns":
                     return Patterns(rest, context, stdout, stderr);
+                case "metrics":
+                    return Metrics(rest, context, stdout, stderr);
                 case "telemetry":
                     return Telemetry(rest, context, stdout, stderr);
                 case "symbols":
@@ -513,6 +516,51 @@ public static class CliDispatch
             writer.WriteLine(output);
     }
 
+    private static int Metrics(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
+    {
+        const string usage = "miller metrics <churn|clones|complexity> [--workspace-id SELECTOR] [--workspace DIR] [--limit N] [--json] [--range REV..REV] [--include-commits] [--min-count N] [--max-symbols-per-group N] [--min-severity low|moderate|high] [--exclude-tests]";
+        if (args.Count > 0 && args[0] is "--help" or "-h" or "help")
+            return Usage(err, usage);
+
+        bool firstTokenIsFlag = args.Count > 0 && args[0].StartsWith("--", StringComparison.Ordinal);
+        string operation = args.Count == 0 || firstTokenIsFlag ? "complexity" : args[0].ToLowerInvariant();
+        if (operation is not ("churn" or "clones" or "clone" or "duplicate" or "duplicates" or "complexity" or "hotspots"))
+            return Usage(err, usage);
+
+        CliOptions o = CliOptions.Parse((firstTokenIsFlag ? args : args.Skip(1)).ToArray(), "json", "exclude-tests", "include-commits");
+        if (!TryResolveReadContext(ctx, o, err, out ctx))
+            return 2;
+        if (!RequireIndex(ctx, err))
+            return 3;
+
+        try
+        {
+            MetricsToolResult result = MetricsTool.Run(
+                ctx.ExtractDbPath,
+                operation,
+                o.Int("limit", MetricsTool.DefaultLimit),
+                o.Has("json"),
+                o.Int("min-count", 2),
+                o.Int("max-symbols-per-group", MetricsTool.DefaultCloneSymbolsPerGroup),
+                o.Value("min-severity", "moderate"),
+                includeTests: !o.Has("exclude-tests"),
+                workspaceRoot: ctx.WorkspaceRoot,
+                range: o.Value("range", "HEAD~20..HEAD"),
+                includeCommits: o.Has("include-commits"),
+                historyReader: new ProcessGitHistoryReader());
+            WriteOutput(outw, result.Output);
+            return 0;
+        }
+        catch (Exception ex) when (
+            ex is FileNotFoundException or InvalidOperationException or IOException
+                or UnauthorizedAccessException or ArgumentException or NotSupportedException
+                or SqliteException)
+        {
+            err.WriteLine("metrics failed: " + ex.Message);
+            return 3;
+        }
+    }
+
     private static int Telemetry(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
         if (args.Count == 0)
@@ -812,6 +860,8 @@ public static class CliDispatch
                 return WorkspaceHealth(ctx, id, path, json, outw, err);
             case "onboarding":
                 return WorkspaceOnboarding(ctx, id, path, json, outw, err);
+            case "leader":
+                return WorkspaceLeader(ctx, id, path, handoff: o.Has("handoff"), wait: o.Has("wait"), json, outw, err);
             case "refresh":
                 return WorkspaceRefresh(ctx, id, path, force: false, json, outw, err);
             case "full":
@@ -821,7 +871,7 @@ public static class CliDispatch
             case "remove":
                 return WorkspaceRemove(ctx, id, path, json, outw, err);
             default:
-                err.WriteLine($"unknown workspace operation '{operation}'. Use status|health|onboarding|list|refresh|full|open|remove.");
+                err.WriteLine($"unknown workspace operation '{operation}'. Use status|health|onboarding|leader|list|refresh|full|open|remove.");
                 return 2;
         }
     }
@@ -972,6 +1022,70 @@ public static class CliDispatch
         return 0;
     }
 
+    private static int WorkspaceLeader(
+        WorkspaceContext ctx,
+        string? id,
+        string? path,
+        bool handoff,
+        bool wait,
+        bool json,
+        TextWriter outw,
+        TextWriter err)
+    {
+        using WorkspaceRegistry registry = WorkspaceRegistry.Open(ctx.RegistryDbPath);
+        SymbolSearchSidecar sidecar = SymbolSearchSidecar.FromEnvironment();
+        var contentSidecar = new ContentCorpusSidecar();
+
+        if (!string.IsNullOrWhiteSpace(id) || !string.IsNullOrWhiteSpace(path))
+        {
+            WorkspaceRegistryRow row;
+            try
+            {
+                row = WorkspaceRegistrySelector.Resolve(registry, (id ?? path)!);
+            }
+            catch (KeyNotFoundException ex)
+            {
+                err.WriteLine(ex.Message);
+                return 2;
+            }
+
+            WorkspaceFacts facts = WorkspaceFactsAssembler.FromRegisteredRow(
+                registry,
+                row,
+                WorkspaceRegisteredFactsProfile.CliStatus,
+                sidecar,
+                contentSidecar);
+            outw.WriteLine(RenderWorkspaceLeader(facts, row.WorkspaceId, handoff, wait, json));
+            return 0;
+        }
+
+        WorkspaceRegistryRow? currentRow = FindCurrentWorkspaceRow(registry, ctx);
+        if (currentRow is not null)
+        {
+            WorkspaceFacts facts = WorkspaceFactsAssembler.FromRegisteredRow(
+                registry,
+                currentRow,
+                WorkspaceRegisteredFactsProfile.CliStatus,
+                sidecar,
+                contentSidecar);
+            outw.WriteLine(RenderWorkspaceLeader(facts, currentRow.WorkspaceId, handoff, wait, json));
+            return 0;
+        }
+
+        if (!RequireIndex(ctx, err))
+            return 3;
+
+        WorkspaceIndexFacts indexFacts = WorkspaceIndexFactsReader.Read(ctx.ExtractDbPath);
+        WorkspaceFacts localFacts = WorkspaceFactsAssembler.FromUnregisteredLocal(
+            ctx,
+            indexFacts,
+            sidecar,
+            contentSidecar);
+        string workspaceId = localFacts.WorkspaceId ?? WorkspaceId.FromCanonicalRoot(Path.GetFullPath(localFacts.Root));
+        outw.WriteLine(RenderWorkspaceLeader(localFacts, workspaceId, handoff, wait, json));
+        return 0;
+    }
+
     private static int WorkspaceOnboarding(
         WorkspaceContext ctx, string? id, string? path, bool json, TextWriter outw, TextWriter err)
     {
@@ -1047,6 +1161,86 @@ public static class CliDispatch
         {
             ArtifactExtractorVersion = ExtractBinaryVersionReader.TryRead(indexDbPath),
         };
+
+    private static string RenderWorkspaceLeader(
+        WorkspaceFacts facts,
+        string workspaceId,
+        bool handoff,
+        bool wait,
+        bool json)
+    {
+        string millerDir = Path.GetDirectoryName(facts.DbPath)!;
+        LeaderHealthFacts leader = CliLeaderFacts(facts.DbPath);
+        LeaderHandoffRequestReceipt? receipt = null;
+        bool observed = false;
+        string? handoffNote = null;
+        if (handoff)
+        {
+            receipt = LeaderScanRequestQueue.RequestLeaderHandoff(millerDir, workspaceId, Environment.ProcessId);
+            if (wait)
+            {
+                observed = WaitForCliHandoffObservation(receipt, millerDir, leader.Identity);
+                handoffNote = observed
+                    ? "leader observed the handoff request"
+                    : "handoff request queued but not observed before timeout";
+            }
+            else
+            {
+                handoffNote = "handoff request queued";
+            }
+        }
+
+        return WorkspaceRender.Leader(
+            new WorkspaceLeaderResult(
+                facts,
+                leader,
+                CliLeaderRecommendation(facts, leader, handoff),
+                HandoffRequested: handoff,
+                HandoffWaited: wait && handoff,
+                HandoffObserved: observed,
+                HandoffRequestId: receipt?.RequestId,
+                HandoffNote: handoffNote),
+            json);
+    }
+
+    private static string CliLeaderRecommendation(WorkspaceFacts facts, LeaderHealthFacts leader, bool handoffRequested)
+    {
+        if (handoffRequested)
+            return "Handoff requested through the local queue; the current leader must drain it before stepping down.";
+        if (facts.IsLeader)
+            return "No handoff requested; this process is the current indexer leader.";
+        if (leader.Identity is null)
+            return "No handoff requested; no leader identity is recorded. An older leader may still hold the lock.";
+        if (leader.Alive == false)
+            return "No handoff requested; recorded leader is not running. Normal lock retry should recover.";
+        return "No handoff requested; use --handoff to ask the live leader to step down gracefully.";
+    }
+
+    private static bool WaitForCliHandoffObservation(
+        LeaderHandoffRequestReceipt receipt,
+        string millerDir,
+        LeaderIdentity? before)
+    {
+        DateTimeOffset deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(2);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (!File.Exists(receipt.RequestPath) && !File.Exists(receipt.RequestPath + ".claimed"))
+                return true;
+
+            LeaderIdentity? current = LeaderIdentityFile.TryRead(millerDir);
+            if (before is not null
+                && (current is null
+                    || current.Pid != before.Pid
+                    || current.StartedAtUtc != before.StartedAtUtc))
+            {
+                return true;
+            }
+
+            Thread.Sleep(TimeSpan.FromMilliseconds(100));
+        }
+
+        return false;
+    }
 
     private static WorkspaceExtractionHealthFacts ReadHealthOrUnavailable(string dbPath, string? error)
     {
@@ -1607,6 +1801,9 @@ public static class CliDispatch
           patterns <op>      List, summarize, or search extractor-recognized code-shape facts.
                              op = list | summary | search
                              [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]
+          metrics <op>       Report deterministic local metrics.
+                             op = churn | clones | complexity
+                             [--workspace-id SELECTOR] [--workspace DIR] [--limit N] [--json] [--range REV..REV] [--include-commits] [--min-count N] [--max-symbols-per-group N] [--min-severity low|moderate|high] [--include-tests|--exclude-tests]
           telemetry <op>     Export machine-global Miller telemetry.
                              export [--jsonl] [--workspace-id ID|all]
           symbols <op>       Bulk-export every symbol row for fleet rollups.   # JSONL
@@ -1628,8 +1825,9 @@ public static class CliDispatch
                              [--workspace-id SELECTOR] [--workspace DIR] [--scope FILE] [--mode auto|path|refs|bridge] [--to SYMBOL] [--reference-kind KIND] [--no-definition] [--depth N] [--limit N] [--full] [--json]
           dashboard          Start or reuse the machine-global loopback dashboard.
                              [--port N] [--json]
-          workspace [op]     Index lifecycle. op = status (default) | health | onboarding | list | refresh | full | open | remove.
+          workspace [op]     Index lifecycle. op = status (default) | health | onboarding | leader | list | refresh | full | open | remove.
                              open   [--path DIR] [--full]   Register + index a directory (creates .miller/symbols.db).
+                             leader [--handoff] [--wait]    Diagnose current leader and optionally request graceful handoff.
                              remove (--id ID | --path DIR)  Delete a workspace's .miller index dir.
                              [--id|--workspace-id SELECTOR] [--path|--workspace DIR] [--json]
           version            Print the build version (e.g. 0.3.2+<sha>).
@@ -1648,13 +1846,14 @@ public static class CliDispatch
           health   Show a short workspace readiness verdict plus stable JSON with quality warnings.
           onboarding
                    Summarize local tool telemetry into starter guidance for an indexed repo.
+          leader   Diagnose the current indexer leader; --handoff queues a graceful abdication request.
           list     List every registered workspace in ~/.miller/workspaces.db.
           refresh  Incrementally refresh the index if the working tree changed.
           full     Force a full re-index (ignores the freshness check).
           open     Register + index a directory (creates .miller/symbols.db).  [--path DIR] [--full]
           remove   Delete a workspace's .miller index dir.                     (--id ID | --path DIR)
 
-        Selectors / flags: [--id|--workspace-id SELECTOR] [--path|--workspace DIR] [--json]
+        Selectors / flags: [--id|--workspace-id SELECTOR] [--path|--workspace DIR] [--json] [--handoff] [--wait]
           --workspace-id aliases --id; --workspace (a directory, resolved against the cwd) aliases --path —
           the same selector flags every read verb accepts.
         """;

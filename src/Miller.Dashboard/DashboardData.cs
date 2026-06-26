@@ -4,6 +4,8 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
+using Miller.Server.Telemetry;
+using Miller.Server.Tools;
 using Miller.Server.Workspaces;
 
 namespace Miller.Dashboard;
@@ -136,6 +138,48 @@ public sealed record DashboardWorkspaceFacts(
     [property: JsonPropertyName("index_revision")] long? IndexRevision = null,
     [property: JsonPropertyName("freshness_status")] string FreshnessStatus = "unknown");
 
+public sealed record DashboardHealthWarning(
+    [property: JsonPropertyName("code")] string Code,
+    [property: JsonPropertyName("severity")] string Severity,
+    [property: JsonPropertyName("message")] string Message);
+
+public sealed record DashboardWorkspaceHealthPanel(
+    [property: JsonPropertyName("workspace_id")] string? WorkspaceId,
+    [property: JsonPropertyName("state")] string State,
+    [property: JsonPropertyName("summary")] string Summary,
+    [property: JsonPropertyName("warnings")] IReadOnlyList<DashboardHealthWarning> Warnings,
+    [property: JsonPropertyName("recommended_actions")] IReadOnlyList<string> RecommendedActions,
+    [property: JsonPropertyName("leader")] string Leader,
+    [property: JsonPropertyName("search_sidecar_status")] string SearchSidecarStatus,
+    [property: JsonPropertyName("content_sidecar_status")] string ContentSidecarStatus,
+    [property: JsonPropertyName("parse_diagnostic_count")] long ParseDiagnosticCount,
+    [property: JsonPropertyName("capability_gap_count")] long CapabilityGapCount,
+    [property: JsonPropertyName("error")] string? Error = null);
+
+public sealed record DashboardOnboardingTarget(
+    [property: JsonPropertyName("confidence")] string Confidence,
+    [property: JsonPropertyName("name")] string? Name,
+    [property: JsonPropertyName("kind")] string? Kind,
+    [property: JsonPropertyName("path")] string? Path,
+    [property: JsonPropertyName("line")] int? Line,
+    [property: JsonPropertyName("calls")] long Calls);
+
+public sealed record DashboardOnboardingMiss(
+    [property: JsonPropertyName("tool")] string Tool,
+    [property: JsonPropertyName("op")] string? Op,
+    [property: JsonPropertyName("reason")] string Reason,
+    [property: JsonPropertyName("calls")] long Calls);
+
+public sealed record DashboardWorkspaceOnboardingPanel(
+    [property: JsonPropertyName("workspace_id")] string? WorkspaceId,
+    [property: JsonPropertyName("state")] string State,
+    [property: JsonPropertyName("total_calls")] long TotalCalls,
+    [property: JsonPropertyName("start_here")] IReadOnlyList<string> StartHere,
+    [property: JsonPropertyName("hot_targets")] IReadOnlyList<DashboardOnboardingTarget> HotTargets,
+    [property: JsonPropertyName("common_misses")] IReadOnlyList<DashboardOnboardingMiss> CommonMisses,
+    [property: JsonPropertyName("notes")] IReadOnlyList<string> Notes,
+    [property: JsonPropertyName("error")] string? Error = null);
+
 public sealed record DashboardContextSavingsTool(
     [property: JsonPropertyName("tool")] string Tool,
     [property: JsonPropertyName("tracked_calls")] long TrackedCalls,
@@ -175,7 +219,9 @@ public sealed record DashboardSnapshot
         string? SelectedWorkspaceId,
         IReadOnlyList<DashboardWorkspaceFacts>? WorkspaceFacts = null,
         DashboardWorkspaceFacts? SelectedWorkspaceFacts = null,
-        DashboardContextSavingsSummary? ContextSavings = null)
+        DashboardContextSavingsSummary? ContextSavings = null,
+        DashboardWorkspaceHealthPanel? Health = null,
+        DashboardWorkspaceOnboardingPanel? Onboarding = null)
     {
         this.Workspaces = Workspaces;
         this.Telemetry = Telemetry;
@@ -183,6 +229,8 @@ public sealed record DashboardSnapshot
         this.WorkspaceFacts = WorkspaceFacts ?? Array.Empty<DashboardWorkspaceFacts>();
         this.SelectedWorkspaceFacts = SelectedWorkspaceFacts;
         this.ContextSavings = ContextSavings ?? DashboardContextSavingsSummary.NotTracked(SelectedWorkspaceId);
+        this.Health = Health;
+        this.Onboarding = Onboarding;
     }
 
     [JsonPropertyName("workspaces")]
@@ -202,6 +250,12 @@ public sealed record DashboardSnapshot
 
     [JsonPropertyName("context_savings")]
     public DashboardContextSavingsSummary ContextSavings { get; init; }
+
+    [JsonPropertyName("health")]
+    public DashboardWorkspaceHealthPanel? Health { get; init; }
+
+    [JsonPropertyName("onboarding")]
+    public DashboardWorkspaceOnboardingPanel? Onboarding { get; init; }
 }
 
 public sealed record DashboardWorkspaceIndexEntry(
@@ -596,13 +650,241 @@ public static class DashboardData
             ? Array.Empty<DashboardWorkspaceFacts>()
             : new[] { selectedFacts };
         DashboardContextSavingsSummary contextSavings = ReadContextSavings(telemetryDbPath, selectedWorkspaceId);
+        DashboardWorkspaceHealthPanel? health = selectedWorkspace is null || selectedFacts is null
+            ? null
+            : ReadWorkspaceHealthPanel(selectedWorkspace, selectedFacts);
+        DashboardWorkspaceOnboardingPanel? onboarding = selectedWorkspace is null || selectedFacts is null
+            ? null
+            : ReadWorkspaceOnboardingPanel(selectedWorkspace, selectedFacts, telemetryDbPath);
         return new DashboardSnapshot(
             workspaces,
             telemetry,
             selectedWorkspaceId,
             workspaceFacts,
             selectedFacts,
-            contextSavings);
+            contextSavings,
+            health,
+            onboarding);
+    }
+
+    private static DashboardWorkspaceHealthPanel? ReadWorkspaceHealthPanel(
+        DashboardWorkspaceRow workspace,
+        DashboardWorkspaceFacts dashboardFacts)
+    {
+        try
+        {
+            WorkspaceFacts facts = BuildWorkspaceFacts(workspace, dashboardFacts);
+            WorkspaceExtractionHealthFacts extraction = ReadExtractionHealthOrUnavailable(
+                workspace.IndexDbPath,
+                facts.WarningText ?? facts.FreshnessStatus);
+            LeaderHealthFacts leader = LeaderHealthFacts.Read(Path.GetDirectoryName(workspace.IndexDbPath) ?? workspace.CanonicalRoot) with
+            {
+                ArtifactExtractorVersion = ExtractBinaryVersionReader.TryRead(workspace.IndexDbPath),
+            };
+            WorkspaceHealthFacts health = WorkspaceHealthFacts.Create(
+                facts,
+                TelemetrySummary.Empty,
+                new TelemetryHealthFacts(0, 0, 0),
+                extraction,
+                leader);
+            return new DashboardWorkspaceHealthPanel(
+                facts.WorkspaceId,
+                WorkspaceHealthFacts.StateName(health.State),
+                health.Summary,
+                health.Warnings.Select(static warning =>
+                    new DashboardHealthWarning(warning.Code, warning.Severity, warning.Message)).ToArray(),
+                health.RecommendedActions,
+                DashboardLeaderLabel(facts, leader),
+                facts.SearchSidecar?.State ?? "unknown",
+                facts.ContentCorpus?.State ?? "unknown",
+                extraction.ParseDiagnostics.Rows.Sum(static row => row.Count),
+                extraction.CapabilityGaps.Rows
+                    .Where(static row => string.Equals(row.Status, "open", StringComparison.OrdinalIgnoreCase))
+                    .Sum(static row => row.Count),
+                Error: null);
+        }
+        catch (Exception ex) when (
+            ex is KeyNotFoundException or SqliteException or IOException or InvalidOperationException
+                or UnauthorizedAccessException)
+        {
+            return new DashboardWorkspaceHealthPanel(
+                workspace.WorkspaceId,
+                "unavailable",
+                "workspace health is unavailable",
+                Array.Empty<DashboardHealthWarning>(),
+                Array.Empty<string>(),
+                "unknown",
+                "unknown",
+                "unknown",
+                ParseDiagnosticCount: 0,
+                CapabilityGapCount: 0,
+                Error: ex.Message);
+        }
+    }
+
+    private static DashboardWorkspaceOnboardingPanel? ReadWorkspaceOnboardingPanel(
+        DashboardWorkspaceRow workspace,
+        DashboardWorkspaceFacts dashboardFacts,
+        string telemetryDbPath)
+    {
+        try
+        {
+            WorkspaceFacts facts = BuildWorkspaceFacts(workspace, dashboardFacts);
+            TelemetryOnboardingFacts telemetry = TelemetryOnboardingReader.Read(telemetryDbPath, workspace.WorkspaceId);
+            WorkspaceOnboardingFacts onboarding = WorkspaceOnboardingFacts.Create(
+                facts,
+                telemetry,
+                ResolveDashboardTargets(workspace.IndexDbPath, telemetry.TargetHashes));
+            return new DashboardWorkspaceOnboardingPanel(
+                facts.WorkspaceId,
+                onboarding.Telemetry.State,
+                onboarding.Telemetry.TotalCalls,
+                onboarding.StartHere,
+                onboarding.HotTargets.Select(static target => new DashboardOnboardingTarget(
+                    target.Confidence,
+                    target.Name,
+                    target.Kind,
+                    target.Path,
+                    target.StartLine,
+                    target.Calls)).ToArray(),
+                onboarding.Telemetry.CommonMisses.Select(static miss => new DashboardOnboardingMiss(
+                    miss.Tool,
+                    miss.Op,
+                    miss.Reason,
+                    miss.Calls)).ToArray(),
+                onboarding.InstructionNotes,
+                onboarding.Telemetry.Error);
+        }
+        catch (Exception ex) when (
+            ex is KeyNotFoundException or SqliteException or IOException or InvalidOperationException
+                or UnauthorizedAccessException)
+        {
+            return new DashboardWorkspaceOnboardingPanel(
+                workspace.WorkspaceId,
+                "unavailable",
+                TotalCalls: 0,
+                Array.Empty<string>(),
+                Array.Empty<DashboardOnboardingTarget>(),
+                Array.Empty<DashboardOnboardingMiss>(),
+                Array.Empty<string>(),
+                Error: ex.Message);
+        }
+    }
+
+    private static WorkspaceFacts BuildWorkspaceFacts(
+        DashboardWorkspaceRow workspace,
+        DashboardWorkspaceFacts dashboardFacts)
+    {
+        long expectedRevision = dashboardFacts.IndexRevision ?? dashboardFacts.LastRevision ?? 0L;
+        SearchSidecarFacts searchSidecar = SymbolSearchSidecar.FromEnvironment().Inspect(
+            workspace.IndexDbPath,
+            expectedRevision);
+        ContentCorpusFacts contentCorpus = new ContentCorpusSidecar().Inspect(
+            workspace.IndexDbPath,
+            expectedRevision);
+        string freshnessStatus = dashboardFacts.Status switch
+        {
+            "missing" => "missing_index",
+            "unreadable" => "unreadable_index",
+            _ => dashboardFacts.FreshnessStatus,
+        };
+
+        return new WorkspaceFacts(
+            workspace.CanonicalRoot,
+            workspace.WorkspaceId,
+            workspace.IndexDbPath,
+            IsLeader: false,
+            dashboardFacts.SymbolCount,
+            SafeInt(dashboardFacts.LanguageCount),
+            expectedRevision,
+            dashboardFacts.LastRevision ?? expectedRevision,
+            DashboardIndexFresh(workspace, dashboardFacts),
+            QueueEmpty: true,
+            freshnessStatus,
+            dashboardFacts.Message ?? dashboardFacts.RegistryLastError,
+            workspace.DisplayId,
+            SearchSidecar: searchSidecar,
+            ContentCorpus: contentCorpus);
+    }
+
+    private static IReadOnlyList<RecoveredTargetHash> ResolveDashboardTargets(
+        string indexDbPath,
+        IReadOnlyList<TargetHashFrequency> targetHashes)
+    {
+        if (targetHashes.Count == 0)
+            return [];
+
+        try
+        {
+            return WorkspaceTargetHashResolver.Resolve(indexDbPath, targetHashes);
+        }
+        catch (Exception ex) when (
+            ex is FileNotFoundException or SqliteException or IOException or InvalidOperationException
+                or UnauthorizedAccessException)
+        {
+            return targetHashes
+                .Select(static hash => new RecoveredTargetHash(
+                    Confidence: "unresolved_hash",
+                    SymbolId: null,
+                    Name: null,
+                    Kind: null,
+                    Path: null,
+                    StartLine: null,
+                    Calls: hash.Calls,
+                    CandidateCount: 0))
+                .ToArray();
+        }
+    }
+
+    private static bool? DashboardIndexFresh(DashboardWorkspaceRow workspace, DashboardWorkspaceFacts facts)
+    {
+        if (!string.IsNullOrWhiteSpace(workspace.LastError) ||
+            facts.Status is "missing" or "unreadable" or "error")
+            return false;
+
+        if (facts.IndexRevision is { } indexRevision &&
+            facts.LastRevision is { } registryRevision &&
+            indexRevision > 0 &&
+            registryRevision != indexRevision)
+            return false;
+
+        if (facts.IndexRevision is null && facts.LastRevision is null)
+            return null;
+
+        return true;
+    }
+
+    private static int SafeInt(long value) =>
+        value >= int.MaxValue ? int.MaxValue : value <= int.MinValue ? int.MinValue : (int)value;
+
+    private static WorkspaceExtractionHealthFacts ReadExtractionHealthOrUnavailable(string indexDbPath, string? error)
+    {
+        try
+        {
+            return WorkspaceHealthReader.Read(indexDbPath);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or SqliteException or InvalidOperationException)
+        {
+            string message = string.IsNullOrWhiteSpace(error) ? ex.Message : error;
+            return new WorkspaceExtractionHealthFacts(
+                HealthFactSection<ParseDiagnosticGroup>.Unavailable(message),
+                HealthFactSection<CapabilityGapGroup>.Unavailable(message),
+                HealthFactSection<LanguageCapabilitySummary>.Unavailable(message),
+                HealthFactSection<StructuralFactGroup>.Unavailable(message),
+                HealthFactSection<ComplexityMetricGroup>.Unavailable(message),
+                HealthFactSection<FileStatusGroup>.Unavailable(message));
+        }
+    }
+
+    private static string DashboardLeaderLabel(WorkspaceFacts facts, LeaderHealthFacts leader)
+    {
+        if (facts.IsLeader)
+            return "this dashboard process";
+        if (leader.Identity is null)
+            return "unknown";
+        string liveness = leader.Alive == false ? "not running" : "alive";
+        string extractor = leader.Identity.ExtractorVersion is { } version ? $" extractor {version}" : string.Empty;
+        return $"pid {leader.Identity.Pid.ToString(CultureInfo.InvariantCulture)} {liveness}{extractor}";
     }
 
     public static DashboardWorkspaceFacts? ReadWorkspaceFacts(string registryDbPath, string workspaceId)

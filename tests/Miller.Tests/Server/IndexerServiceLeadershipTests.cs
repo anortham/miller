@@ -105,6 +105,7 @@ public sealed class IndexerServiceLeadershipTests
     private static IndexerService NewService(
         Func<string, IDisposable?>? tryAcquireLeadership = null,
         Func<string, YieldDrainResult>? drainYieldRequests = null,
+        Func<string, LeaderHandoffDrainResult>? drainLeaderHandoffRequests = null,
         Func<string?>? ownExtractorVersion = null,
         bool? allowExtractorDowngrade = null,
         Func<string?, string?>? readArtifactExtractorVersion = null,
@@ -125,6 +126,7 @@ public sealed class IndexerServiceLeadershipTests
             SymbolSearchSidecar.Disabled,
             attachFileWatchers: false,
             drainYieldRequests: drainYieldRequests,
+            drainLeaderHandoffRequests: drainLeaderHandoffRequests,
             ownExtractorVersion: ownExtractorVersion ?? (() => "3.0.0"),
             allowExtractorDowngrade: allowExtractorDowngrade ?? false,
             readArtifactExtractorVersion: readArtifactExtractorVersion ?? (_ => null),
@@ -174,6 +176,7 @@ public sealed class IndexerServiceLeadershipTests
             drainFullScanRequests: _ => FullScanDrainResult.Empty,
             drainFileConvergeRequests: _ => FileConvergeDrainResult.Empty,
             drainYieldRequests: _ => YieldDrainResult.Empty,
+            drainLeaderHandoffRequests: _ => LeaderHandoffDrainResult.Empty,
             ownExtractorVersion: () => ownVersion,
             allowExtractorDowngrade: false,
             readArtifactExtractorVersion: _ => artifactVersion);
@@ -589,6 +592,62 @@ public sealed class IndexerServiceLeadershipTests
         {
             try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
         }
+    }
+
+    [Fact]
+    public void ProcessLeaderHandoffRequests_ValidRequest_Abdicates()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "miller-leadership-explicit-handoff-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var requesterObservedAtUtc = new DateTimeOffset(2026, 6, 11, 12, 0, 0, TimeSpan.Zero);
+            LeaderIdentityFile.Write(dir, new LeaderIdentity(
+                Environment.ProcessId, "0.3.6", null, DateTimeOffset.UtcNow, "2.0.0"));
+            var lease = new TestLease();
+            var service = NewService(
+                drainLeaderHandoffRequests: _ => new LeaderHandoffDrainResult(
+                    true,
+                    RequesterPid: 9999,
+                    RequesterObservedAtUtc: requesterObservedAtUtc,
+                    ExpiredDiscarded: 0,
+                    ClaimSkipped: 0),
+                ownExtractorVersion: () => "2.0.0",
+                processAliveProbe: _ => true);
+            service.PublishOpsForTest(new RecordingOps());
+            service.AssumeLeadershipForTest(lease);
+
+            Assert.True(service.ProcessLeaderHandoffRequestsForTest(dir));
+
+            Assert.True(lease.Disposed);
+            Assert.False(service.IsLeader);
+            Assert.Null(LeaderIdentityFile.TryRead(dir));
+            Assert.Equal(ScanOutcome.Kind.NotLeader, service.TryScanAsLeader(force: true).Result);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void ProcessLeaderHandoffRequests_DeadRequester_DoesNotAbdicate()
+    {
+        var lease = new TestLease();
+        var service = NewService(
+            drainLeaderHandoffRequests: _ => new LeaderHandoffDrainResult(
+                true,
+                RequesterPid: 9999,
+                RequesterObservedAtUtc: DateTimeOffset.UtcNow,
+                ExpiredDiscarded: 0,
+                ClaimSkipped: 0),
+            processAliveProbe: _ => false);
+        service.PublishOpsForTest(new RecordingOps());
+        service.AssumeLeadershipForTest(lease);
+
+        Assert.False(service.ProcessLeaderHandoffRequestsForTest("/repo/.miller"));
+        Assert.False(lease.Disposed);
+        Assert.True(service.IsLeader);
     }
 
     [Fact]

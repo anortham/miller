@@ -140,6 +140,7 @@ public sealed class IndexerLeadershipCoordinatorTests
     private static IndexerLeadershipCoordinator NewCoordinator(
         Func<string, IDisposable?>? tryAcquireLeadership = null,
         Func<string, YieldDrainResult>? drainYieldRequests = null,
+        Func<string, LeaderHandoffDrainResult>? drainLeaderHandoffRequests = null,
         Func<string?>? ownExtractorVersion = null,
         bool allowExtractorDowngrade = false,
         Func<string?, string?>? readArtifactExtractorVersion = null,
@@ -156,6 +157,7 @@ public sealed class IndexerLeadershipCoordinatorTests
             allowExtractorDowngrade,
             readArtifactExtractorVersion ?? (_ => null),
             drainYieldRequests ?? (_ => YieldDrainResult.Empty),
+            drainLeaderHandoffRequests ?? (_ => LeaderHandoffDrainResult.Empty),
             requestYield ?? ((_, _, _, _) => { }),
             readLeaderIdentity ?? (_ => null),
             leaderAliveProbe ?? (_ => false),

@@ -128,16 +128,20 @@ public sealed class WorkspaceTool
     [Description(
         "Manage the workspace index. Defaults to status. Use refresh to update stale files, full to rebuild " +
         "from scratch, list to see registered workspaces, health for readiness, onboarding for telemetry-derived " +
-        "startup guidance, and operation=dashboard for dashboard/start/open/show requests.")]
+        "startup guidance, leader for leader diagnostics/handoff, and operation=dashboard for dashboard/start/open/show requests.")]
     public string Workspace(
-        [Description("status|refresh|full|list|open|remove|health|onboarding|dashboard. Default status.")] string operation = "status",
+        [Description("status|refresh|full|list|open|remove|health|onboarding|leader|dashboard. Default status.")] string operation = "status",
         [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")]
         string? workspace_id = null,
         [Description("A workspace root path. Required for open; optional for status/health/onboarding/refresh/full/remove.")]
         string? path = null,
         [Description("Output format: compact|json|markdown. Default compact.")] string format = "compact",
         [Description("Dashboard launch port. Used only with operation=dashboard when no dashboard is already running.")]
-        int? port = null)
+        int? port = null,
+        [Description("For operation=leader, queue an explicit graceful leadership handoff request.")]
+        bool handoff = false,
+        [Description("For operation=leader with handoff=true, wait briefly for the live leader to observe the request.")]
+        bool wait = false)
     {
         var telemetry = TelemetryContext.Current;
         // D7: stamp the operation sub-axis onto the ambient scope so the central filter's row records
@@ -149,7 +153,8 @@ public sealed class WorkspaceTool
         {
             bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
 
-            (string output, int resultCount, TelemetryOutcome outcome) = Dispatch(operation, workspace_id, path, port, json);
+            (string output, int resultCount, TelemetryOutcome outcome) = Dispatch(
+                operation, workspace_id, path, port, json, handoff, wait);
 
             if (telemetry is not null)
             {
@@ -173,7 +178,7 @@ public sealed class WorkspaceTool
     // The pure-ish dispatch: route the operation to its handler, returning the rendered output, a result count
     // (for the telemetry KPI), and the outcome. An unknown operation is a usage note (Empty, not an error).
     private (string output, int resultCount, TelemetryOutcome outcome) Dispatch(
-        string? operation, string? workspaceId, string? path, int? port, bool json)
+        string? operation, string? workspaceId, string? path, int? port, bool json, bool handoff, bool wait)
     {
         switch (operation?.ToLowerInvariant())
         {
@@ -183,6 +188,8 @@ public sealed class WorkspaceTool
                 return RenderTargetHealth(workspaceId, path, json);
             case "onboarding":
                 return RenderTargetOnboarding(workspaceId, path, json);
+            case "leader":
+                return RenderTargetLeader(workspaceId, path, json, handoff, wait);
             case "list":
                 return (RenderRegistryList(json), _registry.List().Count, TelemetryOutcome.Ok);
             case "refresh":
@@ -347,6 +354,109 @@ public sealed class WorkspaceTool
             ? TelemetryOutcome.Empty
             : TelemetryOutcome.Ok;
         return (WorkspaceRender.Onboarding(onboarding, json), 1, outcome);
+    }
+
+    private (string output, int resultCount, TelemetryOutcome outcome) RenderTargetLeader(
+        string? workspaceId, string? path, bool json, bool handoff, bool wait)
+    {
+        TargetWorkspace target = ResolveTarget(workspaceId, path);
+        if (target.UnknownNote is { } note)
+            return (Note(note, json), 0, TelemetryOutcome.Empty);
+
+        WorkspaceFacts facts;
+        bool ownWorkspace;
+        if (target.IsCurrent)
+        {
+            facts = AssembleFacts();
+            ownWorkspace = true;
+        }
+        else
+        {
+            WorkspaceRegistryRow row = target.Row
+                ?? throw new InvalidOperationException($"Workspace registry row '{target.WorkspaceId}' was not resolved.");
+            VerifyRegisteredRoot(row);
+            facts = WorkspaceFactsAssembler.FromRegisteredRow(
+                _registry,
+                row,
+                WorkspaceRegisteredFactsProfile.McpStatus,
+                _sidecar,
+                _contentSidecar);
+            ownWorkspace = false;
+        }
+
+        string millerDir = Path.GetDirectoryName(facts.DbPath)!;
+        LeaderHealthFacts leader = ReadLeaderFacts(facts.DbPath, ownWorkspace);
+        LeaderHandoffRequestReceipt? receipt = null;
+        bool observed = false;
+        string? handoffNote = null;
+        if (handoff)
+        {
+            receipt = LeaderScanRequestQueue.RequestLeaderHandoff(
+                millerDir,
+                facts.WorkspaceId ?? WorkspaceId.FromCanonicalRoot(Path.GetFullPath(facts.Root)),
+                Environment.ProcessId);
+            if (wait)
+            {
+                observed = WaitForHandoffObservation(receipt, millerDir, leader.Identity);
+                handoffNote = observed
+                    ? "leader observed the handoff request"
+                    : "handoff request queued but not observed before timeout";
+            }
+            else
+            {
+                handoffNote = "handoff request queued";
+            }
+        }
+
+        var result = new WorkspaceLeaderResult(
+            facts,
+            leader,
+            RecommendationForLeader(facts, leader, handoff),
+            HandoffRequested: handoff,
+            HandoffWaited: wait && handoff,
+            HandoffObserved: observed,
+            HandoffRequestId: receipt?.RequestId,
+            HandoffNote: handoffNote);
+        return (WorkspaceRender.Leader(result, json), 1, TelemetryOutcome.Ok);
+    }
+
+    private static string RecommendationForLeader(WorkspaceFacts facts, LeaderHealthFacts leader, bool handoffRequested)
+    {
+        if (handoffRequested)
+            return "Handoff requested through the local queue; the current leader must drain it before stepping down.";
+        if (facts.IsLeader)
+            return "No handoff requested; this process is the current indexer leader.";
+        if (leader.Identity is null)
+            return "No handoff requested; no leader identity is recorded. An older leader may still hold the lock.";
+        if (leader.Alive == false)
+            return "No handoff requested; recorded leader is not running. Normal lock retry should recover.";
+        return "No handoff requested; use handoff=true to ask the live leader to step down gracefully.";
+    }
+
+    private static bool WaitForHandoffObservation(
+        LeaderHandoffRequestReceipt receipt,
+        string millerDir,
+        LeaderIdentity? before)
+    {
+        DateTimeOffset deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(2);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (!File.Exists(receipt.RequestPath) && !File.Exists(receipt.RequestPath + ".claimed"))
+                return true;
+
+            LeaderIdentity? current = LeaderIdentityFile.TryRead(millerDir);
+            if (before is not null
+                && (current is null
+                    || current.Pid != before.Pid
+                    || current.StartedAtUtc != before.StartedAtUtc))
+            {
+                return true;
+            }
+
+            Thread.Sleep(TimeSpan.FromMilliseconds(100));
+        }
+
+        return false;
     }
 
     private string RenderRegistryList(bool json)

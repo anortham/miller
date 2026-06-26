@@ -28,6 +28,9 @@ internal static class CliCapabilities
         "content remove --json",
         "content export",
         "patterns --json",
+        "metrics churn --json",
+        "metrics clones --json",
+        "metrics complexity --json",
         "telemetry export --jsonl",
         "symbols export --jsonl",
         "references export --jsonl",
@@ -35,6 +38,7 @@ internal static class CliCapabilities
         "workspace status --json",
         "workspace health --json",
         "workspace onboarding --json",
+        "workspace leader --json",
         "workspace list --json",
         "workspace refresh --json",
         "workspace full --json",
@@ -56,9 +60,11 @@ internal static class CliCapabilities
         ("workspace_status", "workspace status --json", 1, "docs/contracts/workspace-status-v1.md"),
         ("workspace_health", "workspace health --json", 1, "docs/contracts/workspace-health-v1.md"),
         ("workspace_onboarding", "workspace onboarding --json", 1, "docs/contracts/workspace-onboarding-v1.md"),
+        ("workspace_leader", "workspace leader --json", 1, "docs/contracts/workspace-leader-json-v1.md"),
         ("refresh_wait", "refresh --json --wait", 1, "docs/contracts/refresh-wait-v1.md"),
         ("trace", "trace --json", 1, "docs/contracts/trace-json-v1.md"),
         ("patterns", "patterns --json", 1, "docs/contracts/patterns-json-v1.md"),
+        ("metrics", "metrics <churn|clones|complexity> --json", 1, "docs/contracts/metrics-json-v1.md"),
     ];
 
     public static string Render(bool json)

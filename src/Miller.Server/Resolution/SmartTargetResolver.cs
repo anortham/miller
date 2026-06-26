@@ -158,31 +158,8 @@ public sealed partial class SmartTargetResolver
         string.Equals(kind, "constructor", StringComparison.OrdinalIgnoreCase)
         || string.Equals(kind, "import", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>
-    /// Up to <see cref="MaxSuggestions"/> near-miss symbols for a truly-unresolvable name. Recall comes from
-    /// the search index (word/component arms in-memory; + the collapsed-trigram arm on the FTS5 sidecar);
-    /// only genuinely CLOSE names survive — a case-insensitive exact match first, then names containing the
-    /// target or its last dot segment. A BM25 hit that merely shares a token is noise here, not a suggestion.
-    /// </summary>
-    private IReadOnlyList<IndexedSymbol> NearMisses(string name)
-    {
-        var hits = Index.Search(name, MaxSuggestions * 4);
-        if (hits.Count == 0)
-            return [];
-
-        string tail = name[(name.LastIndexOf('.') + 1)..]; // == name when there is no dot
-        return hits
-            .Select(h => Index.Resolve(h.Document.DocId))
-            .Where(s => IsCloseName(s.Name, name, tail))
-            .DistinctBy(s => (s.Name, s.FilePath))
-            .OrderByDescending(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase))
-            .Take(MaxSuggestions)
-            .ToList();
-
-        static bool IsCloseName(string candidate, string target, string tail) =>
-            candidate.Contains(target, StringComparison.OrdinalIgnoreCase)
-            || (tail.Length > 0 && candidate.Contains(tail, StringComparison.OrdinalIgnoreCase));
-    }
+    private IReadOnlyList<IndexedSymbol> NearMisses(string name) =>
+        SymbolSuggestionEngine.Suggest(Index, name, MaxSuggestions);
 
     private IReadOnlyList<IndexedSymbol> ResolveQualifiedMember(string name, string? scope)
     {

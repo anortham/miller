@@ -68,6 +68,7 @@ public sealed class AgentInstructionsTests
                 "edit",
                 "impact",
                 "inspect",
+                "metrics",
                 "patterns",
                 "search",
                 "trace",

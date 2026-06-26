@@ -241,15 +241,15 @@ UX such as next-action guidance, confidence/evidence views, semantic/vector retr
 
 ## The tool surface
 
-Nine MCP tools, each with smart defaults so the common path is the simplest call: `search`, `inspect`,
-`context`, `trace`, `impact`, `edit`, `content`, `patterns`, and `workspace`. Read tools accept a `workspace_id`
+Ten MCP tools, each with smart defaults so the common path is the simplest call: `search`, `inspect`,
+`context`, `trace`, `impact`, `edit`, `content`, `patterns`, `metrics`, and `workspace`. Read tools accept a `workspace_id`
 selector: display ID, unique prefix, full ID, registered root path, `current`, or `primary`. Explicit `workspace_id` defaults
 `ensure_fresh=true`. Targets are smart strings, not JSON objects. See
 [docs/findings/miller-toolbox.md](docs/findings/miller-toolbox.md).
 
 For cross-workspace code reading, stay in the current session and run `workspace list`. If the target repo is
 registered, pass its display ID, unique prefix, full ID, or root path as `workspace_id` to `search`, `inspect`,
-`context`, `impact`, `trace`, or `patterns`. If it is not registered yet, run
+`context`, `impact`, `trace`, `patterns`, or `metrics`. If it is not registered yet, run
 `workspace operation=open path=/absolute/repo` from MCP or `miller workspace open --path /absolute/repo --full`
 from the CLI, then retry the read tool. The `workspace_id=all` selector is only for `content search` text audits
 across registered workspace content DBs.
@@ -265,6 +265,15 @@ patterns()
 patterns(operation="search", pattern_id="aspnet.minimal_api.route.v1", where="verb=GET", path="Program.cs")
 patterns(operation="search", pattern_id="htmx.attribute.v1", where="attribute_name=hx-get", path="Views/**")
 patterns(operation="search", pattern_id="alpine.directive.v1", where="directive=x-data", path="Views/**")
+```
+
+`metrics` reports deterministic local facts: recent git churn mapped to current symbols, identical body-hash
+clone groups, and complexity hotspots with transparent thresholds. It is not semantic ranking or cleanup advice:
+
+```text
+metrics(operation="churn", range="HEAD~20..HEAD", limit=25)
+metrics(operation="clones", min_count=2)
+metrics(operation="complexity", min_severity="moderate", include_tests=false)
 ```
 
 ## Using Miller
@@ -297,6 +306,9 @@ The single `miller` binary runs two ways:
   dotnet run --project src/Miller.Server -c Release -- content search "important phrase" --kind web --limit 5
   dotnet run --project src/Miller.Server -c Release -- patterns --json
   dotnet run --project src/Miller.Server -c Release -- patterns search --pattern htmx.attribute.v1 --where attribute_name=hx-get --path "Views/**" --json
+  dotnet run --project src/Miller.Server -c Release -- metrics churn --range HEAD~20..HEAD --json
+  dotnet run --project src/Miller.Server -c Release -- metrics clones --min-count 2 --json
+  dotnet run --project src/Miller.Server -c Release -- metrics complexity --min-severity moderate --exclude-tests --json
   dotnet run --project src/Miller.Server -c Release -- search "TODO,FIXME" --mode markers --file-pattern "src/**"
   dotnet run --project src/Miller.Server -c Release -- inspect src/Miller.Server/AgentInstructions.cs --depth full
   dotnet run --project src/Miller.Server -c Release -- context "CLI workspace routing" --token-budget 2000
@@ -307,13 +319,14 @@ The single `miller` binary runs two ways:
   dotnet run --project src/Miller.Server -c Release -- workspace status
   dotnet run --project src/Miller.Server -c Release -- workspace health --json
   dotnet run --project src/Miller.Server -c Release -- workspace onboarding --json
+  dotnet run --project src/Miller.Server -c Release -- workspace leader --json
   dotnet run --project src/Miller.Server -c Release -- workspace list
   dotnet run --project src/Miller.Server -c Release -- version
   ```
 
   Build once and run the binary directly (`src/Miller.Server/bin/Release/net10.0/miller <verb>`) to skip the
   `dotnet run` up-to-date check. `miller help` lists every verb: `capabilities`, `search`, `todos`, `content`,
-  `patterns`, `telemetry`, `symbols`, `references`, `complexity`, `refresh`, `inspect`, `context`, `impact`,
+  `patterns`, `metrics`, `telemetry`, `symbols`, `references`, `complexity`, `refresh`, `inspect`, `context`, `impact`,
   `trace`, `dashboard`, `workspace`, `version`, `help`, and `serve`.
 
 **Dogfooding the server.** Because MCP runs over stdio, a new build takes effect only after the MCP client
@@ -406,10 +419,12 @@ binary:
 dotnet run --project src/Miller.Server -c Release -- workspace status
 dotnet run --project src/Miller.Server -c Release -- workspace health --json
 dotnet run --project src/Miller.Server -c Release -- workspace onboarding --json
+dotnet run --project src/Miller.Server -c Release -- workspace leader --json
 dotnet run --project src/Miller.Server -c Release -- workspace list
 dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvider" --limit 5
 dotnet run --project src/Miller.Server -c Release -- search "release archive" --mode content --limit 5
 dotnet run --project src/Miller.Server -c Release -- patterns --json
+dotnet run --project src/Miller.Server -c Release -- metrics complexity --json --limit 10
 dotnet run --project src/Miller.Server -c Release -- inspect src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md
 dotnet run --project src/Miller.Server -c Release -- context "dashboard telemetry and workspace registry" --token-budget 1200
 dotnet run --project src/Miller.Server -c Release -- impact src/Miller.Server/Tools/WorkspaceTool.cs --max-depth 1 --limit 10
@@ -420,12 +435,15 @@ What these prove:
 
 - `workspace status`, `workspace health`, `workspace onboarding`, and `workspace list` avoid source-file reads
   and full graph hydration; onboarding adds a read-only telemetry summary plus current-index target recovery.
+- `workspace leader` reports leader identity/liveness and can request graceful handoff without killing processes.
 - `workspace onboarding` turns local telemetry into starter commands, hot current-index targets, common misses,
   and friction signals. Telemetry stores target hashes, not raw queries or raw target text.
 - Symbol search stays narrow and structural (`name + signature`). Docs/config use `--mode content`; source
   bodies and imported text use the explicit content corpus modes.
 - `patterns --json` discovers extractor-recognized code-shape facts across the full pattern catalog (framework
   routes, language constructs, SQL DDL, data-document structure) without private SQLite reads or raw AST queries.
+- `metrics` exposes local churn, body-hash clone groups, and complexity reports without semantic ranking or
+  cleanup workflow ownership.
 - `inspect`, `context`, and `impact` use the same projection-specific read paths exposed to MCP tools.
 - The dashboard is operational evidence, not a separate product UI: it shows registered workspaces, index facts,
   telemetry, latency/failure signals, and scoped JSON endpoints from the same local state.

@@ -336,4 +336,62 @@ public sealed class ContentToolTests : IDisposable
         Assert.Contains("is stale", output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("expected 2", output, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void Content_ReadCanOpenWorkspaceSourceIdReturnedByWorkspaceSearch()
+    {
+        const string sourceText = """
+            public class Api
+            {
+                public void Handle()
+                {
+                    throw new InvalidOperationException("WorkspaceReadMarker");
+                }
+            }
+            """;
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [new JulieDbFixture.SymbolRow("sym-api", "Api", "class", "csharp", "src/Api.cs", "public class Api", 1, null)
+            {
+                EndLine = 7,
+            }],
+            fileContent: new Dictionary<string, string>
+            {
+                ["src/Api.cs"] = sourceText,
+            },
+            revisions:
+            [
+                new JulieDbFixture.RevisionRow(1),
+            ]);
+        ContentCorpusWriter.Write(
+            ContentCorpusSidecar.ContentDbPathFor(fixture.DbPath),
+            fixture.DbPath,
+            fixture.WorkspaceRoot,
+            workspaceId: "ws-source",
+            revision: 1);
+        using (var registry = WorkspaceRegistry.Open(_workspace.RegistryDbPath))
+        {
+            registry.UpsertSeen("ws-source", "source", fixture.WorkspaceRoot, fixture.DbPath);
+            registry.MarkScanned("ws-source", revision: 1);
+        }
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+
+        string json = tool.Content(
+            "search",
+            query: "WorkspaceReadMarker",
+            content_kind: TextContentKind.WorkspaceSource,
+            workspace_id: "source",
+            format: "json");
+        using JsonDocument doc = JsonDocument.Parse(json);
+        JsonElement hit = Assert.Single(doc.RootElement.EnumerateArray());
+        string sourceId = hit.GetProperty("source_id").GetString()!;
+        int line = hit.GetProperty("line").GetInt32();
+
+        string read = tool.Content("read", source_id: sourceId, line: line, context_lines: 0);
+
+        Assert.Contains("src/Api.cs:", read);
+        Assert.Contains($"{line}: ", read);
+        Assert.Contains("WorkspaceReadMarker", read);
+    }
 }
