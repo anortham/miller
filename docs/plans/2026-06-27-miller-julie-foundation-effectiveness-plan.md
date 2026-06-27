@@ -191,12 +191,12 @@ Example manifest shape:
 
 **Acceptance criteria:**
 
-- [ ] Runner rejects malformed rows before opening MCP processes.
-- [ ] Runner can execute a Miller-only smoke run for `miller`, `flask`, and `zod`.
-- [ ] `results.csv` includes `row_id`, `repo`, `task_class`, `tool`, `route`, `hard_gate`, `expected_present`, `expected_top`, `empty`, `ms`, `output_chars`, `first_path`, and `adaptation_candidate`.
-- [ ] `results.json` includes the same fields plus structured diagnostics for parse failures and skipped tools.
-- [ ] Existing narrow benchmark still passes its focused smoke command from Task 1.
-- [ ] Worker-scope verification passes, committed.
+- [x] Runner rejects malformed rows before opening MCP processes.
+- [x] Runner can execute a Miller-only smoke run for `miller`, `flask`, and `zod`.
+- [x] `results.csv` includes `row_id`, `repo`, `task_class`, `tool`, `route`, `hard_gate`, `expected_present`, `expected_top`, `empty`, `ms`, `output_chars`, `first_path`, and `adaptation_candidate`.
+- [x] `results.json` includes the same fields plus structured diagnostics for parse failures and skipped tools.
+- [x] Existing narrow benchmark still passes its focused smoke command from Task 1.
+- [x] Worker-scope verification passes, committed.
 
 ## Task 3: Cover Retrieval, Inspect, And Ambiguity Rows
 
