@@ -170,6 +170,103 @@ public sealed class PatternsToolTests
     }
 
     [Fact]
+    public void Patterns_SearchByQuery_MapsToPatternIdsContainingSubstring()
+    {
+        using var fx = CreatePatternFixture();
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        string output = tool.Patterns(operation: "search", query: "route", limit: 10);
+
+        Assert.Contains("# patterns search query='route'", output);
+        Assert.Contains("matched_pattern_ids: aspnet.minimal_api.route.v1", output);
+        Assert.Contains("aspnet.minimal_api.route.v1", output);
+        Assert.Contains("src/Auth.cs", output);
+        Assert.Contains("route_template=/orders", output);
+    }
+
+    [Fact]
+    public void Patterns_SearchByQuery_JsonIncludesQueryAndMatchedPatternIds()
+    {
+        using var fx = CreatePatternFixture();
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        string json = tool.Patterns(operation: "search", query: "route", limit: 10, format: "json");
+
+        using JsonDocument doc = JsonDocument.Parse(json);
+        Assert.Equal("search", doc.RootElement.GetProperty("operation").GetString());
+        Assert.Equal("route", doc.RootElement.GetProperty("query").GetString());
+        Assert.Equal(
+            new[] { "aspnet.minimal_api.route.v1" },
+            doc.RootElement.GetProperty("matched_pattern_ids").EnumerateArray().Select(static value => value.GetString()).ToArray());
+        JsonElement match = Assert.Single(doc.RootElement.GetProperty("matches").EnumerateArray());
+        Assert.Equal("src/Auth.cs", match.GetProperty("path").GetString());
+        Assert.Equal("fact-route", match.GetProperty("fact_id").GetString());
+    }
+
+    [Fact]
+    public void Patterns_SearchByQuery_NoMatch_ReturnsRecoveryHint()
+    {
+        using var fx = CreatePatternFixture();
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        string output = tool.Patterns(operation: "search", query: "zzz-not-a-pattern");
+
+        Assert.Contains("No patterns match 'zzz-not-a-pattern'", output);
+        Assert.Contains("patterns operation=list", output);
+    }
+
+    [Fact]
+    public void Patterns_SearchByQuery_NoMatch_JsonReturnsValidJson()
+    {
+        using var fx = CreatePatternFixture();
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        string json = tool.Patterns(operation: "search", query: "zzz-not-a-pattern", format: "json");
+
+        using JsonDocument doc = JsonDocument.Parse(json); // must be valid JSON, not plain text
+        Assert.Equal("search", doc.RootElement.GetProperty("operation").GetString());
+        Assert.Equal("zzz-not-a-pattern", doc.RootElement.GetProperty("query").GetString());
+        Assert.Empty(doc.RootElement.GetProperty("matched_pattern_ids").EnumerateArray());
+        Assert.Empty(doc.RootElement.GetProperty("matches").EnumerateArray());
+        Assert.Contains("No patterns match", doc.RootElement.GetProperty("note").GetString());
+    }
+
+    [Fact]
+    public void Patterns_SearchByQuery_WithWhere_FiltersMetadataAcrossMatchedPatternIds()
+    {
+        using var fx = CreatePatternFixture();
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        string output = tool.Patterns(operation: "search", query: "route", where: "verb=GET", limit: 10);
+
+        Assert.Contains("matched_pattern_ids: aspnet.minimal_api.route.v1", output);
+        Assert.Contains("src/Auth.cs", output);
+        Assert.Contains("verb=GET", output);
+    }
+
+    [Fact]
+    public void Patterns_SearchByQuery_RecordsQueryInTelemetry()
+    {
+        using var fx = CreatePatternFixture();
+        string telemetryDb = Path.Combine(Path.GetDirectoryName(fx.DbPath)!, "telemetry.db");
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        using (var ledger = TelemetryLedger.Open(telemetryDb, "workspace-1", Path.GetDirectoryName(Path.GetDirectoryName(fx.DbPath))!))
+        {
+            using var scope = ledger.Measure("patterns", op: null);
+            string output = tool.Patterns(operation: "search", query: "route", limit: 10);
+            Assert.Contains("aspnet.minimal_api.route.v1", output);
+        }
+
+        var row = ReadTelemetryOpMetadata(telemetryDb);
+        Assert.Equal("search", row.Op);
+        Assert.Equal("ok", row.Outcome);
+        using JsonDocument doc = JsonDocument.Parse(row.MetadataJson);
+        Assert.True(doc.RootElement.GetProperty("has_query").GetBoolean());
+        Assert.False(doc.RootElement.GetProperty("has_pattern_id").GetBoolean());
+    }
+
+    [Fact]
     public void Patterns_CompactExplicitWorkspace_DefaultsEnsureFreshAndAddsBanner()
     {
         using var fx = CreatePatternFixture();

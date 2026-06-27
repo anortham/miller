@@ -394,4 +394,62 @@ public sealed class ContentToolTests : IDisposable
         Assert.Contains($"{line}: ", read);
         Assert.Contains("WorkspaceReadMarker", read);
     }
+
+    [Fact]
+    public void Content_SearchCompact_IncludesSourceIdInEachHitAndReadFooter()
+    {
+        string logPath = Path.Combine(_dir, "ci.log");
+        File.WriteAllText(logPath, """
+            build started
+            SourceIdFooterMarker failed in integration
+            build finished
+            """);
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        tool.Content("import", path: logPath);
+
+        string search = tool.Content("search", query: "SourceIdFooterMarker", limit: 5);
+
+        Assert.Contains("source_id=external_file:", search, StringComparison.Ordinal);
+        Assert.Contains("ci.log:2  external_file", search, StringComparison.Ordinal);
+        Assert.Contains("SourceIdFooterMarker failed", search, StringComparison.Ordinal);
+        Assert.Matches(@"\nread: content read source_id=external_file:[0-9a-f]+ line=2\b", search);
+    }
+
+    [Fact]
+    public void Content_Read_AcceptsUniqueDisplayPathAlias()
+    {
+        string logPath = Path.Combine(_dir, "build.log");
+        File.WriteAllText(logPath, """
+            build started
+            DisplayPathAliasMarker on line two
+            build finished
+            """);
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        tool.Content("import", path: logPath, display_path: "build.log");
+
+        string read = tool.Content("read", source_id: "build.log", line: 2, context_lines: 0);
+
+        Assert.Contains("build.log:2-2", read);
+        Assert.Contains("2: DisplayPathAliasMarker on line two", read);
+        Assert.DoesNotContain("build started", read);
+    }
+
+    [Fact]
+    public void Content_Read_RejectsAmbiguousDisplayPathAlias()
+    {
+        string logA = Path.Combine(_dir, "a.log");
+        string logB = Path.Combine(_dir, "b.log");
+        File.WriteAllText(logA, "AmbiguousAliasMarker alpha\n");
+        File.WriteAllText(logB, "AmbiguousAliasMarker beta\n");
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        tool.Content("import", path: logA, display_path: "dup.log");
+        tool.Content("import", path: logB, display_path: "dup.log");
+
+        string output = tool.Content("read", source_id: "dup.log", line: 1, context_lines: 0);
+
+        Assert.StartsWith("content failed:", output, StringComparison.Ordinal);
+        Assert.Contains("matches multiple imported sources", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("external_file:", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("AmbiguousAliasMarker", output, StringComparison.OrdinalIgnoreCase);
+    }
 }

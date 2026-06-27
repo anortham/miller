@@ -30,31 +30,37 @@ Miller serves an always-fresh index of this workspace's code. Reach for a Miller
 - `inspect` — A file or symbol you can already name. A file path lists symbols; a symbol name gives definition,
   signature, and docs. `depth=full` adds refs, callers/callees, body, and recorded complexity facts. Use before
   reading an entire file. Optional `workspace_id` and `ensure_fresh` follow `search`.
-- `context` — A token-budgeted bundle for a task/question. Give the task plus optional `failing_test` or
-  `stack_trace`; get bounded, provenance-tagged symbols. Use for UNFAMILIAR areas; if you know the symbol, use
-  `inspect`. `reference_mode=usage` adds confidence-labeled definitions, possible name-based refs, call IDs, and
-  source chunks; treat `confidence=name_based` as possible, not exact. `exclude_tests=true` filters tests only in
-  usage mode. Optional `workspace_id` and `ensure_fresh` route through the registry provider.
-- `trace` — Follow code. `mode=auto` (callers/callees), `mode=refs` (name-based references, with optional
-  `reference_kind=call|variable_ref|type_usage|member_access|import`), `mode=path` (shortest path), `mode=bridge`
-  (TS call → endpoint → DTO → entity → table). Reduced-confidence links are flagged `[verb-unknown]`/`[ambiguous]`. Use
-  `format=json` for structured references/nodes/links/diagnostics. Use `scope=<file>` to disambiguate duplicate names. Optional
+- `context` — First call in an unfamiliar area: a small, justified bundle of relevant entry points plus the next
+  symbols to `inspect`. Give the task plus optional `failing_test`/`stack_trace`; compact output: seeds first with
+  reasons, capped neighbours, a `## next inspect` footer. If you know the symbol, use `inspect`.
+  `reference_mode=usage` adds confidence-labeled definitions, name-based refs, call IDs, source chunks; treat
+  `confidence=name_based` as possible. `exclude_tests=true` filters tests only in usage mode. Optional `workspace_id`
+  and `ensure_fresh` route through the registry provider.
+- `trace` — Follow code. `mode=refs` (name-based usages, with optional
+  `reference_kind=call|variable_ref|type_usage|member_access|import`; on empty, fall back to `search mode=source`),
+  `mode=path` (shortest path to `to`), `mode=bridge` (provider-scoped cross-language chain; dotnet-web: TS call →
+  endpoint → DTO → entity → table). `mode=auto` (callers/callees) is subsumed by `inspect depth=full` — prefer
+  `inspect` for that. Reduced-confidence links are flagged `[verb-unknown]`/`[ambiguous]`. Use `format=json` for
+  structured references/nodes/links/diagnostics. Use `scope=<file>` to disambiguate duplicate names. Optional
   `workspace_id` and `ensure_fresh` work cross-workspace. **`mode=bridge` is provider-scoped to `dotnet-web`; on
-  another stack use `mode=auto`/`mode=refs`/`mode=path`.**
-- `impact` — What a change affects: downstream symbols and linked tests. Pass exactly one of `target`,
-  `changed_paths`, `diff`, or `git=true` (`base` and `staged` imply git). Use before refactoring, choosing tests,
-  or checking the current git diff. Optional `workspace_id` and `ensure_fresh` work for registered workspaces.
+  another stack use `mode=refs`/`mode=path`, or `inspect depth=full` for callers/callees.**
+- `impact` — What a change affects: downstream symbols and linked tests. After edits, run `impact` with no
+  args to read the working-tree git diff and see what your uncommitted change affects + which tests to run.
+  Or pass exactly one of `target`, `changed_paths`, `diff`, or `git=true` (`base`/`staged` imply git). Use
+  before refactoring or choosing tests. Optional `workspace_id` and `ensure_fresh` work for registered workspaces.
 - `edit` — Index-aware edits: `replace_text`, `replace_symbol_body`, `replace_symbol_signature`, `rename_symbol`,
   `insert_before`, `insert_after`, `add_doc`. Previews a diff unless `apply=true`. A stale target self-heals by
   converging that file; if it fails, run `workspace refresh` first or pass `allow_stale=true` if you accept risk.
 - `content` — Import, search, read, list, remove, and export external/web text. Use for logs, CI output, reports,
-  large dumps, and browser-fetched markdown. `import`/`add_markdown` report metadata; `search` returns snippets;
-  `read` returns bounded windows. Use `content_kind=web` for web-only reads, or `workspace_id=all` on `search` for
-  audits. `export` writes raw JSONL for integration, not interactive reading.
-- `patterns` — List, summarize, and search extractor-recognized code shapes from `structural_facts` across many
-  languages: framework facts, language facts, SQL DDL, and JSON/YAML/TOML/Markdown structure. Run `patterns()` first
-  to see emitted ids. This is not raw AST query execution. Use `operation=list|summary|search`, `pattern_id`,
-  `where=key=value`, `path`, and `language`. Optional `workspace_id` and `ensure_fresh` work for registered workspaces.
+  large dumps, and browser-fetched markdown. `import`/`add_markdown` report metadata; `search` returns snippets and
+  each hit's `source_id`; `read` returns bounded windows capped at 200 lines. Pass a hit's `source_id` to `read`
+  (a unique `display_path` is also accepted). Use `content_kind=web` for web-only reads, or `workspace_id=all` on
+  `search` for audits. `export` writes raw JSONL for integration, not interactive reading.
+- `patterns` — List, summarize, and search code-shape facts from `structural_facts` across many languages: framework
+  facts, language facts, SQL DDL, JSON/YAML/TOML/Markdown structure. Run `patterns()` to see emitted ids (not raw AST
+  queries). Use `operation=list|summary|search` with `pattern_id`, or `query` (no `pattern_id`) to search every
+  `pattern_id` containing it. `where=key=value`, `path`, `language` apply. Optional `workspace_id` and `ensure_fresh`
+  work for registered workspaces.
 - `workspace` — Index lifecycle: `status`, `health`, `onboarding`, `refresh`, `full`, `list`, `open`, `remove`,
   `leader`, `dashboard` (start/reuse the loopback dashboard). `status`, `health`, `onboarding`, `leader`, `refresh`, `full`, and
   `remove` accept `workspace_id` or `path`; `list` shows the registry.
@@ -63,8 +69,8 @@ Miller serves an always-fresh index of this workspace's code. Reach for a Miller
 
 - **New task / unfamiliar area**: `context` → `inspect` the key symbols → implement.
 - **Understand a symbol**: `inspect target depth=full` (definition + refs + callers/callees + body in one call).
-- **Trace a flow**: `trace mode=refs` for usages, `mode=auto` to fan out, `mode=path` for A→B, `mode=bridge` for `dotnet-web`
-  cross-language chains. If a name is ambiguous, retry with `scope=<file>`.
+- **Trace a flow**: `trace mode=refs` for usages, `mode=path` for A→B, `mode=bridge` for `dotnet-web`
+  cross-language chains; for callers/callees use `inspect depth=full` (subsumes `mode=auto`). If a name is ambiguous, retry with `scope=<file>`.
 - **Find something in docs/prose**: `search mode=content "<phrase>"` — searches markdown/config/text content and
   returns `path:line` + snippet, where symbol search would find nothing.
 - **Find source-body text**: `search mode=source "<literal or phrase>"` — searches verified source files and
@@ -72,7 +78,7 @@ Miller serves an always-fresh index of this workspace's code. Reach for a Miller
 - **Audit registered workspaces for exact text**: `content search query="dangerous term" workspace_id=all content_kind=source`
   or `content_kind=docs|config|external_file|web`, then bounded `content read`.
 - **Find known code shapes**: `patterns operation=list` to discover ids, then
-  `patterns operation=search pattern_id=<id> where=attribute_name=hx-get path=Views/**`.
+  `patterns operation=search pattern_id=<id> where=attribute_name=hx-get path=Views/**`, or `query=<text>` for free text.
 - **Inspect a large log/report**: `content import path=/tmp/build.log` → `content search query="error text"` →
   `content read source_id=... line=... context_lines=10`. Do not read or paste the full file.
 - **Research a web page**: use `miller-web-research` to fetch markdown with `browser39` into a temp file, then
@@ -84,7 +90,7 @@ Miller serves an always-fresh index of this workspace's code. Reach for a Miller
 - **List code markers**: `search mode=markers query=TODO,FIXME,HACK,XXX` for TODO/FIXME/HACK/XXX in comments/doc
   comments; add `file_pattern=src/**` or `language=csharp` to scope the audit.
 - **Dashboard**: If the user asks to start, open, or show the Miller dashboard, call `workspace` with `operation=dashboard`. A dashboard request is a tool operation, not a file-finding task. Do not search plugin cache directories for dashboard files.
-- **Scope a change**: `impact git=true` for current diff, or `impact target=…` for a planned edit → run the tests it lists → `edit` (preview) → `edit apply=true` →
+- **Scope a change**: `impact` (no args) for the current working-tree diff, or `impact target=…` for a planned edit → run the tests it lists → `edit` (preview) → `edit apply=true` →
   re-run `impact` if the surface changed.
 - **Edit a symbol**: `inspect` it → `edit …` (preview, the default) → `edit … apply=true`.
 - **Index looks stale**: `workspace refresh` (or `workspace full` to force a clean rebuild).
@@ -114,7 +120,7 @@ code, paste this block into the prompt:
     - impact(target?|changed_paths?|diff?|git?/base?/staged?) before refactors and to choose tests.
     - edit(operation, target, ...) to preview index-aware edits (apply=true to commit).
     - content(import|add_markdown|search|read|list|remove|export, ...) for logs, CI, web markdown, external text, and audits; use workspace_id=all for registered-workspace text audits and bounded reads only.
-    - patterns(operation?, pattern_id?, where?, path?, language?) for extractor-recognized code-shape facts.
+    - patterns(operation?, pattern_id?, query?, where?, path?, language?) for extractor-recognized code-shape facts.
     - workspace(status|health|onboarding|leader|refresh|full|list|open|remove|dashboard) for readiness, leader diagnostics/handoff, refresh, other repos, onboarding, or dashboard with operation=dashboard.
     Do NOT fall back to Glob/Read/Grep chains when a Miller tool fits. Miller returns targeted context in 1-2 calls.
 

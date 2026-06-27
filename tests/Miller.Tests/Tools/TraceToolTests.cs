@@ -665,6 +665,26 @@ public sealed class TraceToolTests
         Assert.Contains("reference_kind must be one of", outp);
     }
 
+    [Fact]
+    public void Refs_Empty_RendersRecoveryHint()
+    {
+        var index = BuildSymbolIndex(
+            new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
+            Array.Empty<(string, string)>());
+
+        string outp = TraceTool.Run(index, ResolverFor(index),
+            target: "Alpha", scope: null, mode: "refs", to: null, depth: 3, limit: 20,
+            fullFormat: false, json: false, referenceKind: null, includeDefinition: true,
+            readReferences: _ => Array.Empty<SymbolRef>(),
+            out int emitted, out int visited);
+
+        Assert.Equal(0, emitted);
+        Assert.Equal(0, visited);
+        Assert.Contains("No extracted refs for 'Alpha'", outp, StringComparison.Ordinal);
+        Assert.Contains("search mode=source Alpha", outp, StringComparison.Ordinal);
+        Assert.Contains("trace mode=auto", outp, StringComparison.Ordinal);
+    }
+
     // ---------- mode: bridge ----------
 
     [Fact]

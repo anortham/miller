@@ -357,6 +357,43 @@ public sealed class SearchToolTests
     }
 
     [Fact]
+    public void Run_FileMode_Empty_ReturnsFileRecoveryHint()
+    {
+        var index = SymbolSearchProjection.Build([
+            Symbol(0, "sym-file-hit", "ActualFileSymbol", "class",
+                "src/Miller.Server/Tools/SearchTool.cs", 9),
+        ]);
+
+        string output = SearchTool.Run(index, "does/not/exist.cs", SearchToolMode.File, limit: 10,
+            excludeTests: null, json: false, out int count);
+
+        Assert.Equal(0, count);
+        Assert.StartsWith("No indexed file matches 'does/not/exist.cs'.", output.Trim());
+        Assert.Contains("mode=auto", output, StringComparison.Ordinal);
+        Assert.Contains("`search does/not/exist.cs` for symbols", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Run_FileMode_FilteredMiss_ShowsOutsideScopeHintInCompact()
+    {
+        var index = SymbolSearchProjection.Build([
+            Symbol(0, "sym-api", "SearchWidget", "class", "src/api/SearchWidget.cs", 8, "public class SearchWidget"),
+            Symbol(1, "sym-domain", "SearchWidget", "class", "src/domain/SearchWidget.cs", 9, "public class SearchWidget"),
+        ]);
+
+        string output = SearchTool.Run(index, "SearchWidget.cs", SearchToolMode.File, limit: 10,
+            excludeTests: null, json: false, out int count, filePattern: "src/ui/**");
+
+        Assert.Equal(0, count);
+        // File-mode empty with out-of-scope hits reuses the filtered-miss recovery, not the bare file-miss hint.
+        Assert.Contains("No results within file_pattern=src/ui/**.", output);
+        Assert.Contains("Outside scope:", output);
+        Assert.Contains("src/api/SearchWidget.cs", output);
+        Assert.Contains("src/domain/SearchWidget.cs", output);
+        Assert.DoesNotContain("No indexed file matches 'SearchWidget.cs'.", output);
+    }
+
+    [Fact]
     public void Run_FileMode_HidesImportAndModuleNoise()
     {
         var index = SymbolSearchProjection.Build([
@@ -488,6 +525,24 @@ public sealed class SearchToolTests
         Assert.Contains("Outside scope:", output);
         Assert.Contains("SearchWidget  class  src/api/SearchWidget.cs:8  public class SearchWidget", output);
         Assert.Contains("SearchWidget  class  src/domain/SearchWidget.cs:9  public class SearchWidget", output);
+    }
+
+    [Fact]
+    public void Run_SymbolSearch_FilteredMiss_SuggestsNestedFilePatternWhenOutsideHitContainsScopedSegment()
+    {
+        var index = new StubSymbolSearchIndex(
+            (Symbol(0, "sym-card", ".iq-card", "property", "src/AccessIQ/wwwroot/css/site.css", 205,
+                ".iq-card { background: var(--surface); }", language: "css"), 10.0));
+
+        string output = SearchTool.Run(index, ".iq-card", SearchToolMode.Auto, limit: 10,
+            excludeTests: null, json: false, out int count, filePattern: "wwwroot/css/**");
+
+        Assert.Equal(0, count);
+        Assert.Contains("No results within file_pattern=wwwroot/css/**.", output);
+        Assert.Contains("file_pattern values match repo-relative paths", output);
+        Assert.Contains("try file_pattern=**/wwwroot/css/**", output);
+        Assert.Contains("src/AccessIQ/wwwroot/css/site.css", output);
+        Assert.Contains("Outside scope:", output);
     }
 
     [Fact]
@@ -1002,14 +1057,16 @@ public sealed class SearchToolTests
     }
 
     [Fact]
-    public void RunContent_Empty_ReturnsNoResultsSentinel()
+    public void RunContent_Empty_ReturnsTextContentRecoveryHint()
     {
         var index = ContentIndex(("docs/guide.md", "nothing relevant on this page"));
 
         string output = SearchTool.RunContent(index, "zzzznotpresent", limit: 10, json: false, out int count);
 
         Assert.Equal(0, count);
-        Assert.Equal("No results.", output.Trim());
+        Assert.StartsWith("No text hits.", output.Trim());
+        Assert.Contains("workspace refresh", output, StringComparison.Ordinal);
+        Assert.Contains("`search zzzznotpresent` for symbols", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1309,6 +1366,67 @@ public sealed class SearchToolTests
     }
 
     [Fact]
+    public void RunTextContent_Empty_WorkspaceKind_PointsAtWorkspaceRefresh()
+    {
+        var index = TextContentIndex();
+
+        string output = SearchTool.RunTextContent(
+            index,
+            "zzzznotpresent",
+            TextContentKind.WorkspaceSource,
+            limit: 10,
+            excludeTests: false,
+            json: false,
+            out int count);
+
+        Assert.Equal(0, count);
+        Assert.StartsWith("No text hits.", output.Trim());
+        Assert.Contains("workspace refresh", output, StringComparison.Ordinal);
+        Assert.Contains("`search zzzznotpresent` for symbols", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunTextContent_Empty_ImportedKind_PointsAtContentList()
+    {
+        var index = TextContentIndex();
+
+        string output = SearchTool.RunTextContent(
+            index,
+            "zzzznotpresent",
+            TextContentKind.ExternalFile,
+            limit: 10,
+            excludeTests: false,
+            json: false,
+            out int count,
+            out long _);
+
+        Assert.Equal(0, count);
+        Assert.StartsWith("No text hits.", output.Trim());
+        Assert.Contains("content list", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("workspace refresh", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunTextContent_Empty_AllText_ListsBothRecoveryPaths()
+    {
+        var index = TextContentIndex();
+
+        string output = SearchTool.RunTextContent(
+            index,
+            "zzzznotpresent",
+            new[] { TextContentKind.WorkspaceSource, TextContentKind.ExternalFile },
+            limit: 10,
+            excludeTests: false,
+            json: false,
+            out int count,
+            out long _);
+
+        Assert.Equal(0, count);
+        Assert.Contains("workspace refresh", output, StringComparison.Ordinal);
+        Assert.Contains("content list", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RunTextContent_Json_HasSourceCorpusShape_NotSymbolShape()
     {
         var index = TextContentIndex(SourceHit(
@@ -1374,6 +1492,31 @@ public sealed class SearchToolTests
         Assert.Contains("src/ui/Panel.ts", output);
         Assert.DoesNotContain("src/api/Panel.cs", output);
         Assert.DoesNotContain("tests/ui/PanelTests.ts", output);
+    }
+
+    [Fact]
+    public void RunTextContent_FilteredMiss_SuggestsNestedFilePatternWhenOutsideHitContainsScopedSegment()
+    {
+        var index = TextContentIndex(
+            SourceHit("src/AccessIQ/wwwroot/css/site.css", 205, ".iq-card { background: var(--surface); }",
+                language: "css", containingSymbolName: ".iq-card"));
+
+        string output = SearchTool.RunTextContent(
+            index,
+            ".iq-card",
+            TextContentKind.WorkspaceSource,
+            limit: 10,
+            excludeTests: false,
+            json: false,
+            out int count,
+            filePattern: "wwwroot/css/**");
+
+        Assert.Equal(0, count);
+        Assert.Contains("No results within file_pattern=wwwroot/css/**.", output);
+        Assert.Contains("file_pattern values match repo-relative paths", output);
+        Assert.Contains("try file_pattern=**/wwwroot/css/**", output);
+        Assert.Contains("src/AccessIQ/wwwroot/css/site.css", output);
+        Assert.Contains("Outside scope:", output);
     }
 
     [Fact]

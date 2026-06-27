@@ -58,11 +58,11 @@ public sealed class ImpactTool
 
     [McpServerTool(Name = "impact")]
     [Description(
-        "Show what a change would affect — the symbols and tests downstream of editing a symbol or file. Use " +
-        "before a refactor, or to find which tests to run for a change. Prefer this over grepping for usages. " +
-        "Pass exactly one of target (a symbol or file), changed_paths (a set of files), diff (a unified " +
-        "diff), or git/base/staged to read the workspace's git diff and map it to impact. Returns compact " +
-        "text by default; pass format=json to chain results.")]
+        "After edits, run impact with no args to see what your uncommitted change affects and which tests to " +
+        "run. Prefer this over grepping for usages. With no args it reads the working-tree git diff and maps " +
+        "changed ranges to impacted symbols + likely tests; or pass exactly one of target (a symbol or file), " +
+        "changed_paths (a set of files), diff (a unified diff), or git/base/staged to read a specific git diff. " +
+        "Returns compact text by default; pass format=json to chain results.")]
     public string Impact(
         [Description("A symbol name/id or a file path (smart-resolved). One of target/changed_paths/diff/git.")]
         string? target = null,
@@ -91,14 +91,19 @@ public sealed class ImpactTool
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
             WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
             string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
-            bool useGitDiff = git || staged || !string.IsNullOrWhiteSpace(@base);
+            bool explicitGit = git || staged || !string.IsNullOrWhiteSpace(@base);
             int provided =
                 (string.IsNullOrWhiteSpace(target) ? 0 : 1) +
                 (changed_paths is { Length: > 0 } ? 1 : 0) +
                 (string.IsNullOrWhiteSpace(diff) ? 0 : 1) +
-                (useGitDiff ? 1 : 0);
+                (explicitGit ? 1 : 0);
 
-            if (useGitDiff && provided != 1)
+            // No-arg default: after edits, `impact` with no inputs reads the working-tree git diff and maps it
+            // to impact (the "which tests to run" leg). >=1 input keeps the exactly-one contract below.
+            bool noArgDefault = provided == 0;
+            bool useGitDiff = explicitGit || noArgDefault;
+
+            if (useGitDiff && provided > 1)
             {
                 string usage = Usage(json);
                 return ReadToolWorkspaceRouting.PrefixCompact(usage, compactBanner);
@@ -109,7 +114,16 @@ public sealed class ImpactTool
             {
                 GitDiffResult gitResult = _gitDiffReader.Read(new GitDiffRequest(context.WorkspaceRoot, @base, staged));
                 if (!gitResult.Success)
+                {
+                    if (noArgDefault)
+                    {
+                        // No-arg in a non-git (or broken-git) workspace: fall back to the usage note rather than
+                        // erroring -- `impact` with no args must never fail just because there is no git diff to read.
+                        string usage = Usage(json);
+                        return ReadToolWorkspaceRouting.PrefixCompact(usage, compactBanner);
+                    }
                     throw new InvalidOperationException($"git diff failed in {context.WorkspaceRoot}: {gitResult.Error ?? "unknown error"}");
+                }
 
                 if (string.IsNullOrWhiteSpace(gitResult.Diff))
                 {

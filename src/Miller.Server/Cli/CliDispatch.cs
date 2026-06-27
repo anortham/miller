@@ -443,21 +443,22 @@ public static class CliDispatch
     private static int Patterns(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
         if (args.Count > 0 && args[0] is "--help" or "-h")
-            return Usage(err, "miller patterns <list|summary|search> [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]");
+            return Usage(err, "miller patterns <list|summary|search> [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--query TEXT] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]");
 
         bool firstTokenIsFlag = args.Count > 0 && args[0].StartsWith("--", StringComparison.Ordinal);
         string operation = args.Count == 0 || firstTokenIsFlag ? "list" : args[0].ToLowerInvariant();
         if (operation is "help" or "--help" or "-h")
-            return Usage(err, "miller patterns <list|summary|search> [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]");
+            return Usage(err, "miller patterns <list|summary|search> [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--query TEXT] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]");
 
         if (operation is not ("list" or "summary" or "summarize" or "search"))
-            return Usage(err, "miller patterns <list|summary|search> [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]");
+            return Usage(err, "miller patterns <list|summary|search> [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--query TEXT] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]");
 
         CliOptions o = CliOptions.Parse((firstTokenIsFlag ? args : args.Skip(1)).ToArray(), "json");
         string? patternId = o.Value("pattern", o.Value("pattern-id"));
         if (string.IsNullOrWhiteSpace(patternId) && o.Positionals.Count > 0)
             patternId = o.Query;
 
+        string? query = o.Value("query");
         string? where = o.Value("where");
         if (!string.IsNullOrWhiteSpace(where))
         {
@@ -471,12 +472,12 @@ public static class CliDispatch
                 return 2;
             }
 
-            if (string.IsNullOrWhiteSpace(patternId))
-                return Usage(err, "miller patterns search --pattern ID [--where key=value] [--json]");
+            if (string.IsNullOrWhiteSpace(patternId) && string.IsNullOrWhiteSpace(query))
+                return Usage(err, "miller patterns search --pattern ID | --query TEXT [--where key=value] [--json]");
         }
 
-        if (operation == "search" && string.IsNullOrWhiteSpace(patternId))
-            return Usage(err, "miller patterns search --pattern ID [--workspace-id SELECTOR] [--workspace DIR] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]");
+        if (operation == "search" && string.IsNullOrWhiteSpace(patternId) && string.IsNullOrWhiteSpace(query))
+            return Usage(err, "miller patterns search --pattern ID | --query TEXT [--workspace-id SELECTOR] [--workspace DIR] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]");
 
         if (!TryResolveReadContext(ctx, o, err, out ctx))
             return 2;
@@ -490,6 +491,7 @@ public static class CliDispatch
                 ctx.ExtractDbPath,
                 operation,
                 patternId,
+                query,
                 o.Value("language"),
                 o.Value("path", o.Value("file-pattern")),
                 where,
@@ -675,7 +677,7 @@ public static class CliDispatch
         if (string.Equals(referenceMode, "usage", StringComparison.OrdinalIgnoreCase))
         {
             output = ContextTool.RunReferenceAware(
-                index, graph, resolver, query: o.Query, tokenBudget: o.Int("token-budget", 4000), maxHops: o.Int("max-hops", 1),
+                index, graph, resolver, query: o.Query, tokenBudget: o.Int("token-budget", 2000), maxHops: o.Int("max-hops", 1),
                 entrySymbols: null, failingTest: null, stackTrace: null,
                 referenceDepth: o.Int("reference-depth", 1), excludeTests: o.Has("exclude-tests"), json: o.Has("json"),
                 readReferences: symbol => ExtractReader.ReadReferences(ctx.ExtractDbPath, symbol.Name).Take(ContextTool.ReferenceRowsPerSymbol).ToArray(),
@@ -690,7 +692,7 @@ public static class CliDispatch
         else if (string.Equals(referenceMode, "off", StringComparison.OrdinalIgnoreCase))
         {
             output = ContextTool.Run(
-                index, graph, resolver, query: o.Query, tokenBudget: o.Int("token-budget", 4000), maxHops: o.Int("max-hops", 1),
+                index, graph, resolver, query: o.Query, tokenBudget: o.Int("token-budget", 2000), maxHops: o.Int("max-hops", 1),
                 entrySymbols: null, failingTest: null, stackTrace: null, json: o.Has("json"), out _, out _);
         }
         else

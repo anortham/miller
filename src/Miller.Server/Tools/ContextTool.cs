@@ -46,15 +46,14 @@ public sealed partial class ContextTool
 
     [McpServerTool(Name = "context")]
     [Description(
-        "Assemble a token-budgeted bundle of the most relevant code for a task or question. Give a description " +
-        "of what you're working on — optionally a failing test or stack trace — and get a bounded set of the " +
-        "most relevant symbols and signatures with provenance. Use for orientation in an unfamiliar area before " +
-        "broad shell/file exploration; if you already know the symbol, use inspect. Returns compact text by default; " +
-        "pass format=json to chain.")]
+        "First call in an unfamiliar area: a small, justified bundle — the most relevant entry points and why, plus " +
+        "the next symbols to inspect. Give the task or question (optionally a failing test or stack trace) and get a " +
+        "bounded set of seed symbols with one-line reasons, capped neighbours, and a 'next inspect' footer. If you " +
+        "already know the symbol, use inspect. Returns compact text by default; pass format=json to chain.")]
     public string Context(
         [Description("The task or question to anchor the bundle on.")] string query,
-        [Description("Hard bound on the returned bundle size, in estimated tokens. Default 4000.")]
-        int token_budget = 4000,
+        [Description("Hard bound on the returned bundle size, in estimated tokens. Default 2000.")]
+        int token_budget = 2000,
         [Description("Neighbour expansion radius in hops (0–2). Default 1.")] int max_hops = 1,
         [Description("Seed symbol names/ids to fold into the bundle. Optional.")] string[]? entry_symbols = null,
         [Description("A failing test name/snippet; its symbol tokens are folded into the seeds. Optional.")]
@@ -541,32 +540,88 @@ public sealed partial class ContextTool
         return sb.ToString();
     }
 
+    private const int MaxNeighbourCandidates = 12;
+    private const int NextInspectCount = 3;
+
     private static string RenderCompact(IReadOnlyList<Candidate> selected)
     {
         if (selected.Count == 0)
             return "Bundle empty — raise token_budget.";
 
-        var sb = new StringBuilder();
-        sb.Append("# context bundle (").Append(selected.Count).Append(")\n");
-        var groups = new List<(string FilePath, List<Candidate> Candidates)>();
+        // The packer preserves caller priority order (seed rank, then hop, then id), so hop-0 seeds lead. Partition
+        // by hop so the render is opinionated: seeds first as the named entry points, neighbours after, capped.
+        var seeds = new List<Candidate>();
+        var neighbours = new List<Candidate>();
         foreach (Candidate candidate in selected)
         {
-            int groupIndex = groups.FindIndex(group => group.FilePath == candidate.Symbol.FilePath);
-            if (groupIndex >= 0)
-                groups[groupIndex].Candidates.Add(candidate);
+            if (candidate.Hop == 0)
+                seeds.Add(candidate);
             else
-                groups.Add((candidate.Symbol.FilePath, new List<Candidate> { candidate }));
+                neighbours.Add(candidate);
         }
 
-        for (int i = 0; i < groups.Count; i++)
+        var sb = new StringBuilder();
+        sb.Append("# context bundle (").Append(selected.Count).Append(")\n");
+
+        if (seeds.Count > 0)
         {
-            var group = groups[i];
-            sb.Append(group.FilePath).Append(':').Append('\n');
-            foreach (Candidate candidate in group.Candidates)
-                sb.Append(GroupedCandidateLine(candidate)).Append('\n');
+            sb.Append("## seeds\n");
+            foreach (Candidate seed in seeds)
+                sb.Append(SeedLine(seed)).Append('\n');
+        }
+
+        if (neighbours.Count > 0)
+        {
+            sb.Append("## neighbours\n");
+            int renderCap = Math.Min(MaxNeighbourCandidates, neighbours.Count);
+            int omitted = neighbours.Count - renderCap;
+            var groups = new List<(string FilePath, List<Candidate> Candidates)>();
+            for (int i = 0; i < renderCap; i++)
+            {
+                Candidate candidate = neighbours[i];
+                int groupIndex = groups.FindIndex(group => group.FilePath == candidate.Symbol.FilePath);
+                if (groupIndex >= 0)
+                    groups[groupIndex].Candidates.Add(candidate);
+                else
+                    groups.Add((candidate.Symbol.FilePath, new List<Candidate> { candidate }));
+            }
+
+            foreach (var group in groups)
+            {
+                sb.Append(group.FilePath).Append(':').Append('\n');
+                foreach (Candidate candidate in group.Candidates)
+                    sb.Append(GroupedCandidateLine(candidate)).Append('\n');
+            }
+
+            if (omitted > 0)
+                sb.Append("... ").Append(omitted).Append(" more neighbours omitted — inspect a seed for the full graph.\n");
+        }
+
+        if (seeds.Count > 0)
+        {
+            sb.Append("## next inspect\n");
+            int inspectCount = Math.Min(NextInspectCount, seeds.Count);
+            for (int i = 0; i < inspectCount; i++)
+            {
+                var s = seeds[i].Symbol;
+                sb.Append(s.FilePath).Append(':').Append(s.StartLine).Append('\n');
+            }
         }
 
         return sb.ToString().TrimEnd('\n');
+    }
+
+    // A hop-0 seed gets one line with its reason ("seed") and full provenance — it is the anchor the bundle is built
+    // around, so it earns the file:line inline (neighbours are grouped by file and only carry a hop label).
+    private static string SeedLine(Candidate c)
+    {
+        var s = c.Symbol;
+        var sb = new StringBuilder();
+        sb.Append(s.Name).Append("  ").Append(s.Kind).Append("  ")
+          .Append(s.FilePath).Append(':').Append(s.StartLine).Append("  seed");
+        if (!string.IsNullOrEmpty(s.Signature))
+            sb.Append("  ").Append(Truncate(s.Signature!, SignatureMaxLength));
+        return sb.ToString();
     }
 
     private static string RenderJson(IReadOnlyList<Candidate> selected)

@@ -752,6 +752,58 @@ public sealed class ImpactToolTests
     }
 
     [Fact]
+    public void Impact_NoArgs_DefaultsToWorkingTreeGitDiff()
+    {
+        var (index, _) = BuildFixture();
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "current.db", "current-ws", "/repo"));
+        var git = new RecordingGitDiffReader(GitDiffResult.Ok(ValidateDiff()));
+        var tool = new ImpactTool(provider, git);
+
+        string output = tool.Impact();
+
+        Assert.Single(git.Requests);
+        Assert.Equal("/repo", git.Requests[0].WorkspaceRoot);
+        Assert.Null(git.Requests[0].BaseRef);
+        Assert.False(git.Requests[0].Staged);
+        Assert.Contains("Process", output);
+        Assert.Contains("Handle", output);
+        Assert.Contains("ProcessWorks", output);
+    }
+
+    [Fact]
+    public void Impact_NoArgs_NonGitWorkspace_ReturnsUsageNotError()
+    {
+        var (index, _) = BuildFixture();
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "current.db", "current-ws", "/repo"));
+        var git = new RecordingGitDiffReader(GitDiffResult.Fail("fatal: not a git repository"));
+        var tool = new ImpactTool(provider, git);
+
+        string output = tool.Impact();
+
+        Assert.Single(git.Requests);
+        Assert.DoesNotContain("impact failed", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("target", output);
+        Assert.Contains("changed_paths", output);
+    }
+
+    [Fact]
+    public void Impact_NoArgs_EmptyDiff_ReturnsNoImpactNote()
+    {
+        var (index, _) = BuildFixture();
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "current.db", "current-ws", "/repo"));
+        var git = new RecordingGitDiffReader(GitDiffResult.Ok(""));
+        var tool = new ImpactTool(provider, git);
+
+        string output = tool.Impact();
+
+        Assert.Single(git.Requests);
+        Assert.Contains("git diff is empty", output);
+    }
+
+    [Fact]
     public void Ctor_RequiresWorkspaceIndexProvider()
     {
         var (index, _) = BuildFixture();

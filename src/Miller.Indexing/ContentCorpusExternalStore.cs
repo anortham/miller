@@ -274,6 +274,51 @@ public sealed class ContentCorpusExternalStore
             linesByNumber.Select(static kv => new ExternalContentLine(kv.Key, kv.Value)).ToArray());
     }
 
+    /// <summary>
+    /// Resolves a read/remove target that may be a real <c>source_id</c> (<c>external_file:&lt;hash&gt;</c> /
+    /// <c>web:&lt;hash&gt;</c>) OR a unique <c>display_path</c> alias. Direct source_id match wins; otherwise a
+    /// case-insensitive <c>display_path</c> match is accepted only when exactly one external/web source matches,
+    /// so an ambiguous display_path never silently picks the wrong source. Workspace-source ids are not aliased
+    /// here (they are routed by <c>ResolveReadContentDbPath</c> in the caller).
+    /// </summary>
+    public SourceIdResolution ResolveSourceId(string contentDbPath, string sourceIdOrDisplayPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(contentDbPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceIdOrDisplayPath);
+        if (!File.Exists(Path.GetFullPath(contentDbPath)))
+            return new SourceIdResolution(sourceIdOrDisplayPath, SourceId: null, Array.Empty<string>());
+
+        using var connection = OpenReadOnly(contentDbPath);
+
+        using (var direct = connection.CreateCommand())
+        {
+            direct.CommandText = "SELECT 1 FROM content_sources WHERE source_id = $id LIMIT 1;";
+            direct.Parameters.AddWithValue("$id", sourceIdOrDisplayPath);
+            if (direct.ExecuteScalar() is not null)
+                return new SourceIdResolution(sourceIdOrDisplayPath, sourceIdOrDisplayPath, Array.Empty<string>());
+        }
+
+        using var alias = connection.CreateCommand();
+        alias.CommandText = """
+            SELECT source_id FROM content_sources
+            WHERE display_path = $display COLLATE NOCASE
+              AND content_kind IN ($external, $web)
+            ORDER BY source_id;
+            """;
+        alias.Parameters.AddWithValue("$display", sourceIdOrDisplayPath);
+        alias.Parameters.AddWithValue("$external", TextContentKind.ExternalFile);
+        alias.Parameters.AddWithValue("$web", TextContentKind.Web);
+
+        var candidates = new List<string>();
+        using var reader = alias.ExecuteReader();
+        while (reader.Read())
+            candidates.Add(reader.GetString(0));
+
+        if (candidates.Count == 1)
+            return new SourceIdResolution(sourceIdOrDisplayPath, candidates[0], candidates);
+        return new SourceIdResolution(sourceIdOrDisplayPath, SourceId: null, candidates);
+    }
+
     public ExternalContentRemoveResult Remove(string contentDbPath, string sourceId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(contentDbPath);
@@ -619,3 +664,12 @@ public sealed record ExternalContentRemoveResult(
     bool Removed,
     int SourceCount,
     int ChunkCount);
+
+public sealed record SourceIdResolution(
+    string Requested,
+    string? SourceId,
+    IReadOnlyList<string> Candidates)
+{
+    public bool Found => SourceId is not null;
+    public bool Ambiguous => SourceId is null && Candidates.Count > 1;
+}

@@ -69,6 +69,28 @@ internal sealed class ToolSearchFilters
         return true;
     }
 
+    public string? NestedFilePatternHint(IEnumerable<string> outsideScopePaths)
+    {
+        foreach (GlobMatcher pattern in _filePatterns)
+        {
+            if (!pattern.CanSuggestNestedPrefix)
+                continue;
+
+            string nestedPattern = "**/" + pattern.Pattern;
+            var nestedMatcher = new GlobMatcher(nestedPattern);
+            foreach (string path in outsideScopePaths)
+            {
+                if (pattern.IsMatch(path) || !nestedMatcher.IsMatch(path))
+                    continue;
+
+                return "Hint: file_pattern values match repo-relative paths; "
+                       + $"for nested paths like {path}, try file_pattern={nestedPattern}.";
+            }
+        }
+
+        return null;
+    }
+
     private sealed class GlobMatcher
     {
         private readonly Regex _regex;
@@ -77,9 +99,17 @@ internal sealed class ToolSearchFilters
         public GlobMatcher(string pattern)
         {
             string normalized = NormalizePath(pattern);
+            Pattern = normalized;
             _containsSlash = normalized.Contains('/', StringComparison.Ordinal);
             _regex = new Regex("^" + GlobToRegex(normalized) + "$", RegexOptions.CultureInvariant);
         }
+
+        public string Pattern { get; }
+
+        public bool CanSuggestNestedPrefix =>
+            _containsSlash
+            && !Pattern.StartsWith("**/", StringComparison.Ordinal)
+            && !Pattern.StartsWith("/", StringComparison.Ordinal);
 
         public bool IsMatch(string path)
         {

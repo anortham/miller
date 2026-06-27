@@ -34,14 +34,14 @@ public sealed class ContentTool
         [Description("import|add_markdown|search|read|list|remove|export. Default list.")] string? operation = "list",
         [Description("Path to import for operation=import/add_markdown.")] string? path = null,
         [Description("Search query for operation=search.")] string? query = null,
-        [Description("Imported source id for operation=read/remove.")] string? source_id = null,
+        [Description("Imported source id for operation=read/remove, of the form external_file:<hash> or web:<hash>. Get it from each `content search` hit or `content list`; a unique display_path is also accepted for read.")] string? source_id = null,
         [Description("URL metadata for operation=add_markdown with web content.")] string? url = null,
         [Description("Human display path/title for imported content. Optional.")] string? display_path = null,
         [Description("Content kind for search/list/export. Default external_file for search/list, all for export.")] string? content_kind = null,
         [Description("Stored workspace_id filter for operation=export. Optional.")] string? content_workspace_id = null,
         [Description("Workspace selector for search; use all for registered workspace search. Optional.")] string? workspace_id = null,
         [Description("1-based center line for operation=read.")] int? line = null,
-        [Description("Context lines before/after the read line. Default 10, maximum bounded by Miller.")] int? context_lines = null,
+        [Description("Context lines before/after the read line. Default 10; total window capped at 200 lines (MaxReadWindowLines); larger is rejected.")] int? context_lines = null,
         [Description("Max search results. Default 6.")] int limit = SearchTool.DefaultLimit,
         [Description("Max import bytes. Required to intentionally import files over the default cap.")] long? max_bytes = null,
         [Description("Output format: compact|json. Default compact.")] string format = "compact")
@@ -247,10 +247,11 @@ public sealed class ContentTool
         if (line is null)
             throw new InvalidOperationException("content read requires line.");
 
-        string readContentDbPath = ResolveReadContentDbPath(contentDbPath, sourceId);
+        string resolvedSourceId = ResolveReadSourceId(contentDbPath, sourceId);
+        string readContentDbPath = ResolveReadContentDbPath(contentDbPath, resolvedSourceId);
         ExternalContentReadResult result = _store.ReadWindow(
             readContentDbPath,
-            sourceId,
+            resolvedSourceId,
             line.Value,
             contextLines ?? ContentCorpusExternalStore.DefaultContextLines);
         if (telemetry is not null)
@@ -261,6 +262,23 @@ public sealed class ContentTool
         }
 
         return json ? RenderReadJson(result) : RenderReadCompact(result);
+    }
+
+    private string ResolveReadSourceId(string contentDbPath, string sourceId)
+    {
+        SourceIdResolution resolution = _store.ResolveSourceId(contentDbPath, sourceId);
+        if (resolution.Found)
+            return resolution.SourceId!;
+        if (resolution.Ambiguous)
+        {
+            string candidates = string.Join(", ", resolution.Candidates);
+            throw new InvalidOperationException(
+                $"'{sourceId}' is not a source id and matches multiple imported sources by display_path: {candidates}. " +
+                "Pass one of their source_id values (from `content list` or `content search`).");
+        }
+        // Not a known source_id or display_path in this corpus. Fall through with the
+        // original value so the existing workspace-routing + not-found error path handles it.
+        return sourceId;
     }
 
     private string ResolveReadContentDbPath(string defaultContentDbPath, string sourceId)
@@ -440,13 +458,17 @@ public sealed class ContentTool
         foreach (TextContentSearchHit hit in hits)
         {
             var block = new StringBuilder();
-            block.Append(hit.DisplayPath).Append(':').Append(hit.Line).Append("  ").Append(hit.ContentKind);
+            block.Append(hit.DisplayPath).Append(':').Append(hit.Line)
+                .Append("  ").Append(hit.ContentKind)
+                .Append("  source_id=").Append(hit.SourceId);
             foreach (string line in hit.Snippet.Split('\n'))
                 block.Append('\n').Append("  ").Append(line);
             blocks.Add(block.ToString());
         }
 
-        return string.Join("\n\n", blocks);
+        TextContentSearchHit first = hits[0];
+        return string.Join("\n\n", blocks)
+            + "\n\nread: content read source_id=" + first.SourceId + " line=" + first.Line;
     }
 
     private static string RenderWorkspaceSearchCompact(IReadOnlyList<WorkspaceContentSearchHit> hits)
@@ -467,7 +489,9 @@ public sealed class ContentTool
                 .Append(':')
                 .Append(hit.Line)
                 .Append("  ")
-                .Append(hit.ContentKind);
+                .Append(hit.ContentKind)
+                .Append("  source_id=")
+                .Append(hit.SourceId);
             foreach (string line in hit.Snippet.Split('\n'))
                 block.Append('\n').Append("  ").Append(line);
             blocks.Add(block.ToString());

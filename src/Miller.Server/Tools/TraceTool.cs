@@ -55,19 +55,20 @@ public sealed class TraceTool
 
     [McpServerTool(Name = "trace")]
     [Description(
-        "Follow a thread of code through the repository. mode=auto shows a symbol's callers and callees; mode=path " +
-        "shows the shortest dependency path from target to 'to'; mode=refs lists name-based identifier references; " +
-        "mode=bridge follows provider-scoped cross-language " +
-        "chains (currently dotnet-web: client call to endpoint to DTO/entity/table) with a confidence band. Reduced-confidence " +
-        "links are flagged [verb-unknown] / [ambiguous] — never trust an unflagged link more than a flagged one. " +
-        "Use before manual caller/callee file hopping. Pass format=json for structured output, or format=full to also " +
-        "see the signals behind each bridge link in compact output.")]
+        "Follow a thread of code. mode=refs lists name-based identifier references (usages); mode=path shows " +
+        "the shortest dependency path from target to 'to'; mode=bridge follows provider-scoped cross-language " +
+        "chains (currently dotnet-web) with a confidence band. mode=auto (callers/callees) is subsumed by " +
+        "inspect depth=full — prefer inspect for that. refs is name-based and may be empty for languages the " +
+        "extractor does not emit refs for; on empty, fall back to search mode=source for text occurrences. " +
+        "Reduced-confidence links are flagged [verb-unknown] / [ambiguous] — never trust an unflagged link more " +
+        "than a flagged one. Use before manual caller/callee file hopping. Pass format=json for structured " +
+        "output, or format=full to also see the signals behind each bridge link in compact output.")]
     public string Trace(
         [Description("A symbol name/id where the trace starts. In bridge mode, route/table nodes and single-symbol files are also accepted.")]
         string target,
         [Description("Disambiguate an ambiguous target symbol name to a file. Optional.")]
         string? scope = null,
-        [Description("Trace mode: auto (callers+callees) | path (shortest path to 'to') | refs (name-based references) | bridge (provider-scoped cross-language chain). Default auto.")]
+        [Description("Trace mode: refs (name-based usages) | path (shortest path to 'to') | bridge (provider-scoped cross-language chain) | auto (callers+callees; prefer inspect depth=full). Default auto.")]
         string mode = "auto",
         [Description("For mode=path: the destination symbol name/id the path must reach. Ignored otherwise.")]
         string? to = null,
@@ -374,9 +375,11 @@ public sealed class TraceTool
         }
 
         sb.Append('\n')
-          .Append("Next: inspect ")
+          .Append("Next: `search mode=source ")
+          .Append(seed.Name)
+          .Append("` for text references not in the graph, or `inspect ")
           .Append(seed.FilePath)
-          .Append(" for nearby symbols, or search mode=source for text references not represented in the graph.");
+          .Append("` for nearby symbols.");
         return sb.ToString();
     }
 
@@ -448,6 +451,14 @@ public sealed class TraceTool
 
     // ---------- mode: refs (name-based identifier references) ----------
 
+    // trace refs is 46% empty: usually the extractor does not emit name-based refs for this language/symbol,
+    // not that the symbol is unused. Point the agent at the text fallback (search mode=source) and the graph
+    // fallback (trace mode=auto) instead of a bare "No references found.".
+    private static string RefsEmptyHint(string name, string? normalizedKind) =>
+        normalizedKind is null
+            ? $"No extracted refs for '{name}' — the extractor may not emit refs here. Use `search mode=source {name}` for text occurrences, or `trace mode=auto` for graph neighbours."
+            : $"No extracted refs for '{name}' with reference_kind={normalizedKind} — try without reference_kind, or use `search mode=source {name}` for text occurrences, or `trace mode=auto` for graph neighbours.";
+
     private static string RunRefs(
         ISymbolLookupIndex index, SmartTargetResolver resolver, string target, string? scope,
         int depth, int limit, bool json, string? referenceKind, bool includeDefinition,
@@ -507,9 +518,7 @@ public sealed class TraceTool
         string? diagnosticCode = null;
         if (filtered.Length == 0)
         {
-            resultNote = normalizedKind is null
-                ? $"No references found for '{targetSymbol.Name}'."
-                : $"No references found for '{targetSymbol.Name}' with reference_kind={normalizedKind}.";
+            resultNote = RefsEmptyHint(targetSymbol.Name, normalizedKind);
             diagnosticCode = "no_references";
         }
         else if (shown.Length < filtered.Length)

@@ -143,6 +143,27 @@ public sealed class ContextToolTests
         return (index, new SmartTargetResolver(index));
     }
 
+    // A wide, shallow cluster: one seed (Hub) with 15 direct neighbours, each in its own file. Used to exercise the
+    // neighbour render cap (MaxNeighbourCandidates) and the omission note.
+    private static (MillerRepositoryIndex index, SmartTargetResolver resolver) BuildWideFixture()
+    {
+        const string hubId = "00000000000000000000000000000001";
+        var symbols = new List<IndexedSymbol>
+        {
+            new(0, hubId, "Hub", "class Hub", "class", "csharp", "src/Hub.cs", 1, 10, null, false),
+        };
+        var edges = new List<GraphEdge>();
+        for (int i = 1; i <= 15; i++)
+        {
+            string id = string.Format("000000000000000000000000000000{0:X2}", i + 1);
+            symbols.Add(new IndexedSymbol(i, id, "N" + i, "class N" + i, "class", "csharp",
+                "src/N" + i + ".cs", 1, 10, null, false));
+            edges.Add(new GraphEdge(hubId, id, "uses"));
+        }
+        var index = MillerRepositoryIndex.Build(symbols, edges);
+        return (index, new SmartTargetResolver(index));
+    }
+
     // ---- seeds + expansion ----
 
     [Fact]
@@ -395,20 +416,21 @@ public sealed class ContextToolTests
         var (index, resolver) = BuildFixture();
 
         string output = ContextTool.Run(index, resolver,
-            query: "OrderService", tokenBudget: 100000, maxHops: 1,
-            entrySymbols: null, failingTest: null, stackTrace: null, json: false, out _, out _);
+            query: "zzz no lexical match zzz", tokenBudget: 100000, maxHops: 1,
+            entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null, json: false, out _, out _);
 
-        // Provenance: name, file:line, and the signature. Seeds (hop 0) carry no hop label — only
-        // graph neighbors (hop >= 1) are annotated; the JSON shape still carries hop for every candidate.
-        Assert.Contains("OrderService", output);
-        Assert.Contains("src/OrderService.cs:", output);
-        Assert.Contains(":1 OrderService", output);
+        // Opinionated render: hop-0 seeds lead with a "seed" reason and full provenance on one line; only graph
+        // neighbours (hop >= 1) carry a hop label. The JSON shape still carries hop for every candidate.
+        Assert.Contains("## seeds", output);
+        Assert.Contains("OrderService  class  src/OrderService.cs:1  seed  class OrderService", output);
+        Assert.Contains("## neighbours", output);
+        Assert.Contains("hop=1", output);
         Assert.Contains("class OrderService", output);
         Assert.DoesNotContain("hop=0", output);
     }
 
     [Fact]
-    public void Run_Compact_GroupsCandidatesByFile()
+    public void Run_Compact_RendersSeedsFirstWithInspectFooter()
     {
         var (index, resolver) = BuildSharedFileFixture();
 
@@ -418,17 +440,56 @@ public sealed class ContextToolTests
             json: false, out int count, out _);
 
         Assert.Equal(3, count);
+        // maxHops=0 → every candidate is a seed; no neighbours section. Seeds are listed first, each on one line
+        // with the "seed" reason, followed by a `## next inspect` footer of the top 3 seed file:line targets.
         Assert.Equal(
             "# context bundle (3)\n" +
-            "src/Shared.cs:\n" +
-            "  :10 Alpha method  method Alpha()\n" +
-            "  :20 Beta method  method Beta()\n" +
-            "src/Gamma.cs:\n" +
-            "  :30 Gamma class  class Gamma",
+            "## seeds\n" +
+            "Alpha  method  src/Shared.cs:10  seed  method Alpha()\n" +
+            "Beta  method  src/Shared.cs:20  seed  method Beta()\n" +
+            "Gamma  class  src/Gamma.cs:30  seed  class Gamma\n" +
+            "## next inspect\n" +
+            "src/Shared.cs:10\n" +
+            "src/Shared.cs:20\n" +
+            "src/Gamma.cs:30",
             output);
-        Assert.Equal(1, output.Split("src/Shared.cs").Length - 1);
-        Assert.DoesNotContain("Alpha  method  src/Shared.cs", output);
-        Assert.DoesNotContain("Beta  method  src/Shared.cs", output);
+    }
+
+    [Fact]
+    public void Run_Compact_GroupsNeighboursByFileAfterSeeds()
+    {
+        var (index, resolver) = BuildFixture();
+
+        string output = ContextTool.Run(index, resolver,
+            query: "zzz no lexical match zzz", tokenBudget: 100000, maxHops: 1,
+            entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null, json: false, out _, out _);
+
+        // Seeds section leads with the anchor; neighbours follow, grouped by file in reach order (hop asc, id asc).
+        Assert.Contains("## seeds", output);
+        Assert.Contains("OrderService  class  src/OrderService.cs:1  seed  class OrderService", output);
+        Assert.Contains("## neighbours", output);
+        Assert.Contains("web/OrderController.cs:\n  :1 OrderController class hop=1", output);
+        Assert.Contains("src/OrderRepo.cs:\n  :1 OrderRepo class hop=1", output);
+        Assert.Contains("tests/OrderServiceTests.cs:\n  :1 OrderServiceTests class hop=1", output);
+        // Footer points at the single seed for the next inspect call.
+        Assert.Contains("## next inspect\nsrc/OrderService.cs:1", output);
+    }
+
+    [Fact]
+    public void Run_Compact_CapsNeighboursAndNotesOmission()
+    {
+        var (index, resolver) = BuildWideFixture();
+
+        string output = ContextTool.Run(index, resolver,
+            query: "Hub", tokenBudget: 100000, maxHops: 1,
+            entrySymbols: null, failingTest: null, stackTrace: null, json: false, out _, out _);
+
+        // 1 seed (Hub) + 15 hop-1 neighbours; the neighbour section is capped at 12 with an omission note.
+        Assert.Contains("## seeds", output);
+        Assert.Contains("Hub  class  src/Hub.cs:1  seed  class Hub", output);
+        Assert.Contains("... 3 more neighbours omitted — inspect a seed for the full graph.", output);
+        Assert.Equal(12, output.Split("hop=1").Length - 1);
+        Assert.Contains("## next inspect\nsrc/Hub.cs:1", output);
     }
 
     [Fact]

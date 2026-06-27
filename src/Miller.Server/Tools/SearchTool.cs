@@ -454,6 +454,40 @@ public sealed class SearchTool
         _ => "no_hits",
     };
 
+    private const int EmptyHintQueryLimit = 60;
+
+    // search·file empty (63% empty on mac): a path fragment that indexed no file. Echo a bounded query so the
+    // agent gets a copy-pasteable symbol fallback rather than a bare "No results.".
+    private static string FileEmptyHint(string query)
+    {
+        string q = Truncate(query, EmptyHintQueryLimit);
+        return $"No indexed file matches '{q}'. Try a shorter path fragment, mode=auto, or `search {q}` for symbols.";
+    }
+
+    // search·source/content/all-text empty (36-47% empty): no text hits. The right "next call" depends on whether
+    // the searched kinds are workspace text (refresh re-indexes files) or imported (content list shows what's
+    // loaded), so route the hint by kind instead of claiming a one-size refresh.
+    private static string TextContentEmptyHint(IReadOnlyCollection<string> contentKinds, string query)
+    {
+        string q = Truncate(query, EmptyHintQueryLimit);
+        bool hasWorkspace = false;
+        bool hasImported = false;
+        foreach (string kind in contentKinds)
+        {
+            if (kind == TextContentKind.ExternalFile || kind == TextContentKind.Web)
+                hasImported = true;
+            else
+                hasWorkspace = true;
+        }
+        string where = (hasWorkspace, hasImported) switch
+        {
+            (true, false) => "`workspace refresh`",
+            (false, true) => "`content list` to see imported sources",
+            _ => "`workspace refresh` or `content list` for imported sources",
+        };
+        return $"No text hits. Try broader terms, {where}, or `search {q}` for symbols.";
+    }
+
     private const int OutsideScopeHintLimit = 3;
     private const int SignatureMaxLength = 110;
 
@@ -555,8 +589,16 @@ public sealed class SearchTool
 
         if (total == 0)
         {
+            if (fileMode)
+            {
+                if (json)
+                    return "[]";
+                return outsideScope.Count > 0
+                    ? RenderFilteredMissCompact(filters, compactBanner, outsideScope)
+                    : ReadToolWorkspaceRouting.PrefixCompact(FileEmptyHint(query), compactBanner);
+            }
             IReadOnlyList<IndexedSymbol> suggestions =
-                !fileMode && outsideScope.Count == 0
+                outsideScope.Count == 0
                     ? SymbolSuggestionEngine.Suggest(index, query, EmptySuggestionLimit)
                     : [];
             if (json)
@@ -652,7 +694,7 @@ public sealed class SearchTool
                 return "[]";
             return outsideScope.Count > 0
                 ? RenderFilteredMissContentCompact(filters, compactBanner, outsideScope)
-                : ReadToolWorkspaceRouting.PrefixCompact("No results.", compactBanner);
+                : ReadToolWorkspaceRouting.PrefixCompact(TextContentEmptyHint(WorkspaceContentSearchKinds, query), compactBanner);
         }
 
         sourceBytes = hits
@@ -730,7 +772,7 @@ public sealed class SearchTool
                 return "[]";
             return outsideScope.Count > 0
                 ? RenderFilteredMissContentCompact(filters, compactBanner, outsideScope)
-                : ReadToolWorkspaceRouting.PrefixCompact("No results.", compactBanner);
+                : ReadToolWorkspaceRouting.PrefixCompact(TextContentEmptyHint(WorkspaceContentSearchKinds, query), compactBanner);
         }
 
         sourceBytes = hits
@@ -822,7 +864,7 @@ public sealed class SearchTool
                 return "[]";
             return outsideScope.Count > 0
                 ? RenderFilteredMissTextContentCompact(filters, compactBanner, outsideScope)
-                : ReadToolWorkspaceRouting.PrefixCompact("No results.", compactBanner);
+                : ReadToolWorkspaceRouting.PrefixCompact(TextContentEmptyHint(contentKinds, query), compactBanner);
         }
 
         sourceBytes = hits
@@ -884,7 +926,7 @@ public sealed class SearchTool
                 return "[]";
             return outsideScope.Count > 0
                 ? RenderFilteredMissTextContentCompact(filters, compactBanner, outsideScope)
-                : ReadToolWorkspaceRouting.PrefixCompact("No results.", compactBanner);
+                : ReadToolWorkspaceRouting.PrefixCompact(TextContentEmptyHint([contentKind], query), compactBanner);
         }
 
         sourceBytes = hits
@@ -1051,7 +1093,7 @@ public sealed class SearchTool
         string? compactBanner,
         IReadOnlyList<IndexedSymbol> outsideScope)
     {
-        var sb = FilteredMissHeader(filters, compactBanner);
+        var sb = FilteredMissHeader(filters, compactBanner, outsideScope.Select(static symbol => symbol.FilePath));
         foreach (IndexedSymbol s in outsideScope)
         {
             sb.Append('\n')
@@ -1070,7 +1112,7 @@ public sealed class SearchTool
         string? compactBanner,
         IReadOnlyList<ContentSearchHit> outsideScope)
     {
-        var sb = FilteredMissHeader(filters, compactBanner);
+        var sb = FilteredMissHeader(filters, compactBanner, outsideScope.Select(static hit => hit.Path));
         foreach (ContentSearchHit h in outsideScope)
         {
             sb.Append('\n').Append(h.Path).Append(':').Append(h.Line);
@@ -1085,7 +1127,7 @@ public sealed class SearchTool
         string? compactBanner,
         IReadOnlyList<TextContentSearchHit> outsideScope)
     {
-        var sb = FilteredMissHeader(filters, compactBanner);
+        var sb = FilteredMissHeader(filters, compactBanner, outsideScope.Select(static hit => hit.DisplayPath));
         foreach (TextContentSearchHit h in outsideScope)
         {
             sb.Append('\n').Append(h.DisplayPath).Append(':').Append(h.Line).Append("  ").Append(h.ContentKind);
@@ -1102,7 +1144,7 @@ public sealed class SearchTool
         string? compactPrefix,
         IReadOnlyList<RegionSearchHit> outsideScope)
     {
-        var sb = FilteredMissHeader(filters, compactPrefix);
+        var sb = FilteredMissHeader(filters, compactPrefix, outsideScope.Select(static hit => hit.Path));
         foreach (RegionSearchHit h in outsideScope)
         {
             sb.Append('\n').Append(h.Path).Append(':').Append(h.Line).Append("  ").Append(h.Kind);
@@ -1114,13 +1156,19 @@ public sealed class SearchTool
         return sb.ToString();
     }
 
-    private static StringBuilder FilteredMissHeader(ToolSearchFilters filters, string? compactPrefix)
+    private static StringBuilder FilteredMissHeader(
+        ToolSearchFilters filters,
+        string? compactPrefix,
+        IEnumerable<string> outsideScopePaths)
     {
         var sb = new StringBuilder();
         if (!string.IsNullOrWhiteSpace(compactPrefix))
             sb.Append(compactPrefix).Append('\n');
-        sb.Append("No results within ").Append(filters.ScopeDescription).Append('.')
-          .Append('\n').Append("Outside scope:");
+        sb.Append("No results within ").Append(filters.ScopeDescription).Append('.');
+        string? nestedFilePatternHint = filters.NestedFilePatternHint(outsideScopePaths);
+        if (!string.IsNullOrWhiteSpace(nestedFilePatternHint))
+            sb.Append('\n').Append(nestedFilePatternHint);
+        sb.Append('\n').Append("Outside scope:");
         return sb;
     }
 
