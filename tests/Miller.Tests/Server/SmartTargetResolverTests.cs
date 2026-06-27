@@ -175,6 +175,46 @@ public sealed class SmartTargetResolverTests
     }
 
     [Fact]
+    public void Resolve_AmbiguousName_PrefersProductionDefinitionOverTestDefinition()
+    {
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
+        {
+            new JulieDbFixture.SymbolRow("aa11223344556677889900aabbccddee", "Flask", "class", "python",
+                "src/flask/app.py", "class Flask(App):", 112, null),
+            new JulieDbFixture.SymbolRow("bb11223344556677889900aabbccddee", "Flask", "class", "python",
+                "tests/test_basic.py", "class Flask:", 7, null),
+            new JulieDbFixture.SymbolRow("cc11223344556677889900aabbccddee", "Flask", "class", "python",
+                "examples/tutorial/flask_app.py", "class Flask:", 4, null),
+        });
+        var index = BuildIndex(fx);
+        var resolver = new SmartTargetResolver(index);
+
+        var result = resolver.Resolve("Flask");
+
+        var sym = Assert.IsType<TargetResolution.Symbol>(result);
+        Assert.Equal("src/flask/app.py", sym.Value.FilePath);
+    }
+
+    [Fact]
+    public void Resolve_AmbiguousName_TiedProductionDefinitionsRemainCandidates()
+    {
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
+        {
+            new JulieDbFixture.SymbolRow("aa11223344556677889900aabbccddee", "Handle", "method", "csharp",
+                "src/First.cs", "void Handle()", 3, null),
+            new JulieDbFixture.SymbolRow("bb11223344556677889900aabbccddee", "Handle", "method", "csharp",
+                "src/Second.cs", "void Handle()", 7, null),
+        });
+        var index = BuildIndex(fx);
+        var resolver = new SmartTargetResolver(index);
+
+        var result = resolver.Resolve("Handle");
+
+        var cands = Assert.IsType<TargetResolution.Candidates>(result);
+        Assert.Equal(2, cands.Matches.Count);
+    }
+
+    [Fact]
     public void Resolve_NameWithSingleTypeAndConstructors_ResolvesToType()
     {
         using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]

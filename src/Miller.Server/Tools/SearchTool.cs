@@ -283,6 +283,32 @@ public sealed class SearchTool
                         Language: language));
                 output = result.Output;
                 count = result.Count;
+                if (ShouldRunAutoSourceRescue(route, json, query, count, context.Index))
+                {
+                    SearchRouteExecutionResult? rescue = TryRunAutoSourceRescue(
+                        query,
+                        limit,
+                        exclude_tests,
+                        output,
+                        count,
+                        workspace_id,
+                        ensureFresh,
+                        file_pattern,
+                        language,
+                        compactBanner);
+                    if (scope is not null)
+                    {
+                        scope.SetMetadata("auto_source_rescue_attempted", true);
+                        scope.SetMetadata("auto_source_rescue_found", rescue is { Count: > 0 });
+                    }
+                    if (rescue is { Count: > 0 })
+                    {
+                        output = rescue.Output;
+                        count += rescue.Count;
+                        if (scope is not null)
+                            scope.SourceBytes += rescue.SourceBytes;
+                    }
+                }
                 if (scope is not null)
                 {
                     ReadToolWorkspaceRouting.ApplyTelemetry(scope, context);
@@ -1019,6 +1045,100 @@ public sealed class SearchTool
     private static bool IsLowSignalKind(string kind) =>
         string.Equals(kind, "import", StringComparison.Ordinal) ||
         string.Equals(kind, "module", StringComparison.Ordinal);
+
+    private static bool ShouldRunAutoSourceRescue(
+        SearchRoute route,
+        bool json,
+        string query,
+        int primaryCount,
+        ISymbolLookupIndex index)
+    {
+        if (json || route.Kind != SearchRouteKind.Symbols || route.Mode != SearchToolMode.Auto)
+            return false;
+        if (IsPathLikeQuery(query, index))
+            return false;
+        return primaryCount == 0 || LooksLikeSourceBodyQuery(query);
+    }
+
+    private SearchRouteExecutionResult? TryRunAutoSourceRescue(
+        string query,
+        int limit,
+        bool? excludeTests,
+        string primaryOutput,
+        int primaryCount,
+        string? workspaceId,
+        bool ensureFresh,
+        string? filePattern,
+        string? language,
+        string? compactBanner)
+    {
+        try
+        {
+            WorkspaceTextContentSearchContext textContent =
+                _textContentProvider.ResolveTextContentSearch(workspaceId, ensureFresh);
+            bool hideTests = ResolveExcludeTests(excludeTests, query, SearchToolMode.Source);
+            string sourceOutput = RunTextContent(
+                textContent.Index,
+                query,
+                TextContentKind.WorkspaceSource,
+                limit: Math.Min(Math.Max(limit, 1), 2),
+                hideTests,
+                json: false,
+                out int sourceCount,
+                out long sourceBytes,
+                compactBanner: null,
+                filePattern,
+                language);
+            return sourceCount == 0
+                ? new SearchRouteExecutionResult(primaryOutput, 0, sourceBytes)
+                : new SearchRouteExecutionResult(
+                    RenderAutoSourceRescueCompact(primaryOutput, primaryCount, sourceOutput, compactBanner),
+                    sourceCount,
+                    sourceBytes);
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+        catch (NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    private static string RenderAutoSourceRescueCompact(
+        string primaryOutput,
+        int primaryCount,
+        string sourceOutput,
+        string? compactBanner)
+    {
+        var sb = new StringBuilder();
+        if (primaryCount > 0)
+        {
+            sb.Append(primaryOutput.TrimEnd('\n')).Append("\n\n");
+        }
+        else if (!string.IsNullOrWhiteSpace(compactBanner))
+        {
+            sb.Append(compactBanner).Append('\n');
+        }
+
+        sb.Append("Source matches also found:\n");
+        sb.Append(sourceOutput.TrimEnd('\n'));
+        sb.Append("\nRerun with mode=source for more source snippets.");
+        return sb.ToString();
+    }
+
+    private static bool LooksLikeSourceBodyQuery(string query)
+    {
+        if (IsNaturalLanguagePhrase(query))
+            return true;
+        foreach (char ch in query)
+        {
+            if (char.IsPunctuation(ch) && ch is not '_' and not '-' and not '.')
+                return true;
+        }
+        return false;
+    }
 
     // A natural-language phrase = multiple whitespace-delimited words (a single identifier-ish token is not).
     private static bool IsNaturalLanguagePhrase(string query)

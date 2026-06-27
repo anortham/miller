@@ -21,15 +21,16 @@ Miller serves an always-fresh index of this workspace's code. Reach for a Miller
 
 - `search` — Find code by name, identifier, phrase, or marker audit. `mode=auto|text|symbol|file|markers|content|source|external|web|all-text`.
   Natural-language queries auto-hide tests (`exclude_tests=false` to include them). Use `mode=content`, alias `docs`,
-  for docs/config; `mode=source` for source-body text; `mode=external|web|all-text` for imported/broad text. Scope with
+  for docs/config; `mode=source` for source-body text; compact `auto` may add bounded source matches. Use
+  `mode=external|web|all-text` for imported/broad text. Scope with
   `file_pattern`, `language`, and `limit`. Use `regions=comment|doc_comment|string_literal` for comments/strings; it
   uses the default source-region `search.db` path; `MILLER_REGION_INDEX=0` opts out. Use `mode=markers` with
   `query=TODO,FIXME,HACK,XXX` for bounded comment/doc-comment marker audits. Symbol hits may include `has_doc`. Optional
   `workspace_id` accepts display ID, unique prefix, full ID, root path, `current`, or `primary`; explicit
   `workspace_id` defaults `ensure_fresh=true`.
 - `inspect` — A file or symbol you can already name. A file path lists symbols; a symbol name gives definition,
-  signature, and docs. `depth=full` adds refs, callers/callees, body, and recorded complexity facts. Use before
-  reading an entire file. Optional `workspace_id` and `ensure_fresh` follow `search`.
+  signature, and docs. `depth=overview` gives bounded refs/calls/body preview; `depth=full` is complete.
+  Optional `workspace_id` and `ensure_fresh` follow `search`.
 - `context` — First call in an unfamiliar area: a small, justified bundle of relevant entry points plus the next
   symbols to `inspect`. Give the task plus optional `failing_test`/`stack_trace`; compact output: seeds first with
   reasons, capped neighbours, a `## next inspect` footer. If you know the symbol, use `inspect`.
@@ -68,7 +69,7 @@ Miller serves an always-fresh index of this workspace's code. Reach for a Miller
 ## Workflows
 
 - **New task / unfamiliar area**: `context` → `inspect` the key symbols → implement.
-- **Understand a symbol**: `inspect target depth=full` (definition + refs + callers/callees + body in one call).
+- **Understand a symbol**: `inspect target depth=overview`; use `depth=full` for complete body/reference/call lists.
 - **Trace a flow**: `trace mode=refs` for usages, `mode=path` for A→B, `mode=bridge` for `dotnet-web`
   cross-language chains; for callers/callees use `inspect depth=full` (subsumes `mode=auto`). If a name is ambiguous, retry with `scope=<file>`.
 - **Find something in docs/prose**: `search mode=content "<phrase>"` — searches markdown/config/text content and
@@ -115,7 +116,7 @@ code, paste this block into the prompt:
     - search(query, mode?, regions?, file_pattern?, language?) before rg/grep/find; use mode=content for docs,
       mode=source/external/web/all-text for content text, mode=markers for TODO/FIXME/HACK/XXX audits,
       regions=... for comments/strings, and filters to scope.
-    - inspect(target, depth?) before reading files/symbols; depth=full adds refs/callers/callees/body.
+    - inspect(target, depth?) before reading files/symbols; depth=overview is compact, depth=full is complete.
     - trace(target, mode?, to?, scope?, reference_kind?) before manual reference/caller/callee file hopping; use mode=refs for usages and scope for ambiguous names.
     - impact(target?|changed_paths?|diff?|git?/base?/staged?) before refactors and to choose tests.
     - edit(operation, target, ...) to preview index-aware edits (apply=true to commit).

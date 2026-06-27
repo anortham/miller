@@ -39,11 +39,11 @@ public sealed class InspectTool
     [McpServerTool(Name = "inspect")]
     [Description(
         "Inspect a file or symbol you can already name. Give a file path to list its symbols, or a symbol " +
-        "name to see its definition, signature, and docs. Add depth=full to also get references, " +
-        "callers/callees, and the body. Use this before reading an entire file.")]
+        "name to see its definition, signature, and docs. Add depth=overview for compact refs/callers/callees " +
+        "and a body preview, or depth=full for the complete body. Use this before reading an entire file.")]
     public string Inspect(
         [Description("A file path or a symbol name/id (smart-resolved).")] string target,
-        [Description("summary|full. summary = file's symbols or def+sig+doc; full = + refs/callers/callees/body/children.")]
+        [Description("summary|overview|full. overview adds bounded refs/callers/callees/body preview; full adds complete body.")]
         string depth = "summary",
         [Description("Filter a file listing to one kind (function/class/...). Optional.")] string? kind = null,
         [Description("Disambiguate an ambiguous symbol name to a file. Optional.")] string? scope = null,
@@ -58,11 +58,11 @@ public sealed class InspectTool
         {
             bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
-            bool full = string.Equals(depth, "full", StringComparison.OrdinalIgnoreCase);
+            InspectDepth parsedDepth = ParseDepth(depth);
 
             string output;
             int count;
-            if (full)
+            if (parsedDepth != InspectDepth.Summary)
             {
                 WorkspaceSymbolSearchContext context = _workspaceSearchProvider.ResolveSymbolSearch(workspace_id, ensureFresh);
                 string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
@@ -85,11 +85,11 @@ public sealed class InspectTool
 
             if (telemetry is not null)
             {
-                telemetry.Op = full ? "full" : "summary";
+                telemetry.Op = DepthName(parsedDepth);
                 telemetry.SetTarget(target);
                 telemetry.ResultCount = count;
                 telemetry.Outcome = count == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
-                telemetry.SetMetadata("depth", full ? "full" : "summary");
+                telemetry.SetMetadata("depth", DepthName(parsedDepth));
                 telemetry.SetMetadata("format", json ? "json" : "compact");
                 telemetry.SetMetadata("has_kind", !string.IsNullOrWhiteSpace(kind));
                 telemetry.SetMetadata("has_scope", !string.IsNullOrWhiteSpace(scope));
@@ -112,6 +112,31 @@ public sealed class InspectTool
 
     private const int SignatureMaxLength = 110;
     private const int RefLimit = 50;
+    private const int OverviewRelationLimit = 3;
+    private const int OverviewChildLimit = 5;
+    private const int OverviewBodyPreviewMaxLines = 16;
+    private const int OverviewBodyPreviewMaxChars = 700;
+
+    private enum InspectDepth
+    {
+        Summary,
+        Overview,
+        Full,
+    }
+
+    private static InspectDepth ParseDepth(string? depth) =>
+        string.Equals(depth, "full", StringComparison.OrdinalIgnoreCase)
+            ? InspectDepth.Full
+            : string.Equals(depth, "overview", StringComparison.OrdinalIgnoreCase)
+                ? InspectDepth.Overview
+                : InspectDepth.Summary;
+
+    private static string DepthName(InspectDepth depth) => depth switch
+    {
+        InspectDepth.Full => "full",
+        InspectDepth.Overview => "overview",
+        _ => "summary",
+    };
 
     private static string LimitBucket(int limit) => limit switch
     {
@@ -137,9 +162,9 @@ public sealed class InspectTool
         ArgumentNullException.ThrowIfNull(resolver);
         ArgumentException.ThrowIfNullOrWhiteSpace(target);
         if (limit < 1) limit = 1;
-        bool full = string.Equals(depth, "full", StringComparison.OrdinalIgnoreCase);
+        InspectDepth parsedDepth = ParseDepth(depth);
 
-        return RunCore(index, resolver, dbPath, workspaceRoot, target, full, kind, scope, limit,
+        return RunCore(index, resolver, dbPath, workspaceRoot, target, parsedDepth, kind, scope, limit,
             json, out resultCount, compactBanner);
     }
 
@@ -152,10 +177,10 @@ public sealed class InspectTool
         ArgumentNullException.ThrowIfNull(index);
         ArgumentException.ThrowIfNullOrWhiteSpace(target);
         if (limit < 1) limit = 1;
-        bool full = string.Equals(depth, "full", StringComparison.OrdinalIgnoreCase);
+        InspectDepth parsedDepth = ParseDepth(depth);
 
         var resolver = new SmartTargetResolver(index);
-        return RunCore(index, resolver, dbPath, workspaceRoot, target, full, kind, scope, limit,
+        return RunCore(index, resolver, dbPath, workspaceRoot, target, parsedDepth, kind, scope, limit,
             json, out resultCount, compactBanner);
     }
 
@@ -171,7 +196,7 @@ public sealed class InspectTool
 
     private static string RunCore(
         ISymbolLookupIndex index, SmartTargetResolver resolver,
-        string dbPath, string workspaceRoot, string target, bool full,
+        string dbPath, string workspaceRoot, string target, InspectDepth depth,
         string? kind, string? scope, int limit, bool json,
         out int resultCount,
         string? compactBanner)
@@ -191,8 +216,8 @@ public sealed class InspectTool
             case TargetResolution.Symbol sym:
                 resultCount = 1;
                 string symbolOutput = json
-                    ? RenderSymbolJson(index, dbPath, workspaceRoot, sym.Value, full)
-                    : RenderSymbolCompact(index, dbPath, workspaceRoot, sym.Value, full);
+                    ? RenderSymbolJson(index, dbPath, workspaceRoot, sym.Value, depth)
+                    : RenderSymbolCompact(index, dbPath, workspaceRoot, sym.Value, depth);
                 return ReadToolWorkspaceRouting.PrefixCompact(symbolOutput, json ? null : compactBanner);
 
             case TargetResolution.Candidates cands:
@@ -345,7 +370,7 @@ public sealed class InspectTool
     // ---------- symbol ----------
 
     private static string RenderSymbolCompact(
-        ISymbolLookupIndex index, string dbPath, string workspaceRoot, IndexedSymbol sym, bool full)
+        ISymbolLookupIndex index, string dbPath, string workspaceRoot, IndexedSymbol sym, InspectDepth depth)
     {
         var detail = ExtractReader.ReadDetail(dbPath, sym.SymbolId);
         var sb = new StringBuilder();
@@ -358,10 +383,9 @@ public sealed class InspectTool
         if (detail is not null && !string.IsNullOrEmpty(detail.DocComment))
             sb.Append("doc: ").Append(detail.DocComment).Append('\n');
 
-        if (!full)
+        if (depth == InspectDepth.Summary)
             return sb.ToString().TrimEnd('\n');
 
-        // complexity (symbol-scoped extract fact; absent for older artifacts or uncovered kinds)
         var complexity = ExtractReader.ReadSymbolComplexity(dbPath, sym.SymbolId);
         if (complexity is not null)
         {
@@ -373,55 +397,67 @@ public sealed class InspectTool
             sb.Append("  lines=").Append(complexity.CoveredLines).Append('\n');
         }
 
-        // children
+        int relationLimit = depth == InspectDepth.Overview ? OverviewRelationLimit : RefLimit;
+
         var children = index.FindChildren(sym.SymbolId);
         if (children.Count > 0)
         {
             sb.Append("\n## children\n");
-            foreach (var c in children)
+            int childLimit = depth == InspectDepth.Overview ? OverviewChildLimit : int.MaxValue;
+            foreach (var c in children.Take(childLimit))
                 sb.Append(SymbolLine(c)).Append('\n');
+            AppendOmittedLine(sb, children.Count, childLimit, "children");
         }
 
-        // refs (name-based)
         var refs = ExtractReader.ReadReferences(dbPath, sym.Name);
         if (refs.Count > 0)
         {
             sb.Append("\n## references\n");
-            foreach (var r in refs.Take(RefLimit))
+            foreach (var r in refs.Take(relationLimit))
                 sb.Append(r.FilePath).Append(':').Append(r.StartLine).Append('\n');
+            AppendOmittedLine(sb, refs.Count, relationLimit, "refs");
         }
 
-        // callers = distinct containing symbols of those refs (resolved to names where possible)
         var callers = DistinctCallers(index, refs);
         if (callers.Count > 0)
         {
             sb.Append("\n## callers\n");
-            foreach (var c in callers.Take(RefLimit))
+            foreach (var c in callers.Take(relationLimit))
                 sb.Append(c).Append('\n');
+            AppendOmittedLine(sb, callers.Count, relationLimit, "callers");
         }
 
-        // callees = one-hop calls FROM this symbol
         var callees = ExtractReader.ReadCallees(dbPath, sym.SymbolId);
         if (callees.Count > 0)
         {
             sb.Append("\n## callees\n");
-            foreach (var c in callees.Take(RefLimit))
+            foreach (var c in callees.Take(relationLimit))
                 sb.Append(c.Name).Append("  ").Append(c.FilePath).Append(':').Append(c.StartLine).Append('\n');
+            AppendOmittedLine(sb, callees.Count, relationLimit, "callees");
         }
 
-        // body (graceful NULL degradation)
-        sb.Append("\n## body\n");
+        sb.Append(depth == InspectDepth.Overview ? "\n## body preview\n" : "\n## body\n");
         var body = detail is null
             ? ExtractReader.BodyReadResult.Unavailable(ExtractReader.BodyUnavailableReason.NoSpanRecorded)
             : ExtractReader.ReadBody(dbPath, workspaceRoot, sym.FilePath,
                 detail.BodyStartByte, detail.BodyEndByte, detail.BodyStartLine, detail.BodyEndLine);
-        sb.Append(body.Text ?? RenderBodyUnavailableNote(body.UnavailableReason));
+        if (depth == InspectDepth.Overview)
+        {
+            var preview = BodyPreview(body);
+            sb.Append(preview.Text ?? RenderBodyUnavailableNote(body.UnavailableReason));
+            if (preview.Truncated)
+                sb.Append("\n... body preview truncated (use depth=full)");
+        }
+        else
+        {
+            sb.Append(body.Text ?? RenderBodyUnavailableNote(body.UnavailableReason));
+        }
 
         return sb.ToString().TrimEnd('\n');
     }
 
     private static string RenderSymbolJson(
-        ISymbolLookupIndex index, string dbPath, string workspaceRoot, IndexedSymbol sym, bool full)
+        ISymbolLookupIndex index, string dbPath, string workspaceRoot, IndexedSymbol sym, InspectDepth depth)
     {
         var detail = ExtractReader.ReadDetail(dbPath, sym.SymbolId);
         var buffer = new ArrayBufferWriter<byte>();
@@ -432,7 +468,7 @@ public sealed class InspectTool
             w.WritePropertyName("symbol");
             WriteSymbolObject(w, sym, detail);
 
-            if (full)
+            if (depth != InspectDepth.Summary)
             {
                 var complexity = ExtractReader.ReadSymbolComplexity(dbPath, sym.SymbolId);
                 if (complexity is null)
@@ -455,13 +491,16 @@ public sealed class InspectTool
                     w.WriteEndObject();
                 }
 
+                int relationLimit = depth == InspectDepth.Overview ? OverviewRelationLimit : RefLimit;
+
                 w.WritePropertyName("children");
-                WriteSymbolArray(w, index.FindChildren(sym.SymbolId));
+                WriteSymbolArray(w, index.FindChildren(sym.SymbolId).Take(
+                    depth == InspectDepth.Overview ? OverviewChildLimit : int.MaxValue));
 
                 var refs = ExtractReader.ReadReferences(dbPath, sym.Name);
                 w.WritePropertyName("refs");
                 w.WriteStartArray();
-                foreach (var r in refs.Take(RefLimit))
+                foreach (var r in refs.Take(relationLimit))
                 {
                     w.WriteStartObject();
                     w.WriteString("file", r.FilePath);
@@ -473,13 +512,13 @@ public sealed class InspectTool
 
                 w.WritePropertyName("callers");
                 w.WriteStartArray();
-                foreach (var c in DistinctCallers(index, refs).Take(RefLimit))
+                foreach (var c in DistinctCallers(index, refs).Take(relationLimit))
                     w.WriteStringValue(c);
                 w.WriteEndArray();
 
                 w.WritePropertyName("callees");
                 w.WriteStartArray();
-                foreach (var c in ExtractReader.ReadCallees(dbPath, sym.SymbolId).Take(RefLimit))
+                foreach (var c in ExtractReader.ReadCallees(dbPath, sym.SymbolId).Take(relationLimit))
                 {
                     w.WriteStartObject();
                     w.WriteString("name", c.Name);
@@ -493,7 +532,21 @@ public sealed class InspectTool
                     ? ExtractReader.BodyReadResult.Unavailable(ExtractReader.BodyUnavailableReason.NoSpanRecorded)
                     : ExtractReader.ReadBody(dbPath, workspaceRoot, sym.FilePath,
                         detail.BodyStartByte, detail.BodyEndByte, detail.BodyStartLine, detail.BodyEndLine);
-                if (body.Text is null)
+                if (depth == InspectDepth.Overview)
+                {
+                    var preview = BodyPreview(body);
+                    if (preview.Text is null)
+                    {
+                        w.WriteNull("body_preview");
+                        w.WriteString("body_unavailable_reason", BodyUnavailableReasonJson(body.UnavailableReason));
+                    }
+                    else
+                    {
+                        w.WriteString("body_preview", preview.Text);
+                    }
+                    w.WriteBoolean("body_preview_truncated", preview.Truncated);
+                }
+                else if (body.Text is null)
                 {
                     w.WriteNull("body");
                     w.WriteString("body_unavailable_reason", BodyUnavailableReasonJson(body.UnavailableReason));
@@ -507,6 +560,32 @@ public sealed class InspectTool
             w.WriteEndObject();
         }
         return Utf8(buffer);
+    }
+
+    private static void AppendOmittedLine(StringBuilder sb, int total, int visible, string label)
+    {
+        if (total > visible)
+            sb.Append("... ").Append(total - visible).Append(" more ").Append(label).Append(" (use depth=full)\n");
+    }
+
+    private readonly record struct BodyPreviewResult(string? Text, bool Truncated);
+
+    private static BodyPreviewResult BodyPreview(ExtractReader.BodyReadResult body)
+    {
+        if (body.Text is null)
+            return new BodyPreviewResult(null, Truncated: false);
+
+        string normalized = body.Text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+        string[] lines = normalized.Split('\n');
+        int lineCount = Math.Min(lines.Length, OverviewBodyPreviewMaxLines);
+        string preview = string.Join('\n', lines.Take(lineCount));
+        bool truncated = lines.Length > lineCount;
+        if (preview.Length > OverviewBodyPreviewMaxChars)
+        {
+            preview = preview[..OverviewBodyPreviewMaxChars].TrimEnd();
+            truncated = true;
+        }
+        return new BodyPreviewResult(preview, truncated);
     }
 
     // distinct enclosing symbols of the refs, rendered as "Name  file:line" where resolvable, else the id.

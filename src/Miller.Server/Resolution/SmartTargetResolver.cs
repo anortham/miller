@@ -119,10 +119,10 @@ public sealed partial class SmartTargetResolver
 
         if (matches.Count == 1)
             return new TargetResolution.Symbol(matches[0]);
-        if (string.IsNullOrWhiteSpace(scope) && matches.Count > 1 && SingleDefinitionCandidate(matches) is { } symbol)
+        if (string.IsNullOrWhiteSpace(scope) && matches.Count > 1 && PreferredDefinitionCandidate(matches) is { } symbol)
             return new TargetResolution.Symbol(symbol);
         if (matches.Count > 1)
-            return new TargetResolution.Candidates(matches);
+            return new TargetResolution.Candidates(RankCandidatesForDisplay(matches));
 
         // A wrong scope (wrong file, absolute path, separator the normalization could not bridge) must never
         // mask a resolvable name as a bare not-found: surface the out-of-scope matches as suggestions so the
@@ -144,19 +144,88 @@ public sealed partial class SmartTargetResolver
     private static IReadOnlyList<IndexedSymbol> Cap(IReadOnlyList<IndexedSymbol> matches) =>
         matches.Count <= MaxSuggestions ? matches : matches.Take(MaxSuggestions).ToList();
 
-    private static IndexedSymbol? SingleDefinitionCandidate(IReadOnlyList<IndexedSymbol> matches)
+    private static IndexedSymbol? PreferredDefinitionCandidate(IReadOnlyList<IndexedSymbol> matches)
     {
         var definitions = matches
             .Where(s => !IsNameLookupNoise(s.Kind))
-            .Take(2)
             .ToArray();
 
-        return definitions.Length == 1 ? definitions[0] : null;
+        if (definitions.Length == 1)
+            return definitions[0];
+        if (definitions.Length == 0)
+            return null;
+
+        var scored = definitions
+            .Select(s => (Symbol: s, Score: DefinitionPreferenceScore(s)))
+            .OrderByDescending(s => s.Score)
+            .ToArray();
+        int topScore = scored[0].Score;
+        return scored.Count(s => s.Score == topScore) == 1 ? scored[0].Symbol : null;
+    }
+
+    private static IReadOnlyList<IndexedSymbol> RankCandidatesForDisplay(IReadOnlyList<IndexedSymbol> matches) =>
+        matches
+            .Select((symbol, index) => (Symbol: symbol, Score: DefinitionPreferenceScore(symbol), Index: index))
+            .OrderByDescending(row => row.Score)
+            .ThenBy(row => row.Index)
+            .Select(row => row.Symbol)
+            .ToList();
+
+    private static int DefinitionPreferenceScore(IndexedSymbol symbol)
+    {
+        int score = 0;
+        if (IsNameLookupNoise(symbol.Kind))
+            score -= 1000;
+        score += IsTestPath.IsTest(symbol) ? -500 : 500;
+
+        string[] segments = PathSegments(symbol.FilePath);
+        if (segments.Any(IsPreferredSourceSegment))
+            score += 100;
+        if (segments.Any(IsAuxiliaryCodeSegment))
+            score -= 300;
+        score += VersionSegmentScore(segments);
+        return score;
     }
 
     private static bool IsNameLookupNoise(string kind) =>
         string.Equals(kind, "constructor", StringComparison.OrdinalIgnoreCase)
         || string.Equals(kind, "import", StringComparison.OrdinalIgnoreCase);
+
+    private static string[] PathSegments(string path) =>
+        path.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
+
+    private static bool IsPreferredSourceSegment(string segment) =>
+        segment.Equals("src", StringComparison.OrdinalIgnoreCase)
+        || segment.Equals("lib", StringComparison.OrdinalIgnoreCase)
+        || segment.Equals("app", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsAuxiliaryCodeSegment(string segment) =>
+        segment.Equals("example", StringComparison.OrdinalIgnoreCase)
+        || segment.Equals("examples", StringComparison.OrdinalIgnoreCase)
+        || segment.Equals("sample", StringComparison.OrdinalIgnoreCase)
+        || segment.Equals("samples", StringComparison.OrdinalIgnoreCase)
+        || segment.Equals("fixture", StringComparison.OrdinalIgnoreCase)
+        || segment.Equals("fixtures", StringComparison.OrdinalIgnoreCase)
+        || segment.Equals("bench", StringComparison.OrdinalIgnoreCase)
+        || segment.Equals("benches", StringComparison.OrdinalIgnoreCase)
+        || segment.Equals("benchmark", StringComparison.OrdinalIgnoreCase)
+        || segment.Equals("benchmarks", StringComparison.OrdinalIgnoreCase)
+        || segment.Equals("generated", StringComparison.OrdinalIgnoreCase)
+        || segment.Equals("dist", StringComparison.OrdinalIgnoreCase)
+        || segment.Equals("build", StringComparison.OrdinalIgnoreCase);
+
+    private static int VersionSegmentScore(IEnumerable<string> segments)
+    {
+        int max = 0;
+        foreach (string segment in segments)
+        {
+            if (segment.Length < 2 || segment[0] is not ('v' or 'V'))
+                continue;
+            if (int.TryParse(segment[1..], out int version) && version > max)
+                max = version;
+        }
+        return Math.Min(max, 50);
+    }
 
     private IReadOnlyList<IndexedSymbol> NearMisses(string name) =>
         SymbolSuggestionEngine.Suggest(Index, name, MaxSuggestions);

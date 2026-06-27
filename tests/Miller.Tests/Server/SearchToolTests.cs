@@ -1599,6 +1599,78 @@ public sealed class SearchToolTests
     }
 
     [Fact]
+    public void Search_AutoMode_EmptySymbolSearch_RendersBoundedSourceRescue()
+    {
+        using var current = FixtureWithSymbol("current-ws", "CurrentOnly");
+        string currentRoot = Path.Combine(Path.GetTempPath(), "miller-current-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(BuildIndex(current), current.DbPath, "current-ws", currentRoot),
+            currentTextContent: ReadToolRoutingTestSupport.TextContentContextFor(
+                TextContentIndex(SourceHit(
+                    "src/Api.cs",
+                    line: 42,
+                    snippet: "throw new InvalidOperationException(\"KnownSourceError\");")),
+                current.DbPath,
+                "current-ws",
+                currentRoot),
+            textContentTargets: Array.Empty<(string, WorkspaceTextContentSearchContext)>());
+        var tool = new SearchTool(provider, provider, provider, provider);
+
+        string output = tool.Search("KnownSourceError"); // mode defaults to auto
+
+        Assert.Equal(1, provider.SymbolSearchResolveCount);
+        Assert.Equal(1, provider.TextContentSearchResolveCount);
+        Assert.Contains("Source matches also found:", output);
+        Assert.Contains("src/Api.cs:42", output);
+        Assert.Contains("KnownSourceError", output);
+        Assert.Contains("mode=source", output);
+    }
+
+    [Fact]
+    public void Search_AutoMode_FileQuery_DoesNotResolveTextContentProvider()
+    {
+        using var current = FixtureWithSymbol("current-ws", "CurrentOnly");
+        string currentRoot = Path.Combine(Path.GetTempPath(), "miller-current-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(BuildIndex(current), current.DbPath, "current-ws", currentRoot),
+            currentTextContent: ReadToolRoutingTestSupport.TextContentContextFor(
+                TextContentIndex(SourceHit("src/Api.cs", 42, "KnownSourceError")),
+                current.DbPath,
+                "current-ws",
+                currentRoot),
+            textContentTargets: Array.Empty<(string, WorkspaceTextContentSearchContext)>());
+        var tool = new SearchTool(provider, provider, provider, provider);
+
+        string output = tool.Search("CurrentOnly.cs"); // mode defaults to auto
+
+        Assert.Equal(1, provider.SymbolSearchResolveCount);
+        Assert.Equal(0, provider.TextContentSearchResolveCount);
+        Assert.Contains("src/CurrentOnly.cs", output);
+    }
+
+    [Fact]
+    public void Search_AutoModeJson_EmptySymbolSearch_DoesNotResolveTextContentProvider()
+    {
+        using var current = FixtureWithSymbol("current-ws", "CurrentOnly");
+        string currentRoot = Path.Combine(Path.GetTempPath(), "miller-current-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(BuildIndex(current), current.DbPath, "current-ws", currentRoot),
+            currentTextContent: ReadToolRoutingTestSupport.TextContentContextFor(
+                TextContentIndex(SourceHit("src/Api.cs", 42, "KnownSourceError")),
+                current.DbPath,
+                "current-ws",
+                currentRoot),
+            textContentTargets: Array.Empty<(string, WorkspaceTextContentSearchContext)>());
+        var tool = new SearchTool(provider, provider, provider, provider);
+
+        string output = tool.Search("KnownSourceError", format: "json"); // mode defaults to auto
+
+        Assert.Equal("[]", output);
+        Assert.Equal(1, provider.SymbolSearchResolveCount);
+        Assert.Equal(0, provider.TextContentSearchResolveCount);
+    }
+
+    [Fact]
     public void Search_NonContentMode_DoesNotResolveContentProvider()
     {
         using var current = FixtureWithSymbol("current-ws", "CurrentOnly");

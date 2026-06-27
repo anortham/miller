@@ -629,13 +629,14 @@ public static class CliDispatch
     {
         CliOptions o = CliOptions.Parse(args, "json");
         if (string.IsNullOrWhiteSpace(o.Query))
-            return Usage(err, "miller inspect <file-or-symbol> [--workspace-id SELECTOR] [--workspace DIR] [--depth summary|full] [--kind K] [--scope FILE] [--limit N] [--json]");
+            return Usage(err, "miller inspect <file-or-symbol> [--workspace-id SELECTOR] [--workspace DIR] [--depth summary|overview|full] [--kind K] [--scope FILE] [--limit N] [--json]");
         if (!TryResolveReadContext(ctx, o, err, out ctx))
             return 2;
 
         string depth = o.Value("depth", "summary")!;
         string output;
-        if (string.Equals(depth, "full", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(depth, "full", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(depth, "overview", StringComparison.OrdinalIgnoreCase))
         {
             if (!TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex index))
                 return 3;

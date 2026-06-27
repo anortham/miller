@@ -289,6 +289,29 @@ public sealed class InspectToolTests
     }
 
     [Fact]
+    public void Run_SymbolOverview_IncludesBoundedContextAndBodyPreview()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        ExtractReaderTests.SeedComplexityRow(fx.DbPath, JulieDbFixture.GetUserId, parameterCount: 1);
+        var (index, resolver) = Build(fx);
+
+        string full = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "GetUser", depth: "full", kind: null, scope: null, limit: 50, json: false, out _);
+        string overview = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "GetUser", depth: "overview", kind: null, scope: null, limit: 50, json: false, out _);
+
+        Assert.Contains("public User GetUser(int id)", overview);
+        Assert.Contains("Gets a user by id.", overview);
+        Assert.Contains("complexity: decisions=2  loops=1  nesting=2  params=1  lines=3", overview);
+        Assert.Contains("web/Controller.cs:4", overview);
+        Assert.Contains("Find", overview);
+        Assert.Contains("## body preview", overview);
+        Assert.Contains("return _repo.Find(id);", overview);
+        Assert.DoesNotContain("## body\n", overview);
+        Assert.Contains("## body\n", full);
+    }
+
+    [Fact]
     public void Run_SymbolFull_Json_ExposesComplexityOrNull()
     {
         using var fx = JulieDbFixture.CreateForInspect();
@@ -565,6 +588,27 @@ public sealed class InspectToolTests
         Assert.True(root.TryGetProperty("callers", out _));
         Assert.True(root.TryGetProperty("body", out _));
         Assert.False(root.TryGetProperty("body_unavailable_reason", out _));
+    }
+
+    [Fact]
+    public void Run_SymbolOverview_Json_HasPreviewShape()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "GetUser", depth: "overview", kind: null, scope: null, limit: 50, json: true, out _);
+
+        using var doc = JsonDocument.Parse(output);
+        var root = doc.RootElement;
+        Assert.Equal("GetUser", root.GetProperty("symbol").GetProperty("name").GetString());
+        Assert.True(root.TryGetProperty("refs", out var refs));
+        Assert.Equal(JsonValueKind.Array, refs.ValueKind);
+        Assert.True(root.TryGetProperty("body_preview", out var preview));
+        Assert.Contains("return _repo.Find(id);", preview.GetString());
+        Assert.True(root.TryGetProperty("body_preview_truncated", out var truncated));
+        Assert.False(truncated.GetBoolean());
+        Assert.False(root.TryGetProperty("body", out _));
     }
 
     [Fact]

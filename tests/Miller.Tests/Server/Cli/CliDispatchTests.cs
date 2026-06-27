@@ -1589,6 +1589,22 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void Inspect_Overview_RendersMiddleDepth()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+
+        var (code, outText, errText) = Run(
+            new[] { "inspect", "GetUser", "--depth", "overview" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("## body preview", outText);
+        Assert.Contains("return _repo.Find(id);", outText);
+        Assert.DoesNotContain("## body\n", outText);
+    }
+
+    [Fact]
     public void Context_FindsRelevantBundle()
     {
         using var fx = JulieDbFixture.CreateForInspect();

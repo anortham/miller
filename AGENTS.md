@@ -219,7 +219,9 @@ scripts/test.ps1 all
   `mode=content` for docs/config prose, `mode=source` for workspace source-body text,
   `mode=external|web|all-text` for imported or full corpus text, and
   `regions=comment|doc_comment|string_literal` for source-region text. Do not add doc comments, literals, or broad
-  source text directly to symbol ranking just because an old TODO predates content corpus FTS.
+  source text directly to symbol ranking just because an old TODO predates content corpus FTS. `search auto` may
+  show a bounded source-content rescue in compact output when symbol/file results look weak; explicit `mode=source`
+  remains the deeper source-text path.
 - **Patterns and structural facts.** The `patterns` MCP/CLI surface reads `structural_facts` emitted by
   `julie-extractors`. Miller may list, group, filter, and render generic `pattern_id` facts, but it must not own
   parser recognition or raw AST query execution. Since julie-extract 2.3.0 the catalog is broad (~130 pattern ids
