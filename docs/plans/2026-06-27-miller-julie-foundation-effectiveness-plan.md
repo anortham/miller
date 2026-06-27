@@ -149,11 +149,11 @@ Test and verification files:
 
 **Acceptance criteria:**
 
-- [ ] `python3 -m py_compile scripts/benchlib/*.py scripts/bench-julie-miller-search-inspect.py` passes.
-- [ ] `python3 scripts/bench-julie-miller-search-inspect.py --repos miller --skip-julie --skip-miller-refresh --gate --out-dir /tmp/miller-search-inspect-smoke` passes.
-- [ ] The existing gate thresholds in `scripts/bench-julie-miller-search-inspect.py` are unchanged.
-- [ ] No generated evidence under `docs/findings/benchmarks/` is overwritten.
-- [ ] Worker-scope verification passes, committed.
+- [x] `python3 -m py_compile scripts/benchlib/*.py scripts/bench-julie-miller-search-inspect.py` passes.
+- [x] `python3 scripts/bench-julie-miller-search-inspect.py --repos miller --skip-julie --skip-miller-refresh --gate --out-dir /tmp/miller-search-inspect-smoke` passes.
+- [x] The existing gate thresholds in `scripts/bench-julie-miller-search-inspect.py` are unchanged.
+- [x] No generated evidence under `docs/findings/benchmarks/` is overwritten.
+- [x] Worker-scope verification passes, committed.
 
 ## Task 2: Add Foundation Matrix Manifest And Runner Skeleton
 
