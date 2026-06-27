@@ -265,6 +265,9 @@ public sealed class ContentToolTests : IDisposable
 
         Assert.Contains("alpha (ws-alpha)  alpha.log:1  external_file", compact);
         Assert.Contains("beta (ws-beta)  beta.log:1  external_file", compact);
+        Assert.Matches(
+            @"\nread: content read source_id=external_file:[0-9a-f]+ line=1 workspace_id=ws-(alpha|beta)\b",
+            compact);
 
         string json = tool.Content(
             "search",
@@ -283,6 +286,48 @@ public sealed class ContentToolTests : IDisposable
             row.GetProperty("workspace_id").GetString() == "ws-beta"
             && row.GetProperty("display_id").GetString() == "beta"
             && row.GetProperty("display_path").GetString() == "beta.log");
+    }
+
+    [Fact]
+    public void Content_ReadUsesWorkspaceIdForExternalSourceIdReturnedByWorkspaceSearch()
+    {
+        string alphaRoot = Path.Combine(_dir, "external-read-alpha");
+        Directory.CreateDirectory(alphaRoot);
+        string alphaSymbols = Path.Combine(alphaRoot, ".miller", "symbols.db");
+        string alphaLog = Path.Combine(alphaRoot, "alpha.log");
+        File.WriteAllText(alphaLog, "CrossWorkspaceExternalReadMarker in alpha.");
+        var store = new ContentCorpusExternalStore();
+        store.Import(ContentCorpusSidecar.ContentDbPathFor(alphaSymbols), alphaLog, displayPath: "alpha.log");
+        using (var registry = WorkspaceRegistry.Open(_workspace.RegistryDbPath))
+        {
+            registry.UpsertSeen("ws-alpha", "alpha", alphaRoot, alphaSymbols);
+            registry.MarkScanned("ws-alpha", revision: 1);
+        }
+        var tool = new ContentTool(_workspace, store);
+
+        string json = tool.Content(
+            "search",
+            query: "CrossWorkspaceExternalReadMarker",
+            workspace_id: "alpha",
+            limit: 10,
+            format: "json");
+        using JsonDocument doc = JsonDocument.Parse(json);
+        JsonElement hit = Assert.Single(doc.RootElement.EnumerateArray());
+        string sourceId = hit.GetProperty("source_id").GetString()!;
+        int line = hit.GetProperty("line").GetInt32();
+        string workspaceId = hit.GetProperty("workspace_id").GetString()!;
+
+        string read = tool.Content(
+            "read",
+            source_id: sourceId,
+            workspace_id: workspaceId,
+            line: line,
+            context_lines: 0);
+
+        Assert.StartsWith("external_file:", sourceId, StringComparison.Ordinal);
+        Assert.Contains("alpha.log:1-1", read);
+        Assert.Contains("1: CrossWorkspaceExternalReadMarker in alpha.", read);
+        Assert.DoesNotContain("content failed:", read, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

@@ -51,11 +51,11 @@ Miller serves an always-fresh index of this workspace's code. Reach for a Miller
 - `edit` — Index-aware edits: `replace_text`, `replace_symbol_body`, `replace_symbol_signature`, `rename_symbol`,
   `insert_before`, `insert_after`, `add_doc`. Previews a diff unless `apply=true`. A stale target self-heals by
   converging that file; if it fails, run `workspace refresh` first or pass `allow_stale=true` if you accept risk.
-- `content` — Import, search, read, list, remove, and export external/web text. Use for logs, CI output, reports,
-  large dumps, and browser-fetched markdown. `import`/`add_markdown` report metadata; `search` returns snippets and
-  each hit's `source_id`; `read` returns bounded windows capped at 200 lines. Pass a hit's `source_id` to `read`
-  (a unique `display_path` is also accepted). Use `content_kind=web` for web-only reads, or `workspace_id=all` on
-  `search` for audits. `export` writes raw JSONL for integration, not interactive reading.
+- `content` — Import/search/read/list/remove/export external/web text for logs, CI, reports, dumps, and fetched
+  markdown. `import`/`add_markdown` report metadata; `search` returns snippets, `source_id`, and `workspace_id` for
+  cross-workspace hits. `read` returns ≤200-line windows; pass the hit's `source_id` and, when present,
+  `workspace_id` (unique `display_path` also works). Use `content_kind=web` for web-only reads, or
+  `workspace_id=all` on `search` for audits. `export` is raw JSONL for integrations.
 - `patterns` — List, summarize, and search code-shape facts from `structural_facts` across many languages: framework
   facts, language facts, SQL DDL, JSON/YAML/TOML/Markdown structure. Run `patterns()` to see emitted ids (not raw AST
   queries). Use `operation=list|summary|search` with `pattern_id`, or `query` (no `pattern_id`) to search every
@@ -76,7 +76,7 @@ Miller serves an always-fresh index of this workspace's code. Reach for a Miller
 - **Find source-body text**: `search mode=source "<literal or phrase>"` — searches verified source files and
   returns `path:line`, kind, containing symbol when known, and snippet.
 - **Audit registered workspaces for exact text**: `content search query="dangerous term" workspace_id=all content_kind=source`
-  or `content_kind=docs|config|external_file|web`, then bounded `content read`.
+  or `content_kind=docs|config|external_file|web`, then `content read` with the hit's `workspace_id`.
 - **Find known code shapes**: `patterns operation=list` to discover ids, then
   `patterns operation=search pattern_id=<id> where=attribute_name=hx-get path=Views/**`, or `query=<text>` for free text.
 - **Inspect a large log/report**: `content import path=/tmp/build.log` → `content search query="error text"` →
@@ -119,7 +119,7 @@ code, paste this block into the prompt:
     - trace(target, mode?, to?, scope?, reference_kind?) before manual reference/caller/callee file hopping; use mode=refs for usages and scope for ambiguous names.
     - impact(target?|changed_paths?|diff?|git?/base?/staged?) before refactors and to choose tests.
     - edit(operation, target, ...) to preview index-aware edits (apply=true to commit).
-    - content(import|add_markdown|search|read|list|remove|export, ...) for logs, CI, web markdown, external text, and audits; use workspace_id=all for registered-workspace text audits and bounded reads only.
+    - content(import|add_markdown|search|read|list|remove|export, ...) for logs, web markdown, and audits; use workspace_id=all for audits and pass hit workspace_id on reads.
     - patterns(operation?, pattern_id?, query?, where?, path?, language?) for extractor-recognized code-shape facts.
     - workspace(status|health|onboarding|leader|refresh|full|list|open|remove|dashboard) for readiness, leader diagnostics/handoff, refresh, other repos, onboarding, or dashboard with operation=dashboard.
     Do NOT fall back to Glob/Read/Grep chains when a Miller tool fits. Miller returns targeted context in 1-2 calls.

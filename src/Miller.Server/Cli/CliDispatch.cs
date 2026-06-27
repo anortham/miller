@@ -1796,7 +1796,7 @@ public static class CliDispatch
                              import <path> [--max-bytes N] [--display-path NAME] [--json]
                              add-markdown <path> --url URL [--display-path NAME] [--json]
                              search <query> [--kind KIND] [--workspace-id all|SELECTOR] [--limit N] [--json]
-                             read --source-id ID --line N [--context-lines N] [--json]
+                             read --source-id ID --line N [--workspace-id SELECTOR] [--context-lines N] [--json]
                              list [--kind KIND] [--json]
                              remove --source-id ID [--json]
                              export [--kind KIND] [--content-workspace-id ID]   # JSONL

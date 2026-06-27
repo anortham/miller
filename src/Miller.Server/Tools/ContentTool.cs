@@ -39,7 +39,7 @@ public sealed class ContentTool
         [Description("Human display path/title for imported content. Optional.")] string? display_path = null,
         [Description("Content kind for search/list/export. Default external_file for search/list, all for export.")] string? content_kind = null,
         [Description("Stored workspace_id filter for operation=export. Optional.")] string? content_workspace_id = null,
-        [Description("Workspace selector for search; use all for registered workspace search. Optional.")] string? workspace_id = null,
+        [Description("Workspace selector for search/read. Use all only for registered workspace search. Optional.")] string? workspace_id = null,
         [Description("1-based center line for operation=read.")] int? line = null,
         [Description("Context lines before/after the read line. Default 10; total window capped at 200 lines (MaxReadWindowLines); larger is rejected.")] int? context_lines = null,
         [Description("Max search results. Default 6.")] int limit = SearchTool.DefaultLimit,
@@ -61,7 +61,7 @@ public sealed class ContentTool
                 "add_markdown" or "add-markdown" or "import_markdown" or "import-markdown" =>
                     AddMarkdown(contentDbPath, path, url, max_bytes, display_path, json, telemetry),
                 "search" => Search(contentDbPath, query, ContentKindOrDefault(content_kind, TextContentKind.ExternalFile), limit, workspace_id, json, telemetry),
-                "read" => Read(contentDbPath, source_id, line, context_lines, json, telemetry),
+                "read" => Read(contentDbPath, source_id, workspace_id, line, context_lines, json, telemetry),
                 "list" => List(contentDbPath, ContentKindOrDefault(content_kind, TextContentKind.ExternalFile), json, telemetry),
                 "remove" or "delete" => Remove(contentDbPath, source_id, json, telemetry),
                 "export" => Export(contentDbPath, OptionalContentKind(content_kind), content_workspace_id, telemetry),
@@ -237,6 +237,7 @@ public sealed class ContentTool
     private string Read(
         string contentDbPath,
         string? sourceId,
+        string? workspaceId,
         int? line,
         int? contextLines,
         bool json,
@@ -247,8 +248,9 @@ public sealed class ContentTool
         if (line is null)
             throw new InvalidOperationException("content read requires line.");
 
-        string resolvedSourceId = ResolveReadSourceId(contentDbPath, sourceId);
-        string readContentDbPath = ResolveReadContentDbPath(contentDbPath, resolvedSourceId);
+        string readContentDbPath = ResolveReadContentDbPath(contentDbPath, sourceId, workspaceId);
+        string resolvedSourceId = ResolveReadSourceId(readContentDbPath, sourceId);
+        readContentDbPath = ResolveReadContentDbPath(readContentDbPath, resolvedSourceId, workspaceId: null);
         ExternalContentReadResult result = _store.ReadWindow(
             readContentDbPath,
             resolvedSourceId,
@@ -281,11 +283,22 @@ public sealed class ContentTool
         return sourceId;
     }
 
-    private string ResolveReadContentDbPath(string defaultContentDbPath, string sourceId)
+    private string ResolveReadContentDbPath(string defaultContentDbPath, string sourceId, string? workspaceId)
+    {
+        if (TryResolveSourceIdWorkspaceContentDbPath(sourceId) is { } routedContentDbPath)
+            return routedContentDbPath;
+
+        if (!string.IsNullOrWhiteSpace(workspaceId))
+            return ResolveReadWorkspaceContentDbPath(defaultContentDbPath, workspaceId);
+
+        return defaultContentDbPath;
+    }
+
+    private string? TryResolveSourceIdWorkspaceContentDbPath(string sourceId)
     {
         int separator = sourceId.IndexOf(':', StringComparison.Ordinal);
         if (separator <= 0)
-            return defaultContentDbPath;
+            return null;
 
         string sourceWorkspaceId = sourceId[..separator];
         try
@@ -294,13 +307,35 @@ public sealed class ContentTool
             WorkspaceRegistryRow? row = registry.List()
                 .FirstOrDefault(r => string.Equals(r.WorkspaceId, sourceWorkspaceId, StringComparison.Ordinal));
             return row is null
-                ? defaultContentDbPath
+                ? null
                 : ContentCorpusSidecar.ContentDbPathFor(row.IndexDbPath);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException)
         {
+            return null;
+        }
+    }
+
+    private string ResolveReadWorkspaceContentDbPath(string defaultContentDbPath, string workspaceId)
+    {
+        string selector = workspaceId.Trim();
+        if (string.Equals(selector, "all", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(selector, "registered", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                "content read workspace_id must select one workspace. Pass the workspace_id from a content search hit, " +
+                "or a specific display ID, unique prefix, full workspace_id, registered root path, current, or primary.");
+        }
+
+        if (string.Equals(selector, "current", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(selector, "primary", StringComparison.OrdinalIgnoreCase))
+        {
             return defaultContentDbPath;
         }
+
+        using var registry = WorkspaceRegistry.Open(_workspace.RegistryDbPath);
+        WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(registry, selector);
+        return ContentCorpusSidecar.ContentDbPathFor(row.IndexDbPath);
     }
 
     private string List(string contentDbPath, string contentKind, bool json, TelemetryScope? telemetry)
@@ -497,7 +532,11 @@ public sealed class ContentTool
             blocks.Add(block.ToString());
         }
 
-        return string.Join("\n\n", blocks);
+        WorkspaceContentSearchHit first = hits[0];
+        return string.Join("\n\n", blocks)
+            + "\n\nread: content read source_id=" + first.Hit.SourceId
+            + " line=" + first.Hit.Line
+            + " workspace_id=" + first.Workspace.WorkspaceId;
     }
 
     private static string RenderReadCompact(ExternalContentReadResult result)

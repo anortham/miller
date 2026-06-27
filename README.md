@@ -512,7 +512,8 @@ Text output is a compact human-facing contract and JSON output is the integratio
   and `content add-markdown <path> --url <url>` for browser-fetched pages. Search web imports with
   `content search "<phrase>" --kind web`, then read bounded windows with `content read --source-id <id>`.
 - `content search "<term>" --workspace-id all --kind source|docs|config|external_file|web` searches registered
-  workspace content DBs and reports workspace/display IDs on every hit for audits.
+  workspace content DBs and reports workspace/display IDs on every hit for audits. Pass the hit's workspace ID back
+  to `content read --workspace-id <id>` for external/web hits from another workspace.
 - `content export [--kind KIND] [--content-workspace-id ID]` writes deterministic JSONL chunk rows for Eros
   and other local consumers. It includes raw chunk text; use it as an integration feed, not as an interactive
   reading shortcut.
