@@ -23,12 +23,6 @@ public sealed class ContentSearchIndex
     /// <summary>Context lines kept on each side of the best-matching line in a snippet.</summary>
     private const int WindowRadius = 2;
 
-    private static readonly FrozenSet<string> CoverageStopWords = new[]
-    {
-        "a", "an", "and", "are", "as", "at", "by", "does", "for", "from", "in", "is", "it", "of", "on",
-        "or", "that", "the", "this", "to", "where", "with",
-    }.ToFrozenSet(StringComparer.Ordinal);
-
     private readonly FrozenDictionary<string, Posting[]> _postings;
     private readonly FrozenDictionary<int, int> _docLengths;
     private readonly FrozenDictionary<int, DocEntry> _docs;
@@ -118,31 +112,18 @@ public sealed class ContentSearchIndex
     /// </summary>
     public IReadOnlyList<ContentSearchHit> Search(string query, int limit = 10)
     {
-        if (string.IsNullOrWhiteSpace(query) || limit <= 0 || _docs.Count == 0)
+        if (limit <= 0 || _docs.Count == 0)
             return Array.Empty<ContentSearchHit>();
 
-        var queryTokens = new List<string>(8);
-        CodeTokenizer.Tokenize(query, queryTokens);
-        if (queryTokens.Count == 0)
+        TextSearchQueryPlan? plan = TextSearchQueryPlan.Create(query);
+        if (plan is null)
             return Array.Empty<ContentSearchHit>();
 
-        // Distinct query terms, preserving first-seen order for determinism.
-        var distinct = new List<string>(queryTokens.Count);
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (string token in queryTokens)
-            if (seen.Add(token))
-                distinct.Add(token);
-
-        IReadOnlyList<string> coverageTerms = CoverageTerms(distinct);
-        var coverageTermSet = coverageTerms.ToHashSet(StringComparer.Ordinal);
-        bool requiresTokenPhrase = RequiresTokenPhrase(query);
-        int requiredCoverage = requiresTokenPhrase
-            ? coverageTerms.Count
-            : RequiredCoverageTermCount(coverageTerms.Count);
+        var coverageTermSet = plan.CoverageTerms.ToHashSet(StringComparer.Ordinal);
 
         var scores = new Dictionary<int, double>();
         var matchedCoverageTermCount = new Dictionary<int, int>();
-        foreach (string term in distinct)
+        foreach (string term in plan.DistinctTerms)
         {
             if (!_postings.TryGetValue(term, out Posting[]? postings))
                 continue;
@@ -171,17 +152,17 @@ public sealed class ContentSearchIndex
         foreach (var (docId, rawScore) in scores)
         {
             matchedCoverageTermCount.TryGetValue(docId, out int matchedTerms);
-            if (matchedTerms < requiredCoverage)
+            if (matchedTerms < plan.RequiredCoverage)
                 continue;
 
             DocEntry entry = _docs[docId];
-            bool hasTokenPhrase = ContainsTokenPhrase(entry.Lines, queryTokens);
-            if (requiresTokenPhrase && !hasTokenPhrase)
+            bool hasTokenPhrase = ContainsTokenPhrase(entry.Lines, plan.QueryTokens);
+            if (plan.RequiresTokenPhrase && !hasTokenPhrase)
                 continue;
 
             double score = hasTokenPhrase ? rawScore * TokenPhraseBoost : rawScore;
-            BestLineMatch bestLine = BestLineAndSnippet(entry.Lines, coverageTermSet, queryTokens);
-            if (bestLine.DistinctTermCount < requiredCoverage)
+            BestLineMatch bestLine = BestLineAndSnippet(entry.Lines, coverageTermSet, plan.QueryTokens);
+            if (bestLine.DistinctTermCount < plan.RequiredCoverage)
                 continue;
 
             hits.Add(new ScoredHit(docId,
@@ -208,28 +189,6 @@ public sealed class ContentSearchIndex
 
         return hits.Select(static h => h.Hit).ToArray();
     }
-
-    private static IReadOnlyList<string> CoverageTerms(IReadOnlyList<string> distinctTerms)
-    {
-        var terms = new List<string>(distinctTerms.Count);
-        foreach (string term in distinctTerms)
-            if (term.Length > 2 && !CoverageStopWords.Contains(term))
-                terms.Add(term);
-
-        return terms.Count == 0 ? distinctTerms : terms;
-    }
-
-    private static int RequiredCoverageTermCount(int termCount)
-    {
-        if (termCount <= 1)
-            return termCount;
-        if (termCount <= 5)
-            return termCount;
-        return Math.Max(2, (int)Math.Ceiling(termCount * 0.6));
-    }
-
-    private static bool RequiresTokenPhrase(string query) =>
-        query.Any(static c => c == '_' || c == ':' || c == '/' || c == '\\');
 
     private static bool ContainsTokenPhrase(string[] lines, IReadOnlyList<string> queryTokens)
     {

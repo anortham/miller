@@ -8,6 +8,8 @@ namespace Miller.Indexing;
 public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex
 {
     private const int SnippetRadius = 2;
+    private const int WidenedCandidateLimit = 5000;
+    private const double TokenPhraseBoost = 2.5;
 
     private readonly string _connectionString;
     private readonly IReadOnlyDictionary<string, TextChunk> _chunksById;
@@ -122,7 +124,7 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex
         int limit = 10,
         bool excludeTests = false)
     {
-        if (string.IsNullOrWhiteSpace(query) || contentKinds.Count == 0 || limit <= 0 || _chunksById.Count == 0)
+        if (contentKinds.Count == 0 || limit <= 0 || _chunksById.Count == 0)
             return Array.Empty<TextContentSearchHit>();
 
         var allowedKinds = new HashSet<string>(StringComparer.Ordinal);
@@ -132,79 +134,29 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex
         if (allowedKinds.Count == 0)
             return Array.Empty<TextContentSearchHit>();
 
-        var queryTokens = new List<string>(8);
-        CodeTokenizer.Tokenize(query, queryTokens);
-        if (queryTokens.Count == 0)
+        TextSearchQueryPlan? plan = TextSearchQueryPlan.Create(query);
+        if (plan is null)
             return Array.Empty<TextContentSearchHit>();
-
-        var distinctTerms = new List<string>(queryTokens.Count);
-        var seenTerms = new HashSet<string>(StringComparer.Ordinal);
-        foreach (string token in queryTokens)
-            if (seenTerms.Add(token))
-                distinctTerms.Add(token);
 
         using var connection = new SqliteConnection(_connectionString);
         connection.Open();
 
         var documentFrequency = new Dictionary<string, int>(StringComparer.Ordinal);
-        foreach (string term in distinctTerms)
+        foreach (string term in plan.DistinctTerms)
             documentFrequency[term] = CountChunksMatching(connection, QuoteFts(term));
 
-        string match = string.Join(" AND ", distinctTerms.Select(QuoteFts));
-        IReadOnlyList<string> candidateIds = ChunkCandidates(connection, match);
+        string strictMatch = JoinFtsTerms(plan.CoverageTerms, " AND ");
+        IReadOnlyList<string> candidateIds = ChunkCandidates(connection, strictMatch);
         var hits = new List<TextContentSearchHit>();
         var tokens = new List<string>(64);
-        var queryTermSet = distinctTerms.ToHashSet(StringComparer.Ordinal);
+        var seenCandidateIds = new HashSet<string>(StringComparer.Ordinal);
+        var coverageTermSet = plan.CoverageTerms.ToHashSet(StringComparer.Ordinal);
 
-        foreach (string chunkId in candidateIds)
+        AddHits(candidateIds);
+        if (hits.Count < limit)
         {
-            if (!_chunksById.TryGetValue(chunkId, out TextChunk? chunk))
-                continue;
-            if (!allowedKinds.Contains(chunk.ContentKind))
-                continue;
-            if (excludeTests && chunk.IsTest)
-                continue;
-
-            tokens.Clear();
-            CodeTokenizer.Tokenize(chunk.RawText, tokens);
-            double score = 0.0;
-            int matched = 0;
-            foreach (string term in distinctTerms)
-            {
-                int tf = CountOccurrences(tokens, term);
-                if (tf == 0)
-                    continue;
-                matched++;
-                score += Bm25.TermScore(
-                    Bm25.Idf(_documentCount, documentFrequency[term]),
-                    tf,
-                    chunk.DocLen,
-                    _avgdl);
-            }
-
-            if (matched != distinctTerms.Count || score <= 0.0)
-                continue;
-
-            BestLine bestLine = BestLineAndSnippet(chunk, queryTermSet);
-            ContentSymbolSpan? symbol = BestContainingSymbol(chunk.SourceId, bestLine.Line);
-            hits.Add(new TextContentSearchHit(
-                chunk.SourceId,
-                chunk.ChunkId,
-                chunk.ContentKind,
-                chunk.Path,
-                chunk.Url,
-                chunk.DisplayPath,
-                chunk.Language,
-                score,
-                bestLine.Line,
-                chunk.LineStart,
-                chunk.LineEnd,
-                chunk.ByteStart,
-                chunk.ByteEnd,
-                bestLine.Snippet,
-                chunk.SourceBytes,
-                symbol?.SymbolId ?? chunk.ContainingSymbolId,
-                symbol?.Name ?? chunk.ContainingSymbolName));
+            string widenedMatch = JoinFtsTerms(plan.CoverageTerms, " OR ");
+            AddHits(ChunkCandidates(connection, widenedMatch, WidenedCandidateLimit));
         }
 
         hits.Sort(static (a, b) =>
@@ -220,6 +172,73 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex
         if (hits.Count > limit)
             hits.RemoveRange(limit, hits.Count - limit);
         return hits;
+
+        void AddHits(IReadOnlyList<string> ids)
+        {
+            foreach (string chunkId in ids)
+            {
+                if (!seenCandidateIds.Add(chunkId))
+                    continue;
+                if (!_chunksById.TryGetValue(chunkId, out TextChunk? chunk))
+                    continue;
+                if (!allowedKinds.Contains(chunk.ContentKind))
+                    continue;
+                if (excludeTests && chunk.IsTest)
+                    continue;
+
+                tokens.Clear();
+                CodeTokenizer.Tokenize(chunk.RawText, tokens);
+                double score = 0.0;
+                int matchedCoverage = 0;
+                foreach (string term in plan.DistinctTerms)
+                {
+                    int tf = CountOccurrences(tokens, term);
+                    if (tf == 0)
+                        continue;
+                    if (coverageTermSet.Contains(term))
+                        matchedCoverage++;
+                    score += Bm25.TermScore(
+                        Bm25.Idf(_documentCount, documentFrequency[term]),
+                        tf,
+                        chunk.DocLen,
+                        _avgdl);
+                }
+
+                if (matchedCoverage < plan.RequiredCoverage || score <= 0.0)
+                    continue;
+
+                bool hasTokenPhrase = ContainsTokenPhrase(chunk, plan.QueryTokens);
+                if (plan.RequiresTokenPhrase && !hasTokenPhrase)
+                    continue;
+
+                BestLine bestLine = BestLineAndSnippet(chunk, coverageTermSet, plan.QueryTokens);
+                if (bestLine.DistinctTermCount < plan.RequiredCoverage)
+                    continue;
+
+                if (hasTokenPhrase)
+                    score *= TokenPhraseBoost;
+
+                ContentSymbolSpan? symbol = BestContainingSymbol(chunk.SourceId, bestLine.Line);
+                hits.Add(new TextContentSearchHit(
+                    chunk.SourceId,
+                    chunk.ChunkId,
+                    chunk.ContentKind,
+                    chunk.Path,
+                    chunk.Url,
+                    chunk.DisplayPath,
+                    chunk.Language,
+                    score,
+                    bestLine.Line,
+                    chunk.LineStart,
+                    chunk.LineEnd,
+                    chunk.ByteStart,
+                    chunk.ByteEnd,
+                    bestLine.Snippet,
+                    chunk.SourceBytes,
+                    symbol?.SymbolId ?? chunk.ContainingSymbolId,
+                    symbol?.Name ?? chunk.ContainingSymbolName));
+            }
+        }
     }
 
     private static ContentMeta ReadMeta(SqliteConnection connection, string absPath)
@@ -350,11 +369,15 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex
         return Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
     }
 
-    private static IReadOnlyList<string> ChunkCandidates(SqliteConnection connection, string match)
+    private static IReadOnlyList<string> ChunkCandidates(SqliteConnection connection, string match, int? limit = null)
     {
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT chunk_id FROM content_fts WHERE body MATCH $q;";
+        command.CommandText = limit is null
+            ? "SELECT chunk_id FROM content_fts WHERE body MATCH $q;"
+            : "SELECT chunk_id FROM content_fts WHERE body MATCH $q ORDER BY rank LIMIT $limit;";
         command.Parameters.AddWithValue("$q", match);
+        if (limit is not null)
+            command.Parameters.AddWithValue("$limit", limit.Value);
         var ids = new List<string>();
         using var reader = command.ExecuteReader();
         while (reader.Read())
@@ -362,20 +385,41 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex
         return ids;
     }
 
-    private static BestLine BestLineAndSnippet(TextChunk chunk, HashSet<string> queryTerms)
+    private static BestLine BestLineAndSnippet(
+        TextChunk chunk,
+        HashSet<string> queryTerms,
+        IReadOnlyList<string> queryTokens)
     {
-        string[] lines = chunk.RawText.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n');
+        string[] lines = SplitLines(chunk.RawText);
         int bestIndex = 0;
+        bool bestHasPhrase = false;
         int bestMatches = -1;
+        int bestTokenHits = -1;
         var tokens = new List<string>(32);
+        var lineTerms = new HashSet<string>(StringComparer.Ordinal);
         for (int i = 0; i < lines.Length; i++)
         {
             tokens.Clear();
+            lineTerms.Clear();
             CodeTokenizer.Tokenize(lines[i], tokens);
-            int matches = tokens.Distinct(StringComparer.Ordinal).Count(queryTerms.Contains);
-            if (matches > bestMatches)
+            int tokenHits = 0;
+            foreach (string token in tokens)
             {
-                bestMatches = matches;
+                if (queryTerms.Contains(token))
+                {
+                    lineTerms.Add(token);
+                    tokenHits++;
+                }
+            }
+
+            bool hasPhrase = queryTokens.Count > 1 && ContainsTokenPhrase(tokens, queryTokens);
+            if (hasPhrase && !bestHasPhrase ||
+                hasPhrase == bestHasPhrase &&
+                (lineTerms.Count > bestMatches || (lineTerms.Count == bestMatches && tokenHits > bestTokenHits)))
+            {
+                bestHasPhrase = hasPhrase;
+                bestMatches = lineTerms.Count;
+                bestTokenHits = tokenHits;
                 bestIndex = i;
             }
         }
@@ -383,7 +427,58 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex
         int start = Math.Max(0, bestIndex - SnippetRadius);
         int end = Math.Min(lines.Length - 1, bestIndex + SnippetRadius);
         string snippet = string.Join('\n', lines[start..(end + 1)]);
-        return new BestLine(chunk.LineStart + bestIndex, snippet);
+        return new BestLine(chunk.LineStart + bestIndex, snippet, bestMatches);
+    }
+
+    private static bool ContainsTokenPhrase(TextChunk chunk, IReadOnlyList<string> queryTokens)
+    {
+        if (queryTokens.Count < 2)
+            return false;
+
+        var tokens = new List<string>(32);
+        foreach (string line in SplitLines(chunk.RawText))
+        {
+            tokens.Clear();
+            CodeTokenizer.Tokenize(line, tokens);
+            if (tokens.Count < queryTokens.Count)
+                continue;
+            if (ContainsTokenPhrase(tokens, queryTokens))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool ContainsTokenPhrase(IReadOnlyList<string> lineTokens, IReadOnlyList<string> queryTokens)
+    {
+        for (int start = 0; start <= lineTokens.Count - queryTokens.Count; start++)
+        {
+            bool matches = true;
+            for (int offset = 0; offset < queryTokens.Count; offset++)
+            {
+                if (!string.Equals(lineTokens[start + offset], queryTokens[offset], StringComparison.Ordinal))
+                {
+                    matches = false;
+                    break;
+                }
+            }
+
+            if (matches)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static string[] SplitLines(string text) =>
+        text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n');
+
+    private static string JoinFtsTerms(IReadOnlyList<string> terms, string separator)
+    {
+        var quoted = new string[terms.Count];
+        for (int i = 0; i < terms.Count; i++)
+            quoted[i] = QuoteFts(terms[i]);
+        return string.Join(separator, quoted);
     }
 
     private ContentSymbolSpan? BestContainingSymbol(string sourceId, int line)
@@ -469,7 +564,7 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex
 
     private sealed record ContentMeta(int SchemaVersion, long? WorkspaceRevision);
 
-    private sealed record BestLine(int Line, string Snippet);
+    private sealed record BestLine(int Line, string Snippet, int DistinctTermCount);
 
     private sealed record ContentSymbolSpan(string SymbolId, string Name, int StartLine, int EndLine);
 

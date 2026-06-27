@@ -132,6 +132,139 @@ public sealed class FtsTextContentSearchIndexTests : IDisposable
     }
 
     [Fact]
+    public void Search_LongNaturalLanguageQueryAllowsHighCoveragePartialMatch()
+    {
+        const string query = "gateway health checks doctor command latency";
+        const string sourceText = "Gateway health checks use the doctor probe for status.";
+        var memoryIndex = ContentSearchIndex.Build(
+            [new ContentDocument(0, "src/Health.cs", sourceText)]);
+        Assert.Equal("src/Health.cs", Assert.Single(memoryIndex.Search(query, limit: 10)).Path);
+
+        using var fx = BuildFixture(
+            ("src/Health.cs", "csharp", false, sourceText));
+        ContentCorpusWriter.Write(_contentDbPath, fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 7);
+        var index = FtsTextContentSearchIndex.Open(_contentDbPath, expectedRevision: 7);
+
+        TextContentSearchHit hit = Assert.Single(index.Search(
+            query,
+            TextContentKind.WorkspaceSource,
+            limit: 10,
+            excludeTests: false));
+
+        Assert.Equal("src/Health.cs", hit.Path);
+        Assert.Contains("Gateway health checks use the doctor", hit.Snippet);
+    }
+
+    [Fact]
+    public void Search_ShortMultiTermQueryStillRequiresAllMeaningfulTerms()
+    {
+        using var fx = BuildFixture(
+            ("src/Weak.cs", "csharp", false, "Gateway health probe reports status."));
+        ContentCorpusWriter.Write(_contentDbPath, fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 7);
+        var index = FtsTextContentSearchIndex.Open(_contentDbPath, expectedRevision: 7);
+
+        Assert.Empty(index.Search(
+            "gateway health checks",
+            TextContentKind.WorkspaceSource,
+            limit: 10,
+            excludeTests: false));
+    }
+
+    [Fact]
+    public void Search_CodeLikeQueryStillRequiresExactTokenPhrase()
+    {
+        using var weak = BuildFixture(
+            ("src/Weak.cs", "csharp", false, "Spawn timeout secs can be configured elsewhere."));
+        ContentCorpusWriter.Write(_contentDbPath, weak.DbPath, weak.WorkspaceRoot, "workspace-1", revision: 7);
+        var weakIndex = FtsTextContentSearchIndex.Open(_contentDbPath, expectedRevision: 7);
+
+        Assert.Empty(weakIndex.Search(
+            "JULIE_EMBEDDING_HOST_SPAWN_TIMEOUT_SECS",
+            TextContentKind.WorkspaceSource,
+            limit: 10,
+            excludeTests: false));
+
+        SqliteConnection.ClearAllPools();
+        File.Delete(_contentDbPath);
+        using var exact = BuildFixture(
+            ("src/Exact.cs", "csharp", false, "Set JULIE_EMBEDDING_HOST_SPAWN_TIMEOUT_SECS for slow model startup."));
+        ContentCorpusWriter.Write(_contentDbPath, exact.DbPath, exact.WorkspaceRoot, "workspace-1", revision: 7);
+        var exactIndex = FtsTextContentSearchIndex.Open(_contentDbPath, expectedRevision: 7);
+
+        TextContentSearchHit hit = Assert.Single(exactIndex.Search(
+            "JULIE_EMBEDDING_HOST_SPAWN_TIMEOUT_SECS",
+            TextContentKind.WorkspaceSource,
+            limit: 10,
+            excludeTests: false));
+        Assert.Equal("src/Exact.cs", hit.Path);
+    }
+
+    [Fact]
+    public void Search_WidenedCandidatesStillApplyKindAndTestFilters()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new JulieDbFixture.SymbolRow(
+                    "sym-prod",
+                    "Prod",
+                    "class",
+                    "csharp",
+                    "src/Prod.cs",
+                    "class Prod",
+                    1,
+                    null)
+                {
+                    EndLine = 1,
+                },
+                new JulieDbFixture.SymbolRow(
+                    "sym-tests",
+                    "ProdTests",
+                    "class",
+                    "csharp",
+                    "tests/ProdTests.cs",
+                    "class ProdTests",
+                    1,
+                    null)
+                {
+                    EndLine = 1,
+                    IsTest = true,
+                },
+            ],
+            fileContent: new Dictionary<string, string>
+            {
+                ["src/Prod.cs"] = "Gateway health checks use the doctor probe.",
+                ["tests/ProdTests.cs"] = "Gateway health checks use the doctor probe.",
+            },
+            extraFiles:
+            [
+                new JulieDbFixture.FileSpec("docs/health.md")
+                {
+                    Language = "markdown",
+                    DiskText = "Gateway health checks use the doctor probe.",
+                },
+            ]);
+        ContentCorpusWriter.Write(_contentDbPath, fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 7);
+        var index = FtsTextContentSearchIndex.Open(_contentDbPath, expectedRevision: 7);
+        const string query = "gateway health checks doctor command latency";
+
+        TextContentSearchHit docsHit = Assert.Single(index.Search(
+            query,
+            TextContentKind.WorkspaceDocs,
+            limit: 10,
+            excludeTests: false));
+        Assert.Equal("docs/health.md", docsHit.Path);
+
+        TextContentSearchHit sourceHit = Assert.Single(index.Search(
+            query,
+            TextContentKind.WorkspaceSource,
+            limit: 10,
+            excludeTests: true));
+        Assert.Equal("src/Prod.cs", sourceHit.Path);
+    }
+
+    [Fact]
     public void Open_StaleRevision_FailsClosed()
     {
         WriteMinimalContentDb(revision: 6, schemaVersion: ContentCorpusSchema.SchemaVersion);
