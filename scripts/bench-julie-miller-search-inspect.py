@@ -17,15 +17,21 @@ import csv
 import json
 import math
 import os
-import re
-import select
-import statistics
 import subprocess
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from benchlib import (
+    McpProcess,
+    content_text,
+    score_miller_search_json,
+    score_text,
+    summarize_by_task,
+    summarize_by_tool,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -149,9 +155,6 @@ REPOS: list[RepoCase] = [
 ]
 
 
-PATH_LINE_RE = re.compile(r"(?P<path>[A-Za-z0-9_@./+\-]+\.[A-Za-z0-9_+\-]+):(?P<line>\d+)")
-
-
 def now_ms() -> int:
     return int(time.perf_counter() * 1000)
 
@@ -161,150 +164,6 @@ def run_cmd(args: list[str], timeout: int = 120) -> tuple[int, int, str, str]:
     proc = subprocess.run(args, text=True, capture_output=True, timeout=timeout)
     elapsed = now_ms() - start
     return elapsed, proc.returncode, proc.stdout, proc.stderr
-
-
-def content_text(message: dict[str, Any]) -> str:
-    if "result" not in message:
-        return json.dumps(message, sort_keys=True)
-    parts: list[str] = []
-    for item in message["result"].get("content", []):
-        if item.get("type") == "text":
-            parts.append(item.get("text", ""))
-    return "\n".join(parts)
-
-
-def is_empty_text(text: str) -> bool:
-    lower = text.lower()
-    return (
-        "no results" in lower
-        or "not found" in lower
-        or "requires a tantivy index" in lower
-        or "no indexed symbols" in lower
-    )
-
-
-def first_path(text: str) -> str | None:
-    for match in PATH_LINE_RE.finditer(text):
-        path = match.group("path")
-        if "/" in path or path.startswith("src") or path.startswith("lib") or path.startswith("test"):
-            return path
-    return None
-
-
-def score_text(text: str, expected_file: str) -> dict[str, Any]:
-    present = expected_file in text
-    first = first_path(text)
-    top = first == expected_file
-    return {
-        "empty": False if present else is_empty_text(text),
-        "expected_present": present,
-        "expected_top": top,
-        "first_path": first or "",
-        "output_chars": len(text),
-        "score": 2 if top else 1 if present else 0,
-    }
-
-
-def score_miller_search_json(text: str, expected_file: str) -> dict[str, Any]:
-    try:
-        rows = json.loads(text)
-    except json.JSONDecodeError:
-        scored = score_text(text, expected_file)
-        scored["result_count"] = ""
-        return scored
-    if isinstance(rows, dict) and "results" in rows:
-        rows = rows["results"]
-    if not isinstance(rows, list):
-        rows = []
-    def row_path(row: dict[str, Any]) -> str:
-        return str(row.get("file") or row.get("path") or row.get("display_path") or "")
-
-    first = row_path(rows[0]) if rows and isinstance(rows[0], dict) else ""
-    present = any(row_path(row) == expected_file for row in rows if isinstance(row, dict))
-    top = first == expected_file
-    return {
-        "empty": len(rows) == 0,
-        "expected_present": present,
-        "expected_top": top,
-        "first_path": first,
-        "result_count": len(rows),
-        "output_chars": len(text),
-        "score": 2 if top else 1 if present else 0,
-    }
-
-
-class McpProcess:
-    def __init__(self, args: list[str], timeout: int = 60) -> None:
-        self.proc = subprocess.Popen(
-            args,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-        )
-        self.next_id = 1
-        self.stderr_lines: list[str] = []
-        init = self.request(
-            "initialize",
-            {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {"name": "miller-julie-bench", "version": "0"},
-            },
-            timeout=timeout,
-        )
-        if "error" in init:
-            raise RuntimeError(init["error"])
-        self.notify("notifications/initialized", {})
-
-    def notify(self, method: str, params: dict[str, Any]) -> None:
-        assert self.proc.stdin is not None
-        self.proc.stdin.write(json.dumps({"jsonrpc": "2.0", "method": method, "params": params}) + "\n")
-        self.proc.stdin.flush()
-
-    def request(self, method: str, params: dict[str, Any], timeout: int = 60) -> dict[str, Any]:
-        request_id = self.next_id
-        self.next_id += 1
-        assert self.proc.stdin is not None
-        self.proc.stdin.write(
-            json.dumps({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}) + "\n"
-        )
-        self.proc.stdin.flush()
-        return self._read_response(request_id, timeout)
-
-    def call_tool(self, name: str, arguments: dict[str, Any], timeout: int = 90) -> tuple[int, dict[str, Any]]:
-        start = now_ms()
-        response = self.request("tools/call", {"name": name, "arguments": arguments}, timeout=timeout)
-        return now_ms() - start, response
-
-    def _read_response(self, request_id: int, timeout: int) -> dict[str, Any]:
-        assert self.proc.stdout is not None
-        assert self.proc.stderr is not None
-        start = time.perf_counter()
-        while time.perf_counter() - start < timeout:
-            readable, _, _ = select.select([self.proc.stdout, self.proc.stderr], [], [], 0.1)
-            for stream in readable:
-                line = stream.readline()
-                if not line:
-                    continue
-                if stream is self.proc.stderr:
-                    self.stderr_lines.append(line.rstrip())
-                    continue
-                try:
-                    message = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if message.get("id") == request_id:
-                    return message
-        raise TimeoutError(f"timed out waiting for JSON-RPC id {request_id}")
-
-    def close(self) -> None:
-        self.proc.terminate()
-        try:
-            self.proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            self.proc.kill()
 
 
 def miller_search_cli(repo: RepoCase, query: str, expected: str, mode: str, json_output: bool = True) -> dict[str, Any]:
@@ -406,47 +265,6 @@ def miller_refresh(repo: RepoCase) -> dict[str, Any]:
         "text": stdout.strip().replace("\n", "\\n"),
         "error": stderr.strip().replace("\n", "\\n") if code != 0 else "",
     }
-
-
-def summarize(rows: list[dict[str, Any]]) -> str:
-    lines: list[str] = []
-    lines.append("| tool | tasks | top | present | empty | median ms | p95 ms | median chars |")
-    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|")
-    for tool in sorted({row["tool"] for row in rows}):
-        bucket = [row for row in rows if row["tool"] == tool]
-        ms = [int(row["ms"]) for row in bucket]
-        chars = [int(row["output_chars"]) for row in bucket]
-        p95_index = max(0, math.ceil(len(ms) * 0.95) - 1) if ms else 0
-        p95 = sorted(ms)[p95_index] if ms else 0
-        lines.append(
-            f"| {tool} | {len(bucket)} | "
-            f"{sum(1 for row in bucket if row['expected_top'])} | "
-            f"{sum(1 for row in bucket if row['expected_present'])} | "
-            f"{sum(1 for row in bucket if row['empty'])} | "
-            f"{int(statistics.median(ms)) if ms else 0} | {p95} | "
-            f"{int(statistics.median(chars)) if chars else 0} |"
-        )
-    return "\n".join(lines)
-
-
-def summarize_by_task(rows: list[dict[str, Any]]) -> str:
-    lines: list[str] = []
-    lines.append("| task | tool | tasks | top | present | empty | median ms | median chars |")
-    lines.append("|---|---|---:|---:|---:|---:|---:|---:|")
-    keys = sorted({(row["task"], row["tool"]) for row in rows})
-    for task, tool in keys:
-        bucket = [row for row in rows if row["task"] == task and row["tool"] == tool]
-        ms = [int(row["ms"]) for row in bucket]
-        chars = [int(row["output_chars"]) for row in bucket]
-        lines.append(
-            f"| {task} | {tool} | {len(bucket)} | "
-            f"{sum(1 for row in bucket if row['expected_top'])} | "
-            f"{sum(1 for row in bucket if row['expected_present'])} | "
-            f"{sum(1 for row in bucket if row['empty'])} | "
-            f"{int(statistics.median(ms)) if ms else 0} | "
-            f"{int(statistics.median(chars)) if chars else 0} |"
-        )
-    return "\n".join(lines)
 
 
 def gate_threshold(n: int, numerator: int, denominator: int) -> int:
@@ -653,7 +471,7 @@ def main() -> int:
         "",
         "Scoring: `top` means the first visible file/result was the expected file. `present` means the expected file appeared anywhere in the output. `empty` means the tool returned a no-result/not-found/index-required response.",
         "",
-        summarize(rows),
+        summarize_by_tool(rows),
         "",
         "## Breakdown By Task",
         "",
