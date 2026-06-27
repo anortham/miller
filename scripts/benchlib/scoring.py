@@ -69,3 +69,101 @@ def score_miller_search_json(text: str, expected_file: str) -> dict[str, Any]:
         "output_chars": len(text),
         "score": 2 if top else 1 if present else 0,
     }
+
+
+def json_row_path(row: dict[str, Any]) -> str:
+    return str(row.get("file") or row.get("path") or row.get("display_path") or "")
+
+
+def json_result_rows(text: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    diagnostics: list[dict[str, Any]] = []
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        diagnostics.append(
+            {
+                "type": "parse_failure",
+                "format": "json",
+                "message": str(exc),
+                "line": exc.lineno,
+                "column": exc.colno,
+            }
+        )
+        return [], diagnostics
+
+    rows: Any = parsed
+    if isinstance(parsed, dict) and "results" in parsed:
+        rows = parsed["results"]
+    if not isinstance(rows, list):
+        diagnostics.append(
+            {
+                "type": "parse_failure",
+                "format": "json",
+                "message": "expected a JSON list or an object with a results list",
+            }
+        )
+        return [], diagnostics
+
+    dict_rows = [row for row in rows if isinstance(row, dict)]
+    if len(dict_rows) != len(rows):
+        diagnostics.append(
+            {
+                "type": "parse_warning",
+                "format": "json",
+                "message": "ignored non-object result rows",
+                "ignored_rows": len(rows) - len(dict_rows),
+            }
+        )
+    return dict_rows, diagnostics
+
+
+def score_manifest_path(
+    text: str,
+    expected: dict[str, Any],
+    scoring: dict[str, Any],
+    *,
+    parse_json: bool = False,
+) -> dict[str, Any]:
+    mode = scoring.get("mode")
+    if mode != "path_present":
+        raise ValueError(f"unsupported scoring mode: {mode!r}")
+
+    expected_path = str(expected.get("path") or "")
+    if not expected_path:
+        raise ValueError("expected.path is required for path_present scoring")
+
+    diagnostics: list[dict[str, Any]] = []
+    if parse_json:
+        rows, diagnostics = json_result_rows(text)
+        first = json_row_path(rows[0]) if rows else ""
+        present = any(json_row_path(row) == expected_path for row in rows)
+        top = first == expected_path
+        scored = {
+            "empty": len(rows) == 0,
+            "expected_present": present,
+            "expected_top": top,
+            "first_path": first,
+            "result_count": len(rows),
+            "output_chars": len(text),
+            "score": 2 if top else 1 if present else 0,
+        }
+        if diagnostics and not rows:
+            fallback = score_text(text, expected_path)
+            scored.update(
+                {
+                    "empty": fallback["empty"],
+                    "expected_present": fallback["expected_present"],
+                    "expected_top": fallback["expected_top"],
+                    "first_path": fallback["first_path"],
+                    "score": fallback["score"],
+                }
+            )
+            scored["result_count"] = ""
+    else:
+        scored = score_text(text, expected_path)
+        scored["result_count"] = ""
+
+    anchor = expected.get("anchor")
+    scored["anchor_present"] = bool(anchor and str(anchor) in text) if anchor else ""
+    scored["diagnostics"] = diagnostics
+    return scored

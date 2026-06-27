@@ -1,0 +1,209 @@
+{
+  "schema_version": 1,
+  "rows": [
+    {
+      "id": "miller.retrieval.symbol.searchtool",
+      "repo": "miller",
+      "task_class": "retrieval.symbol",
+      "intent": "Find Miller's search MCP tool implementation by symbol name.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "SearchTool",
+          "mode": "auto",
+          "limit": 5,
+          "format": "json"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "SearchTool",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Miller.Server/Tools/SearchTool.cs",
+        "anchor": "class SearchTool"
+      },
+      "scoring": {
+        "mode": "path_present",
+        "top_path": true
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.inspect.overview.searchtool",
+      "repo": "miller",
+      "task_class": "inspect.overview",
+      "intent": "Resolve Miller's search MCP tool implementation through inspect overview.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "SearchTool",
+          "depth": "overview",
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "SearchTool",
+          "depth": "overview"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Miller.Server/Tools/SearchTool.cs",
+        "anchor": "SearchTool"
+      },
+      "scoring": {
+        "mode": "path_present",
+        "top_path": true
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "flask.retrieval.symbol.flask-class",
+      "repo": "flask",
+      "task_class": "retrieval.symbol",
+      "intent": "Find the canonical Flask application class by symbol name.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "Flask",
+          "mode": "auto",
+          "limit": 5,
+          "format": "json"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "Flask",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/flask/app.py",
+        "anchor": "class Flask"
+      },
+      "scoring": {
+        "mode": "path_present",
+        "top_path": true
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "flask.inspect.overview.flask-class",
+      "repo": "flask",
+      "task_class": "inspect.overview",
+      "intent": "Resolve the canonical Flask application class.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "Flask",
+          "depth": "overview",
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "Flask",
+          "depth": "overview"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/flask/app.py",
+        "anchor": "class Flask"
+      },
+      "scoring": {
+        "mode": "path_present",
+        "top_path": true
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "zod.retrieval.symbol.zodobject",
+      "repo": "zod",
+      "task_class": "retrieval.symbol",
+      "intent": "Find Zod's object schema class by symbol name.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "ZodObject",
+          "mode": "auto",
+          "limit": 5,
+          "format": "json"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "ZodObject",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "packages/zod/src/v4/classic/schemas.ts",
+        "anchor": "class ZodObject"
+      },
+      "scoring": {
+        "mode": "path_present",
+        "top_path": true
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "zod.inspect.overview.zodobject",
+      "repo": "zod",
+      "task_class": "inspect.overview",
+      "intent": "Resolve Zod's object schema class through inspect overview.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "ZodObject",
+          "depth": "overview",
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "ZodObject",
+          "depth": "overview"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "packages/zod/src/v4/classic/schemas.ts",
+        "anchor": "ZodObject"
+      },
+      "scoring": {
+        "mode": "path_present",
+        "top_path": true
+      },
+      "gate": {
+        "hard": true
+      }
+    }
+  ]
+}
