@@ -17,7 +17,7 @@ These are the only hard gates for this final baseline run. They protect shipped 
 ## Report-Only Miss Summary
 
 - Julie rows are report-only: 0/1 present, 0/1 top-ranked, 0/1 selected-mode pass, 1 skipped.
-- miller.cli latency/output-size are report-only: median 203 ms, median 8806 chars across 1 rows.
-- miller.inspect latency/output-size are report-only: median 51 ms, median 2736 chars across 1 rows.
+- miller.cli latency/output-size are report-only: median 206 ms, median 8806 chars across 1 rows.
+- miller.inspect latency/output-size are report-only: median 53 ms, median 2736 chars across 1 rows.
 - No metrics CLI contract rows are present in this manifest; metrics remain report-only.
 - Adoption and telemetry interpretation remains report-only; parseability evidence lives in the Task 6 adoption run.

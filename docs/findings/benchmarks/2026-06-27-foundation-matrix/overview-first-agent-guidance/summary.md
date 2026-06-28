@@ -14,16 +14,16 @@ Calibrated hard gates are named aggregate thresholds for original-nine Miller re
 | tool | tasks | pass | top | present | empty | median ms | p95 ms | median chars |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | julie.deep_dive | 1 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
-| miller.cli | 1 | 1 | 0 | 1 | 0 | 203 | 203 | 8806 |
-| miller.inspect | 1 | 1 | 1 | 1 | 0 | 51 | 51 | 2736 |
+| miller.cli | 1 | 1 | 0 | 1 | 0 | 206 | 206 | 8806 |
+| miller.inspect | 1 | 1 | 1 | 1 | 0 | 53 | 53 | 2736 |
 
 ## Breakdown By Task Class
 
 | task class | tool | route | rows | hard | pass | present | top | anchors | readiness | empty | adaptations | median ms |
 |---|---|---|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|
-| contract.cli.json | miller.cli | cli | 1 | 1 | 1 | 1 | 0 |  |  | 0 | 0 | 203 |
+| contract.cli.json | miller.cli | cli | 1 | 1 | 1 | 1 | 0 |  |  | 0 | 0 | 206 |
 | inspect.overview | julie.deep_dive | skipped | 1 | 0 | 0 | 0 | 0 |  | unsupported | 1 | 0 | 0 |
-| inspect.overview | miller.inspect | mcp | 1 | 1 | 1 | 1 | 1 |  |  | 0 | 0 | 51 |
+| inspect.overview | miller.inspect | mcp | 1 | 1 | 1 | 1 | 1 |  |  | 0 | 0 | 53 |
 
 Raw CSV: `docs/findings/benchmarks/2026-06-27-foundation-matrix/overview-first-agent-guidance/results.csv`
 Raw JSON: `docs/findings/benchmarks/2026-06-27-foundation-matrix/overview-first-agent-guidance/results.json`

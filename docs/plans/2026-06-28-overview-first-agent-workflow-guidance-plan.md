@@ -200,15 +200,15 @@ If existing rows cannot prove the focused evidence, stop and report a plan misma
 **Approach:** Run the project fast suite and required sync checks after the focused tasks. Update this plan's task checkboxes only after the evidence exists. Save a Goldfish checkpoint before the final commit so future sessions can recover the implementation context.
 
 **Acceptance criteria:**
-- [ ] `scripts/sync-plugin-skills.sh` has been run.
-- [ ] `diff -qr .agents/skills skills` reports no differences.
-- [ ] If `CLAUDE.md` changed, `scripts/sync-agents.sh` has been run and `cmp -s CLAUDE.md AGENTS.md` passes.
-- [ ] `dotnet test tests/Miller.Tests/Miller.Tests.csproj --no-restore --filter "FullyQualifiedName~AgentInstructionsTests|FullyQualifiedName~WorkspaceRenderTests"` passes.
-- [ ] Focused foundation matrix gate from Task 5 passes.
-- [ ] `scripts/test.sh` passes.
-- [ ] `git diff --check` passes.
-- [ ] Goldfish checkpoint records what changed, why, verification evidence, and any remaining follow-up.
-- [ ] Final local commit includes source, docs, generated evidence, synced skill mirror files, and checkpoint.
+- [x] `scripts/sync-plugin-skills.sh` has been run.
+- [x] `diff -qr .agents/skills skills` reports no differences.
+- [x] If `CLAUDE.md` changed, `scripts/sync-agents.sh` has been run and `cmp -s CLAUDE.md AGENTS.md` passes.
+- [x] `dotnet test tests/Miller.Tests/Miller.Tests.csproj --no-restore --filter "FullyQualifiedName~AgentInstructionsTests|FullyQualifiedName~WorkspaceRenderTests"` passes.
+- [x] Focused foundation matrix gate from Task 5 passes.
+- [x] `scripts/test.sh` passes.
+- [x] `git diff --check` passes.
+- [x] Goldfish checkpoint records what changed, why, verification evidence, and any remaining follow-up.
+- [x] Final local commit includes source, docs, generated evidence, synced skill mirror files, and checkpoint.
 
 ## Verification Strategy
 
