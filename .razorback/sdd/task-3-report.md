@@ -71,3 +71,17 @@ Foundation matrix gate status: PASS.
 
 - No blockers.
 - Julie docs content for `External Extract CLI` resolves to the historical implementation-plan doc before the agent-instructions file in the live content corpus, so that row expects the implementation-plan path while still anchoring the same reviewed phrase.
+
+## Fix Note: Scoring Contract Review
+
+- Issue fixed: `expected_present` is no longer overloaded for `path_top` rows. It now always records whether an expected path appeared anywhere, while `expected_top` records first-path match.
+- Added output fields: `scoring_mode` and `scoring_pass` in JSON and CSV evidence. `scoring_pass` is mode-aware: it equals `expected_top` for `path_top`, otherwise it follows expected-path presence.
+- Updated gate behavior: `adaptation_candidate` and hard-gate failures use `scoring_pass`; `path_top` rows that are present but not first report `expected path was not top-ranked`.
+- Updated CSV generation to use LF line endings so regenerated evidence passes whitespace hygiene.
+- Regenerated evidence in `docs/findings/benchmarks/2026-06-27-foundation-matrix/task3-retrieval-inspect-ambiguity/`.
+- Verification for fix:
+  - `python3 -m py_compile scripts/benchlib/*.py scripts/bench-julie-miller-search-inspect.py scripts/bench-foundation-matrix.py`: PASS.
+  - `python3 scripts/bench-julie-miller-search-inspect.py --repos miller --skip-julie --skip-miller-refresh --gate --out-dir /tmp/miller-search-inspect-task3-fix`: PASS.
+  - `python3 scripts/bench-foundation-matrix.py --repos all --skip-julie --out-dir docs/findings/benchmarks/2026-06-27-foundation-matrix/task3-retrieval-inspect-ambiguity --gate`: PASS.
+  - Scoring contract assertion: PASS, `scoring contract ok 15`.
+  - `git diff --check`: PASS.

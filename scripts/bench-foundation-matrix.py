@@ -44,6 +44,8 @@ CSV_FIELDS = [
     "tool",
     "route",
     "hard_gate",
+    "scoring_mode",
+    "scoring_pass",
     "expected_present",
     "expected_top",
     "empty",
@@ -264,8 +266,10 @@ def result_from_score(
     if diagnostics:
         row_diagnostics.extend(diagnostics)
     expected_present = bool(scored.get("expected_present"))
+    scoring_pass = bool(scored.get("scoring_pass"))
     empty = bool(scored.get("empty"))
     anchor_missing = scored.get("anchor_present") is False
+    scoring_mode = str(scored.get("scoring_mode") or row["scoring"]["mode"])
     return {
         "row_id": row["id"],
         "repo": row["repo"],
@@ -274,13 +278,15 @@ def result_from_score(
         "tool": tool,
         "route": route,
         "hard_gate": hard_gate,
+        "scoring_mode": scoring_mode,
+        "scoring_pass": scoring_pass,
         "expected_present": expected_present,
         "expected_top": bool(scored.get("expected_top")),
         "empty": empty,
         "ms": int(ms),
         "output_chars": int(scored.get("output_chars") or 0),
         "first_path": str(scored.get("first_path") or ""),
-        "adaptation_candidate": bool(hard_gate and (empty or not expected_present or anchor_missing)),
+        "adaptation_candidate": bool(hard_gate and (empty or not scoring_pass or anchor_missing)),
         "expected_path": row["expected"]["path"],
         "anchor_present": scored.get("anchor_present", ""),
         "result_count": scored.get("result_count", ""),
@@ -299,6 +305,7 @@ def skipped_result(row: dict[str, Any], *, tool: str, reason: str) -> dict[str, 
             "empty": True,
             "expected_present": False,
             "expected_top": False,
+            "scoring_pass": False,
             "first_path": "",
             "output_chars": 0,
             "anchor_present": "",
@@ -410,6 +417,10 @@ def gate_failures(results: list[dict[str, Any]]) -> list[str]:
             failures.append(f"{row['row_id']}/{row['tool']}: output was empty")
         elif not row["expected_present"]:
             failures.append(f"{row['row_id']}/{row['tool']}: expected path was absent")
+        elif not row["scoring_pass"] and row.get("scoring_mode") == "path_top":
+            failures.append(f"{row['row_id']}/{row['tool']}: expected path was not top-ranked")
+        elif not row["scoring_pass"]:
+            failures.append(f"{row['row_id']}/{row['tool']}: scoring mode {row['scoring_mode']} did not pass")
         elif row["anchor_present"] is False:
             failures.append(f"{row['row_id']}/{row['tool']}: expected anchor was absent")
     return failures
@@ -427,7 +438,7 @@ def write_outputs(
 
     csv_path = out_dir / "results.csv"
     with csv_path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=CSV_FIELDS, extrasaction="ignore")
+        writer = csv.DictWriter(f, fieldnames=CSV_FIELDS, extrasaction="ignore", lineterminator="\n")
         writer.writeheader()
         writer.writerows(results)
 
@@ -465,7 +476,7 @@ def write_outputs(
         f"Manifest: `{manifest_path}`",
         f"Repos: {', '.join(selected_repos)}",
         "",
-        "Scoring: `present` means the expected file path appeared in the result. `top` records whether the first parsed path was the expected file. Hard gates require presence, while Julie rows are report-only.",
+        "Scoring: `present` means the expected file path appeared in the result. `top` records whether the first parsed path was the expected file. `pass` records the selected scoring mode: top-ranked for `path_top`, otherwise presence. Hard gates require the selected scoring mode to pass, while Julie rows are report-only.",
         "",
         summarize_by_tool(results),
         "",

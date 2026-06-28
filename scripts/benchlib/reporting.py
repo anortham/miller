@@ -18,10 +18,14 @@ def _task_name(row: dict[str, Any]) -> str:
     return str(row.get("task") or row.get("task_class") or "")
 
 
+def _passed(row: dict[str, Any]) -> bool:
+    return bool(row.get("scoring_pass", row.get("expected_present")))
+
+
 def summarize_by_tool(rows: list[dict[str, Any]]) -> str:
     lines: list[str] = []
-    lines.append("| tool | tasks | top | present | empty | median ms | p95 ms | median chars |")
-    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append("| tool | tasks | pass | top | present | empty | median ms | p95 ms | median chars |")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|")
     for tool in sorted({row["tool"] for row in rows}):
         bucket = [row for row in rows if row["tool"] == tool]
         ms = [_as_int(row["ms"]) for row in bucket]
@@ -30,6 +34,7 @@ def summarize_by_tool(rows: list[dict[str, Any]]) -> str:
         p95 = sorted(ms)[p95_index] if ms else 0
         lines.append(
             f"| {tool} | {len(bucket)} | "
+            f"{sum(1 for row in bucket if _passed(row))} | "
             f"{sum(1 for row in bucket if row.get('expected_top'))} | "
             f"{sum(1 for row in bucket if row.get('expected_present'))} | "
             f"{sum(1 for row in bucket if row.get('empty'))} | "
@@ -61,8 +66,8 @@ def summarize_by_task(rows: list[dict[str, Any]]) -> str:
 
 def summarize_foundation_matrix(rows: list[dict[str, Any]]) -> str:
     lines: list[str] = []
-    lines.append("| task class | tool | route | rows | hard | present | top | empty | adaptations | median ms |")
-    lines.append("|---|---|---|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append("| task class | tool | route | rows | hard | pass | present | top | empty | adaptations | median ms |")
+    lines.append("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|")
     keys = sorted({(str(row["task_class"]), str(row["tool"]), str(row["route"])) for row in rows})
     for task_class, tool, route in keys:
         bucket = [
@@ -74,6 +79,7 @@ def summarize_foundation_matrix(rows: list[dict[str, Any]]) -> str:
         lines.append(
             f"| {task_class} | {tool} | {route} | {len(bucket)} | "
             f"{sum(1 for row in bucket if row.get('hard_gate'))} | "
+            f"{sum(1 for row in bucket if _passed(row))} | "
             f"{sum(1 for row in bucket if row.get('expected_present'))} | "
             f"{sum(1 for row in bucket if row.get('expected_top'))} | "
             f"{sum(1 for row in bucket if row.get('empty'))} | "

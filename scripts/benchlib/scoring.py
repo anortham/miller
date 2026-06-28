@@ -46,11 +46,11 @@ def score_text_paths(text: str, expected_files: list[str], *, require_top: bool 
     present = any(expected_file in text for expected_file in expected_files)
     first = first_path(text)
     top = first in expected_files
-    expected_present = top if require_top else present
     return {
         "empty": False if present else is_empty_text(text),
-        "expected_present": expected_present,
+        "expected_present": present,
         "expected_top": top,
+        "scoring_pass": top if require_top else present,
         "first_path": first or "",
         "output_chars": len(text),
         "score": 2 if top else 1 if present else 0,
@@ -155,11 +155,11 @@ def score_json_rows(
     first = json_row_path(rows[0]) if rows else ""
     present = any(json_row_path(row) in expected_files for row in rows)
     top = first in expected_files
-    expected_present = top if require_top else present
     return {
         "empty": len(rows) == 0,
-        "expected_present": expected_present,
+        "expected_present": present,
         "expected_top": top,
+        "scoring_pass": top if require_top else present,
         "first_path": first,
         "result_count": len(rows),
         "output_chars": output_chars,
@@ -192,6 +192,7 @@ def score_manifest_path(
                     "empty": fallback["empty"],
                     "expected_present": fallback["expected_present"],
                     "expected_top": fallback["expected_top"],
+                    "scoring_pass": fallback["scoring_pass"],
                     "first_path": fallback["first_path"],
                     "score": fallback["score"],
                 }
@@ -203,5 +204,6 @@ def score_manifest_path(
 
     anchor = expected.get("anchor")
     scored["anchor_present"] = bool(anchor and str(anchor) in text) if anchor else ""
+    scored["scoring_mode"] = mode
     scored["diagnostics"] = diagnostics
     return scored
