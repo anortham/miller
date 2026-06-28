@@ -12,6 +12,7 @@ REFERENCE_LINE_RE = re.compile(r"^\s+\S.*:\d+\s+")
 SECTION_COUNT_RE = re.compile(r"^# (?P<section>impacted|likely tests) \((?P<count>\d+)\)", re.MULTILINE)
 PATH_SCORING_MODES = {"path_present", "path_top", "path_any_present"}
 WORKFLOW_SCORING_MODES = {"workflow_anchors", "trace_refs", "trace_path", "trace_bridge", "impact_targets"}
+CONTRACT_SCORING_MODES = {"contract_json", "contract_jsonl"}
 NOISE_DIAGNOSTIC_PHRASES = {
     "Multiple candidates": "trace_ambiguous",
     "No extracted refs": "trace_no_refs",
@@ -180,6 +181,335 @@ def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item) for item in value if isinstance(item, str) and item]
+
+
+def _field_present(data: Any, path: str) -> bool:
+    current = data
+    for part in path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return False
+        current = current[part]
+    return True
+
+
+def _field_counts(data: Any, fields: list[str]) -> tuple[int, list[str]]:
+    missing = [field for field in fields if not _field_present(data, field)]
+    return len(fields) - len(missing), missing
+
+
+def _rows_at_path(data: Any, path: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    diagnostics: list[dict[str, Any]] = []
+    current = data
+    if path:
+        for part in path.split("."):
+            if not isinstance(current, dict) or part not in current:
+                diagnostics.append({"type": "missing_rows_path", "path": path})
+                return [], diagnostics
+            current = current[part]
+
+    if not isinstance(current, list):
+        if path:
+            diagnostics.append({"type": "invalid_rows_path", "path": path, "expected": "list"})
+        return [], diagnostics
+
+    rows = [row for row in current if isinstance(row, dict)]
+    if len(rows) != len(current):
+        diagnostics.append(
+            {
+                "type": "parse_warning",
+                "format": "json",
+                "message": "ignored non-object rows",
+                "ignored_rows": len(current) - len(rows),
+            }
+        )
+    return rows, diagnostics
+
+
+def _sample_limit(scoring: dict[str, Any]) -> int:
+    value = scoring.get("sample_limit")
+    if isinstance(value, int) and value > 0:
+        return value
+    return 20
+
+
+def _min_rows(scoring: dict[str, Any], row_fields: list[str]) -> int:
+    value = scoring.get("min_rows")
+    if isinstance(value, int) and value >= 0:
+        return value
+    return 1 if row_fields else 0
+
+
+def _score_row_fields(
+    rows: list[dict[str, Any]],
+    fields: list[str],
+    *,
+    min_rows: int,
+) -> tuple[int, int, list[dict[str, Any]]]:
+    diagnostics: list[dict[str, Any]] = []
+    if len(rows) < min_rows:
+        diagnostics.append({"type": "missing_rows", "required": min_rows, "actual": len(rows)})
+
+    total = len(rows) * len(fields)
+    present = 0
+    for index, row in enumerate(rows):
+        _, missing = _field_counts(row, fields)
+        present += len(fields) - len(missing)
+        if missing:
+            diagnostics.append({"type": "missing_required_row_fields", "row": index, "fields": missing})
+    return present, total, diagnostics
+
+
+def _add_command_variants(commands: set[str], command: str) -> None:
+    command = command.strip()
+    if not command:
+        return
+    commands.add(command)
+    if command.startswith("miller "):
+        commands.add(command.removeprefix("miller "))
+    else:
+        commands.add(f"miller {command}")
+
+
+def _advertised_commands(capabilities: Any) -> set[str]:
+    if not isinstance(capabilities, dict):
+        return set()
+
+    commands: set[str] = set()
+    for command in capabilities.get("json_commands", []):
+        if isinstance(command, str):
+            _add_command_variants(commands, command)
+    for contract in capabilities.get("json_contracts", []):
+        if isinstance(contract, dict) and isinstance(contract.get("command"), str):
+            _add_command_variants(commands, contract["command"])
+    for export in capabilities.get("supported_export_formats", []):
+        if isinstance(export, dict) and isinstance(export.get("command"), str):
+            _add_command_variants(commands, export["command"])
+    return commands
+
+
+def _score_advertised_commands(capabilities: Any, commands: list[str]) -> tuple[int, list[str]]:
+    advertised = _advertised_commands(capabilities)
+    missing = [command for command in commands if command not in advertised]
+    return len(commands) - len(missing), missing
+
+
+def _contract_result(
+    *,
+    mode: str,
+    output_chars: int,
+    empty: bool,
+    parse_ok: bool,
+    outcome: str,
+    scoring_pass: bool,
+    diagnostics: list[dict[str, Any]],
+    required_fields_present: int = 0,
+    required_fields_total: int = 0,
+    required_row_fields_present: int = 0,
+    required_row_fields_total: int = 0,
+    advertised_commands_present: int = 0,
+    advertised_commands_total: int = 0,
+    result_count: int | str = "",
+    sampled_jsonl_rows: int = 0,
+    jsonl_non_empty_lines: int = 0,
+) -> dict[str, Any]:
+    return {
+        "empty": empty,
+        "expected_present": parse_ok,
+        "expected_top": False,
+        "first_path": "",
+        "output_chars": output_chars,
+        "result_count": result_count,
+        "anchor_present": "",
+        "score": int(scoring_pass),
+        "scoring_pass": scoring_pass,
+        "scoring_mode": mode,
+        "contract_parse_ok": parse_ok,
+        "required_fields_present": required_fields_present,
+        "required_fields_total": required_fields_total,
+        "required_row_fields_present": required_row_fields_present,
+        "required_row_fields_total": required_row_fields_total,
+        "advertised_commands_present": advertised_commands_present,
+        "advertised_commands_total": advertised_commands_total,
+        "sampled_jsonl_rows": sampled_jsonl_rows,
+        "jsonl_non_empty_lines": jsonl_non_empty_lines,
+        "contract_outcome": outcome,
+        "diagnostics": diagnostics,
+    }
+
+
+def score_contract_json(
+    text: str,
+    expected: dict[str, Any],
+    scoring: dict[str, Any],
+    capabilities: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    diagnostics: list[dict[str, Any]] = []
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        return _contract_result(
+            mode="contract_json",
+            output_chars=len(text),
+            empty=not bool(text.strip()),
+            parse_ok=False,
+            outcome="malformed_json",
+            scoring_pass=False,
+            diagnostics=[
+                {
+                    "type": "parse_failure",
+                    "format": "json",
+                    "message": str(exc),
+                    "line": exc.lineno,
+                    "column": exc.colno,
+                }
+            ],
+        )
+
+    required_fields = _string_list(scoring.get("required_fields"))
+    required_fields_present, missing_fields = _field_counts(parsed, required_fields)
+    if missing_fields:
+        diagnostics.append({"type": "missing_required_fields", "fields": missing_fields})
+
+    rows_path = str(scoring.get("rows_path") or "")
+    rows, row_diagnostics = _rows_at_path(parsed, rows_path) if rows_path or isinstance(parsed, list) else ([], [])
+    diagnostics.extend(row_diagnostics)
+    sample_rows = rows[: _sample_limit(scoring)]
+    row_fields = _string_list(scoring.get("required_row_fields"))
+    row_fields_present, row_fields_total, row_field_diagnostics = _score_row_fields(
+        sample_rows,
+        row_fields,
+        min_rows=_min_rows(scoring, row_fields),
+    )
+    diagnostics.extend(row_field_diagnostics)
+
+    advertised_source = capabilities if capabilities is not None else parsed
+    advertised_commands = _string_list(scoring.get("advertises_commands"))
+    advertised_present, missing_commands = _score_advertised_commands(advertised_source, advertised_commands)
+    if missing_commands:
+        diagnostics.append({"type": "missing_capability", "commands": missing_commands})
+
+    if missing_fields:
+        outcome = "missing_required_fields"
+    elif row_field_diagnostics:
+        outcome = "missing_required_row_fields"
+    elif missing_commands:
+        outcome = "missing_capability"
+    else:
+        outcome = "ok"
+
+    return _contract_result(
+        mode="contract_json",
+        output_chars=len(text),
+        empty=False,
+        parse_ok=True,
+        outcome=outcome,
+        scoring_pass=outcome == "ok",
+        diagnostics=diagnostics,
+        required_fields_present=required_fields_present,
+        required_fields_total=len(required_fields),
+        required_row_fields_present=row_fields_present,
+        required_row_fields_total=row_fields_total,
+        advertised_commands_present=advertised_present,
+        advertised_commands_total=len(advertised_commands),
+        result_count=len(rows) if rows_path or isinstance(parsed, list) else "",
+    )
+
+
+def score_contract_jsonl(
+    text: str,
+    expected: dict[str, Any],
+    scoring: dict[str, Any],
+    capabilities: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    del expected
+    diagnostics: list[dict[str, Any]] = []
+    lines = [line for line in text.splitlines() if line.strip()]
+    sample_lines = lines[: _sample_limit(scoring)]
+    empty_allowed = bool(scoring.get("empty_allowed"))
+
+    if not lines:
+        outcome = "empty_allowed" if empty_allowed else "empty"
+        return _contract_result(
+            mode="contract_jsonl",
+            output_chars=len(text),
+            empty=True,
+            parse_ok=True,
+            outcome=outcome,
+            scoring_pass=empty_allowed,
+            diagnostics=[] if empty_allowed else [{"type": "empty_jsonl"}],
+            jsonl_non_empty_lines=0,
+        )
+
+    rows: list[dict[str, Any]] = []
+    for index, line in enumerate(sample_lines):
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError as exc:
+            diagnostics.append(
+                {
+                    "type": "parse_failure",
+                    "format": "jsonl",
+                    "line_index": index,
+                    "message": str(exc),
+                    "line": exc.lineno,
+                    "column": exc.colno,
+                }
+            )
+            continue
+        if not isinstance(parsed, dict):
+            diagnostics.append({"type": "parse_failure", "format": "jsonl", "line_index": index, "message": "expected object"})
+            continue
+        rows.append(parsed)
+
+    if any(diagnostic.get("type") == "parse_failure" for diagnostic in diagnostics):
+        return _contract_result(
+            mode="contract_jsonl",
+            output_chars=len(text),
+            empty=False,
+            parse_ok=False,
+            outcome="malformed_jsonl",
+            scoring_pass=False,
+            diagnostics=diagnostics,
+            sampled_jsonl_rows=len(rows),
+            jsonl_non_empty_lines=len(lines),
+        )
+
+    required_fields = _string_list(scoring.get("required_fields"))
+    fields_present, fields_total, field_diagnostics = _score_row_fields(
+        rows,
+        required_fields,
+        min_rows=_min_rows(scoring, required_fields),
+    )
+    diagnostics.extend(field_diagnostics)
+
+    advertised_commands = _string_list(scoring.get("advertises_commands"))
+    advertised_present, missing_commands = _score_advertised_commands(capabilities, advertised_commands)
+    if missing_commands:
+        diagnostics.append({"type": "missing_capability", "commands": missing_commands})
+
+    if field_diagnostics:
+        outcome = "missing_required_fields"
+    elif missing_commands:
+        outcome = "missing_capability"
+    else:
+        outcome = "ok"
+
+    return _contract_result(
+        mode="contract_jsonl",
+        output_chars=len(text),
+        empty=False,
+        parse_ok=True,
+        outcome=outcome,
+        scoring_pass=outcome == "ok",
+        diagnostics=diagnostics,
+        required_fields_present=fields_present,
+        required_fields_total=fields_total,
+        advertised_commands_present=advertised_present,
+        advertised_commands_total=len(advertised_commands),
+        result_count=len(rows),
+        sampled_jsonl_rows=len(rows),
+        jsonl_non_empty_lines=len(lines),
+    )
 
 
 def _first_present_anchor(text: str, anchors: list[str]) -> str:
@@ -351,10 +681,15 @@ def score_manifest_path(
     scoring: dict[str, Any],
     *,
     parse_json: bool = False,
+    capabilities: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     mode = scoring.get("mode")
-    if mode not in PATH_SCORING_MODES | WORKFLOW_SCORING_MODES:
+    if mode not in PATH_SCORING_MODES | WORKFLOW_SCORING_MODES | CONTRACT_SCORING_MODES:
         raise ValueError(f"unsupported scoring mode: {mode!r}")
+    if mode == "contract_json":
+        return score_contract_json(text, expected, scoring, capabilities=capabilities)
+    if mode == "contract_jsonl":
+        return score_contract_jsonl(text, expected, scoring, capabilities=capabilities)
     if mode == "workflow_anchors":
         return score_workflow_anchors(text, expected, scoring)
     if mode == "trace_refs":

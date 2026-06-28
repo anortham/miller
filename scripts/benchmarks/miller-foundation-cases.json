@@ -3359,6 +3359,395 @@
       "gate": {
         "hard": true
       }
+    },
+    {
+      "id": "miller.contract.cli.capabilities",
+      "repo": "miller",
+      "task_class": "contract.cli.json",
+      "intent": "Validate the capabilities discovery JSON contract and hard-gated CLI command advertising.",
+      "route": "cli",
+      "cli": {
+        "args": ["capabilities", "--json"],
+        "format": "json"
+      },
+      "expected": {
+        "path": "docs/contracts/cli-eros-v1.md",
+        "anchor": "capabilities --json"
+      },
+      "scoring": {
+        "mode": "contract_json",
+        "required_fields": [
+          "miller.version",
+          "julie_extract.pinned_version",
+          "julie_extract.schema_version",
+          "artifacts.search_sidecar_schema_version",
+          "artifacts.content_corpus_schema_version",
+          "optional_features.symbol_search_sidecar",
+          "json_commands",
+          "json_contracts",
+          "supported_export_formats"
+        ],
+        "advertises_commands": [
+          "capabilities --json",
+          "workspace status --json",
+          "workspace health --json",
+          "workspace onboarding --json",
+          "search --json",
+          "inspect --json",
+          "context --json",
+          "impact --json",
+          "trace --json",
+          "patterns --json",
+          "content export",
+          "telemetry export --jsonl",
+          "symbols export --jsonl",
+          "references export --jsonl",
+          "complexity export --jsonl"
+        ]
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.contract.cli.workspace-status",
+      "repo": "miller",
+      "task_class": "contract.cli.json",
+      "intent": "Validate workspace status JSON for Eros readiness checks.",
+      "route": "cli",
+      "cli": {
+        "args": ["workspace", "status", "--json", "--workspace-id", "/Users/murphy/source/miller"],
+        "format": "json"
+      },
+      "expected": {
+        "path": "docs/contracts/cli-eros-v1.md",
+        "anchor": "workspace status --json"
+      },
+      "scoring": {
+        "mode": "contract_json",
+        "required_fields": ["workspace", "index", "telemetry"],
+        "advertises_commands": ["workspace status --json"]
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.contract.cli.workspace-health",
+      "repo": "miller",
+      "task_class": "contract.cli.json",
+      "intent": "Validate workspace health JSON for Eros readiness checks.",
+      "route": "cli",
+      "cli": {
+        "args": ["workspace", "health", "--json", "--workspace-id", "/Users/murphy/source/miller"],
+        "format": "json"
+      },
+      "expected": {
+        "path": "docs/contracts/cli-eros-v1.md",
+        "anchor": "workspace health --json"
+      },
+      "scoring": {
+        "mode": "contract_json",
+        "required_fields": ["workspace", "verdict", "warnings", "recommended_actions", "index"],
+        "advertises_commands": ["workspace health --json"]
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.contract.cli.workspace-onboarding",
+      "repo": "miller",
+      "task_class": "contract.cli.json",
+      "intent": "Validate workspace onboarding JSON for privacy-safe Eros startup guidance.",
+      "route": "cli",
+      "cli": {
+        "args": ["workspace", "onboarding", "--json", "--workspace-id", "/Users/murphy/source/miller"],
+        "format": "json"
+      },
+      "expected": {
+        "path": "docs/contracts/cli-eros-v1.md",
+        "anchor": "workspace onboarding --json"
+      },
+      "scoring": {
+        "mode": "contract_json",
+        "required_fields": ["workspace", "operation", "privacy", "start_here", "tool_mix"],
+        "advertises_commands": ["workspace onboarding --json"]
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.contract.cli.search",
+      "repo": "miller",
+      "task_class": "contract.cli.json",
+      "intent": "Validate search JSON rows for Eros deterministic code-fact reads.",
+      "route": "cli",
+      "cli": {
+        "args": ["search", "SearchTool", "--json", "--workspace-id", "/Users/murphy/source/miller"],
+        "format": "json"
+      },
+      "expected": {
+        "path": "docs/contracts/cli-eros-v1.md",
+        "anchor": "search --json"
+      },
+      "scoring": {
+        "mode": "contract_json",
+        "required_row_fields": ["symbol_id", "name", "kind", "file", "line"],
+        "advertises_commands": ["search --json"],
+        "sample_limit": 20
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.contract.cli.inspect",
+      "repo": "miller",
+      "task_class": "contract.cli.json",
+      "intent": "Validate inspect overview JSON for Eros deterministic symbol reads.",
+      "route": "cli",
+      "cli": {
+        "args": ["inspect", "SearchTool", "--json", "--workspace-id", "/Users/murphy/source/miller", "--depth", "overview"],
+        "format": "json"
+      },
+      "expected": {
+        "path": "docs/contracts/cli-eros-v1.md",
+        "anchor": "inspect --json"
+      },
+      "scoring": {
+        "mode": "contract_json",
+        "required_fields": ["symbol", "refs", "callers", "callees", "body_preview"],
+        "advertises_commands": ["inspect --json"]
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.contract.cli.context",
+      "repo": "miller",
+      "task_class": "contract.cli.json",
+      "intent": "Validate context JSON bundle output for Eros deterministic code bundles.",
+      "route": "cli",
+      "cli": {
+        "args": ["context", "search inspect effectiveness", "--json", "--workspace-id", "/Users/murphy/source/miller"],
+        "format": "json"
+      },
+      "expected": {
+        "path": "docs/contracts/cli-eros-v1.md",
+        "anchor": "context --json"
+      },
+      "scoring": {
+        "mode": "contract_json",
+        "required_fields": ["bundle"],
+        "rows_path": "bundle",
+        "required_row_fields": ["name", "kind", "file"],
+        "advertises_commands": ["context --json"],
+        "sample_limit": 20
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.contract.cli.impact",
+      "repo": "miller",
+      "task_class": "contract.cli.json",
+      "intent": "Validate impact JSON for Eros downstream-impact reads.",
+      "route": "cli",
+      "cli": {
+        "args": ["impact", "SearchRoutePlanner.Plan", "--json", "--workspace-id", "/Users/murphy/source/miller"],
+        "format": "json"
+      },
+      "expected": {
+        "path": "docs/contracts/cli-eros-v1.md",
+        "anchor": "impact --json"
+      },
+      "scoring": {
+        "mode": "contract_json",
+        "required_fields": ["impacted", "tests"],
+        "rows_path": "impacted",
+        "required_row_fields": ["symbol_id", "name", "file"],
+        "advertises_commands": ["impact --json"],
+        "sample_limit": 20
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.contract.cli.trace",
+      "repo": "miller",
+      "task_class": "contract.cli.json",
+      "intent": "Validate trace refs JSON for Eros usage-fact reads.",
+      "route": "cli",
+      "cli": {
+        "args": ["trace", "SearchRoutePlanner.Plan", "--json", "--workspace-id", "/Users/murphy/source/miller", "--mode", "refs"],
+        "format": "json"
+      },
+      "expected": {
+        "path": "docs/contracts/cli-eros-v1.md",
+        "anchor": "trace --json"
+      },
+      "scoring": {
+        "mode": "contract_json",
+        "required_fields": ["mode", "target", "resolved_target", "references"],
+        "rows_path": "references",
+        "required_row_fields": ["name", "file", "kind", "line"],
+        "advertises_commands": ["trace --json"],
+        "sample_limit": 20
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.contract.cli.patterns",
+      "repo": "miller",
+      "task_class": "contract.cli.json",
+      "intent": "Validate patterns JSON for Eros structural-fact reads.",
+      "route": "cli",
+      "cli": {
+        "args": ["patterns", "--json", "--workspace-id", "/Users/murphy/source/miller"],
+        "format": "json"
+      },
+      "expected": {
+        "path": "docs/contracts/cli-eros-v1.md",
+        "anchor": "patterns --json"
+      },
+      "scoring": {
+        "mode": "contract_json",
+        "required_fields": ["operation", "patterns", "schema_version"],
+        "rows_path": "patterns",
+        "required_row_fields": ["pattern_id", "count"],
+        "advertises_commands": ["patterns --json"],
+        "sample_limit": 20
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.contract.cli.content-export",
+      "repo": "miller",
+      "task_class": "contract.cli.jsonl",
+      "intent": "Validate content export JSONL chunk rows for Eros semantic ingestion.",
+      "route": "cli",
+      "cli": {
+        "args": ["content", "export"],
+        "format": "jsonl"
+      },
+      "expected": {
+        "path": "docs/contracts/cli-eros-v1.md",
+        "anchor": "miller content export"
+      },
+      "scoring": {
+        "mode": "contract_jsonl",
+        "required_fields": ["schema_version", "chunk_id", "content_kind", "path", "chunk_text", "workspace_id"],
+        "advertises_commands": ["content export"],
+        "sample_limit": 20
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.contract.cli.telemetry-export",
+      "repo": "miller",
+      "task_class": "contract.cli.jsonl",
+      "intent": "Validate telemetry export JSONL rows for Eros dashboard and history ingestion.",
+      "route": "cli",
+      "cli": {
+        "args": ["telemetry", "export", "--jsonl"],
+        "format": "jsonl"
+      },
+      "expected": {
+        "path": "docs/contracts/cli-eros-v1.md",
+        "anchor": "Telemetry JSONL fields"
+      },
+      "scoring": {
+        "mode": "contract_jsonl",
+        "required_fields": ["schema_version", "id", "ts", "tool", "duration_ms", "outcome", "bytes_examined", "bytes_returned", "source_bytes", "metadata_json"],
+        "advertises_commands": ["telemetry export --jsonl"],
+        "sample_limit": 20
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.contract.cli.symbols-export",
+      "repo": "miller",
+      "task_class": "contract.cli.jsonl",
+      "intent": "Validate symbols export JSONL rows for Eros fleet rollups.",
+      "route": "cli",
+      "cli": {
+        "args": ["symbols", "export", "--jsonl", "--workspace-id", "/Users/murphy/source/miller"],
+        "format": "jsonl"
+      },
+      "expected": {
+        "path": "docs/contracts/cli-eros-v1.md",
+        "anchor": "symbols export --jsonl"
+      },
+      "scoring": {
+        "mode": "contract_jsonl",
+        "required_fields": ["schema_version", "symbol_id", "name", "kind", "language", "path", "start_line", "end_line", "has_doc", "is_test"],
+        "advertises_commands": ["symbols export --jsonl"],
+        "sample_limit": 20
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.contract.cli.references-export",
+      "repo": "miller",
+      "task_class": "contract.cli.jsonl",
+      "intent": "Validate references export JSONL rows for Eros usage and dead-code workflows.",
+      "route": "cli",
+      "cli": {
+        "args": ["references", "export", "--jsonl", "--workspace-id", "/Users/murphy/source/miller"],
+        "format": "jsonl"
+      },
+      "expected": {
+        "path": "docs/contracts/cli-eros-v1.md",
+        "anchor": "references export --jsonl"
+      },
+      "scoring": {
+        "mode": "contract_jsonl",
+        "required_fields": ["schema_version", "identifier_id", "name", "reference_kind", "language", "path", "start_line", "end_line", "resolution_status", "workspace_revision"],
+        "advertises_commands": ["references export --jsonl"],
+        "sample_limit": 20
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.contract.cli.complexity-export",
+      "repo": "miller",
+      "task_class": "contract.cli.jsonl",
+      "intent": "Validate complexity export JSONL rows for Eros hotspot workflows.",
+      "route": "cli",
+      "cli": {
+        "args": ["complexity", "export", "--jsonl", "--workspace-id", "/Users/murphy/source/miller"],
+        "format": "jsonl"
+      },
+      "expected": {
+        "path": "docs/contracts/cli-eros-v1.md",
+        "anchor": "complexity export --jsonl"
+      },
+      "scoring": {
+        "mode": "contract_jsonl",
+        "required_fields": ["schema_version", "complexity_metric_id", "path", "language", "scope", "algorithm_id", "start_line", "end_line"],
+        "advertises_commands": ["complexity export --jsonl"],
+        "sample_limit": 20
+      },
+      "gate": {
+        "hard": true
+      }
     }
   ]
 }

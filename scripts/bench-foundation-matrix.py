@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +34,8 @@ REPO_ROOTS = {
     "jq": "/Users/murphy/source/jq",
 }
 
+SUPPORTED_ROUTES = {"mcp", "cli"}
+SUPPORTED_CLI_FORMATS = {"json", "jsonl"}
 SUPPORTED_MILLER_TOOLS = {"search", "inspect", "context", "trace", "impact"}
 SUPPORTED_JULIE_TOOLS = {"fast_search", "deep_dive", "get_context", "fast_refs", "call_path", "blast_radius"}
 SUPPORTED_SCORING_MODES = {
@@ -43,10 +47,12 @@ SUPPORTED_SCORING_MODES = {
     "trace_path",
     "trace_bridge",
     "impact_targets",
+    "contract_json",
+    "contract_jsonl",
 }
 SUPPORTED_READINESS = {"edit-ready", "inspect-ready", "needs-search", "unsupported", "no-path"}
 SUPPORTED_WORKFLOW_OUTCOMES = {"ok", "needs-search", "unsupported", "no-path"}
-REQUIRED_ROW_KEYS = {"id", "repo", "task_class", "intent", "miller", "julie", "expected", "scoring", "gate"}
+BASE_REQUIRED_ROW_KEYS = {"id", "repo", "task_class", "intent", "expected", "scoring", "gate"}
 
 WORKFLOW_CSV_FIELDS = [
     "expected_anchor_count",
@@ -62,6 +68,21 @@ WORKFLOW_CSV_FIELDS = [
     "likely_tests_present",
     "impacted_symbol_count",
     "likely_test_count",
+]
+
+CONTRACT_CSV_FIELDS = [
+    "cli_command",
+    "cli_exit_code",
+    "contract_parse_ok",
+    "required_fields_present",
+    "required_fields_total",
+    "required_row_fields_present",
+    "required_row_fields_total",
+    "advertised_commands_present",
+    "advertised_commands_total",
+    "sampled_jsonl_rows",
+    "jsonl_non_empty_lines",
+    "contract_outcome",
 ]
 
 CSV_FIELDS = [
@@ -83,7 +104,7 @@ CSV_FIELDS = [
     "expected_path",
     "anchor_present",
     "result_count",
-] + WORKFLOW_CSV_FIELDS
+] + WORKFLOW_CSV_FIELDS + CONTRACT_CSV_FIELDS
 
 
 def split_filter(value: str) -> set[str]:
@@ -96,6 +117,11 @@ def row_label(row: Any, index: int) -> str:
     if isinstance(row, dict) and row.get("id"):
         return f"row {index} ({row['id']})"
     return f"row {index}"
+
+
+def row_route(row: dict[str, Any]) -> str:
+    route = row.get("route", "mcp")
+    return route if isinstance(route, str) else ""
 
 
 def load_manifest(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
@@ -129,7 +155,14 @@ def validate_rows(rows: list[Any]) -> list[str]:
             errors.append(f"{label}: expected object row")
             continue
 
-        missing = sorted(REQUIRED_ROW_KEYS - set(row))
+        route = row_route(row)
+        required = set(BASE_REQUIRED_ROW_KEYS)
+        if route == "cli":
+            required.add("cli")
+        else:
+            required.update({"miller", "julie"})
+
+        missing = sorted(required - set(row))
         for key in missing:
             errors.append(f"{label}: missing required key '{key}'")
 
@@ -149,11 +182,46 @@ def validate_rows(rows: list[Any]) -> list[str]:
         if isinstance(repo, str) and repo not in REPO_ROOTS:
             errors.append(f"{label}: unknown repo '{repo}'")
 
-        errors.extend(validate_tool_spec(row, label, "miller", SUPPORTED_MILLER_TOOLS))
-        errors.extend(validate_tool_spec(row, label, "julie", SUPPORTED_JULIE_TOOLS))
+        if not isinstance(row.get("route", "mcp"), str) or route not in SUPPORTED_ROUTES:
+            expected = "', '".join(sorted(SUPPORTED_ROUTES))
+            errors.append(f"{label}: unsupported route {row.get('route')!r}; expected one of '{expected}'")
+        elif route == "cli":
+            errors.extend(validate_cli_spec(row, label))
+        else:
+            errors.extend(validate_tool_spec(row, label, "miller", SUPPORTED_MILLER_TOOLS))
+            errors.extend(validate_tool_spec(row, label, "julie", SUPPORTED_JULIE_TOOLS))
         errors.extend(validate_expected(row, label))
         errors.extend(validate_scoring(row, label))
         errors.extend(validate_gate(row, label))
+
+    return errors
+
+
+def validate_cli_spec(row: dict[str, Any], label: str) -> list[str]:
+    spec = row.get("cli")
+    if not isinstance(spec, dict):
+        return [f"{label}: 'cli' must be an object"]
+
+    errors: list[str] = []
+    args = spec.get("args")
+    if not isinstance(args, list) or not args:
+        errors.append(f"{label}: 'cli.args' must be a non-empty list")
+    elif not all(isinstance(arg, str) and arg for arg in args):
+        errors.append(f"{label}: 'cli.args' entries must be non-empty strings")
+
+    fmt = spec.get("format")
+    if fmt not in SUPPORTED_CLI_FORMATS:
+        expected = "', '".join(sorted(SUPPORTED_CLI_FORMATS))
+        errors.append(f"{label}: unsupported cli.format {fmt!r}; expected one of '{expected}'")
+
+    if "allow_unsupported" in spec and not isinstance(spec["allow_unsupported"], bool):
+        errors.append(f"{label}: 'cli.allow_unsupported' must be a boolean when present")
+
+    exit_codes = spec.get("expected_exit_codes")
+    if exit_codes is not None and (
+        not isinstance(exit_codes, list) or not all(isinstance(code, int) for code in exit_codes)
+    ):
+        errors.append(f"{label}: 'cli.expected_exit_codes' must be a list of integers when present")
 
     return errors
 
@@ -243,6 +311,29 @@ def validate_scoring(row: dict[str, Any], label: str) -> list[str]:
     if "top_path" in scoring and not isinstance(scoring["top_path"], bool):
         errors.append(f"{label}: 'scoring.top_path' must be a boolean when present")
     mode = scoring.get("mode")
+    if mode in {"contract_json", "contract_jsonl"}:
+        expected_format = "jsonl" if mode == "contract_jsonl" else "json"
+        if row_route(row) == "cli" and isinstance(row.get("cli"), dict) and row["cli"].get("format") != expected_format:
+            errors.append(f"{label}: scoring.mode {mode!r} requires cli.format {expected_format!r}")
+        for key in ["required_fields", "required_row_fields", "advertises_commands"]:
+            values = scoring.get(key)
+            if values is not None and (
+                not isinstance(values, list) or not all(isinstance(value, str) and value.strip() for value in values)
+            ):
+                errors.append(f"{label}: 'scoring.{key}' must be a list of non-empty strings when present")
+        if row.get("gate", {}).get("hard") is True and not scoring.get("advertises_commands"):
+            errors.append(f"{label}: hard-gated contract rows must set 'scoring.advertises_commands'")
+        if "rows_path" in scoring and not isinstance(scoring["rows_path"], str):
+            errors.append(f"{label}: 'scoring.rows_path' must be a string when present")
+        if "sample_limit" in scoring and (
+            not isinstance(scoring["sample_limit"], int) or scoring["sample_limit"] <= 0
+        ):
+            errors.append(f"{label}: 'scoring.sample_limit' must be a positive integer when present")
+        if "min_rows" in scoring and (not isinstance(scoring["min_rows"], int) or scoring["min_rows"] < 0):
+            errors.append(f"{label}: 'scoring.min_rows' must be a non-negative integer when present")
+        if "empty_allowed" in scoring and not isinstance(scoring["empty_allowed"], bool):
+            errors.append(f"{label}: 'scoring.empty_allowed' must be a boolean when present")
+        return errors
     if mode in {"workflow_anchors", "trace_refs", "trace_path", "trace_bridge", "impact_targets"}:
         readiness = scoring.get("readiness")
         if readiness not in SUPPORTED_READINESS:
@@ -382,6 +473,8 @@ def result_from_score(
     }
     for field in WORKFLOW_CSV_FIELDS:
         result[field] = scored.get(field, "")
+    for field in CONTRACT_CSV_FIELDS:
+        result[field] = scored.get(field, "")
     return result
 
 
@@ -422,6 +515,115 @@ def execute_miller_row(mcp: McpProcess, row: dict[str, Any]) -> dict[str, Any]:
         row,
         tool=f"miller.{tool_name}",
         route="mcp",
+        ms=elapsed,
+        hard_gate=bool(row["gate"]["hard"]),
+        scored=scored,
+        diagnostics=diagnostics,
+    )
+
+
+def cli_command_label(args: list[str]) -> str:
+    return " ".join(["miller", *args])
+
+
+def run_cli(args: list[str], *, timeout: int = 180) -> tuple[int, subprocess.CompletedProcess[str]]:
+    started = time.perf_counter()
+    proc = subprocess.run(
+        [str(MILLER), *args],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=timeout,
+    )
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    return elapsed_ms, proc
+
+
+def load_cli_capabilities() -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    elapsed, proc = run_cli(["capabilities", "--json"], timeout=30)
+    diagnostics: list[dict[str, Any]] = []
+    if proc.returncode != 0:
+        diagnostics.append(
+            {
+                "type": "capabilities_error",
+                "ms": elapsed,
+                "exit_code": proc.returncode,
+                "stderr": proc.stderr.strip(),
+            }
+        )
+        return None, diagnostics
+    try:
+        parsed = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        diagnostics.append(
+            {
+                "type": "capabilities_parse_failure",
+                "ms": elapsed,
+                "message": str(exc),
+                "line": exc.lineno,
+                "column": exc.colno,
+            }
+        )
+        return None, diagnostics
+    if not isinstance(parsed, dict):
+        diagnostics.append({"type": "capabilities_parse_failure", "ms": elapsed, "message": "expected object"})
+        return None, diagnostics
+    return parsed, diagnostics
+
+
+def cli_exit_score(
+    row: dict[str, Any],
+    *,
+    output_chars: int,
+    outcome: str,
+    scoring_pass: bool,
+) -> dict[str, Any]:
+    return {
+        "empty": output_chars == 0,
+        "expected_present": False,
+        "expected_top": False,
+        "scoring_pass": scoring_pass,
+        "first_path": "",
+        "output_chars": output_chars,
+        "anchor_present": "",
+        "result_count": "",
+        "contract_parse_ok": False,
+        "contract_outcome": outcome,
+        "scoring_mode": row["scoring"]["mode"],
+        "diagnostics": [],
+    }
+
+
+def execute_cli_row(row: dict[str, Any], capabilities: dict[str, Any] | None) -> dict[str, Any]:
+    args = list(row["cli"]["args"])
+    elapsed, proc = run_cli(args)
+    text = proc.stdout
+    diagnostics: list[dict[str, Any]] = []
+    command = cli_command_label(args)
+
+    if proc.stderr.strip():
+        diagnostics.append({"type": "cli_stderr", "message": proc.stderr.strip()})
+
+    expected_exit_codes = set(row["cli"].get("expected_exit_codes") or [])
+    if proc.returncode != 0:
+        diagnostics.append({"type": "cli_exit_code", "exit_code": proc.returncode})
+        optional_unsupported = bool(row["cli"].get("allow_unsupported")) or proc.returncode in expected_exit_codes
+        scored = cli_exit_score(
+            row,
+            output_chars=len(text),
+            outcome="unsupported" if optional_unsupported else "nonzero_exit",
+            scoring_pass=False,
+        )
+    else:
+        scored = score_manifest_path(text, row["expected"], row["scoring"], capabilities=capabilities)
+
+    scored["cli_command"] = command
+    scored["cli_exit_code"] = proc.returncode
+    return result_from_score(
+        row,
+        tool="miller.cli",
+        route="cli",
         ms=elapsed,
         hard_gate=bool(row["gate"]["hard"]),
         scored=scored,
@@ -506,6 +708,11 @@ def gate_failures(results: list[dict[str, Any]]) -> list[str]:
         diagnostic_types = {diagnostic.get("type") for diagnostic in row["diagnostics"]}
         if "tool_error" in diagnostic_types:
             failures.append(f"{row['row_id']}/{row['tool']}: tool returned an error")
+        elif str(row.get("scoring_mode", "")).startswith("contract_"):
+            if not row["scoring_pass"]:
+                failures.append(
+                    f"{row['row_id']}/{row['tool']}: contract outcome {row.get('contract_outcome') or 'failed'}"
+                )
         elif row["empty"]:
             failures.append(f"{row['row_id']}/{row['tool']}: output was empty")
         elif not row["expected_present"]:
@@ -573,6 +780,8 @@ def write_outputs(
         "",
         "Workflow fields keep path scoring intact: `expected_anchor_count`/`expected_anchors_present` score required workflow anchors, `first_useful_anchor` records the first matched anchor, `follow_up_hint_present` records guidance such as `next inspect`, `readiness` records edit/inspect/search state, and `workflow_outcome` records structured `ok`, `needs-search`, `unsupported`, or `no-path` outcomes.",
         "",
+        "Contract fields are explicit: `contract_parse_ok` records JSON/JSONL parsing, `required_fields_present` and `required_row_fields_present` record required contract fields, `advertised_commands_present` records `capabilities --json` coverage, `sampled_jsonl_rows` records the JSONL sample checked, and `contract_outcome` records `ok`, `empty_allowed`, `unsupported`, or the failure class.",
+        "",
         summarize_by_tool(results),
         "",
         "## Breakdown By Task Class",
@@ -626,14 +835,28 @@ def main() -> int:
     run_diagnostics: list[dict[str, Any]] = []
     julie_processes: dict[str, McpProcess] = {}
     miller_mcp: McpProcess | None = None
+    mcp_rows = [row for row in selected_rows if row_route(row) == "mcp"]
+    cli_rows = [row for row in selected_rows if row_route(row) == "cli"]
+    capabilities: dict[str, Any] | None = None
+    if cli_rows:
+        capabilities, capability_diagnostics = load_cli_capabilities()
+        run_diagnostics.extend(capability_diagnostics)
 
     try:
-        miller_mcp = McpProcess([str(MILLER), "serve"], timeout=60)
-        if not args.skip_miller_refresh:
-            run_diagnostics.extend(refresh_miller_repos(miller_mcp, {row["repo"] for row in selected_rows}))
+        if mcp_rows:
+            miller_mcp = McpProcess([str(MILLER), "serve"], timeout=60)
+            if not args.skip_miller_refresh:
+                run_diagnostics.extend(refresh_miller_repos(miller_mcp, {row["repo"] for row in mcp_rows}))
 
         for row in selected_rows:
             print(f"== {row['id']} ==", file=sys.stderr)
+            if row_route(row) == "cli":
+                results.append(execute_cli_row(row, capabilities))
+                continue
+
+            if miller_mcp is None:
+                results.append(skipped_result(row, tool=f"miller.{row['miller']['tool']}", reason="Miller MCP was not started"))
+                continue
             results.append(execute_miller_row(miller_mcp, row))
 
             julie_tool = f"julie.{row['julie']['tool']}"
