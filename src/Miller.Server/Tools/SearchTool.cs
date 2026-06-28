@@ -283,9 +283,9 @@ public sealed class SearchTool
                         Language: language));
                 output = result.Output;
                 count = result.Count;
-                if (ShouldRunAutoSourceRescue(route, json, query, count, context.Index))
+                if (ShouldRunAutoTextRescue(route, json, query, count, context.Index))
                 {
-                    SearchRouteExecutionResult? rescue = TryRunAutoSourceRescue(
+                    AutoTextRescueResult? rescue = TryRunAutoTextRescue(
                         query,
                         limit,
                         exclude_tests,
@@ -298,8 +298,11 @@ public sealed class SearchTool
                         compactBanner);
                     if (scope is not null)
                     {
+                        scope.SetMetadata("auto_rescue_attempted", true);
+                        scope.SetMetadata("auto_rescue_kind", rescue?.Kind ?? "unavailable");
+                        scope.SetMetadata("auto_rescue_result_count", rescue?.Count ?? 0);
                         scope.SetMetadata("auto_source_rescue_attempted", true);
-                        scope.SetMetadata("auto_source_rescue_found", rescue is { Count: > 0 });
+                        scope.SetMetadata("auto_source_rescue_found", rescue is { Kind: "source", Count: > 0 });
                     }
                     if (rescue is { Count: > 0 })
                     {
@@ -1046,7 +1049,9 @@ public sealed class SearchTool
         string.Equals(kind, "import", StringComparison.Ordinal) ||
         string.Equals(kind, "module", StringComparison.Ordinal);
 
-    private static bool ShouldRunAutoSourceRescue(
+    private sealed record AutoTextRescueResult(string Output, int Count, long SourceBytes, string Kind);
+
+    private static bool ShouldRunAutoTextRescue(
         SearchRoute route,
         bool json,
         string query,
@@ -1057,10 +1062,16 @@ public sealed class SearchTool
             return false;
         if (IsPathLikeQuery(query, index))
             return false;
-        return primaryCount == 0 || LooksLikeSourceBodyQuery(query);
+        if (primaryCount == 0)
+            return true;
+        if (HasConcreteExactDefinition(index, query))
+            return false;
+        return LooksLikeSourceBodyQuery(query) ||
+               LooksLikeDocsOrConfigQuery(query) ||
+               LooksLikeWeakIdentifierQuery(query);
     }
 
-    private SearchRouteExecutionResult? TryRunAutoSourceRescue(
+    private AutoTextRescueResult? TryRunAutoTextRescue(
         string query,
         int limit,
         bool? excludeTests,
@@ -1076,25 +1087,50 @@ public sealed class SearchTool
         {
             WorkspaceTextContentSearchContext textContent =
                 _textContentProvider.ResolveTextContentSearch(workspaceId, ensureFresh);
+            bool preferDocsConfig = LooksLikeDocsOrConfigQuery(query);
+            if (preferDocsConfig &&
+                TryRunAutoDocsConfigRescue(
+                    textContent.Index,
+                    query,
+                    limit,
+                    primaryOutput,
+                    primaryCount,
+                    compactBanner,
+                    filePattern,
+                    language) is { Count: > 0 } docsRescue)
+            {
+                return docsRescue;
+            }
+
             bool hideTests = ResolveExcludeTests(excludeTests, query, SearchToolMode.Source);
-            string sourceOutput = RunTextContent(
+            AutoTextRescueResult sourceRescue = RunAutoSourceRescue(
                 textContent.Index,
                 query,
-                TextContentKind.WorkspaceSource,
-                limit: Math.Min(Math.Max(limit, 1), 2),
+                limit,
                 hideTests,
-                json: false,
-                out int sourceCount,
-                out long sourceBytes,
-                compactBanner: null,
+                primaryOutput,
+                primaryCount,
+                compactBanner,
                 filePattern,
                 language);
-            return sourceCount == 0
-                ? new SearchRouteExecutionResult(primaryOutput, 0, sourceBytes)
-                : new SearchRouteExecutionResult(
-                    RenderAutoSourceRescueCompact(primaryOutput, primaryCount, sourceOutput, compactBanner),
-                    sourceCount,
-                    sourceBytes);
+            if (sourceRescue.Count > 0)
+                return sourceRescue;
+
+            if (!preferDocsConfig &&
+                TryRunAutoDocsConfigRescue(
+                    textContent.Index,
+                    query,
+                    limit,
+                    primaryOutput,
+                    primaryCount,
+                    compactBanner,
+                    filePattern,
+                    language) is { Count: > 0 } lateDocsRescue)
+            {
+                return lateDocsRescue;
+            }
+
+            return sourceRescue;
         }
         catch (InvalidOperationException)
         {
@@ -1106,11 +1142,88 @@ public sealed class SearchTool
         }
     }
 
-    private static string RenderAutoSourceRescueCompact(
+    private static AutoTextRescueResult RunAutoSourceRescue(
+        ITextContentSearchIndex index,
+        string query,
+        int limit,
+        bool hideTests,
         string primaryOutput,
         int primaryCount,
-        string sourceOutput,
-        string? compactBanner)
+        string? compactBanner,
+        string? filePattern,
+        string? language)
+    {
+        string sourceOutput = RunTextContent(
+            index,
+            query,
+            TextContentKind.WorkspaceSource,
+            limit: Math.Min(Math.Max(limit, 1), 2),
+            hideTests,
+            json: false,
+            out int sourceCount,
+            out long sourceBytes,
+            compactBanner: null,
+            filePattern,
+            language);
+        return sourceCount == 0
+            ? new AutoTextRescueResult(primaryOutput, 0, sourceBytes, "none")
+            : new AutoTextRescueResult(
+                RenderAutoTextRescueCompact(
+                    primaryOutput,
+                    primaryCount,
+                    sourceOutput,
+                    compactBanner,
+                    "Source matches also found:",
+                    "Rerun with mode=source for more source snippets."),
+                sourceCount,
+                sourceBytes,
+                "source");
+    }
+
+    private static AutoTextRescueResult? TryRunAutoDocsConfigRescue(
+        ITextContentSearchIndex index,
+        string query,
+        int limit,
+        string primaryOutput,
+        int primaryCount,
+        string? compactBanner,
+        string? filePattern,
+        string? language)
+    {
+        string docsOutput = RunTextContent(
+            index,
+            query,
+            WorkspaceContentSearchKinds,
+            limit: Math.Min(Math.Max(limit, 1), 2),
+            excludeTests: false,
+            json: false,
+            out int docsCount,
+            out long sourceBytes,
+            compactBanner: null,
+            filePattern,
+            language);
+        return docsCount == 0
+            ? null
+            : new AutoTextRescueResult(
+                RenderAutoTextRescueCompact(
+                    primaryOutput,
+                    primaryCount,
+                    docsOutput,
+                    compactBanner,
+                    "Docs/config matches also found:",
+                    "Rerun with mode=content for more docs/config snippets."),
+                docsCount,
+                sourceBytes,
+                "docs_config");
+    }
+
+    private static string RenderAutoTextRescueCompact(
+        string primaryOutput,
+        int primaryCount,
+        string rescueOutput,
+        string? compactBanner,
+        string heading,
+        string rerunHint)
     {
         var sb = new StringBuilder();
         if (primaryCount > 0)
@@ -1122,10 +1235,24 @@ public sealed class SearchTool
             sb.Append(compactBanner).Append('\n');
         }
 
-        sb.Append("Source matches also found:\n");
-        sb.Append(sourceOutput.TrimEnd('\n'));
-        sb.Append("\nRerun with mode=source for more source snippets.");
+        sb.Append(heading).Append('\n');
+        sb.Append(rescueOutput.TrimEnd('\n'));
+        sb.Append('\n').Append(rerunHint);
         return sb.ToString();
+    }
+
+    private static bool HasConcreteExactDefinition(ISymbolLookupIndex index, string query)
+    {
+        string trimmed = query.Trim();
+        if (trimmed.Length == 0)
+            return false;
+        string queryLower = trimmed.ToLowerInvariant();
+        foreach (IndexedSymbol candidate in index.FindByName(trimmed))
+        {
+            if (!IsLowSignalKind(candidate.Kind) && IsDefinitionNameMatch(candidate.Name, queryLower))
+                return true;
+        }
+        return false;
     }
 
     private static bool LooksLikeSourceBodyQuery(string query)
@@ -1138,6 +1265,41 @@ public sealed class SearchTool
                 return true;
         }
         return false;
+    }
+
+    private static bool LooksLikeDocsOrConfigQuery(string query)
+    {
+        string lower = query.ToLowerInvariant();
+        return lower.Contains("config", StringComparison.Ordinal) ||
+               lower.Contains("configuration", StringComparison.Ordinal) ||
+               lower.Contains("doc", StringComparison.Ordinal) ||
+               lower.Contains("guide", StringComparison.Ordinal) ||
+               lower.Contains("install", StringComparison.Ordinal) ||
+               lower.Contains("quickstart", StringComparison.Ordinal) ||
+               lower.Contains("readme", StringComparison.Ordinal) ||
+               lower.Contains("setup", StringComparison.Ordinal) ||
+               lower.Contains("usage", StringComparison.Ordinal) ||
+               lower.Contains("workspace health", StringComparison.Ordinal) ||
+               lower.Contains("workspace status", StringComparison.Ordinal);
+    }
+
+    private static bool LooksLikeWeakIdentifierQuery(string query)
+    {
+        string trimmed = query.Trim();
+        if (trimmed.Length < 4)
+            return false;
+        bool hasLetter = false;
+        foreach (char ch in trimmed)
+        {
+            if (char.IsLetter(ch))
+            {
+                hasLetter = true;
+                continue;
+            }
+            if (!char.IsDigit(ch) && ch is not '_' and not '-' and not '.')
+                return false;
+        }
+        return hasLetter;
     }
 
     // A natural-language phrase = multiple whitespace-delimited words (a single identifier-ish token is not).

@@ -18,6 +18,38 @@ internal static class CandidateOutput
     public static IEnumerable<IndexedSymbol> Visible(IReadOnlyList<IndexedSymbol> matches) =>
         matches.Take(CompactLimit);
 
+    public static IReadOnlyList<string> RerunExamples(
+        string target,
+        IReadOnlyList<IndexedSymbol> matches,
+        bool supportsScope)
+    {
+        if (!supportsScope || !SpansMultipleFiles(matches))
+            return Array.Empty<string>();
+
+        string escapedTarget = EscapeShellishArgument(target);
+        return matches
+            .Select(static match => match.FilePath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(3)
+            .Select(path => $"inspect target=\"{escapedTarget}\" scope=\"{EscapeShellishArgument(path)}\"")
+            .ToArray();
+    }
+
+    public static void AppendRerunExamples(
+        StringBuilder sb,
+        string target,
+        IReadOnlyList<IndexedSymbol> matches,
+        bool supportsScope)
+    {
+        IReadOnlyList<string> examples = RerunExamples(target, matches, supportsScope);
+        if (examples.Count == 0)
+            return;
+
+        sb.Append("Try:").Append('\n');
+        foreach (string example in examples)
+            sb.Append("  ").Append(example).Append('\n');
+    }
+
     public static void AppendRemainderNote(StringBuilder sb, int total)
     {
         int remaining = total - CompactLimit;
@@ -27,4 +59,7 @@ internal static class CandidateOutput
 
     private static bool SpansMultipleFiles(IReadOnlyList<IndexedSymbol> matches) =>
         matches.Select(static m => m.FilePath).Distinct(StringComparer.OrdinalIgnoreCase).Skip(1).Any();
+
+    private static string EscapeShellishArgument(string value) =>
+        value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal);
 }

@@ -185,19 +185,44 @@ public sealed class SearchToolTests
     // A search-symbol provider returning a fixed context over ANY ISymbolLookupIndex — used to drive the
     // backend-tagging telemetry path with either the on-disk FtsSymbolSearchIndex or an in-memory index
     // (the production RecordingWorkspaceIndexProvider only ever yields a MillerRepositoryIndex-backed context).
-    private sealed class FixedSymbolSearchProvider : IWorkspaceSearchProvider, IWorkspaceContentSearchProvider
+    private sealed class FixedSymbolSearchProvider
+        : IWorkspaceSearchProvider, IWorkspaceContentSearchProvider, IWorkspaceTextContentSearchProvider
     {
         private readonly WorkspaceSymbolSearchContext _context;
+        private readonly WorkspaceTextContentSearchContext? _textContentContext;
 
-        public FixedSymbolSearchProvider(ISymbolLookupIndex index, string root) =>
+        public FixedSymbolSearchProvider(ISymbolLookupIndex index, string root, ITextContentSearchIndex? textContentIndex = null)
+        {
             _context = new WorkspaceSymbolSearchContext(
                 index, "symbols.db", "current-ws", root,
                 Revision: 1, IndexFresh: true, "current", WarningText: null, DisplayId: "current-ws");
+            _textContentContext = textContentIndex is null
+                ? null
+                : new WorkspaceTextContentSearchContext(
+                    textContentIndex,
+                    "content.db",
+                    "current-ws",
+                    root,
+                    Revision: 1,
+                    IndexFresh: true,
+                    "current",
+                    WarningText: null,
+                    DisplayId: "current-ws");
+        }
+
+        public int TextContentSearchResolveCount { get; private set; }
 
         public WorkspaceSymbolSearchContext ResolveSymbolSearch(string? workspaceId, bool ensureFresh) => _context;
 
         public WorkspaceContentSearchContext ResolveContentSearch(string? workspaceId, bool ensureFresh) =>
             throw new NotSupportedException("FixedSymbolSearchProvider serves symbol search only.");
+
+        public WorkspaceTextContentSearchContext ResolveTextContentSearch(string? workspaceId, bool ensureFresh)
+        {
+            TextContentSearchResolveCount++;
+            return _textContentContext
+                ?? throw new NotSupportedException("FixedSymbolSearchProvider has no text content context.");
+        }
     }
 
     [Theory]
@@ -1624,6 +1649,148 @@ public sealed class SearchToolTests
         Assert.Contains("src/Api.cs:42", output);
         Assert.Contains("KnownSourceError", output);
         Assert.Contains("mode=source", output);
+    }
+
+    [Fact]
+    public void Search_AutoMode_WeakSymbolSearch_RendersBoundedSourceRescue()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-weak-search-" + Guid.NewGuid().ToString("N"));
+        var weakSymbol = Symbol(
+            1,
+            "weak-helper",
+            "KnownSourceErrorHelper",
+            "class",
+            "src/KnownSourceErrorHelper.cs",
+            7,
+            "public sealed class KnownSourceErrorHelper");
+        var provider = new FixedSymbolSearchProvider(
+            new StubSymbolSearchIndex((weakSymbol, 0.05)),
+            root,
+            TextContentIndex(SourceHit(
+                "src/Api.cs",
+                line: 42,
+                snippet: "throw new InvalidOperationException(\"KnownSourceError\");")));
+        var tool = new SearchTool(provider, provider);
+
+        string output = tool.Search("KnownSourceError"); // mode defaults to auto
+
+        Assert.Equal(1, provider.TextContentSearchResolveCount);
+        Assert.Contains("KnownSourceErrorHelper", output);
+        Assert.Contains("Source matches also found:", output);
+        Assert.Contains("src/Api.cs:42", output);
+        Assert.Contains("KnownSourceError", output);
+        Assert.Contains("mode=source", output);
+    }
+
+    [Fact]
+    public void Search_AutoMode_DocsLikeQuery_RendersBoundedDocsConfigRescue()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-docs-rescue-" + Guid.NewGuid().ToString("N"));
+        var weakSymbol = Symbol(
+            1,
+            "workspace-health-symbol",
+            "WorkspaceHealthSnapshot",
+            "class",
+            "src/WorkspaceHealthSnapshot.cs",
+            12,
+            "public sealed class WorkspaceHealthSnapshot");
+        var provider = new FixedSymbolSearchProvider(
+            new StubSymbolSearchIndex((weakSymbol, 0.1)),
+            root,
+            TextContentIndex(
+                CorpusHit(
+                    "docs/workspace-health.md",
+                    TextContentKind.WorkspaceDocs,
+                    line: 9,
+                    snippet: "workspace health explains stale sidecars and recovery steps"),
+                CorpusHit(
+                    "mcp-config.json",
+                    TextContentKind.WorkspaceConfig,
+                    line: 3,
+                    snippet: "\"workspace health\"")));
+        var tool = new SearchTool(provider, provider);
+
+        string output = tool.Search("workspace health"); // mode defaults to auto
+
+        Assert.Equal(1, provider.TextContentSearchResolveCount);
+        Assert.Contains("WorkspaceHealthSnapshot", output);
+        Assert.Contains("Docs/config matches also found:", output);
+        Assert.Contains("docs/workspace-health.md:9", output);
+        Assert.Contains("mcp-config.json:3", output);
+        Assert.Contains("mode=content", output);
+    }
+
+    [Fact]
+    public void Search_AutoMode_StrongExactDefinition_DoesNotResolveTextContentProvider()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-strong-search-" + Guid.NewGuid().ToString("N"));
+        var exactSymbol = Symbol(
+            1,
+            "known-source-error",
+            "KnownSourceError",
+            "method",
+            "src/Api.cs",
+            17,
+            "void KnownSourceError()");
+        var provider = new FixedSymbolSearchProvider(
+            new StubSymbolSearchIndex((exactSymbol, 42.0)),
+            root,
+            TextContentIndex(SourceHit("src/Api.cs", 42, "KnownSourceError appears in source text")));
+        var tool = new SearchTool(provider, provider);
+
+        string output = tool.Search("KnownSourceError"); // mode defaults to auto
+
+        Assert.Equal(0, provider.TextContentSearchResolveCount);
+        Assert.Contains("Definition found: KnownSourceError", output);
+        Assert.DoesNotContain("Source matches also found:", output);
+        Assert.DoesNotContain("Docs/config matches also found:", output);
+    }
+
+    [Fact]
+    public void Search_AutoMode_SourceRescue_RecordsTelemetryMetadata()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "miller-auto-rescue-telemetry-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string telemetryDb = Path.Combine(dir, "telemetry.db");
+        string root = Path.Combine(dir, "root");
+        var weakSymbol = Symbol(
+            1,
+            "weak-helper",
+            "KnownSourceErrorHelper",
+            "class",
+            "src/KnownSourceErrorHelper.cs",
+            7,
+            "public sealed class KnownSourceErrorHelper");
+        var provider = new FixedSymbolSearchProvider(
+            new StubSymbolSearchIndex((weakSymbol, 0.05)),
+            root,
+            TextContentIndex(SourceHit(
+                "src/Api.cs",
+                line: 42,
+                snippet: "throw new InvalidOperationException(\"KnownSourceError\");",
+                sourceBytes: 777)));
+        var tool = new SearchTool(provider, provider);
+
+        try
+        {
+            using (var ledger = TelemetryLedger.Open(telemetryDb, "current-ws", root))
+            {
+                using var scope = ledger.Measure("search", op: "auto");
+                string output = tool.Search("KnownSourceError");
+                Assert.Contains("Source matches also found:", output);
+            }
+
+            using JsonDocument doc = JsonDocument.Parse(ReadTelemetryMetadata(telemetryDb));
+            Assert.True(doc.RootElement.GetProperty("auto_rescue_attempted").GetBoolean());
+            Assert.Equal("source", doc.RootElement.GetProperty("auto_rescue_kind").GetString());
+            Assert.Equal(1, doc.RootElement.GetProperty("auto_rescue_result_count").GetInt32());
+            Assert.Equal(777, ReadTelemetrySourceBytes(telemetryDb));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+        }
     }
 
     [Fact]

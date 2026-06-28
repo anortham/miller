@@ -195,6 +195,30 @@ public sealed class SmartTargetResolverTests
         Assert.Equal("src/flask/app.py", sym.Value.FilePath);
     }
 
+    [Theory]
+    [InlineData("node_modules/pkg/src/Button.ts", "packages/web/src/Button.ts")]
+    [InlineData("vendor/pkg/src/Button.go", "cmd/web/src/Button.go")]
+    [InlineData("coverage/src/Button.ts", "packages/web/src/Button.ts")]
+    public void Resolve_AmbiguousName_PrefersSourceOverDependencyOrCoverageNoise(
+        string noisyPath,
+        string sourcePath)
+    {
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
+        {
+            new JulieDbFixture.SymbolRow("aa11223344556677889900aabbccddee", "Button", "class", "typescript",
+                noisyPath, "class Button {}", 3, null),
+            new JulieDbFixture.SymbolRow("bb11223344556677889900aabbccddee", "Button", "class", "typescript",
+                sourcePath, "class Button {}", 7, null),
+        });
+        var index = BuildIndex(fx);
+        var resolver = new SmartTargetResolver(index);
+
+        var result = resolver.Resolve("Button");
+
+        var sym = Assert.IsType<TargetResolution.Symbol>(result);
+        Assert.Equal(sourcePath, sym.Value.FilePath);
+    }
+
     [Fact]
     public void Resolve_AmbiguousName_TiedProductionDefinitionsRemainCandidates()
     {

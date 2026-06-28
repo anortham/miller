@@ -222,7 +222,9 @@ public sealed class InspectTool
 
             case TargetResolution.Candidates cands:
                 resultCount = cands.Matches.Count;
-                string candidatesOutput = json ? RenderCandidatesJson(cands.Matches) : RenderCandidatesCompact(cands.Matches);
+                string candidatesOutput = json
+                    ? RenderCandidatesJson(target, cands.Matches)
+                    : RenderCandidatesCompact(target, cands.Matches);
                 return ReadToolWorkspaceRouting.PrefixCompact(candidatesOutput, json ? null : compactBanner);
 
             case TargetResolution.NotFound nf:
@@ -607,7 +609,7 @@ public sealed class InspectTool
 
     // ---------- candidates ----------
 
-    private static string RenderCandidatesCompact(IReadOnlyList<IndexedSymbol> matches)
+    private static string RenderCandidatesCompact(string target, IReadOnlyList<IndexedSymbol> matches)
     {
         var sb = new StringBuilder();
         sb.Append(CandidateOutput.Header(
@@ -617,16 +619,21 @@ public sealed class InspectTool
         foreach (var s in CandidateOutput.Visible(matches))
             sb.Append(SymbolLine(s)).Append('\n');
         CandidateOutput.AppendRemainderNote(sb, matches.Count);
+        CandidateOutput.AppendRerunExamples(sb, target, matches, supportsScope: true);
         return sb.ToString().TrimEnd('\n');
     }
 
-    private static string RenderCandidatesJson(IReadOnlyList<IndexedSymbol> matches)
+    private static string RenderCandidatesJson(string target, IReadOnlyList<IndexedSymbol> matches)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using var w = NewWriter(buffer);
         w.WriteStartObject();
         w.WritePropertyName("candidates");
         WriteSymbolArray(w, matches);
+        w.WriteStartArray("rerun_examples");
+        foreach (string example in CandidateOutput.RerunExamples(target, matches, supportsScope: true))
+            w.WriteStringValue(example);
+        w.WriteEndArray();
         w.WriteEndObject();
         w.Flush();
         return Utf8(buffer);

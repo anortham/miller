@@ -210,9 +210,14 @@ public sealed partial class SmartTargetResolver
         || segment.Equals("benches", StringComparison.OrdinalIgnoreCase)
         || segment.Equals("benchmark", StringComparison.OrdinalIgnoreCase)
         || segment.Equals("benchmarks", StringComparison.OrdinalIgnoreCase)
+        || segment.Equals("coverage", StringComparison.OrdinalIgnoreCase)
         || segment.Equals("generated", StringComparison.OrdinalIgnoreCase)
+        || segment.Equals("node_modules", StringComparison.OrdinalIgnoreCase)
         || segment.Equals("dist", StringComparison.OrdinalIgnoreCase)
-        || segment.Equals("build", StringComparison.OrdinalIgnoreCase);
+        || segment.Equals("build", StringComparison.OrdinalIgnoreCase)
+        || segment.Equals("vendor", StringComparison.OrdinalIgnoreCase)
+        || segment.Equals("vendors", StringComparison.OrdinalIgnoreCase)
+        || segment.Equals("third_party", StringComparison.OrdinalIgnoreCase);
 
     private static int VersionSegmentScore(IEnumerable<string> segments)
     {

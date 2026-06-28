@@ -478,6 +478,8 @@ public sealed class InspectToolTests
         Assert.Contains("a/First.cs", output);
         Assert.Contains("b/Second.cs", output);
         Assert.Contains("candidate", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("inspect target=\"Handle\" scope=\"a/First.cs\"", output);
+        Assert.Contains("inspect target=\"Handle\" scope=\"b/Second.cs\"", output);
     }
 
     [Fact]
@@ -506,6 +508,28 @@ public sealed class InspectToolTests
     }
 
     [Fact]
+    public void Run_AmbiguousName_Json_IncludesRerunExamples()
+    {
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
+        {
+            new JulieDbFixture.SymbolRow("aa11223344556677889900aabbccddee", "Handle", "method", "csharp",
+                "a/First.cs", "void Handle()", 3, null),
+            new JulieDbFixture.SymbolRow("bb11223344556677889900aabbccddee", "Handle", "method", "csharp",
+                "b/Second.cs", "void Handle()", 7, null),
+        });
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "Handle", depth: "summary", kind: null, scope: null, limit: 50, json: true, out _);
+
+        using var doc = JsonDocument.Parse(output);
+        JsonElement examples = doc.RootElement.GetProperty("rerun_examples");
+        Assert.Equal(JsonValueKind.Array, examples.ValueKind);
+        Assert.Equal("inspect target=\"Handle\" scope=\"a/First.cs\"", examples[0].GetString());
+        Assert.Equal("inspect target=\"Handle\" scope=\"b/Second.cs\"", examples[1].GetString());
+    }
+
+    [Fact]
     public void Run_AmbiguousScopedName_AsksForMoreSpecificTarget()
     {
         using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
@@ -522,6 +546,7 @@ public sealed class InspectToolTests
 
         Assert.Contains("more specific target", output);
         Assert.DoesNotContain("pass scope=<file>", output);
+        Assert.DoesNotContain("scope=\"src/SearchTool.cs\"", output);
     }
 
     [Fact]

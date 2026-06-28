@@ -26,6 +26,7 @@ Foundation matrix generated evidence:
 - Task 4 workflows: [summary](benchmarks/2026-06-27-foundation-matrix/task4-workflows/summary.md), [results CSV](benchmarks/2026-06-27-foundation-matrix/task4-workflows/results.csv), [results JSON](benchmarks/2026-06-27-foundation-matrix/task4-workflows/results.json)
 - Task 5 Eros contracts: [summary](benchmarks/2026-06-27-foundation-matrix/task5-eros-contracts/summary.md), [results CSV](benchmarks/2026-06-27-foundation-matrix/task5-eros-contracts/results.csv), [results JSON](benchmarks/2026-06-27-foundation-matrix/task5-eros-contracts/results.json)
 - Task 6 adoption: [summary](benchmarks/2026-06-27-foundation-matrix/task6-adoption/adoption-summary.md), [JSON](benchmarks/2026-06-27-foundation-matrix/task6-adoption/adoption-summary.json)
+- Search/inspect recovery hardening: [summary](benchmarks/2026-06-27-foundation-matrix/search-inspect-recovery-hardening/summary.md), [results CSV](benchmarks/2026-06-27-foundation-matrix/search-inspect-recovery-hardening/results.csv), [results JSON](benchmarks/2026-06-27-foundation-matrix/search-inspect-recovery-hardening/results.json)
 - Adaptation candidates: [Markdown](benchmarks/2026-06-27-foundation-matrix/adaptation-candidates.md), [CSV](benchmarks/2026-06-27-foundation-matrix/adaptation-candidates.csv), [JSON](benchmarks/2026-06-27-foundation-matrix/adaptation-candidates.json)
 
 ## Hard Gates Versus Report-Only Deltas
@@ -94,11 +95,12 @@ Full candidate details are in the generated [adaptation candidate report](benchm
 
 ## Recommended Next Implementation Goals
 
-1. **Implement a focused `search`/`inspect` recovery slice.**
-   - Keep the MCP tool set unchanged.
-   - In `search auto`, add bounded source/content rescue guidance when primary symbol/file hits look weak but source/content evidence exists.
-   - In `inspect`, prefer non-test concrete definitions when exact names collide, and render scoped rerun examples when multiple definitions remain plausible.
-   - Cover the work with focused rows from Task 3, the existing search/inspect gate, and docs updates for first-call routing.
+1. **Focused `search`/`inspect` recovery slice: implemented 2026-06-28.**
+   - The MCP tool set stayed unchanged.
+   - `search auto` now adds bounded source or docs/config rescue output when compact symbol results are empty or weak and the text corpus has matching evidence.
+   - `inspect` ambiguity output now includes copyable scoped rerun examples when candidates span files, and JSON includes additive `rerun_examples`.
+   - `SmartTargetResolver` now applies generic dependency/report path penalties such as `node_modules`, `vendor`, and `coverage` while preserving tie-safe candidates for equally plausible definitions.
+   - The matrix manifest now includes Miller hard-gate rows for auto docs/config recovery and explicit unscoped ambiguity behavior; focused xUnit coverage pins the exact rescue and rerun-output contracts.
 
 2. Improve trace outcome guidance for `needs-search`, `no-path`, and unsupported bridge cases.
 

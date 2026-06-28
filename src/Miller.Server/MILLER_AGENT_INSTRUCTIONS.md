@@ -21,7 +21,8 @@ Miller serves an always-fresh index of this workspace's code. Reach for a Miller
 
 - `search` — Find code by name, identifier, phrase, or marker audit. `mode=auto|text|symbol|file|markers|content|source|external|web|all-text`.
   Natural-language queries auto-hide tests (`exclude_tests=false` to include them). Use `mode=content`, alias `docs`,
-  for docs/config; `mode=source` for source-body text; compact `auto` may add bounded source matches. Use
+  for docs/config; `mode=source` for source-body text; compact `auto` may rescue weak/empty results with bounded
+  source/docs-config matches. Use
   `mode=external|web|all-text` for imported/broad text. Scope with
   `file_pattern`, `language`, and `limit`. Use `regions=comment|doc_comment|string_literal` for comments/strings; it
   uses the default source-region `search.db` path; `MILLER_REGION_INDEX=0` opts out. Use `mode=markers` with
@@ -30,6 +31,7 @@ Miller serves an always-fresh index of this workspace's code. Reach for a Miller
   `workspace_id` defaults `ensure_fresh=true`.
 - `inspect` — A file or symbol you can already name. A file path lists symbols; a symbol name gives definition,
   signature, and docs. `depth=overview` gives bounded refs/calls/body preview; `depth=full` is complete.
+  Multi-file ambiguity includes copyable scoped reruns.
   Optional `workspace_id` and `ensure_fresh` follow `search`.
 - `context` — First call in an unfamiliar area: a small, justified bundle of relevant entry points plus the next
   symbols to `inspect`. Give the task plus optional `failing_test`/`stack_trace`; compact output: seeds first with
@@ -125,5 +127,4 @@ code, paste this block into the prompt:
     - workspace(status|health|onboarding|leader|refresh|full|list|open|remove|dashboard) for readiness, leader diagnostics/handoff, refresh, other repos, onboarding, or dashboard with operation=dashboard.
     Do NOT fall back to Glob/Read/Grep chains when a Miller tool fits. Miller returns targeted context in 1-2 calls.
 
-Do not use `grep`/`find`/`rg` when a Miller tool fits. Do not read a whole file before `inspect`. Do not chain
-several lookups when one `inspect depth=full` or `context` call answers the question.
+Do not use `grep`/`find`/`rg` when a Miller tool fits. Do not read a whole file before `inspect`.
