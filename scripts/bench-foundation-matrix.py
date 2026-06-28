@@ -32,10 +32,37 @@ REPO_ROOTS = {
     "jq": "/Users/murphy/source/jq",
 }
 
-SUPPORTED_MILLER_TOOLS = {"search", "inspect"}
-SUPPORTED_JULIE_TOOLS = {"fast_search", "deep_dive"}
-SUPPORTED_SCORING_MODES = {"path_present", "path_top", "path_any_present"}
+SUPPORTED_MILLER_TOOLS = {"search", "inspect", "context", "trace", "impact"}
+SUPPORTED_JULIE_TOOLS = {"fast_search", "deep_dive", "get_context", "fast_refs", "call_path", "blast_radius"}
+SUPPORTED_SCORING_MODES = {
+    "path_present",
+    "path_top",
+    "path_any_present",
+    "workflow_anchors",
+    "trace_refs",
+    "trace_path",
+    "trace_bridge",
+    "impact_targets",
+}
+SUPPORTED_READINESS = {"edit-ready", "inspect-ready", "needs-search", "unsupported", "no-path"}
+SUPPORTED_WORKFLOW_OUTCOMES = {"ok", "needs-search", "unsupported", "no-path"}
 REQUIRED_ROW_KEYS = {"id", "repo", "task_class", "intent", "miller", "julie", "expected", "scoring", "gate"}
+
+WORKFLOW_CSV_FIELDS = [
+    "expected_anchor_count",
+    "expected_anchors_present",
+    "first_useful_anchor",
+    "follow_up_hint_present",
+    "readiness",
+    "workflow_outcome",
+    "definition_present",
+    "reference_count",
+    "noise_diagnostic_count",
+    "impacted_symbols_present",
+    "likely_tests_present",
+    "impacted_symbol_count",
+    "likely_test_count",
+]
 
 CSV_FIELDS = [
     "row_id",
@@ -56,7 +83,7 @@ CSV_FIELDS = [
     "expected_path",
     "anchor_present",
     "result_count",
-]
+] + WORKFLOW_CSV_FIELDS
 
 
 def split_filter(value: str) -> set[str]:
@@ -156,11 +183,26 @@ def validate_tool_spec(
             errors.append(f"{label}: 'miller.args.query' is required for search")
         if tool == "inspect" and not isinstance(args.get("target"), str):
             errors.append(f"{label}: 'miller.args.target' is required for inspect")
+        if tool == "context" and not isinstance(args.get("query"), str):
+            errors.append(f"{label}: 'miller.args.query' is required for context")
+        if tool in {"trace", "impact"} and not isinstance(args.get("target"), str):
+            errors.append(f"{label}: 'miller.args.target' is required for {tool}")
     elif key == "julie":
         if tool == "fast_search" and not isinstance(args.get("query"), str):
             errors.append(f"{label}: 'julie.args.query' is required for fast_search")
         if tool == "deep_dive" and not isinstance(args.get("symbol"), str):
             errors.append(f"{label}: 'julie.args.symbol' is required for deep_dive")
+        if tool == "get_context" and not (isinstance(args.get("query"), str) or isinstance(args.get("symbol"), str)):
+            errors.append(f"{label}: 'julie.args.query' or 'julie.args.symbol' is required for get_context")
+        if tool in {"fast_refs", "blast_radius"} and not (
+            isinstance(args.get("target"), str) or isinstance(args.get("symbol"), str)
+        ):
+            errors.append(f"{label}: 'julie.args.target' or 'julie.args.symbol' is required for {tool}")
+        if tool == "call_path" and not (
+            (isinstance(args.get("target"), str) or isinstance(args.get("from"), str))
+            and isinstance(args.get("to"), str)
+        ):
+            errors.append(f"{label}: 'julie.args.target/from' and 'julie.args.to' are required for call_path")
 
     if "report_only" in spec and not isinstance(spec["report_only"], bool):
         errors.append(f"{label}: '{key}.report_only' must be a boolean when present")
@@ -200,6 +242,40 @@ def validate_scoring(row: dict[str, Any], label: str) -> list[str]:
         errors.append(f"{label}: unsupported scoring.mode {scoring.get('mode')!r}; expected one of '{expected}'")
     if "top_path" in scoring and not isinstance(scoring["top_path"], bool):
         errors.append(f"{label}: 'scoring.top_path' must be a boolean when present")
+    mode = scoring.get("mode")
+    if mode in {"workflow_anchors", "trace_refs", "trace_path", "trace_bridge", "impact_targets"}:
+        readiness = scoring.get("readiness")
+        if readiness not in SUPPORTED_READINESS:
+            expected = "', '".join(sorted(SUPPORTED_READINESS))
+            errors.append(f"{label}: unsupported scoring.readiness {readiness!r}; expected one of '{expected}'")
+    if mode in {"workflow_anchors", "trace_refs", "trace_path", "trace_bridge"}:
+        anchors = scoring.get("required_anchors")
+        if anchors is not None and (
+            not isinstance(anchors, list) or not all(isinstance(anchor, str) and anchor.strip() for anchor in anchors)
+        ):
+            errors.append(f"{label}: 'scoring.required_anchors' must be a list of non-empty strings when present")
+    if mode == "workflow_anchors":
+        anchors = scoring.get("required_anchors")
+        if not isinstance(anchors, list) or not anchors:
+            errors.append(f"{label}: 'scoring.required_anchors' is required for workflow_anchors")
+        if "follow_up_hint" in scoring and not isinstance(scoring["follow_up_hint"], str):
+            errors.append(f"{label}: 'scoring.follow_up_hint' must be a string when present")
+    if mode == "trace_refs":
+        if "definition_anchor" in scoring and not isinstance(scoring["definition_anchor"], str):
+            errors.append(f"{label}: 'scoring.definition_anchor' must be a string when present")
+        if "min_references" in scoring and (
+            not isinstance(scoring["min_references"], int) or scoring["min_references"] < 0
+        ):
+            errors.append(f"{label}: 'scoring.min_references' must be a non-negative integer when present")
+    if mode in {"trace_refs", "trace_path", "trace_bridge"} and "expected_outcome" in scoring:
+        if scoring["expected_outcome"] not in SUPPORTED_WORKFLOW_OUTCOMES:
+            expected = "', '".join(sorted(SUPPORTED_WORKFLOW_OUTCOMES))
+            errors.append(f"{label}: unsupported scoring.expected_outcome {scoring['expected_outcome']!r}; expected one of '{expected}'")
+    if mode == "impact_targets":
+        for key in ["required_symbols", "required_tests"]:
+            values = scoring.get(key)
+            if not isinstance(values, list) or not all(isinstance(value, str) and value.strip() for value in values):
+                errors.append(f"{label}: 'scoring.{key}' must be a list of non-empty strings")
     return errors
 
 
@@ -249,6 +325,15 @@ def apply_miller_defaults(row: dict[str, Any]) -> dict[str, Any]:
         args.setdefault("limit", 5)
     elif row["miller"]["tool"] == "inspect":
         args.setdefault("format", "compact")
+    elif row["miller"]["tool"] == "context":
+        args.setdefault("format", "compact")
+        args.setdefault("token_budget", 1500)
+    elif row["miller"]["tool"] == "trace":
+        args.setdefault("format", "compact")
+        args.setdefault("limit", 20)
+    elif row["miller"]["tool"] == "impact":
+        args.setdefault("format", "compact")
+        args.setdefault("limit", 40)
     return args
 
 
@@ -265,12 +350,15 @@ def result_from_score(
     row_diagnostics = list(scored.pop("diagnostics", []))
     if diagnostics:
         row_diagnostics.extend(diagnostics)
+    diagnostic_types = {diagnostic.get("type") for diagnostic in row_diagnostics}
     expected_present = bool(scored.get("expected_present"))
     scoring_pass = bool(scored.get("scoring_pass"))
     empty = bool(scored.get("empty"))
     anchor_missing = scored.get("anchor_present") is False
     scoring_mode = str(scored.get("scoring_mode") or row["scoring"]["mode"])
-    return {
+    report_only_candidate = bool(tool.startswith("julie.") and row.get("julie", {}).get("report_only"))
+    can_adapt = hard_gate or (report_only_candidate and "skipped_tool" not in diagnostic_types)
+    result = {
         "row_id": row["id"],
         "repo": row["repo"],
         "task_class": row["task_class"],
@@ -286,12 +374,15 @@ def result_from_score(
         "ms": int(ms),
         "output_chars": int(scored.get("output_chars") or 0),
         "first_path": str(scored.get("first_path") or ""),
-        "adaptation_candidate": bool(hard_gate and (empty or not scoring_pass or anchor_missing)),
+        "adaptation_candidate": bool(can_adapt and (empty or not scoring_pass or anchor_missing)),
         "expected_path": row["expected"]["path"],
         "anchor_present": scored.get("anchor_present", ""),
         "result_count": scored.get("result_count", ""),
         "diagnostics": row_diagnostics,
     }
+    for field in WORKFLOW_CSV_FIELDS:
+        result[field] = scored.get(field, "")
+    return result
 
 
 def skipped_result(row: dict[str, Any], *, tool: str, reason: str) -> dict[str, Any]:
@@ -310,6 +401,8 @@ def skipped_result(row: dict[str, Any], *, tool: str, reason: str) -> dict[str, 
             "output_chars": 0,
             "anchor_present": "",
             "result_count": "",
+            "workflow_outcome": "skipped",
+            "readiness": "unsupported",
         },
         diagnostics=[{"type": "skipped_tool", "reason": reason}],
     )
@@ -477,6 +570,8 @@ def write_outputs(
         f"Repos: {', '.join(selected_repos)}",
         "",
         "Scoring: `present` means the expected file path appeared in the result. `top` records whether the first parsed path was the expected file. `pass` records the selected scoring mode: top-ranked for `path_top`, otherwise presence. Hard gates require the selected scoring mode to pass, while Julie rows are report-only.",
+        "",
+        "Workflow fields keep path scoring intact: `expected_anchor_count`/`expected_anchors_present` score required workflow anchors, `first_useful_anchor` records the first matched anchor, `follow_up_hint_present` records guidance such as `next inspect`, `readiness` records edit/inspect/search state, and `workflow_outcome` records structured `ok`, `needs-search`, `unsupported`, or `no-path` outcomes.",
         "",
         summarize_by_tool(results),
         "",

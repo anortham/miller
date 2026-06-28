@@ -22,6 +22,19 @@ def _passed(row: dict[str, Any]) -> bool:
     return bool(row.get("scoring_pass", row.get("expected_present")))
 
 
+def _anchor_summary(rows: list[dict[str, Any]]) -> str:
+    total = sum(_as_int(row.get("expected_anchor_count")) for row in rows)
+    if total == 0:
+        return ""
+    present = sum(_as_int(row.get("expected_anchors_present")) for row in rows)
+    return f"{present}/{total}"
+
+
+def _readiness_summary(rows: list[dict[str, Any]]) -> str:
+    values = sorted({str(row.get("readiness")) for row in rows if row.get("readiness")})
+    return ", ".join(values)
+
+
 def summarize_by_tool(rows: list[dict[str, Any]]) -> str:
     lines: list[str] = []
     lines.append("| tool | tasks | pass | top | present | empty | median ms | p95 ms | median chars |")
@@ -66,8 +79,10 @@ def summarize_by_task(rows: list[dict[str, Any]]) -> str:
 
 def summarize_foundation_matrix(rows: list[dict[str, Any]]) -> str:
     lines: list[str] = []
-    lines.append("| task class | tool | route | rows | hard | pass | present | top | empty | adaptations | median ms |")
-    lines.append("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append(
+        "| task class | tool | route | rows | hard | pass | present | top | anchors | readiness | empty | adaptations | median ms |"
+    )
+    lines.append("|---|---|---|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|")
     keys = sorted({(str(row["task_class"]), str(row["tool"]), str(row["route"])) for row in rows})
     for task_class, tool, route in keys:
         bucket = [
@@ -82,6 +97,8 @@ def summarize_foundation_matrix(rows: list[dict[str, Any]]) -> str:
             f"{sum(1 for row in bucket if _passed(row))} | "
             f"{sum(1 for row in bucket if row.get('expected_present'))} | "
             f"{sum(1 for row in bucket if row.get('expected_top'))} | "
+            f"{_anchor_summary(bucket)} | "
+            f"{_readiness_summary(bucket)} | "
             f"{sum(1 for row in bucket if row.get('empty'))} | "
             f"{sum(1 for row in bucket if row.get('adaptation_candidate'))} | "
             f"{int(statistics.median(ms)) if ms else 0} |"

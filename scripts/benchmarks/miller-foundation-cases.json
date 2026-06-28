@@ -2765,6 +2765,600 @@
       "gate": {
         "hard": true
       }
+    },
+    {
+      "id": "julie.context.workflow.fast-search-dispatch",
+      "repo": "julie",
+      "task_class": "context.workflow",
+      "intent": "Gather next inspection anchors for Julie fast search dispatch.",
+      "miller": {
+        "tool": "context",
+        "args": {
+          "query": "Julie fast search dispatch flow fast_search MCP tool dispatch implementation",
+          "token_budget": 1500,
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "get_context",
+        "args": {
+          "query": "Julie fast search dispatch flow fast_search MCP tool dispatch implementation"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/handler/tools/fast_search.rs",
+        "anchor": "FastSearchTool"
+      },
+      "scoring": {
+        "mode": "workflow_anchors",
+        "required_anchors": [
+          "src/handler/tools/fast_search.rs",
+          "crates/julie-tools/src/search/mod.rs",
+          "FastSearchTool"
+        ],
+        "follow_up_hint": "next inspect",
+        "readiness": "inspect-ready"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "eros.context.workflow.semantic-importer",
+      "repo": "eros",
+      "task_class": "context.workflow",
+      "intent": "Gather anchors for the Eros semantic Miller import workflow.",
+      "miller": {
+        "tool": "context",
+        "args": {
+          "query": "Miller Eros semantic importer workflow semantic inputs import content corpus Miller foundation",
+          "token_budget": 1500,
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "get_context",
+        "args": {
+          "query": "Miller Eros semantic importer workflow semantic inputs import content corpus Miller foundation"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Eros.Semantic/SemanticMillerImporter.cs",
+        "anchor": "SemanticMillerImporter"
+      },
+      "scoring": {
+        "mode": "workflow_anchors",
+        "required_anchors": [
+          "src/Eros.Semantic/SemanticMillerImporter.cs",
+          "src/Eros.Store/WorkspaceStore.SemanticInputs.cs",
+          "SemanticMillerImporterTests"
+        ],
+        "follow_up_hint": "next inspect",
+        "readiness": "inspect-ready"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "flask.context.workflow.add-url-rule-navigation",
+      "repo": "flask",
+      "task_class": "context.workflow",
+      "intent": "Gather anchors to navigate from Flask route registration to children and callers.",
+      "miller": {
+        "tool": "context",
+        "args": {
+          "query": "Flask add_url_rule navigation from class inspection to child and caller methods",
+          "token_budget": 1500,
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "get_context",
+        "args": {
+          "query": "Flask add_url_rule navigation from class inspection to child and caller methods"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/flask/sansio/app.py",
+        "anchor": "add_url_rule"
+      },
+      "scoring": {
+        "mode": "workflow_anchors",
+        "required_anchors": [
+          "src/flask/sansio/app.py",
+          "src/flask/sansio/blueprints.py",
+          "add_url_rule"
+        ],
+        "follow_up_hint": "next inspect",
+        "readiness": "inspect-ready"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "zod.context.workflow.zodobject-versions",
+      "repo": "zod",
+      "task_class": "context.workflow",
+      "intent": "Gather anchors for the ZodObject v3/v4 versioned-package ambiguity.",
+      "miller": {
+        "tool": "context",
+        "args": {
+          "query": "ZodObject versioned package ambiguity v3 v4 classic schemas types",
+          "token_budget": 1500,
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "get_context",
+        "args": {
+          "query": "ZodObject versioned package ambiguity v3 v4 classic schemas types"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "packages/zod/src/v4/classic/schemas.ts",
+        "anchor": "ZodObject"
+      },
+      "scoring": {
+        "mode": "workflow_anchors",
+        "required_anchors": [
+          "packages/zod/src/v4/classic/schemas.ts",
+          "packages/zod/src/v3/types.ts",
+          "ZodObject"
+        ],
+        "follow_up_hint": "next inspect",
+        "readiness": "inspect-ready"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.context.workflow.search-route-planner",
+      "repo": "miller",
+      "task_class": "context.workflow",
+      "intent": "Gather route-planning anchors around SearchRoutePlanner.Plan.",
+      "miller": {
+        "tool": "context",
+        "args": {
+          "query": "SearchRoutePlanner.Plan route planning tests",
+          "token_budget": 1500,
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "get_context",
+        "args": {
+          "query": "SearchRoutePlanner.Plan route planning tests"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Miller.Server/Tools/SearchRoutePlanner.cs",
+        "anchor": "SearchRoutePlannerTests"
+      },
+      "scoring": {
+        "mode": "workflow_anchors",
+        "required_anchors": [
+          "src/Miller.Server/Tools/SearchRoutePlanner.cs",
+          "tests/Miller.Tests/Server/SearchRoutePlannerTests.cs",
+          "SearchRoutePlanner"
+        ],
+        "follow_up_hint": "next inspect",
+        "readiness": "inspect-ready"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "julie.trace.refs.fast-search-tool",
+      "repo": "julie",
+      "task_class": "trace.refs",
+      "intent": "Trace references for Julie FastSearchTool dispatch and telemetry wiring.",
+      "miller": {
+        "tool": "trace",
+        "args": {
+          "target": "FastSearchTool",
+          "mode": "refs",
+          "limit": 20,
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "fast_refs",
+        "args": {
+          "target": "FastSearchTool"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "crates/julie-tools/src/search/mod.rs",
+        "anchor": "FastSearchTool"
+      },
+      "scoring": {
+        "mode": "trace_refs",
+        "required_anchors": [
+          "crates/julie-tools/src/search/mod.rs",
+          "src/handler/tools/fast_search.rs",
+          "src/cli_tools/commands.rs"
+        ],
+        "definition_anchor": "definition:",
+        "min_references": 10,
+        "readiness": "inspect-ready"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "flask.trace.refs.add-url-rule",
+      "repo": "flask",
+      "task_class": "trace.refs",
+      "intent": "Trace Flask add_url_rule callers from the sansio app implementation.",
+      "miller": {
+        "tool": "trace",
+        "args": {
+          "target": "add_url_rule",
+          "scope": "src/flask/sansio/app.py",
+          "mode": "refs",
+          "limit": 20,
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "fast_refs",
+        "args": {
+          "target": "add_url_rule"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/flask/sansio/app.py",
+        "anchor": "add_url_rule"
+      },
+      "scoring": {
+        "mode": "trace_refs",
+        "required_anchors": [
+          "src/flask/sansio/app.py",
+          "src/flask/sansio/blueprints.py",
+          "tests/test_basic.py"
+        ],
+        "definition_anchor": "definition:",
+        "min_references": 10,
+        "readiness": "inspect-ready"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.trace.refs.search-route-plan",
+      "repo": "miller",
+      "task_class": "trace.refs",
+      "intent": "Trace SearchRoutePlanner.Plan callers and tests.",
+      "miller": {
+        "tool": "trace",
+        "args": {
+          "target": "SearchRoutePlanner.Plan",
+          "mode": "refs",
+          "limit": 20,
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "fast_refs",
+        "args": {
+          "target": "SearchRoutePlanner.Plan"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Miller.Server/Tools/SearchRoutePlanner.cs",
+        "anchor": "SearchRoutePlanner"
+      },
+      "scoring": {
+        "mode": "trace_refs",
+        "required_anchors": [
+          "src/Miller.Server/Tools/SearchRoutePlanner.cs",
+          "src/Miller.Server/Tools/SearchTool.cs",
+          "tests/Miller.Tests/Server/SearchRoutePlannerTests.cs"
+        ],
+        "definition_anchor": "definition:",
+        "min_references": 5,
+        "readiness": "inspect-ready"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "eros.trace.refs.semantic-inputs-list",
+      "repo": "eros",
+      "task_class": "trace.refs",
+      "intent": "Trace Eros semantic input listing references into importer and store tests.",
+      "miller": {
+        "tool": "trace",
+        "args": {
+          "target": "WorkspaceStore.ListSemanticInputs",
+          "mode": "refs",
+          "limit": 20,
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "fast_refs",
+        "args": {
+          "target": "WorkspaceStore.ListSemanticInputs"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Eros.Store/WorkspaceStore.SemanticInputs.cs",
+        "anchor": "ListSemanticInputs"
+      },
+      "scoring": {
+        "mode": "trace_refs",
+        "required_anchors": [
+          "src/Eros.Store/WorkspaceStore.SemanticInputs.cs",
+          "tests/Eros.Semantic.Tests/SemanticMillerImporterTests.cs",
+          "tests/Eros.Store.Tests/SemanticInputsStoreTests.cs"
+        ],
+        "definition_anchor": "definition:",
+        "min_references": 5,
+        "readiness": "inspect-ready"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "zod.trace.refs.zodobject-needs-search",
+      "repo": "zod",
+      "task_class": "trace.refs",
+      "intent": "Report ZodObject ambiguity as a needs-search trace refs outcome.",
+      "miller": {
+        "tool": "trace",
+        "args": {
+          "target": "ZodObject",
+          "mode": "refs",
+          "limit": 20,
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "fast_refs",
+        "args": {
+          "target": "ZodObject"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "packages/zod/src/v4/classic/schemas.ts",
+        "anchor": "Multiple candidates"
+      },
+      "scoring": {
+        "mode": "trace_refs",
+        "required_anchors": [
+          "packages/zod/src/v4/classic/schemas.ts",
+          "packages/zod/src/v3/types.ts",
+          "Multiple candidates"
+        ],
+        "expected_outcome": "needs-search",
+        "definition_anchor": "Multiple candidates",
+        "min_references": 0,
+        "readiness": "needs-search"
+      },
+      "gate": {
+        "hard": false
+      }
+    },
+    {
+      "id": "miller.trace.path.search-route-plan-to-test-no-path",
+      "repo": "miller",
+      "task_class": "trace.path",
+      "intent": "Report a structured no-path outcome for a route planner method to one test method.",
+      "miller": {
+        "tool": "trace",
+        "args": {
+          "target": "SearchRoutePlanner.Plan",
+          "mode": "path",
+          "to": "SearchRoutePlannerTests.Plan_RegionsOverrideRequestedMode",
+          "limit": 20,
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "call_path",
+        "args": {
+          "target": "SearchRoutePlanner.Plan",
+          "to": "SearchRoutePlannerTests.Plan_RegionsOverrideRequestedMode"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Miller.Server/Tools/SearchRoutePlanner.cs",
+        "anchor": "No path from"
+      },
+      "scoring": {
+        "mode": "trace_path",
+        "required_anchors": [
+          "No path from",
+          "SearchRoutePlanner.Plan",
+          "SearchRoutePlannerTests.Plan_RegionsOverrideRequestedMode"
+        ],
+        "expected_outcome": "no-path",
+        "readiness": "no-path"
+      },
+      "gate": {
+        "hard": false
+      }
+    },
+    {
+      "id": "flask.trace.bridge.add-url-rule-unsupported",
+      "repo": "flask",
+      "task_class": "trace.bridge",
+      "intent": "Report Flask add_url_rule as outside the dotnet-web bridge provider.",
+      "miller": {
+        "tool": "trace",
+        "args": {
+          "target": "add_url_rule",
+          "scope": "src/flask/sansio/app.py",
+          "mode": "bridge",
+          "limit": 20,
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "call_path",
+        "args": {
+          "target": "add_url_rule",
+          "to": "dotnet-web bridge"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/flask/sansio/app.py",
+        "anchor": "cross-language bridge"
+      },
+      "scoring": {
+        "mode": "trace_bridge",
+        "required_anchors": [
+          "not on a cross-language bridge",
+          "bridge providers active"
+        ],
+        "expected_outcome": "unsupported",
+        "readiness": "unsupported"
+      },
+      "gate": {
+        "hard": false
+      }
+    },
+    {
+      "id": "miller.impact.workflow.search-route-planner",
+      "repo": "miller",
+      "task_class": "impact.workflow",
+      "intent": "Score impacted symbols and tests for SearchRoutePlanner.Plan.",
+      "miller": {
+        "tool": "impact",
+        "args": {
+          "target": "SearchRoutePlanner.Plan",
+          "limit": 40,
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "blast_radius",
+        "args": {
+          "target": "SearchRoutePlanner.Plan"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Miller.Server/Tools/SearchTool.cs",
+        "anchor": "SearchRoutePlannerTests"
+      },
+      "scoring": {
+        "mode": "impact_targets",
+        "required_symbols": [
+          "src/Miller.Server/Tools/SearchTool.cs",
+          "src/Miller.Server/Cli/CliDispatch.cs",
+          "src/Miller.Server/Tools/EditService.cs"
+        ],
+        "required_tests": [
+          "tests/Miller.Tests/Server/SearchRoutePlannerTests.cs",
+          "tests/Miller.Tests/Server/SearchRouteExecutorTests.cs"
+        ],
+        "readiness": "edit-ready"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "eros.impact.workflow.semantic-inputs-list",
+      "repo": "eros",
+      "task_class": "impact.workflow",
+      "intent": "Score impacted symbols and tests for Eros semantic input listing.",
+      "miller": {
+        "tool": "impact",
+        "args": {
+          "target": "WorkspaceStore.ListSemanticInputs",
+          "limit": 40,
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "blast_radius",
+        "args": {
+          "target": "WorkspaceStore.ListSemanticInputs"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Eros.Eval/SemanticMillerEval.cs",
+        "anchor": "SemanticMillerImporterTests"
+      },
+      "scoring": {
+        "mode": "impact_targets",
+        "required_symbols": [
+          "src/Eros.Eval/SemanticMillerEval.cs",
+          "tests/Eros.Cli.Tests/SemanticCommandTests.cs"
+        ],
+        "required_tests": [
+          "tests/Eros.Semantic.Tests/SemanticMillerImporterTests.cs",
+          "tests/Eros.Store.Tests/SemanticInputsStoreTests.cs"
+        ],
+        "readiness": "edit-ready"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "eros.impact.workflow.put-semantic-input",
+      "repo": "eros",
+      "task_class": "impact.workflow",
+      "intent": "Score impacted symbols and tests for Eros semantic input upserts.",
+      "miller": {
+        "tool": "impact",
+        "args": {
+          "target": "PutSemanticInput",
+          "limit": 40,
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "blast_radius",
+        "args": {
+          "target": "PutSemanticInput"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Eros.Semantic/SemanticMillerImporter.cs",
+        "anchor": "Import_with_content_kind_replaces_only_that_kind"
+      },
+      "scoring": {
+        "mode": "impact_targets",
+        "required_symbols": [
+          "src/Eros.Store/WorkspaceStore.SemanticInputs.cs",
+          "src/Eros.Semantic/SemanticMillerImporter.cs"
+        ],
+        "required_tests": [
+          "tests/Eros.Semantic.Tests/SemanticMillerImporterTests.cs",
+          "tests/Eros.Store.Tests/SemanticInputsStoreTests.cs"
+        ],
+        "readiness": "edit-ready"
+      },
+      "gate": {
+        "hard": true
+      }
     }
   ]
 }
