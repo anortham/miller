@@ -53,6 +53,7 @@ SUPPORTED_SCORING_MODES = {
     "contract_json",
     "contract_jsonl",
 }
+WORKFLOW_SCORING_MODES = {"workflow_anchors", "trace_refs", "trace_path", "trace_bridge", "impact_targets"}
 SUPPORTED_READINESS = {"edit-ready", "inspect-ready", "needs-search", "unsupported", "no-path"}
 SUPPORTED_WORKFLOW_OUTCOMES = {"ok", "needs-search", "unsupported", "no-path"}
 BASE_REQUIRED_ROW_KEYS = {"id", "repo", "task_class", "intent", "expected", "scoring", "gate"}
@@ -854,6 +855,9 @@ def gate_failures(results: list[dict[str, Any]]) -> list[str]:
                 failures.append(
                     f"{row['row_id']}/{row['tool']}: contract outcome {row.get('contract_outcome') or 'failed'}"
                 )
+        elif row.get("scoring_mode") in WORKFLOW_SCORING_MODES:
+            if not row["scoring_pass"]:
+                failures.append(f"{row['row_id']}/{row['tool']}: scoring mode {row['scoring_mode']} did not pass")
         elif row["empty"]:
             failures.append(f"{row['row_id']}/{row['tool']}: output was empty")
         elif not row["expected_present"]:

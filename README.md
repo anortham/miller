@@ -236,8 +236,9 @@ docs/
 ```
 
 Miller keeps only the local operational dashboard: registered workspaces, freshness, read-only aggregate facts
-from workspace artifacts, telemetry, sidecar health, and refresh/troubleshooting actions. Eros owns richer product
-UX such as next-action guidance, confidence/evidence views, semantic/vector retrieval, and commercial workflows.
+from workspace artifacts, telemetry, sidecar health, and refresh/troubleshooting actions. Miller tools may return
+immediate recovery hints for the next useful local call; Eros owns richer product UX such as workflow guidance,
+confidence/evidence views, semantic/vector retrieval, and commercial workflows.
 
 ## The tool surface
 
@@ -246,6 +247,11 @@ Nine MCP tools, each with smart defaults so the common path is the simplest call
 selector: display ID, unique prefix, full ID, registered root path, `current`, or `primary`. Explicit `workspace_id` defaults
 `ensure_fresh=true`. Targets are smart strings, not JSON objects. See
 [docs/findings/miller-toolbox.md](docs/findings/miller-toolbox.md).
+
+`trace` is the graph workflow tool: `mode=refs` lists name-based identifier references, `mode=path` shows the
+shortest extracted graph path to `to`, and `mode=bridge` follows provider-scoped `dotnet-web` bridge evidence.
+No-path, unsupported bridge, and ambiguous-target results include bounded next actions; JSON callers get the same
+guidance in additive `next_actions` rows.
 
 For cross-workspace code reading, stay in the current session and run `workspace list`. If the target repo is
 registered, pass its display ID, unique prefix, full ID, or root path as `workspace_id` to `search`, `inspect`,
@@ -504,7 +510,8 @@ Text output is a compact human-facing contract and JSON output is the integratio
   and `--regions` searches explicit source regions when region indexing is enabled.
 - `trace --mode refs` returns name-based identifier references for a resolved target symbol. Use
   `--reference-kind call|variable_ref|type_usage|member_access|import` to narrow the result and `--no-definition`
-  when only reference rows are needed.
+  when only reference rows are needed. `trace --mode path` no-path and `trace --mode bridge` unsupported results
+  include next local calls to try; JSON includes them as `next_actions`.
 - `todos --json` is a CLI compatibility alias over marker search for Eros/scripts. For agents and normal
   interactive use, prefer `search "TODO,FIXME,HACK,XXX" --mode markers`; it returns marker, file:line,
   snippet, and containing symbol when available, with `--file-pattern` and `--language` for scope.

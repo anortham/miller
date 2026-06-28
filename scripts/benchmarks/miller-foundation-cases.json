@@ -3218,7 +3218,9 @@
         "required_anchors": [
           "packages/zod/src/v4/classic/schemas.ts",
           "packages/zod/src/v3/types.ts",
-          "Multiple candidates"
+          "Multiple candidates",
+          "Try:",
+          "trace target=\"ZodObject\" scope=\"packages/zod/src/v4/classic/schemas.ts\""
         ],
         "expected_outcome": "needs-search",
         "definition_anchor": "Multiple candidates",
@@ -3226,7 +3228,47 @@
         "readiness": "needs-search"
       },
       "gate": {
-        "hard": false
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.trace.refs.reference-kind-usage-empty-guidance",
+      "repo": "miller",
+      "task_class": "trace.refs",
+      "intent": "Gate trace refs empty-state recovery guidance for a resolved Miller symbol with no reference rows.",
+      "miller": {
+        "tool": "trace",
+        "args": {
+          "target": "ReferenceKindUsage",
+          "mode": "refs",
+          "limit": 20,
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "fast_refs",
+        "args": {
+          "target": "ReferenceKindUsage"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Miller.Server/Tools/TraceTool.cs",
+        "anchor": "No extracted refs"
+      },
+      "scoring": {
+        "mode": "trace_refs",
+        "required_anchors": [
+          "No extracted refs for 'ReferenceKindUsage'",
+          "search mode=source ReferenceKindUsage",
+          "trace mode=auto"
+        ],
+        "definition_anchor": "definition:",
+        "min_references": 0,
+        "readiness": "needs-search"
+      },
+      "gate": {
+        "hard": true
       }
     },
     {
@@ -3261,13 +3303,17 @@
         "required_anchors": [
           "No path from",
           "SearchRoutePlanner.Plan",
-          "SearchRoutePlannerTests.Plan_RegionsOverrideRequestedMode"
+          "SearchRoutePlannerTests.Plan_RegionsOverrideRequestedMode",
+          "Next:",
+          "trace target=\"SearchRoutePlanner.Plan\" mode=\"refs\"",
+          "trace target=\"SearchRoutePlannerTests.Plan_RegionsOverrideRequestedMode\" mode=\"refs\"",
+          "search query=\"SearchRoutePlanner.Plan SearchRoutePlannerTests.Plan_RegionsOverrideRequestedMode\" mode=\"source\""
         ],
         "expected_outcome": "no-path",
         "readiness": "no-path"
       },
       "gate": {
-        "hard": false
+        "hard": true
       }
     },
     {
@@ -3301,13 +3347,17 @@
         "mode": "trace_bridge",
         "required_anchors": [
           "not on a cross-language bridge",
-          "bridge providers active"
+          "bridge providers active",
+          "Next:",
+          "trace target=\"add_url_rule\" mode=\"refs\"",
+          "trace target=\"add_url_rule\" mode=\"auto\"",
+          "search query=\"add_url_rule\" mode=\"source\""
         ],
         "expected_outcome": "unsupported",
         "readiness": "unsupported"
       },
       "gate": {
-        "hard": false
+        "hard": true
       }
     },
     {
@@ -3778,7 +3828,8 @@
           "mode",
           "target",
           "resolved_target",
-          "references"
+          "references",
+          "next_actions"
         ],
         "rows_path": "references",
         "required_row_fields": [

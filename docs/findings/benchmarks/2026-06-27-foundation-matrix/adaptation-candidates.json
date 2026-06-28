@@ -33,7 +33,7 @@
     "evidence_source": "Task 4 report-only rows captured zod trace refs needs-search, Miller trace path no-path, and Flask bridge unsupported outcomes; Task 6 trace default has high empty rate and low use.",
     "impact": "Medium: preserves current graph behavior while helping agents recover to search, inspect, or bridge-specific routes.",
     "implementation_locality": "TraceTool rendering, workflow summary text, and agent instructions; no extractor or graph schema change required.",
-    "recommended_goal_or_action": "Add outcome-specific next-call hints to trace output and docs, then rerun Task 4 workflow rows."
+    "recommended_goal_or_action": "Implemented 2026-06-28 for trace scoped rerun examples, no-path next actions, bridge fallback guidance, additive JSON next_actions, and focused hard-gate rows."
   },
   {
     "rank": 5,

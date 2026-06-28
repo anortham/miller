@@ -220,11 +220,11 @@ Report-only:
 
 **Acceptance criteria:**
 
-- [ ] `Path_NoConnection_CleanMessage` or a new neighboring test proves compact no-path output keeps `No path from ...` and includes a bounded `Next:` block.
-- [ ] `Path_NoConnection_JsonCarriesDiagnostic` proves JSON still has diagnostic code `no_path` and now includes `next_actions`.
-- [ ] Successful path output is unchanged except for any intentionally documented JSON additive default, and focused path success tests remain green.
-- [ ] Duplicate target/destination names do not produce duplicate next-action lines.
-- [ ] Worker-scope verification passes, committed.
+- [x] `Path_NoConnection_CleanMessage` or a new neighboring test proves compact no-path output keeps `No path from ...` and includes a bounded `Next:` block.
+- [x] `Path_NoConnection_JsonCarriesDiagnostic` proves JSON still has diagnostic code `no_path` and now includes `next_actions`.
+- [x] Successful path output is unchanged except for any intentionally documented JSON additive default, and focused path success tests remain green.
+- [x] Duplicate target/destination names do not produce duplicate next-action lines.
+- [x] Worker-scope verification passes, committed.
 
 ## Task 2: Bridge Unsupported And Not-On-Bridge Recovery
 
@@ -259,11 +259,11 @@ Report-only:
 
 **Acceptance criteria:**
 
-- [ ] `Bridge_NotOnBridge_CleanMessage` or a new neighboring test proves compact output includes `trace mode=refs`, `trace mode=auto`, and `search mode=source` recovery lines.
-- [ ] `Bridge_NotOnBridge_IncludesCapabilityStatus_WhenProvidersSkipped` still proves skipped-provider status is present.
-- [ ] `Bridge_NotOnBridge_JsonIncludesCapabilityDiagnostics` proves existing diagnostics still render and JSON now includes `next_actions`.
-- [ ] Bridge success output and `full` signal output remain unchanged.
-- [ ] Worker-scope verification passes, committed.
+- [x] `Bridge_NotOnBridge_CleanMessage` or a new neighboring test proves compact output includes `trace mode=refs`, `trace mode=auto`, and `search mode=source` recovery lines.
+- [x] `Bridge_NotOnBridge_IncludesCapabilityStatus_WhenProvidersSkipped` still proves skipped-provider status is present.
+- [x] `Bridge_NotOnBridge_JsonIncludesCapabilityDiagnostics` proves existing diagnostics still render and JSON now includes `next_actions`.
+- [x] Bridge success output and `full` signal output remain unchanged.
+- [x] Worker-scope verification passes, committed.
 
 ## Task 3: Trace Ambiguity Guidance
 
@@ -298,12 +298,12 @@ Report-only:
 
 **Acceptance criteria:**
 
-- [ ] `Auto_AmbiguousTarget_PointsToScope` or a new test proves compact trace ambiguity includes scoped `trace target=... scope=...` examples.
-- [ ] `Auto_ScopedAmbiguousTarget_AsksForMoreSpecificTarget` proves same-file ambiguity does not suggest scope as the only recovery path.
-- [ ] Bridge ambiguous target tests still show bridge-specific ambiguity flags where appropriate.
-- [ ] JSON ambiguity output includes additive `next_actions` when applicable.
-- [ ] Existing inspect ambiguity tests remain green if `CandidateOutput` changes.
-- [ ] Worker-scope verification passes, committed.
+- [x] `Auto_AmbiguousTarget_PointsToScope` or a new test proves compact trace ambiguity includes scoped `trace target=... scope=...` examples.
+- [x] `Auto_ScopedAmbiguousTarget_AsksForMoreSpecificTarget` proves same-file ambiguity does not suggest scope as the only recovery path.
+- [x] Bridge ambiguous target tests still show bridge-specific ambiguity flags where appropriate.
+- [x] JSON ambiguity output includes additive `next_actions` when applicable.
+- [x] Existing inspect ambiguity tests remain green if `CandidateOutput` changes.
+- [x] Worker-scope verification passes, committed.
 
 ## Task 4: Server Instructions And Tool Description Updates
 
@@ -338,11 +338,11 @@ Report-only:
 
 **Acceptance criteria:**
 
-- [ ] `AgentInstructionsTests.Load_StaysUnderClaudeCodeInstructionBudget` remains green.
-- [ ] `ToolDescriptions_StayWithinClaudeCodeBudgets` remains green.
-- [ ] Tests pin trace recovery language without overfitting the whole paragraph.
-- [ ] Server instructions still document every public MCP tool and do not advertise metrics/todos as MCP tools.
-- [ ] Worker-scope verification passes, committed.
+- [x] `AgentInstructionsTests.Load_StaysUnderClaudeCodeInstructionBudget` remains green.
+- [x] `ToolDescriptions_StayWithinClaudeCodeBudgets` remains green.
+- [x] Tests pin trace recovery language without overfitting the whole paragraph.
+- [x] Server instructions still document every public MCP tool and do not advertise metrics/todos as MCP tools.
+- [x] Worker-scope verification passes, committed.
 
 ## Task 5: Public Docs, GitHub Pages, And Trace Contract
 
@@ -385,11 +385,11 @@ Report-only:
 
 **Acceptance criteria:**
 
-- [ ] README explains trace recovery without implying fake graph certainty.
-- [ ] GitHub Pages trace card mentions recovery guidance and keeps the site concise.
-- [ ] Trace JSON contract documents `next_actions` as additive and optional for consumers.
-- [ ] Docs avoid claiming semantic/vector retrieval belongs to Miller.
-- [ ] Worker-scope verification passes, committed.
+- [x] README explains trace recovery without implying fake graph certainty.
+- [x] GitHub Pages trace card mentions recovery guidance and keeps the site concise.
+- [x] Trace JSON contract documents `next_actions` as additive and optional for consumers.
+- [x] Docs avoid claiming semantic/vector retrieval belongs to Miller.
+- [x] Worker-scope verification passes, committed.
 
 ## Task 6: Foundation Matrix Rows And Evidence Refresh
 
@@ -429,11 +429,11 @@ Report-only:
 
 **Acceptance criteria:**
 
-- [ ] Focused matrix command passes with the new hard-gated trace guidance rows.
-- [ ] Generated evidence files are committed and linked from the foundation matrix finding.
-- [ ] Adaptation candidate 4 is marked implemented only after tests and matrix evidence pass.
-- [ ] Julie rows remain report-only; no Julie parity gate is introduced.
-- [ ] Worker-scope verification passes, committed.
+- [x] Focused matrix command passes with the new hard-gated trace guidance rows.
+- [x] Generated evidence files are committed and linked from the foundation matrix finding.
+- [x] Adaptation candidate 4 is marked implemented only after tests and matrix evidence pass.
+- [x] Julie rows remain report-only; no Julie parity gate is introduced.
+- [x] Worker-scope verification passes, committed.
 
 ## Task 7: Final Verification And Live Tool Smoke
 
@@ -485,9 +485,9 @@ Report-only:
 
 **Acceptance criteria:**
 
-- [ ] Focused tests pass.
-- [ ] `scripts/test.sh` passes.
-- [ ] Focused foundation matrix gate passes and evidence files match the committed behavior.
-- [ ] CLI smoke shows compact `Next:` guidance and JSON `next_actions`.
-- [ ] Final report lists any live MCP smoke that still requires user rebuild/restart.
-- [ ] Changes are committed locally; no push, release, or publish is performed without explicit approval.
+- [x] Focused tests pass.
+- [x] `scripts/test.sh` passes.
+- [x] Focused foundation matrix gate passes and evidence files match the committed behavior.
+- [x] CLI smoke shows compact `Next:` guidance and JSON `next_actions`.
+- [x] Final report lists any live MCP smoke that still requires user rebuild/restart.
+- [x] Changes are committed locally; no push, release, or publish is performed without explicit approval.

@@ -21,17 +21,19 @@ internal static class CandidateOutput
     public static IReadOnlyList<string> RerunExamples(
         string target,
         IReadOnlyList<IndexedSymbol> matches,
-        bool supportsScope)
+        bool supportsScope,
+        string command = "inspect")
     {
         if (!supportsScope || !SpansMultipleFiles(matches))
             return Array.Empty<string>();
 
         string escapedTarget = EscapeShellishArgument(target);
+        string escapedCommand = EscapeShellishArgument(command);
         return matches
             .Select(static match => match.FilePath)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Take(3)
-            .Select(path => $"inspect target=\"{escapedTarget}\" scope=\"{EscapeShellishArgument(path)}\"")
+            .Select(path => $"{escapedCommand} target=\"{escapedTarget}\" scope=\"{EscapeShellishArgument(path)}\"")
             .ToArray();
     }
 
@@ -39,9 +41,10 @@ internal static class CandidateOutput
         StringBuilder sb,
         string target,
         IReadOnlyList<IndexedSymbol> matches,
-        bool supportsScope)
+        bool supportsScope,
+        string command = "inspect")
     {
-        IReadOnlyList<string> examples = RerunExamples(target, matches, supportsScope);
+        IReadOnlyList<string> examples = RerunExamples(target, matches, supportsScope, command);
         if (examples.Count == 0)
             return;
 

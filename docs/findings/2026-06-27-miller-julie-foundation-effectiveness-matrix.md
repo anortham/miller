@@ -27,6 +27,7 @@ Foundation matrix generated evidence:
 - Task 5 Eros contracts: [summary](benchmarks/2026-06-27-foundation-matrix/task5-eros-contracts/summary.md), [results CSV](benchmarks/2026-06-27-foundation-matrix/task5-eros-contracts/results.csv), [results JSON](benchmarks/2026-06-27-foundation-matrix/task5-eros-contracts/results.json)
 - Task 6 adoption: [summary](benchmarks/2026-06-27-foundation-matrix/task6-adoption/adoption-summary.md), [JSON](benchmarks/2026-06-27-foundation-matrix/task6-adoption/adoption-summary.json)
 - Search/inspect recovery hardening: [summary](benchmarks/2026-06-27-foundation-matrix/search-inspect-recovery-hardening/summary.md), [results CSV](benchmarks/2026-06-27-foundation-matrix/search-inspect-recovery-hardening/results.csv), [results JSON](benchmarks/2026-06-27-foundation-matrix/search-inspect-recovery-hardening/results.json)
+- Trace graph recovery guidance: [summary](benchmarks/2026-06-27-foundation-matrix/trace-graph-recovery-guidance/summary.md), [results CSV](benchmarks/2026-06-27-foundation-matrix/trace-graph-recovery-guidance/results.csv), [results JSON](benchmarks/2026-06-27-foundation-matrix/trace-graph-recovery-guidance/results.json)
 - Adaptation candidates: [Markdown](benchmarks/2026-06-27-foundation-matrix/adaptation-candidates.md), [CSV](benchmarks/2026-06-27-foundation-matrix/adaptation-candidates.csv), [JSON](benchmarks/2026-06-27-foundation-matrix/adaptation-candidates.json)
 
 ## Hard Gates Versus Report-Only Deltas
@@ -53,7 +54,7 @@ Important report-only gaps:
 
 - `retrieval.docs`, `retrieval.source_auto`, and some source-explicit rows passed by presence but often missed top rank. The final baseline has `18` Miller present-but-not-top path rows across retrieval, inspect, ambiguity, and region rows.
 - `inspect` passed all gated rows, but Zod and similar versioned targets still need clearer ambiguity handling.
-- Task 4 captured useful structured workflow states such as `needs-search`, `no-path`, and unsupported bridge cases. The final baseline records `39/56` workflow anchors present across `16` workflow rows, and that call-count-to-anchor signal remains report-only.
+- Task 4 captured useful structured workflow states such as `needs-search`, `no-path`, and unsupported bridge cases. Trace now emits bounded next actions for these graph recovery states and the focused rows are hard-gated; the broader call-count-to-anchor signal remains report-only.
 - Task 6 shows local usage does not prove product quality. Trace and impact are low-use in this telemetry window, but they are existing deterministic tools that need better discovery, not replacement.
 - Miller latency and output-size medians are report-only unless they become extreme enough to block interactive use. The final baseline median latencies were: `miller.search` 24 ms, `miller.inspect` 17 ms, `miller.context` 272 ms, `miller.trace` 228 ms, `miller.impact` 238 ms, and `miller.cli` 114 ms.
 - No metrics CLI contract rows are present in the final manifest; metrics remain CLI/export and dashboard/Eros-facing report-only facts.
@@ -87,7 +88,7 @@ The local telemetry window shows `trace` and `impact` are low-use deterministic 
 | 1 | route recovery | Improve first-call routing and recovery for source/text and ambiguous lookup intent inside existing `search` and `inspect` output. | Highest-impact/locality match: the data is present, but agents need better recovery and rerun guidance. |
 | 2 | ambiguity guidance | Make inspect ambiguity explicit when multiple packages, versions, tests, or generated definitions match the same target. | Prevents editing the wrong definition after an apparently successful inspect. |
 | 3 | output usefulness | Promote compact edit-orientation output before full-body reads. | The old Julie evidence shows a compact default can be useful; Miller already has `overview`, but guidance and usage lag. |
-| 4 | graph workflow | Improve fallback text for `needs-search`, `no-path`, and unsupported bridge outcomes. | Keeps graph semantics honest while reducing dead ends. |
+| 4 | graph workflow | Improve fallback text for `needs-search`, `no-path`, and unsupported bridge outcomes. | Implemented 2026-06-28; keeps graph semantics honest while reducing dead ends. |
 | 5 | Eros contract | Keep contract rows as CLI/export regression gates. | Protects Eros integration without growing MCP. |
 | 6 | adoption guidance | Use telemetry/onboarding to improve existing-tool discovery. | Converts real local friction into better starter commands and examples. |
 
@@ -102,7 +103,10 @@ Full candidate details are in the generated [adaptation candidate report](benchm
    - `SmartTargetResolver` now applies generic dependency/report path penalties such as `node_modules`, `vendor`, and `coverage` while preserving tie-safe candidates for equally plausible definitions.
    - The matrix manifest now includes Miller hard-gate rows for auto docs/config recovery and explicit unscoped ambiguity behavior; focused xUnit coverage pins the exact rescue and rerun-output contracts.
 
-2. Improve trace outcome guidance for `needs-search`, `no-path`, and unsupported bridge cases.
+2. **Trace outcome guidance: implemented 2026-06-28.**
+   - `trace` compact output now includes bounded `Next:` actions for ambiguous targets, no-path results, unsupported/not-on-bridge bridge results, and no bridge links within depth.
+   - Trace JSON now includes additive `next_actions` rows for machine consumers.
+   - The foundation matrix now hard-gates Zod trace ambiguity, Miller trace no-path, Flask bridge unsupported, and Miller empty-refs recovery guidance.
 
 3. Move the Task 5 Eros CLI contract rows into standard branch or release verification guidance.
 

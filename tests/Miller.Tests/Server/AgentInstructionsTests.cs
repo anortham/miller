@@ -134,6 +134,25 @@ public sealed class AgentInstructionsTests
     }
 
     [Fact]
+    public void Load_DocumentsTraceRecoveryGuidance()
+    {
+        string instructions = AgentInstructions.Load();
+        Assert.Contains("no extracted graph path within depth, not proof unrelated", instructions);
+        Assert.Contains("on another stack use `mode=refs`/`mode=path`, or `inspect depth=full`", instructions);
+        Assert.Contains("on empty, fall back to `search mode=source`", instructions);
+    }
+
+    [Fact]
+    public void TraceToolDescription_DocumentsRecoveryGuidance()
+    {
+        MethodInfo method = ToolMethod<TraceTool>(nameof(TraceTool.Trace));
+        string description = method.GetCustomAttribute<DescriptionAttribute>()?.Description ?? string.Empty;
+
+        Assert.Contains("No-path/unsupported results include next actions", description);
+        Assert.Contains("next_actions", description);
+    }
+
+    [Fact]
     public void Load_DocumentsDashboardLaunchWorkflow()
     {
         string instructions = AgentInstructions.Load();

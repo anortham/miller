@@ -28,7 +28,8 @@ local integrations.
   "provider": null,
   "nodes": [],
   "links": [],
-  "diagnostics": []
+  "diagnostics": [],
+  "next_actions": []
 }
 ```
 
@@ -43,6 +44,18 @@ local integrations.
 - `nodes_visited`: traversal work count before render truncation where available.
 - `note`: human-readable empty/diagnostic note, or `null` on normal results.
 - `diagnostics`: objects with `code` and `message` when a note should be machine-classified.
+- `next_actions`: bounded recovery suggestions for empty/diagnostic results. Each action has `tool`, `reason`,
+  and `args`; the field is always present and is empty when no recovery guidance applies.
+
+Example `next_actions` row:
+
+```json
+{
+  "tool": "trace",
+  "reason": "check extracted identifier references from the source endpoint",
+  "args": {"target": "SearchRoutePlanner", "mode": "refs"}
+}
+```
 
 ## Symbol graph modes
 
@@ -60,6 +73,10 @@ local integrations.
 - `hops`: full shortest-path hop count, or `null` when no path is available.
 - `nodes`: path symbols in order, truncated by `limit`.
 - `links`: ordered `dependency_path` links between adjacent rendered path nodes.
+
+A `no_path` diagnostic means Miller found no extracted dependency-graph path within the requested `depth`; it is
+not proof that the symbols are unrelated. `next_actions` points at refs/source search and, for very shallow depth,
+at one bounded depth bump.
 
 ## References mode
 
@@ -111,4 +128,6 @@ Bridge link fields:
 
 Bridge is provider-scoped. Current packaged provider coverage is `dotnet-web`: TypeScript/JavaScript client URL
 calls, ASP.NET endpoints, DTOs/entities, AutoMapper, and Entity Framework/Dapper table evidence. Empty bridge
-results are valid when a workspace is not in that stack or no bridge evidence exists.
+results are valid when a workspace is not in that stack or no bridge evidence exists. `not_on_bridge` and
+`no_bridge_links` diagnostics include `next_actions` for ordinary refs, ordinary graph neighbours, and source text
+search rather than implying unsupported stacks have bridge coverage.

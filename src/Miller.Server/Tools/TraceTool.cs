@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.ComponentModel;
+using System.Globalization;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -62,7 +63,8 @@ public sealed class TraceTool
         "extractor does not emit refs for; on empty, fall back to search mode=source for text occurrences. " +
         "Reduced-confidence links are flagged [verb-unknown] / [ambiguous] — never trust an unflagged link more " +
         "than a flagged one. Use before manual caller/callee file hopping. Pass format=json for structured " +
-        "output, or format=full to also see the signals behind each bridge link in compact output.")]
+        "output, or format=full to also see the signals behind each bridge link in compact output. " +
+        "No-path/unsupported results include next actions; JSON includes next_actions.")]
     public string Trace(
         [Description("A symbol name/id where the trace starts. In bridge mode, route/table nodes and single-symbol files are also accepted.")]
         string target,
@@ -136,6 +138,8 @@ public sealed class TraceTool
     private const string ModePath = "path";
     private const string ModeRefs = "refs";
     private const string ModeBridge = "bridge";
+
+    private sealed record TraceNextAction(string Tool, string Reason, IReadOnlyList<KeyValuePair<string, string>> Args);
 
     private static readonly HashSet<string> KnownReferenceKinds = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -299,9 +303,10 @@ public sealed class TraceTool
         emitted = 0;
         nodesVisited = 0;
 
-        if (!ResolveSymbol(index, resolver, target, scope, out string seedId, out string? note))
+        if (!ResolveSymbol(index, resolver, target, scope, out string seedId, out string? note, out IReadOnlyList<TraceNextAction> nextActions))
             return json
-                ? RenderTraceJson(ModeAuto, target, to: null, depth, limit, emitted, nodesVisited, note, DiagnosticCode(note!))
+                ? RenderTraceJson(ModeAuto, target, to: null, depth, limit, emitted, nodesVisited, note, DiagnosticCode(note!),
+                    nextActions: nextActions)
                 : note!;
 
         IReadOnlyList<ReachedNode> reached =
@@ -400,24 +405,26 @@ public sealed class TraceTool
                 : message;
         }
 
-        if (!ResolveSymbol(index, resolver, target, scope, out string fromId, out string? fromNote))
+        if (!ResolveSymbol(index, resolver, target, scope, out string fromId, out string? fromNote, out IReadOnlyList<TraceNextAction> fromNextActions))
             return json
-                ? RenderTraceJson(ModePath, target, to, depth, limit, emitted, nodesVisited, fromNote!, DiagnosticCode(fromNote!))
+                ? RenderTraceJson(ModePath, target, to, depth, limit, emitted, nodesVisited, fromNote!, DiagnosticCode(fromNote!),
+                    nextActions: fromNextActions)
                 : fromNote!;
-        if (!ResolveSymbol(index, resolver, to, scope: null, out string toId, out string? toNote))
+        if (!ResolveSymbol(index, resolver, to, scope: null, out string toId, out string? toNote, out IReadOnlyList<TraceNextAction> toNextActions))
             return json
                 ? RenderPathJson(index, target, to, depth, limit, emitted, nodesVisited, fromId, toId: null, path: null,
-                    note: toNote!, diagnosticCode: DiagnosticCode(toNote!))
+                    note: toNote!, diagnosticCode: DiagnosticCode(toNote!), nextActions: toNextActions)
                 : toNote!;
 
         IReadOnlyList<string>? path = graph.ShortestPath(fromId, toId, depth);
         if (path is null)
         {
             string message = $"No path from '{target}' to '{to}' within {depth} hop(s).";
+            IReadOnlyList<TraceNextAction> noPathNextActions = NoPathNextActions(target, to, depth);
             return json
                 ? RenderPathJson(index, target, to, depth, limit, emitted, nodesVisited, fromId, toId, path: null,
-                    note: message, diagnosticCode: "no_path")
-                : message;
+                    note: message, diagnosticCode: "no_path", nextActions: noPathNextActions)
+                : AppendNextActions(message, noPathNextActions);
         }
 
         // The path is from..to inclusive (ShortestPath includes both endpoints). Hops = path.Count - 1.
@@ -487,10 +494,10 @@ public sealed class TraceTool
                 : message;
         }
 
-        if (!ResolveSymbol(index, resolver, target, scope, out string seedId, out string? note))
+        if (!ResolveSymbol(index, resolver, target, scope, out string seedId, out string? note, out IReadOnlyList<TraceNextAction> nextActions))
             return json
                 ? RenderRefsJson(target, depth, limit, emitted, nodesVisited, targetSymbol: null,
-                    references: [], normalizedKind, includeDefinition, note!, DiagnosticCode(note!))
+                    references: [], normalizedKind, includeDefinition, note!, DiagnosticCode(note!), nextActions)
                 : note!;
 
         IndexedSymbol? targetSymbol = index.FindBySymbolId(seedId);
@@ -601,10 +608,10 @@ public sealed class TraceTool
         emitted = 0;
         nodesVisited = 0;
 
-        if (!ResolveBridgeStart(index, resolver, target, scope, out string startId, out string? note))
+        if (!ResolveBridgeStart(index, resolver, target, scope, out string startId, out string? note, out IReadOnlyList<TraceNextAction> nextActions))
             return json
                 ? RenderBridgeJson(index.BridgeGraph, target, to: null, depth, limit, emitted, nodesVisited, startId: null,
-                    edges: [], note!, DiagnosticCode(note!))
+                    edges: [], note!, DiagnosticCode(note!), nextActions)
                 : note!;
 
         // A symbol with no incident bridge edges is not on any cross-language thread — whether it is absent from the
@@ -614,11 +621,13 @@ public sealed class TraceTool
             var message = new StringBuilder();
             message.Append($"'{target}' is not on a cross-language bridge. trace bridge follows DTO/entity/table/route links; ")
               .Append("this symbol has none.");
+            IReadOnlyList<TraceNextAction> bridgeNextActions = BridgeFallbackNextActions(target);
+            AppendNextActions(message, bridgeNextActions);
             AppendBridgeCapabilityStatus(message, index.BridgeGraph.CapabilityReport);
             return json
                 ? RenderBridgeJson(index.BridgeGraph, target, to: null, depth, limit, emitted, nodesVisited, startId,
                     edges: [], $"'{target}' is not on a cross-language bridge. trace bridge follows DTO/entity/table/route links; this symbol has none.",
-                    "not_on_bridge")
+                    "not_on_bridge", bridgeNextActions)
                 : message.ToString();
         }
 
@@ -629,10 +638,11 @@ public sealed class TraceTool
         if (edges.Count == 0)
         {
             string message = $"No bridge links from '{target}' within {depth} hop(s).";
+            IReadOnlyList<TraceNextAction> bridgeNextActions = BridgeFallbackNextActions(target);
             return json
                 ? RenderBridgeJson(index.BridgeGraph, target, to: null, depth, limit, emitted, nodesVisited, startId,
-                    edges: [], message, "no_bridge_links")
-                : message;
+                    edges: [], message, "no_bridge_links", bridgeNextActions)
+                : AppendNextActions(message, bridgeNextActions);
         }
 
         if (json)
@@ -690,10 +700,11 @@ public sealed class TraceTool
 
     private static bool ResolveBridgeStart(
         MillerRepositoryIndex index, SmartTargetResolver resolver, string target, string? scope,
-        out string startId, out string? note)
+        out string startId, out string? note, out IReadOnlyList<TraceNextAction> nextActions)
     {
         startId = string.Empty;
         note = null;
+        nextActions = Array.Empty<TraceNextAction>();
 
         if (string.IsNullOrWhiteSpace(target))
         {
@@ -721,7 +732,8 @@ public sealed class TraceTool
             case TargetResolution.Candidates cands:
                 if (TryResolveSingleBridgeCandidate(index, cands.Matches, out startId))
                     return true;
-                note = RenderCandidatesNote(cands.Matches);
+                nextActions = AmbiguousTargetNextActions(target, cands.Matches);
+                note = RenderCandidatesNote(target, cands.Matches);
                 return false;
 
             case TargetResolution.NotFound nf:
@@ -982,10 +994,11 @@ public sealed class TraceTool
     /// </summary>
     private static bool ResolveSymbol(
         ISymbolLookupIndex index, SmartTargetResolver resolver, string target, string? scope,
-        out string symbolId, out string? note)
+        out string symbolId, out string? note, out IReadOnlyList<TraceNextAction> nextActions)
     {
         symbolId = string.Empty;
         note = null;
+        nextActions = Array.Empty<TraceNextAction>();
 
         if (string.IsNullOrWhiteSpace(target))
         {
@@ -1004,7 +1017,8 @@ public sealed class TraceTool
                 return false;
 
             case TargetResolution.Candidates cands:
-                note = RenderCandidatesNote(cands.Matches);
+                nextActions = AmbiguousTargetNextActions(target, cands.Matches);
+                note = RenderCandidatesNote(target, cands.Matches);
                 return false;
 
             case TargetResolution.NotFound nf:
@@ -1017,7 +1031,7 @@ public sealed class TraceTool
         }
     }
 
-    private static string RenderCandidatesNote(IReadOnlyList<IndexedSymbol> matches)
+    private static string RenderCandidatesNote(string target, IReadOnlyList<IndexedSymbol> matches)
     {
         var sb = new StringBuilder();
         sb.Append(CandidateOutput.Header(
@@ -1028,8 +1042,139 @@ public sealed class TraceTool
             sb.Append(s.Name).Append("  ").Append(s.Kind).Append("  ")
               .Append(s.FilePath).Append(':').Append(s.StartLine).Append('\n');
         CandidateOutput.AppendRemainderNote(sb, matches.Count);
+        CandidateOutput.AppendRerunExamples(sb, target, matches, supportsScope: true, command: "trace");
         return sb.ToString().TrimEnd('\n');
     }
+
+    private static IReadOnlyList<TraceNextAction> AmbiguousTargetNextActions(string target, IReadOnlyList<IndexedSymbol> matches)
+    {
+        string[] paths = matches
+            .Select(static match => match.FilePath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(3)
+            .ToArray();
+
+        if (paths.Length < 2)
+            return Array.Empty<TraceNextAction>();
+
+        return paths
+            .Select(path => NextAction(
+                "trace",
+                "retry with this file scope to disambiguate the target",
+                ("target", target),
+                ("scope", path)))
+            .ToArray();
+    }
+
+    private static IReadOnlyList<TraceNextAction> NoPathNextActions(string target, string to, int depth)
+    {
+        var actions = new List<TraceNextAction>(capacity: 3)
+        {
+            NextAction(
+                "trace",
+                "check extracted identifier references from the source endpoint",
+                ("target", target),
+                ("mode", ModeRefs)),
+        };
+
+        if (!string.Equals(target.Trim(), to.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            actions.Add(NextAction(
+                "trace",
+                "check extracted identifier references from the destination endpoint",
+                ("target", to),
+                ("mode", ModeRefs)));
+        }
+
+        if (depth < 3)
+        {
+            actions.Add(NextAction(
+                "trace",
+                "retry with a bounded depth bump; this does not prove a path exists",
+                ("target", target),
+                ("mode", ModePath),
+                ("to", to),
+                ("depth", (depth + 1).ToString(CultureInfo.InvariantCulture))));
+        }
+
+        if (actions.Count < 3)
+        {
+            actions.Add(NextAction(
+                "search",
+                "look for text links not represented in the graph",
+                ("query", $"{target} {to}"),
+                ("mode", "source")));
+        }
+
+        return actions.Take(3).ToArray();
+    }
+
+    private static IReadOnlyList<TraceNextAction> BridgeFallbackNextActions(string target) =>
+    [
+        NextAction(
+            "trace",
+            "check ordinary extracted identifier references outside the bridge graph",
+            ("target", target),
+            ("mode", ModeRefs)),
+        NextAction(
+            "trace",
+            "inspect ordinary graph neighbours for callers and callees",
+            ("target", target),
+            ("mode", ModeAuto)),
+        NextAction(
+            "search",
+            "look for source text links not represented in the bridge graph",
+            ("query", target),
+            ("mode", "source")),
+    ];
+
+    private static TraceNextAction NextAction(string tool, string reason, params (string Key, string Value)[] args) =>
+        new(tool, reason, args.Select(static arg => new KeyValuePair<string, string>(arg.Key, arg.Value)).ToArray());
+
+    private static string AppendNextActions(string message, IReadOnlyList<TraceNextAction> actions)
+    {
+        if (actions.Count == 0)
+            return message;
+
+        var sb = new StringBuilder(message);
+        AppendNextActions(sb, actions);
+        return sb.ToString();
+    }
+
+    private static void AppendNextActions(StringBuilder sb, IReadOnlyList<TraceNextAction> actions)
+    {
+        if (actions.Count == 0)
+            return;
+
+        sb.Append('\n').Append("Next:");
+        foreach (TraceNextAction action in actions.Take(3))
+        {
+            sb.Append('\n')
+              .Append("  ")
+              .Append(FormatNextActionCommand(action))
+              .Append(" - ")
+              .Append(action.Reason)
+              .Append('.');
+        }
+    }
+
+    private static string FormatNextActionCommand(TraceNextAction action)
+    {
+        var sb = new StringBuilder(action.Tool);
+        foreach (KeyValuePair<string, string> arg in action.Args)
+        {
+            sb.Append(' ')
+              .Append(arg.Key)
+              .Append("=\"")
+              .Append(EscapeShellishArgument(arg.Value))
+              .Append('"');
+        }
+
+        return sb.ToString();
+    }
+
+    private static string EscapeShellishArgument(string value) =>
+        value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal);
 
     private static string UnknownMode(string? mode, bool json, string target, string? to, int depth, int limit, out int emitted, out int nodesVisited)
     {
@@ -1082,7 +1227,8 @@ public sealed class TraceTool
 
     private static string RenderPathJson(
         ISymbolLookupIndex index, string target, string? to, int depth, int limit, int emitted, int nodesVisited,
-        string? fromId, string? toId, IReadOnlyList<string>? path, string? note, string? diagnosticCode)
+        string? fromId, string? toId, IReadOnlyList<string>? path, string? note, string? diagnosticCode,
+        IReadOnlyList<TraceNextAction>? nextActions = null)
     {
         var ids = new List<string>();
         if (fromId is not null)
@@ -1098,6 +1244,7 @@ public sealed class TraceTool
         int shownCount = path is null ? 0 : Math.Min(path.Count, limit);
 
         return RenderTraceJson(ModePath, target, to, depth, limit, emitted, nodesVisited, note, diagnosticCode,
+            nextActions: nextActions,
             writeExtraRootProperties: w =>
             {
                 if (path is null)
@@ -1142,9 +1289,10 @@ public sealed class TraceTool
     private static string RenderRefsJson(
         string target, int depth, int limit, int emitted, int nodesVisited, IndexedSymbol? targetSymbol,
         IReadOnlyList<SymbolRef> references, string? normalizedKind, bool includeDefinition,
-        string? note, string? diagnosticCode)
+        string? note, string? diagnosticCode, IReadOnlyList<TraceNextAction>? nextActions = null)
     {
         return RenderTraceJson(ModeRefs, target, to: null, depth, limit, emitted, nodesVisited, note, diagnosticCode,
+            nextActions: nextActions,
             writeExtraRootProperties: w =>
             {
                 if (normalizedKind is null) w.WriteNull("reference_kind"); else w.WriteString("reference_kind", normalizedKind);
@@ -1167,7 +1315,8 @@ public sealed class TraceTool
 
     private static string RenderBridgeJson(
         BridgeGraph graph, string target, string? to, int depth, int limit, int emitted, int nodesVisited,
-        string? startId, IReadOnlyList<ScoredEdge> edges, string? note, string? diagnosticCode)
+        string? startId, IReadOnlyList<ScoredEdge> edges, string? note, string? diagnosticCode,
+        IReadOnlyList<TraceNextAction>? nextActions = null)
     {
         BridgeNode? startNode = startId is null ? null : graph.Node(startId);
         var nodeIds = new SortedSet<string>(StringComparer.Ordinal);
@@ -1184,6 +1333,7 @@ public sealed class TraceTool
         }
 
         return RenderTraceJson(ModeBridge, target, to, depth, limit, emitted, nodesVisited, note, diagnosticCode,
+            nextActions: nextActions,
             writeResolvedTarget: w => WriteBridgeNodeOrNull(w, startNode),
             writeProvider: w => WriteProvider(w, graph.CapabilityReport),
             writeNodes: w =>
@@ -1209,6 +1359,7 @@ public sealed class TraceTool
     private static string RenderTraceJson(
         string mode, string target, string? to, int depth, int limit, int emitted, int nodesVisited,
         string? note, string? diagnosticCode,
+        IReadOnlyList<TraceNextAction>? nextActions = null,
         Action<Utf8JsonWriter>? writeExtraRootProperties = null,
         Action<Utf8JsonWriter>? writeResolvedTarget = null,
         Action<Utf8JsonWriter>? writeResolvedTo = null,
@@ -1244,6 +1395,8 @@ public sealed class TraceTool
             if (writeLinks is null) w.WriteEndArray();
             w.WritePropertyName("diagnostics");
             WriteDiagnostics(w, diagnosticCode, note);
+            w.WritePropertyName("next_actions");
+            WriteNextActions(w, nextActions);
             w.WriteEndObject();
         }
         return Utf8(buffer);
@@ -1258,6 +1411,27 @@ public sealed class TraceTool
             w.WriteString("code", code);
             w.WriteString("message", message);
             w.WriteEndObject();
+        }
+        w.WriteEndArray();
+    }
+
+    private static void WriteNextActions(Utf8JsonWriter w, IReadOnlyList<TraceNextAction>? actions)
+    {
+        w.WriteStartArray();
+        if (actions is not null)
+        {
+            foreach (TraceNextAction action in actions.Take(3))
+            {
+                w.WriteStartObject();
+                w.WriteString("tool", action.Tool);
+                w.WriteString("reason", action.Reason);
+                w.WritePropertyName("args");
+                w.WriteStartObject();
+                foreach (KeyValuePair<string, string> arg in action.Args)
+                    w.WriteString(arg.Key, arg.Value);
+                w.WriteEndObject();
+                w.WriteEndObject();
+            }
         }
         w.WriteEndArray();
     }

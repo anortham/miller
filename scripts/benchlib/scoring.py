@@ -603,7 +603,7 @@ def _detect_trace_outcome(text: str) -> str:
     lower = text.lower()
     if "no path from" in lower:
         return "no-path"
-    if "multiple candidates" in text:
+    if "multiple candidates" in lower:
         return "needs-search"
     if (
         "not supported" in lower
