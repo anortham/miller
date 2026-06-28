@@ -24,7 +24,7 @@
     "evidence_source": "Original search/inspect finding shows Julie deep_dive overview at 1129 median chars versus Miller inspect full at 7129 chars; Task 6 shows inspect full is used far more than overview.",
     "impact": "Medium-high: reduces token cost and makes the common inspect path easier to act on.",
     "implementation_locality": "MILLER_AGENT_INSTRUCTIONS, inspect CLI/MCP examples, docs/skills guidance, and possibly default depth guidance.",
-    "recommended_goal_or_action": "Update guidance and examples to route first reads through inspect overview, preserving full for complete bodies."
+    "recommended_goal_or_action": "Implemented 2026-06-28 for overview-first server/tool/skill guidance, README/site copy, aggregate onboarding hints, and focused matrix evidence while preserving inspect default summary."
   },
   {
     "rank": 4,
@@ -51,6 +51,6 @@
     "evidence_source": "Task 6 parseability gate passed; usage interpretation shows trace at 2.3%, impact at 2.7%, and common misses for search/inspect/content.",
     "impact": "Medium: turns real local friction into better starter commands without storing raw queries or adding tools.",
     "implementation_locality": "Telemetry onboarding reader/rendering, docs/README guidance, and agent instructions.",
-    "recommended_goal_or_action": "Add onboarding hints for common empty states and low-use deterministic tools; keep usage interpretation report-only."
+    "recommended_goal_or_action": "Implemented 2026-06-28 with aggregate onboarding hints for overview-first inspect, trace refs/path discovery, and impact before refactors; usage interpretation stays report-only."
   }
 ]

@@ -21,6 +21,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`plans/2026-06-26-miller-five-gap-implementation-plan.md`](plans/2026-06-26-miller-five-gap-implementation-plan.md) - implementation plan for metrics, empty-state recovery, leader handoff, dashboard panels, and clone/complexity discovery.
 - [`findings/2026-06-26-five-gap-implementation.md`](findings/2026-06-26-five-gap-implementation.md) - implementation evidence and boundary notes for the five-gap plan.
 - [`findings/2026-06-27-miller-julie-foundation-effectiveness-matrix.md`](findings/2026-06-27-miller-julie-foundation-effectiveness-matrix.md) - active Miller/Julie foundation matrix finding and adaptation-candidate ranking.
+- [`plans/2026-06-28-overview-first-agent-workflow-guidance-plan.md`](plans/2026-06-28-overview-first-agent-workflow-guidance-plan.md) - approved implementation plan for overview-first inspect guidance, onboarding hints, public docs, and focused matrix evidence.
 - [`plans/2026-06-28-trace-graph-workflow-recovery-guidance-plan.md`](plans/2026-06-28-trace-graph-workflow-recovery-guidance-plan.md) - approved implementation plan for trace no-path, bridge fallback, ambiguity, docs, and matrix evidence guidance.
 - [`plans/2026-06-09-patterns-tool-design.md`](plans/2026-06-09-patterns-tool-design.md) - design record for the `patterns` tool over extractor structural facts.
 - [`plans/2026-06-09-patterns-tool-implementation-plan.md`](plans/2026-06-09-patterns-tool-implementation-plan.md) - implementation plan for the `patterns` MCP/CLI surface.

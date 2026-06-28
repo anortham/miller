@@ -87,10 +87,10 @@ The local telemetry window shows `trace` and `impact` are low-use deterministic 
 |---:|---|---|---|
 | 1 | route recovery | Improve first-call routing and recovery for source/text and ambiguous lookup intent inside existing `search` and `inspect` output. | Highest-impact/locality match: the data is present, but agents need better recovery and rerun guidance. |
 | 2 | ambiguity guidance | Make inspect ambiguity explicit when multiple packages, versions, tests, or generated definitions match the same target. | Prevents editing the wrong definition after an apparently successful inspect. |
-| 3 | output usefulness | Promote compact edit-orientation output before full-body reads. | The old Julie evidence shows a compact default can be useful; Miller already has `overview`, but guidance and usage lag. |
+| 3 | output usefulness | Promote compact edit-orientation output before full-body reads. | Implemented 2026-06-28; overview-first guidance now appears in server instructions, tool descriptions, skills, README, site copy, and onboarding hints while `inspect` default remains `summary`. |
 | 4 | graph workflow | Improve fallback text for `needs-search`, `no-path`, and unsupported bridge outcomes. | Implemented 2026-06-28; keeps graph semantics honest while reducing dead ends. |
 | 5 | Eros contract | Keep contract rows as CLI/export regression gates. | Protects Eros integration without growing MCP. |
-| 6 | adoption guidance | Use telemetry/onboarding to improve existing-tool discovery. | Converts real local friction into better starter commands and examples. |
+| 6 | adoption guidance | Use telemetry/onboarding to improve existing-tool discovery. | Implemented 2026-06-28; onboarding now surfaces overview-first inspect, `trace` for refs/path questions, and `impact` before refactors from aggregate telemetry only. |
 
 Full candidate details are in the generated [adaptation candidate report](benchmarks/2026-06-27-foundation-matrix/adaptation-candidates.md).
 
@@ -108,6 +108,10 @@ Full candidate details are in the generated [adaptation candidate report](benchm
    - Trace JSON now includes additive `next_actions` rows for machine consumers.
    - The foundation matrix now hard-gates Zod trace ambiguity, Miller trace no-path, Flask bridge unsupported, and Miller empty-refs recovery guidance.
 
-3. Move the Task 5 Eros CLI contract rows into standard branch or release verification guidance.
+3. **Overview-first workflow guidance: implemented 2026-06-28.**
+   - `inspect` default remains `summary`.
+   - Server instructions, tool descriptions, skills, README, and site copy now route first symbol reads through `inspect depth=overview`.
+   - `workspace onboarding` compact and JSON output surface aggregate, privacy-preserving hints for `inspect depth=overview`, `trace`, and `impact`.
+   - Focused evidence: [summary](benchmarks/2026-06-27-foundation-matrix/overview-first-agent-guidance/summary.md), [CSV](benchmarks/2026-06-27-foundation-matrix/overview-first-agent-guidance/results.csv), [JSON](benchmarks/2026-06-27-foundation-matrix/overview-first-agent-guidance/results.json).
 
-4. Update onboarding and agent guidance so low-use deterministic tools are easier to discover without changing the tool surface.
+4. Move the Task 5 Eros CLI contract rows into standard branch or release verification guidance.

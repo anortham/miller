@@ -141,14 +141,14 @@
 **Approach:** Keep README and site copy concise. Update the foundation finding so candidate 3 and candidate 6 point to this implementation evidence once generated. Preserve the existing Miller-vs-Julie framing: this is not Julie cloning and not an MCP surface expansion.
 
 **Acceptance criteria:**
-- [ ] README includes an overview-first workflow example or bullet sequence.
-- [ ] GitHub Pages copy under `docs/site/index.html` describes `inspect overview` as the normal first symbol read.
-- [ ] Docs map links the new evidence directory or plan.
-- [ ] Foundation finding marks overview-first guidance as implemented after this slice.
-- [ ] Adaptation candidate Markdown/CSV/JSON agree on candidate 3 and candidate 6 status.
-- [ ] Docs do not claim `inspect full` is the default or preferred first read.
-- [ ] `git diff --check` passes.
-- [ ] Worker-scope verification passes, committed.
+- [x] README includes an overview-first workflow example or bullet sequence.
+- [x] GitHub Pages copy under `docs/site/index.html` describes `inspect overview` as the normal first symbol read.
+- [x] Docs map links the new evidence directory or plan.
+- [x] Foundation finding marks overview-first guidance as implemented after this slice.
+- [x] Adaptation candidate Markdown/CSV/JSON agree on candidate 3 and candidate 6 status.
+- [x] Docs do not claim `inspect full` is the default or preferred first read.
+- [x] `git diff --check` passes.
+- [x] Worker-scope verification passes, committed.
 
 ## Task 5: Generate Focused Foundation Evidence
 

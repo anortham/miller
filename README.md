@@ -76,6 +76,18 @@ For Miller development in this checkout, run `scripts/install-cursor-local-dev.s
 Reload Cursor after adding the entry, then ask your agent to search, inspect, build context, trace, or check impact
 with Miller. Miller writes its local index under that workspace's `.miller/` directory.
 
+### Common Agent Workflow
+
+Use Miller's structural tools before broad file reads:
+
+1. `search "NameOrConcept"` to find candidate symbols or files.
+2. `inspect NameOrSymbol --depth overview` for the first symbol read. `overview` gives bounded refs, callers,
+   callees, complexity, and a body preview without dumping the complete body.
+3. `trace NameOrSymbol --mode refs` or `trace From --mode path --to To` when the question is about usages or
+   graph paths.
+4. `impact --git` or `impact SymbolName` before refactors and risky edits.
+5. `inspect NameOrSymbol --depth full` only when you need the complete body or complete relation lists.
+
 ### Manual Binary Install
 
 Use this path when your MCP client does not use Miller's plugin package.
