@@ -535,14 +535,14 @@ Run `scripts/test.sh scale` only if implementation touches indexing, extraction,
 
 ## Final Acceptance
 
-- [ ] Existing `scripts/bench-julie-miller-search-inspect.py --gate` still passes.
-- [ ] New foundation matrix runner exists and validates a manifest before tool calls.
-- [ ] New matrix covers retrieval, inspect, ambiguity, context, trace, impact, Eros contracts, readiness, and adoption evidence.
-- [ ] Julie rows are report-only and can be skipped when Julie is unavailable.
-- [ ] Miller hard gates protect existing search/inspect strengths and Eros JSON/JSONL contract parseability.
-- [ ] Generated evidence includes CSV, JSON, Markdown summary, prep data, and adaptation candidates.
-- [ ] The finding ranks what Julie still does better and how Miller should adapt without cloning Julie.
-- [ ] The top follow-up implementation goal is concrete enough to become its own plan.
-- [ ] No new MCP tool is added.
-- [ ] No semantic/vector retrieval is added to Miller.
-- [ ] `scripts/test.sh` and branch-gate benchmark commands pass, or any skipped expensive gate is explicitly justified by unchanged code and reused same-HEAD evidence.
+- [x] Existing `scripts/bench-julie-miller-search-inspect.py --gate` still passes.
+- [x] New foundation matrix runner exists and validates a manifest before tool calls.
+- [x] New matrix covers retrieval, inspect, ambiguity, context, trace, impact, Eros contracts, readiness, and adoption evidence.
+- [x] Julie rows are report-only and can be skipped when Julie is unavailable.
+- [x] Miller hard gates protect existing search/inspect strengths and Eros JSON/JSONL contract parseability.
+- [x] Generated evidence includes CSV, JSON, Markdown summary, prep data, and adaptation candidates.
+- [x] The finding ranks what Julie still does better and how Miller should adapt without cloning Julie.
+- [x] The top follow-up implementation goal is concrete enough to become its own plan.
+- [x] No new MCP tool is added.
+- [x] No semantic/vector retrieval is added to Miller.
+- [x] `scripts/test.sh` and branch-gate benchmark commands pass, or any skipped expensive gate is explicitly justified by unchanged code and reused same-HEAD evidence.
