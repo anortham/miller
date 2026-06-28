@@ -271,12 +271,12 @@ Workflow scoring should record:
 
 **Acceptance criteria:**
 
-- [ ] `context` rows score expected anchors and the `next inspect` footer.
-- [ ] `trace refs` rows score definition presence, reference count, and noise/skipped diagnostics.
-- [ ] `trace path` or `trace bridge` rows are provider-scoped and report `unsupported` or `no_path` as structured outcomes, not generic failures.
-- [ ] `impact` rows score impacted symbols and likely tests separately.
-- [ ] Julie comparable rows stay report-only and can emit adaptation candidates.
-- [ ] Worker-scope verification passes, committed.
+- [x] `context` rows score expected anchors and the `next inspect` footer.
+- [x] `trace refs` rows score definition presence, reference count, and noise/skipped diagnostics.
+- [x] `trace path` or `trace bridge` rows are provider-scoped and report `unsupported` or `no_path` as structured outcomes, not generic failures.
+- [x] `impact` rows score impacted symbols and likely tests separately.
+- [x] Julie comparable rows stay report-only and can emit adaptation candidates.
+- [x] Worker-scope verification passes, committed.
 
 ## Task 5: Add Eros Foundation Contract Rows
 
