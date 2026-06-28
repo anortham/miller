@@ -11,6 +11,10 @@ Measure the practical gap between Miller and Julie on the tools agents actually 
 
 The benchmark intentionally ignores lower-use surfaces such as metrics, impact, patterns, and editing.
 
+Status note: this finding remains the narrow search/inspect evidence record. The broader
+[Miller Julie foundation effectiveness matrix](2026-06-27-miller-julie-foundation-effectiveness-matrix.md)
+now supersedes it for product planning and adaptation-candidate ranking.
+
 ## Method
 
 Runner: [`scripts/bench-julie-miller-search-inspect.py`](../../scripts/bench-julie-miller-search-inspect.py)
