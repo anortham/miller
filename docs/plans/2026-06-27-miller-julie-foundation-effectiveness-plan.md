@@ -229,12 +229,12 @@ For Julie, run `fast_search` and `deep_dive` only when a comparable row exists. 
 
 **Acceptance criteria:**
 
-- [ ] At least 9 repos and at least 60 total task rows are represented.
-- [ ] Each row has an expected anchor that can be reviewed as a real file path, symbol, or JSON/JSONL contract field.
-- [ ] Miller hard-gated retrieval rows preserve the existing search/inspect gate strengths from `scripts/bench-julie-miller-search-inspect.py`.
-- [ ] Ambiguity rows distinguish "clear preferred definition" from "correct explicit candidates" instead of forcing a single winner.
-- [ ] Julie rows can be skipped without failing the run when Julie is unavailable.
-- [ ] Worker-scope verification passes, committed.
+- [x] At least 9 repos and at least 60 total task rows are represented.
+- [x] Each row has an expected anchor that can be reviewed as a real file path, symbol, or JSON/JSONL contract field.
+- [x] Miller hard-gated retrieval rows preserve the existing search/inspect gate strengths from `scripts/bench-julie-miller-search-inspect.py`.
+- [x] Ambiguity rows distinguish "clear preferred definition" from "correct explicit candidates" instead of forcing a single winner.
+- [x] Julie rows can be skipped without failing the run when Julie is unavailable.
+- [x] Worker-scope verification passes, committed.
 
 ## Task 4: Add Workflow Rows For Context, Trace, And Impact
 
