@@ -316,12 +316,12 @@ Metrics CLI commands may be included as report-only contract rows if the current
 
 **Acceptance criteria:**
 
-- [ ] `capabilities --json` advertises every hard-gated command the matrix depends on.
-- [ ] JSON command rows parse as JSON and include required top-level contract fields.
-- [ ] JSONL export rows parse at least the first 20 non-empty lines or the full stream when fewer than 20 lines exist.
-- [ ] Missing optional data is reported with a structured `empty_allowed` or `unsupported` outcome when the contract permits it.
-- [ ] Contract rows fail hard on malformed JSON, malformed JSONL, missing required fields, or undocumented command drift.
-- [ ] Worker-scope verification passes, committed.
+- [x] `capabilities --json` advertises every hard-gated command the matrix depends on.
+- [x] JSON command rows parse as JSON and include required top-level contract fields.
+- [x] JSONL export rows parse at least the first 20 non-empty lines or the full stream when fewer than 20 lines exist.
+- [x] Missing optional data is reported with a structured `empty_allowed` or `unsupported` outcome when the contract permits it.
+- [x] Contract rows fail hard on malformed JSON, malformed JSONL, missing required fields, or undocumented command drift.
+- [x] Worker-scope verification passes, committed.
 
 ## Task 6: Add Adoption And Episode Analysis
 
