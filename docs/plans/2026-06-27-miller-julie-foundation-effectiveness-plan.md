@@ -385,12 +385,12 @@ Raw telemetry export parsing is a hard gate; interpretation of usage/adoption qu
 
 **Acceptance criteria:**
 
-- [ ] Finding links to the raw CSV, JSON, prep CSV, summary, and adaptation candidate files.
-- [ ] Finding separates hard-gated Miller failures from report-only Julie wins.
-- [ ] At least three adaptation candidates are classified by category: route recovery, output usefulness, ambiguity guidance, graph workflow, Eros contract, or adoption guidance.
-- [ ] The top recommended next implementation goal is concrete enough to turn into a separate implementation plan.
-- [ ] No historical benchmark file is edited to pretend old evidence came from the new matrix.
-- [ ] Worker-scope verification passes, committed.
+- [x] Finding links to the raw CSV, JSON, prep CSV, summary, and adaptation candidate files.
+- [x] Finding separates hard-gated Miller failures from report-only Julie wins.
+- [x] At least three adaptation candidates are classified by category: route recovery, output usefulness, ambiguity guidance, graph workflow, Eros contract, or adoption guidance.
+- [x] The top recommended next implementation goal is concrete enough to turn into a separate implementation plan.
+- [x] No historical benchmark file is edited to pretend old evidence came from the new matrix.
+- [x] Worker-scope verification passes, committed.
 
 ## Task 8: Full Matrix Baseline Run And Gate Calibration
 
