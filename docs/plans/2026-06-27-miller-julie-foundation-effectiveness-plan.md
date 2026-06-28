@@ -350,11 +350,11 @@ Raw telemetry export parsing is a hard gate; interpretation of usage/adoption qu
 
 **Acceptance criteria:**
 
-- [ ] `telemetry export --jsonl` parsing is hard-gated when telemetry exists.
-- [ ] `workspace onboarding --json` parsing is hard-gated for the Miller repo.
-- [ ] Adoption summary separates "tool exists and is parseable" from "agents actually use it."
-- [ ] Report identifies low-use tools without proposing MCP surface expansion by default.
-- [ ] Worker-scope verification passes, committed.
+- [x] `telemetry export --jsonl` parsing is hard-gated when telemetry exists.
+- [x] `workspace onboarding --json` parsing is hard-gated for the Miller repo.
+- [x] Adoption summary separates "tool exists and is parseable" from "agents actually use it."
+- [x] Report identifies low-use tools without proposing MCP surface expansion by default.
+- [x] Worker-scope verification passes, committed.
 
 ## Task 7: Generate The Foundation Finding And Adaptation Candidate Report
 
