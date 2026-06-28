@@ -431,12 +431,12 @@ Report-only metrics:
 
 **Acceptance criteria:**
 
-- [ ] Full matrix report-only run completes.
-- [ ] Full matrix `--gate` run completes after threshold calibration.
-- [ ] Calibration notes explain every report-only miss and every hard gate.
-- [ ] Existing narrow search/inspect benchmark gate still passes.
-- [ ] `scripts/test.sh` passes unless only docs/generated evidence changed after the last passing same-HEAD run.
-- [ ] Branch-gate verification passes, committed.
+- [x] Full matrix report-only run completes.
+- [x] Full matrix `--gate` run completes after threshold calibration.
+- [x] Calibration notes explain every report-only miss and every hard gate.
+- [x] Existing narrow search/inspect benchmark gate still passes.
+- [x] `scripts/test.sh` passes unless only docs/generated evidence changed after the last passing same-HEAD run.
+- [x] Branch-gate verification passes, committed.
 
 ## Verification Strategy
 
