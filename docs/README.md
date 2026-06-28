@@ -24,7 +24,9 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`plans/2026-06-28-overview-first-agent-workflow-guidance-plan.md`](plans/2026-06-28-overview-first-agent-workflow-guidance-plan.md) - approved implementation plan for overview-first inspect guidance, onboarding hints, public docs, and focused matrix evidence.
 - [`plans/2026-06-28-trace-graph-workflow-recovery-guidance-plan.md`](plans/2026-06-28-trace-graph-workflow-recovery-guidance-plan.md) - approved implementation plan for trace no-path, bridge fallback, ambiguity, docs, and matrix evidence guidance.
 - [`plans/2026-06-28-trace-content-patterns-quality-goal-plan.md`](plans/2026-06-28-trace-content-patterns-quality-goal-plan.md) - implemented goal plan for improving `trace`, `content`, and `patterns` usefulness, recovery output, guidance, and focused evidence.
+- [`plans/2026-06-28-handoff-skills-implementation-plan.md`](plans/2026-06-28-handoff-skills-implementation-plan.md) - approved implementation plan for Miller-provided `handoff-out` and `handoff-in` skills.
 - [`findings/2026-06-28-trace-content-patterns-quality-baseline.md`](findings/2026-06-28-trace-content-patterns-quality-baseline.md) - focused baseline, RED/GREEN replay matrix, and adoption notes for the trace/content/patterns quality slice.
+- [`findings/2026-06-28-handoff-skills-dogfood.md`](findings/2026-06-28-handoff-skills-dogfood.md) - dogfood evidence for local handoff packet creation, intake validation, and tracked/untracked impact behavior.
 - [`plans/2026-06-09-patterns-tool-design.md`](plans/2026-06-09-patterns-tool-design.md) - design record for the `patterns` tool over extractor structural facts.
 - [`plans/2026-06-09-patterns-tool-implementation-plan.md`](plans/2026-06-09-patterns-tool-implementation-plan.md) - implementation plan for the `patterns` MCP/CLI surface.
 - [`release-process.md`](release-process.md) - current release validation and promotion flow.

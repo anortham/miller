@@ -189,6 +189,51 @@ test('editing skill explains exact replace_text recovery', () => {
     'utf8',
   );
 
-  assert.match(skill, /replace_text requires an exact old_text match/);
-  assert.match(skill, /inspect\(target="<file>"/);
+  assert.match(skill, /replace_text` still requires a known `old_text`/);
+  assert.match(skill, /inspect\(target="<symbol-or-file>"/);
+});
+
+test('handoff skills define packet workflows without adding tool surface', () => {
+  for (const name of ['handoff-out', 'handoff-in']) {
+    const relativePath = `${name}/SKILL.md`;
+    const agentPath = path.join(repoRoot, '.agents/skills', relativePath);
+    const pluginPath = path.join(repoRoot, 'skills', relativePath);
+
+    assert.ok(fs.existsSync(agentPath), `${name} skill should exist`);
+    assert.ok(fs.existsSync(pluginPath), `${name} plugin mirror should exist`);
+
+    const skill = fs.readFileSync(agentPath, 'utf8');
+
+    assert.match(skill, new RegExp(`^name: ${name}$`, 'm'));
+    assert.match(skill, /^user-invocable: true$/m);
+    assert.match(skill, /\.miller\/handoffs\//);
+    assert.doesNotMatch(skill, new RegExp(`^name: miller-${name}$`, 'm'));
+    assert.doesNotMatch(skill, /mcp__miller__handoff/);
+    assert.doesNotMatch(skill, /miller handoff/);
+  }
+
+  const handoffOut = fs.readFileSync(
+    path.join(repoRoot, '.agents/skills/handoff-out/SKILL.md'),
+    'utf8',
+  );
+  assert.match(handoffOut, /allowed-tools: .*mcp__miller__workspace/);
+  assert.match(handoffOut, /allowed-tools: .*mcp__miller__impact/);
+  assert.match(handoffOut, /allowed-tools: .*mcp__miller__context/);
+  assert.match(handoffOut, /allowed-tools: .*Bash/);
+  assert.match(handoffOut, /latest\.md/);
+  assert.match(handoffOut, /## Session Notes/);
+  assert.match(handoffOut, /Do not include secrets/);
+  assert.match(handoffOut, /Goldfish is not required/);
+
+  const handoffIn = fs.readFileSync(
+    path.join(repoRoot, '.agents/skills/handoff-in/SKILL.md'),
+    'utf8',
+  );
+  assert.match(handoffIn, /allowed-tools: .*mcp__miller__workspace/);
+  assert.match(handoffIn, /allowed-tools: .*mcp__miller__impact/);
+  assert.match(handoffIn, /\.miller\/handoffs\/latest\.md/);
+  assert.match(handoffIn, /workspace root/);
+  assert.match(handoffIn, /same HEAD/);
+  assert.match(handoffIn, /safe-to-resume/);
+  assert.match(handoffIn, /drifted-but-resumable/);
 });

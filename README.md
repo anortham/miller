@@ -90,6 +90,10 @@ Use Miller's structural tools before broad file reads:
    read. Preview shows match mode, source, line range, disk verification, and the diff before `apply=true`.
 6. `inspect NameOrSymbol --depth full` only when you need the complete body or complete relation lists.
 
+For model or harness switches, the plugin also ships `handoff-out` and `handoff-in` skills. They use existing
+Miller tools plus local git state to write and validate markdown packets under `.miller/handoffs/`; they are not
+new MCP tools or CLI commands, and the packets stay local unless you explicitly share them.
+
 ### Manual Binary Install
 
 Use this path when your MCP client does not use Miller's plugin package.

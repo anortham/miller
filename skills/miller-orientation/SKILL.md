@@ -43,6 +43,8 @@ workspace(operation="refresh")
 | Where is this name referenced | `trace(target="<symbol>", mode="refs")` |
 | Scope a refactor / choose tests | `impact(target="...")` or `impact(git=true)` |
 | Make a localized existing-file text edit | `edit(operation="replace_text", target="<file>", old_text="<known-old>", new_text="<new>", match_mode="auto", query="<nearby text>")` |
+| Prepare a handoff to another harness/model | Use the `handoff-out` skill |
+| Resume from a handoff packet | Use the `handoff-in` skill |
 | List known code shapes | `patterns(operation="list")`, then follow its `Next:` actions or search a shown `pattern_id` |
 | Read a large log/report | `content(operation="import", path=...)` -> `content(operation="search", query="...")` -> bounded `content(operation="read", source_id="...", line=...)` |
 | Work in another registered repo | `workspace(operation="list")` then pass `workspace_id="<selector>"` |
