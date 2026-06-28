@@ -136,7 +136,8 @@ public readonly record struct WorkspaceRemoveResult(
     WorkspaceRemoveResult.Outcome Result,
     string MillerDir,
     string? WorkspaceId = null,
-    string? Root = null)
+    string? Root = null,
+    bool IndexDirDeleted = false)
 {
     /// <summary>The three honest outcomes of a remove.</summary>
     public enum Outcome
@@ -154,9 +155,13 @@ public readonly record struct WorkspaceRemoveResult(
         NotFound,
     }
 
-    /// <summary>The <c>.miller</c> dir was deleted.</summary>
-    public static WorkspaceRemoveResult Removed(string millerDir, string? workspaceId = null, string? root = null) =>
-        new(Outcome.Removed, millerDir, workspaceId, root);
+    /// <summary>The workspace was removed from Miller; <paramref name="indexDirDeleted"/> records whether the index dir existed and was deleted.</summary>
+    public static WorkspaceRemoveResult Removed(
+        string millerDir,
+        string? workspaceId = null,
+        string? root = null,
+        bool indexDirDeleted = true) =>
+        new(Outcome.Removed, millerDir, workspaceId, root, indexDirDeleted);
 
     /// <summary>Refused because the path is the live (in-use) workspace.</summary>
     public static WorkspaceRemoveResult RefusedLive(string millerDir, string? workspaceId = null, string? root = null) =>
@@ -1434,8 +1439,11 @@ public static class WorkspaceRender
 
     private static string RemoveCompact(WorkspaceRemoveResult result) => result.Result switch
     {
-        WorkspaceRemoveResult.Outcome.Removed =>
+        WorkspaceRemoveResult.Outcome.Removed when result.IndexDirDeleted =>
             $"removed workspace index: {result.MillerDir}",
+        WorkspaceRemoveResult.Outcome.Removed =>
+            $"removed workspace registry entry: {result.Root ?? result.WorkspaceId ?? result.MillerDir} " +
+            $"(no index dir at {result.MillerDir})",
         WorkspaceRemoveResult.Outcome.RefusedLive =>
             $"refused: {result.MillerDir} is the workspace this Miller is serving (in use). " +
             "Stop that Miller first, or remove a different workspace.",
@@ -1465,6 +1473,7 @@ public static class WorkspaceRender
             else w.WriteString("workspace_id", result.WorkspaceId);
             if (result.Root is null) w.WriteNull("root");
             else w.WriteString("root", result.Root);
+            w.WriteBoolean("index_dir_deleted", result.IndexDirDeleted);
             w.WriteString("message", RemoveCompact(result));
             w.WriteEndObject();
         }

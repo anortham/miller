@@ -751,6 +751,23 @@ public sealed class WorkspaceRenderTests
     }
 
     [Fact]
+    public void Remove_Compact_RemovedRegistryOnly_ReportsRegistrationCleanup()
+    {
+        var result = WorkspaceRemoveResult.Removed(
+            "/other/repo/.miller",
+            workspaceId: "other-ws",
+            root: "/other/repo",
+            indexDirDeleted: false);
+
+        string text = WorkspaceRender.Remove(result, json: false);
+
+        Assert.Contains("removed", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("registry", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("no index dir", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("nothing to remove", text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Remove_Compact_RefusedLive_IsAClearRefusal()
     {
         var result = WorkspaceRemoveResult.RefusedLive("/repo/.miller");
@@ -773,5 +790,20 @@ public sealed class WorkspaceRenderTests
     {
         using var doc = JsonDocument.Parse(WorkspaceRender.Remove(WorkspaceRemoveResult.RefusedLive("/repo/.miller"), json: true));
         Assert.Equal("refused_live", doc.RootElement.GetProperty("result").GetString());
+    }
+
+    [Fact]
+    public void Remove_Json_ReportsWhetherIndexDirWasDeleted()
+    {
+        using var doc = JsonDocument.Parse(WorkspaceRender.Remove(
+            WorkspaceRemoveResult.Removed(
+                "/other/repo/.miller",
+                workspaceId: "other-ws",
+                root: "/other/repo",
+                indexDirDeleted: false),
+            json: true));
+
+        Assert.Equal("removed", doc.RootElement.GetProperty("result").GetString());
+        Assert.False(doc.RootElement.GetProperty("index_dir_deleted").GetBoolean());
     }
 }

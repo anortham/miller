@@ -1504,7 +1504,11 @@ public static class CliDispatch
             {
                 registry.Remove(stale.WorkspaceId);
                 outw.WriteLine(WorkspaceRender.Remove(
-                    WorkspaceRemoveResult.Removed(goneMillerDir, stale.WorkspaceId, stale.CanonicalRoot), json));
+                    WorkspaceRemoveResult.Removed(
+                        goneMillerDir,
+                        stale.WorkspaceId,
+                        stale.CanonicalRoot,
+                        indexDirDeleted: false), json));
                 return RemoveExitCode(WorkspaceRemoveResult.Outcome.Removed);
             }
             outw.WriteLine(WorkspaceRender.Remove(WorkspaceRemoveResult.NotFound(goneMillerDir), json));
@@ -1529,7 +1533,16 @@ public static class CliDispatch
         if (!Directory.Exists(millerDir))
         {
             if (workspaceId is not null)
+            {
                 registry.Remove(workspaceId);
+                outw.WriteLine(WorkspaceRender.Remove(
+                    WorkspaceRemoveResult.Removed(
+                        millerDir,
+                        workspaceId,
+                        root,
+                        indexDirDeleted: false), json));
+                return RemoveExitCode(WorkspaceRemoveResult.Outcome.Removed);
+            }
             outw.WriteLine(WorkspaceRender.Remove(WorkspaceRemoveResult.NotFound(millerDir, workspaceId, root), json));
             return RemoveExitCode(WorkspaceRemoveResult.Outcome.NotFound);
         }

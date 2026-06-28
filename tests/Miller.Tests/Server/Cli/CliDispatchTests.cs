@@ -2441,6 +2441,9 @@ public sealed class CliDispatchTests : IDisposable
 
         Assert.Equal(0, code);
         Assert.Contains("removed", outText);
+        Assert.Contains("registry", outText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("no index dir", outText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("nothing to remove", outText, StringComparison.OrdinalIgnoreCase);
         using WorkspaceRegistry check = WorkspaceRegistry.Open(_registryDb);
         Assert.Null(check.Get(id));
     }
@@ -2475,7 +2478,7 @@ public sealed class CliDispatchTests : IDisposable
     public void WorkspaceRemove_ById_MissingDir_PrunesOrphanRow()
     {
         // A registered row whose .miller dir was deleted out from under it: remove --id must prune the orphan row
-        // and report a clean not-found (exit 0), without a dir to delete.
+        // and report registry cleanup (exit 0), without pretending nothing changed.
         string sub = Path.Combine(_dir, "ws-orphan");
         const string id = "ws-orphan-000000000";
         using (WorkspaceRegistry registry = WorkspaceRegistry.Open(_registryDb))
@@ -2487,7 +2490,10 @@ public sealed class CliDispatchTests : IDisposable
             Context(Path.Combine(_dir, "symbols.db")));
 
         Assert.Equal(0, code);
-        Assert.Contains("not found", outText);
+        Assert.Contains("removed", outText);
+        Assert.Contains("registry", outText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("no index dir", outText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("nothing to remove", outText, StringComparison.OrdinalIgnoreCase);
         using WorkspaceRegistry check = WorkspaceRegistry.Open(_registryDb);
         Assert.Null(check.Get(id));
     }

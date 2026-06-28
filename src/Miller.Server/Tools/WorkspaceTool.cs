@@ -756,8 +756,15 @@ public sealed class WorkspaceTool
         if (!Directory.Exists(millerDir))
         {
             _registry.Remove(row.WorkspaceId);
-            var notFound = WorkspaceRemoveResult.NotFound(millerDir, row.WorkspaceId, row.CanonicalRoot);
-            return (WorkspaceRender.Remove(notFound, json), 0, TelemetryOutcome.Empty);
+            _logger.LogInformation(
+                "workspace remove: unregistered {WorkspaceId}; index dir {Dir} was already missing.",
+                row.WorkspaceId, millerDir);
+            var staleRemoved = WorkspaceRemoveResult.Removed(
+                millerDir,
+                row.WorkspaceId,
+                row.CanonicalRoot,
+                indexDirDeleted: false);
+            return (WorkspaceRender.Remove(staleRemoved, json), 1, TelemetryOutcome.Ok);
         }
 
         IDisposable? lease = _acquireWriterLock(millerDir);

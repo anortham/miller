@@ -1025,6 +1025,26 @@ public sealed class WorkspaceToolTests : IDisposable
     }
 
     [Fact]
+    public void Remove_RegisteredWorkspaceId_MissingIndexDir_UnregistersAndReportsRegistryCleanup()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(fx, builtRevision: 4, workspaceId: Ws);
+        string other = NewTempDir("remove-missing-index");
+        string otherMiller = Path.Combine(other, ".miller");
+        string otherDb = Path.Combine(otherMiller, "symbols.db");
+        harness.Registry.UpsertSeen(OtherWs, "other-111111111111", other, otherDb, WorkspaceRegistryState.Ready);
+        harness.Registry.MarkScanned(OtherWs, revision: 9);
+
+        string output = harness.Tool.Workspace(operation: "remove", workspace_id: OtherWs);
+
+        Assert.Contains("removed", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("registry", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("no index dir", output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("nothing to remove", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(harness.Registry.Get(OtherWs));
+    }
+
+    [Fact]
     public void Remove_CurrentWorkspaceId_IsRefusedAndKeepsRegistryRow()
     {
         using var fx = CreateSynth(revision: 4, workspaceId: Ws);
