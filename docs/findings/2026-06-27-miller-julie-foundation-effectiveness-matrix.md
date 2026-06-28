@@ -21,6 +21,7 @@ Original narrow search/inspect benchmark:
 
 Foundation matrix generated evidence:
 
+- Final baseline: [summary](benchmarks/2026-06-27-foundation-matrix/final-baseline/summary.md), [results CSV](benchmarks/2026-06-27-foundation-matrix/final-baseline/results.csv), [results JSON](benchmarks/2026-06-27-foundation-matrix/final-baseline/results.json), [calibration notes](benchmarks/2026-06-27-foundation-matrix/final-baseline/calibration.md)
 - Task 3 retrieval, inspect, and ambiguity: [summary](benchmarks/2026-06-27-foundation-matrix/task3-retrieval-inspect-ambiguity/summary.md), [results CSV](benchmarks/2026-06-27-foundation-matrix/task3-retrieval-inspect-ambiguity/results.csv), [results JSON](benchmarks/2026-06-27-foundation-matrix/task3-retrieval-inspect-ambiguity/results.json)
 - Task 4 workflows: [summary](benchmarks/2026-06-27-foundation-matrix/task4-workflows/summary.md), [results CSV](benchmarks/2026-06-27-foundation-matrix/task4-workflows/results.csv), [results JSON](benchmarks/2026-06-27-foundation-matrix/task4-workflows/results.json)
 - Task 5 Eros contracts: [summary](benchmarks/2026-06-27-foundation-matrix/task5-eros-contracts/summary.md), [results CSV](benchmarks/2026-06-27-foundation-matrix/task5-eros-contracts/results.csv), [results JSON](benchmarks/2026-06-27-foundation-matrix/task5-eros-contracts/results.json)
@@ -29,16 +30,19 @@ Foundation matrix generated evidence:
 
 ## Hard Gates Versus Report-Only Deltas
 
-Miller hard-gated rows passed in the generated matrix:
+The final baseline gate is calibrated to named aggregate thresholds plus active Eros-facing CLI contracts. It passed with this evidence:
 
-| area | hard-gated result | interpretation |
-|---|---:|---|
-| Task 3 retrieval, inspect, ambiguity | `miller.search` 48/48 pass; `miller.inspect` 34/34 pass | Miller found every expected anchor under the selected scoring mode. Top-rank gaps remain product improvement inputs. |
-| Task 4 workflows | `miller.context` 5/5 pass; `miller.impact` 3/3 pass; hard-gated `trace.refs` rows pass | Workflow anchors and follow-up hints are present where those rows are gated. Report-only trace outcomes still reveal recovery opportunities. |
-| Task 5 Eros contracts | `miller.cli` 15/15 pass | JSON and JSONL contracts are parseable and advertised through `capabilities --json`. |
-| Task 6 adoption | telemetry JSONL and onboarding JSON parseability pass | The parseable fact surface is proven. Usage interpretation is report-only. |
+| gate | final baseline result | hard threshold | interpretation |
+|---|---:|---:|---|
+| Miller exact-symbol retrieval present on the original nine repos | `9/9` | `9/9` | Protects shipped exact-symbol lookup. |
+| Miller file retrieval present on the original nine repos | `9/9` | at least `7/9` | Protects file lookup without freezing ranking work. |
+| Miller source-auto retrieval present on the original nine repos | `9/9` | at least `8/9` | Protects automatic source rescue without making top rank a blocker. |
+| Miller inspect overview present on the original nine repos | `9/9` | `9/9` | Protects compact inspect orientation. |
+| Eros-facing JSON/JSONL contract parse failures | `0/15` parse failures | `0` parse failures | Protects the public CLI/export process contracts used by Eros. |
 
-Julie rows in the new matrix were skipped/report-only in the local run, so they do not fail or pass Miller. The older narrow search/inspect benchmark remains the source for Julie comparison facts. That evidence shows Julie can be more compact by default and sometimes more forgiving on fuzzy intent, while Miller is stronger on deterministic exact lookup in this sample.
+The final baseline also keeps the existing narrow search/inspect benchmark gate green. It continues to protect the older focused search/inspect thresholds separately from this broader foundation matrix.
+
+Julie rows stay report-only in the final baseline: `69/97` present, `29/97` top-ranked, and `54/97` selected-mode pass. Those counts do not fail or pass Miller; they identify adaptation candidates and calibration context.
 
 ## Product Interpretation
 
@@ -46,10 +50,12 @@ Miller is not missing the underlying data for the current foundation rows. The r
 
 Important report-only gaps:
 
-- `retrieval.docs`, `retrieval.source_auto`, and some source-explicit rows passed by presence but often missed top rank.
+- `retrieval.docs`, `retrieval.source_auto`, and some source-explicit rows passed by presence but often missed top rank. The final baseline has `18` Miller present-but-not-top path rows across retrieval, inspect, ambiguity, and region rows.
 - `inspect` passed all gated rows, but Zod and similar versioned targets still need clearer ambiguity handling.
-- Task 4 captured useful structured workflow states such as `needs-search`, `no-path`, and unsupported bridge cases. Those states should route agents to the next useful existing tool.
+- Task 4 captured useful structured workflow states such as `needs-search`, `no-path`, and unsupported bridge cases. The final baseline records `39/56` workflow anchors present across `16` workflow rows, and that call-count-to-anchor signal remains report-only.
 - Task 6 shows local usage does not prove product quality. Trace and impact are low-use in this telemetry window, but they are existing deterministic tools that need better discovery, not replacement.
+- Miller latency and output-size medians are report-only unless they become extreme enough to block interactive use. The final baseline median latencies were: `miller.search` 24 ms, `miller.inspect` 17 ms, `miller.context` 272 ms, `miller.trace` 228 ms, `miller.impact` 238 ms, and `miller.cli` 114 ms.
+- No metrics CLI contract rows are present in the final manifest; metrics remain CLI/export and dashboard/Eros-facing report-only facts.
 
 ## Eros Foundation Contracts
 

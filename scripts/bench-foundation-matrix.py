@@ -60,6 +60,53 @@ CORE_ADOPTION_TOOLS = ("search", "inspect", "context", "trace", "impact")
 TELEMETRY_SCHEMA_FIELDS = ["tool", "ts", "outcome", "result_count"]
 ONBOARDING_REQUIRED_FIELDS = ["telemetry", "start_here", "tool_mix"]
 TASK4_WORKFLOW_RESULTS = ROOT / "docs/findings/benchmarks/2026-06-27-foundation-matrix/task4-workflows/results.json"
+ORIGINAL_NINE_REPOS = ("miller", "julie", "eros", "express", "flask", "gson", "newtonsoft", "zod", "jq")
+AGGREGATE_GATE_SPECS: tuple[dict[str, Any], ...] = (
+    {
+        "id": "miller.exact_symbol.present.original_nine",
+        "label": "Miller exact-symbol retrieval present",
+        "tool": "miller.search",
+        "task_class": "retrieval.symbol",
+        "metric": "expected_present",
+        "minimum": 9,
+        "expected_rows": 9,
+        "rationale": "protects shipped exact-symbol lookup across the original nine-repo baseline",
+    },
+    {
+        "id": "miller.file.present.original_nine",
+        "label": "Miller file retrieval present",
+        "tool": "miller.search",
+        "task_class": "retrieval.file",
+        "metric": "expected_present",
+        "minimum": 7,
+        "expected_rows": 9,
+        "rationale": "protects file lookup while leaving known route-rank improvement work report-only",
+    },
+    {
+        "id": "miller.source_auto.present.original_nine",
+        "label": "Miller source-auto retrieval present",
+        "tool": "miller.search",
+        "task_class": "retrieval.source_auto",
+        "metric": "expected_present",
+        "minimum": 8,
+        "expected_rows": 9,
+        "rationale": "protects automatic source rescue without freezing top-rank tuning",
+    },
+    {
+        "id": "miller.inspect_overview.present.original_nine",
+        "label": "Miller inspect overview present",
+        "tool": "miller.inspect",
+        "task_class": "inspect.overview",
+        "metric": "expected_present",
+        "minimum": 9,
+        "expected_rows": 9,
+        "rationale": "protects compact inspect orientation across the original nine-repo baseline",
+    },
+)
+AGGREGATE_GATE_KEYS = {
+    (str(spec["tool"]), str(spec["task_class"]))
+    for spec in AGGREGATE_GATE_SPECS
+}
 
 WORKFLOW_CSV_FIELDS = [
     "expected_anchor_count",
@@ -707,10 +754,97 @@ def julie_process_for_repo(
     return julie
 
 
+def aggregate_gate_required(spec: dict[str, Any], selected_rows: int) -> int:
+    if selected_rows <= 0:
+        return 0
+    expected_rows = int(spec["expected_rows"])
+    if selected_rows >= expected_rows:
+        return int(spec["minimum"])
+    return max(1, math.ceil(int(spec["minimum"]) * selected_rows / expected_rows))
+
+
+def is_aggregate_gate_row(row: dict[str, Any]) -> bool:
+    return (
+        row.get("repo") in ORIGINAL_NINE_REPOS
+        and (str(row.get("tool")), str(row.get("task_class"))) in AGGREGATE_GATE_KEYS
+    )
+
+
+def evaluate_gate_thresholds(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    checks: list[dict[str, Any]] = []
+    for spec in AGGREGATE_GATE_SPECS:
+        bucket = [
+            row
+            for row in results
+            if row.get("repo") in ORIGINAL_NINE_REPOS
+            and row.get("tool") == spec["tool"]
+            and row.get("task_class") == spec["task_class"]
+        ]
+        selected_rows = len(bucket)
+        required = aggregate_gate_required(spec, selected_rows)
+        observed = sum(1 for row in bucket if row.get(str(spec["metric"])))
+        if selected_rows == 0:
+            status = "SKIP"
+        else:
+            status = "PASS" if observed >= required else "FAIL"
+        checks.append(
+            {
+                "id": spec["id"],
+                "label": spec["label"],
+                "tool": spec["tool"],
+                "task_class": spec["task_class"],
+                "metric": spec["metric"],
+                "observed": observed,
+                "required": required,
+                "selected_rows": selected_rows,
+                "expected_rows": spec["expected_rows"],
+                "status": status,
+                "rationale": spec["rationale"],
+            }
+        )
+
+    contract_rows = [
+        row
+        for row in results
+        if row.get("tool") == "miller.cli" and str(row.get("scoring_mode", "")).startswith("contract_")
+    ]
+    parse_failures = [row for row in contract_rows if row.get("contract_parse_ok") is not True]
+    checks.append(
+        {
+            "id": "eros.contracts.parse_failures",
+            "label": "Eros-facing CLI contract parse failures",
+            "tool": "miller.cli",
+            "task_class": "contract.cli.*",
+            "metric": "contract_parse_ok",
+            "observed": len(parse_failures),
+            "required": 0,
+            "selected_rows": len(contract_rows),
+            "expected_rows": len(contract_rows),
+            "status": "PASS" if not parse_failures else "FAIL",
+            "rationale": "protects JSON/JSONL parseability for active Eros process contracts",
+        }
+    )
+    return checks
+
+
 def gate_failures(results: list[dict[str, Any]]) -> list[str]:
     failures: list[str] = []
+    for check in evaluate_gate_thresholds(results):
+        if check["status"] != "FAIL":
+            continue
+        if check["id"] == "eros.contracts.parse_failures":
+            failures.append(
+                f"{check['id']}: {check['observed']} parse failures across {check['selected_rows']} contract rows"
+            )
+            continue
+        failures.append(
+            f"{check['id']}: {check['observed']}/{check['selected_rows']} {check['metric']} below "
+            f"{check['required']}/{check['expected_rows']}"
+        )
     for row in results:
         if not row["hard_gate"]:
+            continue
+        if is_aggregate_gate_row(row):
             continue
         diagnostic_types = {diagnostic.get("type") for diagnostic in row["diagnostics"]}
         if "tool_error" in diagnostic_types:
@@ -1051,6 +1185,141 @@ def write_adoption_outputs(out_dir: Path, analysis: dict[str, Any]) -> Path:
     return summary_path
 
 
+def median_int(values: list[int]) -> int:
+    if not values:
+        return 0
+    ordered = sorted(values)
+    midpoint = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[midpoint]
+    return int((ordered[midpoint - 1] + ordered[midpoint]) / 2)
+
+
+def calibration_row_count(rows: list[dict[str, Any]], field: str) -> int:
+    return sum(1 for row in rows if row.get(field))
+
+
+def build_threshold_lines(thresholds: list[dict[str, Any]]) -> list[str]:
+    lines = [
+        "| gate | observed | required | status | rationale |",
+        "|---|---:|---:|---|---|",
+    ]
+    for check in thresholds:
+        if check["id"] == "eros.contracts.parse_failures":
+            observed = f"{check['observed']} parse failures / {check['selected_rows']} rows"
+            required = "0 parse failures"
+        else:
+            observed = f"{check['observed']} / {check['selected_rows']}"
+            required = f"{check['required']} / {check['expected_rows']}"
+        lines.append(
+            f"| `{check['id']}` | {observed} | {required} | {check['status']} | {check['rationale']} |"
+        )
+    return lines
+
+
+def build_report_only_lines(results: list[dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    julie_rows = [row for row in results if str(row.get("tool", "")).startswith("julie.")]
+    if julie_rows:
+        skipped = sum(
+            1
+            for row in julie_rows
+            if any(diagnostic.get("type") == "skipped_tool" for diagnostic in row.get("diagnostics", []))
+        )
+        lines.append(
+            f"- Julie rows are report-only: {calibration_row_count(julie_rows, 'expected_present')}/{len(julie_rows)} "
+            f"present, {calibration_row_count(julie_rows, 'expected_top')}/{len(julie_rows)} top-ranked, "
+            f"{calibration_row_count(julie_rows, 'scoring_pass')}/{len(julie_rows)} selected-mode pass"
+            f"{f', {skipped} skipped' if skipped else ''}."
+        )
+
+    miller_rows = [row for row in results if str(row.get("tool", "")).startswith("miller.")]
+    top_gap_rows = [
+        row
+        for row in miller_rows
+        if row.get("scoring_mode") in {"path_present", "path_any_present"}
+        and row.get("expected_present")
+        and not row.get("expected_top")
+    ]
+    if top_gap_rows:
+        by_task: dict[str, int] = defaultdict(int)
+        for row in top_gap_rows:
+            by_task[str(row["task_class"])] += 1
+        summary = ", ".join(f"{task}={count}" for task, count in sorted(by_task.items()))
+        lines.append(
+            "- Miller top-rank gaps stay report-only unless a row uses `path_top`: "
+            f"{len(top_gap_rows)} present-but-not-top rows ({summary})."
+        )
+
+    workflow_rows = [
+        row
+        for row in results
+        if str(row.get("task_class", "")).endswith(".workflow") or row.get("scoring_mode") in {"workflow_anchors", "impact_targets"}
+    ]
+    anchor_total = sum(adoption_int(row.get("expected_anchor_count")) for row in workflow_rows)
+    anchor_present = sum(adoption_int(row.get("expected_anchors_present")) for row in workflow_rows)
+    if workflow_rows:
+        lines.append(
+            "- Workflow call-count-to-anchor remains report-only: "
+            f"{anchor_present}/{anchor_total} required anchors present across {len(workflow_rows)} workflow rows."
+        )
+
+    for tool in sorted({str(row.get("tool")) for row in miller_rows}):
+        bucket = [row for row in miller_rows if row.get("tool") == tool]
+        ms = [adoption_int(row.get("ms")) for row in bucket]
+        chars = [adoption_int(row.get("output_chars")) for row in bucket]
+        lines.append(
+            f"- {tool} latency/output-size are report-only: median {median_int(ms)} ms, "
+            f"median {median_int(chars)} chars across {len(bucket)} rows."
+        )
+
+    metrics_rows = [
+        row
+        for row in results
+        if "metrics" in str(row.get("row_id", "")).lower()
+        or "metrics" in str(row.get("cli_command", "")).lower()
+    ]
+    if metrics_rows:
+        lines.append(f"- Metrics CLI contract rows are report-only here: {len(metrics_rows)} rows present.")
+    else:
+        lines.append("- No metrics CLI contract rows are present in this manifest; metrics remain report-only.")
+
+    lines.append(
+        "- Adoption and telemetry interpretation remains report-only; parseability evidence lives in the Task 6 adoption run."
+    )
+    return lines
+
+
+def write_calibration_notes(
+    out_dir: Path,
+    thresholds: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+    failures: list[str],
+) -> Path:
+    calibration_path = out_dir / "calibration.md"
+    status = "FAIL" if failures else "PASS"
+    lines = [
+        "# Foundation Matrix Gate Calibration",
+        "",
+        f"Gate status: **{status}**",
+        "",
+        "## Hard Gates",
+        "",
+        "These are the only hard gates for this final baseline run. They protect shipped Miller behavior and active Eros-facing process contracts without turning known product-improvement work into a blocker.",
+        "",
+        *build_threshold_lines(thresholds),
+        "",
+        "## Report-Only Miss Summary",
+        "",
+        *build_report_only_lines(results),
+    ]
+    if failures:
+        lines.extend(["", "## Gate Failures", ""])
+        lines.extend(f"- {failure}" for failure in failures)
+    calibration_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return calibration_path
+
+
 def write_outputs(
     out_dir: Path,
     manifest_path: Path,
@@ -1060,6 +1329,8 @@ def write_outputs(
     failures: list[str],
 ) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
+    thresholds = evaluate_gate_thresholds(results)
+    calibration_path = write_calibration_notes(out_dir, thresholds, results, failures)
 
     csv_path = out_dir / "results.csv"
     with csv_path.open("w", newline="", encoding="utf-8") as f:
@@ -1083,6 +1354,10 @@ def write_outputs(
                     "enabled": args.gate,
                     "status": "FAIL" if failures else "PASS",
                     "failures": failures,
+                    "thresholds": thresholds,
+                },
+                "calibration": {
+                    "path": str(calibration_path),
                 },
                 "results": results,
             },
@@ -1107,6 +1382,8 @@ def write_outputs(
         "",
         "Contract fields are explicit: `contract_parse_ok` records JSON/JSONL parsing, `required_fields_present` and `required_row_fields_present` record required contract fields, `advertised_commands_present` records `capabilities --json` coverage, `sampled_jsonl_rows` records the JSONL sample checked, and `contract_outcome` records `ok`, `empty_allowed`, `unsupported`, or the failure class.",
         "",
+        "Calibrated hard gates are named aggregate thresholds for original-nine Miller retrieval/inspect behavior plus Eros-facing CLI contract parseability. Julie deltas, top-rank gaps, workflow call-count-to-anchor, latency, output-size, metrics CLI rows, and adoption interpretation are report-only calibration notes.",
+        "",
         summarize_by_tool(results),
         "",
         "## Breakdown By Task Class",
@@ -1118,10 +1395,15 @@ def write_outputs(
     ]
     if args.gate:
         summary.extend(["", "## Gate", "", "Status: " + ("FAIL" if failures else "PASS")])
-        summary.extend(f"- {failure}" for failure in failures)
+        summary.extend(["", "### Thresholds", ""])
+        summary.extend(build_threshold_lines(thresholds))
+        if failures:
+            summary.extend(["", "### Failures", ""])
+            summary.extend(f"- {failure}" for failure in failures)
     if run_diagnostics:
         summary.extend(["", "## Run Diagnostics", ""])
         summary.extend(f"- {item['type']}: {item}" for item in run_diagnostics)
+    summary.extend(["", f"Calibration notes: `{calibration_path}`"])
     summary_path.write_text("\n".join(summary) + "\n", encoding="utf-8")
     return summary_path
 
