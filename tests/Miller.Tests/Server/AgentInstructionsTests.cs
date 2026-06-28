@@ -143,6 +143,26 @@ public sealed class AgentInstructionsTests
     }
 
     [Fact]
+    public void Load_DocumentsOverviewFirstInspectGuidance()
+    {
+        string instructions = AgentInstructions.Load();
+        Assert.Contains("Default inspect depth is `summary`", instructions);
+        Assert.Contains("first symbol read should usually be `inspect target depth=overview`", instructions);
+        Assert.Contains("Use `depth=full` when you need the complete body or complete relation lists", instructions);
+    }
+
+    [Fact]
+    public void InspectToolDescription_DocumentsOverviewFirstGuidance()
+    {
+        MethodInfo method = ToolMethod<InspectTool>(nameof(InspectTool.Inspect));
+        string description = method.GetCustomAttribute<DescriptionAttribute>()?.Description ?? string.Empty;
+
+        Assert.Contains("Default depth is summary", description);
+        Assert.Contains("Start symbol reads with depth=overview", description);
+        Assert.Contains("depth=full only when you need the complete body", description);
+    }
+
+    [Fact]
     public void TraceToolDescription_DocumentsRecoveryGuidance()
     {
         MethodInfo method = ToolMethod<TraceTool>(nameof(TraceTool.Trace));

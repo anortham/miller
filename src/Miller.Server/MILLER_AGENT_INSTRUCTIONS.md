@@ -27,7 +27,8 @@ Miller serves an always-fresh index of this workspace's code. Reach for a Miller
   `workspace_id` accepts display ID, unique prefix, full ID, root path, `current`, or `primary`; explicit
   `workspace_id` defaults `ensure_fresh=true`.
 - `inspect` — A file or symbol you can already name. A file path lists symbols; a symbol name gives definition,
-  signature, and docs. `depth=overview` gives bounded refs/calls/body preview; `depth=full` is complete.
+  signature, and docs. Default inspect depth is `summary`. The first symbol read should usually be `inspect target depth=overview`;
+  it gives bounded refs/calls/body preview. Use `depth=full` when you need the complete body or complete relation lists.
   Multi-file ambiguity includes copyable scoped reruns.
   Optional `workspace_id` and `ensure_fresh` follow `search`.
 - `context` — First call in an unfamiliar area: a small, justified bundle of relevant entry points plus the next
@@ -68,7 +69,7 @@ Miller serves an always-fresh index of this workspace's code. Reach for a Miller
 ## Workflows
 
 - **New task / unfamiliar area**: `context` → `inspect` the key symbols → implement.
-- **Understand a symbol**: `inspect target depth=overview`; use `depth=full` for complete body/reference/call lists.
+- **Understand a symbol**: first use `inspect target depth=overview`; use `depth=full` for complete body/reference/call lists.
 - **Trace a flow**: `trace mode=refs` for usages, `mode=path` for A→B, `mode=bridge` for `dotnet-web`
   cross-language chains; for callers/callees use `inspect depth=full` (subsumes `mode=auto`). If a name is ambiguous, retry with `scope=<file>`.
   If `mode=path` returns no path, treat it as no extracted graph path within depth, not proof unrelated; follow its `Next:` actions.

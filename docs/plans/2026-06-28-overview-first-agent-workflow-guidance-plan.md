@@ -62,13 +62,13 @@
 **Approach:** Add focused assertions before editing text. Pin the exact guidance concept rather than full paragraphs: default is `summary`; use `inspect depth=overview` before reading full bodies; use `depth=full` only for complete bodies or complete relation lists; use `trace` for refs/path questions and `impact` before refactors.
 
 **Acceptance criteria:**
-- [ ] `AgentInstructionsTests` fails before text updates because overview-first guidance is missing or too weak.
-- [ ] Server instructions say default inspect depth is `summary`.
-- [ ] Server instructions route first symbol understanding through `inspect target depth=overview`.
-- [ ] Server instructions reserve `inspect depth=full` for complete body or complete relation needs.
-- [ ] Inspect tool description stays under `MaxToolDescriptionChars`.
-- [ ] `dotnet test tests/Miller.Tests/Miller.Tests.csproj --no-restore --filter "FullyQualifiedName~AgentInstructionsTests"` passes.
-- [ ] Worker-scope verification passes, committed.
+- [x] `AgentInstructionsTests` fails before text updates because overview-first guidance is missing or too weak.
+- [x] Server instructions say default inspect depth is `summary`.
+- [x] Server instructions route first symbol understanding through `inspect target depth=overview`.
+- [x] Server instructions reserve `inspect depth=full` for complete body or complete relation needs.
+- [x] Inspect tool description stays under `MaxToolDescriptionChars`.
+- [x] `dotnet test tests/Miller.Tests/Miller.Tests.csproj --no-restore --filter "FullyQualifiedName~AgentInstructionsTests"` passes.
+- [x] Worker-scope verification passes, committed.
 
 ## Task 2: Update Miller Skill Guidance And Mirrors
 
