@@ -179,11 +179,11 @@ python3 scripts/bench-foundation-matrix.py \
 If existing rows cannot prove the focused evidence, stop and report a plan mismatch instead of adding runner features or new manifest rows inside this task.
 
 **Acceptance criteria:**
-- [ ] Focused matrix gate passes for Miller `inspect.overview`.
-- [ ] Focused matrix gate passes for Miller `workspace onboarding` JSON parseability.
-- [ ] Generated summary records hard-gate results separately from report-only interpretation.
-- [ ] No benchmark runner, scorer, or manifest changes are included in this slice.
-- [ ] Worker-scope verification passes, committed.
+- [x] Focused matrix gate passes for Miller `inspect.overview`.
+- [x] Focused matrix gate passes for Miller `workspace onboarding` JSON parseability.
+- [x] Generated summary records hard-gate results separately from report-only interpretation.
+- [x] No benchmark runner, scorer, or manifest changes are included in this slice.
+- [x] Worker-scope verification passes, committed.
 
 ## Task 6: Final Sync, Regression Gate, And Plan Closeout
 
