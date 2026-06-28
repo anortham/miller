@@ -33,17 +33,28 @@ public sealed record WorkspaceOnboardingFacts(
             startHere.Add("use search to find candidate symbols, then inspect the selected result before editing");
         }
 
+        startHere.Add("use inspect depth=overview for first symbol reads; use depth=full only when you need complete bodies");
+
         if (telemetry.ToolMix.Any(static row => row.Tool == "context"))
             startHere.Add("use context for broad orientation before reading whole files");
         else
             startHere.Add("use context when you need a bounded map of the code around a task");
 
-        if (telemetry.TotalCalls == 0 || telemetry.ToolMix.Any(static row => row.Tool == "impact"))
-            startHere.Add("use impact before refactors or risky edits");
+        startHere.Add("use impact before refactors or risky edits");
 
         var notes = new List<string>();
         if (telemetry.CommonMisses.Any(static miss => miss.Tool == "search"))
             notes.Add("search has recent empty results; try mode=source, mode=content, or a narrower symbol name when symbol search misses");
+        long inspectFullCalls = telemetry.ToolMix
+            .Where(static row => row.Tool == "inspect" && string.Equals(row.Op, "full", StringComparison.OrdinalIgnoreCase))
+            .Sum(static row => row.Calls);
+        long inspectOverviewCalls = telemetry.ToolMix
+            .Where(static row => row.Tool == "inspect" && string.Equals(row.Op, "overview", StringComparison.OrdinalIgnoreCase))
+            .Sum(static row => row.Calls);
+        if (inspectFullCalls > inspectOverviewCalls)
+            notes.Add("inspect full is common in recent telemetry; start with inspect depth=overview before full-body reads");
+        if (telemetry.TotalCalls > 0 && telemetry.ToolMix.All(static row => row.Tool != "trace"))
+            notes.Add("trace is available for refs/path questions when you need usages or dependency paths");
         if (hotTargets.Any(static target => target.Confidence == "unresolved_hash"))
             notes.Add("some repeated targets no longer match the current index; refresh before relying on older telemetry patterns");
         if (telemetry.Friction.Any(static row => row.ErrorCount > 0))

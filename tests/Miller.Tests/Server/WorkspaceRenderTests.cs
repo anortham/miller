@@ -226,9 +226,61 @@ public sealed class WorkspaceRenderTests
 
         Assert.Contains("workspace health", text);
         Assert.Contains("search to find candidate symbols", text);
+        Assert.Contains("inspect depth=overview", text);
         Assert.Contains("use context", text);
         Assert.Contains("use impact before refactors", text);
         Assert.Contains("telemetry is unavailable", text);
+    }
+
+    [Fact]
+    public void Onboarding_NoTelemetry_JsonIncludesOverviewStarterGuidance()
+    {
+        WorkspaceOnboardingFacts facts = WorkspaceOnboardingFacts.Create(
+            Facts(),
+            TelemetryOnboardingFacts.Unavailable("missing_telemetry_db"),
+            []);
+
+        using var doc = JsonDocument.Parse(WorkspaceRender.Onboarding(facts, json: true));
+
+        string[] startHere = doc.RootElement.GetProperty("start_here")
+            .EnumerateArray()
+            .Select(static row => row.GetString() ?? string.Empty)
+            .ToArray();
+        Assert.Contains(startHere, static line => line.Contains("inspect depth=overview", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Onboarding_AggregateTelemetry_NotesFullInspectOveruseAndMissingTrace()
+    {
+        WorkspaceOnboardingFacts facts = WorkspaceOnboardingFacts.Create(
+            Facts(),
+            new TelemetryOnboardingFacts(
+                Available: true,
+                State: "ready",
+                TotalCalls: 9,
+                WindowStartTs: "2026-06-23T10:00:00.000Z",
+                WindowEndTs: "2026-06-23T10:09:00.000Z",
+                ToolMix:
+                [
+                    new TelemetryToolMix("search", "auto", 3, 3, 0, 0, 50, 60, 70, 3, 600, 100),
+                    new TelemetryToolMix("inspect", "full", 5, 5, 0, 0, 80, 90, 100, 5, 5000, 1000),
+                    new TelemetryToolMix("inspect", "overview", 1, 1, 0, 0, 30, 40, 50, 1, 700, 150),
+                ],
+                SuccessfulFlows:
+                [
+                    new TelemetryFlow("search:auto", "inspect:full", 2),
+                ],
+                TargetHashes: [],
+                CommonMisses: [],
+                Friction: [],
+                Error: null),
+            []);
+
+        string text = WorkspaceRender.Onboarding(facts, json: false);
+
+        Assert.Contains("inspect depth=overview", text);
+        Assert.Contains("trace is available for refs/path questions", text);
+        Assert.Contains("use impact before refactors", text);
     }
 
     [Fact]

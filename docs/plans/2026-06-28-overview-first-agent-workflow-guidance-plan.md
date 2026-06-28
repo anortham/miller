@@ -112,14 +112,14 @@
 **Approach:** Keep `start_here` short and deterministic. Add a generic start-here line for `inspect depth=overview` before full-body reads. Add or preserve `impact` before refactors as a generic line, not only when there is no telemetry or prior impact use. Add notes for low-use or expensive-use patterns using aggregate counts: when `inspect/full` calls exceed `inspect/overview` calls, note that overview should be the first read; when `trace` has no aggregate use in a non-empty telemetry window, note that trace is available for refs/path questions.
 
 **Acceptance criteria:**
-- [ ] A no-telemetry onboarding render includes `inspect depth=overview` guidance.
-- [ ] A no-telemetry onboarding JSON render includes the same guidance in `start_here`.
-- [ ] An aggregate telemetry fixture with more `inspect/full` calls than `inspect/overview` calls includes a note telling agents to start with `inspect depth=overview`.
-- [ ] A non-empty telemetry fixture with no trace usage includes a note pointing refs/path questions to `trace`.
-- [ ] `WorkspaceOnboardingFacts` still reports the three existing privacy lines.
-- [ ] No telemetry reader schema, raw query storage, or target hash exposure changes are introduced.
-- [ ] `dotnet test tests/Miller.Tests/Miller.Tests.csproj --no-restore --filter "FullyQualifiedName~WorkspaceRenderTests"` passes.
-- [ ] Worker-scope verification passes, committed.
+- [x] A no-telemetry onboarding render includes `inspect depth=overview` guidance.
+- [x] A no-telemetry onboarding JSON render includes the same guidance in `start_here`.
+- [x] An aggregate telemetry fixture with more `inspect/full` calls than `inspect/overview` calls includes a note telling agents to start with `inspect depth=overview`.
+- [x] A non-empty telemetry fixture with no trace usage includes a note pointing refs/path questions to `trace`.
+- [x] `WorkspaceOnboardingFacts` still reports the three existing privacy lines.
+- [x] No telemetry reader schema, raw query storage, or target hash exposure changes are introduced.
+- [x] `dotnet test tests/Miller.Tests/Miller.Tests.csproj --no-restore --filter "FullyQualifiedName~WorkspaceRenderTests"` passes.
+- [x] Worker-scope verification passes, committed.
 
 ## Task 4: Update Public Docs, Site, And Matrix Candidate Status
 
