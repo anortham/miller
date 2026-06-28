@@ -307,7 +307,7 @@ public sealed class TraceTool
             return json
                 ? RenderTraceJson(ModeAuto, target, to: null, depth, limit, emitted, nodesVisited, note, DiagnosticCode(note!),
                     nextActions: nextActions)
-                : note!;
+                : AppendNextActions(note!, nextActions);
 
         IReadOnlyList<ReachedNode> reached =
             graph.Reach([seedId], depth, limit, Direction.Both);
@@ -409,12 +409,12 @@ public sealed class TraceTool
             return json
                 ? RenderTraceJson(ModePath, target, to, depth, limit, emitted, nodesVisited, fromNote!, DiagnosticCode(fromNote!),
                     nextActions: fromNextActions)
-                : fromNote!;
+                : AppendNextActions(fromNote!, fromNextActions);
         if (!ResolveSymbol(index, resolver, to, scope: null, out string toId, out string? toNote, out IReadOnlyList<TraceNextAction> toNextActions))
             return json
                 ? RenderPathJson(index, target, to, depth, limit, emitted, nodesVisited, fromId, toId: null, path: null,
                     note: toNote!, diagnosticCode: DiagnosticCode(toNote!), nextActions: toNextActions)
-                : toNote!;
+                : AppendNextActions(toNote!, toNextActions);
 
         IReadOnlyList<string>? path = graph.ShortestPath(fromId, toId, depth);
         if (path is null)
@@ -498,7 +498,7 @@ public sealed class TraceTool
             return json
                 ? RenderRefsJson(target, depth, limit, emitted, nodesVisited, targetSymbol: null,
                     references: [], normalizedKind, includeDefinition, note!, DiagnosticCode(note!), nextActions)
-                : note!;
+                : AppendNextActions(note!, nextActions);
 
         IndexedSymbol? targetSymbol = index.FindBySymbolId(seedId);
         if (targetSymbol is null)
@@ -612,7 +612,7 @@ public sealed class TraceTool
             return json
                 ? RenderBridgeJson(index.BridgeGraph, target, to: null, depth, limit, emitted, nodesVisited, startId: null,
                     edges: [], note!, DiagnosticCode(note!), nextActions)
-                : note!;
+                : AppendNextActions(note!, nextActions);
 
         // A symbol with no incident bridge edges is not on any cross-language thread — whether it is absent from the
         // bridge node lookup entirely or present but edge-less, the honest answer is the same. Incident subsumes both.
@@ -1055,7 +1055,15 @@ public sealed class TraceTool
             .ToArray();
 
         if (paths.Length < 2)
-            return Array.Empty<TraceNextAction>();
+        {
+            return matches
+                .Take(3)
+                .Select(match => NextAction(
+                    "trace",
+                    $"retry with this symbol id for {match.Kind} in {match.FilePath}:{match.StartLine}",
+                    ("target", match.SymbolId)))
+                .ToArray();
+        }
 
         return paths
             .Select(path => NextAction(

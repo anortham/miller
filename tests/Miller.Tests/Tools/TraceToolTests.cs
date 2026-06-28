@@ -379,6 +379,11 @@ public sealed class TraceToolTests
         Assert.Equal(0, emitted);
         Assert.Contains("more specific target", outp);
         Assert.DoesNotContain("pass scope=<file>", outp);
+        Assert.Contains("Next:", outp);
+        Assert.Contains("trace target=\"a1\"", outp);
+        Assert.Contains("class in src/SearchTool.cs:10", outp);
+        Assert.Contains("trace target=\"a2\"", outp);
+        Assert.Contains("constructor in src/SearchTool.cs:12", outp);
     }
 
     [Fact]
@@ -409,6 +414,32 @@ public sealed class TraceToolTests
         Assert.Equal("src/First.cs", actions[0].GetProperty("args").GetProperty("scope").GetString());
         Assert.Empty(root.GetProperty("nodes").EnumerateArray());
         Assert.Empty(root.GetProperty("links").EnumerateArray());
+    }
+
+    [Fact]
+    public void Auto_ScopedAmbiguousTarget_JsonCarriesSymbolIdNextActions()
+    {
+        var index = BuildSymbolIndex(
+            new[]
+            {
+                ("a1", "SearchTool", "class", "src/SearchTool.cs", 10),
+                ("a2", "SearchTool", "constructor", "src/SearchTool.cs", 12),
+            },
+            Array.Empty<(string, string)>());
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "SearchTool", scope: "src/SearchTool.cs", mode: "auto", to: null, depth: 3, limit: 20,
+            fullFormat: false, json: true, emitted: out int emitted, nodesVisited: out _);
+
+        Assert.Equal(0, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement root = doc.RootElement;
+        Assert.Contains("more specific target", root.GetProperty("note").GetString());
+        JsonElement[] actions = root.GetProperty("next_actions").EnumerateArray().ToArray();
+        Assert.Equal(2, actions.Length);
+        Assert.Equal("trace", actions[0].GetProperty("tool").GetString());
+        Assert.Equal("a1", actions[0].GetProperty("args").GetProperty("target").GetString());
+        Assert.Equal("a2", actions[1].GetProperty("args").GetProperty("target").GetString());
     }
 
     // ---------- mode: path ----------
