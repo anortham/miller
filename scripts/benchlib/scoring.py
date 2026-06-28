@@ -42,6 +42,21 @@ def score_text(text: str, expected_file: str) -> dict[str, Any]:
     }
 
 
+def score_text_paths(text: str, expected_files: list[str], *, require_top: bool = False) -> dict[str, Any]:
+    present = any(expected_file in text for expected_file in expected_files)
+    first = first_path(text)
+    top = first in expected_files
+    expected_present = top if require_top else present
+    return {
+        "empty": False if present else is_empty_text(text),
+        "expected_present": expected_present,
+        "expected_top": top,
+        "first_path": first or "",
+        "output_chars": len(text),
+        "score": 2 if top else 1 if present else 0,
+    }
+
+
 def score_miller_search_json(text: str, expected_file: str) -> dict[str, Any]:
     try:
         rows = json.loads(text)
@@ -117,6 +132,41 @@ def json_result_rows(text: str) -> tuple[list[dict[str, Any]], list[dict[str, An
     return dict_rows, diagnostics
 
 
+def expected_paths(expected: dict[str, Any], mode: str) -> list[str]:
+    if mode == "path_any_present":
+        paths = expected.get("paths")
+        if not isinstance(paths, list) or not all(isinstance(path, str) and path for path in paths):
+            raise ValueError("expected.paths is required for path_any_present scoring")
+        return [str(path) for path in paths]
+
+    expected_path = str(expected.get("path") or "")
+    if not expected_path:
+        raise ValueError(f"expected.path is required for {mode} scoring")
+    return [expected_path]
+
+
+def score_json_rows(
+    rows: list[dict[str, Any]],
+    expected_files: list[str],
+    *,
+    require_top: bool = False,
+    output_chars: int,
+) -> dict[str, Any]:
+    first = json_row_path(rows[0]) if rows else ""
+    present = any(json_row_path(row) in expected_files for row in rows)
+    top = first in expected_files
+    expected_present = top if require_top else present
+    return {
+        "empty": len(rows) == 0,
+        "expected_present": expected_present,
+        "expected_top": top,
+        "first_path": first,
+        "result_count": len(rows),
+        "output_chars": output_chars,
+        "score": 2 if top else 1 if present else 0,
+    }
+
+
 def score_manifest_path(
     text: str,
     expected: dict[str, Any],
@@ -125,30 +175,18 @@ def score_manifest_path(
     parse_json: bool = False,
 ) -> dict[str, Any]:
     mode = scoring.get("mode")
-    if mode != "path_present":
+    if mode not in {"path_present", "path_top", "path_any_present"}:
         raise ValueError(f"unsupported scoring mode: {mode!r}")
 
-    expected_path = str(expected.get("path") or "")
-    if not expected_path:
-        raise ValueError("expected.path is required for path_present scoring")
+    expected_files = expected_paths(expected, str(mode))
+    require_top = mode == "path_top"
 
     diagnostics: list[dict[str, Any]] = []
     if parse_json:
         rows, diagnostics = json_result_rows(text)
-        first = json_row_path(rows[0]) if rows else ""
-        present = any(json_row_path(row) == expected_path for row in rows)
-        top = first == expected_path
-        scored = {
-            "empty": len(rows) == 0,
-            "expected_present": present,
-            "expected_top": top,
-            "first_path": first,
-            "result_count": len(rows),
-            "output_chars": len(text),
-            "score": 2 if top else 1 if present else 0,
-        }
+        scored = score_json_rows(rows, expected_files, require_top=require_top, output_chars=len(text))
         if diagnostics and not rows:
-            fallback = score_text(text, expected_path)
+            fallback = score_text_paths(text, expected_files, require_top=require_top)
             scored.update(
                 {
                     "empty": fallback["empty"],
@@ -160,7 +198,7 @@ def score_manifest_path(
             )
             scored["result_count"] = ""
     else:
-        scored = score_text(text, expected_path)
+        scored = score_text_paths(text, expected_files, require_top=require_top)
         scored["result_count"] = ""
 
     anchor = expected.get("anchor")

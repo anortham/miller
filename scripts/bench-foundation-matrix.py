@@ -34,6 +34,7 @@ REPO_ROOTS = {
 
 SUPPORTED_MILLER_TOOLS = {"search", "inspect"}
 SUPPORTED_JULIE_TOOLS = {"fast_search", "deep_dive"}
+SUPPORTED_SCORING_MODES = {"path_present", "path_top", "path_any_present"}
 REQUIRED_ROW_KEYS = {"id", "repo", "task_class", "intent", "miller", "julie", "expected", "scoring", "gate"}
 
 CSV_FIELDS = [
@@ -171,8 +172,19 @@ def validate_expected(row: dict[str, Any], label: str) -> list[str]:
     errors: list[str] = []
     if not isinstance(expected.get("path"), str) or not expected.get("path", "").strip():
         errors.append(f"{label}: 'expected.path' must be a non-empty string")
-    if "anchor" in expected and not isinstance(expected["anchor"], str):
-        errors.append(f"{label}: 'expected.anchor' must be a string when present")
+    if not isinstance(expected.get("anchor"), str) or not expected.get("anchor", "").strip():
+        errors.append(f"{label}: 'expected.anchor' must be a non-empty string")
+    paths = expected.get("paths")
+    if paths is not None:
+        if not isinstance(paths, list) or not paths:
+            errors.append(f"{label}: 'expected.paths' must be a non-empty list when present")
+        elif not all(isinstance(path, str) and path.strip() for path in paths):
+            errors.append(f"{label}: 'expected.paths' entries must be non-empty strings")
+        elif isinstance(expected.get("path"), str) and expected["path"] not in paths:
+            errors.append(f"{label}: 'expected.path' must be included in 'expected.paths'")
+    scoring = row.get("scoring")
+    if isinstance(scoring, dict) and scoring.get("mode") == "path_any_present" and not isinstance(paths, list):
+        errors.append(f"{label}: 'expected.paths' is required for path_any_present scoring")
     return errors
 
 
@@ -181,8 +193,9 @@ def validate_scoring(row: dict[str, Any], label: str) -> list[str]:
     if not isinstance(scoring, dict):
         return [f"{label}: 'scoring' must be an object"]
     errors: list[str] = []
-    if scoring.get("mode") != "path_present":
-        errors.append(f"{label}: unsupported scoring.mode {scoring.get('mode')!r}; expected 'path_present'")
+    if scoring.get("mode") not in SUPPORTED_SCORING_MODES:
+        expected = "', '".join(sorted(SUPPORTED_SCORING_MODES))
+        errors.append(f"{label}: unsupported scoring.mode {scoring.get('mode')!r}; expected one of '{expected}'")
     if "top_path" in scoring and not isinstance(scoring["top_path"], bool):
         errors.append(f"{label}: 'scoring.top_path' must be a boolean when present")
     return errors
@@ -252,6 +265,7 @@ def result_from_score(
         row_diagnostics.extend(diagnostics)
     expected_present = bool(scored.get("expected_present"))
     empty = bool(scored.get("empty"))
+    anchor_missing = scored.get("anchor_present") is False
     return {
         "row_id": row["id"],
         "repo": row["repo"],
@@ -266,7 +280,7 @@ def result_from_score(
         "ms": int(ms),
         "output_chars": int(scored.get("output_chars") or 0),
         "first_path": str(scored.get("first_path") or ""),
-        "adaptation_candidate": bool(hard_gate and (empty or not expected_present)),
+        "adaptation_candidate": bool(hard_gate and (empty or not expected_present or anchor_missing)),
         "expected_path": row["expected"]["path"],
         "anchor_present": scored.get("anchor_present", ""),
         "result_count": scored.get("result_count", ""),
@@ -396,6 +410,8 @@ def gate_failures(results: list[dict[str, Any]]) -> list[str]:
             failures.append(f"{row['row_id']}/{row['tool']}: output was empty")
         elif not row["expected_present"]:
             failures.append(f"{row['row_id']}/{row['tool']}: expected path was absent")
+        elif row["anchor_present"] is False:
+            failures.append(f"{row['row_id']}/{row['tool']}: expected anchor was absent")
     return failures
 
 

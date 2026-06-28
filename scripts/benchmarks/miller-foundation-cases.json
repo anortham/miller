@@ -5,14 +5,14 @@
       "id": "miller.retrieval.symbol.searchtool",
       "repo": "miller",
       "task_class": "retrieval.symbol",
-      "intent": "Find Miller's search MCP tool implementation by symbol name.",
+      "intent": "Find miller symbol anchor SearchTool.",
       "miller": {
         "tool": "search",
         "args": {
           "query": "SearchTool",
-          "mode": "auto",
           "limit": 5,
-          "format": "json"
+          "format": "json",
+          "mode": "auto"
         }
       },
       "julie": {
@@ -26,10 +26,10 @@
       },
       "expected": {
         "path": "src/Miller.Server/Tools/SearchTool.cs",
-        "anchor": "class SearchTool"
+        "anchor": "SearchTool"
       },
       "scoring": {
-        "mode": "path_present",
+        "mode": "path_top",
         "top_path": true
       },
       "gate": {
@@ -37,10 +37,179 @@
       }
     },
     {
-      "id": "miller.inspect.overview.searchtool",
+      "id": "miller.retrieval.file.primary",
+      "repo": "miller",
+      "task_class": "retrieval.file",
+      "intent": "Find miller primary file by path.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "src/Miller.Server/Tools/SearchTool.cs",
+          "limit": 5,
+          "format": "json",
+          "mode": "file"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "src/Miller.Server/Tools/SearchTool.cs",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Miller.Server/Tools/SearchTool.cs",
+        "anchor": "SearchToolMode"
+      },
+      "scoring": {
+        "mode": "path_top",
+        "top_path": true
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.retrieval.source.auto",
+      "repo": "miller",
+      "task_class": "retrieval.source_auto",
+      "intent": "Use auto search recovery for a source-body phrase in miller.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "No indexed file matches",
+          "limit": 5,
+          "format": "compact",
+          "mode": "auto"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "No indexed file matches",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Miller.Server/Tools/SearchTool.cs",
+        "anchor": "No indexed file matches"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.retrieval.source.explicit",
+      "repo": "miller",
+      "task_class": "retrieval.source_explicit",
+      "intent": "Use explicit source search for a source-body phrase in miller.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "No indexed file matches",
+          "limit": 5,
+          "format": "compact",
+          "mode": "source"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "No indexed file matches",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Miller.Server/Tools/SearchTool.cs",
+        "anchor": "No indexed file matches"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.retrieval.docs.content",
+      "repo": "miller",
+      "task_class": "retrieval.docs",
+      "intent": "Find docs/prose content in miller.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "Quickstart",
+          "limit": 5,
+          "format": "compact",
+          "mode": "content"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "Quickstart",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "README.md",
+        "anchor": "Quickstart"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.inspect.summary.primary",
+      "repo": "miller",
+      "task_class": "inspect.summary",
+      "intent": "Inspect miller primary anchor with summary depth.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "SearchTool",
+          "depth": "summary",
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "SearchTool",
+          "depth": "summary"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Miller.Server/Tools/SearchTool.cs",
+        "anchor": "SearchTool"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.inspect.overview.primary",
       "repo": "miller",
       "task_class": "inspect.overview",
-      "intent": "Resolve Miller's search MCP tool implementation through inspect overview.",
+      "intent": "Inspect miller primary anchor with overview depth.",
       "miller": {
         "tool": "inspect",
         "args": {
@@ -62,7 +231,73 @@
         "anchor": "SearchTool"
       },
       "scoring": {
-        "mode": "path_present",
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.inspect.full.primary",
+      "repo": "miller",
+      "task_class": "inspect.full",
+      "intent": "Inspect miller primary anchor with full depth.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "SearchTool",
+          "depth": "full",
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "SearchTool",
+          "depth": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Miller.Server/Tools/SearchTool.cs",
+        "anchor": "SearchTool"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "julie.retrieval.symbol.fastsearchtool",
+      "repo": "julie",
+      "task_class": "retrieval.symbol",
+      "intent": "Find julie symbol anchor FastSearchTool.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "FastSearchTool",
+          "limit": 5,
+          "format": "json",
+          "mode": "auto"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "FastSearchTool",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "crates/julie-tools/src/search/mod.rs",
+        "anchor": "FastSearchTool"
+      },
+      "scoring": {
+        "mode": "path_top",
         "top_path": true
       },
       "gate": {
@@ -70,17 +305,786 @@
       }
     },
     {
-      "id": "flask.retrieval.symbol.flask-class",
+      "id": "julie.retrieval.file.primary",
+      "repo": "julie",
+      "task_class": "retrieval.file",
+      "intent": "Find julie primary file by path.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "src/handler/tools/fast_search.rs",
+          "limit": 5,
+          "format": "json",
+          "mode": "file"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "src/handler/tools/fast_search.rs",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/handler/tools/fast_search.rs",
+        "anchor": "fast_search"
+      },
+      "scoring": {
+        "mode": "path_top",
+        "top_path": true
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "julie.retrieval.source.auto",
+      "repo": "julie",
+      "task_class": "retrieval.source_auto",
+      "intent": "Use auto search recovery for a source-body phrase in julie.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "fast_search failed",
+          "limit": 5,
+          "format": "compact",
+          "mode": "auto"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "fast_search failed",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/handler/tools/fast_search.rs",
+        "anchor": "fast_search failed"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "julie.retrieval.source.explicit",
+      "repo": "julie",
+      "task_class": "retrieval.source_explicit",
+      "intent": "Use explicit source search for a source-body phrase in julie.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "fast_search failed",
+          "limit": 5,
+          "format": "compact",
+          "mode": "source"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "fast_search failed",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/handler/tools/fast_search.rs",
+        "anchor": "fast_search failed"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "julie.retrieval.docs.content",
+      "repo": "julie",
+      "task_class": "retrieval.docs",
+      "intent": "Find docs/prose content in julie.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "External Extract CLI",
+          "limit": 5,
+          "format": "compact",
+          "mode": "content"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "External Extract CLI",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "docs/plans/2026-05-18-external-extractor-cli-implementation-plan.md",
+        "anchor": "External Extract CLI"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "julie.inspect.summary.primary",
+      "repo": "julie",
+      "task_class": "inspect.summary",
+      "intent": "Inspect julie primary anchor with summary depth.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "FastSearchTool",
+          "depth": "summary",
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "FastSearchTool",
+          "depth": "summary"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "crates/julie-tools/src/search/mod.rs",
+        "anchor": "FastSearchTool"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "julie.inspect.overview.primary",
+      "repo": "julie",
+      "task_class": "inspect.overview",
+      "intent": "Inspect julie primary anchor with overview depth.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "FastSearchTool",
+          "depth": "overview",
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "FastSearchTool",
+          "depth": "overview"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "crates/julie-tools/src/search/mod.rs",
+        "anchor": "FastSearchTool"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "julie.inspect.full.primary",
+      "repo": "julie",
+      "task_class": "inspect.full",
+      "intent": "Inspect julie primary anchor with full depth.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "FastSearchTool",
+          "depth": "full",
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "FastSearchTool",
+          "depth": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "crates/julie-tools/src/search/mod.rs",
+        "anchor": "FastSearchTool"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "eros.retrieval.symbol.continuoustestqualityanalyzer",
+      "repo": "eros",
+      "task_class": "retrieval.symbol",
+      "intent": "Find eros symbol anchor ContinuousTestQualityAnalyzer.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "ContinuousTestQualityAnalyzer",
+          "limit": 5,
+          "format": "json",
+          "mode": "auto"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "ContinuousTestQualityAnalyzer",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Eros.ContinuousTesting/ContinuousTestQualityAnalyzer.cs",
+        "anchor": "ContinuousTestQualityAnalyzer"
+      },
+      "scoring": {
+        "mode": "path_top",
+        "top_path": true
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "eros.retrieval.file.primary",
+      "repo": "eros",
+      "task_class": "retrieval.file",
+      "intent": "Find eros primary file by path.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "src/Eros.ContinuousTesting/ContinuousTestQualityAnalyzer.cs",
+          "limit": 5,
+          "format": "json",
+          "mode": "file"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "src/Eros.ContinuousTesting/ContinuousTestQualityAnalyzer.cs",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Eros.ContinuousTesting/ContinuousTestQualityAnalyzer.cs",
+        "anchor": "ContinuousTestQualityAnalyzer"
+      },
+      "scoring": {
+        "mode": "path_top",
+        "top_path": true
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "eros.retrieval.source.auto",
+      "repo": "eros",
+      "task_class": "retrieval.source_auto",
+      "intent": "Use auto search recovery for a source-body phrase in eros.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "AnalyzeImplementationQuality",
+          "limit": 5,
+          "format": "compact",
+          "mode": "auto"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "AnalyzeImplementationQuality",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Eros.ContinuousTesting/ContinuousTestQualityAnalyzer.cs",
+        "anchor": "AnalyzeImplementationQuality"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "eros.retrieval.source.explicit",
+      "repo": "eros",
+      "task_class": "retrieval.source_explicit",
+      "intent": "Use explicit source search for a source-body phrase in eros.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "AnalyzeImplementationQuality",
+          "limit": 5,
+          "format": "compact",
+          "mode": "source"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "AnalyzeImplementationQuality",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Eros.ContinuousTesting/ContinuousTestQualityAnalyzer.cs",
+        "anchor": "AnalyzeImplementationQuality"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "eros.retrieval.docs.content",
+      "repo": "eros",
+      "task_class": "retrieval.docs",
+      "intent": "Find docs/prose content in eros.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "fleet code-intelligence",
+          "limit": 5,
+          "format": "compact",
+          "mode": "content"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "fleet code-intelligence",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "README.md",
+        "anchor": "fleet code-intelligence"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "eros.inspect.summary.primary",
+      "repo": "eros",
+      "task_class": "inspect.summary",
+      "intent": "Inspect eros primary anchor with summary depth.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "ContinuousTestQualityAnalyzer",
+          "depth": "summary",
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "ContinuousTestQualityAnalyzer",
+          "depth": "summary"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Eros.ContinuousTesting/ContinuousTestQualityAnalyzer.cs",
+        "anchor": "ContinuousTestQualityAnalyzer"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "eros.inspect.overview.primary",
+      "repo": "eros",
+      "task_class": "inspect.overview",
+      "intent": "Inspect eros primary anchor with overview depth.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "ContinuousTestQualityAnalyzer",
+          "depth": "overview",
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "ContinuousTestQualityAnalyzer",
+          "depth": "overview"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Eros.ContinuousTesting/ContinuousTestQualityAnalyzer.cs",
+        "anchor": "ContinuousTestQualityAnalyzer"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "eros.inspect.full.primary",
+      "repo": "eros",
+      "task_class": "inspect.full",
+      "intent": "Inspect eros primary anchor with full depth.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "ContinuousTestQualityAnalyzer",
+          "depth": "full",
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "ContinuousTestQualityAnalyzer",
+          "depth": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Eros.ContinuousTesting/ContinuousTestQualityAnalyzer.cs",
+        "anchor": "ContinuousTestQualityAnalyzer"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "express.retrieval.symbol.createapplication",
+      "repo": "express",
+      "task_class": "retrieval.symbol",
+      "intent": "Find express symbol anchor createApplication.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "createApplication",
+          "limit": 5,
+          "format": "json",
+          "mode": "auto"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "createApplication",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "lib/express.js",
+        "anchor": "createApplication"
+      },
+      "scoring": {
+        "mode": "path_top",
+        "top_path": true
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "express.retrieval.file.primary",
+      "repo": "express",
+      "task_class": "retrieval.file",
+      "intent": "Find express primary file by path.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "lib/express.js",
+          "limit": 5,
+          "format": "json",
+          "mode": "file"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "lib/express.js",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "lib/express.js",
+        "anchor": "createApplication"
+      },
+      "scoring": {
+        "mode": "path_top",
+        "top_path": true
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "express.retrieval.source.auto",
+      "repo": "express",
+      "task_class": "retrieval.source_auto",
+      "intent": "Use auto search recovery for a source-body phrase in express.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "expose the prototype that will get set on requests",
+          "limit": 5,
+          "format": "compact",
+          "mode": "auto"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "expose the prototype that will get set on requests",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "lib/express.js",
+        "anchor": "expose the prototype"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "express.retrieval.source.explicit",
+      "repo": "express",
+      "task_class": "retrieval.source_explicit",
+      "intent": "Use explicit source search for a source-body phrase in express.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "expose the prototype that will get set on requests",
+          "limit": 5,
+          "format": "compact",
+          "mode": "source"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "expose the prototype that will get set on requests",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "lib/express.js",
+        "anchor": "expose the prototype"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "express.retrieval.docs.content",
+      "repo": "express",
+      "task_class": "retrieval.docs",
+      "intent": "Find docs/prose content in express.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "Fast, unopinionated, minimalist web framework",
+          "limit": 5,
+          "format": "compact",
+          "mode": "content"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "Fast, unopinionated, minimalist web framework",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "Readme.md",
+        "anchor": "Fast, unopinionated"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "express.inspect.summary.primary",
+      "repo": "express",
+      "task_class": "inspect.summary",
+      "intent": "Inspect express primary anchor with summary depth.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "createApplication",
+          "depth": "summary",
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "createApplication",
+          "depth": "summary"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "lib/express.js",
+        "anchor": "createApplication"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "express.inspect.overview.primary",
+      "repo": "express",
+      "task_class": "inspect.overview",
+      "intent": "Inspect express primary anchor with overview depth.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "createApplication",
+          "depth": "overview",
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "createApplication",
+          "depth": "overview"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "lib/express.js",
+        "anchor": "createApplication"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "express.inspect.full.primary",
+      "repo": "express",
+      "task_class": "inspect.full",
+      "intent": "Inspect express primary anchor with full depth.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "createApplication",
+          "depth": "full",
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "createApplication",
+          "depth": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "lib/express.js",
+        "anchor": "createApplication"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "flask.retrieval.symbol.flask",
       "repo": "flask",
       "task_class": "retrieval.symbol",
-      "intent": "Find the canonical Flask application class by symbol name.",
+      "intent": "Find flask symbol anchor Flask.",
       "miller": {
         "tool": "search",
         "args": {
           "query": "Flask",
-          "mode": "auto",
           "limit": 5,
-          "format": "json"
+          "format": "json",
+          "mode": "auto"
         }
       },
       "julie": {
@@ -94,10 +1098,44 @@
       },
       "expected": {
         "path": "src/flask/app.py",
-        "anchor": "class Flask"
+        "anchor": "Flask"
       },
       "scoring": {
-        "mode": "path_present",
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "flask.retrieval.file.primary",
+      "repo": "flask",
+      "task_class": "retrieval.file",
+      "intent": "Find flask primary file by path.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "src/flask/app.py",
+          "limit": 5,
+          "format": "json",
+          "mode": "file"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "src/flask/app.py",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/flask/app.py",
+        "anchor": "T_shell_context_processor"
+      },
+      "scoring": {
+        "mode": "path_top",
         "top_path": true
       },
       "gate": {
@@ -105,16 +1143,152 @@
       }
     },
     {
-      "id": "flask.inspect.overview.flask-class",
+      "id": "flask.retrieval.source.auto",
+      "repo": "flask",
+      "task_class": "retrieval.source_auto",
+      "intent": "Use auto search recovery for a source-body phrase in flask.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "The endpoint name for the route defaults to the name",
+          "limit": 5,
+          "format": "compact",
+          "mode": "auto"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "The endpoint name for the route defaults to the name",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/flask/sansio/scaffold.py",
+        "anchor": "endpoint name for the route"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "flask.retrieval.source.explicit",
+      "repo": "flask",
+      "task_class": "retrieval.source_explicit",
+      "intent": "Use explicit source search for a source-body phrase in flask.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "The endpoint name for the route defaults to the name",
+          "limit": 5,
+          "format": "compact",
+          "mode": "source"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "The endpoint name for the route defaults to the name",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/flask/sansio/scaffold.py",
+        "anchor": "endpoint name for the route"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "flask.retrieval.docs.content",
+      "repo": "flask",
+      "task_class": "retrieval.docs",
+      "intent": "Find docs/prose content in flask.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "lightweight WSGI web application framework",
+          "limit": 5,
+          "format": "compact",
+          "mode": "content"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "lightweight WSGI web application framework",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "README.md",
+        "anchor": "lightweight [WSGI]"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "flask.inspect.summary.primary",
+      "repo": "flask",
+      "task_class": "inspect.summary",
+      "intent": "Inspect flask primary anchor with summary depth.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "Flask",
+          "depth": "summary",
+          "format": "compact",
+          "scope": "src/flask/app.py"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "Flask",
+          "depth": "summary"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/flask/app.py",
+        "anchor": "Flask"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "flask.inspect.overview.primary",
       "repo": "flask",
       "task_class": "inspect.overview",
-      "intent": "Resolve the canonical Flask application class.",
+      "intent": "Inspect flask primary anchor with overview depth.",
       "miller": {
         "tool": "inspect",
         "args": {
           "target": "Flask",
           "depth": "overview",
-          "format": "compact"
+          "format": "compact",
+          "scope": "src/flask/app.py"
         }
       },
       "julie": {
@@ -127,11 +1301,579 @@
       },
       "expected": {
         "path": "src/flask/app.py",
-        "anchor": "class Flask"
+        "anchor": "Flask"
       },
       "scoring": {
-        "mode": "path_present",
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "flask.inspect.full.primary",
+      "repo": "flask",
+      "task_class": "inspect.full",
+      "intent": "Inspect flask primary anchor with full depth.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "Flask",
+          "depth": "full",
+          "format": "compact",
+          "scope": "src/flask/app.py"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "Flask",
+          "depth": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/flask/app.py",
+        "anchor": "Flask"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "gson.retrieval.symbol.gsonbuilder",
+      "repo": "gson",
+      "task_class": "retrieval.symbol",
+      "intent": "Find gson symbol anchor GsonBuilder.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "GsonBuilder",
+          "limit": 5,
+          "format": "json",
+          "mode": "auto"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "GsonBuilder",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "gson/src/main/java/com/google/gson/GsonBuilder.java",
+        "anchor": "GsonBuilder"
+      },
+      "scoring": {
+        "mode": "path_top",
         "top_path": true
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "gson.retrieval.file.primary",
+      "repo": "gson",
+      "task_class": "retrieval.file",
+      "intent": "Find gson primary file by path.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "gson/src/main/java/com/google/gson/GsonBuilder.java",
+          "limit": 5,
+          "format": "json",
+          "mode": "file"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "gson/src/main/java/com/google/gson/GsonBuilder.java",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "gson/src/main/java/com/google/gson/GsonBuilder.java",
+        "anchor": "GsonBuilder"
+      },
+      "scoring": {
+        "mode": "path_top",
+        "top_path": true
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "gson.retrieval.source.auto",
+      "repo": "gson",
+      "task_class": "retrieval.source_auto",
+      "intent": "Use auto search recovery for a source-body phrase in gson.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "This is the main class for using Gson",
+          "limit": 5,
+          "format": "compact",
+          "mode": "auto"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "This is the main class for using Gson",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "gson/src/main/java/com/google/gson/Gson.java",
+        "anchor": "main class for using Gson"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "gson.retrieval.source.explicit",
+      "repo": "gson",
+      "task_class": "retrieval.source_explicit",
+      "intent": "Use explicit source search for a source-body phrase in gson.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "This is the main class for using Gson",
+          "limit": 5,
+          "format": "compact",
+          "mode": "source"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "This is the main class for using Gson",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "gson/src/main/java/com/google/gson/Gson.java",
+        "anchor": "main class for using Gson"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "gson.retrieval.docs.content",
+      "repo": "gson",
+      "task_class": "retrieval.docs",
+      "intent": "Find docs/prose content in gson.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "serialization and deserialization of classes",
+          "limit": 5,
+          "format": "compact",
+          "mode": "content"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "serialization and deserialization of classes",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "GsonDesignDocument.md",
+        "anchor": "serialization and deserialization"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "gson.inspect.summary.primary",
+      "repo": "gson",
+      "task_class": "inspect.summary",
+      "intent": "Inspect gson primary anchor with summary depth.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "GsonBuilder",
+          "depth": "summary",
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "GsonBuilder",
+          "depth": "summary"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "gson/src/main/java/com/google/gson/GsonBuilder.java",
+        "anchor": "GsonBuilder"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "gson.inspect.overview.primary",
+      "repo": "gson",
+      "task_class": "inspect.overview",
+      "intent": "Inspect gson primary anchor with overview depth.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "GsonBuilder",
+          "depth": "overview",
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "GsonBuilder",
+          "depth": "overview"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "gson/src/main/java/com/google/gson/GsonBuilder.java",
+        "anchor": "GsonBuilder"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "gson.inspect.full.primary",
+      "repo": "gson",
+      "task_class": "inspect.full",
+      "intent": "Inspect gson primary anchor with full depth.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "GsonBuilder",
+          "depth": "full",
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "GsonBuilder",
+          "depth": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "gson/src/main/java/com/google/gson/GsonBuilder.java",
+        "anchor": "GsonBuilder"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "newtonsoft.retrieval.symbol.jsonconvert",
+      "repo": "newtonsoft",
+      "task_class": "retrieval.symbol",
+      "intent": "Find newtonsoft symbol anchor JsonConvert.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "JsonConvert",
+          "limit": 5,
+          "format": "json",
+          "mode": "auto"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "JsonConvert",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "Src/Newtonsoft.Json/JsonConvert.cs",
+        "anchor": "JsonConvert"
+      },
+      "scoring": {
+        "mode": "path_top",
+        "top_path": true
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "newtonsoft.retrieval.file.primary",
+      "repo": "newtonsoft",
+      "task_class": "retrieval.file",
+      "intent": "Find newtonsoft primary file by path.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "Src/Newtonsoft.Json/JsonConvert.cs",
+          "limit": 5,
+          "format": "json",
+          "mode": "file"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "Src/Newtonsoft.Json/JsonConvert.cs",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "Src/Newtonsoft.Json/JsonConvert.cs",
+        "anchor": "JsonConvert"
+      },
+      "scoring": {
+        "mode": "path_top",
+        "top_path": true
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "newtonsoft.retrieval.source.auto",
+      "repo": "newtonsoft",
+      "task_class": "retrieval.source_auto",
+      "intent": "Use auto search recovery for a source-body phrase in newtonsoft.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "ApplySerializerSettings",
+          "limit": 5,
+          "format": "compact",
+          "mode": "auto"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "ApplySerializerSettings",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "Src/Newtonsoft.Json/JsonSerializer.cs",
+        "anchor": "ApplySerializerSettings"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "newtonsoft.retrieval.source.explicit",
+      "repo": "newtonsoft",
+      "task_class": "retrieval.source_explicit",
+      "intent": "Use explicit source search for a source-body phrase in newtonsoft.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "ApplySerializerSettings",
+          "limit": 5,
+          "format": "compact",
+          "mode": "source"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "ApplySerializerSettings",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "Src/Newtonsoft.Json/JsonSerializer.cs",
+        "anchor": "ApplySerializerSettings"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "newtonsoft.retrieval.docs.content",
+      "repo": "newtonsoft",
+      "task_class": "retrieval.docs",
+      "intent": "Find docs/prose content in newtonsoft.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "Json.NET is a popular high-performance JSON framework",
+          "limit": 5,
+          "format": "compact",
+          "mode": "content"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "Json.NET is a popular high-performance JSON framework",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "Src/Newtonsoft.Json/README.md",
+        "anchor": "high-performance JSON framework"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "newtonsoft.inspect.summary.primary",
+      "repo": "newtonsoft",
+      "task_class": "inspect.summary",
+      "intent": "Inspect newtonsoft primary anchor with summary depth.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "JsonConvert",
+          "depth": "summary",
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "JsonConvert",
+          "depth": "summary"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "Src/Newtonsoft.Json/JsonConvert.cs",
+        "anchor": "JsonConvert"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "newtonsoft.inspect.overview.primary",
+      "repo": "newtonsoft",
+      "task_class": "inspect.overview",
+      "intent": "Inspect newtonsoft primary anchor with overview depth.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "JsonConvert",
+          "depth": "overview",
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "JsonConvert",
+          "depth": "overview"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "Src/Newtonsoft.Json/JsonConvert.cs",
+        "anchor": "JsonConvert"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "newtonsoft.inspect.full.primary",
+      "repo": "newtonsoft",
+      "task_class": "inspect.full",
+      "intent": "Inspect newtonsoft primary anchor with full depth.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "JsonConvert",
+          "depth": "full",
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "JsonConvert",
+          "depth": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "Src/Newtonsoft.Json/JsonConvert.cs",
+        "anchor": "JsonConvert"
+      },
+      "scoring": {
+        "mode": "path_present"
       },
       "gate": {
         "hard": true
@@ -141,14 +1883,14 @@
       "id": "zod.retrieval.symbol.zodobject",
       "repo": "zod",
       "task_class": "retrieval.symbol",
-      "intent": "Find Zod's object schema class by symbol name.",
+      "intent": "Find zod symbol anchor ZodObject.",
       "miller": {
         "tool": "search",
         "args": {
           "query": "ZodObject",
-          "mode": "auto",
           "limit": 5,
-          "format": "json"
+          "format": "json",
+          "mode": "auto"
         }
       },
       "julie": {
@@ -162,10 +1904,44 @@
       },
       "expected": {
         "path": "packages/zod/src/v4/classic/schemas.ts",
-        "anchor": "class ZodObject"
+        "anchor": "ZodObject"
       },
       "scoring": {
-        "mode": "path_present",
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "zod.retrieval.file.primary",
+      "repo": "zod",
+      "task_class": "retrieval.file",
+      "intent": "Find zod primary file by path.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "packages/zod/src/v4/classic/schemas.ts",
+          "limit": 5,
+          "format": "json",
+          "mode": "file"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "packages/zod/src/v4/classic/schemas.ts",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "packages/zod/src/v4/classic/schemas.ts",
+        "anchor": "ZodType"
+      },
+      "scoring": {
+        "mode": "path_top",
         "top_path": true
       },
       "gate": {
@@ -173,15 +1949,797 @@
       }
     },
     {
-      "id": "zod.inspect.overview.zodobject",
+      "id": "zod.retrieval.source.auto",
+      "repo": "zod",
+      "task_class": "retrieval.source_auto",
+      "intent": "Use auto search recovery for a source-body phrase in zod.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "UnknownKeysParam",
+          "limit": 5,
+          "format": "compact",
+          "mode": "auto"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "UnknownKeysParam",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "packages/zod/src/v3/types.ts",
+        "anchor": "UnknownKeysParam"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "zod.retrieval.source.explicit",
+      "repo": "zod",
+      "task_class": "retrieval.source_explicit",
+      "intent": "Use explicit source search for a source-body phrase in zod.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "UnknownKeysParam",
+          "limit": 5,
+          "format": "compact",
+          "mode": "source"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "UnknownKeysParam",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "packages/zod/src/v3/types.ts",
+        "anchor": "UnknownKeysParam"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "zod.retrieval.docs.content",
+      "repo": "zod",
+      "task_class": "retrieval.docs",
+      "intent": "Find docs/prose content in zod.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "TypeScript-first schema validation",
+          "limit": 5,
+          "format": "compact",
+          "mode": "content"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "TypeScript-first schema validation",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "packages/zod/README.md",
+        "anchor": "TypeScript-first schema validation"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "zod.inspect.summary.primary",
+      "repo": "zod",
+      "task_class": "inspect.summary",
+      "intent": "Inspect zod primary anchor with summary depth.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "packages/zod/src/v4/classic/schemas.ts",
+          "depth": "summary",
+          "format": "compact",
+          "limit": 80
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "ZodType",
+          "depth": "summary"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "packages/zod/src/v4/classic/schemas.ts",
+        "anchor": "ZodType"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "zod.inspect.overview.primary",
       "repo": "zod",
       "task_class": "inspect.overview",
-      "intent": "Resolve Zod's object schema class through inspect overview.",
+      "intent": "Inspect zod primary anchor with overview depth.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "packages/zod/src/v4/classic/schemas.ts",
+          "depth": "overview",
+          "format": "compact",
+          "limit": 80
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "ZodType",
+          "depth": "overview"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "packages/zod/src/v4/classic/schemas.ts",
+        "anchor": "ZodType"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "zod.inspect.full.primary",
+      "repo": "zod",
+      "task_class": "inspect.full",
+      "intent": "Inspect zod primary anchor with full depth.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "packages/zod/src/v4/classic/schemas.ts",
+          "depth": "full",
+          "format": "compact",
+          "limit": 80
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "ZodType",
+          "depth": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "packages/zod/src/v4/classic/schemas.ts",
+        "anchor": "ZodType"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "jq.retrieval.symbol.jv_parse",
+      "repo": "jq",
+      "task_class": "retrieval.symbol",
+      "intent": "Find jq symbol anchor jv_parse.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "jv_parse",
+          "limit": 5,
+          "format": "json",
+          "mode": "auto"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "jv_parse",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/jv_parse.c",
+        "anchor": "jv_parse"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "jq.retrieval.file.primary",
+      "repo": "jq",
+      "task_class": "retrieval.file",
+      "intent": "Find jq primary file by path.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "src/jv_parse.c",
+          "limit": 5,
+          "format": "json",
+          "mode": "file"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "src/jv_parse.c",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/jv_parse.c",
+        "anchor": "jv_parse"
+      },
+      "scoring": {
+        "mode": "path_top",
+        "top_path": true
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "jq.retrieval.source.auto",
+      "repo": "jq",
+      "task_class": "retrieval.source_auto",
+      "intent": "Use auto search recovery for a source-body phrase in jq.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "jv_parser_set_buf",
+          "limit": 5,
+          "format": "compact",
+          "mode": "auto"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "jv_parser_set_buf",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/jv_parse.c",
+        "anchor": "jv_parser_set_buf"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "jq.retrieval.source.explicit",
+      "repo": "jq",
+      "task_class": "retrieval.source_explicit",
+      "intent": "Use explicit source search for a source-body phrase in jq.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "jv_parser_set_buf",
+          "limit": 5,
+          "format": "compact",
+          "mode": "source"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "jv_parser_set_buf",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/jv_parse.c",
+        "anchor": "jv_parser_set_buf"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "jq.retrieval.docs.content",
+      "repo": "jq",
+      "task_class": "retrieval.docs",
+      "intent": "Find docs/prose content in jq.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "lightweight and flexible command-line JSON processor",
+          "limit": 5,
+          "format": "compact",
+          "mode": "content"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "lightweight and flexible command-line JSON processor",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "README.md",
+        "anchor": "command-line JSON processor"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "jq.inspect.summary.primary",
+      "repo": "jq",
+      "task_class": "inspect.summary",
+      "intent": "Inspect jq primary anchor with summary depth.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "jv_parse",
+          "depth": "summary",
+          "format": "compact",
+          "scope": "src/jv_parse.c"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "jv_parse",
+          "depth": "summary"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/jv_parse.c",
+        "anchor": "jv_parse"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "jq.inspect.overview.primary",
+      "repo": "jq",
+      "task_class": "inspect.overview",
+      "intent": "Inspect jq primary anchor with overview depth.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "jv_parse",
+          "depth": "overview",
+          "format": "compact",
+          "scope": "src/jv_parse.c"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "jv_parse",
+          "depth": "overview"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/jv_parse.c",
+        "anchor": "jv_parse"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "jq.inspect.full.primary",
+      "repo": "jq",
+      "task_class": "inspect.full",
+      "intent": "Inspect jq primary anchor with full depth.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "jv_parse",
+          "depth": "full",
+          "format": "compact",
+          "scope": "src/jv_parse.c"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "jv_parse",
+          "depth": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/jv_parse.c",
+        "anchor": "jv_parse"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "gson.retrieval.region.doc-comment.gson",
+      "repo": "gson",
+      "task_class": "retrieval.region",
+      "intent": "Find Gson doc comment text through source-region search.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "This is the main class for using Gson",
+          "limit": 5,
+          "format": "compact",
+          "regions": "doc_comment"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "This is the main class for using Gson",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "gson/src/main/java/com/google/gson/Gson.java",
+        "anchor": "This is the main class for using Gson"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "newtonsoft.retrieval.region.doc-comment.serializer",
+      "repo": "newtonsoft",
+      "task_class": "retrieval.region",
+      "intent": "Find JsonSerializer XML doc text through source-region search.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "Serializes and deserializes objects into and from the JSON format",
+          "limit": 5,
+          "format": "compact",
+          "regions": "doc_comment"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "Serializes and deserializes objects into and from the JSON format",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "Src/Newtonsoft.Json/JsonSerializer.cs",
+        "anchor": "Serializes and deserializes objects"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.retrieval.region.string-literal.search-hint",
+      "repo": "miller",
+      "task_class": "retrieval.region",
+      "intent": "Find a Miller search hint string through source-region search.",
+      "miller": {
+        "tool": "search",
+        "args": {
+          "query": "No indexed file matches",
+          "limit": 5,
+          "format": "compact",
+          "regions": "string_literal"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "No indexed file matches",
+          "limit": 5,
+          "return_format": "full"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Miller.Server/Tools/SearchTool.cs",
+        "anchor": "No indexed file matches"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.ambiguity.unscoped.run-candidates",
+      "repo": "miller",
+      "task_class": "ambiguity.unscoped",
+      "intent": "Show unscoped Run candidates across Miller tools and services.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "Run",
+          "depth": "summary",
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "Run",
+          "depth": "summary"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Miller.Server/Tools/SearchTool.cs",
+        "anchor": "Multiple candidates",
+        "paths": [
+          "src/Miller.Server/Tools/SearchTool.cs",
+          "src/Miller.Server/Tools/InspectTool.cs",
+          "src/Miller.Server/Cli/CliDispatch.cs"
+        ]
+      },
+      "scoring": {
+        "mode": "path_any_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.ambiguity.scoped.run-searchtool",
+      "repo": "miller",
+      "task_class": "ambiguity.scoped",
+      "intent": "Disambiguate Run to SearchTool with an explicit scope.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "Run",
+          "depth": "summary",
+          "format": "compact",
+          "scope": "src/Miller.Server/Tools/SearchTool.cs"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "Run",
+          "depth": "summary"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Miller.Server/Tools/SearchTool.cs",
+        "anchor": "SearchTool.cs"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "flask.ambiguity.unscoped.add-url-rule-candidates",
+      "repo": "flask",
+      "task_class": "ambiguity.unscoped",
+      "intent": "Show unscoped Flask add_url_rule candidates.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "add_url_rule",
+          "depth": "summary",
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "add_url_rule",
+          "depth": "summary"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/flask/sansio/app.py",
+        "anchor": "Multiple candidates",
+        "paths": [
+          "src/flask/sansio/app.py",
+          "src/flask/sansio/blueprints.py",
+          "src/flask/sansio/scaffold.py"
+        ]
+      },
+      "scoring": {
+        "mode": "path_any_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "flask.ambiguity.scoped.add-url-rule-app",
+      "repo": "flask",
+      "task_class": "ambiguity.scoped",
+      "intent": "Disambiguate Flask add_url_rule to the sansio app implementation.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "add_url_rule",
+          "depth": "overview",
+          "format": "compact",
+          "scope": "src/flask/sansio/app.py"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "add_url_rule",
+          "depth": "overview"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/flask/sansio/app.py",
+        "anchor": "add_url_rule"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "jq.ambiguity.unscoped.jv-parse-candidates",
+      "repo": "jq",
+      "task_class": "ambiguity.unscoped",
+      "intent": "Show jq jv_parse declaration and implementation candidates.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "jv_parse",
+          "depth": "summary",
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "jv_parse",
+          "depth": "summary"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/jv_parse.c",
+        "anchor": "Multiple candidates",
+        "paths": [
+          "src/jv.h",
+          "src/jv_parse.c"
+        ]
+      },
+      "scoring": {
+        "mode": "path_any_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "jq.ambiguity.scoped.jv-parse-impl",
+      "repo": "jq",
+      "task_class": "ambiguity.scoped",
+      "intent": "Disambiguate jq jv_parse to the implementation file.",
+      "miller": {
+        "tool": "inspect",
+        "args": {
+          "target": "jv_parse",
+          "depth": "overview",
+          "format": "compact",
+          "scope": "src/jv_parse.c"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "jv_parse",
+          "depth": "overview"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/jv_parse.c",
+        "anchor": "jv_parse"
+      },
+      "scoring": {
+        "mode": "path_present"
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "zod.ambiguity.unscoped.zodobject-candidates",
+      "repo": "zod",
+      "task_class": "ambiguity.unscoped",
+      "intent": "Show ZodObject v3/v4 candidates without forcing one winner.",
       "miller": {
         "tool": "inspect",
         "args": {
           "target": "ZodObject",
-          "depth": "overview",
+          "depth": "summary",
           "format": "compact"
         }
       },
@@ -189,17 +2747,20 @@
         "tool": "deep_dive",
         "args": {
           "symbol": "ZodObject",
-          "depth": "overview"
+          "depth": "summary"
         },
         "report_only": true
       },
       "expected": {
         "path": "packages/zod/src/v4/classic/schemas.ts",
-        "anchor": "ZodObject"
+        "anchor": "Multiple candidates",
+        "paths": [
+          "packages/zod/src/v4/classic/schemas.ts",
+          "packages/zod/src/v3/types.ts"
+        ]
       },
       "scoring": {
-        "mode": "path_present",
-        "top_path": true
+        "mode": "path_any_present"
       },
       "gate": {
         "hard": true
