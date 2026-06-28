@@ -1499,7 +1499,8 @@ public static class CliDispatch
         if (!Directory.Exists(fullPath))
         {
             string goneMillerDir = Path.Combine(fullPath, ".miller");
-            WorkspaceRegistryRow? stale = registry.List().FirstOrDefault(r => RootMatches(r, fullPath));
+            WorkspaceRegistryRow? stale =
+                WorkspaceRegistryRootMatcher.FindByPossiblyMissingPath(registry.List(), fullPath);
             if (stale is not null)
             {
                 registry.Remove(stale.WorkspaceId);
@@ -1518,7 +1519,7 @@ public static class CliDispatch
         // Existing dir: canonicalize and match a registry row (ordinal canonical root, like the server's
         // FindByCanonicalRoot), falling back to a local .miller cleanup when no row is registered.
         string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(fullPath);
-        WorkspaceRegistryRow? match = registry.List().FirstOrDefault(r => RootMatches(r, canonicalRoot));
+        WorkspaceRegistryRow? match = WorkspaceRegistryRootMatcher.FindByRoot(registry.List(), canonicalRoot);
         string millerDirByPath = match is { } m
             ? Path.GetDirectoryName(m.IndexDbPath) ?? Path.Combine(canonicalRoot, ".miller")
             : Path.Combine(canonicalRoot, ".miller");
@@ -1567,13 +1568,6 @@ public static class CliDispatch
         outw.WriteLine(WorkspaceRender.Remove(WorkspaceRemoveResult.Removed(millerDir, workspaceId, root), json));
         return RemoveExitCode(WorkspaceRemoveResult.Outcome.Removed);
     }
-
-    // Whether a registry row's canonical root identifies the given root. Ordinal first (the common exact case),
-    // then the OS-case-aware WorkspaceSafety fallback so a case-only difference on a case-insensitive volume
-    // (macOS/Windows) still matches — and, for a GONE dir, IsLiveWorkspace degrades to a lexical full-path compare.
-    private static bool RootMatches(WorkspaceRegistryRow row, string root) =>
-        string.Equals(row.CanonicalRoot, root, StringComparison.Ordinal)
-        || WorkspaceSafety.IsLiveWorkspace(row.CanonicalRoot, root);
 
     // Map a refresh/full outcome to a process exit code (cli-eros-v1: exit 0 = ingestable payload, exit 3 =
     // genuinely unusable index). LockBusy is exit 0: the latest readable DB IS being served and a LIVE leader

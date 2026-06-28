@@ -707,6 +707,12 @@ public sealed class WorkspaceTool
         if (pathTarget.UnknownNote is null)
             return RemoveResolvedTarget(pathTarget, json);
 
+        IReadOnlyList<WorkspaceRegistryRow> rows = _registry.List();
+        WorkspaceRegistryRow? stale =
+            WorkspaceRegistryRootMatcher.FindByPossiblyMissingPath(rows, path!);
+        if (stale is not null)
+            return RemoveResolvedTarget(TargetWorkspace.Registered(stale, IsCurrentWorkspace(stale)), json);
+
         // Backward-compatible cleanup path: allow deleting an unregistered local .miller dir by path. Unknown
         // workspace guidance still applies to targeted registry operations; remove can clean stale local indexes.
         string millerDir = Path.Combine(Path.GetFullPath(path!), ".miller");
@@ -842,12 +848,7 @@ public sealed class WorkspaceTool
     private WorkspaceRegistryRow? FindByCanonicalRoot(string canonicalRoot)
     {
         IReadOnlyList<WorkspaceRegistryRow> rows = _registry.List();
-        WorkspaceRegistryRow? exact = rows.FirstOrDefault(row =>
-            string.Equals(row.CanonicalRoot, canonicalRoot, StringComparison.Ordinal));
-        if (exact is not null)
-            return exact;
-
-        return rows.FirstOrDefault(row => WorkspaceSafety.IsLiveWorkspace(row.CanonicalRoot, canonicalRoot));
+        return WorkspaceRegistryRootMatcher.FindByRoot(rows, canonicalRoot);
     }
 
     private bool IsCurrentWorkspace(WorkspaceRegistryRow row) =>

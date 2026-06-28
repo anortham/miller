@@ -1045,6 +1045,58 @@ public sealed class WorkspaceToolTests : IDisposable
     }
 
     [Fact]
+    public void Remove_RegisteredPath_GoneRoot_UnregistersAndReportsRegistryCleanup()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(fx, builtRevision: 4, workspaceId: Ws);
+        string other = NewTempDir("remove-gone-root");
+        string otherMiller = Path.Combine(other, ".miller");
+        string otherDb = Path.Combine(otherMiller, "symbols.db");
+        harness.Registry.UpsertSeen(OtherWs, "other-111111111111", other, otherDb, WorkspaceRegistryState.Ready);
+        harness.Registry.MarkScanned(OtherWs, revision: 9);
+        Directory.Delete(other);
+
+        string output = harness.Tool.Workspace(operation: "remove", path: other);
+
+        Assert.Contains("removed", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("registry", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("no index dir", output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("nothing to remove", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(harness.Registry.Get(OtherWs));
+    }
+
+    [Fact]
+    public void Remove_RegisteredPath_GoneRootThroughSymlink_UnregistersAndReportsRegistryCleanup()
+    {
+        if (OperatingSystem.IsWindows())
+            Assert.Skip("Symbolic-link creation requires elevation / Developer Mode on Windows; POSIX-only test.");
+
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(fx, builtRevision: 4, workspaceId: Ws);
+        string realParent = NewTempDir("remove-real-parent");
+        string realRoot = Path.Combine(realParent, "workspace");
+        Directory.CreateDirectory(realRoot);
+        string linkParent = NewTempDir("remove-link-parent");
+        string linkRoot = Path.Combine(linkParent, "alias");
+        Directory.CreateSymbolicLink(linkRoot, realParent);
+        string pathThroughLink = Path.Combine(linkRoot, "workspace");
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(pathThroughLink);
+        string otherMiller = Path.Combine(canonicalRoot, ".miller");
+        string otherDb = Path.Combine(otherMiller, "symbols.db");
+        harness.Registry.UpsertSeen(OtherWs, "other-111111111111", canonicalRoot, otherDb, WorkspaceRegistryState.Ready);
+        harness.Registry.MarkScanned(OtherWs, revision: 9);
+        Directory.Delete(realRoot);
+
+        string output = harness.Tool.Workspace(operation: "remove", path: pathThroughLink);
+
+        Assert.Contains("removed", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("registry", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("no index dir", output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("nothing to remove", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(harness.Registry.Get(OtherWs));
+    }
+
+    [Fact]
     public void Remove_CurrentWorkspaceId_IsRefusedAndKeepsRegistryRow()
     {
         using var fx = CreateSynth(revision: 4, workspaceId: Ws);
