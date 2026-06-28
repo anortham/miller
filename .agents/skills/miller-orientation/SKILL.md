@@ -3,7 +3,7 @@ name: miller-orientation
 description: Use when starting a Miller task, choosing a Miller tool, or choosing a Miller search mode.
 user-invocable: true
 arguments: "<what you want to find or do>"
-allowed-tools: mcp__miller__search, mcp__miller__inspect, mcp__miller__context, mcp__miller__trace, mcp__miller__impact, mcp__miller__workspace, mcp__miller__patterns, mcp__miller__content
+allowed-tools: mcp__miller__search, mcp__miller__inspect, mcp__miller__context, mcp__miller__trace, mcp__miller__impact, mcp__miller__workspace, mcp__miller__patterns, mcp__miller__content, mcp__miller__edit
 ---
 
 # Miller Orientation
@@ -42,6 +42,7 @@ workspace(operation="refresh")
 | How does A reach B | `trace(target="A", mode="path", to="B")` |
 | Where is this name referenced | `trace(target="<symbol>", mode="refs")` |
 | Scope a refactor / choose tests | `impact(target="...")` or `impact(git=true)` |
+| Make a localized existing-file text edit | `edit(operation="replace_text", target="<file>", old_text="<known-old>", new_text="<new>", match_mode="auto", query="<nearby text>")` |
 | List known code shapes | `patterns(operation="list")`, then follow its `Next:` actions or search a shown `pattern_id` |
 | Read a large log/report | `content(operation="import", path=...)` -> `content(operation="search", query="...")` -> bounded `content(operation="read", source_id="...", line=...)` |
 | Work in another registered repo | `workspace(operation="list")` then pass `workspace_id="<selector>"` |
@@ -56,6 +57,7 @@ workspace(operation="refresh")
 - `patterns` list and no-match results include `Next:` / JSON `next_actions`; run `patterns(operation="list")` before raw route/HTML/JSON/YAML/Markdown greps.
 - `trace mode=bridge` is provider-scoped to `dotnet-web`; on another stack use `mode=auto`/`refs`/`path`.
 - Symbol search ranks `name + signature` only; docs/literals/broad source text need the row above.
+- Use `edit` for localized text changes when `query`, `anchor`, or `line` can avoid a full-file read; use normal patching for broad multi-hunk edits.
 
 ## Report
 
@@ -63,6 +65,6 @@ Keep it compact:
 
 - Tool chosen and why
 - The exact call issued
-- One-line next step (deeper `inspect`, a follow-up `trace`, or `impact` before a change)
+- One-line next step (deeper `inspect`, a follow-up `trace`, `impact` before a change, or `edit` preview for a localized change)
 
 Do not reach for Grep/Read/find when a row above fits. Do not read a whole file before `inspect`.

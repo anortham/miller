@@ -44,6 +44,7 @@ public sealed class EditService
     private readonly EditApplier _applier;
     private readonly IEditWriteThrough _writeThrough;
     private readonly IndexedSourceTextReader _indexedSourceTextReader;
+    private readonly IndexedEditCandidateReader _indexedEditCandidateReader;
     private readonly RecoveryOptions _recovery;
 
     /// <summary>
@@ -74,6 +75,7 @@ public sealed class EditService
     public EditService(
         MillerRepositoryIndex index, SmartTargetResolver resolver, string dbPath, string workspaceRoot,
         EditApplier applier, IEditWriteThrough writeThrough, IndexedSourceTextReader? indexedSourceTextReader = null,
+        IndexedEditCandidateReader? indexedEditCandidateReader = null,
         RecoveryOptions? recoveryOptions = null)
     {
         ArgumentNullException.ThrowIfNull(index);
@@ -89,6 +91,7 @@ public sealed class EditService
         _applier = applier;
         _writeThrough = writeThrough;
         _indexedSourceTextReader = indexedSourceTextReader ?? new IndexedSourceTextReader();
+        _indexedEditCandidateReader = indexedEditCandidateReader ?? new IndexedEditCandidateReader();
         _recovery = recoveryOptions ?? RecoveryOptions.Default;
     }
 
@@ -115,6 +118,9 @@ public sealed class EditService
 
         if (!TryParseOccurrence(request.Occurrence, out var occurrence))
             return Error($"unknown occurrence '{request.Occurrence}'. Valid: first, last, all.", json);
+
+        if (op == EditOperation.ReplaceText && !TryParseMatchMode(request.MatchMode, out _))
+            return Error($"unknown match_mode '{request.MatchMode}'. Valid: auto, exact, normalized, fuzzy.", json);
 
         return op == EditOperation.RenameSymbol
             ? ExecuteRename(request, json)
@@ -182,16 +188,32 @@ public sealed class EditService
 
         string content = ReadDisk(absPath);
 
-        EditPlan plan = op switch
+        EditMatchEvidence? evidence = null;
+        EditPlan plan;
+        if (op == EditOperation.ReplaceText)
         {
-            EditOperation.ReplaceText => EditPlanner.ReplaceText(content, request.OldText ?? string.Empty, occurrence),
-            EditOperation.ReplaceSymbolBody => EditPlanner.ReplaceSymbolBody(span!, request.NewText ?? string.Empty),
-            EditOperation.ReplaceSymbolSignature => EditPlanner.ReplaceSymbolSignature(span!, request.NewText ?? string.Empty),
-            EditOperation.InsertBefore => EditPlanner.InsertBefore(span!, request.NewText ?? string.Empty),
-            EditOperation.InsertAfter => EditPlanner.InsertAfter(span!, request.NewText ?? string.Empty),
-            EditOperation.AddDoc => EditPlanner.AddDoc(content, span!, request.NewText ?? string.Empty),
-            _ => EditPlan.Failure(new EditError(EditErrorKind.MissingArgument, "unsupported operation")),
-        };
+            if (request.NewText is null)
+                return Error("new_text is required for replace_text.", json);
+
+            var replace = PlanReplaceText(relativePath, content, request, occurrence);
+            if (replace.ErrorMessage is not null)
+                return Error(replace.ErrorMessage, json);
+
+            plan = replace.Plan!;
+            evidence = replace.Evidence;
+        }
+        else
+        {
+            plan = op switch
+            {
+                EditOperation.ReplaceSymbolBody => EditPlanner.ReplaceSymbolBody(span!, request.NewText ?? string.Empty),
+                EditOperation.ReplaceSymbolSignature => EditPlanner.ReplaceSymbolSignature(span!, request.NewText ?? string.Empty),
+                EditOperation.InsertBefore => EditPlanner.InsertBefore(span!, request.NewText ?? string.Empty),
+                EditOperation.InsertAfter => EditPlanner.InsertAfter(span!, request.NewText ?? string.Empty),
+                EditOperation.AddDoc => EditPlanner.AddDoc(content, span!, request.NewText ?? string.Empty),
+                _ => EditPlan.Failure(new EditError(EditErrorKind.MissingArgument, "unsupported operation")),
+            };
+        }
 
         if (!plan.IsSuccess)
             return Error(EditPlanFailureMessage(plan.Error!, op, relativePath, request.OldText), json);
@@ -200,9 +222,6 @@ public sealed class EditService
         IReadOnlyList<TextEdit> edits = op == EditOperation.ReplaceText
             ? FillReplacement(plan.Edits, request.NewText)
             : plan.Edits;
-
-        if (op == EditOperation.ReplaceText && request.NewText is null)
-            return Error("new_text is required for replace_text.", json);
 
         string newContent;
         try
@@ -217,17 +236,17 @@ public sealed class EditService
         }
 
         var planned = new PlannedEdit(absPath, content, newContent, edits);
-        return FinishSingleFile(request, op, occurrence, relativePath, planned, json, allowRecovery);
+        return FinishSingleFile(request, op, occurrence, relativePath, planned, json, allowRecovery, evidence);
     }
 
     private EditResult FinishSingleFile(
         EditRequest request, EditOperation op, Occurrence occurrence,
-        string relativePath, PlannedEdit planned, bool json, bool allowRecovery)
+        string relativePath, PlannedEdit planned, bool json, bool allowRecovery, EditMatchEvidence? evidence = null)
     {
         string diff = UnifiedDiff.Render(planned.OldContent, planned.NewContent, relativePath);
 
         if (!IsApply(request))
-            return Preview(diff, json, renameSummary: null, siteCount: 0);
+            return Preview(diff, json, renameSummary: null, siteCount: 0, evidence);
 
         // --- apply path: freshness gate (with gate-time self-heal), then atomic write, then write-through ---
         var gate = FreshnessGate.Check(_dbPath, relativePath, planned.FilePath, planned.OldContent);
@@ -257,7 +276,227 @@ public sealed class EditService
 
         _writeThrough.Converge([planned.FilePath]);
         return Applied(diff, staleAllowed: !fresh && request.AllowStale, filesWritten: applyResult.FilesWritten,
-            indexFresh: fresh, json);
+            indexFresh: fresh, json, evidence: evidence);
+    }
+
+    private ReplaceTextPlanResult PlanReplaceText(
+        string relativePath,
+        string content,
+        EditRequest request,
+        Occurrence occurrence)
+    {
+        TryParseMatchMode(request.MatchMode, out var matchMode);
+        string oldText = request.OldText ?? string.Empty;
+
+        if (HasIndexedSelector(request))
+        {
+            long expectedRevision = ExpectedWorkspaceRevision();
+            IndexedEditCandidateResult candidateResult = _indexedEditCandidateReader.FindCandidates(
+                _dbPath,
+                relativePath,
+                expectedRevision,
+                oldText,
+                request.Query,
+                request.Anchor,
+                request.Line);
+
+            if (candidateResult.State == IndexedEditCandidateState.Current)
+                return PlanReplaceTextFromIndexedCandidates(content, request, occurrence, matchMode, candidateResult);
+
+            if (candidateResult.State == IndexedEditCandidateState.NoMatch)
+            {
+                return ReplaceTextPlanResult.Error(
+                    "no indexed edit candidates matched the selector. Narrow the edit with a different query, " +
+                    "anchor, or line hint, or retry without indexed selectors.");
+            }
+
+            var fallback = TextReplaceMatcher.Plan(content, oldText, occurrence, matchMode);
+            return ReplaceTextPlanResult.Success(
+                fallback.Plan,
+                EvidenceFromPlan(
+                    fallback,
+                    matchSource: "disk_after_index_unavailable",
+                    contentIndexState: "unavailable",
+                    occurrence,
+                    candidateReason: candidateResult.Reason));
+        }
+
+        var diskPlan = TextReplaceMatcher.Plan(content, oldText, occurrence, matchMode);
+        return ReplaceTextPlanResult.Success(
+            diskPlan.Plan,
+            EvidenceFromPlan(
+                diskPlan,
+                matchSource: "disk",
+                contentIndexState: "not_used",
+                occurrence,
+                candidateReason: null));
+    }
+
+    private ReplaceTextPlanResult PlanReplaceTextFromIndexedCandidates(
+        string content,
+        EditRequest request,
+        Occurrence occurrence,
+        TextMatchMode matchMode,
+        IndexedEditCandidateResult candidateResult)
+    {
+        var successes = new List<(TextReplaceMatchPlan Plan, IndexedEditCandidate Candidate)>();
+        foreach (IndexedEditCandidate indexedCandidate in candidateResult.Candidates)
+        {
+            TextWindow window = FocusIndexedCandidateWindow(content, indexedCandidate, request);
+            TextReplaceMatchPlan windowPlan = TextReplaceMatcher.Plan(window.Text, request.OldText ?? string.Empty, occurrence, matchMode);
+            if (!windowPlan.IsSuccess)
+                continue;
+
+            successes.Add((OffsetPlan(windowPlan, window), indexedCandidate));
+        }
+
+        if (successes.Count == 0)
+        {
+            return ReplaceTextPlanResult.Error(
+                "indexed edit candidates were found, but old_text did not verify against the current disk text. " +
+                "Run workspace refresh or retry with current old_text.");
+        }
+
+        if (successes.Count > 1)
+        {
+            string examples = string.Join(", ", successes.Take(3).Select(static s =>
+                s.Candidate.LineStart.ToString(System.Globalization.CultureInfo.InvariantCulture) + "-" +
+                s.Candidate.LineEnd.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            return ReplaceTextPlanResult.Error(
+                "ambiguous indexed edit candidates matched current disk text at line ranges " + examples +
+                ". Retry with a narrower line or anchor selector.");
+        }
+
+        var (plan, candidate) = successes[0];
+        return ReplaceTextPlanResult.Success(
+            plan.Plan,
+            EvidenceFromPlan(
+                plan,
+                matchSource: "indexed_content",
+                contentIndexState: "current",
+                occurrence,
+                candidateReason: null,
+                candidate));
+    }
+
+    private static TextWindow FocusIndexedCandidateWindow(string content, IndexedEditCandidate candidate, EditRequest request)
+    {
+        if (request.Line is { } line && line >= candidate.LineStart && line <= candidate.LineEnd)
+            return SliceLineWindow(content, line, line);
+
+        if (!string.IsNullOrEmpty(request.Anchor))
+        {
+            TextWindow candidateWindow = SliceLineWindow(content, candidate.LineStart, candidate.LineEnd);
+            int anchorOffset = candidateWindow.Text.IndexOf(request.Anchor, StringComparison.Ordinal);
+            if (anchorOffset >= 0)
+            {
+                int anchorLine = candidateWindow.StartLine + CountNewLinesBefore(candidateWindow.Text, anchorOffset);
+                const int AnchorContextLines = 1;
+                return SliceLineWindow(
+                    content,
+                    Math.Max(candidate.LineStart, anchorLine - AnchorContextLines),
+                    Math.Min(candidate.LineEnd, anchorLine + AnchorContextLines));
+            }
+        }
+
+        return SliceLineWindow(content, candidate.LineStart, candidate.LineEnd);
+    }
+
+    private static int CountNewLinesBefore(string text, int exclusiveEnd)
+    {
+        int count = 0;
+        int limit = Math.Min(text.Length, Math.Max(0, exclusiveEnd));
+        for (int i = 0; i < limit; i++)
+        {
+            if (text[i] == '\n')
+                count++;
+        }
+
+        return count;
+    }
+
+    private static TextReplaceMatchPlan OffsetPlan(TextReplaceMatchPlan plan, TextWindow window)
+    {
+        var edits = plan.Edits
+            .Select(e => new TextEdit(e.StartByte + window.StartByte, e.EndByte + window.StartByte, e.Replacement))
+            .ToArray();
+        var matches = plan.Matches
+            .Select(m => m with
+            {
+                StartByte = m.StartByte + window.StartByte,
+                EndByte = m.EndByte + window.StartByte,
+                StartLine = m.StartLine + window.StartLine - 1,
+                EndLine = m.EndLine + window.StartLine - 1,
+            })
+            .ToArray();
+        return new TextReplaceMatchPlan(
+            EditPlan.Success(edits),
+            plan.RequestedMode,
+            plan.MatchedMode,
+            matches,
+            plan.MatchCount);
+    }
+
+    private static EditMatchEvidence EvidenceFromPlan(
+        TextReplaceMatchPlan plan,
+        string matchSource,
+        string contentIndexState,
+        Occurrence occurrence,
+        string? candidateReason,
+        IndexedEditCandidate? candidate = null)
+    {
+        int? lineStart = plan.Matches.Count == 0 ? null : plan.Matches.Min(static m => m.StartLine);
+        int? lineEnd = plan.Matches.Count == 0 ? null : plan.Matches.Max(static m => m.EndLine);
+        return new EditMatchEvidence(
+            plan.MatchedMode?.ToString().ToLowerInvariant() ?? plan.RequestedMode.ToString().ToLowerInvariant(),
+            matchSource,
+            contentIndexState,
+            lineStart,
+            lineEnd,
+            plan.MatchCount,
+            OccurrenceName(occurrence),
+            DiskVerified: plan.IsSuccess,
+            candidateReason,
+            candidate?.LineStart,
+            candidate?.LineEnd);
+    }
+
+    private long ExpectedWorkspaceRevision()
+    {
+        using var reader = new FreshnessReader(_dbPath);
+        return reader.LatestRevision();
+    }
+
+    private static bool HasIndexedSelector(EditRequest request) =>
+        !string.IsNullOrEmpty(request.Query) ||
+        !string.IsNullOrEmpty(request.Anchor) ||
+        request.Line is not null;
+
+    private static TextWindow SliceLineWindow(string content, int lineStart, int lineEnd)
+    {
+        int startChar = CharOffsetOfLineStart(content, lineStart);
+        int endChar = CharOffsetOfLineStart(content, lineEnd + 1);
+        int startByte = Encoding.UTF8.GetByteCount(content.AsSpan(0, startChar));
+        return new TextWindow(content[startChar..endChar], startByte, lineStart);
+    }
+
+    private static int CharOffsetOfLineStart(string content, int line)
+    {
+        if (line <= 1)
+            return 0;
+
+        int seen = 1;
+        for (int i = 0; i < content.Length; i++)
+        {
+            if (content[i] != '\n')
+                continue;
+
+            seen++;
+            if (seen == line)
+                return i + 1;
+        }
+
+        return content.Length;
     }
 
     // ---------- workspace-wide rename ----------
@@ -461,12 +700,36 @@ public sealed class EditService
 
     // ---------- rendering ----------
 
-    private EditResult Preview(string diff, bool json, string? renameSummary, int siteCount)
+    private EditResult Preview(string diff, bool json, string? renameSummary, int siteCount, EditMatchEvidence? evidence = null)
     {
         if (diff.Length == 0 && renameSummary is null)
+        {
+            if (json)
+            {
+                string body = JsonObject(w =>
+                {
+                    w.WriteBoolean("applied", false);
+                    w.WriteString("diff", "");
+                    w.WriteString("note", "no change");
+                    WriteEvidenceJson(w, evidence);
+                });
+                return new EditResult(body, Applied: false, StaleAllowed: false, IndexFresh: null, Outcome: "empty", ResultCount: 0);
+            }
+
+            if (evidence is null)
+            {
+                return new EditResult(
+                    "No change — the edit is a no-op.",
+                    Applied: false, StaleAllowed: false, IndexFresh: null, Outcome: "empty", ResultCount: 0);
+            }
+
+            var noChange = new StringBuilder();
+            noChange.Append("No change — the edit is a no-op.\n");
+            AppendEvidence(noChange, evidence);
             return new EditResult(
-                json ? "{\"applied\":false,\"diff\":\"\",\"note\":\"no change\"}" : "No change — the edit is a no-op.",
+                noChange.ToString().TrimEnd('\n'),
                 Applied: false, StaleAllowed: false, IndexFresh: null, Outcome: "empty", ResultCount: 0);
+        }
 
         if (json)
         {
@@ -480,12 +743,14 @@ public sealed class EditService
                     w.WriteString("rename_summary", renameSummary);
                     w.WriteNumber("sites", siteCount);
                 }
+                WriteEvidenceJson(w, evidence);
             });
             return new EditResult(body, false, false, null, "ok", renameSummary is null ? 1 : siteCount);
         }
 
         var sb = new StringBuilder();
         sb.Append("Preview — pass apply=true to commit.\n");
+        AppendEvidence(sb, evidence);
         if (renameSummary is not null)
             sb.Append(renameSummary).Append('\n');
         sb.Append(diff);
@@ -495,7 +760,7 @@ public sealed class EditService
 
     private static EditResult Applied(
         string diffOrSummary, bool staleAllowed, int filesWritten, bool indexFresh, bool json,
-        int? resultCountOverride = null)
+        int? resultCountOverride = null, EditMatchEvidence? evidence = null)
     {
         int count = resultCountOverride ?? filesWritten;
         if (json)
@@ -507,6 +772,7 @@ public sealed class EditService
                 w.WriteBoolean("stale_allowed", staleAllowed);
                 w.WriteBoolean("index_fresh", indexFresh);
                 w.WriteString("diff", diffOrSummary);
+                WriteEvidenceJson(w, evidence);
             });
             return new EditResult(body, true, staleAllowed, indexFresh, "ok", count);
         }
@@ -516,7 +782,49 @@ public sealed class EditService
         if (staleAllowed)
             sb.Append(" (stale_allowed: the index was behind disk; edited anyway)");
         sb.Append('\n').Append(diffOrSummary);
+        if (evidence is not null)
+        {
+            sb.Append('\n');
+            AppendEvidence(sb, evidence);
+        }
         return new EditResult(sb.ToString().TrimEnd('\n'), true, staleAllowed, indexFresh, "ok", count);
+    }
+
+    private static void AppendEvidence(StringBuilder sb, EditMatchEvidence? evidence)
+    {
+        if (evidence is null)
+            return;
+
+        sb.Append("Match proof:\n");
+        sb.Append("- match_mode: ").Append(evidence.MatchMode).Append('\n');
+        sb.Append("- match_source: ").Append(evidence.MatchSource).Append('\n');
+        if (evidence.LineStart is { } lineStart && evidence.LineEnd is { } lineEnd)
+            sb.Append("- line_range: ").Append(lineStart).Append('-').Append(lineEnd).Append('\n');
+        sb.Append("- match_count: ").Append(evidence.MatchCount).Append('\n');
+        sb.Append("- occurrence: ").Append(evidence.Occurrence).Append('\n');
+        sb.Append("- disk_verified: ").Append(evidence.DiskVerified ? "true" : "false").Append('\n');
+        sb.Append("- content_index_state: ").Append(evidence.ContentIndexState).Append('\n');
+        if (!string.IsNullOrWhiteSpace(evidence.CandidateReason))
+            sb.Append("- content_index_note: ").Append(evidence.CandidateReason).Append('\n');
+    }
+
+    private static void WriteEvidenceJson(Utf8JsonWriter w, EditMatchEvidence? evidence)
+    {
+        if (evidence is null)
+            return;
+
+        w.WriteString("match_mode", evidence.MatchMode);
+        w.WriteString("match_source", evidence.MatchSource);
+        if (evidence.LineStart is { } lineStart)
+            w.WriteNumber("line_start", lineStart);
+        if (evidence.LineEnd is { } lineEnd)
+            w.WriteNumber("line_end", lineEnd);
+        w.WriteNumber("match_count", evidence.MatchCount);
+        w.WriteString("occurrence", evidence.Occurrence);
+        w.WriteBoolean("disk_verified", evidence.DiskVerified);
+        w.WriteString("content_index_state", evidence.ContentIndexState);
+        if (!string.IsNullOrWhiteSpace(evidence.CandidateReason))
+            w.WriteString("content_index_note", evidence.CandidateReason);
     }
 
     private static EditResult StaleBlocked(string relativePath, bool indexedContentFound, bool json)
@@ -784,6 +1092,50 @@ public sealed class EditService
             default: parsed = default; return false;
         }
     }
+
+    private static bool TryParseMatchMode(string? mode, out TextMatchMode parsed)
+    {
+        switch (mode?.ToLowerInvariant())
+        {
+            case null or "" or "auto": parsed = TextMatchMode.Auto; return true;
+            case "exact": parsed = TextMatchMode.Exact; return true;
+            case "normalized": parsed = TextMatchMode.Normalized; return true;
+            case "fuzzy": parsed = TextMatchMode.Fuzzy; return true;
+            default: parsed = default; return false;
+        }
+    }
+
+    private static string OccurrenceName(Occurrence occurrence) => occurrence switch
+    {
+        Occurrence.First => "first",
+        Occurrence.Last => "last",
+        Occurrence.All => "all",
+        _ => "all",
+    };
+
+    private sealed record ReplaceTextPlanResult(EditPlan? Plan, EditMatchEvidence? Evidence, string? ErrorMessage)
+    {
+        public static ReplaceTextPlanResult Success(EditPlan plan, EditMatchEvidence evidence) =>
+            new(plan, evidence, ErrorMessage: null);
+
+        public static ReplaceTextPlanResult Error(string message) =>
+            new(Plan: null, Evidence: null, message);
+    }
+
+    private sealed record EditMatchEvidence(
+        string MatchMode,
+        string MatchSource,
+        string ContentIndexState,
+        int? LineStart,
+        int? LineEnd,
+        int MatchCount,
+        string Occurrence,
+        bool DiskVerified,
+        string? CandidateReason,
+        int? CandidateLineStart,
+        int? CandidateLineEnd);
+
+    private sealed record TextWindow(string Text, int StartByte, int StartLine);
 
     // ---- JSON helper ----
 

@@ -38,7 +38,7 @@ returns ranked, structured results with fewer tokens.
 - `trace` — Follow code. `mode=refs` (name-based usages, with optional
   `reference_kind=call|variable_ref|type_usage|member_access|import`; on empty, fall back to `search mode=source`),
   `mode=path` (shortest path to `to`; no path means no extracted graph path within depth, not proof unrelated),
-  `mode=bridge` (provider-scoped cross-language chain; dotnet-web: TS call → endpoint → DTO → entity → table).
+  `mode=bridge` (provider-scoped dotnet-web chain).
   `mode=auto` (callers/callees) is subsumed by `inspect depth=full` — prefer `inspect` for that.
   Reduced-confidence links are flagged `[verb-unknown]`/`[ambiguous]`. Use `format=json` for structured
   references/nodes/links/diagnostics/next_actions. Use `scope=<file>` to disambiguate duplicate names. Optional
@@ -49,15 +49,14 @@ returns ranked, structured results with fewer tokens.
   Or pass exactly one of `target`, `changed_paths`, `diff`, or `git=true` (`base`/`staged` imply git). Use
   before refactoring or choosing tests. Optional `workspace_id` and `ensure_fresh` work for registered workspaces.
 - `edit` — Index-aware edits: `replace_text`, `replace_symbol_body`, `replace_symbol_signature`, `rename_symbol`,
-  `insert_before`, `insert_after`, `add_doc`. Previews a diff unless `apply=true`. A stale target self-heals by
-  converging that file; if it fails, run `workspace refresh` first or pass `allow_stale=true` if you accept risk.
+  `insert_before`, `insert_after`, `add_doc`. For localized existing-file edits, `replace_text` supports
+  `match_mode=auto|exact|normalized|fuzzy` plus `query`/`anchor`/`line` selectors and match proof. Previews a diff
+  unless `apply=true`; stale targets self-heal or tell you to refresh / pass `allow_stale`.
 - `content` — Import/search/read/list/remove/export external/web text for logs, CI, reports, dumps, and fetched
-  markdown. `import`/`add_markdown` report metadata; `search` returns snippets, `source_id`, and `workspace_id` for
-  cross-workspace hits. `read` returns ≤200-line windows; pass the hit's `source_id` and, when present,
-  workspace_id when reading cross-workspace hits (unique `display_path` also works). Use `content_kind=web` for
-  web-only reads, or `workspace_id=all` on `search` for audits. Empty content searches and failed reads include recovery guidance; JSON includes `diagnostic_code` and `next_actions`. `export` is raw JSONL.
-- `patterns` — List, summarize, and search code-shape facts from `structural_facts` across many languages: framework
-  facts, SQL DDL, JSON/YAML/TOML/Markdown structure. Run `patterns()` to see emitted ids (not raw AST queries). Use
+  markdown. `search` returns snippets, `source_id`, and `workspace_id`; `read` returns ≤200-line windows. pass the hit's `source_id` and workspace_id when reading cross-workspace hits. Use `content_kind=web` for web reads, or
+  `workspace_id=all` for audits. Empty content searches and failed reads include recovery guidance; JSON includes `diagnostic_code` and `next_actions`. `export` is raw JSONL.
+- `patterns` — List, summarize, and search `structural_facts` code-shape facts. Run `patterns()` to see emitted ids
+  (not raw AST queries). Use
   `operation=list|summary|search` with `pattern_id`, or `query` across matching ids. `where=key=value`, `path`,
   `language`, `workspace_id`, and `ensure_fresh` apply. List/no-match results include `next_actions`.
 - `workspace` — Index lifecycle: `status`, `health`, `onboarding`, `refresh`, `full`, `list`, `open`, `remove`,
@@ -91,6 +90,8 @@ returns ranked, structured results with fewer tokens.
 - **Scope a change**: `impact` (no args) for the current working-tree diff, or `impact target=…` for a planned edit → run the tests it lists → `edit` (preview) → `edit apply=true` →
   re-run `impact` if the surface changed.
 - **Edit a symbol**: `inspect` it → `edit …` (preview, the default) → `edit … apply=true`.
+- **Localized text edit**: `edit replace_text target=<file> old_text=<known-old> new_text=<new> match_mode=auto query=<nearby>`; add `line`/`anchor` for duplicates,
+  review the match proof, then re-call with `apply=true`.
 - **Index looks stale**: `workspace refresh` (or `workspace full` to force a clean rebuild).
 - **Check index trust/readiness**: `workspace health` — reports stale/missing sidecars, parse diagnostics,
   capability gaps, skipped content, and recent telemetry outcomes without hydrating the full graph.
@@ -115,7 +116,7 @@ code, paste this block into the prompt:
     - inspect(target, depth?) before reading files/symbols; depth=overview is compact, depth=full is complete.
     - trace(target, mode?, to?, scope?, reference_kind?) before manual reference/caller/callee file hopping; use mode=refs for usages and scope for ambiguous names. mode=path no-path means no extracted graph path within depth, not proof unrelated; mode=bridge is dotnet-web scoped, so on another stack use `mode=refs`/`mode=path`, or `inspect depth=full`.
     - impact(target?|changed_paths?|diff?|git?/base?/staged?) before refactors and to choose tests.
-    - edit(operation, target, ...) to preview index-aware edits (apply=true to commit).
+    - edit(operation, target, ...) to preview index-aware edits; use match_mode=auto with query/anchor/line for localized replace_text.
     - content(import|add_markdown|search|read|list|remove|export, ...) for logs, web markdown, and audits; use workspace_id=all for audits and pass hit workspace_id on reads.
     - patterns(operation?, pattern_id?, query?, where?, path?, language?) for extractor-recognized code-shape facts.
     - workspace(status|health|onboarding|leader|refresh|full|list|open|remove|dashboard) for readiness, leader diagnostics/handoff, refresh, other repos, onboarding, or dashboard with operation=dashboard.

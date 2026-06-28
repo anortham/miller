@@ -10,6 +10,7 @@ These candidates are product inputs, not parity requirements. Julie remains a ba
 | 4 | graph workflow | Improve graph workflow fallback text for `needs-search`, `no-path`, and unsupported bridge outcomes. | Task 4 report-only rows captured Zod trace refs `needs-search`, Miller trace path `no-path`, and Flask bridge unsupported outcomes; Task 6 trace default has high empty rate and low use. | Medium: preserves current graph behavior while helping agents recover to search, inspect, or bridge-specific routes. | `TraceTool` rendering, workflow summary text, and agent instructions; no extractor or graph schema change required. | Implemented 2026-06-28 for trace scoped rerun examples, no-path next actions, bridge fallback guidance, additive JSON `next_actions`, and focused hard-gate rows. |
 | 5 | Eros contract | Keep Eros foundation contracts as CLI/export gates, not MCP surface expansion. | Task 5 `contract.cli.json` and `contract.cli.jsonl` rows passed 15/15; `docs/contracts/cli-eros-v1.md` is the public contract. | Medium: protects Eros integration while keeping Miller's MCP surface small. | Benchmark manifest contract rows, `docs/contracts/cli-eros-v1.md`, release gates. | Promote the Task 5 contract regression command into future branch/release gate guidance. |
 | 6 | adoption guidance | Use telemetry and onboarding to improve existing-tool discovery rather than judging quality by raw usage volume. | Task 6 parseability gate passed; usage interpretation shows trace at 2.3%, impact at 2.7%, and common misses for search/inspect/content. | Medium: turns real local friction into better starter commands without storing raw queries or adding tools. | Telemetry onboarding reader/rendering, docs/README guidance, and agent instructions. | Implemented 2026-06-28 with aggregate onboarding hints for overview-first inspect, trace refs/path discovery, and impact before refactors; usage interpretation stays report-only. |
+| 7 | token-saving edit | Redesign `edit replace_text` so small text edits can be previewed from indexed selectors without forcing a full-file read. | Julie edit adoption investigation showed `edit_file` was Julie's high-use edit path; Miller telemetry showed `edit` near zero use; focused edit rows now hard-gate match proof and output ceilings. | High: gives Miller a concrete editing advantage over native harness edit loops while preserving preview/freshness/atomic apply guarantees. | `TextReplaceMatcher`, indexed content candidate reader, `EditService` proof rendering, edit guidance, and foundation matrix rows. | Implemented 2026-06-28 with exact/normalized/fuzzy matching, query/anchor/line selectors, disk verification proof, and focused hard-gate evidence. |
 
 ## First Implementation Goal
 
@@ -49,3 +50,18 @@ Implemented 2026-06-28 as an overview-first agent workflow guidance slice:
 - preserve usage/adoption interpretation as report-only while hard-gating overview inspect and onboarding contract parseability.
 
 Evidence: [overview-first agent guidance summary](overview-first-agent-guidance/summary.md), [CSV](overview-first-agent-guidance/results.csv), [JSON](overview-first-agent-guidance/results.json).
+
+## Fourth Implementation Goal
+
+Implemented 2026-06-28 as a token-saving `edit replace_text` redesign:
+
+- keep the MCP tool count unchanged;
+- add exact, normalized, fuzzy, and auto matching for `replace_text`;
+- use indexed content candidate discovery when callers provide `query`, `anchor`, or `line` selectors;
+- verify the selected candidate against current disk text before preview/apply;
+- keep preview-by-default, freshness, TOCTOU, rollback, and write-through behavior;
+- render compact match proof including match mode, source, line range, match count, occurrence, disk verification, and content index state;
+- update server instructions, tool descriptions, Miller editing/orientation skills, README, and the public site;
+- hard-gate focused matrix rows for version updates, normalized indentation, trailing whitespace, bounded fuzzy matching, line and anchor disambiguation, selector no-match recovery, and output ceilings.
+
+Evidence: [token-saving edit redesign summary](../2026-06-28-token-saving-edit-redesign/summary.md), [CSV](../2026-06-28-token-saving-edit-redesign/results.csv), [JSON](../2026-06-28-token-saving-edit-redesign/results.json).

@@ -4650,6 +4650,311 @@
       "gate": {
         "hard": true
       }
+    },
+    {
+      "id": "miller.edit.replace_text.version.preview",
+      "repo": "miller",
+      "task_class": "edit.replace_text",
+      "intent": "Preview a version string update through indexed-content candidate discovery without returning the full file.",
+      "miller": {
+        "tool": "edit",
+        "args": {
+          "operation": "replace_text",
+          "target": "docs/findings/benchmarks/2026-06-28-token-saving-edit-redesign/edit-token-saving-fixture.md",
+          "old_text": "version = \"1.2.3\"",
+          "new_text": "version = \"1.2.4\"",
+          "match_mode": "exact",
+          "query": "edit-fixture-version-marker"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "edit-fixture-version-marker",
+          "limit": 5
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "docs/findings/benchmarks/2026-06-28-token-saving-edit-redesign/edit-token-saving-fixture.md",
+        "anchor": "Match proof:"
+      },
+      "scoring": {
+        "mode": "workflow_anchors",
+        "readiness": "edit-ready",
+        "required_anchors": [
+          "Match proof:",
+          "match_mode: exact",
+          "match_source: indexed_content",
+          "disk_verified: true",
+          "+version = \"1.2.4\""
+        ],
+        "max_output_chars": 3500
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.edit.replace_text.normalized.indentation",
+      "repo": "miller",
+      "task_class": "edit.replace_text",
+      "intent": "Preview a normalized indentation-tolerant text update through indexed-content candidate discovery.",
+      "miller": {
+        "tool": "edit",
+        "args": {
+          "operation": "replace_text",
+          "target": "docs/findings/benchmarks/2026-06-28-token-saving-edit-redesign/edit-token-saving-fixture.md",
+          "old_text": "normalized_label = \"indent target\"",
+          "new_text": "normalized_label = \"indent updated\"",
+          "match_mode": "normalized",
+          "query": "normalized-indent-marker"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "normalized-indent-marker",
+          "limit": 5
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "docs/findings/benchmarks/2026-06-28-token-saving-edit-redesign/edit-token-saving-fixture.md",
+        "anchor": "match_mode: normalized"
+      },
+      "scoring": {
+        "mode": "workflow_anchors",
+        "readiness": "edit-ready",
+        "required_anchors": [
+          "Match proof:",
+          "match_mode: normalized",
+          "match_source: indexed_content",
+          "disk_verified: true",
+          "+    normalized_label = \"indent updated\""
+        ],
+        "max_output_chars": 3500
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.edit.replace_text.normalized.trailing_whitespace",
+      "repo": "miller",
+      "task_class": "edit.replace_text",
+      "intent": "Preview a trailing-whitespace tolerant text update through normalized matching.",
+      "miller": {
+        "tool": "edit",
+        "args": {
+          "operation": "replace_text",
+          "target": "docs/findings/benchmarks/2026-06-28-token-saving-edit-redesign/edit-token-saving-fixture.md",
+          "old_text": "trailing_value = \"target\"",
+          "new_text": "trailing_value = \"updated\"",
+          "match_mode": "normalized",
+          "query": "trailing-whitespace-marker"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "trailing-whitespace-marker",
+          "limit": 5
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "docs/findings/benchmarks/2026-06-28-token-saving-edit-redesign/edit-token-saving-fixture.md",
+        "anchor": "match_mode: normalized"
+      },
+      "scoring": {
+        "mode": "workflow_anchors",
+        "readiness": "edit-ready",
+        "required_anchors": [
+          "Match proof:",
+          "match_mode: normalized",
+          "disk_verified: true",
+          "+trailing_value = \"updated\""
+        ],
+        "max_output_chars": 3500
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.edit.replace_text.fuzzy.preview",
+      "repo": "miller",
+      "task_class": "edit.replace_text",
+      "intent": "Preview a bounded fuzzy text update when old_text has a small typo.",
+      "miller": {
+        "tool": "edit",
+        "args": {
+          "operation": "replace_text",
+          "target": "docs/findings/benchmarks/2026-06-28-token-saving-edit-redesign/edit-token-saving-fixture.md",
+          "old_text": "fuzzy_value = \"receive token\"",
+          "new_text": "fuzzy_value = \"receive tokens\"",
+          "match_mode": "fuzzy"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "fuzzy_value",
+          "limit": 5
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "docs/findings/benchmarks/2026-06-28-token-saving-edit-redesign/edit-token-saving-fixture.md",
+        "anchor": "match_mode: fuzzy"
+      },
+      "scoring": {
+        "mode": "workflow_anchors",
+        "readiness": "edit-ready",
+        "required_anchors": [
+          "Match proof:",
+          "match_mode: fuzzy",
+          "match_source: disk",
+          "disk_verified: true",
+          "+fuzzy_value = \"receive tokens\""
+        ],
+        "max_output_chars": 3500
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.edit.replace_text.line.disambiguates_duplicate",
+      "repo": "miller",
+      "task_class": "edit.replace_text",
+      "intent": "Preview a duplicate text update where a line hint selects the intended duplicate.",
+      "miller": {
+        "tool": "edit",
+        "args": {
+          "operation": "replace_text",
+          "target": "docs/findings/benchmarks/2026-06-28-token-saving-edit-redesign/edit-token-saving-fixture.md",
+          "old_text": "duplicate_value = \"same\"",
+          "new_text": "duplicate_value = \"line-selected\"",
+          "match_mode": "exact",
+          "line": 69
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "duplicate_value",
+          "limit": 5
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "docs/findings/benchmarks/2026-06-28-token-saving-edit-redesign/edit-token-saving-fixture.md",
+        "anchor": "duplicate_value = \"line-selected\""
+      },
+      "scoring": {
+        "mode": "workflow_anchors",
+        "readiness": "edit-ready",
+        "required_anchors": [
+          "Match proof:",
+          "match_source: indexed_content",
+          "match_count: 1",
+          "disk_verified: true",
+          "+duplicate_value = \"line-selected\""
+        ],
+        "max_output_chars": 3500
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.edit.replace_text.anchor.disambiguates_duplicate",
+      "repo": "miller",
+      "task_class": "edit.replace_text",
+      "intent": "Preview a duplicate text update where a nearby anchor selects the intended duplicate.",
+      "miller": {
+        "tool": "edit",
+        "args": {
+          "operation": "replace_text",
+          "target": "docs/findings/benchmarks/2026-06-28-token-saving-edit-redesign/edit-token-saving-fixture.md",
+          "old_text": "duplicate_value = \"same\"",
+          "new_text": "duplicate_value = \"anchor-selected\"",
+          "match_mode": "exact",
+          "anchor": "edit-fixture-duplicate-anchor-beta"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "edit-fixture-duplicate-anchor-beta",
+          "limit": 5
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "docs/findings/benchmarks/2026-06-28-token-saving-edit-redesign/edit-token-saving-fixture.md",
+        "anchor": "duplicate_value = \"anchor-selected\""
+      },
+      "scoring": {
+        "mode": "workflow_anchors",
+        "readiness": "edit-ready",
+        "required_anchors": [
+          "Match proof:",
+          "match_source: indexed_content",
+          "match_count: 1",
+          "disk_verified: true",
+          "+duplicate_value = \"anchor-selected\""
+        ],
+        "max_output_chars": 3500
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.edit.replace_text.no_match.recovery",
+      "repo": "miller",
+      "task_class": "edit.replace_text",
+      "intent": "Show actionable recovery guidance when indexed edit selectors find no candidate.",
+      "miller": {
+        "tool": "edit",
+        "args": {
+          "operation": "replace_text",
+          "target": "docs/findings/benchmarks/2026-06-28-token-saving-edit-redesign/edit-token-saving-fixture.md",
+          "old_text": "version = \"1.2.3\"",
+          "new_text": "version = \"1.2.5\"",
+          "match_mode": "exact",
+          "query": "not-present-edit-selector"
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "not-present-edit-selector",
+          "limit": 5
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "docs/findings/benchmarks/2026-06-28-token-saving-edit-redesign/edit-token-saving-fixture.md",
+        "anchor": "no indexed edit candidates matched"
+      },
+      "scoring": {
+        "mode": "workflow_anchors",
+        "readiness": "needs-search",
+        "required_anchors": [
+          "no indexed edit candidates matched",
+          "query",
+          "anchor",
+          "line hint"
+        ],
+        "max_output_chars": 3500
+      },
+      "gate": {
+        "hard": true
+      }
     }
   ]
 }

@@ -52,5 +52,14 @@
     "impact": "Medium: turns real local friction into better starter commands without storing raw queries or adding tools.",
     "implementation_locality": "Telemetry onboarding reader/rendering, docs/README guidance, and agent instructions.",
     "recommended_goal_or_action": "Implemented 2026-06-28 with aggregate onboarding hints for overview-first inspect, trace refs/path discovery, and impact before refactors; usage interpretation stays report-only."
+  },
+  {
+    "rank": 7,
+    "category": "token-saving edit",
+    "candidate": "Redesign edit replace_text so small text edits can be previewed from indexed selectors without forcing a full-file read.",
+    "evidence_source": "Julie edit adoption investigation showed edit_file was Julie's high-use edit path; Miller telemetry showed edit near zero use; focused edit rows now hard-gate match proof and output ceilings.",
+    "impact": "High: gives Miller a concrete editing advantage over native harness edit loops while preserving preview/freshness/atomic apply guarantees.",
+    "implementation_locality": "TextReplaceMatcher, indexed content candidate reader, EditService proof rendering, edit guidance, and foundation matrix rows.",
+    "recommended_goal_or_action": "Implemented 2026-06-28 with exact/normalized/fuzzy matching, query/anchor/line selectors, disk verification proof, and focused hard-gate evidence."
   }
 ]

@@ -4,7 +4,7 @@ namespace Miller.Server.Tools;
 /// The fully-parsed parameters of one <c>edit</c> call (the tool surface from miller-toolbox.md §6, decision
 /// log #1). The MCP method (<see cref="EditTool"/>) maps its string/bool params onto this; the pure
 /// <see cref="EditService"/> consumes it. Defaults mirror the surface: <see cref="Apply"/> = false (preview),
-/// <see cref="AllowStale"/> = false, <see cref="Occurrence"/> = "first",
+/// <see cref="AllowStale"/> = false, <see cref="Occurrence"/> = "first", <see cref="MatchMode"/> = "auto",
 /// <see cref="Format"/> = "compact". A write happens ONLY when <see cref="Apply"/> is explicitly true.
 /// </summary>
 /// <param name="Operation">replace_text | replace_symbol_body | replace_symbol_signature | rename_symbol | insert_before | insert_after | add_doc.</param>
@@ -19,6 +19,18 @@ public sealed record EditRequest(string Operation, string Target)
 
     /// <summary>Which match(es) of <see cref="OldText"/> to replace: first | last | all. Default first.</summary>
     public string Occurrence { get; init; } = "first";
+
+    /// <summary>How <c>replace_text</c> locates <see cref="OldText"/>: auto | exact | normalized | fuzzy. Default auto.</summary>
+    public string MatchMode { get; init; } = "auto";
+
+    /// <summary>Optional indexed-content selector used to narrow <c>replace_text</c> candidate chunks.</summary>
+    public string? Query { get; init; }
+
+    /// <summary>Optional nearby indexed-content selector used to narrow <c>replace_text</c> candidate chunks.</summary>
+    public string? Anchor { get; init; }
+
+    /// <summary>Optional 1-based line hint used to narrow <c>replace_text</c> candidate chunks.</summary>
+    public int? Line { get; init; }
 
     /// <summary>Must be flipped true to commit the edit to disk; otherwise the call previews a diff and writes nothing.</summary>
     public bool Apply { get; init; }

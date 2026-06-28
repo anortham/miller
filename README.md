@@ -86,7 +86,9 @@ Use Miller's structural tools before broad file reads:
 3. `trace NameOrSymbol --mode refs` or `trace From --mode path --to To` when the question is about usages or
    graph paths.
 4. `impact --git` or `impact SymbolName` before refactors and risky edits.
-5. `inspect NameOrSymbol --depth full` only when you need the complete body or complete relation lists.
+5. `edit replace_text` for localized existing-file edits when `query`, `anchor`, or `line` can avoid a full-file
+   read. Preview shows match mode, source, line range, disk verification, and the diff before `apply=true`.
+6. `inspect NameOrSymbol --depth full` only when you need the complete body or complete relation lists.
 
 ### Manual Binary Install
 

@@ -43,6 +43,22 @@ public enum Occurrence
     All,
 }
 
+/// <summary>How <see cref="EditOperation.ReplaceText"/> should locate <c>old_text</c> within current content.</summary>
+public enum TextMatchMode
+{
+    /// <summary>Try exact first, then normalized line matching, then bounded fuzzy line matching.</summary>
+    Auto,
+
+    /// <summary>Ordinal, non-overlapping literal matching. This is the historical <c>replace_text</c> behavior.</summary>
+    Exact,
+
+    /// <summary>Line-aware matching that ignores indentation, trailing whitespace, and line-ending differences.</summary>
+    Normalized,
+
+    /// <summary>Bounded edit-distance matching for short localized snippets.</summary>
+    Fuzzy,
+}
+
 /// <summary>
 /// One byte-span splice: replace the absolute UTF-8 byte range <c>[StartByte, EndByte)</c> of a file's content
 /// with <paramref name="Replacement"/>. A zero-width span (<c>EndByte == StartByte</c>) is a pure insertion at
@@ -53,6 +69,36 @@ public enum Occurrence
 /// <param name="EndByte">Exclusive end of the byte range to replace; equal to <paramref name="StartByte"/> for an insert.</param>
 /// <param name="Replacement">The text spliced in (verbatim; the planner supplies any comment prefixes/newlines).</param>
 public sealed record TextEdit(int StartByte, int EndByte, string Replacement);
+
+/// <summary>
+/// One selected <c>replace_text</c> match, expressed as UTF-8 byte offsets over the original content plus
+/// line metadata for preview output.
+/// </summary>
+public sealed record TextReplaceMatch(
+    int StartByte,
+    int EndByte,
+    int StartLine,
+    int EndLine,
+    TextMatchMode Mode,
+    int Distance);
+
+/// <summary>
+/// A <c>replace_text</c> plan with match evidence. <see cref="Plan"/> remains the normal byte-splice contract;
+/// the extra fields let callers render why a token-saving match was accepted without re-reading the full file.
+/// </summary>
+public sealed record TextReplaceMatchPlan(
+    EditPlan Plan,
+    TextMatchMode RequestedMode,
+    TextMatchMode? MatchedMode,
+    IReadOnlyList<TextReplaceMatch> Matches,
+    int MatchCount)
+{
+    public bool IsSuccess => Plan.IsSuccess;
+
+    public IReadOnlyList<TextEdit> Edits => Plan.Edits;
+
+    public EditError? Error => Plan.Error;
+}
 
 /// <summary>
 /// The span facts an <see cref="EditPlanner"/> operation needs about one symbol, read from julie's

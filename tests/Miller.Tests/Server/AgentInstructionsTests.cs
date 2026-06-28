@@ -228,6 +228,28 @@ public sealed class AgentInstructionsTests
         Assert.Contains("content_kind=web", instructions);
     }
 
+    [Fact]
+    public void Load_DocumentsTokenSavingEditWorkflow()
+    {
+        string instructions = AgentInstructions.Load();
+
+        Assert.Contains("localized existing-file edits", instructions);
+        Assert.Contains("match_mode=auto|exact|normalized|fuzzy", instructions);
+        Assert.Contains("`query`/`anchor`/`line`", instructions);
+        Assert.Contains("review the match proof", instructions);
+    }
+
+    [Fact]
+    public void EditToolDescription_DocumentsTokenSavingSelectors()
+    {
+        MethodInfo method = ToolMethod<EditTool>(nameof(EditTool.Edit));
+        string description = method.GetCustomAttribute<DescriptionAttribute>()?.Description ?? string.Empty;
+
+        Assert.Contains("match_mode", description);
+        Assert.Contains("query/anchor/line", description);
+        Assert.Contains("match proof", description);
+    }
+
     [Theory]
     [MemberData(nameof(ToolMethods))]
     public void ToolDescriptions_StayWithinClaudeCodeBudgets(MethodInfo method)

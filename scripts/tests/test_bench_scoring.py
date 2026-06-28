@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from benchlib.scoring import _detect_trace_outcome
+from benchlib.scoring import _detect_trace_outcome, score_workflow_anchors
 
 
 def load_bench_foundation_matrix():
@@ -40,6 +40,23 @@ class BenchScoringTests(unittest.TestCase):
         }
 
         self.assertEqual([], runner.gate_failures([result]))
+
+    def test_workflow_anchors_fail_when_output_exceeds_limit(self) -> None:
+        scored = score_workflow_anchors(
+            "Match proof:\n- disk_verified: true\n" + ("x" * 40),
+            {"path": "fixture.md", "anchor": "disk_verified: true"},
+            {
+                "mode": "workflow_anchors",
+                "readiness": "edit-ready",
+                "required_anchors": ["Match proof:", "disk_verified: true"],
+                "max_output_chars": 20,
+            },
+        )
+
+        self.assertFalse(scored["scoring_pass"])
+        self.assertFalse(scored["output_chars_within_limit"])
+        self.assertEqual(20, scored["max_output_chars"])
+        self.assertIn("output_chars_exceeded", {item["type"] for item in scored["diagnostics"]})
 
 
 if __name__ == "__main__":

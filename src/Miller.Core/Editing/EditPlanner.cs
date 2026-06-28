@@ -23,32 +23,7 @@ public static class EditPlanner
     /// <exception cref="ArgumentNullException"><paramref name="content"/> or <paramref name="oldText"/> is null.</exception>
     public static EditPlan ReplaceText(string content, string oldText, Occurrence occurrence)
     {
-        ArgumentNullException.ThrowIfNull(content);
-        ArgumentNullException.ThrowIfNull(oldText);
-
-        if (oldText.Length == 0)
-            return EditPlan.Failure(new EditError(EditErrorKind.MissingArgument, "old_text must not be empty for replace_text."));
-
-        var charMatches = FindNonOverlappingMatches(content, oldText);
-        if (charMatches.Count == 0)
-            return EditPlan.Failure(new EditError(EditErrorKind.TextNotFound, $"old_text not found: \"{oldText}\"."));
-
-        var selected = occurrence switch
-        {
-            Occurrence.First => [charMatches[0]],
-            Occurrence.Last => [charMatches[^1]],
-            Occurrence.All => charMatches,
-            _ => charMatches,
-        };
-
-        var oldTextByteLen = Encoding.UTF8.GetByteCount(oldText);
-        var edits = new List<TextEdit>(selected.Count);
-        foreach (var charIndex in selected)
-        {
-            var startByte = Encoding.UTF8.GetByteCount(content.AsSpan(0, charIndex));
-            edits.Add(new TextEdit(startByte, startByte + oldTextByteLen, string.Empty));
-        }
-        return EditPlan.Success(edits);
+        return TextReplaceMatcher.Plan(content, oldText, occurrence, TextMatchMode.Exact).Plan;
     }
 
     /// <summary>
@@ -199,22 +174,6 @@ public static class EditPlanner
     }
 
     // ---- helpers --------------------------------------------------------------------------------
-
-    /// <summary>All non-overlapping ordinal match char-indices of <paramref name="needle"/> in <paramref name="haystack"/>.</summary>
-    private static List<int> FindNonOverlappingMatches(string haystack, string needle)
-    {
-        var matches = new List<int>();
-        var from = 0;
-        while (from <= haystack.Length - needle.Length)
-        {
-            var at = haystack.IndexOf(needle, from, StringComparison.Ordinal);
-            if (at < 0)
-                break;
-            matches.Add(at);
-            from = at + needle.Length; // non-overlapping: resume past this match
-        }
-        return matches;
-    }
 
     /// <summary>
     /// Byte offset where 1-based <paramref name="line"/> begins in <paramref name="content"/>, counting UTF-8

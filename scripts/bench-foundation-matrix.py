@@ -39,7 +39,7 @@ REPO_ROOTS = {
 
 SUPPORTED_ROUTES = {"mcp", "cli"}
 SUPPORTED_CLI_FORMATS = {"json", "jsonl"}
-SUPPORTED_MILLER_TOOLS = {"search", "inspect", "context", "trace", "impact", "content", "patterns"}
+SUPPORTED_MILLER_TOOLS = {"search", "inspect", "context", "trace", "impact", "content", "patterns", "edit"}
 SUPPORTED_JULIE_TOOLS = {"fast_search", "deep_dive", "get_context", "fast_refs", "call_path", "blast_radius"}
 SUPPORTED_SCORING_MODES = {
     "path_present",
@@ -114,6 +114,8 @@ WORKFLOW_CSV_FIELDS = [
     "expected_anchors_present",
     "first_useful_anchor",
     "follow_up_hint_present",
+    "max_output_chars",
+    "output_chars_within_limit",
     "readiness",
     "workflow_outcome",
     "definition_present",
@@ -306,6 +308,10 @@ def validate_tool_spec(
             errors.append(f"{label}: 'miller.args.query' is required for search")
         if tool == "inspect" and not isinstance(args.get("target"), str):
             errors.append(f"{label}: 'miller.args.target' is required for inspect")
+        if tool == "edit" and (
+            not isinstance(args.get("operation"), str) or not isinstance(args.get("target"), str)
+        ):
+            errors.append(f"{label}: 'miller.args.operation' and 'miller.args.target' are required for edit")
         if tool == "context" and not isinstance(args.get("query"), str):
             errors.append(f"{label}: 'miller.args.query' is required for context")
         if tool in {"trace", "impact"} and not isinstance(args.get("target"), str):
@@ -414,6 +420,10 @@ def validate_scoring(row: dict[str, Any], label: str) -> list[str]:
             errors.append(f"{label}: 'scoring.required_anchors' is required for workflow_anchors")
         if "follow_up_hint" in scoring and not isinstance(scoring["follow_up_hint"], str):
             errors.append(f"{label}: 'scoring.follow_up_hint' must be a string when present")
+        if "max_output_chars" in scoring and (
+            not isinstance(scoring["max_output_chars"], int) or scoring["max_output_chars"] <= 0
+        ):
+            errors.append(f"{label}: 'scoring.max_output_chars' must be a positive integer when present")
     if mode == "trace_refs":
         if "definition_anchor" in scoring and not isinstance(scoring["definition_anchor"], str):
             errors.append(f"{label}: 'scoring.definition_anchor' must be a string when present")
@@ -473,8 +483,9 @@ def select_rows(
 
 def apply_miller_defaults(row: dict[str, Any]) -> dict[str, Any]:
     args = dict(row["miller"]["args"])
-    args["workspace_id"] = REPO_ROOTS[row["repo"]]
-    args.setdefault("ensure_fresh", False)
+    if row["miller"]["tool"] != "edit":
+        args["workspace_id"] = REPO_ROOTS[row["repo"]]
+        args.setdefault("ensure_fresh", False)
     if row["miller"]["tool"] == "search":
         args.setdefault("limit", 5)
     elif row["miller"]["tool"] == "inspect":
@@ -1396,11 +1407,11 @@ def write_outputs(
         "",
         "Scoring: `present` means the expected file path appeared in the result. `top` records whether the first parsed path was the expected file. `pass` records the selected scoring mode: top-ranked for `path_top`, otherwise presence. Hard gates require the selected scoring mode to pass, while Julie rows are report-only.",
         "",
-        "Workflow fields keep path scoring intact: `expected_anchor_count`/`expected_anchors_present` score required workflow anchors, `first_useful_anchor` records the first matched anchor, `follow_up_hint_present` records guidance such as `next inspect`, `readiness` records edit/inspect/search state, and `workflow_outcome` records structured `ok`, `needs-search`, `unsupported`, or `no-path` outcomes.",
+        "Workflow fields keep path scoring intact: `expected_anchor_count`/`expected_anchors_present` score required workflow anchors, `first_useful_anchor` records the first matched anchor, `follow_up_hint_present` records guidance such as `next inspect`, `max_output_chars`/`output_chars_within_limit` record row-specific output ceilings when present, `readiness` records edit/inspect/search state, and `workflow_outcome` records structured `ok`, `needs-search`, `unsupported`, or `no-path` outcomes.",
         "",
         "Contract fields are explicit: `contract_parse_ok` records JSON/JSONL parsing, `required_fields_present` and `required_row_fields_present` record required contract fields, `advertised_commands_present` records `capabilities --json` coverage, `sampled_jsonl_rows` records the JSONL sample checked, and `contract_outcome` records `ok`, `empty_allowed`, `unsupported`, or the failure class.",
         "",
-        "Calibrated hard gates are named aggregate thresholds for original-nine Miller retrieval/inspect behavior plus Eros-facing CLI contract parseability. Julie deltas, top-rank gaps, workflow call-count-to-anchor, latency, output-size, metrics CLI rows, and adoption interpretation are report-only calibration notes.",
+        "Calibrated hard gates are named aggregate thresholds for original-nine Miller retrieval/inspect behavior plus Eros-facing CLI contract parseability. Julie deltas, top-rank gaps, workflow call-count-to-anchor, latency, aggregate output-size calibration, metrics CLI rows, and adoption interpretation are report-only calibration notes. Row-specific output ceilings are hard-gated only when a manifest row sets `max_output_chars`.",
         "",
         summarize_by_tool(results),
         "",

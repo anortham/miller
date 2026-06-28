@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Miller.Indexing;
 using Miller.Server.Hosting;
 using Miller.Server.Resolution;
@@ -132,6 +133,33 @@ public sealed class EditToolTests : IDisposable
     private static EditRequest Req(string op, string target) => new(op, target);
 
     private string AbsPath(string rel) => Path.Combine(_root, rel);
+
+    private JulieDbFixture CreateSingleFileFixture(string relPath, string content) =>
+        JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new JulieDbFixture.SymbolRow("sym-single", Path.GetFileNameWithoutExtension(relPath), "class", "csharp", relPath, "public class Single", 1, null)
+                {
+                    EndLine = Math.Max(1, content.Count(static ch => ch == '\n') + 1),
+                },
+            ],
+            fileContent: new Dictionary<string, string> { [relPath] = content });
+
+    private void BuildContentDb(JulieDbFixture fx, long revision = 0) =>
+        ContentCorpusWriter.Write(
+            ContentCorpusSidecar.ContentDbPathFor(fx.DbPath),
+            fx.DbPath,
+            _root,
+            workspaceId: "ws-edit-001",
+            revision);
+
+    private static string NumberedLines(int count, params (int Line, string Text)[] replacements)
+    {
+        var byLine = replacements.ToDictionary(static r => r.Line, static r => r.Text);
+        return string.Join('\n', Enumerable.Range(1, count).Select(line =>
+            byLine.TryGetValue(line, out var text) ? text : "line " + line)) + "\n";
+    }
 
     // ---- dry_run is the default: preview a diff, write NOTHING ----
 
@@ -341,6 +369,353 @@ public sealed class EditToolTests : IDisposable
         Assert.DoesNotContain("Total", disk); // every occurrence replaced
         Assert.Contains("public int Sum()", disk);
         Assert.Contains("i => i.Sum", disk);
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_AutoPreview_ReportsExactMatchMode()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", "orders/OrderService.cs") with
+        {
+            OldText = "Total",
+            NewText = "Sum",
+        });
+
+        Assert.False(result.Applied);
+        Assert.Contains("match_mode: exact", result.Output);
+        Assert.Contains("match_source: disk", result.Output);
+        Assert.Contains("line_range:", result.Output);
+        Assert.Contains("occurrence: first", result.Output);
+        Assert.Contains("disk_verified: true", result.Output);
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_AutoPreview_ReportsNormalizedMatchMode()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", "orders/OrderService.cs") with
+        {
+            OldText = "return _items.Sum(i => i.Total);   ",
+            NewText = "return 42;",
+        });
+
+        Assert.False(result.Applied);
+        Assert.Contains("match_mode: normalized", result.Output);
+        Assert.Contains("return 42;", result.Output);
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_AutoPreview_ReportsFuzzyMatchMode()
+    {
+        const string relPath = "src/Api.cs";
+        const string source = "public class Api { public string Value => \"target-value\"; }\n";
+        using var fx = CreateSingleFileFixture(relPath, source);
+        LayFiles(new Dictionary<string, string> { [relPath] = source });
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = "public class Api { public string Value => \"target-valeu\"; }",
+            NewText = "public class Api { public string Value => \"updated-value\"; }",
+        });
+
+        Assert.False(result.Applied);
+        Assert.Contains("match_mode: fuzzy", result.Output);
+        Assert.Contains("disk_verified: true", result.Output);
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_ApplyOutput_IncludesMatchProof()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", "orders/OrderService.cs") with
+        {
+            OldText = "Total",
+            NewText = "Sum",
+            Apply = true,
+        });
+
+        Assert.True(result.Applied);
+        Assert.Contains("Applied — 1 file written.", result.Output);
+        Assert.Contains("match_mode: exact", result.Output);
+        Assert.Contains("disk_verified: true", result.Output);
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_JsonPreview_IncludesMatchProofFields()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", "orders/OrderService.cs") with
+        {
+            OldText = "Total",
+            NewText = "Sum",
+            Format = "json",
+        });
+
+        using JsonDocument doc = JsonDocument.Parse(result.Output);
+        JsonElement root = doc.RootElement;
+        Assert.False(root.GetProperty("applied").GetBoolean());
+        Assert.Equal("exact", root.GetProperty("match_mode").GetString());
+        Assert.Equal("disk", root.GetProperty("match_source").GetString());
+        Assert.True(root.GetProperty("disk_verified").GetBoolean());
+        Assert.Equal("first", root.GetProperty("occurrence").GetString());
+        Assert.True(root.GetProperty("match_count").GetInt32() >= 1);
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_JsonApply_IncludesMatchProofFields()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", "orders/OrderService.cs") with
+        {
+            OldText = "Total",
+            NewText = "Sum",
+            Apply = true,
+            Format = "json",
+        });
+
+        using JsonDocument doc = JsonDocument.Parse(result.Output);
+        JsonElement root = doc.RootElement;
+        Assert.True(root.GetProperty("applied").GetBoolean());
+        Assert.Equal("exact", root.GetProperty("match_mode").GetString());
+        Assert.Equal("disk", root.GetProperty("match_source").GetString());
+        Assert.True(root.GetProperty("disk_verified").GetBoolean());
+        Assert.Equal("not_used", root.GetProperty("content_index_state").GetString());
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_NoChangePreview_IncludesMatchProof()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", "orders/OrderService.cs") with
+        {
+            OldText = "Total",
+            NewText = "Total",
+        });
+
+        Assert.False(result.Applied);
+        Assert.Contains("No change", result.Output);
+        Assert.Contains("match_mode: exact", result.Output);
+        Assert.Contains("disk_verified: true", result.Output);
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_ExactMode_RefusesNormalizedOnlyMatch()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", "orders/OrderService.cs") with
+        {
+            OldText = "return _items.Sum(i => i.Total);   ",
+            NewText = "return 42;",
+            MatchMode = "exact",
+            Apply = true,
+        });
+
+        Assert.False(result.Applied);
+        Assert.Contains("not found", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(JulieDbFixture.OrderServiceContent, File.ReadAllText(AbsPath("orders/OrderService.cs")));
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_QueryUsesIndexedCandidateToPickLaterChunk()
+    {
+        const string relPath = "src/Api.cs";
+        string source = NumberedLines(
+            220,
+            (2, "target-value alpha-anchor"),
+            (170, "target-value beta-anchor"));
+        using var fx = CreateSingleFileFixture(relPath, source);
+        LayFiles(new Dictionary<string, string> { [relPath] = source });
+        BuildContentDb(fx);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = "target-value",
+            NewText = "updated-value",
+            Query = "beta-anchor",
+        });
+
+        Assert.False(result.Applied);
+        Assert.Contains("match_source: indexed_content", result.Output);
+        Assert.Contains("line_range: 170-170", result.Output);
+        Assert.Contains("-target-value beta-anchor", result.Output);
+        Assert.DoesNotContain("-target-value alpha-anchor", result.Output);
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_LineUsesIndexedCandidateToPickLaterChunk()
+    {
+        const string relPath = "src/Api.cs";
+        string source = NumberedLines(
+            220,
+            (2, "target-value alpha-anchor"),
+            (170, "target-value beta-anchor"));
+        using var fx = CreateSingleFileFixture(relPath, source);
+        LayFiles(new Dictionary<string, string> { [relPath] = source });
+        BuildContentDb(fx);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = "target-value",
+            NewText = "updated-value",
+            Line = 170,
+        });
+
+        Assert.False(result.Applied);
+        Assert.Contains("line_range: 170-170", result.Output);
+        Assert.Contains("-target-value beta-anchor", result.Output);
+        Assert.DoesNotContain("-target-value alpha-anchor", result.Output);
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_LineFocusesWithinChunkToPickLaterDuplicate()
+    {
+        const string relPath = "src/Api.cs";
+        string source = NumberedLines(
+            80,
+            (12, "target-value alpha-anchor"),
+            (14, "target-value beta-anchor"));
+        using var fx = CreateSingleFileFixture(relPath, source);
+        LayFiles(new Dictionary<string, string> { [relPath] = source });
+        BuildContentDb(fx);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = "target-value",
+            NewText = "updated-value",
+            Line = 14,
+        });
+
+        Assert.False(result.Applied);
+        Assert.Contains("line_range: 14-14", result.Output);
+        Assert.Contains("match_count: 1", result.Output);
+        Assert.Contains("-target-value beta-anchor", result.Output);
+        Assert.DoesNotContain("-target-value alpha-anchor", result.Output);
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_AnchorUsesIndexedCandidateToPickLaterChunk()
+    {
+        const string relPath = "src/Api.cs";
+        string source = NumberedLines(
+            220,
+            (2, "target-value alpha-anchor"),
+            (170, "target-value beta-anchor"));
+        using var fx = CreateSingleFileFixture(relPath, source);
+        LayFiles(new Dictionary<string, string> { [relPath] = source });
+        BuildContentDb(fx);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = "target-value",
+            NewText = "updated-value",
+            Anchor = "beta-anchor",
+        });
+
+        Assert.False(result.Applied);
+        Assert.Contains("line_range: 170-170", result.Output);
+        Assert.Contains("-target-value beta-anchor", result.Output);
+        Assert.DoesNotContain("-target-value alpha-anchor", result.Output);
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_AnchorFocusesWithinChunkToPickLaterDuplicate()
+    {
+        const string relPath = "src/Api.cs";
+        string source = NumberedLines(
+            80,
+            (12, "target-value alpha-anchor"),
+            (14, "target-value beta-anchor"));
+        using var fx = CreateSingleFileFixture(relPath, source);
+        LayFiles(new Dictionary<string, string> { [relPath] = source });
+        BuildContentDb(fx);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = "target-value",
+            NewText = "updated-value",
+            Anchor = "beta-anchor",
+        });
+
+        Assert.False(result.Applied);
+        Assert.Contains("line_range: 14-14", result.Output);
+        Assert.Contains("match_count: 1", result.Output);
+        Assert.Contains("-target-value beta-anchor", result.Output);
+        Assert.DoesNotContain("-target-value alpha-anchor", result.Output);
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_UnavailableContentDb_FallsBackToDiskMatching()
+    {
+        const string relPath = "src/Api.cs";
+        const string source = "public class Api { public string Value => \"target-value\"; }\n";
+        using var fx = CreateSingleFileFixture(relPath, source);
+        LayFiles(new Dictionary<string, string> { [relPath] = source });
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = "target-value",
+            NewText = "updated-value",
+            Query = "Value",
+        });
+
+        Assert.False(result.Applied);
+        Assert.Contains("match_source: disk_after_index_unavailable", result.Output);
+        Assert.Contains("content_index_state: unavailable", result.Output);
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_AmbiguousIndexedCandidates_ReturnsGuidanceNoWrite()
+    {
+        const string relPath = "src/Api.cs";
+        string source = NumberedLines(
+            220,
+            (2, "target-value alpha-anchor"),
+            (170, "target-value beta-anchor"));
+        using var fx = CreateSingleFileFixture(relPath, source);
+        LayFiles(new Dictionary<string, string> { [relPath] = source });
+        BuildContentDb(fx);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = "target-value",
+            NewText = "updated-value",
+            Query = "target-value",
+            Apply = true,
+        });
+
+        Assert.False(result.Applied);
+        Assert.Contains("ambiguous", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("line", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(source, File.ReadAllText(AbsPath(relPath)));
     }
 
     [Fact]

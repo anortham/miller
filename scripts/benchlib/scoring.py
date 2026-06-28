@@ -627,9 +627,24 @@ def score_workflow_anchors(text: str, expected: dict[str, Any], scoring: dict[st
     scored = _workflow_base(text, expected, scoring, anchors)
     follow_up_hint = str(scoring.get("follow_up_hint") or "")
     follow_up_present = bool(follow_up_hint and follow_up_hint.lower() in text.lower())
+    max_output_chars = scoring.get("max_output_chars")
+    output_chars_within_limit = not isinstance(max_output_chars, int) or len(text) <= max_output_chars
+    if isinstance(max_output_chars, int):
+        scored["max_output_chars"] = max_output_chars
+        scored["output_chars_within_limit"] = output_chars_within_limit
+        if not output_chars_within_limit:
+            scored["diagnostics"].append(
+                {
+                    "type": "output_chars_exceeded",
+                    "output_chars": len(text),
+                    "max_output_chars": max_output_chars,
+                }
+            )
     scored["follow_up_hint_present"] = follow_up_present if follow_up_hint else ""
     anchors_pass = scored["expected_anchors_present"] == scored["expected_anchor_count"]
-    scored["scoring_pass"] = bool(anchors_pass and (follow_up_present if follow_up_hint else True))
+    scored["scoring_pass"] = bool(
+        anchors_pass and (follow_up_present if follow_up_hint else True) and output_chars_within_limit
+    )
     scored["score"] = int(scored["expected_anchors_present"]) + (1 if follow_up_present else 0)
     scored["scoring_mode"] = "workflow_anchors"
     return scored

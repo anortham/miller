@@ -51,7 +51,8 @@ public sealed class EditTool
     [Description(
         "Edit code with index awareness. Previews a diff by default and does NOT write; set apply=true to " +
         "commit. Operations cover text replace, symbol body/signature rewrite, workspace-wide rename, insert, " +
-        "and doc add. If the index is stale for the target file, Miller first converges it automatically " +
+        "and doc add. replace_text can use match_mode plus query/anchor/line selectors to avoid full-file reads " +
+        "and returns match proof. If the index is stale for the target file, Miller first converges it automatically " +
         "(briefly waiting when needed); the edit is refused only if that does not land — then re-index or " +
         "pass allow_stale.")]
     public string Edit(
@@ -61,6 +62,10 @@ public sealed class EditTool
         [Description("The literal text to replace, for replace_text.")] string? old_text = null,
         [Description("The replacement text, or the new name for rename_symbol.")] string? new_text = null,
         [Description("Which match of old_text to replace: first | last | all. Default first.")] string occurrence = "first",
+        [Description("replace_text matching: auto | exact | normalized | fuzzy. Default auto.")] string match_mode = "auto",
+        [Description("Optional indexed-content selector to narrow replace_text without reading the full file.")] string? query = null,
+        [Description("Optional nearby text selector to narrow replace_text candidates.")] string? anchor = null,
+        [Description("Optional 1-based line hint to narrow replace_text candidates.")] int? line = null,
         [Description("Set true to commit the edit to disk. Default false (preview a diff and write nothing).")] bool apply = false,
         [Description("Bypass the index-stale refusal for the target file. Default false.")] bool allow_stale = false,
         [Description("Disambiguate an ambiguous symbol name to a file. Optional.")] string? scope = null,
@@ -74,6 +79,10 @@ public sealed class EditTool
                 OldText = old_text,
                 NewText = new_text,
                 Occurrence = occurrence,
+                MatchMode = match_mode,
+                Query = query,
+                Anchor = anchor,
+                Line = line,
                 Apply = apply,
                 AllowStale = allow_stale,
                 Scope = scope,
@@ -102,6 +111,10 @@ public sealed class EditTool
                 telemetry.SetMetadata("apply", apply);
                 telemetry.SetMetadata("allow_stale", allow_stale);
                 telemetry.SetMetadata("has_scope", !string.IsNullOrWhiteSpace(scope));
+                telemetry.SetMetadata("match_mode", string.IsNullOrWhiteSpace(match_mode) ? "auto" : match_mode.Trim().ToLowerInvariant());
+                telemetry.SetMetadata("has_query", !string.IsNullOrEmpty(query));
+                telemetry.SetMetadata("has_anchor", !string.IsNullOrEmpty(anchor));
+                telemetry.SetMetadata("has_line", line is not null);
                 if (telemetry.Outcome == TelemetryOutcome.Empty)
                     telemetry.SetEmptyReason("edit_noop");
             }
