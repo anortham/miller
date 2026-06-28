@@ -27,6 +27,10 @@ search(query="<symbol or file>")
 inspect(target="<symbol-or-file>")
 ```
 
+For symbols, start with `inspect(target="<symbol>", depth="overview")` to choose the edit target and understand
+nearby refs/calls without dumping the full body. Use `inspect(target="<symbol>", depth="full")` before rewriting a
+body or auditing complete relation lists.
+
 For file-level text edits where you already know the path, inspect the file first if the exact surrounding text is
 uncertain:
 

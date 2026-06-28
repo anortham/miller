@@ -25,8 +25,11 @@ Use `failing_test`, `stack_trace`, or `entry_symbols` when the user gave those a
 
 ```text
 inspect(target="<file-or-symbol>")
-inspect(target="<symbol>", depth="full")
+inspect(target="<symbol>", depth="overview")
 ```
+
+Omitted `inspect` depth is `summary`. Use `depth=overview` for the first symbol read; escalate to
+`depth=full` only when you need the complete body or complete relation lists.
 
 4. Use `search` for missing anchors:
 

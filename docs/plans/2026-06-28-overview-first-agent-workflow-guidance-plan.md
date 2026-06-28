@@ -89,13 +89,13 @@
 **Approach:** Edit only canonical `.agents/skills/` files, then run `scripts/sync-plugin-skills.sh`. Keep the guidance compact: the orientation table should distinguish "understand a symbol" from "need complete body"; explore-area should use overview before full; editing should use overview to choose/edit targets and full only when rewriting or auditing the complete body.
 
 **Acceptance criteria:**
-- [ ] `miller-orientation` says `inspect(target="<symbol>", depth="overview")` is the first call for understanding a symbol.
-- [ ] `miller-orientation` says `inspect(target="<symbol>", depth="full")` is for complete body or complete relation needs.
-- [ ] `miller-explore-area` routes named symbols through `inspect depth=overview` before `depth=full`.
-- [ ] `miller-editing` tells agents to inspect overview before choosing edit targets and full before body rewrites when complete source context is needed.
-- [ ] `scripts/sync-plugin-skills.sh` has been run and `diff -qr .agents/skills skills` reports no differences.
-- [ ] `node --test tests/plugin/plugin-manifest.test.cjs` passes if the plugin test file exists in this checkout.
-- [ ] Worker-scope verification passes, committed.
+- [x] `miller-orientation` says `inspect(target="<symbol>", depth="overview")` is the first call for understanding a symbol.
+- [x] `miller-orientation` says `inspect(target="<symbol>", depth="full")` is for complete body or complete relation needs.
+- [x] `miller-explore-area` routes named symbols through `inspect depth=overview` before `depth=full`.
+- [x] `miller-editing` tells agents to inspect overview before choosing edit targets and full before body rewrites when complete source context is needed.
+- [x] `scripts/sync-plugin-skills.sh` has been run and `diff -qr .agents/skills skills` reports no differences.
+- [x] `node --test tests/plugin/plugin-manifest.test.cjs` passes if the plugin test file exists in this checkout.
+- [x] Worker-scope verification passes, committed.
 
 ## Task 3: Add Aggregate Onboarding Hints For Overview, Trace, And Impact
 

@@ -35,7 +35,8 @@ workspace(operation="refresh")
 | Find text in comments/strings | `search(query="...", regions="comment,doc_comment,string_literal")` |
 | Audit TODO/FIXME/HACK/XXX | `search(query="TODO,FIXME,HACK,XXX", mode="markers")` |
 | Read a file you can name | `inspect(target="<file>")` |
-| Understand one symbol fully | `inspect(target="<symbol>", depth="full")` |
+| Understand a symbol first | `inspect(target="<symbol>", depth="overview")` |
+| Need complete body or complete relations | `inspect(target="<symbol>", depth="full")` |
 | Orient on an unfamiliar area/task | `context(query="<task>")` |
 | Who calls / what does this reach | `trace(target="<symbol>")` |
 | How does A reach B | `trace(target="A", mode="path", to="B")` |
@@ -48,6 +49,7 @@ workspace(operation="refresh")
 ## Gotchas
 
 - Natural-language `search` hides tests by default; set `exclude_tests=false` when tests are expected.
+- Omitted `inspect` depth is `summary`; use `depth=overview` for the first symbol read, then `depth=full` only when you need the complete body or complete relation lists.
 - `workspace_id=all` is for `content(operation="search")` text audits only, not symbol/code read tools.
 - `trace mode=bridge` is provider-scoped to `dotnet-web`; on another stack use `mode=auto`/`refs`/`path`.
 - Symbol search ranks `name + signature` only; docs/literals/broad source text need the row above.
