@@ -1,0 +1,1406 @@
+{
+  "commands": {
+    "onboarding": "miller workspace onboarding --json --workspace-id /Users/murphy/source/miller",
+    "telemetry": "miller telemetry export --jsonl"
+  },
+  "core_empty_error_rates": [
+    {
+      "avg_ms": 31,
+      "calls": 939,
+      "empty_count": 147,
+      "error_count": 41,
+      "op": "default",
+      "p95_ms": 100,
+      "result_count": 9553,
+      "tool": "search"
+    },
+    {
+      "avg_ms": 68,
+      "calls": 132,
+      "empty_count": 45,
+      "error_count": 0,
+      "op": "content",
+      "p95_ms": 131,
+      "result_count": 588,
+      "tool": "search"
+    },
+    {
+      "avg_ms": 69,
+      "calls": 131,
+      "empty_count": 46,
+      "error_count": 0,
+      "op": "source",
+      "p95_ms": 156,
+      "result_count": 650,
+      "tool": "search"
+    },
+    {
+      "avg_ms": 192,
+      "calls": 122,
+      "empty_count": 0,
+      "error_count": 0,
+      "op": "auto",
+      "p95_ms": 350,
+      "result_count": 876,
+      "tool": "search"
+    },
+    {
+      "avg_ms": 78,
+      "calls": 35,
+      "empty_count": 0,
+      "error_count": 0,
+      "op": "symbol",
+      "p95_ms": 580,
+      "result_count": 599,
+      "tool": "search"
+    },
+    {
+      "avg_ms": 123,
+      "calls": 27,
+      "empty_count": 7,
+      "error_count": 0,
+      "op": "all-text",
+      "p95_ms": 250,
+      "result_count": 177,
+      "tool": "search"
+    },
+    {
+      "avg_ms": 15,
+      "calls": 25,
+      "empty_count": 11,
+      "error_count": 0,
+      "op": "file",
+      "p95_ms": 44,
+      "result_count": 100,
+      "tool": "search"
+    },
+    {
+      "avg_ms": 97,
+      "calls": 9,
+      "empty_count": 1,
+      "error_count": 1,
+      "op": "regions",
+      "p95_ms": 121,
+      "result_count": 11,
+      "tool": "search"
+    },
+    {
+      "avg_ms": 127,
+      "calls": 3,
+      "empty_count": 0,
+      "error_count": 0,
+      "op": "markers",
+      "p95_ms": 138,
+      "result_count": 11,
+      "tool": "search"
+    },
+    {
+      "avg_ms": 5,
+      "calls": 1641,
+      "empty_count": 228,
+      "error_count": 7,
+      "op": "default",
+      "p95_ms": 22,
+      "result_count": 15385,
+      "tool": "inspect"
+    },
+    {
+      "avg_ms": 23,
+      "calls": 509,
+      "empty_count": 33,
+      "error_count": 0,
+      "op": "full",
+      "p95_ms": 88,
+      "result_count": 1248,
+      "tool": "inspect"
+    },
+    {
+      "avg_ms": 27,
+      "calls": 220,
+      "empty_count": 26,
+      "error_count": 0,
+      "op": "summary",
+      "p95_ms": 127,
+      "result_count": 6302,
+      "tool": "inspect"
+    },
+    {
+      "avg_ms": 22,
+      "calls": 36,
+      "empty_count": 0,
+      "error_count": 0,
+      "op": "overview",
+      "p95_ms": 40,
+      "result_count": 36,
+      "tool": "inspect"
+    },
+    {
+      "avg_ms": 64,
+      "calls": 160,
+      "empty_count": 8,
+      "error_count": 8,
+      "op": "default",
+      "p95_ms": 477,
+      "result_count": 15863,
+      "tool": "context"
+    },
+    {
+      "avg_ms": 143,
+      "calls": 37,
+      "empty_count": 0,
+      "error_count": 0,
+      "op": "off",
+      "p95_ms": 2281,
+      "result_count": 2393,
+      "tool": "context"
+    },
+    {
+      "avg_ms": 537,
+      "calls": 35,
+      "empty_count": 0,
+      "error_count": 0,
+      "op": "usage",
+      "p95_ms": 2354,
+      "result_count": 5231,
+      "tool": "context"
+    },
+    {
+      "avg_ms": 1,
+      "calls": 78,
+      "empty_count": 50,
+      "error_count": 1,
+      "op": "default",
+      "p95_ms": 9,
+      "result_count": 1145,
+      "tool": "trace"
+    },
+    {
+      "avg_ms": 30,
+      "calls": 15,
+      "empty_count": 5,
+      "error_count": 0,
+      "op": "refs",
+      "p95_ms": 213,
+      "result_count": 214,
+      "tool": "trace"
+    },
+    {
+      "avg_ms": 149,
+      "calls": 3,
+      "empty_count": 3,
+      "error_count": 0,
+      "op": "path",
+      "p95_ms": 235,
+      "result_count": 0,
+      "tool": "trace"
+    },
+    {
+      "avg_ms": 1,
+      "calls": 2,
+      "empty_count": 2,
+      "error_count": 0,
+      "op": "auto",
+      "p95_ms": 1,
+      "result_count": 0,
+      "tool": "trace"
+    },
+    {
+      "avg_ms": 2,
+      "calls": 83,
+      "empty_count": 31,
+      "error_count": 0,
+      "op": "default",
+      "p95_ms": 9,
+      "result_count": 1692,
+      "tool": "impact"
+    },
+    {
+      "avg_ms": 52,
+      "calls": 16,
+      "empty_count": 0,
+      "error_count": 0,
+      "op": "git_diff",
+      "p95_ms": 116,
+      "result_count": 927,
+      "tool": "impact"
+    },
+    {
+      "avg_ms": 35,
+      "calls": 13,
+      "empty_count": 0,
+      "error_count": 0,
+      "op": "target",
+      "p95_ms": 219,
+      "result_count": 279,
+      "tool": "impact"
+    },
+    {
+      "avg_ms": 5,
+      "calls": 3,
+      "empty_count": 0,
+      "error_count": 0,
+      "op": "changed_paths",
+      "p95_ms": 10,
+      "result_count": 152,
+      "tool": "impact"
+    }
+  ],
+  "core_tool_op_mix": [
+    {
+      "avg_ms": 31,
+      "calls": 939,
+      "empty_count": 147,
+      "error_count": 41,
+      "op": "default",
+      "p95_ms": 100,
+      "result_count": 9553,
+      "tool": "search"
+    },
+    {
+      "avg_ms": 68,
+      "calls": 132,
+      "empty_count": 45,
+      "error_count": 0,
+      "op": "content",
+      "p95_ms": 131,
+      "result_count": 588,
+      "tool": "search"
+    },
+    {
+      "avg_ms": 69,
+      "calls": 131,
+      "empty_count": 46,
+      "error_count": 0,
+      "op": "source",
+      "p95_ms": 156,
+      "result_count": 650,
+      "tool": "search"
+    },
+    {
+      "avg_ms": 192,
+      "calls": 122,
+      "empty_count": 0,
+      "error_count": 0,
+      "op": "auto",
+      "p95_ms": 350,
+      "result_count": 876,
+      "tool": "search"
+    },
+    {
+      "avg_ms": 78,
+      "calls": 35,
+      "empty_count": 0,
+      "error_count": 0,
+      "op": "symbol",
+      "p95_ms": 580,
+      "result_count": 599,
+      "tool": "search"
+    },
+    {
+      "avg_ms": 123,
+      "calls": 27,
+      "empty_count": 7,
+      "error_count": 0,
+      "op": "all-text",
+      "p95_ms": 250,
+      "result_count": 177,
+      "tool": "search"
+    },
+    {
+      "avg_ms": 15,
+      "calls": 25,
+      "empty_count": 11,
+      "error_count": 0,
+      "op": "file",
+      "p95_ms": 44,
+      "result_count": 100,
+      "tool": "search"
+    },
+    {
+      "avg_ms": 97,
+      "calls": 9,
+      "empty_count": 1,
+      "error_count": 1,
+      "op": "regions",
+      "p95_ms": 121,
+      "result_count": 11,
+      "tool": "search"
+    },
+    {
+      "avg_ms": 127,
+      "calls": 3,
+      "empty_count": 0,
+      "error_count": 0,
+      "op": "markers",
+      "p95_ms": 138,
+      "result_count": 11,
+      "tool": "search"
+    },
+    {
+      "avg_ms": 5,
+      "calls": 1641,
+      "empty_count": 228,
+      "error_count": 7,
+      "op": "default",
+      "p95_ms": 22,
+      "result_count": 15385,
+      "tool": "inspect"
+    },
+    {
+      "avg_ms": 23,
+      "calls": 509,
+      "empty_count": 33,
+      "error_count": 0,
+      "op": "full",
+      "p95_ms": 88,
+      "result_count": 1248,
+      "tool": "inspect"
+    },
+    {
+      "avg_ms": 27,
+      "calls": 220,
+      "empty_count": 26,
+      "error_count": 0,
+      "op": "summary",
+      "p95_ms": 127,
+      "result_count": 6302,
+      "tool": "inspect"
+    },
+    {
+      "avg_ms": 22,
+      "calls": 36,
+      "empty_count": 0,
+      "error_count": 0,
+      "op": "overview",
+      "p95_ms": 40,
+      "result_count": 36,
+      "tool": "inspect"
+    },
+    {
+      "avg_ms": 64,
+      "calls": 160,
+      "empty_count": 8,
+      "error_count": 8,
+      "op": "default",
+      "p95_ms": 477,
+      "result_count": 15863,
+      "tool": "context"
+    },
+    {
+      "avg_ms": 143,
+      "calls": 37,
+      "empty_count": 0,
+      "error_count": 0,
+      "op": "off",
+      "p95_ms": 2281,
+      "result_count": 2393,
+      "tool": "context"
+    },
+    {
+      "avg_ms": 537,
+      "calls": 35,
+      "empty_count": 0,
+      "error_count": 0,
+      "op": "usage",
+      "p95_ms": 2354,
+      "result_count": 5231,
+      "tool": "context"
+    },
+    {
+      "avg_ms": 1,
+      "calls": 78,
+      "empty_count": 50,
+      "error_count": 1,
+      "op": "default",
+      "p95_ms": 9,
+      "result_count": 1145,
+      "tool": "trace"
+    },
+    {
+      "avg_ms": 30,
+      "calls": 15,
+      "empty_count": 5,
+      "error_count": 0,
+      "op": "refs",
+      "p95_ms": 213,
+      "result_count": 214,
+      "tool": "trace"
+    },
+    {
+      "avg_ms": 149,
+      "calls": 3,
+      "empty_count": 3,
+      "error_count": 0,
+      "op": "path",
+      "p95_ms": 235,
+      "result_count": 0,
+      "tool": "trace"
+    },
+    {
+      "avg_ms": 1,
+      "calls": 2,
+      "empty_count": 2,
+      "error_count": 0,
+      "op": "auto",
+      "p95_ms": 1,
+      "result_count": 0,
+      "tool": "trace"
+    },
+    {
+      "avg_ms": 2,
+      "calls": 83,
+      "empty_count": 31,
+      "error_count": 0,
+      "op": "default",
+      "p95_ms": 9,
+      "result_count": 1692,
+      "tool": "impact"
+    },
+    {
+      "avg_ms": 52,
+      "calls": 16,
+      "empty_count": 0,
+      "error_count": 0,
+      "op": "git_diff",
+      "p95_ms": 116,
+      "result_count": 927,
+      "tool": "impact"
+    },
+    {
+      "avg_ms": 35,
+      "calls": 13,
+      "empty_count": 0,
+      "error_count": 0,
+      "op": "target",
+      "p95_ms": 219,
+      "result_count": 279,
+      "tool": "impact"
+    },
+    {
+      "avg_ms": 5,
+      "calls": 3,
+      "empty_count": 0,
+      "error_count": 0,
+      "op": "changed_paths",
+      "p95_ms": 10,
+      "result_count": 152,
+      "tool": "impact"
+    }
+  ],
+  "diagnostics": [
+    {
+      "reason": "prior Task 4 workflow evidence skipped Julie rows",
+      "skipped_julie_rows": 15,
+      "type": "workflow_candidates_unavailable"
+    }
+  ],
+  "gate": {
+    "failures": [],
+    "status": "PASS"
+  },
+  "generated_at": "2026-06-28T00:57:24Z",
+  "low_use_tools": [
+    {
+      "calls": 98,
+      "note": "report-only low usage in this local telemetry window",
+      "share": 0.022929340196537203,
+      "tool": "trace"
+    },
+    {
+      "calls": 115,
+      "note": "report-only low usage in this local telemetry window",
+      "share": 0.02690687880205896,
+      "tool": "impact"
+    }
+  ],
+  "onboarding": {
+    "common_misses": [
+      {
+        "calls": 88,
+        "op": null,
+        "reason": "empty",
+        "tool": "search"
+      },
+      {
+        "calls": 71,
+        "op": null,
+        "reason": "empty",
+        "tool": "inspect"
+      },
+      {
+        "calls": 46,
+        "op": "source",
+        "reason": "no_text_hits",
+        "tool": "search"
+      },
+      {
+        "calls": 45,
+        "op": "content",
+        "reason": "no_text_hits",
+        "tool": "search"
+      },
+      {
+        "calls": 33,
+        "op": "full",
+        "reason": "not_found",
+        "tool": "inspect"
+      },
+      {
+        "calls": 26,
+        "op": "summary",
+        "reason": "not_found",
+        "tool": "inspect"
+      },
+      {
+        "calls": 24,
+        "op": "search",
+        "reason": "no_content_hits",
+        "tool": "content"
+      },
+      {
+        "calls": 15,
+        "op": null,
+        "reason": "empty",
+        "tool": "trace"
+      },
+      {
+        "calls": 14,
+        "op": null,
+        "reason": "InvalidOperationException",
+        "tool": "search"
+      },
+      {
+        "calls": 11,
+        "op": "file",
+        "reason": "no_symbol_hits",
+        "tool": "search"
+      }
+    ],
+    "friction": [
+      {
+        "avg_ms": 50.547222222222224,
+        "bytes_returned": 553396,
+        "calls": 360,
+        "empty_count": 88,
+        "error_count": 14,
+        "est_tokens": 138488,
+        "max_ms": 2103,
+        "op": null,
+        "p95_ms": 133,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 5.425925925925926,
+        "bytes_returned": 340593,
+        "calls": 54,
+        "empty_count": 0,
+        "error_count": 11,
+        "est_tokens": 85168,
+        "max_ms": 14,
+        "op": "read",
+        "p95_ms": 12,
+        "tool": "content"
+      },
+      {
+        "avg_ms": 8.249678249678249,
+        "bytes_returned": 2833031,
+        "calls": 777,
+        "empty_count": 71,
+        "error_count": 5,
+        "est_tokens": 708545,
+        "max_ms": 527,
+        "op": null,
+        "p95_ms": 33,
+        "tool": "inspect"
+      },
+      {
+        "avg_ms": 29.623655913978496,
+        "bytes_returned": 34972,
+        "calls": 93,
+        "empty_count": 1,
+        "error_count": 4,
+        "est_tokens": 8778,
+        "max_ms": 1231,
+        "op": "status",
+        "p95_ms": 50,
+        "tool": "workspace"
+      },
+      {
+        "avg_ms": 135.38571428571427,
+        "bytes_returned": 1119636,
+        "calls": 70,
+        "empty_count": 0,
+        "error_count": 4,
+        "est_tokens": 279934,
+        "max_ms": 772,
+        "op": null,
+        "p95_ms": 607,
+        "tool": "context"
+      },
+      {
+        "avg_ms": 1403.75,
+        "bytes_returned": 5361,
+        "calls": 12,
+        "empty_count": 0,
+        "error_count": 2,
+        "est_tokens": 1343,
+        "max_ms": 5017,
+        "op": "open",
+        "p95_ms": 5017,
+        "tool": "workspace"
+      },
+      {
+        "avg_ms": 97.33333333333333,
+        "bytes_returned": 2269,
+        "calls": 9,
+        "empty_count": 0,
+        "error_count": 1,
+        "est_tokens": 572,
+        "max_ms": 121,
+        "op": "regions",
+        "p95_ms": 121,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 19.75,
+        "bytes_returned": 1594,
+        "calls": 4,
+        "empty_count": 0,
+        "error_count": 1,
+        "est_tokens": 400,
+        "max_ms": 67,
+        "op": "replace_text",
+        "p95_ms": 67,
+        "tool": "edit"
+      },
+      {
+        "avg_ms": 69.93129770992367,
+        "bytes_returned": 276321,
+        "calls": 131,
+        "empty_count": 46,
+        "error_count": 0,
+        "est_tokens": 69135,
+        "max_ms": 774,
+        "op": "source",
+        "p95_ms": 156,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 68.36363636363636,
+        "bytes_returned": 318139,
+        "calls": 132,
+        "empty_count": 45,
+        "error_count": 0,
+        "est_tokens": 79582,
+        "max_ms": 2105,
+        "op": "content",
+        "p95_ms": 131,
+        "tool": "search"
+      }
+    ],
+    "start_here": [
+      "run workspace health first when taking over this repo",
+      "use search to find candidate symbols, then inspect the selected result before editing",
+      "use context for broad orientation before reading whole files"
+    ],
+    "telemetry": {
+      "available": true,
+      "error": null,
+      "state": "ready",
+      "total_calls": 3022,
+      "window_end_ts": "2026-06-28T00:53:17.125Z",
+      "window_start_ts": "2026-06-06T23:29:30.913Z"
+    },
+    "tool_mix": [
+      {
+        "avg_ms": 8.249678249678249,
+        "bytes_returned": 2833031,
+        "calls": 777,
+        "empty_count": 71,
+        "error_count": 5,
+        "est_tokens": 708545,
+        "max_ms": 527,
+        "ok_count": 701,
+        "op": null,
+        "p95_ms": 33,
+        "result_count": 7993,
+        "tool": "inspect"
+      },
+      {
+        "avg_ms": 23.593320235756384,
+        "bytes_returned": 5448398,
+        "calls": 509,
+        "empty_count": 33,
+        "error_count": 0,
+        "est_tokens": 1362292,
+        "max_ms": 345,
+        "ok_count": 476,
+        "op": "full",
+        "p95_ms": 88,
+        "result_count": 1248,
+        "tool": "inspect"
+      },
+      {
+        "avg_ms": 50.547222222222224,
+        "bytes_returned": 553396,
+        "calls": 360,
+        "empty_count": 88,
+        "error_count": 14,
+        "est_tokens": 138488,
+        "max_ms": 2103,
+        "ok_count": 258,
+        "op": null,
+        "p95_ms": 133,
+        "result_count": 2612,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 27.104545454545455,
+        "bytes_returned": 713316,
+        "calls": 220,
+        "empty_count": 26,
+        "error_count": 0,
+        "est_tokens": 178407,
+        "max_ms": 2112,
+        "ok_count": 194,
+        "op": "summary",
+        "p95_ms": 127,
+        "result_count": 6302,
+        "tool": "inspect"
+      },
+      {
+        "avg_ms": 68.36363636363636,
+        "bytes_returned": 318139,
+        "calls": 132,
+        "empty_count": 45,
+        "error_count": 0,
+        "est_tokens": 79582,
+        "max_ms": 2105,
+        "ok_count": 87,
+        "op": "content",
+        "p95_ms": 131,
+        "result_count": 588,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 69.93129770992367,
+        "bytes_returned": 276321,
+        "calls": 131,
+        "empty_count": 46,
+        "error_count": 0,
+        "est_tokens": 69135,
+        "max_ms": 774,
+        "ok_count": 85,
+        "op": "source",
+        "p95_ms": 156,
+        "result_count": 650,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 192.10655737704917,
+        "bytes_returned": 176870,
+        "calls": 122,
+        "empty_count": 0,
+        "error_count": 0,
+        "est_tokens": 44261,
+        "max_ms": 2196,
+        "ok_count": 122,
+        "op": "auto",
+        "p95_ms": 350,
+        "result_count": 876,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 29.623655913978496,
+        "bytes_returned": 34972,
+        "calls": 93,
+        "empty_count": 1,
+        "error_count": 4,
+        "est_tokens": 8778,
+        "max_ms": 1231,
+        "ok_count": 88,
+        "op": "status",
+        "p95_ms": 50,
+        "result_count": 88,
+        "tool": "workspace"
+      },
+      {
+        "avg_ms": 65.24444444444444,
+        "bytes_returned": 274589,
+        "calls": 90,
+        "empty_count": 24,
+        "error_count": 0,
+        "est_tokens": 68675,
+        "max_ms": 127,
+        "ok_count": 66,
+        "op": "search",
+        "p95_ms": 110,
+        "result_count": 410,
+        "tool": "content"
+      },
+      {
+        "avg_ms": 135.38571428571427,
+        "bytes_returned": 1119636,
+        "calls": 70,
+        "empty_count": 0,
+        "error_count": 4,
+        "est_tokens": 279934,
+        "max_ms": 772,
+        "ok_count": 66,
+        "op": null,
+        "p95_ms": 607,
+        "result_count": 8692,
+        "tool": "context"
+      }
+    ]
+  },
+  "parseability": {
+    "onboarding": {
+      "exit_code": 0,
+      "friction_miss_fields_present": [
+        "common_misses",
+        "friction"
+      ],
+      "missing_fields": [],
+      "ms": 151,
+      "parsed": true,
+      "required_fields": [
+        "telemetry",
+        "start_here",
+        "tool_mix"
+      ],
+      "required_fields_present": 3,
+      "required_fields_total": 3
+    },
+    "telemetry": {
+      "exit_code": 0,
+      "ms": 158,
+      "no_telemetry": false,
+      "non_empty_lines": 13471,
+      "parsed": true,
+      "parsed_rows": 13471,
+      "required_fields": [
+        "tool",
+        "ts",
+        "outcome",
+        "result_count"
+      ],
+      "sampled_rows": 200
+    }
+  },
+  "telemetry": {
+    "core_empty_error_rates": [
+      {
+        "avg_ms": 31,
+        "calls": 939,
+        "empty_count": 147,
+        "error_count": 41,
+        "op": "default",
+        "p95_ms": 100,
+        "result_count": 9553,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 68,
+        "calls": 132,
+        "empty_count": 45,
+        "error_count": 0,
+        "op": "content",
+        "p95_ms": 131,
+        "result_count": 588,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 69,
+        "calls": 131,
+        "empty_count": 46,
+        "error_count": 0,
+        "op": "source",
+        "p95_ms": 156,
+        "result_count": 650,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 192,
+        "calls": 122,
+        "empty_count": 0,
+        "error_count": 0,
+        "op": "auto",
+        "p95_ms": 350,
+        "result_count": 876,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 78,
+        "calls": 35,
+        "empty_count": 0,
+        "error_count": 0,
+        "op": "symbol",
+        "p95_ms": 580,
+        "result_count": 599,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 123,
+        "calls": 27,
+        "empty_count": 7,
+        "error_count": 0,
+        "op": "all-text",
+        "p95_ms": 250,
+        "result_count": 177,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 15,
+        "calls": 25,
+        "empty_count": 11,
+        "error_count": 0,
+        "op": "file",
+        "p95_ms": 44,
+        "result_count": 100,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 97,
+        "calls": 9,
+        "empty_count": 1,
+        "error_count": 1,
+        "op": "regions",
+        "p95_ms": 121,
+        "result_count": 11,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 127,
+        "calls": 3,
+        "empty_count": 0,
+        "error_count": 0,
+        "op": "markers",
+        "p95_ms": 138,
+        "result_count": 11,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 5,
+        "calls": 1641,
+        "empty_count": 228,
+        "error_count": 7,
+        "op": "default",
+        "p95_ms": 22,
+        "result_count": 15385,
+        "tool": "inspect"
+      },
+      {
+        "avg_ms": 23,
+        "calls": 509,
+        "empty_count": 33,
+        "error_count": 0,
+        "op": "full",
+        "p95_ms": 88,
+        "result_count": 1248,
+        "tool": "inspect"
+      },
+      {
+        "avg_ms": 27,
+        "calls": 220,
+        "empty_count": 26,
+        "error_count": 0,
+        "op": "summary",
+        "p95_ms": 127,
+        "result_count": 6302,
+        "tool": "inspect"
+      },
+      {
+        "avg_ms": 22,
+        "calls": 36,
+        "empty_count": 0,
+        "error_count": 0,
+        "op": "overview",
+        "p95_ms": 40,
+        "result_count": 36,
+        "tool": "inspect"
+      },
+      {
+        "avg_ms": 64,
+        "calls": 160,
+        "empty_count": 8,
+        "error_count": 8,
+        "op": "default",
+        "p95_ms": 477,
+        "result_count": 15863,
+        "tool": "context"
+      },
+      {
+        "avg_ms": 143,
+        "calls": 37,
+        "empty_count": 0,
+        "error_count": 0,
+        "op": "off",
+        "p95_ms": 2281,
+        "result_count": 2393,
+        "tool": "context"
+      },
+      {
+        "avg_ms": 537,
+        "calls": 35,
+        "empty_count": 0,
+        "error_count": 0,
+        "op": "usage",
+        "p95_ms": 2354,
+        "result_count": 5231,
+        "tool": "context"
+      },
+      {
+        "avg_ms": 1,
+        "calls": 78,
+        "empty_count": 50,
+        "error_count": 1,
+        "op": "default",
+        "p95_ms": 9,
+        "result_count": 1145,
+        "tool": "trace"
+      },
+      {
+        "avg_ms": 30,
+        "calls": 15,
+        "empty_count": 5,
+        "error_count": 0,
+        "op": "refs",
+        "p95_ms": 213,
+        "result_count": 214,
+        "tool": "trace"
+      },
+      {
+        "avg_ms": 149,
+        "calls": 3,
+        "empty_count": 3,
+        "error_count": 0,
+        "op": "path",
+        "p95_ms": 235,
+        "result_count": 0,
+        "tool": "trace"
+      },
+      {
+        "avg_ms": 1,
+        "calls": 2,
+        "empty_count": 2,
+        "error_count": 0,
+        "op": "auto",
+        "p95_ms": 1,
+        "result_count": 0,
+        "tool": "trace"
+      },
+      {
+        "avg_ms": 2,
+        "calls": 83,
+        "empty_count": 31,
+        "error_count": 0,
+        "op": "default",
+        "p95_ms": 9,
+        "result_count": 1692,
+        "tool": "impact"
+      },
+      {
+        "avg_ms": 52,
+        "calls": 16,
+        "empty_count": 0,
+        "error_count": 0,
+        "op": "git_diff",
+        "p95_ms": 116,
+        "result_count": 927,
+        "tool": "impact"
+      },
+      {
+        "avg_ms": 35,
+        "calls": 13,
+        "empty_count": 0,
+        "error_count": 0,
+        "op": "target",
+        "p95_ms": 219,
+        "result_count": 279,
+        "tool": "impact"
+      },
+      {
+        "avg_ms": 5,
+        "calls": 3,
+        "empty_count": 0,
+        "error_count": 0,
+        "op": "changed_paths",
+        "p95_ms": 10,
+        "result_count": 152,
+        "tool": "impact"
+      }
+    ],
+    "core_tool_op_mix": [
+      {
+        "avg_ms": 31,
+        "calls": 939,
+        "empty_count": 147,
+        "error_count": 41,
+        "op": "default",
+        "p95_ms": 100,
+        "result_count": 9553,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 68,
+        "calls": 132,
+        "empty_count": 45,
+        "error_count": 0,
+        "op": "content",
+        "p95_ms": 131,
+        "result_count": 588,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 69,
+        "calls": 131,
+        "empty_count": 46,
+        "error_count": 0,
+        "op": "source",
+        "p95_ms": 156,
+        "result_count": 650,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 192,
+        "calls": 122,
+        "empty_count": 0,
+        "error_count": 0,
+        "op": "auto",
+        "p95_ms": 350,
+        "result_count": 876,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 78,
+        "calls": 35,
+        "empty_count": 0,
+        "error_count": 0,
+        "op": "symbol",
+        "p95_ms": 580,
+        "result_count": 599,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 123,
+        "calls": 27,
+        "empty_count": 7,
+        "error_count": 0,
+        "op": "all-text",
+        "p95_ms": 250,
+        "result_count": 177,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 15,
+        "calls": 25,
+        "empty_count": 11,
+        "error_count": 0,
+        "op": "file",
+        "p95_ms": 44,
+        "result_count": 100,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 97,
+        "calls": 9,
+        "empty_count": 1,
+        "error_count": 1,
+        "op": "regions",
+        "p95_ms": 121,
+        "result_count": 11,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 127,
+        "calls": 3,
+        "empty_count": 0,
+        "error_count": 0,
+        "op": "markers",
+        "p95_ms": 138,
+        "result_count": 11,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 5,
+        "calls": 1641,
+        "empty_count": 228,
+        "error_count": 7,
+        "op": "default",
+        "p95_ms": 22,
+        "result_count": 15385,
+        "tool": "inspect"
+      },
+      {
+        "avg_ms": 23,
+        "calls": 509,
+        "empty_count": 33,
+        "error_count": 0,
+        "op": "full",
+        "p95_ms": 88,
+        "result_count": 1248,
+        "tool": "inspect"
+      },
+      {
+        "avg_ms": 27,
+        "calls": 220,
+        "empty_count": 26,
+        "error_count": 0,
+        "op": "summary",
+        "p95_ms": 127,
+        "result_count": 6302,
+        "tool": "inspect"
+      },
+      {
+        "avg_ms": 22,
+        "calls": 36,
+        "empty_count": 0,
+        "error_count": 0,
+        "op": "overview",
+        "p95_ms": 40,
+        "result_count": 36,
+        "tool": "inspect"
+      },
+      {
+        "avg_ms": 64,
+        "calls": 160,
+        "empty_count": 8,
+        "error_count": 8,
+        "op": "default",
+        "p95_ms": 477,
+        "result_count": 15863,
+        "tool": "context"
+      },
+      {
+        "avg_ms": 143,
+        "calls": 37,
+        "empty_count": 0,
+        "error_count": 0,
+        "op": "off",
+        "p95_ms": 2281,
+        "result_count": 2393,
+        "tool": "context"
+      },
+      {
+        "avg_ms": 537,
+        "calls": 35,
+        "empty_count": 0,
+        "error_count": 0,
+        "op": "usage",
+        "p95_ms": 2354,
+        "result_count": 5231,
+        "tool": "context"
+      },
+      {
+        "avg_ms": 1,
+        "calls": 78,
+        "empty_count": 50,
+        "error_count": 1,
+        "op": "default",
+        "p95_ms": 9,
+        "result_count": 1145,
+        "tool": "trace"
+      },
+      {
+        "avg_ms": 30,
+        "calls": 15,
+        "empty_count": 5,
+        "error_count": 0,
+        "op": "refs",
+        "p95_ms": 213,
+        "result_count": 214,
+        "tool": "trace"
+      },
+      {
+        "avg_ms": 149,
+        "calls": 3,
+        "empty_count": 3,
+        "error_count": 0,
+        "op": "path",
+        "p95_ms": 235,
+        "result_count": 0,
+        "tool": "trace"
+      },
+      {
+        "avg_ms": 1,
+        "calls": 2,
+        "empty_count": 2,
+        "error_count": 0,
+        "op": "auto",
+        "p95_ms": 1,
+        "result_count": 0,
+        "tool": "trace"
+      },
+      {
+        "avg_ms": 2,
+        "calls": 83,
+        "empty_count": 31,
+        "error_count": 0,
+        "op": "default",
+        "p95_ms": 9,
+        "result_count": 1692,
+        "tool": "impact"
+      },
+      {
+        "avg_ms": 52,
+        "calls": 16,
+        "empty_count": 0,
+        "error_count": 0,
+        "op": "git_diff",
+        "p95_ms": 116,
+        "result_count": 927,
+        "tool": "impact"
+      },
+      {
+        "avg_ms": 35,
+        "calls": 13,
+        "empty_count": 0,
+        "error_count": 0,
+        "op": "target",
+        "p95_ms": 219,
+        "result_count": 279,
+        "tool": "impact"
+      },
+      {
+        "avg_ms": 5,
+        "calls": 3,
+        "empty_count": 0,
+        "error_count": 0,
+        "op": "changed_paths",
+        "p95_ms": 10,
+        "result_count": 152,
+        "tool": "impact"
+      }
+    ],
+    "exported_total_calls": 13471,
+    "low_use_tools": [
+      {
+        "calls": 98,
+        "note": "report-only low usage in this local telemetry window",
+        "share": 0.022929340196537203,
+        "tool": "trace"
+      },
+      {
+        "calls": 115,
+        "note": "report-only low usage in this local telemetry window",
+        "share": 0.02690687880205896,
+        "tool": "impact"
+      }
+    ],
+    "tool_counts": {
+      "context": 232,
+      "impact": 115,
+      "inspect": 2406,
+      "search": 1423,
+      "trace": 98
+    },
+    "window_end_ts": "2026-06-28T00:53:17.125Z",
+    "window_start_ts": "2026-05-31T13:17:18.924Z",
+    "workspace_filter_matched": true,
+    "workspace_root": "/Users/murphy/source/miller",
+    "workspace_total_calls": 4787
+  },
+  "workflow_candidate_note": "Prior Task 4 workflow evidence was run with Julie rows skipped, so no Julie-style one-call superiority conclusion is drawn.",
+  "workflow_candidates": []
+}

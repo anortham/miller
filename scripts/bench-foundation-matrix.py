@@ -6,15 +6,18 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import subprocess
 import sys
 import time
+from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from benchlib import McpProcess, content_text, summarize_by_tool
-from benchlib.reporting import summarize_foundation_matrix
-from benchlib.scoring import score_manifest_path
+from benchlib.reporting import summarize_adoption_analysis, summarize_foundation_matrix
+from benchlib.scoring import count_present_fields, parse_jsonl_objects, score_manifest_path
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,6 +56,10 @@ SUPPORTED_SCORING_MODES = {
 SUPPORTED_READINESS = {"edit-ready", "inspect-ready", "needs-search", "unsupported", "no-path"}
 SUPPORTED_WORKFLOW_OUTCOMES = {"ok", "needs-search", "unsupported", "no-path"}
 BASE_REQUIRED_ROW_KEYS = {"id", "repo", "task_class", "intent", "expected", "scoring", "gate"}
+CORE_ADOPTION_TOOLS = ("search", "inspect", "context", "trace", "impact")
+TELEMETRY_SCHEMA_FIELDS = ["tool", "ts", "outcome", "result_count"]
+ONBOARDING_REQUIRED_FIELDS = ["telemetry", "start_here", "tool_mix"]
+TASK4_WORKFLOW_RESULTS = ROOT / "docs/findings/benchmarks/2026-06-27-foundation-matrix/task4-workflows/results.json"
 
 WORKFLOW_CSV_FIELDS = [
     "expected_anchor_count",
@@ -726,6 +733,324 @@ def gate_failures(results: list[dict[str, Any]]) -> list[str]:
     return failures
 
 
+def adoption_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def adoption_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def adoption_float(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def adoption_p95(values: list[float]) -> int:
+    if not values:
+        return 0
+    index = max(0, math.ceil(len(values) * 0.95) - 1)
+    return int(sorted(values)[index])
+
+
+def adoption_op(value: Any) -> str:
+    return str(value) if value is not None and str(value) else "default"
+
+
+def telemetry_is_error(row: dict[str, Any]) -> bool:
+    if row.get("error_kind"):
+        return True
+    outcome = str(row.get("outcome") or "").lower()
+    return bool(outcome and outcome not in {"ok", "empty", "no_results", "not_found"})
+
+
+def telemetry_is_empty(row: dict[str, Any]) -> bool:
+    outcome = str(row.get("outcome") or "").lower()
+    return adoption_int(row.get("result_count")) == 0 or outcome in {"empty", "no_results", "not_found"}
+
+
+def telemetry_tool_rows(rows: list[dict[str, Any]], workspace_root: str) -> tuple[list[dict[str, Any]], bool]:
+    workspace_rows = [row for row in rows if row.get("workspace_root") == workspace_root]
+    return workspace_rows, bool(workspace_rows or not rows)
+
+
+def summarize_telemetry_rows(rows: list[dict[str, Any]], workspace_root: str) -> dict[str, Any]:
+    workspace_rows, workspace_filter_matched = telemetry_tool_rows(rows, workspace_root)
+    timestamps = sorted(str(row.get("ts") or "") for row in workspace_rows if row.get("ts"))
+    tool_counts = {tool: 0 for tool in CORE_ADOPTION_TOOLS}
+    buckets: dict[tuple[str, str], dict[str, Any]] = defaultdict(
+        lambda: {
+            "calls": 0,
+            "result_count": 0,
+            "empty_count": 0,
+            "error_count": 0,
+            "durations": [],
+        }
+    )
+
+    for row in workspace_rows:
+        tool = str(row.get("tool") or "")
+        op = adoption_op(row.get("op"))
+        if tool in tool_counts:
+            tool_counts[tool] += 1
+        bucket = buckets[(tool, op)]
+        bucket["calls"] += 1
+        bucket["result_count"] += adoption_int(row.get("result_count"))
+        bucket["empty_count"] += 1 if telemetry_is_empty(row) else 0
+        bucket["error_count"] += 1 if telemetry_is_error(row) else 0
+        bucket["durations"].append(adoption_float(row.get("duration_ms")))
+
+    core_rows: list[dict[str, Any]] = []
+    for tool in CORE_ADOPTION_TOOLS:
+        tool_keys = sorted((key for key in buckets if key[0] == tool), key=lambda key: (-buckets[key]["calls"], key[1]))
+        if not tool_keys:
+            tool_keys = [(tool, "default")]
+        for key in tool_keys:
+            bucket = buckets[key]
+            durations = bucket["durations"]
+            calls = adoption_int(bucket["calls"])
+            core_rows.append(
+                {
+                    "tool": key[0],
+                    "op": key[1],
+                    "calls": calls,
+                    "result_count": adoption_int(bucket["result_count"]),
+                    "empty_count": adoption_int(bucket["empty_count"]),
+                    "error_count": adoption_int(bucket["error_count"]),
+                    "avg_ms": int(sum(durations) / len(durations)) if durations else 0,
+                    "p95_ms": adoption_p95(durations),
+                }
+            )
+
+    total_core_calls = sum(tool_counts.values())
+    low_use_tools: list[dict[str, Any]] = []
+    for tool, calls in sorted(tool_counts.items(), key=lambda item: (item[1], item[0])):
+        share = (calls / total_core_calls) if total_core_calls else 0.0
+        if calls == 0 or share <= 0.05:
+            low_use_tools.append(
+                {
+                    "tool": tool,
+                    "calls": calls,
+                    "share": share,
+                    "note": "report-only low usage in this local telemetry window",
+                }
+            )
+    if not low_use_tools and tool_counts:
+        tool, calls = min(tool_counts.items(), key=lambda item: (item[1], item[0]))
+        low_use_tools.append(
+            {
+                "tool": tool,
+                "calls": calls,
+                "share": (calls / total_core_calls) if total_core_calls else 0.0,
+                "note": "lowest observed core-tool usage; report-only",
+            }
+        )
+
+    return {
+        "workspace_root": workspace_root,
+        "workspace_filter_matched": workspace_filter_matched,
+        "exported_total_calls": len(rows),
+        "workspace_total_calls": len(workspace_rows),
+        "window_start_ts": timestamps[0] if timestamps else "",
+        "window_end_ts": timestamps[-1] if timestamps else "",
+        "tool_counts": tool_counts,
+        "core_tool_op_mix": core_rows,
+        "core_empty_error_rates": core_rows,
+        "low_use_tools": low_use_tools,
+    }
+
+
+def summarize_onboarding(parsed: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "telemetry": parsed.get("telemetry") if isinstance(parsed.get("telemetry"), dict) else {},
+        "start_here": parsed.get("start_here") if isinstance(parsed.get("start_here"), list) else [],
+        "tool_mix": parsed.get("tool_mix")[:10] if isinstance(parsed.get("tool_mix"), list) else [],
+        "common_misses": parsed.get("common_misses")[:10] if isinstance(parsed.get("common_misses"), list) else [],
+        "friction": parsed.get("friction")[:10] if isinstance(parsed.get("friction"), list) else [],
+    }
+
+
+def workflow_candidates_from_prior_results(path: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    diagnostics: list[dict[str, Any]] = []
+    if not path.exists():
+        return [], [{"type": "workflow_results_missing", "path": str(path)}]
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return [], [{"type": "workflow_results_parse_failure", "path": str(path), "message": str(exc)}]
+    results = document.get("results") if isinstance(document, dict) else None
+    if not isinstance(results, list):
+        return [], [{"type": "workflow_results_invalid", "path": str(path), "message": "missing results list"}]
+
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in results:
+        if isinstance(row, dict) and row.get("row_id"):
+            grouped[str(row["row_id"])].append(row)
+
+    candidates: list[dict[str, Any]] = []
+    skipped_julie_rows = 0
+    for row_id, rows in sorted(grouped.items()):
+        miller_rows = [row for row in rows if str(row.get("tool", "")).startswith("miller.")]
+        julie_rows = [row for row in rows if str(row.get("tool", "")).startswith("julie.")]
+        skipped_julie_rows += sum(1 for row in julie_rows if row.get("route") == "skipped")
+        julie_pass = [row for row in julie_rows if row.get("scoring_pass")]
+        miller_friction = [
+            row
+            for row in miller_rows
+            if row.get("adaptation_candidate")
+            or not row.get("scoring_pass")
+            or str(row.get("workflow_outcome") or "") in {"needs-search", "unsupported", "no-path"}
+        ]
+        if not julie_pass or not miller_friction:
+            continue
+        miller = miller_friction[0]
+        julie = julie_pass[0]
+        candidates.append(
+            {
+                "row_id": row_id,
+                "repo": miller.get("repo") or julie.get("repo") or "",
+                "intent": miller.get("intent") or julie.get("intent") or "",
+                "miller_outcome": str(miller.get("workflow_outcome") or miller.get("scoring_mode") or ""),
+                "julie_outcome": str(julie.get("workflow_outcome") or julie.get("scoring_mode") or ""),
+                "note": "Julie-like one-call row passed while the Miller row still showed friction",
+            }
+        )
+    if not candidates and skipped_julie_rows:
+        diagnostics.append(
+            {
+                "type": "workflow_candidates_unavailable",
+                "reason": "prior Task 4 workflow evidence skipped Julie rows",
+                "skipped_julie_rows": skipped_julie_rows,
+            }
+        )
+    return candidates, diagnostics
+
+
+def run_adoption_analysis(workspace_root: str) -> dict[str, Any]:
+    failures: list[str] = []
+    diagnostics: list[dict[str, Any]] = []
+    telemetry_elapsed, telemetry_proc = run_cli(["telemetry", "export", "--jsonl"], timeout=120)
+    onboarding_elapsed, onboarding_proc = run_cli(
+        ["workspace", "onboarding", "--json", "--workspace-id", workspace_root],
+        timeout=90,
+    )
+
+    telemetry_rows: list[dict[str, Any]] = []
+    telemetry_non_empty_lines = 0
+    telemetry_parse_diagnostics: list[dict[str, Any]] = []
+    telemetry_no_rows = True
+    if telemetry_proc.returncode != 0:
+        failures.append(f"telemetry export exited {telemetry_proc.returncode}")
+        diagnostics.append({"type": "telemetry_exit_code", "exit_code": telemetry_proc.returncode, "stderr": telemetry_proc.stderr.strip()})
+    else:
+        telemetry_rows, telemetry_non_empty_lines, telemetry_parse_diagnostics = parse_jsonl_objects(telemetry_proc.stdout)
+        telemetry_no_rows = telemetry_non_empty_lines == 0
+        if telemetry_parse_diagnostics:
+            failures.append("telemetry JSONL parse failed")
+            diagnostics.extend(telemetry_parse_diagnostics)
+        schema_sample = telemetry_rows[:200]
+        for index, row in enumerate(schema_sample):
+            _, missing_fields = count_present_fields(row, TELEMETRY_SCHEMA_FIELDS)
+            if missing_fields:
+                failures.append(f"telemetry row {index} missing fields: {', '.join(missing_fields)}")
+                diagnostics.append({"type": "telemetry_schema_missing_fields", "row": index, "fields": missing_fields})
+                break
+
+    telemetry_summary = summarize_telemetry_rows(telemetry_rows, workspace_root)
+
+    onboarding_parse: dict[str, Any] | None = None
+    onboarding_missing_fields: list[str] = []
+    onboarding_shape_errors: list[dict[str, Any]] = []
+    if onboarding_proc.returncode != 0:
+        failures.append(f"workspace onboarding exited {onboarding_proc.returncode}")
+        diagnostics.append({"type": "onboarding_exit_code", "exit_code": onboarding_proc.returncode, "stderr": onboarding_proc.stderr.strip()})
+    else:
+        try:
+            parsed = json.loads(onboarding_proc.stdout)
+        except json.JSONDecodeError as exc:
+            failures.append("onboarding JSON parse failed")
+            diagnostics.append({"type": "onboarding_parse_failure", "message": str(exc), "line": exc.lineno, "column": exc.colno})
+        else:
+            if not isinstance(parsed, dict):
+                failures.append("onboarding JSON was not an object")
+                diagnostics.append({"type": "onboarding_parse_failure", "message": "expected object"})
+            else:
+                onboarding_parse = parsed
+                _, onboarding_missing_fields = count_present_fields(parsed, ONBOARDING_REQUIRED_FIELDS)
+                if onboarding_missing_fields:
+                    failures.append(f"onboarding missing fields: {', '.join(onboarding_missing_fields)}")
+                    diagnostics.append({"type": "onboarding_missing_fields", "fields": onboarding_missing_fields})
+                for field in ["common_misses", "friction"]:
+                    if field in parsed and not isinstance(parsed[field], list):
+                        onboarding_shape_errors.append({"type": "onboarding_invalid_field", "field": field, "expected": "list"})
+                if onboarding_shape_errors:
+                    failures.append("onboarding friction/miss fields had invalid shapes")
+                    diagnostics.extend(onboarding_shape_errors)
+
+    workflow_candidates, workflow_diagnostics = workflow_candidates_from_prior_results(TASK4_WORKFLOW_RESULTS)
+    diagnostics.extend(workflow_diagnostics)
+    workflow_candidate_note = ""
+    if any(item.get("type") == "workflow_candidates_unavailable" for item in workflow_diagnostics):
+        workflow_candidate_note = "Prior Task 4 workflow evidence was run with Julie rows skipped, so no Julie-style one-call superiority conclusion is drawn."
+
+    analysis = {
+        "generated_at": adoption_now(),
+        "commands": {
+            "telemetry": cli_command_label(["telemetry", "export", "--jsonl"]),
+            "onboarding": cli_command_label(["workspace", "onboarding", "--json", "--workspace-id", workspace_root]),
+        },
+        "gate": {
+            "status": "FAIL" if failures else "PASS",
+            "failures": failures,
+        },
+        "parseability": {
+            "telemetry": {
+                "exit_code": telemetry_proc.returncode,
+                "ms": telemetry_elapsed,
+                "parsed": telemetry_proc.returncode == 0 and not telemetry_parse_diagnostics,
+                "no_telemetry": telemetry_no_rows,
+                "non_empty_lines": telemetry_non_empty_lines,
+                "parsed_rows": len(telemetry_rows),
+                "sampled_rows": min(len(telemetry_rows), 200),
+                "required_fields": TELEMETRY_SCHEMA_FIELDS,
+            },
+            "onboarding": {
+                "exit_code": onboarding_proc.returncode,
+                "ms": onboarding_elapsed,
+                "parsed": onboarding_parse is not None,
+                "required_fields": ONBOARDING_REQUIRED_FIELDS,
+                "required_fields_present": len(ONBOARDING_REQUIRED_FIELDS) - len(onboarding_missing_fields),
+                "required_fields_total": len(ONBOARDING_REQUIRED_FIELDS),
+                "missing_fields": onboarding_missing_fields,
+                "friction_miss_fields_present": [field for field in ["common_misses", "friction"] if onboarding_parse and field in onboarding_parse],
+            },
+        },
+        "telemetry": telemetry_summary,
+        "core_tool_op_mix": telemetry_summary["core_tool_op_mix"],
+        "core_empty_error_rates": telemetry_summary["core_empty_error_rates"],
+        "low_use_tools": telemetry_summary["low_use_tools"],
+        "onboarding": summarize_onboarding(onboarding_parse or {}),
+        "workflow_candidates": workflow_candidates,
+        "workflow_candidate_note": workflow_candidate_note,
+        "diagnostics": diagnostics,
+    }
+    return analysis
+
+
+def write_adoption_outputs(out_dir: Path, analysis: dict[str, Any]) -> Path:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    json_path = out_dir / "adoption-summary.json"
+    json_path.write_text(json.dumps(analysis, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    summary_path = out_dir / "adoption-summary.md"
+    summary_path.write_text(summarize_adoption_analysis(analysis) + "\n", encoding="utf-8")
+    return summary_path
+
+
 def write_outputs(
     out_dir: Path,
     manifest_path: Path,
@@ -810,7 +1135,21 @@ def main() -> int:
     parser.add_argument("--skip-julie", action="store_true")
     parser.add_argument("--skip-miller-refresh", action="store_true")
     parser.add_argument("--gate", action="store_true", help="fail when hard Miller rows miss expected paths")
+    parser.add_argument("--adoption-only", action="store_true", help="write telemetry/onboarding adoption evidence and exit")
     args = parser.parse_args()
+
+    if args.adoption_only:
+        if not MILLER.exists():
+            print(f"Miller binary not found: {MILLER}", file=sys.stderr)
+            return 2
+        analysis = run_adoption_analysis(REPO_ROOTS["miller"])
+        summary_path = write_adoption_outputs(Path(args.out_dir), analysis)
+        if analysis["gate"]["failures"]:
+            print("adoption analysis gate failed:", file=sys.stderr)
+            for failure in analysis["gate"]["failures"]:
+                print(f"- {failure}", file=sys.stderr)
+        print(summary_path)
+        return 1 if analysis["gate"]["failures"] else 0
 
     manifest_path = Path(args.manifest)
     rows, errors = load_manifest(manifest_path)

@@ -293,6 +293,38 @@ def _score_advertised_commands(capabilities: Any, commands: list[str]) -> tuple[
     return len(commands) - len(missing), missing
 
 
+def parse_jsonl_objects(text: str, *, sample_limit: int | None = None) -> tuple[list[dict[str, Any]], int, list[dict[str, Any]]]:
+    """Parse non-empty JSONL object rows, optionally bounded to a sample."""
+    diagnostics: list[dict[str, Any]] = []
+    lines = [line for line in text.splitlines() if line.strip()]
+    sample = lines[:sample_limit] if sample_limit is not None else lines
+    rows: list[dict[str, Any]] = []
+    for index, line in enumerate(sample):
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError as exc:
+            diagnostics.append(
+                {
+                    "type": "parse_failure",
+                    "format": "jsonl",
+                    "line_index": index,
+                    "message": str(exc),
+                    "line": exc.lineno,
+                    "column": exc.colno,
+                }
+            )
+            continue
+        if not isinstance(parsed, dict):
+            diagnostics.append({"type": "parse_failure", "format": "jsonl", "line_index": index, "message": "expected object"})
+            continue
+        rows.append(parsed)
+    return rows, len(lines), diagnostics
+
+
+def count_present_fields(data: Any, fields: list[str]) -> tuple[int, list[str]]:
+    return _field_counts(data, fields)
+
+
 def _contract_result(
     *,
     mode: str,
