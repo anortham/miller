@@ -441,7 +441,7 @@ public sealed class ContextToolTests
 
         Assert.Equal(3, count);
         // maxHops=0 → every candidate is a seed; no neighbours section. Seeds are listed first, each on one line
-        // with the "seed" reason, followed by a `## next inspect` footer of the top 3 seed file:line targets.
+        // with the "seed" reason, followed by copyable overview-first inspect calls for the top 3 seeds.
         Assert.Equal(
             "# context bundle (3)\n" +
             "## seeds\n" +
@@ -449,9 +449,9 @@ public sealed class ContextToolTests
             "Beta  method  src/Shared.cs:20  seed  method Beta()\n" +
             "Gamma  class  src/Gamma.cs:30  seed  class Gamma\n" +
             "## next inspect\n" +
-            "src/Shared.cs:10\n" +
-            "src/Shared.cs:20\n" +
-            "src/Gamma.cs:30",
+            "inspect(target=\"Alpha\", scope=\"src/Shared.cs\", depth=\"overview\")\n" +
+            "inspect(target=\"Beta\", scope=\"src/Shared.cs\", depth=\"overview\")\n" +
+            "inspect(target=\"Gamma\", scope=\"src/Gamma.cs\", depth=\"overview\")",
             output);
     }
 
@@ -471,8 +471,8 @@ public sealed class ContextToolTests
         Assert.Contains("web/OrderController.cs:\n  :1 OrderController class hop=1", output);
         Assert.Contains("src/OrderRepo.cs:\n  :1 OrderRepo class hop=1", output);
         Assert.Contains("tests/OrderServiceTests.cs:\n  :1 OrderServiceTests class hop=1", output);
-        // Footer points at the single seed for the next inspect call.
-        Assert.Contains("## next inspect\nsrc/OrderService.cs:1", output);
+        // Footer points at the single seed with a copyable overview-first inspect call.
+        Assert.Contains("## next inspect\ninspect(target=\"OrderService\", scope=\"src/OrderService.cs\", depth=\"overview\")", output);
     }
 
     [Fact]
@@ -489,7 +489,7 @@ public sealed class ContextToolTests
         Assert.Contains("Hub  class  src/Hub.cs:1  seed  class Hub", output);
         Assert.Contains("... 3 more neighbours omitted — inspect a seed for the full graph.", output);
         Assert.Equal(12, output.Split("hop=1").Length - 1);
-        Assert.Contains("## next inspect\nsrc/Hub.cs:1", output);
+        Assert.Contains("## next inspect\ninspect(target=\"Hub\", scope=\"src/Hub.cs\", depth=\"overview\")", output);
     }
 
     [Fact]

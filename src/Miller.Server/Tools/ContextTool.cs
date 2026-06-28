@@ -48,7 +48,8 @@ public sealed partial class ContextTool
     [Description(
         "First call in an unfamiliar area: a small, justified bundle — the most relevant entry points and why, plus " +
         "the next symbols to inspect. Give the task or question (optionally a failing test or stack trace) and get a " +
-        "bounded set of seed symbols with one-line reasons, capped neighbours, and a 'next inspect' footer. If you " +
+        "bounded set of seed symbols with one-line reasons, capped neighbours, and copyable inspect depth=overview " +
+        "footer calls. If you " +
         "already know the symbol, use inspect. Returns compact text by default; pass format=json to chain.")]
     public string Context(
         [Description("The task or question to anchor the bundle on.")] string query,
@@ -602,14 +603,20 @@ public sealed partial class ContextTool
             sb.Append("## next inspect\n");
             int inspectCount = Math.Min(NextInspectCount, seeds.Count);
             for (int i = 0; i < inspectCount; i++)
-            {
-                var s = seeds[i].Symbol;
-                sb.Append(s.FilePath).Append(':').Append(s.StartLine).Append('\n');
-            }
+                sb.Append(NextInspectLine(seeds[i].Symbol)).Append('\n');
         }
 
         return sb.ToString().TrimEnd('\n');
     }
+
+    private static string NextInspectLine(IndexedSymbol symbol) =>
+        "inspect(target=\"" + EscapeCallString(symbol.Name) +
+        "\", scope=\"" + EscapeCallString(symbol.FilePath) +
+        "\", depth=\"overview\")";
+
+    private static string EscapeCallString(string value) =>
+        value.Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal);
 
     // A hop-0 seed gets one line with its reason ("seed") and full provenance — it is the anchor the bundle is built
     // around, so it earns the file:line inline (neighbours are grouped by file and only carry a hop label).
