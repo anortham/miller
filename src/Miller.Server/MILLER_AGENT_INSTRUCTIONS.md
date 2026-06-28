@@ -1,21 +1,19 @@
 # Miller — Code Intelligence Server
 
-Miller serves an always-fresh index of this workspace's code. Reach for a Miller tool before a raw shell
-`rg`/`grep`/`find` or reading a whole file: one call returns ranked, structured results with fewer tokens.
+Miller serves a fresh index of this workspace's code. Reach for a Miller tool before a raw shell read: one call
+returns ranked, structured results with fewer tokens.
 
 ## Rules
 
-1. **Search before reading.** Run `search` before `grep`/`rg`/`cat` or opening files by hand.
+1. **Search before reading.** Run `search` before `grep`/`rg`/`cat`.
 2. **Structure before content.** Run `inspect` to see a file's symbols or a symbol's signature before reading
    the whole file — it is far cheaper than a full read.
-3. **Impact before changing.** Run `impact` before a refactor to find the downstream symbols AND the tests to
-   run. Prefer it over grepping for usages.
+3. **Impact before changing.** Run `impact` before a refactor to find downstream symbols and tests.
 4. **Trace to follow a thread.** Use `trace` for "where is this referenced?", "who calls this?", "how does A reach B?", or a cross-language
    call chain — not manual file hopping.
-5. **Edit with a preview.** `edit` previews a diff and writes nothing by default; set `apply=true` only after
-   the dry-run looks right.
-6. **Trust the index.** Results are extracted and kept fresh — do NOT re-verify them with `grep`/`find`/`Read`.
-   If the index is stale or `inspect <file>` misses expected symbols, run `workspace refresh`, then refresh and retry before raw reads.
+5. **Edit with a preview.** `edit` previews a diff; set `apply=true` only after the dry-run looks right.
+6. **Trust the index.** Do NOT re-verify Miller results with `grep`/`find`/`Read`.
+   If stale, run `workspace refresh`, then refresh and retry before raw reads.
 
 ## Tools
 
@@ -44,7 +42,7 @@ Miller serves an always-fresh index of this workspace's code. Reach for a Miller
   `mode=auto` (callers/callees) is subsumed by `inspect depth=full` — prefer `inspect` for that.
   Reduced-confidence links are flagged `[verb-unknown]`/`[ambiguous]`. Use `format=json` for structured
   references/nodes/links/diagnostics/next_actions. Use `scope=<file>` to disambiguate duplicate names. Optional
-  `workspace_id` and `ensure_fresh` work cross-workspace. **`mode=bridge` is provider-scoped to `dotnet-web`; on
+  `workspace_id` and `ensure_fresh` work cross-workspace. **`mode=bridge` is scoped to `dotnet-web`; on
   another stack use `mode=refs`/`mode=path`, or `inspect depth=full` for callers/callees.**
 - `impact` — What a change affects: downstream symbols and linked tests. After edits, run `impact` with no
   args to read the working-tree git diff and see what your uncommitted change affects + which tests to run.
@@ -56,12 +54,12 @@ Miller serves an always-fresh index of this workspace's code. Reach for a Miller
 - `content` — Import/search/read/list/remove/export external/web text for logs, CI, reports, dumps, and fetched
   markdown. `import`/`add_markdown` report metadata; `search` returns snippets, `source_id`, and `workspace_id` for
   cross-workspace hits. `read` returns ≤200-line windows; pass the hit's `source_id` and, when present,
-  `workspace_id` (unique `display_path` also works). Use `content_kind=web` for web-only reads, or
-  `workspace_id=all` on `search` for audits. `export` is raw JSONL for integrations.
+  workspace_id when reading cross-workspace hits (unique `display_path` also works). Use `content_kind=web` for
+  web-only reads, or `workspace_id=all` on `search` for audits. Empty content searches and failed reads include recovery guidance; JSON includes `diagnostic_code` and `next_actions`. `export` is raw JSONL.
 - `patterns` — List, summarize, and search code-shape facts from `structural_facts` across many languages: framework
   facts, SQL DDL, JSON/YAML/TOML/Markdown structure. Run `patterns()` to see emitted ids (not raw AST queries). Use
   `operation=list|summary|search` with `pattern_id`, or `query` across matching ids. `where=key=value`, `path`,
-  `language`, `workspace_id`, and `ensure_fresh` apply.
+  `language`, `workspace_id`, and `ensure_fresh` apply. List/no-match results include `next_actions`.
 - `workspace` — Index lifecycle: `status`, `health`, `onboarding`, `refresh`, `full`, `list`, `open`, `remove`,
   `leader`, `dashboard` (start/reuse the loopback dashboard). `status`, `health`, `onboarding`, `leader`, `refresh`, `full`, and
   `remove` accept `workspace_id` or `path`; `list` shows the registry.
@@ -73,19 +71,18 @@ Miller serves an always-fresh index of this workspace's code. Reach for a Miller
 - **Trace a flow**: `trace mode=refs` for usages, `mode=path` for A→B, `mode=bridge` for `dotnet-web`
   cross-language chains; for callers/callees use `inspect depth=full` (subsumes `mode=auto`). If a name is ambiguous, retry with `scope=<file>`.
   If `mode=path` returns no path, treat it as no extracted graph path within depth, not proof unrelated; follow its `Next:` actions.
-- **Find something in docs/prose**: `search mode=content "<phrase>"` — searches markdown/config/text content and
-  returns `path:line` + snippet, where symbol search would find nothing.
-- **Find source-body text**: `search mode=source "<literal or phrase>"` — searches verified source files and
-  returns `path:line`, kind, containing symbol when known, and snippet.
+- **Find docs/prose**: `search mode=content "<phrase>"` returns `path:line` + snippet.
+- **Find source-body text**: `search mode=source "<literal or phrase>"` searches verified source files.
 - **Audit registered workspaces for exact text**: `content search query="dangerous term" workspace_id=all content_kind=source`
   or `content_kind=docs|config|external_file|web`, then `content read` with the hit's `workspace_id`.
 - **Find known code shapes**: `patterns operation=list`, then `patterns operation=search pattern_id=<id>` with filters.
+  If a query has no matches, use the suggested near matches or list output instead of raw AST grepping.
 - **Inspect a large log/report**: `content import path=/tmp/build.log` → `content search query="error text"` →
   `content read source_id=... line=... context_lines=10`. Do not read or paste the full file.
 - **Research a web page**: use `miller-web-research` to fetch markdown with `browser39` into a temp file, then
   `content add_markdown path=/tmp/page.md url=https://... display_path="title"` →
   `content search query="phrase" content_kind=web` → bounded `content read`. Do not create repo docs for pages.
-- **Scope noisy search**: add `file_pattern=src/ui/**` or `language=typescript` when you know the likely area.
+- **Scope noisy search**: add `file_pattern=src/ui/**` or `language=typescript`.
 - **Find text only inside comments or strings**: `search "<phrase>" regions=comment` or `regions=string_literal`;
   `MILLER_REGION_INDEX=0` disables this path.
 - **List code markers**: `search mode=markers query=TODO,FIXME,HACK,XXX` for TODO/FIXME/HACK/XXX in comments/doc

@@ -131,7 +131,8 @@ public sealed class ContentToolTests : IDisposable
         Assert.Contains("removed", removed);
 
         string afterRemove = tool.Content("search", query: "SecretToken42");
-        Assert.Equal("No results.", afterRemove.Trim());
+        Assert.Contains("No results", afterRemove, StringComparison.Ordinal);
+        Assert.Contains("content_kind", afterRemove, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -146,7 +147,7 @@ public sealed class ContentToolTests : IDisposable
         {
             using var scope = ledger.Measure("content", op: null);
             string output = tool.Content("search", query: "MissingSecretValue", content_kind: "web", limit: 7);
-            Assert.Equal("No results.", output.Trim());
+            Assert.Contains("No results", output, StringComparison.Ordinal);
         }
 
         var row = ReadTelemetryOpMetadata(_workspace.TelemetryDbPath);
@@ -159,6 +160,43 @@ public sealed class ContentToolTests : IDisposable
         Assert.False(doc.RootElement.GetProperty("workspace_all").GetBoolean());
         Assert.Equal("no_content_hits", doc.RootElement.GetProperty("empty_reason").GetString());
         Assert.DoesNotContain("MissingSecretValue", row.MetadataJson, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Content_SearchNoResults_CompactIncludesRecoveryGuidance()
+    {
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+
+        string output = tool.Content("search", query: "MissingSecretValue", content_kind: "docs", limit: 3);
+
+        Assert.Contains("No results", output, StringComparison.Ordinal);
+        Assert.Contains("content_kind", output, StringComparison.Ordinal);
+        Assert.Contains("workspace_id=all", output, StringComparison.Ordinal);
+        Assert.Contains("search mode=source", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_SearchNoResults_JsonIncludesRecoveryGuidance()
+    {
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+
+        string output = tool.Content("search", query: "MissingSecretValue", content_kind: "docs", format: "json", limit: 3);
+
+        using JsonDocument doc = JsonDocument.Parse(output);
+        JsonElement root = doc.RootElement;
+        Assert.Equal("search", root.GetProperty("operation").GetString());
+        Assert.Equal("no_results", root.GetProperty("diagnostic_code").GetString());
+        JsonElement results = root.GetProperty("results");
+        Assert.Equal(JsonValueKind.Array, results.ValueKind);
+        Assert.Empty(results.EnumerateArray());
+        JsonElement[] actions = root.GetProperty("next_actions").EnumerateArray().ToArray();
+        Assert.True(actions.Length >= 3);
+        Assert.Contains(actions, action =>
+            action.GetProperty("tool").GetString() == "content"
+            && action.GetProperty("args").GetProperty("content_kind").GetString() == "all-text");
+        Assert.Contains(actions, action =>
+            action.GetProperty("tool").GetString() == "search"
+            && action.GetProperty("args").GetProperty("mode").GetString() == "source");
     }
 
     [Fact]
@@ -480,6 +518,45 @@ public sealed class ContentToolTests : IDisposable
     }
 
     [Fact]
+    public void Content_ReadUnknownSource_CompactIncludesRecoveryGuidance()
+    {
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        string logPath = Path.Combine(_dir, "known.log");
+        File.WriteAllText(logPath, "Known source exists.\n");
+        tool.Content("import", path: logPath);
+
+        string output = tool.Content("read", source_id: "not-a-real-source-id", line: 1, context_lines: 0);
+
+        Assert.Contains("Content source 'not-a-real-source-id' was not found", output, StringComparison.Ordinal);
+        Assert.Contains("content search", output, StringComparison.Ordinal);
+        Assert.Contains("content list", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_ReadUnknownSource_JsonIncludesDiagnosticRecovery()
+    {
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        string logPath = Path.Combine(_dir, "known.log");
+        File.WriteAllText(logPath, "Known source exists.\n");
+        tool.Content("import", path: logPath);
+
+        string output = tool.Content("read", source_id: "not-a-real-source-id", line: 1, context_lines: 0, format: "json");
+
+        using JsonDocument doc = JsonDocument.Parse(output);
+        JsonElement root = doc.RootElement;
+        Assert.Equal("read", root.GetProperty("operation").GetString());
+        Assert.Equal("source_not_found", root.GetProperty("diagnostic_code").GetString());
+        Assert.Contains("not-a-real-source-id", root.GetProperty("error").GetString(), StringComparison.Ordinal);
+        JsonElement[] actions = root.GetProperty("next_actions").EnumerateArray().ToArray();
+        Assert.Contains(actions, action =>
+            action.GetProperty("tool").GetString() == "content"
+            && action.GetProperty("args").GetProperty("operation").GetString() == "search");
+        Assert.Contains(actions, action =>
+            action.GetProperty("tool").GetString() == "content"
+            && action.GetProperty("args").GetProperty("operation").GetString() == "list");
+    }
+
+    [Fact]
     public void Content_Read_RejectsAmbiguousDisplayPathAlias()
     {
         string logA = Path.Combine(_dir, "a.log");
@@ -492,9 +569,10 @@ public sealed class ContentToolTests : IDisposable
 
         string output = tool.Content("read", source_id: "dup.log", line: 1, context_lines: 0);
 
-        Assert.StartsWith("content failed:", output, StringComparison.Ordinal);
+        Assert.StartsWith("content read failed:", output, StringComparison.Ordinal);
         Assert.Contains("matches multiple imported sources", output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("external_file:", output, StringComparison.Ordinal);
+        Assert.Contains("content list", output, StringComparison.Ordinal);
         Assert.DoesNotContain("AmbiguousAliasMarker", output, StringComparison.OrdinalIgnoreCase);
     }
 }

@@ -4090,6 +4090,566 @@
       "gate": {
         "hard": true
       }
+    },
+    {
+      "id": "miller.trace.path.no_path.next_actions.compact",
+      "repo": "miller",
+      "task_class": "trace",
+      "intent": "Trace path no-path compact output should guide refs, depth bump, and source text fallback.",
+      "miller": {
+        "tool": "trace",
+        "args": {
+          "target": "TraceTool",
+          "mode": "path",
+          "to": "ContentTool",
+          "depth": 1,
+          "format": "compact",
+          "limit": 20
+        }
+      },
+      "julie": {
+        "tool": "call_path",
+        "args": {
+          "target": "TraceTool",
+          "to": "ContentTool"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Miller.Server/Tools/TraceTool.cs",
+        "anchor": "No path from"
+      },
+      "scoring": {
+        "mode": "trace_path",
+        "readiness": "no-path",
+        "expected_outcome": "no-path",
+        "required_anchors": [
+          "mode=\"refs\"",
+          "target=\"ContentTool\"",
+          "depth=\"2\"",
+          "mode=\"source\""
+        ]
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.trace.path.no_path.next_actions.json",
+      "repo": "miller",
+      "task_class": "trace",
+      "intent": "Trace path no-path JSON output should parse and expose equivalent next actions.",
+      "miller": {
+        "tool": "trace",
+        "args": {
+          "target": "TraceTool",
+          "mode": "path",
+          "to": "ContentTool",
+          "depth": 1,
+          "format": "json",
+          "limit": 20
+        }
+      },
+      "julie": {
+        "tool": "call_path",
+        "args": {
+          "target": "TraceTool",
+          "to": "ContentTool"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Miller.Server/Tools/TraceTool.cs",
+        "anchor": "next_actions"
+      },
+      "scoring": {
+        "mode": "trace_path",
+        "readiness": "no-path",
+        "expected_outcome": "no-path",
+        "required_anchors": [
+          "\"next_actions\"",
+          "\"tool\":\"search\"",
+          "\"mode\":\"source\""
+        ]
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.trace.refs.empty.next_actions.compact",
+      "repo": "miller",
+      "task_class": "trace",
+      "intent": "Trace refs empty compact output should use copyable next actions.",
+      "miller": {
+        "tool": "trace",
+        "args": {
+          "target": "ReferenceKindUsage",
+          "mode": "refs",
+          "format": "compact",
+          "limit": 20
+        }
+      },
+      "julie": {
+        "tool": "fast_refs",
+        "args": {
+          "target": "ReferenceKindUsage"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Miller.Server/Tools/TraceTool.cs",
+        "anchor": "No extracted refs"
+      },
+      "scoring": {
+        "mode": "workflow_anchors",
+        "readiness": "needs-search",
+        "expected_outcome": "ok",
+        "min_references": 0,
+        "required_anchors": [
+          "No extracted refs",
+          "mode=\"source\"",
+          "mode=\"auto\""
+        ]
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.trace.refs.empty.next_actions.json",
+      "repo": "miller",
+      "task_class": "trace",
+      "intent": "Trace refs empty JSON output should parse and expose next actions.",
+      "miller": {
+        "tool": "trace",
+        "args": {
+          "target": "ReferenceKindUsage",
+          "mode": "refs",
+          "format": "json",
+          "limit": 20
+        }
+      },
+      "julie": {
+        "tool": "fast_refs",
+        "args": {
+          "target": "ReferenceKindUsage"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Miller.Server/Tools/TraceTool.cs",
+        "anchor": "next_actions"
+      },
+      "scoring": {
+        "mode": "workflow_anchors",
+        "readiness": "needs-search",
+        "expected_outcome": "ok",
+        "min_references": 0,
+        "required_anchors": [
+          "\"next_actions\"",
+          "\"tool\":\"search\"",
+          "\"mode\":\"source\""
+        ]
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.trace.bridge.unsupported.next_actions.compact",
+      "repo": "miller",
+      "task_class": "trace",
+      "intent": "Trace bridge unsupported compact output should stay honest and suggest relevant fallbacks.",
+      "miller": {
+        "tool": "trace",
+        "args": {
+          "target": "TraceTool",
+          "mode": "bridge",
+          "format": "compact",
+          "limit": 20
+        }
+      },
+      "julie": {
+        "tool": "call_path",
+        "args": {
+          "target": "TraceTool",
+          "to": "ContentTool"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Miller.Server/Tools/TraceTool.cs",
+        "anchor": "cross-language bridge"
+      },
+      "scoring": {
+        "mode": "trace_bridge",
+        "readiness": "unsupported",
+        "expected_outcome": "unsupported",
+        "required_anchors": [
+          "cross-language bridge",
+          "bridge providers active",
+          "mode=\"refs\"",
+          "mode=\"source\""
+        ]
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.trace.bridge.unsupported.next_actions.json",
+      "repo": "miller",
+      "task_class": "trace",
+      "intent": "Trace bridge unsupported JSON output should parse and expose provider diagnostics plus fallbacks.",
+      "miller": {
+        "tool": "trace",
+        "args": {
+          "target": "TraceTool",
+          "mode": "bridge",
+          "format": "json",
+          "limit": 20
+        }
+      },
+      "julie": {
+        "tool": "call_path",
+        "args": {
+          "target": "TraceTool",
+          "to": "ContentTool"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Miller.Server/Tools/TraceTool.cs",
+        "anchor": "next_actions"
+      },
+      "scoring": {
+        "mode": "workflow_anchors",
+        "readiness": "unsupported",
+        "required_anchors": [
+          "\"provider\"",
+          "\"next_actions\"",
+          "\"tool\":\"search\"",
+          "\"mode\":\"source\""
+        ]
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.content.search.no_results.recovery.compact",
+      "repo": "miller",
+      "task_class": "content",
+      "intent": "Content search no-results compact output should give bounded recovery guidance.",
+      "miller": {
+        "tool": "content",
+        "args": {
+          "operation": "search",
+          "query": "zzzz-no-such-quality-anchor",
+          "content_kind": "docs",
+          "format": "compact",
+          "limit": 3
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "zzzz-no-such-quality-anchor",
+          "limit": 3
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Miller.Server/Tools/ContentTool.cs",
+        "anchor": "No results"
+      },
+      "scoring": {
+        "mode": "workflow_anchors",
+        "readiness": "needs-search",
+        "required_anchors": [
+          "No results",
+          "content_kind",
+          "workspace_id=all",
+          "search mode=source"
+        ]
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.content.search.no_results.recovery.json",
+      "repo": "miller",
+      "task_class": "content",
+      "intent": "Content search no-results JSON output should parse and expose recovery fields.",
+      "miller": {
+        "tool": "content",
+        "args": {
+          "operation": "search",
+          "query": "zzzz-no-such-quality-anchor",
+          "content_kind": "docs",
+          "format": "json",
+          "limit": 3
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "zzzz-no-such-quality-anchor",
+          "limit": 3
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Miller.Server/Tools/ContentTool.cs",
+        "anchor": "next_actions"
+      },
+      "scoring": {
+        "mode": "workflow_anchors",
+        "readiness": "needs-search",
+        "required_anchors": [
+          "\"operation\"",
+          "\"diagnostic_code\"",
+          "\"next_actions\"",
+          "search"
+        ]
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.content.read.missing_source.recovery.compact",
+      "repo": "miller",
+      "task_class": "content",
+      "intent": "Content read missing source compact output should explain how to recover.",
+      "miller": {
+        "tool": "content",
+        "args": {
+          "operation": "read",
+          "source_id": "not-a-real-source-id",
+          "line": 1,
+          "format": "compact"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "not-a-real-source-id"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Miller.Server/Tools/ContentTool.cs",
+        "anchor": "Content source"
+      },
+      "scoring": {
+        "mode": "workflow_anchors",
+        "readiness": "needs-search",
+        "required_anchors": [
+          "Content source",
+          "content search",
+          "content list"
+        ]
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.content.read.missing_source.recovery.json",
+      "repo": "miller",
+      "task_class": "content",
+      "intent": "Content read missing source JSON output should parse and expose diagnostic recovery fields.",
+      "miller": {
+        "tool": "content",
+        "args": {
+          "operation": "read",
+          "source_id": "not-a-real-source-id",
+          "line": 1,
+          "format": "json"
+        }
+      },
+      "julie": {
+        "tool": "deep_dive",
+        "args": {
+          "symbol": "not-a-real-source-id"
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Miller.Server/Tools/ContentTool.cs",
+        "anchor": "next_actions"
+      },
+      "scoring": {
+        "mode": "workflow_anchors",
+        "readiness": "needs-search",
+        "required_anchors": [
+          "\"operation\"",
+          "\"diagnostic_code\"",
+          "\"next_actions\"",
+          "\"search\""
+        ]
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.patterns.list.next_actions.compact",
+      "repo": "miller",
+      "task_class": "patterns",
+      "intent": "Patterns list compact output should suggest concrete search and summary follow-ups.",
+      "miller": {
+        "tool": "patterns",
+        "args": {
+          "operation": "list",
+          "format": "compact",
+          "limit": 5
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "pattern_id",
+          "limit": 5
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Miller.Server/Tools/PatternsTool.cs",
+        "anchor": "patterns"
+      },
+      "scoring": {
+        "mode": "workflow_anchors",
+        "readiness": "inspect-ready",
+        "required_anchors": [
+          "patterns operation=search pattern_id=",
+          "patterns operation=summary pattern_id=",
+          "patterns operation=search query="
+        ]
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.patterns.list.next_actions.json",
+      "repo": "miller",
+      "task_class": "patterns",
+      "intent": "Patterns list JSON output should parse and expose concrete next actions.",
+      "miller": {
+        "tool": "patterns",
+        "args": {
+          "operation": "list",
+          "format": "json",
+          "limit": 5
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "pattern_id",
+          "limit": 5
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Miller.Server/Tools/PatternsTool.cs",
+        "anchor": "next_actions"
+      },
+      "scoring": {
+        "mode": "workflow_anchors",
+        "readiness": "inspect-ready",
+        "required_anchors": [
+          "\"next_actions\"",
+          "\"tool\":\"patterns\"",
+          "\"operation\":\"search\""
+        ]
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.patterns.search.no_match.recovery.compact",
+      "repo": "miller",
+      "task_class": "patterns",
+      "intent": "Patterns query no-match compact output should suggest list and near-match recovery.",
+      "miller": {
+        "tool": "patterns",
+        "args": {
+          "operation": "search",
+          "query": "markdwn",
+          "format": "compact",
+          "limit": 5
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "markdwn",
+          "limit": 5
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Miller.Server/Tools/PatternsTool.cs",
+        "anchor": "No patterns match"
+      },
+      "scoring": {
+        "mode": "workflow_anchors",
+        "readiness": "needs-search",
+        "required_anchors": [
+          "No patterns match",
+          "patterns operation=list",
+          "near matches",
+          "markdown.heading.v1"
+        ]
+      },
+      "gate": {
+        "hard": true
+      }
+    },
+    {
+      "id": "miller.patterns.search.no_match.recovery.json",
+      "repo": "miller",
+      "task_class": "patterns",
+      "intent": "Patterns query no-match JSON output should parse and expose near-match recovery.",
+      "miller": {
+        "tool": "patterns",
+        "args": {
+          "operation": "search",
+          "query": "markdwn",
+          "format": "json",
+          "limit": 5
+        }
+      },
+      "julie": {
+        "tool": "fast_search",
+        "args": {
+          "query": "markdwn",
+          "limit": 5
+        },
+        "report_only": true
+      },
+      "expected": {
+        "path": "src/Miller.Server/Tools/PatternsTool.cs",
+        "anchor": "next_actions"
+      },
+      "scoring": {
+        "mode": "workflow_anchors",
+        "readiness": "needs-search",
+        "required_anchors": [
+          "\"next_actions\"",
+          "\"near_matches\"",
+          "markdown.heading.v1"
+        ]
+      },
+      "gate": {
+        "hard": true
+      }
     }
   ]
 }

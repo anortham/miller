@@ -34,6 +34,10 @@ Use `--kind external_file` for imported logs/reports and `--kind web` for import
 miller content read --source-id SOURCE_ID --line 120 --context-lines 8
 ```
 
+Use the `source_id` from each `content search` hit or `content list`. When the hit came from
+`--workspace-id all`, pass its `workspace_id` back to `content read` so Miller reads the right registered
+workspace.
+
 4. Summarize findings as workspace, file/display path, line, term, and one short snippet. Do not paste full files or full exported JSONL.
 
 ## Rules
@@ -41,4 +45,5 @@ miller content read --source-id SOURCE_ID --line 120 --context-lines 8
 - Context remains opt-in; do not feed audit hits into `context` unless the user asks for code context around a finding.
 - Keep exact-term audits exact first. Raise `--limit` or switch kind only after the targeted query misses.
 - Use `content export` only for integration feeds, not for interactive audit output.
+- Empty searches and failed reads include compact recovery text and JSON `diagnostic_code`/`next_actions`; follow those before falling back to shell search.
 - If `--workspace-id all` returns no rows, confirm workspaces are registered and content DBs are built before falling back to shell search.

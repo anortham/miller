@@ -53,6 +53,24 @@ public sealed record WorkspaceOnboardingFacts(
             .Sum(static row => row.Calls);
         if (inspectFullCalls > inspectOverviewCalls)
             notes.Add("inspect full is common in recent telemetry; start with inspect depth=overview before full-body reads");
+        long traceCalls = telemetry.ToolMix
+            .Where(static row => row.Tool == "trace")
+            .Sum(static row => row.Calls);
+        long traceEmpty = telemetry.ToolMix
+            .Where(static row => row.Tool == "trace")
+            .Sum(static row => row.EmptyCount);
+        if (traceCalls > 0 && traceEmpty * 2 >= traceCalls)
+            notes.Add("trace has recent empty results; try trace mode=refs and search mode=source when path/graph traces do not connect");
+        long contentReadCalls = telemetry.ToolMix
+            .Where(static row => row.Tool == "content" && string.Equals(row.Op, "read", StringComparison.OrdinalIgnoreCase))
+            .Sum(static row => row.Calls);
+        long contentReadErrors = telemetry.ToolMix
+            .Where(static row => row.Tool == "content" && string.Equals(row.Op, "read", StringComparison.OrdinalIgnoreCase))
+            .Sum(static row => row.ErrorCount);
+        if (contentReadCalls > 0 && contentReadErrors > 0)
+            notes.Add("content read has recent errors; use the source_id from content search/list and pass workspace_id for cross-workspace hits");
+        if (telemetry.TotalCalls > 0 && telemetry.ToolMix.All(static row => row.Tool != "patterns"))
+            notes.Add("patterns operation=list is available before raw route, HTML, JSON, YAML, or Markdown greps");
         if (telemetry.TotalCalls > 0 && telemetry.ToolMix.All(static row => row.Tool != "trace"))
             notes.Add("trace is available for refs/path questions when you need usages or dependency paths");
         if (hotTargets.Any(static target => target.Confidence == "unresolved_hash"))

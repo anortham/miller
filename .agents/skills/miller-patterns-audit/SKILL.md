@@ -21,6 +21,9 @@ patterns(operation="list")
 patterns(operation="list", language="razor")
 ```
 
+List output includes `Next:` / JSON `next_actions` derived from observed IDs. Prefer those follow-up calls
+before inventing a raw text grep.
+
 2. Search a concrete pattern:
 
 ```text
@@ -53,4 +56,6 @@ inspect(target="<path from pattern row>")
 
 - `patterns` is not a raw AST query engine.
 - Pattern IDs come from the extractor catalog; if a shape is missing, add extractor support first.
+- No-match output can include near matches and active-filter guidance. If the pattern exists but filters remove
+  every row, loosen `path`, `language`, or `where`.
 - Use `search(mode="source")` for arbitrary source text and `search(mode="content")` for docs/config prose.

@@ -32,6 +32,11 @@ public sealed class PatternsTool
     private readonly IWorkspaceArtifactProvider _workspaceProvider;
     private readonly PatternFactsReader _reader;
 
+    private sealed record PatternNextAction(
+        string Tool,
+        string Reason,
+        IReadOnlyList<KeyValuePair<string, string>> Args);
+
     public PatternsTool(IWorkspaceArtifactProvider workspaceProvider, PatternFactsReader reader)
     {
         ArgumentNullException.ThrowIfNull(workspaceProvider);
@@ -46,7 +51,7 @@ public sealed class PatternsTool
         "observed pattern_id values, then search by pattern_id plus path/language/where filters, or pass a free-text " +
         "query with no pattern_id to search across every pattern_id that contains it. Examples: " +
         "`patterns operation=search pattern_id=aspnet.minimal_api.route.v1`; " +
-        "`patterns operation=search query=route`. Not raw AST queries.")]
+        "`patterns operation=search query=route`. List/no-match results include next_actions. Not raw AST queries.")]
     public string Patterns(
         [Description("list|summary|search. Default list.")] string? operation = "list",
         [Description("Pattern id. Required for search unless query is given; optional for summary/list. Example: htmx.attribute.v1.")] string? pattern_id = null,
@@ -255,13 +260,20 @@ public sealed class PatternsTool
     {
         int boundedLimit = Math.Clamp(limit, 1, MaxLimit);
         ToolSearchFilters filters = ToolSearchFilters.Parse(path, null);
-        IEnumerable<PatternMatchRow> candidates = filters.HasAny
+        PatternMatchRow[] candidates = (filters.HasAny
             ? reader.EnumerateMatches(dbPath, patternId, language, metadataFilter)
-            : reader.EnumerateMatches(dbPath, patternId, language, metadataFilter, boundedLimit);
+            : reader.EnumerateMatches(dbPath, patternId, language, metadataFilter, boundedLimit))
+            .ToArray();
         PatternMatchRow[] rows = candidates
             .Where(row => filters.Allows(row.Path, row.Language))
             .Take(boundedLimit)
             .ToArray();
+        bool patternExists = rows.Length > 0
+            || candidates.Length > 0
+            || reader.EnumerateMatches(dbPath, patternId, language: null, metadataFilter: null, limit: 1).Any();
+        bool filteredOut = rows.Length == 0
+            && patternExists
+            && (filters.HasAny || !string.IsNullOrWhiteSpace(language) || metadataFilter is not null);
 
         return new PatternToolResult(
             json
@@ -270,7 +282,11 @@ public sealed class PatternsTool
                     patternId,
                     rows,
                     metadataFilter,
-                    rows.Length == 0 ? SuggestPatternIds(reader, dbPath, patternId, language) : []),
+                    rows.Length == 0 && !filteredOut ? SuggestPatternIds(reader, dbPath, patternId, language) : [],
+                    filteredOut,
+                    path,
+                    language,
+                    metadataFilter),
             rows.Length);
     }
 
@@ -295,6 +311,7 @@ public sealed class PatternsTool
 
         if (matchedPatternIds.Length == 0)
         {
+            IReadOnlyList<string> nearMatches = SuggestPatternIds(reader, dbPath, query, language);
             if (json)
             {
                 var buffer = new ArrayBufferWriter<byte>();
@@ -305,15 +322,18 @@ public sealed class PatternsTool
                     writer.WriteString("operation", "search");
                     writer.WriteString("query", query);
                     WriteStringArray(writer, "matched_pattern_ids", Array.Empty<string>());
+                    WriteStringArray(writer, "near_matches", nearMatches);
                     writer.WriteStartArray("matches");
                     writer.WriteEndArray();
                     writer.WriteString("note", $"No patterns match '{query}'. Try `patterns operation=list` to see observed pattern_id values.");
+                    writer.WritePropertyName("next_actions");
+                    WriteNextActions(writer, QueryNoMatchNextActions(nearMatches));
                     writer.WriteEndObject();
                 }
                 return new PatternToolResult(Encoding.UTF8.GetString(buffer.WrittenSpan), 0);
             }
 
-            string hint = $"No patterns match '{query}'. Try `patterns operation=list` to see observed pattern_id values.";
+            string hint = RenderQueryNoMatchCompact(query, nearMatches);
             return new PatternToolResult(hint, 0);
         }
 
@@ -361,6 +381,7 @@ public sealed class PatternsTool
               .Append(string.Join(",", row.Captures))
               .AppendLine();
         }
+        AppendNextActions(sb, ListNextActions(rows));
         return sb.ToString().TrimEnd();
     }
 
@@ -387,10 +408,16 @@ public sealed class PatternsTool
         string patternId,
         IReadOnlyList<PatternMatchRow> rows,
         PatternMetadataFilter? metadataFilter,
-        IReadOnlyList<string> suggestions)
+        IReadOnlyList<string> suggestions,
+        bool filteredOut,
+        string? path,
+        string? language,
+        PatternMetadataFilter? activeMetadataFilter)
     {
         if (rows.Count == 0)
         {
+            if (filteredOut)
+                return RenderFilteredOutCompact(patternId, path, language, activeMetadataFilter);
             if (suggestions.Count == 0)
                 return $"No matches for {patternId}.";
 
@@ -417,6 +444,181 @@ public sealed class PatternsTool
         sb.Append("matched_pattern_ids: ").Append(string.Join(", ", matchedPatternIds)).AppendLine();
         AppendMatchGroups(sb, rows, metadataFilter);
         return sb.ToString().TrimEnd();
+    }
+
+    private static string RenderQueryNoMatchCompact(string query, IReadOnlyList<string> nearMatches)
+    {
+        var sb = new StringBuilder();
+        sb.Append("No patterns match '").Append(query).AppendLine("'. Try `patterns operation=list` to see observed pattern_id values.");
+        if (nearMatches.Count > 0)
+            sb.Append("near matches: ").AppendLine(string.Join(", ", nearMatches));
+        AppendNextActions(sb, QueryNoMatchNextActions(nearMatches));
+        return sb.ToString().TrimEnd();
+    }
+
+    private static string RenderFilteredOutCompact(
+        string patternId,
+        string? path,
+        string? language,
+        PatternMetadataFilter? metadataFilter)
+    {
+        string filters = ActiveFiltersCompact(path, language, metadataFilter);
+        var sb = new StringBuilder();
+        sb.Append("No matches for ").Append(patternId).Append(" after filters");
+        if (!string.IsNullOrWhiteSpace(filters))
+            sb.Append(": ").Append(filters);
+        sb.AppendLine(".");
+        sb.Append("Try again with this pattern_id and loosen language, path, or where.");
+        AppendNextActions(sb, PatternIdRecoveryNextActions(patternId));
+        return sb.ToString().TrimEnd();
+    }
+
+    private static string ActiveFiltersCompact(string? path, string? language, PatternMetadataFilter? metadataFilter)
+    {
+        var filters = new List<string>(capacity: 3);
+        if (!string.IsNullOrWhiteSpace(language))
+            filters.Add("language=" + language.Trim());
+        if (!string.IsNullOrWhiteSpace(path))
+            filters.Add("path=" + path.Trim());
+        if (metadataFilter is not null)
+            filters.Add("where=" + metadataFilter.Key + "=" + metadataFilter.Value);
+        return string.Join(", ", filters);
+    }
+
+    private static IReadOnlyList<PatternNextAction> ListNextActions(IReadOnlyList<PatternListRow> rows)
+    {
+        if (rows.Count == 0)
+            return [];
+
+        PatternListRow top = rows
+            .OrderByDescending(static row => row.Count)
+            .ThenBy(static row => row.PatternId, StringComparer.Ordinal)
+            .First();
+        var actions = new List<PatternNextAction>
+        {
+            NextAction(
+                "patterns",
+                "search concrete facts for an observed pattern_id",
+                ("operation", "search"),
+                ("pattern_id", top.PatternId)),
+            NextAction(
+                "patterns",
+                "summarize files and languages for an observed pattern_id",
+                ("operation", "summary"),
+                ("pattern_id", top.PatternId)),
+        };
+
+        string? query = DomainQueryFromPatternIds(rows);
+        if (query is not null)
+        {
+            actions.Add(NextAction(
+                "patterns",
+                "search across observed pattern_id values by domain term",
+                ("operation", "search"),
+                ("query", query)));
+        }
+
+        return actions;
+    }
+
+    private static string? DomainQueryFromPatternIds(IReadOnlyList<PatternListRow> rows)
+    {
+        string[] domainTerms = ["route", "html", "json", "yaml", "markdown"];
+        foreach (string term in domainTerms)
+        {
+            if (rows.Any(row => row.PatternId.Contains(term, StringComparison.OrdinalIgnoreCase)))
+                return term;
+        }
+
+        return null;
+    }
+
+    private static IReadOnlyList<PatternNextAction> QueryNoMatchNextActions(IReadOnlyList<string> nearMatches)
+    {
+        var actions = new List<PatternNextAction>
+        {
+            NextAction(
+                "patterns",
+                "list observed pattern_id values before searching",
+                ("operation", "list")),
+        };
+        if (nearMatches.Count > 0)
+        {
+            string patternId = nearMatches[0];
+            actions.Add(NextAction(
+                "patterns",
+                "search the closest observed pattern_id",
+                ("operation", "search"),
+                ("pattern_id", patternId)));
+            actions.Add(NextAction(
+                "patterns",
+                "summarize the closest observed pattern_id",
+                ("operation", "summary"),
+                ("pattern_id", patternId)));
+        }
+
+        return actions;
+    }
+
+    private static IReadOnlyList<PatternNextAction> PatternIdRecoveryNextActions(string patternId) =>
+    [
+        NextAction(
+            "patterns",
+            "retry without filters to check whether the pattern_id has facts",
+            ("operation", "search"),
+            ("pattern_id", patternId)),
+        NextAction(
+            "patterns",
+            "summarize where this pattern_id appears before reapplying filters",
+            ("operation", "summary"),
+            ("pattern_id", patternId)),
+    ];
+
+    private static PatternNextAction NextAction(string tool, string reason, params (string Key, string Value)[] args) =>
+        new(tool, reason, args.Select(static arg => new KeyValuePair<string, string>(arg.Key, arg.Value)).ToArray());
+
+    private static void AppendNextActions(StringBuilder sb, IReadOnlyList<PatternNextAction> actions)
+    {
+        if (actions.Count == 0)
+            return;
+
+        sb.Append("Next:");
+        foreach (PatternNextAction action in actions.Take(4))
+        {
+            sb.Append('\n')
+              .Append("  ")
+              .Append(FormatPatternActionCommand(action))
+              .Append(" - ")
+              .Append(action.Reason)
+              .Append('.');
+        }
+        sb.AppendLine();
+    }
+
+    private static string FormatPatternActionCommand(PatternNextAction action)
+    {
+        var sb = new StringBuilder(action.Tool);
+        foreach (KeyValuePair<string, string> arg in action.Args)
+            sb.Append(' ').Append(arg.Key).Append('=').Append(arg.Value);
+        return sb.ToString();
+    }
+
+    private static void WriteNextActions(Utf8JsonWriter writer, IReadOnlyList<PatternNextAction> actions)
+    {
+        writer.WriteStartArray();
+        foreach (PatternNextAction action in actions.Take(4))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("tool", action.Tool);
+            writer.WriteString("reason", action.Reason);
+            writer.WritePropertyName("args");
+            writer.WriteStartObject();
+            foreach (KeyValuePair<string, string> arg in action.Args)
+                writer.WriteString(arg.Key, arg.Value);
+            writer.WriteEndObject();
+            writer.WriteEndObject();
+        }
+        writer.WriteEndArray();
     }
 
     private static void AppendMatchGroups(StringBuilder sb, IReadOnlyList<PatternMatchRow> rows, PatternMetadataFilter? metadataFilter)
@@ -463,6 +665,8 @@ public sealed class PatternsTool
                 writer.WriteEndObject();
             }
             writer.WriteEndArray();
+            writer.WritePropertyName("next_actions");
+            WriteNextActions(writer, ListNextActions(rows));
             writer.WriteEndObject();
         }
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
@@ -633,16 +837,66 @@ public sealed class PatternsTool
         if (candidateTokens.Length == 0)
             return 0;
 
-        int overlap = queryTokens.Count(token => candidateTokens.Contains(token, StringComparer.Ordinal));
-        if (overlap < 2)
+        int exactOverlap = queryTokens.Count(token => candidateTokens.Contains(token, StringComparer.Ordinal));
+        int nearOverlap = queryTokens.Count(token =>
+            !candidateTokens.Contains(token, StringComparer.Ordinal)
+            && candidateTokens.Any(candidateToken => TokensAreNear(token, candidateToken)));
+        int overlap = exactOverlap + nearOverlap;
+        int requiredOverlap = queryTokens.Length == 1 ? 1 : 2;
+        if (overlap < requiredOverlap)
             return 0;
 
-        int score = overlap * 10;
+        int score = (exactOverlap * 10) + (nearOverlap * 6);
         if (string.Equals(queryTokens.LastOrDefault(), candidateTokens.LastOrDefault(), StringComparison.Ordinal))
             score += 2;
         if (candidate.Contains(queryTokens[0], StringComparison.OrdinalIgnoreCase))
             score += 1;
         return score;
+    }
+
+    private static bool TokensAreNear(string queryToken, string candidateToken)
+    {
+        if (queryToken.Length < 4 || candidateToken.Length < 4)
+            return false;
+        if (candidateToken.Contains(queryToken, StringComparison.OrdinalIgnoreCase)
+            || queryToken.Contains(candidateToken, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return EditDistanceAtMost(queryToken, candidateToken, maxDistance: 2);
+    }
+
+    private static bool EditDistanceAtMost(string left, string right, int maxDistance)
+    {
+        if (Math.Abs(left.Length - right.Length) > maxDistance)
+            return false;
+
+        Span<int> previous = stackalloc int[right.Length + 1];
+        Span<int> current = stackalloc int[right.Length + 1];
+        for (int j = 0; j <= right.Length; j++)
+            previous[j] = j;
+
+        for (int i = 1; i <= left.Length; i++)
+        {
+            current[0] = i;
+            int rowMin = current[0];
+            for (int j = 1; j <= right.Length; j++)
+            {
+                int cost = char.ToLowerInvariant(left[i - 1]) == char.ToLowerInvariant(right[j - 1]) ? 0 : 1;
+                current[j] = Math.Min(
+                    Math.Min(current[j - 1] + 1, previous[j] + 1),
+                    previous[j - 1] + cost);
+                rowMin = Math.Min(rowMin, current[j]);
+            }
+
+            if (rowMin > maxDistance)
+                return false;
+
+            Span<int> temp = previous;
+            previous = current;
+            current = temp;
+        }
+
+        return previous[right.Length] <= maxDistance;
     }
 
     private static string[] PatternTokens(string patternId) =>

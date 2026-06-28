@@ -229,7 +229,43 @@ public sealed class TraceToolTests
         Assert.Contains("Resolved target: Alpha method src/A.cs:1", outp);
         Assert.Contains("Same-file symbols:", outp);
         Assert.Contains("Beta  method  src/A.cs:10", outp);
-        Assert.Contains("inspect src/A.cs", outp);
+        Assert.Contains("Next:", outp);
+        Assert.Contains("search query=\"Alpha\" mode=\"source\"", outp);
+        Assert.Contains("inspect target=\"src/A.cs\" depth=\"overview\"", outp);
+        Assert.Contains("trace target=\"Alpha\" mode=\"refs\"", outp);
+    }
+
+    [Fact]
+    public void Auto_NoNeighbours_JsonCarriesNextActions()
+    {
+        var index = BuildSymbolIndex(
+            new[]
+            {
+                ("a", "Alpha", "method", "src/A.cs", 1),
+                ("b", "Beta", "method", "src/A.cs", 10),
+            },
+            Array.Empty<(string, string)>());
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "Alpha", mode: "auto", to: null, depth: 3, limit: 20, fullFormat: false, json: true,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement root = doc.RootElement;
+        JsonElement diagnostic = Assert.Single(root.GetProperty("diagnostics").EnumerateArray());
+        Assert.Equal("no_neighbours", diagnostic.GetProperty("code").GetString());
+        JsonElement[] actions = root.GetProperty("next_actions").EnumerateArray().ToArray();
+        Assert.Equal(3, actions.Length);
+        Assert.Equal("search", actions[0].GetProperty("tool").GetString());
+        Assert.Equal("Alpha", actions[0].GetProperty("args").GetProperty("query").GetString());
+        Assert.Equal("source", actions[0].GetProperty("args").GetProperty("mode").GetString());
+        Assert.Equal("inspect", actions[1].GetProperty("tool").GetString());
+        Assert.Equal("src/A.cs", actions[1].GetProperty("args").GetProperty("target").GetString());
+        Assert.Equal("overview", actions[1].GetProperty("args").GetProperty("depth").GetString());
+        Assert.Equal("trace", actions[2].GetProperty("tool").GetString());
+        Assert.Equal("Alpha", actions[2].GetProperty("args").GetProperty("target").GetString());
+        Assert.Equal("refs", actions[2].GetProperty("args").GetProperty("mode").GetString());
     }
 
     [Fact]
@@ -573,6 +609,55 @@ public sealed class TraceToolTests
     }
 
     [Fact]
+    public void Path_NoConnection_WithDepthBump_StillIncludesSourceFallback()
+    {
+        var index = BuildSymbolIndex(
+            new[]
+            {
+                ("a", "Alpha", "method", "src/A.cs", 1),
+                ("c", "Gamma", "method", "src/C.cs", 3),
+            },
+            Array.Empty<(string, string)>());
+
+        string outp = TraceTool.Run(index, ResolverFor(index),
+            target: "Alpha", mode: "path", to: "Gamma", depth: 1, limit: 20, fullFormat: false,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        Assert.Contains("trace target=\"Alpha\" mode=\"refs\"", outp);
+        Assert.Contains("trace target=\"Gamma\" mode=\"refs\"", outp);
+        Assert.Contains("trace target=\"Alpha\" mode=\"path\" to=\"Gamma\" depth=\"2\"", outp);
+        Assert.Contains("search query=\"Alpha Gamma\" mode=\"source\"", outp);
+    }
+
+    [Fact]
+    public void Path_NoConnection_WithDepthBump_JsonStillIncludesSourceFallback()
+    {
+        var index = BuildSymbolIndex(
+            new[]
+            {
+                ("a", "Alpha", "method", "src/A.cs", 1),
+                ("c", "Gamma", "method", "src/C.cs", 3),
+            },
+            Array.Empty<(string, string)>());
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "Alpha", mode: "path", to: "Gamma", depth: 1, limit: 20, fullFormat: false, json: true,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement[] actions = doc.RootElement.GetProperty("next_actions").EnumerateArray().ToArray();
+        Assert.Equal(4, actions.Length);
+        Assert.Equal("trace", actions[2].GetProperty("tool").GetString());
+        Assert.Equal("path", actions[2].GetProperty("args").GetProperty("mode").GetString());
+        Assert.Equal("2", actions[2].GetProperty("args").GetProperty("depth").GetString());
+        Assert.Equal("search", actions[3].GetProperty("tool").GetString());
+        Assert.Equal("Alpha Gamma", actions[3].GetProperty("args").GetProperty("query").GetString());
+        Assert.Equal("source", actions[3].GetProperty("args").GetProperty("mode").GetString());
+    }
+
+    [Fact]
     public void Path_BeyondDepth_NoPath()
     {
         var index = BuildSymbolIndex(
@@ -733,8 +818,38 @@ public sealed class TraceToolTests
         Assert.Equal(0, emitted);
         Assert.Equal(0, visited);
         Assert.Contains("No extracted refs for 'Alpha'", outp, StringComparison.Ordinal);
-        Assert.Contains("search mode=source Alpha", outp, StringComparison.Ordinal);
-        Assert.Contains("trace mode=auto", outp, StringComparison.Ordinal);
+        Assert.Contains("Next:", outp, StringComparison.Ordinal);
+        Assert.Contains("search query=\"Alpha\" mode=\"source\"", outp, StringComparison.Ordinal);
+        Assert.Contains("trace target=\"Alpha\" mode=\"auto\"", outp, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Refs_Empty_JsonCarriesNextActions()
+    {
+        var index = BuildSymbolIndex(
+            new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
+            Array.Empty<(string, string)>());
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "Alpha", scope: null, mode: "refs", to: null, depth: 3, limit: 20,
+            fullFormat: false, json: true, referenceKind: null, includeDefinition: true,
+            readReferences: _ => Array.Empty<SymbolRef>(),
+            out int emitted, out int visited);
+
+        Assert.Equal(0, emitted);
+        Assert.Equal(0, visited);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement root = doc.RootElement;
+        JsonElement diagnostic = Assert.Single(root.GetProperty("diagnostics").EnumerateArray());
+        Assert.Equal("no_references", diagnostic.GetProperty("code").GetString());
+        JsonElement[] actions = root.GetProperty("next_actions").EnumerateArray().ToArray();
+        Assert.Equal(2, actions.Length);
+        Assert.Equal("search", actions[0].GetProperty("tool").GetString());
+        Assert.Equal("Alpha", actions[0].GetProperty("args").GetProperty("query").GetString());
+        Assert.Equal("source", actions[0].GetProperty("args").GetProperty("mode").GetString());
+        Assert.Equal("trace", actions[1].GetProperty("tool").GetString());
+        Assert.Equal("Alpha", actions[1].GetProperty("args").GetProperty("target").GetString());
+        Assert.Equal("auto", actions[1].GetProperty("args").GetProperty("mode").GetString());
     }
 
     // ---------- mode: bridge ----------

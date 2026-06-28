@@ -18,6 +18,11 @@ public sealed class ContentTool
     private readonly ContentCorpusExternalStore _store;
     private readonly ContentCorpusExportReader _exportReader = new();
 
+    private sealed record ContentNextAction(
+        string Tool,
+        string Reason,
+        IReadOnlyList<KeyValuePair<string, string>> Args);
+
     public ContentTool(WorkspaceContext workspace, ContentCorpusExternalStore store)
     {
         ArgumentNullException.ThrowIfNull(workspace);
@@ -29,7 +34,9 @@ public sealed class ContentTool
     [McpServerTool(Name = "content")]
     [Description(
         "Import, search, read, list, remove, and export text in Miller's content corpus. Use for logs, " +
-        "CI output, web markdown, reports, large text files, and Eros JSONL chunk feeds.")]
+        "CI output, web markdown, reports, large text files, and Eros JSONL chunk feeds. Search hits include " +
+        "source_id; pass it to read, with workspace_id for cross-workspace hits. Empty searches and read failures " +
+        "include recovery next_actions in JSON.")]
     public string Content(
         [Description("import|add_markdown|search|read|list|remove|export. Default list.")] string? operation = "list",
         [Description("Path to import for operation=import/add_markdown.")] string? path = null,
@@ -47,11 +54,11 @@ public sealed class ContentTool
         [Description("Output format: compact|json. Default compact.")] string format = "compact")
     {
         var telemetry = TelemetryContext.Current;
+        bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
+        string op = string.IsNullOrWhiteSpace(operation) ? "list" : operation.Trim().ToLowerInvariant();
         try
         {
             string contentDbPath = ContentCorpusSidecar.ContentDbPathFor(_workspace.ExtractDbPath);
-            bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
-            string op = string.IsNullOrWhiteSpace(operation) ? "list" : operation.Trim().ToLowerInvariant();
             if (telemetry is not null)
                 telemetry.Op = op;
 
@@ -70,12 +77,17 @@ public sealed class ContentTool
         }
         catch (Exception ex)
         {
+            string diagnosticCode = ContentDiagnosticCode(op, ex);
             if (telemetry is not null)
             {
                 telemetry.Outcome = TelemetryOutcome.Error;
                 telemetry.SetError(ex);
+                telemetry.SetMetadata("diagnostic_code", diagnosticCode);
+                telemetry.SetErrorCategory(diagnosticCode);
             }
-            return $"content failed: {ex.Message}";
+            return json
+                ? RenderDiagnosticJson(op, ex.Message, diagnosticCode, ReadRecoveryNextActions(source_id))
+                : RenderDiagnosticCompact(op, ex.Message, diagnosticCode, ReadRecoveryNextActions(source_id));
         }
     }
 
@@ -159,7 +171,7 @@ public sealed class ContentTool
                 telemetry.SetEmptyReason("no_content_hits");
         }
 
-        return json ? RenderSearchJson(hits) : RenderSearchCompact(hits);
+        return json ? RenderSearchJson(hits, query, contentKind) : RenderSearchCompact(hits, query, contentKind);
     }
 
     private string SearchWorkspaces(
@@ -199,7 +211,9 @@ public sealed class ContentTool
                 telemetry.SetEmptyReason("no_content_hits");
         }
 
-        return json ? RenderWorkspaceSearchJson(page) : RenderWorkspaceSearchCompact(page);
+        return json
+            ? RenderWorkspaceSearchJson(page, query, contentKind)
+            : RenderWorkspaceSearchCompact(page, query, contentKind);
     }
 
     private IReadOnlyList<TextContentSearchHit> SearchWorkspaceContent(
@@ -484,10 +498,10 @@ public sealed class ContentTool
         $"source_bytes: {result.SourceBytes}\n" +
         $"chunks: {result.ChunkCount}";
 
-    private static string RenderSearchCompact(IReadOnlyList<TextContentSearchHit> hits)
+    private static string RenderSearchCompact(IReadOnlyList<TextContentSearchHit> hits, string query, string contentKind)
     {
         if (hits.Count == 0)
-            return "No results.";
+            return RenderNoResultsCompact("search", query, contentKind);
 
         var blocks = new List<string>(hits.Count);
         foreach (TextContentSearchHit hit in hits)
@@ -506,10 +520,10 @@ public sealed class ContentTool
             + "\n\nread: content read source_id=" + first.SourceId + " line=" + first.Line;
     }
 
-    private static string RenderWorkspaceSearchCompact(IReadOnlyList<WorkspaceContentSearchHit> hits)
+    private static string RenderWorkspaceSearchCompact(IReadOnlyList<WorkspaceContentSearchHit> hits, string query, string contentKind)
     {
         if (hits.Count == 0)
-            return "No results.";
+            return RenderNoResultsCompact("search", query, contentKind);
 
         var blocks = new List<string>(hits.Count);
         foreach (WorkspaceContentSearchHit workspaceHit in hits)
@@ -569,6 +583,151 @@ public sealed class ContentTool
             ? $"removed {result.SourceId} ({result.ChunkCount} chunks)"
             : $"not found: {result.SourceId}";
 
+    private static string RenderNoResultsCompact(string operation, string query, string contentKind)
+    {
+        var sb = new StringBuilder();
+        sb.Append("No results for content ").Append(operation).Append(".")
+          .Append('\n')
+          .Append("Tried content_kind=").Append(contentKind).Append(". ")
+          .Append("Try content_kind=docs, source, external_file, web, or all-text as appropriate; ")
+          .Append("use workspace_id=all only for registered workspace audits; ")
+          .Append("use search mode=source for current workspace source-body text.");
+        AppendContentNextActions(sb, SearchNoResultsNextActions(query, contentKind));
+        return sb.ToString();
+    }
+
+    private static string RenderDiagnosticCompact(
+        string operation,
+        string error,
+        string diagnosticCode,
+        IReadOnlyList<ContentNextAction> nextActions)
+    {
+        var sb = new StringBuilder();
+        sb.Append("content");
+        if (string.Equals(operation, "read", StringComparison.Ordinal))
+            sb.Append(" read");
+        sb.Append(" failed: ").Append(error)
+          .Append('\n')
+          .Append("diagnostic_code=").Append(diagnosticCode);
+        AppendContentNextActions(sb, nextActions);
+        return sb.ToString();
+    }
+
+    private static string ContentDiagnosticCode(string operation, Exception ex)
+    {
+        string message = ex.Message;
+        if (string.Equals(operation, "search", StringComparison.Ordinal))
+        {
+            if (message.Contains("requires query", StringComparison.OrdinalIgnoreCase))
+                return "missing_query";
+            return "search_error";
+        }
+
+        if (string.Equals(operation, "read", StringComparison.Ordinal))
+        {
+            if (message.Contains("requires source_id", StringComparison.OrdinalIgnoreCase))
+                return "missing_source_id";
+            if (message.Contains("requires line", StringComparison.OrdinalIgnoreCase))
+                return "missing_line";
+            if (message.Contains("matches multiple imported sources", StringComparison.OrdinalIgnoreCase))
+                return "ambiguous_source";
+            if (message.Contains("was not found", StringComparison.OrdinalIgnoreCase))
+                return "source_not_found";
+            if (message.Contains("No content corpus exists", StringComparison.OrdinalIgnoreCase))
+                return "content_corpus_missing";
+            if (message.Contains("maximum is", StringComparison.OrdinalIgnoreCase))
+                return "read_window_too_large";
+            if (message.Contains("requested line", StringComparison.OrdinalIgnoreCase))
+                return "line_out_of_range";
+            if (ex is ArgumentOutOfRangeException && message.Contains("context_lines", StringComparison.OrdinalIgnoreCase))
+                return "invalid_context_lines";
+            if (ex is ArgumentOutOfRangeException && message.Contains("line", StringComparison.OrdinalIgnoreCase))
+                return "invalid_line";
+            return "read_error";
+        }
+
+        return "content_error";
+    }
+
+    private static IReadOnlyList<ContentNextAction> SearchNoResultsNextActions(string query, string contentKind) =>
+    [
+        NextAction(
+            "content",
+            "retry against all indexed text kinds when the expected corpus is unclear",
+            ("operation", "search"),
+            ("query", query),
+            ("content_kind", "all-text")),
+        NextAction(
+            "content",
+            "audit registered workspace source text across workspaces only when that broad scope is intended",
+            ("operation", "search"),
+            ("query", query),
+            ("content_kind", "source"),
+            ("workspace_id", "all")),
+        NextAction(
+            "search",
+            "use source search for current workspace source-body text",
+            ("query", query),
+            ("mode", "source")),
+    ];
+
+    private static IReadOnlyList<ContentNextAction> ReadRecoveryNextActions(string? sourceId)
+    {
+        string query = string.IsNullOrWhiteSpace(sourceId) ? "<query>" : sourceId.Trim();
+        return
+        [
+            NextAction(
+                "content",
+                "find a valid source_id before reading",
+                ("operation", "search"),
+                ("query", query),
+                ("content_kind", "all-text")),
+            NextAction(
+                "content",
+                "list imported sources and choose an exact source_id",
+                ("operation", "list"),
+                ("content_kind", "all-text")),
+        ];
+    }
+
+    private static ContentNextAction NextAction(string tool, string reason, params (string Key, string Value)[] args) =>
+        new(tool, reason, args.Select(static arg => new KeyValuePair<string, string>(arg.Key, arg.Value)).ToArray());
+
+    private static void AppendContentNextActions(StringBuilder sb, IReadOnlyList<ContentNextAction> actions)
+    {
+        if (actions.Count == 0)
+            return;
+
+        sb.Append('\n').Append("Next:");
+        foreach (ContentNextAction action in actions.Take(4))
+        {
+            sb.Append('\n')
+              .Append("  ")
+              .Append(FormatContentActionCommand(action))
+              .Append(" - ")
+              .Append(action.Reason)
+              .Append('.');
+        }
+    }
+
+    private static string FormatContentActionCommand(ContentNextAction action)
+    {
+        var sb = new StringBuilder(action.Tool);
+        string? operation = action.Args.FirstOrDefault(static arg => arg.Key == "operation").Value;
+        if (string.Equals(action.Tool, "content", StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(operation))
+            sb.Append(' ').Append(operation);
+
+        foreach (KeyValuePair<string, string> arg in action.Args)
+        {
+            if (string.Equals(action.Tool, "content", StringComparison.Ordinal)
+                && string.Equals(arg.Key, "operation", StringComparison.Ordinal))
+                continue;
+            sb.Append(' ').Append(arg.Key).Append('=').Append(arg.Value);
+        }
+
+        return sb.ToString();
+    }
+
     private static string RenderImportJson(ExternalContentImportResult result)
     {
         var buffer = new ArrayBufferWriter<byte>();
@@ -589,8 +748,50 @@ public sealed class ContentTool
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
     }
 
-    private static string RenderSearchJson(IReadOnlyList<TextContentSearchHit> hits)
+    private static string RenderNoResultsJson(string operation, string query, string contentKind)
     {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("operation", operation);
+            writer.WriteString("error", "No results.");
+            writer.WriteString("diagnostic_code", "no_results");
+            writer.WriteString("content_kind", contentKind);
+            writer.WriteStartArray("results");
+            writer.WriteEndArray();
+            writer.WritePropertyName("next_actions");
+            WriteNextActions(writer, SearchNoResultsNextActions(query, contentKind));
+            writer.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    private static string RenderDiagnosticJson(
+        string operation,
+        string error,
+        string diagnosticCode,
+        IReadOnlyList<ContentNextAction> nextActions)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("operation", operation);
+            writer.WriteString("error", error);
+            writer.WriteString("diagnostic_code", diagnosticCode);
+            writer.WritePropertyName("next_actions");
+            WriteNextActions(writer, nextActions);
+            writer.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    private static string RenderSearchJson(IReadOnlyList<TextContentSearchHit> hits, string query, string contentKind)
+    {
+        if (hits.Count == 0)
+            return RenderNoResultsJson("search", query, contentKind);
+
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = JsonWriter(buffer))
         {
@@ -617,8 +818,11 @@ public sealed class ContentTool
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
     }
 
-    private static string RenderWorkspaceSearchJson(IReadOnlyList<WorkspaceContentSearchHit> hits)
+    private static string RenderWorkspaceSearchJson(IReadOnlyList<WorkspaceContentSearchHit> hits, string query, string contentKind)
     {
+        if (hits.Count == 0)
+            return RenderNoResultsJson("search", query, contentKind);
+
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = JsonWriter(buffer))
         {
@@ -715,6 +919,24 @@ public sealed class ContentTool
             writer.WriteEndObject();
         }
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    private static void WriteNextActions(Utf8JsonWriter writer, IReadOnlyList<ContentNextAction> actions)
+    {
+        writer.WriteStartArray();
+        foreach (ContentNextAction action in actions.Take(4))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("tool", action.Tool);
+            writer.WriteString("reason", action.Reason);
+            writer.WritePropertyName("args");
+            writer.WriteStartObject();
+            foreach (KeyValuePair<string, string> arg in action.Args)
+                writer.WriteString(arg.Key, arg.Value);
+            writer.WriteEndObject();
+            writer.WriteEndObject();
+        }
+        writer.WriteEndArray();
     }
 
     private static Utf8JsonWriter JsonWriter(ArrayBufferWriter<byte> buffer) =>

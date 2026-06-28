@@ -64,7 +64,7 @@ public sealed class TraceTool
         "Reduced-confidence links are flagged [verb-unknown] / [ambiguous] — never trust an unflagged link more " +
         "than a flagged one. Use before manual caller/callee file hopping. Pass format=json for structured " +
         "output, or format=full to also see the signals behind each bridge link in compact output. " +
-        "No-path/unsupported results include next actions; JSON includes next_actions.")]
+        "Empty refs/no-neighbour/no-path/unsupported results include next actions; JSON includes next_actions.")]
     public string Trace(
         [Description("A symbol name/id where the trace starts. In bridge mode, route/table nodes and single-symbol files are also accepted.")]
         string target,
@@ -315,10 +315,12 @@ public sealed class TraceTool
 
         if (reached.Count == 0)
         {
+            IReadOnlyList<TraceNextAction> noNeighboursNextActions = NoNeighboursNextActions(index, seedId);
             string message = RenderNoNeighboursMessage(index, target, depth, seedId);
             return json
-                ? RenderAutoJson(index, target, to: null, depth, limit, emitted, nodesVisited, seedId, reached, message, "no_neighbours")
-                : message;
+                ? RenderAutoJson(index, target, to: null, depth, limit, emitted, nodesVisited, seedId, reached, message, "no_neighbours",
+                    noNeighboursNextActions)
+                : AppendNextActions(message, noNeighboursNextActions);
         }
 
         if (json)
@@ -379,12 +381,6 @@ public sealed class TraceTool
             }
         }
 
-        sb.Append('\n')
-          .Append("Next: `search mode=source ")
-          .Append(seed.Name)
-          .Append("` for text references not in the graph, or `inspect ")
-          .Append(seed.FilePath)
-          .Append("` for nearby symbols.");
         return sb.ToString();
     }
 
@@ -463,8 +459,8 @@ public sealed class TraceTool
     // fallback (trace mode=auto) instead of a bare "No references found.".
     private static string RefsEmptyHint(string name, string? normalizedKind) =>
         normalizedKind is null
-            ? $"No extracted refs for '{name}' — the extractor may not emit refs here. Use `search mode=source {name}` for text occurrences, or `trace mode=auto` for graph neighbours."
-            : $"No extracted refs for '{name}' with reference_kind={normalizedKind} — try without reference_kind, or use `search mode=source {name}` for text occurrences, or `trace mode=auto` for graph neighbours.";
+            ? $"No extracted refs for '{name}' — the extractor may not emit refs here."
+            : $"No extracted refs for '{name}' with reference_kind={normalizedKind} — try without reference_kind.";
 
     private static string RunRefs(
         ISymbolLookupIndex index, SmartTargetResolver resolver, string target, string? scope,
@@ -523,10 +519,12 @@ public sealed class TraceTool
 
         string? resultNote = null;
         string? diagnosticCode = null;
+        IReadOnlyList<TraceNextAction> resultNextActions = [];
         if (filtered.Length == 0)
         {
             resultNote = RefsEmptyHint(targetSymbol.Name, normalizedKind);
             diagnosticCode = "no_references";
+            resultNextActions = RefsEmptyNextActions(targetSymbol.Name);
         }
         else if (shown.Length < filtered.Length)
         {
@@ -536,7 +534,7 @@ public sealed class TraceTool
 
         if (json)
             return RenderRefsJson(target, depth, limit, emitted, nodesVisited, targetSymbol, shown, normalizedKind,
-                includeDefinition, resultNote, diagnosticCode);
+                includeDefinition, resultNote, diagnosticCode, resultNextActions);
 
         var sb = new StringBuilder();
         sb.Append("# trace refs ").Append(targetSymbol.Name)
@@ -558,6 +556,7 @@ public sealed class TraceTool
         if (shown.Length == 0)
         {
             sb.Append(resultNote);
+            AppendNextActions(sb, resultNextActions);
         }
         else
         {
@@ -1076,7 +1075,7 @@ public sealed class TraceTool
 
     private static IReadOnlyList<TraceNextAction> NoPathNextActions(string target, string to, int depth)
     {
-        var actions = new List<TraceNextAction>(capacity: 3)
+        var actions = new List<TraceNextAction>(capacity: 4)
         {
             NextAction(
                 "trace",
@@ -1105,16 +1104,53 @@ public sealed class TraceTool
                 ("depth", (depth + 1).ToString(CultureInfo.InvariantCulture))));
         }
 
-        if (actions.Count < 3)
-        {
-            actions.Add(NextAction(
-                "search",
-                "look for text links not represented in the graph",
-                ("query", $"{target} {to}"),
-                ("mode", "source")));
-        }
+        actions.Add(NextAction(
+            "search",
+            "look for text links not represented in the graph",
+            ("query", $"{target} {to}"),
+            ("mode", "source")));
 
-        return actions.Take(3).ToArray();
+        return actions.Take(4).ToArray();
+    }
+
+    private static IReadOnlyList<TraceNextAction> RefsEmptyNextActions(string target) =>
+    [
+        NextAction(
+            "search",
+            "look for text occurrences because extracted refs may be unavailable or incomplete",
+            ("query", target),
+            ("mode", "source")),
+        NextAction(
+            "trace",
+            "inspect ordinary graph neighbours for callers and callees",
+            ("target", target),
+            ("mode", ModeAuto)),
+    ];
+
+    private static IReadOnlyList<TraceNextAction> NoNeighboursNextActions(ISymbolLookupIndex index, string seedId)
+    {
+        IndexedSymbol? seed = index.FindBySymbolId(seedId);
+        if (seed is null)
+            return [];
+
+        return
+        [
+            NextAction(
+                "search",
+                "look for text references not represented in the graph",
+                ("query", seed.Name),
+                ("mode", "source")),
+            NextAction(
+                "inspect",
+                "inspect nearby same-file context before widening the search",
+                ("target", seed.FilePath),
+                ("depth", "overview")),
+            NextAction(
+                "trace",
+                "check extracted identifier references directly",
+                ("target", seed.Name),
+                ("mode", ModeRefs)),
+        ];
     }
 
     private static IReadOnlyList<TraceNextAction> BridgeFallbackNextActions(string target) =>
@@ -1155,7 +1191,7 @@ public sealed class TraceTool
             return;
 
         sb.Append('\n').Append("Next:");
-        foreach (TraceNextAction action in actions.Take(3))
+        foreach (TraceNextAction action in actions.Take(4))
         {
             sb.Append('\n')
               .Append("  ")
@@ -1198,7 +1234,8 @@ public sealed class TraceTool
 
     private static string RenderAutoJson(
         ISymbolLookupIndex index, string target, string? to, int depth, int limit, int emitted, int nodesVisited,
-        string seedId, IReadOnlyList<ReachedNode> reached, string? note, string? diagnosticCode)
+        string seedId, IReadOnlyList<ReachedNode> reached, string? note, string? diagnosticCode,
+        IReadOnlyList<TraceNextAction>? nextActions = null)
     {
         var symbolsById = SymbolLookupBatch.FindBySymbolIds(index, reached.Select(static node => node.Id).Prepend(seedId));
         symbolsById.TryGetValue(seedId, out IndexedSymbol? seed);
@@ -1230,7 +1267,8 @@ public sealed class TraceTool
                     w.WriteEndObject();
                 }
                 w.WriteEndArray();
-            });
+            },
+            nextActions: nextActions);
     }
 
     private static string RenderPathJson(
@@ -1428,7 +1466,7 @@ public sealed class TraceTool
         w.WriteStartArray();
         if (actions is not null)
         {
-            foreach (TraceNextAction action in actions.Take(3))
+            foreach (TraceNextAction action in actions.Take(4))
             {
                 w.WriteStartObject();
                 w.WriteString("tool", action.Tool);

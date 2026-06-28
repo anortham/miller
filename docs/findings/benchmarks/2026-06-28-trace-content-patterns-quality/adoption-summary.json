@@ -1,0 +1,888 @@
+{
+  "commands": {
+    "onboarding": "miller workspace onboarding --json --workspace-id /Users/murphy/source/miller/.worktrees/trace-content-patterns-quality",
+    "telemetry": "miller telemetry export --jsonl"
+  },
+  "core_empty_error_rates": [
+    {
+      "avg_ms": 1043,
+      "calls": 10,
+      "empty_count": 7,
+      "error_count": 0,
+      "op": "source",
+      "p95_ms": 4876,
+      "result_count": 16,
+      "tool": "search"
+    },
+    {
+      "avg_ms": 959,
+      "calls": 7,
+      "empty_count": 5,
+      "error_count": 0,
+      "op": "content",
+      "p95_ms": 4987,
+      "result_count": 3,
+      "tool": "search"
+    },
+    {
+      "avg_ms": 192,
+      "calls": 5,
+      "empty_count": 2,
+      "error_count": 0,
+      "op": "file",
+      "p95_ms": 209,
+      "result_count": 10,
+      "tool": "search"
+    },
+    {
+      "avg_ms": 997,
+      "calls": 35,
+      "empty_count": 0,
+      "error_count": 0,
+      "op": "full",
+      "p95_ms": 4919,
+      "result_count": 37,
+      "tool": "inspect"
+    },
+    {
+      "avg_ms": 512,
+      "calls": 10,
+      "empty_count": 0,
+      "error_count": 0,
+      "op": "summary",
+      "p95_ms": 3366,
+      "result_count": 312,
+      "tool": "inspect"
+    },
+    {
+      "avg_ms": 5362,
+      "calls": 1,
+      "empty_count": 0,
+      "error_count": 0,
+      "op": "usage",
+      "p95_ms": 5362,
+      "result_count": 81,
+      "tool": "context"
+    },
+    {
+      "avg_ms": 320,
+      "calls": 20,
+      "empty_count": 11,
+      "error_count": 0,
+      "op": "refs",
+      "p95_ms": 580,
+      "result_count": 43,
+      "tool": "trace"
+    },
+    {
+      "avg_ms": 66,
+      "calls": 9,
+      "empty_count": 9,
+      "error_count": 0,
+      "op": "path",
+      "p95_ms": 478,
+      "result_count": 0,
+      "tool": "trace"
+    },
+    {
+      "avg_ms": 101,
+      "calls": 5,
+      "empty_count": 5,
+      "error_count": 0,
+      "op": "bridge",
+      "p95_ms": 487,
+      "result_count": 0,
+      "tool": "trace"
+    },
+    {
+      "avg_ms": 495,
+      "calls": 2,
+      "empty_count": 2,
+      "error_count": 0,
+      "op": "auto",
+      "p95_ms": 498,
+      "result_count": 0,
+      "tool": "trace"
+    },
+    {
+      "avg_ms": 0,
+      "calls": 0,
+      "empty_count": 0,
+      "error_count": 0,
+      "op": "default",
+      "p95_ms": 0,
+      "result_count": 0,
+      "tool": "impact"
+    }
+  ],
+  "core_tool_op_mix": [
+    {
+      "avg_ms": 1043,
+      "calls": 10,
+      "empty_count": 7,
+      "error_count": 0,
+      "op": "source",
+      "p95_ms": 4876,
+      "result_count": 16,
+      "tool": "search"
+    },
+    {
+      "avg_ms": 959,
+      "calls": 7,
+      "empty_count": 5,
+      "error_count": 0,
+      "op": "content",
+      "p95_ms": 4987,
+      "result_count": 3,
+      "tool": "search"
+    },
+    {
+      "avg_ms": 192,
+      "calls": 5,
+      "empty_count": 2,
+      "error_count": 0,
+      "op": "file",
+      "p95_ms": 209,
+      "result_count": 10,
+      "tool": "search"
+    },
+    {
+      "avg_ms": 997,
+      "calls": 35,
+      "empty_count": 0,
+      "error_count": 0,
+      "op": "full",
+      "p95_ms": 4919,
+      "result_count": 37,
+      "tool": "inspect"
+    },
+    {
+      "avg_ms": 512,
+      "calls": 10,
+      "empty_count": 0,
+      "error_count": 0,
+      "op": "summary",
+      "p95_ms": 3366,
+      "result_count": 312,
+      "tool": "inspect"
+    },
+    {
+      "avg_ms": 5362,
+      "calls": 1,
+      "empty_count": 0,
+      "error_count": 0,
+      "op": "usage",
+      "p95_ms": 5362,
+      "result_count": 81,
+      "tool": "context"
+    },
+    {
+      "avg_ms": 320,
+      "calls": 20,
+      "empty_count": 11,
+      "error_count": 0,
+      "op": "refs",
+      "p95_ms": 580,
+      "result_count": 43,
+      "tool": "trace"
+    },
+    {
+      "avg_ms": 66,
+      "calls": 9,
+      "empty_count": 9,
+      "error_count": 0,
+      "op": "path",
+      "p95_ms": 478,
+      "result_count": 0,
+      "tool": "trace"
+    },
+    {
+      "avg_ms": 101,
+      "calls": 5,
+      "empty_count": 5,
+      "error_count": 0,
+      "op": "bridge",
+      "p95_ms": 487,
+      "result_count": 0,
+      "tool": "trace"
+    },
+    {
+      "avg_ms": 495,
+      "calls": 2,
+      "empty_count": 2,
+      "error_count": 0,
+      "op": "auto",
+      "p95_ms": 498,
+      "result_count": 0,
+      "tool": "trace"
+    },
+    {
+      "avg_ms": 0,
+      "calls": 0,
+      "empty_count": 0,
+      "error_count": 0,
+      "op": "default",
+      "p95_ms": 0,
+      "result_count": 0,
+      "tool": "impact"
+    }
+  ],
+  "diagnostics": [
+    {
+      "reason": "prior Task 4 workflow evidence skipped Julie rows",
+      "skipped_julie_rows": 15,
+      "type": "workflow_candidates_unavailable"
+    }
+  ],
+  "gate": {
+    "failures": [],
+    "status": "PASS"
+  },
+  "generated_at": "2026-06-28T17:33:15Z",
+  "low_use_tools": [
+    {
+      "calls": 0,
+      "note": "report-only low usage in this local telemetry window",
+      "share": 0.0,
+      "tool": "impact"
+    },
+    {
+      "calls": 1,
+      "note": "report-only low usage in this local telemetry window",
+      "share": 0.009615384615384616,
+      "tool": "context"
+    }
+  ],
+  "onboarding": {
+    "common_misses": [
+      {
+        "calls": 11,
+        "op": "refs",
+        "reason": "no_references",
+        "tool": "trace"
+      },
+      {
+        "calls": 9,
+        "op": "path",
+        "reason": "no_path",
+        "tool": "trace"
+      },
+      {
+        "calls": 8,
+        "op": "read",
+        "reason": "KeyNotFoundException",
+        "tool": "content"
+      },
+      {
+        "calls": 8,
+        "op": "search",
+        "reason": "no_content_hits",
+        "tool": "content"
+      },
+      {
+        "calls": 8,
+        "op": "search",
+        "reason": "no_pattern_facts",
+        "tool": "patterns"
+      },
+      {
+        "calls": 7,
+        "op": "source",
+        "reason": "no_text_hits",
+        "tool": "search"
+      },
+      {
+        "calls": 5,
+        "op": "content",
+        "reason": "no_text_hits",
+        "tool": "search"
+      },
+      {
+        "calls": 5,
+        "op": "bridge",
+        "reason": "no_bridge_path",
+        "tool": "trace"
+      },
+      {
+        "calls": 2,
+        "op": "file",
+        "reason": "no_symbol_hits",
+        "tool": "search"
+      },
+      {
+        "calls": 2,
+        "op": "auto",
+        "reason": "no_trace_edges",
+        "tool": "trace"
+      }
+    ],
+    "friction": [
+      {
+        "avg_ms": 10,
+        "bytes_returned": 2353,
+        "calls": 8,
+        "empty_count": 0,
+        "error_count": 8,
+        "est_tokens": 589,
+        "max_ms": 22,
+        "op": "read",
+        "p95_ms": 22,
+        "tool": "content"
+      },
+      {
+        "avg_ms": 320.15,
+        "bytes_returned": 14733,
+        "calls": 20,
+        "empty_count": 11,
+        "error_count": 0,
+        "est_tokens": 3690,
+        "max_ms": 585,
+        "op": "refs",
+        "p95_ms": 580,
+        "tool": "trace"
+      },
+      {
+        "avg_ms": 66.33333333333333,
+        "bytes_returned": 8778,
+        "calls": 9,
+        "empty_count": 9,
+        "error_count": 0,
+        "est_tokens": 2200,
+        "max_ms": 478,
+        "op": "path",
+        "p95_ms": 478,
+        "tool": "trace"
+      },
+      {
+        "avg_ms": 82.875,
+        "bytes_returned": 4348,
+        "calls": 8,
+        "empty_count": 8,
+        "error_count": 0,
+        "est_tokens": 1090,
+        "max_ms": 140,
+        "op": "search",
+        "p95_ms": 140,
+        "tool": "content"
+      },
+      {
+        "avg_ms": 30.75,
+        "bytes_returned": 4410,
+        "calls": 8,
+        "empty_count": 8,
+        "error_count": 0,
+        "est_tokens": 1104,
+        "max_ms": 41,
+        "op": "search",
+        "p95_ms": 41,
+        "tool": "patterns"
+      },
+      {
+        "avg_ms": 1043.2,
+        "bytes_returned": 6143,
+        "calls": 10,
+        "empty_count": 7,
+        "error_count": 0,
+        "est_tokens": 1537,
+        "max_ms": 4876,
+        "op": "source",
+        "p95_ms": 4876,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 959.8571428571429,
+        "bytes_returned": 2805,
+        "calls": 7,
+        "empty_count": 5,
+        "error_count": 0,
+        "est_tokens": 702,
+        "max_ms": 4987,
+        "op": "content",
+        "p95_ms": 4987,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 101.8,
+        "bytes_returned": 2690,
+        "calls": 5,
+        "empty_count": 5,
+        "error_count": 0,
+        "est_tokens": 675,
+        "max_ms": 487,
+        "op": "bridge",
+        "p95_ms": 487,
+        "tool": "trace"
+      },
+      {
+        "avg_ms": 495,
+        "bytes_returned": 2653,
+        "calls": 2,
+        "empty_count": 2,
+        "error_count": 0,
+        "est_tokens": 664,
+        "max_ms": 498,
+        "op": "auto",
+        "p95_ms": 498,
+        "tool": "trace"
+      },
+      {
+        "avg_ms": 192.8,
+        "bytes_returned": 1119,
+        "calls": 5,
+        "empty_count": 2,
+        "error_count": 0,
+        "est_tokens": 281,
+        "max_ms": 209,
+        "op": "file",
+        "p95_ms": 209,
+        "tool": "search"
+      }
+    ],
+    "start_here": [
+      "run workspace health first when taking over this repo",
+      "use search to find candidate symbols, then inspect the selected result before editing",
+      "use inspect depth=overview for first symbol reads; use depth=full only when you need complete bodies",
+      "use context when you need a bounded map of the code around a task",
+      "use impact before refactors or risky edits"
+    ],
+    "telemetry": {
+      "available": true,
+      "error": null,
+      "state": "ready",
+      "total_calls": 140,
+      "window_end_ts": "2026-06-28T17:33:07.374Z",
+      "window_start_ts": "2026-06-28T17:04:39.308Z"
+    },
+    "tool_mix": [
+      {
+        "avg_ms": 997.8857142857142,
+        "bytes_returned": 137368,
+        "calls": 35,
+        "empty_count": 0,
+        "error_count": 0,
+        "est_tokens": 34356,
+        "max_ms": 4924,
+        "ok_count": 35,
+        "op": "full",
+        "p95_ms": 4919,
+        "result_count": 37,
+        "tool": "inspect"
+      },
+      {
+        "avg_ms": 320.15,
+        "bytes_returned": 14733,
+        "calls": 20,
+        "empty_count": 11,
+        "error_count": 0,
+        "est_tokens": 3690,
+        "max_ms": 585,
+        "ok_count": 9,
+        "op": "refs",
+        "p95_ms": 580,
+        "result_count": 43,
+        "tool": "trace"
+      },
+      {
+        "avg_ms": 1043.2,
+        "bytes_returned": 6143,
+        "calls": 10,
+        "empty_count": 7,
+        "error_count": 0,
+        "est_tokens": 1537,
+        "max_ms": 4876,
+        "ok_count": 3,
+        "op": "source",
+        "p95_ms": 4876,
+        "result_count": 16,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 512,
+        "bytes_returned": 33741,
+        "calls": 10,
+        "empty_count": 0,
+        "error_count": 0,
+        "est_tokens": 8440,
+        "max_ms": 3366,
+        "ok_count": 10,
+        "op": "summary",
+        "p95_ms": 3366,
+        "result_count": 312,
+        "tool": "inspect"
+      },
+      {
+        "avg_ms": 66.33333333333333,
+        "bytes_returned": 8778,
+        "calls": 9,
+        "empty_count": 9,
+        "error_count": 0,
+        "est_tokens": 2200,
+        "max_ms": 478,
+        "ok_count": 0,
+        "op": "path",
+        "p95_ms": 478,
+        "result_count": 0,
+        "tool": "trace"
+      },
+      {
+        "avg_ms": 38.666666666666664,
+        "bytes_returned": 29703,
+        "calls": 9,
+        "empty_count": 0,
+        "error_count": 0,
+        "est_tokens": 7428,
+        "max_ms": 181,
+        "ok_count": 9,
+        "op": "list",
+        "p95_ms": 181,
+        "result_count": 288,
+        "tool": "patterns"
+      },
+      {
+        "avg_ms": 82.875,
+        "bytes_returned": 4348,
+        "calls": 8,
+        "empty_count": 8,
+        "error_count": 0,
+        "est_tokens": 1090,
+        "max_ms": 140,
+        "ok_count": 0,
+        "op": "search",
+        "p95_ms": 140,
+        "result_count": 0,
+        "tool": "content"
+      },
+      {
+        "avg_ms": 30.75,
+        "bytes_returned": 4410,
+        "calls": 8,
+        "empty_count": 8,
+        "error_count": 0,
+        "est_tokens": 1104,
+        "max_ms": 41,
+        "ok_count": 0,
+        "op": "search",
+        "p95_ms": 41,
+        "result_count": 0,
+        "tool": "patterns"
+      },
+      {
+        "avg_ms": 10,
+        "bytes_returned": 2353,
+        "calls": 8,
+        "empty_count": 0,
+        "error_count": 8,
+        "est_tokens": 589,
+        "max_ms": 22,
+        "ok_count": 0,
+        "op": "read",
+        "p95_ms": 22,
+        "result_count": 0,
+        "tool": "content"
+      },
+      {
+        "avg_ms": 959.8571428571429,
+        "bytes_returned": 2805,
+        "calls": 7,
+        "empty_count": 5,
+        "error_count": 0,
+        "est_tokens": 702,
+        "max_ms": 4987,
+        "ok_count": 2,
+        "op": "content",
+        "p95_ms": 4987,
+        "result_count": 3,
+        "tool": "search"
+      }
+    ]
+  },
+  "parseability": {
+    "onboarding": {
+      "exit_code": 0,
+      "friction_miss_fields_present": [
+        "common_misses",
+        "friction"
+      ],
+      "missing_fields": [],
+      "ms": 185,
+      "parsed": true,
+      "required_fields": [
+        "telemetry",
+        "start_here",
+        "tool_mix"
+      ],
+      "required_fields_present": 3,
+      "required_fields_total": 3
+    },
+    "telemetry": {
+      "exit_code": 0,
+      "ms": 180,
+      "no_telemetry": false,
+      "non_empty_lines": 14694,
+      "parsed": true,
+      "parsed_rows": 14694,
+      "required_fields": [
+        "tool",
+        "ts",
+        "outcome",
+        "result_count"
+      ],
+      "sampled_rows": 200
+    }
+  },
+  "telemetry": {
+    "core_empty_error_rates": [
+      {
+        "avg_ms": 1043,
+        "calls": 10,
+        "empty_count": 7,
+        "error_count": 0,
+        "op": "source",
+        "p95_ms": 4876,
+        "result_count": 16,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 959,
+        "calls": 7,
+        "empty_count": 5,
+        "error_count": 0,
+        "op": "content",
+        "p95_ms": 4987,
+        "result_count": 3,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 192,
+        "calls": 5,
+        "empty_count": 2,
+        "error_count": 0,
+        "op": "file",
+        "p95_ms": 209,
+        "result_count": 10,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 997,
+        "calls": 35,
+        "empty_count": 0,
+        "error_count": 0,
+        "op": "full",
+        "p95_ms": 4919,
+        "result_count": 37,
+        "tool": "inspect"
+      },
+      {
+        "avg_ms": 512,
+        "calls": 10,
+        "empty_count": 0,
+        "error_count": 0,
+        "op": "summary",
+        "p95_ms": 3366,
+        "result_count": 312,
+        "tool": "inspect"
+      },
+      {
+        "avg_ms": 5362,
+        "calls": 1,
+        "empty_count": 0,
+        "error_count": 0,
+        "op": "usage",
+        "p95_ms": 5362,
+        "result_count": 81,
+        "tool": "context"
+      },
+      {
+        "avg_ms": 320,
+        "calls": 20,
+        "empty_count": 11,
+        "error_count": 0,
+        "op": "refs",
+        "p95_ms": 580,
+        "result_count": 43,
+        "tool": "trace"
+      },
+      {
+        "avg_ms": 66,
+        "calls": 9,
+        "empty_count": 9,
+        "error_count": 0,
+        "op": "path",
+        "p95_ms": 478,
+        "result_count": 0,
+        "tool": "trace"
+      },
+      {
+        "avg_ms": 101,
+        "calls": 5,
+        "empty_count": 5,
+        "error_count": 0,
+        "op": "bridge",
+        "p95_ms": 487,
+        "result_count": 0,
+        "tool": "trace"
+      },
+      {
+        "avg_ms": 495,
+        "calls": 2,
+        "empty_count": 2,
+        "error_count": 0,
+        "op": "auto",
+        "p95_ms": 498,
+        "result_count": 0,
+        "tool": "trace"
+      },
+      {
+        "avg_ms": 0,
+        "calls": 0,
+        "empty_count": 0,
+        "error_count": 0,
+        "op": "default",
+        "p95_ms": 0,
+        "result_count": 0,
+        "tool": "impact"
+      }
+    ],
+    "core_tool_op_mix": [
+      {
+        "avg_ms": 1043,
+        "calls": 10,
+        "empty_count": 7,
+        "error_count": 0,
+        "op": "source",
+        "p95_ms": 4876,
+        "result_count": 16,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 959,
+        "calls": 7,
+        "empty_count": 5,
+        "error_count": 0,
+        "op": "content",
+        "p95_ms": 4987,
+        "result_count": 3,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 192,
+        "calls": 5,
+        "empty_count": 2,
+        "error_count": 0,
+        "op": "file",
+        "p95_ms": 209,
+        "result_count": 10,
+        "tool": "search"
+      },
+      {
+        "avg_ms": 997,
+        "calls": 35,
+        "empty_count": 0,
+        "error_count": 0,
+        "op": "full",
+        "p95_ms": 4919,
+        "result_count": 37,
+        "tool": "inspect"
+      },
+      {
+        "avg_ms": 512,
+        "calls": 10,
+        "empty_count": 0,
+        "error_count": 0,
+        "op": "summary",
+        "p95_ms": 3366,
+        "result_count": 312,
+        "tool": "inspect"
+      },
+      {
+        "avg_ms": 5362,
+        "calls": 1,
+        "empty_count": 0,
+        "error_count": 0,
+        "op": "usage",
+        "p95_ms": 5362,
+        "result_count": 81,
+        "tool": "context"
+      },
+      {
+        "avg_ms": 320,
+        "calls": 20,
+        "empty_count": 11,
+        "error_count": 0,
+        "op": "refs",
+        "p95_ms": 580,
+        "result_count": 43,
+        "tool": "trace"
+      },
+      {
+        "avg_ms": 66,
+        "calls": 9,
+        "empty_count": 9,
+        "error_count": 0,
+        "op": "path",
+        "p95_ms": 478,
+        "result_count": 0,
+        "tool": "trace"
+      },
+      {
+        "avg_ms": 101,
+        "calls": 5,
+        "empty_count": 5,
+        "error_count": 0,
+        "op": "bridge",
+        "p95_ms": 487,
+        "result_count": 0,
+        "tool": "trace"
+      },
+      {
+        "avg_ms": 495,
+        "calls": 2,
+        "empty_count": 2,
+        "error_count": 0,
+        "op": "auto",
+        "p95_ms": 498,
+        "result_count": 0,
+        "tool": "trace"
+      },
+      {
+        "avg_ms": 0,
+        "calls": 0,
+        "empty_count": 0,
+        "error_count": 0,
+        "op": "default",
+        "p95_ms": 0,
+        "result_count": 0,
+        "tool": "impact"
+      }
+    ],
+    "exported_total_calls": 14694,
+    "low_use_tools": [
+      {
+        "calls": 0,
+        "note": "report-only low usage in this local telemetry window",
+        "share": 0.0,
+        "tool": "impact"
+      },
+      {
+        "calls": 1,
+        "note": "report-only low usage in this local telemetry window",
+        "share": 0.009615384615384616,
+        "tool": "context"
+      }
+    ],
+    "tool_counts": {
+      "context": 1,
+      "impact": 0,
+      "inspect": 45,
+      "search": 22,
+      "trace": 36
+    },
+    "window_end_ts": "2026-06-28T17:33:07.374Z",
+    "window_start_ts": "2026-06-28T17:04:39.308Z",
+    "workspace_filter_matched": true,
+    "workspace_root": "/Users/murphy/source/miller/.worktrees/trace-content-patterns-quality",
+    "workspace_total_calls": 140
+  },
+  "workflow_candidate_note": "Prior Task 4 workflow evidence was run with Julie rows skipped, so no Julie-style one-call superiority conclusion is drawn.",
+  "workflow_candidates": []
+}

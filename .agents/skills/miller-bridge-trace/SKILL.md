@@ -37,6 +37,10 @@ If the anchor name is ambiguous but you know the file, pass scope instead of doi
 trace(target="<symbol>", mode="bridge", scope="<file>")
 ```
 
+Unsupported-provider or no-link bridge results include `Next:` / JSON `next_actions`. Follow those fallbacks
+before calling the bridge absent: usually `patterns(query="route")`, `trace(mode="refs")`, or
+`search(mode="source")`, depending on the output.
+
 4. If the user asks for a specific route from one node to another, use path mode first, then bridge mode if the path crosses provider boundaries:
 
 ```text

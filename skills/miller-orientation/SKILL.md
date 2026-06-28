@@ -42,7 +42,7 @@ workspace(operation="refresh")
 | How does A reach B | `trace(target="A", mode="path", to="B")` |
 | Where is this name referenced | `trace(target="<symbol>", mode="refs")` |
 | Scope a refactor / choose tests | `impact(target="...")` or `impact(git=true)` |
-| List known code shapes | `patterns(operation="list")` then `patterns(operation="search", pattern_id="...")` |
+| List known code shapes | `patterns(operation="list")`, then follow its `Next:` actions or search a shown `pattern_id` |
 | Read a large log/report | `content(operation="import", path=...)` -> `content(operation="search", query="...")` -> bounded `content(operation="read", source_id="...", line=...)` |
 | Work in another registered repo | `workspace(operation="list")` then pass `workspace_id="<selector>"` |
 
@@ -51,6 +51,9 @@ workspace(operation="refresh")
 - Natural-language `search` hides tests by default; set `exclude_tests=false` when tests are expected.
 - Omitted `inspect` depth is `summary`; use `depth=overview` for the first symbol read, then `depth=full` only when you need the complete body or complete relation lists.
 - `workspace_id=all` is for `content(operation="search")` text audits only, not symbol/code read tools.
+- `trace` empty results include `Next:` / JSON `next_actions`; follow them before treating a missing path or ref as proof.
+- `content(operation="read")` should use the `source_id` from `content(operation="search")` or `content(operation="list")`; pass the hit's `workspace_id` for cross-workspace reads.
+- `patterns` list and no-match results include `Next:` / JSON `next_actions`; run `patterns(operation="list")` before raw route/HTML/JSON/YAML/Markdown greps.
 - `trace mode=bridge` is provider-scoped to `dotnet-web`; on another stack use `mode=auto`/`refs`/`path`.
 - Symbol search ranks `name + signature` only; docs/literals/broad source text need the row above.
 

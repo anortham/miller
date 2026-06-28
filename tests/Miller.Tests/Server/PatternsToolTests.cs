@@ -49,6 +49,31 @@ public sealed class PatternsToolTests
         JsonElement future = doc.RootElement.GetProperty("patterns").EnumerateArray()
             .Single(row => row.GetProperty("pattern_id").GetString() == "future.custom_pattern.v1");
         Assert.Equal("observed", future.GetProperty("catalog").GetString());
+
+        JsonElement[] actions = doc.RootElement.GetProperty("next_actions").EnumerateArray().ToArray();
+        Assert.Contains(actions, action =>
+            action.GetProperty("tool").GetString() == "patterns"
+            && action.GetProperty("args").GetProperty("operation").GetString() == "search");
+        Assert.Contains(actions, action =>
+            action.GetProperty("tool").GetString() == "patterns"
+            && action.GetProperty("args").GetProperty("operation").GetString() == "summary");
+        Assert.Contains(actions, action =>
+            action.GetProperty("tool").GetString() == "patterns"
+            && action.GetProperty("args").TryGetProperty("query", out JsonElement query)
+            && query.GetString() == "route");
+    }
+
+    [Fact]
+    public void Patterns_ListCompact_IncludesConcreteNextActions()
+    {
+        using var fx = CreatePatternFixture();
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        string output = tool.Patterns(operation: "list");
+
+        Assert.Contains("patterns operation=search pattern_id=", output, StringComparison.Ordinal);
+        Assert.Contains("patterns operation=summary pattern_id=", output, StringComparison.Ordinal);
+        Assert.Contains("patterns operation=search query=route", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -216,6 +241,21 @@ public sealed class PatternsToolTests
     }
 
     [Fact]
+    public void Patterns_SearchByQuery_NoMatch_ReturnsNearMatchesAndNextActions()
+    {
+        using var fx = CreatePatternFixture();
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        string output = tool.Patterns(operation: "search", query: "markdwn");
+
+        Assert.Contains("No patterns match 'markdwn'", output);
+        Assert.Contains("near matches:", output);
+        Assert.Contains("markdown.heading.v1", output);
+        Assert.Contains("patterns operation=list", output);
+        Assert.Contains("patterns operation=search pattern_id=markdown.heading.v1", output);
+    }
+
+    [Fact]
     public void Patterns_SearchByQuery_NoMatch_JsonReturnsValidJson()
     {
         using var fx = CreatePatternFixture();
@@ -229,6 +269,49 @@ public sealed class PatternsToolTests
         Assert.Empty(doc.RootElement.GetProperty("matched_pattern_ids").EnumerateArray());
         Assert.Empty(doc.RootElement.GetProperty("matches").EnumerateArray());
         Assert.Contains("No patterns match", doc.RootElement.GetProperty("note").GetString());
+    }
+
+    [Fact]
+    public void Patterns_SearchByQuery_NoMatch_JsonIncludesNearMatchesAndNextActions()
+    {
+        using var fx = CreatePatternFixture();
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        string json = tool.Patterns(operation: "search", query: "markdwn", format: "json");
+
+        using JsonDocument doc = JsonDocument.Parse(json);
+        Assert.Equal(
+            new[] { "markdown.heading.v1" },
+            doc.RootElement.GetProperty("near_matches").EnumerateArray().Select(static value => value.GetString()).ToArray());
+        JsonElement[] actions = doc.RootElement.GetProperty("next_actions").EnumerateArray().ToArray();
+        Assert.Contains(actions, action =>
+            action.GetProperty("tool").GetString() == "patterns"
+            && action.GetProperty("args").GetProperty("operation").GetString() == "list");
+        Assert.Contains(actions, action =>
+            action.GetProperty("tool").GetString() == "patterns"
+            && action.GetProperty("args").TryGetProperty("pattern_id", out JsonElement patternId)
+            && patternId.GetString() == "markdown.heading.v1");
+    }
+
+    [Fact]
+    public void Patterns_SearchByPatternId_NoRowsAfterFilters_NamesActiveFilters()
+    {
+        using var fx = CreatePatternFixture();
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        string output = tool.Patterns(
+            operation: "search",
+            pattern_id: "htmx.attribute.v1",
+            language: "csharp",
+            where: "name=hx-get",
+            path: "Views/**",
+            limit: 10);
+
+        Assert.Contains("No matches for htmx.attribute.v1 after filters", output);
+        Assert.Contains("language=csharp", output);
+        Assert.Contains("path=Views/**", output);
+        Assert.Contains("where=name=hx-get", output);
+        Assert.Contains("loosen language, path, or where", output);
     }
 
     [Fact]
@@ -313,12 +396,15 @@ public sealed class PatternsToolTests
                     "public/index.html", null, 1, null),
                 new JulieDbFixture.SymbolRow("sym-auth", "AuthorizeHandler", "method", "csharp",
                     "src/Auth.cs", "void AuthorizeHandler()", 1, null),
+                new JulieDbFixture.SymbolRow("sym-doc", "Readme", "document", "markdown",
+                    "docs/README.md", null, 1, null),
             },
             fileContent: new Dictionary<string, string>
             {
                 ["Views/Orders.cshtml"] = "<button hx-get=\"/orders\" hx-trigger=\"click\"></button>\n",
                 ["public/index.html"] = "<button hx-post=\"/orders\"></button>\n",
                 ["src/Auth.cs"] = "[Authorize]\npublic class Auth {}\n",
+                ["docs/README.md"] = "# Project Docs\n",
             });
         Exec(fx.DbPath, """
             INSERT INTO structural_facts
@@ -344,7 +430,10 @@ public sealed class PatternsToolTests
                 ('fact-route', 'file:src/Auth.cs', 'src/Auth.cs', 'csharp',
                  'aspnet.minimal_api.route.v1', 'route_call', 'invocation_expression', 'sym-auth',
                  3, 1, 3, 30, 36, 65, 1.0,
-                 '{"query_family":"framework","framework":"aspnet","route_template":"/orders","pattern_version":1,"verb":"GET"}');
+                 '{"query_family":"framework","framework":"aspnet","route_template":"/orders","pattern_version":1,"verb":"GET"}'),
+                ('fact-markdown-heading', 'file:docs/README.md', 'docs/README.md', 'markdown',
+                 'markdown.heading.v1', 'heading', 'atx_heading', 'sym-doc',
+                 1, 1, 1, 14, 0, 13, 1.0, '{"text":"Project Docs","level":1}');
             """);
         return fx;
     }

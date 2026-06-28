@@ -718,18 +718,48 @@ def score_manifest_path(
     mode = scoring.get("mode")
     if mode not in PATH_SCORING_MODES | WORKFLOW_SCORING_MODES | CONTRACT_SCORING_MODES:
         raise ValueError(f"unsupported scoring mode: {mode!r}")
+    json_parse_diagnostics: list[dict[str, Any]] = []
+    if parse_json and mode in WORKFLOW_SCORING_MODES:
+        try:
+            json.loads(text)
+        except json.JSONDecodeError as exc:
+            json_parse_diagnostics.append(
+                {
+                    "type": "parse_failure",
+                    "format": "json",
+                    "message": str(exc),
+                    "line": exc.lineno,
+                    "column": exc.colno,
+                }
+            )
     if mode == "contract_json":
         return score_contract_json(text, expected, scoring, capabilities=capabilities)
     if mode == "contract_jsonl":
         return score_contract_jsonl(text, expected, scoring, capabilities=capabilities)
     if mode == "workflow_anchors":
-        return score_workflow_anchors(text, expected, scoring)
+        scored = score_workflow_anchors(text, expected, scoring)
+        if json_parse_diagnostics:
+            scored["diagnostics"].extend(json_parse_diagnostics)
+            scored["scoring_pass"] = False
+        return scored
     if mode == "trace_refs":
-        return score_trace_refs(text, expected, scoring)
+        scored = score_trace_refs(text, expected, scoring)
+        if json_parse_diagnostics:
+            scored["diagnostics"].extend(json_parse_diagnostics)
+            scored["scoring_pass"] = False
+        return scored
     if mode in {"trace_path", "trace_bridge"}:
-        return score_trace_path(text, expected, scoring, str(mode))
+        scored = score_trace_path(text, expected, scoring, str(mode))
+        if json_parse_diagnostics:
+            scored["diagnostics"].extend(json_parse_diagnostics)
+            scored["scoring_pass"] = False
+        return scored
     if mode == "impact_targets":
-        return score_impact_targets(text, expected, scoring)
+        scored = score_impact_targets(text, expected, scoring)
+        if json_parse_diagnostics:
+            scored["diagnostics"].extend(json_parse_diagnostics)
+            scored["scoring_pass"] = False
+        return scored
 
     expected_files = expected_paths(expected, str(mode))
     require_top = mode == "path_top"

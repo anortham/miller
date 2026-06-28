@@ -284,6 +284,47 @@ public sealed class WorkspaceRenderTests
     }
 
     [Fact]
+    public void Onboarding_AggregateTelemetry_SurfacesTraceContentPatternsGuidance()
+    {
+        WorkspaceOnboardingFacts facts = WorkspaceOnboardingFacts.Create(
+            Facts(),
+            new TelemetryOnboardingFacts(
+                Available: true,
+                State: "ready",
+                TotalCalls: 12,
+                WindowStartTs: "2026-06-23T10:00:00.000Z",
+                WindowEndTs: "2026-06-23T10:09:00.000Z",
+                ToolMix:
+                [
+                    new TelemetryToolMix("trace", "path", 4, 0, 4, 0, 50, 60, 70, 0, 600, 100),
+                    new TelemetryToolMix("content", "read", 3, 0, 0, 3, 80, 90, 100, 0, 500, 100),
+                    new TelemetryToolMix("search", "auto", 5, 5, 0, 0, 30, 40, 50, 3, 700, 150),
+                ],
+                SuccessfulFlows: [],
+                TargetHashes: [],
+                CommonMisses: [],
+                Friction: [],
+                Error: null),
+            []);
+
+        string text = WorkspaceRender.Onboarding(facts, json: false);
+        using var doc = JsonDocument.Parse(WorkspaceRender.Onboarding(facts, json: true));
+        string[] notes = doc.RootElement.GetProperty("instruction_notes")
+            .EnumerateArray()
+            .Select(static row => row.GetString() ?? string.Empty)
+            .ToArray();
+
+        Assert.Contains("trace mode=refs", text);
+        Assert.Contains("search mode=source", text);
+        Assert.Contains("source_id from content search", text);
+        Assert.Contains("workspace_id", text);
+        Assert.Contains("patterns operation=list", text);
+        Assert.Contains(notes, static note => note.Contains("trace mode=refs", StringComparison.Ordinal));
+        Assert.Contains(notes, static note => note.Contains("source_id from content search", StringComparison.Ordinal));
+        Assert.Contains(notes, static note => note.Contains("patterns operation=list", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Status_Json_HasWorkspaceIndexAndTelemetrySections()
     {
         using var doc = JsonDocument.Parse(

@@ -140,6 +140,18 @@ public sealed class AgentInstructionsTests
         Assert.Contains("no extracted graph path within depth, not proof unrelated", instructions);
         Assert.Contains("on another stack use `mode=refs`/`mode=path`, or `inspect depth=full`", instructions);
         Assert.Contains("on empty, fall back to `search mode=source`", instructions);
+        Assert.Contains("follow its `Next:` actions", instructions);
+    }
+
+    [Fact]
+    public void Load_DocumentsContentAndPatternsRecoveryGuidance()
+    {
+        string instructions = AgentInstructions.Load();
+        Assert.Contains("pass the hit's `source_id`", instructions);
+        Assert.Contains("workspace_id when reading cross-workspace hits", instructions);
+        Assert.Contains("Empty content searches and failed reads include recovery guidance", instructions);
+        Assert.Contains("patterns operation=list", instructions);
+        Assert.Contains("List/no-match results include `next_actions`", instructions);
     }
 
     [Fact]
@@ -168,8 +180,21 @@ public sealed class AgentInstructionsTests
         MethodInfo method = ToolMethod<TraceTool>(nameof(TraceTool.Trace));
         string description = method.GetCustomAttribute<DescriptionAttribute>()?.Description ?? string.Empty;
 
-        Assert.Contains("No-path/unsupported results include next actions", description);
+        Assert.Contains("Empty refs/no-neighbour/no-path/unsupported results include next actions", description);
         Assert.Contains("next_actions", description);
+    }
+
+    [Fact]
+    public void ContentAndPatternsToolDescriptions_DocumentRecoveryGuidance()
+    {
+        string contentDescription = ToolMethod<ContentTool>(nameof(ContentTool.Content))
+            .GetCustomAttribute<DescriptionAttribute>()?.Description ?? string.Empty;
+        string patternsDescription = ToolMethod<PatternsTool>(nameof(PatternsTool.Patterns))
+            .GetCustomAttribute<DescriptionAttribute>()?.Description ?? string.Empty;
+
+        Assert.Contains("source_id", contentDescription);
+        Assert.Contains("next_actions", contentDescription);
+        Assert.Contains("List/no-match results include next_actions", patternsDescription);
     }
 
     [Fact]

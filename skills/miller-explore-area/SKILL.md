@@ -52,6 +52,13 @@ trace(target="<symbol>")
 trace(target="<from>", mode="path", to="<to>")
 ```
 
+If `trace` returns no refs, no neighbours, no path, or an unsupported bridge, follow its `Next:` actions first.
+Typical recovery is `trace(mode="refs")`, `search(mode="source")`, a scoped `inspect(depth="overview")`, or a
+bounded depth bump; a missing extracted path is not proof the code is unrelated.
+
+Use `patterns(operation="list")` before raw route, HTML, SQL, JSON, YAML, TOML, or Markdown structure hunting.
+Then search a shown `pattern_id` or follow the list output's `Next:` actions.
+
 ## Report
 
 Keep the answer compact:

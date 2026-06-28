@@ -167,6 +167,17 @@ for field-level guarantees. Fields (`schema_version` 1):
 - `resolution_status` — `unresolved`, `resolved`, or `dangling_target`.
 - `confidence`, `metadata_json`, `artifact_id`, `workspace_revision`.
 
+Read-command JSON is allowed to grow additive recovery fields. Current examples:
+
+- `trace --json` includes `next_actions` for empty or diagnostic outcomes such as no path, no refs, no
+  neighbours, or unsupported bridge providers.
+- `content search --json` no-result output remains parseable and may include `diagnostic_code` and
+  `next_actions`; successful search hits remain source-id driven.
+- `content read --json` parameter/source/window failures return a parseable object with `operation`, `error`,
+  `diagnostic_code`, and `next_actions` when Miller can suggest recovery.
+- `patterns --json` list/no-match output may include `next_actions`; no-match search output may include
+  `near_matches`.
+
 `miller complexity export --jsonl [--workspace-id SELECTOR] [--workspace DIR]` emits one JSON line per
 `complexity_metrics` row (file-scope and symbol-scope; emitted broadly since julie-extract 2.3.0), ordered
 `(path, start_byte, complexity_metric_id)`. Fields (`schema_version` 1):

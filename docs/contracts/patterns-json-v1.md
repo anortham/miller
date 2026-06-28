@@ -40,9 +40,19 @@ MCP uses the same names with snake_case parameters: `operation`, `pattern_id`, `
       "languages": ["html", "razor"],
       "captures": ["attribute"]
     }
+  ],
+  "next_actions": [
+    {
+      "tool": "patterns",
+      "reason": "search observed structural facts for this pattern",
+      "args": {"operation": "search", "pattern_id": "htmx.attribute.v1"}
+    }
   ]
 }
 ```
+
+`next_actions` is additive and bounded. It is present for list output when Miller can derive useful follow-up
+commands from observed `pattern_id` values.
 
 ## Summary
 
@@ -103,6 +113,15 @@ keeps the row for unfiltered output and writes `metadata_error`; metadata-filter
 
 `--where key=value` is an exact string comparison against one top-level metadata property. The first slice supports
 one `--where` filter.
+
+No-match search output may include:
+
+- `near_matches`: observed `pattern_id` values close to the query.
+- `next_actions`: bounded recovery calls, such as `operation=list`, `operation=summary`, or a concrete
+  `pattern_id` search.
+
+If a requested `pattern_id` exists but `language`, `path`, or `where` filters remove every row, the empty result
+is still successful and the compact output names the active filters so callers can loosen them deliberately.
 
 ## Exit Codes
 

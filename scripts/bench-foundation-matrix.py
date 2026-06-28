@@ -26,7 +26,7 @@ MILLER = ROOT / "src/Miller.Server/bin/Release/net10.0/miller"
 JULIE = Path("/Users/murphy/source/julie/target/release/julie-server")
 
 REPO_ROOTS = {
-    "miller": "/Users/murphy/source/miller",
+    "miller": str(ROOT),
     "julie": "/Users/murphy/source/julie",
     "eros": "/Users/murphy/source/eros",
     "express": "/Users/murphy/source/express",
@@ -39,7 +39,7 @@ REPO_ROOTS = {
 
 SUPPORTED_ROUTES = {"mcp", "cli"}
 SUPPORTED_CLI_FORMATS = {"json", "jsonl"}
-SUPPORTED_MILLER_TOOLS = {"search", "inspect", "context", "trace", "impact"}
+SUPPORTED_MILLER_TOOLS = {"search", "inspect", "context", "trace", "impact", "content", "patterns"}
 SUPPORTED_JULIE_TOOLS = {"fast_search", "deep_dive", "get_context", "fast_refs", "call_path", "blast_radius"}
 SUPPORTED_SCORING_MODES = {
     "path_present",
@@ -310,6 +310,14 @@ def validate_tool_spec(
             errors.append(f"{label}: 'miller.args.query' is required for context")
         if tool in {"trace", "impact"} and not isinstance(args.get("target"), str):
             errors.append(f"{label}: 'miller.args.target' is required for {tool}")
+        if tool == "content" and args.get("operation") == "search" and not isinstance(args.get("query"), str):
+            errors.append(f"{label}: 'miller.args.query' is required for content search")
+        if tool == "content" and args.get("operation") == "read" and not isinstance(args.get("source_id"), str):
+            errors.append(f"{label}: 'miller.args.source_id' is required for content read")
+        if tool == "patterns" and args.get("operation") == "search" and not (
+            isinstance(args.get("pattern_id"), str) or isinstance(args.get("query"), str)
+        ):
+            errors.append(f"{label}: 'miller.args.pattern_id' or 'miller.args.query' is required for patterns search")
     elif key == "julie":
         if tool == "fast_search" and not isinstance(args.get("query"), str):
             errors.append(f"{label}: 'julie.args.query' is required for fast_search")
@@ -480,6 +488,12 @@ def apply_miller_defaults(row: dict[str, Any]) -> dict[str, Any]:
     elif row["miller"]["tool"] == "impact":
         args.setdefault("format", "compact")
         args.setdefault("limit", 40)
+    elif row["miller"]["tool"] == "content":
+        args.setdefault("format", "compact")
+        args.setdefault("limit", 6)
+    elif row["miller"]["tool"] == "patterns":
+        args.setdefault("format", "compact")
+        args.setdefault("limit", 50)
     return args
 
 
@@ -561,7 +575,7 @@ def execute_miller_row(mcp: McpProcess, row: dict[str, Any]) -> dict[str, Any]:
     tool_args = apply_miller_defaults(row)
     elapsed, response = mcp.call_tool(tool_name, tool_args, timeout=90)
     text = content_text(response)
-    parse_json = bool(tool_name == "search" and tool_args.get("format") == "json")
+    parse_json = bool(tool_args.get("format") == "json")
     scored = score_manifest_path(text, row["expected"], row["scoring"], parse_json=parse_json)
     diagnostics: list[dict[str, Any]] = []
     if "error" in response:

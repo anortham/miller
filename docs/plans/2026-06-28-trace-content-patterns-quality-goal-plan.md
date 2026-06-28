@@ -105,12 +105,12 @@ Interpretation:
 - `patterns.search.no_match.recovery`: compact and JSON output suggest list/query/near-match next actions.
 
 **Acceptance criteria:**
-- [ ] Baseline doc records current telemetry counts for `trace`, `content`, and `patterns`.
-- [ ] Focused matrix rows exist for each tool's main recovery workflow.
-- [ ] Hard gates cover parseability and required recovery anchors, not adoption-rate targets.
-- [ ] Usage/adoption numbers are explicitly report-only.
-- [ ] No new MCP tools or telemetry raw-query/raw-target fields are introduced.
-- [ ] Worker-scope verification passes and is committed.
+- [x] Baseline doc records current telemetry counts for `trace`, `content`, and `patterns`.
+- [x] Focused matrix rows exist for each tool's main recovery workflow.
+- [x] Hard gates cover parseability and required recovery anchors, not adoption-rate targets.
+- [x] Usage/adoption numbers are explicitly report-only.
+- [x] No new MCP tools or telemetry raw-query/raw-target fields are introduced.
+- [x] Worker-scope verification passes and is committed.
 
 ## Task 2: Make Trace Empty States Actionable And Measurable
 
@@ -135,16 +135,16 @@ Interpretation:
 - Telemetry empty reasons should become specific enough to separate `no_path`, `no_references`, `no_neighbours`, `bridge_no_provider`, `bridge_no_links`, and `unsupported`.
 
 **Acceptance criteria:**
-- [ ] `trace mode=path` no-path compact output includes source refs, destination refs, bounded depth bump, and source text search next actions.
-- [ ] `trace mode=path` no-path JSON output includes equivalent `next_actions`.
-- [ ] `trace mode=refs` empty compact output includes copyable next actions, not only prose.
-- [ ] `trace mode=refs` empty JSON output includes equivalent `next_actions`.
-- [ ] `trace mode=auto` no-neighbour compact and JSON output include useful next actions and same-file context when available.
-- [ ] `trace mode=bridge` unsupported/no-links outcomes keep provider honesty and include relevant fallbacks.
-- [ ] Telemetry empty reasons distinguish the major trace empty classes.
-- [ ] Tool description and server instructions stay under budget and mention trace recovery accurately.
-- [ ] `dotnet test tests/Miller.Tests/Miller.Tests.csproj --no-restore --filter "FullyQualifiedName~TraceToolTests|FullyQualifiedName~AgentInstructionsTests"` passes.
-- [ ] Worker-scope verification passes and is committed.
+- [x] `trace mode=path` no-path compact output includes source refs, destination refs, bounded depth bump, and source text search next actions.
+- [x] `trace mode=path` no-path JSON output includes equivalent `next_actions`.
+- [x] `trace mode=refs` empty compact output includes copyable next actions, not only prose.
+- [x] `trace mode=refs` empty JSON output includes equivalent `next_actions`.
+- [x] `trace mode=auto` no-neighbour compact and JSON output include useful next actions and same-file context when available.
+- [x] `trace mode=bridge` unsupported/no-links outcomes keep provider honesty and include relevant fallbacks.
+- [x] Telemetry empty reasons distinguish the major trace empty classes.
+- [x] Tool description and server instructions stay under budget and mention trace recovery accurately.
+- [x] `dotnet test tests/Miller.Tests/Miller.Tests.csproj --no-restore --filter "FullyQualifiedName~TraceToolTests|FullyQualifiedName~AgentInstructionsTests"` passes.
+- [x] Worker-scope verification passes and is committed.
 
 ## Task 3: Reduce Content Read Errors And Improve Content Recovery
 
@@ -172,15 +172,15 @@ Interpretation:
 - Improve telemetry classification for `content:read` errors and `content:search` no-results using specific error/empty reasons.
 
 **Acceptance criteria:**
-- [ ] `content search` no-results compact output gives bounded rerun guidance.
-- [ ] `content search` no-results JSON output is parseable and includes equivalent recovery fields.
-- [ ] `content read` missing/unknown source compact output suggests `content search` and `content list`.
-- [ ] `content read` ambiguous display path compact output keeps candidate source IDs and explains how to choose one.
-- [ ] `content read` JSON errors are parseable and include diagnostic codes.
-- [ ] Existing successful search/read output remains source-id driven and bounded.
-- [ ] Telemetry distinguishes no-results from read parameter/source/window errors.
-- [ ] `dotnet test tests/Miller.Tests/Miller.Tests.csproj --no-restore --filter "FullyQualifiedName~ContentToolTests|FullyQualifiedName~CliDispatchTests"` passes for affected tests.
-- [ ] Worker-scope verification passes and is committed.
+- [x] `content search` no-results compact output gives bounded rerun guidance.
+- [x] `content search` no-results JSON output is parseable and includes equivalent recovery fields.
+- [x] `content read` missing/unknown source compact output suggests `content search` and `content list`.
+- [x] `content read` ambiguous display path compact output keeps candidate source IDs and explains how to choose one.
+- [x] `content read` JSON errors are parseable and include diagnostic codes.
+- [x] Existing successful search/read output remains source-id driven and bounded.
+- [x] Telemetry distinguishes no-results from read parameter/source/window errors.
+- [x] `dotnet test tests/Miller.Tests/Miller.Tests.csproj --no-restore --filter "FullyQualifiedName~ContentToolTests|FullyQualifiedName~CliDispatchTests"` passes for affected tests.
+- [x] Worker-scope verification passes and is committed.
 
 ## Task 4: Make Patterns Discoverable And Workflow-Shaped
 
@@ -208,13 +208,13 @@ Interpretation:
 - Keep pattern recognition generic. Do not special-case ASP.NET/htmx/SQL beyond examples derived from observed `pattern_id` values.
 
 **Acceptance criteria:**
-- [ ] `patterns operation=list` compact output includes concrete next actions derived from observed pattern IDs.
-- [ ] `patterns operation=list --json` includes parseable `next_actions`.
-- [ ] `patterns search query=<miss>` compact and JSON output include recovery guidance and near matches when available.
-- [ ] `patterns search pattern_id=<id>` with filters that remove all rows distinguishes no facts from filtered-out facts.
-- [ ] Existing search/list/summary successful output remains bounded and generic over `pattern_id`.
-- [ ] `dotnet test tests/Miller.Tests/Miller.Tests.csproj --no-restore --filter "FullyQualifiedName~PatternsToolTests|FullyQualifiedName~CliDispatchTests"` passes for affected tests.
-- [ ] Worker-scope verification passes and is committed.
+- [x] `patterns operation=list` compact output includes concrete next actions derived from observed pattern IDs.
+- [x] `patterns operation=list --json` includes parseable `next_actions`.
+- [x] `patterns search query=<miss>` compact and JSON output include recovery guidance and near matches when available.
+- [x] `patterns search pattern_id=<id>` with filters that remove all rows distinguishes no facts from filtered-out facts.
+- [x] Existing search/list/summary successful output remains bounded and generic over `pattern_id`.
+- [x] `dotnet test tests/Miller.Tests/Miller.Tests.csproj --no-restore --filter "FullyQualifiedName~PatternsToolTests|FullyQualifiedName~CliDispatchTests"` passes for affected tests.
+- [x] Worker-scope verification passes and is committed.
 
 ## Task 5: Surface Tool-Specific Guidance In Onboarding, Skills, And Public Docs
 
@@ -253,14 +253,14 @@ Interpretation:
 - README/site should show the three tools as workflow tools, not extra features.
 
 **Acceptance criteria:**
-- [ ] Onboarding compact and JSON output can surface trace/content/patterns guidance using aggregate telemetry only.
-- [ ] Server instructions document the improved recovery workflows without exceeding budgets.
-- [ ] Skills are updated in `.agents/skills/`, mirrored to `skills/`, and pass plugin mirror tests.
-- [ ] README and GitHub Pages explain the intended workflows without implying new tools or semantic retrieval.
-- [ ] `dotnet test tests/Miller.Tests/Miller.Tests.csproj --no-restore --filter "FullyQualifiedName~WorkspaceRenderTests|FullyQualifiedName~AgentInstructionsTests"` passes.
-- [ ] `scripts/sync-plugin-skills.sh && diff -qr .agents/skills skills` passes.
-- [ ] `node --test tests/plugin/plugin-manifest.test.cjs` passes.
-- [ ] Worker-scope verification passes and is committed.
+- [x] Onboarding compact and JSON output can surface trace/content/patterns guidance using aggregate telemetry only.
+- [x] Server instructions document the improved recovery workflows without exceeding budgets.
+- [x] Skills are updated in `.agents/skills/`, mirrored to `skills/`, and pass plugin mirror tests.
+- [x] README and GitHub Pages explain the intended workflows without implying new tools or semantic retrieval.
+- [x] `dotnet test tests/Miller.Tests/Miller.Tests.csproj --no-restore --filter "FullyQualifiedName~WorkspaceRenderTests|FullyQualifiedName~AgentInstructionsTests"` passes.
+- [x] `scripts/sync-plugin-skills.sh && diff -qr .agents/skills skills` passes.
+- [x] `node --test tests/plugin/plugin-manifest.test.cjs` passes.
+- [x] Worker-scope verification passes and is committed.
 
 ## Task 6: Focused Evidence, Final Regression Gate, And Goal Closeout
 
@@ -295,15 +295,15 @@ python3 scripts/bench-foundation-matrix.py \
 If the runner cannot select by those task names, use the exact task IDs added in Task 1. If existing runner semantics cannot express the checks, update the runner in the narrowest way and document the hard-gate fields.
 
 **Acceptance criteria:**
-- [ ] Focused matrix gates pass for trace recovery anchors and JSON parseability.
-- [ ] Focused matrix gates pass for content recovery anchors and JSON parseability.
-- [ ] Focused matrix gates pass for patterns next-action anchors and JSON parseability.
-- [ ] Baseline doc records before/after behavior and marks adoption metrics report-only.
-- [ ] Plan checklist is updated only after evidence exists.
-- [ ] Goldfish checkpoint records what changed, why, verification evidence, and remaining follow-up.
-- [ ] `scripts/test.sh` passes.
-- [ ] `git diff --check` passes.
-- [ ] Final local commit includes code, tests, docs, generated evidence, skill mirrors, and checkpoint.
+- [x] Focused matrix gates pass for trace recovery anchors and JSON parseability.
+- [x] Focused matrix gates pass for content recovery anchors and JSON parseability.
+- [x] Focused matrix gates pass for patterns next-action anchors and JSON parseability.
+- [x] Baseline doc records before/after behavior and marks adoption metrics report-only.
+- [x] Plan checklist is updated only after evidence exists.
+- [x] Goldfish checkpoint records what changed, why, verification evidence, and remaining follow-up.
+- [x] `scripts/test.sh` passes.
+- [x] `git diff --check` passes.
+- [x] Final local commit includes code, tests, docs, generated evidence, skill mirrors, and checkpoint.
 
 ## Verification Strategy
 

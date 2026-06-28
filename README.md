@@ -265,6 +265,10 @@ shortest extracted graph path to `to`, and `mode=bridge` follows provider-scoped
 No-path, unsupported bridge, and ambiguous-target results include bounded next actions; JSON callers get the same
 guidance in additive `next_actions` rows.
 
+`content` is the large-text workflow: import or search the right content kind, keep the `source_id` from each
+hit, then read a bounded line window. Empty searches and failed reads include recovery guidance, diagnostic codes
+in JSON, and reminders to pass `workspace_id` when a hit came from a cross-workspace search.
+
 For cross-workspace code reading, stay in the current session and run `workspace list`. If the target repo is
 registered, pass its display ID, unique prefix, full ID, or root path as `workspace_id` to `search`, `inspect`,
 `context`, `impact`, `trace`, or `patterns`. If it is not registered yet, run
@@ -285,6 +289,9 @@ patterns(operation="search", pattern_id="aspnet.minimal_api.route.v1", where="ve
 patterns(operation="search", pattern_id="htmx.attribute.v1", where="attribute_name=hx-get", path="Views/**")
 patterns(operation="search", pattern_id="alpine.directive.v1", where="directive=x-data", path="Views/**")
 ```
+
+Start with `patterns()`/`patterns(operation="list")`; list and no-match output now includes concrete next
+actions, and search misses can suggest near pattern IDs or explain when active filters removed all rows.
 
 The CLI-only `miller metrics` command reports deterministic local facts: recent git churn mapped to current
 symbols, identical body-hash clone groups, and complexity hotspots with transparent thresholds. It is not semantic
