@@ -19,11 +19,11 @@ Common extractor-backed examples include:
 ```bash
 miller patterns [list] [--workspace-id SELECTOR] [--workspace DIR] [--language LANG] [--json]
 miller patterns summary [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--language LANG] [--path GLOB] [--json]
-miller patterns search --pattern ID [--workspace-id SELECTOR] [--workspace DIR] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]
+miller patterns search (--pattern ID | --query TEXT) [--workspace-id SELECTOR] [--workspace DIR] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]
 ```
 
 MCP uses the same names with snake_case parameters: `operation`, `pattern_id`, `language`, `path`, `where`,
-`workspace_id`, `ensure_fresh`, `limit`, and `format=json`.
+`query`, `workspace_id`, `ensure_fresh`, `limit`, and `format=json`.
 
 ## List
 
@@ -73,6 +73,9 @@ commands from observed `pattern_id` values.
 
 ## Search
 
+Search accepts either an exact `pattern_id` or a free-text `query`. A free-text query maps to every observed
+`pattern_id` containing the substring, then searches across those pattern ids.
+
 ```json
 {
   "schema_version": 1,
@@ -111,8 +114,8 @@ commands from observed `pattern_id` values.
 `metadata` is present when `metadata_json` is valid JSON object data. If a row has malformed metadata, search
 keeps the row for unfiltered output and writes `metadata_error`; metadata-filtered searches skip malformed rows.
 
-`--where key=value` is an exact string comparison against one top-level metadata property. The first slice supports
-one `--where` filter.
+`--where key=value` is an exact string comparison against one top-level metadata property. It can be used with
+`--pattern` or `--query`. The first slice supports one `--where` filter.
 
 No-match search output may include:
 
@@ -128,6 +131,6 @@ is still successful and the compact output names the active filters so callers c
 | Code | Meaning |
 |---:|---|
 | `0` | Success. Empty result arrays are still successful. |
-| `2` | Usage or workspace selector error, such as `search` without `--pattern`. |
+| `2` | Usage or workspace selector error, such as `search` without `--pattern` or `--query`. |
 | `3` | Operational failure, such as no usable index or incompatible/missing `structural_facts`. |
 | `1` | Unexpected failure converted to a clean CLI error line. |

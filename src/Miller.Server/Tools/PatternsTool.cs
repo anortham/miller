@@ -58,7 +58,7 @@ public sealed class PatternsTool
         [Description("Free-text query for search when pattern_id is omitted. Maps to every pattern_id containing the substring (case-insensitive) and searches across them. Ignored when pattern_id is supplied. Example: route.")] string? query = null,
         [Description("Language filter such as csharp, html, or razor. Optional.")] string? language = null,
         [Description("Workspace-relative glob filter, e.g. Views/**. Optional.")] string? path = null,
-        [Description("Top-level metadata equality filter as key=value. Requires pattern_id. Optional.")] string? where = null,
+        [Description("Top-level metadata equality filter as key=value. Requires pattern_id or query. Optional.")] string? where = null,
         [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")] string? workspace_id = null,
         [Description("Refresh selected workspace before reading. Defaults true when workspace_id is supplied.")] bool? ensure_fresh = null,
         [Description("Max search results. Default 50, maximum 500.")] int limit = DefaultLimit,

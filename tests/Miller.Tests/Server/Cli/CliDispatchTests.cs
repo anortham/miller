@@ -449,6 +449,8 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Contains("search", outText);
         Assert.Contains("todos", outText);
         Assert.Contains("patterns", outText);
+        Assert.Contains("--pattern ID] [--query TEXT]", outText);
+        Assert.Contains("--depth summary|overview|full", outText);
         Assert.Contains("serve", outText);
     }
 

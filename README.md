@@ -294,10 +294,12 @@ patterns()
 patterns(operation="search", pattern_id="aspnet.minimal_api.route.v1", where="verb=GET", path="Program.cs")
 patterns(operation="search", pattern_id="htmx.attribute.v1", where="attribute_name=hx-get", path="Views/**")
 patterns(operation="search", pattern_id="alpine.directive.v1", where="directive=x-data", path="Views/**")
+patterns(operation="search", query="route")
 ```
 
 Start with `patterns()`/`patterns(operation="list")`; list and no-match output now includes concrete next
-actions, and search misses can suggest near pattern IDs or explain when active filters removed all rows.
+actions, and search misses can suggest near pattern IDs or explain when active filters removed all rows. Use
+`query` when you remember the kind of fact but not the exact `pattern_id`.
 
 The CLI-only `miller metrics` command reports deterministic local facts: recent git churn mapped to current
 symbols, identical body-hash clone groups, and complexity hotspots with transparent thresholds. It is not semantic

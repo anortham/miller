@@ -1810,7 +1810,7 @@ public static class CliDispatch
                              export [--kind KIND] [--content-workspace-id ID]   # JSONL
           patterns <op>      List, summarize, or search extractor-recognized code-shape facts.
                              op = list | summary | search
-                             [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]
+                             [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--query TEXT] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]
           metrics <op>       Report deterministic local metrics.
                              op = churn | clones | complexity
                              [--workspace-id SELECTOR] [--workspace DIR] [--limit N] [--json] [--range REV..REV] [--include-commits] [--min-count N] [--max-symbols-per-group N] [--min-severity low|moderate|high] [--include-tests|--exclude-tests]
@@ -1825,7 +1825,7 @@ public static class CliDispatch
           refresh            Refresh a registered workspace index and return after convergence attempt.
                              [--json] [--wait] [--workspace-id SELECTOR|--workspace DIR] [--full]
           inspect <target>   List a file's symbols, or show a symbol's definition.
-                             [--workspace-id SELECTOR] [--workspace DIR] [--depth summary|full] [--kind K] [--scope FILE] [--limit N] [--json]
+                             [--workspace-id SELECTOR] [--workspace DIR] [--depth summary|overview|full] [--kind K] [--scope FILE] [--limit N] [--json]
           context <query>    Token-budgeted bundle of the most relevant code for a task.
                              [--workspace-id SELECTOR] [--workspace DIR] [--token-budget N] [--max-hops 0-2] [--reference-mode off|usage] [--reference-depth 0-1] [--exclude-tests] [--json]
           impact <input>     Downstream symbols + tests a change would affect.

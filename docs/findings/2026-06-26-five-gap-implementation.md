@@ -1,6 +1,10 @@
 # Five-gap implementation note
 
-Status: implementation evidence for the 2026-06-26 Miller five-gap plan.
+Status: historical implementation evidence for the 2026-06-26 Miller five-gap plan.
+
+Current note: the metrics MCP tool implemented during this slice was later removed. Metrics are now CLI-only via
+`miller metrics <churn|clones|complexity> --json`; see `docs/contracts/metrics-json-v1.md` for the active
+contract. Keep the older MCP-oriented names below as implementation evidence, not current agent guidance.
 
 ## Completed surfaces
 

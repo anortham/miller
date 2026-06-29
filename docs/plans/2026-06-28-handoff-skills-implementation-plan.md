@@ -87,7 +87,8 @@ target_harness: cursor
 branch: main
 head: 7bf576d
 dirty_state: dirty|clean
-index_revision: 1908
+index_built_revision: 1908
+index_latest_revision: 1908
 ---
 
 ## Resume Prompt
