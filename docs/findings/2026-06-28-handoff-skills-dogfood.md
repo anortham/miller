@@ -22,7 +22,7 @@ The packet is intentionally not committed.
 
 Collected:
 
-- Miller `workspace(status)`: fresh revision 2 at packet creation, current `search_db`, current `content_db`, queue empty.
+- Miller `workspace(status)`: fresh revision 2 at packet creation, current `search_db`, current `content_db`, queue empty. The skill now records the JSON fields as `index_built_revision` and `index_latest_revision`.
 - Miller `workspace(health)`: usable with warnings due to 21 parse diagnostics; telemetry errors were 0.
 - Git root, branch, HEAD, status, diff stat, and changed path list.
 - Miller `impact(git=true)` for the tracked working-tree diff.
@@ -48,11 +48,11 @@ Validation against current workspace facts:
 - Branch matched: `codex/handoff-skills`.
 - HEAD matched: `7bf576d`.
 - Dirty state matched: dirty.
-- Miller remained fresh, but the index moved from revision 2 to revision 3 after packet creation.
+- Miller remained fresh, but the index moved from built/latest revision 2 to built/latest revision 3 after packet creation.
 
 Result classification: `drifted-but-resumable`.
 
-The drift is expected because writing and then validating the local packet advanced the workspace index. The receiving workflow should keep the packet, note the revision drift, and rerun Miller checks when using impact/context.
+The drift is expected because writing and then validating the local packet advanced the workspace index. The receiving workflow should keep the packet, note the revision drift, compare the changed-file lists, and rerun Miller checks when using impact/context.
 
 ## Observed Limitation
 

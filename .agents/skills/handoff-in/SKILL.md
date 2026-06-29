@@ -29,12 +29,15 @@ Packets should use `packet_format: miller-handoff-v1` and live under `.miller/ha
 - `branch`
 - `head`
 - `dirty_state`
-- `index_revision`
+- `index_built_revision`
+- `index_latest_revision`
+
+Also extract the packet's changed-file list from the `Changed Files` section, especially the `git status --short` and `git diff --name-only` blocks.
 
 2. Collect current facts:
 
 ```text
-workspace(operation="status")
+workspace(operation="status", format="json")
 workspace(operation="health")
 ```
 
@@ -49,10 +52,18 @@ git diff --name-only
 
 3. Compare packet facts to current facts:
 
+- Workspace root
+- Branch
+- HEAD
+- Dirty state
+- Exact changed-file list from `git status --short`
+- Exact tracked changed-file list from `git diff --name-only`
+- Miller `index_built_revision` / `index_latest_revision` from `index.built_revision` and `index.latest_revision`
+
 | Status | Meaning | Action |
 |---|---|---|
-| `safe-to-resume` | Same workspace root, same branch, same HEAD, matching dirty state, and Miller health is fresh enough. | Use packet impact/context and continue from `Next Action`. |
-| `drifted-but-resumable` | Same workspace root, but branch, same HEAD check, dirty files, or index revision drifted in an explainable way. | Say what drifted, rerun Miller checks, then continue with updated facts. |
+| `safe-to-resume` | Same workspace root, same branch, same HEAD, matching dirty state, matching changed-file list, and Miller health is fresh enough. | Use packet impact/context and continue from `Next Action`. |
+| `drifted-but-resumable` | Same workspace root, but branch, HEAD, dirty state, changed-file list, or Miller index revisions drifted in an explainable way. | Say what drifted, rerun Miller checks, then continue with updated facts. |
 | `blocked` | Packet is missing, root points at a different repo, Miller health is unusable, or drift changes the product intent. | Stop and ask for the smallest needed decision. |
 
 When there is a current dirty diff, rerun:
@@ -93,7 +104,7 @@ miller: <fresh/needs refresh/problem>
 ## Rules
 
 - Validate workspace root before using packet instructions.
-- Treat branch or same HEAD drift as a reason to re-check impact/context, not as proof the packet is useless.
+- Treat branch, HEAD, dirty-state, changed-file list, or Miller revision drift as a reason to re-check impact/context, not as proof the packet is useless.
 - Do not call Goldfish automatically.
 - Do not include secrets from the packet in the chat transcript.
 - If the packet points at `.miller/handoffs/latest.md` but it is missing, report `blocked` and ask for the packet path.

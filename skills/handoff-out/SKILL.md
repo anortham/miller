@@ -23,11 +23,11 @@ Create a local markdown handoff packet from current workspace facts, Miller cont
 1. Confirm Miller freshness:
 
 ```text
-workspace(operation="status")
+workspace(operation="status", format="json")
 workspace(operation="health")
 ```
 
-If `health` reports stale, missing, or corrupt sidecars, run `workspace(operation="refresh")` before collecting packet evidence.
+If `health` reports stale, missing, or corrupt sidecars, run `workspace(operation="refresh")` before collecting packet evidence. From JSON status, record `index.built_revision` and `index.latest_revision` as `index_built_revision` and `index_latest_revision`; do not invent a generic revision field.
 
 2. Capture local git facts with shell/git:
 
@@ -73,7 +73,8 @@ target_harness: <target harness/model>
 branch: <branch>
 head: <short head>
 dirty_state: dirty|clean
-index_revision: <revision>
+index_built_revision: <workspace status index.built_revision>
+index_latest_revision: <workspace status index.latest_revision>
 ---
 
 ## Resume Prompt
@@ -86,7 +87,23 @@ index_revision: <revision>
 
 ## Changed Files
 
-<git status --short, git diff --stat, and changed path list.>
+### git status --short
+
+```text
+<exact git status --short output, or "clean">
+```
+
+### git diff --name-only
+
+```text
+<exact git diff --name-only output, or "none">
+```
+
+### git diff --stat
+
+```text
+<exact git diff --stat output, or "none">
+```
 
 ## Impact
 
@@ -113,7 +130,7 @@ index_revision: <revision>
 - Same workspace root?
 - Same branch?
 - Same HEAD or acceptable drift?
-- Dirty files match packet?
+- Dirty state and changed-file list match packet?
 - Miller workspace fresh?
 - Re-run impact if drifted?
 ```

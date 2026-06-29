@@ -224,6 +224,11 @@ test('handoff skills define packet workflows without adding tool surface', () =>
   assert.match(handoffOut, /## Session Notes/);
   assert.match(handoffOut, /Do not include secrets/);
   assert.match(handoffOut, /Goldfish is not required/);
+  assert.match(handoffOut, /index_built_revision/);
+  assert.match(handoffOut, /index_latest_revision/);
+  assert.doesNotMatch(handoffOut, /index_revision/);
+  assert.match(handoffOut, /git status --short/);
+  assert.match(handoffOut, /git diff --name-only/);
 
   const handoffIn = fs.readFileSync(
     path.join(repoRoot, '.agents/skills/handoff-in/SKILL.md'),
@@ -234,6 +239,12 @@ test('handoff skills define packet workflows without adding tool surface', () =>
   assert.match(handoffIn, /\.miller\/handoffs\/latest\.md/);
   assert.match(handoffIn, /workspace root/);
   assert.match(handoffIn, /same HEAD/);
+  assert.match(handoffIn, /changed-file list/);
+  assert.match(handoffIn, /git status --short/);
+  assert.match(handoffIn, /git diff --name-only/);
   assert.match(handoffIn, /safe-to-resume/);
   assert.match(handoffIn, /drifted-but-resumable/);
+  assert.match(handoffIn, /index_built_revision/);
+  assert.match(handoffIn, /index_latest_revision/);
+  assert.doesNotMatch(handoffIn, /index_revision/);
 });
