@@ -204,11 +204,11 @@
 **Approach:** Map ASP.NET `verb` metadata to annotation-style verb keys such as `httpget`, and use `route_template` as the endpoint method route. Map htmx `target_path` to a synthetic `LiteralRecord` with `kind=url`, language from the fact, and carrier `htmx.get`, `htmx.post`, `htmx.put`, `htmx.patch`, or `htmx.delete` according to the metadata verb.
 
 **Acceptance criteria:**
-- [ ] htmx `hx-get` to ASP.NET `MapGet` produces a high-confidence `Hits` edge with both client and endpoint evidence.
-- [ ] htmx `hx-post` does not match `MapGet` for the same route.
-- [ ] htmx `hx-target` and other non-route htmx attributes do not produce client route calls.
-- [ ] Provider evidence counts include nonzero `dotnet-web.structuralFacts`, `dotnet-web.aspnetMinimalRoutes`, and `dotnet-web.htmxCalls` in the htmx fixture.
-- [ ] Worker-scope verification passes, committed.
+- [x] htmx `hx-get` to ASP.NET `MapGet` produces a high-confidence `Hits` edge with both client and endpoint evidence.
+- [x] htmx `hx-post` does not match `MapGet` for the same route.
+- [x] htmx `hx-target` and other non-route htmx attributes do not produce client route calls.
+- [x] Provider evidence counts include nonzero `dotnet-web.structuralFacts`, `dotnet-web.aspnetMinimalRoutes`, and `dotnet-web.htmxCalls` in the htmx fixture.
+- [x] Worker-scope verification passes, committed.
 
 ### Task 4: Bridge Vue Route Facts
 
