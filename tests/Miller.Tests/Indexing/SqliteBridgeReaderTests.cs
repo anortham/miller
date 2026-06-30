@@ -68,6 +68,12 @@ public sealed class SqliteBridgeReaderTests : IDisposable
                 annotation_id TEXT PRIMARY KEY, symbol_id TEXT, annotation TEXT, annotation_key TEXT,
                 raw_text TEXT, carrier TEXT
             );
+            CREATE TABLE structural_facts (
+                structural_fact_id TEXT PRIMARY KEY, file_id TEXT, path TEXT, language TEXT, pattern_id TEXT,
+                capture_name TEXT, node_kind TEXT, containing_symbol_id TEXT, start_line INTEGER, start_column INTEGER,
+                end_line INTEGER, end_column INTEGER, start_byte INTEGER, end_byte INTEGER, confidence REAL,
+                metadata_json TEXT
+            );
             CREATE TABLE artifact_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             """;
         command.ExecuteNonQuery();
@@ -243,6 +249,62 @@ public sealed class SqliteBridgeReaderTests : IDisposable
         Assert.Equal("AppSetting", data.DbSetProperties.Single(d => d.TableName == "AppSettings").EntityTypeName);
     }
 
+    // ---- structural_facts ------------------------------------------------------------------------------------
+
+    [Fact]
+    public void Read_StructuralFacts_LoadsOnlyRouteRelevantPatternIds_WithMetadataAndSpan()
+    {
+        using (var c = OpenWrite())
+        {
+            CreateSchemaAndGate(c);
+            // Insert OUT of order and include one generic structural fact. The bridge reader should load only raw
+            // route-relevant fact ids, ordered deterministically by (path, start_byte, structural_fact_id).
+            Exec(c, """
+                INSERT INTO structural_facts
+                    (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                     containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                     confidence, metadata_json)
+                VALUES
+                    ('fact-vue', 'file:web/App.vue', 'web/App.vue', 'vue',
+                     'vue.route_reference.v1', 'route_reference', 'call', 'sym-vue',
+                     3, 12, 3, 45, 90, 123, 0.92, '{"route":"/users/:id","method":"get"}'),
+                    ('fact-json', 'file:config/app.json', 'config/app.json', 'json',
+                     'json.property.v1', 'property', 'pair', NULL,
+                     1, 1, 1, 8, 0, 7, 1.0, '{"key":"routes"}'),
+                    ('fact-aspnet', 'file:Api/Program.cs', 'Api/Program.cs', 'csharp',
+                     'aspnet.minimal_api.route.v1', 'route', 'invocation', 'sym-mapget',
+                     12, 17, 12, 54, 200, 237, 1.0, '{"route":"/api/users/{id}","verb":"GET"}'),
+                    ('fact-hx', 'file:Views/Users.cshtml', 'Views/Users.cshtml', 'razor',
+                     'htmx.attribute.v1', 'attribute', 'attribute', 'sym-view',
+                     5, 9, 5, 31, 40, 62, 0.98, '{"name":"hx-get","value":"/api/users"}');
+                """);
+        }
+
+        var data = SqliteBridgeReader.Read(_dbPath);
+
+        Assert.Equal(
+            new[] { "fact-aspnet", "fact-hx", "fact-vue" },
+            data.StructuralFacts.Select(f => f.FactId).ToArray());
+
+        Assert.DoesNotContain(data.StructuralFacts, f => f.PatternId == "json.property.v1");
+
+        var minimalRoute = data.StructuralFacts[0];
+        Assert.Equal("aspnet.minimal_api.route.v1", minimalRoute.PatternId);
+        Assert.Equal("csharp", minimalRoute.Language);
+        Assert.Equal("Api/Program.cs", minimalRoute.Path);
+        Assert.Equal("route", minimalRoute.CaptureName);
+        Assert.Equal("invocation", minimalRoute.NodeKind);
+        Assert.Equal("sym-mapget", minimalRoute.ContainingSymbolId);
+        Assert.Equal(12, minimalRoute.StartLine);
+        Assert.Equal(17, minimalRoute.StartColumn);
+        Assert.Equal(12, minimalRoute.EndLine);
+        Assert.Equal(54, minimalRoute.EndColumn);
+        Assert.Equal(200, minimalRoute.Span.StartByte);
+        Assert.Equal(237, minimalRoute.Span.EndByte);
+        Assert.Equal(1.0, minimalRoute.Confidence);
+        Assert.Equal("""{"route":"/api/users/{id}","verb":"GET"}""", minimalRoute.MetadataJson);
+    }
+
     [Fact]
     public void Read_EmptyBridgeTables_YieldEmptyCollections_NotNull()
     {
@@ -256,6 +318,7 @@ public sealed class SqliteBridgeReaderTests : IDisposable
         Assert.Empty(data.Annotations);
         Assert.Empty(data.DbSetProperties);
         Assert.Empty(data.LiteralSites);
+        Assert.Empty(data.StructuralFacts);
     }
 
     // ---- gate + error paths ----------------------------------------------------------------------------------

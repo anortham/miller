@@ -20,6 +20,7 @@ public sealed record BridgeProviderContext(
     IReadOnlyList<LiteralRecord> Literals,
     IReadOnlyList<SymbolAnnotation> Annotations,
     IReadOnlyList<DbSetProperty> DbSetProperties,
+    IReadOnlyList<StructuralFactRecord> StructuralFacts,
     IReadOnlyDictionary<LiteralRecord, LiteralSite>? LiteralSites,
     IReadOnlyDictionary<string, SymbolDetail> SymbolsById,
     SymbolResolver Resolver);

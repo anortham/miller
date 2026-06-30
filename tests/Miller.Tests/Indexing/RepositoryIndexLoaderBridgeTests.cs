@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Miller.Core.Contracts;
 using Miller.Core.Graph;
 using Miller.Core.Resolver; // BridgeKind, ConfidenceBand, ScoredEdge (the Walk result element type)
 using Miller.Indexing;
@@ -76,6 +77,12 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
                 CREATE TABLE symbol_annotations (
                     annotation_id TEXT PRIMARY KEY, symbol_id TEXT, annotation TEXT, annotation_key TEXT, raw_text TEXT, carrier TEXT
                 );
+                CREATE TABLE structural_facts (
+                    structural_fact_id TEXT PRIMARY KEY, file_id TEXT, path TEXT, language TEXT, pattern_id TEXT,
+                    capture_name TEXT, node_kind TEXT, containing_symbol_id TEXT, start_line INTEGER, start_column INTEGER,
+                    end_line INTEGER, end_column INTEGER, start_byte INTEGER, end_byte INTEGER, confidence REAL,
+                    metadata_json TEXT
+                );
                 CREATE TABLE artifact_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
                 -- The entity, the DTO, and a DbContext exposing DbSet<ApplicationUser> ApplicationUsers.
@@ -96,6 +103,23 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
                 VALUES
                   ('ta-0', 'u-map', NULL, 0, 'ApplicationUser'),
                   ('ta-1', 'u-map', NULL, 1, 'UserDto');
+
+                -- Structural facts are raw bridge inputs only in this task. The selected route-relevant facts should
+                -- be passed into BridgeGraphBuilder; the generic JSON fact should be ignored by the bridge reader.
+                INSERT INTO structural_facts
+                    (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                     containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                     confidence, metadata_json)
+                VALUES
+                  ('sf-minimal', 'file:Api/Program.cs', 'Api/Program.cs', 'csharp',
+                   'aspnet.minimal_api.route.v1', 'route', 'invocation', 's-profile',
+                   20, 9, 20, 42, 300, 333, 1.0, '{"route":"/api/users"}'),
+                  ('sf-hx', 'file:Views/Users.cshtml', 'Views/Users.cshtml', 'razor',
+                   'htmx.attribute.v1', 'attribute', 'attribute', NULL,
+                   5, 12, 5, 34, 80, 102, 0.95, '{"name":"hx-get","value":"/api/users"}'),
+                  ('sf-json', 'file:config/routes.json', 'config/routes.json', 'json',
+                   'json.property.v1', 'property', 'pair', NULL,
+                   1, 1, 1, 9, 0, 8, 1.0, '{"key":"route"}');
                 """;
             command.ExecuteNonQuery();
 
@@ -133,6 +157,60 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
     private static void TryDelete(string path)
     {
         try { System.IO.Directory.Delete(path, recursive: true); } catch { /* best effort */ }
+    }
+
+    private sealed class CapturingStructuralFactsProvider : IBridgeProvider
+    {
+        public string Id => "capture-structural-facts";
+
+        public IReadOnlyList<StructuralFactRecord>? Observed { get; private set; }
+
+        public BridgeProviderResult BuildCandidates(BridgeProviderContext context)
+        {
+            Observed = context.StructuralFacts;
+            return BridgeProviderResult.ActiveResult(
+                candidates: [],
+                evidenceCounts: new Dictionary<string, int>(StringComparer.Ordinal)
+                {
+                    ["capture.structuralFacts"] = context.StructuralFacts.Count,
+                });
+        }
+    }
+
+    [Fact]
+    public void BridgeGraphBuilder_PassesStructuralFactsToProviderContext()
+    {
+        IReadOnlyList<StructuralFactRecord> facts =
+        [
+            new(
+                FactId: "sf-vue",
+                PatternId: "vue.route_reference.v1",
+                Language: "vue",
+                Path: "web/App.vue",
+                CaptureName: "route_reference",
+                NodeKind: "call",
+                ContainingSymbolId: null,
+                StartLine: 3,
+                StartColumn: 12,
+                EndLine: 3,
+                EndColumn: 45,
+                Span: new SourceSpan(90, 123),
+                Confidence: 0.92,
+                MetadataJson: """{"route":"/users/:id"}"""),
+        ];
+        var provider = new CapturingStructuralFactsProvider();
+
+        var graph = BridgeGraphBuilder.Build(
+            symbols: [],
+            typeArguments: [],
+            literals: [],
+            annotations: [],
+            dbSetProperties: [],
+            providers: [provider],
+            structuralFacts: facts);
+
+        Assert.Same(facts, provider.Observed);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["capture.structuralFacts"]);
     }
 
     [Fact]
@@ -204,6 +282,19 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
         Assert.Equal(1, calls);
         Assert.True(observed >= TimeSpan.Zero);
         Assert.True(index.BridgeGraph.Contains("s-entity")); // and the graph is still populated
+    }
+
+    [Fact]
+    public void Load_PassesSelectedStructuralFactsIntoBridgeBuilder_WithoutGraphingUnrelatedPatternIds()
+    {
+        var index = RepositoryIndexLoader.Load(_dbPath);
+
+        Assert.True(index.BridgeGraph.CapabilityReport.EvidenceCounts.TryGetValue("bridge.structuralFacts", out int count));
+        Assert.Equal(2, count);
+        Assert.DoesNotContain(
+            index.BridgeGraph.CapabilityReport.EvidenceCounts.Keys,
+            key => key.Contains("json.property", StringComparison.Ordinal));
+        Assert.False(index.BridgeGraph.Contains(BridgeGraph.SynthesizeId(BridgeNodeKind.Endpoint, "json.property.v1")));
     }
 
     [Fact]

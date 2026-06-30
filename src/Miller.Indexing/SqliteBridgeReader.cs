@@ -7,11 +7,11 @@ namespace Miller.Indexing;
 /// <summary>
 /// The cross-language bridge read layer (plan Task 9; design SQLite-reader section). Opens a julie extract DB
 /// under the SAME D4 read-only discipline as <see cref="SqliteSymbolReader"/> (<see cref="SqliteReadOnlyAccess.Open"/>
-/// + <see cref="JulieSchemaGate"/>) and projects the four bridge-relevant tables into the RAW Miller.Core contract
-/// rows the <see cref="BridgeGraphBuilder"/> consumes. It performs NO leg transformation — that is Task 8's job; this
+/// + <see cref="JulieSchemaGate"/>) and projects bridge-relevant tables into the RAW Miller.Core contract
+/// rows the <see cref="BridgeGraphBuilder"/> consumes. It performs NO leg transformation — provider reducers own that; this
 /// reader only maps julie columns to records.
 ///
-/// <para>The four sources (v1 schema.rs column shapes):
+/// <para>The legacy bridge sources (v1 schema.rs column shapes):
 /// <list type="bullet">
 /// <item><c>type_arguments</c> JOIN <c>type_argument_usages</c> → <see cref="TypeArgument"/> (CreateMap grouping
 /// input): v1 moved <c>identifier_id</c>/<c>path</c> onto the usage row, so the reader JOINs by <c>usage_id</c>.
@@ -25,6 +25,8 @@ namespace Miller.Indexing;
 /// <item>DbContext <c>DbSet&lt;T&gt;</c> properties → <see cref="DbSetProperty"/> (Leg 3 PRIMARY), parsed from
 /// <c>symbols</c> rows with <c>kind='property'</c> whose <c>signature</c> contains <c>DbSet&lt;…&gt;</c>: the property
 /// name IS the table name (EF convention), the generic arg IS the entity type.</item>
+/// <item>Selected <c>structural_facts</c> rows → <see cref="StructuralFactRecord"/> for route-relevant bridge
+/// providers. Generic fact families stay out of the bridge input.</item>
 /// </list></para>
 ///
 /// <para>Sync by design: this is part of the single startup/rebuild pass (Microsoft.Data.Sqlite's async is
@@ -32,8 +34,15 @@ namespace Miller.Indexing;
 /// </summary>
 public static class SqliteBridgeReader
 {
+    private static readonly string[] StructuralFactPatternIds =
+    [
+        "aspnet.minimal_api.route.v1",
+        "htmx.attribute.v1",
+        "vue.route_reference.v1",
+    ];
+
     /// <summary>
-    /// Read the four bridge tables from the julie extract at <paramref name="dbPath"/> into the raw Core contract
+    /// Read the bridge tables from the julie extract at <paramref name="dbPath"/> into the raw Core contract
     /// collections (plus the literal→file:line lookup for the builder's literal-evidence seam).
     /// </summary>
     /// <param name="dbPath">Path to the julie extract DB (opened <c>Mode=ReadOnly</c> by the shared D4 discipline).</param>
@@ -53,8 +62,9 @@ public static class SqliteBridgeReader
         var (literals, literalSites) = ReadLiterals(connection);
         var annotations = ReadAnnotations(connection);
         var dbSetProperties = ReadDbSetProperties(connection);
+        var structuralFacts = ReadStructuralFacts(connection);
 
-        return new BridgeData(typeArguments, literals, annotations, dbSetProperties, literalSites);
+        return new BridgeData(typeArguments, literals, annotations, dbSetProperties, literalSites, structuralFacts);
     }
 
     // ---- type_arguments ---------------------------------------------------------------------------------------
@@ -225,6 +235,94 @@ public static class SqliteBridgeReader
         return results;
     }
 
+    // ---- structural_facts ------------------------------------------------------------------------------------
+
+    private static IReadOnlyList<StructuralFactRecord> ReadStructuralFacts(SqliteConnection connection)
+    {
+        if (!TableExists(connection, "structural_facts"))
+            return [];
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT structural_fact_id, pattern_id, language, path, capture_name, node_kind,
+                   containing_symbol_id, start_line, start_column, end_line, end_column,
+                   start_byte, end_byte, confidence, metadata_json
+            FROM structural_facts
+            WHERE pattern_id IN ($aspnet, $htmx, $vue)
+            ORDER BY path, start_byte, structural_fact_id;
+            """;
+        command.Parameters.AddWithValue("$aspnet", StructuralFactPatternIds[0]);
+        command.Parameters.AddWithValue("$htmx", StructuralFactPatternIds[1]);
+        command.Parameters.AddWithValue("$vue", StructuralFactPatternIds[2]);
+
+        var results = new List<StructuralFactRecord>();
+        using var reader = command.ExecuteReader();
+        int oFactId = reader.GetOrdinal("structural_fact_id");
+        int oPatternId = reader.GetOrdinal("pattern_id");
+        int oLanguage = reader.GetOrdinal("language");
+        int oPath = reader.GetOrdinal("path");
+        int oCaptureName = reader.GetOrdinal("capture_name");
+        int oNodeKind = reader.GetOrdinal("node_kind");
+        int oContainingSymbolId = reader.GetOrdinal("containing_symbol_id");
+        int oStartLine = reader.GetOrdinal("start_line");
+        int oStartColumn = reader.GetOrdinal("start_column");
+        int oEndLine = reader.GetOrdinal("end_line");
+        int oEndColumn = reader.GetOrdinal("end_column");
+        int oStartByte = reader.GetOrdinal("start_byte");
+        int oEndByte = reader.GetOrdinal("end_byte");
+        int oConfidence = reader.GetOrdinal("confidence");
+        int oMetadataJson = reader.GetOrdinal("metadata_json");
+        while (reader.Read())
+        {
+            string factId = reader.GetString(oFactId);
+            string patternId = reader.GetString(oPatternId);
+            string language = reader.IsDBNull(oLanguage) ? string.Empty : reader.GetString(oLanguage);
+            string path = reader.IsDBNull(oPath) ? string.Empty : reader.GetString(oPath);
+            string captureName = reader.IsDBNull(oCaptureName) ? string.Empty : reader.GetString(oCaptureName);
+            string nodeKind = reader.IsDBNull(oNodeKind) ? string.Empty : reader.GetString(oNodeKind);
+            string? containingSymbolId = reader.IsDBNull(oContainingSymbolId) ? null : reader.GetString(oContainingSymbolId);
+            int startLine = reader.IsDBNull(oStartLine) ? 0 : reader.GetInt32(oStartLine);
+            int startColumn = reader.IsDBNull(oStartColumn) ? 0 : reader.GetInt32(oStartColumn);
+            int endLine = reader.IsDBNull(oEndLine) ? 0 : reader.GetInt32(oEndLine);
+            int endColumn = reader.IsDBNull(oEndColumn) ? 0 : reader.GetInt32(oEndColumn);
+            int startByte = reader.IsDBNull(oStartByte) ? 0 : reader.GetInt32(oStartByte);
+            int endByte = reader.IsDBNull(oEndByte) ? 0 : reader.GetInt32(oEndByte);
+            double confidence = reader.IsDBNull(oConfidence) ? 0d : reader.GetDouble(oConfidence);
+            string? metadataJson = reader.IsDBNull(oMetadataJson) ? null : reader.GetString(oMetadataJson);
+
+            results.Add(new StructuralFactRecord(
+                factId,
+                patternId,
+                language,
+                path,
+                captureName,
+                nodeKind,
+                containingSymbolId,
+                startLine,
+                startColumn,
+                endLine,
+                endColumn,
+                new SourceSpan(startByte, endByte),
+                confidence,
+                metadataJson));
+        }
+
+        return results;
+    }
+
+    private static bool TableExists(SqliteConnection connection, string tableName)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT 1
+            FROM sqlite_master
+            WHERE type = 'table' AND name = $name
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$name", tableName);
+        return command.ExecuteScalar() is not null;
+    }
+
     /// <summary>
     /// Parse the entity type out of the FIRST <c>DbSet&lt;T&gt;</c> in a property signature. Returns the leaf type
     /// name (no namespace) of the generic arg, or null when no balanced <c>DbSet&lt;…&gt;</c> is present. Handles a
@@ -272,20 +370,22 @@ public static class SqliteBridgeReader
 }
 
 /// <summary>
-/// The RAW bridge rows + literal-site lookup read from a julie extract (plan Task 9). NOT leg inputs — the
+/// The RAW bridge rows + literal-site lookup read from a julie extract (plan Task 9). NOT reduced leg inputs — the
 /// per-leg transformation is <see cref="BridgeGraphBuilder"/>'s job. <see cref="LiteralSites"/> is the
 /// literal-evidence seam the builder requires (Task 8 deviation): the <c>literals</c> table carries its own
 /// file/line, but the lean <see cref="LiteralRecord"/> does not re-expose them, so the reader returns the
-/// per-literal-instance lookup here.
+/// per-literal-instance lookup here. <see cref="StructuralFacts"/> carries only selected route-relevant raw facts.
 /// </summary>
 /// <param name="TypeArguments">The <c>type_arguments</c> rows (CreateMap grouping input).</param>
 /// <param name="Literals">The <c>literals</c> rows (url client calls + sql).</param>
 /// <param name="Annotations">The <c>symbol_annotations</c> rows (http-verb endpoints + class <c>[Route]</c>).</param>
 /// <param name="DbSetProperties">The DbContext <c>DbSet&lt;T&gt;</c> property breadcrumbs (Leg 3 PRIMARY).</param>
 /// <param name="LiteralSites">The per-literal-instance <c>literal → (file, line)</c> lookup (the literal-evidence seam).</param>
+/// <param name="StructuralFacts">Selected raw <c>structural_facts</c> rows for route-relevant bridge providers.</param>
 public sealed record BridgeData(
     IReadOnlyList<TypeArgument> TypeArguments,
     IReadOnlyList<LiteralRecord> Literals,
     IReadOnlyList<SymbolAnnotation> Annotations,
     IReadOnlyList<DbSetProperty> DbSetProperties,
-    IReadOnlyDictionary<LiteralRecord, LiteralSite> LiteralSites);
+    IReadOnlyDictionary<LiteralRecord, LiteralSite> LiteralSites,
+    IReadOnlyList<StructuralFactRecord> StructuralFacts);

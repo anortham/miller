@@ -33,6 +33,7 @@ public static class BridgeGraphBuilder
     /// The reader-supplied <c>literal → (file, line)</c> lookup (the literal-evidence seam — see the type remarks). May
     /// be null; a missing literal falls back to its containing symbol's file:line.
     /// </param>
+    /// <param name="structuralFacts">Selected raw <c>structural_facts</c> rows for provider-specific reductions.</param>
     /// <exception cref="ArgumentNullException">Any required collection is null.</exception>
     public static BridgeGraph Build(
         IReadOnlyList<SymbolDetail> symbols,
@@ -40,8 +41,9 @@ public static class BridgeGraphBuilder
         IReadOnlyList<LiteralRecord> literals,
         IReadOnlyList<SymbolAnnotation> annotations,
         IReadOnlyList<DbSetProperty> dbSetProperties,
-        IReadOnlyDictionary<LiteralRecord, LiteralSite>? literalSites = null) =>
-        Build(symbols, typeArguments, literals, annotations, dbSetProperties, DefaultProviders, literalSites);
+        IReadOnlyDictionary<LiteralRecord, LiteralSite>? literalSites = null,
+        IReadOnlyList<StructuralFactRecord>? structuralFacts = null) =>
+        Build(symbols, typeArguments, literals, annotations, dbSetProperties, DefaultProviders, literalSites, structuralFacts);
 
     /// <summary>
     /// Build the cross-language <see cref="BridgeGraph"/> with an explicit provider set. Tests and future
@@ -56,7 +58,8 @@ public static class BridgeGraphBuilder
         IReadOnlyList<SymbolAnnotation> annotations,
         IReadOnlyList<DbSetProperty> dbSetProperties,
         IReadOnlyList<IBridgeProvider> providers,
-        IReadOnlyDictionary<LiteralRecord, LiteralSite>? literalSites = null)
+        IReadOnlyDictionary<LiteralRecord, LiteralSite>? literalSites = null,
+        IReadOnlyList<StructuralFactRecord>? structuralFacts = null)
     {
         ArgumentNullException.ThrowIfNull(symbols);
         ArgumentNullException.ThrowIfNull(typeArguments);
@@ -67,6 +70,7 @@ public static class BridgeGraphBuilder
 
         var symbolsById = BuildSymbolIndex(symbols);
         var resolver = new SymbolResolver(symbols);
+        var structuralFactRows = structuralFacts ?? [];
 
         // --- run enabled bridge providers; each emits candidates that the shared scorer scores -------------------
         var candidates = new List<CandidateEdge>();
@@ -77,6 +81,8 @@ public static class BridgeGraphBuilder
 
         if (providers.Count == 0)
             notes.Add("no bridge providers enabled");
+        if (structuralFactRows.Count > 0)
+            evidenceCounts["bridge.structuralFacts"] = structuralFactRows.Count;
 
         var context = new BridgeProviderContext(
             symbols,
@@ -84,6 +90,7 @@ public static class BridgeGraphBuilder
             literals,
             annotations,
             dbSetProperties,
+            structuralFactRows,
             literalSites,
             symbolsById,
             resolver);
