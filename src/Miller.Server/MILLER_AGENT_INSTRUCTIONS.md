@@ -41,9 +41,10 @@ returns ranked, structured results with fewer tokens.
   `mode=bridge` (provider-scoped dotnet-web chain).
   `mode=auto` (callers/callees) is subsumed by `inspect depth=full` — prefer `inspect` for that.
   Reduced-confidence links are flagged `[verb-unknown]`/`[ambiguous]`. Use `format=json` for structured
-  references/nodes/links/diagnostics/next_actions. Use `scope=<file>` to disambiguate duplicate names. Optional
-  `workspace_id` and `ensure_fresh` work cross-workspace. **`mode=bridge` is scoped to `dotnet-web`; on
-  another stack use `mode=refs`/`mode=path`, or `inspect depth=full` for callers/callees.**
+  references/nodes/links/diagnostics/next_actions. Use `scope=<file>` to disambiguate duplicate names.
+  Optional `workspace_id` and `ensure_fresh` work cross-workspace. **`mode=bridge` is scoped to `dotnet-web`; on another stack use `mode=refs`/`mode=path`, or `inspect depth=full` for callers/callees.** The dotnet-web bridge
+  consumes ASP.NET minimal API, htmx, and Vue route structural facts when present; if route links are missing,
+  use `patterns` to audit those facts.
 - `impact` — What a change affects: downstream symbols and linked tests. After edits, run `impact` with no
   args to read the working-tree git diff and see what your uncommitted change affects + which tests to run.
   Or pass exactly one of `target`, `changed_paths`, `diff`, or `git=true` (`base`/`staged` imply git). Use
@@ -76,6 +77,9 @@ returns ranked, structured results with fewer tokens.
   or `content_kind=docs|config|external_file|web`, then `content read` with the hit's `workspace_id`.
 - **Find known code shapes**: `patterns operation=list`, then `patterns operation=search pattern_id=<id>` with filters.
   If a query has no matches, use the suggested near matches or list output instead of raw AST grepping.
+  For dotnet-web bridge route misses, start with `patterns operation=search query=route`, then use
+  `patterns operation=search pattern_id=htmx.attribute.v1` or
+  `patterns operation=search pattern_id=vue.route_reference.v1` when htmx or Vue route facts are involved.
 - **Inspect a large log/report**: `content import path=/tmp/build.log` → `content search query="error text"` →
   `content read source_id=... line=... context_lines=10`. Do not read or paste the full file.
 - **Research a web page**: use `miller-web-research` to fetch markdown with `browser39` into a temp file, then
@@ -104,22 +108,19 @@ returns ranked, structured results with fewer tokens.
 
 ## Subagent Dispatching
 
-Subagents may not receive Miller's server instructions. When dispatching subagents that will explore or modify
-code, paste this block into the prompt:
+Subagents may not receive Miller's server instructions. When dispatching code subagents, paste this primer:
 
     ## Code Intelligence Tools (use instead of Grep/Glob/Read)
-    You have Miller MCP tools. Use them before raw shell/file exploration:
-    - context(query, ...) for unfamiliar task-shaped orientation.
-    - search(query, mode?, regions?, file_pattern?, language?) before rg/grep/find; use mode=content for docs,
-      mode=source/external/web/all-text for content text, mode=markers for TODO/FIXME/HACK/XXX audits,
-      regions=... for comments/strings, and filters to scope.
-    - inspect(target, depth?) before reading files/symbols; depth=overview is compact, depth=full is complete.
-    - trace(target, mode?, to?, scope?, reference_kind?) before manual reference/caller/callee file hopping; use mode=refs for usages and scope for ambiguous names. mode=path no-path means no extracted graph path within depth, not proof unrelated; mode=bridge is dotnet-web scoped, so on another stack use `mode=refs`/`mode=path`, or `inspect depth=full`.
+    Use Miller MCP tools before raw shell/file exploration:
+    - context(query, ...) to orient.
+    - search(query, mode?, regions?, file_pattern?, language?) before rg/grep/find.
+    - inspect(target, depth?) before reading files/symbols; depth=overview first, depth=full when needed.
+    - trace(target, mode?, to?, scope?, reference_kind?) before manual reference or caller/callee hopping.
     - impact(target?|changed_paths?|diff?|git?/base?/staged?) before refactors and to choose tests.
-    - edit(operation, target, ...) to preview index-aware edits; use match_mode=auto with query/anchor/line for localized replace_text.
-    - content(import|add_markdown|search|read|list|remove|export, ...) for logs, web markdown, and audits; use workspace_id=all for audits and pass hit workspace_id on reads.
-    - patterns(operation?, pattern_id?, query?, where?, path?, language?, group_by?, facet?) for code-shape facts.
-    - workspace(status|health|onboarding|leader|refresh|full|list|open|remove|dashboard) for readiness, leader diagnostics/handoff, refresh, other repos, onboarding, or dashboard with operation=dashboard.
+    - edit(operation, target, ...) to preview index-aware edits.
+    - content(...) for logs, web markdown, and audits.
+    - patterns(...) for code-shape facts.
+    - workspace(...) for readiness, refresh, other repos, and dashboard launch.
     Do NOT fall back to Glob/Read/Grep chains when a Miller tool fits. Miller returns targeted context in 1-2 calls.
 
 Do not use `grep`/`find`/`rg` when a Miller tool fits. Do not read a whole file before `inspect`.
