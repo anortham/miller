@@ -24,8 +24,13 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
         ArgumentNullException.ThrowIfNull(context);
 
         var createMaps = ReduceCreateMaps(context.TypeArguments);
-        var endpoints = ReduceEndpoints(context.Symbols, context.Annotations);
-        var clientCalls = ReduceClientCalls(context.Literals, context.SymbolsById, context.LiteralSites);
+        var structuralReduction = WebStackStructuralFactReducer.Reduce(context.StructuralFacts, context.SymbolsById);
+        var endpoints = ReduceEndpoints(context.Symbols, context.Annotations)
+            .Concat(structuralReduction.AspNetMinimalRoutes)
+            .ToList();
+        var clientCalls = ReduceClientCalls(context.Literals, context.SymbolsById, context.LiteralSites)
+            .Concat(structuralReduction.HtmxCalls)
+            .ToList();
         var serverTypeResolver = new SymbolResolver(context.Symbols.Where(IsCSharpUserType).ToArray());
 
         var evidenceCounts = new Dictionary<string, int>(StringComparer.Ordinal)
@@ -34,6 +39,9 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
             ["dotnet-web.endpoints"] = endpoints.Count,
             ["dotnet-web.clientCalls"] = clientCalls.Count,
             ["dotnet-web.dbsets"] = context.DbSetProperties.Count,
+            ["dotnet-web.structuralFacts"] = context.StructuralFacts.Count,
+            ["dotnet-web.aspnetMinimalRoutes"] = structuralReduction.AspNetMinimalRoutes.Count,
+            ["dotnet-web.htmxCalls"] = structuralReduction.HtmxCalls.Count,
         };
 
         if (createMaps.Count == 0 &&

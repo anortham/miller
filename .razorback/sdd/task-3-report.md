@@ -1,87 +1,49 @@
-# Task 3 Report: Retrieval, Inspect, And Ambiguity Rows
+# Task 3 Report: ASP.NET Minimal API and htmx Structural Fact Bridge
 
-## Changed Files
+## Summary
 
-- `scripts/benchmarks/miller-foundation-cases.json`
-- `scripts/bench-foundation-matrix.py`
-- `scripts/benchlib/scoring.py`
-- `docs/findings/benchmarks/2026-06-27-foundation-matrix/task3-retrieval-inspect-ambiguity/summary.md`
-- `docs/findings/benchmarks/2026-06-27-foundation-matrix/task3-retrieval-inspect-ambiguity/results.csv`
-- `docs/findings/benchmarks/2026-06-27-foundation-matrix/task3-retrieval-inspect-ambiguity/results.json`
-- `.razorback/sdd/task-3-report.md`
+- Added `WebStackStructuralFactReducer` in `Miller.Core.Graph`.
+- Reduced `aspnet.minimal_api.route.v1` facts into existing `ControllerEndpoint` inputs.
+- Reduced route-bearing `htmx.attribute.v1` facts into existing `TsClientCall` inputs with carriers like `htmx.get` and `htmx.post`.
+- Merged reduced structural endpoints and htmx calls in `DotnetWebBridgeProvider` before `RouteBridge.Resolve`.
+- Added provider evidence counts for `dotnet-web.structuralFacts`, `dotnet-web.aspnetMinimalRoutes`, and `dotnet-web.htmxCalls`.
+- Added focused bridge graph tests for htmx GET hits, htmx POST versus MapGet mismatch, htmx non-route attribute rejection, evidence, and counters.
 
-## Miller Evidence Used
+## Miller Calls Used
 
-- `workspace status` for `/Users/murphy/source/miller/.worktrees/foundation-effectiveness-matrix`: confirmed the worktree index was fresh, search/content sidecars current, and queue empty.
-- `workspace list`: confirmed all nine target repos were locally registered: `miller`, `julie`, `eros`, `express`, `flask`, `gson`, `newtonsoft`, `zod`, and `jq`.
-- `workspace refresh` for the worktree: scanned successfully with no swap, revision stayed `5`.
-- `context` on the foundation matrix benchmark area: identified `scripts/bench-foundation-matrix.py`, `scripts/benchlib/scoring.py`, and `scripts/benchlib/reporting.py` as the relevant implementation surfaces.
-- `inspect` on `scripts/bench-foundation-matrix.py`, `scripts/benchlib/scoring.py`, and `scripts/benchlib/reporting.py`: confirmed current validation, execution, scoring, and summary behavior before edits.
-- Cross-workspace `search` and `inspect` calls for each target repo: selected real file, symbol, source, docs, region, and ambiguity anchors before adding rows.
-- `impact` on the final diff: reported affected benchmark runner/scoring paths and the existing narrow benchmark caller surface.
+- `workspace status path=/Users/murphy/source/miller/.worktrees/web-stack-structural-facts-bridge`: confirmed the requested worktree was registered, fresh, and using current search/content sidecars.
+- `content search/read` on `docs/plans/2026-06-30-web-stack-structural-facts-bridge.md`: confirmed Task 3 files, inputs, outputs, and acceptance criteria.
+- `context` for Task 3 bridge work: identified `DotnetWebBridgeProvider`, `BridgeGraphBuilderTests`, `RouteBridge`, and the Task 2 structural fact seam as the relevant surfaces.
+- `inspect` on `DotnetWebBridgeProvider`, `RouteBridge`, `BridgeGraphBuilderTests`, `StructuralFactRecord`, `BridgeProviderContext`, `TsClientCall`, `ControllerEndpoint`, and `RouteNormalizer`: confirmed existing contracts and route/verb behavior before edits.
+- `trace refs` on `DotnetWebBridgeProvider` and `StructuralFactRecord`: confirmed reference shape and that structural facts were only carried through the new Task 2 seam.
+- `impact target=DotnetWebBridgeProvider` and `impact git=true`: confirmed expected bridge graph and shared graph-construction test impact.
+- `workspace refresh`: refreshed the worktree index after edits; refresh completed at revision 8.
 
-## Row Counts
+## Verification Ledger
 
-By repo:
+| Scope | Invariant | Command | Commit / Tree | Result | Timestamp |
+| --- | --- | --- | --- | --- | --- |
+| Baseline worker scope | Existing branch worker slice was clean before Task 3 edits | `dotnet test tests/Miller.Tests/Miller.Tests.csproj --filter "FullyQualifiedName~BridgeGraphBuilderTests|FullyQualifiedName~SqliteBridgeReaderTests|FullyQualifiedName~RepositoryIndexLoaderBridgeTests"` | `b2b32df`, clean tree | PASS: 37 passed, 0 failed | 2026-06-30 UTC |
+| TDD red | New tests fail because structural facts are not reduced yet | same worker command | working tree with tests only | EXPECTED FAIL: no htmx Hits edge; missing `dotnet-web.aspnetMinimalRoutes` count | 2026-06-30 UTC |
+| Worker scope green | Task 3 bridge behavior and existing worker tests pass | same worker command | working tree after implementation | PASS: 40 passed, 0 failed | 2026-06-30 UTC |
+| Fast suite | Shared graph callers remain compatible | `scripts/test.sh` | working tree after implementation | PASS: 2505 passed, 0 failed | 2026-06-30 UTC |
+| Whitespace hygiene | No diff whitespace errors | `git diff --check` | working tree after implementation | PASS | 2026-06-30 UTC |
 
-- `eros`: 8
-- `express`: 8
-- `flask`: 10
-- `gson`: 9
-- `jq`: 10
-- `julie`: 8
-- `miller`: 11
-- `newtonsoft`: 9
-- `zod`: 9
+## Acceptance Checklist
 
-By task class:
+- [x] htmx `hx-get` to ASP.NET `MapGet` produces a high-confidence `Hits` edge with both client and endpoint evidence.
+- [x] htmx `hx-post` does not match `MapGet` for the same route.
+- [x] htmx `hx-target` and other non-route htmx attributes do not produce client route calls.
+- [x] Provider evidence counts include nonzero `dotnet-web.structuralFacts`, `dotnet-web.aspnetMinimalRoutes`, and `dotnet-web.htmxCalls` in the htmx fixture.
+- [x] Worker-scope verification passes and the task is committed.
 
-- `ambiguity.scoped`: 3
-- `ambiguity.unscoped`: 4
-- `inspect.full`: 9
-- `inspect.overview`: 9
-- `inspect.summary`: 9
-- `retrieval.docs`: 9
-- `retrieval.file`: 9
-- `retrieval.region`: 3
-- `retrieval.source_auto`: 9
-- `retrieval.source_explicit`: 9
-- `retrieval.symbol`: 9
+## Concerns Or Plan Mismatches
 
-Total manifest rows: 82. All Julie specs are report-only.
+- No plan mismatches.
+- I did not modify Task 4 Vue behavior, `PatternsTool`, or MCP surface area.
+- Miller does not parse source text in this slice; the reducer uses only `StructuralFactRecord` fields and `MetadataJson`.
+- Minimal API structural endpoints intentionally leave response/request DTO fields empty. Task 3 only bridges route hits; inferring DTOs from minimal API signatures would be separate behavior.
 
-## Generated Evidence
+## Commit SHA
 
-- `docs/findings/benchmarks/2026-06-27-foundation-matrix/task3-retrieval-inspect-ambiguity/summary.md`
-- `docs/findings/benchmarks/2026-06-27-foundation-matrix/task3-retrieval-inspect-ambiguity/results.csv`
-- `docs/findings/benchmarks/2026-06-27-foundation-matrix/task3-retrieval-inspect-ambiguity/results.json`
-
-Foundation matrix gate status: PASS.
-
-## Verification
-
-- Red characterization before implementation: failed as expected with `rows=6`, repos `flask,miller,zod`, no ambiguity rows.
-- `python3 -m py_compile scripts/benchlib/*.py scripts/bench-julie-miller-search-inspect.py scripts/bench-foundation-matrix.py`: PASS.
-- `python3 scripts/bench-julie-miller-search-inspect.py --repos miller --skip-julie --skip-miller-refresh --gate --out-dir /tmp/miller-search-inspect-task3-smoke`: PASS.
-- `python3 scripts/bench-foundation-matrix.py --repos all --skip-julie --out-dir docs/findings/benchmarks/2026-06-27-foundation-matrix/task3-retrieval-inspect-ambiguity --gate`: PASS.
-- Manifest assertion: PASS with 82 rows, all nine repos represented, ambiguity rows present, and no Julie hard-gated specs.
-- `git diff --check`: PASS.
-
-## Concerns Or Blockers
-
-- No blockers.
-- Julie docs content for `External Extract CLI` resolves to the historical implementation-plan doc before the agent-instructions file in the live content corpus, so that row expects the implementation-plan path while still anchoring the same reviewed phrase.
-
-## Fix Note: Scoring Contract Review
-
-- Issue fixed: `expected_present` is no longer overloaded for `path_top` rows. It now always records whether an expected path appeared anywhere, while `expected_top` records first-path match.
-- Added output fields: `scoring_mode` and `scoring_pass` in JSON and CSV evidence. `scoring_pass` is mode-aware: it equals `expected_top` for `path_top`, otherwise it follows expected-path presence.
-- Updated gate behavior: `adaptation_candidate` and hard-gate failures use `scoring_pass`; `path_top` rows that are present but not first report `expected path was not top-ranked`.
-- Updated CSV generation to use LF line endings so regenerated evidence passes whitespace hygiene.
-- Regenerated evidence in `docs/findings/benchmarks/2026-06-27-foundation-matrix/task3-retrieval-inspect-ambiguity/`.
-- Verification for fix:
-  - `python3 -m py_compile scripts/benchlib/*.py scripts/bench-julie-miller-search-inspect.py scripts/bench-foundation-matrix.py`: PASS.
-  - `python3 scripts/bench-julie-miller-search-inspect.py --repos miller --skip-julie --skip-miller-refresh --gate --out-dir /tmp/miller-search-inspect-task3-fix`: PASS.
-  - `python3 scripts/bench-foundation-matrix.py --repos all --skip-julie --out-dir docs/findings/benchmarks/2026-06-27-foundation-matrix/task3-retrieval-inspect-ambiguity --gate`: PASS.
-  - Scoring contract assertion: PASS, `scoring contract ok 15`.
-  - `git diff --check`: PASS.
+- Pending at report-write time. The final immutable commit SHA is reported in the task response because a commit cannot contain its own final hash without changing that hash.

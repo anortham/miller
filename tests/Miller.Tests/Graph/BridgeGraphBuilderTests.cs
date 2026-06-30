@@ -219,6 +219,122 @@ public sealed class BridgeGraphBuilderTests
     }
 
     [Fact]
+    public void StructuralFacts_htmx_get_hits_minimal_api_mapget_with_client_and_endpoint_evidence()
+    {
+        var mapGet = Method("sym-mapget", "MapGet", "IResult MapGet()", "Program", "api/Program.cs");
+        var htmlNode = Type("sym-htmx", "loadTodos", "element", file: "web/index.html");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-mapget",
+                patternId: "aspnet.minimal_api.route.v1",
+                language: "csharp",
+                path: "api/Program.cs",
+                containingSymbolId: "sym-mapget",
+                startLine: 12,
+                metadataJson: """{"verb":"GET","route_template":"/todos"}"""),
+            StructuralFact(
+                factId: "fact-hx-get",
+                patternId: "htmx.attribute.v1",
+                language: "html",
+                path: "web/index.html",
+                containingSymbolId: "sym-htmx",
+                startLine: 4,
+                metadataJson: """{"attribute_name":"hx-get","verb":"GET","target_path":"/todos"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [mapGet, htmlNode],
+            typeArguments: [],
+            literals: [],
+            annotations: [],
+            dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hit = Assert.Single(graph.Incident("sym-mapget"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.Contains(hit.Edge.Evidence, e => e.FilePath == "api/Program.cs" && e.Line == 12);
+        Assert.Contains(hit.Edge.Evidence, e => e.FilePath == "web/index.html" && e.Line == 4);
+        Assert.Equal(2, graph.CapabilityReport.EvidenceCounts["dotnet-web.structuralFacts"]);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.aspnetMinimalRoutes"]);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.htmxCalls"]);
+    }
+
+    [Fact]
+    public void StructuralFacts_htmx_post_does_not_match_minimal_api_mapget_for_same_route()
+    {
+        var mapGet = Method("sym-mapget", "MapGet", "IResult MapGet()", "Program", "api/Program.cs");
+        var htmlNode = Type("sym-htmx", "createTodo", "element", file: "web/index.html");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-mapget",
+                patternId: "aspnet.minimal_api.route.v1",
+                language: "csharp",
+                path: "api/Program.cs",
+                containingSymbolId: "sym-mapget",
+                startLine: 12,
+                metadataJson: """{"verb":"GET","route_template":"/todos"}"""),
+            StructuralFact(
+                factId: "fact-hx-post",
+                patternId: "htmx.attribute.v1",
+                language: "html",
+                path: "web/index.html",
+                containingSymbolId: "sym-htmx",
+                startLine: 4,
+                metadataJson: """{"attribute_name":"hx-post","verb":"POST","target_path":"/todos"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [mapGet, htmlNode],
+            typeArguments: [],
+            literals: [],
+            annotations: [],
+            dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.DoesNotContain(graph.Incident("sym-mapget"), e => e.Edge.Kind == BridgeKind.Hits);
+    }
+
+    [Fact]
+    public void StructuralFacts_htmx_non_route_attributes_do_not_produce_client_calls()
+    {
+        var mapGet = Method("sym-mapget", "MapGet", "IResult MapGet()", "Program", "api/Program.cs");
+        var htmlNode = Type("sym-htmx", "targetTodos", "element", file: "web/index.html");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-mapget",
+                patternId: "aspnet.minimal_api.route.v1",
+                language: "csharp",
+                path: "api/Program.cs",
+                containingSymbolId: "sym-mapget",
+                startLine: 12,
+                metadataJson: """{"verb":"GET","route_template":"/todos"}"""),
+            StructuralFact(
+                factId: "fact-hx-target",
+                patternId: "htmx.attribute.v1",
+                language: "html",
+                path: "web/index.html",
+                containingSymbolId: "sym-htmx",
+                startLine: 4,
+                metadataJson: """{"attribute_name":"hx-target","verb":"GET","target_path":"/todos"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [mapGet, htmlNode],
+            typeArguments: [],
+            literals: [],
+            annotations: [],
+            dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.DoesNotContain(graph.Incident("sym-mapget"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.aspnetMinimalRoutes"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["dotnet-web.htmxCalls"]);
+    }
+
+    [Fact]
     public void Client_call_container_symbol_is_a_bridge_start_node()
     {
         var classSym = Type("sym-class", "ReportMenuController", "class", "Api.Controllers",
@@ -453,4 +569,28 @@ public sealed class BridgeGraphBuilderTests
             Language: language,
             ContainingSymbolId: containingSymbolId,
             Span: new SourceSpan(spanStart, spanStart + text.Length));
+
+    private static StructuralFactRecord StructuralFact(
+        string factId,
+        string patternId,
+        string language,
+        string path,
+        string? containingSymbolId,
+        int startLine,
+        string metadataJson)
+        => new(
+            FactId: factId,
+            PatternId: patternId,
+            Language: language,
+            Path: path,
+            CaptureName: "framework.route",
+            NodeKind: "node",
+            ContainingSymbolId: containingSymbolId,
+            StartLine: startLine,
+            StartColumn: 1,
+            EndLine: startLine,
+            EndColumn: 1,
+            Span: new SourceSpan(startLine * 10, startLine * 10 + 1),
+            Confidence: 1.0,
+            MetadataJson: metadataJson);
 }
