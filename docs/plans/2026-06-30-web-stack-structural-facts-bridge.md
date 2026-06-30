@@ -271,8 +271,8 @@
 **Approach:** Keep this as evidence, not product docs. Do not edit release-facing README metadata unless a release task explicitly follows.
 
 **Acceptance criteria:**
-- [ ] Miller `scripts/test.sh` passes.
-- [ ] If Task 1 changed julie-extractors, julie-extractors `cargo xtask test default` passes.
-- [ ] Evidence file records command, scope label, commit SHA, result, timestamp, and hard-gate assertions.
-- [ ] Plan checkboxes are updated to reflect completed tasks.
-- [ ] Worker-scope verification passes, committed.
+- [x] Miller `scripts/test.sh` passes.
+- [x] If Task 1 changed julie-extractors, julie-extractors `cargo xtask test default` passes.
+- [x] Evidence file records command, scope label, commit SHA, result, timestamp, and hard-gate assertions.
+- [x] Plan checkboxes are updated to reflect completed tasks.
+- [x] Worker-scope verification passes, committed.
