@@ -250,11 +250,11 @@
 **Approach:** Extend `BridgeFallbackNextActions` or wrap it with capability-aware additions. Suggested actions should use existing tool surfaces, such as `patterns operation=search query=route`, `patterns operation=search pattern_id=htmx.attribute.v1`, and `patterns operation=search pattern_id=vue.route_reference.v1`.
 
 **Acceptance criteria:**
-- [ ] Compact bridge fallback includes patterns next actions when bridge route facts are relevant.
-- [ ] JSON bridge fallback includes equivalent structured next actions.
-- [ ] Server instructions document htmx/Vue route fact consumption and pattern-audit fallback.
-- [ ] Existing bridge trace output for successful paths remains compatible.
-- [ ] Worker-scope verification passes, committed.
+- [x] Compact bridge fallback includes patterns next actions when bridge route facts are relevant.
+- [x] JSON bridge fallback includes equivalent structured next actions.
+- [x] Server instructions document htmx/Vue route fact consumption and pattern-audit fallback.
+- [x] Existing bridge trace output for successful paths remains compatible.
+- [x] Worker-scope verification passes, committed.
 
 ### Task 6: Dogfood End-to-End And Record Evidence
 

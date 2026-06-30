@@ -42,9 +42,10 @@
 
 - The server instruction file was already close to its guarded 12,000-character budget. I trimmed duplicate subagent primer wording to keep the new route-fact guidance under budget without weakening tested guidance.
 - No plan mismatches. Core bridge construction, reducer behavior, `PatternsTool`, and MCP tool surface were not changed.
+- Lead inline review found no remaining Task 5 issues.
 
 ## Commit SHA
 
 - Pre-commit base: `851b1cf646c9696acca193f8a93f40768defa75e`
 - Task implementation commit: `6783e54b098f5ea608f829588b150de435575be0`
-- Report update commit: created after this report update; final SHA is returned by the implementer.
+- Report update commit: `ef48fe05360b197397cc8b271bf86e513e832fbf`
