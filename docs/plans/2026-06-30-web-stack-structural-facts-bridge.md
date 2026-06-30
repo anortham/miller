@@ -227,11 +227,11 @@
 **Approach:** Map Vue navigation facts to synthetic `LiteralRecord` values with `kind=url`, `language=vue`, literal text from `target_path`, carrier `vue.get`, and containing symbol/test status from the fact's `containing_symbol_id`. Preserve file and line evidence from the structural fact span.
 
 **Acceptance criteria:**
-- [ ] Vue `RouterLink` or `router-link` route fact to `/todos` matches ASP.NET `MapGet("/todos", ...)`.
-- [ ] Vue bound `:to="'/todos'"` route fact matches ASP.NET `MapGet("/todos", ...)`.
-- [ ] Vue route facts without `target_path` or with nonliteral expressions produce no client calls.
-- [ ] Provider evidence counts include nonzero `dotnet-web.vueCalls` in the Vue fixture.
-- [ ] Worker-scope verification passes, committed.
+- [x] Vue `RouterLink` or `router-link` route fact to `/todos` matches ASP.NET `MapGet("/todos", ...)`.
+- [x] Vue bound `:to="'/todos'"` route fact matches ASP.NET `MapGet("/todos", ...)`.
+- [x] Vue route facts without `target_path` or with nonliteral expressions produce no client calls.
+- [x] Provider evidence counts include nonzero `dotnet-web.vueCalls` in the Vue fixture.
+- [x] Worker-scope verification passes, committed.
 
 ### Task 5: Improve Trace Recovery And Agent Guidance
 
