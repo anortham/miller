@@ -92,6 +92,9 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
                   ('s-dto',    'UserDto',         'public class UserDto',         'class', 'csharp', 'dto/UserDto.cs',           1, 10, NULL),
                   ('s-ctx',    'AppDbContext',    'public class AppDbContext',    'class', 'csharp', 'data/AppDbContext.cs',     1, 30, NULL),
                   ('s-prop',   'ApplicationUsers','public DbSet<ApplicationUser> ApplicationUsers { get; set; }', 'property', 'csharp', 'data/AppDbContext.cs', 5, 5, 's-ctx'),
+                  ('s-program','Program',         'public class Program',         'class', 'csharp', 'Api/Program.cs',           1, 60, NULL),
+                  ('s-mapget', 'MapGet',          'IResult MapGet()',             'method','csharp', 'Api/Program.cs',          20, 20, 's-program'),
+                  ('s-vue',    'TodoLinks',       '<template>',                   'component', 'vue', 'Client/TodoLinks.vue',   4, 8, NULL),
                   ('s-profile','MapProfile',      'public class MapProfile',      'class', 'csharp', 'map/MapProfile.cs',        1, 8, NULL);
 
                 -- CreateMap<ApplicationUser, UserDto> use-site: ONE usage row carries identifier_id 'id-map' + path;
@@ -112,11 +115,14 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
                      confidence, metadata_json)
                 VALUES
                   ('sf-minimal', 'file:Api/Program.cs', 'Api/Program.cs', 'csharp',
-                   'aspnet.minimal_api.route.v1', 'route', 'invocation', 's-profile',
-                   20, 9, 20, 42, 300, 333, 1.0, '{"route":"/api/users"}'),
+                   'aspnet.minimal_api.route.v1', 'route', 'invocation', 's-mapget',
+                   20, 9, 20, 42, 300, 333, 1.0, '{"verb":"GET","route_template":"/api/users"}'),
                   ('sf-hx', 'file:Views/Users.cshtml', 'Views/Users.cshtml', 'razor',
                    'htmx.attribute.v1', 'attribute', 'attribute', NULL,
                    5, 12, 5, 34, 80, 102, 0.95, '{"name":"hx-get","value":"/api/users"}'),
+                  ('sf-vue', 'file:Client/TodoLinks.vue', 'Client/TodoLinks.vue', 'vue',
+                   'vue.route_reference.v1', 'route_reference', 'element', 's-vue',
+                   6, 14, 6, 40, 120, 146, 1.0, '{"source_kind":"router-link","attribute_name":"to","verb":"GET","target_path":"/api/users"}'),
                   ('sf-json', 'file:config/routes.json', 'config/routes.json', 'json',
                    'json.property.v1', 'property', 'pair', NULL,
                    1, 1, 1, 9, 0, 8, 1.0, '{"key":"route"}');
@@ -261,7 +267,7 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
 
         // The existing index features are intact: every symbol is indexed, search resolves, and the dependency
         // graph still carries every symbol as a node (the bridge graph is additive, not a replacement).
-        Assert.Equal(5, index.DocumentCount);
+        Assert.Equal(8, index.DocumentCount);
         Assert.Equal("s-entity", index.FindByName("ApplicationUser").Single().SymbolId);
         Assert.True(index.Graph.Contains("s-entity"));
     }
@@ -290,11 +296,23 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
         var index = RepositoryIndexLoader.Load(_dbPath);
 
         Assert.True(index.BridgeGraph.CapabilityReport.EvidenceCounts.TryGetValue("bridge.structuralFacts", out int count));
-        Assert.Equal(2, count);
+        Assert.Equal(3, count);
         Assert.DoesNotContain(
             index.BridgeGraph.CapabilityReport.EvidenceCounts.Keys,
             key => key.Contains("json.property", StringComparison.Ordinal));
         Assert.False(index.BridgeGraph.Contains(BridgeGraph.SynthesizeId(BridgeNodeKind.Endpoint, "json.property.v1")));
+    }
+
+    [Fact]
+    public void Load_PopulatesBridgeGraph_FromVueRouteStructuralFacts()
+    {
+        var index = RepositoryIndexLoader.Load(_dbPath);
+
+        var hit = Assert.Single(index.BridgeGraph.Incident("s-mapget"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.Contains(hit.Edge.Evidence, e => e.FilePath == "Api/Program.cs" && e.Line == 20);
+        Assert.Contains(hit.Edge.Evidence, e => e.FilePath == "Client/TodoLinks.vue" && e.Line == 6);
+        Assert.Equal(1, index.BridgeGraph.CapabilityReport.EvidenceCounts["dotnet-web.vueCalls"]);
     }
 
     [Fact]

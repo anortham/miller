@@ -335,6 +335,132 @@ public sealed class BridgeGraphBuilderTests
     }
 
     [Fact]
+    public void StructuralFacts_vue_router_link_hits_minimal_api_mapget_with_client_and_endpoint_evidence()
+    {
+        var mapGet = Method("sym-mapget", "MapGet", "IResult MapGet()", "Program", "api/Program.cs");
+        var vueNode = Type("sym-vue", "TodoLink", "component", file: "web/TodoLink.vue");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-mapget",
+                patternId: "aspnet.minimal_api.route.v1",
+                language: "csharp",
+                path: "api/Program.cs",
+                containingSymbolId: "sym-mapget",
+                startLine: 12,
+                metadataJson: """{"verb":"GET","route_template":"/todos"}"""),
+            StructuralFact(
+                factId: "fact-vue-router-link",
+                patternId: "vue.route_reference.v1",
+                language: "vue",
+                path: "web/TodoLink.vue",
+                containingSymbolId: "sym-vue",
+                startLine: 6,
+                metadataJson: """{"source_kind":"RouterLink","attribute_name":"to","verb":"GET","target_path":"/todos"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [mapGet, vueNode],
+            typeArguments: [],
+            literals: [],
+            annotations: [],
+            dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hit = Assert.Single(graph.Incident("sym-mapget"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.Contains(hit.Edge.Evidence, e => e.FilePath == "api/Program.cs" && e.Line == 12);
+        Assert.Contains(hit.Edge.Evidence, e => e.FilePath == "web/TodoLink.vue" && e.Line == 6);
+        Assert.Equal(2, graph.CapabilityReport.EvidenceCounts["dotnet-web.structuralFacts"]);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.aspnetMinimalRoutes"]);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.vueCalls"]);
+    }
+
+    [Fact]
+    public void StructuralFacts_vue_bound_to_literal_hits_minimal_api_mapget()
+    {
+        var mapGet = Method("sym-mapget", "MapGet", "IResult MapGet()", "Program", "api/Program.cs");
+        var vueNode = Type("sym-vue", "TodoLink", "component", file: "web/TodoLink.vue");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-mapget",
+                patternId: "aspnet.minimal_api.route.v1",
+                language: "csharp",
+                path: "api/Program.cs",
+                containingSymbolId: "sym-mapget",
+                startLine: 12,
+                metadataJson: """{"verb":"GET","route_template":"/todos"}"""),
+            StructuralFact(
+                factId: "fact-vue-bound-to",
+                patternId: "vue.route_reference.v1",
+                language: "vue",
+                path: "web/TodoLink.vue",
+                containingSymbolId: "sym-vue",
+                startLine: 7,
+                metadataJson: """{"source_kind":"bound_attribute","attribute_name":":to","expression":"'\/todos'","verb":"GET","target_path":"/todos"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [mapGet, vueNode],
+            typeArguments: [],
+            literals: [],
+            annotations: [],
+            dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hit = Assert.Single(graph.Incident("sym-mapget"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.vueCalls"]);
+    }
+
+    [Fact]
+    public void StructuralFacts_vue_route_facts_without_target_path_do_not_produce_client_calls()
+    {
+        var mapGet = Method("sym-mapget", "MapGet", "IResult MapGet()", "Program", "api/Program.cs");
+        var vueNode = Type("sym-vue", "TodoLink", "component", file: "web/TodoLink.vue");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-mapget",
+                patternId: "aspnet.minimal_api.route.v1",
+                language: "csharp",
+                path: "api/Program.cs",
+                containingSymbolId: "sym-mapget",
+                startLine: 12,
+                metadataJson: """{"verb":"GET","route_template":"/todos"}"""),
+            StructuralFact(
+                factId: "fact-vue-missing-target",
+                patternId: "vue.route_reference.v1",
+                language: "vue",
+                path: "web/TodoLink.vue",
+                containingSymbolId: "sym-vue",
+                startLine: 7,
+                metadataJson: """{"source_kind":"RouterLink","attribute_name":"to","verb":"GET"}"""),
+            StructuralFact(
+                factId: "fact-vue-nonliteral-expression",
+                patternId: "vue.route_reference.v1",
+                language: "vue",
+                path: "web/TodoLink.vue",
+                containingSymbolId: "sym-vue",
+                startLine: 8,
+                metadataJson: """{"source_kind":"bound_attribute","attribute_name":":to","expression":"todo.href","verb":"GET"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [mapGet, vueNode],
+            typeArguments: [],
+            literals: [],
+            annotations: [],
+            dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.DoesNotContain(graph.Incident("sym-mapget"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.aspnetMinimalRoutes"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["dotnet-web.vueCalls"]);
+    }
+
+    [Fact]
     public void Client_call_container_symbol_is_a_bridge_start_node()
     {
         var classSym = Type("sym-class", "ReportMenuController", "class", "Api.Controllers",

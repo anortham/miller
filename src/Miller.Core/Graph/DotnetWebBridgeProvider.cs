@@ -30,6 +30,7 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
             .ToList();
         var clientCalls = ReduceClientCalls(context.Literals, context.SymbolsById, context.LiteralSites)
             .Concat(structuralReduction.HtmxCalls)
+            .Concat(structuralReduction.VueCalls)
             .ToList();
         var serverTypeResolver = new SymbolResolver(context.Symbols.Where(IsCSharpUserType).ToArray());
 
@@ -42,6 +43,7 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
             ["dotnet-web.structuralFacts"] = context.StructuralFacts.Count,
             ["dotnet-web.aspnetMinimalRoutes"] = structuralReduction.AspNetMinimalRoutes.Count,
             ["dotnet-web.htmxCalls"] = structuralReduction.HtmxCalls.Count,
+            ["dotnet-web.vueCalls"] = structuralReduction.VueCalls.Count,
         };
 
         if (createMaps.Count == 0 &&

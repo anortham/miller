@@ -6,12 +6,14 @@ namespace Miller.Core.Graph;
 
 internal sealed record WebStackStructuralFactReduction(
     IReadOnlyList<ControllerEndpoint> AspNetMinimalRoutes,
-    IReadOnlyList<TsClientCall> HtmxCalls);
+    IReadOnlyList<TsClientCall> HtmxCalls,
+    IReadOnlyList<TsClientCall> VueCalls);
 
 internal static class WebStackStructuralFactReducer
 {
     private const string AspNetMinimalRoutePatternId = "aspnet.minimal_api.route.v1";
     private const string HtmxAttributePatternId = "htmx.attribute.v1";
+    private const string VueRouteReferencePatternId = "vue.route_reference.v1";
 
     private static readonly string[] HtmxRouteAttributes =
     [
@@ -27,6 +29,7 @@ internal static class WebStackStructuralFactReducer
 
         var aspNetRoutes = new List<ControllerEndpoint>();
         var htmxCalls = new List<TsClientCall>();
+        var vueCalls = new List<TsClientCall>();
 
         foreach (var fact in structuralFacts)
         {
@@ -43,9 +46,14 @@ internal static class WebStackStructuralFactReducer
                 if (TryReduceHtmxCall(fact, metadata, symbolsById, out var call))
                     htmxCalls.Add(call);
             }
+            else if (string.Equals(fact.PatternId, VueRouteReferencePatternId, StringComparison.Ordinal))
+            {
+                if (TryReduceVueCall(fact, metadata, symbolsById, out var call))
+                    vueCalls.Add(call);
+            }
         }
 
-        return new WebStackStructuralFactReduction(aspNetRoutes, htmxCalls);
+        return new WebStackStructuralFactReduction(aspNetRoutes, htmxCalls, vueCalls);
     }
 
     private static bool TryReduceAspNetMinimalRoute(
@@ -101,6 +109,39 @@ internal static class WebStackStructuralFactReducer
             Carrier: carrier,
             ArgPosition: 0,
             Language: fact.Language,
+            ContainingSymbolId: fact.ContainingSymbolId ?? string.Empty,
+            Span: fact.Span);
+
+        bool isTest = false;
+        if (!string.IsNullOrEmpty(fact.ContainingSymbolId) &&
+            symbolsById.TryGetValue(fact.ContainingSymbolId, out var container))
+        {
+            isTest = container.IsTest;
+        }
+
+        call = new TsClientCall(literal, isTest, fact.Path, fact.StartLine);
+        return true;
+    }
+
+    private static bool TryReduceVueCall(
+        StructuralFactRecord fact,
+        JsonElement metadata,
+        IReadOnlyDictionary<string, SymbolDetail> symbolsById,
+        out TsClientCall call)
+    {
+        call = null!;
+
+        var targetPath = StringProperty(metadata, "target_path");
+        var verb = CanonicalVerb(StringProperty(metadata, "verb"));
+        if (string.IsNullOrWhiteSpace(targetPath) || !string.Equals(verb, "GET", StringComparison.Ordinal))
+            return false;
+
+        var literal = new LiteralRecord(
+            LiteralText: targetPath,
+            Kind: "url",
+            Carrier: "vue.get",
+            ArgPosition: 0,
+            Language: "vue",
             ContainingSymbolId: fact.ContainingSymbolId ?? string.Empty,
             Span: fact.Span);
 
