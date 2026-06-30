@@ -1,61 +1,50 @@
-# Task 5 Report: Eros Foundation Contract Rows
+# Task 5 Report: Trace Recovery And Agent Guidance
 
-## Changed Files
+## Summary
 
-- `scripts/benchmarks/miller-foundation-cases.json`
-- `scripts/bench-foundation-matrix.py`
-- `scripts/benchlib/scoring.py`
-- `docs/findings/benchmarks/2026-06-27-foundation-matrix/task5-eros-contracts/summary.md`
-- `docs/findings/benchmarks/2026-06-27-foundation-matrix/task5-eros-contracts/results.csv`
-- `docs/findings/benchmarks/2026-06-27-foundation-matrix/task5-eros-contracts/results.json`
-- `.razorback/sdd/task-5-report.md`
+- Extended `trace mode=bridge` fallback next actions to use `BridgeCapabilityReport.EvidenceCounts`.
+- Added `patterns` recovery actions for route structural facts:
+  - `patterns operation=search query=route`
+  - `patterns operation=search pattern_id=htmx.attribute.v1`
+  - `patterns operation=search pattern_id=vue.route_reference.v1`
+- Preserved existing fallback actions for `trace refs`, `trace auto`, and `search source`.
+- Updated server agent instructions to document ASP.NET minimal API, htmx, and Vue route structural fact consumption and `patterns` fallback audits.
+- Added focused compact/JSON trace fallback tests and server instruction guard assertions.
 
-## Miller Evidence Used
+## Miller Calls Used
 
-- `workspace status` for `/Users/murphy/source/miller/.worktrees/foundation-effectiveness-matrix`: confirmed the worktree index was fresh, reader mode, revision 18.
-- `workspace refresh` for the same worktree: confirmed `status: unchanged`, `scanned: yes`, `swapped: no`, revision 18.
-- `context` for the foundation benchmark/contract area: confirmed the relevant runner/reporting seed and `docs/contracts/cli-eros-v1.md` as the public contract source.
-- `inspect` on `scripts/bench-foundation-matrix.py`: confirmed existing MCP execution, validation, output writing, and main-loop structure before adding a separate CLI route.
-- `inspect` on `scripts/benchlib/scoring.py`: confirmed Task 3 path scoring and Task 4 workflow scoring entry points before appending contract scoring modes.
-- `inspect` on `scripts/benchlib/reporting.py`: confirmed summary tables derive from generic result rows and did not need a behavior change.
-- `inspect` on `scripts/benchmarks/miller-foundation-cases.json`: confirmed the manifest structure and existing row shape before appending Task 5 rows.
-- `inspect` on `docs/contracts/cli-eros-v1.md`: confirmed the documented Eros-facing JSON and JSONL command surface.
-- `trace refs score_manifest_path`: confirmed only the foundation runner calls the shared scorer, so adding an optional `capabilities` parameter preserved existing callers.
-- `impact` on the final working-tree diff: confirmed the changed benchmark/scoring path and listed likely broader tests; the brief-required benchmark smoke and contract matrix covered the relevant Python runner behavior.
+- `workspace status path=/Users/murphy/source/miller/.worktrees/web-stack-structural-facts-bridge`: confirmed the isolated worktree index was fresh, reader mode, revision 13.
+- `context` on Task 5 trace fallback and server instruction work: confirmed relevant entry points were `TraceTool`, `BridgeFallbackNextActions`, `TraceToolTests`, and `AgentInstructionsTests`.
+- `inspect BridgeFallbackNextActions`, `inspect RunBridge`, `inspect RenderBridgeJson`, `inspect WriteNextActions`, `inspect BridgeCapabilityReport`: confirmed fallback call sites, JSON next-action rendering, provider evidence JSON, and capability report shape.
+- `inspect TraceToolTests` and selected bridge fallback tests: confirmed existing helper shape and compatibility assertions before adding tests.
+- `inspect AgentInstructionsTests`: confirmed existing instruction budget and recovery guidance assertions.
+- `impact target=BridgeFallbackNextActions`: confirmed the planned code change flows through `RunBridge` and `Run`.
+- `impact git=true` after edits: confirmed changed trace next-action surface and likely tests; worker scope covered `TraceToolTests` and `AgentInstructionsTests`.
 
-## Contract Row Counts
+## Verification Ledger
 
-- Added 15 hard-gated Task 5 contract rows.
-- `contract.cli.json`: 10 rows, 10 passed.
-- `contract.cli.jsonl`: 5 rows, 5 passed.
-- Manifest/output assertion confirmed Task 3 classes still exist, Task 4 workflow classes still exist, both contract task classes exist, all hard-gated contract rows passed, every hard-gated command was advertised by `capabilities --json`, and JSONL rows sampled the required first 20 non-empty lines.
+| Scope | Invariant | Command | Commit SHA / working tree | Result | Timestamp |
+| --- | --- | --- | --- | --- | --- |
+| RED worker scope | New tests fail for missing pattern fallback and instruction guidance | `dotnet test tests/Miller.Tests/Miller.Tests.csproj --filter "FullyQualifiedName~TraceToolTests|FullyQualifiedName~AgentInstructionsTests"` | `851b1cf646c9696acca193f8a93f40768defa75e` + test-only working tree | Failed as expected: 5 failures from new assertions, 86 passed | 2026-06-30T15:36:06Z |
+| GREEN worker scope | Trace fallback and instruction behavior pass at worker scope | `dotnet test tests/Miller.Tests/Miller.Tests.csproj --filter "FullyQualifiedName~TraceToolTests|FullyQualifiedName~AgentInstructionsTests"` | `851b1cf646c9696acca193f8a93f40768defa75e` + Task 5 working tree | Passed: 92 passed, 0 failed, 0 skipped | 2026-06-30T15:36:06Z |
+| Whitespace | Diff has no whitespace errors | `git diff --check` | `851b1cf646c9696acca193f8a93f40768defa75e` + Task 5 working tree | Passed | 2026-06-30T15:36:06Z |
 
-## Contract Doc Update
+## Acceptance Checklist
 
-`docs/contracts/cli-eros-v1.md` did not require changes. Live `miller capabilities --json` advertised the hard-gated JSON commands and export feeds used by the matrix, and live CLI output contained the required fields documented for those rows.
+- [x] Compact bridge fallback includes patterns next actions when bridge route facts are relevant.
+- [x] JSON bridge fallback includes equivalent structured next actions.
+- [x] Server instructions document htmx/Vue route fact consumption and pattern-audit fallback.
+- [x] Existing bridge trace output for successful paths remains compatible; successful bridge rendering code was not changed.
+- [x] Worker-scope verification passes.
+- [x] Task implementation commit created: `6783e54b098f5ea608f829588b150de435575be0`.
 
-## Generated Evidence
+## Concerns Or Plan Mismatches
 
-Evidence path:
+- The server instruction file was already close to its guarded 12,000-character budget. I trimmed duplicate subagent primer wording to keep the new route-fact guidance under budget without weakening tested guidance.
+- No plan mismatches. Core bridge construction, reducer behavior, `PatternsTool`, and MCP tool surface were not changed.
 
-`docs/findings/benchmarks/2026-06-27-foundation-matrix/task5-eros-contracts/`
+## Commit SHA
 
-Files generated:
-
-- `summary.md`
-- `results.csv`
-- `results.json`
-
-## Verification
-
-- `PYTHONPATH=scripts python3 - <<'PY' ...`: RED check first failed with unsupported `contract_json`; after implementation, the same assertion passed for contract JSON and JSONL scoring.
-- `python3 -m py_compile scripts/benchlib/*.py scripts/bench-julie-miller-search-inspect.py scripts/bench-foundation-matrix.py`: passed.
-- `python3 scripts/bench-julie-miller-search-inspect.py --repos miller --skip-julie --skip-miller-refresh --gate --out-dir /tmp/miller-search-inspect-task5-smoke`: passed.
-- `python3 scripts/bench-foundation-matrix.py --tasks contract.cli.json,contract.cli.jsonl --skip-julie --out-dir docs/findings/benchmarks/2026-06-27-foundation-matrix/task5-eros-contracts --gate`: passed.
-- Manifest/output assertion command: passed with `task3_classes=11`, `task4_classes=5`, `contract_rows=15`, `hard_contract_results=15`, `jsonl_rows=5`.
-- Miller `impact` on final changed paths: completed; relevant verification remained the benchmark smoke plus contract matrix gate.
-- `git diff --check`: passed.
-
-## Concerns
-
-- None.
+- Pre-commit base: `851b1cf646c9696acca193f8a93f40768defa75e`
+- Task implementation commit: `6783e54b098f5ea608f829588b150de435575be0`
+- Report update commit: created after this report update; final SHA is returned by the implementer.
