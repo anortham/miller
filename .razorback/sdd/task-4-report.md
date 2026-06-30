@@ -1,51 +1,66 @@
-# Task 4 Report: Workflow Rows For Context, Trace, And Impact
+# Task 4 Report: Bridge Vue Route Facts
 
-## Changed Files
+## Summary of Changes
 
-- `scripts/benchmarks/miller-foundation-cases.json`
-- `scripts/bench-foundation-matrix.py`
-- `scripts/benchlib/scoring.py`
-- `scripts/benchlib/reporting.py`
-- `docs/findings/benchmarks/2026-06-27-foundation-matrix/task4-workflows/summary.md`
-- `docs/findings/benchmarks/2026-06-27-foundation-matrix/task4-workflows/results.csv`
-- `docs/findings/benchmarks/2026-06-27-foundation-matrix/task4-workflows/results.json`
-- `.razorback/sdd/task-4-report.md`
+- Extended `WebStackStructuralFactReducer` to consume `vue.route_reference.v1`.
+- Reduced Vue facts with nonblank `target_path` and `verb=GET` into synthetic URL literals with:
+  - `kind=url`
+  - `language=vue`
+  - `carrier=vue.get`
+  - literal text from `target_path`
+  - containing symbol/test status from `containing_symbol_id`
+  - file/line evidence from the structural fact span
+- Merged Vue calls into the existing `DotnetWebBridgeProvider` route reduction path before `RouteBridge.Resolve`.
+- Added provider evidence count `dotnet-web.vueCalls`.
+- Added graph and repository-loader tests for Vue RouterLink/router-link facts, bound `:to` literals, missing target metadata, and loader evidence counts.
 
-## Miller Evidence Used
+## Miller Calls Used
 
-- `workspace open/status/health` on `/Users/murphy/source/miller/.worktrees/foundation-effectiveness-matrix`: confirmed the requested worktree, branch, fresh index, current search/content sidecars, and no freshness blocker.
-- `context` on the benchmark area in the Task 4 worktree: confirmed the active runner/scoring/reporting entry points and the plan's Task 4 section.
-- `inspect` on `scripts/bench-foundation-matrix.py`, `scripts/benchlib/scoring.py`, and `scripts/benchlib/reporting.py`: confirmed existing validation, scoring, output, and report shapes before edits.
-- Cross-workspace `context` calls for Julie, Eros, Flask, Zod, and Miller: selected stable context anchors and verified non-usage compact context output includes the `## next inspect` footer.
-- Cross-workspace `trace` calls: selected hard-gated refs rows for `FastSearchTool`, `add_url_rule`, `SearchRoutePlanner.Plan`, and `WorkspaceStore.ListSemanticInputs`; confirmed Zod `ZodObject` is a structured `needs-search` ambiguity; confirmed Flask bridge is provider-scoped/unsupported.
-- Cross-workspace `impact` calls: selected hard-gated impact anchors for `SearchRoutePlanner.Plan`, `WorkspaceStore.ListSemanticInputs`, and `PutSemanticInput`.
-- Final worktree `impact(git=true)`: confirmed the final diff maps primarily to benchmark runner/scoring/reporting changes and suggested benchmark/trace telemetry test surfaces; no extra Task 4 gate beyond the brief's explicit commands was required.
+- `workspace status` for `/Users/murphy/source/miller/.worktrees/web-stack-structural-facts-bridge`
+  - Confirmed the isolated worktree was registered, fresh, and on the requested root.
+- `context` for Task 4 reducer/provider/test scope
+  - Confirmed the relevant entry points: `WebStackStructuralFactReducer`, `DotnetWebBridgeProvider`, `BridgeGraphBuilderTests`, and `RepositoryIndexLoaderBridgeTests`.
+- `inspect WebStackStructuralFactReducer`
+  - Confirmed Task 3 already reduced ASP.NET minimal routes and htmx calls, with no Vue branch.
+- `inspect DotnetWebBridgeProvider`
+  - Confirmed structural routes and htmx calls were already merged before `RouteBridge.Resolve`, and evidence counts were the right extension point.
+- `inspect` on existing htmx graph tests and loader fixture methods
+  - Confirmed the local test patterns and fixture helpers to extend.
+- `trace WebStackStructuralFactReducer.Reduce` and `trace DotnetWebBridgeProvider.BuildCandidates`
+  - Confirmed reducer use flows through the dotnet-web provider and provider use flows through bridge graph build/context paths.
+- `impact` on planned reducer/provider changes and on the working-tree diff
+  - Confirmed the touched surface is the bridge builder/provider path, with the assigned graph/indexing tests in scope.
+- `workspace refresh`
+  - Refreshed the edited worktree index to revision 12 before post-edit inspection.
+- Post-edit `inspect`
+  - Confirmed the reducer now has `VueRouteReferencePatternId` and the provider merges `structuralReduction.VueCalls`.
 
-## Row Counts
+## Verification Ledger
 
-- `context.workflow`: 5
-- `trace.refs`: 5
-- `trace.path`: 1
-- `trace.bridge`: 1
-- `impact.workflow`: 3
-- Task 3 path-scored rows preserved: 82
+| Scope | Invariant | Command | Commit SHA / Working Tree | Result | Timestamp |
+| --- | --- | --- | --- | --- | --- |
+| Baseline worker scope | Task 3 base is green before Task 4 tests | `dotnet test tests/Miller.Tests/Miller.Tests.csproj --filter "FullyQualifiedName~BridgeGraphBuilderTests\|FullyQualifiedName~SqliteBridgeReaderTests\|FullyQualifiedName~RepositoryIndexLoaderBridgeTests"` | `94d65b4` | Passed: 40, Failed: 0 | 2026-06-30 session |
+| TDD red | New Vue tests fail before production implementation for missing Vue route reduction/counting | Same worker command | Working tree before implementation | Failed as expected: 4 Vue failures, no unrelated failures | 2026-06-30 session |
+| Worker green | Vue route-reference facts bridge through existing dotnet-web provider and loader fixture | Same worker command | `d380ef1229de35810df8030093a3e410314f2df6` | Passed: 44, Failed: 0 | 2026-06-30T15:23:34Z |
+| Diff hygiene | No whitespace or conflict-marker issues | `git diff --check` | `d380ef1229de35810df8030093a3e410314f2df6` | Passed | 2026-06-30T15:23:34Z |
 
-## Generated Evidence
+## Acceptance Checklist
 
-- `docs/findings/benchmarks/2026-06-27-foundation-matrix/task4-workflows/summary.md`
-- `docs/findings/benchmarks/2026-06-27-foundation-matrix/task4-workflows/results.csv`
-- `docs/findings/benchmarks/2026-06-27-foundation-matrix/task4-workflows/results.json`
+- [x] Vue `RouterLink` or `router-link` route fact to `/todos` matches ASP.NET `MapGet("/todos", ...)`.
+- [x] Vue bound `:to="'/todos'"` route fact matches ASP.NET `MapGet("/todos", ...)`.
+- [x] Vue route facts without `target_path` or with nonliteral expressions produce no client calls.
+- [x] Provider evidence counts include nonzero `dotnet-web.vueCalls` in the Vue fixture.
+- [x] Worker-scope verification passes.
+- [x] Task implementation committed.
 
-## Verification
+## Concerns or Plan Mismatches
 
-- RED check: manifest/output assertion failed before edits with `AssertionError: missing context coverage`.
-- `python3 -m py_compile scripts/benchlib/*.py scripts/bench-julie-miller-search-inspect.py scripts/bench-foundation-matrix.py`: PASS.
-- `python3 scripts/bench-julie-miller-search-inspect.py --repos miller --skip-julie --skip-miller-refresh --gate --out-dir /tmp/miller-search-inspect-task4-smoke`: PASS.
-- `python3 scripts/bench-foundation-matrix.py --tasks context.workflow,trace.refs,trace.path,trace.bridge,impact.workflow --skip-julie --out-dir docs/findings/benchmarks/2026-06-27-foundation-matrix/task4-workflows --gate`: PASS.
-- Manifest/output assertion: PASS; `task3_rows=82`, `task4_rows=15`, `hard_task4_rows=12`, structured unsupported/no-path rows present.
-- `git diff --check`: PASS.
+- No plan mismatches found.
+- No Vue source parsing was added in Miller.
+- `PatternsTool` was not edited.
+- No MCP tool was added.
+- Existing htmx behavior remains on the Task 3 reducer/provider path.
 
-## Concerns Or Blockers
+## Commit SHA
 
-- No blockers.
-- Julie workflow comparison rows are report-only and were skipped by the required `--skip-julie` verification command.
+- Implementation: `d380ef1229de35810df8030093a3e410314f2df6`
