@@ -369,6 +369,10 @@ public sealed class CliDispatchTests : IDisposable
         JsonElement referencesExport = Assert.Single(exports, item => item.GetProperty("name").GetString() == "references");
         Assert.Equal("miller references export --jsonl", referencesExport.GetProperty("command").GetString());
         Assert.Equal("jsonl", referencesExport.GetProperty("format").GetString());
+
+        JsonElement structuralFactsExport = Assert.Single(exports, item => item.GetProperty("name").GetString() == "structural_facts");
+        Assert.Equal("miller patterns export --jsonl", structuralFactsExport.GetProperty("command").GetString());
+        Assert.Equal(PatternFactsExportReader.SchemaVersion, structuralFactsExport.GetProperty("schema_version").GetInt32());
     }
 
     [Fact]
@@ -1067,6 +1071,56 @@ public sealed class CliDispatchTests : IDisposable
             .Single(row => row.GetProperty("identifier_id").GetString() == "d100000000000000000000000000000d");
         Assert.Equal(JsonValueKind.Null, unresolved.GetProperty("target_symbol_id").ValueKind);
         Assert.Equal("unresolved", unresolved.GetProperty("resolution_status").GetString());
+    }
+
+    [Fact]
+    public void Patterns_Export_EmitsStructuralFactRows()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow("sym-orders", "OrdersView", "view", "razor",
+                    "Views/Orders.cshtml", null, 1, null),
+            },
+            fileContent: new Dictionary<string, string> { ["Views/Orders.cshtml"] = "<button hx-get=\"/orders\"></button>" });
+        ExecStructuralFact(fx.DbPath);
+
+        var (code, outText, errText) = Run(
+            new[] { "patterns", "export", "--jsonl" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        string[] lines = outText.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        JsonElement row = JsonDocument.Parse(Assert.Single(lines)).RootElement;
+        Assert.Equal(PatternFactsExportReader.SchemaVersion, row.GetProperty("schema_version").GetInt32());
+        Assert.Equal("fact-hx-get", row.GetProperty("structural_fact_id").GetString());
+        Assert.Equal("htmx.attribute.v1", row.GetProperty("pattern_id").GetString());
+    }
+
+    private static void ExecStructuralFact(string dbPath)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO structural_facts
+                (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                 containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                 confidence, metadata_json)
+            VALUES
+                ('fact-hx-get', 'file:Views/Orders.cshtml', 'Views/Orders.cshtml', 'razor',
+                 'htmx.attribute.v1', 'attribute', 'attribute', 'sym-orders',
+                 1, 9, 1, 25, 8, 24, 1.0, '{"name":"hx-get","value":"/orders"}');
+            """;
+        command.ExecuteNonQuery();
     }
 
     [Fact]

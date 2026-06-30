@@ -96,6 +96,7 @@ internal static class CliCapabilities
         sb.AppendLine("  - symbols jsonl via `miller symbols export --jsonl`");
         sb.AppendLine("  - references jsonl via `miller references export --jsonl`");
         sb.AppendLine("  - complexity_metrics jsonl via `miller complexity export --jsonl`");
+        sb.AppendLine("  - structural_facts jsonl via `miller patterns export --jsonl`");
         sb.AppendLine("json_commands:");
         foreach (string command in JsonCommands)
             sb.AppendLine("  - " + command);
@@ -224,6 +225,18 @@ internal static class CliCapabilities
             w.WriteString("command", "miller complexity export --jsonl");
             w.WriteString("format", "jsonl");
             w.WriteNumber("schema_version", ComplexityExportReader.SchemaVersion);
+            w.WritePropertyName("filters");
+            w.WriteStartArray();
+            w.WriteStringValue("--workspace-id");
+            w.WriteStringValue("--workspace");
+            w.WriteEndArray();
+            w.WriteEndObject();
+
+            w.WriteStartObject();
+            w.WriteString("name", "structural_facts");
+            w.WriteString("command", "miller patterns export --jsonl");
+            w.WriteString("format", "jsonl");
+            w.WriteNumber("schema_version", PatternFactsExportReader.SchemaVersion);
             w.WritePropertyName("filters");
             w.WriteStartArray();
             w.WriteStringValue("--workspace-id");

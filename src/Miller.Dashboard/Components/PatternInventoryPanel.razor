@@ -1,0 +1,57 @@
+@namespace Miller.Dashboard.Components
+
+<section id="pattern-inventory-panel" class="panel pattern-inventory-panel" aria-label="Pattern inventory">
+    <div class="panel-heading">
+        <div>
+            <h2>Pattern inventory</h2>
+            <p>Observed structural-fact families from workspace health aggregates.</p>
+        </div>
+        @if (Inventory is not null)
+        {
+            <span class="workspace-state @HealthStateClass(Inventory.State)">@Inventory.State</span>
+        }
+    </div>
+
+    @if (Inventory is null)
+    {
+        <p class="empty">Select a workspace to view pattern inventory.</p>
+    }
+    else if (!string.IsNullOrWhiteSpace(Inventory.Error))
+    {
+        <p class="notice error-notice"><strong>Pattern inventory unavailable</strong> @Inventory.Error</p>
+    }
+    else if (Inventory.Families.Count == 0)
+    {
+        <p class="empty-inline">No structural facts observed.</p>
+    }
+    else
+    {
+        <ol class="pattern-family-list">
+            @foreach (DashboardPatternFamily family in Inventory.Families)
+            {
+                <li>
+                    <div class="breakdown-row">
+                        <code>@family.Family</code>
+                        <span>@family.FactCount facts</span>
+                    </div>
+                    <small>
+                        @family.PatternCount pattern@(family.PatternCount == 1 ? string.Empty : "s");
+                        languages: @string.Join(", ", family.Languages);
+                        captures: @string.Join(", ", family.Captures)
+                    </small>
+                </li>
+            }
+        </ol>
+    }
+</section>
+
+@code {
+    [Parameter] public DashboardPatternInventoryPanel? Inventory { get; set; }
+
+    private static string HealthStateClass(string state) => state switch
+    {
+        "ready" => "ok",
+        "empty" => "neutral",
+        _ => "bad",
+    };
+}

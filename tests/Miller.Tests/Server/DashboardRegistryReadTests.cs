@@ -588,6 +588,64 @@ public sealed class DashboardRegistryReadTests : IDisposable
     }
 
     [Fact]
+    public void ReadSnapshot_IncludesPatternInventoryFamilies()
+    {
+        using JulieDbFixture fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            rows:
+            [
+                new JulieDbFixture.SymbolRow(
+                    "sym-orders",
+                    "OrdersView",
+                    "view",
+                    "razor",
+                    "Views/Orders.cshtml",
+                    null,
+                    1,
+                    null),
+            ],
+            fileContent: new Dictionary<string, string>
+            {
+                ["Views/Orders.cshtml"] = "<button hx-get=\"/orders\"></button>\n",
+            });
+        Exec(fixture.DbPath, """
+            INSERT INTO structural_facts
+                (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                 containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                 confidence, metadata_json)
+            VALUES
+                ('fact-hx-get', 'file:Views/Orders.cshtml', 'Views/Orders.cshtml', 'razor',
+                 'htmx.attribute.v1', 'attribute', 'attribute', 'sym-orders',
+                 1, 9, 1, 25, 8, 24, 1.0, '{"name":"hx-get"}'),
+                ('fact-hx-trigger', 'file:Views/Orders.cshtml', 'Views/Orders.cshtml', 'razor',
+                 'htmx.attribute.v1', 'attribute', 'attribute', 'sym-orders',
+                 1, 26, 1, 45, 25, 44, 1.0, '{"name":"hx-trigger"}');
+            """);
+        using (var registry = WorkspaceRegistry.Open(_registryDb))
+        {
+            registry.UpsertSeen(
+                "ws-patterns",
+                "patterns-abcd1234",
+                fixture.WorkspaceRoot,
+                fixture.DbPath,
+                WorkspaceRegistryState.Ready,
+                DateTimeOffset.Parse("2026-05-31T10:00:00Z"));
+            registry.MarkScanned("ws-patterns", 1, DateTimeOffset.Parse("2026-05-31T10:01:00Z"));
+        }
+
+        DashboardSnapshot snapshot = DashboardData.ReadSnapshot(_registryDb, _telemetryDb, "ws-patterns");
+
+        Assert.NotNull(snapshot.PatternInventory);
+        Assert.Equal("ready", snapshot.PatternInventory!.State);
+        DashboardPatternFamily family = Assert.Single(snapshot.PatternInventory.Families);
+        Assert.Equal("htmx.attribute", family.Family);
+        Assert.Equal(2, family.FactCount);
+        Assert.Equal(1, family.PatternCount);
+        Assert.Equal("razor", Assert.Single(family.Languages));
+    }
+
+    [Fact]
     public void DashboardIndexFactsCache_ReusesFactsWithinTtl()
     {
         using JulieDbFixture fixture = JulieDbFixture.Create(

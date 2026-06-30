@@ -96,6 +96,10 @@ public static class CliDispatch
                 case "content":
                     return Content(rest, context, stdout, stderr);
                 case "patterns":
+                    if (rest.Count > 0 && rest[0].Equals("export", StringComparison.OrdinalIgnoreCase))
+                        return ArtifactExport(rest, context, stdout, stderr,
+                            "miller patterns export [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]",
+                            PatternFactsExportReader.ExportJsonLines);
                     return Patterns(rest, context, stdout, stderr);
                 case "metrics":
                     return Metrics(rest, context, stdout, stderr);
@@ -443,28 +447,29 @@ public static class CliDispatch
     private static int Patterns(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
         if (args.Count > 0 && args[0] is "--help" or "-h")
-            return Usage(err, "miller patterns <list|summary|search> [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--query TEXT] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]");
+            return Usage(err, "miller patterns <list|summary|search|export> [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--query TEXT] [--language LANG] [--path GLOB] [--where key=value] [--group-by file|directory] [--facet KEY] [--limit N] [--json]");
 
         bool firstTokenIsFlag = args.Count > 0 && args[0].StartsWith("--", StringComparison.Ordinal);
         string operation = args.Count == 0 || firstTokenIsFlag ? "list" : args[0].ToLowerInvariant();
         if (operation is "help" or "--help" or "-h")
-            return Usage(err, "miller patterns <list|summary|search> [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--query TEXT] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]");
+            return Usage(err, "miller patterns <list|summary|search|export> [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--query TEXT] [--language LANG] [--path GLOB] [--where key=value] [--group-by file|directory] [--facet KEY] [--limit N] [--json]");
 
         if (operation is not ("list" or "summary" or "summarize" or "search"))
-            return Usage(err, "miller patterns <list|summary|search> [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--query TEXT] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]");
+            return Usage(err, "miller patterns <list|summary|search|export> [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--query TEXT] [--language LANG] [--path GLOB] [--where key=value] [--group-by file|directory] [--facet KEY] [--limit N] [--json]");
 
-        CliOptions o = CliOptions.Parse((firstTokenIsFlag ? args : args.Skip(1)).ToArray(), "json");
+        IReadOnlyList<string> argTail = (firstTokenIsFlag ? args : args.Skip(1)).ToArray();
+        CliOptions o = CliOptions.Parse(argTail, "json");
         string? patternId = o.Value("pattern", o.Value("pattern-id"));
         if (string.IsNullOrWhiteSpace(patternId) && o.Positionals.Count > 0)
             patternId = o.Query;
 
         string? query = o.Value("query");
-        string? where = o.Value("where");
+        string? where = CombineWhereFilters(CollectRepeatedOptionValues(argTail, "where"));
         if (!string.IsNullOrWhiteSpace(where))
         {
             try
             {
-                PatternsTool.ParseWhere(where);
+                _ = PatternsTool.ParseWhereFilters(where);
             }
             catch (InvalidOperationException ex)
             {
@@ -478,6 +483,12 @@ public static class CliDispatch
 
         if (operation == "search" && string.IsNullOrWhiteSpace(patternId) && string.IsNullOrWhiteSpace(query))
             return Usage(err, "miller patterns search --pattern ID | --query TEXT [--workspace-id SELECTOR] [--workspace DIR] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]");
+
+        if ((operation is "list" or "summary" or "summarize") && !string.IsNullOrWhiteSpace(query))
+        {
+            err.WriteLine("patterns query is only supported for search.");
+            return 2;
+        }
 
         if (!TryResolveReadContext(ctx, o, err, out ctx))
             return 2;
@@ -495,6 +506,8 @@ public static class CliDispatch
                 o.Value("language"),
                 o.Value("path", o.Value("file-pattern")),
                 where,
+                o.Value("group-by", o.Value("group_by")),
+                o.Value("facet"),
                 o.Int("limit", PatternsTool.DefaultLimit),
                 o.Has("json"));
             WriteOutput(outw, result.Output);
@@ -508,6 +521,42 @@ public static class CliDispatch
             err.WriteLine("patterns failed: " + ex.Message);
             return 3;
         }
+    }
+
+    private static string? CombineWhereFilters(IReadOnlyList<string> whereFilters) =>
+        whereFilters.Count switch
+        {
+            0 => null,
+            1 => whereFilters[0],
+            _ => string.Join(";", whereFilters),
+        };
+
+    private static IReadOnlyList<string> CollectRepeatedOptionValues(IReadOnlyList<string> args, string flagName)
+    {
+        var values = new List<string>();
+        for (int i = 0; i < args.Count; i++)
+        {
+            string token = args[i];
+            if (!token.StartsWith("--", StringComparison.Ordinal) || token.Length == 2)
+                continue;
+
+            string name = token[2..];
+            int equals = name.IndexOf('=', StringComparison.Ordinal);
+            if (equals >= 0)
+            {
+                if (name[..equals].Equals(flagName, StringComparison.OrdinalIgnoreCase))
+                    values.Add(name[(equals + 1)..]);
+                continue;
+            }
+
+            if (!name.Equals(flagName, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (i + 1 < args.Count && !args[i + 1].StartsWith("--", StringComparison.Ordinal))
+                values.Add(args[++i]);
+        }
+
+        return values;
     }
 
     private static void WriteOutput(TextWriter writer, string output)

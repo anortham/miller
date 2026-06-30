@@ -328,6 +328,62 @@ public sealed class PatternsToolTests
     }
 
     [Fact]
+    public void Patterns_SearchByQuery_ConsidersEveryMatchedPatternBeforeGlobalLimit()
+    {
+        using var fx = CreatePatternFixture();
+        Exec(fx.DbPath, """
+            INSERT INTO structural_facts
+                (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                 containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                 confidence, metadata_json)
+            VALUES
+                ('fact-bulk-route-1', 'file:src/Auth.cs', 'zzz/BulkRoutes.cs', 'csharp',
+                 'bulk.route.v1', 'route_call', 'invocation_expression', 'sym-auth',
+                 1, 1, 1, 20, 0, 19, 1.0, '{"verb":"GET"}'),
+                ('fact-bulk-route-2', 'file:src/Auth.cs', 'zzz/BulkRoutes.cs', 'csharp',
+                 'bulk.route.v1', 'route_call', 'invocation_expression', 'sym-auth',
+                 2, 1, 2, 20, 20, 39, 1.0, '{"verb":"POST"}');
+            """);
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        string json = tool.Patterns(operation: "search", query: "route", limit: 1, format: "json");
+
+        using JsonDocument doc = JsonDocument.Parse(json);
+        Assert.Equal(
+            new[] { "bulk.route.v1", "aspnet.minimal_api.route.v1" },
+            doc.RootElement.GetProperty("matched_pattern_ids").EnumerateArray().Select(static value => value.GetString()).ToArray());
+        JsonElement match = Assert.Single(doc.RootElement.GetProperty("matches").EnumerateArray());
+        Assert.Equal("fact-route", match.GetProperty("fact_id").GetString());
+        Assert.Equal("src/Auth.cs", match.GetProperty("path").GetString());
+    }
+
+    [Fact]
+    public void Patterns_SearchByQuery_JsonEmptyAfterFilters_IncludesReasonAndActiveFilters()
+    {
+        using var fx = CreatePatternFixture();
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        string json = tool.Patterns(
+            operation: "search",
+            query: "route",
+            language: "razor",
+            path: "Views/**",
+            where: "verb=GET",
+            limit: 10,
+            format: "json");
+
+        using JsonDocument doc = JsonDocument.Parse(json);
+        Assert.Equal("filtered_out", doc.RootElement.GetProperty("empty_reason").GetString());
+        Assert.Empty(doc.RootElement.GetProperty("matches").EnumerateArray());
+        JsonElement activeFilters = doc.RootElement.GetProperty("active_filters");
+        Assert.Equal("razor", activeFilters.GetProperty("language").GetString());
+        Assert.Equal("Views/**", activeFilters.GetProperty("path").GetString());
+        JsonElement where = Assert.Single(activeFilters.GetProperty("where").EnumerateArray());
+        Assert.Equal("verb", where.GetProperty("key").GetString());
+        Assert.Equal("GET", where.GetProperty("value").GetString());
+    }
+
+    [Fact]
     public void Patterns_SearchByQuery_RecordsQueryInTelemetry()
     {
         using var fx = CreatePatternFixture();
@@ -436,6 +492,52 @@ public sealed class PatternsToolTests
                  1, 1, 1, 14, 0, 13, 1.0, '{"text":"Project Docs","level":1}');
             """);
         return fx;
+    }
+
+    [Fact]
+    public void Patterns_List_RejectsQuery()
+    {
+        using var fx = CreatePatternFixture();
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        string output = tool.Patterns(operation: "list", query: "route");
+
+        Assert.StartsWith("patterns failed:", output, StringComparison.Ordinal);
+        Assert.Contains("query is only supported for search", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Patterns_SearchJsonEmpty_IncludesNearMatchesAndEmptyReason()
+    {
+        using var fx = CreatePatternFixture();
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        string json = tool.Patterns(operation: "search", pattern_id: "aspnet.route.v1", format: "json");
+
+        using JsonDocument doc = JsonDocument.Parse(json);
+        Assert.Equal("no_such_pattern_id", doc.RootElement.GetProperty("empty_reason").GetString());
+        Assert.Contains(
+            doc.RootElement.GetProperty("near_matches").EnumerateArray().Select(static value => value.GetString()),
+            match => match == "aspnet.minimal_api.route.v1");
+    }
+
+    [Fact]
+    public void Patterns_SummaryJson_GroupByFile_ReturnsPathRollups()
+    {
+        using var fx = CreatePatternFixture();
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        string json = tool.Patterns(
+            operation: "summary",
+            pattern_id: "htmx.attribute.v1",
+            path: "Views/**",
+            group_by: "file",
+            format: "json");
+
+        using JsonDocument doc = JsonDocument.Parse(json);
+        Assert.Equal("file", doc.RootElement.GetProperty("group_by").GetString());
+        JsonElement group = Assert.Single(doc.RootElement.GetProperty("groups").EnumerateArray());
+        Assert.Equal("Views/Orders.cshtml", group.GetProperty("path").GetString());
     }
 
     private static void Exec(string dbPath, string sql)

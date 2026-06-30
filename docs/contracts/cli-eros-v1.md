@@ -67,6 +67,7 @@ Current `json_commands` include:
 | `symbols export --jsonl` | Bulk-export one row per symbol for fleet rollups (counts, kinds, doc coverage, clones). |
 | `references export --jsonl` | Bulk-export one row per identifier/reference usage fact for dead-code candidate workflows. |
 | `complexity export --jsonl` | Bulk-export per-symbol/per-file complexity metric rows for fleet hotspot ranking. |
+| `patterns export --jsonl` | Bulk-export structural fact rows for fleet code-shape inventory. |
 | `dashboard --json` | Start/reuse the local dashboard helper and return its URL. |
 | `capabilities --json` | Discover this contract surface. |
 
@@ -176,7 +177,15 @@ Read-command JSON is allowed to grow additive recovery fields. Current examples:
 - `content read --json` parameter/source/window failures return a parseable object with `operation`, `error`,
   `diagnostic_code`, and `next_actions` when Miller can suggest recovery.
 - `patterns --json` list/no-match output may include `next_actions`; no-match search output may include
-  `near_matches`.
+  `near_matches`, `empty_reason`, and `active_filters`.
+
+`miller patterns export --jsonl [--workspace-id SELECTOR] [--workspace DIR]` emits one JSON line per
+`structural_facts` row, ordered `(path, start_byte, structural_fact_id)`. Fields (`schema_version` 1):
+
+- `structural_fact_id`, `path`, `language`, `pattern_id`, `capture_name`, `node_kind`.
+- `containing_symbol_id` (nullable), `confidence`.
+- `start_line`, `start_column`, `end_line`, `end_column`, `start_byte`, `end_byte`.
+- `metadata_json` (nullable raw JSON text).
 
 `miller complexity export --jsonl [--workspace-id SELECTOR] [--workspace DIR]` emits one JSON line per
 `complexity_metrics` row (file-scope and symbol-scope; emitted broadly since julie-extract 2.3.0), ordered

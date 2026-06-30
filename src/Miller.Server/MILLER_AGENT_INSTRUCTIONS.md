@@ -56,9 +56,9 @@ returns ranked, structured results with fewer tokens.
   markdown. `search` returns snippets, `source_id`, and `workspace_id`; `read` returns ≤200-line windows. pass the hit's `source_id` and workspace_id when reading cross-workspace hits. Use `content_kind=web` for web reads, or
   `workspace_id=all` for audits. Empty content searches and failed reads include recovery guidance; JSON includes `diagnostic_code` and `next_actions`. `export` is raw JSONL.
 - `patterns` — List, summarize, and search `structural_facts` code-shape facts. Run `patterns()` to see emitted ids
-  (not raw AST queries). Use
-  `operation=list|summary|search` with `pattern_id`, or `query` across matching ids. `where=key=value`, `path`,
-  `language`, `workspace_id`, and `ensure_fresh` apply. List/no-match results include `next_actions`.
+  (not raw AST queries). `operation=list|summary|search`; `query` is search-only. `where=key=value` ANDs when
+  repeated or `;`-joined; also `path`, `language`, `group_by`, `facet`, `workspace_id`, `ensure_fresh`.
+  List/no-match results include `next_actions`; search adds `near_matches`, `empty_reason`.
 - `workspace` — Index lifecycle: `status`, `health`, `onboarding`, `refresh`, `full`, `list`, `open`, `remove`,
   `leader`, `dashboard` (start/reuse the loopback dashboard). `status`, `health`, `onboarding`, `leader`, `refresh`, `full`, and
   `remove` accept `workspace_id` or `path`; `list` shows the registry.
@@ -118,7 +118,7 @@ code, paste this block into the prompt:
     - impact(target?|changed_paths?|diff?|git?/base?/staged?) before refactors and to choose tests.
     - edit(operation, target, ...) to preview index-aware edits; use match_mode=auto with query/anchor/line for localized replace_text.
     - content(import|add_markdown|search|read|list|remove|export, ...) for logs, web markdown, and audits; use workspace_id=all for audits and pass hit workspace_id on reads.
-    - patterns(operation?, pattern_id?, query?, where?, path?, language?) for extractor-recognized code-shape facts.
+    - patterns(operation?, pattern_id?, query?, where?, path?, language?, group_by?, facet?) for code-shape facts.
     - workspace(status|health|onboarding|leader|refresh|full|list|open|remove|dashboard) for readiness, leader diagnostics/handoff, refresh, other repos, onboarding, or dashboard with operation=dashboard.
     Do NOT fall back to Glob/Read/Grep chains when a Miller tool fits. Miller returns targeted context in 1-2 calls.
 

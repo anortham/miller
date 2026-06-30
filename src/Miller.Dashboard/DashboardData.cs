@@ -143,6 +143,19 @@ public sealed record DashboardHealthWarning(
     [property: JsonPropertyName("severity")] string Severity,
     [property: JsonPropertyName("message")] string Message);
 
+public sealed record DashboardPatternFamily(
+    [property: JsonPropertyName("family")] string Family,
+    [property: JsonPropertyName("pattern_count")] int PatternCount,
+    [property: JsonPropertyName("fact_count")] long FactCount,
+    [property: JsonPropertyName("languages")] IReadOnlyList<string> Languages,
+    [property: JsonPropertyName("captures")] IReadOnlyList<string> Captures);
+
+public sealed record DashboardPatternInventoryPanel(
+    [property: JsonPropertyName("workspace_id")] string? WorkspaceId,
+    [property: JsonPropertyName("state")] string State,
+    [property: JsonPropertyName("families")] IReadOnlyList<DashboardPatternFamily> Families,
+    [property: JsonPropertyName("error")] string? Error = null);
+
 public sealed record DashboardWorkspaceHealthPanel(
     [property: JsonPropertyName("workspace_id")] string? WorkspaceId,
     [property: JsonPropertyName("state")] string State,
@@ -248,6 +261,7 @@ public sealed record DashboardSnapshot
         DashboardWorkspaceFacts? SelectedWorkspaceFacts = null,
         DashboardContextSavingsSummary? ContextSavings = null,
         DashboardWorkspaceHealthPanel? Health = null,
+        DashboardPatternInventoryPanel? PatternInventory = null,
         DashboardWorkspaceOnboardingPanel? Onboarding = null,
         DashboardLocalMetricsPanel? LocalMetrics = null)
     {
@@ -258,6 +272,7 @@ public sealed record DashboardSnapshot
         this.SelectedWorkspaceFacts = SelectedWorkspaceFacts;
         this.ContextSavings = ContextSavings ?? DashboardContextSavingsSummary.NotTracked(SelectedWorkspaceId);
         this.Health = Health;
+        this.PatternInventory = PatternInventory;
         this.Onboarding = Onboarding;
         this.LocalMetrics = LocalMetrics;
     }
@@ -282,6 +297,9 @@ public sealed record DashboardSnapshot
 
     [JsonPropertyName("health")]
     public DashboardWorkspaceHealthPanel? Health { get; init; }
+
+    [JsonPropertyName("pattern_inventory")]
+    public DashboardPatternInventoryPanel? PatternInventory { get; init; }
 
     [JsonPropertyName("onboarding")]
     public DashboardWorkspaceOnboardingPanel? Onboarding { get; init; }
@@ -685,6 +703,9 @@ public static class DashboardData
         DashboardWorkspaceHealthPanel? health = selectedWorkspace is null || selectedFacts is null
             ? null
             : ReadWorkspaceHealthPanel(selectedWorkspace, selectedFacts);
+        DashboardPatternInventoryPanel? patternInventory = selectedWorkspace is null || selectedFacts is null
+            ? null
+            : ReadPatternInventoryPanel(selectedWorkspace, selectedFacts);
         DashboardWorkspaceOnboardingPanel? onboarding = selectedWorkspace is null || selectedFacts is null
             ? null
             : ReadWorkspaceOnboardingPanel(selectedWorkspace, selectedFacts, telemetryDbPath);
@@ -699,6 +720,7 @@ public static class DashboardData
             selectedFacts,
             contextSavings,
             health,
+            patternInventory,
             onboarding,
             localMetrics);
     }
@@ -749,6 +771,77 @@ public static class DashboardData
                 Array.Empty<DashboardMetricCloneGroup>(),
                 Error: ex.Message);
         }
+    }
+
+    private static DashboardPatternInventoryPanel? ReadPatternInventoryPanel(
+        DashboardWorkspaceRow workspace,
+        DashboardWorkspaceFacts dashboardFacts)
+    {
+        try
+        {
+            WorkspaceExtractionHealthFacts extraction = ReadExtractionHealthOrUnavailable(
+                workspace.IndexDbPath,
+                dashboardFacts.Message ?? dashboardFacts.FreshnessStatus);
+            if (!extraction.StructuralFacts.Available)
+            {
+                return new DashboardPatternInventoryPanel(
+                    workspace.WorkspaceId,
+                    "unavailable",
+                    Array.Empty<DashboardPatternFamily>(),
+                    Error: extraction.StructuralFacts.Error);
+            }
+
+            IReadOnlyList<DashboardPatternFamily> families = extraction.StructuralFacts.Rows
+                .GroupBy(row => PatternFamilyName(row.PatternId), StringComparer.Ordinal)
+                .OrderByDescending(static group => group.Sum(static row => row.Count))
+                .ThenBy(static group => group.Key, StringComparer.Ordinal)
+                .Select(static group => new DashboardPatternFamily(
+                    group.Key,
+                    PatternCount: group.Select(static row => row.PatternId).Distinct(StringComparer.Ordinal).Count(),
+                    FactCount: group.Sum(static row => row.Count),
+                    Languages: group.Select(static row => row.Language).Distinct(StringComparer.Ordinal).OrderBy(static value => value, StringComparer.Ordinal).ToArray(),
+                    Captures: group.Select(static row => row.CaptureName).Distinct(StringComparer.Ordinal).OrderBy(static value => value, StringComparer.Ordinal).ToArray()))
+                .ToArray();
+
+            return new DashboardPatternInventoryPanel(
+                workspace.WorkspaceId,
+                families.Count == 0 ? "empty" : "ready",
+                families);
+        }
+        catch (Exception ex) when (
+            ex is KeyNotFoundException or SqliteException or IOException or InvalidOperationException
+                or UnauthorizedAccessException)
+        {
+            return new DashboardPatternInventoryPanel(
+                workspace.WorkspaceId,
+                "unavailable",
+                Array.Empty<DashboardPatternFamily>(),
+                Error: ex.Message);
+        }
+    }
+
+    private static string PatternFamilyName(string patternId)
+    {
+        int lastDot = patternId.LastIndexOf('.');
+        if (lastDot <= 0)
+            return patternId;
+
+        ReadOnlySpan<char> suffix = patternId.AsSpan(lastDot + 1);
+        if (suffix.Length > 1 && suffix[0] == 'v' && IsVersionDigitSuffix(suffix[1..]))
+            return patternId[..lastDot];
+
+        return patternId;
+    }
+
+    private static bool IsVersionDigitSuffix(ReadOnlySpan<char> suffix)
+    {
+        foreach (char c in suffix)
+        {
+            if (!char.IsAsciiDigit(c))
+                return false;
+        }
+
+        return suffix.Length > 0;
     }
 
     private static DashboardWorkspaceHealthPanel? ReadWorkspaceHealthPanel(

@@ -307,6 +307,7 @@ internal sealed class JulieDbFixture : IDisposable
             Exec(conn, SourceRegionsDdl);
             Exec(conn, SourceRegionsIndexesDdl);
             Exec(conn, StructuralFactsDdl);
+            Exec(conn, PatternCatalogDdl);
             Exec(conn, ComplexityMetricsDdl);
             // The v1 freshness tables (extraction_revisions/revision_file_changes) so the FreshnessReader can open.
             Exec(conn, ExtractionRevisionsDdl);
@@ -989,6 +990,16 @@ internal sealed class JulieDbFixture : IDisposable
         CREATE INDEX IF NOT EXISTS idx_source_regions_file_span ON source_regions(file_id, start_byte, end_byte);
         CREATE INDEX IF NOT EXISTS idx_source_regions_kind_file ON source_regions(kind, file_id, start_byte);
         CREATE INDEX IF NOT EXISTS idx_source_regions_symbol ON source_regions(containing_symbol_id);
+        """;
+
+    private const string PatternCatalogDdl = """
+        CREATE TABLE IF NOT EXISTS pattern_catalog (
+            pattern_id TEXT PRIMARY KEY,
+            label TEXT NOT NULL,
+            description TEXT,
+            tags_json TEXT,
+            expected_metadata_keys_json TEXT
+        );
         """;
 
     private const string StructuralFactsDdl = """

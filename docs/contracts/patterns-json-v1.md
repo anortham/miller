@@ -8,6 +8,10 @@ AST queries here. It lists, groups, filters, and renders known extractor facts b
 Unknown future `pattern_id` values are valid observed facts. Consumers must not require a hard-coded Miller
 catalog entry before accepting a row.
 
+When `julie-extractors` emits a `pattern_catalog` table (all supported languages), list output overlays
+`label`, `description`, `tags`, and `expected_metadata_keys` and sets `catalog` to `"known"`. Observed facts
+still decide existence; unknown ids continue to list and search unchanged.
+
 Common extractor-backed examples include:
 
 - `aspnet.minimal_api.route.v1` for ASP.NET minimal API route mappings in C#.
@@ -18,12 +22,15 @@ Common extractor-backed examples include:
 
 ```bash
 miller patterns [list] [--workspace-id SELECTOR] [--workspace DIR] [--language LANG] [--json]
-miller patterns summary [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--language LANG] [--path GLOB] [--json]
+miller patterns summary [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--language LANG] [--path GLOB] [--where key=value] [--group-by file|directory] [--facet KEY] [--json]
 miller patterns search (--pattern ID | --query TEXT) [--workspace-id SELECTOR] [--workspace DIR] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]
+miller patterns export --jsonl [--workspace-id SELECTOR] [--workspace DIR]
 ```
 
 MCP uses the same names with snake_case parameters: `operation`, `pattern_id`, `language`, `path`, `where`,
-`query`, `workspace_id`, `ensure_fresh`, `limit`, and `format=json`.
+`query`, `group_by`, `facet`, `workspace_id`, `ensure_fresh`, `limit`, and `format=json`.
+
+`list` and `summary` reject `query` with a usage error. `query` is only valid for `search`.
 
 ## List
 
@@ -34,11 +41,14 @@ MCP uses the same names with snake_case parameters: `operation`, `pattern_id`, `
   "patterns": [
     {
       "pattern_id": "htmx.attribute.v1",
-      "label": "htmx.attribute.v1",
+      "label": "htmx attribute",
       "count": 4,
-      "catalog": "observed",
+      "catalog": "known",
       "languages": ["html", "razor"],
-      "captures": ["attribute"]
+      "captures": ["attribute"],
+      "description": "An htmx attribute usage",
+      "tags": ["htmx", "html"],
+      "expected_metadata_keys": ["name", "value"]
     }
   ],
   "next_actions": [
@@ -51,30 +61,48 @@ MCP uses the same names with snake_case parameters: `operation`, `pattern_id`, `
 }
 ```
 
+`label` defaults to `pattern_id` when no catalog row exists. `description`, `tags`, and
+`expected_metadata_keys` are omitted when absent.
+
 `next_actions` is additive and bounded. It is present for list output when Miller can derive useful follow-up
 commands from observed `pattern_id` values.
 
 ## Summary
 
+Default grouping is `(language, pattern_id, capture_name)`.
+
+Optional `group_by`:
+
+- `language_pattern_capture` (default) — same as omitting the flag.
+- `file` — adds `path` per group.
+- `directory` — adds `directory` (repo-relative, first two path segments).
+
+Optional `facet` — when set, groups also include `facet_value` read from a top-level metadata key.
+
 ```json
 {
   "schema_version": 1,
   "operation": "summary",
+  "group_by": "file",
   "groups": [
     {
       "language": "razor",
       "pattern_id": "htmx.attribute.v1",
       "capture_name": "attribute",
+      "path": "Views/Orders.cshtml",
       "count": 2
     }
   ]
 }
 ```
 
+`language`, exact path, safe prefix/suffix path, and `where` filters are pushed into SQL. Other path globs use
+the same C# glob fallback as Miller read tools so `*` and `?` do not cross `/`.
+
 ## Search
 
 Search accepts either an exact `pattern_id` or a free-text `query`. A free-text query maps to every observed
-`pattern_id` containing the substring, then searches across those pattern ids.
+`pattern_id` containing the substring, then searches across those pattern ids (bounded per pattern id).
 
 ```json
 {
@@ -100,11 +128,8 @@ Search accepts either an exact `pattern_id` or a free-text `query`. A free-text 
         "end_byte": 24
       },
       "metadata": {
-        "framework": "htmx",
-        "verb": "GET",
-        "attribute_name": "hx-get",
-        "attribute_value": "/orders",
-        "target_path": "/orders"
+        "name": "hx-get",
+        "value": "/orders"
       }
     }
   ]
@@ -114,23 +139,37 @@ Search accepts either an exact `pattern_id` or a free-text `query`. A free-text 
 `metadata` is present when `metadata_json` is valid JSON object data. If a row has malformed metadata, search
 keeps the row for unfiltered output and writes `metadata_error`; metadata-filtered searches skip malformed rows.
 
-`--where key=value` is an exact string comparison against one top-level metadata property. It can be used with
-`--pattern` or `--query`. The first slice supports one `--where` filter.
+### Filters
 
-No-match search output may include:
+- `--where key=value` — exact match on one top-level metadata property. Repeat the flag or separate values with
+  `;` in MCP (`where=name=hx-get;verb=GET`) to AND multiple filters. Metadata predicates run in SQL via guarded
+  `json_extract` (strings compare as strings; numbers/booleans/objects compare as raw JSON text).
+- `--path GLOB` — workspace-relative glob pushed into SQL when representable; semantics match other Miller read
+  tools (`Views/**`, `**/*.cs`, exact paths).
+- `--language LANG` — exact language filter.
 
+No-match search JSON includes the same recovery context as compact output:
+
+- `empty_reason`: `no_such_pattern_id`, `filtered_out`, `no_metadata_match`, `no_facts`, or `query_no_match`.
 - `near_matches`: observed `pattern_id` values close to the query.
-- `next_actions`: bounded recovery calls, such as `operation=list`, `operation=summary`, or a concrete
+- `active_filters`: applied `language`, `path`, and `where` filters.
+- `next_actions`: bounded recovery calls such as `operation=list`, `operation=summary`, or a concrete
   `pattern_id` search.
 
 If a requested `pattern_id` exists but `language`, `path`, or `where` filters remove every row, the empty result
-is still successful and the compact output names the active filters so callers can loosen them deliberately.
+is still successful and output names the active filters so callers can loosen them deliberately.
+
+## Export (CLI only)
+
+`miller patterns export --jsonl` emits one JSON line per `structural_facts` row, ordered
+`(path, start_byte, structural_fact_id)`. Advertised under `supported_export_formats` in `capabilities --json`.
+Incompatible artifacts or a missing `structural_facts` table exit `3`.
 
 ## Exit Codes
 
 | Code | Meaning |
 |---:|---|
 | `0` | Success. Empty result arrays are still successful. |
-| `2` | Usage or workspace selector error, such as `search` without `--pattern` or `--query`. |
+| `2` | Usage or workspace selector error, such as `search` without `--pattern` or `--query`, or `query` on `list`/`summary`. |
 | `3` | Operational failure, such as no usable index or incompatible/missing `structural_facts`. |
 | `1` | Unexpected failure converted to a clean CLI error line. |
