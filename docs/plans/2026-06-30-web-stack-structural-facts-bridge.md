@@ -155,11 +155,11 @@
 **Approach:** Add a new pattern id to the Vue web pattern list and a focused fact builder near `vue_template_directive_fact`. Do not weaken existing `vue.template_directive.v1`; route matching gets a distinct route-ready fact so Miller does not parse arbitrary Vue expressions.
 
 **Acceptance criteria:**
-- [ ] `vue.route_reference.v1` appears in `web_structural_fact_pattern_ids_for_language("vue")`.
-- [ ] `RouterLink` and `router-link` literal `to` attributes emit `target_path="/todos"` and `verb="GET"`.
-- [ ] Bound `:to="'/todos'"` emits the same `target_path` only when the expression is a literal string.
-- [ ] Non-route directives such as `v-if`, `v-model`, and `:class` do not emit route-reference facts.
-- [ ] Worker-scope verification passes, committed.
+- [x] `vue.route_reference.v1` appears in `web_structural_fact_pattern_ids_for_language("vue")`.
+- [x] `RouterLink` and `router-link` literal `to` attributes emit `target_path="/todos"` and `verb="GET"`.
+- [x] Bound `:to="'/todos'"` emits the same `target_path` only when the expression is a literal string.
+- [x] Non-route directives such as `v-if`, `v-model`, and `:class` do not emit route-reference facts.
+- [x] Worker-scope verification passes, committed.
 
 ### Task 2: Add Miller Structural Fact Bridge Input
 
