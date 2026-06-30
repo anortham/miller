@@ -181,11 +181,11 @@
 **Approach:** Add a `ReadStructuralFacts` method in `SqliteBridgeReader` using by-name reads and deterministic ordering by `path`, `start_byte`, and `structural_fact_id`. Query only `aspnet.minimal_api.route.v1`, `htmx.attribute.v1`, and `vue.route_reference.v1` so large generic fact sets such as JSON properties are not loaded into every bridge graph.
 
 **Acceptance criteria:**
-- [ ] `SqliteBridgeReader.Read` returns selected structural facts with metadata JSON and span intact.
-- [ ] Missing or unrelated pattern ids are ignored by the bridge reader.
-- [ ] `RepositoryIndexLoader.Load` passes structural facts into `BridgeGraphBuilder.Build`.
-- [ ] Existing bridge tests compile without requiring callers to pass structural facts manually.
-- [ ] Worker-scope verification passes, committed.
+- [x] `SqliteBridgeReader.Read` returns selected structural facts with metadata JSON and span intact.
+- [x] Missing or unrelated pattern ids are ignored by the bridge reader.
+- [x] `RepositoryIndexLoader.Load` passes structural facts into `BridgeGraphBuilder.Build`.
+- [x] Existing bridge tests compile without requiring callers to pass structural facts manually.
+- [x] Worker-scope verification passes, committed.
 
 ### Task 3: Bridge ASP.NET Minimal API And htmx Facts
 
