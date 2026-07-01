@@ -141,6 +141,8 @@ public sealed class TraceTool
 
     private sealed record TraceNextAction(string Tool, string Reason, IReadOnlyList<KeyValuePair<string, string>> Args);
 
+    private sealed record BridgeRouteDiagnostic(string Code, string Message);
+
     private static readonly HashSet<string> KnownReferenceKinds = new(StringComparer.OrdinalIgnoreCase)
     {
         "call",
@@ -607,7 +609,7 @@ public sealed class TraceTool
         emitted = 0;
         nodesVisited = 0;
 
-        if (!ResolveBridgeStart(index, resolver, target, scope, out string startId, out string? note, out IReadOnlyList<TraceNextAction> nextActions))
+        if (!ResolveBridgeStart(index, resolver, target, scope, out string startId, out string? routeFilter, out string? note, out IReadOnlyList<TraceNextAction> nextActions))
             return json
                 ? RenderBridgeJson(index.BridgeGraph, target, to: null, depth, limit, emitted, nodesVisited, startId: null,
                     edges: [], note!, DiagnosticCode(note!), nextActions)
@@ -617,6 +619,15 @@ public sealed class TraceTool
         // bridge node lookup entirely or present but edge-less, the honest answer is the same. Incident subsumes both.
         if (index.BridgeGraph.Incident(startId).Count == 0)
         {
+            if (routeFilter is not null && TryBuildRouteDiagnostic(index.BridgeGraph, routeFilter, out var routeDiagnostic))
+            {
+                IReadOnlyList<TraceNextAction> routeNextActions = BridgeFallbackNextActions(target);
+                return json
+                    ? RenderBridgeJson(index.BridgeGraph, target, to: null, depth, limit, emitted, nodesVisited, startId,
+                        edges: [], routeDiagnostic.Message, routeDiagnostic.Code, routeNextActions)
+                    : AppendNextActions(routeDiagnostic.Message, routeNextActions);
+            }
+
             var message = new StringBuilder();
             message.Append($"'{target}' is not on a cross-language bridge. trace bridge follows DTO/entity/table/route links; ")
               .Append("this symbol has none.");
@@ -631,11 +642,22 @@ public sealed class TraceTool
         }
 
         IReadOnlyList<ScoredEdge> edges = index.BridgeGraph.Walk(startId, depth);
+        if (routeFilter is not null)
+            edges = FilterRouteTargetEdges(index.BridgeGraph, startId, edges, routeFilter);
         nodesVisited = edges.Count;
 
         // The start has direct incident edges (checked above), so an empty Walk means depth could not reach them.
         if (edges.Count == 0)
         {
+            if (routeFilter is not null && TryBuildRouteDiagnostic(index.BridgeGraph, routeFilter, out var routeDiagnostic))
+            {
+                IReadOnlyList<TraceNextAction> routeNextActions = BridgeFallbackNextActions(target);
+                return json
+                    ? RenderBridgeJson(index.BridgeGraph, target, to: null, depth, limit, emitted, nodesVisited, startId,
+                        edges: [], routeDiagnostic.Message, routeDiagnostic.Code, routeNextActions)
+                    : AppendNextActions(routeDiagnostic.Message, routeNextActions);
+            }
+
             string message = $"No bridge links from '{target}' within {depth} hop(s).";
             IReadOnlyList<TraceNextAction> bridgeNextActions = BridgeFallbackNextActions(target);
             return json
@@ -697,11 +719,235 @@ public sealed class TraceTool
             sb.Append("bridge note: ").Append(note).Append('\n');
     }
 
+    private static IReadOnlyList<ScoredEdge> FilterRouteTargetEdges(
+        BridgeGraph graph, string startId, IReadOnlyList<ScoredEdge> edges, string route)
+    {
+        var routeEdges = edges
+            .Where(edge => IsRouteTargetEdge(edge.Edge, route))
+            .ToList();
+        if (routeEdges.Count == 0)
+            return Array.Empty<ScoredEdge>();
+
+        var allowed = new HashSet<string>(StringComparer.Ordinal);
+        allowed.Add(startId);
+        foreach (var edge in routeEdges)
+        {
+            string? sourceId = BridgeGraph.NodeIdOf(edge.Edge.SourceRef, edge.Edge.Kind, EndpointSide.Source);
+            string? targetId = BridgeGraph.NodeIdOf(edge.Edge.TargetRef, edge.Edge.Kind, EndpointSide.Target);
+            if (sourceId is not null)
+                allowed.Add(sourceId);
+            if (targetId is not null)
+                allowed.Add(targetId);
+        }
+
+        var filtered = new List<ScoredEdge>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        bool changed;
+        do
+        {
+            changed = false;
+            foreach (var edge in edges)
+            {
+                string? sourceId = BridgeGraph.NodeIdOf(edge.Edge.SourceRef, edge.Edge.Kind, EndpointSide.Source);
+                string? targetId = BridgeGraph.NodeIdOf(edge.Edge.TargetRef, edge.Edge.Kind, EndpointSide.Target);
+                if (sourceId is null || targetId is null)
+                    continue;
+
+                bool routeEdge = IsRouteTargetEdge(edge.Edge, route);
+                bool downstream = !IsRouteTargetKind(edge.Edge.Kind) && (allowed.Contains(sourceId) || allowed.Contains(targetId));
+                if (!routeEdge && !downstream)
+                    continue;
+
+                var signature = $"{edge.Edge.Kind}:{sourceId}->{targetId}:{edge.Edge.SourceRef.Display}:{edge.Edge.TargetRef.Display}";
+                if (seen.Add(signature))
+                    filtered.Add(edge);
+                if (allowed.Add(sourceId))
+                    changed = true;
+                if (allowed.Add(targetId))
+                    changed = true;
+            }
+        }
+        while (changed);
+
+        return filtered;
+    }
+
+    private static bool TryBuildRouteDiagnostic(BridgeGraph graph, string route, out BridgeRouteDiagnostic diagnostic)
+    {
+        string targetRoute = NormalizeRouteDisplay(route);
+        var frontendRoutes = ObservedRoutes(graph, BridgeNodeKind.TsType).ToArray();
+        var backendRoutes = ObservedRoutes(graph, BridgeNodeKind.Endpoint).ToArray();
+        var nextFileRoutes = ObservedRoutes(graph, BridgeNodeKind.NextRoute).ToArray();
+
+        bool frontendPresent = frontendRoutes.Any(r => string.Equals(r.Normalized, route, StringComparison.Ordinal));
+        bool backendPresent = backendRoutes.Any(r => string.Equals(r.Normalized, route, StringComparison.Ordinal));
+        bool nextFilePresent = nextFileRoutes.Any(r => string.Equals(r.Normalized, route, StringComparison.Ordinal));
+        bool hasNextJsEvidence = HasNextJsRouteEvidence(graph);
+        if (nextFilePresent || (frontendPresent && hasNextJsEvidence))
+        {
+            if (TryBuildNextRouteDiagnostic(
+                    graph,
+                    targetRoute,
+                    frontendPresent,
+                    nextFilePresent,
+                    frontendRoutes,
+                    nextFileRoutes,
+                    out diagnostic))
+                return true;
+        }
+
+        if (!frontendPresent && frontendRoutes.Length == 0 && backendRoutes.Length == 0)
+        {
+            diagnostic = new BridgeRouteDiagnostic("route_not_observed", $"no frontend or backend route facts observed for {targetRoute}.");
+            return false;
+        }
+
+        if (frontendPresent && !backendPresent)
+        {
+            string observedBackend = FormatObservedRoutes(backendRoutes);
+            diagnostic = new BridgeRouteDiagnostic(
+                "route_no_backend_match",
+                $"frontend route fact exists: {targetRoute}; no matching backend route fact. observed backend routes: {observedBackend}");
+            return true;
+        }
+
+        if (!frontendPresent && backendPresent)
+        {
+            string observedFrontend = FormatObservedRoutes(frontendRoutes);
+            diagnostic = new BridgeRouteDiagnostic(
+                "route_no_frontend_match",
+                $"backend route fact exists: {targetRoute}; no matching frontend route fact. observed frontend routes: {observedFrontend}");
+            return true;
+        }
+
+        diagnostic = new BridgeRouteDiagnostic(
+            "route_no_bridge_link",
+            $"frontend and backend route facts exist for {targetRoute}, but no bridge link was built for that route.");
+        return true;
+    }
+
+    private static bool TryBuildNextRouteDiagnostic(
+        BridgeGraph graph,
+        string targetRoute,
+        bool routeReferencePresent,
+        bool fileRoutePresent,
+        IReadOnlyList<(string Normalized, string Display)> routeReferences,
+        IReadOnlyList<(string Normalized, string Display)> fileRoutes,
+        out BridgeRouteDiagnostic diagnostic)
+    {
+        var matchingFileRoutes = fileRoutes
+            .Where(route => Miller.Core.Resolver.NextRouteMatcher.Matches(targetRoute, route.Display))
+            .ToArray();
+        bool fileRouteMatchesTarget = fileRoutePresent || matchingFileRoutes.Length > 0;
+
+        int ambiguousMatches = NextJsEvidenceCount(graph, "nextjs.ambiguousMatches");
+        if (routeReferencePresent && ambiguousMatches > 0 && matchingFileRoutes.Length > 0)
+        {
+            diagnostic = new BridgeRouteDiagnostic(
+                "nextjs_route_ambiguous_file_match",
+                $"Next.js route reference exists: {targetRoute}; multiple matching file route facts were observed, so no navigation edge was built. observed file routes: {FormatObservedRoutes(matchingFileRoutes)}");
+            return true;
+        }
+
+        if (routeReferencePresent && !fileRouteMatchesTarget)
+        {
+            diagnostic = new BridgeRouteDiagnostic(
+                "nextjs_route_no_file_match",
+                $"Next.js route reference exists: {targetRoute}; no matching file route fact. observed file routes: {FormatObservedRoutes(fileRoutes)}");
+            return true;
+        }
+
+        if (!routeReferencePresent && fileRouteMatchesTarget)
+        {
+            diagnostic = new BridgeRouteDiagnostic(
+                "nextjs_route_no_reference_match",
+                $"Next.js file route exists: {targetRoute}; no matching route reference fact. observed route references: {FormatObservedRoutes(routeReferences)}");
+            return true;
+        }
+
+        if (routeReferencePresent && fileRouteMatchesTarget)
+        {
+            diagnostic = new BridgeRouteDiagnostic(
+                "nextjs_route_no_bridge_link",
+                $"Next.js route reference and file route facts exist for {targetRoute}, but no navigation edge was built for that route.");
+            return true;
+        }
+
+        diagnostic = new BridgeRouteDiagnostic(
+            "nextjs_route_not_observed",
+            $"no Next.js route reference or file route facts observed for {targetRoute}.");
+        return false;
+    }
+
+    private static bool HasNextJsRouteEvidence(BridgeGraph graph) =>
+        graph.CapabilityReport.ActiveProviders.Any(provider => string.Equals(provider, "nextjs", StringComparison.Ordinal)) ||
+        graph.CapabilityReport.EvidenceCounts.Any(static item =>
+            item.Value > 0 && item.Key.StartsWith("nextjs.", StringComparison.Ordinal));
+
+    private static int NextJsEvidenceCount(BridgeGraph graph, string key) =>
+        graph.CapabilityReport.EvidenceCounts.TryGetValue(key, out int count) ? count : 0;
+
+    private static IEnumerable<(string Normalized, string Display)> ObservedRoutes(BridgeGraph graph, BridgeNodeKind kind) =>
+        graph.Nodes.Values
+            .Where(node => node.Kind == kind)
+            .Select(NodeRouteDisplay)
+            .Where(route => route is not null)
+            .Select(route => (Normalized: RouteNormalizer.FromClientCall("fetch", route!).Route, Display: NormalizeRouteDisplay(route!)))
+            .Where(route => route.Normalized.Length > 0)
+            .GroupBy(route => route.Normalized, StringComparer.Ordinal)
+            .Select(group => group.OrderBy(route => route.Display, StringComparer.Ordinal).First())
+            .OrderBy(route => route.Display, StringComparer.Ordinal);
+
+    private static string? NodeRouteDisplay(BridgeNode node) =>
+        node.Kind switch
+        {
+            BridgeNodeKind.TsType when node.Display.Contains('/', StringComparison.Ordinal) => node.Display,
+            BridgeNodeKind.Endpoint => EndpointRouteDisplay(node.Display),
+            BridgeNodeKind.NextRoute when node.Display.Contains('/', StringComparison.Ordinal) => node.Display,
+            _ => null,
+        };
+
+    private static string? EndpointRouteDisplay(string display)
+    {
+        var trimmed = display.Trim();
+        if (trimmed.Length == 0)
+            return null;
+
+        int space = trimmed.IndexOf(' ');
+        if (space >= 0 && IsHttpVerb(trimmed[..space]))
+            return trimmed[(space + 1)..].Trim();
+
+        return trimmed.Contains('/', StringComparison.Ordinal) ? trimmed : null;
+    }
+
+    private static bool IsHttpVerb(string value) =>
+        string.Equals(value, "GET", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(value, "POST", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(value, "PUT", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(value, "PATCH", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(value, "DELETE", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(value, "HEAD", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(value, "OPTIONS", StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeRouteDisplay(string route)
+    {
+        var normalized = RouteNormalizer.FromClientCall("fetch", route).Route;
+        if (normalized.Length == 0)
+            return route;
+        return normalized.StartsWith("/", StringComparison.Ordinal) ? normalized : "/" + normalized;
+    }
+
+    private static string FormatObservedRoutes(IReadOnlyList<(string Normalized, string Display)> routes) =>
+        routes.Count == 0
+            ? "none"
+            : string.Join(", ", routes.Take(5).Select(route => route.Display)) + (routes.Count > 5 ? $", +{routes.Count - 5} more" : string.Empty);
+
     private static bool ResolveBridgeStart(
         MillerRepositoryIndex index, SmartTargetResolver resolver, string target, string? scope,
-        out string startId, out string? note, out IReadOnlyList<TraceNextAction> nextActions)
+        out string startId, out string? routeFilter, out string? note, out IReadOnlyList<TraceNextAction> nextActions)
     {
         startId = string.Empty;
+        routeFilter = null;
         note = null;
         nextActions = Array.Empty<TraceNextAction>();
 
@@ -711,13 +957,13 @@ public sealed class TraceTool
             return false;
         }
 
-        if (TryResolveSyntheticBridgeNode(index.BridgeGraph, target, out startId))
-            return true;
-
-        if (TryResolveBridgeRouteTarget(index.BridgeGraph, target, out startId, out note))
+        if (TryResolveBridgeRouteTarget(index.BridgeGraph, target, out startId, out routeFilter, out note))
             return true;
         if (note is not null)
             return false;
+
+        if (TryResolveSyntheticBridgeNode(index.BridgeGraph, target, out startId, out routeFilter))
+            return true;
 
         switch (resolver.Resolve(target, scope))
         {
@@ -761,9 +1007,10 @@ public sealed class TraceTool
         return true;
     }
 
-    private static bool TryResolveSyntheticBridgeNode(BridgeGraph graph, string target, out string startId)
+    private static bool TryResolveSyntheticBridgeNode(BridgeGraph graph, string target, out string startId, out string? routeFilter)
     {
         startId = string.Empty;
+        routeFilter = null;
 
         var route = RouteNormalizer.FromClientCall("fetch", target).Route;
         if (route.Length > 0)
@@ -772,6 +1019,25 @@ public sealed class TraceTool
             if (graph.Contains(routeId))
             {
                 startId = routeId;
+                routeFilter = route;
+                return true;
+            }
+
+            if (TryResolveObservedRouteNode(graph, route, BridgeNodeKind.TsType, out startId))
+            {
+                routeFilter = route;
+                return true;
+            }
+
+            if (TryResolveObservedRouteNode(graph, route, BridgeNodeKind.Endpoint, out startId))
+            {
+                routeFilter = route;
+                return true;
+            }
+
+            if (TryResolveObservedRouteNode(graph, route, BridgeNodeKind.NextRoute, out startId))
+            {
+                routeFilter = route;
                 return true;
             }
         }
@@ -790,10 +1056,28 @@ public sealed class TraceTool
         return false;
     }
 
+    private static bool TryResolveObservedRouteNode(
+        BridgeGraph graph, string route, BridgeNodeKind kind, out string startId)
+    {
+        startId = graph.Nodes.Values
+            .Where(node => node.Kind == kind)
+            .Where(node =>
+            {
+                var nodeRoute = NodeRouteDisplay(node);
+                return nodeRoute is not null &&
+                       string.Equals(RouteNormalizer.FromClientCall("fetch", nodeRoute).Route, route, StringComparison.Ordinal);
+            })
+            .OrderBy(node => node.Id, StringComparer.Ordinal)
+            .Select(node => node.Id)
+            .FirstOrDefault() ?? string.Empty;
+        return startId.Length > 0;
+    }
+
     private static bool TryResolveBridgeRouteTarget(
-        BridgeGraph graph, string target, out string startId, out string? note)
+        BridgeGraph graph, string target, out string startId, out string? routeFilter, out string? note)
     {
         startId = string.Empty;
+        routeFilter = null;
         note = null;
 
         if (!target.Contains('/', StringComparison.Ordinal))
@@ -804,7 +1088,7 @@ public sealed class TraceTool
             return false;
 
         var starts = graph.Edges
-            .Where(e => e.Edge.Kind == BridgeKind.Hits && HitsRouteMatches(e.Edge, route))
+            .Where(e => IsRouteTargetEdge(e.Edge, route))
             .Select(e => BridgeGraph.NodeIdOf(e.Edge.SourceRef, e.Edge.Kind, EndpointSide.Source))
             .Where(id => id is not null && graph.Contains(id))
             .Cast<string>()
@@ -815,6 +1099,7 @@ public sealed class TraceTool
         if (starts.Count == 1)
         {
             startId = starts[0];
+            routeFilter = route;
             return true;
         }
 
@@ -824,9 +1109,16 @@ public sealed class TraceTool
         return false;
     }
 
-    private static bool HitsRouteMatches(CandidateEdge edge, string route) =>
-        string.Equals(edge.SourceRef.Display, route, StringComparison.Ordinal)
-        || string.Equals(edge.TargetRef.Display, route, StringComparison.Ordinal);
+    private static bool IsRouteTargetEdge(CandidateEdge edge, string route) =>
+        IsRouteTargetKind(edge.Kind) &&
+        (RouteDisplayMatches(edge.SourceRef.Display, route) || RouteDisplayMatches(edge.TargetRef.Display, route));
+
+    private static bool IsRouteTargetKind(BridgeKind kind) =>
+        kind is BridgeKind.Hits or BridgeKind.NavigatesTo;
+
+    private static bool RouteDisplayMatches(string display, string route) =>
+        string.Equals(display, route, StringComparison.Ordinal) ||
+        string.Equals(RouteNormalizer.FromClientCall("fetch", display).Route, route, StringComparison.Ordinal);
 
     private static string RenderBridgeRouteCandidatesNote(
         BridgeGraph graph, string route, IReadOnlyList<string> startIds)
@@ -942,6 +1234,7 @@ public sealed class TraceTool
         BridgeKind.StoredIn => "DbSet",
         BridgeKind.MapsTo => "CreateMap",
         BridgeKind.Hits => "route",
+        BridgeKind.NavigatesTo => "navigates_to",
         BridgeKind.Responds => "responds",
         BridgeKind.Consumes => "consumes",
         BridgeKind.NameMatch => "name",
@@ -1679,6 +1972,7 @@ public sealed class TraceTool
         BridgeKind.StoredIn => "stored_in",
         BridgeKind.MapsTo => "maps_to",
         BridgeKind.Hits => "hits",
+        BridgeKind.NavigatesTo => "navigates_to",
         BridgeKind.Responds => "responds",
         BridgeKind.Consumes => "consumes",
         BridgeKind.NameMatch => "name_match",
@@ -1692,6 +1986,7 @@ public sealed class TraceTool
         BridgeNodeKind.CsEntity => "cs_entity",
         BridgeNodeKind.DbTable => "db_table",
         BridgeNodeKind.Endpoint => "endpoint",
+        BridgeNodeKind.NextRoute => "next_route",
         _ => kind.ToString().ToLowerInvariant(),
     };
 

@@ -20,6 +20,9 @@ public enum SignalRule
     /// <summary>A (verb, route) endpoint match with a KNOWN verb after token expansion (Leg 1). High-eligible.</summary>
     RouteVerbMatch,
 
+    /// <summary>A Next.js route reference matched a file-route template. Explicit structural breadcrumb ⇒ High-eligible.</summary>
+    RouteReferenceMatch,
+
     /// <summary>A route-only match — the route lines up but the client verb was unknown (Leg 1). Medium, never High.</summary>
     RouteOnlyMatch,
 
@@ -62,9 +65,9 @@ public abstract record Signal(SignalRule Rule, Evidence? Evidence);
 
 /// <summary>
 /// A structural breadcrumb signal carrying only a present/absent boolean + its evidence: the CreateMap, DbSetProperty,
-/// RouteVerbMatch, RouteOnlyMatch, ReturnTypeDto, FromBodyDto, or DapperFrom rules. <see cref="Present"/> is true when
-/// the breadcrumb actually fired; a leg only emits a present=false signal as a deliberate "considered-but-absent"
-/// record (the scorer treats a non-present structural signal as no anchor).
+/// RouteVerbMatch, RouteReferenceMatch, RouteOnlyMatch, ReturnTypeDto, FromBodyDto, or DapperFrom rules.
+/// <see cref="Present"/> is true when the breadcrumb actually fired; a leg only emits a present=false signal as a
+/// deliberate "considered-but-absent" record (the scorer treats a non-present structural signal as no anchor).
 /// </summary>
 /// <param name="Rule">The structural rule (must be one of the structural <see cref="SignalRule"/> values).</param>
 /// <param name="Present">True when the breadcrumb fired.</param>

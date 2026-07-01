@@ -5,13 +5,15 @@ namespace Miller.Indexing;
 
 internal static class BridgeProviderSelection
 {
+    private static readonly IBridgeProvider[] DefaultProviders = [DotnetWebBridgeProvider.Instance, NextJsBridgeProvider.Instance];
+
     public static IReadOnlyList<IBridgeProvider> ProvidersForDatabase(string dbPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
 
         string? configPath = ConfigPathForDatabase(dbPath);
         if (configPath is null || !File.Exists(configPath))
-            return [DotnetWebBridgeProvider.Instance];
+            return DefaultProviders;
 
         MillerConfig? config;
         try
@@ -29,7 +31,7 @@ internal static class BridgeProviderSelection
 
         var providerIds = config?.Bridge?.Providers;
         if (providerIds is null)
-            return [DotnetWebBridgeProvider.Instance];
+            return DefaultProviders;
 
         var providers = new List<IBridgeProvider>(providerIds.Count);
         foreach (var providerId in providerIds)
@@ -59,9 +61,12 @@ internal static class BridgeProviderSelection
     }
 
     private static IBridgeProvider CreateProvider(string providerId) =>
-        string.Equals(providerId, DotnetWebBridgeProvider.ProviderId, StringComparison.OrdinalIgnoreCase)
-            ? DotnetWebBridgeProvider.Instance
-            : new UnknownBridgeProvider(providerId);
+        providerId.ToLowerInvariant() switch
+        {
+            DotnetWebBridgeProvider.ProviderId => DotnetWebBridgeProvider.Instance,
+            NextJsBridgeProvider.ProviderId => NextJsBridgeProvider.Instance,
+            _ => new UnknownBridgeProvider(providerId),
+        };
 
     private sealed class UnknownBridgeProvider(string id) : IBridgeProvider
     {

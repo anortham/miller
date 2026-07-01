@@ -24,6 +24,9 @@ public enum BridgeNodeKind
 
     /// <summary>A dotnet-web controller action endpoint (a route target — the <c>—hits→</c> destination).</summary>
     Endpoint,
+
+    /// <summary>A Next.js file route target.</summary>
+    NextRoute,
 }
 
 /// <summary>
@@ -82,6 +85,9 @@ public sealed class BridgeGraph
 
     /// <summary>The unique scored bridge edges admitted to the graph, in deterministic order.</summary>
     public IReadOnlyList<ScoredEdge> Edges => _edges;
+
+    /// <summary>The bridge node lookup admitted to the graph, including edge-less structural fact nodes.</summary>
+    public IReadOnlyDictionary<string, BridgeNode> Nodes => _nodes;
 
     /// <summary>
     /// Build a bridge graph from <paramref name="scoredEdges"/> and a <paramref name="nodes"/> lookup. Each edge is
@@ -232,13 +238,14 @@ public sealed class BridgeGraph
 
     /// <summary>
     /// Map a bridge edge kind + endpoint side to the node kind of that endpoint. Current labels match dotnet-web
-    /// provider output: StoredIn is entity→table; Hits is client route→endpoint; MapsTo is DTO/entity;
-    /// Responds/Consumes are endpoint→DTO. The source-vs-target side disambiguates the two ends.
+    /// provider output: StoredIn is entity→table; Hits is client route→endpoint; NavigatesTo is client route→Next route;
+    /// MapsTo is DTO/entity; Responds/Consumes are endpoint→DTO. The source-vs-target side disambiguates the two ends.
     /// </summary>
     public static BridgeNodeKind NodeKindFor(BridgeKind edgeKind, EndpointSide side) => edgeKind switch
     {
         BridgeKind.StoredIn => side == EndpointSide.Source ? BridgeNodeKind.CsEntity : BridgeNodeKind.DbTable,
         BridgeKind.Hits => side == EndpointSide.Source ? BridgeNodeKind.TsType : BridgeNodeKind.Endpoint,
+        BridgeKind.NavigatesTo => side == EndpointSide.Source ? BridgeNodeKind.TsType : BridgeNodeKind.NextRoute,
         BridgeKind.Responds => side == EndpointSide.Source ? BridgeNodeKind.Endpoint : BridgeNodeKind.CsDto,
         BridgeKind.Consumes => side == EndpointSide.Source ? BridgeNodeKind.Endpoint : BridgeNodeKind.CsDto,
         BridgeKind.MapsTo => BridgeNodeKind.CsDto,

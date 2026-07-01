@@ -1019,6 +1019,369 @@ public sealed class TraceToolTests
     }
 
     [Fact]
+    public void Bridge_RouteStringTarget_EmitsOnlyEdgesForThatRoute()
+    {
+        var dismiss = MakeScored(
+            BridgeKind.Hits,
+            new EdgeRef("api/users/{}", "client", "web/api.ts", Resolved("client")),
+            SymbolRef("dismiss", "DismissUser", "src/UsersController.cs"),
+            ConfidenceBand.High, 0.9);
+        var preview = MakeScored(
+            BridgeKind.Hits,
+            new EdgeRef("api/users/{}/preview", "client", "web/api.ts", Resolved("client")),
+            SymbolRef("preview", "PreviewUser", "src/UsersController.cs"),
+            ConfidenceBand.High, 0.9);
+
+        var index = BuildBridgeIndex(
+            new[]
+            {
+                ("client", "usersApi", "web/api.ts", 5),
+                ("dismiss", "DismissUser", "src/UsersController.cs", 12),
+                ("preview", "PreviewUser", "src/UsersController.cs", 18),
+            },
+            new[] { dismiss, preview },
+            new Dictionary<string, BridgeNode>(StringComparer.Ordinal));
+
+        string outp = TraceTool.Run(index, ResolverFor(index),
+            target: "/api/users/{userId}", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false,
+            out int emitted, out _);
+
+        Assert.Equal(1, emitted);
+        Assert.Contains("usersApi  --route-->  DismissUser", outp);
+        Assert.DoesNotContain("PreviewUser", outp);
+    }
+
+    [Fact]
+    public void Bridge_RouteStringTarget_JsonEmitsOnlyEdgesForThatRoute()
+    {
+        var dismiss = MakeScored(
+            BridgeKind.Hits,
+            new EdgeRef("api/users/{}", "client", "web/api.ts", Resolved("client")),
+            SymbolRef("dismiss", "DismissUser", "src/UsersController.cs"),
+            ConfidenceBand.High, 0.9);
+        var preview = MakeScored(
+            BridgeKind.Hits,
+            new EdgeRef("api/users/{}/preview", "client", "web/api.ts", Resolved("client")),
+            SymbolRef("preview", "PreviewUser", "src/UsersController.cs"),
+            ConfidenceBand.High, 0.9);
+
+        var index = BuildBridgeIndex(
+            new[]
+            {
+                ("client", "usersApi", "web/api.ts", 5),
+                ("dismiss", "DismissUser", "src/UsersController.cs", 12),
+                ("preview", "PreviewUser", "src/UsersController.cs", 18),
+            },
+            new[] { dismiss, preview },
+            new Dictionary<string, BridgeNode>(StringComparer.Ordinal));
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "/api/users/{userId}", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false, json: true,
+            out int emitted, out _);
+
+        Assert.Equal(1, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement[] links = doc.RootElement.GetProperty("links").EnumerateArray().ToArray();
+        JsonElement link = Assert.Single(links);
+        Assert.Equal("DismissUser", link.GetProperty("target_display").GetString());
+        Assert.DoesNotContain(doc.RootElement.GetProperty("nodes").EnumerateArray(),
+            node => node.GetProperty("display").GetString() == "PreviewUser");
+    }
+
+    [Fact]
+    public void Bridge_RouteStringTarget_NextJsNavigation_StartsFromRouteAndRendersNavigatesTo()
+    {
+        string referenceId = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, "/settings");
+        string fileRouteId = BridgeGraph.SynthesizeId(BridgeNodeKind.NextRoute, "/settings");
+        var navigation = MakeScored(
+            BridgeKind.NavigatesTo,
+            NonSymbolRef("/settings"),
+            NonSymbolRef("/settings"),
+            ConfidenceBand.High,
+            0.9);
+        var extra = new Dictionary<string, BridgeNode>(StringComparer.Ordinal)
+        {
+            [referenceId] = new BridgeNode(referenceId, BridgeNodeKind.TsType, "/settings", "web/Nav.tsx", 10),
+            [fileRouteId] = new BridgeNode(fileRouteId, BridgeNodeKind.NextRoute, "/settings", "web/app/settings/page.tsx", 1),
+        };
+        var index = BuildBridgeIndex(
+            Array.Empty<(string symbolId, string name, string file, int line)>(),
+            new[] { navigation },
+            extra);
+
+        string outp = TraceTool.Run(index, ResolverFor(index),
+            target: "/settings", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false,
+            out int emitted, out _);
+
+        Assert.Equal(1, emitted);
+        Assert.Contains("# trace bridge /settings", outp);
+        Assert.Contains("/settings  --navigates_to-->  /settings", outp);
+        Assert.DoesNotContain("--route-->", outp);
+    }
+
+    [Fact]
+    public void Bridge_RouteStringTarget_NextJsNavigation_JsonUsesNavigatesToAndNextRoute()
+    {
+        string referenceId = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, "/settings");
+        string fileRouteId = BridgeGraph.SynthesizeId(BridgeNodeKind.NextRoute, "/settings");
+        var navigation = MakeScored(
+            BridgeKind.NavigatesTo,
+            NonSymbolRef("/settings"),
+            NonSymbolRef("/settings"),
+            ConfidenceBand.High,
+            0.9);
+        var extra = new Dictionary<string, BridgeNode>(StringComparer.Ordinal)
+        {
+            [referenceId] = new BridgeNode(referenceId, BridgeNodeKind.TsType, "/settings", "web/Nav.tsx", 10),
+            [fileRouteId] = new BridgeNode(fileRouteId, BridgeNodeKind.NextRoute, "/settings", "web/app/settings/page.tsx", 1),
+        };
+        var index = BuildBridgeIndex(
+            Array.Empty<(string symbolId, string name, string file, int line)>(),
+            new[] { navigation },
+            extra);
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "/settings", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false, json: true,
+            out int emitted, out _);
+
+        Assert.Equal(1, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement link = Assert.Single(doc.RootElement.GetProperty("links").EnumerateArray());
+        Assert.Equal("navigates_to", link.GetProperty("kind").GetString());
+        Assert.Equal("navigates_to", link.GetProperty("label").GetString());
+        Assert.Contains(doc.RootElement.GetProperty("nodes").EnumerateArray(),
+            node => node.GetProperty("kind").GetString() == "next_route" &&
+                    node.GetProperty("display").GetString() == "/settings");
+    }
+
+    [Fact]
+    public void Bridge_RouteStringTarget_NextJsReferenceOnly_JsonExplainsNoFileMatch()
+    {
+        string referenceId = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, "/settings");
+        var extra = new Dictionary<string, BridgeNode>(StringComparer.Ordinal)
+        {
+            [referenceId] = new BridgeNode(referenceId, BridgeNodeKind.TsType, "/settings", "web/Nav.tsx", 10),
+        };
+        var capability = new BridgeCapabilityReport(
+            ActiveProviders: ["nextjs"],
+            SkippedProviders: [],
+            Notes: [],
+            EvidenceCounts: new Dictionary<string, int>(StringComparer.Ordinal)
+            {
+                ["nextjs.routeReferences"] = 1,
+                ["nextjs.fileRoutes"] = 0,
+                ["nextjs.candidates"] = 0,
+                ["nextjs.ambiguousMatches"] = 0,
+            });
+        var index = BuildBridgeIndex(
+            Array.Empty<(string symbolId, string name, string file, int line)>(),
+            Array.Empty<ScoredEdge>(),
+            extra,
+            capability);
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "/settings", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false, json: true,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement diagnostic = Assert.Single(doc.RootElement.GetProperty("diagnostics").EnumerateArray());
+        Assert.Equal("nextjs_route_no_file_match", diagnostic.GetProperty("code").GetString());
+        Assert.Contains("Next.js route reference exists: /settings", diagnostic.GetProperty("message").GetString());
+        Assert.Contains("no matching file route fact", diagnostic.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public void Bridge_RouteStringTarget_NextJsFileRouteOnly_JsonExplainsNoReferenceMatch()
+    {
+        string fileRouteId = BridgeGraph.SynthesizeId(BridgeNodeKind.NextRoute, "/settings");
+        var extra = new Dictionary<string, BridgeNode>(StringComparer.Ordinal)
+        {
+            [fileRouteId] = new BridgeNode(fileRouteId, BridgeNodeKind.NextRoute, "/settings", "web/app/settings/page.tsx", 1),
+        };
+        var capability = new BridgeCapabilityReport(
+            ActiveProviders: ["nextjs"],
+            SkippedProviders: [],
+            Notes: [],
+            EvidenceCounts: new Dictionary<string, int>(StringComparer.Ordinal)
+            {
+                ["nextjs.routeReferences"] = 0,
+                ["nextjs.fileRoutes"] = 1,
+                ["nextjs.candidates"] = 0,
+                ["nextjs.ambiguousMatches"] = 0,
+            });
+        var index = BuildBridgeIndex(
+            Array.Empty<(string symbolId, string name, string file, int line)>(),
+            Array.Empty<ScoredEdge>(),
+            extra,
+            capability);
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "/settings", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false, json: true,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement diagnostic = Assert.Single(doc.RootElement.GetProperty("diagnostics").EnumerateArray());
+        Assert.Equal("nextjs_route_no_reference_match", diagnostic.GetProperty("code").GetString());
+        Assert.Contains("Next.js file route exists: /settings", diagnostic.GetProperty("message").GetString());
+        Assert.Contains("no matching route reference fact", diagnostic.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public void Bridge_RouteStringTarget_NextJsAmbiguousFileRoutes_JsonExplainsAmbiguousFileMatch()
+    {
+        string referenceId = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, "/users/123");
+        string fileRouteId = BridgeGraph.SynthesizeId(BridgeNodeKind.NextRoute, "/users/[id]");
+        var extra = new Dictionary<string, BridgeNode>(StringComparer.Ordinal)
+        {
+            [referenceId] = new BridgeNode(referenceId, BridgeNodeKind.TsType, "/users/123", "web/Nav.tsx", 10),
+            [fileRouteId] = new BridgeNode(fileRouteId, BridgeNodeKind.NextRoute, "/users/[id]", "web/app/users/[id]/page.tsx", 1),
+        };
+        var capability = new BridgeCapabilityReport(
+            ActiveProviders: ["nextjs"],
+            SkippedProviders: [],
+            Notes: [],
+            EvidenceCounts: new Dictionary<string, int>(StringComparer.Ordinal)
+            {
+                ["nextjs.routeReferences"] = 1,
+                ["nextjs.fileRoutes"] = 2,
+                ["nextjs.candidates"] = 0,
+                ["nextjs.ambiguousMatches"] = 1,
+            });
+        var index = BuildBridgeIndex(
+            Array.Empty<(string symbolId, string name, string file, int line)>(),
+            Array.Empty<ScoredEdge>(),
+            extra,
+            capability);
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "/users/123", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false, json: true,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement diagnostic = Assert.Single(doc.RootElement.GetProperty("diagnostics").EnumerateArray());
+        Assert.Equal("nextjs_route_ambiguous_file_match", diagnostic.GetProperty("code").GetString());
+        Assert.Contains("multiple matching file route facts", diagnostic.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public void Bridge_RouteStringTarget_NextJsReferenceOnly_WithUnrelatedAmbiguity_JsonExplainsNoFileMatch()
+    {
+        string referenceId = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, "/settings");
+        string unrelatedFileRouteId = BridgeGraph.SynthesizeId(BridgeNodeKind.NextRoute, "/users/[id]");
+        var extra = new Dictionary<string, BridgeNode>(StringComparer.Ordinal)
+        {
+            [referenceId] = new BridgeNode(referenceId, BridgeNodeKind.TsType, "/settings", "web/Nav.tsx", 10),
+            [unrelatedFileRouteId] = new BridgeNode(unrelatedFileRouteId, BridgeNodeKind.NextRoute, "/users/[id]", "web/app/users/[id]/page.tsx", 1),
+        };
+        var capability = new BridgeCapabilityReport(
+            ActiveProviders: ["nextjs"],
+            SkippedProviders: [],
+            Notes: [],
+            EvidenceCounts: new Dictionary<string, int>(StringComparer.Ordinal)
+            {
+                ["nextjs.routeReferences"] = 2,
+                ["nextjs.fileRoutes"] = 2,
+                ["nextjs.candidates"] = 0,
+                ["nextjs.ambiguousMatches"] = 1,
+            });
+        var index = BuildBridgeIndex(
+            Array.Empty<(string symbolId, string name, string file, int line)>(),
+            Array.Empty<ScoredEdge>(),
+            extra,
+            capability);
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "/settings", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false, json: true,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement diagnostic = Assert.Single(doc.RootElement.GetProperty("diagnostics").EnumerateArray());
+        Assert.Equal("nextjs_route_no_file_match", diagnostic.GetProperty("code").GetString());
+        Assert.Contains("Next.js route reference exists: /settings", diagnostic.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public void Bridge_RouteStringTarget_WithFrontendFactButNoBackendMatch_ExplainsObservedRoutes()
+    {
+        string frontendRouteId = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, "calendar");
+        string backendRouteId = BridgeGraph.SynthesizeId(BridgeNodeKind.Endpoint, "GET /keep-alive.html");
+        var extra = new Dictionary<string, BridgeNode>(StringComparer.Ordinal)
+        {
+            [frontendRouteId] = new BridgeNode(frontendRouteId, BridgeNodeKind.TsType, "/calendar", "src/AppHeader.vue", 22),
+            [backendRouteId] = new BridgeNode(backendRouteId, BridgeNodeKind.Endpoint, "GET /keep-alive.html", "src/KeepAlive.cs", 25),
+        };
+        var index = BuildBridgeIndex(
+            Array.Empty<(string symbolId, string name, string file, int line)>(),
+            Array.Empty<ScoredEdge>(),
+            extra);
+
+        string outp = TraceTool.Run(index, ResolverFor(index),
+            target: "/calendar", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        Assert.Contains("frontend route fact exists: /calendar", outp);
+        Assert.Contains("no matching backend route fact", outp);
+        Assert.Contains("observed backend routes: /keep-alive.html", outp);
+    }
+
+    [Fact]
+    public void Bridge_RouteStringTarget_WithFrontendFactButNoBackendMatch_JsonExplainsObservedRoutes()
+    {
+        string frontendRouteId = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, "calendar");
+        string backendRouteId = BridgeGraph.SynthesizeId(BridgeNodeKind.Endpoint, "GET /keep-alive.html");
+        var extra = new Dictionary<string, BridgeNode>(StringComparer.Ordinal)
+        {
+            [frontendRouteId] = new BridgeNode(frontendRouteId, BridgeNodeKind.TsType, "/calendar", "src/AppHeader.vue", 22),
+            [backendRouteId] = new BridgeNode(backendRouteId, BridgeNodeKind.Endpoint, "GET /keep-alive.html", "src/KeepAlive.cs", 25),
+        };
+        var index = BuildBridgeIndex(
+            Array.Empty<(string symbolId, string name, string file, int line)>(),
+            Array.Empty<ScoredEdge>(),
+            extra);
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "/calendar", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false, json: true,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement diagnostic = Assert.Single(doc.RootElement.GetProperty("diagnostics").EnumerateArray());
+        Assert.Equal("route_no_backend_match", diagnostic.GetProperty("code").GetString());
+        Assert.Contains("frontend route fact exists: /calendar", diagnostic.GetProperty("message").GetString());
+        Assert.Contains("observed backend routes: /keep-alive.html", diagnostic.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public void Bridge_RouteStringTarget_WithBackendFactButNoFrontendMatch_ExplainsObservedRoutes()
+    {
+        string frontendRouteId = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, "calendar");
+        string backendRouteId = BridgeGraph.SynthesizeId(BridgeNodeKind.Endpoint, "GET /keep-alive.html");
+        var extra = new Dictionary<string, BridgeNode>(StringComparer.Ordinal)
+        {
+            [frontendRouteId] = new BridgeNode(frontendRouteId, BridgeNodeKind.TsType, "/calendar", "src/AppHeader.vue", 22),
+            [backendRouteId] = new BridgeNode(backendRouteId, BridgeNodeKind.Endpoint, "GET /keep-alive.html", "src/KeepAlive.cs", 25),
+        };
+        var index = BuildBridgeIndex(
+            Array.Empty<(string symbolId, string name, string file, int line)>(),
+            Array.Empty<ScoredEdge>(),
+            extra);
+
+        string outp = TraceTool.Run(index, ResolverFor(index),
+            target: "/keep-alive.html", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        Assert.Contains("backend route fact exists: /keep-alive.html", outp);
+        Assert.Contains("no matching frontend route fact", outp);
+        Assert.Contains("observed frontend routes: /calendar", outp);
+    }
+
+    [Fact]
     public void Bridge_FilePathWithOneBridgeSymbol_StartsFromThatSymbol()
     {
         var mapsTo = MakeScored(

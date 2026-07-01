@@ -22,6 +22,9 @@ public enum BridgeKind
     /// <summary>A TS client call ↔ C# endpoint edge (Leg 1): <c>TsCall —hits→ Endpoint</c> by matched (verb, route).</summary>
     Hits,
 
+    /// <summary>A Next.js route reference ↔ file route edge: <c>RouteReference —navigates_to→ NextRoute</c>.</summary>
+    NavigatesTo,
+
     /// <summary>An endpoint ↔ response DTO edge (Leg 1): <c>Endpoint —responds→ CsDto</c> from the unwrapped return type.</summary>
     Responds,
 

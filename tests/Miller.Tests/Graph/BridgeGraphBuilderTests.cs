@@ -31,6 +31,26 @@ public sealed class BridgeGraphBuilderTests
     private static DbSetProperty DbSet(string table, string entity, string file = "src/Db.cs", int line = 10) =>
         new("prop:" + table, table, entity, file, line);
 
+    private static StructuralFactRecord Fact(
+        string id,
+        string patternId,
+        string language,
+        string path,
+        string containingSymbolId,
+        int startByte,
+        IReadOnlyDictionary<string, string> metadata) =>
+        new(
+            id,
+            patternId,
+            language,
+            path,
+            CaptureName: "capture",
+            NodeKind: "node",
+            ContainingSymbolId: containingSymbolId,
+            Span: new StructuralFactSpan(1, 0, 1, 1, startByte, startByte + 1),
+            Confidence: 1.0,
+            Metadata: metadata);
+
     [Fact]
     public void CreateMap_chain_resolves_UserDto_to_ApplicationUser_to_table_with_High_edges()
     {
@@ -156,7 +176,7 @@ public sealed class BridgeGraphBuilderTests
     }
 
     [Fact]
-    public void Build_DefaultProvider_ReportsDotnetWebCapability()
+    public void Build_DefaultProvider_ReportsDotnetWebAndNextJsCapability()
     {
         var symbols = new List<SymbolDetail> { Type("sym-appsetting", "AppSetting", "class", "Domain") };
         var dbSets = new List<DbSetProperty> { DbSet("AppSettings", "AppSetting") };
@@ -165,7 +185,13 @@ public sealed class BridgeGraphBuilderTests
 
         Assert.Contains("dotnet-web", graph.CapabilityReport.ActiveProviders);
         Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.dbsets"]);
-        Assert.Empty(graph.CapabilityReport.SkippedProviders);
+        var skipped = Assert.Single(graph.CapabilityReport.SkippedProviders);
+        Assert.Equal("nextjs", skipped.ProviderId);
+        Assert.Contains("no nextjs bridge evidence", skipped.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["nextjs.routeReferences"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["nextjs.fileRoutes"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["nextjs.candidates"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["nextjs.ambiguousMatches"]);
     }
 
     [Fact]
@@ -429,6 +455,649 @@ public sealed class BridgeGraphBuilderTests
         var graph = BridgeGraphBuilder.Build(symbols, [], literals, annotations, []);
 
         Assert.Contains(graph.Incident("cs.endpoint"), e => e.Edge.Kind == BridgeKind.Hits);
+    }
+
+    [Fact]
+    public void StructuralFacts_VueRouteReference_YieldsHitsEdgeToMinimalApiHandler()
+    {
+        var symbols = new List<SymbolDetail>
+        {
+            Type("vue.header", "AppHeader", "component", file: "web/AppHeader.vue"),
+            Method("cs.calendar", "CalendarAsync", "Task<IResult> CalendarAsync()", string.Empty, "Api/CalendarEndpoints.cs"),
+        };
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact(
+                "sf-vue-calendar",
+                "vue.route_reference.v1",
+                "vue",
+                "web/AppHeader.vue",
+                "vue.header",
+                100,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "vue",
+                    ["target_path"] = "/calendar",
+                    ["verb"] = "GET",
+                }),
+            Fact(
+                "sf-route-calendar",
+                "aspnet.minimal_api.route.v1",
+                "csharp",
+                "Api/CalendarEndpoints.cs",
+                "cs.map",
+                200,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "aspnet",
+                    ["route_template"] = "/calendar",
+                    ["verb"] = "GET",
+                    ["handler_name"] = "CalendarAsync",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(symbols, [], [], [], [], structuralFacts: facts);
+
+        var hits = Assert.Single(graph.Incident("vue.header"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal("cs.calendar", hits.Edge.TargetRef.SymbolId);
+        Assert.Equal(ConfidenceBand.High, hits.Band);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.structuralClientCalls"]);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.structuralEndpoints"]);
+    }
+
+    [Fact]
+    public void StructuralFacts_MinimalApiEffectiveRouteTemplate_YieldsHitsEdgeWithoutMapGroupFallback()
+    {
+        var symbols = new List<SymbolDetail>
+        {
+            Type("htmx.form", "ConnectorForm", "component", file: "components/ConnectorForm.razor"),
+            Method("cs.save", "SaveAsync", "Task<IResult> SaveAsync()", string.Empty, "Api/AdminConnectorsEndpoints.cs"),
+        };
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact(
+                "sf-htmx-save",
+                "htmx.attribute.v1",
+                "razor",
+                "components/ConnectorForm.razor",
+                "htmx.form",
+                100,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "htmx",
+                    ["target_path"] = "/admin/connectors/save",
+                    ["verb"] = "POST",
+                }),
+            Fact(
+                "sf-route-save",
+                "aspnet.minimal_api.route.v1",
+                "csharp",
+                "Api/AdminConnectorsEndpoints.cs",
+                "cs.map",
+                200,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "aspnet",
+                    ["route_template"] = "/save",
+                    ["effective_route_template"] = "/admin/connectors/save",
+                    ["verb"] = "POST",
+                    ["handler_name"] = "SaveAsync",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(symbols, [], [], [], [], structuralFacts: facts);
+
+        var hits = Assert.Single(graph.Incident("htmx.form"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal("cs.save", hits.Edge.TargetRef.SymbolId);
+        Assert.Equal(ConfidenceBand.High, hits.Band);
+    }
+
+    [Theory]
+    [InlineData("vue.route_definition.v1", "vue", "web/router.ts", "vue.router", "target_path", "/calendar")]
+    [InlineData("react.route_reference.v1", "tsx", "web/App.tsx", "react.link", "target_path", "/calendar")]
+    [InlineData("react.route_definition.v1", "tsx", "web/routes.tsx", "react.routes", "route_path", "/calendar")]
+    [InlineData("nextjs.route_reference.v1", "tsx", "web/nav.tsx", "next.link", "target_path", "/calendar")]
+    [InlineData("nextjs.file_route.v1", "tsx", "web/app/calendar/page.tsx", "next.page", "route_path", "/calendar")]
+    public void StructuralFacts_FrontendRouteFacts_YieldHitsEdgeToMinimalApiHandler(
+        string frontendPattern,
+        string frontendLanguage,
+        string frontendPath,
+        string frontendSymbol,
+        string routeKey,
+        string routeValue)
+    {
+        var symbols = new List<SymbolDetail>
+        {
+            Type(frontendSymbol, "CalendarRoute", "component", file: frontendPath),
+            Method("cs.calendar", "CalendarAsync", "Task<IResult> CalendarAsync()", string.Empty, "Api/CalendarEndpoints.cs"),
+        };
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact(
+                "sf-frontend-calendar",
+                frontendPattern,
+                frontendLanguage,
+                frontendPath,
+                frontendSymbol,
+                100,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = frontendPattern.Split('.')[0],
+                    [routeKey] = routeValue,
+                }),
+            Fact(
+                "sf-route-calendar",
+                "aspnet.minimal_api.route.v1",
+                "csharp",
+                "Api/CalendarEndpoints.cs",
+                "cs.map",
+                200,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "aspnet",
+                    ["route_template"] = "/calendar",
+                    ["verb"] = "GET",
+                    ["handler_name"] = "CalendarAsync",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(symbols, [], [], [], [], structuralFacts: facts);
+
+        var hits = Assert.Single(graph.Incident(frontendSymbol), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal("cs.calendar", hits.Edge.TargetRef.SymbolId);
+        Assert.Equal(ConfidenceBand.High, hits.Band);
+    }
+
+    [Fact]
+    public void StructuralFacts_FrontendRouteFacts_FromTestPaths_AreIgnored()
+    {
+        var symbols = new List<SymbolDetail>
+        {
+            Method("cs.calendar", "CalendarAsync", "Task<IResult> CalendarAsync()", string.Empty, "Api/CalendarEndpoints.cs"),
+        };
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact(
+                "sf-next-test-page",
+                "nextjs.file_route.v1",
+                "tsx",
+                "web/app/calendar/__tests__/page.test.tsx",
+                string.Empty,
+                100,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "nextjs",
+                    ["route_path"] = "/calendar",
+                }),
+            Fact(
+                "sf-route-calendar",
+                "aspnet.minimal_api.route.v1",
+                "csharp",
+                "Api/CalendarEndpoints.cs",
+                "cs.map",
+                200,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "aspnet",
+                    ["route_template"] = "/calendar",
+                    ["verb"] = "GET",
+                    ["handler_name"] = "CalendarAsync",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(symbols, [], [], [], [], structuralFacts: facts);
+
+        Assert.Empty(graph.Edges);
+        Assert.DoesNotContain(graph.Nodes.Values, node =>
+            node.Kind == BridgeNodeKind.TsType &&
+            node.Display == "/calendar" &&
+            node.FilePath == "web/app/calendar/__tests__/page.test.tsx");
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["dotnet-web.structuralClientCalls"]);
+    }
+
+    [Fact]
+    public void StructuralRouteFactAdapter_TryReadRouteReference_ReadsRouteAndDefaultVerb()
+    {
+        var fact = Fact(
+            "sf-react-calendar",
+            "react.route_reference.v1",
+            "tsx",
+            "web/Nav.tsx",
+            "react.link",
+            100,
+            new Dictionary<string, string>
+            {
+                ["target_path"] = "/calendar",
+            });
+
+        Assert.True(StructuralRouteFactAdapter.TryReadRouteReference(fact, new Dictionary<string, SymbolDetail>(), out var reference));
+        Assert.Equal("/calendar", reference.RoutePath);
+        Assert.Equal("GET", reference.Verb);
+        Assert.Equal("react.link", reference.ContainingSymbolId);
+        Assert.Equal("web/Nav.tsx", reference.FilePath);
+        Assert.Equal(1, reference.Line);
+    }
+
+    [Fact]
+    public void StructuralRouteFactAdapter_TryReadFileRoute_ReadsRoutePath()
+    {
+        var fact = Fact(
+            "sf-next-calendar",
+            "nextjs.file_route.v1",
+            "tsx",
+            "web/app/calendar/page.tsx",
+            string.Empty,
+            100,
+            new Dictionary<string, string>
+            {
+                ["route_path"] = "/calendar",
+            });
+
+        Assert.True(StructuralRouteFactAdapter.TryReadFileRoute(fact, new Dictionary<string, SymbolDetail>(), out var route));
+        Assert.Equal("/calendar", route.RoutePath);
+        Assert.Equal("web/app/calendar/page.tsx", route.FilePath);
+        Assert.Equal(1, route.Line);
+    }
+
+    [Fact]
+    public void StructuralRouteFactAdapter_IsTestFact_UsesContainerFlagAndTestPath()
+    {
+        var symbolsById = new Dictionary<string, SymbolDetail>
+        {
+            ["react.link"] = new(
+                "react.link",
+                "CalendarLink",
+                "component",
+                "web/Nav.tsx",
+                Signature: "CalendarLink",
+                Namespace: null,
+                IsTest: true,
+                ParentClassName: null),
+        };
+        var containerFact = Fact(
+            "sf-react-calendar",
+            "react.route_reference.v1",
+            "tsx",
+            "web/Nav.tsx",
+            "react.link",
+            100,
+            new Dictionary<string, string>
+            {
+                ["target_path"] = "/calendar",
+            });
+        var pathFact = Fact(
+            "sf-next-calendar-test",
+            "nextjs.file_route.v1",
+            "tsx",
+            "web/app/calendar/__tests__/page.test.tsx",
+            string.Empty,
+            100,
+            new Dictionary<string, string>
+            {
+                ["route_path"] = "/calendar",
+            });
+        var productionFact = Fact(
+            "sf-next-calendar",
+            "nextjs.file_route.v1",
+            "tsx",
+            "web/app/calendar/page.tsx",
+            string.Empty,
+            100,
+            new Dictionary<string, string>
+            {
+                ["route_path"] = "/calendar",
+            });
+
+        Assert.True(StructuralRouteFactAdapter.IsTestFact(containerFact, symbolsById));
+        Assert.True(StructuralRouteFactAdapter.IsTestFact(pathFact, symbolsById));
+        Assert.False(StructuralRouteFactAdapter.IsTestFact(productionFact, symbolsById));
+    }
+
+    [Fact]
+    public void Build_DefaultProviders_BuildsNextNavigationFromStructuralFacts()
+    {
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact(
+                "sf-next-settings-link",
+                "nextjs.route_reference.v1",
+                "tsx",
+                "web/Nav.tsx",
+                string.Empty,
+                100,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "nextjs",
+                    ["target_path"] = "/settings",
+                }),
+            Fact(
+                "sf-next-settings-page",
+                "nextjs.file_route.v1",
+                "tsx",
+                "web/app/settings/page.tsx",
+                string.Empty,
+                200,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "nextjs",
+                    ["route_path"] = "/settings",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build([], [], [], [], [], structuralFacts: facts);
+
+        var edge = Assert.Single(graph.Edges, e => e.Edge.Kind == BridgeKind.NavigatesTo);
+        Assert.Equal(ConfidenceBand.High, edge.Band);
+        Assert.Equal("/settings", edge.Edge.SourceRef.Display);
+        Assert.Equal("/settings", edge.Edge.TargetRef.Display);
+        Assert.Contains("nextjs", graph.CapabilityReport.ActiveProviders);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["nextjs.routeReferences"]);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["nextjs.fileRoutes"]);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["nextjs.candidates"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["nextjs.ambiguousMatches"]);
+        Assert.Contains(graph.Nodes.Values, node =>
+            node.Kind == BridgeNodeKind.NextRoute &&
+            node.Display == "/settings" &&
+            node.FilePath == "web/app/settings/page.tsx" &&
+            node.Line == 1);
+    }
+
+    [Fact]
+    public void Build_DefaultProviders_RetainsUnmatchedNextRoutesAsObservationNodes()
+    {
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact(
+                "sf-next-missing-link",
+                "nextjs.route_reference.v1",
+                "tsx",
+                "web/Nav.tsx",
+                string.Empty,
+                100,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "nextjs",
+                    ["target_path"] = "/missing",
+                }),
+            Fact(
+                "sf-next-settings-page",
+                "nextjs.file_route.v1",
+                "tsx",
+                "web/app/settings/page.tsx",
+                string.Empty,
+                200,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "nextjs",
+                    ["route_path"] = "/settings",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build([], [], [], [], [], structuralFacts: facts);
+
+        Assert.DoesNotContain(graph.Edges, edge => edge.Edge.Kind == BridgeKind.NavigatesTo);
+        Assert.Contains("nextjs", graph.CapabilityReport.ActiveProviders);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["nextjs.candidates"]);
+        Assert.Contains(graph.Nodes.Values, node =>
+            node.Kind == BridgeNodeKind.TsType &&
+            node.Display == "/missing" &&
+            node.FilePath == "web/Nav.tsx" &&
+            node.Line == 1);
+        Assert.Contains(graph.Nodes.Values, node =>
+            node.Kind == BridgeNodeKind.NextRoute &&
+            node.Display == "/settings" &&
+            node.FilePath == "web/app/settings/page.tsx" &&
+            node.Line == 1);
+    }
+
+    [Fact]
+    public void NextRouteBridge_StaticReference_YieldsNavigatesToEdge()
+    {
+        var edges = NextRouteBridge.Resolve(
+            [NextRouteReference("/settings")],
+            [NextFileRoute("/settings", "web/app/settings/page.tsx")]);
+
+        var edge = Assert.Single(edges);
+        Assert.Equal(BridgeKind.NavigatesTo, edge.Kind);
+        Assert.Equal("/settings", edge.SourceRef.Display);
+        Assert.Equal("/settings", edge.TargetRef.Display);
+        var signal = Assert.Single(edge.Signals);
+        var structural = Assert.IsType<StructuralSignal>(signal);
+        Assert.Equal(SignalRule.RouteReferenceMatch, structural.Rule);
+        Assert.True(structural.Present);
+    }
+
+    [Theory]
+    [InlineData("/users/[id]")]
+    [InlineData("/users/{}")]
+    public void NextRouteBridge_DynamicReference_YieldsHighConfidenceEdge(string fileRoute)
+    {
+        var edge = Assert.Single(NextRouteBridge.Resolve(
+            [NextRouteReference("/users/123")],
+            [NextFileRoute(fileRoute, "web/app/users/[id]/page.tsx")]));
+
+        var scored = BridgeScorer.Score(edge);
+
+        Assert.NotNull(scored);
+        Assert.Equal(ConfidenceBand.High, scored!.Band);
+        Assert.Equal(fileRoute, edge.TargetRef.Display);
+    }
+
+    [Fact]
+    public void NextRouteBridge_CatchAllRequiresAtLeastOneTrailingSegment()
+    {
+        var edges = NextRouteBridge.Resolve(
+            [
+                NextRouteReference("/docs", "next.docs.index"),
+                NextRouteReference("/docs/a/b", "next.docs.deep"),
+            ],
+            [NextFileRoute("/docs/[...slug]", "web/app/docs/[...slug]/page.tsx")]);
+
+        var edge = Assert.Single(edges);
+        Assert.Equal("/docs/a/b", edge.SourceRef.Display);
+        Assert.Equal("/docs/[...slug]", edge.TargetRef.Display);
+    }
+
+    [Fact]
+    public void NextRouteBridge_OptionalCatchAllMatchesZeroOrMoreTrailingSegments()
+    {
+        var edges = NextRouteBridge.Resolve(
+            [
+                NextRouteReference("/docs", "next.docs.index"),
+                NextRouteReference("/docs/a/b", "next.docs.deep"),
+            ],
+            [NextFileRoute("/docs/[[...slug]]", "web/app/docs/[[...slug]]/page.tsx")]);
+
+        Assert.Collection(
+            edges.OrderBy(edge => edge.SourceRef.Display, StringComparer.Ordinal),
+            edge =>
+            {
+                Assert.Equal("/docs", edge.SourceRef.Display);
+                Assert.Equal("/docs/[[...slug]]", edge.TargetRef.Display);
+            },
+            edge =>
+            {
+                Assert.Equal("/docs/a/b", edge.SourceRef.Display);
+                Assert.Equal("/docs/[[...slug]]", edge.TargetRef.Display);
+            });
+    }
+
+    [Fact]
+    public void NextRouteBridge_RouteGroupSegmentsDoNotParticipateInMatching()
+    {
+        var edge = Assert.Single(NextRouteBridge.Resolve(
+            [NextRouteReference("/settings")],
+            [NextFileRoute("/(admin)/settings", "web/app/(admin)/settings/page.tsx")]));
+
+        Assert.Equal("/settings", edge.SourceRef.Display);
+        Assert.Equal("/(admin)/settings", edge.TargetRef.Display);
+    }
+
+    [Fact]
+    public void NextRouteBridge_AmbiguousFileRouteMatchesEmitNoEdge()
+    {
+        var edges = NextRouteBridge.Resolve(
+            [NextRouteReference("/settings")],
+            [
+                NextFileRoute("/settings", "web/app/settings/page.tsx", "sf-next-settings-app"),
+                NextFileRoute("/(admin)/settings", "web/app/(admin)/settings/page.tsx", "sf-next-settings-admin"),
+            ]);
+
+        Assert.Empty(edges);
+    }
+
+    [Fact]
+    public void StructuralFacts_VueRouteReference_YieldsHitsEdgeToSyntheticLambdaEndpoint()
+    {
+        var symbols = new List<SymbolDetail>
+        {
+            Type("vue.header", "AppHeader", "component", file: "web/AppHeader.vue"),
+        };
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact(
+                "sf-vue-keepalive",
+                "vue.route_reference.v1",
+                "vue",
+                "web/AppHeader.vue",
+                "vue.header",
+                100,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "vue",
+                    ["target_path"] = "/keep-alive.html",
+                    ["verb"] = "GET",
+                }),
+            Fact(
+                "sf-route-keepalive",
+                "aspnet.minimal_api.route.v1",
+                "csharp",
+                "Api/KeepAlive.cs",
+                "cs.map",
+                200,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "aspnet",
+                    ["route_template"] = "/keep-alive.html",
+                    ["verb"] = "GET",
+                    ["handler_kind"] = "lambda",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(symbols, [], [], [], [], structuralFacts: facts);
+
+        var hits = Assert.Single(graph.Incident("vue.header"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Null(hits.Edge.TargetRef.SymbolId);
+        var endpointNodeId = BridgeGraph.NodeIdOf(hits.Edge.TargetRef, BridgeKind.Hits, EndpointSide.Target);
+        Assert.NotNull(endpointNodeId);
+        var endpointNode = graph.Node(endpointNodeId);
+        Assert.NotNull(endpointNode);
+        Assert.Equal(BridgeNodeKind.Endpoint, endpointNode.Kind);
+        Assert.Equal("GET /keep-alive.html", endpointNode.Display);
+        Assert.Equal("Api/KeepAlive.cs", endpointNode.FilePath);
+        Assert.Equal(1, endpointNode.Line);
+        Assert.Equal(ConfidenceBand.High, hits.Band);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.structuralEndpoints"]);
+    }
+
+    private static StructuralRouteReference NextRouteReference(
+        string routePath,
+        string containingSymbolId = "next.link",
+        string id = "sf-next-reference",
+        string filePath = "web/Nav.tsx") =>
+        new(
+            Fact(
+                id,
+                "nextjs.route_reference.v1",
+                "tsx",
+                filePath,
+                containingSymbolId,
+                100,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "nextjs",
+                    ["target_path"] = routePath,
+                }),
+            routePath,
+            "GET",
+            containingSymbolId,
+            filePath,
+            Line: 1);
+
+    private static StructuralFileRoute NextFileRoute(
+        string routePath,
+        string filePath,
+        string id = "sf-next-file-route") =>
+        new(
+            Fact(
+                id,
+                "nextjs.file_route.v1",
+                "tsx",
+                filePath,
+                containingSymbolId: string.Empty,
+                200,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "nextjs",
+                    ["route_path"] = routePath,
+                }),
+            routePath,
+            "GET",
+            ContainingSymbolId: string.Empty,
+            filePath,
+            Line: 1);
+
+    [Fact]
+    public void StructuralFacts_UnmatchedFrontendAndBackendRoutes_AreRetainedAsObservationNodes()
+    {
+        var symbols = new List<SymbolDetail>
+        {
+            Type("vue.header", "AppHeader", "component", file: "web/AppHeader.vue"),
+        };
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact(
+                "sf-vue-calendar",
+                "vue.route_reference.v1",
+                "vue",
+                "web/AppHeader.vue",
+                "vue.header",
+                100,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "vue",
+                    ["target_path"] = "/calendar",
+                    ["verb"] = "GET",
+                }),
+            Fact(
+                "sf-route-keepalive",
+                "aspnet.minimal_api.route.v1",
+                "csharp",
+                "Api/KeepAlive.cs",
+                "cs.map",
+                200,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "aspnet",
+                    ["route_template"] = "/keep-alive.html",
+                    ["verb"] = "GET",
+                    ["handler_kind"] = "lambda",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(symbols, [], [], [], [], structuralFacts: facts);
+
+        Assert.Empty(graph.Edges);
+        Assert.Contains(graph.Nodes.Values, node =>
+            node.Kind == BridgeNodeKind.TsType &&
+            node.Display == "/calendar" &&
+            node.FilePath == "web/AppHeader.vue" &&
+            node.Line == 1);
+        Assert.Contains(graph.Nodes.Values, node =>
+            node.Kind == BridgeNodeKind.Endpoint &&
+            node.Display == "GET /keep-alive.html" &&
+            node.FilePath == "Api/KeepAlive.cs" &&
+            node.Line == 1);
     }
 
     [Fact]

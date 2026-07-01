@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using Miller.Core.Graph;
 using Miller.Core.Resolver;
 using Miller.Indexing;
@@ -106,6 +107,40 @@ public sealed class LiveBridgeTraceTests
         _output.WriteLine($"  Leg2 MapsTo:   {mapNames[0]} <-> {mapNames[1]}   band={mapsTo.Band} score={Fmt(mapsTo.Score)}");
         _output.WriteLine($"  Leg1 Hits:     {clientDisplay} -> GetById   band={hits.Band} score={Fmt(hits.Score)} verbUnknown={hits.IsVerbUnknown}");
         _output.WriteLine("  Rendered (trace bridge AppSetting):");
+        _output.WriteLine(rendered);
+    }
+
+    [Fact]
+    public void NextFixture_RouteReferenceToFileRoute_TraceBridgeResolves()
+    {
+        string binary = ScaleTestSupport.RequireJulieServer();
+        using var work = new TempWorkspace();
+        WriteNextFixture(work.Repo);
+
+        var index = ExtractAndLoad(binary, work);
+        var patternIds = StructuralPatternIds(work.Db, "nextjs.%");
+        Assert.Contains("nextjs.route_reference.v1", patternIds);
+        Assert.Contains("nextjs.file_route.v1", patternIds);
+
+        var graph = index.BridgeGraph;
+        Assert.Contains("nextjs", graph.CapabilityReport.ActiveProviders);
+        var edge = Assert.Single(graph.Edges, e =>
+            e.Edge.Kind == BridgeKind.NavigatesTo
+            && string.Equals(e.Edge.SourceRef.Display, "/settings", StringComparison.Ordinal)
+            && string.Equals(e.Edge.TargetRef.Display, "/settings", StringComparison.Ordinal));
+        Assert.Equal(ConfidenceBand.High, edge.Band);
+
+        string rendered = TraceTool.Run(
+            index, new SmartTargetResolver(index), target: "/settings", mode: "bridge", to: null, depth: 2, limit: 20,
+            fullFormat: false, out int emitted, out _);
+
+        Assert.Equal(1, emitted);
+        Assert.Contains("Nav  --navigates_to-->  /settings", rendered);
+        Assert.DoesNotContain("--route-->", rendered);
+
+        _output.WriteLine("NEXT.JS FIXTURE — route reference to file route verified:");
+        _output.WriteLine($"  Patterns: {string.Join(", ", patternIds.Order(StringComparer.Ordinal))}");
+        _output.WriteLine($"  NavigatesTo: {edge.Edge.SourceRef.Display} -> {edge.Edge.TargetRef.Display} band={edge.Band} score={Fmt(edge.Score)}");
         _output.WriteLine(rendered);
     }
 
@@ -353,6 +388,38 @@ public sealed class LiveBridgeTraceTests
             export async function createAppSetting(body: AppSettingDto): Promise<AppSettingDto> {
               const res = await axios.post("/api/appsettings", body);
               return res.data;
+            }
+            """);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────
+    // Pure Next.js fixture writer.
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    private static void WriteNextFixture(string repo)
+    {
+        string settingsRoute = Path.Combine(repo, "app", "settings");
+        string userRoute = Path.Combine(repo, "app", "users", "[id]");
+        string components = Path.Combine(repo, "components");
+        Directory.CreateDirectory(settingsRoute);
+        Directory.CreateDirectory(userRoute);
+        Directory.CreateDirectory(components);
+
+        File.WriteAllText(Path.Combine(settingsRoute, "page.tsx"), """
+            export default function SettingsPage() {
+              return <main>Settings</main>;
+            }
+            """);
+        File.WriteAllText(Path.Combine(userRoute, "page.tsx"), """
+            export default function UserPage() {
+              return <main>User</main>;
+            }
+            """);
+        File.WriteAllText(Path.Combine(components, "Nav.tsx"), """
+            import Link from "next/link";
+
+            export function Nav() {
+              return <Link href="/settings">Settings</Link>;
             }
             """);
     }
@@ -611,6 +678,28 @@ public sealed class LiveBridgeTraceTests
         Assert.True(report.SymbolsExtracted > 0, "scan should extract at least one symbol");
 
         return RepositoryIndexLoader.Load(work.Db);
+    }
+
+    private static IReadOnlyCollection<string> StructuralPatternIds(string dbPath, string like)
+    {
+        using var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder { DataSource = dbPath, Mode = SqliteOpenMode.ReadOnly }.ToString());
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT DISTINCT pattern_id
+            FROM structural_facts
+            WHERE pattern_id LIKE $like
+            ORDER BY pattern_id;
+            """;
+        command.Parameters.AddWithValue("$like", like);
+
+        using var reader = command.ExecuteReader();
+        var ids = new List<string>();
+        while (reader.Read())
+            ids.Add(reader.GetString(0));
+        return ids;
     }
 
     // Every distinct bridge edge in the graph, deduped by the graph's own signature (Kind|sortedIds). BridgeGraph

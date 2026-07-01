@@ -48,7 +48,10 @@ public sealed record TsClientCall(
 /// of the method <c>signature</c> are the graph builder's job — plan Task 8, out of this leg's scope. This is the
 /// already-reduced input the pure leg consumes.</para>
 /// </summary>
-/// <param name="SymbolId">The endpoint method symbol's id (the resolved <c>—hits→</c> target).</param>
+/// <param name="SymbolId">
+/// The endpoint method symbol's id (the resolved <c>—hits→</c> target), or null for a structural endpoint such as a
+/// lambda minimal API route where the extractor observed the route but no handler symbol exists.
+/// </param>
 /// <param name="VerbKey">The lowercased annotation key (<c>httpget</c>/<c>httppost</c>/…); the verb is read from it.</param>
 /// <param name="ClassRoute">The class <c>[Route(...)]</c> arg (e.g. <c>api/[controller]</c>), or null when absent.</param>
 /// <param name="MethodRoute">The method route arg (e.g. <c>{id}</c>), or null when the method declares none.</param>
@@ -65,7 +68,7 @@ public sealed record TsClientCall(
 /// <param name="FilePath">The endpoint's file (workspace-relative), for the edge evidence.</param>
 /// <param name="Line">The 1-based line of the endpoint declaration, for the edge evidence (file:line).</param>
 public sealed record ControllerEndpoint(
-    string SymbolId,
+    string? SymbolId,
     string VerbKey,
     string? ClassRoute,
     string? MethodRoute,
@@ -244,8 +247,9 @@ public static class RouteBridge
         // The client side is the containing frontend function when julie supplied one, falling back to a route node for
         // legacy or malformed rows. This makes trace bridge useful from the symbol agents naturally start with.
         var clientRef = ClientCallRef(call, callRoute.Route);
+        var endpointDisplay = endpoint.SymbolId is null ? endpoint.MethodName : endpointRoute.Route;
         var endpointRef = new EdgeRef(
-            Display: endpointRoute.Route,
+            Display: endpointDisplay,
             SymbolId: endpoint.SymbolId,
             FilePath: endpoint.FilePath,
             Resolution: new NameResolution(ResolutionStatus.Resolved, endpoint.SymbolId, 1));

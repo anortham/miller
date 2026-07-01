@@ -86,7 +86,8 @@ public static class RepositoryIndexLoader
             bridgeData.Annotations,
             bridgeData.DbSetProperties,
             bridgeProviders,
-            bridgeData.LiteralSites);
+            bridgeData.LiteralSites,
+            bridgeData.StructuralFacts);
         stopwatch.Stop();
         onBridgeGraphBuilt?.Invoke(stopwatch.Elapsed);
 

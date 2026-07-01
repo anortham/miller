@@ -210,6 +210,7 @@ public sealed class BridgeScorerTests
     [InlineData(SignalRule.CreateMap)]
     [InlineData(SignalRule.DbSetProperty)]
     [InlineData(SignalRule.RouteVerbMatch)]
+    [InlineData(SignalRule.RouteReferenceMatch)]
     public void StructuralBreadcrumb_Resolved_ScoresHigh(SignalRule rule)
     {
         var edge = Edge([new StructuralSignal(rule, Present: true, Site)]);

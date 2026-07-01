@@ -8,9 +8,9 @@ namespace Miller.Core.Graph;
 /// — it takes already-loaded value records, asks bridge providers to reduce framework-specific evidence into candidate
 /// edges, scores every candidate, and builds the graph. No DB, no I/O.
 ///
-/// <para>The default provider is <see cref="DotnetWebBridgeProvider"/>, which owns the current ASP.NET/TypeScript
-/// reductions: CreateMap pairs, controller endpoints, client URL calls, and EF DbSet breadcrumbs. The builder remains
-/// provider-agnostic so future bridge models can plug in without changing scoring or graph traversal.</para>
+/// <para>The default providers are <see cref="DotnetWebBridgeProvider"/> and <see cref="NextJsBridgeProvider"/>.
+/// Framework-specific reductions stay behind those providers; the builder remains provider-agnostic so future bridge
+/// models can plug in without changing scoring or graph traversal.</para>
 ///
 /// <para><b>Literal evidence seam (Task 9 must match this).</b> <see cref="LiteralRecord"/> surfaces only a byte
 /// <c>span</c> + <c>containing_symbol_id</c>; it does not re-expose the <c>literals</c> row's own file/line columns. So
@@ -19,7 +19,7 @@ namespace Miller.Core.Graph;
 /// </summary>
 public static class BridgeGraphBuilder
 {
-    private static readonly IBridgeProvider[] DefaultProviders = [DotnetWebBridgeProvider.Instance];
+    private static readonly IBridgeProvider[] DefaultProviders = [DotnetWebBridgeProvider.Instance, NextJsBridgeProvider.Instance];
 
     /// <summary>
     /// Build the cross-language <see cref="BridgeGraph"/> over a workspace's symbols + julie breadcrumbs.
@@ -40,8 +40,9 @@ public static class BridgeGraphBuilder
         IReadOnlyList<LiteralRecord> literals,
         IReadOnlyList<SymbolAnnotation> annotations,
         IReadOnlyList<DbSetProperty> dbSetProperties,
-        IReadOnlyDictionary<LiteralRecord, LiteralSite>? literalSites = null) =>
-        Build(symbols, typeArguments, literals, annotations, dbSetProperties, DefaultProviders, literalSites);
+        IReadOnlyDictionary<LiteralRecord, LiteralSite>? literalSites = null,
+        IReadOnlyList<StructuralFactRecord>? structuralFacts = null) =>
+        Build(symbols, typeArguments, literals, annotations, dbSetProperties, DefaultProviders, literalSites, structuralFacts);
 
     /// <summary>
     /// Build the cross-language <see cref="BridgeGraph"/> with an explicit provider set. Tests and future
@@ -56,7 +57,8 @@ public static class BridgeGraphBuilder
         IReadOnlyList<SymbolAnnotation> annotations,
         IReadOnlyList<DbSetProperty> dbSetProperties,
         IReadOnlyList<IBridgeProvider> providers,
-        IReadOnlyDictionary<LiteralRecord, LiteralSite>? literalSites = null)
+        IReadOnlyDictionary<LiteralRecord, LiteralSite>? literalSites = null,
+        IReadOnlyList<StructuralFactRecord>? structuralFacts = null)
     {
         ArgumentNullException.ThrowIfNull(symbols);
         ArgumentNullException.ThrowIfNull(typeArguments);
@@ -74,6 +76,7 @@ public static class BridgeGraphBuilder
         var skippedProviders = new List<BridgeProviderSkip>();
         var notes = new List<string>();
         var evidenceCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var observationNodes = new Dictionary<string, BridgeNode>(StringComparer.Ordinal);
 
         if (providers.Count == 0)
             notes.Add("no bridge providers enabled");
@@ -84,6 +87,7 @@ public static class BridgeGraphBuilder
             literals,
             annotations,
             dbSetProperties,
+            structuralFacts ?? [],
             literalSites,
             symbolsById,
             resolver);
@@ -95,6 +99,7 @@ public static class BridgeGraphBuilder
             var result = provider.BuildCandidates(context) ??
                          throw new InvalidOperationException($"Bridge provider '{provider.Id}' returned null.");
             AddEvidenceCounts(evidenceCounts, result.EvidenceCounts);
+            AddObservationNodes(observationNodes, result.ObservationNodes);
 
             if (result.Active)
             {
@@ -120,6 +125,7 @@ public static class BridgeGraphBuilder
 
         // --- build a node for every endpoint of a surviving edge, then the graph --------------------------------
         var nodes = BuildNodes(scored, symbolsById);
+        AddObservationNodes(nodes, observationNodes);
         var capabilityReport = new BridgeCapabilityReport(
             activeProviders,
             skippedProviders,
@@ -137,20 +143,21 @@ public static class BridgeGraphBuilder
     /// its <see cref="EdgeRef.Display"/> carries) and is enriched with the symbol's file:line; a non-symbol node
     /// (table / route) carries the edge ref's display + file.
     /// </summary>
-    private static IReadOnlyDictionary<string, BridgeNode> BuildNodes(
+    private static Dictionary<string, BridgeNode> BuildNodes(
         IReadOnlyList<ScoredEdge> scored, IReadOnlyDictionary<string, SymbolDetail> symbolsById)
     {
         var nodes = new Dictionary<string, BridgeNode>(StringComparer.Ordinal);
         foreach (var edge in scored)
         {
-            AddNode(nodes, edge.Edge.SourceRef, edge.Edge.Kind, EndpointSide.Source, symbolsById);
-            AddNode(nodes, edge.Edge.TargetRef, edge.Edge.Kind, EndpointSide.Target, symbolsById);
+            AddNode(nodes, edge, edge.Edge.SourceRef, edge.Edge.Kind, EndpointSide.Source, symbolsById);
+            AddNode(nodes, edge, edge.Edge.TargetRef, edge.Edge.Kind, EndpointSide.Target, symbolsById);
         }
         return nodes;
     }
 
     private static void AddNode(
         Dictionary<string, BridgeNode> nodes,
+        ScoredEdge scored,
         EdgeRef edgeRef,
         BridgeKind edgeKind,
         EndpointSide side,
@@ -172,7 +179,26 @@ public static class BridgeGraphBuilder
             return;
         }
 
-        nodes[id] = new BridgeNode(id, kind, edgeRef.Display, edgeRef.FilePath, Line: 0);
+        nodes[id] = new BridgeNode(id, kind, edgeRef.Display, edgeRef.FilePath, Line: EvidenceLine(edgeRef, scored.Edge.Evidence));
+    }
+
+    private static int EvidenceLine(EdgeRef edgeRef, IReadOnlyList<Evidence> evidence)
+    {
+        if (string.IsNullOrWhiteSpace(edgeRef.FilePath))
+            return 0;
+
+        return evidence
+            .Where(item => string.Equals(item.FilePath, edgeRef.FilePath, StringComparison.Ordinal))
+            .Select(item => item.Line)
+            .FirstOrDefault(line => line > 0);
+    }
+
+    private static void AddObservationNodes(
+        Dictionary<string, BridgeNode> target,
+        IReadOnlyDictionary<string, BridgeNode> source)
+    {
+        foreach (var item in source.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+            target.TryAdd(item.Key, item.Value);
     }
 
     // ============================ shared helpers ===============================================================

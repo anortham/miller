@@ -10,6 +10,7 @@ namespace Miller.Core.Graph;
 public sealed class DotnetWebBridgeProvider : IBridgeProvider
 {
     public const string ProviderId = "dotnet-web";
+    private const string AspNetMinimalApiRoutePattern = "aspnet.minimal_api.route.v1";
 
     public static DotnetWebBridgeProvider Instance { get; } = new();
 
@@ -24,8 +25,14 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
         ArgumentNullException.ThrowIfNull(context);
 
         var createMaps = ReduceCreateMaps(context.TypeArguments);
-        var endpoints = ReduceEndpoints(context.Symbols, context.Annotations);
-        var clientCalls = ReduceClientCalls(context.Literals, context.SymbolsById, context.LiteralSites);
+        var annotationEndpoints = ReduceEndpoints(context.Symbols, context.Annotations);
+        var structuralEndpoints = ReduceStructuralEndpoints(
+            context.StructuralFacts, context.Symbols, context.Literals, context.SymbolsById, context.LiteralSites);
+        var endpoints = annotationEndpoints.Concat(structuralEndpoints).ToList();
+        var literalClientCalls = ReduceClientCalls(context.Literals, context.SymbolsById, context.LiteralSites);
+        var structuralClientCalls = ReduceStructuralClientCalls(context.StructuralFacts, context.SymbolsById);
+        var clientCalls = literalClientCalls.Concat(structuralClientCalls).ToList();
+        var observationNodes = BuildStructuralRouteObservationNodes(structuralClientCalls, structuralEndpoints);
         var serverTypeResolver = new SymbolResolver(context.Symbols.Where(IsCSharpUserType).ToArray());
 
         var evidenceCounts = new Dictionary<string, int>(StringComparer.Ordinal)
@@ -33,6 +40,8 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
             ["dotnet-web.createMaps"] = createMaps.Count,
             ["dotnet-web.endpoints"] = endpoints.Count,
             ["dotnet-web.clientCalls"] = clientCalls.Count,
+            ["dotnet-web.structuralEndpoints"] = structuralEndpoints.Count,
+            ["dotnet-web.structuralClientCalls"] = structuralClientCalls.Count,
             ["dotnet-web.dbsets"] = context.DbSetProperties.Count,
         };
 
@@ -53,7 +62,7 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
             new RouteBridgeInput(clientCalls, endpoints), serverTypeResolver));
 
         evidenceCounts["dotnet-web.candidates"] = candidates.Count;
-        return BridgeProviderResult.ActiveResult(candidates, evidenceCounts);
+        return BridgeProviderResult.ActiveResult(candidates, evidenceCounts, observationNodes);
     }
 
     /// <summary>
@@ -171,6 +180,231 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
                 Line: 0));
         }
         return endpoints;
+    }
+
+    private static IReadOnlyList<ControllerEndpoint> ReduceStructuralEndpoints(
+        IReadOnlyList<StructuralFactRecord> structuralFacts,
+        IReadOnlyList<SymbolDetail> symbols,
+        IReadOnlyList<LiteralRecord> literals,
+        IReadOnlyDictionary<string, SymbolDetail> symbolsById,
+        IReadOnlyDictionary<LiteralRecord, LiteralSite>? literalSites)
+    {
+        var endpoints = new List<ControllerEndpoint>();
+        foreach (var fact in structuralFacts.OrderBy(f => f.Path, StringComparer.Ordinal).ThenBy(f => f.Span.StartByte))
+        {
+            if (!TryReduceStructuralEndpointFact(fact, symbols, literals, symbolsById, literalSites, out var endpoint))
+                continue;
+
+            endpoints.Add(endpoint);
+        }
+        return endpoints;
+    }
+
+    private static bool TryReduceStructuralEndpointFact(
+        StructuralFactRecord fact,
+        IReadOnlyList<SymbolDetail> symbols,
+        IReadOnlyList<LiteralRecord> literals,
+        IReadOnlyDictionary<string, SymbolDetail> symbolsById,
+        IReadOnlyDictionary<LiteralRecord, LiteralSite>? literalSites,
+        out ControllerEndpoint endpoint)
+    {
+        endpoint = null!;
+        if (!string.Equals(fact.PatternId, AspNetMinimalApiRoutePattern, StringComparison.Ordinal))
+            return false;
+
+        var routeTemplate = MetadataString(fact, "route_template");
+        var verb = MetadataString(fact, "verb");
+        if (string.IsNullOrWhiteSpace(routeTemplate) || string.IsNullOrWhiteSpace(verb))
+            return false;
+
+        var handler = ResolveStructuralHandler(fact, symbols);
+        var fullRoute = ComposeStructuralEndpointRoute(fact, routeTemplate, literals, symbolsById, literalSites);
+        endpoint = new ControllerEndpoint(
+            SymbolId: handler?.Id,
+            VerbKey: ToHttpVerbKey(verb),
+            ClassRoute: null,
+            MethodRoute: fullRoute,
+            ParentClassName: handler?.ParentClassName ?? string.Empty,
+            MethodName: handler?.Name ?? SyntheticEndpointDisplay(verb, fullRoute),
+            ReturnType: string.Empty,
+            RequestBodyType: null,
+            FilePath: handler?.FilePath ?? fact.Path,
+            Line: fact.Span.StartLine);
+        return true;
+    }
+
+    private static string SyntheticEndpointDisplay(string verb, string route)
+    {
+        var displayRoute = RouteNormalizer.FromClientCall("fetch", route).Route;
+        if (displayRoute.Length > 0 && !displayRoute.StartsWith("/", StringComparison.Ordinal))
+            displayRoute = "/" + displayRoute;
+        return string.Concat(verb.Trim().ToUpperInvariant(), " ", displayRoute.Length == 0 ? route : displayRoute);
+    }
+
+    private static IReadOnlyDictionary<string, BridgeNode> BuildStructuralRouteObservationNodes(
+        IReadOnlyList<TsClientCall> structuralClientCalls,
+        IReadOnlyList<ControllerEndpoint> structuralEndpoints)
+    {
+        var nodes = new Dictionary<string, BridgeNode>(StringComparer.Ordinal);
+
+        foreach (var call in structuralClientCalls)
+        {
+            var route = RouteNormalizer.FromClientCall(call.Literal.Carrier, call.Literal.LiteralText).Route;
+            if (route.Length == 0)
+                continue;
+
+            var display = RouteDisplay(route);
+            var id = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, route);
+            nodes.TryAdd(id, new BridgeNode(id, BridgeNodeKind.TsType, display, call.FilePath, call.Line));
+        }
+
+        foreach (var endpoint in structuralEndpoints)
+        {
+            var route = RouteNormalizer.FromEndpoint(
+                endpoint.VerbKey,
+                endpoint.ClassRoute,
+                endpoint.MethodRoute,
+                endpoint.ParentClassName,
+                endpoint.MethodName);
+            if (route.Route.Length == 0)
+                continue;
+
+            var display = SyntheticEndpointDisplay(HttpVerbDisplay(endpoint.VerbKey), route.Route);
+            var id = BridgeGraph.SynthesizeId(BridgeNodeKind.Endpoint, display);
+            nodes.TryAdd(id, new BridgeNode(id, BridgeNodeKind.Endpoint, display, endpoint.FilePath, endpoint.Line));
+        }
+
+        return nodes;
+    }
+
+    private static string RouteDisplay(string route) =>
+        route.StartsWith("/", StringComparison.Ordinal) ? route : "/" + route;
+
+    private static string HttpVerbDisplay(string verbKey) =>
+        verbKey.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+            ? verbKey[4..].ToUpperInvariant()
+            : verbKey.ToUpperInvariant();
+
+    private static IReadOnlyList<TsClientCall> ReduceStructuralClientCalls(
+        IReadOnlyList<StructuralFactRecord> structuralFacts,
+        IReadOnlyDictionary<string, SymbolDetail> symbolsById)
+    {
+        var calls = new List<TsClientCall>();
+        foreach (var fact in structuralFacts.OrderBy(f => f.Path, StringComparer.Ordinal).ThenBy(f => f.Span.StartByte))
+        {
+            if (StructuralRouteFactAdapter.TryReadRouteReference(fact, symbolsById, out var reference))
+            {
+                calls.Add(ToClientCall(reference));
+                continue;
+            }
+
+            if (StructuralRouteFactAdapter.TryReadFileRoute(fact, symbolsById, out var fileRoute))
+                calls.Add(ToClientCall(fileRoute));
+        }
+        return calls;
+    }
+
+    private static TsClientCall ToClientCall(StructuralRouteReference reference)
+    {
+        var literal = new LiteralRecord(
+            LiteralText: reference.RoutePath,
+            Kind: "url",
+            Carrier: reference.Verb.ToUpperInvariant(),
+            ArgPosition: 0,
+            Language: reference.Fact.Language,
+            ContainingSymbolId: reference.ContainingSymbolId,
+            Span: new SourceSpan(reference.Fact.Span.StartByte, reference.Fact.Span.EndByte));
+        return new TsClientCall(literal, IsTest: false, reference.FilePath, reference.Line);
+    }
+
+    private static TsClientCall ToClientCall(StructuralFileRoute route)
+    {
+        var literal = new LiteralRecord(
+            LiteralText: route.RoutePath,
+            Kind: "url",
+            Carrier: route.Verb.ToUpperInvariant(),
+            ArgPosition: 0,
+            Language: route.Fact.Language,
+            ContainingSymbolId: route.ContainingSymbolId,
+            Span: new SourceSpan(route.Fact.Span.StartByte, route.Fact.Span.EndByte));
+        return new TsClientCall(literal, IsTest: false, route.FilePath, route.Line);
+    }
+
+    private static SymbolDetail? ResolveStructuralHandler(StructuralFactRecord fact, IReadOnlyList<SymbolDetail> symbols)
+    {
+        var handlerName = MetadataString(fact, "handler_name");
+        if (string.IsNullOrWhiteSpace(handlerName))
+            return null;
+
+        return symbols
+            .Where(symbol => string.Equals(symbol.Name, handlerName, StringComparison.Ordinal)
+                             && string.Equals(symbol.FilePath, fact.Path, StringComparison.Ordinal)
+                             && string.Equals(symbol.Kind, "method", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(symbol => symbol.Id, StringComparer.Ordinal)
+            .FirstOrDefault();
+    }
+
+    private static string ComposeStructuralEndpointRoute(
+        StructuralFactRecord fact,
+        string routeTemplate,
+        IReadOnlyList<LiteralRecord> literals,
+        IReadOnlyDictionary<string, SymbolDetail> symbolsById,
+        IReadOnlyDictionary<LiteralRecord, LiteralSite>? literalSites)
+    {
+        var effectiveRoute = MetadataString(fact, "effective_route_template");
+        if (!string.IsNullOrWhiteSpace(effectiveRoute))
+            return effectiveRoute;
+
+        var explicitPrefix = MetadataString(fact, "route_group_prefix")
+            ?? MetadataString(fact, "group_prefix")
+            ?? MetadataString(fact, "route_prefix");
+        var prefix = string.IsNullOrWhiteSpace(explicitPrefix)
+            ? NearestMapGroupPrefix(fact, literals, symbolsById, literalSites)
+            : explicitPrefix;
+
+        return string.IsNullOrWhiteSpace(prefix)
+            ? routeTemplate
+            : JoinRoute(prefix, routeTemplate);
+    }
+
+    private static string? NearestMapGroupPrefix(
+        StructuralFactRecord fact,
+        IReadOnlyList<LiteralRecord> literals,
+        IReadOnlyDictionary<string, SymbolDetail> symbolsById,
+        IReadOnlyDictionary<LiteralRecord, LiteralSite>? literalSites)
+    {
+        if (string.IsNullOrWhiteSpace(fact.ContainingSymbolId))
+            return null;
+
+        return literals
+            .Where(literal => string.Equals(literal.ContainingSymbolId, fact.ContainingSymbolId, StringComparison.Ordinal)
+                              && literal.Span.StartByte < fact.Span.StartByte
+                              && string.Equals(literal.Language, "csharp", StringComparison.OrdinalIgnoreCase)
+                              && literal.Carrier.Contains("MapGroup", StringComparison.Ordinal)
+                              && string.Equals(SiteFor(literal, symbolsById, literalSites).FilePath, fact.Path, StringComparison.Ordinal))
+            .OrderByDescending(literal => literal.Span.StartByte)
+            .Select(literal => literal.LiteralText)
+            .FirstOrDefault();
+    }
+
+    private static string ToHttpVerbKey(string verb) => "http" + verb.Trim().ToLowerInvariant();
+
+    private static string JoinRoute(string prefix, string route)
+    {
+        var p = prefix.Trim('/');
+        var r = route.Trim('/');
+        if (p.Length == 0)
+            return r;
+        if (r.Length == 0)
+            return p;
+        return "/" + p + "/" + r;
+    }
+
+    private static string? MetadataString(StructuralFactRecord fact, string key)
+    {
+        return fact.Metadata.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
+            ? value
+            : null;
     }
 
     private static bool IsClassKind(string kind) =>

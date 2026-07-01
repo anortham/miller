@@ -1,6 +1,7 @@
 using Microsoft.Data.Sqlite;
 using Miller.Core.Contracts;
 using Miller.Core.Graph;
+using System.Text.Json;
 
 namespace Miller.Indexing;
 
@@ -11,7 +12,7 @@ namespace Miller.Indexing;
 /// rows the <see cref="BridgeGraphBuilder"/> consumes. It performs NO leg transformation — that is Task 8's job; this
 /// reader only maps julie columns to records.
 ///
-/// <para>The four sources (v1 schema.rs column shapes):
+/// <para>The bridge sources (v1 schema.rs column shapes):
 /// <list type="bullet">
 /// <item><c>type_arguments</c> JOIN <c>type_argument_usages</c> → <see cref="TypeArgument"/> (CreateMap grouping
 /// input): v1 moved <c>identifier_id</c>/<c>path</c> onto the usage row, so the reader JOINs by <c>usage_id</c>.
@@ -25,6 +26,8 @@ namespace Miller.Indexing;
 /// <item>DbContext <c>DbSet&lt;T&gt;</c> properties → <see cref="DbSetProperty"/> (Leg 3 PRIMARY), parsed from
 /// <c>symbols</c> rows with <c>kind='property'</c> whose <c>signature</c> contains <c>DbSet&lt;…&gt;</c>: the property
 /// name IS the table name (EF convention), the generic arg IS the entity type.</item>
+/// <item><c>structural_facts</c> → <see cref="StructuralFactRecord"/> for parser-backed web/framework route facts
+/// emitted by julie-extractors, including ASP.NET Minimal API, htmx, Vue, React Router, and Next.js routes.</item>
 /// </list></para>
 ///
 /// <para>Sync by design: this is part of the single startup/rebuild pass (Microsoft.Data.Sqlite's async is
@@ -33,7 +36,7 @@ namespace Miller.Indexing;
 public static class SqliteBridgeReader
 {
     /// <summary>
-    /// Read the four bridge tables from the julie extract at <paramref name="dbPath"/> into the raw Core contract
+    /// Read bridge tables from the julie extract at <paramref name="dbPath"/> into the raw Core contract
     /// collections (plus the literal→file:line lookup for the builder's literal-evidence seam).
     /// </summary>
     /// <param name="dbPath">Path to the julie extract DB (opened <c>Mode=ReadOnly</c> by the shared D4 discipline).</param>
@@ -53,8 +56,9 @@ public static class SqliteBridgeReader
         var (literals, literalSites) = ReadLiterals(connection);
         var annotations = ReadAnnotations(connection);
         var dbSetProperties = ReadDbSetProperties(connection);
+        var structuralFacts = ReadStructuralFacts(connection);
 
-        return new BridgeData(typeArguments, literals, annotations, dbSetProperties, literalSites);
+        return new BridgeData(typeArguments, literals, annotations, dbSetProperties, structuralFacts, literalSites);
     }
 
     // ---- type_arguments ---------------------------------------------------------------------------------------
@@ -96,7 +100,7 @@ public static class SqliteBridgeReader
 
     // ---- literals ---------------------------------------------------------------------------------------------
 
-    private static (IReadOnlyList<LiteralRecord> Literals, IReadOnlyDictionary<LiteralRecord, LiteralSite> Sites)
+    private static (List<LiteralRecord> Literals, Dictionary<LiteralRecord, LiteralSite> Sites)
         ReadLiterals(SqliteConnection connection)
     {
         using var command = connection.CreateCommand();
@@ -225,6 +229,74 @@ public static class SqliteBridgeReader
         return results;
     }
 
+    // ---- structural_facts -------------------------------------------------------------------------------------
+
+    private static IReadOnlyList<StructuralFactRecord> ReadStructuralFacts(SqliteConnection connection)
+    {
+        if (!TableExists(connection, "structural_facts"))
+            return [];
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT structural_fact_id, pattern_id, language, path, capture_name, node_kind,
+                   containing_symbol_id, start_line, start_column, end_line, end_column,
+                   start_byte, end_byte, confidence, metadata_json
+            FROM structural_facts
+            WHERE pattern_id IN (
+                'aspnet.minimal_api.route.v1',
+                'aspnet.minimal_api.route_group.v1',
+                'htmx.attribute.v1',
+                'vue.route_reference.v1',
+                'vue.route_definition.v1',
+                'react.route_reference.v1',
+                'react.route_definition.v1',
+                'nextjs.route_reference.v1',
+                'nextjs.file_route.v1')
+            ORDER BY path, start_byte, structural_fact_id;
+            """;
+
+        var results = new List<StructuralFactRecord>();
+        using var reader = command.ExecuteReader();
+        int oFactId = reader.GetOrdinal("structural_fact_id");
+        int oPatternId = reader.GetOrdinal("pattern_id");
+        int oLanguage = reader.GetOrdinal("language");
+        int oPath = reader.GetOrdinal("path");
+        int oCaptureName = reader.GetOrdinal("capture_name");
+        int oNodeKind = reader.GetOrdinal("node_kind");
+        int oContaining = reader.GetOrdinal("containing_symbol_id");
+        int oStartLine = reader.GetOrdinal("start_line");
+        int oStartColumn = reader.GetOrdinal("start_column");
+        int oEndLine = reader.GetOrdinal("end_line");
+        int oEndColumn = reader.GetOrdinal("end_column");
+        int oStartByte = reader.GetOrdinal("start_byte");
+        int oEndByte = reader.GetOrdinal("end_byte");
+        int oConfidence = reader.GetOrdinal("confidence");
+        int oMetadata = reader.GetOrdinal("metadata_json");
+        while (reader.Read())
+        {
+            string? metadataJson = reader.IsDBNull(oMetadata) ? null : reader.GetString(oMetadata);
+            results.Add(new StructuralFactRecord(
+                FactId: reader.GetString(oFactId),
+                PatternId: reader.GetString(oPatternId),
+                Language: reader.GetString(oLanguage),
+                Path: reader.GetString(oPath),
+                CaptureName: reader.GetString(oCaptureName),
+                NodeKind: reader.GetString(oNodeKind),
+                ContainingSymbolId: reader.IsDBNull(oContaining) ? null : reader.GetString(oContaining),
+                Span: new StructuralFactSpan(
+                    reader.GetInt32(oStartLine),
+                    reader.GetInt32(oStartColumn),
+                    reader.GetInt32(oEndLine),
+                    reader.GetInt32(oEndColumn),
+                    reader.GetInt32(oStartByte),
+                    reader.GetInt32(oEndByte)),
+                Confidence: reader.GetDouble(oConfidence),
+                Metadata: ParseMetadata(metadataJson)));
+        }
+
+        return results;
+    }
+
     /// <summary>
     /// Parse the entity type out of the FIRST <c>DbSet&lt;T&gt;</c> in a property signature. Returns the leaf type
     /// name (no namespace) of the generic arg, or null when no balanced <c>DbSet&lt;…&gt;</c> is present. Handles a
@@ -269,6 +341,41 @@ public static class SqliteBridgeReader
         leaf = leaf.Trim();
         return leaf.Length == 0 ? null : leaf;
     }
+
+    private static IReadOnlyDictionary<string, string> ParseMetadata(string? metadataJson)
+    {
+        if (string.IsNullOrWhiteSpace(metadataJson))
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(metadataJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return new Dictionary<string, string>(StringComparer.Ordinal);
+
+            var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (JsonProperty property in doc.RootElement.EnumerateObject())
+            {
+                metadata[property.Name] = property.Value.ValueKind == JsonValueKind.String
+                    ? property.Value.GetString() ?? string.Empty
+                    : property.Value.GetRawText();
+            }
+            return metadata;
+        }
+        catch (JsonException)
+        {
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+        }
+    }
+
+    private static bool TableExists(SqliteConnection connection, string tableName)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $name LIMIT 1;";
+        command.Parameters.AddWithValue("$name", tableName);
+        using var reader = command.ExecuteReader();
+        return reader.Read();
+    }
 }
 
 /// <summary>
@@ -282,10 +389,12 @@ public static class SqliteBridgeReader
 /// <param name="Literals">The <c>literals</c> rows (url client calls + sql).</param>
 /// <param name="Annotations">The <c>symbol_annotations</c> rows (http-verb endpoints + class <c>[Route]</c>).</param>
 /// <param name="DbSetProperties">The DbContext <c>DbSet&lt;T&gt;</c> property breadcrumbs (Leg 3 PRIMARY).</param>
+/// <param name="StructuralFacts">The parser-backed route facts used by bridge providers.</param>
 /// <param name="LiteralSites">The per-literal-instance <c>literal → (file, line)</c> lookup (the literal-evidence seam).</param>
 public sealed record BridgeData(
     IReadOnlyList<TypeArgument> TypeArguments,
     IReadOnlyList<LiteralRecord> Literals,
     IReadOnlyList<SymbolAnnotation> Annotations,
     IReadOnlyList<DbSetProperty> DbSetProperties,
+    IReadOnlyList<StructuralFactRecord> StructuralFacts,
     IReadOnlyDictionary<LiteralRecord, LiteralSite> LiteralSites);

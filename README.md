@@ -267,7 +267,8 @@ selector: display ID, unique prefix, full ID, registered root path, `current`, o
 [docs/findings/miller-toolbox.md](docs/findings/miller-toolbox.md).
 
 `trace` is the graph workflow tool: `mode=refs` lists name-based identifier references, `mode=path` shows the
-shortest extracted graph path to `to`, and `mode=bridge` follows provider-scoped `dotnet-web` bridge evidence.
+shortest extracted graph path to `to`, and `mode=bridge` follows provider-scoped bridge evidence. Current providers
+are `dotnet-web` and `nextjs`; `nextjs` links route references to file routes, not every framework route shape.
 No-path, unsupported bridge, and ambiguous-target results include bounded next actions; JSON callers get the same
 guidance in additive `next_actions` rows.
 
@@ -623,11 +624,12 @@ Warnings are errors (`Directory.Build.props`).
   corpora.
 - Ambiguous targets may need a file path, a more specific symbol, or a symbol ID. The CLI reports ambiguity
   instead of guessing.
-- Bridge trace (`trace mode=bridge`) is provider-scoped, not a general all-language feature. The current
-  provider is the `dotnet-web` stack (ASP.NET controllers ↔ TypeScript/JS client URL calls ↔ AutoMapper ↔
-  Entity Framework), so do not expect cross-language bridge results on another stack. It intentionally uses
-  the full bridge graph for that provider-scoped evidence. Normal `search`, `inspect`, graph-only `context`,
-  `impact`, non-bridge `trace`, and workspace status/list stay on projection-specific read paths.
+- Bridge trace (`trace mode=bridge`) is provider-scoped, not a general all-language/all-framework feature. Current
+  providers are `dotnet-web` (ASP.NET controllers, TypeScript/JS client URL calls, AutoMapper, Entity Framework)
+  and `nextjs` (route references to file routes). Next.js API handlers, server actions, middleware rewrites, and
+  redirects need extractor facts before bridge can claim them. The mode intentionally uses the full bridge graph
+  for provider-scoped evidence. Normal `search`, `inspect`, graph-only `context`, `impact`, non-bridge `trace`,
+  and workspace status/list stay on projection-specific read paths.
 - The main `miller` release binary publishes with Native AOT (no .NET SDK required to run it). The packaged
   dashboard helper stays self-contained/non-AOT because ASP.NET Razor Components do not yet support Native AOT.
 - A rebuilt MCP server is picked up only after the MCP client restarts the Miller subprocess. Use

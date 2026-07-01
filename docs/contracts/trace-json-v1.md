@@ -117,7 +117,8 @@ Bridge link fields:
 
 - `source`, `target`: bridge node ids.
 - `source_display`, `target_display`: human display labels for the endpoints.
-- `kind`: machine kind such as `hits`, `maps_to`, `stored_in`, `responds`, `consumes`, or `name_match`.
+- `kind`: machine kind such as `hits`, `maps_to`, `stored_in`, `responds`, `consumes`, `navigates_to`, or
+  `name_match`.
 - `label`: compact-output label such as `route`, `CreateMap`, or `DbSet`.
 - `score`: numeric confidence score.
 - `confidence`: `high` or `medium`.
@@ -126,8 +127,16 @@ Bridge link fields:
 - `evidence`: edge-level file/line evidence.
 - `signals`: typed scoring signals with rule-specific payload and optional evidence.
 
-Bridge is provider-scoped. Current packaged provider coverage is `dotnet-web`: TypeScript/JavaScript client URL
-calls, ASP.NET endpoints, DTOs/entities, AutoMapper, and Entity Framework/Dapper table evidence. Empty bridge
-results are valid when a workspace is not in that stack or no bridge evidence exists. `not_on_bridge` and
-`no_bridge_links` diagnostics include `next_actions` for ordinary refs, ordinary graph neighbours, and source text
-search rather than implying unsupported stacks have bridge coverage.
+Bridge node `kind` values include `next_route` for Next.js file-route nodes.
+
+Bridge is provider-scoped. Current packaged providers are:
+
+- `dotnet-web`: TypeScript/JavaScript client URL calls, ASP.NET endpoints, DTOs/entities, AutoMapper, and Entity
+  Framework/Dapper table evidence.
+- `nextjs`: route references to Next.js file routes. It does not claim API route handlers, server actions,
+  middleware rewrites, redirects, or runtime routing unless extractor facts exist for them.
+
+Empty bridge results are valid when a workspace is outside those providers or no bridge evidence exists.
+`not_on_bridge` and `no_bridge_links` diagnostics include `next_actions` for ordinary refs, ordinary graph
+neighbours, source text search, and structural `patterns` checks rather than implying unsupported stacks have
+bridge coverage.

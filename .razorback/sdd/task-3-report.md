@@ -1,87 +1,76 @@
-# Task 3 Report: Retrieval, Inspect, And Ambiguity Rows
+# Task 3 Report: Next.js Provider And Provider Selection
 
-## Changed Files
+## Files Changed
 
-- `scripts/benchmarks/miller-foundation-cases.json`
-- `scripts/bench-foundation-matrix.py`
-- `scripts/benchlib/scoring.py`
-- `docs/findings/benchmarks/2026-06-27-foundation-matrix/task3-retrieval-inspect-ambiguity/summary.md`
-- `docs/findings/benchmarks/2026-06-27-foundation-matrix/task3-retrieval-inspect-ambiguity/results.csv`
-- `docs/findings/benchmarks/2026-06-27-foundation-matrix/task3-retrieval-inspect-ambiguity/results.json`
-- `.razorback/sdd/task-3-report.md`
+- Created: `src/Miller.Core/Graph/NextJsBridgeProvider.cs`
+- Modified: `src/Miller.Core/Graph/BridgeGraphBuilder.cs`
+- Modified: `src/Miller.Indexing/BridgeProviderSelection.cs`
+- Modified: `tests/Miller.Tests/Graph/BridgeGraphBuilderTests.cs`
+- Modified: `tests/Miller.Tests/Indexing/RepositoryIndexLoaderBridgeTests.cs`
+- Modified: `.razorback/sdd/task-3-report.md`
 
-## Miller Evidence Used
+Note: the checkout already had approved dirty Task 1/2 changes in several of these files. I did not revert or reset them.
 
-- `workspace status` for `/Users/murphy/source/miller/.worktrees/foundation-effectiveness-matrix`: confirmed the worktree index was fresh, search/content sidecars current, and queue empty.
-- `workspace list`: confirmed all nine target repos were locally registered: `miller`, `julie`, `eros`, `express`, `flask`, `gson`, `newtonsoft`, `zod`, and `jq`.
-- `workspace refresh` for the worktree: scanned successfully with no swap, revision stayed `5`.
-- `context` on the foundation matrix benchmark area: identified `scripts/bench-foundation-matrix.py`, `scripts/benchlib/scoring.py`, and `scripts/benchlib/reporting.py` as the relevant implementation surfaces.
-- `inspect` on `scripts/bench-foundation-matrix.py`, `scripts/benchlib/scoring.py`, and `scripts/benchlib/reporting.py`: confirmed current validation, execution, scoring, and summary behavior before edits.
-- Cross-workspace `search` and `inspect` calls for each target repo: selected real file, symbol, source, docs, region, and ambiguity anchors before adding rows.
-- `impact` on the final diff: reported affected benchmark runner/scoring paths and the existing narrow benchmark caller surface.
+## Miller Calls Used
 
-## Row Counts
+- `workspace status`: confirmed `/Users/murphy/source/miller` was fresh, queue empty, and sidecars current before work.
+- `context` for Task 3 provider selection: confirmed the relevant seams were `IBridgeProvider`, `BridgeGraphBuilder`, `BridgeProviderSelection`, `NextRouteBridge`, and the requested test files.
+- `search mode=file/content`: checked `RAZORBACK.md`, the plan path, task brief path, and plan sections; Miller found the plan in docs content and no repo-root `RAZORBACK.md`.
+- `content read` on `docs/plans/2026-07-01-nextjs-bridge-trace-support.md`: confirmed Task 3 files, interfaces, approach, and acceptance criteria.
+- `inspect` on `IBridgeProvider`, `BridgeGraphBuilder`, `BridgeProviderSelection`, `DotnetWebBridgeProvider`, `StructuralRouteFactAdapter`, `NextRouteBridge`, `NextRouteMatcher`, `BridgeGraph.NodeKindFor`, and target test methods: confirmed current signatures and existing behavior before edits.
+- `trace mode=refs` on `BridgeProviderSelection` and `NextRouteBridge`: confirmed extracted refs were sparse and pointed to source-search fallback; no public seam change was needed.
+- `impact target=BridgeGraphBuilder` and `impact target=BridgeProviderSelection`: checked planned blast radius before implementation.
+- `impact` after edits: reported broad impact because the worktree already contains Task 1/2 dirty changes; focused worker tests were still the required gate.
+- `workspace status` after edits: confirmed Miller re-indexed the new file and stayed fresh.
+- `search/inspect` on `NextJsBridgeProvider` after edits: confirmed the new provider was indexed and implemented behind the existing provider seam.
 
-By repo:
+## Tests Run
 
-- `eros`: 8
-- `express`: 8
-- `flask`: 10
-- `gson`: 9
-- `jq`: 10
-- `julie`: 8
-- `miller`: 11
-- `newtonsoft`: 9
-- `zod`: 9
+Red run after test patch:
 
-By task class:
+```bash
+dotnet test tests/Miller.Tests/Miller.Tests.csproj -c Release --filter "FullyQualifiedName~BridgeGraphBuilderTests|FullyQualifiedName~RepositoryIndexLoaderBridgeTests"
+```
 
-- `ambiguity.scoped`: 3
-- `ambiguity.unscoped`: 4
-- `inspect.full`: 9
-- `inspect.overview`: 9
-- `inspect.summary`: 9
-- `retrieval.docs`: 9
-- `retrieval.file`: 9
-- `retrieval.region`: 3
-- `retrieval.source_auto`: 9
-- `retrieval.source_explicit`: 9
-- `retrieval.symbol`: 9
+Result: failed as expected after correcting a fixture pollution issue: 5 failed, 46 passed. Failures showed missing `nextjs` default provider, missing Next navigation edge, and configured `nextjs` not producing a graph edge.
 
-Total manifest rows: 82. All Julie specs are report-only.
+Green run after implementation:
 
-## Generated Evidence
+```bash
+dotnet test tests/Miller.Tests/Miller.Tests.csproj -c Release --filter "FullyQualifiedName~BridgeGraphBuilderTests|FullyQualifiedName~RepositoryIndexLoaderBridgeTests"
+```
 
-- `docs/findings/benchmarks/2026-06-27-foundation-matrix/task3-retrieval-inspect-ambiguity/summary.md`
-- `docs/findings/benchmarks/2026-06-27-foundation-matrix/task3-retrieval-inspect-ambiguity/results.csv`
-- `docs/findings/benchmarks/2026-06-27-foundation-matrix/task3-retrieval-inspect-ambiguity/results.json`
+Result: passed, 51 passed, 0 failed, 0 skipped.
 
-Foundation matrix gate status: PASS.
+Post-refactor verification:
 
-## Verification
+```bash
+dotnet test tests/Miller.Tests/Miller.Tests.csproj -c Release --filter "FullyQualifiedName~BridgeGraphBuilderTests|FullyQualifiedName~RepositoryIndexLoaderBridgeTests"
+```
 
-- Red characterization before implementation: failed as expected with `rows=6`, repos `flask,miller,zod`, no ambiguity rows.
-- `python3 -m py_compile scripts/benchlib/*.py scripts/bench-julie-miller-search-inspect.py scripts/bench-foundation-matrix.py`: PASS.
-- `python3 scripts/bench-julie-miller-search-inspect.py --repos miller --skip-julie --skip-miller-refresh --gate --out-dir /tmp/miller-search-inspect-task3-smoke`: PASS.
-- `python3 scripts/bench-foundation-matrix.py --repos all --skip-julie --out-dir docs/findings/benchmarks/2026-06-27-foundation-matrix/task3-retrieval-inspect-ambiguity --gate`: PASS.
-- Manifest assertion: PASS with 82 rows, all nine repos represented, ambiguity rows present, and no Julie hard-gated specs.
-- `git diff --check`: PASS.
+Result: passed, 51 passed, 0 failed, 0 skipped.
 
-## Concerns Or Blockers
+Invariant proved: provider-level Next.js graph population works from structural facts, default provider selection is additive, configured provider lists are authoritative, unknown providers do not fall back to defaults, and stable `nextjs.*` evidence counts are present.
 
-- No blockers.
-- Julie docs content for `External Extract CLI` resolves to the historical implementation-plan doc before the agent-instructions file in the live content corpus, so that row expects the implementation-plan path while still anchoring the same reviewed phrase.
+## Acceptance Criteria
 
-## Fix Note: Scoring Contract Review
+- [x] `BridgeGraphBuilder.Build(...)` with default providers can build a pure Next navigation edge from structural facts only.
+- [x] `BridgeProviderSelection.ProvidersForDatabase(...)` returns both `dotnet-web` and `nextjs` when no config exists.
+- [x] Explicit config with `["dotnet-web"]` does not run `nextjs`.
+- [x] Explicit config with `["nextjs"]` does not run `dotnet-web`.
+- [x] Unknown provider tests still show skipped-provider behavior and do not run defaults.
+- [x] Capability report includes `nextjs` active/skipped status and stable evidence counts: `nextjs.routeReferences`, `nextjs.fileRoutes`, `nextjs.candidates`, `nextjs.ambiguousMatches`.
+- [x] Worker-scope verification passes.
 
-- Issue fixed: `expected_present` is no longer overloaded for `path_top` rows. It now always records whether an expected path appeared anywhere, while `expected_top` records first-path match.
-- Added output fields: `scoring_mode` and `scoring_pass` in JSON and CSV evidence. `scoring_pass` is mode-aware: it equals `expected_top` for `path_top`, otherwise it follows expected-path presence.
-- Updated gate behavior: `adaptation_candidate` and hard-gate failures use `scoring_pass`; `path_top` rows that are present but not first report `expected path was not top-ranked`.
-- Updated CSV generation to use LF line endings so regenerated evidence passes whitespace hygiene.
-- Regenerated evidence in `docs/findings/benchmarks/2026-06-27-foundation-matrix/task3-retrieval-inspect-ambiguity/`.
-- Verification for fix:
-  - `python3 -m py_compile scripts/benchlib/*.py scripts/bench-julie-miller-search-inspect.py scripts/bench-foundation-matrix.py`: PASS.
-  - `python3 scripts/bench-julie-miller-search-inspect.py --repos miller --skip-julie --skip-miller-refresh --gate --out-dir /tmp/miller-search-inspect-task3-fix`: PASS.
-  - `python3 scripts/bench-foundation-matrix.py --repos all --skip-julie --out-dir docs/findings/benchmarks/2026-06-27-foundation-matrix/task3-retrieval-inspect-ambiguity --gate`: PASS.
-  - Scoring contract assertion: PASS, `scoring contract ok 15`.
-  - `git diff --check`: PASS.
+## Implementation Notes
+
+- `NextJsBridgeProvider` is a concrete `IBridgeProvider` over structural facts plus `NextRouteBridge`.
+- The provider filters to `nextjs.route_reference.v1` and `nextjs.file_route.v1`, uses `StructuralRouteFactAdapter`, and does not parse source or read SQLite.
+- Observation nodes are emitted for Next route references (`TsType`) and file routes (`NextRoute`) so unmatched facts remain diagnosable.
+- Default provider sets are now `[dotnet-web, nextjs]` in both `BridgeGraphBuilder` and `BridgeProviderSelection`.
+- Configured provider lists remain authoritative; unknown providers still return a skipped-provider entry.
+
+## Concerns Or Plan Mismatch
+
+- No plan mismatch.
+- One behavior to keep in mind for Task 4: `dotnet-web` can still become active on frontend route-reference/file-route evidence because Task 1 made those facts available for ASP.NET route diagnostics. I left that existing behavior intact and asserted only that `nextjs` produces its own active/skipped status and navigation candidates.

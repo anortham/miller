@@ -35,6 +35,7 @@ public sealed class BridgeGraphTests
         BridgeKind.MapsTo => SignalRule.CreateMap,
         BridgeKind.StoredIn => SignalRule.DbSetProperty,
         BridgeKind.Hits => SignalRule.RouteVerbMatch,
+        BridgeKind.NavigatesTo => SignalRule.RouteReferenceMatch,
         BridgeKind.Responds => SignalRule.ReturnTypeDto,
         BridgeKind.Consumes => SignalRule.FromBodyDto,
         _ => SignalRule.NameMatch,
@@ -105,6 +106,13 @@ public sealed class BridgeGraphTests
 
         Assert.Empty(graph.Incident("sym-userdto"));
         Assert.Empty(graph.Walk("sym-userdto", maxDepth: 5));
+    }
+
+    [Fact]
+    public void NodeKindFor_NavigatesTo_UsesNextRouteTarget()
+    {
+        Assert.Equal(BridgeNodeKind.TsType, BridgeGraph.NodeKindFor(BridgeKind.NavigatesTo, EndpointSide.Source));
+        Assert.Equal(BridgeNodeKind.NextRoute, BridgeGraph.NodeKindFor(BridgeKind.NavigatesTo, EndpointSide.Target));
     }
 
     [Fact]

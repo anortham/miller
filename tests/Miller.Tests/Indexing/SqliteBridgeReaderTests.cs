@@ -68,6 +68,13 @@ public sealed class SqliteBridgeReaderTests : IDisposable
                 annotation_id TEXT PRIMARY KEY, symbol_id TEXT, annotation TEXT, annotation_key TEXT,
                 raw_text TEXT, carrier TEXT
             );
+            CREATE TABLE structural_facts (
+                structural_fact_id TEXT PRIMARY KEY, file_id TEXT NOT NULL, path TEXT NOT NULL, language TEXT NOT NULL,
+                pattern_id TEXT NOT NULL, capture_name TEXT NOT NULL, node_kind TEXT NOT NULL,
+                containing_symbol_id TEXT, start_line INTEGER NOT NULL, start_column INTEGER NOT NULL,
+                end_line INTEGER NOT NULL, end_column INTEGER NOT NULL, start_byte INTEGER NOT NULL,
+                end_byte INTEGER NOT NULL, confidence REAL NOT NULL DEFAULT 1.0, metadata_json TEXT
+            );
             CREATE TABLE artifact_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             """;
         command.ExecuteNonQuery();
@@ -255,7 +262,73 @@ public sealed class SqliteBridgeReaderTests : IDisposable
         Assert.Empty(data.Literals);
         Assert.Empty(data.Annotations);
         Assert.Empty(data.DbSetProperties);
+        Assert.Empty(data.StructuralFacts);
         Assert.Empty(data.LiteralSites);
+    }
+
+    [Fact]
+    public void Read_StructuralFacts_IncludesFrameworkRoutePatternIdsNeededForBridge()
+    {
+        using (var c = OpenWrite())
+        {
+            CreateSchemaAndGate(c);
+            Exec(c, """
+                INSERT INTO structural_facts
+                    (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                     containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                     confidence, metadata_json)
+                VALUES
+                  ('sf-aspnet-route', 'f-api', 'Api/Routes.cs', 'csharp', 'aspnet.minimal_api.route.v1',
+                   'route_call', 'invocation_expression', 's-api', 10, 0, 10, 30, 100, 130, 1.0,
+                   '{"route_template":"/calendar","effective_route_template":"/api/calendar","verb":"GET"}'),
+                  ('sf-aspnet-group', 'f-api', 'Api/Routes.cs', 'csharp', 'aspnet.minimal_api.route_group.v1',
+                   'route_group', 'invocation_expression', 's-api', 9, 0, 9, 30, 90, 99, 1.0,
+                   '{"route_prefix":"/api","group_variable":"api"}'),
+                  ('sf-htmx', 'f-view', 'Components/Form.razor', 'razor', 'htmx.attribute.v1',
+                   'attribute', 'element', 's-form', 20, 0, 20, 30, 200, 230, 1.0,
+                   '{"target_path":"/api/calendar","verb":"POST"}'),
+                  ('sf-vue-ref', 'f-vue', 'web/App.vue', 'vue', 'vue.route_reference.v1',
+                   'route_reference', 'template_attribute', 's-vue', 30, 0, 30, 30, 300, 330, 1.0,
+                   '{"target_path":"/calendar"}'),
+                  ('sf-vue-def', 'f-vue', 'web/router.ts', 'vue', 'vue.route_definition.v1',
+                   'route_definition', 'object', 's-router', 31, 0, 31, 30, 331, 360, 1.0,
+                   '{"target_path":"/calendar","component_path":"./Calendar.vue"}'),
+                  ('sf-react-ref', 'f-react', 'web/Nav.tsx', 'tsx', 'react.route_reference.v1',
+                   'route_reference', 'jsx_attribute', 's-react', 40, 0, 40, 30, 400, 430, 1.0,
+                   '{"target_path":"/calendar","library":"react_router"}'),
+                  ('sf-react-def', 'f-react', 'web/routes.tsx', 'tsx', 'react.route_definition.v1',
+                   'route_definition', 'jsx_element', 's-routes', 41, 0, 41, 30, 431, 460, 1.0,
+                   '{"route_path":"/calendar","library":"react_router"}'),
+                  ('sf-next-ref', 'f-next', 'web/Nav.tsx', 'tsx', 'nextjs.route_reference.v1',
+                   'route_reference', 'jsx_attribute', 's-next-link', 50, 0, 50, 30, 500, 530, 1.0,
+                   '{"target_path":"/calendar"}'),
+                  ('sf-next-file', 'f-next', 'web/app/calendar/page.tsx', 'tsx', 'nextjs.file_route.v1',
+                   'file_route', 'file', 's-next-page', 1, 0, 100, 0, 531, 800, 1.0,
+                   '{"route_path":"/calendar","normalized_route_template":"/calendar"}'),
+                  ('sf-ignored', 'f-css', 'web/site.css', 'css', 'css.selector_rule.v1',
+                   'selector', 'rule_set', NULL, 60, 0, 60, 10, 900, 910, 1.0,
+                   '{"selector":".calendar"}');
+                """);
+        }
+
+        var data = SqliteBridgeReader.Read(_dbPath);
+
+        Assert.Equal(
+            new[]
+            {
+                "aspnet.minimal_api.route_group.v1",
+                "aspnet.minimal_api.route.v1",
+                "htmx.attribute.v1",
+                "vue.route_reference.v1",
+                "react.route_reference.v1",
+                "nextjs.route_reference.v1",
+                "nextjs.file_route.v1",
+                "vue.route_definition.v1",
+                "react.route_definition.v1",
+            },
+            data.StructuralFacts.Select(f => f.PatternId).ToArray());
+        Assert.DoesNotContain(data.StructuralFacts, f => f.PatternId == "css.selector_rule.v1");
+        Assert.Equal("/api/calendar", data.StructuralFacts.Single(f => f.FactId == "sf-aspnet-route").Metadata["effective_route_template"]);
     }
 
     // ---- gate + error paths ----------------------------------------------------------------------------------

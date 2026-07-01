@@ -1,61 +1,62 @@
-# Task 5 Report: Eros Foundation Contract Rows
+# Task 5 Report: Docs, Agent Guidance, And Contract Text
 
-## Changed Files
+## Status
 
-- `scripts/benchmarks/miller-foundation-cases.json`
-- `scripts/bench-foundation-matrix.py`
-- `scripts/benchlib/scoring.py`
-- `docs/findings/benchmarks/2026-06-27-foundation-matrix/task5-eros-contracts/summary.md`
-- `docs/findings/benchmarks/2026-06-27-foundation-matrix/task5-eros-contracts/results.csv`
-- `docs/findings/benchmarks/2026-06-27-foundation-matrix/task5-eros-contracts/results.json`
+Task 5 implementation is complete in the working tree. I did not commit, per the task instruction for this worker.
+
+## Files Changed
+
+- `src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md`
+- `docs/contracts/trace-json-v1.md`
+- `README.md`
+- `skills/miller-bridge-trace/SKILL.md`
+- `.agents/skills/miller-bridge-trace/SKILL.md`
+- `tests/Miller.Tests/Server/AgentInstructionsTests.cs`
 - `.razorback/sdd/task-5-report.md`
 
-## Miller Evidence Used
+## Miller Calls Used
 
-- `workspace status` for `/Users/murphy/source/miller/.worktrees/foundation-effectiveness-matrix`: confirmed the worktree index was fresh, reader mode, revision 18.
-- `workspace refresh` for the same worktree: confirmed `status: unchanged`, `scanned: yes`, `swapped: no`, revision 18.
-- `context` for the foundation benchmark/contract area: confirmed the relevant runner/reporting seed and `docs/contracts/cli-eros-v1.md` as the public contract source.
-- `inspect` on `scripts/bench-foundation-matrix.py`: confirmed existing MCP execution, validation, output writing, and main-loop structure before adding a separate CLI route.
-- `inspect` on `scripts/benchlib/scoring.py`: confirmed Task 3 path scoring and Task 4 workflow scoring entry points before appending contract scoring modes.
-- `inspect` on `scripts/benchlib/reporting.py`: confirmed summary tables derive from generic result rows and did not need a behavior change.
-- `inspect` on `scripts/benchmarks/miller-foundation-cases.json`: confirmed the manifest structure and existing row shape before appending Task 5 rows.
-- `inspect` on `docs/contracts/cli-eros-v1.md`: confirmed the documented Eros-facing JSON and JSONL command surface.
-- `trace refs score_manifest_path`: confirmed only the foundation runner calls the shared scorer, so adding an optional `capabilities` parameter preserved existing callers.
-- `impact` on the final working-tree diff: confirmed the changed benchmark/scoring path and listed likely broader tests; the brief-required benchmark smoke and contract matrix covered the relevant Python runner behavior.
-
-## Contract Row Counts
-
-- Added 15 hard-gated Task 5 contract rows.
-- `contract.cli.json`: 10 rows, 10 passed.
-- `contract.cli.jsonl`: 5 rows, 5 passed.
-- Manifest/output assertion confirmed Task 3 classes still exist, Task 4 workflow classes still exist, both contract task classes exist, all hard-gated contract rows passed, every hard-gated command was advertised by `capabilities --json`, and JSONL rows sampled the required first 20 non-empty lines.
-
-## Contract Doc Update
-
-`docs/contracts/cli-eros-v1.md` did not require changes. Live `miller capabilities --json` advertised the hard-gated JSON commands and export feeds used by the matrix, and live CLI output contained the required fields documented for those rows.
-
-## Generated Evidence
-
-Evidence path:
-
-`docs/findings/benchmarks/2026-06-27-foundation-matrix/task5-eros-contracts/`
-
-Files generated:
-
-- `summary.md`
-- `results.csv`
-- `results.json`
+- `workspace status`: confirmed `/Users/murphy/source/miller` was fresh before and after edits; final status was revision 40 with current `search_db` and `content_db`.
+- `context(query="Task 5 docs and agent guidance ...")`: found the approved Task 5 plan entry and the relevant contract/test surfaces.
+- `search(mode=file, query="RAZORBACK.md")`: found no indexed `RAZORBACK.md`; repo-specific policy came from the task brief and AGENTS guidance.
+- `search(mode=file, query=<plan/brief filenames>)`: exact file-mode lookup did not find the hidden/new plan artifacts, so I used the explicit task paths for bounded shell reads.
+- `inspect(target="Task 5: Docs, Agent Guidance, And Contract Text", scope=...)`: confirmed allowed files, interfaces, and acceptance criteria from the plan.
+- `inspect(target="AgentInstructionsTests", depth="full")`: confirmed the budget/recovery guidance assertions and the old dotnet-web-only assertion to update.
+- `inspect` on the target markdown files: confirmed these are prompt/docs surfaces without code symbols before bounded text reads.
+- `search(mode=content, query="dotnet-web")`: located old dotnet-web-only wording in server instructions, README, and both bridge-trace skills.
+- `impact(changed_paths=[...])`: scoped the requested docs/test files before editing.
+- `impact()` after editing: mapped the full dirty worktree; it included pre-existing Tasks 1-4 changes, with `AgentInstructionsTests` among likely tests for this worker slice.
+- `search(mode=content, query="navigates_to")` and `search(mode=content, query="next_route")`: confirmed the trace JSON contract now documents both stable values.
+- `search(mode=content, query="nextjs.route_reference.v1")`: confirmed the bridge-trace skill now tells agents to check `patterns` when Next route facts are missing.
 
 ## Verification
 
-- `PYTHONPATH=scripts python3 - <<'PY' ...`: RED check first failed with unsupported `contract_json`; after implementation, the same assertion passed for contract JSON and JSONL scoring.
-- `python3 -m py_compile scripts/benchlib/*.py scripts/bench-julie-miller-search-inspect.py scripts/bench-foundation-matrix.py`: passed.
-- `python3 scripts/bench-julie-miller-search-inspect.py --repos miller --skip-julie --skip-miller-refresh --gate --out-dir /tmp/miller-search-inspect-task5-smoke`: passed.
-- `python3 scripts/bench-foundation-matrix.py --tasks contract.cli.json,contract.cli.jsonl --skip-julie --out-dir docs/findings/benchmarks/2026-06-27-foundation-matrix/task5-eros-contracts --gate`: passed.
-- Manifest/output assertion command: passed with `task3_classes=11`, `task4_classes=5`, `contract_rows=15`, `hard_contract_results=15`, `jsonl_rows=5`.
-- Miller `impact` on final changed paths: completed; relevant verification remained the benchmark smoke plus contract matrix gate.
-- `git diff --check`: passed.
+- Command: `dotnet test tests/Miller.Tests/Miller.Tests.csproj -c Release --filter "FullyQualifiedName~AgentInstructionsTests"`
+  - Result: passed.
+  - Evidence: 41 passed, 0 failed, 0 skipped.
+  - Invariant proved: embedded server instructions remain non-empty, documented, current with the pinned trace guidance, and within instruction/tool description budgets.
+- Command: `git diff --check`
+  - Result: passed.
+  - Invariant proved: no whitespace errors in the combined dirty diff.
 
-## Concerns
+## Acceptance Criteria Checklist
 
-- None.
+- [x] Agent instructions no longer say bridge mode is only a `dotnet-web` chain.
+- [x] README describes `nextjs` support without implying all-framework bridge coverage.
+- [x] JSON contract documents `navigates_to` and `next_route`.
+- [x] Bridge trace skill tells agents to use `patterns` when Next route facts are missing.
+- [x] Agent instruction tests pass.
+- [x] Worker-scope verification passes.
+- [x] No commit was made, per this worker instruction.
+
+## Concerns / Plan Mismatch
+
+- The plan acceptance text says changes are committed, but this worker brief explicitly says `DO NOT commit`; I followed the worker instruction.
+- Miller content search still finds older dotnet-web-only wording in historical release notes/plans, `docs/site/index.html`, and the separate `miller-orientation` skill copies. Historical release notes/plans were explicitly out of scope, and `docs/site/index.html` plus `miller-orientation` were not in the allowed Task 5 file list, so I did not modify them.
+
+## Lead Follow-Up
+
+- Updated current-facing stragglers outside the original worker write list: `docs/site/index.html`, `skills/miller-orientation/SKILL.md`, and `.agents/skills/miller-orientation/SKILL.md`.
+- Shortened `src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md` after the first lead run exceeded the 12,000-character budget by 8 characters.
+- Re-ran `dotnet test tests/Miller.Tests/Miller.Tests.csproj -c Release --filter "FullyQualifiedName~AgentInstructionsTests"`: 41 passed, 0 failed.
+- Re-ran `git diff --check`: passed.

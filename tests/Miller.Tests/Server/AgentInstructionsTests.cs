@@ -138,7 +138,8 @@ public sealed class AgentInstructionsTests
     {
         string instructions = AgentInstructions.Load();
         Assert.Contains("no extracted graph path within depth, not proof unrelated", instructions);
-        Assert.Contains("on another stack use `mode=refs`/`mode=path`, or `inspect depth=full`", instructions);
+        Assert.Contains("provider-scoped to `dotnet-web` and `nextjs`", instructions);
+        Assert.Contains("outside those providers use `mode=refs`/`mode=path`, or `inspect depth=full`", instructions);
         Assert.Contains("on empty, fall back to `search mode=source`", instructions);
         Assert.Contains("follow its `Next:` actions", instructions);
     }
