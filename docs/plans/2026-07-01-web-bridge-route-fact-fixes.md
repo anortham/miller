@@ -80,9 +80,9 @@ From the 2026-07-01 review (checkpoint `checkpoint_92e28948`, fast suite 2555/25
 **Approach:** Extend the compiled regex (or add a pre-pass) for `[[...name]]`, `[...name]`, `[name]` — ordered longest-first so optional catch-all is not partially consumed. Add normalization equivalence tests: `/users/[id]` == `/users/{id}` == `/users/:id` after canonicalization.
 
 **Acceptance criteria:**
-- [ ] Bracket, brace, colon, and template-literal dynamic segments canonicalize identically.
-- [ ] Existing normalizer tests stay green.
-- [ ] Worker-scope verification passes, committed.
+- [x] Bracket, brace, colon, and template-literal dynamic segments canonicalize identically.
+- [x] Existing normalizer tests stay green.
+- [x] Worker-scope verification passes, committed.
 
 ## Task 3: Ambiguity Precedence Instead of Dropping
 

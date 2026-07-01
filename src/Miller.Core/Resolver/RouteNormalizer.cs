@@ -33,12 +33,13 @@ public static class RouteNormalizer
         "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS",
     ];
 
-    // ${param} | {param} | :param  ->  {}. Compiled once; each alternative consumes one path segment placeholder.
+    // [[...param]] | [...param] | [param] | ${param} | {param} | :param  ->  {}. Compiled once; each
+    // alternative consumes one path segment placeholder.
     // The :param alternative is bounded to an identifier run (not "everything up to the next /") so a trailing literal
     // extension/suffix is preserved — "/files/:id.json" folds to "files/{}.json", matching the C# "{id}.json" side,
     // which stops folding at the '}'. The over-broad ":[^/]+" form folded the extension away on only the client side.
     private static readonly Regex ParamPattern = new(
-        @"\$\{[^}]*\}|\{[^}]*\}|:[A-Za-z_][A-Za-z0-9_]*",
+        @"\[\[\.\.\.[^\]/]+\]\]|\[\.\.\.[^\]/]+\]|\[[^\]/]+\]|\$\{[^}]*\}|\{[^}]*\}|:[A-Za-z_][A-Za-z0-9_]*",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     /// <summary>

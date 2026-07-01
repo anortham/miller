@@ -74,6 +74,20 @@ public sealed class RouteNormalizerTests
         Assert.Equal("api/users", result.Route); // route still recovered
     }
 
+    [Theory]
+    [InlineData("/api/users/[id]")]
+    [InlineData("/api/users/[...id]")]
+    [InlineData("/api/users/[[...id]]")]
+    [InlineData("/api/users/{id}")]
+    [InlineData("/api/users/:id")]
+    [InlineData("/api/users/${id}")]
+    public void FromClientCall_DynamicSegments_CanonicalizeToSamePlaceholder(string route)
+    {
+        var result = RouteNormalizer.FromClientCall("axios.get", route);
+
+        Assert.Equal("api/users/{}", result.Route);
+    }
+
     // ---- C# endpoint side: token expansion + prefix concat -----------------------------------------------------
 
     [Fact]
