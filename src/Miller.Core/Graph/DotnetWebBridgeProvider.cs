@@ -60,10 +60,9 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
 
         if (createMaps.Count == 0 &&
             endpoints.Count == 0 &&
-            clientCalls.Count == 0 &&
             context.DbSetProperties.Count == 0)
         {
-            return BridgeProviderResult.Skipped("no dotnet-web bridge evidence", evidenceCounts);
+            return BridgeProviderResult.Skipped("no dotnet-web backend evidence", evidenceCounts);
         }
 
         var candidates = new List<CandidateEdge>();
@@ -267,7 +266,7 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
                 continue;
 
             var display = RouteDisplay(route);
-            var id = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, route);
+            var id = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, display);
             nodes.TryAdd(id, new BridgeNode(id, BridgeNodeKind.TsType, display, call.FilePath, call.Line));
         }
 
@@ -310,18 +309,24 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
         int nuxt = 0;
         foreach (var fact in structuralFacts.OrderBy(f => f.Path, StringComparer.Ordinal).ThenBy(f => f.Span.StartByte))
         {
+            if (!IsStructuralClientCallPattern(fact.PatternId))
+                continue;
+
             if (StructuralRouteFactAdapter.TryReadRouteReference(fact, symbolsById, out var reference))
             {
                 CountStructuralRouteReferencePattern(fact.PatternId, ref htmx, ref vue, ref react, ref nextjs, ref nuxt);
                 calls.Add(ToClientCall(reference));
-                continue;
             }
-
-            if (StructuralRouteFactAdapter.TryReadFileRoute(fact, symbolsById, out var fileRoute))
-                calls.Add(ToClientCall(fileRoute));
         }
         return new StructuralClientCallReduction(calls, (htmx, vue, react, nextjs, nuxt));
     }
+
+    private static bool IsStructuralClientCallPattern(string patternId) =>
+        string.Equals(patternId, BridgeStructuralPatterns.HtmxAttribute, StringComparison.Ordinal) ||
+        string.Equals(patternId, BridgeStructuralPatterns.VueRouteReference, StringComparison.Ordinal) ||
+        string.Equals(patternId, BridgeStructuralPatterns.ReactRouteReference, StringComparison.Ordinal) ||
+        string.Equals(patternId, BridgeStructuralPatterns.NextJsRouteReference, StringComparison.Ordinal) ||
+        string.Equals(patternId, BridgeStructuralPatterns.NuxtRouteReference, StringComparison.Ordinal);
 
     private static void CountStructuralRouteReferencePattern(
         string patternId,
@@ -337,11 +342,9 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
                 htmx++;
                 break;
             case BridgeStructuralPatterns.VueRouteReference:
-            case BridgeStructuralPatterns.VueRouteDefinition:
                 vue++;
                 break;
             case BridgeStructuralPatterns.ReactRouteReference:
-            case BridgeStructuralPatterns.ReactRouteDefinition:
                 react++;
                 break;
             case BridgeStructuralPatterns.NextJsRouteReference:
@@ -378,19 +381,6 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
             BridgeStructuralPatterns.NuxtRouteReference => "nuxt." + lowerVerb,
             _ => verb.ToUpperInvariant(),
         };
-    }
-
-    private static TsClientCall ToClientCall(StructuralFileRoute route)
-    {
-        var literal = new LiteralRecord(
-            LiteralText: route.RoutePath,
-            Kind: "url",
-            Carrier: route.Verb.ToUpperInvariant(),
-            ArgPosition: 0,
-            Language: route.Fact.Language,
-            ContainingSymbolId: route.ContainingSymbolId,
-            Span: new SourceSpan(route.Fact.Span.StartByte, route.Fact.Span.EndByte));
-        return new TsClientCall(literal, IsTest: false, route.FilePath, route.Line);
     }
 
     private static SymbolDetail? ResolveStructuralHandler(

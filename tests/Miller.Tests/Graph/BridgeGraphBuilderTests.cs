@@ -799,13 +799,10 @@ public sealed class BridgeGraphBuilderTests
     }
 
     [Theory]
-    [InlineData("vue.route_definition.v1", "vue", "web/router.ts", "vue.router", "target_path", "/calendar")]
+    [InlineData("vue.route_reference.v1", "vue", "web/CalendarLink.vue", "vue.link", "target_path", "/calendar")]
     [InlineData("react.route_reference.v1", "tsx", "web/App.tsx", "react.link", "target_path", "/calendar")]
-    [InlineData("react.route_definition.v1", "tsx", "web/routes.tsx", "react.routes", "route_path", "/calendar")]
     [InlineData("nextjs.route_reference.v1", "tsx", "web/nav.tsx", "next.link", "target_path", "/calendar")]
-    [InlineData("nextjs.file_route.v1", "tsx", "web/app/calendar/page.tsx", "next.page", "route_path", "/calendar")]
     [InlineData("nuxt.route_reference.v1", "vue", "app/components/Nav.vue", "nuxt.link", "target_path", "/calendar")]
-    [InlineData("nuxt.file_route.v1", "vue", "app/pages/calendar.vue", "nuxt.page", "route_path", "/calendar")]
     public void StructuralFacts_FrontendRouteFacts_YieldHitsEdgeToMinimalApiHandler(
         string frontendPattern,
         string frontendLanguage,
@@ -854,6 +851,60 @@ public sealed class BridgeGraphBuilderTests
         var hits = Assert.Single(graph.Incident(frontendSymbol), e => e.Edge.Kind == BridgeKind.Hits);
         Assert.Equal("cs.calendar", hits.Edge.TargetRef.SymbolId);
         Assert.Equal(ConfidenceBand.High, hits.Band);
+    }
+
+    [Theory]
+    [InlineData("vue.route_definition.v1", "vue", "web/router.ts", "vue.router", "target_path", "/calendar")]
+    [InlineData("react.route_definition.v1", "tsx", "web/routes.tsx", "react.routes", "route_path", "/calendar")]
+    [InlineData("nextjs.file_route.v1", "tsx", "web/app/calendar/page.tsx", "next.page", "route_path", "/calendar")]
+    [InlineData("nuxt.file_route.v1", "vue", "app/pages/calendar.vue", "nuxt.page", "route_path", "/calendar")]
+    public void StructuralFacts_DefinitionRouteFacts_DoNotYieldHitsEdgeToMinimalApiHandler(
+        string frontendPattern,
+        string frontendLanguage,
+        string frontendPath,
+        string frontendSymbol,
+        string routeKey,
+        string routeValue)
+    {
+        var symbols = new List<SymbolDetail>
+        {
+            Type(frontendSymbol, "CalendarRoute", "component", file: frontendPath),
+            Method("cs.calendar", "CalendarAsync", "Task<IResult> CalendarAsync()", string.Empty, "Api/CalendarEndpoints.cs"),
+        };
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact(
+                "sf-frontend-calendar",
+                frontendPattern,
+                frontendLanguage,
+                frontendPath,
+                frontendSymbol,
+                100,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = frontendPattern.Split('.')[0],
+                    [routeKey] = routeValue,
+                }),
+            Fact(
+                "sf-route-calendar",
+                "aspnet.minimal_api.route.v1",
+                "csharp",
+                "Api/CalendarEndpoints.cs",
+                "cs.map",
+                200,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "aspnet",
+                    ["route_template"] = "/calendar",
+                    ["verb"] = "GET",
+                    ["handler_name"] = "CalendarAsync",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(symbols, [], [], [], [], structuralFacts: facts);
+
+        Assert.DoesNotContain(graph.Incident(frontendSymbol), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["dotnet-web.structuralClientCalls"]);
     }
 
     [Fact]
@@ -1039,6 +1090,7 @@ public sealed class BridgeGraphBuilderTests
         Assert.Equal("/settings", edge.Edge.SourceRef.Display);
         Assert.Equal("/settings", edge.Edge.TargetRef.Display);
         Assert.Contains("nextjs", graph.CapabilityReport.ActiveProviders);
+        Assert.DoesNotContain("dotnet-web", graph.CapabilityReport.ActiveProviders);
         Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["nextjs.routeReferences"]);
         Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["nextjs.fileRoutes"]);
         Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["nextjs.candidates"]);
@@ -1048,6 +1100,60 @@ public sealed class BridgeGraphBuilderTests
             node.Display == "/settings" &&
             node.FilePath == "web/app/settings/page.tsx" &&
             node.Line == 1);
+    }
+
+    [Fact]
+    public void Build_DefaultProviders_DeduplicatesRouteObservationNodesAcrossDotnetAndNext()
+    {
+        var mapGet = Method("sym-mapget", "MapGet", "IResult MapGet()", "Program", "api/Program.cs");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact(
+                "sf-next-settings-link",
+                "nextjs.route_reference.v1",
+                "tsx",
+                "web/Nav.tsx",
+                string.Empty,
+                100,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "nextjs",
+                    ["target_path"] = "/settings",
+                }),
+            Fact(
+                "sf-next-settings-page",
+                "nextjs.file_route.v1",
+                "tsx",
+                "web/app/settings/page.tsx",
+                string.Empty,
+                200,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "nextjs",
+                    ["route_path"] = "/settings",
+                }),
+            Fact(
+                "sf-aspnet-settings",
+                "aspnet.minimal_api.route.v1",
+                "csharp",
+                "api/Program.cs",
+                "sym-mapget",
+                300,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "aspnet",
+                    ["route_template"] = "/settings",
+                    ["verb"] = "GET",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build([mapGet], [], [], [], [], structuralFacts: facts);
+
+        Assert.Contains("dotnet-web", graph.CapabilityReport.ActiveProviders);
+        Assert.Contains("nextjs", graph.CapabilityReport.ActiveProviders);
+        Assert.Contains(graph.Edges, edge => edge.Edge.Kind == BridgeKind.Hits);
+        Assert.Contains(graph.Edges, edge => edge.Edge.Kind == BridgeKind.NavigatesTo);
+        Assert.Single(graph.Nodes.Values, node => node.Kind == BridgeNodeKind.TsType && node.Display == "/settings");
     }
 
     [Fact]

@@ -120,11 +120,11 @@ From the 2026-07-01 review (checkpoint `checkpoint_92e28948`, fast suite 2555/25
 **Approach:** Partition by `pattern_id` role at the top of the structural reduction using `BridgeStructuralPatterns`. Gate "active" on backend-evidence presence, not candidate-list non-emptiness. Reuse the adapter/normalizer as the single source of the observation-node key. Preserve current diagnostics vocabulary (missing frontend facts / missing backend facts / no matched pairs).
 
 **Acceptance criteria:**
-- [ ] A pure Next.js repo (file routes + Link references, no .NET facts) shows `dotnet-web` inactive and `nextjs` file-route bridging active.
-- [ ] A hybrid repo (Vue reference + ASP.NET minimal API route) still produces the frontend→endpoint edge.
-- [ ] One structural route yields exactly one observation node regardless of which providers saw it.
-- [ ] Existing htmx/ASP.NET dogfood-shaped tests stay green.
-- [ ] Worker-scope verification passes, committed.
+- [x] A pure Next.js repo (file routes + Link references, no .NET facts) shows `dotnet-web` inactive and `nextjs` file-route bridging active.
+- [x] A hybrid repo (Vue reference + ASP.NET minimal API route) still produces the frontend→endpoint edge.
+- [x] One structural route yields exactly one observation node regardless of which providers saw it.
+- [x] Existing htmx/ASP.NET dogfood-shaped tests stay green.
+- [x] Worker-scope verification passes, committed.
 
 ## Task 5: Honest Verbs for Navigation References
 

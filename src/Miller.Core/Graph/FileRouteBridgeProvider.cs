@@ -78,8 +78,9 @@ public sealed class FileRouteBridgeProvider : IBridgeProvider
 
         foreach (var reference in routeReferences)
         {
-            var id = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, reference.RoutePath);
-            nodes.TryAdd(id, new BridgeNode(id, BridgeNodeKind.TsType, reference.RoutePath, reference.FilePath, reference.Line));
+            var display = RouteDisplay(reference.RoutePath);
+            var id = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, display);
+            nodes.TryAdd(id, new BridgeNode(id, BridgeNodeKind.TsType, display, reference.FilePath, reference.Line));
         }
 
         foreach (var route in fileRoutes)
@@ -89,6 +90,14 @@ public sealed class FileRouteBridgeProvider : IBridgeProvider
         }
 
         return nodes;
+    }
+
+    private static string RouteDisplay(string route)
+    {
+        var canonical = RouteNormalizer.FromClientCall("route", route).Route;
+        if (canonical.Length == 0)
+            return route.StartsWith("/", StringComparison.Ordinal) ? route : "/" + route;
+        return canonical.StartsWith("/", StringComparison.Ordinal) ? canonical : "/" + canonical;
     }
 }
 
