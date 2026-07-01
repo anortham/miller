@@ -23,7 +23,7 @@ internal static class StructuralRouteFactAdapter
         if (!IsRouteReferencePattern(fact.PatternId))
             return false;
 
-        var routePath = RoutePath(fact);
+        var routePath = RouteReferencePath(fact);
         if (string.IsNullOrWhiteSpace(routePath))
             return false;
 
@@ -55,7 +55,7 @@ internal static class StructuralRouteFactAdapter
         if (!IsFileRoutePattern(fact.PatternId))
             return false;
 
-        var routePath = RoutePath(fact);
+        var routePath = FileRoutePath(fact);
         if (string.IsNullOrWhiteSpace(routePath))
             return false;
 
@@ -99,11 +99,17 @@ internal static class StructuralRouteFactAdapter
         string.Equals(patternId, NextJsFileRoutePattern, StringComparison.Ordinal) ||
         string.Equals(patternId, NuxtFileRoutePattern, StringComparison.Ordinal);
 
-    private static string? RoutePath(StructuralFactRecord fact) =>
+    private static string? RouteReferencePath(StructuralFactRecord fact) =>
         MetadataString(fact, "target_path")
         ?? MetadataString(fact, "attribute_value")
         ?? MetadataString(fact, "normalized_route_template")
         ?? MetadataString(fact, "route_path");
+
+    private static string? FileRoutePath(StructuralFactRecord fact) =>
+        MetadataString(fact, "route_path")
+        ?? MetadataString(fact, "normalized_route_template")
+        ?? MetadataString(fact, "target_path")
+        ?? MetadataString(fact, "attribute_value");
 
     private static string? DefaultVerbForRouteReferenceFact(string patternId) =>
         string.Equals(patternId, VueRouteReferencePattern, StringComparison.Ordinal) ||

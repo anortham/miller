@@ -1051,6 +1051,46 @@ public sealed class BridgeGraphBuilderTests
     }
 
     [Fact]
+    public void Build_DefaultProviders_BuildsNextDynamicNavigationFromBracketFileRouteFact()
+    {
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact(
+                "sf-next-user-link",
+                "nextjs.route_reference.v1",
+                "tsx",
+                "web/Nav.tsx",
+                string.Empty,
+                100,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "nextjs",
+                    ["target_path"] = "/users/42",
+                }),
+            Fact(
+                "sf-next-user-page",
+                "nextjs.file_route.v1",
+                "tsx",
+                "web/app/users/[id]/page.tsx",
+                string.Empty,
+                200,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "nextjs",
+                    ["route_path"] = "/users/[id]",
+                    ["normalized_route_template"] = "/users/:id",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build([], [], [], [], [], structuralFacts: facts);
+
+        var edge = Assert.Single(graph.Edges, e => e.Edge.Kind == BridgeKind.NavigatesTo);
+        Assert.Equal("/users/42", edge.Edge.SourceRef.Display);
+        Assert.Equal("/users/[id]", edge.Edge.TargetRef.Display);
+        Assert.Equal(ConfidenceBand.High, edge.Band);
+    }
+
+    [Fact]
     public void Build_DefaultProviders_RetainsUnmatchedNextRoutesAsObservationNodes()
     {
         var facts = new List<StructuralFactRecord>
@@ -1148,6 +1188,46 @@ public sealed class BridgeGraphBuilderTests
     }
 
     [Fact]
+    public void Build_DefaultProviders_BuildsNuxtDynamicNavigationFromBracketFileRouteFact()
+    {
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact(
+                "sf-nuxt-blog-link",
+                "nuxt.route_reference.v1",
+                "vue",
+                "app/components/Nav.vue",
+                string.Empty,
+                100,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "nuxt",
+                    ["target_path"] = "/blog/hello",
+                }),
+            Fact(
+                "sf-nuxt-blog-page",
+                "nuxt.file_route.v1",
+                "vue",
+                "app/pages/blog/[slug].vue",
+                string.Empty,
+                200,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "nuxt",
+                    ["route_path"] = "/blog/[slug]",
+                    ["normalized_route_template"] = "/blog/:slug",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build([], [], [], [], [], structuralFacts: facts);
+
+        var edge = Assert.Single(graph.Edges, e => e.Edge.Kind == BridgeKind.NavigatesTo);
+        Assert.Equal("/blog/hello", edge.Edge.SourceRef.Display);
+        Assert.Equal("/blog/[slug]", edge.Edge.TargetRef.Display);
+        Assert.Equal(ConfidenceBand.High, edge.Band);
+    }
+
+    [Fact]
     public void FileRouteBridge_StaticReference_YieldsNavigatesToEdge()
     {
         var edges = FileRouteBridge.Resolve(
@@ -1167,6 +1247,7 @@ public sealed class BridgeGraphBuilderTests
     [Theory]
     [InlineData("/users/[id]")]
     [InlineData("/users/{}")]
+    [InlineData("/users/:id")]
     public void FileRouteBridge_DynamicReference_YieldsHighConfidenceEdge(string fileRoute)
     {
         var edge = Assert.Single(FileRouteBridge.Resolve(
@@ -1196,6 +1277,21 @@ public sealed class BridgeGraphBuilderTests
     }
 
     [Fact]
+    public void FileRouteBridge_ColonCatchAllRequiresAtLeastOneTrailingSegment()
+    {
+        var edges = FileRouteBridge.Resolve(
+            [
+                NextRouteReference("/docs", "next.docs.index"),
+                NextRouteReference("/docs/a/b", "next.docs.deep"),
+            ],
+            [NextFileRoute("/docs/:slug*", "web/app/docs/[...slug]/page.tsx")]);
+
+        var edge = Assert.Single(edges);
+        Assert.Equal("/docs/a/b", edge.SourceRef.Display);
+        Assert.Equal("/docs/:slug*", edge.TargetRef.Display);
+    }
+
+    [Fact]
     public void FileRouteBridge_OptionalCatchAllMatchesZeroOrMoreTrailingSegments()
     {
         var edges = FileRouteBridge.Resolve(
@@ -1216,6 +1312,32 @@ public sealed class BridgeGraphBuilderTests
             {
                 Assert.Equal("/docs/a/b", edge.SourceRef.Display);
                 Assert.Equal("/docs/[[...slug]]", edge.TargetRef.Display);
+            });
+    }
+
+    [Theory]
+    [InlineData("/docs/:slug*?")]
+    [InlineData("/docs/:slug?")]
+    public void FileRouteBridge_ColonOptionalCatchAllMatchesZeroOrMoreTrailingSegments(string fileRoute)
+    {
+        var edges = FileRouteBridge.Resolve(
+            [
+                NextRouteReference("/docs", "next.docs.index"),
+                NextRouteReference("/docs/a/b", "next.docs.deep"),
+            ],
+            [NextFileRoute(fileRoute, "web/app/docs/[[...slug]]/page.tsx")]);
+
+        Assert.Collection(
+            edges.OrderBy(edge => edge.SourceRef.Display, StringComparer.Ordinal),
+            edge =>
+            {
+                Assert.Equal("/docs", edge.SourceRef.Display);
+                Assert.Equal(fileRoute, edge.TargetRef.Display);
+            },
+            edge =>
+            {
+                Assert.Equal("/docs/a/b", edge.SourceRef.Display);
+                Assert.Equal(fileRoute, edge.TargetRef.Display);
             });
     }
 
