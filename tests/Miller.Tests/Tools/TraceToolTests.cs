@@ -1542,6 +1542,115 @@ public sealed class TraceToolTests
     }
 
     [Fact]
+    public void Bridge_NotOnBridge_WithRouteFactEvidence_OffersPatternAudits()
+    {
+        var capability = new BridgeCapabilityReport(
+            ActiveProviders: ["dotnet-web"],
+            SkippedProviders: [],
+            Notes: [],
+            EvidenceCounts: new Dictionary<string, int>(StringComparer.Ordinal)
+            {
+                ["dotnet-web.structuralFacts"] = 3,
+                ["dotnet-web.aspnetMinimalRoutes"] = 1,
+                ["dotnet-web.htmxCalls"] = 1,
+                ["dotnet-web.vueCalls"] = 1,
+            });
+        var index = BuildBridgeIndex(
+            new[] { ("x", "Loner", "src/Loner.cs", 1) },
+            Array.Empty<ScoredEdge>(),
+            new Dictionary<string, BridgeNode>(StringComparer.Ordinal),
+            capability);
+
+        string outp = TraceTool.Run(index, ResolverFor(index),
+            target: "Loner", mode: "bridge", to: null, depth: 3, limit: 20, fullFormat: false,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        Assert.Contains("trace target=\"Loner\" mode=\"refs\"", outp);
+        Assert.Contains("trace target=\"Loner\" mode=\"auto\"", outp);
+        Assert.Contains("search query=\"Loner\" mode=\"source\"", outp);
+        Assert.Contains("patterns operation=\"search\" query=\"route\"", outp);
+        Assert.Contains("patterns operation=\"search\" pattern_id=\"htmx.attribute.v1\"", outp);
+        Assert.Contains("patterns operation=\"search\" pattern_id=\"vue.route_reference.v1\"", outp);
+    }
+
+    [Fact]
+    public void Bridge_NotOnBridge_WithRouteFactEvidence_JsonCarriesPatternAudits()
+    {
+        var capability = new BridgeCapabilityReport(
+            ActiveProviders: ["dotnet-web"],
+            SkippedProviders: [],
+            Notes: [],
+            EvidenceCounts: new Dictionary<string, int>(StringComparer.Ordinal)
+            {
+                ["dotnet-web.structuralFacts"] = 3,
+                ["dotnet-web.aspnetMinimalRoutes"] = 1,
+                ["dotnet-web.htmxCalls"] = 1,
+                ["dotnet-web.vueCalls"] = 1,
+            });
+        var index = BuildBridgeIndex(
+            new[] { ("x", "Loner", "src/Loner.cs", 1) },
+            Array.Empty<ScoredEdge>(),
+            new Dictionary<string, BridgeNode>(StringComparer.Ordinal),
+            capability);
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "Loner", mode: "bridge", to: null, depth: 3, limit: 20, fullFormat: false, json: true,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement[] actions = doc.RootElement.GetProperty("next_actions").EnumerateArray().ToArray();
+        Assert.Contains(actions, action =>
+            action.GetProperty("tool").GetString() == "patterns" &&
+            action.GetProperty("args").TryGetProperty("query", out JsonElement query) &&
+            query.GetString() == "route");
+        Assert.Contains(actions, action =>
+            action.GetProperty("tool").GetString() == "patterns" &&
+            action.GetProperty("args").TryGetProperty("pattern_id", out JsonElement patternId) &&
+            patternId.GetString() == "htmx.attribute.v1");
+        Assert.Contains(actions, action =>
+            action.GetProperty("tool").GetString() == "patterns" &&
+            action.GetProperty("args").TryGetProperty("pattern_id", out JsonElement patternId) &&
+            patternId.GetString() == "vue.route_reference.v1");
+    }
+
+    [Fact]
+    public void Bridge_CannotStart_WithRouteFactEvidence_JsonCarriesPatternAudits()
+    {
+        var capability = new BridgeCapabilityReport(
+            ActiveProviders: ["dotnet-web"],
+            SkippedProviders: [],
+            Notes: [],
+            EvidenceCounts: new Dictionary<string, int>(StringComparer.Ordinal)
+            {
+                ["dotnet-web.structuralFacts"] = 2,
+                ["dotnet-web.vueCalls"] = 1,
+            });
+        var index = BuildBridgeIndex(
+            new[] { ("x", "Loner", "src/Loner.cs", 1) },
+            Array.Empty<ScoredEdge>(),
+            new Dictionary<string, BridgeNode>(StringComparer.Ordinal),
+            capability);
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "MissingRoute", mode: "bridge", to: null, depth: 3, limit: 20, fullFormat: false, json: true,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement[] actions = doc.RootElement.GetProperty("next_actions").EnumerateArray().ToArray();
+        Assert.Contains(actions, action =>
+            action.GetProperty("tool").GetString() == "patterns" &&
+            action.GetProperty("args").TryGetProperty("query", out JsonElement query) &&
+            query.GetString() == "route");
+        Assert.Contains(actions, action =>
+            action.GetProperty("tool").GetString() == "patterns" &&
+            action.GetProperty("args").TryGetProperty("pattern_id", out JsonElement patternId) &&
+            patternId.GetString() == "vue.route_reference.v1");
+    }
+
+    [Fact]
     public void Bridge_NoLinksWithinDepth_RendersFallbackGuidance()
     {
         var mapsTo = MakeScored(
@@ -1595,6 +1704,48 @@ public sealed class TraceToolTests
         Assert.Equal("refs", actions[0].GetProperty("args").GetProperty("mode").GetString());
         Assert.Equal("auto", actions[1].GetProperty("args").GetProperty("mode").GetString());
         Assert.Equal("source", actions[2].GetProperty("args").GetProperty("mode").GetString());
+    }
+
+    [Fact]
+    public void Bridge_NoLinksWithinDepth_WithHtmxRouteFactEvidence_OffersPatternAudits()
+    {
+        var mapsTo = MakeScored(
+            BridgeKind.MapsTo,
+            SymbolRef("dto", "OrderDto", "src/OrderDto.cs"),
+            SymbolRef("ent", "Order", "src/Order.cs"),
+            ConfidenceBand.High,
+            0.95);
+        var capability = new BridgeCapabilityReport(
+            ActiveProviders: ["dotnet-web"],
+            SkippedProviders: [],
+            Notes: [],
+            EvidenceCounts: new Dictionary<string, int>(StringComparer.Ordinal)
+            {
+                ["dotnet-web.structuralFacts"] = 2,
+                ["dotnet-web.aspnetMinimalRoutes"] = 1,
+                ["dotnet-web.htmxCalls"] = 1,
+            });
+        var index = BuildBridgeIndex(
+            new[] { ("dto", "OrderDto", "src/OrderDto.cs", 1), ("ent", "Order", "src/Order.cs", 1) },
+            new[] { mapsTo },
+            new Dictionary<string, BridgeNode>(StringComparer.Ordinal),
+            capability);
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "OrderDto", mode: "bridge", to: null, depth: 0, limit: 20, fullFormat: false, json: true,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement[] actions = doc.RootElement.GetProperty("next_actions").EnumerateArray().ToArray();
+        Assert.Contains(actions, action =>
+            action.GetProperty("tool").GetString() == "patterns" &&
+            action.GetProperty("args").TryGetProperty("query", out JsonElement query) &&
+            query.GetString() == "route");
+        Assert.Contains(actions, action =>
+            action.GetProperty("tool").GetString() == "patterns" &&
+            action.GetProperty("args").TryGetProperty("pattern_id", out JsonElement patternId) &&
+            patternId.GetString() == "htmx.attribute.v1");
     }
 
     [Fact]

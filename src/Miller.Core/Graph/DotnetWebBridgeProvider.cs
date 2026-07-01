@@ -33,6 +33,7 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
         var structuralClientCalls = ReduceStructuralClientCalls(context.StructuralFacts, context.SymbolsById);
         var clientCalls = literalClientCalls.Concat(structuralClientCalls).ToList();
         var observationNodes = BuildStructuralRouteObservationNodes(structuralClientCalls, structuralEndpoints);
+        var structuralCallCounts = CountStructuralRouteReferences(context.StructuralFacts, context.SymbolsById);
         var serverTypeResolver = new SymbolResolver(context.Symbols.Where(IsCSharpUserType).ToArray());
 
         var evidenceCounts = new Dictionary<string, int>(StringComparer.Ordinal)
@@ -42,6 +43,10 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
             ["dotnet-web.clientCalls"] = clientCalls.Count,
             ["dotnet-web.structuralEndpoints"] = structuralEndpoints.Count,
             ["dotnet-web.structuralClientCalls"] = structuralClientCalls.Count,
+            ["dotnet-web.structuralFacts"] = context.StructuralFacts.Count,
+            ["dotnet-web.aspnetMinimalRoutes"] = structuralEndpoints.Count,
+            ["dotnet-web.htmxCalls"] = structuralCallCounts.Htmx,
+            ["dotnet-web.vueCalls"] = structuralCallCounts.Vue,
             ["dotnet-web.dbsets"] = context.DbSetProperties.Count,
         };
 
@@ -217,7 +222,7 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
         if (string.IsNullOrWhiteSpace(routeTemplate) || string.IsNullOrWhiteSpace(verb))
             return false;
 
-        var handler = ResolveStructuralHandler(fact, symbols);
+        var handler = ResolveStructuralHandler(fact, symbols, symbolsById);
         var fullRoute = ComposeStructuralEndpointRoute(fact, routeTemplate, literals, symbolsById, literalSites);
         endpoint = new ControllerEndpoint(
             SymbolId: handler?.Id,
@@ -304,17 +309,51 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
         return calls;
     }
 
+    private static (int Htmx, int Vue) CountStructuralRouteReferences(
+        IReadOnlyList<StructuralFactRecord> structuralFacts,
+        IReadOnlyDictionary<string, SymbolDetail> symbolsById)
+    {
+        int htmx = 0;
+        int vue = 0;
+        foreach (var fact in structuralFacts)
+        {
+            if (!StructuralRouteFactAdapter.TryReadRouteReference(fact, symbolsById, out _))
+                continue;
+
+            if (string.Equals(fact.PatternId, "htmx.attribute.v1", StringComparison.Ordinal))
+                htmx++;
+            else if (string.Equals(fact.PatternId, "vue.route_reference.v1", StringComparison.Ordinal) ||
+                     string.Equals(fact.PatternId, "vue.route_definition.v1", StringComparison.Ordinal))
+                vue++;
+        }
+
+        return (htmx, vue);
+    }
+
     private static TsClientCall ToClientCall(StructuralRouteReference reference)
     {
         var literal = new LiteralRecord(
             LiteralText: reference.RoutePath,
             Kind: "url",
-            Carrier: reference.Verb.ToUpperInvariant(),
+            Carrier: StructuralCarrier(reference.Fact.PatternId, reference.Verb),
             ArgPosition: 0,
             Language: reference.Fact.Language,
             ContainingSymbolId: reference.ContainingSymbolId,
             Span: new SourceSpan(reference.Fact.Span.StartByte, reference.Fact.Span.EndByte));
         return new TsClientCall(literal, IsTest: false, reference.FilePath, reference.Line);
+    }
+
+    private static string StructuralCarrier(string patternId, string verb)
+    {
+        var lowerVerb = verb.ToLowerInvariant();
+        return patternId switch
+        {
+            "htmx.attribute.v1" => "htmx." + lowerVerb,
+            "vue.route_reference.v1" or "vue.route_definition.v1" => "vue." + lowerVerb,
+            "react.route_reference.v1" or "react.route_definition.v1" => "react." + lowerVerb,
+            "nextjs.route_reference.v1" => "nextjs." + lowerVerb,
+            _ => verb.ToUpperInvariant(),
+        };
     }
 
     private static TsClientCall ToClientCall(StructuralFileRoute route)
@@ -330,11 +369,19 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
         return new TsClientCall(literal, IsTest: false, route.FilePath, route.Line);
     }
 
-    private static SymbolDetail? ResolveStructuralHandler(StructuralFactRecord fact, IReadOnlyList<SymbolDetail> symbols)
+    private static SymbolDetail? ResolveStructuralHandler(
+        StructuralFactRecord fact,
+        IReadOnlyList<SymbolDetail> symbols,
+        IReadOnlyDictionary<string, SymbolDetail> symbolsById)
     {
         var handlerName = MetadataString(fact, "handler_name");
         if (string.IsNullOrWhiteSpace(handlerName))
-            return null;
+        {
+            return !string.IsNullOrWhiteSpace(fact.ContainingSymbolId) &&
+                   symbolsById.TryGetValue(fact.ContainingSymbolId, out var containing)
+                ? containing
+                : null;
+        }
 
         return symbols
             .Where(symbol => string.Equals(symbol.Name, handlerName, StringComparison.Ordinal)

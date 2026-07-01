@@ -1,6 +1,7 @@
 using Miller.Core.Contracts;
 using Miller.Core.Graph;
 using Miller.Core.Resolver;
+using System.Text.Json;
 using Xunit;
 
 namespace Miller.Tests.Graph;
@@ -242,6 +243,248 @@ public sealed class BridgeGraphBuilderTests
         var endpointEdges = graph.Incident("sym-get");
         Assert.Contains(endpointEdges, e => e.Edge.Kind == BridgeKind.Hits && e.Band == ConfidenceBand.High);
         Assert.Contains(endpointEdges, e => e.Edge.Kind == BridgeKind.Responds);
+    }
+
+    [Fact]
+    public void StructuralFacts_htmx_get_hits_minimal_api_mapget_with_client_and_endpoint_evidence()
+    {
+        var mapGet = Method("sym-mapget", "MapGet", "IResult MapGet()", "Program", "api/Program.cs");
+        var htmlNode = Type("sym-htmx", "loadTodos", "element", file: "web/index.html");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-mapget",
+                patternId: "aspnet.minimal_api.route.v1",
+                language: "csharp",
+                path: "api/Program.cs",
+                containingSymbolId: "sym-mapget",
+                startLine: 12,
+                metadataJson: """{"verb":"GET","route_template":"/todos"}"""),
+            StructuralFact(
+                factId: "fact-hx-get",
+                patternId: "htmx.attribute.v1",
+                language: "html",
+                path: "web/index.html",
+                containingSymbolId: "sym-htmx",
+                startLine: 4,
+                metadataJson: """{"attribute_name":"hx-get","verb":"GET","target_path":"/todos"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [mapGet, htmlNode],
+            typeArguments: [],
+            literals: [],
+            annotations: [],
+            dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hit = Assert.Single(graph.Incident("sym-mapget"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.Contains(hit.Edge.Evidence, e => e.FilePath == "api/Program.cs" && e.Line == 12);
+        Assert.Contains(hit.Edge.Evidence, e => e.FilePath == "web/index.html" && e.Line == 4);
+        Assert.Equal(2, graph.CapabilityReport.EvidenceCounts["dotnet-web.structuralFacts"]);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.aspnetMinimalRoutes"]);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.htmxCalls"]);
+    }
+
+    [Fact]
+    public void StructuralFacts_htmx_post_does_not_match_minimal_api_mapget_for_same_route()
+    {
+        var mapGet = Method("sym-mapget", "MapGet", "IResult MapGet()", "Program", "api/Program.cs");
+        var htmlNode = Type("sym-htmx", "createTodo", "element", file: "web/index.html");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-mapget",
+                patternId: "aspnet.minimal_api.route.v1",
+                language: "csharp",
+                path: "api/Program.cs",
+                containingSymbolId: "sym-mapget",
+                startLine: 12,
+                metadataJson: """{"verb":"GET","route_template":"/todos"}"""),
+            StructuralFact(
+                factId: "fact-hx-post",
+                patternId: "htmx.attribute.v1",
+                language: "html",
+                path: "web/index.html",
+                containingSymbolId: "sym-htmx",
+                startLine: 4,
+                metadataJson: """{"attribute_name":"hx-post","verb":"POST","target_path":"/todos"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [mapGet, htmlNode],
+            typeArguments: [],
+            literals: [],
+            annotations: [],
+            dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.DoesNotContain(graph.Incident("sym-mapget"), e => e.Edge.Kind == BridgeKind.Hits);
+    }
+
+    [Fact]
+    public void StructuralFacts_htmx_non_route_attributes_do_not_produce_client_calls()
+    {
+        var mapGet = Method("sym-mapget", "MapGet", "IResult MapGet()", "Program", "api/Program.cs");
+        var htmlNode = Type("sym-htmx", "targetTodos", "element", file: "web/index.html");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-mapget",
+                patternId: "aspnet.minimal_api.route.v1",
+                language: "csharp",
+                path: "api/Program.cs",
+                containingSymbolId: "sym-mapget",
+                startLine: 12,
+                metadataJson: """{"verb":"GET","route_template":"/todos"}"""),
+            StructuralFact(
+                factId: "fact-hx-target",
+                patternId: "htmx.attribute.v1",
+                language: "html",
+                path: "web/index.html",
+                containingSymbolId: "sym-htmx",
+                startLine: 4,
+                metadataJson: """{"attribute_name":"hx-target","verb":"GET","target_path":"/todos"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [mapGet, htmlNode],
+            typeArguments: [],
+            literals: [],
+            annotations: [],
+            dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.DoesNotContain(graph.Incident("sym-mapget"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.aspnetMinimalRoutes"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["dotnet-web.htmxCalls"]);
+    }
+
+    [Fact]
+    public void StructuralFacts_vue_router_link_hits_minimal_api_mapget_with_client_and_endpoint_evidence()
+    {
+        var mapGet = Method("sym-mapget", "MapGet", "IResult MapGet()", "Program", "api/Program.cs");
+        var vueNode = Type("sym-vue", "TodoLink", "component", file: "web/TodoLink.vue");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-mapget",
+                patternId: "aspnet.minimal_api.route.v1",
+                language: "csharp",
+                path: "api/Program.cs",
+                containingSymbolId: "sym-mapget",
+                startLine: 12,
+                metadataJson: """{"verb":"GET","route_template":"/todos"}"""),
+            StructuralFact(
+                factId: "fact-vue-router-link",
+                patternId: "vue.route_reference.v1",
+                language: "vue",
+                path: "web/TodoLink.vue",
+                containingSymbolId: "sym-vue",
+                startLine: 6,
+                metadataJson: """{"source_kind":"RouterLink","attribute_name":"to","verb":"GET","target_path":"/todos"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [mapGet, vueNode],
+            typeArguments: [],
+            literals: [],
+            annotations: [],
+            dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hit = Assert.Single(graph.Incident("sym-mapget"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.Contains(hit.Edge.Evidence, e => e.FilePath == "api/Program.cs" && e.Line == 12);
+        Assert.Contains(hit.Edge.Evidence, e => e.FilePath == "web/TodoLink.vue" && e.Line == 6);
+        Assert.Equal(2, graph.CapabilityReport.EvidenceCounts["dotnet-web.structuralFacts"]);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.aspnetMinimalRoutes"]);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.vueCalls"]);
+    }
+
+    [Fact]
+    public void StructuralFacts_vue_bound_to_literal_hits_minimal_api_mapget()
+    {
+        var mapGet = Method("sym-mapget", "MapGet", "IResult MapGet()", "Program", "api/Program.cs");
+        var vueNode = Type("sym-vue", "TodoLink", "component", file: "web/TodoLink.vue");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-mapget",
+                patternId: "aspnet.minimal_api.route.v1",
+                language: "csharp",
+                path: "api/Program.cs",
+                containingSymbolId: "sym-mapget",
+                startLine: 12,
+                metadataJson: """{"verb":"GET","route_template":"/todos"}"""),
+            StructuralFact(
+                factId: "fact-vue-bound-to",
+                patternId: "vue.route_reference.v1",
+                language: "vue",
+                path: "web/TodoLink.vue",
+                containingSymbolId: "sym-vue",
+                startLine: 7,
+                metadataJson: """{"source_kind":"bound_attribute","attribute_name":":to","expression":"'\/todos'","verb":"GET","target_path":"/todos"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [mapGet, vueNode],
+            typeArguments: [],
+            literals: [],
+            annotations: [],
+            dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hit = Assert.Single(graph.Incident("sym-mapget"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.vueCalls"]);
+    }
+
+    [Fact]
+    public void StructuralFacts_vue_route_facts_without_target_path_do_not_produce_client_calls()
+    {
+        var mapGet = Method("sym-mapget", "MapGet", "IResult MapGet()", "Program", "api/Program.cs");
+        var vueNode = Type("sym-vue", "TodoLink", "component", file: "web/TodoLink.vue");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-mapget",
+                patternId: "aspnet.minimal_api.route.v1",
+                language: "csharp",
+                path: "api/Program.cs",
+                containingSymbolId: "sym-mapget",
+                startLine: 12,
+                metadataJson: """{"verb":"GET","route_template":"/todos"}"""),
+            StructuralFact(
+                factId: "fact-vue-missing-target",
+                patternId: "vue.route_reference.v1",
+                language: "vue",
+                path: "web/TodoLink.vue",
+                containingSymbolId: "sym-vue",
+                startLine: 7,
+                metadataJson: """{"source_kind":"RouterLink","attribute_name":"to","verb":"GET"}"""),
+            StructuralFact(
+                factId: "fact-vue-nonliteral-expression",
+                patternId: "vue.route_reference.v1",
+                language: "vue",
+                path: "web/TodoLink.vue",
+                containingSymbolId: "sym-vue",
+                startLine: 8,
+                metadataJson: """{"source_kind":"bound_attribute","attribute_name":":to","expression":"todo.href","verb":"GET"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [mapGet, vueNode],
+            typeArguments: [],
+            literals: [],
+            annotations: [],
+            dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.DoesNotContain(graph.Incident("sym-mapget"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.aspnetMinimalRoutes"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["dotnet-web.vueCalls"]);
     }
 
     [Fact]
@@ -1122,4 +1365,43 @@ public sealed class BridgeGraphBuilderTests
             Language: language,
             ContainingSymbolId: containingSymbolId,
             Span: new SourceSpan(spanStart, spanStart + text.Length));
+
+    private static StructuralFactRecord StructuralFact(
+        string factId,
+        string patternId,
+        string language,
+        string path,
+        string? containingSymbolId,
+        int startLine,
+        string metadataJson)
+        => new(
+            FactId: factId,
+            PatternId: patternId,
+            Language: language,
+            Path: path,
+            CaptureName: "framework.route",
+            NodeKind: "node",
+            ContainingSymbolId: containingSymbolId,
+            Span: new StructuralFactSpan(
+                startLine,
+                StartColumn: 1,
+                startLine,
+                EndColumn: 1,
+                startLine * 10,
+                startLine * 10 + 1),
+            Confidence: 1.0,
+            Metadata: ParseMetadata(metadataJson));
+
+    private static IReadOnlyDictionary<string, string> ParseMetadata(string metadataJson)
+    {
+        using var document = JsonDocument.Parse(metadataJson);
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var property in document.RootElement.EnumerateObject())
+        {
+            metadata[property.Name] = property.Value.ValueKind == JsonValueKind.String
+                ? property.Value.GetString() ?? string.Empty
+                : property.Value.GetRawText();
+        }
+        return metadata;
+    }
 }

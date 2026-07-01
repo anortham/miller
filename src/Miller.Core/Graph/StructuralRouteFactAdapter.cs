@@ -25,7 +25,9 @@ internal static class StructuralRouteFactAdapter
         if (string.IsNullOrWhiteSpace(routePath))
             return false;
 
-        var verb = MetadataString(fact, "verb") ?? DefaultVerbForRouteReferenceFact(fact.PatternId);
+        var verb = string.Equals(fact.PatternId, HtmxAttributePattern, StringComparison.Ordinal)
+            ? HtmxVerb(fact)
+            : MetadataString(fact, "verb") ?? DefaultVerbForRouteReferenceFact(fact.PatternId);
         if (string.IsNullOrWhiteSpace(verb))
             return false;
 
@@ -104,6 +106,24 @@ internal static class StructuralRouteFactAdapter
         string.Equals(patternId, NextJsRouteReferencePattern, StringComparison.Ordinal)
             ? "GET"
             : null;
+
+    private static string? HtmxVerb(StructuralFactRecord fact)
+    {
+        var attributeName = MetadataString(fact, "attribute_name")
+            ?? MetadataString(fact, "attribute");
+        if (string.IsNullOrWhiteSpace(attributeName))
+            return MetadataString(fact, "verb");
+
+        return attributeName?.ToLowerInvariant() switch
+        {
+            "hx-get" => "GET",
+            "hx-post" => "POST",
+            "hx-put" => "PUT",
+            "hx-patch" => "PATCH",
+            "hx-delete" => "DELETE",
+            _ => null,
+        };
+    }
 
     private static string? MetadataString(StructuralFactRecord fact, string key)
     {

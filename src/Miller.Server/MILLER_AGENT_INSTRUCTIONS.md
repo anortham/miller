@@ -35,14 +35,12 @@ returns ranked, structured results with fewer tokens.
   `reference_mode=usage` adds definitions, name-based refs, call IDs, and source chunks; treat
   `confidence=name_based` as possible. `exclude_tests=true` filters tests only in usage mode. Optional `workspace_id`
   and `ensure_fresh` route through the registry provider.
-- `trace` — Follow code. `mode=refs` (name-based usages, with optional
+- `trace` — Follow code. `mode=refs` (name-based usages; optional
   `reference_kind=call|variable_ref|type_usage|member_access|import`; on empty, fall back to `search mode=source`),
   `mode=path` (shortest path to `to`; no path means no extracted graph path within depth, not proof unrelated),
-  `mode=bridge` (provider bridge graph: `dotnet-web`, `nextjs`).
-  `mode=auto` (callers/callees) is subsumed by `inspect depth=full` — prefer `inspect` for that.
-  Reduced-confidence links are flagged `[verb-unknown]`/`[ambiguous]`. Use `format=json` for structured
-  references/nodes/links/diagnostics/next_actions. Use `scope=<file>` to disambiguate duplicate names. Optional
-  `workspace_id` and `ensure_fresh` work cross-workspace. **`mode=bridge` is provider-scoped to
+  `mode=bridge` (`dotnet-web`, `nextjs`). `mode=auto` is subsumed by `inspect depth=full`.
+  Links are flagged `[verb-unknown]`/`[ambiguous]`. Use `format=json` for
+  refs/nodes/links/diagnostics/next_actions; `scope=<file>` for duplicate names. **`mode=bridge` is provider-scoped to
   `dotnet-web` and `nextjs`; outside those providers use `mode=refs`/`mode=path`, or `inspect depth=full`.**
 - `impact` — What a change affects: downstream symbols and linked tests. After edits, run `impact` with no
   args to read the working-tree git diff and see what your uncommitted change affects + which tests to run.
@@ -68,7 +66,10 @@ returns ranked, structured results with fewer tokens.
 - **New task / unfamiliar area**: `context` → `inspect` the key symbols → implement.
 - **Understand a symbol**: first use `inspect target depth=overview`; use `depth=full` for complete body/reference/call lists.
 - **Trace a flow**: `trace mode=refs` for usages, `mode=path` for A→B, `mode=bridge` for
-  `dotnet-web`/`nextjs` evidence; for callers/callees use `inspect depth=full` (subsumes `mode=auto`). If a name is ambiguous, retry with `scope=<file>`.
+  `dotnet-web`/`nextjs` evidence. ASP.NET minimal API, htmx, and Vue route structural facts feed `dotnet-web`;
+  route-fact audits: `patterns operation=search query=route`, `patterns operation=search pattern_id=htmx.attribute.v1`,
+  `patterns operation=search pattern_id=vue.route_reference.v1`. For callers/callees use `inspect depth=full`.
+  If ambiguous, retry with `scope=<file>`.
   If `mode=path` returns no path, treat it as no extracted graph path within depth, not proof unrelated; follow its `Next:` actions.
 - **Find docs/prose**: `search mode=content "<phrase>"` returns `path:line` + snippet.
 - **Find source-body text**: `search mode=source "<literal or phrase>"` searches verified source files.
@@ -114,7 +115,7 @@ code, paste this block into the prompt:
       mode=source/external/web/all-text for content text, mode=markers for TODO/FIXME/HACK/XXX audits,
       regions=... for comments/strings, and filters to scope.
     - inspect(target, depth?) before reading files/symbols; depth=overview is compact, depth=full is complete.
-    - trace(target, mode?, to?, scope?, reference_kind?) before manual reference/caller/callee file hopping; use mode=refs for usages and scope for ambiguous names. mode=path no-path means no extracted graph path within depth, not proof unrelated; mode=bridge is provider-scoped to `dotnet-web` and `nextjs`; outside those providers use `mode=refs`/`mode=path`, or `inspect depth=full`.
+    - trace(target, mode?, to?, scope?, reference_kind?) before manual file hopping; use mode=refs for usages and scope for ambiguous names. mode=path no-path means no extracted graph path within depth, not proof unrelated; mode=bridge is provider-scoped to `dotnet-web` and `nextjs`; outside those providers use `mode=refs`/`mode=path`, or `inspect depth=full`.
     - impact(target?|changed_paths?|diff?|git?/base?/staged?) before refactors and to choose tests.
     - edit(operation, target, ...) to preview index-aware edits; use match_mode=auto with query/anchor/line for localized replace_text.
     - content(import|add_markdown|search|read|list|remove|export, ...) for logs, web markdown, and audits; use workspace_id=all for audits and pass hit workspace_id on reads.

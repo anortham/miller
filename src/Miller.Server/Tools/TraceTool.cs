@@ -610,10 +610,14 @@ public sealed class TraceTool
         nodesVisited = 0;
 
         if (!ResolveBridgeStart(index, resolver, target, scope, out string startId, out string? routeFilter, out string? note, out IReadOnlyList<TraceNextAction> nextActions))
+        {
+            if (nextActions.Count == 0)
+                nextActions = BridgeFallbackNextActions(target, index.BridgeGraph.CapabilityReport);
             return json
                 ? RenderBridgeJson(index.BridgeGraph, target, to: null, depth, limit, emitted, nodesVisited, startId: null,
                     edges: [], note!, DiagnosticCode(note!), nextActions)
                 : AppendNextActions(note!, nextActions);
+        }
 
         // A symbol with no incident bridge edges is not on any cross-language thread — whether it is absent from the
         // bridge node lookup entirely or present but edge-less, the honest answer is the same. Incident subsumes both.
@@ -621,7 +625,7 @@ public sealed class TraceTool
         {
             if (routeFilter is not null && TryBuildRouteDiagnostic(index.BridgeGraph, routeFilter, out var routeDiagnostic))
             {
-                IReadOnlyList<TraceNextAction> routeNextActions = BridgeFallbackNextActions(target);
+                IReadOnlyList<TraceNextAction> routeNextActions = BridgeFallbackNextActions(target, index.BridgeGraph.CapabilityReport);
                 return json
                     ? RenderBridgeJson(index.BridgeGraph, target, to: null, depth, limit, emitted, nodesVisited, startId,
                         edges: [], routeDiagnostic.Message, routeDiagnostic.Code, routeNextActions)
@@ -631,7 +635,7 @@ public sealed class TraceTool
             var message = new StringBuilder();
             message.Append($"'{target}' is not on a cross-language bridge. trace bridge follows DTO/entity/table/route links; ")
               .Append("this symbol has none.");
-            IReadOnlyList<TraceNextAction> bridgeNextActions = BridgeFallbackNextActions(target);
+            IReadOnlyList<TraceNextAction> bridgeNextActions = BridgeFallbackNextActions(target, index.BridgeGraph.CapabilityReport);
             AppendNextActions(message, bridgeNextActions);
             AppendBridgeCapabilityStatus(message, index.BridgeGraph.CapabilityReport);
             return json
@@ -651,7 +655,7 @@ public sealed class TraceTool
         {
             if (routeFilter is not null && TryBuildRouteDiagnostic(index.BridgeGraph, routeFilter, out var routeDiagnostic))
             {
-                IReadOnlyList<TraceNextAction> routeNextActions = BridgeFallbackNextActions(target);
+                IReadOnlyList<TraceNextAction> routeNextActions = BridgeFallbackNextActions(target, index.BridgeGraph.CapabilityReport);
                 return json
                     ? RenderBridgeJson(index.BridgeGraph, target, to: null, depth, limit, emitted, nodesVisited, startId,
                         edges: [], routeDiagnostic.Message, routeDiagnostic.Code, routeNextActions)
@@ -659,7 +663,7 @@ public sealed class TraceTool
             }
 
             string message = $"No bridge links from '{target}' within {depth} hop(s).";
-            IReadOnlyList<TraceNextAction> bridgeNextActions = BridgeFallbackNextActions(target);
+            IReadOnlyList<TraceNextAction> bridgeNextActions = BridgeFallbackNextActions(target, index.BridgeGraph.CapabilityReport);
             return json
                 ? RenderBridgeJson(index.BridgeGraph, target, to: null, depth, limit, emitted, nodesVisited, startId,
                     edges: [], message, "no_bridge_links", bridgeNextActions)
@@ -1446,24 +1450,68 @@ public sealed class TraceTool
         ];
     }
 
-    private static IReadOnlyList<TraceNextAction> BridgeFallbackNextActions(string target) =>
-    [
-        NextAction(
+    private static IReadOnlyList<TraceNextAction> BridgeFallbackNextActions(string target, BridgeCapabilityReport? capabilityReport = null)
+    {
+        var actions = new List<TraceNextAction>
+        {
+            NextAction(
             "trace",
             "check ordinary extracted identifier references outside the bridge graph",
             ("target", target),
             ("mode", ModeRefs)),
-        NextAction(
+            NextAction(
             "trace",
             "inspect ordinary graph neighbours for callers and callees",
             ("target", target),
             ("mode", ModeAuto)),
-        NextAction(
+            NextAction(
             "search",
             "look for source text links not represented in the bridge graph",
             ("query", target),
             ("mode", "source")),
-    ];
+        };
+
+        if (capabilityReport is not null && HasRouteFactEvidence(capabilityReport))
+        {
+            actions.Add(NextAction(
+                "patterns",
+                "audit route structural facts consumed by bridge providers",
+                ("operation", "search"),
+                ("query", "route")));
+
+            if (HasEvidence(capabilityReport, "dotnet-web.htmxCalls"))
+            {
+                actions.Add(NextAction(
+                    "patterns",
+                    "audit htmx route structural facts consumed by the dotnet-web bridge",
+                    ("operation", "search"),
+                    ("pattern_id", "htmx.attribute.v1")));
+            }
+
+            if (HasEvidence(capabilityReport, "dotnet-web.vueCalls"))
+            {
+                actions.Add(NextAction(
+                    "patterns",
+                    "audit Vue route structural facts consumed by the dotnet-web bridge",
+                    ("operation", "search"),
+                    ("pattern_id", "vue.route_reference.v1")));
+            }
+        }
+
+        return actions;
+    }
+
+    private static bool HasRouteFactEvidence(BridgeCapabilityReport report) =>
+        HasEvidence(report, "bridge.structuralFacts") ||
+        HasEvidence(report, "dotnet-web.structuralFacts") ||
+        HasEvidence(report, "dotnet-web.aspnetMinimalRoutes") ||
+        HasEvidence(report, "dotnet-web.htmxCalls") ||
+        HasEvidence(report, "dotnet-web.vueCalls") ||
+        HasEvidence(report, "nextjs.routeReferences") ||
+        HasEvidence(report, "nextjs.fileRoutes");
+
+    private static bool HasEvidence(BridgeCapabilityReport report, string key) =>
+        report.EvidenceCounts.TryGetValue(key, out int value) && value > 0;
 
     private static TraceNextAction NextAction(string tool, string reason, params (string Key, string Value)[] args) =>
         new(tool, reason, args.Select(static arg => new KeyValuePair<string, string>(arg.Key, arg.Value)).ToArray());
@@ -1484,7 +1532,7 @@ public sealed class TraceTool
             return;
 
         sb.Append('\n').Append("Next:");
-        foreach (TraceNextAction action in actions.Take(4))
+        foreach (TraceNextAction action in actions.Take(6))
         {
             sb.Append('\n')
               .Append("  ")
@@ -1759,7 +1807,7 @@ public sealed class TraceTool
         w.WriteStartArray();
         if (actions is not null)
         {
-            foreach (TraceNextAction action in actions.Take(4))
+            foreach (TraceNextAction action in actions.Take(6))
             {
                 w.WriteStartObject();
                 w.WriteString("tool", action.Tool);

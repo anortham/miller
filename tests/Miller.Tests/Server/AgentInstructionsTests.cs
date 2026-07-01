@@ -142,6 +142,7 @@ public sealed class AgentInstructionsTests
         Assert.Contains("outside those providers use `mode=refs`/`mode=path`, or `inspect depth=full`", instructions);
         Assert.Contains("on empty, fall back to `search mode=source`", instructions);
         Assert.Contains("follow its `Next:` actions", instructions);
+        Assert.Contains("ASP.NET minimal API, htmx, and Vue route structural facts", instructions);
     }
 
     [Fact]
@@ -153,6 +154,9 @@ public sealed class AgentInstructionsTests
         Assert.Contains("Empty content searches and failed reads include recovery guidance", instructions);
         Assert.Contains("patterns operation=list", instructions);
         Assert.Contains("List/no-match results include `next_actions`", instructions);
+        Assert.Contains("patterns operation=search query=route", instructions);
+        Assert.Contains("patterns operation=search pattern_id=htmx.attribute.v1", instructions);
+        Assert.Contains("patterns operation=search pattern_id=vue.route_reference.v1", instructions);
     }
 
     [Fact]
