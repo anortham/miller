@@ -186,9 +186,12 @@ public sealed class BridgeGraphBuilderTests
 
         Assert.Contains("dotnet-web", graph.CapabilityReport.ActiveProviders);
         Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.dbsets"]);
-        var skipped = Assert.Single(graph.CapabilityReport.SkippedProviders);
-        Assert.Equal("nextjs", skipped.ProviderId);
-        Assert.Contains("no nextjs bridge evidence", skipped.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(graph.CapabilityReport.SkippedProviders, skipped =>
+            skipped.ProviderId == "nextjs" &&
+            skipped.Reason.Contains("no nextjs bridge evidence", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(graph.CapabilityReport.SkippedProviders, skipped =>
+            skipped.ProviderId == "nuxt" &&
+            skipped.Reason.Contains("no nuxt bridge evidence", StringComparison.OrdinalIgnoreCase));
         Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["nextjs.routeReferences"]);
         Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["nextjs.fileRoutes"]);
         Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["nextjs.candidates"]);
@@ -801,6 +804,8 @@ public sealed class BridgeGraphBuilderTests
     [InlineData("react.route_definition.v1", "tsx", "web/routes.tsx", "react.routes", "route_path", "/calendar")]
     [InlineData("nextjs.route_reference.v1", "tsx", "web/nav.tsx", "next.link", "target_path", "/calendar")]
     [InlineData("nextjs.file_route.v1", "tsx", "web/app/calendar/page.tsx", "next.page", "route_path", "/calendar")]
+    [InlineData("nuxt.route_reference.v1", "vue", "app/components/Nav.vue", "nuxt.link", "target_path", "/calendar")]
+    [InlineData("nuxt.file_route.v1", "vue", "app/pages/calendar.vue", "nuxt.page", "route_path", "/calendar")]
     public void StructuralFacts_FrontendRouteFacts_YieldHitsEdgeToMinimalApiHandler(
         string frontendPattern,
         string frontendLanguage,
@@ -1039,7 +1044,7 @@ public sealed class BridgeGraphBuilderTests
         Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["nextjs.candidates"]);
         Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["nextjs.ambiguousMatches"]);
         Assert.Contains(graph.Nodes.Values, node =>
-            node.Kind == BridgeNodeKind.NextRoute &&
+            node.Kind == BridgeNodeKind.FileRoute &&
             node.Display == "/settings" &&
             node.FilePath == "web/app/settings/page.tsx" &&
             node.Line == 1);
@@ -1087,16 +1092,65 @@ public sealed class BridgeGraphBuilderTests
             node.FilePath == "web/Nav.tsx" &&
             node.Line == 1);
         Assert.Contains(graph.Nodes.Values, node =>
-            node.Kind == BridgeNodeKind.NextRoute &&
+            node.Kind == BridgeNodeKind.FileRoute &&
             node.Display == "/settings" &&
             node.FilePath == "web/app/settings/page.tsx" &&
             node.Line == 1);
     }
 
     [Fact]
-    public void NextRouteBridge_StaticReference_YieldsNavigatesToEdge()
+    public void Build_DefaultProviders_BuildsNuxtNavigationFromStructuralFacts()
     {
-        var edges = NextRouteBridge.Resolve(
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact(
+                "sf-nuxt-about-link",
+                "nuxt.route_reference.v1",
+                "vue",
+                "app/components/Nav.vue",
+                string.Empty,
+                100,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "nuxt",
+                    ["target_path"] = "/about",
+                }),
+            Fact(
+                "sf-nuxt-about-page",
+                "nuxt.file_route.v1",
+                "vue",
+                "app/pages/about.vue",
+                string.Empty,
+                200,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "nuxt",
+                    ["route_path"] = "/about",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build([], [], [], [], [], structuralFacts: facts);
+
+        var edge = Assert.Single(graph.Edges, e => e.Edge.Kind == BridgeKind.NavigatesTo);
+        Assert.Equal(ConfidenceBand.High, edge.Band);
+        Assert.Equal("/about", edge.Edge.SourceRef.Display);
+        Assert.Equal("/about", edge.Edge.TargetRef.Display);
+        Assert.Contains("nuxt", graph.CapabilityReport.ActiveProviders);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["nuxt.routeReferences"]);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["nuxt.fileRoutes"]);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["nuxt.candidates"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["nuxt.ambiguousMatches"]);
+        Assert.Contains(graph.Nodes.Values, node =>
+            node.Kind == BridgeNodeKind.FileRoute &&
+            node.Display == "/about" &&
+            node.FilePath == "app/pages/about.vue" &&
+            node.Line == 1);
+    }
+
+    [Fact]
+    public void FileRouteBridge_StaticReference_YieldsNavigatesToEdge()
+    {
+        var edges = FileRouteBridge.Resolve(
             [NextRouteReference("/settings")],
             [NextFileRoute("/settings", "web/app/settings/page.tsx")]);
 
@@ -1113,9 +1167,9 @@ public sealed class BridgeGraphBuilderTests
     [Theory]
     [InlineData("/users/[id]")]
     [InlineData("/users/{}")]
-    public void NextRouteBridge_DynamicReference_YieldsHighConfidenceEdge(string fileRoute)
+    public void FileRouteBridge_DynamicReference_YieldsHighConfidenceEdge(string fileRoute)
     {
-        var edge = Assert.Single(NextRouteBridge.Resolve(
+        var edge = Assert.Single(FileRouteBridge.Resolve(
             [NextRouteReference("/users/123")],
             [NextFileRoute(fileRoute, "web/app/users/[id]/page.tsx")]));
 
@@ -1127,9 +1181,9 @@ public sealed class BridgeGraphBuilderTests
     }
 
     [Fact]
-    public void NextRouteBridge_CatchAllRequiresAtLeastOneTrailingSegment()
+    public void FileRouteBridge_CatchAllRequiresAtLeastOneTrailingSegment()
     {
-        var edges = NextRouteBridge.Resolve(
+        var edges = FileRouteBridge.Resolve(
             [
                 NextRouteReference("/docs", "next.docs.index"),
                 NextRouteReference("/docs/a/b", "next.docs.deep"),
@@ -1142,9 +1196,9 @@ public sealed class BridgeGraphBuilderTests
     }
 
     [Fact]
-    public void NextRouteBridge_OptionalCatchAllMatchesZeroOrMoreTrailingSegments()
+    public void FileRouteBridge_OptionalCatchAllMatchesZeroOrMoreTrailingSegments()
     {
-        var edges = NextRouteBridge.Resolve(
+        var edges = FileRouteBridge.Resolve(
             [
                 NextRouteReference("/docs", "next.docs.index"),
                 NextRouteReference("/docs/a/b", "next.docs.deep"),
@@ -1166,9 +1220,9 @@ public sealed class BridgeGraphBuilderTests
     }
 
     [Fact]
-    public void NextRouteBridge_RouteGroupSegmentsDoNotParticipateInMatching()
+    public void FileRouteBridge_RouteGroupSegmentsDoNotParticipateInMatching()
     {
-        var edge = Assert.Single(NextRouteBridge.Resolve(
+        var edge = Assert.Single(FileRouteBridge.Resolve(
             [NextRouteReference("/settings")],
             [NextFileRoute("/(admin)/settings", "web/app/(admin)/settings/page.tsx")]));
 
@@ -1177,9 +1231,9 @@ public sealed class BridgeGraphBuilderTests
     }
 
     [Fact]
-    public void NextRouteBridge_AmbiguousFileRouteMatchesEmitNoEdge()
+    public void FileRouteBridge_AmbiguousFileRouteMatchesEmitNoEdge()
     {
-        var edges = NextRouteBridge.Resolve(
+        var edges = FileRouteBridge.Resolve(
             [NextRouteReference("/settings")],
             [
                 NextFileRoute("/settings", "web/app/settings/page.tsx", "sf-next-settings-app"),

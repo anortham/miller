@@ -1,6 +1,6 @@
 namespace Miller.Core.Resolver;
 
-public static class NextRouteMatcher
+public static class FileRouteMatcher
 {
     public static bool Matches(string referenceRoute, string fileRoute)
     {

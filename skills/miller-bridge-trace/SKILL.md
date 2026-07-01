@@ -1,6 +1,6 @@
 ---
 name: miller-bridge-trace
-description: Use when tracing Miller bridge paths in supported providers: dotnet-web URL literals to ASP.NET signals, or nextjs route references to file routes.
+description: Use when tracing Miller bridge paths in supported providers: dotnet-web URL literals to ASP.NET signals, or Next.js/Nuxt route references to file routes.
 user-invocable: true
 arguments: "<client call, URL, route, endpoint, DTO, entity, or table>"
 allowed-tools: mcp__miller__trace, mcp__miller__search, mcp__miller__inspect, mcp__miller__context, mcp__miller__workspace, mcp__miller__patterns
@@ -9,8 +9,8 @@ allowed-tools: mcp__miller__trace, mcp__miller__search, mcp__miller__inspect, mc
 # Miller Bridge Trace
 
 Miller bridge tracing is provider-scoped evidence, not generic semantic magic. Current providers are `dotnet-web`
-(TypeScript/JavaScript/Vue URL literals to ASP.NET endpoints, DTOs, entities, and EF/table signals) and `nextjs`
-(route references to Next.js file routes).
+(TypeScript/JavaScript/Vue URL literals to ASP.NET endpoints, DTOs, entities, and EF/table signals), `nextjs`
+(route references to Next.js file routes), and `nuxt` (NuxtLink route references to Nuxt file routes).
 
 ## Workflow
 
@@ -21,11 +21,12 @@ search(query="<URL, route, method, controller, DTO, entity, or table>")
 search(query="<route text>", regions="string_literal")
 ```
 
-For Next.js, bridge links require `nextjs.route_reference.v1` and `nextjs.file_route.v1` structural facts. If
-Next route facts look missing, check patterns before assuming bridge support:
+For Next.js and Nuxt, bridge links require matching route-reference and file-route structural facts. If
+file-route facts look missing, check patterns before assuming bridge support:
 
 ```text
 patterns(operation="search", query="nextjs")
+patterns(operation="search", query="nuxt")
 patterns(operation="search", query="route")
 ```
 
@@ -63,14 +64,14 @@ trace(target="<from>", mode="bridge")
 - `[verb-unknown]` means the URL matched but HTTP verb evidence is reduced.
 - `[ambiguous]` means multiple plausible links exist.
 - No bridge path can mean no provider is selected, missing extractor evidence, stale index, or a real absence of cross-language linkage.
-- `nextjs` covers route references to file routes; API handlers, server actions, middleware rewrites, and redirects
-  need extractor facts before bridge can claim them.
+- `nextjs` and `nuxt` cover route references to file routes; API handlers, server actions, middleware rewrites,
+  redirects, and runtime route rules need extractor facts before bridge can claim them.
 
 ## Report
 
 State:
 
-- Provider assumption: `dotnet-web`, `nextjs`, or both
+- Provider assumption: `dotnet-web`, `nextjs`, `nuxt`, or a combination
 - Start node and end node if present
 - Link confidence and any flags
 - Missing evidence if the trace stops early

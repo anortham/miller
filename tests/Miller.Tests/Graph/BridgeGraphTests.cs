@@ -112,7 +112,7 @@ public sealed class BridgeGraphTests
     public void NodeKindFor_NavigatesTo_UsesNextRouteTarget()
     {
         Assert.Equal(BridgeNodeKind.TsType, BridgeGraph.NodeKindFor(BridgeKind.NavigatesTo, EndpointSide.Source));
-        Assert.Equal(BridgeNodeKind.NextRoute, BridgeGraph.NodeKindFor(BridgeKind.NavigatesTo, EndpointSide.Target));
+        Assert.Equal(BridgeNodeKind.FileRoute, BridgeGraph.NodeKindFor(BridgeKind.NavigatesTo, EndpointSide.Target));
     }
 
     [Fact]

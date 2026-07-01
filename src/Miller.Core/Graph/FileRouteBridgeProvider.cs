@@ -1,0 +1,132 @@
+using Miller.Core.Resolver;
+
+namespace Miller.Core.Graph;
+
+/// <summary>
+/// Framework file-route bridge provider: route references such as Link/NuxtLink navigation to file-route facts.
+/// </summary>
+public sealed class FileRouteBridgeProvider : IBridgeProvider
+{
+    public static FileRouteBridgeProvider NextJs { get; } = new(
+        new FileRouteBridgeDescriptor(
+            ProviderId: "nextjs",
+            DisplayName: "Next.js",
+            RouteReferencePattern: "nextjs.route_reference.v1",
+            FileRoutePattern: "nextjs.file_route.v1"));
+
+    public static FileRouteBridgeProvider Nuxt { get; } = new(
+        new FileRouteBridgeDescriptor(
+            ProviderId: "nuxt",
+            DisplayName: "Nuxt",
+            RouteReferencePattern: "nuxt.route_reference.v1",
+            FileRoutePattern: "nuxt.file_route.v1"));
+
+    private readonly FileRouteBridgeDescriptor _descriptor;
+
+    private FileRouteBridgeProvider(FileRouteBridgeDescriptor descriptor)
+    {
+        _descriptor = descriptor;
+    }
+
+    public string Id => _descriptor.ProviderId;
+
+    public BridgeProviderResult BuildCandidates(BridgeProviderContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        var routeReferences = new List<StructuralRouteReference>();
+        var fileRoutes = new List<StructuralFileRoute>();
+        foreach (var fact in context.StructuralFacts.OrderBy(f => f.Path, StringComparer.Ordinal).ThenBy(f => f.Span.StartByte))
+        {
+            if (string.Equals(fact.PatternId, _descriptor.RouteReferencePattern, StringComparison.Ordinal) &&
+                StructuralRouteFactAdapter.TryReadRouteReference(fact, context.SymbolsById, out var reference))
+            {
+                routeReferences.Add(reference);
+                continue;
+            }
+
+            if (string.Equals(fact.PatternId, _descriptor.FileRoutePattern, StringComparison.Ordinal) &&
+                StructuralRouteFactAdapter.TryReadFileRoute(fact, context.SymbolsById, out var fileRoute))
+            {
+                fileRoutes.Add(fileRoute);
+            }
+        }
+
+        var candidates = FileRouteBridge.Resolve(routeReferences, fileRoutes);
+        var evidenceCounts = new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            [_descriptor.EvidenceKey("routeReferences")] = routeReferences.Count,
+            [_descriptor.EvidenceKey("fileRoutes")] = fileRoutes.Count,
+            [_descriptor.EvidenceKey("candidates")] = candidates.Count,
+            [_descriptor.EvidenceKey("ambiguousMatches")] = CountAmbiguousMatches(routeReferences, fileRoutes),
+        };
+
+        if (routeReferences.Count == 0 && fileRoutes.Count == 0)
+            return BridgeProviderResult.Skipped($"no {_descriptor.ProviderId} bridge evidence", evidenceCounts);
+
+        return BridgeProviderResult.ActiveResult(
+            candidates,
+            evidenceCounts,
+            BuildObservationNodes(routeReferences, fileRoutes));
+    }
+
+    private static int CountAmbiguousMatches(
+        IReadOnlyList<StructuralRouteReference> routeReferences,
+        IReadOnlyList<StructuralFileRoute> fileRoutes)
+    {
+        var count = 0;
+        foreach (var reference in routeReferences)
+        {
+            var matches = fileRoutes
+                .Where(route => FileRouteMatcher.Matches(reference.RoutePath, route.RoutePath))
+                .Take(2)
+                .Count();
+            if (matches == 2)
+                count++;
+        }
+
+        return count;
+    }
+
+    private static IReadOnlyDictionary<string, BridgeNode> BuildObservationNodes(
+        IReadOnlyList<StructuralRouteReference> routeReferences,
+        IReadOnlyList<StructuralFileRoute> fileRoutes)
+    {
+        var nodes = new Dictionary<string, BridgeNode>(StringComparer.Ordinal);
+
+        foreach (var reference in routeReferences)
+        {
+            var id = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, reference.RoutePath);
+            nodes.TryAdd(id, new BridgeNode(id, BridgeNodeKind.TsType, reference.RoutePath, reference.FilePath, reference.Line));
+        }
+
+        foreach (var route in fileRoutes)
+        {
+            var id = BridgeGraph.SynthesizeId(BridgeNodeKind.FileRoute, route.RoutePath);
+            nodes.TryAdd(id, new BridgeNode(id, BridgeNodeKind.FileRoute, route.RoutePath, route.FilePath, route.Line));
+        }
+
+        return nodes;
+    }
+}
+
+internal sealed record FileRouteBridgeDescriptor(
+    string ProviderId,
+    string DisplayName,
+    string RouteReferencePattern,
+    string FileRoutePattern)
+{
+    public string EvidenceKey(string name) => ProviderId + "." + name;
+}
+
+public static class NextJsBridgeProvider
+{
+    public const string ProviderId = "nextjs";
+    public static IBridgeProvider Instance => FileRouteBridgeProvider.NextJs;
+}
+
+public static class NuxtBridgeProvider
+{
+    public const string ProviderId = "nuxt";
+    public static IBridgeProvider Instance => FileRouteBridgeProvider.Nuxt;
+}

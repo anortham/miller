@@ -5,7 +5,12 @@ namespace Miller.Indexing;
 
 internal static class BridgeProviderSelection
 {
-    private static readonly IBridgeProvider[] DefaultProviders = [DotnetWebBridgeProvider.Instance, NextJsBridgeProvider.Instance];
+    private static readonly IBridgeProvider[] DefaultProviders =
+    [
+        DotnetWebBridgeProvider.Instance,
+        FileRouteBridgeProvider.NextJs,
+        FileRouteBridgeProvider.Nuxt,
+    ];
 
     public static IReadOnlyList<IBridgeProvider> ProvidersForDatabase(string dbPath)
     {
@@ -65,6 +70,7 @@ internal static class BridgeProviderSelection
         {
             DotnetWebBridgeProvider.ProviderId => DotnetWebBridgeProvider.Instance,
             NextJsBridgeProvider.ProviderId => NextJsBridgeProvider.Instance,
+            NuxtBridgeProvider.ProviderId => NuxtBridgeProvider.Instance,
             _ => new UnknownBridgeProvider(providerId),
         };
 

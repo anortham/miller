@@ -19,12 +19,12 @@ The practical difference from a one-time graph dump is that Miller is built for 
   opt out with `MILLER_SEARCH_SIDECAR=0` when debugging the in-memory fallback;
 - cross-language bridge evidence stays structural and provider-scoped, not embedding-driven.
 
-> **Current release: v1.2.0.** Miller ships as agent plugins, self-contained per-platform release archives,
+> **Current release: v1.3.0.** Miller ships as agent plugins, self-contained per-platform release archives,
 > and a source-checkout workflow. Plugin and release-archive installs include the pinned `julie-extract`
 > binary; users do not install it separately.
 >
 > Website: [anortham.github.io/miller](https://anortham.github.io/miller/) · Release:
-> [v1.2.0](https://github.com/anortham/miller/releases/tag/v1.2.0)
+> [v1.3.0](https://github.com/anortham/miller/releases/tag/v1.3.0)
 
 ## Quickstart
 
@@ -60,7 +60,7 @@ After extracting a release archive (see [Manual Binary Install](#manual-binary-i
   "mcpServers": {
     "miller": {
       "type": "stdio",
-      "command": "/absolute/path/to/miller-1.2.0-aarch64-apple-darwin/miller",
+      "command": "/absolute/path/to/miller-1.3.0-aarch64-apple-darwin/miller",
       "args": ["serve"]
     }
   }
@@ -99,28 +99,28 @@ new MCP tools or CLI commands, and the packets stay local unless you explicitly 
 Use this path when your MCP client does not use Miller's plugin package.
 
 1. Download the archive for your platform from the
-   [v1.2.0 release](https://github.com/anortham/miller/releases/tag/v1.2.0), plus the matching `.sha256`
+   [v1.3.0 release](https://github.com/anortham/miller/releases/tag/v1.3.0), plus the matching `.sha256`
    sidecar:
 
-   - `miller-1.2.0-aarch64-apple-darwin.tar.gz`
-   - `miller-1.2.0-x86_64-apple-darwin.tar.gz`
-   - `miller-1.2.0-x86_64-unknown-linux-gnu.tar.gz`
-   - `miller-1.2.0-x86_64-pc-windows-msvc.zip`
+   - `miller-1.3.0-aarch64-apple-darwin.tar.gz`
+   - `miller-1.3.0-x86_64-apple-darwin.tar.gz`
+   - `miller-1.3.0-x86_64-unknown-linux-gnu.tar.gz`
+   - `miller-1.3.0-x86_64-pc-windows-msvc.zip`
 
 2. Verify and extract it:
 
    ```bash
-   shasum -a 256 -c miller-1.2.0-aarch64-apple-darwin.tar.gz.sha256
-   tar -xzf miller-1.2.0-aarch64-apple-darwin.tar.gz
-   cd miller-1.2.0-aarch64-apple-darwin
+   shasum -a 256 -c miller-1.3.0-aarch64-apple-darwin.tar.gz.sha256
+   tar -xzf miller-1.3.0-aarch64-apple-darwin.tar.gz
+   cd miller-1.3.0-aarch64-apple-darwin
    ./miller version
    ```
 
    ```powershell
-   (Get-FileHash .\miller-1.2.0-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash
-   # compare against miller-1.2.0-x86_64-pc-windows-msvc.zip.sha256, then extract
-   Expand-Archive .\miller-1.2.0-x86_64-pc-windows-msvc.zip -DestinationPath .
-   .\miller-1.2.0-x86_64-pc-windows-msvc\miller.exe version
+   (Get-FileHash .\miller-1.3.0-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash
+   # compare against miller-1.3.0-x86_64-pc-windows-msvc.zip.sha256, then extract
+   Expand-Archive .\miller-1.3.0-x86_64-pc-windows-msvc.zip -DestinationPath .
+   .\miller-1.3.0-x86_64-pc-windows-msvc\miller.exe version
    ```
 
    Keep the extracted directory together. The native library files beside `miller`/`miller.exe`, the `.tools/`
@@ -134,7 +134,7 @@ Use this path when your MCP client does not use Miller's plugin package.
    {
       "mcpServers": {
         "miller": {
-         "command": "/absolute/path/to/miller-1.2.0-aarch64-apple-darwin/miller",
+         "command": "/absolute/path/to/miller-1.3.0-aarch64-apple-darwin/miller",
           "args": ["serve"]
         }
       }
@@ -268,7 +268,7 @@ selector: display ID, unique prefix, full ID, registered root path, `current`, o
 
 `trace` is the graph workflow tool: `mode=refs` lists name-based identifier references, `mode=path` shows the
 shortest extracted graph path to `to`, and `mode=bridge` follows provider-scoped bridge evidence. Current providers
-are `dotnet-web` and `nextjs`; `nextjs` links route references to file routes, not every framework route shape.
+are `dotnet-web`, `nextjs`, and `nuxt`; file-route providers link route references to file routes, not every framework route shape.
 No-path, unsupported bridge, and ambiguous-target results include bounded next actions; JSON callers get the same
 guidance in additive `next_actions` rows.
 
@@ -367,7 +367,7 @@ The single `miller` binary runs two ways:
 
 **Dogfooding the server.** Because MCP runs over stdio, a new build takes effect only after the MCP client
 restarts the subprocess. A build made inside the repo carries its git short SHA — `miller version` prints
-`1.2.0+<sha>` (just `1.2.0` for a build with no `.git`), and the same string heads the `# workspace` block of
+`1.3.0+<sha>` (just `1.3.0` for a build with no `.git`), and the same string heads the `# workspace` block of
 `workspace status`. The status header also includes the process id (`pid <n>`), which is the quickest way to
 confirm a restarted MCP client is talking to a new Miller subprocess when you rebuilt uncommitted changes and
 the SHA suffix stayed the same.
@@ -625,9 +625,9 @@ Warnings are errors (`Directory.Build.props`).
 - Ambiguous targets may need a file path, a more specific symbol, or a symbol ID. The CLI reports ambiguity
   instead of guessing.
 - Bridge trace (`trace mode=bridge`) is provider-scoped, not a general all-language/all-framework feature. Current
-  providers are `dotnet-web` (ASP.NET controllers, TypeScript/JS client URL calls, AutoMapper, Entity Framework)
-  and `nextjs` (route references to file routes). Next.js API handlers, server actions, middleware rewrites, and
-  redirects need extractor facts before bridge can claim them. The mode intentionally uses the full bridge graph
+  providers are `dotnet-web` (ASP.NET controllers, TypeScript/JS client URL calls, AutoMapper, Entity Framework),
+  `nextjs` (route references to file routes), and `nuxt` (NuxtLink route references to Nuxt file routes).
+  API handlers, server actions, middleware rewrites, redirects, and runtime route rules need extractor facts before bridge can claim them. The mode intentionally uses the full bridge graph
   for provider-scoped evidence. Normal `search`, `inspect`, graph-only `context`, `impact`, non-bridge `trace`,
   and workspace status/list stay on projection-specific read paths.
 - The main `miller` release binary publishes with Native AOT (no .NET SDK required to run it). The packaged

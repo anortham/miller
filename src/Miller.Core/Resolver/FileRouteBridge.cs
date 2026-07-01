@@ -3,7 +3,7 @@ using Miller.Core.Graph;
 
 namespace Miller.Core.Resolver;
 
-internal static class NextRouteBridge
+internal static class FileRouteBridge
 {
     public static IReadOnlyList<CandidateEdge> Resolve(
         IReadOnlyList<StructuralRouteReference> references,
@@ -16,7 +16,7 @@ internal static class NextRouteBridge
         foreach (var reference in references)
         {
             var matches = fileRoutes
-                .Where(route => NextRouteMatcher.Matches(reference.RoutePath, route.RoutePath))
+                .Where(route => FileRouteMatcher.Matches(reference.RoutePath, route.RoutePath))
                 .Take(2)
                 .ToArray();
 

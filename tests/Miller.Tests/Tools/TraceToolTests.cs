@@ -1092,7 +1092,7 @@ public sealed class TraceToolTests
     public void Bridge_RouteStringTarget_NextJsNavigation_StartsFromRouteAndRendersNavigatesTo()
     {
         string referenceId = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, "/settings");
-        string fileRouteId = BridgeGraph.SynthesizeId(BridgeNodeKind.NextRoute, "/settings");
+        string fileRouteId = BridgeGraph.SynthesizeId(BridgeNodeKind.FileRoute, "/settings");
         var navigation = MakeScored(
             BridgeKind.NavigatesTo,
             NonSymbolRef("/settings"),
@@ -1102,7 +1102,7 @@ public sealed class TraceToolTests
         var extra = new Dictionary<string, BridgeNode>(StringComparer.Ordinal)
         {
             [referenceId] = new BridgeNode(referenceId, BridgeNodeKind.TsType, "/settings", "web/Nav.tsx", 10),
-            [fileRouteId] = new BridgeNode(fileRouteId, BridgeNodeKind.NextRoute, "/settings", "web/app/settings/page.tsx", 1),
+            [fileRouteId] = new BridgeNode(fileRouteId, BridgeNodeKind.FileRoute, "/settings", "web/app/settings/page.tsx", 1),
         };
         var index = BuildBridgeIndex(
             Array.Empty<(string symbolId, string name, string file, int line)>(),
@@ -1120,10 +1120,10 @@ public sealed class TraceToolTests
     }
 
     [Fact]
-    public void Bridge_RouteStringTarget_NextJsNavigation_JsonUsesNavigatesToAndNextRoute()
+    public void Bridge_RouteStringTarget_FileRouteNavigation_JsonUsesNavigatesToAndFileRoute()
     {
         string referenceId = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, "/settings");
-        string fileRouteId = BridgeGraph.SynthesizeId(BridgeNodeKind.NextRoute, "/settings");
+        string fileRouteId = BridgeGraph.SynthesizeId(BridgeNodeKind.FileRoute, "/settings");
         var navigation = MakeScored(
             BridgeKind.NavigatesTo,
             NonSymbolRef("/settings"),
@@ -1133,7 +1133,7 @@ public sealed class TraceToolTests
         var extra = new Dictionary<string, BridgeNode>(StringComparer.Ordinal)
         {
             [referenceId] = new BridgeNode(referenceId, BridgeNodeKind.TsType, "/settings", "web/Nav.tsx", 10),
-            [fileRouteId] = new BridgeNode(fileRouteId, BridgeNodeKind.NextRoute, "/settings", "web/app/settings/page.tsx", 1),
+            [fileRouteId] = new BridgeNode(fileRouteId, BridgeNodeKind.FileRoute, "/settings", "web/app/settings/page.tsx", 1),
         };
         var index = BuildBridgeIndex(
             Array.Empty<(string symbolId, string name, string file, int line)>(),
@@ -1150,8 +1150,45 @@ public sealed class TraceToolTests
         Assert.Equal("navigates_to", link.GetProperty("kind").GetString());
         Assert.Equal("navigates_to", link.GetProperty("label").GetString());
         Assert.Contains(doc.RootElement.GetProperty("nodes").EnumerateArray(),
-            node => node.GetProperty("kind").GetString() == "next_route" &&
+            node => node.GetProperty("kind").GetString() == "file_route" &&
                     node.GetProperty("display").GetString() == "/settings");
+    }
+
+    [Fact]
+    public void Bridge_RouteStringTarget_NuxtReferenceOnly_JsonExplainsNoFileMatch()
+    {
+        string referenceId = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, "/about");
+        var extra = new Dictionary<string, BridgeNode>(StringComparer.Ordinal)
+        {
+            [referenceId] = new BridgeNode(referenceId, BridgeNodeKind.TsType, "/about", "app/components/Nav.vue", 8),
+        };
+        var capability = new BridgeCapabilityReport(
+            ActiveProviders: ["nuxt"],
+            SkippedProviders: [],
+            Notes: [],
+            EvidenceCounts: new Dictionary<string, int>(StringComparer.Ordinal)
+            {
+                ["nuxt.routeReferences"] = 1,
+                ["nuxt.fileRoutes"] = 0,
+                ["nuxt.candidates"] = 0,
+                ["nuxt.ambiguousMatches"] = 0,
+            });
+        var index = BuildBridgeIndex(
+            Array.Empty<(string symbolId, string name, string file, int line)>(),
+            Array.Empty<ScoredEdge>(),
+            extra,
+            capability);
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "/about", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false, json: true,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement diagnostic = Assert.Single(doc.RootElement.GetProperty("diagnostics").EnumerateArray());
+        Assert.Equal("nuxt_route_no_file_match", diagnostic.GetProperty("code").GetString());
+        Assert.Contains("Nuxt route reference exists: /about", diagnostic.GetProperty("message").GetString());
+        Assert.Contains("no matching file route fact", diagnostic.GetProperty("message").GetString());
     }
 
     [Fact]
@@ -1194,10 +1231,10 @@ public sealed class TraceToolTests
     [Fact]
     public void Bridge_RouteStringTarget_NextJsFileRouteOnly_JsonExplainsNoReferenceMatch()
     {
-        string fileRouteId = BridgeGraph.SynthesizeId(BridgeNodeKind.NextRoute, "/settings");
+        string fileRouteId = BridgeGraph.SynthesizeId(BridgeNodeKind.FileRoute, "/settings");
         var extra = new Dictionary<string, BridgeNode>(StringComparer.Ordinal)
         {
-            [fileRouteId] = new BridgeNode(fileRouteId, BridgeNodeKind.NextRoute, "/settings", "web/app/settings/page.tsx", 1),
+            [fileRouteId] = new BridgeNode(fileRouteId, BridgeNodeKind.FileRoute, "/settings", "web/app/settings/page.tsx", 1),
         };
         var capability = new BridgeCapabilityReport(
             ActiveProviders: ["nextjs"],
@@ -1232,11 +1269,11 @@ public sealed class TraceToolTests
     public void Bridge_RouteStringTarget_NextJsAmbiguousFileRoutes_JsonExplainsAmbiguousFileMatch()
     {
         string referenceId = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, "/users/123");
-        string fileRouteId = BridgeGraph.SynthesizeId(BridgeNodeKind.NextRoute, "/users/[id]");
+        string fileRouteId = BridgeGraph.SynthesizeId(BridgeNodeKind.FileRoute, "/users/[id]");
         var extra = new Dictionary<string, BridgeNode>(StringComparer.Ordinal)
         {
             [referenceId] = new BridgeNode(referenceId, BridgeNodeKind.TsType, "/users/123", "web/Nav.tsx", 10),
-            [fileRouteId] = new BridgeNode(fileRouteId, BridgeNodeKind.NextRoute, "/users/[id]", "web/app/users/[id]/page.tsx", 1),
+            [fileRouteId] = new BridgeNode(fileRouteId, BridgeNodeKind.FileRoute, "/users/[id]", "web/app/users/[id]/page.tsx", 1),
         };
         var capability = new BridgeCapabilityReport(
             ActiveProviders: ["nextjs"],
@@ -1270,11 +1307,11 @@ public sealed class TraceToolTests
     public void Bridge_RouteStringTarget_NextJsReferenceOnly_WithUnrelatedAmbiguity_JsonExplainsNoFileMatch()
     {
         string referenceId = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, "/settings");
-        string unrelatedFileRouteId = BridgeGraph.SynthesizeId(BridgeNodeKind.NextRoute, "/users/[id]");
+        string unrelatedFileRouteId = BridgeGraph.SynthesizeId(BridgeNodeKind.FileRoute, "/users/[id]");
         var extra = new Dictionary<string, BridgeNode>(StringComparer.Ordinal)
         {
             [referenceId] = new BridgeNode(referenceId, BridgeNodeKind.TsType, "/settings", "web/Nav.tsx", 10),
-            [unrelatedFileRouteId] = new BridgeNode(unrelatedFileRouteId, BridgeNodeKind.NextRoute, "/users/[id]", "web/app/users/[id]/page.tsx", 1),
+            [unrelatedFileRouteId] = new BridgeNode(unrelatedFileRouteId, BridgeNodeKind.FileRoute, "/users/[id]", "web/app/users/[id]/page.tsx", 1),
         };
         var capability = new BridgeCapabilityReport(
             ActiveProviders: ["nextjs"],

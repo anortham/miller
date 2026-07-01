@@ -127,7 +127,7 @@ Bridge link fields:
 - `evidence`: edge-level file/line evidence.
 - `signals`: typed scoring signals with rule-specific payload and optional evidence.
 
-Bridge node `kind` values include `next_route` for Next.js file-route nodes.
+Bridge node `kind` values include `file_route` for framework file-route nodes.
 
 Bridge is provider-scoped. Current packaged providers are:
 
@@ -135,6 +135,8 @@ Bridge is provider-scoped. Current packaged providers are:
   Framework/Dapper table evidence.
 - `nextjs`: route references to Next.js file routes. It does not claim API route handlers, server actions,
   middleware rewrites, redirects, or runtime routing unless extractor facts exist for them.
+- `nuxt`: NuxtLink route references to Nuxt file routes. It does not claim Nitro/server API routes, route rules,
+  middleware redirects, or runtime routing unless extractor facts exist for them.
 
 Empty bridge results are valid when a workspace is outside those providers or no bridge evidence exists.
 `not_on_bridge` and `no_bridge_links` diagnostics include `next_actions` for ordinary refs, ordinary graph

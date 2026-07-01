@@ -144,6 +144,40 @@ public sealed class LiveBridgeTraceTests
         _output.WriteLine(rendered);
     }
 
+    [Fact]
+    public void NuxtFixture_RouteReferenceToFileRoute_TraceBridgeResolves()
+    {
+        string binary = ScaleTestSupport.RequireJulieServer();
+        using var work = new TempWorkspace();
+        WriteNuxtFixture(work.Repo);
+
+        var index = ExtractAndLoad(binary, work);
+        var patternIds = StructuralPatternIds(work.Db, "nuxt.%");
+        Assert.Contains("nuxt.route_reference.v1", patternIds);
+        Assert.Contains("nuxt.file_route.v1", patternIds);
+
+        var graph = index.BridgeGraph;
+        Assert.Contains("nuxt", graph.CapabilityReport.ActiveProviders);
+        var edge = Assert.Single(graph.Edges, e =>
+            e.Edge.Kind == BridgeKind.NavigatesTo
+            && string.Equals(e.Edge.SourceRef.Display, "/about", StringComparison.Ordinal)
+            && string.Equals(e.Edge.TargetRef.Display, "/about", StringComparison.Ordinal));
+        Assert.Equal(ConfidenceBand.High, edge.Band);
+
+        string rendered = TraceTool.Run(
+            index, new SmartTargetResolver(index), target: "/about", mode: "bridge", to: null, depth: 2, limit: 20,
+            fullFormat: false, out int emitted, out _);
+
+        Assert.Equal(1, emitted);
+        Assert.Contains("--navigates_to-->  /about", rendered);
+        Assert.DoesNotContain("--route-->", rendered);
+
+        _output.WriteLine("NUXT FIXTURE — route reference to file route verified:");
+        _output.WriteLine($"  Patterns: {string.Join(", ", patternIds.Order(StringComparer.Ordinal))}");
+        _output.WriteLine($"  NavigatesTo: {edge.Edge.SourceRef.Display} -> {edge.Edge.TargetRef.Display} band={edge.Band} score={Fmt(edge.Score)}");
+        _output.WriteLine(rendered);
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────────────────────────────
     // Probe 2: honesty probe — undisciplined fixture. Precision + per-leg recall + guard proofs.
     // ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -420,6 +454,40 @@ public sealed class LiveBridgeTraceTests
 
             export function Nav() {
               return <Link href="/settings">Settings</Link>;
+            }
+            """);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────
+    // Pure Nuxt fixture writer.
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    private static void WriteNuxtFixture(string repo)
+    {
+        string pageRoute = Path.Combine(repo, "app", "pages");
+        string components = Path.Combine(repo, "app", "components");
+        string composables = Path.Combine(repo, "app", "composables");
+        Directory.CreateDirectory(pageRoute);
+        Directory.CreateDirectory(components);
+        Directory.CreateDirectory(composables);
+
+        File.WriteAllText(Path.Combine(pageRoute, "about.vue"), """
+            <template>
+              <main>About</main>
+            </template>
+
+            <script setup lang="ts">
+            const pageTitle = "About";
+            </script>
+            """);
+        File.WriteAllText(Path.Combine(components, "Nav.vue"), """
+            <template>
+              <NuxtLink to="/about">About</NuxtLink>
+            </template>
+            """);
+        File.WriteAllText(Path.Combine(composables, "useMarker.ts"), """
+            export function useMarker() {
+              return "marker";
             }
             """);
     }

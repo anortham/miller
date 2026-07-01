@@ -8,7 +8,7 @@ namespace Miller.Core.Graph;
 /// — it takes already-loaded value records, asks bridge providers to reduce framework-specific evidence into candidate
 /// edges, scores every candidate, and builds the graph. No DB, no I/O.
 ///
-/// <para>The default providers are <see cref="DotnetWebBridgeProvider"/> and <see cref="NextJsBridgeProvider"/>.
+/// <para>The default providers are <see cref="DotnetWebBridgeProvider"/> plus framework file-route providers.
 /// Framework-specific reductions stay behind those providers; the builder remains provider-agnostic so future bridge
 /// models can plug in without changing scoring or graph traversal.</para>
 ///
@@ -19,7 +19,12 @@ namespace Miller.Core.Graph;
 /// </summary>
 public static class BridgeGraphBuilder
 {
-    private static readonly IBridgeProvider[] DefaultProviders = [DotnetWebBridgeProvider.Instance, NextJsBridgeProvider.Instance];
+    private static readonly IBridgeProvider[] DefaultProviders =
+    [
+        DotnetWebBridgeProvider.Instance,
+        FileRouteBridgeProvider.NextJs,
+        FileRouteBridgeProvider.Nuxt,
+    ];
 
     /// <summary>
     /// Build the cross-language <see cref="BridgeGraph"/> over a workspace's symbols + julie breadcrumbs.

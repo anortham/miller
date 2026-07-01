@@ -241,6 +241,29 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
         command.ExecuteNonQuery();
     }
 
+    private static void AddNuxtRouteFacts(string dbPath)
+    {
+        using var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder { DataSource = dbPath, Mode = SqliteOpenMode.ReadWrite }.ToString());
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO structural_facts
+                (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                 containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                 confidence, metadata_json)
+            VALUES
+              ('sf-nuxt-about-link', 'f-nuxt-nav', 'app/components/Nav.vue', 'vue', 'nuxt.route_reference.v1',
+               'route_reference', 'template_attribute', NULL, 8, 18, 8, 35, 3000, 3017, 1.0,
+               '{"framework":"nuxt","target_path":"/about"}'),
+              ('sf-nuxt-about-page', 'f-nuxt-page', 'app/pages/about.vue', 'vue', 'nuxt.file_route.v1',
+               'file_route', 'file', NULL, 1, 1, 20, 1, 4000, 5000, 1.0,
+               '{"framework":"nuxt","route_path":"/about"}');
+            """;
+        command.ExecuteNonQuery();
+    }
+
     private static void TryDelete(string path)
     {
         try { System.IO.Directory.Delete(path, recursive: true); } catch { /* best effort */ }
@@ -335,11 +358,11 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
     }
 
     [Fact]
-    public void ProvidersForDatabase_NoConfig_ReturnsDotnetWebAndNextJs()
+    public void ProvidersForDatabase_NoConfig_ReturnsDotnetWebNextJsAndNuxt()
     {
         var providers = BridgeProviderSelection.ProvidersForDatabase(_dbPath);
 
-        Assert.Equal(["dotnet-web", "nextjs"], providers.Select(provider => provider.Id).ToArray());
+        Assert.Equal(["dotnet-web", "nextjs", "nuxt"], providers.Select(provider => provider.Id).ToArray());
     }
 
     [Fact]
@@ -393,9 +416,13 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
             Assert.True(index.BridgeGraph.Contains("s-entity"));
             Assert.Contains("dotnet-web", index.BridgeGraph.CapabilityReport.ActiveProviders);
             Assert.DoesNotContain("nextjs", index.BridgeGraph.CapabilityReport.ActiveProviders);
+            Assert.DoesNotContain("nuxt", index.BridgeGraph.CapabilityReport.ActiveProviders);
             Assert.DoesNotContain(
                 index.BridgeGraph.CapabilityReport.SkippedProviders,
                 skipped => skipped.ProviderId == "nextjs");
+            Assert.DoesNotContain(
+                index.BridgeGraph.CapabilityReport.SkippedProviders,
+                skipped => skipped.ProviderId == "nuxt");
         }
         finally
         {
@@ -431,6 +458,42 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
             Assert.Equal(1, index.BridgeGraph.CapabilityReport.EvidenceCounts["nextjs.fileRoutes"]);
             Assert.Equal(1, index.BridgeGraph.CapabilityReport.EvidenceCounts["nextjs.candidates"]);
             Assert.Equal(0, index.BridgeGraph.CapabilityReport.EvidenceCounts["nextjs.ambiguousMatches"]);
+        }
+        finally
+        {
+            TryDelete(root);
+        }
+    }
+
+    [Fact]
+    public void Load_RootMillerJsonNuxtProvider_PopulatesOnlyNuxtBridgeGraph()
+    {
+        var (root, dbPath) = CreateConfiguredBridgeWorkspace("""
+            {
+              "bridge": {
+                "providers": ["nuxt"]
+              }
+            }
+            """);
+        try
+        {
+            AddNuxtRouteFacts(dbPath);
+
+            var index = RepositoryIndexLoader.Load(dbPath);
+
+            Assert.False(index.BridgeGraph.Contains("s-entity"));
+            var edge = Assert.Single(index.BridgeGraph.Edges, item => item.Edge.Kind == BridgeKind.NavigatesTo);
+            Assert.Equal("/about", edge.Edge.TargetRef.Display);
+            Assert.Contains("nuxt", index.BridgeGraph.CapabilityReport.ActiveProviders);
+            Assert.DoesNotContain("dotnet-web", index.BridgeGraph.CapabilityReport.ActiveProviders);
+            Assert.DoesNotContain("nextjs", index.BridgeGraph.CapabilityReport.ActiveProviders);
+            Assert.DoesNotContain(
+                index.BridgeGraph.CapabilityReport.SkippedProviders,
+                skipped => skipped.ProviderId == "dotnet-web");
+            Assert.Equal(1, index.BridgeGraph.CapabilityReport.EvidenceCounts["nuxt.routeReferences"]);
+            Assert.Equal(1, index.BridgeGraph.CapabilityReport.EvidenceCounts["nuxt.fileRoutes"]);
+            Assert.Equal(1, index.BridgeGraph.CapabilityReport.EvidenceCounts["nuxt.candidates"]);
+            Assert.Equal(0, index.BridgeGraph.CapabilityReport.EvidenceCounts["nuxt.ambiguousMatches"]);
         }
         finally
         {
@@ -486,6 +549,9 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
             Assert.DoesNotContain(
                 index.BridgeGraph.CapabilityReport.SkippedProviders,
                 item => item.ProviderId == "nextjs");
+            Assert.DoesNotContain(
+                index.BridgeGraph.CapabilityReport.SkippedProviders,
+                item => item.ProviderId == "nuxt");
         }
         finally
         {

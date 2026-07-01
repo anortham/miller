@@ -21,5 +21,5 @@ internal static class MillerExtractContract
 
     // Download pin only (restore-script + julie-pins.json target). This is the PRODUCT version,
     // orthogonal to the runtime schema/contract gate above (D7): product 2.5.x ships schema/contract 3.
-    public const string PinnedJulieExtractVersion = "2.5.7"; // julie-extractors release tag v2.5.7 (published 2026-06-30).
+    public const string PinnedJulieExtractVersion = "2.5.8"; // julie-extractors release tag v2.5.8 (published 2026-07-01).
 }

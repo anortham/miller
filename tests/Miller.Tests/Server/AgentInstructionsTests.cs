@@ -138,11 +138,12 @@ public sealed class AgentInstructionsTests
     {
         string instructions = AgentInstructions.Load();
         Assert.Contains("no extracted graph path within depth, not proof unrelated", instructions);
-        Assert.Contains("provider-scoped to `dotnet-web` and `nextjs`", instructions);
+        Assert.Contains("provider-scoped to", instructions);
+        Assert.Contains("`dotnet-web`, `nextjs`, and `nuxt`", instructions);
         Assert.Contains("outside those providers use `mode=refs`/`mode=path`, or `inspect depth=full`", instructions);
         Assert.Contains("on empty, fall back to `search mode=source`", instructions);
         Assert.Contains("follow its `Next:` actions", instructions);
-        Assert.Contains("ASP.NET minimal API, htmx, and Vue route structural facts", instructions);
+        Assert.Contains("ASP.NET, htmx, and Vue route facts", instructions);
     }
 
     [Fact]

@@ -47,6 +47,9 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
             ["dotnet-web.aspnetMinimalRoutes"] = structuralEndpoints.Count,
             ["dotnet-web.htmxCalls"] = structuralCallCounts.Htmx,
             ["dotnet-web.vueCalls"] = structuralCallCounts.Vue,
+            ["dotnet-web.reactCalls"] = structuralCallCounts.React,
+            ["dotnet-web.nextjsCalls"] = structuralCallCounts.NextJs,
+            ["dotnet-web.nuxtCalls"] = structuralCallCounts.Nuxt,
             ["dotnet-web.dbsets"] = context.DbSetProperties.Count,
         };
 
@@ -309,12 +312,15 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
         return calls;
     }
 
-    private static (int Htmx, int Vue) CountStructuralRouteReferences(
+    private static (int Htmx, int Vue, int React, int NextJs, int Nuxt) CountStructuralRouteReferences(
         IReadOnlyList<StructuralFactRecord> structuralFacts,
         IReadOnlyDictionary<string, SymbolDetail> symbolsById)
     {
         int htmx = 0;
         int vue = 0;
+        int react = 0;
+        int nextjs = 0;
+        int nuxt = 0;
         foreach (var fact in structuralFacts)
         {
             if (!StructuralRouteFactAdapter.TryReadRouteReference(fact, symbolsById, out _))
@@ -325,9 +331,16 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
             else if (string.Equals(fact.PatternId, "vue.route_reference.v1", StringComparison.Ordinal) ||
                      string.Equals(fact.PatternId, "vue.route_definition.v1", StringComparison.Ordinal))
                 vue++;
+            else if (string.Equals(fact.PatternId, "react.route_reference.v1", StringComparison.Ordinal) ||
+                     string.Equals(fact.PatternId, "react.route_definition.v1", StringComparison.Ordinal))
+                react++;
+            else if (string.Equals(fact.PatternId, "nextjs.route_reference.v1", StringComparison.Ordinal))
+                nextjs++;
+            else if (string.Equals(fact.PatternId, "nuxt.route_reference.v1", StringComparison.Ordinal))
+                nuxt++;
         }
 
-        return (htmx, vue);
+        return (htmx, vue, react, nextjs, nuxt);
     }
 
     private static TsClientCall ToClientCall(StructuralRouteReference reference)
@@ -352,6 +365,7 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
             "vue.route_reference.v1" or "vue.route_definition.v1" => "vue." + lowerVerb,
             "react.route_reference.v1" or "react.route_definition.v1" => "react." + lowerVerb,
             "nextjs.route_reference.v1" => "nextjs." + lowerVerb,
+            "nuxt.route_reference.v1" => "nuxt." + lowerVerb,
             _ => verb.ToUpperInvariant(),
         };
     }

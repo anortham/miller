@@ -11,6 +11,8 @@ internal static class StructuralRouteFactAdapter
     private const string ReactRouteDefinitionPattern = "react.route_definition.v1";
     private const string NextJsRouteReferencePattern = "nextjs.route_reference.v1";
     private const string NextJsFileRoutePattern = "nextjs.file_route.v1";
+    private const string NuxtRouteReferencePattern = "nuxt.route_reference.v1";
+    private const string NuxtFileRoutePattern = "nuxt.file_route.v1";
 
     public static bool TryReadRouteReference(
         StructuralFactRecord fact,
@@ -50,7 +52,7 @@ internal static class StructuralRouteFactAdapter
         out StructuralFileRoute route)
     {
         route = null!;
-        if (!string.Equals(fact.PatternId, NextJsFileRoutePattern, StringComparison.Ordinal))
+        if (!IsFileRoutePattern(fact.PatternId))
             return false;
 
         var routePath = RoutePath(fact);
@@ -90,7 +92,12 @@ internal static class StructuralRouteFactAdapter
         string.Equals(patternId, VueRouteDefinitionPattern, StringComparison.Ordinal) ||
         string.Equals(patternId, ReactRouteReferencePattern, StringComparison.Ordinal) ||
         string.Equals(patternId, ReactRouteDefinitionPattern, StringComparison.Ordinal) ||
-        string.Equals(patternId, NextJsRouteReferencePattern, StringComparison.Ordinal);
+        string.Equals(patternId, NextJsRouteReferencePattern, StringComparison.Ordinal) ||
+        string.Equals(patternId, NuxtRouteReferencePattern, StringComparison.Ordinal);
+
+    private static bool IsFileRoutePattern(string patternId) =>
+        string.Equals(patternId, NextJsFileRoutePattern, StringComparison.Ordinal) ||
+        string.Equals(patternId, NuxtFileRoutePattern, StringComparison.Ordinal);
 
     private static string? RoutePath(StructuralFactRecord fact) =>
         MetadataString(fact, "target_path")
@@ -103,7 +110,8 @@ internal static class StructuralRouteFactAdapter
         string.Equals(patternId, VueRouteDefinitionPattern, StringComparison.Ordinal) ||
         string.Equals(patternId, ReactRouteReferencePattern, StringComparison.Ordinal) ||
         string.Equals(patternId, ReactRouteDefinitionPattern, StringComparison.Ordinal) ||
-        string.Equals(patternId, NextJsRouteReferencePattern, StringComparison.Ordinal)
+        string.Equals(patternId, NextJsRouteReferencePattern, StringComparison.Ordinal) ||
+        string.Equals(patternId, NuxtRouteReferencePattern, StringComparison.Ordinal)
             ? "GET"
             : null;
 

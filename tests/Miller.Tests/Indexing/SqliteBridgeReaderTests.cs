@@ -305,6 +305,12 @@ public sealed class SqliteBridgeReaderTests : IDisposable
                   ('sf-next-file', 'f-next', 'web/app/calendar/page.tsx', 'tsx', 'nextjs.file_route.v1',
                    'file_route', 'file', 's-next-page', 1, 0, 100, 0, 531, 800, 1.0,
                    '{"route_path":"/calendar","normalized_route_template":"/calendar"}'),
+                  ('sf-nuxt-ref', 'f-nuxt', 'web/zz/NuxtNav.vue', 'vue', 'nuxt.route_reference.v1',
+                   'route_reference', 'template_attribute', 's-nuxt-link', 70, 0, 70, 30, 1000, 1030, 1.0,
+                   '{"target_path":"/calendar"}'),
+                  ('sf-nuxt-file', 'f-nuxt', 'web/zz/pages/calendar.vue', 'vue', 'nuxt.file_route.v1',
+                   'file_route', 'file', 's-nuxt-page', 1, 0, 100, 0, 1031, 1200, 1.0,
+                   '{"route_path":"/calendar","normalized_route_template":"/calendar"}'),
                   ('sf-ignored', 'f-css', 'web/site.css', 'css', 'css.selector_rule.v1',
                    'selector', 'rule_set', NULL, 60, 0, 60, 10, 900, 910, 1.0,
                    '{"selector":".calendar"}');
@@ -325,6 +331,8 @@ public sealed class SqliteBridgeReaderTests : IDisposable
                 "nextjs.file_route.v1",
                 "vue.route_definition.v1",
                 "react.route_definition.v1",
+                "nuxt.route_reference.v1",
+                "nuxt.file_route.v1",
             },
             data.StructuralFacts.Select(f => f.PatternId).ToArray());
         Assert.DoesNotContain(data.StructuralFacts, f => f.PatternId == "css.selector_rule.v1");

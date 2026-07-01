@@ -27,7 +27,7 @@ namespace Miller.Indexing;
 /// <c>symbols</c> rows with <c>kind='property'</c> whose <c>signature</c> contains <c>DbSet&lt;…&gt;</c>: the property
 /// name IS the table name (EF convention), the generic arg IS the entity type.</item>
 /// <item><c>structural_facts</c> → <see cref="StructuralFactRecord"/> for parser-backed web/framework route facts
-/// emitted by julie-extractors, including ASP.NET Minimal API, htmx, Vue, React Router, and Next.js routes.</item>
+/// emitted by julie-extractors, including ASP.NET Minimal API, htmx, Vue, React Router, Next.js, and Nuxt routes.</item>
 /// </list></para>
 ///
 /// <para>Sync by design: this is part of the single startup/rebuild pass (Microsoft.Data.Sqlite's async is
@@ -251,7 +251,9 @@ public static class SqliteBridgeReader
                 'react.route_reference.v1',
                 'react.route_definition.v1',
                 'nextjs.route_reference.v1',
-                'nextjs.file_route.v1')
+                'nextjs.file_route.v1',
+                'nuxt.route_reference.v1',
+                'nuxt.file_route.v1')
             ORDER BY path, start_byte, structural_fact_id;
             """;
 
