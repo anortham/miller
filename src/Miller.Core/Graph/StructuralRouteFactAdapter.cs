@@ -29,9 +29,12 @@ internal static class StructuralRouteFactAdapter
 
         var verb = string.Equals(fact.PatternId, HtmxAttributePattern, StringComparison.Ordinal)
             ? HtmxVerb(fact)
-            : MetadataString(fact, "verb") ?? DefaultVerbForRouteReferenceFact(fact.PatternId);
-        if (string.IsNullOrWhiteSpace(verb))
+            : null;
+        if (string.Equals(fact.PatternId, HtmxAttributePattern, StringComparison.Ordinal) &&
+            string.IsNullOrWhiteSpace(verb))
+        {
             return false;
+        }
 
         if (IsTestFact(fact, symbolsById))
             return false;
@@ -111,16 +114,6 @@ internal static class StructuralRouteFactAdapter
         ?? MetadataString(fact, "target_path")
         ?? MetadataString(fact, "attribute_value");
 
-    private static string? DefaultVerbForRouteReferenceFact(string patternId) =>
-        string.Equals(patternId, VueRouteReferencePattern, StringComparison.Ordinal) ||
-        string.Equals(patternId, VueRouteDefinitionPattern, StringComparison.Ordinal) ||
-        string.Equals(patternId, ReactRouteReferencePattern, StringComparison.Ordinal) ||
-        string.Equals(patternId, ReactRouteDefinitionPattern, StringComparison.Ordinal) ||
-        string.Equals(patternId, NextJsRouteReferencePattern, StringComparison.Ordinal) ||
-        string.Equals(patternId, NuxtRouteReferencePattern, StringComparison.Ordinal)
-            ? "GET"
-            : null;
-
     private static string? HtmxVerb(StructuralFactRecord fact)
     {
         var attributeName = MetadataString(fact, "attribute_name")
@@ -158,7 +151,7 @@ internal static class StructuralRouteFactAdapter
 internal sealed record StructuralRouteReference(
     StructuralFactRecord Fact,
     string RoutePath,
-    string Verb,
+    string? Verb,
     string ContainingSymbolId,
     string FilePath,
     int Line);

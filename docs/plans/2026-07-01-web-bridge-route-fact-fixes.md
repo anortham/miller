@@ -142,11 +142,11 @@ From the 2026-07-01 review (checkpoint `checkpoint_92e28948`, fast suite 2555/25
 **Approach:** Replace the assumed-verb defaulting with an explicit "verb evidence: attested | unknown" distinction carried through `TsClientCall`. Where a route-only match would previously be silently GET-matched against a non-GET-only endpoint, prefer matching the endpoint set by route and flagging verb uncertainty rather than filtering to GET. Update `docs/contracts/` trace JSON notes if the band change is visible in documented examples.
 
 **Acceptance criteria:**
-- [ ] htmx `hx-post` → `MapPost` stays High with verb-known signal.
-- [ ] Vue `<router-link to="/calendar">` → ASP.NET GET endpoint becomes Medium with `verb_unknown` (edge still exists).
-- [ ] No structural navigation reference produces a verb-KNOWN signal without extractor verb metadata.
-- [ ] Compact and JSON trace output agree on bands/flags.
-- [ ] Worker-scope verification passes, committed.
+- [x] htmx `hx-post` → `MapPost` stays High with verb-known signal.
+- [x] Vue `<router-link to="/calendar">` → ASP.NET GET endpoint becomes Medium with `verb_unknown` (edge still exists).
+- [x] No structural navigation reference produces a verb-KNOWN signal without extractor verb metadata.
+- [x] Compact and JSON trace output agree on bands/flags.
+- [x] Worker-scope verification passes, committed.
 
 ## Task 6: `data-hx-*` Support (Miller side)
 

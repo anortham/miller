@@ -369,8 +369,20 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
         return new TsClientCall(literal, IsTest: false, reference.FilePath, reference.Line);
     }
 
-    private static string StructuralCarrier(string patternId, string verb)
+    private static string StructuralCarrier(string patternId, string? verb)
     {
+        if (string.IsNullOrWhiteSpace(verb))
+        {
+            return patternId switch
+            {
+                BridgeStructuralPatterns.VueRouteReference => "vue",
+                BridgeStructuralPatterns.ReactRouteReference => "react",
+                BridgeStructuralPatterns.NextJsRouteReference => "nextjs",
+                BridgeStructuralPatterns.NuxtRouteReference => "nuxt",
+                _ => "route",
+            };
+        }
+
         var lowerVerb = verb.ToLowerInvariant();
         return patternId switch
         {

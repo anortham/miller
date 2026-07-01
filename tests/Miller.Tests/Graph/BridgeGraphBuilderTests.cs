@@ -283,6 +283,7 @@ public sealed class BridgeGraphBuilderTests
 
         var hit = Assert.Single(graph.Incident("sym-mapget"), e => e.Edge.Kind == BridgeKind.Hits);
         Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.False(hit.IsVerbUnknown);
         Assert.Contains(hit.Edge.Evidence, e => e.FilePath == "api/Program.cs" && e.Line == 12);
         Assert.Contains(hit.Edge.Evidence, e => e.FilePath == "web/index.html" && e.Line == 4);
         Assert.Equal(2, graph.CapabilityReport.EvidenceCounts["dotnet-web.structuralFacts"]);
@@ -386,7 +387,7 @@ public sealed class BridgeGraphBuilderTests
                 path: "web/TodoLink.vue",
                 containingSymbolId: "sym-vue",
                 startLine: 6,
-                metadataJson: """{"source_kind":"RouterLink","attribute_name":"to","verb":"GET","target_path":"/todos"}"""),
+                metadataJson: """{"source_kind":"RouterLink","attribute_name":"to","target_path":"/todos"}"""),
         };
 
         var graph = BridgeGraphBuilder.Build(
@@ -398,7 +399,8 @@ public sealed class BridgeGraphBuilderTests
             structuralFacts: facts);
 
         var hit = Assert.Single(graph.Incident("sym-mapget"), e => e.Edge.Kind == BridgeKind.Hits);
-        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.Equal(ConfidenceBand.Medium, hit.Band);
+        Assert.True(hit.IsVerbUnknown);
         Assert.Contains(hit.Edge.Evidence, e => e.FilePath == "api/Program.cs" && e.Line == 12);
         Assert.Contains(hit.Edge.Evidence, e => e.FilePath == "web/TodoLink.vue" && e.Line == 6);
         Assert.Equal(2, graph.CapabilityReport.EvidenceCounts["dotnet-web.structuralFacts"]);
@@ -428,7 +430,7 @@ public sealed class BridgeGraphBuilderTests
                 path: "web/TodoLink.vue",
                 containingSymbolId: "sym-vue",
                 startLine: 7,
-                metadataJson: """{"source_kind":"bound_attribute","attribute_name":":to","expression":"'\/todos'","verb":"GET","target_path":"/todos"}"""),
+                metadataJson: """{"source_kind":"bound_attribute","attribute_name":":to","expression":"'\/todos'","target_path":"/todos"}"""),
         };
 
         var graph = BridgeGraphBuilder.Build(
@@ -440,7 +442,8 @@ public sealed class BridgeGraphBuilderTests
             structuralFacts: facts);
 
         var hit = Assert.Single(graph.Incident("sym-mapget"), e => e.Edge.Kind == BridgeKind.Hits);
-        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.Equal(ConfidenceBand.Medium, hit.Band);
+        Assert.True(hit.IsVerbUnknown);
         Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.vueCalls"]);
     }
 
@@ -746,7 +749,8 @@ public sealed class BridgeGraphBuilderTests
 
         var hits = Assert.Single(graph.Incident("vue.header"), e => e.Edge.Kind == BridgeKind.Hits);
         Assert.Equal("cs.calendar", hits.Edge.TargetRef.SymbolId);
-        Assert.Equal(ConfidenceBand.High, hits.Band);
+        Assert.Equal(ConfidenceBand.Medium, hits.Band);
+        Assert.True(hits.IsVerbUnknown);
         Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.structuralClientCalls"]);
         Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.structuralEndpoints"]);
     }
@@ -850,7 +854,8 @@ public sealed class BridgeGraphBuilderTests
 
         var hits = Assert.Single(graph.Incident(frontendSymbol), e => e.Edge.Kind == BridgeKind.Hits);
         Assert.Equal("cs.calendar", hits.Edge.TargetRef.SymbolId);
-        Assert.Equal(ConfidenceBand.High, hits.Band);
+        Assert.Equal(ConfidenceBand.Medium, hits.Band);
+        Assert.True(hits.IsVerbUnknown);
     }
 
     [Theory]
@@ -955,7 +960,7 @@ public sealed class BridgeGraphBuilderTests
     }
 
     [Fact]
-    public void StructuralRouteFactAdapter_TryReadRouteReference_ReadsRouteAndDefaultVerb()
+    public void StructuralRouteFactAdapter_TryReadRouteReference_ReadsRouteAndUnknownVerbForNavigation()
     {
         var fact = Fact(
             "sf-react-calendar",
@@ -971,7 +976,7 @@ public sealed class BridgeGraphBuilderTests
 
         Assert.True(StructuralRouteFactAdapter.TryReadRouteReference(fact, new Dictionary<string, SymbolDetail>(), out var reference));
         Assert.Equal("/calendar", reference.RoutePath);
-        Assert.Equal("GET", reference.Verb);
+        Assert.Null(reference.Verb);
         Assert.Equal("react.link", reference.ContainingSymbolId);
         Assert.Equal("web/Nav.tsx", reference.FilePath);
         Assert.Equal(1, reference.Line);
@@ -1517,7 +1522,6 @@ public sealed class BridgeGraphBuilderTests
                 {
                     ["framework"] = "vue",
                     ["target_path"] = "/keep-alive.html",
-                    ["verb"] = "GET",
                 }),
             Fact(
                 "sf-route-keepalive",
@@ -1547,7 +1551,8 @@ public sealed class BridgeGraphBuilderTests
         Assert.Equal("GET /keep-alive.html", endpointNode.Display);
         Assert.Equal("Api/KeepAlive.cs", endpointNode.FilePath);
         Assert.Equal(1, endpointNode.Line);
-        Assert.Equal(ConfidenceBand.High, hits.Band);
+        Assert.Equal(ConfidenceBand.Medium, hits.Band);
+        Assert.True(hits.IsVerbUnknown);
         Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.structuralEndpoints"]);
     }
 
