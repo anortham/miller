@@ -4,14 +4,17 @@ namespace Miller.Tests;
 
 /// <summary>
 /// Unit coverage for <see cref="ScaleTestSupport.RepoRoot"/>'s repo-root resolution, in particular the
-/// cwd fallback added for Eros CT: CT runs Miller's test binary from an out-of-repo sandbox with the
-/// working directory set to the Miller repo root, so the assembly-based walk (which starts from
-/// <c>AppContext.BaseDirectory</c>, outside the repo in that scenario) fails, and a second walk from
-/// <c>Directory.GetCurrentDirectory()</c> must succeed instead.
+/// fallback chain added for Eros CT. CT runs Miller's test binary from an out-of-repo sandbox, so the
+/// assembly-based walk (which starts from <c>AppContext.BaseDirectory</c>, outside the repo in that
+/// scenario) fails. The cwd walk is also defeated under CT because xunit v3 resets the process working
+/// directory to the test-assembly directory before tests execute, so the reliable channel is the
+/// <c>EROS_WORKSPACE_ROOT</c> environment variable CT always sets.
 ///
-/// These tests exercise <see cref="ScaleTestSupport.LocateRepoRoot"/> directly — the single-walk helper
-/// that <c>RepoRoot()</c> composes twice — so the fallback is verified without faking
-/// <c>AppContext.BaseDirectory</c> (which C# cannot do) or the process's actual working directory.
+/// These tests exercise the pure helpers <see cref="ScaleTestSupport.LocateRepoRoot"/> and
+/// <see cref="ScaleTestSupport.LocateRepoRootFromWorkspaceRoot"/> directly — the pieces <c>RepoRoot()</c>
+/// composes — so the fallbacks are verified without faking <c>AppContext.BaseDirectory</c> (which C#
+/// cannot do), the process's working directory, or the process-global environment (unsafe under xunit
+/// v3's parallel collections).
 /// </summary>
 public sealed class ScaleTestSupportTests
 {
@@ -53,5 +56,37 @@ public sealed class ScaleTestSupportTests
         string repoRoot = ScaleTestSupport.RepoRoot();
 
         Assert.True(File.Exists(Path.Combine(repoRoot, "Miller.slnx")));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void LocateRepoRootFromWorkspaceRoot_ReturnsNull_WhenValueBlank(string? workspaceRoot)
+    {
+        // The env-var fallback must no-op when EROS_WORKSPACE_ROOT is unset or blank, so RepoRoot() falls
+        // through to its final throw rather than walking up from an empty/garbage path.
+        Assert.Null(ScaleTestSupport.LocateRepoRootFromWorkspaceRoot(workspaceRoot));
+    }
+
+    [Fact]
+    public void LocateRepoRootFromWorkspaceRoot_ReturnsNull_WhenValueIsNotUnderRepo()
+    {
+        // A non-repo EROS_WORKSPACE_ROOT (e.g. pointing at an unrelated tree) resolves nothing.
+        string outside = Path.Combine(
+            Path.GetTempPath(), "miller-workspace-root-test-" + Guid.NewGuid().ToString("N"), "nested");
+
+        Assert.Null(ScaleTestSupport.LocateRepoRootFromWorkspaceRoot(outside));
+    }
+
+    [Fact]
+    public void LocateRepoRootFromWorkspaceRoot_FindsRepoRoot_WhenValuePointsIntoRepo()
+    {
+        // This is the CT path xunit v3's cwd reset defeats: EROS_WORKSPACE_ROOT points into the repo, and
+        // the env-var walk must resolve the repo root even though the assembly and cwd walks both miss.
+        string expectedRepoRoot = ScaleTestSupport.RepoRoot();
+        string workspaceRoot = Path.Combine(expectedRepoRoot, "some", "nested", "workspace");
+
+        Assert.Equal(expectedRepoRoot, ScaleTestSupport.LocateRepoRootFromWorkspaceRoot(workspaceRoot));
     }
 }

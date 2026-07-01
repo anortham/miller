@@ -16,15 +16,21 @@ namespace Miller.Tests;
 public static class ScaleTestSupport
 {
     /// <summary>
-    /// The repo root (the dir holding <c>Miller.slnx</c>), walked up from the test assembly first and, if
-    /// that fails, from the process's current working directory. The cwd fallback exists for Eros CT, which
-    /// runs Miller's test binary from an out-of-repo sandbox with the working directory set to the repo
-    /// root: the assembly-based walk starts outside the repo there and never finds <c>Miller.slnx</c>, so a
-    /// second walk from cwd is needed. This mirrors Miller's own multi-fallback workspace-resolution idiom.
+    /// The repo root (the dir holding <c>Miller.slnx</c>), resolved through a three-step fallback chain:
+    /// walk up from the test assembly, then from the process's current working directory, then from the
+    /// <c>EROS_WORKSPACE_ROOT</c> environment variable. Each step exists for Eros CT, which runs Miller's
+    /// test binary from an out-of-repo sandbox: the assembly-based walk starts outside the repo and never
+    /// finds <c>Miller.slnx</c>. The cwd walk cannot be relied on either, because xunit v3 resets the
+    /// process current directory to the test-assembly directory (the out-of-repo sandbox) before tests
+    /// execute, so <c>Directory.GetCurrentDirectory()</c> no longer points at CT's launch cwd. The
+    /// <c>EROS_WORKSPACE_ROOT</c> variable, which CT always sets to the repo root, survives that reset and
+    /// is therefore the reliable channel under CT. This mirrors Miller's own multi-fallback
+    /// workspace-resolution idiom.
     /// </summary>
     public static string RepoRoot() =>
         LocateRepoRoot(AppContext.BaseDirectory)
         ?? LocateRepoRoot(Directory.GetCurrentDirectory())
+        ?? LocateRepoRootFromWorkspaceRoot(Environment.GetEnvironmentVariable("EROS_WORKSPACE_ROOT"))
         ?? throw new InvalidOperationException("Could not locate repo root (Miller.slnx).");
 
     /// <summary>
@@ -39,6 +45,15 @@ public static class ScaleTestSupport
             dir = dir.Parent;
         return dir?.FullName;
     }
+
+    /// <summary>
+    /// Resolve the repo root from a raw <c>EROS_WORKSPACE_ROOT</c> value by walking up from it, or return
+    /// <c>null</c> when the value is unset/blank so <see cref="RepoRoot"/> falls through to its next step.
+    /// Kept as a pure helper (the env read stays in <see cref="RepoRoot"/>) so it is testable without
+    /// mutating the process-global environment — unsafe under xunit v3's parallel collections.
+    /// </summary>
+    internal static string? LocateRepoRootFromWorkspaceRoot(string? workspaceRoot) =>
+        string.IsNullOrWhiteSpace(workspaceRoot) ? null : LocateRepoRoot(workspaceRoot);
 
     /// <summary>
     /// The pinned julie-extract binary under <c>.tools/</c>, or <c>null</c> if restore has not been run.
