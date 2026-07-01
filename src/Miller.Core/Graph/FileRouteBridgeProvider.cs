@@ -52,40 +52,22 @@ public sealed class FileRouteBridgeProvider : IBridgeProvider
             }
         }
 
-        var candidates = FileRouteBridge.Resolve(routeReferences, fileRoutes);
+        var result = FileRouteBridge.Resolve(routeReferences, fileRoutes);
         var evidenceCounts = new Dictionary<string, int>(StringComparer.Ordinal)
         {
             [_descriptor.EvidenceKey("routeReferences")] = routeReferences.Count,
             [_descriptor.EvidenceKey("fileRoutes")] = fileRoutes.Count,
-            [_descriptor.EvidenceKey("candidates")] = candidates.Count,
-            [_descriptor.EvidenceKey("ambiguousMatches")] = CountAmbiguousMatches(routeReferences, fileRoutes),
+            [_descriptor.EvidenceKey("candidates")] = result.Edges.Count,
+            [_descriptor.EvidenceKey("ambiguousMatches")] = result.AmbiguousMatches,
         };
 
         if (routeReferences.Count == 0 && fileRoutes.Count == 0)
             return BridgeProviderResult.Skipped($"no {_descriptor.ProviderId} bridge evidence", evidenceCounts);
 
         return BridgeProviderResult.ActiveResult(
-            candidates,
+            result.Edges,
             evidenceCounts,
             BuildObservationNodes(routeReferences, fileRoutes));
-    }
-
-    private static int CountAmbiguousMatches(
-        IReadOnlyList<StructuralRouteReference> routeReferences,
-        IReadOnlyList<StructuralFileRoute> fileRoutes)
-    {
-        var count = 0;
-        foreach (var reference in routeReferences)
-        {
-            var matches = fileRoutes
-                .Where(route => FileRouteMatcher.Matches(reference.RoutePath, route.RoutePath))
-                .Take(2)
-                .Count();
-            if (matches == 2)
-                count++;
-        }
-
-        return count;
     }
 
     private static IReadOnlyDictionary<string, BridgeNode> BuildObservationNodes(

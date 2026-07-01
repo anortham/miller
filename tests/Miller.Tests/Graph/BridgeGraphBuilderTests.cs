@@ -1232,7 +1232,7 @@ public sealed class BridgeGraphBuilderTests
     {
         var edges = FileRouteBridge.Resolve(
             [NextRouteReference("/settings")],
-            [NextFileRoute("/settings", "web/app/settings/page.tsx")]);
+            [NextFileRoute("/settings", "web/app/settings/page.tsx")]).Edges;
 
         var edge = Assert.Single(edges);
         Assert.Equal(BridgeKind.NavigatesTo, edge.Kind);
@@ -1252,7 +1252,7 @@ public sealed class BridgeGraphBuilderTests
     {
         var edge = Assert.Single(FileRouteBridge.Resolve(
             [NextRouteReference("/users/123")],
-            [NextFileRoute(fileRoute, "web/app/users/[id]/page.tsx")]));
+            [NextFileRoute(fileRoute, "web/app/users/[id]/page.tsx")]).Edges);
 
         var scored = BridgeScorer.Score(edge);
 
@@ -1269,7 +1269,7 @@ public sealed class BridgeGraphBuilderTests
                 NextRouteReference("/docs", "next.docs.index"),
                 NextRouteReference("/docs/a/b", "next.docs.deep"),
             ],
-            [NextFileRoute("/docs/[...slug]", "web/app/docs/[...slug]/page.tsx")]);
+            [NextFileRoute("/docs/[...slug]", "web/app/docs/[...slug]/page.tsx")]).Edges;
 
         var edge = Assert.Single(edges);
         Assert.Equal("/docs/a/b", edge.SourceRef.Display);
@@ -1284,7 +1284,7 @@ public sealed class BridgeGraphBuilderTests
                 NextRouteReference("/docs", "next.docs.index"),
                 NextRouteReference("/docs/a/b", "next.docs.deep"),
             ],
-            [NextFileRoute("/docs/:slug*", "web/app/docs/[...slug]/page.tsx")]);
+            [NextFileRoute("/docs/:slug*", "web/app/docs/[...slug]/page.tsx")]).Edges;
 
         var edge = Assert.Single(edges);
         Assert.Equal("/docs/a/b", edge.SourceRef.Display);
@@ -1299,7 +1299,7 @@ public sealed class BridgeGraphBuilderTests
                 NextRouteReference("/docs", "next.docs.index"),
                 NextRouteReference("/docs/a/b", "next.docs.deep"),
             ],
-            [NextFileRoute("/docs/[[...slug]]", "web/app/docs/[[...slug]]/page.tsx")]);
+            [NextFileRoute("/docs/[[...slug]]", "web/app/docs/[[...slug]]/page.tsx")]).Edges;
 
         Assert.Collection(
             edges.OrderBy(edge => edge.SourceRef.Display, StringComparer.Ordinal),
@@ -1325,7 +1325,7 @@ public sealed class BridgeGraphBuilderTests
                 NextRouteReference("/docs", "next.docs.index"),
                 NextRouteReference("/docs/a/b", "next.docs.deep"),
             ],
-            [NextFileRoute(fileRoute, "web/app/docs/[[...slug]]/page.tsx")]);
+            [NextFileRoute(fileRoute, "web/app/docs/[[...slug]]/page.tsx")]).Edges;
 
         Assert.Collection(
             edges.OrderBy(edge => edge.SourceRef.Display, StringComparer.Ordinal),
@@ -1346,7 +1346,7 @@ public sealed class BridgeGraphBuilderTests
     {
         var edges = FileRouteBridge.Resolve(
             [NextRouteReference("/docs/a/edit")],
-            [NextFileRoute("/docs/[[...slug]]/edit", "web/app/docs/[[...slug]]/edit/page.tsx")]);
+            [NextFileRoute("/docs/[[...slug]]/edit", "web/app/docs/[[...slug]]/edit/page.tsx")]).Edges;
 
         Assert.Empty(edges);
     }
@@ -1356,23 +1356,39 @@ public sealed class BridgeGraphBuilderTests
     {
         var edge = Assert.Single(FileRouteBridge.Resolve(
             [NextRouteReference("/settings")],
-            [NextFileRoute("/(admin)/settings", "web/app/(admin)/settings/page.tsx")]));
+            [NextFileRoute("/(admin)/settings", "web/app/(admin)/settings/page.tsx")]).Edges);
 
         Assert.Equal("/settings", edge.SourceRef.Display);
         Assert.Equal("/(admin)/settings", edge.TargetRef.Display);
     }
 
     [Fact]
+    public void FileRouteBridge_PrefersDynamicSegmentOverCatchAll()
+    {
+        var result = FileRouteBridge.Resolve(
+            [NextRouteReference("/users/42")],
+            [
+                NextFileRoute("/users/[...slug]", "web/app/users/[...slug]/page.tsx", "sf-next-users-catchall"),
+                NextFileRoute("/users/[id]", "web/app/users/[id]/page.tsx", "sf-next-users-id"),
+            ]);
+
+        var edge = Assert.Single(result.Edges);
+        Assert.Equal("/users/[id]", edge.TargetRef.Display);
+        Assert.Equal(0, result.AmbiguousMatches);
+    }
+
+    [Fact]
     public void FileRouteBridge_AmbiguousFileRouteMatchesEmitNoEdge()
     {
-        var edges = FileRouteBridge.Resolve(
+        var result = FileRouteBridge.Resolve(
             [NextRouteReference("/settings")],
             [
                 NextFileRoute("/settings", "web/app/settings/page.tsx", "sf-next-settings-app"),
                 NextFileRoute("/(admin)/settings", "web/app/(admin)/settings/page.tsx", "sf-next-settings-admin"),
             ]);
 
-        Assert.Empty(edges);
+        Assert.Empty(result.Edges);
+        Assert.Equal(1, result.AmbiguousMatches);
     }
 
     [Fact]

@@ -4,8 +4,8 @@ public static class FileRouteMatcher
 {
     public static bool Matches(string referenceRoute, string fileRoute)
     {
-        var referenceSegments = Segments(referenceRoute);
-        var fileSegments = Segments(fileRoute);
+        var referenceSegments = RouteSegments(referenceRoute);
+        var fileSegments = RouteSegments(fileRoute);
 
         var referenceIndex = 0;
         for (var fileIndex = 0; fileIndex < fileSegments.Length; fileIndex++)
@@ -13,10 +13,10 @@ public static class FileRouteMatcher
             var fileSegment = fileSegments[fileIndex];
             var isLastFileSegment = fileIndex == fileSegments.Length - 1;
 
-            if (IsOptionalCatchAll(fileSegment))
+            if (IsOptionalCatchAllSegment(fileSegment))
                 return isLastFileSegment;
 
-            if (IsCatchAll(fileSegment))
+            if (IsCatchAllSegment(fileSegment))
                 return isLastFileSegment && referenceIndex < referenceSegments.Length;
 
             if (referenceIndex >= referenceSegments.Length)
@@ -32,9 +32,9 @@ public static class FileRouteMatcher
     }
 
     private static bool SegmentMatches(string referenceSegment, string fileSegment) =>
-        IsDynamic(fileSegment) || string.Equals(referenceSegment, fileSegment, StringComparison.Ordinal);
+        IsDynamicSegment(fileSegment) || string.Equals(referenceSegment, fileSegment, StringComparison.Ordinal);
 
-    private static string[] Segments(string route)
+    internal static string[] RouteSegments(string route)
     {
         if (string.IsNullOrWhiteSpace(route))
             return [];
@@ -67,23 +67,23 @@ public static class FileRouteMatcher
         return -1;
     }
 
-    private static bool IsDynamic(string segment) =>
+    internal static bool IsDynamicSegment(string segment) =>
         IsBraceDynamic(segment) ||
         IsColonDynamic(segment) ||
         (segment.Length >= 3 &&
             segment[0] == '[' &&
             segment[^1] == ']' &&
-            !IsCatchAll(segment) &&
-            !IsOptionalCatchAll(segment));
+            !IsCatchAllSegment(segment) &&
+            !IsOptionalCatchAllSegment(segment));
 
     private static bool IsBraceDynamic(string segment) =>
         segment.Length >= 2 && segment[0] == '{' && segment[^1] == '}';
 
-    private static bool IsCatchAll(string segment) =>
+    internal static bool IsCatchAllSegment(string segment) =>
         (segment.StartsWith("[...", StringComparison.Ordinal) && segment.EndsWith(']')) ||
         IsColonCatchAll(segment);
 
-    private static bool IsOptionalCatchAll(string segment) =>
+    internal static bool IsOptionalCatchAllSegment(string segment) =>
         (segment.StartsWith("[[...", StringComparison.Ordinal) && segment.EndsWith("]]", StringComparison.Ordinal)) ||
         IsColonOptionalCatchAll(segment);
 

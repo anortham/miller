@@ -100,10 +100,10 @@ From the 2026-07-01 review (checkpoint `checkpoint_92e28948`, fast suite 2555/25
 **Approach:** Compare candidate file routes pairwise by segment specificity vector, mirroring Next.js route resolution order. Keep the result type small (edges + ambiguous count); don't build a general router.
 
 **Acceptance criteria:**
-- [ ] `/users/42` matching both `/users/[id]` and `/users/[...slug]` yields one edge to `/users/[id]`.
-- [ ] Two equally-specific matches still produce no edge and an ambiguous count of 1.
-- [ ] Matching is computed once per build (no duplicate pass).
-- [ ] Worker-scope verification passes, committed.
+- [x] `/users/42` matching both `/users/[id]` and `/users/[...slug]` yields one edge to `/users/[id]`.
+- [x] Two equally-specific matches still produce no edge and an ambiguous count of 1.
+- [x] Matching is computed once per build (no duplicate pass).
+- [x] Worker-scope verification passes, committed.
 
 ## Task 4: Scope DotnetWebBridgeProvider Structural Consumption
 
