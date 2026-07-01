@@ -33,14 +33,6 @@ jobs:
       - name: Test plugin distribution metadata
         run: scripts/test-plugin.sh
 
-      - name: HOL plugin-scanner (lint)
-        uses: hashgraph-online/ai-plugin-scanner-action@v1
-        with:
-          plugin_dir: .
-          mode: lint
-          min_score: 0
-          fail_on_severity: none
-
       - uses: actions/setup-dotnet@v5.3.0
         with:
           dotnet-version: '10.0.x'
