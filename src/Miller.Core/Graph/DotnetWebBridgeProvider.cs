@@ -10,13 +10,17 @@ namespace Miller.Core.Graph;
 public sealed class DotnetWebBridgeProvider : IBridgeProvider
 {
     public const string ProviderId = "dotnet-web";
-    private const string AspNetMinimalApiRoutePattern = "aspnet.minimal_api.route.v1";
+    private const string AspNetMinimalApiRoutePattern = BridgeStructuralPatterns.AspNetMinimalApiRoute;
 
     public static DotnetWebBridgeProvider Instance { get; } = new();
 
     private DotnetWebBridgeProvider()
     {
     }
+
+    private sealed record StructuralClientCallReduction(
+        IReadOnlyList<TsClientCall> Calls,
+        (int Htmx, int Vue, int React, int NextJs, int Nuxt) Counts);
 
     public string Id => ProviderId;
 
@@ -30,10 +34,11 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
             context.StructuralFacts, context.Symbols, context.Literals, context.SymbolsById, context.LiteralSites);
         var endpoints = annotationEndpoints.Concat(structuralEndpoints).ToList();
         var literalClientCalls = ReduceClientCalls(context.Literals, context.SymbolsById, context.LiteralSites);
-        var structuralClientCalls = ReduceStructuralClientCalls(context.StructuralFacts, context.SymbolsById);
+        var structuralClientCallReduction = ReduceStructuralClientCalls(context.StructuralFacts, context.SymbolsById);
+        var structuralClientCalls = structuralClientCallReduction.Calls;
         var clientCalls = literalClientCalls.Concat(structuralClientCalls).ToList();
         var observationNodes = BuildStructuralRouteObservationNodes(structuralClientCalls, structuralEndpoints);
-        var structuralCallCounts = CountStructuralRouteReferences(context.StructuralFacts, context.SymbolsById);
+        var structuralCallCounts = structuralClientCallReduction.Counts;
         var serverTypeResolver = new SymbolResolver(context.Symbols.Where(IsCSharpUserType).ToArray());
 
         var evidenceCounts = new Dictionary<string, int>(StringComparer.Ordinal)
@@ -220,8 +225,8 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
         if (!string.Equals(fact.PatternId, AspNetMinimalApiRoutePattern, StringComparison.Ordinal))
             return false;
 
-        var routeTemplate = MetadataString(fact, "route_template");
-        var verb = MetadataString(fact, "verb");
+        var routeTemplate = StructuralRouteFactAdapter.MetadataString(fact, "route_template");
+        var verb = StructuralRouteFactAdapter.MetadataString(fact, "verb");
         if (string.IsNullOrWhiteSpace(routeTemplate) || string.IsNullOrWhiteSpace(verb))
             return false;
 
@@ -293,15 +298,21 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
             ? verbKey[4..].ToUpperInvariant()
             : verbKey.ToUpperInvariant();
 
-    private static IReadOnlyList<TsClientCall> ReduceStructuralClientCalls(
+    private static StructuralClientCallReduction ReduceStructuralClientCalls(
         IReadOnlyList<StructuralFactRecord> structuralFacts,
         IReadOnlyDictionary<string, SymbolDetail> symbolsById)
     {
         var calls = new List<TsClientCall>();
+        int htmx = 0;
+        int vue = 0;
+        int react = 0;
+        int nextjs = 0;
+        int nuxt = 0;
         foreach (var fact in structuralFacts.OrderBy(f => f.Path, StringComparer.Ordinal).ThenBy(f => f.Span.StartByte))
         {
             if (StructuralRouteFactAdapter.TryReadRouteReference(fact, symbolsById, out var reference))
             {
+                CountStructuralRouteReferencePattern(fact.PatternId, ref htmx, ref vue, ref react, ref nextjs, ref nuxt);
                 calls.Add(ToClientCall(reference));
                 continue;
             }
@@ -309,38 +320,37 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
             if (StructuralRouteFactAdapter.TryReadFileRoute(fact, symbolsById, out var fileRoute))
                 calls.Add(ToClientCall(fileRoute));
         }
-        return calls;
+        return new StructuralClientCallReduction(calls, (htmx, vue, react, nextjs, nuxt));
     }
 
-    private static (int Htmx, int Vue, int React, int NextJs, int Nuxt) CountStructuralRouteReferences(
-        IReadOnlyList<StructuralFactRecord> structuralFacts,
-        IReadOnlyDictionary<string, SymbolDetail> symbolsById)
+    private static void CountStructuralRouteReferencePattern(
+        string patternId,
+        ref int htmx,
+        ref int vue,
+        ref int react,
+        ref int nextjs,
+        ref int nuxt)
     {
-        int htmx = 0;
-        int vue = 0;
-        int react = 0;
-        int nextjs = 0;
-        int nuxt = 0;
-        foreach (var fact in structuralFacts)
+        switch (patternId)
         {
-            if (!StructuralRouteFactAdapter.TryReadRouteReference(fact, symbolsById, out _))
-                continue;
-
-            if (string.Equals(fact.PatternId, "htmx.attribute.v1", StringComparison.Ordinal))
+            case BridgeStructuralPatterns.HtmxAttribute:
                 htmx++;
-            else if (string.Equals(fact.PatternId, "vue.route_reference.v1", StringComparison.Ordinal) ||
-                     string.Equals(fact.PatternId, "vue.route_definition.v1", StringComparison.Ordinal))
+                break;
+            case BridgeStructuralPatterns.VueRouteReference:
+            case BridgeStructuralPatterns.VueRouteDefinition:
                 vue++;
-            else if (string.Equals(fact.PatternId, "react.route_reference.v1", StringComparison.Ordinal) ||
-                     string.Equals(fact.PatternId, "react.route_definition.v1", StringComparison.Ordinal))
+                break;
+            case BridgeStructuralPatterns.ReactRouteReference:
+            case BridgeStructuralPatterns.ReactRouteDefinition:
                 react++;
-            else if (string.Equals(fact.PatternId, "nextjs.route_reference.v1", StringComparison.Ordinal))
+                break;
+            case BridgeStructuralPatterns.NextJsRouteReference:
                 nextjs++;
-            else if (string.Equals(fact.PatternId, "nuxt.route_reference.v1", StringComparison.Ordinal))
+                break;
+            case BridgeStructuralPatterns.NuxtRouteReference:
                 nuxt++;
+                break;
         }
-
-        return (htmx, vue, react, nextjs, nuxt);
     }
 
     private static TsClientCall ToClientCall(StructuralRouteReference reference)
@@ -361,11 +371,11 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
         var lowerVerb = verb.ToLowerInvariant();
         return patternId switch
         {
-            "htmx.attribute.v1" => "htmx." + lowerVerb,
-            "vue.route_reference.v1" or "vue.route_definition.v1" => "vue." + lowerVerb,
-            "react.route_reference.v1" or "react.route_definition.v1" => "react." + lowerVerb,
-            "nextjs.route_reference.v1" => "nextjs." + lowerVerb,
-            "nuxt.route_reference.v1" => "nuxt." + lowerVerb,
+            BridgeStructuralPatterns.HtmxAttribute => "htmx." + lowerVerb,
+            BridgeStructuralPatterns.VueRouteReference or BridgeStructuralPatterns.VueRouteDefinition => "vue." + lowerVerb,
+            BridgeStructuralPatterns.ReactRouteReference or BridgeStructuralPatterns.ReactRouteDefinition => "react." + lowerVerb,
+            BridgeStructuralPatterns.NextJsRouteReference => "nextjs." + lowerVerb,
+            BridgeStructuralPatterns.NuxtRouteReference => "nuxt." + lowerVerb,
             _ => verb.ToUpperInvariant(),
         };
     }
@@ -388,7 +398,7 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
         IReadOnlyList<SymbolDetail> symbols,
         IReadOnlyDictionary<string, SymbolDetail> symbolsById)
     {
-        var handlerName = MetadataString(fact, "handler_name");
+        var handlerName = StructuralRouteFactAdapter.MetadataString(fact, "handler_name");
         if (string.IsNullOrWhiteSpace(handlerName))
         {
             return !string.IsNullOrWhiteSpace(fact.ContainingSymbolId) &&
@@ -412,13 +422,13 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
         IReadOnlyDictionary<string, SymbolDetail> symbolsById,
         IReadOnlyDictionary<LiteralRecord, LiteralSite>? literalSites)
     {
-        var effectiveRoute = MetadataString(fact, "effective_route_template");
+        var effectiveRoute = StructuralRouteFactAdapter.MetadataString(fact, "effective_route_template");
         if (!string.IsNullOrWhiteSpace(effectiveRoute))
             return effectiveRoute;
 
-        var explicitPrefix = MetadataString(fact, "route_group_prefix")
-            ?? MetadataString(fact, "group_prefix")
-            ?? MetadataString(fact, "route_prefix");
+        var explicitPrefix = StructuralRouteFactAdapter.MetadataString(fact, "route_group_prefix")
+            ?? StructuralRouteFactAdapter.MetadataString(fact, "group_prefix")
+            ?? StructuralRouteFactAdapter.MetadataString(fact, "route_prefix");
         var prefix = string.IsNullOrWhiteSpace(explicitPrefix)
             ? NearestMapGroupPrefix(fact, literals, symbolsById, literalSites)
             : explicitPrefix;
@@ -459,13 +469,6 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
         if (r.Length == 0)
             return p;
         return "/" + p + "/" + r;
-    }
-
-    private static string? MetadataString(StructuralFactRecord fact, string key)
-    {
-        return fact.Metadata.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
-            ? value
-            : null;
     }
 
     private static bool IsClassKind(string kind) =>

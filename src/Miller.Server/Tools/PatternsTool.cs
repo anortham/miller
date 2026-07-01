@@ -174,14 +174,6 @@ public sealed class PatternsTool
         throw new InvalidOperationException("patterns search requires pattern_id or query.");
     }
 
-    internal static PatternMetadataFilter? ParseWhere(string? where) =>
-        ParseWhereFilters(where).Count switch
-        {
-            0 => null,
-            1 => ParseWhereFilters(where)[0],
-            _ => throw new InvalidOperationException("patterns where accepts one key=value per call; use repeated --where or semicolon-separated filters."),
-        };
-
     internal static IReadOnlyList<PatternMetadataFilter> ParseWhereFilters(string? where)
     {
         if (string.IsNullOrWhiteSpace(where))
@@ -310,8 +302,7 @@ public sealed class PatternsTool
             patternExists,
             filteredOut,
             metadataFilters.Count > 0,
-            querySearch: false,
-            hasNearMatches: suggestions.Count > 0);
+            querySearch: false);
 
         return new PatternToolResult(
             json
@@ -388,18 +379,15 @@ public sealed class PatternsTool
         }
 
         var combined = new List<PatternMatchRow>(capacity: Math.Min(boundedLimit * matchedPatternIds.Length, MaxLimit * MaxQueryPatternIds));
-        foreach (string pid in matchedPatternIds)
+        foreach (PatternMatchRow row in reader.EnumerateMatches(
+                     dbPath,
+                     matchedPatternIds,
+                     language,
+                     path,
+                     metadataFilters.Count == 0 ? null : metadataFilters,
+                     boundedLimit))
         {
-            foreach (PatternMatchRow row in reader.EnumerateMatches(
-                         dbPath,
-                         pid,
-                         language,
-                         path,
-                         metadataFilters.Count == 0 ? null : metadataFilters,
-                         boundedLimit))
-            {
-                combined.Add(row);
-            }
+            combined.Add(row);
         }
 
         PatternMatchRow[] rows = combined
@@ -838,11 +826,6 @@ public sealed class PatternsTool
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
     }
 
-    private static string RenderSearchJson(
-        string patternId,
-        IReadOnlyList<PatternMatchRow> rows) =>
-        RenderSearchJson(patternId, rows, [], filteredOut: false, path: null, language: null, metadataFilters: Array.Empty<PatternMetadataFilter>(), emptyReason: null);
-
     private static string RenderSearchJsonForQuery(
         string query,
         IReadOnlyList<string> matchedPatternIds,
@@ -1126,15 +1109,14 @@ public sealed class PatternsTool
         bool patternExists,
         bool filteredOut,
         bool hasMetadataFilter,
-        bool querySearch,
-        bool hasNearMatches)
+        bool querySearch)
     {
         if (querySearch)
             return "query_no_match";
         if (filteredOut)
             return "filtered_out";
         if (hasPatternId && !patternExists)
-            return hasNearMatches ? "no_such_pattern_id" : "no_such_pattern_id";
+            return "no_such_pattern_id";
         if (hasMetadataFilter)
             return "no_metadata_match";
         return "no_facts";

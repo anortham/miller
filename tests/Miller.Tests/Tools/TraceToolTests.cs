@@ -1587,10 +1587,13 @@ public sealed class TraceToolTests
             Notes: [],
             EvidenceCounts: new Dictionary<string, int>(StringComparer.Ordinal)
             {
-                ["dotnet-web.structuralFacts"] = 3,
+                ["dotnet-web.structuralFacts"] = 6,
                 ["dotnet-web.aspnetMinimalRoutes"] = 1,
                 ["dotnet-web.htmxCalls"] = 1,
                 ["dotnet-web.vueCalls"] = 1,
+                ["dotnet-web.reactCalls"] = 1,
+                ["dotnet-web.nextjsCalls"] = 1,
+                ["dotnet-web.nuxtCalls"] = 1,
             });
         var index = BuildBridgeIndex(
             new[] { ("x", "Loner", "src/Loner.cs", 1) },
@@ -1609,6 +1612,9 @@ public sealed class TraceToolTests
         Assert.Contains("patterns operation=\"search\" query=\"route\"", outp);
         Assert.Contains("patterns operation=\"search\" pattern_id=\"htmx.attribute.v1\"", outp);
         Assert.Contains("patterns operation=\"search\" pattern_id=\"vue.route_reference.v1\"", outp);
+        Assert.Contains("patterns operation=\"search\" pattern_id=\"react.route_reference.v1\"", outp);
+        Assert.Contains("patterns operation=\"search\" query=\"nextjs\"", outp);
+        Assert.Contains("patterns operation=\"search\" query=\"nuxt\"", outp);
     }
 
     [Fact]
@@ -1620,10 +1626,13 @@ public sealed class TraceToolTests
             Notes: [],
             EvidenceCounts: new Dictionary<string, int>(StringComparer.Ordinal)
             {
-                ["dotnet-web.structuralFacts"] = 3,
+                ["dotnet-web.structuralFacts"] = 6,
                 ["dotnet-web.aspnetMinimalRoutes"] = 1,
                 ["dotnet-web.htmxCalls"] = 1,
                 ["dotnet-web.vueCalls"] = 1,
+                ["dotnet-web.reactCalls"] = 1,
+                ["dotnet-web.nextjsCalls"] = 1,
+                ["dotnet-web.nuxtCalls"] = 1,
             });
         var index = BuildBridgeIndex(
             new[] { ("x", "Loner", "src/Loner.cs", 1) },
@@ -1650,6 +1659,18 @@ public sealed class TraceToolTests
             action.GetProperty("tool").GetString() == "patterns" &&
             action.GetProperty("args").TryGetProperty("pattern_id", out JsonElement patternId) &&
             patternId.GetString() == "vue.route_reference.v1");
+        Assert.Contains(actions, action =>
+            action.GetProperty("tool").GetString() == "patterns" &&
+            action.GetProperty("args").TryGetProperty("pattern_id", out JsonElement patternId) &&
+            patternId.GetString() == "react.route_reference.v1");
+        Assert.Contains(actions, action =>
+            action.GetProperty("tool").GetString() == "patterns" &&
+            action.GetProperty("args").TryGetProperty("query", out JsonElement query) &&
+            query.GetString() == "nextjs");
+        Assert.Contains(actions, action =>
+            action.GetProperty("tool").GetString() == "patterns" &&
+            action.GetProperty("args").TryGetProperty("query", out JsonElement query) &&
+            query.GetString() == "nuxt");
     }
 
     [Fact]

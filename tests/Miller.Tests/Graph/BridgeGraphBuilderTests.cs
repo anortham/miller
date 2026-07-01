@@ -1220,6 +1220,16 @@ public sealed class BridgeGraphBuilderTests
     }
 
     [Fact]
+    public void FileRouteBridge_OptionalCatchAllOnlyMatchesTrailingSegments()
+    {
+        var edges = FileRouteBridge.Resolve(
+            [NextRouteReference("/docs/a/edit")],
+            [NextFileRoute("/docs/[[...slug]]/edit", "web/app/docs/[[...slug]]/edit/page.tsx")]);
+
+        Assert.Empty(edges);
+    }
+
+    [Fact]
     public void FileRouteBridge_RouteGroupSegmentsDoNotParticipateInMatching()
     {
         var edge = Assert.Single(FileRouteBridge.Resolve(

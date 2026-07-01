@@ -26,7 +26,7 @@ internal static class PatternPathGlobMatcher
         {
             string normalized = NormalizePath(pattern);
             _containsSlash = normalized.Contains('/', StringComparison.Ordinal);
-            _regex = new Regex("^" + GlobToRegex(normalized) + "$", RegexOptions.CultureInvariant);
+            _regex = new Regex("^" + GlobToRegex(normalized) + "$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
         }
 
         public bool IsMatch(string path)

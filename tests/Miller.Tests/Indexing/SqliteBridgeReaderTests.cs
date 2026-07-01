@@ -322,7 +322,6 @@ public sealed class SqliteBridgeReaderTests : IDisposable
         Assert.Equal(
             new[]
             {
-                "aspnet.minimal_api.route_group.v1",
                 "aspnet.minimal_api.route.v1",
                 "htmx.attribute.v1",
                 "vue.route_reference.v1",
@@ -335,6 +334,7 @@ public sealed class SqliteBridgeReaderTests : IDisposable
                 "nuxt.file_route.v1",
             },
             data.StructuralFacts.Select(f => f.PatternId).ToArray());
+        Assert.DoesNotContain(data.StructuralFacts, f => f.PatternId == "aspnet.minimal_api.route_group.v1");
         Assert.DoesNotContain(data.StructuralFacts, f => f.PatternId == "css.selector_rule.v1");
         Assert.Equal("/api/calendar", data.StructuralFacts.Single(f => f.FactId == "sf-aspnet-route").Metadata["effective_route_template"]);
     }

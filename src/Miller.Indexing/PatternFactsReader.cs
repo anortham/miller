@@ -177,6 +177,56 @@ public sealed class PatternFactsReader
 
         int? boundedLimit = limit is null ? null : Math.Clamp(limit.Value, 1, 500);
         using SqliteConnection connection = OpenStructuralFacts(dbPath);
+        foreach (PatternMatchRow row in EnumerateMatches(
+                     connection,
+                     patternId,
+                     language,
+                     pathGlob,
+                     metadataFilters,
+                     boundedLimit))
+        {
+            yield return row;
+        }
+    }
+
+    public IEnumerable<PatternMatchRow> EnumerateMatches(
+        string dbPath,
+        IReadOnlyList<string> patternIds,
+        string? language,
+        string? pathGlob,
+        IReadOnlyList<PatternMetadataFilter>? metadataFilters,
+        int? limitPerPattern = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
+        ArgumentNullException.ThrowIfNull(patternIds);
+        ValidateFilters(metadataFilters);
+
+        int? boundedLimit = limitPerPattern is null ? null : Math.Clamp(limitPerPattern.Value, 1, 500);
+        using SqliteConnection connection = OpenStructuralFacts(dbPath);
+        foreach (string patternId in patternIds)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(patternId);
+            foreach (PatternMatchRow row in EnumerateMatches(
+                         connection,
+                         patternId,
+                         language,
+                         pathGlob,
+                         metadataFilters,
+                         boundedLimit))
+            {
+                yield return row;
+            }
+        }
+    }
+
+    private static IEnumerable<PatternMatchRow> EnumerateMatches(
+        SqliteConnection connection,
+        string? patternId,
+        string? language,
+        string? pathGlob,
+        IReadOnlyList<PatternMetadataFilter>? metadataFilters,
+        int? boundedLimit)
+    {
         using SqliteCommand command = connection.CreateCommand();
         int paramIndex = 0;
         List<string> where = AddFactFilters(command, patternId, language, ref paramIndex);
@@ -222,7 +272,7 @@ public sealed class PatternFactsReader
         }
     }
 
-    private static IReadOnlyList<PatternSummaryRow> SummaryFromMatches(
+    private IReadOnlyList<PatternSummaryRow> SummaryFromMatches(
         string dbPath,
         string? patternId,
         string? language,
@@ -231,7 +281,7 @@ public sealed class PatternFactsReader
         PatternSummaryGroupBy groupBy,
         string? facetKey)
     {
-        IEnumerable<PatternMatchRow> rows = new PatternFactsReader().EnumerateMatches(
+        IEnumerable<PatternMatchRow> rows = EnumerateMatches(
             dbPath,
             patternId,
             language,

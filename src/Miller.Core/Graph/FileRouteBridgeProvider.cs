@@ -11,15 +11,15 @@ public sealed class FileRouteBridgeProvider : IBridgeProvider
         new FileRouteBridgeDescriptor(
             ProviderId: "nextjs",
             DisplayName: "Next.js",
-            RouteReferencePattern: "nextjs.route_reference.v1",
-            FileRoutePattern: "nextjs.file_route.v1"));
+            RouteReferencePattern: BridgeStructuralPatterns.NextJsRouteReference,
+            FileRoutePattern: BridgeStructuralPatterns.NextJsFileRoute));
 
     public static FileRouteBridgeProvider Nuxt { get; } = new(
         new FileRouteBridgeDescriptor(
             ProviderId: "nuxt",
             DisplayName: "Nuxt",
-            RouteReferencePattern: "nuxt.route_reference.v1",
-            FileRoutePattern: "nuxt.file_route.v1"));
+            RouteReferencePattern: BridgeStructuralPatterns.NuxtRouteReference,
+            FileRoutePattern: BridgeStructuralPatterns.NuxtFileRoute));
 
     private readonly FileRouteBridgeDescriptor _descriptor;
 

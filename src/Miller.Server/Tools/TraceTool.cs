@@ -138,6 +138,7 @@ public sealed class TraceTool
     private const string ModePath = "path";
     private const string ModeRefs = "refs";
     private const string ModeBridge = "bridge";
+    private const int MaxNextActions = 10;
 
     private sealed record TraceNextAction(string Tool, string Reason, IReadOnlyList<KeyValuePair<string, string>> Args);
 
@@ -1535,7 +1536,7 @@ public sealed class TraceTool
                     "patterns",
                     "audit htmx route structural facts consumed by the dotnet-web bridge",
                     ("operation", "search"),
-                    ("pattern_id", "htmx.attribute.v1")));
+                    ("pattern_id", BridgeStructuralPatterns.HtmxAttribute)));
             }
 
             if (HasEvidence(capabilityReport, "dotnet-web.vueCalls"))
@@ -1544,7 +1545,7 @@ public sealed class TraceTool
                     "patterns",
                     "audit Vue route structural facts consumed by the dotnet-web bridge",
                     ("operation", "search"),
-                    ("pattern_id", "vue.route_reference.v1")));
+                    ("pattern_id", BridgeStructuralPatterns.VueRouteReference)));
             }
 
             if (HasEvidence(capabilityReport, "dotnet-web.reactCalls"))
@@ -1553,7 +1554,7 @@ public sealed class TraceTool
                     "patterns",
                     "audit React route structural facts consumed by the dotnet-web bridge",
                     ("operation", "search"),
-                    ("pattern_id", "react.route_reference.v1")));
+                    ("pattern_id", BridgeStructuralPatterns.ReactRouteReference)));
             }
 
             if (HasEvidence(capabilityReport, "dotnet-web.nextjsCalls") ||
@@ -1618,7 +1619,7 @@ public sealed class TraceTool
             return;
 
         sb.Append('\n').Append("Next:");
-        foreach (TraceNextAction action in actions.Take(6))
+        foreach (TraceNextAction action in actions.Take(MaxNextActions))
         {
             sb.Append('\n')
               .Append("  ")
@@ -1893,7 +1894,7 @@ public sealed class TraceTool
         w.WriteStartArray();
         if (actions is not null)
         {
-            foreach (TraceNextAction action in actions.Take(6))
+            foreach (TraceNextAction action in actions.Take(MaxNextActions))
             {
                 w.WriteStartObject();
                 w.WriteString("tool", action.Tool);

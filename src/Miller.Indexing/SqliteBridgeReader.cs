@@ -236,26 +236,20 @@ public static class SqliteBridgeReader
         if (!TableExists(connection, "structural_facts"))
             return [];
 
+        var patternIds = BridgeStructuralPatterns.BridgeFactPatternIds;
+        var placeholders = string.Join(", ", patternIds.Select((_, index) => "$pattern" + index));
+
         using var command = connection.CreateCommand();
-        command.CommandText = """
+        command.CommandText = $"""
             SELECT structural_fact_id, pattern_id, language, path, capture_name, node_kind,
                    containing_symbol_id, start_line, start_column, end_line, end_column,
                    start_byte, end_byte, confidence, metadata_json
             FROM structural_facts
-            WHERE pattern_id IN (
-                'aspnet.minimal_api.route.v1',
-                'aspnet.minimal_api.route_group.v1',
-                'htmx.attribute.v1',
-                'vue.route_reference.v1',
-                'vue.route_definition.v1',
-                'react.route_reference.v1',
-                'react.route_definition.v1',
-                'nextjs.route_reference.v1',
-                'nextjs.file_route.v1',
-                'nuxt.route_reference.v1',
-                'nuxt.file_route.v1')
+            WHERE pattern_id IN ({placeholders})
             ORDER BY path, start_byte, structural_fact_id;
             """;
+        for (int i = 0; i < patternIds.Count; i++)
+            command.Parameters.AddWithValue("$pattern" + i, patternIds[i]);
 
         var results = new List<StructuralFactRecord>();
         using var reader = command.ExecuteReader();

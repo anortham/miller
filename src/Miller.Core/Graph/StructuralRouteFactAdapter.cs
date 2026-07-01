@@ -4,15 +4,15 @@ namespace Miller.Core.Graph;
 
 internal static class StructuralRouteFactAdapter
 {
-    private const string HtmxAttributePattern = "htmx.attribute.v1";
-    private const string VueRouteReferencePattern = "vue.route_reference.v1";
-    private const string VueRouteDefinitionPattern = "vue.route_definition.v1";
-    private const string ReactRouteReferencePattern = "react.route_reference.v1";
-    private const string ReactRouteDefinitionPattern = "react.route_definition.v1";
-    private const string NextJsRouteReferencePattern = "nextjs.route_reference.v1";
-    private const string NextJsFileRoutePattern = "nextjs.file_route.v1";
-    private const string NuxtRouteReferencePattern = "nuxt.route_reference.v1";
-    private const string NuxtFileRoutePattern = "nuxt.file_route.v1";
+    private const string HtmxAttributePattern = BridgeStructuralPatterns.HtmxAttribute;
+    private const string VueRouteReferencePattern = BridgeStructuralPatterns.VueRouteReference;
+    private const string VueRouteDefinitionPattern = BridgeStructuralPatterns.VueRouteDefinition;
+    private const string ReactRouteReferencePattern = BridgeStructuralPatterns.ReactRouteReference;
+    private const string ReactRouteDefinitionPattern = BridgeStructuralPatterns.ReactRouteDefinition;
+    private const string NextJsRouteReferencePattern = BridgeStructuralPatterns.NextJsRouteReference;
+    private const string NextJsFileRoutePattern = BridgeStructuralPatterns.NextJsFileRoute;
+    private const string NuxtRouteReferencePattern = BridgeStructuralPatterns.NuxtRouteReference;
+    private const string NuxtFileRoutePattern = BridgeStructuralPatterns.NuxtFileRoute;
 
     public static bool TryReadRouteReference(
         StructuralFactRecord fact,
@@ -133,7 +133,7 @@ internal static class StructuralRouteFactAdapter
         };
     }
 
-    private static string? MetadataString(StructuralFactRecord fact, string key)
+    public static string? MetadataString(StructuralFactRecord fact, string key)
     {
         return fact.Metadata.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
             ? value
