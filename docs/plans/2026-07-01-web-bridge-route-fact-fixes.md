@@ -183,11 +183,11 @@ From the 2026-07-01 review (checkpoint `checkpoint_92e28948`, fast suite 2555/25
 **Approach:** Prefer extending `FileRouteBridgeProvider`'s descriptor model (framework name, reference patterns, definition patterns) over a new provider class; only split if the definition-fact shape genuinely differs. Note in the provider docs that real-world recall improves after the extractor plan's H3 (route defs in plain `.ts` files), H4 (wrong-object range), and M3 (child relative paths) fixes ship — Miller's logic is testable now against fixture facts.
 
 **Acceptance criteria:**
-- [ ] Vue `<router-link to="/users/42">` bridges to a `vue.route_definition.v1` for `/users/:id` in a fixture-fact test.
-- [ ] React `<Link to="/settings">` bridges to a `react.route_definition.v1` for `/settings`.
-- [ ] Trace diagnostics name the framework when references exist but no definitions do (and vice versa).
-- [ ] `trace mode=bridge` provider docs/help text list the new coverage.
-- [ ] Worker-scope verification passes, committed.
+- [x] Vue `<router-link to="/users/42">` bridges to a `vue.route_definition.v1` for `/users/:id` in a fixture-fact test.
+- [x] React `<Link to="/settings">` bridges to a `react.route_definition.v1` for `/settings`.
+- [x] Trace diagnostics name the framework when references exist but no definitions do (and vice versa).
+- [x] `trace mode=bridge` provider docs/help text list the new coverage.
+- [x] Worker-scope verification passes, committed.
 
 ## Task 8: Extractor Pin Bump, Live Dynamic Coverage, Docs Sync
 

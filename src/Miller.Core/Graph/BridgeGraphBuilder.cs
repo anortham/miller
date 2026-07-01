@@ -24,6 +24,8 @@ public static class BridgeGraphBuilder
         DotnetWebBridgeProvider.Instance,
         FileRouteBridgeProvider.NextJs,
         FileRouteBridgeProvider.Nuxt,
+        FileRouteBridgeProvider.Vue,
+        FileRouteBridgeProvider.React,
     ];
 
     /// <summary>

@@ -268,7 +268,7 @@ selector: display ID, unique prefix, full ID, registered root path, `current`, o
 
 `trace` is the graph workflow tool: `mode=refs` lists name-based identifier references, `mode=path` shows the
 shortest extracted graph path to `to`, and `mode=bridge` follows provider-scoped bridge evidence. Current providers
-are `dotnet-web`, `nextjs`, and `nuxt`; file-route providers link route references to file routes, not every framework route shape.
+are `dotnet-web`, `nextjs`, `nuxt`, `vue`, and `react`; route providers link route references to file routes or route definitions, not every framework route shape.
 No-path, unsupported bridge, and ambiguous-target results include bounded next actions; JSON callers get the same
 guidance in additive `next_actions` rows.
 
@@ -626,7 +626,8 @@ Warnings are errors (`Directory.Build.props`).
   instead of guessing.
 - Bridge trace (`trace mode=bridge`) is provider-scoped, not a general all-language/all-framework feature. Current
   providers are `dotnet-web` (ASP.NET controllers, TypeScript/JS client URL calls, AutoMapper, Entity Framework),
-  `nextjs` (route references to file routes), and `nuxt` (NuxtLink route references to Nuxt file routes).
+  `nextjs` (route references to file routes), `nuxt` (NuxtLink route references to Nuxt file routes), `vue`
+  (Vue route references to route definitions), and `react` (React route references to route definitions).
   API handlers, server actions, middleware rewrites, redirects, and runtime route rules need extractor facts before bridge can claim them. The mode intentionally uses the full bridge graph
   for provider-scoped evidence. Normal `search`, `inspect`, graph-only `context`, `impact`, non-bridge `trace`,
   and workspace status/list stay on projection-specific read paths.

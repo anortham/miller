@@ -1380,6 +1380,92 @@ public sealed class BridgeGraphBuilderTests
     }
 
     [Fact]
+    public void Build_DefaultProviders_BuildsVueNavigationFromRouteDefinitions()
+    {
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact(
+                "sf-vue-user-link",
+                "vue.route_reference.v1",
+                "vue",
+                "web/AppHeader.vue",
+                "vue.header",
+                100,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "vue",
+                    ["target_path"] = "/users/42",
+                }),
+            Fact(
+                "sf-vue-user-route",
+                "vue.route_definition.v1",
+                "typescript",
+                "web/router.ts",
+                "vue.router",
+                200,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "vue",
+                    ["route_path"] = "/users/:id",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build([], [], [], [], [], structuralFacts: facts);
+
+        var edge = Assert.Single(graph.Edges, e => e.Edge.Kind == BridgeKind.NavigatesTo);
+        Assert.Equal(ConfidenceBand.High, edge.Band);
+        Assert.Equal("/users/42", edge.Edge.SourceRef.Display);
+        Assert.Equal("/users/:id", edge.Edge.TargetRef.Display);
+        Assert.Contains("vue", graph.CapabilityReport.ActiveProviders);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["vue.routeReferences"]);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["vue.fileRoutes"]);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["vue.candidates"]);
+    }
+
+    [Fact]
+    public void Build_DefaultProviders_BuildsReactNavigationFromRouteDefinitions()
+    {
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact(
+                "sf-react-settings-link",
+                "react.route_reference.v1",
+                "tsx",
+                "web/App.tsx",
+                "react.link",
+                100,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "react",
+                    ["target_path"] = "/settings",
+                }),
+            Fact(
+                "sf-react-settings-route",
+                "react.route_definition.v1",
+                "tsx",
+                "web/routes.tsx",
+                "react.routes",
+                200,
+                new Dictionary<string, string>
+                {
+                    ["framework"] = "react",
+                    ["route_path"] = "/settings",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build([], [], [], [], [], structuralFacts: facts);
+
+        var edge = Assert.Single(graph.Edges, e => e.Edge.Kind == BridgeKind.NavigatesTo);
+        Assert.Equal(ConfidenceBand.High, edge.Band);
+        Assert.Equal("/settings", edge.Edge.SourceRef.Display);
+        Assert.Equal("/settings", edge.Edge.TargetRef.Display);
+        Assert.Contains("react", graph.CapabilityReport.ActiveProviders);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["react.routeReferences"]);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["react.fileRoutes"]);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["react.candidates"]);
+    }
+
+    [Fact]
     public void FileRouteBridge_StaticReference_YieldsNavigatesToEdge()
     {
         var edges = FileRouteBridge.Resolve(

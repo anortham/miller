@@ -10,6 +10,8 @@ internal static class BridgeProviderSelection
         DotnetWebBridgeProvider.Instance,
         FileRouteBridgeProvider.NextJs,
         FileRouteBridgeProvider.Nuxt,
+        FileRouteBridgeProvider.Vue,
+        FileRouteBridgeProvider.React,
     ];
 
     public static IReadOnlyList<IBridgeProvider> ProvidersForDatabase(string dbPath)
@@ -71,6 +73,8 @@ internal static class BridgeProviderSelection
             DotnetWebBridgeProvider.ProviderId => DotnetWebBridgeProvider.Instance,
             NextJsBridgeProvider.ProviderId => NextJsBridgeProvider.Instance,
             NuxtBridgeProvider.ProviderId => NuxtBridgeProvider.Instance,
+            VueBridgeProvider.ProviderId => VueBridgeProvider.Instance,
+            ReactBridgeProvider.ProviderId => ReactBridgeProvider.Instance,
             _ => new UnknownBridgeProvider(providerId),
         };
 

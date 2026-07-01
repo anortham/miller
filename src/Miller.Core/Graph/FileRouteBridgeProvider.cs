@@ -21,6 +21,20 @@ public sealed class FileRouteBridgeProvider : IBridgeProvider
             RouteReferencePattern: BridgeStructuralPatterns.NuxtRouteReference,
             FileRoutePattern: BridgeStructuralPatterns.NuxtFileRoute));
 
+    public static FileRouteBridgeProvider Vue { get; } = new(
+        new FileRouteBridgeDescriptor(
+            ProviderId: "vue",
+            DisplayName: "Vue",
+            RouteReferencePattern: BridgeStructuralPatterns.VueRouteReference,
+            FileRoutePattern: BridgeStructuralPatterns.VueRouteDefinition));
+
+    public static FileRouteBridgeProvider React { get; } = new(
+        new FileRouteBridgeDescriptor(
+            ProviderId: "react",
+            DisplayName: "React",
+            RouteReferencePattern: BridgeStructuralPatterns.ReactRouteReference,
+            FileRoutePattern: BridgeStructuralPatterns.ReactRouteDefinition));
+
     private readonly FileRouteBridgeDescriptor _descriptor;
 
     private FileRouteBridgeProvider(FileRouteBridgeDescriptor descriptor)
@@ -120,4 +134,16 @@ public static class NuxtBridgeProvider
 {
     public const string ProviderId = "nuxt";
     public static IBridgeProvider Instance => FileRouteBridgeProvider.Nuxt;
+}
+
+public static class VueBridgeProvider
+{
+    public const string ProviderId = "vue";
+    public static IBridgeProvider Instance => FileRouteBridgeProvider.Vue;
+}
+
+public static class ReactBridgeProvider
+{
+    public const string ProviderId = "react";
+    public static IBridgeProvider Instance => FileRouteBridgeProvider.React;
 }

@@ -92,13 +92,13 @@ internal static class StructuralRouteFactAdapter
     private static bool IsRouteReferencePattern(string patternId) =>
         string.Equals(patternId, HtmxAttributePattern, StringComparison.Ordinal) ||
         string.Equals(patternId, VueRouteReferencePattern, StringComparison.Ordinal) ||
-        string.Equals(patternId, VueRouteDefinitionPattern, StringComparison.Ordinal) ||
         string.Equals(patternId, ReactRouteReferencePattern, StringComparison.Ordinal) ||
-        string.Equals(patternId, ReactRouteDefinitionPattern, StringComparison.Ordinal) ||
         string.Equals(patternId, NextJsRouteReferencePattern, StringComparison.Ordinal) ||
         string.Equals(patternId, NuxtRouteReferencePattern, StringComparison.Ordinal);
 
     private static bool IsFileRoutePattern(string patternId) =>
+        string.Equals(patternId, VueRouteDefinitionPattern, StringComparison.Ordinal) ||
+        string.Equals(patternId, ReactRouteDefinitionPattern, StringComparison.Ordinal) ||
         string.Equals(patternId, NextJsFileRoutePattern, StringComparison.Ordinal) ||
         string.Equals(patternId, NuxtFileRoutePattern, StringComparison.Ordinal);
 

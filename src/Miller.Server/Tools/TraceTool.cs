@@ -27,8 +27,8 @@ namespace Miller.Server.Tools;
 /// <item><b>refs</b> — name-based identifier occurrences for the resolved target symbol. These rows are honest about
 ///   being name-based because extractor refs do not carry resolved target symbol IDs.</item>
 /// <item><b>bridge</b> — the provider-scoped structural chain via <see cref="BridgeGraph.Walk"/> over the loaded
-///   <see cref="BridgeGraph"/>, rendering each scored bridge edge with its confidence band and score. The current
-///   provider is dotnet-web.</item>
+///   <see cref="BridgeGraph"/>, rendering each scored bridge edge with its confidence band and score. Current
+///   providers are dotnet-web, nextjs, nuxt, vue, and react.</item>
 /// </list>
 ///
 /// <para><b>Honesty flags are load-bearing.</b> A reduced-confidence bridge edge is never rendered as if it were
@@ -144,7 +144,7 @@ public sealed class TraceTool
 
     private sealed record BridgeRouteDiagnostic(string Code, string Message);
 
-    private sealed record FileRouteDiagnosticProvider(string ProviderId, string DisplayName)
+    private sealed record FileRouteDiagnosticProvider(string ProviderId, string DisplayName, string TargetFactName)
     {
         public string DiagnosticCode(string suffix) => ProviderId + "_" + suffix;
     }
@@ -617,6 +617,16 @@ public sealed class TraceTool
 
         if (!ResolveBridgeStart(index, resolver, target, scope, out string startId, out string? routeFilter, out string? note, out IReadOnlyList<TraceNextAction> nextActions))
         {
+            if (target.Contains('/', StringComparison.Ordinal) &&
+                TryBuildRouteDiagnostic(index.BridgeGraph, target, out var routeDiagnostic))
+            {
+                IReadOnlyList<TraceNextAction> routeNextActions = BridgeFallbackNextActions(target, index.BridgeGraph.CapabilityReport);
+                return json
+                    ? RenderBridgeJson(index.BridgeGraph, target, to: null, depth, limit, emitted, nodesVisited, startId: null,
+                        edges: [], routeDiagnostic.Message, routeDiagnostic.Code, routeNextActions)
+                    : AppendNextActions(routeDiagnostic.Message, routeNextActions);
+            }
+
             if (nextActions.Count == 0)
                 nextActions = BridgeFallbackNextActions(target, index.BridgeGraph.CapabilityReport);
             return json
@@ -794,7 +804,7 @@ public sealed class TraceTool
         bool backendPresent = backendRoutes.Any(r => string.Equals(r.Normalized, targetRouteKey, StringComparison.Ordinal));
         bool fileRoutePresent = fileRoutes.Any(r => string.Equals(r.Normalized, targetRouteKey, StringComparison.Ordinal));
         bool hasFileRouteEvidence = HasFileRouteProviderEvidence(graph);
-        if (fileRoutePresent || (frontendPresent && hasFileRouteEvidence))
+        if (fileRoutePresent || (hasFileRouteEvidence && (frontendPresent || fileRoutes.Length > 0)))
         {
             if (TryBuildFileRouteDiagnostic(
                     graph,
@@ -891,7 +901,7 @@ public sealed class TraceTool
         {
             diagnostic = new BridgeRouteDiagnostic(
                 provider.DiagnosticCode("route_ambiguous_file_match"),
-                $"{provider.DisplayName} route reference exists: {targetRoute}; multiple matching file route facts were observed, so no navigation edge was built. observed file routes: {FormatObservedRoutes(matchingFileRoutes)}");
+                $"{provider.DisplayName} route reference exists: {targetRoute}; multiple matching {provider.TargetFactName} facts were observed, so no navigation edge was built. observed {provider.TargetFactName}s: {FormatObservedRoutes(matchingFileRoutes)}");
             return true;
         }
 
@@ -899,7 +909,7 @@ public sealed class TraceTool
         {
             diagnostic = new BridgeRouteDiagnostic(
                 provider.DiagnosticCode("route_no_file_match"),
-                $"{provider.DisplayName} route reference exists: {targetRoute}; no matching file route fact. observed file routes: {FormatObservedRoutes(fileRoutes)}");
+                $"{provider.DisplayName} route reference exists: {targetRoute}; no matching {provider.TargetFactName} fact. observed {provider.TargetFactName}s: {FormatObservedRoutes(fileRoutes)}");
             return true;
         }
 
@@ -907,7 +917,7 @@ public sealed class TraceTool
         {
             diagnostic = new BridgeRouteDiagnostic(
                 provider.DiagnosticCode("route_no_reference_match"),
-                $"{provider.DisplayName} file route exists: {targetRoute}; no matching route reference fact. observed route references: {FormatObservedRoutes(routeReferences)}");
+                $"{provider.DisplayName} {provider.TargetFactName} exists: {targetRoute}; no matching route reference fact. observed route references: {FormatObservedRoutes(routeReferences)}");
             return true;
         }
 
@@ -921,14 +931,16 @@ public sealed class TraceTool
 
         diagnostic = new BridgeRouteDiagnostic(
             provider.DiagnosticCode("route_not_observed"),
-            $"no {provider.DisplayName} route reference or file route facts observed for {targetRoute}.");
+            $"no {provider.DisplayName} route reference or {provider.TargetFactName} facts observed for {targetRoute}.");
         return false;
     }
 
     private static readonly FileRouteDiagnosticProvider[] FileRouteDiagnosticProviders =
     [
-        new("nextjs", "Next.js"),
-        new("nuxt", "Nuxt"),
+        new("nextjs", "Next.js", "file route"),
+        new("nuxt", "Nuxt", "file route"),
+        new("vue", "Vue", "route definition"),
+        new("react", "React", "route definition"),
     ];
 
     private static bool HasFileRouteProviderEvidence(BridgeGraph graph) =>

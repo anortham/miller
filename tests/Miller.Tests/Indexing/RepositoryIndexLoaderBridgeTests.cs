@@ -358,11 +358,11 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
     }
 
     [Fact]
-    public void ProvidersForDatabase_NoConfig_ReturnsDotnetWebNextJsAndNuxt()
+    public void ProvidersForDatabase_NoConfig_ReturnsAllDefaultBridgeProviders()
     {
         var providers = BridgeProviderSelection.ProvidersForDatabase(_dbPath);
 
-        Assert.Equal(["dotnet-web", "nextjs", "nuxt"], providers.Select(provider => provider.Id).ToArray());
+        Assert.Equal(["dotnet-web", "nextjs", "nuxt", "vue", "react"], providers.Select(provider => provider.Id).ToArray());
     }
 
     [Fact]

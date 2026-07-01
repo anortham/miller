@@ -1266,6 +1266,80 @@ public sealed class TraceToolTests
     }
 
     [Fact]
+    public void Bridge_RouteStringTarget_VueReferenceOnly_JsonExplainsNoDefinitionMatch()
+    {
+        string referenceId = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, "/users/42");
+        var extra = new Dictionary<string, BridgeNode>(StringComparer.Ordinal)
+        {
+            [referenceId] = new BridgeNode(referenceId, BridgeNodeKind.TsType, "/users/42", "web/AppHeader.vue", 8),
+        };
+        var capability = new BridgeCapabilityReport(
+            ActiveProviders: ["vue"],
+            SkippedProviders: [],
+            Notes: [],
+            EvidenceCounts: new Dictionary<string, int>(StringComparer.Ordinal)
+            {
+                ["vue.routeReferences"] = 1,
+                ["vue.fileRoutes"] = 0,
+                ["vue.candidates"] = 0,
+                ["vue.ambiguousMatches"] = 0,
+            });
+        var index = BuildBridgeIndex(
+            Array.Empty<(string symbolId, string name, string file, int line)>(),
+            Array.Empty<ScoredEdge>(),
+            extra,
+            capability);
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "/users/42", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false, json: true,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement diagnostic = Assert.Single(doc.RootElement.GetProperty("diagnostics").EnumerateArray());
+        Assert.Equal("vue_route_no_file_match", diagnostic.GetProperty("code").GetString());
+        Assert.Contains("Vue route reference exists: /users/42", diagnostic.GetProperty("message").GetString());
+        Assert.Contains("no matching route definition fact", diagnostic.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public void Bridge_RouteStringTarget_VueDefinitionOnly_JsonExplainsNoReferenceMatch()
+    {
+        string routeId = BridgeGraph.SynthesizeId(BridgeNodeKind.FileRoute, "/users/:id");
+        var extra = new Dictionary<string, BridgeNode>(StringComparer.Ordinal)
+        {
+            [routeId] = new BridgeNode(routeId, BridgeNodeKind.FileRoute, "/users/:id", "web/router.ts", 3),
+        };
+        var capability = new BridgeCapabilityReport(
+            ActiveProviders: ["vue"],
+            SkippedProviders: [],
+            Notes: [],
+            EvidenceCounts: new Dictionary<string, int>(StringComparer.Ordinal)
+            {
+                ["vue.routeReferences"] = 0,
+                ["vue.fileRoutes"] = 1,
+                ["vue.candidates"] = 0,
+                ["vue.ambiguousMatches"] = 0,
+            });
+        var index = BuildBridgeIndex(
+            Array.Empty<(string symbolId, string name, string file, int line)>(),
+            Array.Empty<ScoredEdge>(),
+            extra,
+            capability);
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "/users/42", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false, json: true,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement diagnostic = Assert.Single(doc.RootElement.GetProperty("diagnostics").EnumerateArray());
+        Assert.Equal("vue_route_no_reference_match", diagnostic.GetProperty("code").GetString());
+        Assert.Contains("Vue route definition exists: /users/42", diagnostic.GetProperty("message").GetString());
+        Assert.Contains("no matching route reference fact", diagnostic.GetProperty("message").GetString());
+    }
+
+    [Fact]
     public void Bridge_RouteStringTarget_NextJsAmbiguousFileRoutes_JsonExplainsAmbiguousFileMatch()
     {
         string referenceId = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, "/users/123");
