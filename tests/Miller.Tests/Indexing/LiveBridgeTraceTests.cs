@@ -145,6 +145,34 @@ public sealed class LiveBridgeTraceTests
     }
 
     [Fact]
+    public void NextFixture_DynamicRouteReferenceToFileRoute_TraceBridgeResolves()
+    {
+        string binary = ScaleTestSupport.RequireJulieServer();
+        using var work = new TempWorkspace();
+        WriteNextFixture(work.Repo);
+
+        var index = ExtractAndLoad(binary, work);
+        var graph = index.BridgeGraph;
+
+        var edge = Assert.Single(graph.Edges, e =>
+            e.Edge.Kind == BridgeKind.NavigatesTo
+            && string.Equals(e.Edge.SourceRef.Display, "/users/42", StringComparison.Ordinal)
+            && string.Equals(e.Edge.TargetRef.FilePath, "app/users/[id]/page.tsx", StringComparison.Ordinal));
+        Assert.Equal(ConfidenceBand.High, edge.Band);
+
+        string rendered = TraceTool.Run(
+            index, new SmartTargetResolver(index), target: "/users/42", mode: "bridge", to: null, depth: 2, limit: 20,
+            fullFormat: false, out int emitted, out _);
+
+        Assert.Equal(1, emitted);
+        Assert.Contains("--navigates_to-->", rendered);
+
+        _output.WriteLine("NEXT.JS FIXTURE - dynamic route reference to file route verified:");
+        _output.WriteLine($"  NavigatesTo: {edge.Edge.SourceRef.Display} -> {edge.Edge.TargetRef.Display} file={edge.Edge.TargetRef.FilePath}");
+        _output.WriteLine(rendered);
+    }
+
+    [Fact]
     public void NuxtFixture_RouteReferenceToFileRoute_TraceBridgeResolves()
     {
         string binary = ScaleTestSupport.RequireJulieServer();
@@ -175,6 +203,97 @@ public sealed class LiveBridgeTraceTests
         _output.WriteLine("NUXT FIXTURE — route reference to file route verified:");
         _output.WriteLine($"  Patterns: {string.Join(", ", patternIds.Order(StringComparer.Ordinal))}");
         _output.WriteLine($"  NavigatesTo: {edge.Edge.SourceRef.Display} -> {edge.Edge.TargetRef.Display} band={edge.Band} score={Fmt(edge.Score)}");
+        _output.WriteLine(rendered);
+    }
+
+    [Fact]
+    public void NuxtFixture_DynamicRouteReferenceToFileRoute_TraceBridgeResolves()
+    {
+        string binary = ScaleTestSupport.RequireJulieServer();
+        using var work = new TempWorkspace();
+        WriteNuxtFixture(work.Repo);
+
+        var index = ExtractAndLoad(binary, work);
+        var graph = index.BridgeGraph;
+
+        var edge = Assert.Single(graph.Edges, e =>
+            e.Edge.Kind == BridgeKind.NavigatesTo
+            && string.Equals(e.Edge.SourceRef.Display, "/blog/hello-world", StringComparison.Ordinal)
+            && string.Equals(e.Edge.TargetRef.FilePath, "app/pages/blog/[slug].vue", StringComparison.Ordinal));
+        Assert.Equal(ConfidenceBand.High, edge.Band);
+
+        string rendered = TraceTool.Run(
+            index, new SmartTargetResolver(index), target: "/blog/hello-world", mode: "bridge", to: null, depth: 2, limit: 20,
+            fullFormat: false, out int emitted, out _);
+
+        Assert.Equal(1, emitted);
+        Assert.Contains("--navigates_to-->", rendered);
+
+        _output.WriteLine("NUXT FIXTURE - dynamic route reference to file route verified:");
+        _output.WriteLine($"  NavigatesTo: {edge.Edge.SourceRef.Display} -> {edge.Edge.TargetRef.Display} file={edge.Edge.TargetRef.FilePath}");
+        _output.WriteLine(rendered);
+    }
+
+    [Fact]
+    public void HtmxFixture_DataHxPostAttribute_TraceBridgeResolves()
+    {
+        string binary = ScaleTestSupport.RequireJulieServer();
+        using var work = new TempWorkspace();
+        WriteHtmxDataPrefixFixture(work.Repo);
+
+        var index = ExtractAndLoad(binary, work);
+        var patternIds = StructuralPatternIds(work.Db, "htmx.%");
+        Assert.Contains("htmx.attribute.v1", patternIds);
+
+        var graph = index.BridgeGraph;
+        string handlerId = FindSymbolId(index, "CreateTodo", "method");
+        var hit = Assert.Single(graph.Incident(handlerId), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.False(hit.IsVerbUnknown);
+
+        string rendered = TraceTool.Run(
+            index, new SmartTargetResolver(index), target: "CreateTodo", mode: "bridge", to: null, depth: 2, limit: 20,
+            fullFormat: false, out int emitted, out _);
+
+        Assert.True(emitted > 0);
+        Assert.Contains("--route-->", rendered);
+        Assert.Contains("CreateTodo", rendered);
+
+        _output.WriteLine("HTMX FIXTURE - data-hx-post attribute to POST endpoint verified:");
+        _output.WriteLine($"  Hits: {EndpointDisplayOf(graph, hit, EndpointSide.Source)} -> {EndpointDisplayOf(graph, hit, EndpointSide.Target)}");
+        _output.WriteLine(rendered);
+    }
+
+    [Fact]
+    public void VueFixture_RouteReferenceToRouteDefinition_TraceBridgeResolves()
+    {
+        string binary = ScaleTestSupport.RequireJulieServer();
+        using var work = new TempWorkspace();
+        WriteVueRouteDefinitionFixture(work.Repo);
+
+        var index = ExtractAndLoad(binary, work);
+        var patternIds = StructuralPatternIds(work.Db, "vue.%");
+        Assert.Contains("vue.route_reference.v1", patternIds);
+        Assert.Contains("vue.route_definition.v1", patternIds);
+
+        var graph = index.BridgeGraph;
+        Assert.Contains("vue", graph.CapabilityReport.ActiveProviders);
+        var edge = Assert.Single(graph.Edges, e =>
+            e.Edge.Kind == BridgeKind.NavigatesTo
+            && string.Equals(e.Edge.SourceRef.Display, "/users/42", StringComparison.Ordinal)
+            && string.Equals(e.Edge.TargetRef.Display, "/users/:id", StringComparison.Ordinal));
+        Assert.Equal(ConfidenceBand.High, edge.Band);
+
+        string rendered = TraceTool.Run(
+            index, new SmartTargetResolver(index), target: "/users/42", mode: "bridge", to: null, depth: 2, limit: 20,
+            fullFormat: false, out int emitted, out _);
+
+        Assert.Equal(1, emitted);
+        Assert.Contains("--navigates_to-->", rendered);
+        Assert.Contains("/users/:id", rendered);
+
+        _output.WriteLine("VUE FIXTURE - route reference to route definition verified:");
+        _output.WriteLine($"  NavigatesTo: {edge.Edge.SourceRef.Display} -> {edge.Edge.TargetRef.Display} file={edge.Edge.TargetRef.FilePath}");
         _output.WriteLine(rendered);
     }
 
@@ -453,7 +572,12 @@ public sealed class LiveBridgeTraceTests
             import Link from "next/link";
 
             export function Nav() {
-              return <Link href="/settings">Settings</Link>;
+              return (
+                <nav>
+                  <Link href="/settings">Settings</Link>
+                  <Link href="/users/42">User 42</Link>
+                </nav>
+              );
             }
             """);
     }
@@ -482,13 +606,95 @@ public sealed class LiveBridgeTraceTests
             """);
         File.WriteAllText(Path.Combine(components, "Nav.vue"), """
             <template>
-              <NuxtLink to="/about">About</NuxtLink>
+              <nav>
+                <NuxtLink to="/about">About</NuxtLink>
+                <NuxtLink to="/blog/hello-world">Hello World</NuxtLink>
+              </nav>
             </template>
+            """);
+        string blogRoute = Path.Combine(pageRoute, "blog");
+        Directory.CreateDirectory(blogRoute);
+        File.WriteAllText(Path.Combine(blogRoute, "[slug].vue"), """
+            <template>
+              <article>Blog post</article>
+            </template>
+
+            <script setup lang="ts">
+            const slug = "hello-world";
+            </script>
             """);
         File.WriteAllText(Path.Combine(composables, "useMarker.ts"), """
             export function useMarker() {
               return "marker";
             }
+            """);
+    }
+
+    private static void WriteHtmxDataPrefixFixture(string repo)
+    {
+        string server = Path.Combine(repo, "server");
+        string web = Path.Combine(repo, "web");
+        Directory.CreateDirectory(server);
+        Directory.CreateDirectory(web);
+
+        File.WriteAllText(Path.Combine(server, "TodosController.cs"), """
+            using Microsoft.AspNetCore.Mvc;
+
+            namespace Demo.Api;
+
+            [ApiController]
+            [Route("todos")]
+            public sealed class TodosController : ControllerBase
+            {
+                [HttpPost]
+                public IActionResult CreateTodo() => Ok();
+            }
+            """);
+        File.WriteAllText(Path.Combine(web, "index.html"), """
+            <!doctype html>
+            <html>
+              <body>
+                <form data-hx-post="/todos">
+                  <button type="submit">Create</button>
+                </form>
+              </body>
+            </html>
+            """);
+    }
+
+    private static void WriteVueRouteDefinitionFixture(string repo)
+    {
+        string web = Path.Combine(repo, "web");
+        Directory.CreateDirectory(web);
+
+        File.WriteAllText(Path.Combine(web, "router.ts"), """
+            import { createRouter, createWebHistory } from "vue-router";
+            import UserPage from "./UserPage.vue";
+
+            export const router = createRouter({
+              history: createWebHistory(),
+              routes: [
+                {
+                  path: "/users/:id",
+                  name: "user",
+                  component: UserPage,
+                },
+              ],
+            });
+            """);
+        File.WriteAllText(Path.Combine(web, "UserPage.vue"), """
+            <template>
+              <main>User page</main>
+            </template>
+            """);
+        File.WriteAllText(Path.Combine(web, "Nav.vue"), """
+            <template>
+              <section>
+                <template #default>
+                  <router-link to="/users/42">User 42</router-link>
+                </template>
+              </section>
+            </template>
             """);
     }
 

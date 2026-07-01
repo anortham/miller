@@ -6,7 +6,7 @@
 
 **Architecture:** No new MCP tools and no new extractor ownership. All changes deepen the existing fact-to-candidate-to-edge pipeline: `StructuralRouteFactAdapter` (fact interpretation), `FileRouteMatcher`/`FileRouteBridge`/`FileRouteBridgeProvider` (file-route navigation), `DotnetWebBridgeProvider` (frontend-to-ASP.NET), and `RouteNormalizer` (canonical route keys). The companion extractor plan is `~/source/julie-extractors/docs/plans/2026-07-01-web-route-facts-hardening.md`; Tasks 1–6 here need no extractor changes, Task 7 gains real-world value only after the extractor's H3/H4/M3 fixes ship, and Task 8 is the pin-bump/coverage slice after that release.
 
-**Tech Stack:** .NET 10, Miller.Core bridge graph, Miller.Server `TraceTool`, julie-extractors `structural_facts` (pinned binary, currently 2.5.9).
+**Tech Stack:** .NET 10, Miller.Core bridge graph, Miller.Server `TraceTool`, julie-extractors `structural_facts` (pinned binary, currently 2.5.10).
 
 **Architecture Quality:** Affected modules are `Miller.Core.Graph`, `Miller.Core.Resolver`, and tests. Caller-facing surface stays `trace mode=bridge` (MCP + CLI). Architecture risk is medium: Task 4 re-draws the ownership boundary between `DotnetWebBridgeProvider` and the file-route providers, and Task 5 changes confidence-band behavior that dogfood consumers may have observed.
 
@@ -202,14 +202,14 @@ From the 2026-07-01 review (checkpoint `checkpoint_92e28948`, fast suite 2555/25
 
 **What to build:** Bump the pin, re-run `scripts/restore-julie-extract.sh`, then extend `LiveBridgeTraceTests` with the scenarios today's suite lacks: a dynamic Next.js route (`/users/42` → `app/users/[id]/page.tsx`), a dynamic Nuxt route (`pages/blog/[slug].vue`), a `data-hx-*` attribute, and a Vue reference→definition pair. Sync contract docs and agent instructions to match shipped behavior.
 
-**Approach:** This task is blocked on the extractor release; everything before it runs against the current 2.5.9 pin using hand-built fixture facts. Follow the existing `LiveBridgeTraceTests` fixture pattern; remember Scale tests skip when `.tools/julie-extract` is missing.
+**Approach:** This task was blocked on the extractor release; everything before it ran against the prior 2.5.9 pin using hand-built fixture facts. Follow the existing `LiveBridgeTraceTests` fixture pattern; remember Scale tests skip when `.tools/julie-extract` is missing.
 
 **Acceptance criteria:**
-- [ ] Pin bumped; `VerifyPinnedJulieExtractVersion` build guard passes after restore.
-- [ ] Live scale tests cover dynamic Next/Nuxt routes, `data-hx-*`, and Vue ref→def, all green.
-- [ ] Contract docs and agent instructions match shipped behavior (`AgentInstructionsTests` green).
-- [ ] `scripts/test.sh all` green.
-- [ ] Worker-scope verification passes, committed.
+- [x] Pin bumped; `VerifyPinnedJulieExtractVersion` build guard passes after restore.
+- [x] Live scale tests cover dynamic Next/Nuxt routes, `data-hx-*`, and Vue ref→def, all green.
+- [x] Contract docs and agent instructions match shipped behavior (`AgentInstructionsTests` green).
+- [x] `scripts/test.sh all` green.
+- [x] Worker-scope verification passes, committed.
 
 ## Verification Strategy
 

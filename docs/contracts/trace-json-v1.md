@@ -127,7 +127,7 @@ Bridge link fields:
 - `evidence`: edge-level file/line evidence.
 - `signals`: typed scoring signals with rule-specific payload and optional evidence.
 
-Bridge node `kind` values include `file_route` for framework file-route nodes.
+Bridge node `kind` values include `file_route` for framework file-route and route-definition nodes.
 
 Bridge is provider-scoped. Current packaged providers are:
 
@@ -137,6 +137,8 @@ Bridge is provider-scoped. Current packaged providers are:
   middleware rewrites, redirects, or runtime routing unless extractor facts exist for them.
 - `nuxt`: NuxtLink route references to Nuxt file routes. It does not claim Nitro/server API routes, route rules,
   middleware redirects, or runtime routing unless extractor facts exist for them.
+- `vue`: Vue route references to Vue route definitions.
+- `react`: React route references to React route definitions.
 
 Empty bridge results are valid when a workspace is outside those providers or no bridge evidence exists.
 `not_on_bridge` and `no_bridge_links` diagnostics include `next_actions` for ordinary refs, ordinary graph
