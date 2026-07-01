@@ -121,7 +121,11 @@ internal static class StructuralRouteFactAdapter
         if (string.IsNullOrWhiteSpace(attributeName))
             return MetadataString(fact, "verb");
 
-        return attributeName?.ToLowerInvariant() switch
+        var normalizedAttributeName = attributeName.Trim().ToLowerInvariant();
+        if (normalizedAttributeName.StartsWith("data-", StringComparison.Ordinal))
+            normalizedAttributeName = normalizedAttributeName["data-".Length..];
+
+        return normalizedAttributeName switch
         {
             "hx-get" => "GET",
             "hx-post" => "POST",

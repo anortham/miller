@@ -327,6 +327,47 @@ public sealed class BridgeGraphBuilderTests
         Assert.DoesNotContain(graph.Incident("sym-mapget"), e => e.Edge.Kind == BridgeKind.Hits);
     }
 
+    [Theory]
+    [InlineData("data-hx-post")]
+    [InlineData("DATA-HX-POST")]
+    public void StructuralFacts_data_hx_post_hits_minimal_api_mappost_with_attested_verb(string attributeName)
+    {
+        var mapPost = Method("sym-mappost", "MapPost", "IResult MapPost()", "Program", "api/Program.cs");
+        var htmlNode = Type("sym-htmx", "createTodo", "element", file: "web/index.html");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-mappost",
+                patternId: "aspnet.minimal_api.route.v1",
+                language: "csharp",
+                path: "api/Program.cs",
+                containingSymbolId: "sym-mappost",
+                startLine: 12,
+                metadataJson: """{"verb":"POST","route_template":"/todos"}"""),
+            StructuralFact(
+                factId: "fact-data-hx-post",
+                patternId: "htmx.attribute.v1",
+                language: "html",
+                path: "web/index.html",
+                containingSymbolId: "sym-htmx",
+                startLine: 4,
+                metadataJson: $$"""{"attribute_name":"{{attributeName}}","target_path":"/todos"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [mapPost, htmlNode],
+            typeArguments: [],
+            literals: [],
+            annotations: [],
+            dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hit = Assert.Single(graph.Incident("sym-mappost"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.False(hit.IsVerbUnknown);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.htmxCalls"]);
+    }
+
     [Fact]
     public void StructuralFacts_htmx_non_route_attributes_do_not_produce_client_calls()
     {

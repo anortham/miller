@@ -163,9 +163,9 @@ From the 2026-07-01 review (checkpoint `checkpoint_92e28948`, fast suite 2555/25
 **Approach:** Small, table-driven; test with mixed-case and `data-` prefixed fixture facts fed directly to `BridgeGraphBuilder` (no extractor dependency).
 
 **Acceptance criteria:**
-- [ ] `data-hx-post` fact yields the same edge/verb as `hx-post`.
-- [ ] Case variants normalize identically.
-- [ ] Worker-scope verification passes, committed.
+- [x] `data-hx-post` fact yields the same edge/verb as `hx-post`.
+- [x] Case variants normalize identically.
+- [x] Worker-scope verification passes, committed.
 
 ## Task 7: Vue/React Reference→Definition Navigation Provider
 
