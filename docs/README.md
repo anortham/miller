@@ -31,6 +31,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`plans/2026-06-09-patterns-tool-implementation-plan.md`](plans/2026-06-09-patterns-tool-implementation-plan.md) - implementation plan for the `patterns` MCP/CLI surface.
 - [`release-process.md`](release-process.md) - current release validation and promotion flow.
 - [`release-notes/v1.3.0.md`](release-notes/v1.3.0.md) - latest release notes.
+- [`findings/2026-07-01-v1.3.0-release-verification.md`](findings/2026-07-01-v1.3.0-release-verification.md) - live `v1.3.0` release verification.
 - [`findings/2026-06-29-v1.2.0-release-verification.md`](findings/2026-06-29-v1.2.0-release-verification.md) - live `v1.2.0` release verification.
 - [`release-notes/v1.2.0.md`](release-notes/v1.2.0.md) - historical `v1.2.0` release notes.
 - [`findings/2026-06-27-v1.1.2-release-verification.md`](findings/2026-06-27-v1.1.2-release-verification.md) - live `v1.1.2` release verification.
