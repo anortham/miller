@@ -15,13 +15,29 @@ namespace Miller.Tests;
 /// </summary>
 public static class ScaleTestSupport
 {
-    /// <summary>The repo root (the dir holding <c>Miller.slnx</c>), walked up from the test assembly.</summary>
-    public static string RepoRoot()
+    /// <summary>
+    /// The repo root (the dir holding <c>Miller.slnx</c>), walked up from the test assembly first and, if
+    /// that fails, from the process's current working directory. The cwd fallback exists for Eros CT, which
+    /// runs Miller's test binary from an out-of-repo sandbox with the working directory set to the repo
+    /// root: the assembly-based walk starts outside the repo there and never finds <c>Miller.slnx</c>, so a
+    /// second walk from cwd is needed. This mirrors Miller's own multi-fallback workspace-resolution idiom.
+    /// </summary>
+    public static string RepoRoot() =>
+        LocateRepoRoot(AppContext.BaseDirectory)
+        ?? LocateRepoRoot(Directory.GetCurrentDirectory())
+        ?? throw new InvalidOperationException("Could not locate repo root (Miller.slnx).");
+
+    /// <summary>
+    /// Walk up from <paramref name="startDirectory"/> looking for the directory containing
+    /// <c>Miller.slnx</c>. Returns <c>null</c> (never throws) if the walk reaches the filesystem root
+    /// without finding it, so callers can try another starting point before giving up.
+    /// </summary>
+    internal static string? LocateRepoRoot(string startDirectory)
     {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        var dir = new DirectoryInfo(startDirectory);
         while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Miller.slnx")))
             dir = dir.Parent;
-        return dir?.FullName ?? throw new InvalidOperationException("Could not locate repo root (Miller.slnx).");
+        return dir?.FullName;
     }
 
     /// <summary>
