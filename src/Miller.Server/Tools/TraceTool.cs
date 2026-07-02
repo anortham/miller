@@ -28,7 +28,7 @@ namespace Miller.Server.Tools;
 ///   being name-based because extractor refs do not carry resolved target symbol IDs.</item>
 /// <item><b>bridge</b> — the provider-scoped structural chain via <see cref="BridgeGraph.Walk"/> over the loaded
 ///   <see cref="BridgeGraph"/>, rendering each scored bridge edge with its confidence band and score. Current
-///   providers are dotnet-web, nextjs, nextjs-api, nuxt, nuxt-api, vue, and react.</item>
+///   providers are dotnet-web, nextjs, nextjs-api, nuxt, nuxt-api, vue, react, and backend-http.</item>
 /// </list>
 ///
 /// <para><b>Honesty flags are load-bearing.</b> A reduced-confidence bridge edge is never rendered as if it were
@@ -58,12 +58,12 @@ public sealed class TraceTool
     [Description(
         "Follow a thread of code. mode=refs lists name-based identifier references (usages); mode=path shows " +
         "the shortest dependency path from target to 'to'; mode=bridge follows provider-scoped cross-language " +
-        "chains (dotnet-web, nextjs, nextjs-api, nuxt, nuxt-api, vue, react) with a confidence band. " +
+        "chains (dotnet-web, nextjs, nextjs-api, nuxt, nuxt-api, vue, react, backend-http) with a confidence band. " +
         "mode=auto (callers/callees) is subsumed by " +
         "inspect depth=full — prefer inspect for that. refs is name-based and may be empty for some " +
         "languages; on empty, fall back to search mode=source for text occurrences. " +
         "Reduced-confidence links are flagged [verb-unknown] / [ambiguous] — never trust an unflagged link more " +
-        "than a flagged one. Use before manual caller/callee file hopping. Pass format=json for structured " +
+        "than a flagged one. Use before manual file hopping. Pass format=json for structured " +
         "output, or format=full to also see the signals behind each bridge link in compact output. " +
         "Empty refs/no-neighbour/no-path/unsupported results include next actions; JSON includes next_actions.")]
     public string Trace(
@@ -147,9 +147,10 @@ public sealed class TraceTool
 
     /// <summary>
     /// One row of the per-provider route diagnostic table. The navigation providers (nextjs/nuxt/vue/react)
-    /// compare route references against <see cref="BridgeNodeKind.FileRoute"/> observation nodes; the API
-    /// providers (nextjs-api/nuxt-api) compare client requests against <see cref="BridgeNodeKind.Endpoint"/>
-    /// handler observation nodes. <paramref name="DefinitionEvidenceName"/> is the definition-side evidence
+    /// compare route references against <see cref="BridgeNodeKind.FileRoute"/> observation nodes; the API and
+    /// backend providers (nextjs-api/nuxt-api/backend-http) compare client requests against
+    /// <see cref="BridgeNodeKind.Endpoint"/> handler/route-fact observation nodes.
+    /// <paramref name="DefinitionEvidenceName"/> is the definition-side evidence
     /// count key suffix; API providers participate only when it is non-zero, because both share the
     /// <c>http.client_request.v1</c> reference family and client requests alone cannot attribute a repo to
     /// Next.js vs Nuxt — the handler facts can. The noun fields keep rendered diagnostics honest per provider
@@ -1013,6 +1014,14 @@ public sealed class TraceTool
         new("nuxt-api", "Nuxt", "client request", "server route", BridgeNodeKind.Endpoint, "serverRoutes", "route edge"),
         new("vue", "Vue", "route reference", "route definition", BridgeNodeKind.FileRoute, "fileRoutes", "navigation edge"),
         new("react", "React", "route reference", "route definition", BridgeNodeKind.FileRoute, "fileRoutes", "navigation edge"),
+        // The backend HTTP boundary provider mirrors the nextjs-api/nuxt-api rows (Endpoint definition kind, a
+        // client-request reference noun). ProviderParticipates therefore gates it on backend-http.routeFacts > 0,
+        // which is correct: the client-request family is shared with dotnet-web/nextjs-api/nuxt-api, so gating on it
+        // would make backend-http "participate" in a non-backend repo. Limitation: a niche Rails-only repo where
+        // every route is expanded rather than a direct rails.route fact has routeFacts == 0, so this row does not
+        // participate for it — the generic pooled route diagnostics still cover that case. We intentionally do NOT
+        // OR composedRoutes/expandedResourceRoutes into the single-key participation gate.
+        new("backend-http", "Backend", "client request", "route fact", BridgeNodeKind.Endpoint, "routeFacts", "route edge"),
     ];
 
     private static bool HasFileRouteProviderEvidence(BridgeGraph graph) =>
@@ -1656,7 +1665,8 @@ public sealed class TraceTool
 
             if (HasEvidence(capabilityReport, "dotnet-web.clientRequests") ||
                 HasEvidence(capabilityReport, "nextjs-api.clientRequests") ||
-                HasEvidence(capabilityReport, "nuxt-api.clientRequests"))
+                HasEvidence(capabilityReport, "nuxt-api.clientRequests") ||
+                HasEvidence(capabilityReport, "backend-http.clientRequests"))
             {
                 actions.Add(NextAction(
                     "patterns",
@@ -1706,6 +1716,19 @@ public sealed class TraceTool
                     ("operation", "search"),
                     ("query", "nuxt")));
             }
+
+            if (HasEvidence(capabilityReport, "backend-http.routeFacts") ||
+                HasEvidence(capabilityReport, "backend-http.composedRoutes") ||
+                HasEvidence(capabilityReport, "backend-http.expandedResourceRoutes"))
+            {
+                // The 10 backend route families don't share one pattern_id and enumerating all 16 would be noise;
+                // query=route matches the *.route.* families and the generic route audit above covers the rest.
+                actions.Add(NextAction(
+                    "patterns",
+                    "audit backend HTTP route structural facts consumed by the backend-http bridge",
+                    ("operation", "search"),
+                    ("query", "route")));
+            }
         }
 
         return actions;
@@ -1729,7 +1752,11 @@ public sealed class TraceTool
         HasEvidence(report, "nuxt.routeReferences") ||
         HasEvidence(report, "nuxt.fileRoutes") ||
         HasEvidence(report, "nuxt-api.clientRequests") ||
-        HasEvidence(report, "nuxt-api.serverRoutes");
+        HasEvidence(report, "nuxt-api.serverRoutes") ||
+        HasEvidence(report, "backend-http.routeFacts") ||
+        HasEvidence(report, "backend-http.clientRequests") ||
+        HasEvidence(report, "backend-http.composedRoutes") ||
+        HasEvidence(report, "backend-http.expandedResourceRoutes");
 
     private static bool HasEvidence(BridgeCapabilityReport report, string key) =>
         report.EvidenceCounts.TryGetValue(key, out int value) && value > 0;

@@ -2675,4 +2675,218 @@ public sealed class TraceToolTests
         Assert.Throws<ArgumentNullException>(() =>
             TraceTool.Run(index, null!, "Alpha", "auto", null, 3, 20, false, out _, out _));
     }
+
+    // ---------- backend-http provider (plan Task 6): route diagnostics, next_actions, render agreement ----------
+
+    [Fact]
+    public void Bridge_RouteStringTarget_BackendHttpClientRequestOnly_JsonExplainsNoRouteFactMatch()
+    {
+        // A backend-http repo: an Express route fact exists for /api/orders, but the traced client request is to a
+        // DIFFERENT route /api/users that matches no route fact. The diagnostic must speak backend-http nouns
+        // ("Backend" / "client request" / "route fact"), not the generic frontend/backend wording.
+        string requestId = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, "/api/users");
+        string routeId = BridgeGraph.SynthesizeId(BridgeNodeKind.Endpoint, "GET /api/orders");
+        var extra = new Dictionary<string, BridgeNode>(StringComparer.Ordinal)
+        {
+            [requestId] = new BridgeNode(requestId, BridgeNodeKind.TsType, "/api/users", "web/lib/api.ts", 5),
+            [routeId] = new BridgeNode(routeId, BridgeNodeKind.Endpoint, "GET /api/orders", "server/orders.js", 1),
+        };
+        // Only backend-http participates: its routeFacts gate is > 0; nextjs-api/nuxt-api handler evidence is absent,
+        // so the shared client-request family cannot mis-attribute the diagnostic to a framework API provider.
+        var capability = new BridgeCapabilityReport(
+            ActiveProviders: ["backend-http"],
+            SkippedProviders: [],
+            Notes: [],
+            EvidenceCounts: new Dictionary<string, int>(StringComparer.Ordinal)
+            {
+                ["backend-http.clientRequests"] = 1,
+                ["backend-http.routeFacts"] = 1,
+                ["backend-http.candidates"] = 0,
+                ["backend-http.ambiguousMatches"] = 0,
+            });
+        var index = BuildBridgeIndex(
+            Array.Empty<(string symbolId, string name, string file, int line)>(),
+            Array.Empty<ScoredEdge>(),
+            extra,
+            capability);
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "/api/users", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false, json: true,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement diagnostic = Assert.Single(doc.RootElement.GetProperty("diagnostics").EnumerateArray());
+        Assert.Equal("backend-http_route_no_file_match", diagnostic.GetProperty("code").GetString());
+        string message = diagnostic.GetProperty("message").GetString()!;
+        Assert.Contains("Backend client request exists: /api/users", message);
+        Assert.Contains("observed route facts: /api/orders", message);
+    }
+
+    [Fact]
+    public void Bridge_RouteStringTarget_BackendHttpBothFactsNoEdge_JsonUsesRouteEdgeNoun()
+    {
+        // A client request AND a backend route fact for the SAME route /api/users exist, but no edge was built.
+        // The honest diagnostic uses the backend-http "route edge" edge noun (proving EdgeNoun renders per provider).
+        string requestId = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, "/api/users");
+        string routeId = BridgeGraph.SynthesizeId(BridgeNodeKind.Endpoint, "/api/users");
+        var extra = new Dictionary<string, BridgeNode>(StringComparer.Ordinal)
+        {
+            [requestId] = new BridgeNode(requestId, BridgeNodeKind.TsType, "/api/users", "web/lib/api.ts", 5),
+            [routeId] = new BridgeNode(routeId, BridgeNodeKind.Endpoint, "/api/users", "server/users.js", 1),
+        };
+        var capability = new BridgeCapabilityReport(
+            ActiveProviders: ["backend-http"],
+            SkippedProviders: [],
+            Notes: [],
+            EvidenceCounts: new Dictionary<string, int>(StringComparer.Ordinal)
+            {
+                ["backend-http.clientRequests"] = 1,
+                ["backend-http.routeFacts"] = 1,
+                ["backend-http.candidates"] = 0,
+                ["backend-http.ambiguousMatches"] = 0,
+            });
+        var index = BuildBridgeIndex(
+            Array.Empty<(string symbolId, string name, string file, int line)>(),
+            Array.Empty<ScoredEdge>(),
+            extra,
+            capability);
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "/api/users", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false, json: true,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement diagnostic = Assert.Single(doc.RootElement.GetProperty("diagnostics").EnumerateArray());
+        Assert.Equal("backend-http_route_no_bridge_link", diagnostic.GetProperty("code").GetString());
+        string message = diagnostic.GetProperty("message").GetString()!;
+        Assert.Contains("Backend client request and route fact facts exist for /api/users", message);
+        Assert.Contains("no route edge was built", message);
+    }
+
+    [Fact]
+    public void Bridge_NotOnBridge_WithBackendHttpEvidence_OffersBackendRouteAndClientRequestAudits()
+    {
+        // A backend-http repo (route facts + client requests + expanded resource routes) whose traced symbol is not
+        // on the bridge: the generic route audit, the shared http.client_request.v1 audit, and the backend-http
+        // route-fact audit must all fire off the new evidence keys.
+        var capability = new BridgeCapabilityReport(
+            ActiveProviders: ["backend-http"],
+            SkippedProviders: [],
+            Notes: [],
+            EvidenceCounts: new Dictionary<string, int>(StringComparer.Ordinal)
+            {
+                ["backend-http.clientRequests"] = 2,
+                ["backend-http.routeFacts"] = 3,
+                ["backend-http.expandedResourceRoutes"] = 7,
+            });
+        var index = BuildBridgeIndex(
+            new[] { ("x", "Loner", "src/Loner.cs", 1) },
+            Array.Empty<ScoredEdge>(),
+            new Dictionary<string, BridgeNode>(StringComparer.Ordinal),
+            capability);
+
+        string outp = TraceTool.Run(index, ResolverFor(index),
+            target: "Loner", mode: "bridge", to: null, depth: 3, limit: 20, fullFormat: false,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        Assert.Contains("patterns operation=\"search\" query=\"route\"", outp);
+        Assert.Contains("patterns operation=\"search\" pattern_id=\"http.client_request.v1\"", outp);
+        Assert.Contains("audit backend HTTP route structural facts consumed by the backend-http bridge", outp);
+    }
+
+    [Fact]
+    public void Bridge_NotOnBridge_WithBackendHttpEvidence_JsonCarriesBackendRouteAndClientRequestAudits()
+    {
+        // Composed-route evidence alone (no direct routeFacts) must open the route-fact gate and fire the
+        // backend-http route audit; client-request evidence fires the shared http.client_request.v1 audit.
+        var capability = new BridgeCapabilityReport(
+            ActiveProviders: ["backend-http"],
+            SkippedProviders: [],
+            Notes: [],
+            EvidenceCounts: new Dictionary<string, int>(StringComparer.Ordinal)
+            {
+                ["backend-http.clientRequests"] = 1,
+                ["backend-http.composedRoutes"] = 2,
+            });
+        var index = BuildBridgeIndex(
+            new[] { ("x", "Loner", "src/Loner.cs", 1) },
+            Array.Empty<ScoredEdge>(),
+            new Dictionary<string, BridgeNode>(StringComparer.Ordinal),
+            capability);
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "Loner", mode: "bridge", to: null, depth: 3, limit: 20, fullFormat: false, json: true,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement[] actions = doc.RootElement.GetProperty("next_actions").EnumerateArray().ToArray();
+        Assert.Contains(actions, action =>
+            action.GetProperty("tool").GetString() == "patterns" &&
+            action.GetProperty("reason").GetString() == "audit backend HTTP route structural facts consumed by the backend-http bridge" &&
+            action.GetProperty("args").TryGetProperty("query", out JsonElement query) &&
+            query.GetString() == "route");
+        Assert.Contains(actions, action =>
+            action.GetProperty("tool").GetString() == "patterns" &&
+            action.GetProperty("args").TryGetProperty("pattern_id", out JsonElement patternId) &&
+            patternId.GetString() == "http.client_request.v1");
+    }
+
+    [Fact]
+    public void Bridge_BackendHttpClientRequestEdge_CompactAndJsonAgreeOnKindLabelBandAndFlags()
+    {
+        // A matched verb-known backend client-request edge (fetch -> Express route handler symbol): High, no flags.
+        // Backend edges flow through the same BridgeKind.Hits path as dotnet-web/nextjs-api, so compact renders the
+        // "route" arrow and JSON renders kind=hits/label=route with no honesty flags. ASSERT this; the render path
+        // needs no backend-specific code.
+        var hits = MakeScored(
+            BridgeKind.Hits,
+            SymbolRef("client", "loadOrders", "web/lib/api.ts"),
+            SymbolRef("handler", "getOrders", "server/routes/orders.js"),
+            ConfidenceBand.High, 0.9);
+        var capability = new BridgeCapabilityReport(
+            ActiveProviders: ["backend-http"],
+            SkippedProviders: [],
+            Notes: [],
+            EvidenceCounts: new Dictionary<string, int>(StringComparer.Ordinal)
+            {
+                ["backend-http.clientRequests"] = 1,
+                ["backend-http.routeFacts"] = 1,
+                ["backend-http.candidates"] = 1,
+            });
+        var index = BuildBridgeIndex(
+            new[]
+            {
+                ("client", "loadOrders", "web/lib/api.ts", 5),
+                ("handler", "getOrders", "server/routes/orders.js", 3),
+            },
+            new[] { hits },
+            new Dictionary<string, BridgeNode>(StringComparer.Ordinal),
+            capability);
+
+        string compact = TraceTool.Run(index, ResolverFor(index),
+            target: "loadOrders", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false,
+            out int compactEmitted, out _);
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "loadOrders", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false, json: true,
+            out int jsonEmitted, out _);
+
+        Assert.Equal(1, compactEmitted);
+        Assert.Equal(1, jsonEmitted);
+        Assert.Contains("loadOrders  --route-->  getOrders", compact);
+        Assert.Contains("0.90 (High)", compact);
+        Assert.DoesNotContain("[verb-unknown]", compact);
+        Assert.DoesNotContain("[ambiguous]", compact);
+
+        using var doc = JsonDocument.Parse(json);
+        JsonElement link = Assert.Single(doc.RootElement.GetProperty("links").EnumerateArray());
+        Assert.Equal("hits", link.GetProperty("kind").GetString());
+        Assert.Equal("route", link.GetProperty("label").GetString());
+        Assert.Equal("high", link.GetProperty("confidence").GetString());
+        Assert.Equal(0.9, link.GetProperty("score").GetDouble(), precision: 5);
+        Assert.Empty(link.GetProperty("flags").EnumerateArray());
+    }
 }
