@@ -416,8 +416,10 @@ public sealed class InspectTool
         if (refs.Count > 0)
         {
             sb.Append("\n## references\n");
-            foreach (var r in refs.Take(relationLimit))
-                sb.Append(r.FilePath).Append(':').Append(r.StartLine).Append('\n');
+            // Group the (path/line-ordered) refs by file so a file with N reference sites costs one line
+            // (`path:l1,l2,…`) instead of N. Group AFTER Take(relationLimit) so the ref limit/omitted-count
+            // semantics are unchanged — the omitted line still counts underlying refs, not files.
+            AppendGroupedReferences(sb, refs.Take(relationLimit));
             AppendOmittedLine(sb, refs.Count, relationLimit, "refs");
         }
 
@@ -434,9 +436,18 @@ public sealed class InspectTool
         if (callees.Count > 0)
         {
             sb.Append("\n## callees\n");
-            foreach (var c in callees.Take(relationLimit))
-                sb.Append(c.Name).Append("  ").Append(c.FilePath).Append(':').Append(c.StartLine).Append('\n');
-            AppendOmittedLine(sb, callees.Count, relationLimit, "callees");
+            // Dedup by callee name (first location wins, `×N` when a name recurs) BEFORE the relation limit,
+            // so full depth spends its 50-row budget on distinct callees rather than repeated identifiers.
+            // The omitted-count line counts DISTINCT callees so it can't overstate.
+            var distinctCallees = DistinctCallees(callees);
+            foreach (var c in distinctCallees.Take(relationLimit))
+            {
+                sb.Append(c.Name);
+                if (c.Count > 1)
+                    sb.Append(" ×").Append(c.Count);
+                sb.Append("  ").Append(c.FilePath).Append(':').Append(c.StartLine).Append('\n');
+            }
+            AppendOmittedLine(sb, distinctCallees.Count, relationLimit, "callees");
         }
 
         sb.Append(depth == InspectDepth.Overview ? "\n## body preview\n" : "\n## body\n");
@@ -569,6 +580,56 @@ public sealed class InspectTool
     {
         if (total > visible)
             sb.Append("... ").Append(total - visible).Append(" more ").Append(label).Append(" (use depth=full)\n");
+    }
+
+    /// <summary>
+    /// Render a reference list as one <c>path:l1,l2,…</c> line per file, preserving first-seen file order and
+    /// the incoming line order within each file. Refs arrive path/line-ordered from <c>ReadReferences</c>, so a
+    /// file's sites are already contiguous; the insertion-ordered map keeps the output stable regardless.
+    /// </summary>
+    private static void AppendGroupedReferences(StringBuilder sb, IEnumerable<SymbolRef> refs)
+    {
+        var order = new List<string>();
+        var linesByFile = new Dictionary<string, List<int>>(StringComparer.Ordinal);
+        foreach (var r in refs)
+        {
+            if (!linesByFile.TryGetValue(r.FilePath, out var lines))
+            {
+                lines = new List<int>();
+                linesByFile[r.FilePath] = lines;
+                order.Add(r.FilePath);
+            }
+            lines.Add(r.StartLine);
+        }
+        foreach (var file in order)
+            sb.Append(file).Append(':').Append(string.Join(',', linesByFile[file])).Append('\n');
+    }
+
+    private readonly record struct DistinctCallee(string Name, string FilePath, int StartLine, int Count);
+
+    /// <summary>
+    /// Collapse a callee list to distinct callee names, preserving first occurrence (which also fixes the
+    /// rendered location) and counting recurrences. No name is filtered — <c>nameof</c>/<c>ArgumentException</c>
+    /// still carry information; dedup removes only the repetition cost. The caller applies the relation limit
+    /// AFTER this collapse so full depth shows up to the limit in DISTINCT callees.
+    /// </summary>
+    private static List<DistinctCallee> DistinctCallees(IReadOnlyList<SymbolRef> callees)
+    {
+        var indexByName = new Dictionary<string, int>(StringComparer.Ordinal);
+        var result = new List<DistinctCallee>();
+        foreach (var c in callees)
+        {
+            if (indexByName.TryGetValue(c.Name, out var i))
+            {
+                result[i] = result[i] with { Count = result[i].Count + 1 };
+            }
+            else
+            {
+                indexByName[c.Name] = result.Count;
+                result.Add(new DistinctCallee(c.Name, c.FilePath, c.StartLine, 1));
+            }
+        }
+        return result;
     }
 
     private readonly record struct BodyPreviewResult(string? Text, bool Truncated);

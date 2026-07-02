@@ -288,6 +288,103 @@ public sealed class InspectToolTests
         Assert.DoesNotContain("complexity:", output);
     }
 
+    // A symbol with many same-file references and repeated callee names, to pin compact grouping/dedup.
+    // References to "Cmp": three sites in a.cs (lines 5, 8, 12) + one in b.cs (line 3) — grouped one line per
+    // file. Callees FROM Cmp: TryParse ×2, nameof ×2, Validate, Check — four distinct names from six call
+    // sites, deduped first-location-wins. Reference rows carry a NULL containing id so no callers section is
+    // emitted (keeps the assertions about refs/callees isolated).
+    private static JulieDbFixture GroupAndDedupFixture()
+    {
+        const string cmpId = "aa000000000000000000000000000001";
+        var rows = new[]
+        {
+            new JulieDbFixture.SymbolRow(cmpId, "Cmp", "method", "csharp",
+                "src/a.cs", "public int Cmp(string x)", 2, null),
+        };
+        var identifiers = new[]
+        {
+            // Name-based references to "Cmp" (ReadReferences), ordered by path/line: a.cs 5,8,12 then b.cs 3.
+            new JulieDbFixture.IdentifierRow("bb00000000000000000000000000000a", "Cmp", "call", "csharp", "src/a.cs", 5, null),
+            new JulieDbFixture.IdentifierRow("bb00000000000000000000000000000b", "Cmp", "call", "csharp", "src/a.cs", 8, null),
+            new JulieDbFixture.IdentifierRow("bb00000000000000000000000000000c", "Cmp", "call", "csharp", "src/a.cs", 12, null),
+            new JulieDbFixture.IdentifierRow("bb00000000000000000000000000000d", "Cmp", "call", "csharp", "src/b.cs", 3, null),
+            // Callees FROM Cmp (containing == Cmp, kind 'call'), ordered by line 3..8: repeated names collapse.
+            new JulieDbFixture.IdentifierRow("cc00000000000000000000000000000a", "TryParse", "call", "csharp", "src/a.cs", 3, cmpId),
+            new JulieDbFixture.IdentifierRow("cc00000000000000000000000000000b", "nameof", "call", "csharp", "src/a.cs", 4, cmpId),
+            new JulieDbFixture.IdentifierRow("cc00000000000000000000000000000c", "TryParse", "call", "csharp", "src/a.cs", 5, cmpId),
+            new JulieDbFixture.IdentifierRow("cc00000000000000000000000000000d", "nameof", "call", "csharp", "src/a.cs", 6, cmpId),
+            new JulieDbFixture.IdentifierRow("cc00000000000000000000000000000e", "Validate", "call", "csharp", "src/a.cs", 7, cmpId),
+            new JulieDbFixture.IdentifierRow("cc00000000000000000000000000000f", "Check", "call", "csharp", "src/a.cs", 8, cmpId),
+        };
+        return JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract,
+            rows, identifiers: identifiers, workspaceId: "ws-inspect-group");
+    }
+
+    [Fact]
+    public void Run_SymbolFull_GroupsReferencesByFile_AndDedupsCallees()
+    {
+        using var fx = GroupAndDedupFixture();
+        var (index, resolver) = Build(fx);
+
+        string full = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "Cmp", depth: "full", kind: null, scope: null, limit: 50, json: false, out _);
+
+        // References: one comma-joined line per file, in path/line order.
+        Assert.Contains("src/a.cs:5,8,12", full);
+        Assert.Contains("src/b.cs:3", full);
+        // No un-grouped one-ref-per-line rendering survives.
+        Assert.DoesNotContain("src/a.cs:5\n", full);
+
+        // Callees: unique by name, first location wins, ×N only when a name recurs.
+        Assert.Contains("TryParse ×2  src/a.cs:3", full);
+        Assert.Contains("nameof ×2  src/a.cs:4", full);
+        Assert.Contains("Validate  src/a.cs:7", full);
+        Assert.Contains("Check  src/a.cs:8", full);
+        // A single-occurrence callee never gets a count annotation.
+        Assert.DoesNotContain("Validate ×", full);
+        Assert.DoesNotContain("Check ×", full);
+        // All four distinct callees fit under the 50-row full limit — no omitted line.
+        Assert.DoesNotContain("more callees", full);
+    }
+
+    [Fact]
+    public void Run_SymbolOverview_OmittedCounts_UseRefsAndDistinctCallees()
+    {
+        using var fx = GroupAndDedupFixture();
+        var (index, resolver) = Build(fx);
+
+        string overview = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "Cmp", depth: "overview", kind: null, scope: null, limit: 50, json: false, out _);
+
+        // Overview relation limit is 3. Refs: first 3 (all in a.cs) render as one grouped line; b.cs is past
+        // the limit; the omitted count still counts underlying refs (4 total → 1 hidden), not files.
+        Assert.Contains("src/a.cs:5,8,12", overview);
+        Assert.DoesNotContain("src/b.cs", overview);
+        Assert.Contains("... 1 more refs", overview);
+
+        // Callees: dedup happens BEFORE the limit. 4 distinct names, 3 shown → "1 more" (distinct count),
+        // NOT "3 more" that the 6 raw call sites would have produced.
+        Assert.Contains("... 1 more callees", overview);
+        Assert.DoesNotContain("... 3 more callees", overview);
+    }
+
+    [Fact]
+    public void Run_SymbolFull_Json_KeepsRawUndedupedRefsAndCallees()
+    {
+        using var fx = GroupAndDedupFixture();
+        var (index, resolver) = Build(fx);
+
+        string json = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "Cmp", depth: "full", kind: null, scope: null, limit: 50, json: true, out _);
+
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        // JSON is untouched: one object per raw reference (4) and per raw call site (6), no ×N collapsing.
+        Assert.Equal(4, root.GetProperty("refs").GetArrayLength());
+        Assert.Equal(6, root.GetProperty("callees").GetArrayLength());
+        Assert.DoesNotContain("×", json);
+    }
+
     [Fact]
     public void Run_SymbolOverview_IncludesBoundedContextAndBodyPreview()
     {
