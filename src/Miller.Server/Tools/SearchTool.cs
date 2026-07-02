@@ -548,6 +548,21 @@ public sealed class SearchTool
     /// (so more rows may exist) and fewer than <paramref name="limit"/> were kept, retry with the next larger
     /// window (500 → 2000 → 10000).
     /// </summary>
+    private static void FetchWithEscalation(int overFetch, int limit, Func<int, (int Fetched, int Kept)> fetchAndFilter)
+    {
+        int window = overFetch;
+        (int fetched, int kept) = fetchAndFilter(window);
+        foreach (int nextWindow in OverFetchEscalationWindows)
+        {
+            if (nextWindow <= window)
+                continue;
+            if (kept >= limit || fetched < window)
+                return;
+            window = nextWindow;
+            (fetched, kept) = fetchAndFilter(window);
+        }
+    }
+
     /// <summary>
     /// Collapse identical <c>(SourceId, Line)</c> text-content hits: overlapping content-corpus chunks can both
     /// match the same physical line, so the index returns duplicate rows with identical snippets. Keeps the first
@@ -568,21 +583,6 @@ public sealed class SearchTool
         }
 
         return deduped.Count == hits.Count ? hits : deduped;
-    }
-
-    private static void FetchWithEscalation(int overFetch, int limit, Func<int, (int Fetched, int Kept)> fetchAndFilter)
-    {
-        int window = overFetch;
-        (int fetched, int kept) = fetchAndFilter(window);
-        foreach (int nextWindow in OverFetchEscalationWindows)
-        {
-            if (nextWindow <= window)
-                continue;
-            if (kept >= limit || fetched < window)
-                return;
-            window = nextWindow;
-            (fetched, kept) = fetchAndFilter(window);
-        }
     }
 
     /// <summary>
