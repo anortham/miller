@@ -163,16 +163,36 @@ public sealed class ContentToolTests : IDisposable
     }
 
     [Fact]
-    public void Content_SearchNoResults_CompactIncludesRecoveryGuidance()
+    public void Content_SearchNoResults_CompactStatesRecoveryAdviceOnceInNextBlock()
     {
         var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
 
         string output = tool.Content("search", query: "MissingSecretValue", content_kind: "docs", limit: 3);
 
-        Assert.Contains("No results", output, StringComparison.Ordinal);
-        Assert.Contains("content_kind", output, StringComparison.Ordinal);
-        Assert.Contains("workspace_id=all", output, StringComparison.Ordinal);
-        Assert.Contains("search mode=source", output, StringComparison.Ordinal);
+        // States what was attempted (a fact, not advice) ...
+        // "docs" is normalized to the canonical workspace_docs kind before rendering.
+        Assert.Contains("No results for content search.", output, StringComparison.Ordinal);
+        Assert.Contains("Tried content_kind=workspace_docs.", output, StringComparison.Ordinal);
+
+        // ... and encodes the recovery advice exactly once, as structured Next actions.
+        Assert.Contains("Next:", output, StringComparison.Ordinal);
+        Assert.Equal(1, CountOccurrences(output, "workspace_id=all"));
+        Assert.Equal(1, CountOccurrences(output, "mode=source"));
+
+        // The old duplicated prose sentence is gone (advice is not said twice).
+        Assert.DoesNotContain("Try content_kind=docs, source, external_file", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("use workspace_id=all only for registered workspace audits", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("use search mode=source for current workspace source-body text", output, StringComparison.Ordinal);
+    }
+
+    private static int CountOccurrences(string haystack, string needle)
+    {
+        int count = 0;
+        for (int i = haystack.IndexOf(needle, StringComparison.Ordinal);
+             i >= 0;
+             i = haystack.IndexOf(needle, i + needle.Length, StringComparison.Ordinal))
+            count++;
+        return count;
     }
 
     [Fact]

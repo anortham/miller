@@ -586,12 +586,11 @@ public sealed class ContentTool
     private static string RenderNoResultsCompact(string operation, string query, string contentKind)
     {
         var sb = new StringBuilder();
+        // State the fact of what was attempted, then let the structured Next block carry the recovery
+        // advice exactly once (it already encodes content_kind=all-text, workspace_id=all, mode=source).
         sb.Append("No results for content ").Append(operation).Append(".")
           .Append('\n')
-          .Append("Tried content_kind=").Append(contentKind).Append(". ")
-          .Append("Try content_kind=docs, source, external_file, web, or all-text as appropriate; ")
-          .Append("use workspace_id=all only for registered workspace audits; ")
-          .Append("use search mode=source for current workspace source-body text.");
+          .Append("Tried content_kind=").Append(contentKind).Append('.');
         AppendContentNextActions(sb, SearchNoResultsNextActions(query, contentKind));
         return sb.ToString();
     }
