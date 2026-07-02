@@ -264,6 +264,61 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
         command.ExecuteNonQuery();
     }
 
+    // The four 2.6.0 HTTP-boundary fact families (plan Task 2): a fetch client request, an ASP.NET attribute
+    // route, a Next.js route handler, and a Nuxt server route — plus the two symbols the dotnet-web bridge binds.
+    private static void AddHttpBoundaryFacts(string dbPath)
+    {
+        using var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder { DataSource = dbPath, Mode = SqliteOpenMode.ReadWrite }.ToString());
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO symbols(symbol_id, name, signature, kind, language, path, start_line, end_line, parent_symbol_id)
+            VALUES
+              ('s-users-get', 'GetUsers', 'IResult GetUsers()', 'method', 'csharp', 'api/UsersController.cs', 12, 20, NULL),
+              ('s-fetch-users', 'fetchUsers', 'function fetchUsers()', 'function', 'typescript', 'web/api.ts', 4, 9, NULL);
+
+            INSERT INTO structural_facts
+                (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                 containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                 confidence, metadata_json)
+            VALUES
+              ('sf-fetch-users', 'f-web-api', 'web/api.ts', 'typescript', 'http.client_request.v1',
+               'client_request', 'call_expression', 's-fetch-users', 5, 3, 5, 40, 100, 140, 1.0,
+               '{"client":"fetch","framework":"fetch","target_path":"/api/users","url_kind":"path","verb":"GET","verb_source":"default"}'),
+              ('sf-users-get', 'f-users-controller', 'api/UsersController.cs', 'csharp', 'aspnet.attribute_route.v1',
+               'attribute', 'attribute', 's-users-get', 12, 5, 12, 15, 300, 320, 1.0,
+               '{"attribute_kind":"http_method","verb":"GET","controller_route_template":"api/[controller]","effective_route_template":"/api/users","route_tokens":["controller"]}'),
+              ('sf-next-handler', 'f-next-route', 'web/app/api/messages/route.ts', 'typescript', 'nextjs.route_handler.v1',
+               'route_handler', 'export_statement', NULL, 1, 1, 10, 1, 0, 200, 1.0,
+               '{"framework":"nextjs","router":"app","route_path":"/api/messages","verb":"GET","verb_source":"attested"}'),
+              ('sf-nuxt-handler', 'f-nuxt-route', 'server/api/notes.ts', 'typescript', 'nuxt.server_route.v1',
+               'server_route', 'source_file', NULL, 1, 1, 8, 1, 0, 150, 1.0,
+               '{"framework":"nuxt","route_path":"/api/notes"}');
+            """;
+        command.ExecuteNonQuery();
+    }
+
+    [Fact]
+    public void Load_HttpBoundaryFactFamilies_LoadThroughTheWhitelistAndBridge()
+    {
+        AddHttpBoundaryFacts(_dbPath);
+
+        var index = RepositoryIndexLoader.Load(_dbPath);
+
+        // All four 2.6.0 families pass the SqliteBridgeReader whitelist: the base fixture carries 2 facts, +4 here.
+        Assert.Equal(6, index.BridgeGraph.CapabilityReport.EvidenceCounts["dotnet-web.structuralFacts"]);
+        Assert.Equal(1, index.BridgeGraph.CapabilityReport.EvidenceCounts["dotnet-web.clientRequests"]);
+        Assert.Equal(1, index.BridgeGraph.CapabilityReport.EvidenceCounts["dotnet-web.attributeRoutes"]);
+
+        // And the client request bridges to the attribute-routed action through the production Load path.
+        var fromClient = index.BridgeGraph.Walk("s-fetch-users", maxDepth: 2);
+        var hits = Assert.Single(fromClient, e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hits.Band);
+        Assert.Equal("s-users-get", hits.Edge.TargetRef.SymbolId);
+    }
+
     private static void TryDelete(string path)
     {
         try { System.IO.Directory.Delete(path, recursive: true); } catch { /* best effort */ }

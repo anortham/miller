@@ -4,13 +4,15 @@ using Miller.Core.Resolver;
 namespace Miller.Core.Graph;
 
 /// <summary>
-/// The current ASP.NET / TypeScript bridge provider: controller routes, client URL literals, AutoMapper-style
-/// CreateMap pairs, and EF DbSet breadcrumbs.
+/// The current ASP.NET / TypeScript bridge provider: controller routes (annotation-derived and
+/// <c>aspnet.attribute_route.v1</c> structural facts), client URL literals and <c>http.client_request.v1</c>
+/// fetch/axios facts, AutoMapper-style CreateMap pairs, and EF DbSet breadcrumbs.
 /// </summary>
 public sealed class DotnetWebBridgeProvider : IBridgeProvider
 {
     public const string ProviderId = "dotnet-web";
     private const string AspNetMinimalApiRoutePattern = BridgeStructuralPatterns.AspNetMinimalApiRoute;
+    private const string AspNetAttributeRoutePattern = BridgeStructuralPatterns.AspNetAttributeRoute;
 
     public static DotnetWebBridgeProvider Instance { get; } = new();
 
@@ -20,7 +22,17 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
 
     private sealed record StructuralClientCallReduction(
         IReadOnlyList<TsClientCall> Calls,
-        (int Htmx, int Vue, int React, int NextJs, int Nuxt) Counts);
+        (int Htmx, int Vue, int React, int NextJs, int Nuxt, int ClientRequests) Counts);
+
+    /// <summary>
+    /// The <c>aspnet.attribute_route.v1</c> reduction: the emitted endpoints plus the count of endpoint-shaped
+    /// method-level facts consumed (<c>http_method</c> facts emitted as endpoints + <c>route</c> facts recognized
+    /// but deferred — see <see cref="ReduceAttributeRouteEndpoints"/>). <c>controller_route</c> prefix facts are
+    /// neither.
+    /// </summary>
+    private sealed record AttributeRouteReduction(
+        IReadOnlyList<ControllerEndpoint> Endpoints,
+        int EndpointFacts);
 
     public string Id => ProviderId;
 
@@ -30,9 +42,11 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
 
         var createMaps = ReduceCreateMaps(context.TypeArguments);
         var annotationEndpoints = ReduceEndpoints(context.Symbols, context.Annotations);
-        var structuralEndpoints = ReduceStructuralEndpoints(
+        var minimalApiEndpoints = ReduceStructuralEndpoints(
             context.StructuralFacts, context.Symbols, context.Literals, context.SymbolsById, context.LiteralSites);
-        var endpoints = annotationEndpoints.Concat(structuralEndpoints).ToList();
+        var attributeRoutes = ReduceAttributeRouteEndpoints(context.StructuralFacts, context.SymbolsById);
+        var structuralEndpoints = minimalApiEndpoints.Concat(attributeRoutes.Endpoints).ToList();
+        var endpoints = DedupeEndpoints(annotationEndpoints, structuralEndpoints);
         var literalClientCalls = ReduceClientCalls(context.Literals, context.SymbolsById, context.LiteralSites);
         var structuralClientCallReduction = ReduceStructuralClientCalls(context.StructuralFacts, context.SymbolsById);
         var structuralClientCalls = structuralClientCallReduction.Calls;
@@ -49,15 +63,19 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
             ["dotnet-web.structuralEndpoints"] = structuralEndpoints.Count,
             ["dotnet-web.structuralClientCalls"] = structuralClientCalls.Count,
             ["dotnet-web.structuralFacts"] = context.StructuralFacts.Count,
-            ["dotnet-web.aspnetMinimalRoutes"] = structuralEndpoints.Count,
+            ["dotnet-web.aspnetMinimalRoutes"] = minimalApiEndpoints.Count,
+            ["dotnet-web.attributeRoutes"] = attributeRoutes.EndpointFacts,
             ["dotnet-web.htmxCalls"] = structuralCallCounts.Htmx,
             ["dotnet-web.vueCalls"] = structuralCallCounts.Vue,
             ["dotnet-web.reactCalls"] = structuralCallCounts.React,
             ["dotnet-web.nextjsCalls"] = structuralCallCounts.NextJs,
             ["dotnet-web.nuxtCalls"] = structuralCallCounts.Nuxt,
+            ["dotnet-web.clientRequests"] = structuralCallCounts.ClientRequests,
             ["dotnet-web.dbsets"] = context.DbSetProperties.Count,
         };
 
+        // The active gate is backend-evidence-based: client calls/requests alone never activate dotnet-web,
+        // so a pure-frontend repo stays inactive (its client-request evidence counts are still reported).
         if (createMaps.Count == 0 &&
             endpoints.Count == 0 &&
             context.DbSetProperties.Count == 0)
@@ -245,6 +263,102 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
         return true;
     }
 
+    /// <summary>
+    /// Reduce <c>aspnet.attribute_route.v1</c> facts (2.6.0) into controller endpoints beside the minimal-API arm.
+    /// Only <c>attribute_kind="http_method"</c> facts become endpoints: the route is the extractor-composed
+    /// <c>effective_route_template</c> (leading <c>/</c>, tokens pre-substituted) falling back to
+    /// <c>route_template</c>, and the handler binds via <c>containing_symbol_id</c> (the action method).
+    /// <c>controller_route</c> facts are class-level prefix facts, never endpoints. <c>route</c> facts (a method
+    /// <c>[Route]</c> with no verb attribute) would be verb-unknown endpoints, but
+    /// <c>RouteBridge.TryBuildHitsEdge</c> yields NO edge for a verb-known client against a verb-unknown endpoint
+    /// (verified 2026-07-01), so they are counted as evidence only — endpoint emission is a noted follow-up.
+    /// </summary>
+    private static AttributeRouteReduction ReduceAttributeRouteEndpoints(
+        IReadOnlyList<StructuralFactRecord> structuralFacts,
+        IReadOnlyDictionary<string, SymbolDetail> symbolsById)
+    {
+        var endpoints = new List<ControllerEndpoint>();
+        int endpointFacts = 0;
+        foreach (var fact in structuralFacts.OrderBy(f => f.Path, StringComparer.Ordinal).ThenBy(f => f.Span.StartByte))
+        {
+            if (!string.Equals(fact.PatternId, AspNetAttributeRoutePattern, StringComparison.Ordinal))
+                continue;
+
+            var attributeKind = StructuralRouteFactAdapter.MetadataString(fact, "attribute_kind");
+            if (string.Equals(attributeKind, "route", StringComparison.Ordinal))
+            {
+                endpointFacts++;
+                continue;
+            }
+
+            if (!string.Equals(attributeKind, "http_method", StringComparison.Ordinal))
+                continue;
+
+            var verb = StructuralRouteFactAdapter.MetadataString(fact, "verb");
+            if (string.IsNullOrWhiteSpace(verb))
+                continue;
+
+            // route_template is ABSENT for a bare [HttpGet]; effective_route_template is absent only when
+            // neither template exists (conventional routing) — then there is no route evidence to join on.
+            var route = StructuralRouteFactAdapter.MetadataString(fact, "effective_route_template")
+                ?? StructuralRouteFactAdapter.MetadataString(fact, "route_template");
+            if (string.IsNullOrWhiteSpace(route))
+                continue;
+
+            endpointFacts++;
+
+            SymbolDetail? handler = !string.IsNullOrWhiteSpace(fact.ContainingSymbolId) &&
+                                    symbolsById.TryGetValue(fact.ContainingSymbolId, out var containing)
+                ? containing
+                : null;
+
+            var verbKey = ToHttpVerbKey(verb);
+            var (returnType, requestBodyType) = handler is null
+                ? (string.Empty, (string?)null)
+                : ParseSignatureTypes(handler.Signature, verbKey);
+
+            endpoints.Add(new ControllerEndpoint(
+                SymbolId: handler?.Id,
+                VerbKey: verbKey,
+                ClassRoute: null,
+                MethodRoute: route,
+                ParentClassName: handler?.ParentClassName ?? string.Empty,
+                MethodName: handler?.Name ?? SyntheticEndpointDisplay(verb, route),
+                ReturnType: returnType,
+                RequestBodyType: requestBodyType,
+                FilePath: handler?.FilePath ?? fact.Path,
+                Line: fact.Span.StartLine));
+        }
+        return new AttributeRouteReduction(endpoints, endpointFacts);
+    }
+
+    /// <summary>
+    /// Collapse overlapping endpoint evidence: a structural attribute-route endpoint and an annotation-derived
+    /// endpoint for the same (method SymbolId, VerbKey) describe ONE endpoint — the structural fact wins (its
+    /// extractor-composed template is richer: <c>[action]</c> substitution, absolute <c>/</c>/<c>~/</c>
+    /// overrides, tokens pre-substituted).
+    /// </summary>
+    private static List<ControllerEndpoint> DedupeEndpoints(
+        IReadOnlyList<ControllerEndpoint> annotationEndpoints,
+        IReadOnlyList<ControllerEndpoint> structuralEndpoints)
+    {
+        var structuralKeys = new HashSet<(string SymbolId, string VerbKey)>(
+            structuralEndpoints
+                .Where(endpoint => !string.IsNullOrEmpty(endpoint.SymbolId))
+                .Select(endpoint => (endpoint.SymbolId!, endpoint.VerbKey.ToLowerInvariant())));
+
+        var endpoints = new List<ControllerEndpoint>();
+        foreach (var endpoint in annotationEndpoints)
+        {
+            if (!string.IsNullOrEmpty(endpoint.SymbolId) &&
+                structuralKeys.Contains((endpoint.SymbolId, endpoint.VerbKey.ToLowerInvariant())))
+                continue;
+            endpoints.Add(endpoint);
+        }
+        endpoints.AddRange(structuralEndpoints);
+        return endpoints;
+    }
+
     private static string SyntheticEndpointDisplay(string verb, string route)
     {
         var displayRoute = RouteNormalizer.FromClientCall("fetch", route).Route;
@@ -307,10 +421,21 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
         int react = 0;
         int nextjs = 0;
         int nuxt = 0;
+        int clientRequests = 0;
         foreach (var fact in structuralFacts.OrderBy(f => f.Path, StringComparer.Ordinal).ThenBy(f => f.Span.StartByte))
         {
             if (!IsStructuralClientCallPattern(fact.PatternId))
                 continue;
+
+            if (string.Equals(fact.PatternId, BridgeStructuralPatterns.HttpClientRequest, StringComparison.Ordinal))
+            {
+                if (StructuralRouteFactAdapter.TryReadClientRequest(fact, symbolsById, out var request))
+                {
+                    clientRequests++;
+                    calls.Add(ToClientCall(request));
+                }
+                continue;
+            }
 
             if (StructuralRouteFactAdapter.TryReadRouteReference(fact, symbolsById, out var reference))
             {
@@ -318,7 +443,7 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
                 calls.Add(ToClientCall(reference));
             }
         }
-        return new StructuralClientCallReduction(calls, (htmx, vue, react, nextjs, nuxt));
+        return new StructuralClientCallReduction(calls, (htmx, vue, react, nextjs, nuxt, clientRequests));
     }
 
     private static bool IsStructuralClientCallPattern(string patternId) =>
@@ -326,7 +451,8 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
         string.Equals(patternId, BridgeStructuralPatterns.VueRouteReference, StringComparison.Ordinal) ||
         string.Equals(patternId, BridgeStructuralPatterns.ReactRouteReference, StringComparison.Ordinal) ||
         string.Equals(patternId, BridgeStructuralPatterns.NextJsRouteReference, StringComparison.Ordinal) ||
-        string.Equals(patternId, BridgeStructuralPatterns.NuxtRouteReference, StringComparison.Ordinal);
+        string.Equals(patternId, BridgeStructuralPatterns.NuxtRouteReference, StringComparison.Ordinal) ||
+        string.Equals(patternId, BridgeStructuralPatterns.HttpClientRequest, StringComparison.Ordinal);
 
     private static void CountStructuralRouteReferencePattern(
         string patternId,
@@ -355,6 +481,29 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
                 break;
         }
     }
+
+    private static TsClientCall ToClientCall(StructuralClientRequest request)
+    {
+        var literal = new LiteralRecord(
+            LiteralText: request.RoutePath,
+            Kind: "url",
+            Carrier: ClientRequestCarrier(request),
+            ArgPosition: 0,
+            Language: request.Fact.Language,
+            ContainingSymbolId: request.ContainingSymbolId,
+            Span: new SourceSpan(request.Fact.Span.StartByte, request.Fact.Span.EndByte));
+        return new TsClientCall(literal, IsTest: false, request.FilePath, request.Line);
+    }
+
+    /// <summary>
+    /// Carrier synthesis for an <c>http.client_request.v1</c> fact: <c>"&lt;client&gt;.&lt;lowerverb&gt;"</c>
+    /// (<c>fetch.get</c>, <c>axios.post</c>, …) so <c>RouteNormalizer.VerbFromCarrier</c> attests the verb.
+    /// Both <c>verb_source</c> values (<c>attested</c> and <c>default</c>) are verb-known per the verb-honesty
+    /// doctrine — the extractor stays silent when the method option is non-literal, so <c>default</c> genuinely
+    /// means the runtime verb is GET by spec.
+    /// </summary>
+    private static string ClientRequestCarrier(StructuralClientRequest request) =>
+        request.Client.ToLowerInvariant() + "." + request.Verb.ToLowerInvariant();
 
     private static TsClientCall ToClientCall(StructuralRouteReference reference)
     {

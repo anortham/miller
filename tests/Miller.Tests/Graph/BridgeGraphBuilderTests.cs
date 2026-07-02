@@ -1045,6 +1045,106 @@ public sealed class BridgeGraphBuilderTests
     }
 
     [Fact]
+    public void StructuralRouteFactAdapter_TryReadClientRequest_ReadsPathVerbAndClient()
+    {
+        var fact = Fact(
+            "sf-fetch-messages",
+            "http.client_request.v1",
+            "typescript",
+            "web/api.ts",
+            "sym-tsfn",
+            100,
+            new Dictionary<string, string>
+            {
+                ["client"] = "fetch",
+                ["framework"] = "fetch",
+                ["target_path"] = "/api/messages",
+                ["url_kind"] = "path",
+                ["verb"] = "GET",
+                ["verb_source"] = "default",
+            });
+
+        Assert.True(StructuralRouteFactAdapter.TryReadClientRequest(fact, new Dictionary<string, SymbolDetail>(), out var request));
+        Assert.Equal("/api/messages", request.RoutePath);
+        Assert.Equal("GET", request.Verb);
+        Assert.Equal("default", request.VerbSource);
+        Assert.Equal("fetch", request.Client);
+        Assert.Equal("sym-tsfn", request.ContainingSymbolId);
+        Assert.Equal("web/api.ts", request.FilePath);
+    }
+
+    [Theory]
+    [InlineData("relative")]
+    [InlineData("absolute")]
+    public void StructuralRouteFactAdapter_TryReadClientRequest_RejectsNonPathUrlKinds(string urlKind)
+    {
+        var fact = Fact(
+            "sf-fetch-external",
+            "http.client_request.v1",
+            "typescript",
+            "web/api.ts",
+            "sym-tsfn",
+            100,
+            new Dictionary<string, string>
+            {
+                ["client"] = "fetch",
+                ["target_path"] = "/api/messages",
+                ["url_kind"] = urlKind,
+                ["verb"] = "GET",
+                ["verb_source"] = "default",
+            });
+
+        Assert.False(StructuralRouteFactAdapter.TryReadClientRequest(fact, new Dictionary<string, SymbolDetail>(), out _));
+    }
+
+    [Fact]
+    public void StructuralRouteFactAdapter_TryReadRouteHandler_ReadsBracketRoutePathAndVerb()
+    {
+        var fact = Fact(
+            "sf-next-users-handler",
+            "nextjs.route_handler.v1",
+            "typescript",
+            "web/app/api/users/[id]/route.ts",
+            "sym-handler",
+            100,
+            new Dictionary<string, string>
+            {
+                ["framework"] = "nextjs",
+                ["router"] = "app",
+                ["route_path"] = "/api/users/[id]",
+                ["normalized_route_template"] = "/api/users/:id",
+                ["verb"] = "GET",
+                ["verb_source"] = "attested",
+            });
+
+        Assert.True(StructuralRouteFactAdapter.TryReadRouteHandler(fact, new Dictionary<string, SymbolDetail>(), out var handler));
+        Assert.Equal("/api/users/[id]", handler.RoutePath); // bracket route_path preferred over the colon form
+        Assert.Equal("GET", handler.Verb);
+        Assert.Equal("sym-handler", handler.ContainingSymbolId);
+    }
+
+    [Fact]
+    public void StructuralRouteFactAdapter_TryReadRouteHandler_SuffixlessNuxtRouteHasNullVerb()
+    {
+        var fact = Fact(
+            "sf-nuxt-notes-handler",
+            "nuxt.server_route.v1",
+            "typescript",
+            "server/api/notes.ts",
+            string.Empty,
+            100,
+            new Dictionary<string, string>
+            {
+                ["framework"] = "nuxt",
+                ["route_path"] = "/api/notes",
+            });
+
+        Assert.True(StructuralRouteFactAdapter.TryReadRouteHandler(fact, new Dictionary<string, SymbolDetail>(), out var handler));
+        Assert.Equal("/api/notes", handler.RoutePath);
+        Assert.Null(handler.Verb); // a suffix-less server route answers every method — never assumed GET
+    }
+
+    [Fact]
     public void StructuralRouteFactAdapter_IsTestFact_UsesContainerFlagAndTestPath()
     {
         var symbolsById = new Dictionary<string, SymbolDetail>
@@ -1781,6 +1881,382 @@ public sealed class BridgeGraphBuilderTests
             node.Display == "GET /keep-alive.html" &&
             node.FilePath == "Api/KeepAlive.cs" &&
             node.Line == 1);
+    }
+
+    // ---- 2.6.0 HTTP boundary facts: http.client_request.v1 + aspnet.attribute_route.v1 (Tasks 2–3) ----
+
+    [Fact]
+    public void StructuralFacts_AttestedPostFetch_HitsAttributeRoutePostEndpoint_High()
+    {
+        // A bare [HttpPost] (no route_template) inherits the controller's effective template.
+        var create = Method("sym-create", "Create", "Task<IResult> Create(CreateMessageRequest request)",
+            "MessagesController", "api/MessagesController.cs");
+        var tsFn = Type("sym-tsfn", "createMessage", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-httppost",
+                patternId: "aspnet.attribute_route.v1",
+                language: "csharp",
+                path: "api/MessagesController.cs",
+                containingSymbolId: "sym-create",
+                startLine: 14,
+                metadataJson: """{"attribute_kind":"http_method","verb":"POST","controller_route_template":"api/[controller]","effective_route_template":"/api/messages","route_tokens":["controller"]}"""),
+            StructuralFact(
+                factId: "fact-fetch-post",
+                patternId: "http.client_request.v1",
+                language: "typescript",
+                path: "web/api.ts",
+                containingSymbolId: "sym-tsfn",
+                startLine: 8,
+                metadataJson: """{"client":"fetch","framework":"fetch","target_path":"/api/messages","url_kind":"path","verb":"POST","verb_source":"attested"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [create, tsFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hit = Assert.Single(graph.Incident("sym-create"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.False(hit.IsVerbUnknown);
+        Assert.Equal("sym-tsfn", hit.Edge.SourceRef.SymbolId);
+        Assert.Contains(hit.Edge.Evidence, e => e.FilePath == "web/api.ts" && e.Line == 8);
+        Assert.Contains(hit.Edge.Evidence, e => e.FilePath == "api/MessagesController.cs" && e.Line == 14);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.clientRequests"]);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.attributeRoutes"]);
+    }
+
+    [Fact]
+    public void StructuralFacts_DefaultVerbFetch_IsVerbKnownGet_AndDoesNotMatchPostOnlyEndpoint()
+    {
+        var list = Method("sym-list", "List", "Task<IResult> List()", "MessagesController", "api/MessagesController.cs");
+        var create = Method("sym-create", "Create", "Task<IResult> Create(CreateMessageRequest request)",
+            "MessagesController", "api/MessagesController.cs");
+        var tsFn = Type("sym-tsfn", "loadMessages", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-httpget",
+                patternId: "aspnet.attribute_route.v1",
+                language: "csharp",
+                path: "api/MessagesController.cs",
+                containingSymbolId: "sym-list",
+                startLine: 10,
+                metadataJson: """{"attribute_kind":"http_method","verb":"GET","controller_route_template":"api/[controller]","effective_route_template":"/api/messages","route_tokens":["controller"]}"""),
+            StructuralFact(
+                factId: "fact-httppost",
+                patternId: "aspnet.attribute_route.v1",
+                language: "csharp",
+                path: "api/MessagesController.cs",
+                containingSymbolId: "sym-create",
+                startLine: 20,
+                metadataJson: """{"attribute_kind":"http_method","verb":"POST","controller_route_template":"api/[controller]","effective_route_template":"/api/messages","route_tokens":["controller"]}"""),
+            StructuralFact(
+                factId: "fact-bare-fetch",
+                patternId: "http.client_request.v1",
+                language: "typescript",
+                path: "web/api.ts",
+                containingSymbolId: "sym-tsfn",
+                startLine: 5,
+                metadataJson: """{"client":"fetch","framework":"fetch","target_path":"/api/messages","url_kind":"path","verb":"GET","verb_source":"default"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [list, create, tsFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        // verb_source=default is verb-known GET by fetch spec: High against the GET action, NO edge to the POST one.
+        var hit = Assert.Single(graph.Incident("sym-list"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.False(hit.IsVerbUnknown);
+        Assert.DoesNotContain(graph.Incident("sym-create"), e => e.Edge.Kind == BridgeKind.Hits);
+    }
+
+    [Theory]
+    [InlineData("absolute", "https://api.example.com/api/messages")]
+    [InlineData("relative", "api/messages")]
+    public void StructuralFacts_NonPathClientRequests_AreNotBridgeCandidates(string urlKind, string targetPath)
+    {
+        var list = Method("sym-list", "List", "Task<IResult> List()", "MessagesController", "api/MessagesController.cs");
+        var tsFn = Type("sym-tsfn", "loadMessages", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-httpget",
+                patternId: "aspnet.attribute_route.v1",
+                language: "csharp",
+                path: "api/MessagesController.cs",
+                containingSymbolId: "sym-list",
+                startLine: 10,
+                metadataJson: """{"attribute_kind":"http_method","verb":"GET","controller_route_template":"api/[controller]","effective_route_template":"/api/messages","route_tokens":["controller"]}"""),
+            StructuralFact(
+                factId: "fact-non-path",
+                patternId: "http.client_request.v1",
+                language: "typescript",
+                path: "web/api.ts",
+                containingSymbolId: "sym-tsfn",
+                startLine: 5,
+                metadataJson: $$"""{"client":"fetch","framework":"fetch","target_path":"{{targetPath}}","url_kind":"{{urlKind}}","verb":"GET","verb_source":"default"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [list, tsFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.DoesNotContain(graph.Incident("sym-list"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["dotnet-web.clientRequests"]);
+    }
+
+    [Fact]
+    public void StructuralFacts_ClientRequestFromTestPath_IsIgnored()
+    {
+        var list = Method("sym-list", "List", "Task<IResult> List()", "MessagesController", "api/MessagesController.cs");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-httpget",
+                patternId: "aspnet.attribute_route.v1",
+                language: "csharp",
+                path: "api/MessagesController.cs",
+                containingSymbolId: "sym-list",
+                startLine: 10,
+                metadataJson: """{"attribute_kind":"http_method","verb":"GET","controller_route_template":"api/[controller]","effective_route_template":"/api/messages","route_tokens":["controller"]}"""),
+            StructuralFact(
+                factId: "fact-test-fetch",
+                patternId: "http.client_request.v1",
+                language: "typescript",
+                path: "web/__tests__/api.test.ts",
+                containingSymbolId: string.Empty,
+                startLine: 5,
+                metadataJson: """{"client":"fetch","framework":"fetch","target_path":"/api/messages","url_kind":"path","verb":"GET","verb_source":"default"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [list], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.DoesNotContain(graph.Incident("sym-list"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["dotnet-web.clientRequests"]);
+    }
+
+    [Fact]
+    public void StructuralFacts_AttributeRouteEffectiveTemplate_MatchesCanonicalClientCall()
+    {
+        var getById = Method("sym-get", "GetById", "Task<IResult> GetById(int id)",
+            "UsersController", "api/UsersController.cs");
+        var tsFn = Type("sym-tsfn", "loadUser", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-httpget-id",
+                patternId: "aspnet.attribute_route.v1",
+                language: "csharp",
+                path: "api/UsersController.cs",
+                containingSymbolId: "sym-get",
+                startLine: 18,
+                metadataJson: """{"attribute_kind":"http_method","verb":"GET","route_template":"{id}","controller_route_template":"api/[controller]","effective_route_template":"/api/users/{id}","route_tokens":["controller"]}"""),
+            StructuralFact(
+                factId: "fact-axios-get",
+                patternId: "http.client_request.v1",
+                language: "typescript",
+                path: "web/api.ts",
+                containingSymbolId: "sym-tsfn",
+                startLine: 6,
+                metadataJson: """{"client":"axios","framework":"axios","import_source":"axios","target_path":"/api/users/${userId}","url_kind":"path","verb":"GET","verb_source":"attested"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [getById, tsFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        // /api/users/${userId} and /api/users/{id} both canonicalize to api/users/{} — verb-known High.
+        var hit = Assert.Single(graph.Incident("sym-get"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.False(hit.IsVerbUnknown);
+    }
+
+    [Fact]
+    public void StructuralFacts_ControllerRouteFact_ProducesNoEndpoint()
+    {
+        var controller = Type("sym-users-controller", "UsersController", "class", "Api.Controllers", "api/UsersController.cs");
+        var tsFn = Type("sym-tsfn", "loadUsers", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-controller-route",
+                patternId: "aspnet.attribute_route.v1",
+                language: "csharp",
+                path: "api/UsersController.cs",
+                containingSymbolId: "sym-users-controller",
+                startLine: 8,
+                metadataJson: """{"attribute_kind":"controller_route","route_template":"api/[controller]","route_tokens":["controller"],"effective_route_template":"/api/users"}"""),
+            StructuralFact(
+                factId: "fact-fetch-users",
+                patternId: "http.client_request.v1",
+                language: "typescript",
+                path: "web/api.ts",
+                containingSymbolId: "sym-tsfn",
+                startLine: 5,
+                metadataJson: """{"client":"fetch","framework":"fetch","target_path":"/api/users","url_kind":"path","verb":"GET","verb_source":"default"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [controller, tsFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        // A class-level prefix fact is never an endpoint: no backend evidence, provider inactive, no edges.
+        Assert.DoesNotContain(graph.Edges, e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["dotnet-web.attributeRoutes"]);
+        Assert.DoesNotContain("dotnet-web", graph.CapabilityReport.ActiveProviders);
+    }
+
+    [Fact]
+    public void StructuralFacts_MethodRouteFactWithoutVerb_IsCountedInEvidenceButNotAnEndpoint()
+    {
+        // RouteBridge.TryBuildHitsEdge yields NO edge for a verb-known client against a verb-unknown endpoint
+        // (verified 2026-07-01), so method [Route] facts are evidence-only until that arm learns an honest Medium.
+        var legacy = Method("sym-legacy", "Legacy", "Task<IResult> Legacy()", "UsersController", "api/UsersController.cs");
+        var tsFn = Type("sym-tsfn", "loadLegacy", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-method-route",
+                patternId: "aspnet.attribute_route.v1",
+                language: "csharp",
+                path: "api/UsersController.cs",
+                containingSymbolId: "sym-legacy",
+                startLine: 30,
+                metadataJson: """{"attribute_kind":"route","route_template":"legacy","controller_route_template":"api/[controller]","effective_route_template":"/api/users/legacy","route_tokens":["controller"]}"""),
+            StructuralFact(
+                factId: "fact-fetch-legacy",
+                patternId: "http.client_request.v1",
+                language: "typescript",
+                path: "web/api.ts",
+                containingSymbolId: "sym-tsfn",
+                startLine: 5,
+                metadataJson: """{"client":"fetch","framework":"fetch","target_path":"/api/users/legacy","url_kind":"path","verb":"GET","verb_source":"default"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [legacy, tsFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.attributeRoutes"]);
+        Assert.DoesNotContain(graph.Edges, e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.DoesNotContain("dotnet-web", graph.CapabilityReport.ActiveProviders);
+    }
+
+    [Fact]
+    public void StructuralFacts_AnnotationAndStructuralAttributeEndpoint_YieldOneEndpointAndOneEdge()
+    {
+        var classSym = Type("sym-class", "UsersController", "class", "Api.Controllers", "api/UsersController.cs");
+        var getById = Method("sym-get", "GetById", "Task<IResult> GetById(int id)", "UsersController", "api/UsersController.cs");
+        var tsFn = Type("sym-tsfn", "loadUser", "function", file: "web/api.ts");
+
+        var annotations = new List<SymbolAnnotation>
+        {
+            new(SymbolId: "sym-class", Ordinal: 0, Annotation: "Route", AnnotationKey: "route",
+                RawText: "Route(\"api/[controller]\")", Carrier: "Route"),
+            new(SymbolId: "sym-get", Ordinal: 0, Annotation: "HttpGet", AnnotationKey: "httpget",
+                RawText: "HttpGet(\"{id}\")", Carrier: "HttpGet"),
+        };
+
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-httpget-id",
+                patternId: "aspnet.attribute_route.v1",
+                language: "csharp",
+                path: "api/UsersController.cs",
+                containingSymbolId: "sym-get",
+                startLine: 18,
+                metadataJson: """{"attribute_kind":"http_method","verb":"GET","route_template":"{id}","controller_route_template":"api/[controller]","effective_route_template":"/api/users/{id}","route_tokens":["controller"]}"""),
+            StructuralFact(
+                factId: "fact-fetch-user",
+                patternId: "http.client_request.v1",
+                language: "typescript",
+                path: "web/api.ts",
+                containingSymbolId: "sym-tsfn",
+                startLine: 6,
+                metadataJson: """{"client":"fetch","framework":"fetch","target_path":"/api/users/${id}","url_kind":"path","verb":"GET","verb_source":"attested"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [classSym, getById, tsFn], typeArguments: [], literals: [], annotations: annotations,
+            dbSetProperties: [], structuralFacts: facts);
+
+        // The annotation-derived endpoint and the structural attribute-route fact describe ONE endpoint
+        // (same method symbol + verb): structural wins, no duplicate endpoint, one Hits edge.
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.endpoints"]);
+        var hit = Assert.Single(graph.Incident("sym-get"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+    }
+
+    [Fact]
+    public void StructuralFacts_LiteralAndStructuralClientRequest_CollapseToTheHigherBandEdge()
+    {
+        var list = Method("sym-list", "List", "Task<IResult> List()", "UsersController", "api/UsersController.cs");
+        var tsFn = Type("sym-tsfn", "loadUsers", "function", file: "web/api.ts");
+
+        var annotations = new List<SymbolAnnotation>
+        {
+            new(SymbolId: "sym-list", Ordinal: 0, Annotation: "HttpGet", AnnotationKey: "httpget",
+                RawText: "HttpGet(\"/api/users\")", Carrier: "HttpGet"),
+        };
+
+        // The SAME call site as a legacy url literal (carrier fetch = verb-unknown Medium) and as a 2.6.0
+        // structural client request (fetch spec-default GET = verb-known High).
+        var literal = MakeLiteral("/api/users", kind: "url", language: "typescript",
+            carrier: "fetch", containingSymbolId: "sym-tsfn", spanStart: 80);
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-fetch-users",
+                patternId: "http.client_request.v1",
+                language: "typescript",
+                path: "web/api.ts",
+                containingSymbolId: "sym-tsfn",
+                startLine: 8,
+                metadataJson: """{"client":"fetch","framework":"fetch","target_path":"/api/users","url_kind":"path","verb":"GET","verb_source":"default"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [list, tsFn], typeArguments: [], literals: [literal], annotations: annotations,
+            dbSetProperties: [], structuralFacts: facts);
+
+        // One edge per (client, endpoint) pair — and the HIGHER band survives the collapse.
+        var hit = Assert.Single(graph.Incident("sym-list"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.False(hit.IsVerbUnknown);
+    }
+
+    [Fact]
+    public void StructuralFacts_ClientRequestsAlone_LeaveDotnetWebInactive()
+    {
+        var tsFn = Type("sym-tsfn", "loadMessages", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-bare-fetch",
+                patternId: "http.client_request.v1",
+                language: "typescript",
+                path: "web/api.ts",
+                containingSymbolId: "sym-tsfn",
+                startLine: 5,
+                metadataJson: """{"client":"fetch","framework":"fetch","target_path":"/api/messages","url_kind":"path","verb":"GET","verb_source":"default"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [tsFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        // The active gate stays backend-evidence-based: a pure-frontend repo must not activate dotnet-web.
+        Assert.DoesNotContain("dotnet-web", graph.CapabilityReport.ActiveProviders);
+        Assert.Contains(graph.CapabilityReport.SkippedProviders, skipped =>
+            skipped.ProviderId == "dotnet-web" &&
+            skipped.Reason.Contains("no dotnet-web backend evidence", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.clientRequests"]);
+        Assert.Empty(graph.Edges);
     }
 
     [Fact]

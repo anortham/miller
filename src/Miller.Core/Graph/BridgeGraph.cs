@@ -93,8 +93,10 @@ public sealed class BridgeGraph
     /// Build a bridge graph from <paramref name="scoredEdges"/> and a <paramref name="nodes"/> lookup. Each edge is
     /// registered on both of its endpoint node ids (resolved via <see cref="NodeIdOf"/>); an edge whose endpoints are
     /// not both present in <paramref name="nodes"/> is dropped (bounding the graph to known nodes), self-loops are
-    /// dropped, and an exact-duplicate scored edge on a node is collapsed. Neighbour edge lists are sorted for stable
-    /// traversal. An empty edge/node set yields an empty graph.
+    /// dropped, and duplicate edges for the same correspondence collapse to the BEST-scored one (higher band, then
+    /// higher score; ties keep the first-seen edge) — so a call site observed both as a legacy url literal (Medium)
+    /// and as a structural client-request fact (High) surfaces once at High. Neighbour edge lists are sorted for
+    /// stable traversal. An empty edge/node set yields an empty graph.
     /// </summary>
     /// <param name="scoredEdges">The surviving scored bridge edges (post-scorer; nulls already dropped by the caller).</param>
     /// <param name="nodes">The node lookup: node id → <see cref="BridgeNode"/> (built by the caller for every endpoint).</param>
@@ -107,7 +109,9 @@ public sealed class BridgeGraph
         ArgumentNullException.ThrowIfNull(scoredEdges);
         ArgumentNullException.ThrowIfNull(nodes);
 
-        // Per-node deduped edge set; dedupe by a stable edge signature so the same correspondence is not double-counted.
+        // Dedupe by a stable edge signature so the same correspondence is not double-counted. When two scored
+        // edges collapse to one signature (overlapping evidence sources for the same call site), the BEST-scored
+        // edge survives — selection first, then the per-node incident lists are built from the survivors.
         var byNode = new Dictionary<string, Dictionary<string, ScoredEdge>>(StringComparer.Ordinal);
         var uniqueEdges = new Dictionary<string, ScoredEdge>(StringComparer.Ordinal);
 
@@ -124,7 +128,14 @@ public sealed class BridgeGraph
                 continue; // endpoint not in the node lookup — bound the graph to known nodes
 
             var signature = EdgeSignature(edge, sourceId, targetId);
-            uniqueEdges.TryAdd(signature, edge);
+            if (!uniqueEdges.TryGetValue(signature, out var existing) || IsBetterEdge(edge, existing))
+                uniqueEdges[signature] = edge;
+        }
+
+        foreach (var (signature, edge) in uniqueEdges)
+        {
+            var sourceId = NodeIdOf(edge.Edge.SourceRef, edge.Edge.Kind, EndpointSide.Source)!;
+            var targetId = NodeIdOf(edge.Edge.TargetRef, edge.Edge.Kind, EndpointSide.Target)!;
             AddIncident(byNode, sourceId, signature, edge);
             AddIncident(byNode, targetId, signature, edge);
         }
@@ -252,6 +263,18 @@ public sealed class BridgeGraph
         BridgeKind.NameMatch => side == EndpointSide.Source ? BridgeNodeKind.TsType : BridgeNodeKind.CsDto,
         _ => BridgeNodeKind.CsDto,
     };
+
+    /// <summary>
+    /// True when <paramref name="candidate"/> should replace <paramref name="existing"/> for the same edge
+    /// signature: a higher confidence band wins (High over Medium), then a higher score within the band; ties keep
+    /// the existing (first-seen) edge so the result stays deterministic for genuinely identical duplicates.
+    /// </summary>
+    private static bool IsBetterEdge(ScoredEdge candidate, ScoredEdge existing)
+    {
+        if (candidate.Band != existing.Band)
+            return candidate.Band == ConfidenceBand.High;
+        return candidate.Score > existing.Score;
+    }
 
     private static void AddIncident(
         Dictionary<string, Dictionary<string, ScoredEdge>> byNode, string nodeId, string signature, ScoredEdge edge)
