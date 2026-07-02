@@ -199,6 +199,90 @@ public sealed class WorkspaceRenderTests
     }
 
     [Fact]
+    public void Onboarding_Compact_CollapsesUnresolvedHotTargetsIntoOneAggregateLine()
+    {
+        WorkspaceOnboardingFacts facts = WorkspaceOnboardingFacts.Create(
+            Facts(),
+            TelemetryOnboardingFacts.Unavailable("missing_telemetry_db"),
+            [
+                new RecoveredTargetHash(
+                    "symbol_name_hash", SymbolId: "sym-1", Name: "GetUser", Kind: "method",
+                    Path: "auth/UserService.cs", StartLine: 2, Calls: 5, CandidateCount: 1),
+                new RecoveredTargetHash(
+                    "unresolved_hash", SymbolId: null, Name: null, Kind: null,
+                    Path: null, StartLine: null, Calls: 3, CandidateCount: 0),
+                new RecoveredTargetHash(
+                    "unresolved_hash", SymbolId: null, Name: null, Kind: null,
+                    Path: null, StartLine: null, Calls: 2, CandidateCount: 0),
+            ]);
+
+        string text = WorkspaceRender.Onboarding(facts, json: false);
+
+        // Resolved rows still render individually.
+        Assert.Contains("- GetUser  auth/UserService.cs", text);
+        // All unresolved rows collapse into exactly one aggregate line (2 rows, 3+2 calls).
+        Assert.Contains("- unresolved repeated targets: 2 (5 calls total)", text);
+        // The per-row unresolved label is never spent on its own line.
+        Assert.DoesNotContain("- unresolved repeated target  unresolved_hash", text);
+        Assert.Equal(1, CountOccurrences(text, "unresolved repeated targets:"));
+    }
+
+    [Fact]
+    public void Onboarding_Compact_AllUnresolvedHotTargets_RendersOnlyAggregateLine()
+    {
+        WorkspaceOnboardingFacts facts = WorkspaceOnboardingFacts.Create(
+            Facts(),
+            TelemetryOnboardingFacts.Unavailable("missing_telemetry_db"),
+            [
+                new RecoveredTargetHash(
+                    "unresolved_hash", null, null, null, null, null, Calls: 4, CandidateCount: 0),
+                new RecoveredTargetHash(
+                    "unresolved_hash", null, null, null, null, null, Calls: 1, CandidateCount: 0),
+                new RecoveredTargetHash(
+                    "unresolved_hash", null, null, null, null, null, Calls: 1, CandidateCount: 0),
+            ]);
+
+        string text = WorkspaceRender.Onboarding(facts, json: false);
+
+        Assert.Contains("hot targets:", text);
+        Assert.Contains("- unresolved repeated targets: 3 (6 calls total)", text);
+        Assert.Equal(1, CountOccurrences(text, "unresolved repeated target"));
+    }
+
+    [Fact]
+    public void Onboarding_Json_KeepsUnresolvedHotTargetsPerRow()
+    {
+        WorkspaceOnboardingFacts facts = WorkspaceOnboardingFacts.Create(
+            Facts(),
+            TelemetryOnboardingFacts.Unavailable("missing_telemetry_db"),
+            [
+                new RecoveredTargetHash(
+                    "symbol_name_hash", SymbolId: "sym-1", Name: "GetUser", Kind: "method",
+                    Path: "auth/UserService.cs", StartLine: 2, Calls: 5, CandidateCount: 1),
+                new RecoveredTargetHash(
+                    "unresolved_hash", null, null, null, null, null, Calls: 3, CandidateCount: 0),
+                new RecoveredTargetHash(
+                    "unresolved_hash", null, null, null, null, null, Calls: 2, CandidateCount: 0),
+            ]);
+
+        using var doc = JsonDocument.Parse(WorkspaceRender.Onboarding(facts, json: true));
+
+        JsonElement[] targets = doc.RootElement.GetProperty("hot_targets").EnumerateArray().ToArray();
+        Assert.Equal(3, targets.Length);
+        Assert.Equal(2, targets.Count(t => t.GetProperty("confidence").GetString() == "unresolved_hash"));
+    }
+
+    private static int CountOccurrences(string haystack, string needle)
+    {
+        int count = 0;
+        for (int i = haystack.IndexOf(needle, StringComparison.Ordinal);
+             i >= 0;
+             i = haystack.IndexOf(needle, i + needle.Length, StringComparison.Ordinal))
+            count++;
+        return count;
+    }
+
+    [Fact]
     public void Onboarding_Json_RendersStableSections()
     {
         using var doc = JsonDocument.Parse(WorkspaceRender.Onboarding(OnboardingFacts(), json: true));

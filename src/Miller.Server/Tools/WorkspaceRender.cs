@@ -1141,7 +1141,12 @@ public static class WorkspaceRender
         if (facts.HotTargets.Count > 0)
         {
             sb.Append("hot targets:\n");
-            foreach (RecoveredTargetHash target in facts.HotTargets.Take(5))
+            // Resolved targets carry a per-row label worth a line; unresolved hashes convey nothing
+            // individually, so collapse however many there are into one aggregate line.
+            List<RecoveredTargetHash> resolved = facts.HotTargets.Where(static t => !IsUnresolvedTarget(t)).ToList();
+            List<RecoveredTargetHash> unresolved = facts.HotTargets.Where(static t => IsUnresolvedTarget(t)).ToList();
+
+            foreach (RecoveredTargetHash target in resolved.Take(5))
                 sb.Append("- ").Append(TargetLabel(target)).Append("  ")
                     .Append(target.Confidence).Append("  calls ")
                     .Append(target.Calls.ToString(CultureInfo.InvariantCulture))
@@ -1149,6 +1154,16 @@ public static class WorkspaceRender
                         ? $"  candidates {target.CandidateCount.ToString(CultureInfo.InvariantCulture)}"
                         : string.Empty)
                     .Append('\n');
+
+            if (unresolved.Count > 0)
+            {
+                long unresolvedCalls = unresolved.Sum(static t => t.Calls);
+                sb.Append("- unresolved repeated targets: ")
+                    .Append(unresolved.Count.ToString(CultureInfo.InvariantCulture))
+                    .Append(" (")
+                    .Append(unresolvedCalls.ToString(CultureInfo.InvariantCulture))
+                    .Append(" calls total)\n");
+            }
         }
 
         if (facts.Telemetry.CommonMisses.Count > 0)
@@ -1348,6 +1363,11 @@ public static class WorkspaceRender
             return target.Name;
         return "unresolved repeated target";
     }
+
+    // True exactly when TargetLabel would fall through to the placeholder "unresolved repeated target"
+    // (both name and path unknown) — the rows worth collapsing into a single aggregate onboarding line.
+    private static bool IsUnresolvedTarget(RecoveredTargetHash target) =>
+        target.Path is null && target.Name is null;
 
     private static string OnboardingLabel(string tool, string? op) =>
         string.IsNullOrWhiteSpace(op) ? tool : tool + ":" + op;
