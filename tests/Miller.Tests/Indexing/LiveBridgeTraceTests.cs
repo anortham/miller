@@ -509,6 +509,363 @@ public sealed class LiveBridgeTraceTests
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────────────────────
+    // TASK 7 — backend-http boundary language-parity gate (julie-extract 2.7.0). One grouped polyglot fixture
+    // per scenario, each extracted LIVE through the real binary, proving Miller CONSUMES every new route/mount
+    // family and every new client language end-to-end (fact emission → backend-http provider → Hits edge → band
+    // → rendered trace). Six behavioral group tests plus one aggregation test that unions per-family emission and
+    // per-client-language emission across ALL group workspaces.
+    //
+    // SCOPE OF THE PARITY CLAIM (state it, don't imply): these tests live-verify Miller's per-family CONSUMPTION
+    // and per-client-language CONSUMPTION on REPRESENTATIVE fixtures — one idiomatic shape per family, one client
+    // per language. The full per-language×per-family matrix (express in js AND jsx AND ts AND tsx, spring across
+    // annotation shapes, etc.) is owned UPSTREAM by julie-extractors' capability-matrix and golden gates; Miller
+    // does not re-prove extractor coverage. It proves that each of the 16 families and each of the 7 client
+    // languages, once emitted, actually bridges through the backend-http/dotnet-web providers Miller ships.
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void BackendHttpJsTsGroup_ExpressMountFastifyVueClient_LiveBridges()
+    {
+        string binary = ScaleTestSupport.RequireJulieServer();
+        using var work = new TempWorkspace();
+        WriteJsTsBackendGroup(work.Repo);
+
+        var index = ExtractAndLoad(binary, work);
+        var expressPatterns = StructuralPatternIds(work.Db, "express.%");
+        Assert.Contains("express.route.v1", expressPatterns);
+        Assert.Contains("express.router_mount.v1", expressPatterns);
+        Assert.Contains("fastify.route.v1", StructuralPatternIds(work.Db, "fastify.%"));
+        Assert.Contains("http.client_request.v1", StructuralPatternIds(work.Db, "http.%"));
+
+        var graph = index.BridgeGraph;
+        Assert.Contains("backend-http", graph.CapabilityReport.ActiveProviders);
+
+        // Direct express route (server/direct.ts, app.get) — axios.get + fetch clients are verb-known GET ⇒ High.
+        var directHits = HitsInto(graph, "server/direct.ts");
+        Assert.NotEmpty(directHits);
+        Assert.All(directHits, h => Assert.Equal(ConfidenceBand.High, h.Band));
+        Assert.All(directHits, h => Assert.False(h.IsVerbUnknown));
+
+        // Cross-file mounted express route: app.use("/users", usersRouter) composes the mount prefix onto
+        // usersRouter.ts's router.get("/:id") ⇒ /users/:id, so client /users/1 (axios GET) bridges High. The
+        // composed handler keeps the route fact's file, so the Hits edge targets server/usersRouter.ts.
+        Assert.True(graph.CapabilityReport.EvidenceCounts["backend-http.composedRoutes"] >= 1,
+            "the express app.use mount must compose at least one /users/:id route onto usersRouter.ts");
+        var mountedHits = HitsInto(graph, "server/usersRouter.ts");
+        Assert.NotEmpty(mountedHits);
+        Assert.All(mountedHits, h => Assert.Equal(ConfidenceBand.High, h.Band));
+
+        // Fastify shorthand route (server/fast.ts) — client /things/1 (axios GET) ⇒ High.
+        var fastifyHits = HitsInto(graph, "server/fast.ts");
+        Assert.NotEmpty(fastifyHits);
+        Assert.All(fastifyHits, h => Assert.Equal(ConfidenceBand.High, h.Band));
+
+        // The Vue SFC's <script> client request emits http.client_request.v1 with language=vue and bridges the
+        // same composed /users/:id route — proving vue is a first-class backend-http client language.
+        Assert.Contains("vue", StructuralFactLanguages(work.Db, "http.client_request.v1"));
+        Assert.Contains(mountedHits, h => string.Equals(h.Edge.SourceRef.FilePath, "web/Panel.vue", StringComparison.Ordinal));
+
+        string rendered = TraceTool.Run(
+            index, new SmartTargetResolver(index), target: "loadUser", mode: "bridge", to: null, depth: 2, limit: 20,
+            fullFormat: false, out int emitted, out _);
+        Assert.True(emitted > 0);
+        Assert.Contains("--route-->", rendered);
+        Assert.Contains("(High)", rendered);
+
+        _output.WriteLine("BACKEND-HTTP JS/TS GROUP — express direct + cross-file mount + fastify + vue client verified:");
+        _output.WriteLine($"  Patterns: {string.Join(", ", expressPatterns.Order(StringComparer.Ordinal))}");
+        _output.WriteLine($"  composedRoutes={graph.CapabilityReport.EvidenceCounts["backend-http.composedRoutes"]} directHits={directHits.Count} mountedHits={mountedHits.Count} fastifyHits={fastifyHits.Count}");
+        _output.WriteLine(rendered);
+    }
+
+    [Fact]
+    public void BackendHttpPythonGroup_FastApiFlaskDjango_LiveBridges()
+    {
+        string binary = ScaleTestSupport.RequireJulieServer();
+        using var work = new TempWorkspace();
+        WritePythonBackendGroup(work.Repo);
+
+        var index = ExtractAndLoad(binary, work);
+        Assert.Contains("fastapi.route.v1", StructuralPatternIds(work.Db, "fastapi.%"));
+        Assert.Contains("fastapi.include_router.v1", StructuralPatternIds(work.Db, "fastapi.%"));
+        Assert.Contains("flask.route.v1", StructuralPatternIds(work.Db, "flask.%"));
+        Assert.Contains("flask.blueprint_registration.v1", StructuralPatternIds(work.Db, "flask.%"));
+        Assert.Contains("django.url_pattern.v1", StructuralPatternIds(work.Db, "django.%"));
+        Assert.Contains("django.url_include.v1", StructuralPatternIds(work.Db, "django.%"));
+        Assert.Contains("http.client_request.v1", StructuralPatternIds(work.Db, "http.%"));
+
+        var graph = index.BridgeGraph;
+        Assert.Contains("backend-http", graph.CapabilityReport.ActiveProviders);
+
+        // FastAPI: @router.get with APIRouter(prefix="/api") ⇒ effective /api/users/{user_id}; client /api/users/1
+        // (requests.get GET) bridges High into the decorator's file.
+        var fastapiHits = HitsInto(graph, "app/main.py");
+        Assert.NotEmpty(fastapiHits);
+        Assert.All(fastapiHits, h => Assert.Equal(ConfidenceBand.High, h.Band));
+        Assert.All(fastapiHits, h => Assert.False(h.IsVerbUnknown));
+
+        // Flask blueprint composed cross-file: register_blueprint(bp, url_prefix="/shop") composes /shop onto
+        // users_bp.py's @bp.get("/accounts/<int:account_id>") ⇒ /shop/accounts/:account_id; client /shop/accounts/1
+        // (httpx GET) bridges composed-High into the blueprint route's file.
+        Assert.True(graph.CapabilityReport.EvidenceCounts["backend-http.composedRoutes"] >= 1,
+            "the flask register_blueprint mount must compose at least one /shop/accounts route onto users_bp.py");
+        var flaskHits = HitsInto(graph, "app/users_bp.py");
+        Assert.NotEmpty(flaskHits);
+        Assert.All(flaskHits, h => Assert.Equal(ConfidenceBand.High, h.Band));
+
+        // Django URLconf path() has no verb at the URLconf level ⇒ every django route-only match is honest Medium
+        // verb_unknown. Client /users/1 matches path("users/<int:pk>/") in app/urls.py.
+        var djangoHits = HitsInto(graph, "app/urls.py");
+        Assert.NotEmpty(djangoHits);
+        Assert.All(djangoHits, h => Assert.Equal(ConfidenceBand.Medium, h.Band));
+        Assert.All(djangoHits, h => Assert.True(h.IsVerbUnknown));
+
+        string rendered = TraceTool.Run(
+            index, new SmartTargetResolver(index), target: "call_clients", mode: "bridge", to: null, depth: 2, limit: 20,
+            fullFormat: false, out int emitted, out _);
+        Assert.True(emitted > 0);
+        Assert.Contains("--route-->", rendered);
+        Assert.Contains("(High)", rendered);
+        Assert.Contains("(Medium)", rendered);
+        Assert.Contains("[verb-unknown]", rendered);
+
+        _output.WriteLine("BACKEND-HTTP PYTHON GROUP — fastapi High + flask composed High + django Medium verb_unknown verified:");
+        _output.WriteLine($"  fastapiHits={fastapiHits.Count} flaskHits(composed)={flaskHits.Count} djangoHits(medium)={djangoHits.Count}");
+        _output.WriteLine(rendered);
+    }
+
+    [Fact]
+    public void BackendHttpGoGroup_NetHttpGinEcho_LiveBridges()
+    {
+        string binary = ScaleTestSupport.RequireJulieServer();
+        using var work = new TempWorkspace();
+        WriteGoBackendGroup(work.Repo);
+
+        var index = ExtractAndLoad(binary, work);
+        Assert.Contains("go.net_http.route.v1", StructuralPatternIds(work.Db, "go.%"));
+        Assert.Contains("gin.route.v1", StructuralPatternIds(work.Db, "gin.%"));
+        Assert.Contains("echo.route.v1", StructuralPatternIds(work.Db, "echo.%"));
+        Assert.Contains("http.client_request.v1", StructuralPatternIds(work.Db, "http.%"));
+
+        var graph = index.BridgeGraph;
+        Assert.Contains("backend-http", graph.CapabilityReport.ActiveProviders);
+
+        // Everything lives in main.go, so discriminate the two client edges by band, not file:
+        //   net/http Go-1.22 pattern "GET /api/items/{id}" attests GET ⇒ http.Get("/api/items/1") is verb-matched High.
+        //   gin r.Any("/ping") is verbless ⇒ http.Get("/ping") is a route-only Medium verb_unknown.
+        var hits = HitsInto(graph, "main.go");
+        Assert.Contains(hits, h => h.Band == ConfidenceBand.High && !h.IsVerbUnknown);
+        Assert.Contains(hits, h => h.Band == ConfidenceBand.Medium && h.IsVerbUnknown);
+
+        string rendered = TraceTool.Run(
+            index, new SmartTargetResolver(index), target: "clients", mode: "bridge", to: null, depth: 2, limit: 20,
+            fullFormat: false, out int emitted, out _);
+        Assert.True(emitted > 0);
+        Assert.Contains("--route-->", rendered);
+        Assert.Contains("(High)", rendered);
+        Assert.Contains("(Medium)", rendered);
+        Assert.Contains("[verb-unknown]", rendered);
+
+        _output.WriteLine("BACKEND-HTTP GO GROUP — net/http verb-attested High + gin Any Medium verb_unknown (echo emits) verified:");
+        _output.WriteLine($"  hits={hits.Count} bands={string.Join("/", hits.Select(h => $"{h.Band}{(h.IsVerbUnknown ? "!" : string.Empty)}"))}");
+        _output.WriteLine(rendered);
+    }
+
+    [Fact]
+    public void BackendHttpJavaGroup_SpringRequestMapping_LiveBridges()
+    {
+        string binary = ScaleTestSupport.RequireJulieServer();
+        using var work = new TempWorkspace();
+        WriteJavaBackendGroup(work.Repo);
+
+        var index = ExtractAndLoad(binary, work);
+        Assert.Contains("spring.request_mapping.v1", StructuralPatternIds(work.Db, "spring.%"));
+        Assert.Contains("http.client_request.v1", StructuralPatternIds(work.Db, "http.%"));
+
+        var graph = index.BridgeGraph;
+        Assert.Contains("backend-http", graph.CapabilityReport.ActiveProviders);
+
+        // Both controllers live in UserController.java; discriminate by band:
+        //   @RequestMapping("/api") class + @GetMapping("/users/{id}") ⇒ effective GET /api/users/:id; the
+        //   HttpRequest builder client to /api/users/1 is verb-matched High.
+        //   method-less @RequestMapping("/legacy") is verbless ⇒ client /legacy is route-only Medium verb_unknown.
+        var hits = HitsInto(graph, "src/UserController.java");
+        Assert.Contains(hits, h => h.Band == ConfidenceBand.High && !h.IsVerbUnknown);
+        Assert.Contains(hits, h => h.Band == ConfidenceBand.Medium && h.IsVerbUnknown);
+
+        string rendered = TraceTool.Run(
+            index, new SmartTargetResolver(index), target: "callClient", mode: "bridge", to: null, depth: 2, limit: 20,
+            fullFormat: false, out int emitted, out _);
+        Assert.True(emitted > 0);
+        Assert.Contains("--route-->", rendered);
+        Assert.Contains("(High)", rendered);
+        Assert.Contains("(Medium)", rendered);
+        Assert.Contains("[verb-unknown]", rendered);
+
+        _output.WriteLine("BACKEND-HTTP JAVA GROUP — spring @GetMapping High + method-less @RequestMapping Medium verb_unknown verified:");
+        _output.WriteLine($"  hits={hits.Count} bands={string.Join("/", hits.Select(h => $"{h.Band}{(h.IsVerbUnknown ? "!" : string.Empty)}"))}");
+        _output.WriteLine(rendered);
+    }
+
+    [Fact]
+    public void BackendHttpRubyGroup_RailsDslResourceMount_LiveBridges()
+    {
+        string binary = ScaleTestSupport.RequireJulieServer();
+        using var work = new TempWorkspace();
+        WriteRubyBackendGroup(work.Repo);
+
+        var index = ExtractAndLoad(binary, work);
+        Assert.Contains("rails.route.v1", StructuralPatternIds(work.Db, "rails.%"));
+        Assert.Contains("rails.resource_route.v1", StructuralPatternIds(work.Db, "rails.%"));
+        Assert.Contains("rails.mount.v1", StructuralPatternIds(work.Db, "rails.%"));
+        Assert.Contains("http.client_request.v1", StructuralPatternIds(work.Db, "http.%"));
+
+        var graph = index.BridgeGraph;
+        Assert.Contains("backend-http", graph.CapabilityReport.ActiveProviders);
+
+        // rails.mount.v1 (mount Sidekiq::Web => "/jobs") mounts a Rack app whose internal routes never reach the
+        // fact stream — it is evidence-only and must be counted in backend-http.mounts, never composed/bridged.
+        Assert.True(graph.CapabilityReport.EvidenceCounts["backend-http.mounts"] >= 1,
+            "the rails mount must be counted in backend-http.mounts evidence");
+        // resources :users must expand to concrete Rails routes on Miller's side (the julie handoff's job).
+        Assert.True(graph.CapabilityReport.EvidenceCounts["backend-http.expandedResourceRoutes"] >= 1,
+            "resources :users must expand into concrete verb-known route handlers");
+
+        var hits = HitsInto(graph, "config/routes.rb");
+        Assert.NotEmpty(hits);
+
+        // DSL verb route: get "/health", to: "health#show" ⇒ Net::HTTP GET /health is verb-matched High.
+        Assert.Contains(hits, h => h.Band == ConfidenceBand.High && !h.IsVerbUnknown);
+
+        // Expanded-resource route bound to the controller method SYMBOL: resources :users expands show ⇒
+        // GET /users/:id, and Miller rebinds the endpoint to UsersController#show (unambiguous method match).
+        // Client GET /users/1 therefore lands on the show method symbol, not a synthesized endpoint node.
+        var showMethodIds = SymbolIdsInFile(index, "show", "app/controllers/users_controller.rb");
+        var showHit = Assert.Single(hits, h =>
+            !string.IsNullOrEmpty(h.Edge.TargetRef.SymbolId) && showMethodIds.Contains(h.Edge.TargetRef.SymbolId!));
+        Assert.Equal(ConfidenceBand.High, showHit.Band);
+
+        string rendered = TraceTool.Run(
+            index, new SmartTargetResolver(index), target: "call_clients", mode: "bridge", to: null, depth: 2, limit: 20,
+            fullFormat: false, out int emitted, out _);
+        Assert.True(emitted > 0);
+        Assert.Contains("--route-->", rendered);
+        Assert.Contains("(High)", rendered);
+
+        _output.WriteLine("BACKEND-HTTP RUBY GROUP — rails DSL High + expanded-resource High bound to UsersController#show + mount counted verified:");
+        _output.WriteLine($"  mounts={graph.CapabilityReport.EvidenceCounts["backend-http.mounts"]} expandedResourceRoutes={graph.CapabilityReport.EvidenceCounts["backend-http.expandedResourceRoutes"]} showBound={showHit.Edge.TargetRef.SymbolId}");
+        _output.WriteLine(rendered);
+    }
+
+    [Fact]
+    public void BackendHttpCsharpGroup_HttpClientToAttributeRoute_LiveBridges()
+    {
+        string binary = ScaleTestSupport.RequireJulieServer();
+        using var work = new TempWorkspace();
+        WriteCsharpBackendGroup(work.Repo);
+
+        var index = ExtractAndLoad(binary, work);
+        Assert.Contains("aspnet.attribute_route.v1", StructuralPatternIds(work.Db, "aspnet.%"));
+        Assert.Contains("http.client_request.v1", StructuralPatternIds(work.Db, "http.%"));
+        Assert.Contains("csharp", StructuralFactLanguages(work.Db, "http.client_request.v1"));
+
+        var graph = index.BridgeGraph;
+        // Task 5 live proof: a non-test csharp HttpClient structural request is first-class client evidence into
+        // dotnet-web (service-to-service). client.GetFromJsonAsync("/api/users/{id}") ⇒ verb-known GET matches the
+        // [HttpGet("{id}")] action under [Route("api/users")] ⇒ High edge into the controller, through dotnet-web.
+        Assert.Contains("dotnet-web", graph.CapabilityReport.ActiveProviders);
+        var hits = HitsInto(graph, "server/UsersController.cs");
+        Assert.NotEmpty(hits);
+        Assert.Contains(hits, h => h.Band == ConfidenceBand.High && !h.IsVerbUnknown);
+
+        string rendered = TraceTool.Run(
+            index, new SmartTargetResolver(index), target: "Load", mode: "bridge", to: null, depth: 2, limit: 20,
+            fullFormat: false, out int emitted, out _);
+        Assert.True(emitted > 0);
+        Assert.Contains("--route-->", rendered);
+        Assert.Contains("(High)", rendered);
+
+        _output.WriteLine("BACKEND-HTTP C# GROUP — HttpClient service-to-service to attribute-routed action verified:");
+        _output.WriteLine($"  hits={hits.Count} bands={string.Join("/", hits.Select(h => h.Band))}");
+        _output.WriteLine(rendered);
+    }
+
+    // ── The parity gate: aggregate per-family + per-client-language emission across ALL group workspaces ──────
+    [Fact]
+    public void BackendHttpParityGate_AllSixteenFamiliesAndSevenClientLanguagesEmitLive()
+    {
+        string binary = ScaleTestSupport.RequireJulieServer();
+
+        // Extract every group into its own workspace and union the emitted structural-fact pattern ids + the
+        // http.client_request.v1 languages across all of them. A family or client language that silently emits
+        // ZERO across every representative fixture FAILS this test — it never softens to a subset.
+        var writers = new (string Label, Action<string> Write)[]
+        {
+            ("js/ts", WriteJsTsBackendGroup),
+            ("python", WritePythonBackendGroup),
+            ("go", WriteGoBackendGroup),
+            ("java", WriteJavaBackendGroup),
+            ("ruby", WriteRubyBackendGroup),
+            ("csharp", WriteCsharpBackendGroup),
+        };
+
+        var emittedPatternIds = new HashSet<string>(StringComparer.Ordinal);
+        var emittedClientLanguages = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (label, write) in writers)
+        {
+            using var work = new TempWorkspace();
+            write(work.Repo);
+            _ = ExtractAndLoad(binary, work);
+            foreach (var id in StructuralPatternIds(work.Db, "%"))
+                emittedPatternIds.Add(id);
+            foreach (var lang in StructuralFactLanguages(work.Db, "http.client_request.v1"))
+                emittedClientLanguages.Add(lang);
+            _output.WriteLine($"  group {label}: {StructuralFactLanguages(work.Db, "http.client_request.v1").Count} client languages, "
+                + $"{StructuralPatternIds(work.Db, "%").Count(id => RequiredFamilies.Contains(id))} target families present");
+        }
+
+        // The 16 route/mount families the backend-http lane added in julie-extract 2.7.0 (release notes §New
+        // Structural-Fact Families). Every one must emit at least once, or Miller's consumer is proving a subset.
+        foreach (var family in RequiredFamilies)
+            Assert.Contains(family, emittedPatternIds);
+
+        // http.client_request.v1 now emits from seven client-language fixtures. js/ts counts as javascript AND
+        // typescript; the remaining five are vue, python, go, java, ruby, csharp. A client language that
+        // silently emits zero fails the test.
+        foreach (var lang in RequiredClientLanguages)
+            Assert.Contains(lang, emittedClientLanguages);
+
+        _output.WriteLine("BACKEND-HTTP PARITY GATE — all 16 families + all client languages emit live:");
+        _output.WriteLine($"  families ({RequiredFamilies.Length}/16): {string.Join(", ", RequiredFamilies.Order(StringComparer.Ordinal))}");
+        _output.WriteLine($"  client languages: {string.Join(", ", emittedClientLanguages.Order(StringComparer.Ordinal))}");
+    }
+
+    // The 16 backend route/mount fact families (julie-extract 2.7.0). Kept as one explicit list so a dropped or
+    // renamed family FAILS loudly rather than silently shrinking the parity claim.
+    private static readonly string[] RequiredFamilies =
+    {
+        "express.route.v1", "express.router_mount.v1", "fastify.route.v1",
+        "fastapi.route.v1", "fastapi.include_router.v1", "flask.route.v1", "flask.blueprint_registration.v1",
+        "django.url_pattern.v1", "django.url_include.v1", "spring.request_mapping.v1",
+        "go.net_http.route.v1", "gin.route.v1", "echo.route.v1",
+        "rails.route.v1", "rails.resource_route.v1", "rails.mount.v1",
+    };
+
+    // The distinct client languages http.client_request.v1 must cover live (js/ts split into javascript +
+    // typescript; plus vue, python, go, java, ruby, csharp = 8 distinct languages, the "seven client-language
+    // fixtures" of the plan since js/ts share the JS/TS group).
+    private static readonly string[] RequiredClientLanguages =
+    {
+        "javascript", "typescript", "vue", "python", "go", "java", "ruby", "csharp",
+    };
+
+    private static List<ScoredEdge> HitsInto(BridgeGraph graph, string filePath) =>
+        graph.Edges
+            .Where(e => e.Edge.Kind == BridgeKind.Hits
+                && string.Equals(e.Edge.TargetRef.FilePath, filePath, StringComparison.Ordinal))
+            .ToList();
+
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────
     // Probe 2: honesty probe — undisciplined fixture. Precision + per-leg recall + guard proofs.
     // ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -1034,6 +1391,313 @@ public sealed class LiveBridgeTraceTests
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────────────────────
+    // TASK 7 grouped polyglot fixture writers. Each idiomatic shape is grounded in julie-extract 2.7.0's own
+    // golden fixtures (fixtures/extraction/<lang>/backend_http_boundaries) and validated against the real binary
+    // so every target family emits. Cross-file layouts (mount composition, blueprint registration, Rails
+    // controllers) are split across files exactly as the enrichment passes need.
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    // JS/TS group: a direct express route, a cross-file app.use("/users", usersRouter) mount composing onto a
+    // sibling router file, a fastify shorthand route, and fetch/axios clients — including a Vue SFC client.
+    // (usersRouter uses `const` + a separate `export {}`: an inline `export const x = express.Router()` defeats
+    // 2.7.0's in-file receiver tracing, so the router route would not emit — verified against the binary.)
+    private static void WriteJsTsBackendGroup(string repo)
+    {
+        string server = Path.Combine(repo, "server");
+        string web = Path.Combine(repo, "web");
+        Directory.CreateDirectory(server);
+        Directory.CreateDirectory(web);
+
+        File.WriteAllText(Path.Combine(server, "usersRouter.ts"), """
+            import express from "express";
+
+            const usersRouter = express.Router();
+
+            usersRouter.get("/:id", (_req, res) => res.send("user"));
+
+            export { usersRouter };
+            """);
+        File.WriteAllText(Path.Combine(server, "app.ts"), """
+            import express from "express";
+            import { usersRouter } from "./usersRouter";
+
+            export function buildApp(): void {
+              const app = express();
+              app.use("/users", usersRouter);
+            }
+            """);
+        File.WriteAllText(Path.Combine(server, "direct.ts"), """
+            import express from "express";
+
+            export function buildDirect(): void {
+              const app = express();
+              app.get("/direct/:id", (_req, res) => res.send("direct"));
+            }
+            """);
+        File.WriteAllText(Path.Combine(server, "fast.ts"), """
+            import fastify from "fastify";
+
+            export function buildFast(): void {
+              const server = fastify();
+              server.get("/things/:id", async () => ({ ok: true }));
+            }
+            """);
+        File.WriteAllText(Path.Combine(web, "client.ts"), """
+            import axios from "axios";
+
+            export async function loadUser(): Promise<void> {
+              await axios.get("/users/1");
+            }
+
+            export async function loadDirect(): Promise<void> {
+              await axios.get("/direct/1");
+            }
+
+            export async function loadThing(): Promise<void> {
+              await axios.get("/things/1");
+            }
+            """);
+        File.WriteAllText(Path.Combine(web, "legacy.js"), """
+            export async function pingDirect() {
+              await fetch("/direct/1");
+            }
+            """);
+        File.WriteAllText(Path.Combine(web, "Panel.vue"), """
+            <template>
+              <button @click="load">load</button>
+            </template>
+
+            <script setup lang="ts">
+            import axios from "axios";
+
+            async function load() {
+              await axios.get("/users/1");
+            }
+            </script>
+            """);
+    }
+
+    // Python group: FastAPI APIRouter(prefix=...) + include_router, a cross-file Flask blueprint composed by
+    // register_blueprint(url_prefix=...), Django path() + include(), and requests/httpx clients. Distinct path
+    // prefixes per framework keep the join keys from colliding (a cross-family verb-exact tie would drop as
+    // ambiguous). views.* is undefined on purpose — structural facts are syntactic, exactly like the golden.
+    private static void WritePythonBackendGroup(string repo)
+    {
+        string app = Path.Combine(repo, "app");
+        string shop = Path.Combine(repo, "shop");
+        Directory.CreateDirectory(app);
+        Directory.CreateDirectory(shop);
+
+        File.WriteAllText(Path.Combine(app, "main.py"), """
+            from fastapi import FastAPI, APIRouter
+            from flask import Flask
+            from users_bp import bp
+
+            app = FastAPI()
+            router = APIRouter(prefix="/api")
+
+
+            @router.get("/users/{user_id}")
+            def fastapi_user(user_id: str):
+                pass
+
+
+            app.include_router(router, prefix="/v1")
+
+            flask_app = Flask(__name__)
+            flask_app.register_blueprint(bp, url_prefix="/shop")
+            """);
+        File.WriteAllText(Path.Combine(app, "users_bp.py"), """
+            from flask import Blueprint
+
+            bp = Blueprint("accounts", __name__)
+
+
+            @bp.get("/accounts/<int:account_id>")
+            def flask_account(account_id):
+                pass
+            """);
+        File.WriteAllText(Path.Combine(app, "urls.py"), """
+            from django.urls import path, include
+
+            urlpatterns = [
+                path("users/<int:pk>/", views.detail, name="user-detail"),
+                path("api/", include("shop.urls"), namespace="api"),
+            ]
+            """);
+        File.WriteAllText(Path.Combine(shop, "urls.py"), """
+            from django.urls import path
+
+            urlpatterns = [
+                path("products/<int:pk>/", views.product, name="product"),
+            ]
+            """);
+        File.WriteAllText(Path.Combine(app, "clients.py"), """
+            import requests
+            import httpx
+
+
+            def call_clients():
+                requests.get("/api/users/1")
+                httpx.get("/shop/accounts/1")
+                requests.get("/users/1")
+            """);
+    }
+
+    // Go group: a net/http Go-1.22 "GET /api/items/{id}" mux route (verb-attested), a gin group route plus a
+    // verbless r.Any("/ping"), an echo group route (emission only), and http.Get clients. Each framework's routes
+    // sit in their OWN function so the net/http and gin route facts carry DISTINCT containing symbols — otherwise
+    // both client edges collapse to the same (clients -> routes) signature and the graph dedupes the Medium away.
+    // The behavioral test then discriminates the net/http High edge and the gin-Any Medium edge by band.
+    private static void WriteGoBackendGroup(string repo)
+    {
+        Directory.CreateDirectory(repo);
+        File.WriteAllText(Path.Combine(repo, "main.go"), """
+            package main
+
+            import (
+            	"net/http"
+
+            	"github.com/gin-gonic/gin"
+            	"github.com/labstack/echo/v4"
+            )
+
+            func registerMux() {
+            	http.HandleFunc("GET /api/items/{id}", showItem)
+            }
+
+            func registerGin() {
+            	r := gin.Default()
+            	api := r.Group("/api")
+            	api.GET("/users/:id", showUser)
+            	r.Any("/ping", pingAny)
+            }
+
+            func registerEcho() {
+            	e := echo.New()
+            	v1 := e.Group("/v1")
+            	v1.POST("/notes/:id", createNote)
+            }
+
+            func clients() {
+            	http.Get("/api/items/1")
+            	http.Get("/ping")
+            }
+            """);
+    }
+
+    // Java group: a Spring @RestController with a class-level @RequestMapping prefix + @GetMapping method
+    // (verb-attested), a second controller with a method-less @RequestMapping (verbless), and java.net.http
+    // HttpRequest builder clients. Both controllers share the one .java file; the test discriminates by band.
+    private static void WriteJavaBackendGroup(string repo)
+    {
+        string src = Path.Combine(repo, "src");
+        Directory.CreateDirectory(src);
+        File.WriteAllText(Path.Combine(src, "UserController.java"), """
+            import java.net.URI;
+            import java.net.http.HttpRequest;
+            import org.springframework.web.bind.annotation.*;
+
+            @RestController
+            @RequestMapping("/api")
+            class UserController {
+                @GetMapping("/users/{id}")
+                public User getUser() { return null; }
+
+                void callClient() {
+                    HttpRequest req = HttpRequest.newBuilder(URI.create("/api/users/1")).build();
+                    HttpRequest legacy = HttpRequest.newBuilder(URI.create("/legacy")).build();
+                }
+            }
+
+            @RestController
+            class LegacyController {
+                @RequestMapping("/legacy")
+                public String legacy() { return "ok"; }
+            }
+            """);
+    }
+
+    // Ruby group: a config/routes.rb draw block with a verb DSL route (get ..., to: "controller#action"),
+    // resources :users (Rails-semantics expansion is Miller's job), and mount ... => "/jobs" (the rails.mount.v1
+    // emitter, evidence-only), a matching UsersController, and Net::HTTP clients with literal URI(...).
+    private static void WriteRubyBackendGroup(string repo)
+    {
+        string config = Path.Combine(repo, "config");
+        string controllers = Path.Combine(repo, "app", "controllers");
+        Directory.CreateDirectory(config);
+        Directory.CreateDirectory(controllers);
+
+        File.WriteAllText(Path.Combine(config, "routes.rb"), """
+            require "net/http"
+            require "uri"
+
+            Rails.application.routes.draw do
+              get "/health", to: "health#show"
+              resources :users
+              mount Sidekiq::Web => "/jobs"
+            end
+            """);
+        File.WriteAllText(Path.Combine(controllers, "users_controller.rb"), """
+            class UsersController < ApplicationController
+              def index
+              end
+
+              def show
+              end
+            end
+            """);
+        File.WriteAllText(Path.Combine(repo, "app", "clients.rb"), """
+            require "net/http"
+            require "uri"
+
+            def call_clients
+              Net::HTTP.get(URI("/health"))
+              Net::HTTP.get(URI("/users/1"))
+            end
+            """);
+    }
+
+    // C# group (Task 5 live proof): an attribute-routed controller ([Route("api/users")] + [HttpGet("{id}")]) and
+    // a service HttpClient whose GetFromJsonAsync target is the parameterized /api/users/{id} — dotnet-web's
+    // RouteBridge requires exact canonical-route equality, so the {id}-literal client folds onto the endpoint.
+    private static void WriteCsharpBackendGroup(string repo)
+    {
+        string server = Path.Combine(repo, "server");
+        string client = Path.Combine(repo, "client");
+        Directory.CreateDirectory(server);
+        Directory.CreateDirectory(client);
+
+        File.WriteAllText(Path.Combine(server, "UsersController.cs"), """
+            using Microsoft.AspNetCore.Mvc;
+
+            namespace Demo.Api;
+
+            [ApiController]
+            [Route("api/users")]
+            public sealed class UsersController : ControllerBase
+            {
+                [HttpGet("{id}")]
+                public IActionResult GetUser(int id) => Ok();
+            }
+            """);
+        File.WriteAllText(Path.Combine(client, "UserApiClient.cs"), """
+            using System.Net.Http;
+            using System.Net.Http.Json;
+
+            namespace Demo.Client;
+
+            public sealed class UserApiClient
+            {
+                public async Task Load(HttpClient client)
+                {
+                    await client.GetFromJsonAsync<object>("/api/users/{id}");
+                }
+            }
+            """);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────
     // Undisciplined fixture writer (the honesty-probe traps).
     // ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -1374,6 +2038,30 @@ public sealed class LiveBridgeTraceTests
         while (reader.Read())
             paths.Add(reader.GetString(0));
         return paths;
+    }
+
+    // The distinct languages one pattern id emitted for — proves per-client-language coverage of
+    // http.client_request.v1 (js/ts, vue, python, go, java, ruby, csharp) on a real extract.
+    private static IReadOnlyCollection<string> StructuralFactLanguages(string dbPath, string patternId)
+    {
+        using var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder { DataSource = dbPath, Mode = SqliteOpenMode.ReadOnly }.ToString());
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT DISTINCT language
+            FROM structural_facts
+            WHERE pattern_id = $patternId
+            ORDER BY language;
+            """;
+        command.Parameters.AddWithValue("$patternId", patternId);
+
+        using var reader = command.ExecuteReader();
+        var languages = new List<string>();
+        while (reader.Read())
+            languages.Add(reader.GetString(0));
+        return languages;
     }
 
     // Every distinct bridge edge in the graph, deduped by the graph's own signature (Kind|sortedIds). BridgeGraph
