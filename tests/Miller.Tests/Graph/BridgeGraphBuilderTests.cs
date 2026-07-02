@@ -2054,6 +2054,127 @@ public sealed class BridgeGraphBuilderTests
     }
 
     [Fact]
+    public void StructuralFacts_CsharpHttpClientRequest_HitsAttributeRouteEndpoint_High()
+    {
+        // C# service-to-service (Task 5): a NON-test HttpClient.GetAsync($"/api/users/{id}") reduces to an
+        // http.client_request.v1 fact carrying an attested verb (AttestedVerb != null). The narrowed csharp
+        // exclusion now admits it as a real client call, and it folds onto the attribute-route GET
+        // /api/users/{id} endpoint — a verb-known High Hits edge through dotnet-web. (RouteNormalizer folds the
+        // {id} placeholder to {}; a bare numeric literal like /api/users/42 does NOT fold, so the interpolated
+        // parameterized path is the shape that actually matches the parameterized endpoint.)
+        var getById = Method("sym-get", "GetById", "Task<IResult> GetById(int id)",
+            "UsersController", "api/UsersController.cs");
+        var client = Method("sym-client", "FetchUser", "Task<User> FetchUser(int id)",
+            "UserApiClient", "src/UserApiClient.cs");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-httpget-id",
+                patternId: "aspnet.attribute_route.v1",
+                language: "csharp",
+                path: "api/UsersController.cs",
+                containingSymbolId: "sym-get",
+                startLine: 18,
+                metadataJson: """{"attribute_kind":"http_method","verb":"GET","route_template":"{id}","controller_route_template":"api/[controller]","effective_route_template":"/api/users/{id}","route_tokens":["controller"]}"""),
+            StructuralFact(
+                factId: "fact-httpclient-get",
+                patternId: "http.client_request.v1",
+                language: "csharp",
+                path: "src/UserApiClient.cs",
+                containingSymbolId: "sym-client",
+                startLine: 12,
+                metadataJson: """{"client":"HttpClient","framework":"httpclient","target_path":"/api/users/{id}","url_kind":"path","verb":"GET","verb_source":"attested"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [getById, client], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        // Client /api/users/{id} and endpoint /api/users/{id} both canonicalize to api/users/{} — verb-known GET High.
+        var hit = Assert.Single(graph.Incident("sym-get"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.False(hit.IsVerbUnknown);
+        Assert.Equal("sym-client", hit.Edge.SourceRef.SymbolId);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.clientRequests"]);
+    }
+
+    [Fact]
+    public void StructuralFacts_CsharpHttpClientRequestFromTestSymbol_IsExcluded()
+    {
+        // Test-noise safety (Task 5): a test-project HttpClient call — its containing symbol is julie-flagged
+        // is_test — is rejected at TryReadClientRequest (IsTestFact container-flag branch), so it never becomes
+        // a structural client call, never gains an AttestedVerb, and produces no edge. This is exactly the
+        // test-HttpClient noise the csharp exclusion was built to block; narrowing to AttestedVerb-null keeps it out.
+        var getById = Method("sym-get", "GetById", "Task<IResult> GetById(int id)",
+            "UsersController", "api/UsersController.cs");
+        var testMethod = new SymbolDetail("sym-test", "GetUser_ReturnsOk", "method", "tests/UsersApiTests.cs",
+            "Task GetUser_ReturnsOk()", "Api.Tests", IsTest: true, ParentClassName: "UsersApiTests");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-httpget-id",
+                patternId: "aspnet.attribute_route.v1",
+                language: "csharp",
+                path: "api/UsersController.cs",
+                containingSymbolId: "sym-get",
+                startLine: 18,
+                metadataJson: """{"attribute_kind":"http_method","verb":"GET","route_template":"{id}","controller_route_template":"api/[controller]","effective_route_template":"/api/users/{id}","route_tokens":["controller"]}"""),
+            StructuralFact(
+                factId: "fact-test-httpclient",
+                patternId: "http.client_request.v1",
+                language: "csharp",
+                path: "tests/UsersApiTests.cs",
+                containingSymbolId: "sym-test",
+                startLine: 20,
+                metadataJson: """{"client":"HttpClient","framework":"httpclient","target_path":"/api/users/{id}","url_kind":"path","verb":"GET","verb_source":"attested"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [getById, testMethod], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.DoesNotContain(graph.Incident("sym-get"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["dotnet-web.clientRequests"]);
+    }
+
+    [Fact]
+    public void StructuralFacts_LegacyCsharpUrlLiteral_StaysExcludedEvenWithMatchingEndpoint()
+    {
+        // Legacy exclusion preserved (Task 5): a raw csharp url literal carries NO attested verb
+        // (AttestedVerb == null). The narrowed rule still drops it — only structural-fact-derived csharp calls
+        // become real client calls. Paired here with the SAME endpoint the structural call in the positive test
+        // hits, proving the csharp+AttestedVerb-null exclusion (not a route miss) is what suppresses the edge.
+        var getById = Method("sym-get", "GetById", "Task<IResult> GetById(int id)",
+            "UsersController", "api/UsersController.cs");
+        var client = new SymbolDetail("sym-client", "FetchUser", "method", "src/UserApiClient.cs",
+            "Task FetchUser()", "Api.Clients", IsTest: false, ParentClassName: "UserApiClient");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-httpget-id",
+                patternId: "aspnet.attribute_route.v1",
+                language: "csharp",
+                path: "api/UsersController.cs",
+                containingSymbolId: "sym-get",
+                startLine: 18,
+                metadataJson: """{"attribute_kind":"http_method","verb":"GET","route_template":"{id}","controller_route_template":"api/[controller]","effective_route_template":"/api/users/{id}","route_tokens":["controller"]}"""),
+        };
+        var literals = new List<LiteralRecord>
+        {
+            // Verb-known (GetAsync -> GET) and route api/users/{} — this WOULD match the endpoint if admitted;
+            // it is dropped only because it is a legacy csharp literal with no attested verb.
+            MakeLiteral("/api/users/{id}", kind: "url", language: "csharp", carrier: "GetAsync",
+                containingSymbolId: "sym-client", spanStart: 0),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [getById, client], typeArguments: [], literals: literals, annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.DoesNotContain(graph.Incident("sym-get"), e => e.Edge.Kind == BridgeKind.Hits);
+    }
+
+    [Fact]
     public void StructuralFacts_AttributeRouteEffectiveTemplate_MatchesCanonicalClientCall()
     {
         var getById = Method("sym-get", "GetById", "Task<IResult> GetById(int id)",

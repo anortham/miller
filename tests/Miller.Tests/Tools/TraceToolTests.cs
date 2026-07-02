@@ -2051,6 +2051,35 @@ public sealed class TraceToolTests
     }
 
     [Fact]
+    public void Bridge_CsharpHttpClientRequest_SurfacesRouteEdgeToAspNetEndpoint()
+    {
+        // Task 5 end-to-end: a NON-test csharp http.client_request.v1 fact + an ASP.NET attribute-route endpoint
+        // flow through the REAL BridgeGraphBuilder and surface as a rendered route edge in `trace mode=bridge`.
+        // This exercises the whole csharp HttpClient -> ASP.NET pipeline (graph build + render), which the
+        // provider-agnostic hand-built render tests above do not cover for the csharp client path.
+        var getById = DetailMethod("sym-get", "GetById", "UsersController", "api/UsersController.cs");
+        var client = DetailMethod("sym-client", "FetchUser", "UserApiClient", "src/UserApiClient.cs");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact("fact-httpget-id", "aspnet.attribute_route.v1", "csharp", "api/UsersController.cs",
+                "sym-get", 18,
+                """{"attribute_kind":"http_method","verb":"GET","route_template":"{id}","controller_route_template":"api/[controller]","effective_route_template":"/api/users/{id}","route_tokens":["controller"]}"""),
+            StructuralFact("fact-httpclient-get", "http.client_request.v1", "csharp", "src/UserApiClient.cs",
+                "sym-client", 12,
+                """{"client":"HttpClient","framework":"httpclient","target_path":"/api/users/{id}","url_kind":"path","verb":"GET","verb_source":"attested"}"""),
+        };
+        var index = BuildBridgeIndexFromStructuralFacts([getById, client], facts);
+
+        string outp = TraceTool.Run(index, ResolverFor(index),
+            target: "/api/users/{id}", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false,
+            out int emitted, out _);
+
+        Assert.Equal(1, emitted);
+        Assert.Contains("--route-->", outp);
+        Assert.Contains("GetById", outp);
+    }
+
+    [Fact]
     public void Bridge_FilePathWithOneBridgeSymbol_StartsFromThatSymbol()
     {
         var mapsTo = MakeScored(

@@ -221,10 +221,22 @@ public static class RouteBridge
     }
 
     /// <summary>
-    /// A real client call is a <c>kind=url</c> literal in a frontend/client language (NOT the C# endpoint language) and
-    /// NOT an <c>is_test</c> HttpClient call (design §4 Leg 1; findings 28-2). The language-agnostic phrasing of the
-    /// design's filter ("literal.language != the endpoint language") is implemented as "not the C# endpoint language":
-    /// the route bridge's endpoints are C#, so a <c>csharp</c> url literal is a test HttpClient call, never a client call.
+    /// A real client call is a <c>kind=url</c> literal that is NOT an <c>is_test</c> HttpClient call (design §4 Leg 1;
+    /// findings 28-2). The csharp side of the contract has two halves (Task 5):
+    /// <list type="bullet">
+    /// <item>A <b>structural-fact-derived</b> csharp client call (<see cref="TsClientCall.AttestedVerb"/> non-null —
+    /// reduced from a 2.6.0 <c>http.client_request.v1</c> fact) <b>IS</b> a real client call: it is M2-disciplined,
+    /// non-test-filtered evidence of an outbound <c>HttpClient</c> request, so C# service-to-service bridging
+    /// (<c>HttpClient</c> call → ASP.NET endpoint) works. Its verb is source-attested; the fact's test-project HttpClient
+    /// calls were already rejected upstream by <c>StructuralRouteFactAdapter.TryReadClientRequest</c>'s
+    /// <c>IsTestFact</c> gate, so none reach here with an <see cref="TsClientCall.AttestedVerb"/>.</item>
+    /// <item>A <b>legacy csharp url literal</b> (<see cref="TsClientCall.AttestedVerb"/> null) <b>stays excluded</b>:
+    /// the design-§4 heuristic it encodes — the route bridge's endpoints are C#, so a raw <c>csharp</c> url literal is a
+    /// test HttpClient call, never a client call — remains true for raw literals, which is why the exclusion is gated on
+    /// <see cref="TsClientCall.AttestedVerb"/> being absent rather than dropped entirely.</item>
+    /// </list>
+    /// Non-csharp (frontend/client language) url literals are unaffected — julie stores FULL strings like
+    /// <c>typescript</c>, so the csharp check matches only the endpoint language.
     /// </summary>
     private static bool IsRealClientCall(TsClientCall call)
     {
@@ -232,8 +244,10 @@ public static class RouteBridge
             return false;
         if (call.IsTest)
             return false;
-        // The endpoint side is C#; a url literal in the endpoint language is a (test) HttpClient call, not a client call.
-        if (string.Equals(call.Literal.Language, "csharp", StringComparison.OrdinalIgnoreCase))
+        // The endpoint side is C#; a raw csharp url literal (no attested verb) is a (test) HttpClient call, not a
+        // client call. A structural-fact-derived csharp call carries an attested verb and IS a real client call.
+        if (string.Equals(call.Literal.Language, "csharp", StringComparison.OrdinalIgnoreCase) &&
+            string.IsNullOrWhiteSpace(call.AttestedVerb))
             return false;
         return true;
     }
