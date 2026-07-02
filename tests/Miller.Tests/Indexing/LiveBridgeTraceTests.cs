@@ -298,6 +298,212 @@ public sealed class LiveBridgeTraceTests
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────────────────────
+    // 2.6.0 HTTP boundary facts, live: http.client_request.v1 → nextjs.route_handler.v1 / nuxt.server_route.v1
+    // through the verb-aware nextjs-api / nuxt-api providers, plus htmx-from-TSX → aspnet.attribute_route.v1
+    // with live annotation+structural dedupe (plan Task 6).
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void NextApiFixture_AttestedPostFetch_HitsPostRouteHandlerSymbol()
+    {
+        string binary = ScaleTestSupport.RequireJulieServer();
+        using var work = new TempWorkspace();
+        WriteNextApiFixture(work.Repo);
+
+        var index = ExtractAndLoad(binary, work);
+        var handlerPatterns = StructuralPatternIds(work.Db, "nextjs.%");
+        Assert.Contains("nextjs.route_handler.v1", handlerPatterns);
+        var clientPatterns = StructuralPatternIds(work.Db, "http.%");
+        Assert.Contains("http.client_request.v1", clientPatterns);
+
+        var graph = index.BridgeGraph;
+        Assert.Contains("nextjs-api", graph.CapabilityReport.ActiveProviders);
+        // Pure Next.js repo: client requests alone must never activate dotnet-web (backend-evidence gate).
+        Assert.DoesNotContain("dotnet-web", graph.CapabilityReport.ActiveProviders);
+
+        // BOTH handler export shapes (function declaration + const arrow) emit route-handler facts live.
+        // Live 2.6.0 binding surprise: only the FUNCTION-declaration fact carries containing_symbol_id (the
+        // const-arrow fact's span is the `export const GET` header, which precedes the arrow-function
+        // symbol's span, so it stays symbol-unbound) — hence POST is the function declaration here.
+        Assert.Equal(2, StructuralFactCount(work.Db, "nextjs.route_handler.v1", "app/api/messages/route.ts"));
+
+        // fetch("/api/messages", { method: "POST" }) is verb-attested POST ⇒ exactly ONE High edge into the
+        // route file, bound to the POST handler-export SYMBOL (the navigation payoff), NOT a synthetic
+        // endpoint node — and the GET export stays unbridged (verb discrimination).
+        var hit = Assert.Single(graph.Edges, e =>
+            e.Edge.Kind == BridgeKind.Hits
+            && string.Equals(e.Edge.TargetRef.FilePath, "app/api/messages/route.ts", StringComparison.Ordinal));
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.False(hit.IsVerbUnknown);
+        Assert.False(string.IsNullOrEmpty(hit.Edge.TargetRef.SymbolId));
+        Assert.Contains(hit.Edge.TargetRef.SymbolId!, SymbolIdsInFile(index, "POST", "app/api/messages/route.ts"));
+        Assert.Equal("POST", EndpointDisplayOf(graph, hit, EndpointSide.Target));
+        Assert.Equal("sendMessage", EndpointDisplayOf(graph, hit, EndpointSide.Source));
+
+        string rendered = TraceTool.Run(
+            index, new SmartTargetResolver(index), target: "sendMessage", mode: "bridge", to: null, depth: 2, limit: 20,
+            fullFormat: false, out int emitted, out _);
+
+        Assert.True(emitted > 0);
+        Assert.Contains("--route-->", rendered);
+        Assert.Contains("(High)", rendered);
+
+        _output.WriteLine("NEXT.JS API FIXTURE - attested POST fetch to route-handler export verified:");
+        _output.WriteLine($"  Patterns: {string.Join(", ", handlerPatterns.Concat(clientPatterns).Order(StringComparer.Ordinal))}");
+        _output.WriteLine($"  Hits: {EndpointDisplayOf(graph, hit, EndpointSide.Source)} -> {EndpointDisplayOf(graph, hit, EndpointSide.Target)} band={hit.Band} score={Fmt(hit.Score)} verbUnknown={hit.IsVerbUnknown}");
+        _output.WriteLine(rendered);
+    }
+
+    [Fact]
+    public void NextApiFixture_DynamicRouteClientRequest_HitsBracketRouteHandler()
+    {
+        string binary = ScaleTestSupport.RequireJulieServer();
+        using var work = new TempWorkspace();
+        WriteNextApiFixture(work.Repo);
+
+        var index = ExtractAndLoad(binary, work);
+        var graph = index.BridgeGraph;
+
+        // fetch("/api/users/42") (bare fetch = spec-default GET, verb-known) segment-matches the bracket
+        // route route_path=/api/users/[id] and binds to its GET export symbol.
+        var hit = Assert.Single(graph.Edges, e =>
+            e.Edge.Kind == BridgeKind.Hits
+            && string.Equals(e.Edge.TargetRef.FilePath, "app/api/users/[id]/route.ts", StringComparison.Ordinal));
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.False(hit.IsVerbUnknown);
+        Assert.False(string.IsNullOrEmpty(hit.Edge.TargetRef.SymbolId));
+        Assert.Contains(hit.Edge.TargetRef.SymbolId!, SymbolIdsInFile(index, "GET", "app/api/users/[id]/route.ts"));
+        Assert.Equal("GET", EndpointDisplayOf(graph, hit, EndpointSide.Target));
+        Assert.Equal("loadUser", EndpointDisplayOf(graph, hit, EndpointSide.Source));
+
+        string rendered = TraceTool.Run(
+            index, new SmartTargetResolver(index), target: "loadUser", mode: "bridge", to: null, depth: 2, limit: 20,
+            fullFormat: false, out int emitted, out _);
+
+        Assert.True(emitted > 0);
+        Assert.Contains("--route-->", rendered);
+        Assert.Contains("(High)", rendered);
+
+        _output.WriteLine("NEXT.JS API FIXTURE - dynamic client request to bracket route handler verified:");
+        _output.WriteLine($"  Hits: {EndpointDisplayOf(graph, hit, EndpointSide.Source)} -> {EndpointDisplayOf(graph, hit, EndpointSide.Target)} band={hit.Band} score={Fmt(hit.Score)} verbUnknown={hit.IsVerbUnknown}");
+        _output.WriteLine(rendered);
+    }
+
+    [Fact]
+    public void NuxtServerFixture_AxiosAndSuffixlessRoutes_HighAndHonestMedium()
+    {
+        string binary = ScaleTestSupport.RequireJulieServer();
+        using var work = new TempWorkspace();
+        WriteNuxtServerFixture(work.Repo);
+
+        var index = ExtractAndLoad(binary, work);
+        var patternIds = StructuralPatternIds(work.Db, "nuxt.%");
+        Assert.Contains("nuxt.server_route.v1", patternIds);
+        Assert.Contains("http.client_request.v1", StructuralPatternIds(work.Db, "http.%"));
+
+        var graph = index.BridgeGraph;
+        Assert.Contains("nuxt-api", graph.CapabilityReport.ActiveProviders);
+
+        // server/api/messages.get.ts: the filename suffix attests GET; axios.get is verb-known ⇒ High, no flag.
+        var messagesHit = Assert.Single(graph.Edges, e =>
+            e.Edge.Kind == BridgeKind.Hits
+            && string.Equals(e.Edge.TargetRef.FilePath, "server/api/messages.get.ts", StringComparison.Ordinal));
+        Assert.Equal(ConfidenceBand.High, messagesHit.Band);
+        Assert.False(messagesHit.IsVerbUnknown);
+
+        // server/api/notes.ts: suffix-less handler answers every method — its accepted verb set is not
+        // source-attested, so the route-only match stays honest Medium with the verb-unknown flag.
+        var notesHit = Assert.Single(graph.Edges, e =>
+            e.Edge.Kind == BridgeKind.Hits
+            && string.Equals(e.Edge.TargetRef.FilePath, "server/api/notes.ts", StringComparison.Ordinal));
+        Assert.Equal(ConfidenceBand.Medium, notesHit.Band);
+        Assert.True(notesHit.IsVerbUnknown);
+
+        string renderedHigh = TraceTool.Run(
+            index, new SmartTargetResolver(index), target: "fetchMessages", mode: "bridge", to: null, depth: 2, limit: 20,
+            fullFormat: false, out int emittedHigh, out _);
+        Assert.True(emittedHigh > 0);
+        Assert.Contains("--route-->", renderedHigh);
+        Assert.Contains("(High)", renderedHigh);
+
+        string renderedMedium = TraceTool.Run(
+            index, new SmartTargetResolver(index), target: "loadNotes", mode: "bridge", to: null, depth: 2, limit: 20,
+            fullFormat: false, out int emittedMedium, out _);
+        Assert.True(emittedMedium > 0);
+        Assert.Contains("--route-->", renderedMedium);
+        Assert.Contains("[verb-unknown]", renderedMedium);
+        Assert.Contains("(Medium)", renderedMedium);
+
+        _output.WriteLine("NUXT SERVER FIXTURE - axios GET + suffix-less server route verified:");
+        _output.WriteLine($"  Patterns: {string.Join(", ", patternIds.Order(StringComparer.Ordinal))}");
+        _output.WriteLine($"  Hits(GET): {EndpointDisplayOf(graph, messagesHit, EndpointSide.Source)} -> {EndpointDisplayOf(graph, messagesHit, EndpointSide.Target)} band={messagesHit.Band} verbUnknown={messagesHit.IsVerbUnknown}");
+        _output.WriteLine($"  Hits(suffix-less): {EndpointDisplayOf(graph, notesHit, EndpointSide.Source)} -> {EndpointDisplayOf(graph, notesHit, EndpointSide.Target)} band={notesHit.Band} verbUnknown={notesHit.IsVerbUnknown}");
+        _output.WriteLine(renderedHigh);
+        _output.WriteLine(renderedMedium);
+    }
+
+    [Fact]
+    public void HtmxTsxFixture_AttributeRouteController_BridgesAndDedupes()
+    {
+        string binary = ScaleTestSupport.RequireJulieServer();
+        using var work = new TempWorkspace();
+        WriteHtmxTsxAttributeRouteFixture(work.Repo);
+
+        var index = ExtractAndLoad(binary, work);
+        Assert.Contains("htmx.attribute.v1", StructuralPatternIds(work.Db, "htmx.%"));
+        Assert.Contains("aspnet.attribute_route.v1", StructuralPatternIds(work.Db, "aspnet.%"));
+        Assert.Contains("http.client_request.v1", StructuralPatternIds(work.Db, "http.%"));
+        // 2.6.0 emits the htmx fact from TSX (not just plain HTML/Vue) — pin the emitting file.
+        Assert.Contains("web/TodoPanel.tsx", StructuralFactPaths(work.Db, "htmx.attribute.v1"));
+
+        var graph = index.BridgeGraph;
+        Assert.True(graph.CapabilityReport.EvidenceCounts["dotnet-web.attributeRoutes"] > 0,
+            "the [HttpPost] action must be counted as aspnet.attribute_route.v1 endpoint evidence");
+        Assert.True(graph.CapabilityReport.EvidenceCounts["dotnet-web.clientRequests"] >= 1,
+            "the axios.post call must be counted as http.client_request.v1 evidence");
+
+        string handlerId = FindSymbolId(index, "CreateTodo", "method");
+        var hits = graph.Incident(handlerId).Where(e => e.Edge.Kind == BridgeKind.Hits).ToList();
+
+        // Live dedupe proof: the axios site emits BOTH a legacy url literal and a structural client-request
+        // fact, and the [HttpPost] action emits BOTH an annotation endpoint and an aspnet.attribute_route.v1
+        // fact — the graph must still hold exactly ONE Hits edge per (client, endpoint) pair: the htmx TSX
+        // button and the axios TS helper, nothing duplicated.
+        Assert.Equal(2, hits.Count);
+        foreach (var group in hits.GroupBy(
+                     e => BridgeGraph.NodeIdOf(e.Edge.SourceRef, e.Edge.Kind, EndpointSide.Source) ?? string.Empty,
+                     StringComparer.Ordinal))
+        {
+            Assert.Single(group);
+        }
+
+        foreach (var hit in hits)
+        {
+            Assert.Equal(ConfidenceBand.High, hit.Band);
+            Assert.False(hit.IsVerbUnknown);
+        }
+
+        var sources = hits
+            .Select(e => EndpointDisplayOf(graph, e, EndpointSide.Source))
+            .Order(StringComparer.Ordinal)
+            .ToList();
+        Assert.Contains("createTodo", sources);
+
+        string rendered = TraceTool.Run(
+            index, new SmartTargetResolver(index), target: "CreateTodo", mode: "bridge", to: null, depth: 2, limit: 20,
+            fullFormat: false, out int emitted, out _);
+
+        Assert.True(emitted >= 2);
+        Assert.Contains("--route-->", rendered);
+        Assert.Contains("(High)", rendered);
+        Assert.DoesNotContain("[verb-unknown]", rendered);
+
+        _output.WriteLine("HTMX TSX FIXTURE - hx-post from TSX + axios to attribute-routed action verified:");
+        _output.WriteLine($"  Clients: {string.Join(", ", sources)} -> CreateTodo (one edge each, bands {string.Join("/", hits.Select(h => h.Band))})");
+        _output.WriteLine(rendered);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────
     // Probe 2: honesty probe — undisciplined fixture. Precision + per-leg recall + guard proofs.
     // ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -699,6 +905,133 @@ public sealed class LiveBridgeTraceTests
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────────────────────
+    // Next.js API fixture writer (2.6.0 HTTP boundary facts): App Router route handlers + fetch clients.
+    // Client URLs are plain static strings on purpose — template literals are silent in 2.6.0. The client
+    // calls deliberately avoid `const res = await …`: http.client_request.v1 binds the INNERMOST enclosing
+    // symbol, and a res variable would steal the containing-symbol binding from the function (live-verified).
+    // The POST handler is the FUNCTION declaration because live 2.6.0 symbol-binds only that shape; the
+    // const-arrow export still proves its fact emission (see the fact-count assertion).
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    private static void WriteNextApiFixture(string repo)
+    {
+        string messagesRoute = Path.Combine(repo, "app", "api", "messages");
+        string userRoute = Path.Combine(repo, "app", "api", "users", "[id]");
+        string lib = Path.Combine(repo, "lib");
+        Directory.CreateDirectory(messagesRoute);
+        Directory.CreateDirectory(userRoute);
+        Directory.CreateDirectory(lib);
+
+        // Both handler shapes: an exported const arrow (GET) and an exported async function (POST).
+        File.WriteAllText(Path.Combine(messagesRoute, "route.ts"), """
+            export const GET = async (request: Request): Promise<Response> => {
+              return Response.json({ messages: [] });
+            };
+
+            export async function POST(request: Request): Promise<Response> {
+              const body = await request.json();
+              return Response.json(body, { status: 201 });
+            }
+            """);
+        File.WriteAllText(Path.Combine(userRoute, "route.ts"), """
+            export async function GET(request: Request): Promise<Response> {
+              return Response.json({ id: "42" });
+            }
+            """);
+        File.WriteAllText(Path.Combine(lib, "messages.api.ts"), """
+            export async function sendMessage(payload: unknown): Promise<void> {
+              await fetch("/api/messages", { method: "POST" });
+            }
+
+            export async function loadUser(): Promise<void> {
+              await fetch("/api/users/42");
+            }
+            """);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────
+    // Nuxt server-route fixture writer: Nitro routes live at server/api/** relative to the project root
+    // (the /api prefix comes from the directory). messages.get.ts attests GET via the filename suffix;
+    // notes.ts is suffix-less (answers every method ⇒ verb-less fact). axios calls REQUIRE the axios import.
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    private static void WriteNuxtServerFixture(string repo)
+    {
+        string serverApi = Path.Combine(repo, "server", "api");
+        string composables = Path.Combine(repo, "app", "composables");
+        Directory.CreateDirectory(serverApi);
+        Directory.CreateDirectory(composables);
+
+        File.WriteAllText(Path.Combine(serverApi, "messages.get.ts"), """
+            export default defineEventHandler(() => {
+              return { messages: [] };
+            });
+            """);
+        File.WriteAllText(Path.Combine(serverApi, "notes.ts"), """
+            export default defineEventHandler(() => {
+              return { notes: [] };
+            });
+            """);
+        // No `const res = await …` — the innermost-symbol binding would attach the fact to the res variable
+        // instead of the composable function (live-verified against 2.6.0).
+        File.WriteAllText(Path.Combine(composables, "useApi.ts"), """
+            import axios from "axios";
+
+            export async function fetchMessages(): Promise<void> {
+              await axios.get("/api/messages");
+            }
+
+            export async function loadNotes(): Promise<void> {
+              await fetch("/api/notes");
+            }
+            """);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────
+    // htmx-in-TSX + ASP.NET attribute-route fixture writer: [Route("todos")] + bare [HttpPost] compose the
+    // effective route /todos; the TSX hx-post and an axios.post both target it. The axios site additionally
+    // emits a legacy url literal and the action an annotation endpoint — the live dedupe surface.
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    private static void WriteHtmxTsxAttributeRouteFixture(string repo)
+    {
+        string server = Path.Combine(repo, "server");
+        string web = Path.Combine(repo, "web");
+        Directory.CreateDirectory(server);
+        Directory.CreateDirectory(web);
+
+        File.WriteAllText(Path.Combine(server, "TodosController.cs"), """
+            using Microsoft.AspNetCore.Mvc;
+
+            namespace Demo.Api;
+
+            [ApiController]
+            [Route("todos")]
+            public sealed class TodosController : ControllerBase
+            {
+                [HttpPost]
+                public IActionResult CreateTodo() => Ok();
+            }
+            """);
+        File.WriteAllText(Path.Combine(web, "TodoPanel.tsx"), """
+            export function TodoPanel() {
+              return (
+                <section>
+                  <button hx-post="/todos">Add</button>
+                </section>
+              );
+            }
+            """);
+        File.WriteAllText(Path.Combine(web, "todos.api.ts"), """
+            import axios from "axios";
+
+            export async function createTodo(body: unknown): Promise<void> {
+              await axios.post("/todos", body);
+            }
+            """);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────
     // Undisciplined fixture writer (the honesty-probe traps).
     // ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -976,6 +1309,48 @@ public sealed class LiveBridgeTraceTests
         return ids;
     }
 
+    // How many facts one pattern id emitted for one file — proves a specific source SHAPE fired (e.g. both
+    // route-handler export shapes in one route.ts).
+    private static int StructuralFactCount(string dbPath, string patternId, string path)
+    {
+        using var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder { DataSource = dbPath, Mode = SqliteOpenMode.ReadOnly }.ToString());
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT COUNT(*)
+            FROM structural_facts
+            WHERE pattern_id = $patternId AND path = $path;
+            """;
+        command.Parameters.AddWithValue("$patternId", patternId);
+        command.Parameters.AddWithValue("$path", path);
+        return Convert.ToInt32(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    // The distinct emitting files for one pattern id — proves WHERE a fact family fired (e.g. htmx from TSX).
+    private static IReadOnlyCollection<string> StructuralFactPaths(string dbPath, string patternId)
+    {
+        using var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder { DataSource = dbPath, Mode = SqliteOpenMode.ReadOnly }.ToString());
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT DISTINCT path
+            FROM structural_facts
+            WHERE pattern_id = $patternId
+            ORDER BY path;
+            """;
+        command.Parameters.AddWithValue("$patternId", patternId);
+
+        using var reader = command.ExecuteReader();
+        var paths = new List<string>();
+        while (reader.Read())
+            paths.Add(reader.GetString(0));
+        return paths;
+    }
+
     // Every distinct bridge edge in the graph, deduped by the graph's own signature (Kind|sortedIds). BridgeGraph
     // has no node-set accessor, so we sweep node ids breadth-first from a complete seed set: every symbol id the
     // index knows (covers symbol-backed endpoints, e.g. both sides of a MapsTo) plus the synthesized table/route ids
@@ -1083,6 +1458,19 @@ public sealed class LiveBridgeTraceTests
         string? id = FindSymbolIdOrNull(index, name, kind);
         Assert.True(id is not null, $"fixture symbol '{name}' (kind {kind}) was not extracted/indexed");
         return id!;
+    }
+
+    // A TS export yields TWO same-name symbols (an `export`-kind wrapper plus the `function` itself) and the
+    // extractor may bind a fact to either, so handler assertions check membership in the full same-name,
+    // same-file id set instead of guessing one (relative-unix paths per IndexedSymbol).
+    private static IReadOnlyCollection<string> SymbolIdsInFile(MillerRepositoryIndex index, string name, string filePath)
+    {
+        var ids = index.FindByName(name)
+            .Where(s => string.Equals(s.FilePath, filePath, StringComparison.Ordinal))
+            .Select(s => s.SymbolId)
+            .ToList();
+        Assert.True(ids.Count > 0, $"fixture symbol '{name}' in '{filePath}' was not extracted/indexed");
+        return ids;
     }
 
     private static string? FindSymbolIdOrNull(MillerRepositoryIndex index, string name, string kind)
