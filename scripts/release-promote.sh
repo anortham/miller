@@ -251,9 +251,19 @@ else
   args=(
     gh release create "$tag" "$release_dir"/*
     --repo "$repo"
-    --target "$target_sha"
     --title "Miller $tag"
   )
+  # Only pin --target when the release must create the tag. For an existing tag
+  # the target is redundant, and passing a non-tip SHA trips GitHub's
+  # workflow-scope release check: if the target's diff against the default
+  # branch HEAD touches .github/workflows, the Actions token needs
+  # workflows:write, which no permissions block can grant (2026-07-02 v1.3.2
+  # tag-push publish 403'd exactly this way).
+  if gh api "repos/${repo}/git/ref/tags/${tag}" >/dev/null 2>&1; then
+    echo "Tag $tag already exists; omitting --target so the release binds to the existing tag."
+  else
+    args+=(--target "$target_sha")
+  fi
   if [[ -n "$notes_file" && -f "$notes_file" ]]; then
     args+=(--notes-file "$notes_file")
   else

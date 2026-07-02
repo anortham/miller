@@ -129,6 +129,13 @@ scripts/test.ps1 all
   same working session as that push, and verify the assets exist. (Why: the 1.3.2 prep commit was pushed
   2026-07-01 without publishing the release; marketplace updates 404'd on the missing archive until v1.3.2 was
   tagged the next day.)
+- **Tag-push publish 403 recovery.** GitHub requires the ungrantable `workflows: write` scope to create a release
+  targeting a commit whose diff against default-branch HEAD touches `.github/workflows` — so never push new
+  workflow-touching commits to main while a tag-push release run is still building (the v1.3.2 publish job 403'd
+  exactly this way on 2026-07-02). `release-promote.sh` now omits `--target` for existing tags; if a publish job
+  still fails after the builds succeed, recover locally: `gh run download <run-id> -D <dir>` then
+  `scripts/release-promote.sh --version <ver> --artifacts-dir <dir> --target <tag-commit> --prerelease false`
+  (the `--run-id` promote path refuses runs whose overall conclusion is failure).
 
 ## Public docs & onboarding
 
