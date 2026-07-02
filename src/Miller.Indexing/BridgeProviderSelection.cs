@@ -14,6 +14,7 @@ internal static class BridgeProviderSelection
         ApiRouteBridgeProvider.Nuxt,
         FileRouteBridgeProvider.Vue,
         FileRouteBridgeProvider.React,
+        BackendHttpBridgeProvider.Instance,
     ];
 
     public static IReadOnlyList<IBridgeProvider> ProvidersForDatabase(string dbPath)
@@ -79,6 +80,7 @@ internal static class BridgeProviderSelection
             NuxtApiBridgeProvider.ProviderId => NuxtApiBridgeProvider.Instance,
             VueBridgeProvider.ProviderId => VueBridgeProvider.Instance,
             ReactBridgeProvider.ProviderId => ReactBridgeProvider.Instance,
+            BackendHttpBridgeProvider.ProviderId => BackendHttpBridgeProvider.Instance,
             _ => new UnknownBridgeProvider(providerId),
         };
 

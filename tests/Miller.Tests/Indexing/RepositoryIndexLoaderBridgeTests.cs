@@ -330,6 +330,72 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
         command.ExecuteNonQuery();
     }
 
+    // A matching Express client-request/route-template pair (plan Task 2): the handler symbol carrying the
+    // express.route.v1 fact, the containing client function, and the two facts that bridge them through the
+    // SqliteBridgeReader whitelist (express.route.v1 was added to the whitelist in Task 1).
+    private static void AddBackendHttpBoundaryFacts(string dbPath)
+    {
+        using var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder { DataSource = dbPath, Mode = SqliteOpenMode.ReadWrite }.ToString());
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO symbols(symbol_id, name, signature, kind, language, path, start_line, end_line, parent_symbol_id)
+            VALUES
+              ('s-express-create', 'createUser', 'createUser(req, res)', 'function', 'javascript', 'api/users.js', 12, 20, NULL),
+              ('s-create-user', 'createUser', 'function createUser()', 'function', 'typescript', 'web/lib/api.ts', 4, 9, NULL);
+
+            INSERT INTO structural_facts
+                (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                 containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                 confidence, metadata_json)
+            VALUES
+              ('sf-express-route', 'f-users-js', 'api/users.js', 'javascript', 'express.route.v1',
+               'route_call', 'call_expression', 's-express-create', 12, 1, 12, 40, 40, 260, 1.0,
+               '{"framework":"express","normalized_route_template":"/api/users","verb":"POST"}'),
+              ('sf-express-client', 'f-web-lib-api', 'web/lib/api.ts', 'typescript', 'http.client_request.v1',
+               'client_request', 'call_expression', 's-create-user', 5, 3, 5, 40, 100, 140, 1.0,
+               '{"client":"fetch","framework":"fetch","target_path":"/api/users","url_kind":"path","verb":"POST","verb_source":"attested"}');
+            """;
+        command.ExecuteNonQuery();
+    }
+
+    [Fact]
+    public void Load_RootMillerJsonBackendHttpProvider_BridgesClientRequestToBackendRoute()
+    {
+        var (root, dbPath) = CreateConfiguredBridgeWorkspace("""
+            {
+              "bridge": {
+                "providers": ["backend-http"]
+              }
+            }
+            """);
+        try
+        {
+            AddBackendHttpBoundaryFacts(dbPath);
+
+            var index = RepositoryIndexLoader.Load(dbPath);
+
+            Assert.False(index.BridgeGraph.Contains("s-entity"));
+            Assert.Contains("backend-http", index.BridgeGraph.CapabilityReport.ActiveProviders);
+            Assert.DoesNotContain("dotnet-web", index.BridgeGraph.CapabilityReport.ActiveProviders);
+
+            var edge = Assert.Single(index.BridgeGraph.Edges, item => item.Edge.Kind == BridgeKind.Hits);
+            Assert.Equal(ConfidenceBand.High, edge.Band);
+            Assert.Equal("s-create-user", edge.Edge.SourceRef.SymbolId);
+            Assert.Equal("s-express-create", edge.Edge.TargetRef.SymbolId);
+            Assert.Equal(1, index.BridgeGraph.CapabilityReport.EvidenceCounts["backend-http.clientRequests"]);
+            Assert.Equal(1, index.BridgeGraph.CapabilityReport.EvidenceCounts["backend-http.routeFacts"]);
+            Assert.Equal(1, index.BridgeGraph.CapabilityReport.EvidenceCounts["backend-http.candidates"]);
+            Assert.Equal(0, index.BridgeGraph.CapabilityReport.EvidenceCounts["backend-http.ambiguousMatches"]);
+        }
+        finally
+        {
+            TryDelete(root);
+        }
+    }
+
     [Fact]
     public void Load_RootMillerJsonNextJsApiProvider_BridgesClientRequestToRouteHandler()
     {
@@ -517,7 +583,7 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
         var providers = BridgeProviderSelection.ProvidersForDatabase(_dbPath);
 
         Assert.Equal(
-            ["dotnet-web", "nextjs", "nextjs-api", "nuxt", "nuxt-api", "vue", "react"],
+            ["dotnet-web", "nextjs", "nextjs-api", "nuxt", "nuxt-api", "vue", "react", "backend-http"],
             providers.Select(provider => provider.Id).ToArray());
     }
 

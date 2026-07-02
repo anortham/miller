@@ -29,6 +29,7 @@ public static class BridgeGraphBuilder
         ApiRouteBridgeProvider.Nuxt,
         FileRouteBridgeProvider.Vue,
         FileRouteBridgeProvider.React,
+        BackendHttpBridgeProvider.Instance,
     ];
 
     /// <summary>

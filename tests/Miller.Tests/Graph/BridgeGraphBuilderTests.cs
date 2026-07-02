@@ -2995,6 +2995,324 @@ public sealed class BridgeGraphBuilderTests
         Assert.Empty(graph.ObservationProviders("nope"));
     }
 
+    // ============================ backend-http provider (plan Task 2) ==========================================
+    // These fixtures exercise BackendHttpBridgeProvider through the default BridgeGraphBuilder.Build set: a
+    // http.client_request.v1 fetch/axios call site joins a backend route-template family (the 10
+    // BackendRoutePatternIds) via FileRouteBridge.ResolveClientRequests — every verb rule inherited from that
+    // resolver. Assertions are caller-facing (graph.Incident / CapabilityReport), never on private helpers.
+
+    [Fact]
+    public void BackendHttp_express_post_route_hits_client_request_bound_to_handler_symbol_High()
+    {
+        // Invariant: a verb-equal backend route (Express POST /api/users) joins a POST client request to the
+        // route fact's containing handler symbol at High, verb-known.
+        var handler = Method("sym-express-handler", "createUser", "createUser(req, res)", string.Empty, "api/users.js");
+        var clientFn = Type("sym-client-fn", "createUser", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-client-post", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch",
+                    ["target_path"] = "/api/users",
+                    ["url_kind"] = "path",
+                    ["verb"] = "POST",
+                    ["verb_source"] = "attested",
+                }),
+            Fact("sf-express-route", "express.route.v1", "javascript", "api/users.js", "sym-express-handler", 200,
+                new Dictionary<string, string>
+                {
+                    ["normalized_route_template"] = "/api/users",
+                    ["verb"] = "POST",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [handler, clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hit = Assert.Single(graph.Incident("sym-express-handler"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.False(hit.IsVerbUnknown);
+        Assert.Equal("sym-client-fn", hit.Edge.SourceRef.SymbolId);
+        Assert.Equal("sym-express-handler", hit.Edge.TargetRef.SymbolId);
+        Assert.Contains("backend-http", graph.CapabilityReport.ActiveProviders);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["backend-http.clientRequests"]);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["backend-http.routeFacts"]);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["backend-http.candidates"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["backend-http.ambiguousMatches"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["backend-http.mounts"]);
+    }
+
+    [Fact]
+    public void BackendHttp_colon_param_fastapi_route_hits_concrete_path_client_High()
+    {
+        // Invariant: the resolver folds the client's concrete segment (/api/users/42) against the route's
+        // colon-param template (:user_id) canonically, so a verb-equal fastapi route joins at High.
+        var handler = Method("sym-fastapi-handler", "get_user", "get_user(user_id)", string.Empty, "app/routes.py");
+        var clientFn = Type("sym-client-fn", "loadUser", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-client-get", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch",
+                    ["target_path"] = "/api/users/42",
+                    ["url_kind"] = "path",
+                    ["verb"] = "GET",
+                    ["verb_source"] = "default",
+                }),
+            Fact("sf-fastapi-route", "fastapi.route.v1", "python", "app/routes.py", "sym-fastapi-handler", 200,
+                new Dictionary<string, string>
+                {
+                    ["normalized_route_template"] = "/api/users/:user_id",
+                    ["verb"] = "GET",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [handler, clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hit = Assert.Single(graph.Incident("sym-fastapi-handler"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.False(hit.IsVerbUnknown);
+        Assert.Equal("sym-fastapi-handler", hit.Edge.TargetRef.SymbolId);
+    }
+
+    [Fact]
+    public void BackendHttp_two_equally_specific_routes_are_ambiguous_no_edge()
+    {
+        // Invariant: two verb-exact backend routes equally specific for the same path/verb tie on specificity —
+        // ambiguousMatches increments and no edge is emitted (resolver BestMatch ambiguity).
+        var handlerA = Method("sym-fastapi-a", "get_user", "get_user(user_id)", string.Empty, "app/a.py");
+        var handlerB = Method("sym-fastapi-b", "show_user", "show_user(other_id)", string.Empty, "app/b.py");
+        var clientFn = Type("sym-client-fn", "loadUser", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-client-get", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch",
+                    ["target_path"] = "/api/users/42",
+                    ["url_kind"] = "path",
+                    ["verb"] = "GET",
+                    ["verb_source"] = "default",
+                }),
+            Fact("sf-fastapi-a", "fastapi.route.v1", "python", "app/a.py", "sym-fastapi-a", 200,
+                new Dictionary<string, string>
+                {
+                    ["normalized_route_template"] = "/api/users/:user_id",
+                    ["verb"] = "GET",
+                }),
+            Fact("sf-fastapi-b", "fastapi.route.v1", "python", "app/b.py", "sym-fastapi-b", 300,
+                new Dictionary<string, string>
+                {
+                    ["normalized_route_template"] = "/api/users/:other_id",
+                    ["verb"] = "GET",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [handlerA, handlerB, clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.DoesNotContain(graph.Incident("sym-fastapi-a"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.DoesNotContain(graph.Incident("sym-fastapi-b"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["backend-http.ambiguousMatches"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["backend-http.candidates"]);
+        Assert.Equal(2, graph.CapabilityReport.EvidenceCounts["backend-http.routeFacts"]);
+    }
+
+    [Fact]
+    public void BackendHttp_gin_any_route_with_no_verb_hits_client_Medium_verb_unknown()
+    {
+        // Invariant: a verbless backend handler (gin Any) matches on route alone → Medium, flagged verb-unknown
+        // (never assumed to accept the client verb).
+        var handler = Method("sym-gin-handler", "Health", "Health(c *gin.Context)", string.Empty, "server/routes.go");
+        var clientFn = Type("sym-client-fn", "checkHealth", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-client-get", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch",
+                    ["target_path"] = "/api/health",
+                    ["url_kind"] = "path",
+                    ["verb"] = "GET",
+                    ["verb_source"] = "default",
+                }),
+            Fact("sf-gin-route", "gin.route.v1", "go", "server/routes.go", "sym-gin-handler", 200,
+                new Dictionary<string, string>
+                {
+                    ["normalized_route_template"] = "/api/health",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [handler, clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hit = Assert.Single(graph.Incident("sym-gin-handler"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.Medium, hit.Band);
+        Assert.True(hit.IsVerbUnknown);
+    }
+
+    [Fact]
+    public void BackendHttp_post_client_and_get_only_spring_route_produce_no_edge()
+    {
+        // Invariant: a verb-known backend handler whose verb differs from the client's is NOT a candidate (a
+        // real verb distinction), so no edge is emitted.
+        var handler = Method("sym-spring-handler", "listOrders", "ResponseEntity listOrders()", string.Empty, "src/OrderController.java");
+        var clientFn = Type("sym-client-fn", "createOrder", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-client-post", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch",
+                    ["target_path"] = "/api/orders",
+                    ["url_kind"] = "path",
+                    ["verb"] = "POST",
+                    ["verb_source"] = "attested",
+                }),
+            Fact("sf-spring-route", "spring.request_mapping.v1", "java", "src/OrderController.java", "sym-spring-handler", 200,
+                new Dictionary<string, string>
+                {
+                    ["attribute_kind"] = "http_method",
+                    ["normalized_route_template"] = "/api/orders",
+                    ["verb"] = "GET",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [handler, clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.DoesNotContain(graph.Incident("sym-spring-handler"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["backend-http.candidates"]);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["backend-http.routeFacts"]);
+    }
+
+    [Fact]
+    public void BackendHttp_django_path_pattern_no_verb_hits_client_Medium_verb_unknown()
+    {
+        // Invariant: a Django path-syntax URLconf route carries no verb → Medium, flagged verb-unknown.
+        var handler = Method("sym-django-handler", "article_detail", "article_detail(request)", string.Empty, "app/urls.py");
+        var clientFn = Type("sym-client-fn", "loadArticles", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-client-get", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch",
+                    ["target_path"] = "/api/articles",
+                    ["url_kind"] = "path",
+                    ["verb"] = "GET",
+                    ["verb_source"] = "default",
+                }),
+            Fact("sf-django-route", "django.url_pattern.v1", "python", "app/urls.py", "sym-django-handler", 200,
+                new Dictionary<string, string>
+                {
+                    ["route_syntax"] = "path",
+                    ["normalized_route_template"] = "/api/articles",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [handler, clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hit = Assert.Single(graph.Incident("sym-django-handler"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.Medium, hit.Band);
+        Assert.True(hit.IsVerbUnknown);
+    }
+
+    [Fact]
+    public void BackendHttp_client_only_repo_is_active_with_observation_node_and_no_edges()
+    {
+        // Invariant: a pure-frontend repo (client requests, zero backend routes) is ACTIVE and emits a client
+        // observation node, but fabricates no edge — candidates == 0 (mirrors the nextjs-api/nuxt-api arm).
+        var clientFn = Type("sym-client-fn", "loadUsers", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-client-get", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch",
+                    ["target_path"] = "/api/users",
+                    ["url_kind"] = "path",
+                    ["verb"] = "GET",
+                    ["verb_source"] = "default",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.Contains("backend-http", graph.CapabilityReport.ActiveProviders);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["backend-http.clientRequests"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["backend-http.routeFacts"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["backend-http.candidates"]);
+        Assert.DoesNotContain(graph.Edges, e => e.Edge.Kind == BridgeKind.Hits);
+        var clientNodeId = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, FileRouteBridgeProvider.RouteDisplay("/api/users"));
+        Assert.True(graph.Contains(clientNodeId));
+        Assert.Contains("backend-http", graph.ObservationProviders(clientNodeId));
+    }
+
+    [Fact]
+    public void BackendHttp_mounts_evidence_counts_mount_facts_and_evidence_only_rails_mount()
+    {
+        // Invariant: backend-http.mounts counts all mount/include facts observed (the 4 read families) PLUS
+        // evidence-only rails.mount facts; Task 2 collects but composes nothing — no edge is emitted.
+        var mountFn = Type("sym-mount", "app", "variable", file: "api/app.js");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-express-mount", "express.router_mount.v1", "javascript", "api/app.js", "sym-mount", 100,
+                new Dictionary<string, string>
+                {
+                    ["normalized_mount_path"] = "/api",
+                    ["mount_target"] = "usersRouter",
+                }),
+            Fact("sf-rails-mount", "rails.mount.v1", "ruby", "config/routes.rb", string.Empty, 200,
+                new Dictionary<string, string>
+                {
+                    ["mount_path"] = "/sidekiq",
+                    ["mount_target"] = "Sidekiq::Web",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [mountFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.Contains("backend-http", graph.CapabilityReport.ActiveProviders);
+        Assert.Equal(2, graph.CapabilityReport.EvidenceCounts["backend-http.mounts"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["backend-http.candidates"]);
+        Assert.DoesNotContain(graph.Edges, e => e.Edge.Kind == BridgeKind.Hits);
+    }
+
+    [Fact]
+    public void BackendHttp_no_evidence_skips_with_reason_and_zero_counts()
+    {
+        // Invariant: with no client requests, backend routes, mount facts, or rails.mount facts, the provider
+        // SKIPS with a stable reason and all-zero evidence counts.
+        var symbols = new List<SymbolDetail> { Type("sym-x", "X", "class", "Domain") };
+        var dbSets = new List<DbSetProperty> { DbSet("Xs", "X") };
+
+        var graph = BridgeGraphBuilder.Build(symbols, [], [], [], dbSets);
+
+        Assert.Contains(graph.CapabilityReport.SkippedProviders, skipped =>
+            skipped.ProviderId == "backend-http" &&
+            skipped.Reason.Contains("no backend-http bridge evidence", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["backend-http.clientRequests"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["backend-http.routeFacts"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["backend-http.mounts"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["backend-http.candidates"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["backend-http.ambiguousMatches"]);
+    }
+
     [Fact]
     public void Build_null_collections_throw()
     {
