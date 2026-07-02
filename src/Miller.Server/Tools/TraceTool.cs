@@ -1021,7 +1021,10 @@ public sealed class TraceTool
         // every route is expanded rather than a direct rails.route fact has routeFacts == 0, so this row does not
         // participate for it — the generic pooled route diagnostics still cover that case. We intentionally do NOT
         // OR composedRoutes/expandedResourceRoutes into the single-key participation gate.
-        new("backend-http", "Backend", "client request", "route fact", BridgeNodeKind.Endpoint, "routeFacts", "route edge"),
+        // TargetFactName is the fact SUBJECT ("route"), not "route fact": the diagnostic templates append " fact"/
+        // " facts"/"s" to it (e.g. "no matching route fact", "observed routes:"), matching the existing rows'
+        // "file route"/"route handler"/"server route" convention. DefinitionEvidenceName stays the "routeFacts" key.
+        new("backend-http", "Backend", "client request", "route", BridgeNodeKind.Endpoint, "routeFacts", "route edge"),
     ];
 
     private static bool HasFileRouteProviderEvidence(BridgeGraph graph) =>

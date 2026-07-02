@@ -2720,7 +2720,8 @@ public sealed class TraceToolTests
         Assert.Equal("backend-http_route_no_file_match", diagnostic.GetProperty("code").GetString());
         string message = diagnostic.GetProperty("message").GetString()!;
         Assert.Contains("Backend client request exists: /api/users", message);
-        Assert.Contains("observed route facts: /api/orders", message);
+        Assert.Contains("no matching route fact", message);
+        Assert.Contains("observed routes: /api/orders", message);
     }
 
     [Fact]
@@ -2761,7 +2762,7 @@ public sealed class TraceToolTests
         JsonElement diagnostic = Assert.Single(doc.RootElement.GetProperty("diagnostics").EnumerateArray());
         Assert.Equal("backend-http_route_no_bridge_link", diagnostic.GetProperty("code").GetString());
         string message = diagnostic.GetProperty("message").GetString()!;
-        Assert.Contains("Backend client request and route fact facts exist for /api/users", message);
+        Assert.Contains("Backend client request and route facts exist for /api/users", message);
         Assert.Contains("no route edge was built", message);
     }
 
