@@ -357,26 +357,105 @@ public sealed partial class ContextTool
         IReadOnlyList<ReachedNode> reached =
             graph.Reach(seedOrder, maxHops, ReachCap, Direction.Both);
 
-        // --- 3. Build the candidate list in priority order: seeds (hop 0, in seed rank) then reached (hop, id).
-        // Reach already orders the reached nodes by (hop asc, id asc), so appending preserves that. ---
+        // --- 3. Build the candidate list in priority order: seeds (hop 0, in seed rank) then reached
+        // neighbours ordered (hop asc, relevance desc, id asc). Reach returns the reached nodes in (hop asc,
+        // id asc); a *stable* secondary sort on relevance keeps id-asc as the final tiebreak. Ranking by affinity
+        // to the query + seeds (rather than raw symbol id) makes the rendered neighbours the ones actually related
+        // to the anchor — the pre-release audit saw unrelated symbols crowd out relevant ones purely on lower ids.
         var candidates = new List<Candidate>(seedOrder.Count + reached.Count);
         var symbolsById = SymbolLookupBatch.FindBySymbolIds(
             index,
             seedOrder.Concat(reached.Select(static node => node.Id)));
+
+        var seedSymbols = new List<IndexedSymbol>(seedOrder.Count);
         foreach (var seedId in seedOrder)
         {
             if (symbolsById.TryGetValue(seedId, out IndexedSymbol? symbol)) // defensive — a seed id always comes from the index
+            {
+                seedSymbols.Add(symbol);
                 candidates.Add(new Candidate(symbol, Hop: 0));
+            }
         }
+
+        // Score each reached neighbour once, preserving Reach's (hop asc, id asc) order, then stably sort by
+        // (hop asc, relevance desc) so relevance breaks ties within a hop and id-asc breaks ties within a score.
+        NeighbourRelevanceScorer scorer = NeighbourRelevanceScorer.Build(query, seedSymbols);
+        var scoredReached = new List<(IndexedSymbol Symbol, int Hop, int Score)>(reached.Count);
         foreach (var node in reached)
         {
             if (symbolsById.TryGetValue(node.Id, out IndexedSymbol? symbol))
-                candidates.Add(new Candidate(symbol, node.Hop));
+                scoredReached.Add((symbol, node.Hop, scorer.Score(symbol)));
         }
+        foreach (var entry in scoredReached.OrderBy(static n => n.Hop).ThenByDescending(static n => n.Score))
+            candidates.Add(new Candidate(entry.Symbol, entry.Hop));
 
         // D10 work proxy: the full candidate set the packer considered (seeds + reached), before truncation.
         candidatesExamined = candidates.Count;
         return candidates;
+    }
+
+    /// <summary>
+    /// Ranks a hop&gt;0 neighbour by affinity to the anchor so relevance — not arbitrary symbol id — breaks ties
+    /// within a hop: +2 per query/seed identifier token that appears (case-insensitive substring) in the
+    /// neighbour's name, +1 when it shares a seed's file, +1 when it shares a seed's directory. Same-file
+    /// neighbours therefore score above same-directory-only ones (they earn both the file and the directory
+    /// point). Pure and deterministic; built once per bundle over the query tokens and the seed set.
+    /// </summary>
+    private readonly struct NeighbourRelevanceScorer
+    {
+        private static readonly char[] PathSeparators = { '/', '\\' };
+
+        private readonly string[] _tokens;
+        private readonly HashSet<string> _seedFiles;
+        private readonly HashSet<string> _seedDirectories;
+
+        private NeighbourRelevanceScorer(string[] tokens, HashSet<string> seedFiles, HashSet<string> seedDirectories)
+        {
+            _tokens = tokens;
+            _seedFiles = seedFiles;
+            _seedDirectories = seedDirectories;
+        }
+
+        internal static NeighbourRelevanceScorer Build(string? query, IReadOnlyList<IndexedSymbol> seeds)
+        {
+            // Scoring tokens: identifier tokens parsed from the query plus each seed's whole name, deduped
+            // case-insensitively so a token shared by the query and a seed name is not counted twice.
+            var tokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string token in ExtractIdentifierTokens(query))
+                tokens.Add(token);
+            var seedFiles = new HashSet<string>(StringComparer.Ordinal);
+            var seedDirectories = new HashSet<string>(StringComparer.Ordinal);
+            foreach (IndexedSymbol seed in seeds)
+            {
+                if (!string.IsNullOrEmpty(seed.Name))
+                    tokens.Add(seed.Name);
+                seedFiles.Add(seed.FilePath);
+                seedDirectories.Add(DirectoryOf(seed.FilePath));
+            }
+
+            return new NeighbourRelevanceScorer(tokens.ToArray(), seedFiles, seedDirectories);
+        }
+
+        internal int Score(IndexedSymbol neighbour)
+        {
+            int score = 0;
+            foreach (string token in _tokens)
+            {
+                if (neighbour.Name.Contains(token, StringComparison.OrdinalIgnoreCase))
+                    score += 2;
+            }
+            if (_seedFiles.Contains(neighbour.FilePath))
+                score += 1;
+            if (_seedDirectories.Contains(DirectoryOf(neighbour.FilePath)))
+                score += 1;
+            return score;
+        }
+
+        private static string DirectoryOf(string filePath)
+        {
+            int separator = filePath.LastIndexOfAny(PathSeparators);
+            return separator < 0 ? string.Empty : filePath[..separator];
+        }
     }
 
     private static IReadOnlyList<ReferenceContextItem> BuildReferenceItems(

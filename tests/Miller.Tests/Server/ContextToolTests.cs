@@ -492,6 +492,89 @@ public sealed class ContextToolTests
         Assert.Contains("## next inspect\ninspect(target=\"Hub\", scope=\"src/Hub.cs\", depth=\"overview\")", output);
     }
 
+    // ---- neighbour relevance ranking (pre-release audit finding) ----
+
+    // A relevance-ranking fixture reproducing the audit failure: one anchor seed with several equal-hop
+    // neighbours where the UNRELATED neighbour has the smallest symbol id. Id-order alone (the old behaviour)
+    // surfaced the unrelated neighbour first; relevance ranking must put the same-file / name-overlap neighbours
+    // ahead of it, while hop still dominates score.
+    //   Anchor  Order        (src/Orders/Order.cs, id ..0A)
+    //     → Helper      (util/Helper.cs,      id ..01)  unrelated                       score 0
+    //     → OrderRepo   (src/Orders/Order.cs, id ..02)  same file + name "Order": +2+1+1 = 4
+    //     → OrderQueue  (src/Queue/Queue.cs,  id ..03)  name "Order" only:          +2   = 2
+    //     Helper → OrderDeep (util/Deep.cs,   id ..04)  name "Order" but hop 2:     +2   = 2 (hop 2)
+    private static (MillerRepositoryIndex index, SmartTargetResolver resolver) BuildRelevanceFixture()
+    {
+        const string anchorId = "0000000000000000000000000000000A";
+        const string helperId = "00000000000000000000000000000001";
+        const string repoId = "00000000000000000000000000000002";
+        const string queueId = "00000000000000000000000000000003";
+        const string deepId = "00000000000000000000000000000004";
+        var symbols = new List<IndexedSymbol>
+        {
+            new(0, anchorId, "Order", "class Order", "class", "csharp", "src/Orders/Order.cs", 1, 50, null, false),
+            new(1, helperId, "Helper", "class Helper", "class", "csharp", "util/Helper.cs", 1, 10, null, false),
+            new(2, repoId, "OrderRepo", "class OrderRepo", "class", "csharp", "src/Orders/Order.cs", 60, 90, null, false),
+            new(3, queueId, "OrderQueue", "class OrderQueue", "class", "csharp", "src/Queue/Queue.cs", 1, 20, null, false),
+            new(4, deepId, "OrderDeep", "class OrderDeep", "class", "csharp", "util/Deep.cs", 1, 15, null, false),
+        };
+        var edges = new[]
+        {
+            new GraphEdge(anchorId, helperId, "uses"),
+            new GraphEdge(anchorId, repoId, "uses"),
+            new GraphEdge(anchorId, queueId, "uses"),
+            new GraphEdge(helperId, deepId, "uses"),
+        };
+        var index = MillerRepositoryIndex.Build(symbols, edges);
+        return (index, new SmartTargetResolver(index));
+    }
+
+    private static List<string> BundleNames(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.GetProperty("bundle").EnumerateArray()
+            .Select(item => item.GetProperty("name").GetString()!)
+            .ToList();
+    }
+
+    [Fact]
+    public void Run_Neighbours_RelevanceBeatsLowerIdUnrelated_AtEqualHop()
+    {
+        var (index, resolver) = BuildRelevanceFixture();
+
+        // Anchor the bundle on Order (empty query → no BM25 seeds; the seed name "Order" is the scoring token).
+        // All three neighbours sit at hop 1. Under the old (hop, id) order the unrelated Helper (smallest id ..01)
+        // led; relevance ranking must surface the same-file OrderRepo and the name-overlap OrderQueue ahead of it.
+        string output = ContextTool.Run(index, resolver,
+            query: "", tokenBudget: 100000, maxHops: 1,
+            entrySymbols: new[] { "Order" }, failingTest: null, stackTrace: null, json: true, out _, out _);
+
+        var names = BundleNames(output);
+        Assert.Equal("Order", names[0]); // hop-0 seed leads
+        // Relevance order for the hop-1 neighbours: OrderRepo (4) > OrderQueue (2) > Helper (0). Helper has the
+        // SMALLEST id, so id-order alone would have put it first — the exact case the audit flagged.
+        Assert.Equal(new[] { "OrderRepo", "OrderQueue", "Helper" }, names.Skip(1).ToArray());
+        Assert.True(names.IndexOf("OrderRepo") < names.IndexOf("Helper"));
+        Assert.True(names.IndexOf("OrderQueue") < names.IndexOf("Helper"));
+    }
+
+    [Fact]
+    public void Run_Neighbours_HopStillDominatesRelevance()
+    {
+        var (index, resolver) = BuildRelevanceFixture();
+
+        // OrderDeep (hop 2) shares the "Order" token (score 2) yet must still sort AFTER the unrelated hop-1
+        // Helper (score 0): hop dominates relevance, so a hop-2 relevant neighbour never leapfrogs a hop-1 one.
+        string output = ContextTool.Run(index, resolver,
+            query: "", tokenBudget: 100000, maxHops: 2,
+            entrySymbols: new[] { "Order" }, failingTest: null, stackTrace: null, json: true, out _, out _);
+
+        var names = BundleNames(output);
+        Assert.Equal(new[] { "Order", "OrderRepo", "OrderQueue", "Helper", "OrderDeep" }, names.ToArray());
+        Assert.True(names.IndexOf("Helper") < names.IndexOf("OrderDeep"),
+            "a hop-1 neighbour must precede a hop-2 neighbour regardless of relevance score.");
+    }
+
     [Fact]
     public void Run_Json_KeepsPerCandidateFileFields()
     {
