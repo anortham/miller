@@ -548,6 +548,28 @@ public sealed class SearchTool
     /// (so more rows may exist) and fewer than <paramref name="limit"/> were kept, retry with the next larger
     /// window (500 → 2000 → 10000).
     /// </summary>
+    /// <summary>
+    /// Collapse identical <c>(SourceId, Line)</c> text-content hits: overlapping content-corpus chunks can both
+    /// match the same physical line, so the index returns duplicate rows with identical snippets. Keeps the first
+    /// occurrence per key and preserves order, so escalation counts, paging, and <c>sourceBytes</c> all see the
+    /// deduped set. Returns the input list unchanged when there is nothing to collapse.
+    /// </summary>
+    private static List<TextContentSearchHit> DedupByLine(List<TextContentSearchHit> hits)
+    {
+        if (hits.Count < 2)
+            return hits;
+
+        var seen = new HashSet<(string SourceId, int Line)>(hits.Count);
+        var deduped = new List<TextContentSearchHit>(hits.Count);
+        foreach (TextContentSearchHit hit in hits)
+        {
+            if (seen.Add((hit.SourceId, hit.Line)))
+                deduped.Add(hit);
+        }
+
+        return deduped.Count == hits.Count ? hits : deduped;
+    }
+
     private static void FetchWithEscalation(int overFetch, int limit, Func<int, (int Fetched, int Kept)> fetchAndFilter)
     {
         int window = overFetch;
@@ -879,6 +901,7 @@ public sealed class SearchTool
                 else if (filters.HasAny && outsideScope.Count < OutsideScopeHintLimit)
                     outsideScope.Add(hit);
             }
+            hits = DedupByLine(hits);
             return (fetched.Count, hits.Count);
         });
 
@@ -941,6 +964,7 @@ public sealed class SearchTool
                 else if (filters.HasAny && outsideScope.Count < OutsideScopeHintLimit)
                     outsideScope.Add(hit);
             }
+            hits = DedupByLine(hits);
             return (fetched.Count, hits.Count);
         });
 

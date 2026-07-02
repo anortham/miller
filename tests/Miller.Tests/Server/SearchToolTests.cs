@@ -1367,6 +1367,59 @@ public sealed class SearchToolTests
     }
 
     [Fact]
+    public void RunTextContent_CollapsesDuplicateSourceLineHits()
+    {
+        // Overlapping content-corpus chunks can both match the same physical line, so the index
+        // returns two rows with identical (SourceId, Line) and snippet (only chunkId differs).
+        // Miller must render the hit once and count it once.
+        var index = TextContentIndex(
+            SourceHit("src/TraceTool.cs", line: 2111, snippet: "var x = Resolve();",
+                sourceId: "src:trace", chunkId: "src:trace:0007"),
+            SourceHit("src/TraceTool.cs", line: 2111, snippet: "var x = Resolve();",
+                sourceId: "src:trace", chunkId: "src:trace:0008"));
+
+        string output = SearchTool.RunTextContent(
+            index,
+            "Resolve",
+            TextContentKind.WorkspaceSource,
+            limit: 10,
+            excludeTests: false,
+            json: false,
+            out int count,
+            out long sourceBytes);
+
+        Assert.Equal(1, count);
+        Assert.Equal(1, output.Split("src/TraceTool.cs:2111").Length - 1);
+        // sourceBytes groups by source and takes the max, so the deduped page bills the source once.
+        Assert.Equal(128, sourceBytes);
+    }
+
+    [Fact]
+    public void RunTextContent_KeepsDistinctLinesFromSameSource()
+    {
+        // Distinct physical lines from the same source must NOT be collapsed by the dedup.
+        var index = TextContentIndex(
+            SourceHit("src/TraceTool.cs", line: 2111, snippet: "first match",
+                sourceId: "src:trace", chunkId: "src:trace:0001"),
+            SourceHit("src/TraceTool.cs", line: 2130, snippet: "second match",
+                sourceId: "src:trace", chunkId: "src:trace:0002"));
+
+        string output = SearchTool.RunTextContent(
+            index,
+            "match",
+            TextContentKind.WorkspaceSource,
+            limit: 10,
+            excludeTests: false,
+            json: false,
+            out int count,
+            out long _);
+
+        Assert.Equal(2, count);
+        Assert.Contains("src/TraceTool.cs:2111", output, StringComparison.Ordinal);
+        Assert.Contains("src/TraceTool.cs:2130", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RunTextContent_AllText_CanSearchMultipleContentKinds()
     {
         var index = TextContentIndex(
