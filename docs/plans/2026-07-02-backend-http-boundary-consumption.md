@@ -65,7 +65,7 @@ Client extension: `http.client_request.v1` now spans vue/js/jsx/tsx/ts/python/cs
 - Modify: `src/Miller.Core/Graph/DotnetWebBridgeProvider.cs` — only if the structural-call path needs a marker for Task 5's narrowing (follow code reality on `TsClientCall`'s existing fields first).
 - Modify: `src/Miller.Core/Graph/BridgeGraphBuilder.cs:23` + `src/Miller.Indexing/BridgeProviderSelection.cs:8,72` — register `backend-http` in BOTH `DefaultProviders` lists + `CreateProvider` switch.
 - Modify: `src/Miller.Server/Tools/TraceTool.cs` — diagnostics table (`FileRouteDiagnosticProviders`, `:1008`), evidence-key lists, next_actions, doc header, MCP `[Description]` provider list.
-- Modify: `docs/contracts/trace-json-v1.md`, `src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md`, `.agents/skills/miller-bridge-trace/SKILL.md` (+ regen `skills/`).
+- Modify: `docs/contracts/trace-json-v1.md`, `src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md`, `.agents/skills/miller-bridge-trace/SKILL.md`, `.agents/skills/miller-orientation/SKILL.md` (+ regen `skills/`).
 - Test: `tests/Miller.Tests/Graph/BridgeGraphBuilderTests.cs`, `tests/Miller.Tests/Tools/TraceToolTests.cs`, `tests/Miller.Tests/Server/AgentInstructionsTests.cs`, `tests/Miller.Tests/Indexing/LiveBridgeTraceTests.cs` (Scale).
 
 ## Task 1: Whitelist + Adapter Reads for the 16 New Families
@@ -130,14 +130,19 @@ Client extension: `http.client_request.v1` now spans vue/js/jsx/tsx/ts/python/cs
 1. **Module-path anchor (django):** `included_module` `"users.urls"` → route facts whose workspace-relative path ends `users/urls.py` (dots → path separators, `.py` appended). Zero or multiple matching files → no compose, count `unanchoredMounts`.
 2. **Identifier anchor (express/fastapi/flask):** take the trailing identifier token of `mount_target` (`usersRouter`, `users.router` → `router` qualified by module `users`, `users_bp`); compose only when exactly ONE non-test file both defines a symbol with that name (via `context.SymbolsById`) and owns route facts of the matching framework family. Zero or ties → no compose, count `unanchoredMounts`. For dotted fastapi targets (`users.router`), require the module segment to match the defining file's stem as well.
 
-Compose only route facts WITHOUT `effective_route_template` (a same-file-prefixed fact is already mounted upstream; composing again double-prefixes). The original un-composed handler entry is REPLACED by the composed one for anchored (mount, route-file) pairs — the router-local path (`/:id`) is not client-reachable once mounted.
+Compose only route facts WITHOUT `effective_route_template` (a same-file-prefixed fact is already mounted upstream; composing again double-prefixes). Composition is **strictly additive — never replace the original handler entry** (codex review 2026-07-02, finding 1): route facts carry no receiver identity (`structural-fact-patterns.json` route families have route/verb metadata only; `StructuralRouteHandler` has no receiver field), so Miller can never PROVE a given route fact in the anchored file belongs to the mounted router rather than a direct `app.get` or a second router in the same file. Replacing would hide legitimate direct routes on unprovable ownership.
 
-**Approach:** Ambiguity poisons rather than degrades, mirroring upstream doctrine — never emit both a composed and heuristic alternative. Composed routes keep normal band rules (verb-matched → High): both endpoints of the join are source-attested facts and the anchor was required to be unambiguous. `rails.mount.v1` is counted in `.mounts` but never composes. If `SymbolsById` cannot answer "which file defines identifier X" without an O(symbols) scan per mount, build one name→files lookup per `BuildCandidates` run — do not add reader/SQL surface for this.
+**Accepted tradeoff (document + pin, do not band-aid):** in a file mixing a mounted router with direct-app routes (or two routers), every composable route fact in the anchored file gains a composed variant under the mount prefix — some variants are spurious. A spurious variant that no client path matches costs only an observation node; one that a client path DOES match is a wrong edge, and the fix is tightening the anchor upstream (receiver facts), never lowering the band. Pin this shape with negative tests rather than hiding it.
+
+**Approach:** Ambiguity poisons rather than degrades, mirroring upstream doctrine — never emit a compose from a zero-or-tied anchor. Composed routes keep normal band rules (verb-matched → High): both endpoints of the join are source-attested facts and the anchor was required to be unambiguous. `rails.mount.v1` is counted in `.mounts` but never composes. If `SymbolsById` cannot answer "which file defines identifier X" without an O(symbols) scan per mount, build one name→files lookup per `BuildCandidates` run — do not add reader/SQL surface for this.
 
 **Acceptance criteria:**
-- [ ] Express fixture: routes file (`router.get("/:id")`, symbol `usersRouter` exported) + mount file (`app.use("/users", usersRouter)` fact) + client `fetch("/users/42")` → High edge; router-local `/{}` no longer emitted as an endpoint for that pair.
+- [ ] Express fixture: routes file (`router.get("/:id")`, symbol `usersRouter` exported) + mount file (`app.use("/users", usersRouter)` fact) + client `fetch("/users/42")` → High edge via the composed route; the original router-local entry is still present (additive semantics).
 - [ ] Django fixture: `url_include` (`mount_path="/shop/"`, `included_module="shop.urls"`) + `url_pattern` in `shop/urls.py` → composed Medium `verb_unknown` edge for a matching GET client.
 - [ ] Two files defining `usersRouter` → no composed edges, `unanchoredMounts` counted; prefix-less fastapi include → no compose.
+- [ ] Middleware-shaped mount target (`app.use("/api", express.json())`) → identifier resolves to no route-owning file → no compose, `unanchoredMounts` counted.
+- [ ] Same router mounted at two prefixes (`app.use("/a", r)` + `app.use("/b", r)`) → composed variants under BOTH prefixes (correct Express semantics).
+- [ ] Mixed-file tradeoff pinned: a direct `app.get` route in the anchored routes file also gains a composed variant — test asserts and comments the accepted shape.
 - [ ] Fact with `effective_route_template` never double-composed.
 - [ ] Worker-scope verification passes, committed.
 
@@ -157,7 +162,7 @@ Compose only route facts WITHOUT `effective_route_template` (a same-file-prefixe
 - `resource_kind="singular"` (`resource :profile`): show `GET /profile`, create `POST /profile`, new `GET /profile/new`, edit `GET /profile/edit`, update `PATCH /profile` AND `PUT /profile`, destroy `DELETE /profile` (no index, no `:id`).
 - `only`/`except` (raw JSON string arrays — parse with `System.Text.Json`) filter the action set; `scope_path` prefixes the paths. Every expanded route is verb-known (Rails semantics are as deterministic as fetch's spec-default GET) → High on verb match.
 
-Symbol binding: for expanded routes and for `rails.route.v1` facts with `controller_action` (`"users#show"`), bind the endpoint to the `<CamelCase(name)>Controller` method symbol (`UsersController` + `show`) when exactly one non-test match exists in `SymbolsById`; otherwise fall back to the fact's `containing_symbol_id` (usually null in `routes.rb`) → synthesized `Endpoint` node. Expanded resource routes use the conventional action names as the lookup (`index`, `show`, …).
+Symbol binding: for `rails.route.v1` facts with `controller_action` (`"users#show"`), bind to `CamelCase(controller)` + `Controller` (`UsersController` + `show`) — the controller token is already in Rails' controller form, no inflection. For expanded resource routes, Rails maps BOTH kinds to **plural** controllers (`resources :users` → `UsersController`, `resource :profile` → `ProfilesController` — codex review 2026-07-02, finding 2): collection `resource_name` is already plural as written, singular `resource_name` must be pluralized with a minimal English rule set (append `s`; consonant+`y` → `ies`; `s/x/z/ch/sh` → `es`). Irregulars (`person`) simply fail the lookup — unambiguous-or-nothing already guards, and the fallback is honest. Bind only when exactly one non-test method match exists in `SymbolsById`; otherwise fall back to the fact's `containing_symbol_id` (usually null in `routes.rb`) → synthesized `Endpoint` node. Expanded resource routes use the conventional action names as the lookup (`index`, `show`, …).
 
 **Approach:** Expanded handlers carry the resource fact's file/line (routes.rb) so trace output points at the declaring DSL line; the bound symbol (when found) carries the controller location. Unambiguous-or-nothing on controller binding — never bind on name similarity.
 
@@ -165,6 +170,7 @@ Symbol binding: for expanded routes and for `rails.route.v1` facts with `control
 - [ ] `resources :users` fixture fact → 8 expanded routes; `only: [:index, :show]` → 2; `except` honored; singular variant correct; `scope_path="/admin"` prefixes all.
 - [ ] Client `fetch("/users/42")` GET → High edge to show route; `DELETE` client → High to destroy; expanded routes join through the same canonical fold.
 - [ ] `controller_action`/conventional binding: `UsersController#show` symbol present → edge targets that symbol id; controller absent → synthesized endpoint node, edge still emitted.
+- [ ] Singular-resource binding: `resource :profile` + `ProfilesController#show` present → bound to the PLURAL controller; a `ProfileController` decoy is never bound.
 - [ ] Worker-scope verification passes, committed.
 
 ## Task 5: C# Structural Client Requests Through dotnet-web
@@ -178,7 +184,7 @@ Symbol binding: for expanded routes and for `rails.route.v1` facts with `control
 - Consumes: `http.client_request.v1` facts in csharp (also go/java/ruby/python — these already flow; csharp is the one the filter blocks).
 - Produces: decided contract — a **structural-fact-derived** csharp client call is a real client call (it is M2-disciplined, non-test-filtered evidence of an outbound `HttpClient` request); a **legacy csharp url literal** stays excluded (the design-§4 heuristic it encodes — "a csharp url literal is a test HttpClient call" — remains true for raw literals). dotnet-web gains service-to-service edges: C# `HttpClient` call → ASP.NET endpoint.
 
-**What to build:** Narrow the exclusion at `RouteBridge.cs:236` so it applies only to calls that did NOT originate from a structural client-request fact. Inspect `TsClientCall`'s existing fields first (it already carries an attestation-ish member — follow code reality); if no existing field distinguishes structural origin, add one defaulted so every current construction site is byte-identical in behavior. Update the XML doc on `IsRealClientCall` to state both halves of the contract.
+**What to build:** Narrow the exclusion at `RouteBridge.cs:236` so it applies only to calls that did NOT originate from a structural client-request fact. The seam already exists (verified 2026-07-02): `TsClientCall.AttestedVerb` (`RouteBridge.cs:31-45`) is non-null exactly when the call was reduced from an `http.client_request.v1` fact (`TryReadClientRequest` rejects verbless facts, so every structural call carries one) and null for every legacy url-literal call — gate the csharp exclusion on `AttestedVerb is null`. No new field needed. Update the XML doc on `IsRealClientCall` to state both halves of the contract.
 
 **Approach:** `IsTestFact` + the fact's `is_test` already filter test-project HttpClient calls on the structural path — assert this with a test-path csharp fixture fact (rejected), plus a non-test csharp fact (edge emitted). Check F4 `DedupeClientCalls` interplay: a csharp structural request has no legacy-literal twin under the legacy exclusion, so suppression sets simply gain entries — assert no behavior change for js-side dedupe. The backend-http provider (Task 2) needs no change — `ResolveClientRequests` has no language filter.
 
@@ -217,20 +223,23 @@ Symbol binding: for expanded routes and for `rails.route.v1` facts with `control
 
 **What to build:** Grouped polyglot fixtures — one temp workspace per scenario group, not one per family — covering every new family live:
 
-1. **JS/TS group:** express route + cross-file router mount (`app.use`) + fastify route + `fetch`/axios clients → direct High, mounted High, fastify High.
+1. **JS/TS group:** express route + cross-file router mount (`app.use`) + fastify route + `fetch`/axios clients, plus a Vue SFC whose `<script>` issues a client request → direct High, mounted High, fastify High, vue client fact emitted.
 2. **Python group:** fastapi route (with `router_prefix`), flask blueprint route + `register_blueprint(url_prefix=...)` cross-file, django `path()` urlpattern + `url_include`, `requests.get`/`httpx` clients → fastapi High, flask composed High, django Medium `verb_unknown`.
 3. **Go group:** `net/http` Go-1.22 pattern (`"GET /api/items/{id}"`), gin group route, echo route + `http.Get` client → verb-attested High; gin `Any` → Medium.
 4. **Java group:** Spring `@RestController` with class-level `@RequestMapping` + `@GetMapping` + `HttpRequest` builder client → High; method-less `@RequestMapping` → Medium.
-5. **Ruby group:** `config/routes.rb` draw block with verb DSL + `resources :users` + controller class + `Net::HTTP` client → DSL High, expanded-resource High bound to the controller method symbol.
+5. **Ruby group:** `config/routes.rb` draw block with verb DSL + `resources :users` + `mount SomeEngine => "/eng"` (the `rails.mount.v1` emitter) + controller class + `Net::HTTP` client → DSL High, expanded-resource High bound to the controller method symbol, mount counted in evidence.
 6. **C# service-to-service:** `HttpClient` call + attribute-routed controller → High through dotnet-web (Task 5 live proof).
 
-Per the language-parity rule, add one live assertion enumerating per-family fact counts from the extract (`SELECT pattern_id, COUNT(*)` over the fixture workspace's `structural_facts`) proving every one of the 16 ids emits on this extract — a family that silently emits zero fails the test, not the reader.
+Per the language-parity rule, add one live assertion enumerating per-family fact counts **aggregated across ALL group workspaces** (`SELECT pattern_id, COUNT(*)` over each group's `structural_facts`, union-summed — codex review 2026-07-02, finding 3) proving every one of the 16 ids emits at least once, plus a client-fact-language assertion proving `http.client_request.v1` emits from all seven client-language fixtures above (js/ts, vue, python, go, java, ruby, csharp). A family or client language that silently emits zero fails the test, not the reader.
+
+**Scope of the parity claim (stated, not implied):** Miller live-verifies per-family emission and per-client-language emission on representative fixtures. The full per-language × per-family matrix (e.g. express in jsx AND tsx AND js AND ts) is owned by upstream's capability-matrix and golden gates (run for the v2.7.0 release per its release notes) — Miller does not re-prove upstream's matrix, it proves its own consumption of each family and each client language.
 
 **Approach:** `_output.WriteLine` evidence; compact render lines asserted (`--route-->` + band). Scale trait via `ScaleTestSupport.RequireJulieServer()` or the convention guard fails the build. If a family emits nothing live that the release notes claim, STOP and report upstream — do not soften the parity assertion.
 
 **Acceptance criteria:**
 - [ ] All six scenario groups green via `scripts/test.sh scale`.
-- [ ] Per-family emission assertion covers all 16 pattern ids.
+- [ ] Per-family emission assertion covers all 16 pattern ids, aggregated across all group workspaces.
+- [ ] Client-language emission assertion covers all seven client-language fixtures.
 - [ ] Worker-scope verification passes, committed.
 
 ## Task 8: Docs, Instructions, Skill Sync + Branch Gate
@@ -238,13 +247,13 @@ Per the language-parity rule, add one live assertion enumerating per-family fact
 **Files:**
 - Modify: `docs/contracts/trace-json-v1.md`
 - Modify: `src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md` + `tests/Miller.Tests/Server/AgentInstructionsTests.cs`
-- Modify: `.agents/skills/miller-bridge-trace/SKILL.md` → run `scripts/sync-plugin-skills.sh`
+- Modify: `.agents/skills/miller-bridge-trace/SKILL.md` + `.agents/skills/miller-orientation/SKILL.md:60` → run `scripts/sync-plugin-skills.sh`
 
 **Interfaces:**
 - Consumes: shipped behavior from Tasks 1–7.
 - Produces: docs matching reality; green `AgentInstructionsTests`.
 
-**What to build:** (a) trace-json-v1.md: add `backend-http` to the provider scope list with its evidence-count names, the mount-composition and Rails-expansion semantics (including the unambiguous-anchor rule and `verb_unknown` arms), and the csharp client-request contract; state what is NOT claimed (regex Django patterns, `rails.mount` engine internals, non-literal templates — upstream M2 silence). (b) MILLER_AGENT_INSTRUCTIONS.md: provider list + fact-feed sentence gains `backend-http` and the five new client languages; update `AgentInstructionsTests` exact strings in lockstep. (c) Skill: provider list, backend families, pattern-audit examples (`pattern_id=express.route.v1`); regen `skills/` and confirm byte-identical. CLAUDE.md needs no edit (it does not enumerate providers) — verify; if an edit IS needed, run `scripts/sync-agents.sh` + `cmp -s CLAUDE.md AGENTS.md`.
+**What to build:** (a) trace-json-v1.md: add `backend-http` to the provider scope list with its evidence-count names, the mount-composition and Rails-expansion semantics (including the unambiguous-anchor rule and `verb_unknown` arms), and the csharp client-request contract; state what is NOT claimed (regex Django patterns, `rails.mount` engine internals, non-literal templates — upstream M2 silence). (b) MILLER_AGENT_INSTRUCTIONS.md: provider list + fact-feed sentence gains `backend-http` and the five new client languages; update `AgentInstructionsTests` exact strings in lockstep. (c) Skills: miller-bridge-trace gets provider list, backend families, pattern-audit examples (`pattern_id=express.route.v1`); miller-orientation's hardcoded provider sentence (`SKILL.md:60`, currently `dotnet-web, nextjs, nuxt, vue, react` — ALREADY stale, missing the shipped `nextjs-api`/`nuxt-api`) becomes the full list including `backend-http` (codex review 2026-07-02, finding 4); regen `skills/` and confirm byte-identical copies of both. CLAUDE.md needs no edit (it does not enumerate providers) — verify; if an edit IS needed, run `scripts/sync-agents.sh` + `cmp -s CLAUDE.md AGENTS.md`.
 
 **Acceptance criteria:**
 - [ ] `AgentInstructionsTests` green with updated strings; docs match shipped behavior.
