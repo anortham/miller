@@ -504,7 +504,7 @@ public sealed class TraceTool
 
         if (!TryNormalizeReferenceKind(referenceKind, out string? normalizedKind, out string? kindError))
             return json
-                ? RenderRefsJson(target, depth, limit, emitted, nodesVisited, targetSymbol: null,
+                ? RenderRefsJson(index, target, depth, limit, emitted, nodesVisited, targetSymbol: null,
                     references: [], normalizedKind, includeDefinition, kindError, "invalid_reference_kind")
                 : kindError!;
 
@@ -512,14 +512,14 @@ public sealed class TraceTool
         {
             const string message = "trace mode=refs requires the workspace reference reader.";
             return json
-                ? RenderRefsJson(target, depth, limit, emitted, nodesVisited, targetSymbol: null,
+                ? RenderRefsJson(index, target, depth, limit, emitted, nodesVisited, targetSymbol: null,
                     references: [], normalizedKind, includeDefinition, message, "refs_requires_reader")
                 : message;
         }
 
         if (!ResolveSymbol(index, resolver, target, scope, out string seedId, out string? note, out IReadOnlyList<TraceNextAction> nextActions))
             return json
-                ? RenderRefsJson(target, depth, limit, emitted, nodesVisited, targetSymbol: null,
+                ? RenderRefsJson(index, target, depth, limit, emitted, nodesVisited, targetSymbol: null,
                     references: [], normalizedKind, includeDefinition, note!, DiagnosticCode(note!), nextActions)
                 : AppendNextActions(note!, nextActions);
 
@@ -528,7 +528,7 @@ public sealed class TraceTool
         {
             const string message = "trace refs could not load the resolved target symbol.";
             return json
-                ? RenderRefsJson(target, depth, limit, emitted, nodesVisited, targetSymbol: null,
+                ? RenderRefsJson(index, target, depth, limit, emitted, nodesVisited, targetSymbol: null,
                     references: [], normalizedKind, includeDefinition, message, "target_symbol_missing")
                 : message;
         }
@@ -560,7 +560,7 @@ public sealed class TraceTool
         }
 
         if (json)
-            return RenderRefsJson(target, depth, limit, emitted, nodesVisited, targetSymbol, shown, normalizedKind,
+            return RenderRefsJson(index, target, depth, limit, emitted, nodesVisited, targetSymbol, shown, normalizedKind,
                 includeDefinition, resultNote, diagnosticCode, resultNextActions);
 
         var sb = new StringBuilder();
@@ -589,7 +589,7 @@ public sealed class TraceTool
         {
             sb.Append("references:\n");
             foreach (SymbolRef reference in shown)
-                sb.Append("  ").Append(ReferenceLine(reference)).Append('\n');
+                sb.Append("  ").Append(ReferenceLine(index, reference)).Append('\n');
             if (resultNote is not null)
                 sb.Append(resultNote).Append('\n');
         }
@@ -597,13 +597,16 @@ public sealed class TraceTool
         return sb.ToString().TrimEnd('\n');
     }
 
-    private static string ReferenceLine(SymbolRef reference)
+    private static string ReferenceLine(ISymbolLookupIndex index, SymbolRef reference)
     {
         var sb = new StringBuilder();
         sb.Append(reference.FilePath).Append(':').Append(reference.StartLine)
           .Append("  ").Append(reference.Kind);
-        if (!string.IsNullOrWhiteSpace(reference.ContainingSymbolId))
-            sb.Append("  containing=").Append(reference.ContainingSymbolId);
+        // Resolve the enclosing symbol id to its name (like InspectTool.DistinctCallers). A raw 32-hex id is
+        // unusable in compact output, so when it does not resolve, drop the segment entirely.
+        if (reference.ContainingSymbolId is { } containingId &&
+            index.FindBySymbolId(containingId) is { } containing)
+            sb.Append("  in=").Append(containing.Name);
         return sb.ToString();
     }
 
@@ -1925,6 +1928,7 @@ public sealed class TraceTool
     }
 
     private static string RenderRefsJson(
+        ISymbolLookupIndex index,
         string target, int depth, int limit, int emitted, int nodesVisited, IndexedSymbol? targetSymbol,
         IReadOnlyList<SymbolRef> references, string? normalizedKind, bool includeDefinition,
         string? note, string? diagnosticCode, IReadOnlyList<TraceNextAction>? nextActions = null)
@@ -1938,7 +1942,7 @@ public sealed class TraceTool
                 w.WritePropertyName("references");
                 w.WriteStartArray();
                 foreach (SymbolRef reference in references)
-                    WriteReference(w, reference);
+                    WriteReference(index, w, reference);
                 w.WriteEndArray();
             },
             writeResolvedTarget: w => WriteSymbolOrNull(w, targetSymbol),
@@ -2098,7 +2102,7 @@ public sealed class TraceTool
         w.WriteEndObject();
     }
 
-    private static void WriteReference(Utf8JsonWriter w, SymbolRef reference)
+    private static void WriteReference(ISymbolLookupIndex index, Utf8JsonWriter w, SymbolRef reference)
     {
         w.WriteStartObject();
         w.WriteString("name", reference.Name);
@@ -2109,6 +2113,12 @@ public sealed class TraceTool
             w.WriteNull("containing_symbol_id");
         else
             w.WriteString("containing_symbol_id", reference.ContainingSymbolId);
+        // Additive: the resolved enclosing symbol name next to the chainable id. Null when absent or unresolvable.
+        if (reference.ContainingSymbolId is { } containingId &&
+            index.FindBySymbolId(containingId) is { } containing)
+            w.WriteString("containing_symbol_name", containing.Name);
+        else
+            w.WriteNull("containing_symbol_name");
         w.WriteString("confidence", "name_based");
         w.WriteEndObject();
     }

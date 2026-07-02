@@ -737,7 +737,11 @@ public sealed class TraceToolTests
     public void Refs_RendersDefinitionAndFilteredNameBasedReferences()
     {
         var index = BuildSymbolIndex(
-            new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
+            new[]
+            {
+                ("a", "Alpha", "method", "src/A.cs", 1),
+                ("caller", "CallerMethod", "method", "src/Caller.cs", 5),
+            },
             Array.Empty<(string, string)>());
         var references = new[]
         {
@@ -756,15 +760,46 @@ public sealed class TraceToolTests
         Assert.Contains("# trace refs Alpha (1 reference(s), kind=call, name-based)", outp);
         Assert.Contains("definition:", outp);
         Assert.Contains("Alpha  method  src/A.cs:1", outp);
-        Assert.Contains("src/Caller.cs:10  call  containing=caller", outp);
+        // Compact resolves the containing symbol id to its enclosing symbol name — no raw hash/id.
+        Assert.Contains("src/Caller.cs:10  call  in=CallerMethod", outp);
+        Assert.DoesNotContain("containing=", outp);
         Assert.DoesNotContain("src/Types.cs", outp);
+    }
+
+    [Fact]
+    public void Refs_Compact_UnresolvableContainingRendersNoInSegment()
+    {
+        // The containing id points at a symbol absent from the index (e.g. cross-file/unindexed): drop it
+        // entirely — a bare 32-hex id is unusable in compact output.
+        var index = BuildSymbolIndex(
+            new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
+            Array.Empty<(string, string)>());
+        var references = new[]
+        {
+            new SymbolRef("Alpha", "call", "src/Caller.cs", 10, "deadbeefdeadbeefdeadbeefdeadbeef"),
+        };
+
+        string outp = TraceTool.Run(index, ResolverFor(index),
+            target: "Alpha", scope: null, mode: "refs", to: null, depth: 3, limit: 20,
+            fullFormat: false, json: false, referenceKind: "call", includeDefinition: false,
+            readReferences: _ => references,
+            out int emitted, out int visited);
+
+        Assert.Equal(1, emitted);
+        Assert.Contains("src/Caller.cs:10  call", outp);
+        Assert.DoesNotContain("in=", outp);
+        Assert.DoesNotContain("deadbeef", outp);
     }
 
     [Fact]
     public void Refs_Json_RendersStructuredReferenceRows()
     {
         var index = BuildSymbolIndex(
-            new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
+            new[]
+            {
+                ("a", "Alpha", "method", "src/A.cs", 1),
+                ("caller", "CallerMethod", "method", "src/Caller.cs", 5),
+            },
             Array.Empty<(string, string)>());
         var references = new[]
         {
@@ -795,8 +830,11 @@ public sealed class TraceToolTests
         Assert.Equal("src/Caller.cs", refs[0].GetProperty("file").GetString());
         Assert.Equal(10, refs[0].GetProperty("line").GetInt32());
         Assert.Equal("caller", refs[0].GetProperty("containing_symbol_id").GetString());
+        // JSON keeps the chainable id AND adds the resolved enclosing symbol name (additive).
+        Assert.Equal("CallerMethod", refs[0].GetProperty("containing_symbol_name").GetString());
         Assert.Equal("name_based", refs[0].GetProperty("confidence").GetString());
         Assert.Equal(JsonValueKind.Null, refs[1].GetProperty("containing_symbol_id").ValueKind);
+        Assert.Equal(JsonValueKind.Null, refs[1].GetProperty("containing_symbol_name").ValueKind);
     }
 
     [Fact]
