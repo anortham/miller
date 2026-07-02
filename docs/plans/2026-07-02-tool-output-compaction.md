@@ -78,10 +78,10 @@
 **Approach:** Change `ReferenceLine(SymbolRef)` to `ReferenceLine(ISymbolLookupIndex index, SymbolRef reference)`; resolve `ContainingSymbolId` via `index.FindBySymbolId`. Render `in=<Name>` when resolved; when unresolvable, render nothing (drop the hash — it is unusable). Follow `InspectTool.DistinctCallers` (`InspectTool.cs:595`) as the resolution pattern. In `WriteReference` (JSON), add `containing_symbol_name` (nullable) after `containing_symbol_id`; JSON keeps the id (it is chainable there). `RunRefs` already holds `index` — thread it to both call sites. Resolution is per-line; refs are capped by `limit` (default 20), so ≤20 lookups — no batching needed (but `SymbolLookupBatch.FindBySymbolIds` exists if you prefer one batch call).
 
 **Acceptance criteria:**
-- [ ] Compact refs output contains `in=<symbol name>` and never a 32-hex id.
-- [ ] JSON refs output has both `containing_symbol_id` and new `containing_symbol_name`.
-- [ ] Unresolvable containing id renders no `in=` segment (compact) and `null` name (JSON).
-- [ ] Worker-scope verification passes, committed.
+- [x] Compact refs output contains `in=<symbol name>` and never a 32-hex id.
+- [x] JSON refs output has both `containing_symbol_id` and new `containing_symbol_name`.
+- [x] Unresolvable containing id renders no `in=` segment (compact) and `null` name (JSON).
+- [x] Worker-scope verification passes, committed.
 
 ### Task 2: `workspace list` — recency ordering, default cap, filter
 
@@ -102,12 +102,12 @@
 **Approach:** Ordering: current workspace first, then `LastSeenAt` descending. Compact: render at most `limit` entries (default 20; `limit<=0` means unlimited), then the omitted-count tail. Filter: case-insensitive substring match against `DisplayId` and `Root`, applied before the cap; when a filter is given and matches nothing, say so with the total registered count. JSON: unlimited by default (existing consumers), but respects explicit `limit`/`filter`; always add `last_seen_at`. Error-state entries (like `state: error`) that fall outside the cap must still be discoverable: append a one-line summary `errors: N workspace(s) in error state — filter or raise limit to see them` when any error entry was omitted. CLI `workspace list` gets `--filter <s>` / `--limit <n>` mapped to the same core. New MCP params go on the existing `Workspace` method with `[Description]` attributes mirroring this contract.
 
 **Acceptance criteria:**
-- [ ] Compact list with >20 registered workspaces renders 20 entries + accurate omitted tail; current workspace always first.
-- [ ] `filter` narrows by display id or root substring (case-insensitive); no-match renders a helpful line, not an empty string.
-- [ ] JSON unchanged shape + additive `last_seen_at`; unlimited without explicit limit.
-- [ ] Omitted error-state entries produce the error summary line.
-- [ ] CLI `workspace list --filter/--limit` works (test via CLI dispatch unit path, not subprocess).
-- [ ] Worker-scope verification passes, committed.
+- [x] Compact list with >20 registered workspaces renders 20 entries + accurate omitted tail; current workspace always first.
+- [x] `filter` narrows by display id or root substring (case-insensitive); no-match renders a helpful line, not an empty string.
+- [x] JSON unchanged shape + additive `last_seen_at`; unlimited without explicit limit.
+- [x] Omitted error-state entries produce the error summary line.
+- [x] CLI `workspace list --filter/--limit` works (test via CLI dispatch unit path, not subprocess).
+- [x] Worker-scope verification passes, committed.
 
 ### Task 3: `context` — rank neighbours by relevance, not symbol id
 
@@ -124,10 +124,10 @@
 **Approach:** In `BuildCandidates` step 3, before appending reached nodes, compute a relevance score per reached symbol: (a) +2 per query/seed identifier token (from `ExtractIdentifierTokens(query)` plus seed symbol names, case-insensitive) that appears in the neighbour's `Name`; (b) +1 if the neighbour's `FilePath` equals any seed's `FilePath`; (c) +1 if the neighbour's `FilePath` directory equals a seed's directory. Sort reached by `(Hop asc, score desc, Id asc)` — stable and deterministic. Keep `candidatesExamined` semantics unchanged. Do NOT change seed selection or the packer. Test with a synthetic index: a seed whose same-file neighbour and name-overlapping neighbour must outrank an unrelated neighbour that has a smaller symbol id (the case that fails today).
 
 **Acceptance criteria:**
-- [ ] Deterministic test proves same-file + name-overlap neighbours beat lower-id unrelated neighbours at equal hop.
-- [ ] Hop ordering still dominates (hop-1 before hop-2 regardless of score).
-- [ ] Existing ContextTool tests pass unmodified (or with order-only assertion updates justified in the commit message).
-- [ ] Worker-scope verification passes, committed.
+- [x] Deterministic test proves same-file + name-overlap neighbours beat lower-id unrelated neighbours at equal hop.
+- [x] Hop ordering still dominates (hop-1 before hop-2 regardless of score).
+- [x] Existing ContextTool tests pass unmodified (or with order-only assertion updates justified in the commit message).
+- [x] Worker-scope verification passes, committed.
 
 ### Task 4: `inspect depth=overview` — strip doc-comment lines from body preview
 
@@ -144,10 +144,10 @@
 **Approach:** In `BodyPreview`, after normalizing newlines and splitting, drop lines whose trimmed form is a doc-comment line: starts with `///` or `//!` (C#/Rust), or is inside a `/** … */` block (track a small in-block flag; a line starting `/**` opens, `*/` closes, drop inclusive), or starts with `"""` blocks is NOT in scope (Python docstrings are string literals — leave them). Keep ordinary `//` and `#` comments — they are code commentary, not doc duplication. If any lines were dropped, append nothing extra — the existing truncation note suffices; but count dropped lines toward `Truncated` only if the raw text also exceeded caps (dropping alone doesn't mean truncation). Then apply the existing line/char caps to the filtered lines.
 
 **Acceptance criteria:**
-- [ ] Overview preview of a body containing `///` member docs shows code lines only, within existing caps.
-- [ ] `/** */` block lines are dropped; plain `//` comments are kept.
-- [ ] `depth=full` body output is byte-identical to before.
-- [ ] Worker-scope verification passes, committed.
+- [x] Overview preview of a body containing `///` member docs shows code lines only, within existing caps.
+- [x] `/** */` block lines are dropped; plain `//` comments are kept.
+- [x] `depth=full` body output is byte-identical to before.
+- [x] Worker-scope verification passes, committed.
 
 ### Task 5: `inspect depth=full` — dedup callees, group references by file
 
@@ -164,10 +164,10 @@
 **Approach:** References: group the (already path/line-ordered) refs by `FilePath`, render `path:l1,l2,…` per file; the omitted-count line (`AppendOmittedLine`) now counts refs, applied against `relationLimit` on the underlying ref count as today (group after `Take(relationLimit)` so the limit semantics don't change). Callees: dedup by `Name` preserving first occurrence, annotate `×N` when N>1; apply `Take(relationLimit)` AFTER dedup so full depth shows up to 50 distinct callees (more information for the same budget). Do not filter out any names (no keyword blocklist — `nameof`/`ArgumentException` still carry information; the dedup removes the repetition cost). Overview depth uses the same rendering with its own limit (3) — verify both depths in tests.
 
 **Acceptance criteria:**
-- [ ] References render one line per file with comma-joined lines; totals/omitted counts remain accurate.
-- [ ] Callees are unique by name with `×N` counts; dedup happens before the relation limit.
-- [ ] JSON output unchanged.
-- [ ] Worker-scope verification passes, committed.
+- [x] References render one line per file with comma-joined lines; totals/omitted counts remain accurate.
+- [x] Callees are unique by name with `×N` counts; dedup happens before the relation limit.
+- [x] JSON output unchanged.
+- [x] Worker-scope verification passes, committed.
 
 ### Task 6: `search mode=markers` — collapse multi-marker lines
 
@@ -184,11 +184,11 @@
 **Approach:** In `FindMarkers`, key the dictionary by `RegionId` alone; accumulate the matched markers per region (ordered by `DefaultMarkers` index then name, matching today's tiebreak). `Take(limit)` then counts regions, not (marker,region) pairs — that is the correct unit. Sort by `(Path, Line, first-marker rank)` as today. `RenderCompact` joins markers with `,`. `RenderJson`: keep `"marker"` = first marker (additive-only rule) and add `"markers"` array. Update the internal callers (`SearchTool` markers mode, `CliDispatch.Todos` ~:155) for the record shape change.
 
 **Acceptance criteria:**
-- [ ] A line matching TODO+FIXME+HACK renders exactly one block with `TODO,FIXME,HACK`.
-- [ ] `limit` counts distinct regions.
-- [ ] JSON has both `marker` (unchanged meaning: first) and `markers` (all, ordered).
-- [ ] CLI `todos` path compiles and its tests pass.
-- [ ] Worker-scope verification passes, committed.
+- [x] A line matching TODO+FIXME+HACK renders exactly one block with `TODO,FIXME,HACK`.
+- [x] `limit` counts distinct regions.
+- [x] JSON has both `marker` (unchanged meaning: first) and `markers` (all, ordered).
+- [x] CLI `todos` path compiles and its tests pass.
+- [x] Worker-scope verification passes, committed.
 
 ### Task 7: text-content search — dedup identical (source, line) hits
 
@@ -205,10 +205,10 @@
 **Approach:** Add `private static List<TextContentSearchHit> DedupByLine(List<TextContentSearchHit> hits)` keeping first occurrence per `(SourceId, LineNumber)` key (use the actual member names). Apply inside both `FetchWithEscalation` callbacks after the filter loop (so escalation counts see deduped totals) — i.e., dedup `hits` before returning `(fetched.Count, hits.Count)`. Preserve order. Also check `SearchRouteExecutor.RunTextContent` (`src/Miller.Server/Tools/SearchRouteExecutor.cs:67`) — if it fetches independently rather than delegating to these overloads, apply the same dedup there.
 
 **Acceptance criteria:**
-- [ ] A fabricated index returning duplicate (source, line) hits renders the hit once; `total` reflects the deduped count.
-- [ ] Distinct lines from the same source are NOT collapsed.
-- [ ] `sourceBytes` accounting unchanged for the deduped page.
-- [ ] Worker-scope verification passes, committed.
+- [x] A fabricated index returning duplicate (source, line) hits renders the hit once; `total` reflects the deduped count.
+- [x] Distinct lines from the same source are NOT collapsed.
+- [x] `sourceBytes` accounting unchanged for the deduped page.
+- [x] Worker-scope verification passes, committed.
 
 ### Task 8: single-say recovery text — content empty search + onboarding unresolved rows
 
@@ -226,13 +226,26 @@
 **Approach:** ContentTool: delete the three-clause prose sentence in `RenderNoResultsCompact`, keep `Tried content_kind=<kind>.` (it states what was attempted — not duplicated in Next), keep `AppendContentNextActions`. JSON (`RenderNoResultsJson`) already only carries next_actions — leave it. WorkspaceRender: in the hot-targets loop, partition unresolved rows (identify via the same predicate `TargetLabel` uses to emit the unresolved label — inspect `TargetLabel`/`RecoveredTargetHash` first); render resolved rows as today (still capped at 5 total rendered rows), then if any unresolved exist append the single aggregate line with count and summed calls. Onboarding JSON unchanged.
 
 **Acceptance criteria:**
-- [ ] Empty content search compact contains the advice exactly once (Next block), plus the `Tried content_kind` fact line.
-- [ ] Onboarding compact renders ≤1 line for unresolved targets regardless of row count; resolved targets unaffected.
-- [ ] JSON outputs unchanged for both surfaces.
-- [ ] Worker-scope verification passes, committed.
+- [x] Empty content search compact contains the advice exactly once (Next block), plus the `Tried content_kind` fact line.
+- [x] Onboarding compact renders ≤1 line for unresolved targets regardless of row count; resolved targets unaffected.
+- [x] JSON outputs unchanged for both surfaces.
+- [x] Worker-scope verification passes, committed.
 
 ---
 
-## Run Report (fill during execution)
+## Run Report (completed 2026-07-02)
 
-Ledger entries per task: invariant, command, scope, SHA, result, timestamp. Before/after sample renders for the audited calls (report-only token comparison).
+Execution: subagent-driven-development, 8 tasks in 3 waves (T1/T2/T3/T4/T7 parallel → T5 → T6/T8 parallel), one fix round (T7 doc-comment placement). All tasks Lead-inline-reviewed and approved. Verification ledger: `.razorback/sdd/progress.md`.
+
+**Branch gate (HEAD c7d67bf):** `dotnet build Miller.slnx -c Release` → 0 warnings / 0 errors. `scripts/test.sh all` → fast 2726/2726 (14s), scale 45/45 (real julie-extract, not skipped).
+
+**Live before/after (report-only, this workspace):**
+- `trace refs FreshnessService`: `containing=418b740cbe36…` (unusable hash, ~10 tokens/line) → `in=AddMillerServices` (actionable, shorter).
+- `workspace list`: 140 rows ≈ 3.5k tokens → `# workspaces (20 of 140)` current-first/recency-ordered + `… 120 more` tail + error-state summary line.
+- `inspect CompareVersions depth=full`: 11 single-ref lines → 5 grouped `path:l1,l2` lines; callees deduped with `×N`.
+- `search mode=markers`: `SearchTool.cs:45` rendered once as `TODO,FIXME,HACK` (was 3 identical blocks).
+- context neighbours, overview body preview, source-search dedup, content/onboarding single-say: proven by unit tests (deterministic fixtures).
+
+**Notable judgment calls:** JSON stayed additive everywhere (`containing_symbol_name`, `last_seen_at`, `markers`); markers JSON keeps `marker`=first for contract compatibility. `WorkspaceListEntry.LastSeenAt` has a default value so pre-existing construction sites compile.
+
+**Flag for future work:** `MILLER_AGENT_INSTRUCTIONS.md` is at 11,982 of its 12,000-char AgentInstructionsTests budget (18 chars headroom) — the next doc addition must trim elsewhere.
