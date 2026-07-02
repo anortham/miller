@@ -3293,6 +3293,420 @@ public sealed class BridgeGraphBuilderTests
         Assert.DoesNotContain(graph.Edges, e => e.Edge.Kind == BridgeKind.Hits);
     }
 
+    // ============================ backend-http mount composition (plan Task 3) =================================
+    // Cross-file mount-prefix composition: a mount/include fact anchors — deterministically, unambiguous-or-nothing
+    // — to route facts in ANOTHER file, and Miller APPENDS composed route variants (RoutePath =
+    // JoinRoute(mountPath, routePath); verb/symbol/file/line unchanged) so a client hitting the mounted prefix
+    // joins the router-local route. Composition is STRICTLY ADDITIVE — the original router-local entry is never
+    // replaced (route facts carry no receiver identity, so ownership of a route by the mounted router is
+    // unprovable; replacing would hide legitimate direct routes). An ambiguous/tied/absent anchor composes NOTHING
+    // (ambiguity poisons, never degrades) and is counted in backend-http.unanchoredMounts.
+
+    [Fact]
+    public void BackendHttp_express_router_mount_composes_prefixed_route_High_and_keeps_original()
+    {
+        // Invariant: express router.get("/:id") in web/users.js (symbol usersRouter also defined there) +
+        // app.use("/users", usersRouter) in web/app.js → composed /users/:id joins fetch("/users/42") at High,
+        // bound to the route fact's handler symbol. ADDITIVE: the original router-local /:id is still counted in
+        // routeFacts AND still present as an unmatched endpoint observation node — never replaced.
+        var handler = Method("sym-users-show", "show", "show(req, res)", string.Empty, "web/users.js");
+        var routerSym = Type("sym-users-router", "usersRouter", "variable", file: "web/users.js");
+        var appSym = Type("sym-app", "app", "variable", file: "web/app.js");
+        var clientFn = Type("sym-client-fn", "loadUser", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-client-get", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch",
+                    ["target_path"] = "/users/42",
+                    ["url_kind"] = "path",
+                    ["verb"] = "GET",
+                    ["verb_source"] = "default",
+                }),
+            Fact("sf-express-route", "express.route.v1", "javascript", "web/users.js", "sym-users-show", 200,
+                new Dictionary<string, string>
+                {
+                    ["normalized_route_template"] = "/:id",
+                    ["verb"] = "GET",
+                }),
+            Fact("sf-express-mount", "express.router_mount.v1", "javascript", "web/app.js", "sym-app", 300,
+                new Dictionary<string, string>
+                {
+                    ["normalized_mount_path"] = "/users",
+                    ["mount_target"] = "usersRouter",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [handler, routerSym, appSym, clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hit = Assert.Single(graph.Incident("sym-users-show"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.False(hit.IsVerbUnknown);
+        Assert.Equal("sym-client-fn", hit.Edge.SourceRef.SymbolId);
+        Assert.Equal("sym-users-show", hit.Edge.TargetRef.SymbolId);
+
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["backend-http.composedRoutes"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["backend-http.unanchoredMounts"]);
+        // Additive proof #1: the original /:id backend route is still counted (routeFacts counts originals only).
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["backend-http.routeFacts"]);
+        // Additive proof #2: the original router-local /:id is still an (unmatched) endpoint observation node —
+        // the composed /users/:id was ADDED beside it, not substituted for it.
+        var originalEndpointId = BridgeGraph.SynthesizeId(
+            BridgeNodeKind.Endpoint,
+            FileRouteBridge.HandlerDisplay(new StructuralRouteHandler(
+                facts[1], "/:id", "GET", "sym-users-show", "web/users.js", 1)));
+        Assert.True(graph.Contains(originalEndpointId));
+        Assert.Contains("backend-http", graph.ObservationProviders(originalEndpointId));
+    }
+
+    [Fact]
+    public void BackendHttp_django_url_include_module_anchor_composes_Medium_verb_unknown()
+    {
+        // Invariant: django url_include(mount_path="/shop/", included_module="shop.urls") anchors by MODULE PATH to
+        // url_pattern facts in a file ending shop/urls.py (dots→'/', + ".py"), composing /shop/posts. Django
+        // URLconf carries no verb → the composed edge is Medium verb_unknown.
+        var clientFn = Type("sym-client-fn", "loadPosts", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-client-get", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch",
+                    ["target_path"] = "/shop/posts",
+                    ["url_kind"] = "path",
+                    ["verb"] = "GET",
+                    ["verb_source"] = "default",
+                }),
+            Fact("sf-django-route", "django.url_pattern.v1", "python", "src/shop/urls.py", string.Empty, 200,
+                new Dictionary<string, string>
+                {
+                    ["route_syntax"] = "path",
+                    ["normalized_route_template"] = "/posts",
+                }),
+            Fact("sf-django-include", "django.url_include.v1", "python", "src/config/urls.py", string.Empty, 300,
+                new Dictionary<string, string>
+                {
+                    ["normalized_mount_path"] = "/shop/",
+                    ["included_module"] = "shop.urls",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hit = Assert.Single(graph.Incident("sym-client-fn"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.Medium, hit.Band);
+        Assert.True(hit.IsVerbUnknown);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["backend-http.composedRoutes"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["backend-http.unanchoredMounts"]);
+    }
+
+    [Fact]
+    public void BackendHttp_django_url_include_unmatched_module_composes_nothing_and_counts_unanchored()
+    {
+        // Invariant (absence poisons): included_module="shop.urls" but the only url_pattern lives in other/urls.py
+        // (does not end with shop/urls.py) → zero module-anchor match → NO compose, unanchoredMounts counted.
+        var clientFn = Type("sym-client-fn", "loadPosts", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-client-get", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch",
+                    ["target_path"] = "/shop/posts",
+                    ["url_kind"] = "path",
+                    ["verb"] = "GET",
+                    ["verb_source"] = "default",
+                }),
+            Fact("sf-django-route", "django.url_pattern.v1", "python", "src/other/urls.py", string.Empty, 200,
+                new Dictionary<string, string>
+                {
+                    ["route_syntax"] = "path",
+                    ["normalized_route_template"] = "/posts",
+                }),
+            Fact("sf-django-include", "django.url_include.v1", "python", "src/config/urls.py", string.Empty, 300,
+                new Dictionary<string, string>
+                {
+                    ["normalized_mount_path"] = "/shop/",
+                    ["included_module"] = "shop.urls",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.DoesNotContain(graph.Edges, e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["backend-http.composedRoutes"]);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["backend-http.unanchoredMounts"]);
+    }
+
+    [Fact]
+    public void BackendHttp_two_files_define_router_identifier_is_ambiguous_composes_nothing()
+    {
+        // Invariant (tie poisons): two non-test files both define `usersRouter` AND both own express routes → the
+        // identifier anchor is a TIE → NO compose, unanchoredMounts counted, zero composed edges.
+        var handlerA = Method("sym-a-show", "show", "show(req,res)", string.Empty, "web/a/users.js");
+        var routerA = Type("sym-a-router", "usersRouter", "variable", file: "web/a/users.js");
+        var handlerB = Method("sym-b-show", "show", "show(req,res)", string.Empty, "web/b/users.js");
+        var routerB = Type("sym-b-router", "usersRouter", "variable", file: "web/b/users.js");
+        var appSym = Type("sym-app", "app", "variable", file: "web/app.js");
+        var clientFn = Type("sym-client-fn", "loadUser", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-client-get", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch",
+                    ["target_path"] = "/users/42",
+                    ["url_kind"] = "path",
+                    ["verb"] = "GET",
+                    ["verb_source"] = "default",
+                }),
+            Fact("sf-route-a", "express.route.v1", "javascript", "web/a/users.js", "sym-a-show", 200,
+                new Dictionary<string, string> { ["normalized_route_template"] = "/:id", ["verb"] = "GET" }),
+            Fact("sf-route-b", "express.route.v1", "javascript", "web/b/users.js", "sym-b-show", 210,
+                new Dictionary<string, string> { ["normalized_route_template"] = "/:id", ["verb"] = "GET" }),
+            Fact("sf-mount", "express.router_mount.v1", "javascript", "web/app.js", "sym-app", 300,
+                new Dictionary<string, string> { ["normalized_mount_path"] = "/users", ["mount_target"] = "usersRouter" }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [handlerA, routerA, handlerB, routerB, appSym, clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.DoesNotContain(graph.Edges, e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["backend-http.composedRoutes"]);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["backend-http.unanchoredMounts"]);
+    }
+
+    [Fact]
+    public void BackendHttp_middleware_mount_target_resolves_to_no_route_owning_file_composes_nothing()
+    {
+        // Invariant (absence poisons): app.use("/api", express.json()) → identifier `json` (call args dropped)
+        // names no route-owning file → NO compose, unanchoredMounts counted.
+        var handler = Method("sym-users-show", "show", "show(req,res)", string.Empty, "web/users.js");
+        var routerSym = Type("sym-users-router", "usersRouter", "variable", file: "web/users.js");
+        var appSym = Type("sym-app", "app", "variable", file: "web/app.js");
+        var clientFn = Type("sym-client-fn", "loadConfig", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-client-get", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch",
+                    ["target_path"] = "/api/config",
+                    ["url_kind"] = "path",
+                    ["verb"] = "GET",
+                    ["verb_source"] = "default",
+                }),
+            Fact("sf-express-route", "express.route.v1", "javascript", "web/users.js", "sym-users-show", 200,
+                new Dictionary<string, string> { ["normalized_route_template"] = "/:id", ["verb"] = "GET" }),
+            Fact("sf-mw-mount", "express.router_mount.v1", "javascript", "web/app.js", "sym-app", 300,
+                new Dictionary<string, string> { ["normalized_mount_path"] = "/api", ["mount_target"] = "express.json()" }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [handler, routerSym, appSym, clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["backend-http.composedRoutes"]);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["backend-http.unanchoredMounts"]);
+        Assert.DoesNotContain(graph.Edges, e => e.Edge.Kind == BridgeKind.Hits);
+    }
+
+    [Fact]
+    public void BackendHttp_prefixless_fastapi_include_is_not_a_mount_and_composes_nothing()
+    {
+        // Invariant: a fastapi include_router with NO mount_path is rejected at TryReadMountFact (Task 1) → it
+        // never reaches mountFacts, is not counted in backend-http.mounts, and composes nothing. The fastapi
+        // route still joins its client DIRECTLY (no prefix added).
+        var handler = Method("sym-items", "list_items", "list_items()", string.Empty, "app/items.py");
+        var routerSym = Type("sym-items-router", "api_router", "variable", file: "app/items.py");
+        var clientFn = Type("sym-client-fn", "loadItems", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-client-get", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch",
+                    ["target_path"] = "/api/items",
+                    ["url_kind"] = "path",
+                    ["verb"] = "GET",
+                    ["verb_source"] = "default",
+                }),
+            Fact("sf-fastapi-route", "fastapi.route.v1", "python", "app/items.py", "sym-items", 200,
+                new Dictionary<string, string> { ["normalized_route_template"] = "/api/items", ["verb"] = "GET" }),
+            Fact("sf-include", "fastapi.include_router.v1", "python", "app/main.py", string.Empty, 300,
+                new Dictionary<string, string> { ["mount_target"] = "api_router" }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [handler, routerSym, clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hit = Assert.Single(graph.Incident("sym-items"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["backend-http.mounts"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["backend-http.composedRoutes"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["backend-http.unanchoredMounts"]);
+    }
+
+    [Fact]
+    public void BackendHttp_same_router_mounted_at_two_prefixes_composes_both_variants()
+    {
+        // Invariant: app.use("/a", r) + app.use("/b", r), one routes file defining `r` → composed variants under
+        // BOTH /a and /b (correct Express semantics — two distinct reachable paths), each joining its own client
+        // at High.
+        var handler = Method("sym-r-show", "show", "show(req,res)", string.Empty, "web/r.js");
+        var routerSym = Type("sym-r", "r", "variable", file: "web/r.js");
+        var appSym = Type("sym-app", "app", "variable", file: "web/app.js");
+        var clientA = Type("sym-client-a", "loadA", "function", file: "web/api.ts");
+        var clientB = Type("sym-client-b", "loadB", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-client-a", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-a", 100,
+                new Dictionary<string, string> { ["client"] = "fetch", ["target_path"] = "/a/42", ["url_kind"] = "path", ["verb"] = "GET", ["verb_source"] = "default" }),
+            Fact("sf-client-b", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-b", 110,
+                new Dictionary<string, string> { ["client"] = "fetch", ["target_path"] = "/b/42", ["url_kind"] = "path", ["verb"] = "GET", ["verb_source"] = "default" }),
+            Fact("sf-route", "express.route.v1", "javascript", "web/r.js", "sym-r-show", 200,
+                new Dictionary<string, string> { ["normalized_route_template"] = "/:id", ["verb"] = "GET" }),
+            Fact("sf-mount-a", "express.router_mount.v1", "javascript", "web/app.js", "sym-app", 300,
+                new Dictionary<string, string> { ["normalized_mount_path"] = "/a", ["mount_target"] = "r" }),
+            Fact("sf-mount-b", "express.router_mount.v1", "javascript", "web/app.js", "sym-app", 310,
+                new Dictionary<string, string> { ["normalized_mount_path"] = "/b", ["mount_target"] = "r" }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [handler, routerSym, appSym, clientA, clientB], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hits = graph.Incident("sym-r-show").Where(e => e.Edge.Kind == BridgeKind.Hits).ToList();
+        Assert.Equal(2, hits.Count);
+        Assert.All(hits, h => Assert.Equal(ConfidenceBand.High, h.Band));
+        Assert.Contains(hits, h => h.Edge.SourceRef.SymbolId == "sym-client-a");
+        Assert.Contains(hits, h => h.Edge.SourceRef.SymbolId == "sym-client-b");
+        Assert.Equal(2, graph.CapabilityReport.EvidenceCounts["backend-http.composedRoutes"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["backend-http.unanchoredMounts"]);
+    }
+
+    [Fact]
+    public void BackendHttp_mixed_file_direct_route_also_gains_a_composed_variant_accepted_tradeoff()
+    {
+        // ACCEPTED, DOCUMENTED TRADEOFF (plan Task 3): route facts carry NO receiver identity, so when a mounted
+        // router's routes file ALSO contains a direct app.get route, Miller cannot prove which facts belong to the
+        // router. The ANCHOR is unambiguous-or-nothing (one file), but WITHIN the anchored file every composable
+        // route of the family gains a prefixed variant — including the direct app.get. The composed /users/health
+        // below is SPURIOUS (the real app.get is /health, not under the router), yet a client to /users/health
+        // matches it. This is the accepted cost; the fix is a tighter upstream anchor (receiver facts), never a
+        // lower band. Pinned so a future change cannot silently "fix" it by dropping the retained direct route.
+        var showSym = Method("sym-users-show", "show", "show(req,res)", string.Empty, "web/users.js");
+        var healthSym = Method("sym-health", "health", "health(req,res)", string.Empty, "web/users.js");
+        var routerSym = Type("sym-users-router", "usersRouter", "variable", file: "web/users.js");
+        var appSym = Type("sym-app", "app", "variable", file: "web/app.js");
+        var clientFn = Type("sym-client-fn", "checkHealth", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-client-get", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 100,
+                new Dictionary<string, string> { ["client"] = "fetch", ["target_path"] = "/users/health", ["url_kind"] = "path", ["verb"] = "GET", ["verb_source"] = "default" }),
+            Fact("sf-route-show", "express.route.v1", "javascript", "web/users.js", "sym-users-show", 200,
+                new Dictionary<string, string> { ["normalized_route_template"] = "/:id", ["verb"] = "GET" }),
+            Fact("sf-route-health", "express.route.v1", "javascript", "web/users.js", "sym-health", 210,
+                new Dictionary<string, string> { ["normalized_route_template"] = "/health", ["verb"] = "GET" }),
+            Fact("sf-mount", "express.router_mount.v1", "javascript", "web/app.js", "sym-app", 300,
+                new Dictionary<string, string> { ["normalized_mount_path"] = "/users", ["mount_target"] = "usersRouter" }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [showSym, healthSym, routerSym, appSym, clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        // The direct app.get /health ALSO gained a composed /users/health (spurious but accepted): the client to
+        // /users/health binds to the direct route's handler symbol as the literal-specificity winner.
+        var hit = Assert.Single(graph.Incident("sym-health"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.Equal("sym-health", hit.Edge.TargetRef.SymbolId);
+        // Both the router-local /:id and the direct /health composed → two composed variants.
+        Assert.Equal(2, graph.CapabilityReport.EvidenceCounts["backend-http.composedRoutes"]);
+    }
+
+    [Fact]
+    public void BackendHttp_route_with_effective_template_is_never_double_composed()
+    {
+        // Invariant: a route fact already carrying effective_route_template (/users/:id) was prefixed UPSTREAM
+        // (same-file app.use); composing again would double-prefix (/users/users/:id). Such facts are skipped by
+        // composition. The client joins the already-effective route DIRECTLY at High; composedRoutes==0 and no
+        // /users/users node exists. The mount still ANCHORED (one candidate file) → unanchoredMounts==0.
+        var handler = Method("sym-users-show", "show", "show(req,res)", string.Empty, "web/users.js");
+        var routerSym = Type("sym-users-router", "usersRouter", "variable", file: "web/users.js");
+        var appSym = Type("sym-app", "app", "variable", file: "web/app.js");
+        var clientFn = Type("sym-client-fn", "loadUser", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-client-get", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 100,
+                new Dictionary<string, string> { ["client"] = "fetch", ["target_path"] = "/users/42", ["url_kind"] = "path", ["verb"] = "GET", ["verb_source"] = "default" }),
+            Fact("sf-express-route", "express.route.v1", "javascript", "web/users.js", "sym-users-show", 200,
+                new Dictionary<string, string>
+                {
+                    ["normalized_route_template"] = "/:id",
+                    ["effective_route_template"] = "/users/:id",
+                    ["verb"] = "GET",
+                }),
+            Fact("sf-express-mount", "express.router_mount.v1", "javascript", "web/app.js", "sym-app", 300,
+                new Dictionary<string, string> { ["normalized_mount_path"] = "/users", ["mount_target"] = "usersRouter" }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [handler, routerSym, appSym, clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hit = Assert.Single(graph.Incident("sym-users-show"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["backend-http.composedRoutes"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["backend-http.unanchoredMounts"]);
+        Assert.DoesNotContain(graph.Nodes.Values, n => n.Display.Contains("users/users", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void BackendHttp_fastapi_dotted_target_requires_module_to_match_file_stem()
+    {
+        // Invariant: a dotted fastapi target (users.router) anchors only when the candidate file's stem
+        // (users.py → users) equals the module segment. A same-named `router` symbol in a different-stem file
+        // (admin.py) is filtered out by the stem requirement, so users.py is the UNIQUE anchor (without the stem
+        // filter the two `router` files would tie and compose nothing).
+        var usersHandler = Method("sym-users", "get_user", "get_user()", string.Empty, "app/users.py");
+        var usersRouter = Type("sym-users-router", "router", "variable", file: "app/users.py");
+        var adminHandler = Method("sym-admin", "get_admin", "get_admin()", string.Empty, "app/admin.py");
+        var adminRouter = Type("sym-admin-router", "router", "variable", file: "app/admin.py");
+        var clientFn = Type("sym-client-fn", "loadUser", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-client-get", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 100,
+                new Dictionary<string, string> { ["client"] = "fetch", ["target_path"] = "/users/42", ["url_kind"] = "path", ["verb"] = "GET", ["verb_source"] = "default" }),
+            Fact("sf-users-route", "fastapi.route.v1", "python", "app/users.py", "sym-users", 200,
+                new Dictionary<string, string> { ["normalized_route_template"] = "/:id", ["verb"] = "GET" }),
+            Fact("sf-admin-route", "fastapi.route.v1", "python", "app/admin.py", "sym-admin", 210,
+                new Dictionary<string, string> { ["normalized_route_template"] = "/:id", ["verb"] = "GET" }),
+            Fact("sf-include", "fastapi.include_router.v1", "python", "app/main.py", string.Empty, 300,
+                new Dictionary<string, string> { ["normalized_mount_path"] = "/users", ["mount_target"] = "users.router" }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [usersHandler, usersRouter, adminHandler, adminRouter, clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hit = Assert.Single(graph.Incident("sym-users"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.Equal("sym-users", hit.Edge.TargetRef.SymbolId);
+        Assert.DoesNotContain(graph.Incident("sym-admin"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["backend-http.composedRoutes"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["backend-http.unanchoredMounts"]);
+    }
+
     [Fact]
     public void BackendHttp_no_evidence_skips_with_reason_and_zero_counts()
     {
