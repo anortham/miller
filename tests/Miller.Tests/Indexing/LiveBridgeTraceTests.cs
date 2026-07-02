@@ -92,6 +92,7 @@ public sealed class LiveBridgeTraceTests
         // The client side is the containing TS function, not the synthetic route node, so agents start from useful code.
         string clientDisplay = EndpointDisplayOf(graph, hits, EndpointSide.Source);
         Assert.Equal("fetchAppSetting", clientDisplay);
+        Assert.Equal(2, graph.CapabilityReport.EvidenceCounts["dotnet-web.clientCalls"]);
 
         // ── End-to-end render proof: the entity→table bridge must render through the real TraceTool.Run with its band.
         var resolver = new SmartTargetResolver(index);
@@ -321,11 +322,15 @@ public sealed class LiveBridgeTraceTests
         // Pure Next.js repo: client requests alone must never activate dotnet-web (backend-evidence gate).
         Assert.DoesNotContain("dotnet-web", graph.CapabilityReport.ActiveProviders);
 
-        // BOTH handler export shapes (function declaration + const arrow) emit route-handler facts live.
-        // Live 2.6.0 binding surprise: only the FUNCTION-declaration fact carries containing_symbol_id (the
-        // const-arrow fact's span is the `export const GET` header, which precedes the arrow-function
-        // symbol's span, so it stays symbol-unbound) — hence POST is the function declaration here.
+        // BOTH handler export shapes (function declaration + const arrow) emit route-handler facts live and,
+        // with julie-extract 2.6.1+, both carry the exported handler symbol as containing_symbol_id.
         Assert.Equal(2, StructuralFactCount(work.Db, "nextjs.route_handler.v1", "app/api/messages/route.ts"));
+        var boundHandlerIds = StructuralFactContainingSymbolIds(
+            work.Db, "nextjs.route_handler.v1", "app/api/messages/route.ts");
+        Assert.Equal(2, boundHandlerIds.Count);
+        Assert.DoesNotContain(boundHandlerIds, string.IsNullOrEmpty);
+        Assert.Contains(SymbolIdsInFile(index, "GET", "app/api/messages/route.ts"), boundHandlerIds.Contains);
+        Assert.Contains(SymbolIdsInFile(index, "POST", "app/api/messages/route.ts"), boundHandlerIds.Contains);
 
         // fetch("/api/messages", { method: "POST" }) is verb-attested POST ⇒ exactly ONE High edge into the
         // route file, bound to the POST handler-export SYMBOL (the navigation payoff), NOT a synthetic
@@ -905,12 +910,9 @@ public sealed class LiveBridgeTraceTests
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────────────────────
-    // Next.js API fixture writer (2.6.0 HTTP boundary facts): App Router route handlers + fetch clients.
-    // Client URLs are plain static strings on purpose — template literals are silent in 2.6.0. The client
-    // calls deliberately avoid `const res = await …`: http.client_request.v1 binds the INNERMOST enclosing
-    // symbol, and a res variable would steal the containing-symbol binding from the function (live-verified).
-    // The POST handler is the FUNCTION declaration because live 2.6.0 symbol-binds only that shape; the
-    // const-arrow export still proves its fact emission (see the fact-count assertion).
+    // Next.js API fixture writer: App Router route handlers + fetch clients. Client URLs are plain static
+    // strings so the extractor emits concrete path facts. julie-extract 2.6.1+ binds both function-declaration
+    // and const-arrow route handlers to their exported handler symbols; the test above asserts both bindings.
     // ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
     private static void WriteNextApiFixture(string repo)
@@ -972,8 +974,8 @@ public sealed class LiveBridgeTraceTests
               return { notes: [] };
             });
             """);
-        // No `const res = await …` — the innermost-symbol binding would attach the fact to the res variable
-        // instead of the composable function (live-verified against 2.6.0).
+        // Bare awaits keep this fixture compact; the assigned-response client shape is covered by the
+        // disciplined and honesty-probe fixtures, where 2.6.1+ binds the fact to the containing function.
         File.WriteAllText(Path.Combine(composables, "useApi.ts"), """
             import axios from "axios";
 
@@ -1326,6 +1328,29 @@ public sealed class LiveBridgeTraceTests
         command.Parameters.AddWithValue("$patternId", patternId);
         command.Parameters.AddWithValue("$path", path);
         return Convert.ToInt32(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static IReadOnlyCollection<string> StructuralFactContainingSymbolIds(string dbPath, string patternId, string path)
+    {
+        using var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder { DataSource = dbPath, Mode = SqliteOpenMode.ReadOnly }.ToString());
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT COALESCE(containing_symbol_id, '')
+            FROM structural_facts
+            WHERE pattern_id = $patternId AND path = $path
+            ORDER BY structural_fact_id;
+            """;
+        command.Parameters.AddWithValue("$patternId", patternId);
+        command.Parameters.AddWithValue("$path", path);
+
+        using var reader = command.ExecuteReader();
+        var ids = new List<string>();
+        while (reader.Read())
+            ids.Add(reader.GetString(0));
+        return ids;
     }
 
     // The distinct emitting files for one pattern id — proves WHERE a fact family fired (e.g. htmx from TSX).

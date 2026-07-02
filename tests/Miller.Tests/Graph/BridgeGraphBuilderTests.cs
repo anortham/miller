@@ -2647,9 +2647,9 @@ public sealed class BridgeGraphBuilderTests
     [Fact]
     public void StructuralFacts_UncoveredUrlLiteral_SurvivesClientRequestSuppression()
     {
-        // F4 survival guard: suppression is per-site, never global. A ky wrapper literal with no covering
-        // structural request must keep its honest Medium route-only edge even while a covered fetch literal
-        // elsewhere is suppressed.
+        // F4 survival guard: suppression is not global across different keys. A ky wrapper literal with no
+        // covering structural request must keep its honest Medium route-only edge even while a covered fetch
+        // literal elsewhere is suppressed.
         var legacy = Method("sym-legacy-get", "LegacyGet", "Task<IResult> LegacyGet()",
             "LegacyController", "api/LegacyController.cs");
         var create = Method("sym-create-order", "CreateOrder", "Task<IResult> CreateOrder(CreateOrderRequest request)",
@@ -2702,6 +2702,51 @@ public sealed class BridgeGraphBuilderTests
         Assert.Equal(ConfidenceBand.High, orderHit.Band);
         // 1 surviving literal + 1 structural request.
         Assert.Equal(2, graph.CapabilityReport.EvidenceCounts["dotnet-web.clientCalls"]);
+    }
+
+    [Fact]
+    public void StructuralFacts_SameFunctionSameRouteWrapperLiteral_IsSuppressedByCoarseClientRequestKey()
+    {
+        // F4 intentionally keys suppression by (containing symbol, canonical route), not by call-site span.
+        // A wrapper literal in the same function and route as a structural fetch fact is suppressed; wrapper
+        // survival remains covered by the different-symbol/different-route test above.
+        var create = Method("sym-create-order", "CreateOrder", "Task<IResult> CreateOrder(CreateOrderRequest request)",
+            "OrdersController", "api/OrdersController.cs");
+        var tsFn = Type("sym-tsfn", "createOrder", "function", file: "web/api.ts");
+
+        var coveredFetchLiteral = MakeLiteral("/api/orders", kind: "url", language: "typescript",
+            carrier: "fetch", containingSymbolId: "sym-tsfn", spanStart: 80);
+        var sameFunctionWrapperLiteral = MakeLiteral("/api/orders", kind: "url", language: "typescript",
+            carrier: "ky", containingSymbolId: "sym-tsfn", spanStart: 140);
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-httppost",
+                patternId: "aspnet.attribute_route.v1",
+                language: "csharp",
+                path: "api/OrdersController.cs",
+                containingSymbolId: "sym-create-order",
+                startLine: 20,
+                metadataJson: """{"attribute_kind":"http_method","verb":"POST","controller_route_template":"api/[controller]","effective_route_template":"/api/orders","route_tokens":["controller"]}"""),
+            StructuralFact(
+                factId: "fact-fetch-post",
+                patternId: "http.client_request.v1",
+                language: "typescript",
+                path: "web/api.ts",
+                containingSymbolId: "sym-tsfn",
+                startLine: 8,
+                metadataJson: """{"client":"fetch","framework":"fetch","target_path":"/api/orders","url_kind":"path","verb":"POST","verb_source":"attested"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [create, tsFn], typeArguments: [], literals: [coveredFetchLiteral, sameFunctionWrapperLiteral],
+            annotations: [], dbSetProperties: [], structuralFacts: facts);
+
+        var orderHit = Assert.Single(graph.Incident("sym-create-order"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, orderHit.Band);
+        Assert.False(orderHit.IsVerbUnknown);
+        Assert.Equal("sym-tsfn", orderHit.Edge.SourceRef.SymbolId);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.clientCalls"]);
     }
 
     [Fact]

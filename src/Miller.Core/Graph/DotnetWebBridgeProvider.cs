@@ -376,8 +376,8 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
     /// route-only edges to endpoints whose verb is KNOWN to differ — a different target means a different edge
     /// signature, so graph dedupe cannot collapse them). Same site = same canonical route
     /// (<see cref="RouteNormalizer"/>) AND same containing symbol id; when either side has no containing
-    /// symbol, same file path + same canonical route. A literal with no covering structural request
-    /// (ky/got/$fetch/HttpClient wrappers, …) always survives — suppression is per-site, never global.
+    /// symbol, same file path + same canonical route. A wrapper literal (ky/got/$fetch/HttpClient, …)
+    /// survives only when it has a different key; same-function same-route wrappers are suppressed by design.
     /// </summary>
     private static List<TsClientCall> DedupeClientCalls(
         IReadOnlyList<TsClientCall> literalClientCalls,
