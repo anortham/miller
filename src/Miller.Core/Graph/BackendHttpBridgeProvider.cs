@@ -1,5 +1,6 @@
 using Miller.Core.Contracts;
 using Miller.Core.Resolver;
+using System.Text.Json;
 
 namespace Miller.Core.Graph;
 
@@ -42,6 +43,7 @@ public sealed class BackendHttpBridgeProvider : IBridgeProvider
         var clientRequests = new List<StructuralClientRequest>();
         var backendRoutes = new List<StructuralRouteHandler>();
         var mountFacts = new List<StructuralMountFact>();
+        var resourceFacts = new List<StructuralFactRecord>();
         var railsMountCount = 0;
         foreach (var fact in context.StructuralFacts.OrderBy(f => f.Path, StringComparer.Ordinal).ThenBy(f => f.Span.StartByte))
         {
@@ -64,22 +66,44 @@ public sealed class BackendHttpBridgeProvider : IBridgeProvider
                 continue;
             }
 
+            // Task 4: rails.resource_route.v1 matches none of the reads above (it is NOT in BackendRoutePatternIds).
+            // Collect the raw fact and expand it into concrete verb-known route handlers below. The IsTestFact filter
+            // mirrors the route/mount reads so a resources declaration in a test-scoped routes file never expands.
+            if (string.Equals(fact.PatternId, BridgeStructuralPatterns.RailsResourceRoute, StringComparison.Ordinal))
+            {
+                if (!StructuralRouteFactAdapter.IsTestFact(fact, context.SymbolsById))
+                    resourceFacts.Add(fact);
+                continue;
+            }
+
             // rails.mount mounts a Rack app whose internal routes never reach the fact stream, so it composes
             // nothing — counted as mount evidence only (never read, never a join input).
             if (string.Equals(fact.PatternId, BridgeStructuralPatterns.RailsMount, StringComparison.Ordinal))
                 railsMountCount++;
         }
 
-        // The join pool. Tasks 3 (mount-prefix composition) and 4 (Rails resource expansion) APPEND their
-        // synthesized handlers here before the resolve call — keep this as a distinct local so the insertion
-        // point stays obvious.
-        var routeHandlers = new List<StructuralRouteHandler>(backendRoutes);
+        // Task 4: build the (controllerClass, action) → unique-method-id lookup ONCE per run (mirrors Task 3's
+        // BuildNameToFiles — no O(symbols) scan per route). Rails controller binding is unambiguous-or-nothing:
+        // exactly one non-test method match binds; zero or many falls back to the fact's containing symbol id.
+        var controllerMethods = BuildControllerMethodIndex(context.Symbols);
 
-        // Task 3: cross-file mount-prefix composition. Anchor each mount fact (deterministically, unambiguous-or-
-        // nothing) to route facts in another file and APPEND composed prefixed variants — strictly additive, the
-        // original backendRoutes entries are never removed.
+        // The join pool. Task 3 (mount-prefix composition) and Task 4 (Rails resource expansion) APPEND their
+        // synthesized handlers here before the resolve call — keep this as a distinct local so the insertion point
+        // stays obvious. Rails route handlers carrying controller_action are REBOUND to their resolved controller
+        // method (an honest rebind — controller_action is receiver identity); every other family is copied verbatim.
+        var routeHandlers = new List<StructuralRouteHandler>(backendRoutes.Count);
+        foreach (var route in backendRoutes)
+            routeHandlers.Add(BindRailsRouteController(route, controllerMethods));
+
+        // Task 3: cross-file mount-prefix composition reads the PRISTINE backendRoutes (so the rebind above and the
+        // route-fact count stay decoupled). Anchor each mount fact (deterministically, unambiguous-or-nothing) to
+        // route facts in another file and APPEND composed prefixed variants — strictly additive, originals kept.
         var composition = ComposeMountedRoutes(mountFacts, backendRoutes, context.Symbols);
         routeHandlers.AddRange(composition.Composed);
+
+        // Task 4: expand rails.resource_route.v1 facts into concrete verb-known handlers and APPEND them.
+        var expandedResourceRoutes = ExpandResourceRoutes(resourceFacts, controllerMethods);
+        routeHandlers.AddRange(expandedResourceRoutes);
 
         var result = FileRouteBridge.ResolveClientRequests(clientRequests, routeHandlers);
         var evidenceCounts = new Dictionary<string, int>(StringComparer.Ordinal)
@@ -89,11 +113,13 @@ public sealed class BackendHttpBridgeProvider : IBridgeProvider
             ["backend-http.mounts"] = mountFacts.Count + railsMountCount,
             ["backend-http.composedRoutes"] = composition.Composed.Count,
             ["backend-http.unanchoredMounts"] = composition.UnanchoredMounts,
+            ["backend-http.expandedResourceRoutes"] = expandedResourceRoutes.Count,
             ["backend-http.candidates"] = result.Edges.Count,
             ["backend-http.ambiguousMatches"] = result.AmbiguousMatches,
         };
 
-        if (clientRequests.Count == 0 && backendRoutes.Count == 0 && mountFacts.Count == 0 && railsMountCount == 0)
+        if (clientRequests.Count == 0 && backendRoutes.Count == 0 && mountFacts.Count == 0 &&
+            railsMountCount == 0 && resourceFacts.Count == 0)
             return BridgeProviderResult.Skipped("no backend-http bridge evidence", evidenceCounts);
 
         return BridgeProviderResult.ActiveResult(
@@ -368,4 +394,280 @@ public sealed class BackendHttpBridgeProvider : IBridgeProvider
         var dot = name.LastIndexOf('.');
         return dot > 0 ? name[..dot] : name;
     }
+
+    // ================================ Task 4: Rails semantics ================================================
+    // Rails is Miller's job (julie handoff). rails.resource_route.v1 facts are expanded into concrete verb-known
+    // route handlers by deterministic Rails doctrine, and rails route handlers bind to their controller-action
+    // method symbol UNAMBIGUOUSLY-OR-NOTHING. Every expanded handler carries the resource fact's routes.rb
+    // file/line so trace points at the declaring DSL line; the resolved controller method id (when a unique
+    // non-test match exists) becomes the edge target, else the endpoint falls back to a synthesized node.
+
+    // The 7 conventional Rails actions — the only/except filter domain. `update` maps to two verb entries.
+    private static readonly HashSet<string> ConventionalActions = new(StringComparer.Ordinal)
+    {
+        "index", "create", "new", "edit", "show", "update", "destroy",
+    };
+
+    // resources :x → 8 handler entries (collection). Suffix is appended to "/{resource_name}".
+    private static readonly (string Action, string Verb, string Suffix)[] CollectionRoutes =
+    [
+        ("index",   "GET",    ""),
+        ("create",  "POST",   ""),
+        ("new",     "GET",    "/new"),
+        ("edit",    "GET",    "/:id/edit"),
+        ("show",    "GET",    "/:id"),
+        ("update",  "PATCH",  "/:id"),
+        ("update",  "PUT",    "/:id"),
+        ("destroy", "DELETE", "/:id"),
+    ];
+
+    // resource :x → 7 handler entries (singular): no index, no :id member routes.
+    private static readonly (string Action, string Verb, string Suffix)[] SingularRoutes =
+    [
+        ("show",    "GET",    ""),
+        ("create",  "POST",   ""),
+        ("new",     "GET",    "/new"),
+        ("edit",    "GET",    "/edit"),
+        ("update",  "PATCH",  ""),
+        ("update",  "PUT",    ""),
+        ("destroy", "DELETE", ""),
+    ];
+
+    /// <summary>
+    /// Expand every collected <c>rails.resource_route.v1</c> fact into concrete verb-known route handlers by Rails
+    /// doctrine. The base path segment is <c>resource_name</c> (leading <c>:</c> stripped); <c>only</c>/<c>except</c>
+    /// (JSON string arrays, tolerant of a leading <c>:</c> and a raw ruby form) filter the ACTION set;
+    /// <c>scope_path</c> prefixes every path via <see cref="JoinRoute"/>. Both kinds map to a PLURAL controller
+    /// (collection <c>resource_name</c> is already plural; a singular one is pluralized first); each entry binds to
+    /// the conventional action method when a unique non-test match exists, else to the fact's containing symbol id.
+    /// </summary>
+    private static IReadOnlyList<StructuralRouteHandler> ExpandResourceRoutes(
+        IReadOnlyList<StructuralFactRecord> resourceFacts,
+        IReadOnlyDictionary<string, string?> controllerMethods)
+    {
+        var expanded = new List<StructuralRouteHandler>();
+        if (resourceFacts.Count == 0)
+            return expanded;
+
+        foreach (var fact in resourceFacts)
+        {
+            var rawName = StructuralRouteFactAdapter.MetadataString(fact, "resource_name");
+            if (rawName is null)
+                continue;
+            var resourceName = StripLeadingColon(rawName.Trim());
+            if (resourceName.Length == 0)
+                continue;
+
+            var kind = StructuralRouteFactAdapter.MetadataString(fact, "resource_kind")?.Trim() ?? string.Empty;
+            var singular = string.Equals(kind, "singular", StringComparison.OrdinalIgnoreCase);
+            var collection = string.Equals(kind, "collection", StringComparison.OrdinalIgnoreCase);
+            if (!singular && !collection)
+                continue; // Unknown resource_kind → expand nothing (honest: never fabricate a route shape).
+
+            // Rails maps BOTH kinds to a PLURAL controller: `resources :users` → UsersController; `resource :profile`
+            // → ProfilesController (pluralize, then CamelCase + "Controller"). A singular ProfileController never binds.
+            var controllerClass = CamelCase(singular ? Pluralize(resourceName) : resourceName) + "Controller";
+
+            var allowed = ComputeAllowedActions(fact); // null ⇒ every conventional action.
+            var scopePath = StructuralRouteFactAdapter.MetadataString(fact, "scope_path");
+            var table = singular ? SingularRoutes : CollectionRoutes;
+
+            foreach (var (action, verb, suffix) in table)
+            {
+                if (allowed is not null && !allowed.Contains(action))
+                    continue;
+
+                var path = "/" + resourceName + suffix;
+                if (!string.IsNullOrWhiteSpace(scopePath))
+                    path = JoinRoute(scopePath, path);
+
+                var boundId = ResolveControllerMethod(controllerMethods, controllerClass, action)
+                    ?? (fact.ContainingSymbolId ?? string.Empty);
+
+                expanded.Add(new StructuralRouteHandler(fact, path, verb, boundId, fact.Path, fact.Span.StartLine));
+            }
+        }
+
+        return expanded;
+    }
+
+    /// <summary>
+    /// Rebind a <c>rails.route.v1</c> handler carrying <c>controller_action</c> (<c>"users#show"</c>) to the resolved
+    /// controller method: controller class = <c>CamelCase(controller) + "Controller"</c> (already in Rails' controller
+    /// form, no inflection), action = the method name. An honest rebind because controller_action IS receiver
+    /// identity. Any non-rails handler, a missing/blank controller_action, or an unresolved lookup returns the handler
+    /// unchanged (⇒ its original containing symbol id, or a synthesized endpoint node when that is blank).
+    /// </summary>
+    private static StructuralRouteHandler BindRailsRouteController(
+        StructuralRouteHandler route,
+        IReadOnlyDictionary<string, string?> controllerMethods)
+    {
+        if (!string.Equals(route.Fact.PatternId, BridgeStructuralPatterns.RailsRoute, StringComparison.Ordinal))
+            return route;
+
+        var controllerAction = StructuralRouteFactAdapter.MetadataString(route.Fact, "controller_action");
+        if (controllerAction is null)
+            return route;
+
+        var hash = controllerAction.IndexOf('#', StringComparison.Ordinal);
+        if (hash <= 0 || hash >= controllerAction.Length - 1)
+            return route; // Need a "controller#action" shape; anything else is not a bindable literal.
+
+        var controllerClass = CamelCase(controllerAction[..hash].Trim()) + "Controller";
+        var action = controllerAction[(hash + 1)..].Trim();
+        if (action.Length == 0)
+            return route;
+
+        var boundId = ResolveControllerMethod(controllerMethods, controllerClass, action);
+        return boundId is null ? route : route with { ContainingSymbolId = boundId };
+    }
+
+    /// <summary>
+    /// Build the <c>(controllerClass, action) → unique-method-id</c> lookup once per run. A key maps to the ONE
+    /// non-test method symbol whose <see cref="SymbolDetail.ParentClassName"/> and <see cref="SymbolDetail.Name"/>
+    /// match; a second collision POISONS the key to null (ambiguous → never binds). Unambiguous-or-nothing.
+    /// </summary>
+    private static Dictionary<string, string?> BuildControllerMethodIndex(IReadOnlyList<SymbolDetail> symbols)
+    {
+        var index = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (var symbol in symbols)
+        {
+            if (symbol.IsTest ||
+                !string.Equals(symbol.Kind, "method", StringComparison.Ordinal) ||
+                string.IsNullOrEmpty(symbol.Name) ||
+                string.IsNullOrEmpty(symbol.ParentClassName) ||
+                string.IsNullOrEmpty(symbol.Id))
+            {
+                continue;
+            }
+
+            var key = symbol.ParentClassName + ' ' + symbol.Name;
+            index[key] = index.ContainsKey(key) ? null : symbol.Id; // second match ⇒ ambiguous (null), never binds.
+        }
+        return index;
+    }
+
+    /// <summary>Look up the unique method id for a controller action; null when absent OR ambiguous (poisoned).</summary>
+    private static string? ResolveControllerMethod(
+        IReadOnlyDictionary<string, string?> controllerMethods,
+        string controllerClass,
+        string action) =>
+        controllerMethods.TryGetValue(controllerClass + ' ' + action, out var id) ? id : null;
+
+    /// <summary>
+    /// The allowed action set from <c>only</c>/<c>except</c> (null ⇒ every conventional action). <c>only</c> keeps
+    /// only the listed conventional actions; <c>except</c> drops the listed ones. Elements are normalized (trimmed,
+    /// leading <c>:</c> stripped, lowercased) before comparison against the conventional action names.
+    /// </summary>
+    private static HashSet<string>? ComputeAllowedActions(StructuralFactRecord fact)
+    {
+        var onlyRaw = StructuralRouteFactAdapter.MetadataString(fact, "only");
+        if (onlyRaw is not null)
+        {
+            var only = ParseActionList(onlyRaw);
+            return ConventionalActions.Where(only.Contains).ToHashSet(StringComparer.Ordinal);
+        }
+
+        var exceptRaw = StructuralRouteFactAdapter.MetadataString(fact, "except");
+        if (exceptRaw is not null)
+        {
+            var except = ParseActionList(exceptRaw);
+            return ConventionalActions.Where(action => !except.Contains(action)).ToHashSet(StringComparer.Ordinal);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Parse a Rails action list. The 2.7.0 contract types <c>only</c>/<c>except</c> as JSON string arrays, so parse
+    /// with <see cref="JsonSerializer"/> first; on failure fall back to a bracket/comma split so a raw ruby array
+    /// (<c>[:index, :show]</c>) still works — the task asks for leading-<c>:</c> tolerance so Task 7's live extract
+    /// cannot surprise the filter. Each element is normalized to a lowercased action name.
+    /// </summary>
+    private static HashSet<string> ParseActionList(string raw)
+    {
+        var trimmed = raw.Trim();
+        var actions = new HashSet<string>(StringComparer.Ordinal);
+        if (trimmed.Length == 0)
+            return actions;
+
+        try
+        {
+            var parsed = JsonSerializer.Deserialize<List<string>>(trimmed);
+            if (parsed is not null)
+            {
+                foreach (var element in parsed)
+                {
+                    var action = NormalizeAction(element);
+                    if (action.Length > 0)
+                        actions.Add(action);
+                }
+                return actions;
+            }
+        }
+        catch (JsonException)
+        {
+            // Not JSON — fall through to the tolerant bracket/comma split (raw ruby `[:index, :show]`).
+        }
+
+        var inner = trimmed;
+        if (inner.StartsWith('['))
+            inner = inner[1..];
+        if (inner.EndsWith(']'))
+            inner = inner[..^1];
+        foreach (var element in inner.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var action = NormalizeAction(element);
+            if (action.Length > 0)
+                actions.Add(action);
+        }
+        return actions;
+    }
+
+    /// <summary>Normalize one action token: strip surrounding quotes, a leading <c>:</c>, then lowercase.</summary>
+    private static string NormalizeAction(string raw)
+    {
+        var token = raw.Trim();
+        if (token.Length >= 2 && token[0] == '"' && token[^1] == '"')
+            token = token[1..^1].Trim();
+        token = StripLeadingColon(token);
+        return token.Trim().ToLowerInvariant();
+    }
+
+    private static string StripLeadingColon(string token) =>
+        token.StartsWith(':') ? token[1..] : token;
+
+    /// <summary>snake_case → PascalCase: split on '_', capitalize each segment (<c>admin_user</c> → <c>AdminUser</c>).</summary>
+    private static string CamelCase(string snake) =>
+        string.Concat(snake
+            .Split('_', StringSplitOptions.RemoveEmptyEntries)
+            .Select(segment => char.ToUpperInvariant(segment[0]) + segment[1..]));
+
+    /// <summary>
+    /// Minimal English pluralization for singular resource controllers: <c>s/x/z/ch/sh</c> → append <c>es</c>;
+    /// consonant + <c>y</c> → <c>ies</c>; otherwise append <c>s</c>. Irregulars (<c>person</c> → <c>people</c>)
+    /// simply fail the controller lookup — unambiguous-or-nothing already guards, and the endpoint fallback is honest.
+    /// </summary>
+    private static string Pluralize(string word)
+    {
+        if (word.Length == 0)
+            return word;
+
+        if (word.EndsWith("s", StringComparison.OrdinalIgnoreCase) ||
+            word.EndsWith("x", StringComparison.OrdinalIgnoreCase) ||
+            word.EndsWith("z", StringComparison.OrdinalIgnoreCase) ||
+            word.EndsWith("ch", StringComparison.OrdinalIgnoreCase) ||
+            word.EndsWith("sh", StringComparison.OrdinalIgnoreCase))
+        {
+            return word + "es";
+        }
+
+        if (word.Length >= 2 && (word[^1] == 'y' || word[^1] == 'Y') && !IsVowel(word[^2]))
+            return word[..^1] + "ies";
+
+        return word + "s";
+    }
+
+    private static bool IsVowel(char c) =>
+        c is 'a' or 'e' or 'i' or 'o' or 'u' or 'A' or 'E' or 'I' or 'O' or 'U';
 }

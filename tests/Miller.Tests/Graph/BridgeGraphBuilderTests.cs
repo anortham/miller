@@ -4147,4 +4147,341 @@ public sealed class BridgeGraphBuilderTests
 
         Assert.False(StructuralRouteFactAdapter.TryReadMountFact(fact, new Dictionary<string, SymbolDetail>(), out _));
     }
+
+    // ============================ backend-http Rails semantics (plan Task 4) ==================================
+    // Rails is Miller's job (julie handoff): (a) rails.resource_route.v1 facts are expanded into concrete,
+    // verb-known route handlers by deterministic Rails doctrine, and (b) Rails route handlers bind to their
+    // controller-action method symbol UNAMBIGUOUSLY-OR-NOTHING. Expanded handlers carry the resource fact's
+    // routes.rb file/line (trace points at the declaring DSL line); the bound method id targets the edge.
+
+    private static StructuralFactRecord ResourceFact(
+        string id,
+        string resourceName,
+        string resourceKind,
+        IReadOnlyDictionary<string, string>? extra = null,
+        string path = "config/routes.rb")
+    {
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["api_style"] = "dsl_routing",
+            ["resource_name"] = resourceName,
+            ["resource_kind"] = resourceKind,
+        };
+        if (extra is not null)
+            foreach (var kv in extra)
+                metadata[kv.Key] = kv.Value;
+        return Fact(id, "rails.resource_route.v1", "ruby", path, string.Empty, 200, metadata);
+    }
+
+    [Fact]
+    public void BackendHttp_rails_resources_collection_expands_to_eight_route_entries()
+    {
+        // Invariant: `resources :users` (collection) expands to the 8 canonical Rails handler entries
+        // (index/create/new/edit/show, update as PATCH AND PUT, destroy). Provider is ACTIVE on a resource
+        // fact alone even with no client and no symbols.
+        var facts = new List<StructuralFactRecord> { ResourceFact("sf-users", ":users", "collection") };
+
+        var graph = BridgeGraphBuilder.Build(
+            [], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.Contains("backend-http", graph.CapabilityReport.ActiveProviders);
+        Assert.Equal(8, graph.CapabilityReport.EvidenceCounts["backend-http.expandedResourceRoutes"]);
+    }
+
+    [Theory]
+    [InlineData("[\"index\", \"show\"]")]     // JSON, no leading colon
+    [InlineData("[\":index\", \":show\"]")]   // JSON, ruby symbol leading colon
+    [InlineData("[:index, :show]")]            // raw ruby array (tolerant fallback)
+    public void BackendHttp_rails_resources_only_filter_keeps_two(string onlyRaw)
+    {
+        // Invariant: `only:` keeps ONLY the listed actions; parsing tolerates JSON with/without leading ':'
+        // and a raw ruby array — so Task 7's live extract shape cannot surprise the filter.
+        var facts = new List<StructuralFactRecord>
+        {
+            ResourceFact("sf-users", ":users", "collection",
+                new Dictionary<string, string> { ["only"] = onlyRaw }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.Equal(2, graph.CapabilityReport.EvidenceCounts["backend-http.expandedResourceRoutes"]);
+    }
+
+    [Fact]
+    public void BackendHttp_rails_resources_except_filter_drops_destroy()
+    {
+        // Invariant: `except: [:destroy]` drops the destroy action (one entry) → 7 remaining; behaviorally, a
+        // DELETE client to /users/42 no longer joins (the destroy route is gone).
+        var clientFn = Type("sym-client-fn", "removeUser", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            ResourceFact("sf-users", ":users", "collection",
+                new Dictionary<string, string> { ["except"] = "[\":destroy\"]" }),
+            Fact("sf-client-del", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch",
+                    ["target_path"] = "/users/42",
+                    ["url_kind"] = "path",
+                    ["verb"] = "DELETE",
+                    ["verb_source"] = "literal",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.Equal(7, graph.CapabilityReport.EvidenceCounts["backend-http.expandedResourceRoutes"]);
+        Assert.DoesNotContain(graph.Edges, e => e.Edge.Kind == BridgeKind.Hits);
+    }
+
+    [Fact]
+    public void BackendHttp_rails_resource_singular_expands_to_seven_no_index_no_id()
+    {
+        // Invariant: `resource :profile` (singular) expands to 7 entries (no index, no :id member routes); a
+        // GET client to /profile joins show at High, and there is NO /profile/:id (a GET /profile/42 misses).
+        var clientShow = Type("sym-client-show", "loadProfile", "function", file: "web/api.ts");
+        var clientMember = Type("sym-client-member", "loadOther", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            ResourceFact("sf-profile", ":profile", "singular"),
+            Fact("sf-client-show", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-show", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch",
+                    ["target_path"] = "/profile",
+                    ["url_kind"] = "path",
+                    ["verb"] = "GET",
+                    ["verb_source"] = "default",
+                }),
+            Fact("sf-client-member", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-member", 110,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch",
+                    ["target_path"] = "/profile/42",
+                    ["url_kind"] = "path",
+                    ["verb"] = "GET",
+                    ["verb_source"] = "default",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [clientShow, clientMember], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.Equal(7, graph.CapabilityReport.EvidenceCounts["backend-http.expandedResourceRoutes"]);
+        var hit = Assert.Single(graph.Incident("sym-client-show"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.False(hit.IsVerbUnknown);
+        // No /profile/:id member route exists for a singular resource → the /profile/42 client joins nothing.
+        Assert.DoesNotContain(graph.Incident("sym-client-member"), e => e.Edge.Kind == BridgeKind.Hits);
+    }
+
+    [Fact]
+    public void BackendHttp_rails_scope_path_prefixes_every_expanded_route()
+    {
+        // Invariant: `scope_path="/admin"` prefixes every expanded path (JoinRoute) → a GET client to
+        // /admin/users/42 joins the show route (which canonically folds :id to match 42).
+        var clientFn = Type("sym-client-fn", "loadUser", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            ResourceFact("sf-users", ":users", "collection",
+                new Dictionary<string, string> { ["scope_path"] = "/admin" }),
+            Fact("sf-client-get", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch",
+                    ["target_path"] = "/admin/users/42",
+                    ["url_kind"] = "path",
+                    ["verb"] = "GET",
+                    ["verb_source"] = "default",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.Equal(8, graph.CapabilityReport.EvidenceCounts["backend-http.expandedResourceRoutes"]);
+        var hit = Assert.Single(graph.Incident("sym-client-fn"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+    }
+
+    [Fact]
+    public void BackendHttp_rails_resource_verb_specific_join_binds_to_plural_controller_methods()
+    {
+        // Invariant: expanded routes are VERB-KNOWN and bind to the PLURAL controller. `resources :users` +
+        // UsersController.{show,destroy} → a GET /users/42 client edges to show; a DELETE /users/42 client edges
+        // to destroy; both High; both target the controller METHOD symbol id (canonical :id↔42 fold). Also
+        // proves resource_name leading-colon stripping affects the path (":users" → /users/...).
+        var show = Method("sym-users-show", "show", "show", "UsersController", "app/controllers/users_controller.rb");
+        var destroy = Method("sym-users-destroy", "destroy", "destroy", "UsersController", "app/controllers/users_controller.rb");
+        var clientGet = Type("sym-client-get", "loadUser", "function", file: "web/api.ts");
+        var clientDel = Type("sym-client-del", "removeUser", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            ResourceFact("sf-users", ":users", "collection"),
+            Fact("sf-client-get", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-get", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch", ["target_path"] = "/users/42", ["url_kind"] = "path",
+                    ["verb"] = "GET", ["verb_source"] = "default",
+                }),
+            Fact("sf-client-del", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-del", 110,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch", ["target_path"] = "/users/42", ["url_kind"] = "path",
+                    ["verb"] = "DELETE", ["verb_source"] = "literal",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [show, destroy, clientGet, clientDel], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        var showHit = Assert.Single(graph.Incident("sym-users-show"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, showHit.Band);
+        Assert.Equal("sym-client-get", showHit.Edge.SourceRef.SymbolId);
+        Assert.Equal("sym-users-show", showHit.Edge.TargetRef.SymbolId);
+
+        var destroyHit = Assert.Single(graph.Incident("sym-users-destroy"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, destroyHit.Band);
+        Assert.Equal("sym-client-del", destroyHit.Edge.SourceRef.SymbolId);
+        Assert.Equal("sym-users-destroy", destroyHit.Edge.TargetRef.SymbolId);
+    }
+
+    [Fact]
+    public void BackendHttp_rails_route_controller_action_binds_to_controller_method()
+    {
+        // Invariant: a rails.route.v1 fact carrying controller_action="users#show" REBINDS the handler endpoint to
+        // UsersController.show (CamelCase(controller)+Controller, no inflection) — controller_action IS receiver
+        // identity — so the edge targets that method symbol id.
+        var show = Method("sym-users-show", "show", "show", "UsersController", "app/controllers/users_controller.rb");
+        var clientFn = Type("sym-client-fn", "loadUser", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-rails-route", "rails.route.v1", "ruby", "config/routes.rb", string.Empty, 200,
+                new Dictionary<string, string>
+                {
+                    ["api_style"] = "dsl_routing",
+                    ["route_template"] = "/users/:id",
+                    ["normalized_route_template"] = "/users/:id",
+                    ["verb"] = "GET",
+                    ["controller_action"] = "users#show",
+                }),
+            Fact("sf-client-get", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch", ["target_path"] = "/users/42", ["url_kind"] = "path",
+                    ["verb"] = "GET", ["verb_source"] = "default",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [show, clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hit = Assert.Single(graph.Incident("sym-users-show"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.Equal("sym-users-show", hit.Edge.TargetRef.SymbolId);
+    }
+
+    [Fact]
+    public void BackendHttp_rails_route_controller_action_absent_controller_synthesizes_endpoint_edge_still_emitted()
+    {
+        // Invariant: the same rails.route.v1 controller_action fact with NO matching controller symbol falls back
+        // to a synthesized Endpoint node (target SymbolId null) — the edge is STILL emitted at High.
+        var clientFn = Type("sym-client-fn", "loadUser", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-rails-route", "rails.route.v1", "ruby", "config/routes.rb", string.Empty, 200,
+                new Dictionary<string, string>
+                {
+                    ["api_style"] = "dsl_routing",
+                    ["route_template"] = "/users/:id",
+                    ["normalized_route_template"] = "/users/:id",
+                    ["verb"] = "GET",
+                    ["controller_action"] = "users#show",
+                }),
+            Fact("sf-client-get", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch", ["target_path"] = "/users/42", ["url_kind"] = "path",
+                    ["verb"] = "GET", ["verb_source"] = "default",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hit = Assert.Single(graph.Incident("sym-client-fn"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.Null(hit.Edge.TargetRef.SymbolId);
+    }
+
+    [Fact]
+    public void BackendHttp_rails_resource_singular_binds_plural_controller_never_singular_decoy()
+    {
+        // Invariant: singular `resource :profile` maps to the PLURAL ProfilesController (pluralize then CamelCase +
+        // Controller). A GET /profile client binds to ProfilesController.show; the singular ProfileController.show
+        // decoy is NEVER bound.
+        var plural = Method("sym-profiles-show", "show", "show", "ProfilesController", "app/controllers/profiles_controller.rb");
+        var decoy = Method("sym-profile-show", "show", "show", "ProfileController", "app/controllers/profile_controller.rb");
+        var clientFn = Type("sym-client-fn", "loadProfile", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            ResourceFact("sf-profile", ":profile", "singular"),
+            Fact("sf-client-get", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch", ["target_path"] = "/profile", ["url_kind"] = "path",
+                    ["verb"] = "GET", ["verb_source"] = "default",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [plural, decoy, clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hit = Assert.Single(graph.Incident("sym-profiles-show"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.Equal("sym-profiles-show", hit.Edge.TargetRef.SymbolId);
+        Assert.DoesNotContain(graph.Incident("sym-profile-show"), e => e.Edge.Kind == BridgeKind.Hits);
+    }
+
+    [Fact]
+    public void BackendHttp_rails_resource_ambiguous_controller_method_does_not_bind_falls_back_to_endpoint()
+    {
+        // Invariant (unambiguous-or-nothing): two non-test UsersController.show methods (two files) POISON the
+        // lookup → the expanded show route does NOT bind, falling back to a synthesized Endpoint node (target
+        // SymbolId null) — the High edge is still emitted, never bound on similarity.
+        var showA = Method("sym-users-show-a", "show", "show", "UsersController", "app/controllers/a/users_controller.rb");
+        var showB = Method("sym-users-show-b", "show", "show", "UsersController", "app/controllers/b/users_controller.rb");
+        var clientFn = Type("sym-client-fn", "loadUser", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            ResourceFact("sf-users", ":users", "collection"),
+            Fact("sf-client-get", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch", ["target_path"] = "/users/42", ["url_kind"] = "path",
+                    ["verb"] = "GET", ["verb_source"] = "default",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [showA, showB, clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.DoesNotContain(graph.Incident("sym-users-show-a"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.DoesNotContain(graph.Incident("sym-users-show-b"), e => e.Edge.Kind == BridgeKind.Hits);
+        var hit = Assert.Single(graph.Incident("sym-client-fn"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.Null(hit.Edge.TargetRef.SymbolId);
+    }
 }
