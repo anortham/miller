@@ -28,7 +28,7 @@ namespace Miller.Server.Tools;
 ///   being name-based because extractor refs do not carry resolved target symbol IDs.</item>
 /// <item><b>bridge</b> — the provider-scoped structural chain via <see cref="BridgeGraph.Walk"/> over the loaded
 ///   <see cref="BridgeGraph"/>, rendering each scored bridge edge with its confidence band and score. Current
-///   providers are dotnet-web, nextjs, nuxt, vue, and react.</item>
+///   providers are dotnet-web, nextjs, nextjs-api, nuxt, nuxt-api, vue, and react.</item>
 /// </list>
 ///
 /// <para><b>Honesty flags are load-bearing.</b> A reduced-confidence bridge edge is never rendered as if it were
@@ -58,9 +58,10 @@ public sealed class TraceTool
     [Description(
         "Follow a thread of code. mode=refs lists name-based identifier references (usages); mode=path shows " +
         "the shortest dependency path from target to 'to'; mode=bridge follows provider-scoped cross-language " +
-        "chains (currently dotnet-web) with a confidence band. mode=auto (callers/callees) is subsumed by " +
-        "inspect depth=full — prefer inspect for that. refs is name-based and may be empty for languages the " +
-        "extractor does not emit refs for; on empty, fall back to search mode=source for text occurrences. " +
+        "chains (dotnet-web, nextjs, nextjs-api, nuxt, nuxt-api, vue, react) with a confidence band. " +
+        "mode=auto (callers/callees) is subsumed by " +
+        "inspect depth=full — prefer inspect for that. refs is name-based and may be empty for some " +
+        "languages; on empty, fall back to search mode=source for text occurrences. " +
         "Reduced-confidence links are flagged [verb-unknown] / [ambiguous] — never trust an unflagged link more " +
         "than a flagged one. Use before manual caller/callee file hopping. Pass format=json for structured " +
         "output, or format=full to also see the signals behind each bridge link in compact output. " +
@@ -144,7 +145,24 @@ public sealed class TraceTool
 
     private sealed record BridgeRouteDiagnostic(string Code, string Message);
 
-    private sealed record FileRouteDiagnosticProvider(string ProviderId, string DisplayName, string TargetFactName)
+    /// <summary>
+    /// One row of the per-provider route diagnostic table. The navigation providers (nextjs/nuxt/vue/react)
+    /// compare route references against <see cref="BridgeNodeKind.FileRoute"/> observation nodes; the API
+    /// providers (nextjs-api/nuxt-api) compare client requests against <see cref="BridgeNodeKind.Endpoint"/>
+    /// handler observation nodes. <paramref name="DefinitionEvidenceName"/> is the definition-side evidence
+    /// count key suffix; API providers participate only when it is non-zero, because both share the
+    /// <c>http.client_request.v1</c> reference family and client requests alone cannot attribute a repo to
+    /// Next.js vs Nuxt — the handler facts can. The noun fields keep rendered diagnostics honest per provider
+    /// ("client request" vs "route reference", "route edge" vs "navigation edge").
+    /// </summary>
+    private sealed record FileRouteDiagnosticProvider(
+        string ProviderId,
+        string DisplayName,
+        string ReferenceNoun,
+        string TargetFactName,
+        BridgeNodeKind DefinitionNodeKind,
+        string DefinitionEvidenceName,
+        string EdgeNoun)
     {
         public string DiagnosticCode(string suffix) => ProviderId + "_" + suffix;
     }
@@ -804,15 +822,21 @@ public sealed class TraceTool
         bool backendPresent = backendRoutes.Any(r => string.Equals(r.Normalized, targetRouteKey, StringComparison.Ordinal));
         bool fileRoutePresent = fileRoutes.Any(r => string.Equals(r.Normalized, targetRouteKey, StringComparison.Ordinal));
         bool hasFileRouteEvidence = HasFileRouteProviderEvidence(graph);
-        if (fileRoutePresent || (hasFileRouteEvidence && (frontendPresent || fileRoutes.Length > 0)))
+        bool hasApiDefinitionEvidence = FileRouteDiagnosticProviders.Any(provider =>
+            provider.DefinitionNodeKind == BridgeNodeKind.Endpoint && ProviderParticipates(graph, provider));
+        if (fileRoutePresent ||
+            (hasFileRouteEvidence &&
+             (frontendPresent || fileRoutes.Length > 0 || (hasApiDefinitionEvidence && backendRoutes.Length > 0))))
         {
             if (TryBuildFileRouteDiagnostic(
                     graph,
                     targetRoute,
                     frontendPresent,
                     fileRoutePresent,
+                    backendPresent,
                     frontendRoutes,
                     fileRoutes,
+                    backendRoutes,
                     out diagnostic))
                 return true;
         }
@@ -852,23 +876,26 @@ public sealed class TraceTool
         string targetRoute,
         bool routeReferencePresent,
         bool fileRoutePresent,
+        bool backendPresent,
         IReadOnlyList<(string Normalized, string Display)> routeReferences,
         IReadOnlyList<(string Normalized, string Display)> fileRoutes,
+        IReadOnlyList<(string Normalized, string Display)> backendRoutes,
         out BridgeRouteDiagnostic diagnostic)
     {
         foreach (var provider in FileRouteDiagnosticProviders)
         {
-            if (!HasFileRouteProviderEvidence(graph, provider.ProviderId))
+            if (!ProviderParticipates(graph, provider))
                 continue;
 
+            bool isApiProvider = provider.DefinitionNodeKind == BridgeNodeKind.Endpoint;
             if (TryBuildFrameworkFileRouteDiagnostic(
                     graph,
                     provider,
                     targetRoute,
                     routeReferencePresent,
-                    fileRoutePresent,
+                    definitionPresent: isApiProvider ? backendPresent : fileRoutePresent,
                     routeReferences,
-                    fileRoutes,
+                    definitionRoutes: isApiProvider ? backendRoutes : fileRoutes,
                     out diagnostic))
             {
                 return true;
@@ -886,65 +913,76 @@ public sealed class TraceTool
         FileRouteDiagnosticProvider provider,
         string targetRoute,
         bool routeReferencePresent,
-        bool fileRoutePresent,
+        bool definitionPresent,
         IReadOnlyList<(string Normalized, string Display)> routeReferences,
-        IReadOnlyList<(string Normalized, string Display)> fileRoutes,
+        IReadOnlyList<(string Normalized, string Display)> definitionRoutes,
         out BridgeRouteDiagnostic diagnostic)
     {
-        var matchingFileRoutes = fileRoutes
+        var matchingDefinitions = definitionRoutes
             .Where(route => Miller.Core.Resolver.FileRouteMatcher.Matches(targetRoute, route.Display))
             .ToArray();
-        bool fileRouteMatchesTarget = fileRoutePresent || matchingFileRoutes.Length > 0;
+        bool definitionMatchesTarget = definitionPresent || matchingDefinitions.Length > 0;
 
         int ambiguousMatches = FileRouteEvidenceCount(graph, provider.ProviderId, "ambiguousMatches");
-        if (routeReferencePresent && ambiguousMatches > 0 && matchingFileRoutes.Length > 0)
+        if (routeReferencePresent && ambiguousMatches > 0 && matchingDefinitions.Length > 0)
         {
             diagnostic = new BridgeRouteDiagnostic(
                 provider.DiagnosticCode("route_ambiguous_file_match"),
-                $"{provider.DisplayName} route reference exists: {targetRoute}; multiple matching {provider.TargetFactName} facts were observed, so no navigation edge was built. observed {provider.TargetFactName}s: {FormatObservedRoutes(matchingFileRoutes)}");
+                $"{provider.DisplayName} {provider.ReferenceNoun} exists: {targetRoute}; multiple matching {provider.TargetFactName} facts were observed, so no {provider.EdgeNoun} was built. observed {provider.TargetFactName}s: {FormatObservedRoutes(matchingDefinitions)}");
             return true;
         }
 
-        if (routeReferencePresent && !fileRouteMatchesTarget)
+        if (routeReferencePresent && !definitionMatchesTarget)
         {
             diagnostic = new BridgeRouteDiagnostic(
                 provider.DiagnosticCode("route_no_file_match"),
-                $"{provider.DisplayName} route reference exists: {targetRoute}; no matching {provider.TargetFactName} fact. observed {provider.TargetFactName}s: {FormatObservedRoutes(fileRoutes)}");
+                $"{provider.DisplayName} {provider.ReferenceNoun} exists: {targetRoute}; no matching {provider.TargetFactName} fact. observed {provider.TargetFactName}s: {FormatObservedRoutes(definitionRoutes)}");
             return true;
         }
 
-        if (!routeReferencePresent && fileRouteMatchesTarget)
+        if (!routeReferencePresent && definitionMatchesTarget)
         {
             diagnostic = new BridgeRouteDiagnostic(
                 provider.DiagnosticCode("route_no_reference_match"),
-                $"{provider.DisplayName} {provider.TargetFactName} exists: {targetRoute}; no matching route reference fact. observed route references: {FormatObservedRoutes(routeReferences)}");
+                $"{provider.DisplayName} {provider.TargetFactName} exists: {targetRoute}; no matching {provider.ReferenceNoun} fact. observed {provider.ReferenceNoun}s: {FormatObservedRoutes(routeReferences)}");
             return true;
         }
 
-        if (routeReferencePresent && fileRouteMatchesTarget)
+        if (routeReferencePresent && definitionMatchesTarget)
         {
             diagnostic = new BridgeRouteDiagnostic(
                 provider.DiagnosticCode("route_no_bridge_link"),
-                $"{provider.DisplayName} route reference and file route facts exist for {targetRoute}, but no navigation edge was built for that route.");
+                $"{provider.DisplayName} {provider.ReferenceNoun} and {provider.TargetFactName} facts exist for {targetRoute}, but no {provider.EdgeNoun} was built for that route.");
             return true;
         }
 
         diagnostic = new BridgeRouteDiagnostic(
             provider.DiagnosticCode("route_not_observed"),
-            $"no {provider.DisplayName} route reference or {provider.TargetFactName} facts observed for {targetRoute}.");
+            $"no {provider.DisplayName} {provider.ReferenceNoun} or {provider.TargetFactName} facts observed for {targetRoute}.");
         return false;
     }
 
     private static readonly FileRouteDiagnosticProvider[] FileRouteDiagnosticProviders =
     [
-        new("nextjs", "Next.js", "file route"),
-        new("nuxt", "Nuxt", "file route"),
-        new("vue", "Vue", "route definition"),
-        new("react", "React", "route definition"),
+        new("nextjs", "Next.js", "route reference", "file route", BridgeNodeKind.FileRoute, "fileRoutes", "navigation edge"),
+        new("nextjs-api", "Next.js", "client request", "route handler", BridgeNodeKind.Endpoint, "routeHandlers", "route edge"),
+        new("nuxt", "Nuxt", "route reference", "file route", BridgeNodeKind.FileRoute, "fileRoutes", "navigation edge"),
+        new("nuxt-api", "Nuxt", "client request", "server route", BridgeNodeKind.Endpoint, "serverRoutes", "route edge"),
+        new("vue", "Vue", "route reference", "route definition", BridgeNodeKind.FileRoute, "fileRoutes", "navigation edge"),
+        new("react", "React", "route reference", "route definition", BridgeNodeKind.FileRoute, "fileRoutes", "navigation edge"),
     ];
 
     private static bool HasFileRouteProviderEvidence(BridgeGraph graph) =>
-        FileRouteDiagnosticProviders.Any(provider => HasFileRouteProviderEvidence(graph, provider.ProviderId));
+        FileRouteDiagnosticProviders.Any(provider => ProviderParticipates(graph, provider));
+
+    // A navigation provider participates in route diagnostics on any of its evidence (its fact families are
+    // provider-specific). An API provider participates only with definition-side (handler) evidence — its
+    // client-request evidence is shared with the sibling API provider AND appears in repos that are neither
+    // Next.js nor Nuxt (dotnet-web consumes the same facts), where the generic backend diagnostics stay honest.
+    private static bool ProviderParticipates(BridgeGraph graph, FileRouteDiagnosticProvider provider) =>
+        provider.DefinitionNodeKind == BridgeNodeKind.Endpoint
+            ? FileRouteEvidenceCount(graph, provider.ProviderId, provider.DefinitionEvidenceName) > 0
+            : HasFileRouteProviderEvidence(graph, provider.ProviderId);
 
     private static bool HasFileRouteProviderEvidence(BridgeGraph graph, string providerId) =>
         graph.CapabilityReport.ActiveProviders.Any(provider => string.Equals(provider, providerId, StringComparison.Ordinal)) ||
@@ -1551,6 +1589,26 @@ public sealed class TraceTool
                     ("pattern_id", BridgeStructuralPatterns.HtmxAttribute)));
             }
 
+            if (HasEvidence(capabilityReport, "dotnet-web.attributeRoutes"))
+            {
+                actions.Add(NextAction(
+                    "patterns",
+                    "audit ASP.NET attribute route structural facts consumed by the dotnet-web bridge",
+                    ("operation", "search"),
+                    ("pattern_id", BridgeStructuralPatterns.AspNetAttributeRoute)));
+            }
+
+            if (HasEvidence(capabilityReport, "dotnet-web.clientRequests") ||
+                HasEvidence(capabilityReport, "nextjs-api.clientRequests") ||
+                HasEvidence(capabilityReport, "nuxt-api.clientRequests"))
+            {
+                actions.Add(NextAction(
+                    "patterns",
+                    "audit HTTP client request structural facts consumed by bridge providers",
+                    ("operation", "search"),
+                    ("pattern_id", BridgeStructuralPatterns.HttpClientRequest)));
+            }
+
             if (HasEvidence(capabilityReport, "dotnet-web.vueCalls"))
             {
                 actions.Add(NextAction(
@@ -1571,7 +1629,8 @@ public sealed class TraceTool
 
             if (HasEvidence(capabilityReport, "dotnet-web.nextjsCalls") ||
                 HasEvidence(capabilityReport, "nextjs.routeReferences") ||
-                HasEvidence(capabilityReport, "nextjs.fileRoutes"))
+                HasEvidence(capabilityReport, "nextjs.fileRoutes") ||
+                HasEvidence(capabilityReport, "nextjs-api.routeHandlers"))
             {
                 actions.Add(NextAction(
                     "patterns",
@@ -1582,7 +1641,8 @@ public sealed class TraceTool
 
             if (HasEvidence(capabilityReport, "dotnet-web.nuxtCalls") ||
                 HasEvidence(capabilityReport, "nuxt.routeReferences") ||
-                HasEvidence(capabilityReport, "nuxt.fileRoutes"))
+                HasEvidence(capabilityReport, "nuxt.fileRoutes") ||
+                HasEvidence(capabilityReport, "nuxt-api.serverRoutes"))
             {
                 actions.Add(NextAction(
                     "patterns",
@@ -1599,15 +1659,21 @@ public sealed class TraceTool
         HasEvidence(report, "bridge.structuralFacts") ||
         HasEvidence(report, "dotnet-web.structuralFacts") ||
         HasEvidence(report, "dotnet-web.aspnetMinimalRoutes") ||
+        HasEvidence(report, "dotnet-web.attributeRoutes") ||
         HasEvidence(report, "dotnet-web.htmxCalls") ||
         HasEvidence(report, "dotnet-web.vueCalls") ||
         HasEvidence(report, "dotnet-web.reactCalls") ||
         HasEvidence(report, "dotnet-web.nextjsCalls") ||
         HasEvidence(report, "dotnet-web.nuxtCalls") ||
+        HasEvidence(report, "dotnet-web.clientRequests") ||
         HasEvidence(report, "nextjs.routeReferences") ||
         HasEvidence(report, "nextjs.fileRoutes") ||
+        HasEvidence(report, "nextjs-api.clientRequests") ||
+        HasEvidence(report, "nextjs-api.routeHandlers") ||
         HasEvidence(report, "nuxt.routeReferences") ||
-        HasEvidence(report, "nuxt.fileRoutes");
+        HasEvidence(report, "nuxt.fileRoutes") ||
+        HasEvidence(report, "nuxt-api.clientRequests") ||
+        HasEvidence(report, "nuxt-api.serverRoutes");
 
     private static bool HasEvidence(BridgeCapabilityReport report, string key) =>
         report.EvidenceCounts.TryGetValue(key, out int value) && value > 0;

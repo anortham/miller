@@ -1089,6 +1089,92 @@ public sealed class TraceToolTests
     }
 
     [Fact]
+    public void Bridge_ClientRequestEdge_CompactAndJsonAgreeOnKindBandAndFlags()
+    {
+        // A matched verb-known client-request edge (fetch -> Next.js route handler symbol): High, no flags.
+        var hits = MakeScored(
+            BridgeKind.Hits,
+            SymbolRef("client", "loadMessages", "web/lib/api.ts"),
+            SymbolRef("handler", "GET", "web/app/api/messages/route.ts"),
+            ConfidenceBand.High, 0.9);
+        var index = BuildBridgeIndex(
+            new[]
+            {
+                ("client", "loadMessages", "web/lib/api.ts", 5),
+                ("handler", "GET", "web/app/api/messages/route.ts", 3),
+            },
+            new[] { hits },
+            new Dictionary<string, BridgeNode>(StringComparer.Ordinal));
+
+        string compact = TraceTool.Run(index, ResolverFor(index),
+            target: "loadMessages", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false,
+            out int compactEmitted, out _);
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "loadMessages", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false, json: true,
+            out int jsonEmitted, out _);
+
+        Assert.Equal(1, compactEmitted);
+        Assert.Equal(1, jsonEmitted);
+        Assert.Contains("loadMessages  --route-->  GET", compact);
+        Assert.Contains("0.90 (High)", compact);
+        Assert.DoesNotContain("[verb-unknown]", compact);
+        Assert.DoesNotContain("[ambiguous]", compact);
+
+        using var doc = JsonDocument.Parse(json);
+        JsonElement link = Assert.Single(doc.RootElement.GetProperty("links").EnumerateArray());
+        Assert.Equal("hits", link.GetProperty("kind").GetString());
+        Assert.Equal("route", link.GetProperty("label").GetString());
+        Assert.Equal("high", link.GetProperty("confidence").GetString());
+        Assert.Equal(0.9, link.GetProperty("score").GetDouble(), precision: 5);
+        Assert.Empty(link.GetProperty("flags").EnumerateArray());
+    }
+
+    [Fact]
+    public void Bridge_NuxtVerbUnknownClientRequestEdge_CompactAndJsonAgreeOnFlags()
+    {
+        // A suffix-less Nuxt server route answers every method: the edge is honest-Medium and flagged
+        // verb-unknown in BOTH compact and JSON output.
+        string endpointId = BridgeGraph.SynthesizeId(BridgeNodeKind.Endpoint, "/api/notes");
+        var hits = MakeScored(
+            BridgeKind.Hits,
+            SymbolRef("client", "loadNotes", "app/lib/api.ts"),
+            NonSymbolRef("/api/notes"),
+            ConfidenceBand.Medium, 0.75, verbUnknown: true);
+        var extra = new Dictionary<string, BridgeNode>(StringComparer.Ordinal)
+        {
+            [endpointId] = new BridgeNode(endpointId, BridgeNodeKind.Endpoint, "/api/notes", "server/api/notes.ts", 1),
+        };
+        var index = BuildBridgeIndex(
+            new[] { ("client", "loadNotes", "app/lib/api.ts", 5) },
+            new[] { hits },
+            extra);
+
+        string compact = TraceTool.Run(index, ResolverFor(index),
+            target: "loadNotes", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false,
+            out int compactEmitted, out _);
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "loadNotes", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false, json: true,
+            out int jsonEmitted, out _);
+
+        Assert.Equal(1, compactEmitted);
+        Assert.Equal(1, jsonEmitted);
+        Assert.Contains("loadNotes  --route-->  /api/notes", compact);
+        Assert.Contains("[verb-unknown]", compact);
+        Assert.Contains("0.75 (Medium)", compact);
+
+        using var doc = JsonDocument.Parse(json);
+        JsonElement link = Assert.Single(doc.RootElement.GetProperty("links").EnumerateArray());
+        Assert.Equal("hits", link.GetProperty("kind").GetString());
+        Assert.Equal("route", link.GetProperty("label").GetString());
+        Assert.Equal("medium", link.GetProperty("confidence").GetString());
+        Assert.Equal(new[] { "verb_unknown" },
+            link.GetProperty("flags").EnumerateArray().Select(flag => flag.GetString()).ToArray());
+        Assert.Contains(doc.RootElement.GetProperty("nodes").EnumerateArray(),
+            node => node.GetProperty("kind").GetString() == "endpoint" &&
+                    node.GetProperty("display").GetString() == "/api/notes");
+    }
+
+    [Fact]
     public void Bridge_RouteStringTarget_NextJsNavigation_StartsFromRouteAndRendersNavigatesTo()
     {
         string referenceId = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, "/settings");
@@ -1413,6 +1499,215 @@ public sealed class TraceToolTests
         JsonElement diagnostic = Assert.Single(doc.RootElement.GetProperty("diagnostics").EnumerateArray());
         Assert.Equal("nextjs_route_no_file_match", diagnostic.GetProperty("code").GetString());
         Assert.Contains("Next.js route reference exists: /settings", diagnostic.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public void Bridge_RouteStringTarget_NextJsApiClientRequestOnly_JsonExplainsNoHandlerMatch()
+    {
+        // An unmatched fetch("/api/messages") in a Next.js API repo: the client-request observation node exists,
+        // a route-handler fact exists elsewhere, no edge. The diagnostic must speak Next.js API nouns.
+        string requestId = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, "/api/messages");
+        string handlerId = BridgeGraph.SynthesizeId(BridgeNodeKind.Endpoint, "GET /api/other");
+        var extra = new Dictionary<string, BridgeNode>(StringComparer.Ordinal)
+        {
+            [requestId] = new BridgeNode(requestId, BridgeNodeKind.TsType, "/api/messages", "web/lib/api.ts", 5),
+            [handlerId] = new BridgeNode(handlerId, BridgeNodeKind.Endpoint, "GET /api/other", "web/app/api/other/route.ts", 1),
+        };
+        // Both API providers activate on the shared http.client_request.v1 family; only nextjs-api has
+        // handler facts, so the diagnostic must be attributed to Next.js, not Nuxt.
+        var capability = new BridgeCapabilityReport(
+            ActiveProviders: ["nextjs-api", "nuxt-api"],
+            SkippedProviders: [],
+            Notes: [],
+            EvidenceCounts: new Dictionary<string, int>(StringComparer.Ordinal)
+            {
+                ["nextjs-api.clientRequests"] = 1,
+                ["nextjs-api.routeHandlers"] = 1,
+                ["nextjs-api.candidates"] = 0,
+                ["nextjs-api.ambiguousMatches"] = 0,
+                ["nuxt-api.clientRequests"] = 1,
+                ["nuxt-api.serverRoutes"] = 0,
+                ["nuxt-api.candidates"] = 0,
+                ["nuxt-api.ambiguousMatches"] = 0,
+            });
+        var index = BuildBridgeIndex(
+            Array.Empty<(string symbolId, string name, string file, int line)>(),
+            Array.Empty<ScoredEdge>(),
+            extra,
+            capability);
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "/api/messages", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false, json: true,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement diagnostic = Assert.Single(doc.RootElement.GetProperty("diagnostics").EnumerateArray());
+        Assert.Equal("nextjs-api_route_no_file_match", diagnostic.GetProperty("code").GetString());
+        Assert.Contains("Next.js client request exists: /api/messages", diagnostic.GetProperty("message").GetString());
+        Assert.Contains("no matching route handler fact", diagnostic.GetProperty("message").GetString());
+        Assert.Contains("observed route handlers: /api/other", diagnostic.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public void Bridge_RouteStringTarget_NuxtApiClientRequestOnly_JsonExplainsNoServerRouteMatch()
+    {
+        string requestId = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, "/api/messages");
+        string handlerId = BridgeGraph.SynthesizeId(BridgeNodeKind.Endpoint, "/api/notes");
+        var extra = new Dictionary<string, BridgeNode>(StringComparer.Ordinal)
+        {
+            [requestId] = new BridgeNode(requestId, BridgeNodeKind.TsType, "/api/messages", "app/lib/api.ts", 5),
+            [handlerId] = new BridgeNode(handlerId, BridgeNodeKind.Endpoint, "/api/notes", "server/api/notes.ts", 1),
+        };
+        var capability = new BridgeCapabilityReport(
+            ActiveProviders: ["nextjs-api", "nuxt-api"],
+            SkippedProviders: [],
+            Notes: [],
+            EvidenceCounts: new Dictionary<string, int>(StringComparer.Ordinal)
+            {
+                ["nextjs-api.clientRequests"] = 1,
+                ["nextjs-api.routeHandlers"] = 0,
+                ["nextjs-api.candidates"] = 0,
+                ["nextjs-api.ambiguousMatches"] = 0,
+                ["nuxt-api.clientRequests"] = 1,
+                ["nuxt-api.serverRoutes"] = 1,
+                ["nuxt-api.candidates"] = 0,
+                ["nuxt-api.ambiguousMatches"] = 0,
+            });
+        var index = BuildBridgeIndex(
+            Array.Empty<(string symbolId, string name, string file, int line)>(),
+            Array.Empty<ScoredEdge>(),
+            extra,
+            capability);
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "/api/messages", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false, json: true,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement diagnostic = Assert.Single(doc.RootElement.GetProperty("diagnostics").EnumerateArray());
+        Assert.Equal("nuxt-api_route_no_file_match", diagnostic.GetProperty("code").GetString());
+        Assert.Contains("Nuxt client request exists: /api/messages", diagnostic.GetProperty("message").GetString());
+        Assert.Contains("no matching server route fact", diagnostic.GetProperty("message").GetString());
+        Assert.Contains("observed server routes: /api/notes", diagnostic.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public void Bridge_RouteStringTarget_NextJsApiVerbMismatch_JsonExplainsNoRouteEdge()
+    {
+        // Client request and handler share the path but no edge was built (a real verb distinction):
+        // both facts exist, so the honest diagnostic is "no route edge was built".
+        string requestId = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, "/api/messages");
+        string handlerId = BridgeGraph.SynthesizeId(BridgeNodeKind.Endpoint, "GET /api/messages");
+        var extra = new Dictionary<string, BridgeNode>(StringComparer.Ordinal)
+        {
+            [requestId] = new BridgeNode(requestId, BridgeNodeKind.TsType, "/api/messages", "web/lib/api.ts", 5),
+            [handlerId] = new BridgeNode(handlerId, BridgeNodeKind.Endpoint, "GET /api/messages", "web/app/api/messages/route.ts", 1),
+        };
+        var capability = new BridgeCapabilityReport(
+            ActiveProviders: ["nextjs-api"],
+            SkippedProviders: [],
+            Notes: [],
+            EvidenceCounts: new Dictionary<string, int>(StringComparer.Ordinal)
+            {
+                ["nextjs-api.clientRequests"] = 1,
+                ["nextjs-api.routeHandlers"] = 1,
+                ["nextjs-api.candidates"] = 0,
+                ["nextjs-api.ambiguousMatches"] = 0,
+            });
+        var index = BuildBridgeIndex(
+            Array.Empty<(string symbolId, string name, string file, int line)>(),
+            Array.Empty<ScoredEdge>(),
+            extra,
+            capability);
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "/api/messages", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false, json: true,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement diagnostic = Assert.Single(doc.RootElement.GetProperty("diagnostics").EnumerateArray());
+        Assert.Equal("nextjs-api_route_no_bridge_link", diagnostic.GetProperty("code").GetString());
+        Assert.Contains("Next.js client request and route handler facts exist for /api/messages", diagnostic.GetProperty("message").GetString());
+        Assert.Contains("no route edge was built", diagnostic.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public void Bridge_RouteStringTarget_NuxtApiServerRouteOnly_JsonExplainsNoClientRequestMatch()
+    {
+        string handlerId = BridgeGraph.SynthesizeId(BridgeNodeKind.Endpoint, "/api/notes");
+        var extra = new Dictionary<string, BridgeNode>(StringComparer.Ordinal)
+        {
+            [handlerId] = new BridgeNode(handlerId, BridgeNodeKind.Endpoint, "/api/notes", "server/api/notes.ts", 1),
+        };
+        var capability = new BridgeCapabilityReport(
+            ActiveProviders: ["nuxt-api"],
+            SkippedProviders: [],
+            Notes: [],
+            EvidenceCounts: new Dictionary<string, int>(StringComparer.Ordinal)
+            {
+                ["nuxt-api.clientRequests"] = 0,
+                ["nuxt-api.serverRoutes"] = 1,
+                ["nuxt-api.candidates"] = 0,
+                ["nuxt-api.ambiguousMatches"] = 0,
+            });
+        var index = BuildBridgeIndex(
+            Array.Empty<(string symbolId, string name, string file, int line)>(),
+            Array.Empty<ScoredEdge>(),
+            extra,
+            capability);
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "/api/notes", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false, json: true,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement diagnostic = Assert.Single(doc.RootElement.GetProperty("diagnostics").EnumerateArray());
+        Assert.Equal("nuxt-api_route_no_reference_match", diagnostic.GetProperty("code").GetString());
+        Assert.Contains("Nuxt server route exists: /api/notes", diagnostic.GetProperty("message").GetString());
+        Assert.Contains("no matching client request fact", diagnostic.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public void Bridge_RouteStringTarget_NextJsApiAmbiguousHandlers_JsonExplainsAmbiguousMatch()
+    {
+        string requestId = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, "/api/users/42");
+        string handlerId = BridgeGraph.SynthesizeId(BridgeNodeKind.Endpoint, "GET /api/users/{}");
+        var extra = new Dictionary<string, BridgeNode>(StringComparer.Ordinal)
+        {
+            [requestId] = new BridgeNode(requestId, BridgeNodeKind.TsType, "/api/users/42", "web/lib/api.ts", 5),
+            [handlerId] = new BridgeNode(handlerId, BridgeNodeKind.Endpoint, "GET /api/users/{}", "web/app/api/users/[id]/route.ts", 1),
+        };
+        var capability = new BridgeCapabilityReport(
+            ActiveProviders: ["nextjs-api"],
+            SkippedProviders: [],
+            Notes: [],
+            EvidenceCounts: new Dictionary<string, int>(StringComparer.Ordinal)
+            {
+                ["nextjs-api.clientRequests"] = 1,
+                ["nextjs-api.routeHandlers"] = 2,
+                ["nextjs-api.candidates"] = 0,
+                ["nextjs-api.ambiguousMatches"] = 1,
+            });
+        var index = BuildBridgeIndex(
+            Array.Empty<(string symbolId, string name, string file, int line)>(),
+            Array.Empty<ScoredEdge>(),
+            extra,
+            capability);
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "/api/users/42", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false, json: true,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement diagnostic = Assert.Single(doc.RootElement.GetProperty("diagnostics").EnumerateArray());
+        Assert.Equal("nextjs-api_route_ambiguous_file_match", diagnostic.GetProperty("code").GetString());
+        Assert.Contains("multiple matching route handler facts", diagnostic.GetProperty("message").GetString());
+        Assert.Contains("no route edge was built", diagnostic.GetProperty("message").GetString());
     }
 
     [Fact]
@@ -1780,6 +2075,80 @@ public sealed class TraceToolTests
             action.GetProperty("tool").GetString() == "patterns" &&
             action.GetProperty("args").TryGetProperty("pattern_id", out JsonElement patternId) &&
             patternId.GetString() == "vue.route_reference.v1");
+    }
+
+    [Fact]
+    public void Bridge_NotOnBridge_WithClientRequestAndAttributeRouteEvidence_OffersPatternAudits()
+    {
+        // The 2.6.0 boundary keys alone must open the route-fact gate and map to their pattern audits.
+        var capability = new BridgeCapabilityReport(
+            ActiveProviders: ["dotnet-web"],
+            SkippedProviders: [],
+            Notes: [],
+            EvidenceCounts: new Dictionary<string, int>(StringComparer.Ordinal)
+            {
+                ["dotnet-web.clientRequests"] = 2,
+                ["dotnet-web.attributeRoutes"] = 3,
+            });
+        var index = BuildBridgeIndex(
+            new[] { ("x", "Loner", "src/Loner.cs", 1) },
+            Array.Empty<ScoredEdge>(),
+            new Dictionary<string, BridgeNode>(StringComparer.Ordinal),
+            capability);
+
+        string outp = TraceTool.Run(index, ResolverFor(index),
+            target: "Loner", mode: "bridge", to: null, depth: 3, limit: 20, fullFormat: false,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        Assert.Contains("patterns operation=\"search\" query=\"route\"", outp);
+        Assert.Contains("patterns operation=\"search\" pattern_id=\"http.client_request.v1\"", outp);
+        Assert.Contains("patterns operation=\"search\" pattern_id=\"aspnet.attribute_route.v1\"", outp);
+    }
+
+    [Fact]
+    public void Bridge_NotOnBridge_WithApiProviderEvidence_JsonCarriesPatternAudits()
+    {
+        var capability = new BridgeCapabilityReport(
+            ActiveProviders: ["nextjs-api", "nuxt-api"],
+            SkippedProviders: [],
+            Notes: [],
+            EvidenceCounts: new Dictionary<string, int>(StringComparer.Ordinal)
+            {
+                ["nextjs-api.clientRequests"] = 1,
+                ["nextjs-api.routeHandlers"] = 1,
+                ["nuxt-api.clientRequests"] = 1,
+                ["nuxt-api.serverRoutes"] = 1,
+            });
+        var index = BuildBridgeIndex(
+            new[] { ("x", "Loner", "src/Loner.cs", 1) },
+            Array.Empty<ScoredEdge>(),
+            new Dictionary<string, BridgeNode>(StringComparer.Ordinal),
+            capability);
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "Loner", mode: "bridge", to: null, depth: 3, limit: 20, fullFormat: false, json: true,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement[] actions = doc.RootElement.GetProperty("next_actions").EnumerateArray().ToArray();
+        Assert.Contains(actions, action =>
+            action.GetProperty("tool").GetString() == "patterns" &&
+            action.GetProperty("args").TryGetProperty("query", out JsonElement query) &&
+            query.GetString() == "route");
+        Assert.Contains(actions, action =>
+            action.GetProperty("tool").GetString() == "patterns" &&
+            action.GetProperty("args").TryGetProperty("pattern_id", out JsonElement patternId) &&
+            patternId.GetString() == "http.client_request.v1");
+        Assert.Contains(actions, action =>
+            action.GetProperty("tool").GetString() == "patterns" &&
+            action.GetProperty("args").TryGetProperty("query", out JsonElement query) &&
+            query.GetString() == "nextjs");
+        Assert.Contains(actions, action =>
+            action.GetProperty("tool").GetString() == "patterns" &&
+            action.GetProperty("args").TryGetProperty("query", out JsonElement query) &&
+            query.GetString() == "nuxt");
     }
 
     [Fact]
