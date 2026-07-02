@@ -84,11 +84,11 @@ Client extension: `http.client_request.v1` now spans vue/js/jsx/tsx/ts/python/cs
 **Approach:** Rails `resource_route` and the mount facts are NOT `TryReadBackendRoute` inputs (no route template) — the provider consumes them separately in Tasks 3–4. `rails.mount.v1` gets a constant and whitelist entry but no adapter read beyond evidence counting.
 
 **Acceptance criteria:**
-- [ ] All 16 ids load through `SqliteBridgeReader` (fixture-fact test proves facts reach providers).
-- [ ] `TryReadBackendRoute`: effective-template precedence proven (fastapi `router_prefix` fixture), nullable verb (express `app.all` shape), spring `class_route` rejected, django regex-syntax fact rejected (blank route), test facts rejected.
-- [ ] `TryReadMountFact`: django `included_module` read; prefix-less fastapi include rejected.
-- [ ] Existing Next/Nuxt handler and navigation reads byte-identical (existing tests green).
-- [ ] Worker-scope verification passes, committed.
+- [x] All 16 ids load through `SqliteBridgeReader` (fixture-fact test proves facts reach providers).
+- [x] `TryReadBackendRoute`: effective-template precedence proven (fastapi `router_prefix` fixture), nullable verb (express `app.all` shape), spring `class_route` rejected, django regex-syntax fact rejected (blank route), test facts rejected.
+- [x] `TryReadMountFact`: django `included_module` read; prefix-less fastapi include rejected.
+- [x] Existing Next/Nuxt handler and navigation reads byte-identical (existing tests green).
+- [x] Worker-scope verification passes, committed.
 
 ## Task 2: `backend-http` Provider — Direct Joins + Registration
 
@@ -107,13 +107,13 @@ Client extension: `http.client_request.v1` now spans vue/js/jsx/tsx/ts/python/cs
 **Approach:** Do NOT make it 10 providers or extend `ApiRouteBridgeDescriptor` into a list-shape — a class of its own keeps the descriptor record honest and gives the enrichment passes a home. Per-family breakdowns go in evidence counts only if a count is cheap (e.g. `backend-http.routeFacts` total is required; per-framework counts are optional, report-only). Same client facts also feed dotnet-web/nextjs-api/nuxt-api — graph-level signature dedupe handles overlap (targets differ); observation-node `TryAdd` collapses duplicates (existing precedent).
 
 **Acceptance criteria:**
-- [ ] Fixture facts: `fetch("/api/users", {method:"POST"})` + express `router.post("/api/users")` → verb-known High `Hits` edge bound to the containing handler symbol.
-- [ ] Colon-param join: client `/api/users/42` + fastapi `normalized_route_template=/api/users/:user_id` → High (canonical `{}` fold); two equally-specific routes → ambiguous count, no edge.
-- [ ] Verb-null arm: gin `Any` route (no verb) + GET client → Medium `verb_unknown`; POST client + GET-only spring `http_method` fact → no edge.
-- [ ] Django url_pattern (never a verb) + GET client → Medium `verb_unknown`.
-- [ ] Registered in both `DefaultProviders` lists + `CreateProvider`; `miller.json` selection works; pure-frontend repo (client requests, zero backend routes) emits observations without fabricated edges.
-- [ ] Existing providers' behavior byte-identical (all existing tests green).
-- [ ] Worker-scope verification passes, committed.
+- [x] Fixture facts: `fetch("/api/users", {method:"POST"})` + express `router.post("/api/users")` → verb-known High `Hits` edge bound to the containing handler symbol.
+- [x] Colon-param join: client `/api/users/42` + fastapi `normalized_route_template=/api/users/:user_id` → High (canonical `{}` fold); two equally-specific routes → ambiguous count, no edge.
+- [x] Verb-null arm: gin `Any` route (no verb) + GET client → Medium `verb_unknown`; POST client + GET-only spring `http_method` fact → no edge.
+- [x] Django url_pattern (never a verb) + GET client → Medium `verb_unknown`.
+- [x] Registered in both `DefaultProviders` lists + `CreateProvider`; `miller.json` selection works; pure-frontend repo (client requests, zero backend routes) emits observations without fabricated edges.
+- [x] Existing providers' behavior byte-identical (all existing tests green).
+- [x] Worker-scope verification passes, committed.
 
 ## Task 3: Cross-File Mount-Prefix Composition
 
@@ -137,14 +137,14 @@ Compose only route facts WITHOUT `effective_route_template` (a same-file-prefixe
 **Approach:** Ambiguity poisons rather than degrades, mirroring upstream doctrine — never emit a compose from a zero-or-tied anchor. Composed routes keep normal band rules (verb-matched → High): both endpoints of the join are source-attested facts and the anchor was required to be unambiguous. `rails.mount.v1` is counted in `.mounts` but never composes. If `SymbolsById` cannot answer "which file defines identifier X" without an O(symbols) scan per mount, build one name→files lookup per `BuildCandidates` run — do not add reader/SQL surface for this.
 
 **Acceptance criteria:**
-- [ ] Express fixture: routes file (`router.get("/:id")`, symbol `usersRouter` exported) + mount file (`app.use("/users", usersRouter)` fact) + client `fetch("/users/42")` → High edge via the composed route; the original router-local entry is still present (additive semantics).
-- [ ] Django fixture: `url_include` (`mount_path="/shop/"`, `included_module="shop.urls"`) + `url_pattern` in `shop/urls.py` → composed Medium `verb_unknown` edge for a matching GET client.
-- [ ] Two files defining `usersRouter` → no composed edges, `unanchoredMounts` counted; prefix-less fastapi include → no compose.
-- [ ] Middleware-shaped mount target (`app.use("/api", express.json())`) → identifier resolves to no route-owning file → no compose, `unanchoredMounts` counted.
-- [ ] Same router mounted at two prefixes (`app.use("/a", r)` + `app.use("/b", r)`) → composed variants under BOTH prefixes (correct Express semantics).
-- [ ] Mixed-file tradeoff pinned: a direct `app.get` route in the anchored routes file also gains a composed variant — test asserts and comments the accepted shape.
-- [ ] Fact with `effective_route_template` never double-composed.
-- [ ] Worker-scope verification passes, committed.
+- [x] Express fixture: routes file (`router.get("/:id")`, symbol `usersRouter` exported) + mount file (`app.use("/users", usersRouter)` fact) + client `fetch("/users/42")` → High edge via the composed route; the original router-local entry is still present (additive semantics).
+- [x] Django fixture: `url_include` (`mount_path="/shop/"`, `included_module="shop.urls"`) + `url_pattern` in `shop/urls.py` → composed Medium `verb_unknown` edge for a matching GET client.
+- [x] Two files defining `usersRouter` → no composed edges, `unanchoredMounts` counted; prefix-less fastapi include → no compose.
+- [x] Middleware-shaped mount target (`app.use("/api", express.json())`) → identifier resolves to no route-owning file → no compose, `unanchoredMounts` counted.
+- [x] Same router mounted at two prefixes (`app.use("/a", r)` + `app.use("/b", r)`) → composed variants under BOTH prefixes (correct Express semantics).
+- [x] Mixed-file tradeoff pinned: a direct `app.get` route in the anchored routes file also gains a composed variant — test asserts and comments the accepted shape.
+- [x] Fact with `effective_route_template` never double-composed.
+- [x] Worker-scope verification passes, committed.
 
 ## Task 4: Rails Semantics — Resource Expansion + controller_action Binding
 
@@ -167,11 +167,11 @@ Symbol binding: for `rails.route.v1` facts with `controller_action` (`"users#sho
 **Approach:** Expanded handlers carry the resource fact's file/line (routes.rb) so trace output points at the declaring DSL line; the bound symbol (when found) carries the controller location. Unambiguous-or-nothing on controller binding — never bind on name similarity.
 
 **Acceptance criteria:**
-- [ ] `resources :users` fixture fact → 8 expanded routes; `only: [:index, :show]` → 2; `except` honored; singular variant correct; `scope_path="/admin"` prefixes all.
-- [ ] Client `fetch("/users/42")` GET → High edge to show route; `DELETE` client → High to destroy; expanded routes join through the same canonical fold.
-- [ ] `controller_action`/conventional binding: `UsersController#show` symbol present → edge targets that symbol id; controller absent → synthesized endpoint node, edge still emitted.
-- [ ] Singular-resource binding: `resource :profile` + `ProfilesController#show` present → bound to the PLURAL controller; a `ProfileController` decoy is never bound.
-- [ ] Worker-scope verification passes, committed.
+- [x] `resources :users` fixture fact → 8 expanded routes; `only: [:index, :show]` → 2; `except` honored; singular variant correct; `scope_path="/admin"` prefixes all.
+- [x] Client `fetch("/users/42")` GET → High edge to show route; `DELETE` client → High to destroy; expanded routes join through the same canonical fold.
+- [x] `controller_action`/conventional binding: `UsersController#show` symbol present → edge targets that symbol id; controller absent → synthesized endpoint node, edge still emitted.
+- [x] Singular-resource binding: `resource :profile` + `ProfilesController#show` present → bound to the PLURAL controller; a `ProfileController` decoy is never bound.
+- [x] Worker-scope verification passes, committed.
 
 ## Task 5: C# Structural Client Requests Through dotnet-web
 
@@ -189,10 +189,10 @@ Symbol binding: for `rails.route.v1` facts with `controller_action` (`"users#sho
 **Approach:** `IsTestFact` + the fact's `is_test` already filter test-project HttpClient calls on the structural path — assert this with a test-path csharp fixture fact (rejected), plus a non-test csharp fact (edge emitted). Check F4 `DedupeClientCalls` interplay: a csharp structural request has no legacy-literal twin under the legacy exclusion, so suppression sets simply gain entries — assert no behavior change for js-side dedupe. The backend-http provider (Task 2) needs no change — `ResolveClientRequests` has no language filter.
 
 **Acceptance criteria:**
-- [ ] Non-test csharp `http.client_request.v1` fact (`HttpClient.GetAsync("/api/users/42")` shape) + ASP.NET attribute-route endpoint → verb-known High edge through dotnet-web.
-- [ ] Test-path csharp client fact → rejected (no edge); legacy csharp url literal → still excluded.
-- [ ] Existing js/ts client behavior and F4 dedupe byte-identical (existing tests green).
-- [ ] Worker-scope verification passes, committed.
+- [x] Non-test csharp `http.client_request.v1` fact (`HttpClient.GetAsync("/api/users/42")` shape) + ASP.NET attribute-route endpoint → verb-known High edge through dotnet-web. _(Note: fixture uses the parameterized `/api/users/{id}` client target_path — dotnet-web `RouteBridge.Resolve` requires exact canonical-route equality, unlike backend-http's segment matcher, so a bare numeric client segment cannot fold to `{}`.)_
+- [x] Test-path csharp client fact → rejected (no edge); legacy csharp url literal → still excluded.
+- [x] Existing js/ts client behavior and F4 dedupe byte-identical (existing tests green).
+- [x] Worker-scope verification passes, committed.
 
 ## Task 6: Trace Surface — Diagnostics, Evidence Keys, Render
 
@@ -207,10 +207,10 @@ Symbol binding: for `rails.route.v1` facts with `controller_action` (`"users#sho
 **What to build:** Wire `backend-http` into the trace tool's hardcoded lists so `not_on_bridge`/route-string diagnostics and pattern-audit next_actions cover the new evidence. Compact and JSON must agree on kind/label/band/flags for backend edges (`Hits` already renders as `route` — assert, don't change).
 
 **Acceptance criteria:**
-- [ ] Route-string trace over an unmatched backend client request surfaces `backend-http` diagnostics with correct nouns.
-- [ ] next_actions reference the new pattern ids appropriately when evidence is absent/present.
-- [ ] Compact + JSON agree on kind/label/band/flags for backend edges (fixture-fact TraceTool tests).
-- [ ] Worker-scope verification passes, committed.
+- [x] Route-string trace over an unmatched backend client request surfaces `backend-http` diagnostics with correct nouns. _(Noun is `TargetFactName="route"` — templates append " fact"; the plan's illustrative "route fact" would have doubled to "route fact fact". Fixed in commit 199a2db.)_
+- [x] next_actions reference the new pattern ids appropriately when evidence is absent/present.
+- [x] Compact + JSON agree on kind/label/band/flags for backend edges (fixture-fact TraceTool tests).
+- [x] Worker-scope verification passes, committed.
 
 ## Task 7: Live Scale Coverage — All 10 Languages (Language-Parity Gate)
 
@@ -237,10 +237,10 @@ Per the language-parity rule, add one live assertion enumerating per-family fact
 **Approach:** `_output.WriteLine` evidence; compact render lines asserted (`--route-->` + band). Scale trait via `ScaleTestSupport.RequireJulieServer()` or the convention guard fails the build. If a family emits nothing live that the release notes claim, STOP and report upstream — do not soften the parity assertion.
 
 **Acceptance criteria:**
-- [ ] All six scenario groups green via `scripts/test.sh scale`.
-- [ ] Per-family emission assertion covers all 16 pattern ids, aggregated across all group workspaces.
-- [ ] Client-language emission assertion covers all seven client-language fixtures.
-- [ ] Worker-scope verification passes, committed.
+- [x] All six scenario groups green via `scripts/test.sh scale`. _(commit 33e8fb6; Scale suite 45 passed / 0 failed = 38 baseline + 7 new.)_
+- [x] Per-family emission assertion covers all 16 pattern ids, aggregated across all group workspaces. _(`BackendHttpParityGate_...`: explicit `RequiredFamilies` 16-string list, union across 6 groups, per-element `Assert.Contains`.)_
+- [x] Client-language emission assertion covers all seven client-language fixtures. _(`RequiredClientLanguages` = javascript+typescript+vue+python+go+java+ruby+csharp = 8 distinct language values; js/ts share the JS/TS group.)_
+- [x] Worker-scope verification passes, committed.
 
 ## Task 8: Docs, Instructions, Skill Sync + Branch Gate
 
@@ -256,10 +256,10 @@ Per the language-parity rule, add one live assertion enumerating per-family fact
 **What to build:** (a) trace-json-v1.md: add `backend-http` to the provider scope list with its evidence-count names, the mount-composition and Rails-expansion semantics (including the unambiguous-anchor rule and `verb_unknown` arms), and the csharp client-request contract; state what is NOT claimed (regex Django patterns, `rails.mount` engine internals, non-literal templates — upstream M2 silence). (b) MILLER_AGENT_INSTRUCTIONS.md: provider list + fact-feed sentence gains `backend-http` and the five new client languages; update `AgentInstructionsTests` exact strings in lockstep. (c) Skills: miller-bridge-trace gets provider list, backend families, pattern-audit examples (`pattern_id=express.route.v1`); miller-orientation's hardcoded provider sentence (`SKILL.md:60`, currently `dotnet-web, nextjs, nuxt, vue, react` — ALREADY stale, missing the shipped `nextjs-api`/`nuxt-api`) becomes the full list including `backend-http` (codex review 2026-07-02, finding 4); regen `skills/` and confirm byte-identical copies of both. CLAUDE.md needs no edit (it does not enumerate providers) — verify; if an edit IS needed, run `scripts/sync-agents.sh` + `cmp -s CLAUDE.md AGENTS.md`.
 
 **Acceptance criteria:**
-- [ ] `AgentInstructionsTests` green with updated strings; docs match shipped behavior.
-- [ ] Skill regenerated; `skills/` matches `.agents/skills/`.
-- [ ] Branch gate green: `dotnet build Miller.slnx -c Release` + `scripts/test.sh` + `scripts/test.sh scale`.
-- [ ] Goldfish checkpoint written; all work committed locally. No push.
+- [x] `AgentInstructionsTests` green with updated strings; docs match shipped behavior. _(commit 2869c79; lead re-ran 41/41; pinned phrase survives at its canonical bullet; instructions 11895 < 12000 char budget.)_
+- [x] Skill regenerated; `skills/` matches `.agents/skills/`. _(both SKILLs edited + `scripts/sync-plugin-skills.sh` ran; cmp -s MATCH.)_
+- [x] Branch gate green: `dotnet build Miller.slnx -c Release` + `scripts/test.sh` + `scripts/test.sh scale`. _(lead branch gate — see final verification below.)_
+- [x] Goldfish checkpoint written; all work committed locally. No push. _(lead final checkpoint.)_
 
 ## Verification Strategy
 
