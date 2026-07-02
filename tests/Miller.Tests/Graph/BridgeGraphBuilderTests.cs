@@ -3056,4 +3056,363 @@ public sealed class BridgeGraphBuilderTests
         }
         return metadata;
     }
+
+    // ===== Task 1: Backend HTTP boundary — whitelist + adapter reads (16 new families) =====
+
+    [Fact]
+    public void BridgeStructuralPatterns_BridgeFactPatternIds_ContainsAll16BackendFamilies()
+    {
+        // The load whitelist (SqliteBridgeReader SQL gate): an id absent here never reaches a provider.
+        var backendIds = new[]
+        {
+            BridgeStructuralPatterns.ExpressRoute,
+            BridgeStructuralPatterns.ExpressRouterMount,
+            BridgeStructuralPatterns.FastifyRoute,
+            BridgeStructuralPatterns.FastApiRoute,
+            BridgeStructuralPatterns.FastApiIncludeRouter,
+            BridgeStructuralPatterns.FlaskRoute,
+            BridgeStructuralPatterns.FlaskBlueprintRegistration,
+            BridgeStructuralPatterns.DjangoUrlPattern,
+            BridgeStructuralPatterns.DjangoUrlInclude,
+            BridgeStructuralPatterns.SpringRequestMapping,
+            BridgeStructuralPatterns.GoNetHttpRoute,
+            BridgeStructuralPatterns.GinRoute,
+            BridgeStructuralPatterns.EchoRoute,
+            BridgeStructuralPatterns.RailsRoute,
+            BridgeStructuralPatterns.RailsResourceRoute,
+            BridgeStructuralPatterns.RailsMount,
+        };
+
+        Assert.Equal(16, backendIds.Length); // self-check: every constant enumerated
+        foreach (var id in backendIds)
+            Assert.Contains(id, BridgeStructuralPatterns.BridgeFactPatternIds);
+    }
+
+    [Fact]
+    public void BridgeStructuralPatterns_BackendRoutePatternIds_ContainsTheTenRouteFamiliesOnly()
+    {
+        var routeIds = BridgeStructuralPatterns.BackendRoutePatternIds;
+
+        Assert.Equal(10, routeIds.Count);
+        // The 10 route-template families the provider joins against normalized_route_template.
+        Assert.Contains(BridgeStructuralPatterns.ExpressRoute, routeIds);
+        Assert.Contains(BridgeStructuralPatterns.FastifyRoute, routeIds);
+        Assert.Contains(BridgeStructuralPatterns.FastApiRoute, routeIds);
+        Assert.Contains(BridgeStructuralPatterns.FlaskRoute, routeIds);
+        Assert.Contains(BridgeStructuralPatterns.DjangoUrlPattern, routeIds);
+        Assert.Contains(BridgeStructuralPatterns.SpringRequestMapping, routeIds);
+        Assert.Contains(BridgeStructuralPatterns.GoNetHttpRoute, routeIds);
+        Assert.Contains(BridgeStructuralPatterns.GinRoute, routeIds);
+        Assert.Contains(BridgeStructuralPatterns.EchoRoute, routeIds);
+        Assert.Contains(BridgeStructuralPatterns.RailsRoute, routeIds);
+        // Mount families and Rails evidence-only families are NOT route-template inputs.
+        Assert.DoesNotContain(BridgeStructuralPatterns.ExpressRouterMount, routeIds);
+        Assert.DoesNotContain(BridgeStructuralPatterns.FastApiIncludeRouter, routeIds);
+        Assert.DoesNotContain(BridgeStructuralPatterns.FlaskBlueprintRegistration, routeIds);
+        Assert.DoesNotContain(BridgeStructuralPatterns.DjangoUrlInclude, routeIds);
+        Assert.DoesNotContain(BridgeStructuralPatterns.RailsResourceRoute, routeIds);
+        Assert.DoesNotContain(BridgeStructuralPatterns.RailsMount, routeIds);
+    }
+
+    [Fact]
+    public void StructuralRouteFactAdapter_TryReadBackendRoute_PrefersEffectiveRouteTemplateOverNormalized()
+    {
+        var fact = Fact(
+            "sf-fastapi-users",
+            "fastapi.route.v1",
+            "python",
+            "app/routers/users.py",
+            "sym-fastapi-handler",
+            100,
+            new Dictionary<string, string>
+            {
+                ["framework"] = "fastapi",
+                ["router_prefix"] = "/api",
+                ["route_template"] = "/users/{user_id}",
+                ["normalized_route_template"] = "/users/:user_id",
+                ["effective_route_template"] = "/api/users/:user_id",
+                ["verb"] = "GET",
+                ["verb_source"] = "attested",
+            });
+
+        Assert.True(StructuralRouteFactAdapter.TryReadBackendRoute(fact, new Dictionary<string, SymbolDetail>(), out var handler));
+        Assert.Equal("/api/users/:user_id", handler.RoutePath); // effective_route_template wins over normalized
+        Assert.Equal("GET", handler.Verb);
+        Assert.Equal("sym-fastapi-handler", handler.ContainingSymbolId);
+        Assert.Equal("app/routers/users.py", handler.FilePath);
+    }
+
+    [Fact]
+    public void StructuralRouteFactAdapter_TryReadBackendRoute_VerblessExpressAppAllHasNullVerb()
+    {
+        var fact = Fact(
+            "sf-express-all",
+            "express.route.v1",
+            "typescript",
+            "src/server.ts",
+            "sym-express",
+            100,
+            new Dictionary<string, string>
+            {
+                ["framework"] = "express",
+                ["route_template"] = "/api/webhook",
+                ["normalized_route_template"] = "/api/webhook",
+                // no verb key: app.all answers every method
+            });
+
+        Assert.True(StructuralRouteFactAdapter.TryReadBackendRoute(fact, new Dictionary<string, SymbolDetail>(), out var handler));
+        Assert.Equal("/api/webhook", handler.RoutePath); // normalized_route_template (no same-file prefix)
+        Assert.Null(handler.Verb); // verbless app.all → null verb, never assumed GET
+    }
+
+    [Fact]
+    public void StructuralRouteFactAdapter_TryReadBackendRoute_UppercasesVerb()
+    {
+        var fact = Fact(
+            "sf-gin-create",
+            "gin.route.v1",
+            "go",
+            "main.go",
+            "sym-gin",
+            100,
+            new Dictionary<string, string>
+            {
+                ["framework"] = "gin",
+                ["normalized_route_template"] = "/users",
+                ["verb"] = "post",
+            });
+
+        Assert.True(StructuralRouteFactAdapter.TryReadBackendRoute(fact, new Dictionary<string, SymbolDetail>(), out var handler));
+        Assert.Equal("POST", handler.Verb); // verb normalized to UPPERCASE
+    }
+
+    [Fact]
+    public void StructuralRouteFactAdapter_TryReadBackendRoute_RejectsSpringClassRoute()
+    {
+        var fact = Fact(
+            "sf-spring-class",
+            "spring.request_mapping.v1",
+            "java",
+            "src/main/java/com/example/UserController.java",
+            "sym-controller",
+            100,
+            new Dictionary<string, string>
+            {
+                ["framework"] = "spring",
+                ["attribute_kind"] = "class_route",
+                ["class_route_template"] = "/api/users",
+                ["normalized_route_template"] = "/api/users", // present, yet a prefix fact is never an endpoint
+            });
+
+        Assert.False(StructuralRouteFactAdapter.TryReadBackendRoute(fact, new Dictionary<string, SymbolDetail>(), out _));
+    }
+
+    [Fact]
+    public void StructuralRouteFactAdapter_TryReadBackendRoute_RejectsDjangoRegexSyntaxWithNoTemplate()
+    {
+        var fact = Fact(
+            "sf-django-regex",
+            "django.url_pattern.v1",
+            "python",
+            "app/urls.py",
+            "sym-urlconf",
+            100,
+            new Dictionary<string, string>
+            {
+                ["framework"] = "django",
+                ["route_syntax"] = "regex",
+                ["view_target"] = "views.legacy",
+                // no normalized_route_template: regex urlpatterns are honestly excluded, never synthesized
+            });
+
+        Assert.False(StructuralRouteFactAdapter.TryReadBackendRoute(fact, new Dictionary<string, SymbolDetail>(), out _));
+    }
+
+    [Fact]
+    public void StructuralRouteFactAdapter_TryReadBackendRoute_RejectsTestFacts()
+    {
+        var fact = Fact(
+            "sf-express-test",
+            "express.route.v1",
+            "typescript",
+            "src/routes.test.ts",
+            string.Empty,
+            100,
+            new Dictionary<string, string>
+            {
+                ["framework"] = "express",
+                ["normalized_route_template"] = "/api/users",
+                ["verb"] = "GET",
+            });
+
+        Assert.False(StructuralRouteFactAdapter.TryReadBackendRoute(fact, new Dictionary<string, SymbolDetail>(), out _));
+    }
+
+    [Theory]
+    [InlineData("express.router_mount.v1")]
+    [InlineData("rails.resource_route.v1")]
+    [InlineData("rails.mount.v1")]
+    public void StructuralRouteFactAdapter_TryReadBackendRoute_RejectsNonRouteFamilies(string patternId)
+    {
+        var fact = Fact(
+            "sf-non-route",
+            patternId,
+            "ruby",
+            "config/routes.rb",
+            "sym-x",
+            100,
+            new Dictionary<string, string>
+            {
+                ["normalized_route_template"] = "/users", // even with a template, not a route-template family
+                ["verb"] = "GET",
+            });
+
+        Assert.False(StructuralRouteFactAdapter.TryReadBackendRoute(fact, new Dictionary<string, SymbolDetail>(), out _));
+    }
+
+    [Fact]
+    public void StructuralRouteFactAdapter_TryReadMountFact_ReadsDjangoIncludedModule()
+    {
+        var fact = Fact(
+            "sf-django-include",
+            "django.url_include.v1",
+            "python",
+            "project/urls.py",
+            "sym-rooturls",
+            100,
+            new Dictionary<string, string>
+            {
+                ["framework"] = "django",
+                ["mount_path"] = "/users/",
+                ["normalized_mount_path"] = "/users",
+                ["included_module"] = "users.urls",
+            });
+
+        Assert.True(StructuralRouteFactAdapter.TryReadMountFact(fact, new Dictionary<string, SymbolDetail>(), out var mount));
+        Assert.Equal("/users", mount.MountPath); // normalized_mount_path preferred
+        Assert.Equal("users.urls", mount.IncludedModule);
+        Assert.Equal("project/urls.py", mount.FilePath);
+    }
+
+    [Fact]
+    public void StructuralRouteFactAdapter_TryReadMountFact_ReadsExpressMountTargetAndPrefersNormalizedPath()
+    {
+        var fact = Fact(
+            "sf-express-mount",
+            "express.router_mount.v1",
+            "typescript",
+            "src/server.ts",
+            "sym-app",
+            100,
+            new Dictionary<string, string>
+            {
+                ["framework"] = "express",
+                ["mount_path"] = "/users/",
+                ["normalized_mount_path"] = "/users",
+                ["mount_target"] = "usersRouter",
+            });
+
+        Assert.True(StructuralRouteFactAdapter.TryReadMountFact(fact, new Dictionary<string, SymbolDetail>(), out var mount));
+        Assert.Equal("/users", mount.MountPath);
+        Assert.Equal("usersRouter", mount.MountTarget);
+        Assert.Null(mount.IncludedModule); // included_module is Django-only
+    }
+
+    [Fact]
+    public void StructuralRouteFactAdapter_TryReadMountFact_FallsBackToMountPathWhenNoNormalized()
+    {
+        var fact = Fact(
+            "sf-flask-bp",
+            "flask.blueprint_registration.v1",
+            "python",
+            "app/__init__.py",
+            "sym-createapp",
+            100,
+            new Dictionary<string, string>
+            {
+                ["framework"] = "flask",
+                ["mount_path"] = "/admin",
+                ["mount_target"] = "admin_bp",
+                // no normalized_mount_path
+            });
+
+        Assert.True(StructuralRouteFactAdapter.TryReadMountFact(fact, new Dictionary<string, SymbolDetail>(), out var mount));
+        Assert.Equal("/admin", mount.MountPath); // falls back to mount_path
+        Assert.Equal("admin_bp", mount.MountTarget);
+    }
+
+    [Fact]
+    public void StructuralRouteFactAdapter_TryReadMountFact_RejectsPrefixlessFastapiInclude()
+    {
+        var fact = Fact(
+            "sf-fastapi-include-noprefix",
+            "fastapi.include_router.v1",
+            "python",
+            "app/main.py",
+            "sym-mainapp",
+            100,
+            new Dictionary<string, string>
+            {
+                ["framework"] = "fastapi",
+                ["mount_target"] = "users.router",
+                // no mount_path / normalized_mount_path: an un-prefixed include composes nothing
+            });
+
+        Assert.False(StructuralRouteFactAdapter.TryReadMountFact(fact, new Dictionary<string, SymbolDetail>(), out _));
+    }
+
+    [Fact]
+    public void StructuralRouteFactAdapter_TryReadMountFact_RejectsTestFacts()
+    {
+        var symbolsById = new Dictionary<string, SymbolDetail>
+        {
+            ["sym-test-urls"] = new(
+                "sym-test-urls",
+                "urlpatterns",
+                "variable",
+                "project/tests/urls.py",
+                Signature: "urlpatterns",
+                Namespace: null,
+                IsTest: true,
+                ParentClassName: null),
+        };
+        var fact = Fact(
+            "sf-django-include-test",
+            "django.url_include.v1",
+            "python",
+            "project/tests/urls.py",
+            "sym-test-urls",
+            100,
+            new Dictionary<string, string>
+            {
+                ["mount_path"] = "/users/",
+                ["normalized_mount_path"] = "/users",
+                ["included_module"] = "users.urls",
+            });
+
+        Assert.False(StructuralRouteFactAdapter.TryReadMountFact(fact, symbolsById, out _));
+    }
+
+    [Theory]
+    [InlineData("rails.mount.v1")]
+    [InlineData("express.route.v1")]
+    [InlineData("nextjs.route_handler.v1")]
+    public void StructuralRouteFactAdapter_TryReadMountFact_RejectsNonMountFamilies(string patternId)
+    {
+        var fact = Fact(
+            "sf-non-mount",
+            patternId,
+            "ruby",
+            "config/routes.rb",
+            "sym-x",
+            100,
+            new Dictionary<string, string>
+            {
+                ["mount_path"] = "/engine",
+                ["normalized_mount_path"] = "/engine",
+                ["mount_target"] = "SomeEngine",
+            });
+
+        Assert.False(StructuralRouteFactAdapter.TryReadMountFact(fact, new Dictionary<string, SymbolDetail>(), out _));
+    }
 }

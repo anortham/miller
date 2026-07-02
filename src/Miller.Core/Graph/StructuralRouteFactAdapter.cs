@@ -1,4 +1,5 @@
 using Miller.Core.Contracts;
+using System.Linq;
 
 namespace Miller.Core.Graph;
 
@@ -16,6 +17,11 @@ internal static class StructuralRouteFactAdapter
     private const string HttpClientRequestPattern = BridgeStructuralPatterns.HttpClientRequest;
     private const string NextJsRouteHandlerPattern = BridgeStructuralPatterns.NextJsRouteHandler;
     private const string NuxtServerRoutePattern = BridgeStructuralPatterns.NuxtServerRoute;
+    private const string SpringRequestMappingPattern = BridgeStructuralPatterns.SpringRequestMapping;
+    private const string ExpressRouterMountPattern = BridgeStructuralPatterns.ExpressRouterMount;
+    private const string FastApiIncludeRouterPattern = BridgeStructuralPatterns.FastApiIncludeRouter;
+    private const string FlaskBlueprintRegistrationPattern = BridgeStructuralPatterns.FlaskBlueprintRegistration;
+    private const string DjangoUrlIncludePattern = BridgeStructuralPatterns.DjangoUrlInclude;
 
     public static bool TryReadRouteReference(
         StructuralFactRecord fact,
@@ -157,6 +163,90 @@ internal static class StructuralRouteFactAdapter
         return true;
     }
 
+    /// <summary>
+    /// Read a backend HTTP route-template fact (2.7.0: the 10 <see cref="BridgeStructuralPatterns.BackendRoutePatternIds"/>
+    /// families — Express/Fastify/FastAPI/Flask/Django/Spring/Go net-http/gin/echo/Rails). Sibling to
+    /// <see cref="TryReadRouteHandler"/>, but the route-path precedence differs: backend families carry NO
+    /// bracket-form <c>route_path</c>, so the join key is <c>effective_route_template</c> (same-file prefix folded)
+    /// preferred over <c>normalized_route_template</c>. A blank route is rejected — this honestly excludes Django
+    /// <c>route_syntax="regex"</c> facts (no <c>normalized_route_template</c>), never synthesizing a route from a regex.
+    /// A Spring <c>attribute_kind="class_route"</c> fact is a controller prefix, never an endpoint (mirrors ASP.NET
+    /// <c>controller_route</c>), and is rejected. The verb is NULLABLE UPPERCASE: verbless facts (Express <c>app.all</c>,
+    /// gin/echo <c>Any</c>, method-less <c>@RequestMapping</c>, Django URLconf) yield a null verb → downstream Medium
+    /// <c>verb_unknown</c>, never an assumed GET. Reuses <see cref="StructuralRouteHandler"/> so
+    /// <c>FileRouteBridge.ResolveClientRequests</c> consumes backend routes with no resolver change.
+    /// </summary>
+    public static bool TryReadBackendRoute(
+        StructuralFactRecord fact,
+        IReadOnlyDictionary<string, SymbolDetail> symbolsById,
+        out StructuralRouteHandler handler)
+    {
+        handler = null!;
+        if (!IsBackendRoutePattern(fact.PatternId))
+            return false;
+
+        // A Spring class-level @RequestMapping is a controller prefix, not an endpoint (evidence only).
+        if (string.Equals(fact.PatternId, SpringRequestMappingPattern, StringComparison.Ordinal) &&
+            string.Equals(MetadataString(fact, "attribute_kind"), "class_route", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var routePath = MetadataString(fact, "effective_route_template")
+            ?? MetadataString(fact, "normalized_route_template");
+        if (string.IsNullOrWhiteSpace(routePath))
+            return false;
+
+        if (IsTestFact(fact, symbolsById))
+            return false;
+
+        var verb = MetadataString(fact, "verb");
+        handler = new StructuralRouteHandler(
+            fact,
+            routePath,
+            string.IsNullOrWhiteSpace(verb) ? null : verb.Trim().ToUpperInvariant(),
+            fact.ContainingSymbolId ?? string.Empty,
+            fact.Path,
+            fact.Span.StartLine);
+        return true;
+    }
+
+    /// <summary>
+    /// Read a cross-file route-mount/include fact (2.7.0: <c>express.router_mount.v1</c>,
+    /// <c>fastapi.include_router.v1</c>, <c>flask.blueprint_registration.v1</c>, <c>django.url_include.v1</c>).
+    /// <c>rails.mount.v1</c> is deliberately NOT read here — it mounts Rack apps whose internal routes are not
+    /// in the fact stream, so it is evidence-only. The mount prefix is <c>normalized_mount_path</c> preferred
+    /// over <c>mount_path</c>; a fact with NEITHER is rejected — an un-prefixed <c>include_router</c>/
+    /// <c>register_blueprint</c> composes nothing (fastapi/flask mount paths are optional literal-only). The
+    /// <see cref="IsTestFact"/> filter mirrors the route reads so a mount fact in a test file never seeds
+    /// composed edges.
+    /// </summary>
+    public static bool TryReadMountFact(
+        StructuralFactRecord fact,
+        IReadOnlyDictionary<string, SymbolDetail> symbolsById,
+        out StructuralMountFact mount)
+    {
+        mount = null!;
+        if (!IsMountFactPattern(fact.PatternId))
+            return false;
+
+        var mountPath = MetadataString(fact, "normalized_mount_path")
+            ?? MetadataString(fact, "mount_path");
+        if (string.IsNullOrWhiteSpace(mountPath))
+            return false;
+
+        if (IsTestFact(fact, symbolsById))
+            return false;
+
+        mount = new StructuralMountFact(
+            fact,
+            mountPath,
+            MetadataString(fact, "mount_target") ?? string.Empty,
+            MetadataString(fact, "included_module"),
+            fact.Path);
+        return true;
+    }
+
     public static bool IsTestFact(
         StructuralFactRecord fact,
         IReadOnlyDictionary<string, SymbolDetail> symbolsById)
@@ -187,6 +277,17 @@ internal static class StructuralRouteFactAdapter
     private static bool IsRouteHandlerPattern(string patternId) =>
         string.Equals(patternId, NextJsRouteHandlerPattern, StringComparison.Ordinal) ||
         string.Equals(patternId, NuxtServerRoutePattern, StringComparison.Ordinal);
+
+    // The 10 backend route-template families are the single source of truth in BridgeStructuralPatterns —
+    // gate against that list so the adapter and the provider can never drift.
+    private static bool IsBackendRoutePattern(string patternId) =>
+        BridgeStructuralPatterns.BackendRoutePatternIds.Contains(patternId, StringComparer.Ordinal);
+
+    private static bool IsMountFactPattern(string patternId) =>
+        string.Equals(patternId, ExpressRouterMountPattern, StringComparison.Ordinal) ||
+        string.Equals(patternId, FastApiIncludeRouterPattern, StringComparison.Ordinal) ||
+        string.Equals(patternId, FlaskBlueprintRegistrationPattern, StringComparison.Ordinal) ||
+        string.Equals(patternId, DjangoUrlIncludePattern, StringComparison.Ordinal);
 
     private static string? RouteReferencePath(StructuralFactRecord fact) =>
         MetadataString(fact, "target_path")
@@ -281,3 +382,18 @@ internal sealed record StructuralRouteHandler(
     string ContainingSymbolId,
     string FilePath,
     int Line);
+
+/// <summary>
+/// A cross-file route-mount/include fact (2.7.0: <c>express.router_mount.v1</c> / <c>fastapi.include_router.v1</c> /
+/// <c>flask.blueprint_registration.v1</c> / <c>django.url_include.v1</c>). <paramref name="MountPath"/> is the
+/// mount prefix (<c>normalized_mount_path</c> preferred over <c>mount_path</c>). <paramref name="MountTarget"/> is
+/// the mounted expression's source text (the identifier anchor for express/fastapi/flask); it is empty when the
+/// family carries no <c>mount_target</c> (Django anchors by module instead). <paramref name="IncludedModule"/> is
+/// the Django module literal (e.g. <c>"users.urls"</c>) and null for the others.
+/// </summary>
+internal sealed record StructuralMountFact(
+    StructuralFactRecord Fact,
+    string MountPath,
+    string MountTarget,
+    string? IncludedModule,
+    string FilePath);
