@@ -2461,6 +2461,52 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void WorkspaceList_FilterFlag_NarrowsByDisplayIdOrRoot()
+    {
+        using (WorkspaceRegistry registry = WorkspaceRegistry.Open(_registryDb))
+        {
+            registry.UpsertSeen("ws-alpha-0001", "alpha-disp", "/repo/alpha",
+                "/repo/alpha/.miller/symbols.db", WorkspaceRegistryState.Ready);
+            registry.UpsertSeen("ws-beta-0001", "beta-disp", "/repo/beta",
+                "/repo/beta/.miller/symbols.db", WorkspaceRegistryState.Ready);
+        }
+        SqliteConnection.ClearAllPools();
+
+        var (code, outText, _) = Run(
+            new[] { "workspace", "list", "--filter", "BETA" },
+            Context(Path.Combine(_dir, "symbols.db")));
+
+        Assert.Equal(0, code);
+        Assert.Contains("beta-disp", outText);
+        Assert.DoesNotContain("alpha-disp", outText);
+    }
+
+    [Fact]
+    public void WorkspaceList_LimitFlag_CapsCompactRowsAndRendersTail()
+    {
+        using (WorkspaceRegistry registry = WorkspaceRegistry.Open(_registryDb))
+        {
+            DateTimeOffset baseSeen = DateTimeOffset.UtcNow.AddDays(-1);
+            for (int i = 1; i <= 3; i++)
+                registry.UpsertSeen($"ws-seed-{i:D2}", $"seed-{i:D2}-disp", $"/repo/seed-{i:D2}",
+                    $"/repo/seed-{i:D2}/.miller/symbols.db", WorkspaceRegistryState.Ready,
+                    seenAtUtc: baseSeen.AddMinutes(i));
+        }
+        SqliteConnection.ClearAllPools();
+
+        var (code, outText, _) = Run(
+            new[] { "workspace", "list", "--limit", "1" },
+            Context(Path.Combine(_dir, "symbols.db")));
+
+        Assert.Equal(0, code);
+        Assert.Contains("# workspaces (1 of 3)", outText);
+        Assert.Contains("… 2 more — raise limit or pass filter=<substring>", outText);
+        // Most-recently-seen row (seed-03) survives the cap of 1.
+        Assert.Contains("seed-03-disp", outText);
+        Assert.DoesNotContain("seed-01-disp", outText);
+    }
+
+    [Fact]
     public void WorkspaceRemove_LockHeldByAnotherWriter_RefusedExitThree()
     {
         string sub = Path.Combine(_dir, "ws-locked");

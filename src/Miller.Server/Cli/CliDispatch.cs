@@ -905,7 +905,10 @@ public static class CliDispatch
         switch (operation)
         {
             case "list":
-                return WorkspaceList(ctx, json, outw);
+                return WorkspaceList(
+                    ctx, json, outw,
+                    filter: o.Value("filter"),
+                    limit: o.Has("limit") ? o.Int("limit", WorkspaceRender.DefaultListLimit) : (int?)null);
             case "status":
                 return WorkspaceStatus(ctx, id, path, json, outw, err);
             case "health":
@@ -928,7 +931,8 @@ public static class CliDispatch
         }
     }
 
-    private static int WorkspaceList(WorkspaceContext ctx, bool json, TextWriter outw)
+    private static int WorkspaceList(
+        WorkspaceContext ctx, bool json, TextWriter outw, string? filter = null, int? limit = null)
     {
         using WorkspaceRegistry registry = WorkspaceRegistry.Open(ctx.RegistryDbPath);
         IReadOnlyList<WorkspaceRegistryRow> rows = registry.List();
@@ -938,7 +942,7 @@ public static class CliDispatch
             row => currentRow is not null
                 ? string.Equals(row.WorkspaceId, currentRow.WorkspaceId, StringComparison.Ordinal)
                 : WorkspaceSafety.IsLiveWorkspace(row.CanonicalRoot, ctx.WorkspaceRoot));
-        outw.WriteLine(WorkspaceRender.List(entries, json));
+        outw.WriteLine(WorkspaceRender.List(entries, json, filter, limit));
         return 0;
     }
 
@@ -1906,7 +1910,8 @@ public static class CliDispatch
           onboarding
                    Summarize local tool telemetry into starter guidance for an indexed repo.
           leader   Diagnose the current indexer leader; --handoff queues a graceful abdication request.
-          list     List every registered workspace in ~/.miller/workspaces.db.
+          list     List registered workspaces (current first, then most-recently-seen). [--filter SUBSTR] [--limit N]
+                   Compact caps at 20 rows (--limit N, <=0 unlimited); --filter narrows by display id or root.
           refresh  Incrementally refresh the index if the working tree changed.
           full     Force a full re-index (ignores the freshness check).
           open     Register + index a directory (creates .miller/symbols.db).  [--path DIR] [--full]

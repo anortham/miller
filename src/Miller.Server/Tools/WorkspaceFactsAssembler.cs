@@ -127,7 +127,8 @@ internal static class WorkspaceFactsAssembler
                 State: row.StateText,
                 LastRevision: row.LastRevision,
                 Current: isCurrent(row),
-                LastError: row.LastError));
+                LastError: row.LastError,
+                LastSeenAt: row.LastSeenAt));
         }
 
         return entries;

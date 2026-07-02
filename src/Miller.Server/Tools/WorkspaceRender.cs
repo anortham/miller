@@ -53,6 +53,8 @@ public readonly record struct WorkspaceFacts(
     ContentCorpusFacts? ContentCorpus = null);
 
 /// <summary>A registry-backed row rendered by <c>workspace list</c>.</summary>
+/// <remarks><see cref="LastSeenAt"/> drives recency ordering (current first, then most-recently-seen); it is
+/// optional so pre-existing construction sites compile, and defaults to <see cref="DateTimeOffset.MinValue"/>.</remarks>
 public readonly record struct WorkspaceListEntry(
     string WorkspaceId,
     string DisplayId,
@@ -61,7 +63,8 @@ public readonly record struct WorkspaceListEntry(
     string State,
     long? LastRevision,
     bool Current,
-    string? LastError);
+    string? LastError,
+    DateTimeOffset LastSeenAt = default);
 
 /// <summary>
 /// The result of a <c>refresh</c>/<c>full</c> action (M7 decision-3): whether the leader ran a scan, whether the
@@ -937,9 +940,34 @@ public static class WorkspaceRender
     public static string List(WorkspaceFacts facts, bool json) =>
         json ? ListJson(facts) : ListCompact(facts);
 
-    /// <summary>Render the registry-backed workspace list.</summary>
-    public static string List(IReadOnlyList<WorkspaceListEntry> entries, bool json) =>
-        json ? ListJson(entries) : ListCompact(entries);
+    /// <summary>
+    /// Render the registry-backed workspace list. Entries are ordered current-first then most-recently-seen.
+    /// <paramref name="filter"/> is a case-insensitive substring matched against display id or root, applied
+    /// before the cap. <paramref name="limit"/> caps the compact view (default 20; <c>&lt;= 0</c> unlimited);
+    /// JSON is unlimited unless <paramref name="limit"/> is set to a positive value (additive <c>last_seen_at</c>).
+    /// </summary>
+    public static string List(
+        IReadOnlyList<WorkspaceListEntry> entries, bool json, string? filter = null, int? limit = null) =>
+        json ? ListJson(entries, filter, limit ?? 0) : ListCompact(entries, filter, limit ?? DefaultListLimit);
+
+    /// <summary>The default number of compact <c>workspace list</c> entries before the omitted-count tail.</summary>
+    public const int DefaultListLimit = 20;
+
+    private static bool MatchesFilter(in WorkspaceListEntry entry, string filter) =>
+        entry.DisplayId.Contains(filter, StringComparison.OrdinalIgnoreCase)
+        || entry.Root.Contains(filter, StringComparison.OrdinalIgnoreCase);
+
+    // Current workspace first, then most-recently-seen. LINQ OrderBy is stable, so equal keys keep registry order.
+    private static List<WorkspaceListEntry> OrderAndFilter(
+        IReadOnlyList<WorkspaceListEntry> entries, string? filter)
+    {
+        IEnumerable<WorkspaceListEntry> ordered = entries
+            .OrderByDescending(static e => e.Current)
+            .ThenByDescending(static e => e.LastSeenAt);
+        if (!string.IsNullOrWhiteSpace(filter))
+            ordered = ordered.Where(e => MatchesFilter(e, filter));
+        return ordered.ToList();
+    }
 
     private static string ListCompact(WorkspaceFacts facts)
     {
@@ -955,11 +983,36 @@ public static class WorkspaceRender
         return sb.ToString();
     }
 
-    private static string ListCompact(IReadOnlyList<WorkspaceListEntry> entries)
+    private static string ListCompact(IReadOnlyList<WorkspaceListEntry> entries, string? filter, int limit)
     {
+        int total = entries.Count;
+        bool hasFilter = !string.IsNullOrWhiteSpace(filter);
+        List<WorkspaceListEntry> matched = OrderAndFilter(entries, filter);
+
         var sb = new StringBuilder();
-        sb.Append("# workspaces (").Append(entries.Count).Append(")\n");
-        foreach (WorkspaceListEntry entry in entries)
+
+        // A filter that matches nothing is a helpful line, never an empty string — say so with the total count.
+        if (hasFilter && matched.Count == 0)
+        {
+            sb.Append("# workspaces (0 shown)\n");
+            sb.Append("no workspace matches filter \"").Append(filter).Append("\" — ")
+              .Append(total).Append(" registered; adjust the substring or omit filter");
+            return sb.ToString();
+        }
+
+        int cap = limit <= 0 ? matched.Count : limit;
+        int shown = Math.Min(cap, matched.Count);
+        List<WorkspaceListEntry> omitted = matched.Skip(shown).ToList();
+
+        if (hasFilter)
+            sb.Append("# workspaces (").Append(shown).Append(" of ").Append(matched.Count)
+              .Append(" matched, ").Append(total).Append(" registered; filter=\"").Append(filter).Append("\")\n");
+        else if (shown < total)
+            sb.Append("# workspaces (").Append(shown).Append(" of ").Append(total).Append(")\n");
+        else
+            sb.Append("# workspaces (").Append(total).Append(")\n");
+
+        foreach (WorkspaceListEntry entry in matched.Take(shown))
         {
             sb.Append("* ").Append(entry.DisplayId).Append("  ").Append(entry.Root);
             if (entry.Current)
@@ -970,6 +1023,17 @@ public static class WorkspaceRender
                 sb.Append('\n').Append("  error: ").Append(entry.LastError);
             sb.Append('\n');
         }
+
+        if (omitted.Count > 0)
+        {
+            sb.Append("… ").Append(omitted.Count).Append(" more — raise limit or pass filter=<substring>\n");
+            // Omitted error-state rows would otherwise be invisible past the cap — surface a discoverable summary.
+            int omittedErrors = omitted.Count(static e => string.Equals(e.State, "error", StringComparison.Ordinal));
+            if (omittedErrors > 0)
+                sb.Append("errors: ").Append(omittedErrors)
+                  .Append(" workspace(s) in error state — filter or raise limit to see them\n");
+        }
+
         return sb.ToString().TrimEnd('\n');
     }
 
@@ -996,15 +1060,19 @@ public static class WorkspaceRender
         return Utf8(buffer);
     }
 
-    private static string ListJson(IReadOnlyList<WorkspaceListEntry> entries)
+    private static string ListJson(IReadOnlyList<WorkspaceListEntry> entries, string? filter, int limit)
     {
+        List<WorkspaceListEntry> matched = OrderAndFilter(entries, filter);
+        // JSON is unlimited by default (existing consumers); a positive limit narrows it.
+        IEnumerable<WorkspaceListEntry> visible = limit > 0 ? matched.Take(limit) : matched;
+
         var buffer = new ArrayBufferWriter<byte>();
         using (var w = NewWriter(buffer))
         {
             w.WriteStartObject();
             w.WritePropertyName("workspaces");
             w.WriteStartArray();
-            foreach (WorkspaceListEntry entry in entries)
+            foreach (WorkspaceListEntry entry in visible)
             {
                 w.WriteStartObject();
                 w.WriteString("workspace_id", entry.WorkspaceId);
@@ -1017,6 +1085,8 @@ public static class WorkspaceRender
                 w.WriteBoolean("current", entry.Current);
                 if (entry.LastError is null) w.WriteNull("last_error");
                 else w.WriteString("last_error", entry.LastError);
+                // Additive: ISO-8601 recency stamp (round-trip "o" format) used for ordering.
+                w.WriteString("last_seen_at", entry.LastSeenAt);
                 w.WriteEndObject();
             }
             w.WriteEndArray();

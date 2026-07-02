@@ -141,7 +141,11 @@ public sealed class WorkspaceTool
         [Description("For operation=leader, queue an explicit graceful leadership handoff request.")]
         bool handoff = false,
         [Description("For operation=leader with handoff=true, wait briefly for the live leader to observe the request.")]
-        bool wait = false)
+        bool wait = false,
+        [Description("operation=list only: case-insensitive substring filter on display id or root, applied before the cap. Default null (no filter).")]
+        string? filter = null,
+        [Description("operation=list only: max compact entries before the omitted-count tail. Default 20; <=0 unlimited. JSON is unlimited unless set to a positive value.")]
+        int? limit = null)
     {
         var telemetry = TelemetryContext.Current;
         // D7: stamp the operation sub-axis onto the ambient scope so the central filter's row records
@@ -154,7 +158,7 @@ public sealed class WorkspaceTool
             bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
 
             (string output, int resultCount, TelemetryOutcome outcome) = Dispatch(
-                operation, workspace_id, path, port, json, handoff, wait);
+                operation, workspace_id, path, port, json, handoff, wait, filter, limit);
 
             if (telemetry is not null)
             {
@@ -178,7 +182,8 @@ public sealed class WorkspaceTool
     // The pure-ish dispatch: route the operation to its handler, returning the rendered output, a result count
     // (for the telemetry KPI), and the outcome. An unknown operation is a usage note (Empty, not an error).
     private (string output, int resultCount, TelemetryOutcome outcome) Dispatch(
-        string? operation, string? workspaceId, string? path, int? port, bool json, bool handoff, bool wait)
+        string? operation, string? workspaceId, string? path, int? port, bool json, bool handoff, bool wait,
+        string? filter = null, int? limit = null)
     {
         switch (operation?.ToLowerInvariant())
         {
@@ -191,7 +196,7 @@ public sealed class WorkspaceTool
             case "leader":
                 return RenderTargetLeader(workspaceId, path, json, handoff, wait);
             case "list":
-                return (RenderRegistryList(json), _registry.List().Count, TelemetryOutcome.Ok);
+                return (RenderRegistryList(json, filter, limit), _registry.List().Count, TelemetryOutcome.Ok);
             case "refresh":
                 return RenderTargetAction("refresh", workspaceId, path, force: false, json);
             case "full":
@@ -459,12 +464,12 @@ public sealed class WorkspaceTool
         return false;
     }
 
-    private string RenderRegistryList(bool json)
+    private string RenderRegistryList(bool json, string? filter, int? limit)
     {
         IReadOnlyList<WorkspaceRegistryRow> rows = _registry.List();
         IReadOnlyList<WorkspaceListEntry> entries =
             WorkspaceFactsAssembler.ToListEntries(rows, IsCurrentWorkspace);
-        return WorkspaceRender.List(entries, json);
+        return WorkspaceRender.List(entries, json, filter, limit);
     }
 
     // Gather the live facts the status/list views render. Reads the holder (index facts), the workspace context

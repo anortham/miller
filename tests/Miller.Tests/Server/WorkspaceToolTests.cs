@@ -413,6 +413,122 @@ public sealed class WorkspaceToolTests : IDisposable
             && row.GetProperty("last_revision").GetInt64() == 9);
     }
 
+    // Seed N registered non-current rows with ascending last-seen stamps (i=1 oldest .. i=N newest) so the
+    // recency order is deterministic: higher i renders earlier (right after the current workspace).
+    private static void SeedOtherWorkspaces(
+        WorkspaceToolHarness harness, int count, DateTimeOffset baseSeenAt,
+        Func<int, WorkspaceRegistryState>? stateFor = null)
+    {
+        for (int i = 1; i <= count; i++)
+        {
+            string root = $"/seed/repo-{i:D3}";
+            harness.Registry.UpsertSeen(
+                $"ws-seed-{i:D3}",
+                $"seed-{i:D3}-aaaaaaaa",
+                root,
+                root + "/.miller/symbols.db",
+                stateFor?.Invoke(i) ?? WorkspaceRegistryState.Ready,
+                seenAtUtc: baseSeenAt.AddMinutes(i));
+        }
+    }
+
+    [Fact]
+    public void List_Compact_CapsAtDefaultLimitAndRendersOmittedTail_CurrentFirst()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(fx, builtRevision: 4, workspaceId: Ws);
+        SeedOtherWorkspaces(harness, count: 25, baseSeenAt: DateTimeOffset.UtcNow.AddDays(-1));
+
+        string output = harness.Tool.Workspace(operation: "list");
+
+        // 26 registered (1 current + 25 seeded); compact caps at 20 with a 6-row omitted tail.
+        Assert.Contains("# workspaces (20 of 26)", output);
+        Assert.Contains("… 6 more — raise limit or pass filter=<substring>", output);
+        // Current workspace is always first.
+        string firstRow = output.Split('\n').First(line => line.StartsWith("* ", StringComparison.Ordinal));
+        Assert.Contains("[current]", firstRow);
+        // The newest seeded row survives the cap; the oldest is omitted.
+        Assert.Contains("seed-025-aaaaaaaa", output);
+        Assert.DoesNotContain("seed-001-aaaaaaaa", output);
+    }
+
+    [Fact]
+    public void List_Compact_FilterNarrowsByDisplayIdOrRoot()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(fx, builtRevision: 4, workspaceId: Ws);
+        SeedOtherWorkspaces(harness, count: 5, baseSeenAt: DateTimeOffset.UtcNow.AddDays(-1));
+
+        // "repo-004" matches only one seeded row's root substring (case-insensitive).
+        string output = harness.Tool.Workspace(operation: "list", filter: "REPO-004");
+
+        Assert.Contains("seed-004-aaaaaaaa", output);
+        Assert.DoesNotContain("seed-003-aaaaaaaa", output);
+        Assert.Contains("filter=\"REPO-004\"", output);
+    }
+
+    [Fact]
+    public void List_Compact_FilterNoMatchRendersHelpfulLine()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(fx, builtRevision: 4, workspaceId: Ws);
+        SeedOtherWorkspaces(harness, count: 3, baseSeenAt: DateTimeOffset.UtcNow.AddDays(-1));
+
+        string output = harness.Tool.Workspace(operation: "list", filter: "zzz-no-such-workspace");
+
+        Assert.False(string.IsNullOrWhiteSpace(output));
+        Assert.Contains("no workspace matches filter \"zzz-no-such-workspace\"", output);
+        Assert.Contains("4 registered", output); // 1 current + 3 seeded
+    }
+
+    [Fact]
+    public void List_Compact_OmittedErrorStateProducesErrorSummary()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(fx, builtRevision: 4, workspaceId: Ws);
+        // The oldest seeded row (i=1) is error-state; being oldest it falls outside the default cap.
+        SeedOtherWorkspaces(
+            harness, count: 25, baseSeenAt: DateTimeOffset.UtcNow.AddDays(-1),
+            stateFor: i => i == 1 ? WorkspaceRegistryState.Error : WorkspaceRegistryState.Ready);
+
+        string output = harness.Tool.Workspace(operation: "list");
+
+        Assert.DoesNotContain("seed-001-aaaaaaaa", output); // omitted past the cap
+        Assert.Contains("errors: 1 workspace(s) in error state — filter or raise limit to see them", output);
+    }
+
+    [Fact]
+    public void List_Json_UnlimitedByDefaultAndAddsLastSeenAt()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(fx, builtRevision: 4, workspaceId: Ws);
+        SeedOtherWorkspaces(harness, count: 25, baseSeenAt: DateTimeOffset.UtcNow.AddDays(-1));
+
+        using var doc = JsonDocument.Parse(harness.Tool.Workspace(operation: "list", format: "json"));
+        var rows = doc.RootElement.GetProperty("workspaces").EnumerateArray().ToArray();
+
+        Assert.Equal(26, rows.Length); // JSON is unlimited without an explicit limit
+        // Additive last_seen_at present and ISO-8601 parseable on every row.
+        foreach (JsonElement row in rows)
+            Assert.True(DateTimeOffset.TryParse(
+                row.GetProperty("last_seen_at").GetString(), out _));
+        // Current workspace is ordered first.
+        Assert.True(rows[0].GetProperty("current").GetBoolean());
+    }
+
+    [Fact]
+    public void List_Json_RespectsExplicitLimit()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(fx, builtRevision: 4, workspaceId: Ws);
+        SeedOtherWorkspaces(harness, count: 25, baseSeenAt: DateTimeOffset.UtcNow.AddDays(-1));
+
+        using var doc = JsonDocument.Parse(
+            harness.Tool.Workspace(operation: "list", format: "json", limit: 3));
+
+        Assert.Equal(3, doc.RootElement.GetProperty("workspaces").GetArrayLength());
+    }
+
     [Fact]
     public void Status_ByWorkspaceId_ReadsRegisteredFactsWithoutRequiringFullIndexTables()
     {

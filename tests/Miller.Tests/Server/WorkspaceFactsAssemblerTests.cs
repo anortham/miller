@@ -213,6 +213,30 @@ public sealed class WorkspaceFactsAssemblerTests : IDisposable
             });
     }
 
+    [Fact]
+    public void ToListEntriesCarriesLastSeenAtForRecencyOrdering()
+    {
+        DateTimeOffset seen = DateTimeOffset.UtcNow.AddMinutes(-42);
+        var rows = new[]
+        {
+            new WorkspaceRegistryRow(
+                "ws-a",
+                "aaaa",
+                "/workspace/a",
+                "/workspace/a/.miller/symbols.db",
+                seen,
+                LastScanAt: null,
+                LastRevision: 3,
+                WorkspaceRegistryState.Ready,
+                LastError: null),
+        };
+
+        IReadOnlyList<WorkspaceListEntry> entries =
+            WorkspaceFactsAssembler.ToListEntries(rows, _ => false);
+
+        Assert.Equal(seen, Assert.Single(entries).LastSeenAt);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_temp))

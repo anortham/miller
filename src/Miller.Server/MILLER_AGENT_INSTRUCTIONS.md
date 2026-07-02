@@ -58,7 +58,7 @@ returns ranked, structured results with fewer tokens.
   List/no-match results include `next_actions`; search adds `near_matches`, `empty_reason`.
 - `workspace` — Index lifecycle: `status`, `health`, `onboarding`, `refresh`, `full`, `list`, `open`, `remove`,
   `leader`, `dashboard` (start/reuse the loopback dashboard). `status`, `health`, `onboarding`, `leader`, `refresh`, `full`, and
-  `remove` accept `workspace_id` or `path`; `list` shows the registry.
+  `remove` accept `workspace_id` or `path`; `list` shows the registry (`filter`/`limit`).
 
 ## Workflows
 

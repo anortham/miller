@@ -1,144 +1,106 @@
-# Task 2 Report — `backend-http` Provider: Direct Joins + Registration
+# Task 2 — `workspace list` recency ordering, default cap, filter
 
-**Status:** COMPLETE (green, committed)
-**Branch:** `feat/backend-http-boundary`
+**Status:** DONE (green). Supersedes stale prior `backend-http` content from an earlier SDD run.
 
-(This report replaces stale content from a prior `nextjs-bridge-trace` SDD run.)
+## What I implemented
 
-## What was implemented
+Render-layer changes only (No Architecture Impact). `workspace list` now orders by relevance and
+caps compact output so a 100+-row registry no longer dumps ~3.5k tokens.
 
-A standalone bridge provider `BackendHttpBridgeProvider` that joins backend HTTP client requests to
-server route-template handlers, plus its registration in all three required sites.
+- **`WorkspaceListEntry` gains `DateTimeOffset LastSeenAt`** (`WorkspaceRender.cs:56`). Added as the
+  last positional param with `= default` so every existing construction site (incl. the un-owned
+  `WorkspaceRenderTests.cs`) still compiles unchanged.
+- **Ordering** (`WorkspaceRender.OrderAndFilter`): current workspace first
+  (`OrderByDescending(Current)`), then `LastSeenAt` descending. LINQ `OrderBy` is stable, so ties keep
+  the registry's own order.
+- **Filter**: case-insensitive substring on `DisplayId` OR `Root`, applied before the cap. No-match
+  renders a helpful line with the total registered count instead of an empty string.
+- **Compact cap** (`ListCompact`): default 20 (`WorkspaceRender.DefaultListLimit`), `<=0` unlimited.
+  Renders at most `limit` entries then a tail `… N more — raise limit or pass filter=<substring>`.
+- **Omitted error visibility**: when any omitted (past-cap) entry is `state=error`, appends
+  `errors: N workspace(s) in error state — filter or raise limit to see them`.
+- **JSON** (`ListJson`): unlimited by default (existing consumers), narrows only on a positive explicit
+  `limit`; ordered current-first; every row gains additive `last_seen_at` (ISO-8601 round-trip).
+- **Assembler** (`WorkspaceFactsAssembler.ToListEntries`): maps `row.LastSeenAt` onto the entry.
+- **MCP `workspace` tool**: new optional `filter` (string, default null) and `limit` (int?, default null
+  → 20 compact / unlimited JSON) params with `[Description]` attributes, threaded through `Dispatch` →
+  `RenderRegistryList` → `WorkspaceRender.List`. Not a new tool (adding params is approved by the plan).
+- **CLI `workspace list`**: `--filter <s>` / `--limit <n>` mapped to the same core (`o.Value("filter")`,
+  `o.Has("limit") ? o.Int("limit", DefaultListLimit) : null`). Help text updated.
+- **Agent instructions doc**: minimal note `list shows the registry (filter/limit)` — kept terse because
+  the embedded doc had only 37 chars of headroom under the 12k budget; final length 11982.
 
-- **New:** `src/Miller.Core/Graph/BackendHttpBridgeProvider.cs`
-  - `sealed class BackendHttpBridgeProvider : IBridgeProvider`, `const ProviderId = "backend-http"`,
-    static `Instance`, private ctor, `Id => ProviderId`.
-  - `BuildCandidates`: ONE ordered fact loop (`OrderBy(Path, Ordinal).ThenBy(Span.StartByte)`) collecting
-    `clientRequests` (`TryReadClientRequest`), `backendRoutes` (`TryReadBackendRoute`), `mountFacts`
-    (`TryReadMountFact` — collected, not composed), and a `railsMountCount` (every
-    `fact.PatternId == BridgeStructuralPatterns.RailsMount`, evidence-only, never read).
-  - `routeHandlers = new List<StructuralRouteHandler>(backendRoutes)` kept as a distinct local — the T3/T4
-    append point before the single `FileRouteBridge.ResolveClientRequests(clientRequests, routeHandlers)` call.
-  - Evidence keys: `backend-http.clientRequests`, `.routeFacts`, `.mounts` (= `mountFacts.Count +
-    railsMountCount`), `.candidates`, `.ambiguousMatches`. No T3/T4 keys added.
-  - Skip `"no backend-http bridge evidence"` iff all four counts are zero; else `ActiveResult` with
-    observation nodes (client → canonical-route `TsType`, each `routeHandlers` entry → `Endpoint`),
-    mirroring `ApiRouteBridgeProvider.BuildObservationNodes` and built over `routeHandlers` so T3/T4
-    composed/expanded handlers get nodes for free.
-- **Modified:** `src/Miller.Core/Graph/BridgeGraphBuilder.cs` — appended `BackendHttpBridgeProvider.Instance`
-  to `DefaultProviders`.
-- **Modified:** `src/Miller.Indexing/BridgeProviderSelection.cs` — appended to `DefaultProviders` and added
-  `BackendHttpBridgeProvider.ProviderId => BackendHttpBridgeProvider.Instance` to the `CreateProvider` switch
-  so `"backend-http"` is valid in `miller.json` `bridge.providers`.
+## Miller calls used + what each confirmed
 
-All verb rules are inherited unchanged from `FileRouteBridge.ResolveClientRequests` (verb equal → High
-`RouteVerbMatch`; verb different → no edge; verb null → Medium `RouteOnlyMatch`/`verb_unknown`; equally-specific
-verb-exact tie → ambiguous, no edge; edge target bound to handler `containing_symbol_id`). The resolver was NOT
-touched.
-
-## Files changed
-
-- `src/Miller.Core/Graph/BackendHttpBridgeProvider.cs` (new)
-- `src/Miller.Core/Graph/BridgeGraphBuilder.cs` (DefaultProviders +1)
-- `src/Miller.Indexing/BridgeProviderSelection.cs` (DefaultProviders +1, CreateProvider switch +1)
-- `tests/Miller.Tests/Graph/BridgeGraphBuilderTests.cs` (+9 provider tests)
-- `tests/Miller.Tests/Indexing/RepositoryIndexLoaderBridgeTests.cs` (default-list assertion updated + 1 end-to-end selection test + fixture helper)
-
-## Tests (caller-facing: `BridgeGraphBuilder.Build` / `BridgeProviderSelection.ProvidersForDatabase`)
-
-`tests/Miller.Tests/Graph/BridgeGraphBuilderTests.cs` (9 new tests):
-- `BackendHttp_express_post_route_hits_client_request_bound_to_handler_symbol_High` — verb-equal Express POST
-  joins client to the handler symbol at High, verb-known; evidence counts (`clientRequests/routeFacts/
-  candidates=1`, `ambiguousMatches/mounts=0`).
-- `BackendHttp_colon_param_fastapi_route_hits_concrete_path_client_High` — `/api/users/42` folds against
-  `:user_id` canonically → High.
-- `BackendHttp_two_equally_specific_routes_are_ambiguous_no_edge` — specificity tie → `ambiguousMatches=1`,
-  `candidates=0`, no edge.
-- `BackendHttp_gin_any_route_with_no_verb_hits_client_Medium_verb_unknown` — verbless gin → Medium,
-  `IsVerbUnknown`.
-- `BackendHttp_post_client_and_get_only_spring_route_produce_no_edge` — verb-known-different → no edge.
-- `BackendHttp_django_path_pattern_no_verb_hits_client_Medium_verb_unknown` — Django path URLconf (verbless) →
-  Medium.
-- `BackendHttp_client_only_repo_is_active_with_observation_node_and_no_edges` — pure-frontend repo is ACTIVE,
-  emits a client `TsType` observation node with `backend-http` provenance, `candidates=0`, no Hits edge.
-- `BackendHttp_mounts_evidence_counts_mount_facts_and_evidence_only_rails_mount` — `mounts=2` (1 express mount +
-  1 evidence-only `rails.mount`), no composed edge.
-- `BackendHttp_no_evidence_skips_with_reason_and_zero_counts` — skip reason + all-zero counts.
-
-`tests/Miller.Tests/Indexing/RepositoryIndexLoaderBridgeTests.cs`:
-- Updated `ProvidersForDatabase_NoConfig_ReturnsAllDefaultBridgeProviders` expected list to append
-  `"backend-http"` (would otherwise break — the only pre-existing brittle exact-list assertion).
-- Added `Load_RootMillerJsonBackendHttpProvider_BridgesClientRequestToBackendRoute` — end-to-end through the
-  production `RepositoryIndexLoader.Load` path with a `miller.json` selecting `["backend-http"]`: proves the
-  `CreateProvider` switch maps the id AND that `express.route.v1` loads through the Task-1 SQL whitelist and
-  bridges a POST client to the containing handler symbol at High.
-
-## Verification
-
-Invariant each check proves, exact command, result, timestamp:
-
-| Invariant proven | Command | Result |
-| --- | --- | --- |
-| RED — 9 backend-http behaviors fail before impl (feature missing, not typos) | `dotnet test tests/Miller.Tests/Miller.Tests.csproj --filter "FullyQualifiedName~BridgeGraphBuilderTests&Category!=Scale" -v minimal` | Failed: 9, Passed: 113 (expected) |
-| GREEN — provider behaviors + evidence/skip/observation nodes | same filter | Passed: 122, Failed: 0 |
-| Selection + end-to-end Load path (CreateProvider + SQL whitelist) | `dotnet test tests/Miller.Tests/Miller.Tests.csproj --filter "FullyQualifiedName~RepositoryIndexLoaderBridgeTests&Category!=Scale" -v minimal` | Passed: 17, Failed: 0 |
-| Existing providers byte-identical (full fast suite, incl. nextjs-api/nuxt-api/dotnet-web shared-client fixtures) | `scripts/test.sh` | Passed: 2663, Failed: 0, 21s (<30s ceiling) |
-| 0 warnings / 0 errors (warnings-as-errors) | `dotnet build Miller.slnx -c Release` | Build succeeded, 0 Warning(s), 0 Error(s) |
-
-Timestamp: 2026-07-02 (local session). Commit SHA: recorded on the `feat: backend-http bridge provider` commit
-on `feat/backend-http-boundary` (see `git log -1`).
-
-## Miller calls used (orientation) and what each confirmed
-
-- `inspect ApiRouteBridgeProvider depth=full` — the template: single ordered fact loop, `ResolveClientRequests`
-  call, evidence-count dict, skip/active branch, `BuildObservationNodes` (client→`TsType`, handler→`Endpoint`).
-- `inspect FileRouteBridge depth=full` — confirmed `ResolveClientRequests(IReadOnlyList<StructuralClientRequest>,
-  IReadOnlyList<StructuralRouteHandler>)` and `internal HandlerDisplay(StructuralRouteHandler)` signatures + verb
-  rules; resolver binds edge target to `containing_symbol_id`.
-- `inspect StructuralRouteFactAdapter depth=full` — confirmed `TryReadClientRequest` (language-agnostic),
-  `TryReadBackendRoute` (gates on `BackendRoutePatternIds`, verb nullable, Spring `class_route` rejected),
-  `TryReadMountFact` (gates on the 4 mount families, `rails.mount` deliberately NOT read).
-- `inspect BridgeStructuralPatterns depth=full` — confirmed `BackendRoutePatternIds` (10 families) and
-  `RailsMount = "rails.mount.v1"`.
-- `inspect BridgeProviderResult depth=full` / `inspect BridgeProviderContext depth=full` — confirmed
-  `ActiveResult(edges, counts, observationNodes)` / `Skipped(reason, counts)` factories and context fields
-  `.StructuralFacts` / `.SymbolsById`.
-- `inspect StructuralMountFact depth=full` — confirmed the record shape (collected, not composed in T2).
-- Read `BridgeGraphBuilder.cs`, `BridgeProviderSelection.cs`, `FileRouteBridgeProvider.cs`,
-  `RepositoryIndexLoaderBridgeTests.cs` — confirmed the exact registration sites, the wrapper-class precedent,
-  `FileRouteBridgeProvider.RouteDisplay` (`public static`), and the `Fact(...)` dictionary test helper.
+- `inspect WorkspaceListEntry depth=overview` — confirmed the record-struct shape (8 positional params)
+  and listed callers/refs to update.
+- `trace WorkspaceListEntry mode=refs` — enumerated all 15 construction/type-usage sites across
+  `CliDispatch.cs`, `WorkspaceFactsAssembler.cs`, `WorkspaceRender.cs`, `WorkspaceTool.cs`, and 3 test
+  files, proving a defaulted trailing param was needed to keep un-owned `WorkspaceRenderTests.cs` green.
+- Targeted `Read` on `RenderRegistryList`, `Dispatch`, `WorkspaceList`, `ToListEntries`,
+  `WorkspaceRegistry.{UpsertSeen,List}`, `CliOptions`.
 
 ## API-shape evidence
 
-`FileRouteBridge.ResolveClientRequests`, `FileRouteBridge.HandlerDisplay`,
-`FileRouteBridgeProvider.RouteDisplay`, `BridgeGraph.SynthesizeId`, `BridgeNodeKind.{TsType,Endpoint}`,
-`BridgeProviderResult.{ActiveResult,Skipped}`, `BridgeStructuralPatterns.{BackendRoutePatternIds,RailsMount}`,
-`StructuralRouteFactAdapter.{TryReadClientRequest,TryReadBackendRoute,TryReadMountFact}` — all confirmed by
-Miller `inspect` before use (above). Evidence key strings and the skip reason are asserted verbatim by the new
-tests.
+- `WorkspaceRegistryRow.LastSeenAt` is a non-null `DateTimeOffset` (`WorkspaceRegistryRow.cs:21`) — safe
+  to map without a null guard.
+- `WorkspaceRegistry.UpsertSeen(..., DateTimeOffset? seenAtUtc = null)` lets tests seed distinct
+  last-seen stamps for deterministic recency ordering.
+- `Utf8JsonWriter.WriteString(name, DateTimeOffset)` emits ISO-8601 (additive `last_seen_at`).
+- `CliOptions.Int(name, fallback)` + `.Has(name)` give explicit-vs-default detection for the CLI limit.
+
+## Verification
+
+- **Invariant proven**: `workspace list` renders the current workspace first, then most-recently-seen,
+  caps compact output at `limit` (default 20) with an accurate omitted-count tail, surfaces omitted
+  error-state rows, narrows by case-insensitive `filter` (no-match → helpful line), and keeps JSON an
+  unlimited, additive-`last_seen_at` shape unless a positive limit is given — across both the MCP tool
+  and the CLI dispatch path.
+- **Scope**: `dotnet test tests/Miller.Tests --filter
+  "FullyQualifiedName~WorkspaceToolTests|FullyQualifiedName~WorkspaceFactsAssembler|FullyQualifiedName~AgentInstructions|FullyQualifiedName~CliDispatchTests"`
+- **Result**: Passed! Failed: 0, Passed: 226, Skipped: 0.
+- **Build**: `dotnet build src/Miller.Server -c Release` → 0 warnings / 0 errors.
+- Timestamp: 2026-07-02. SHA: see commit trailer.
+
+New tests: `WorkspaceToolTests` (cap+tail+current-first, filter narrow, filter no-match, omitted-error
+summary, JSON unlimited+last_seen_at, JSON explicit limit); `WorkspaceFactsAssemblerTests` (LastSeenAt
+mapping); `CliDispatchTests` (`--filter`, `--limit` + tail).
+
+## Files changed
+
+- `src/Miller.Server/Tools/WorkspaceRender.cs`
+- `src/Miller.Server/Tools/WorkspaceFactsAssembler.cs`
+- `src/Miller.Server/Tools/WorkspaceTool.cs`
+- `src/Miller.Server/Cli/CliDispatch.cs` (workspace-list region only)
+- `src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md`
+- `tests/Miller.Tests/Server/WorkspaceToolTests.cs`
+- `tests/Miller.Tests/Server/WorkspaceFactsAssemblerTests.cs`
+- `tests/Miller.Tests/Server/Cli/CliDispatchTests.cs`
+
+## Judgment calls
+
+- `LastSeenAt` added as a **defaulted** trailing param (not required) so un-owned test/production
+  construction sites compile unchanged — the only site passing a real value is `ToListEntries`.
+- Header made explicit about capping/filtering (`# workspaces (20 of 26)` / `... matched, ...
+  registered; filter="..."`) but kept exactly `# workspaces (N)` when nothing is omitted and no filter,
+  preserving the un-owned `WorkspaceRenderTests` header assertion.
+- JSON ordered current-first too (additive; order isn't a documented contract) for consistency with
+  compact; existing JSON shape tests still pass.
+- Agent-instructions note kept terse due to the 12k-char embedded-doc budget. The full contract lives in
+  the MCP param `[Description]`s and CLI help text.
 
 ## Self-review findings
 
-- Adapters self-gate by pattern id and the three families (`http.client_request.v1`, the 10
-  `BackendRoutePatternIds`, the 4 mount families) plus `rails.mount.v1` are DISJOINT, so the `if/continue`
-  ordering cannot misclassify a fact. Verified by the passing per-family tests.
-- Shared client facts also feed dotnet-web/nextjs-api/nuxt-api; no dedupe added — graph-level signature dedupe
-  and observation-node `TryAdd` handle overlap (existing precedent). The full fast suite (incl. those fixtures)
-  stayed green, confirming byte-identical existing behavior.
-- Only one pre-existing test asserted the exact default-provider list; updated it. No other test asserts
-  `ActiveProviders.Count`/`SkippedProviders.Count` (grep-verified), so the additive default provider is safe.
+- Confirmed `limit <= 0` = unlimited in both compact and JSON.
+- Confirmed no-match filter returns a non-empty, count-bearing line (not `""`).
+- Confirmed omitted-error summary fires only for rows actually omitted past the cap.
+- Confirmed the CLI distinguishes explicit `--limit` from the default (via `o.Has`), so JSON stays
+  unlimited when `--limit` is absent.
 
-## Judgment calls (file:line — X over Y because …)
+## Concerns
 
-- `BackendHttpBridgeProvider.cs:44-72` — collect only `mountFacts` + `railsMountCount` (no resource-route list),
-  over the plan prose's "collecting … resource-route facts", because the authoritative Task 2 spec scopes the
-  seam to `routeHandlers` + `mountFacts`, `rails.resource_route.v1` is excluded from `BackendRoutePatternIds`
-  and has no adapter read yet (Task 4 adds expansion), and adding an unused list now is speculative
-  extensibility the architecture-quality bar forbids. The resource-route collection point is a Task 4 concern.
-- `BackendHttpBridgeProvider.cs:77-84` — evidence key literals written inline
-  (`"backend-http.clientRequests"`, …) rather than via a descriptor `EvidenceKey` helper, because this provider
-  is standalone (not descriptor-driven) — matching the plan's "a class of its own keeps the descriptor record
-  honest" and keeping T3/T4's added keys visible in one place.
-- Selection/end-to-end test placed in `RepositoryIndexLoaderBridgeTests.cs` (the existing
-  `ProvidersForDatabase`-oriented file) rather than a new file, following the established precedent for
-  `nextjs-api`/`nuxt-api` selection tests.
+- **Shared build coupling**: the test assembly briefly failed to COMPILE mid-run because a sibling's
+  `InspectTool.cs` (Task 5) was mid-edit (CS0103 on `AppendGroupedReferences`/`DistinctCallees`). It
+  resolved on its own; my scope then passed 226/226. No action needed.
+- The embedded agent-instructions doc is near its 12k budget (now 11982); further additions by other
+  tasks may need trimming.
