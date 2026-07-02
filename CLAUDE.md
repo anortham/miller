@@ -122,6 +122,13 @@ scripts/test.ps1 all
   Native AOT.
 - Do not publish, retag, delete, or overwrite a release without explicit user approval. README current-release
   metadata and release-evidence docs must come from live GitHub release facts, not guessed values.
+- **A pushed release-prep commit is a live marketplace release (load-bearing).** The Claude Code/Cursor/Codex
+  marketplaces serve the plugin manifests straight from `origin/main` HEAD, and the plugin launcher downloads
+  `releases/download/v<manifest version>/…`. Pushing a `release: prepare X` commit therefore makes updates
+  advertise version X immediately — publish the vX GitHub release (tag push or dispatch `publish: true`) in the
+  same working session as that push, and verify the assets exist. (Why: the 1.3.2 prep commit was pushed
+  2026-07-01 without publishing the release; marketplace updates 404'd on the missing archive until v1.3.2 was
+  tagged the next day.)
 
 ## Public docs & onboarding
 
