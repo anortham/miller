@@ -579,16 +579,52 @@ public sealed class InspectTool
             return new BodyPreviewResult(null, Truncated: false);
 
         string normalized = body.Text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
-        string[] lines = normalized.Split('\n');
-        int lineCount = Math.Min(lines.Length, OverviewBodyPreviewMaxLines);
+        // Drop doc-comment lines before spending the line/char budget: an overview preview of a container
+        // otherwise re-prints member docs that already duplicate the `doc:` section above. Dropping alone is
+        // NOT truncation — the caps below still decide Truncated against the filtered code lines.
+        List<string> lines = FilterDocCommentLines(normalized.Split('\n'));
+        int lineCount = Math.Min(lines.Count, OverviewBodyPreviewMaxLines);
         string preview = string.Join('\n', lines.Take(lineCount));
-        bool truncated = lines.Length > lineCount;
+        bool truncated = lines.Count > lineCount;
         if (preview.Length > OverviewBodyPreviewMaxChars)
         {
             preview = preview[..OverviewBodyPreviewMaxChars].TrimEnd();
             truncated = true;
         }
         return new BodyPreviewResult(preview, truncated);
+    }
+
+    // Remove doc-comment lines (C#/Rust `///` and `//!`, and `/** … */` blocks inclusive) so the overview body
+    // preview spends its budget on code rather than member docs already shown in the `doc:` section. Ordinary
+    // `//` and `#` comments are code commentary — kept. Python docstrings (`"""`) are string literals, not
+    // doc-comment syntax, so they are left untouched.
+    private static List<string> FilterDocCommentLines(IReadOnlyList<string> lines)
+    {
+        var result = new List<string>(lines.Count);
+        bool inBlockDoc = false;
+        foreach (string line in lines)
+        {
+            string trimmed = line.TrimStart();
+            if (inBlockDoc)
+            {
+                // Every line of an open `/** … */` block is dropped, up to and including the closing `*/`.
+                if (trimmed.Contains("*/", StringComparison.Ordinal))
+                    inBlockDoc = false;
+                continue;
+            }
+            if (trimmed.StartsWith("///", StringComparison.Ordinal) ||
+                trimmed.StartsWith("//!", StringComparison.Ordinal))
+                continue;
+            if (trimmed.StartsWith("/**", StringComparison.Ordinal))
+            {
+                // A single-line `/** … */` closes on the same line; a multi-line one opens the block.
+                if (!trimmed.Contains("*/", StringComparison.Ordinal))
+                    inBlockDoc = true;
+                continue;
+            }
+            result.Add(line);
+        }
+        return result;
     }
 
     // distinct enclosing symbols of the refs, rendered as "Name  file:line" where resolvable, else the id.

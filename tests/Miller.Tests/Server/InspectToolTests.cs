@@ -311,6 +311,88 @@ public sealed class InspectToolTests
         Assert.Contains("## body\n", full);
     }
 
+    // A container whose body interleaves doc-comment lines (dropped from the overview preview) with ordinary
+    // comments and code (kept). Body span covers the whole file so BodyPreview sees every line.
+    private const string DocCommentBodyContent =
+        "public class Widget {\n" +                        // L1  kept (code)
+        "  /// <summary>Adds numbers.</summary>\n" +       // L2  dropped (///)
+        "  public int Add(int a) {\n" +                    // L3  kept
+        "    return a + 1;\n" +                            // L4  kept
+        "  }\n" +                                          // L5  kept
+        "  /** block doc open\n" +                         // L6  dropped (/** opens block)
+        "   * block doc middle\n" +                        // L7  dropped (inside block)
+        "   */\n" +                                        // L8  dropped (closes block)
+        "  //! inner doc line\n" +                         // L9  dropped (//!)
+        "  // ordinary kept comment\n" +                   // L10 kept (plain //)
+        "  # hash kept comment\n" +                        // L11 kept (#)
+        "  public int Sub(int a) { return a - 1; }\n" +    // L12 kept
+        "}\n";                                             // L13 kept
+
+    private static JulieDbFixture DocCommentBodyFixture()
+    {
+        var rows = new[]
+        {
+            new JulieDbFixture.SymbolRow("c0000000000000000000000000000abc", "Widget", "class", "csharp",
+                "src/Widget.cs", "public class Widget", 1, null)
+            {
+                Visibility = "public",
+                DocComment = "A widget.",
+                BodyStartByte = 0,
+                BodyEndByte = System.Text.Encoding.UTF8.GetByteCount(DocCommentBodyContent),
+                BodyStartLine = 1,
+                BodyEndLine = 13,
+            },
+        };
+        var content = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["src/Widget.cs"] = DocCommentBodyContent,
+        };
+        return JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract,
+            rows, fileContent: content, workspaceId: "ws-inspect-doc");
+    }
+
+    [Fact]
+    public void Run_SymbolOverview_BodyPreview_DropsDocCommentLines_KeepsCodeAndPlainComments()
+    {
+        using var fx = DocCommentBodyFixture();
+        var (index, resolver) = Build(fx);
+
+        string overview = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "Widget", depth: "overview", kind: null, scope: null, limit: 50, json: false, out _);
+
+        // /// and //! doc-comment lines are gone.
+        Assert.DoesNotContain("Adds numbers", overview);
+        Assert.DoesNotContain("inner doc line", overview);
+        // The /** ... */ block is dropped, inclusive of every line.
+        Assert.DoesNotContain("block doc open", overview);
+        Assert.DoesNotContain("block doc middle", overview);
+        // Plain // and # comments and real code survive.
+        Assert.Contains("// ordinary kept comment", overview);
+        Assert.Contains("# hash kept comment", overview);
+        Assert.Contains("public int Add(int a)", overview);
+        Assert.Contains("public int Sub(int a)", overview);
+        // Filtering alone (few lines, small chars) is NOT truncation.
+        Assert.DoesNotContain("body preview truncated", overview);
+    }
+
+    [Fact]
+    public void Run_SymbolFull_Body_IsByteIdenticalIncludingDocComments()
+    {
+        using var fx = DocCommentBodyFixture();
+        var (index, resolver) = Build(fx);
+
+        string full = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "Widget", depth: "full", kind: null, scope: null, limit: 50, json: false, out _);
+
+        // depth=full renders the raw body verbatim — every doc-comment line is still present.
+        Assert.Contains("## body\n", full);
+        Assert.Contains("/// <summary>Adds numbers.</summary>", full);
+        Assert.Contains("/** block doc open", full);
+        Assert.Contains("* block doc middle", full);
+        Assert.Contains("//! inner doc line", full);
+        Assert.Contains("// ordinary kept comment", full);
+    }
+
     [Fact]
     public void Run_SymbolFull_Json_ExposesComplexityOrNull()
     {
