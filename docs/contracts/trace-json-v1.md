@@ -141,7 +141,8 @@ Bridge is provider-scoped. Current packaged providers are:
 - `nextjs`: route references to Next.js file routes (navigation).
 - `nextjs-api`: fetch/axios client requests (`http.client_request.v1`) to source-attested Next.js App Router
   route handlers (`nextjs.route_handler.v1`, julie-extract 2.6.0+), emitted as `hits` edges with the `route`
-  label, bound to the exported handler symbol when the fact carries one.
+  label. With julie-extract 2.6.1+, both `export async function VERB` and
+  `export const VERB = async () => ...` route-handler facts bind to the exported handler symbol.
 - `nuxt`: NuxtLink route references to Nuxt file routes (navigation).
 - `nuxt-api`: fetch/axios client requests to source-attested Nitro server routes (`nuxt.server_route.v1`,
   julie-extract 2.6.0+), emitted as `hits` edges with the `route` label; a whole-file handler fact without a

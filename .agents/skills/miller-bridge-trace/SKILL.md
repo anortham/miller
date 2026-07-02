@@ -35,8 +35,8 @@ patterns(operation="search", query="react")
 patterns(operation="search", query="route")
 ```
 
-For the HTTP boundary bridges (`dotnet-web` client requests, `nextjs-api`, `nuxt-api`), audit the 2.6.0 fact
-families directly:
+For the HTTP boundary bridges (`dotnet-web` client requests, `nextjs-api`, `nuxt-api`), audit the HTTP boundary
+fact families directly:
 
 ```text
 patterns(operation="search", pattern_id="http.client_request.v1")
