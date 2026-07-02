@@ -27,7 +27,6 @@ returns ranked, structured results with fewer tokens.
 - `inspect` — A file or symbol you can already name. A file path lists symbols; a symbol name gives definition,
   signature, and docs. Default inspect depth is `summary`. The first symbol read should usually be `inspect target depth=overview`;
   it gives bounded refs/calls/body preview. Use `depth=full` when you need the complete body or complete relation lists.
-  Multi-file ambiguity includes copyable scoped reruns.
   Optional `workspace_id` and `ensure_fresh` follow `search`.
 - `context` — First call in an unfamiliar area: a small, justified bundle of relevant entry points plus the next
   symbols to `inspect`. Give the task plus optional `failing_test`/`stack_trace`; compact output: seeds first with
@@ -41,7 +40,7 @@ returns ranked, structured results with fewer tokens.
   `mode=bridge`. `mode=auto` is subsumed by `inspect depth=full`.
   Links are flagged `[verb-unknown]`/`[ambiguous]`. Use `format=json` for
   refs/nodes/links/diagnostics/actions; `scope=<file>` for duplicate names. **`mode=bridge` is provider-scoped to
-  `dotnet-web`, `nextjs`, `nextjs-api`, `nuxt`, `nuxt-api`, `vue`, and `react`; otherwise use `mode=refs`/`mode=path` or `inspect depth=full`.**
+  `dotnet-web`, `nextjs`, `nextjs-api`, `nuxt`, `nuxt-api`, `vue`, `react`, and `backend-http`; otherwise use `mode=refs`/`mode=path` or `inspect depth=full`.**
 - `impact` — What a change affects: downstream symbols and linked tests. After edits, run `impact` with no
   args to read the working-tree git diff and see what your uncommitted change affects + which tests to run.
   Or pass exactly one of `target`, `changed_paths`, `diff`, or `git=true` (`base`/`staged` imply git). Use
@@ -66,13 +65,13 @@ returns ranked, structured results with fewer tokens.
 - **New task / unfamiliar area**: `context` → `inspect` the key symbols → implement.
 - **Understand a symbol**: first use `inspect target depth=overview`; use `depth=full` for complete body/reference/call lists.
 - **Trace a flow**: `trace mode=refs` for usages, `mode=path` for A→B, `mode=bridge` for
-  `dotnet-web`/`nextjs`/`nextjs-api`/`nuxt`/`nuxt-api`/`vue`/`react` evidence. ASP.NET, htmx, and frontend route-reference facts
-  feed `dotnet-web` (attribute + minimal-API routes); client fetch/axios `http.client_request.v1` facts feed `dotnet-web`
-  and the `*-api` providers; route-fact audits: `patterns operation=search query=route`,
+  `dotnet-web`/`nextjs`/`nextjs-api`/`nuxt`/`nuxt-api`/`vue`/`react`/`backend-http` evidence. ASP.NET, htmx, and frontend route-reference facts
+  feed `dotnet-web`; client fetch/axios `http.client_request.v1` facts feed `dotnet-web`
+  and the `*-api` providers, plus `backend-http` for python/go/java/ruby and vue client requests beyond js/ts; route-fact audits: `patterns operation=search query=route`,
   `patterns operation=search pattern_id=htmx.attribute.v1`, `patterns operation=search pattern_id=http.client_request.v1`,
   `patterns operation=search pattern_id=vue.route_reference.v1`. For callers/callees use `inspect depth=full`.
   If ambiguous, retry with `scope=<file>`.
-  A `mode=path` no-path result means no extracted graph path within depth, not proof unrelated; follow its `Next:` actions.
+  A `mode=path` no-path result is not proof unrelated; follow its `Next:` actions.
 - **Find docs/prose**: `search mode=content "<phrase>"` returns `path:line` + snippet.
 - **Find source-body text**: `search mode=source "<literal or phrase>"` searches verified source files.
 - **Audit registered workspaces for exact text**: `content search query="dangerous term" workspace_id=all content_kind=source`
@@ -116,7 +115,7 @@ code, paste this block into the prompt:
       mode=source/external/web/all-text for content text, mode=markers for TODO/FIXME/HACK/XXX audits,
       regions=... for comments/strings, and filters to scope.
     - inspect(target, depth?) before reading files/symbols; depth=overview is compact, depth=full is complete.
-    - trace(target, mode?, to?, scope?, reference_kind?) before manual file hopping; use refs for usages and scope for ambiguous names. mode=path no-path means not proven unrelated; mode=bridge is provider-scoped to `dotnet-web`, `nextjs`, `nextjs-api`, `nuxt`, `nuxt-api`, `vue`, and `react`.
+    - trace(target, mode?, to?, scope?, reference_kind?) before manual file hopping; use refs for usages and scope for ambiguous names. mode=path no-path means not proven unrelated; mode=bridge is provider-scoped to `dotnet-web`, `nextjs`, `nextjs-api`, `nuxt`, `nuxt-api`, `vue`, `react`, and `backend-http`.
     - impact(target?|changed_paths?|diff?|git?/base?/staged?) before refactors and to choose tests.
     - edit(operation, target, ...) to preview index-aware edits; use match_mode=auto with query/anchor/line for localized replace_text.
     - content(import|add_markdown|search|read|list|remove|export, ...) for logs, web markdown, and audits; use workspace_id=all for audits and pass hit workspace_id on reads.

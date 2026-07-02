@@ -1,6 +1,6 @@
 ---
 name: miller-bridge-trace
-description: Use when tracing Miller bridge paths in supported providers: dotnet-web URL literals and fetch/axios client requests to ASP.NET signals, client requests to Next.js route handlers or Nuxt server routes, Next.js/Nuxt route references to file routes, or Vue/React references to route definitions.
+description: Use when tracing Miller bridge paths in supported providers: dotnet-web URL literals and fetch/axios client requests to ASP.NET signals, client requests to Next.js route handlers or Nuxt server routes, Next.js/Nuxt route references to file routes, Vue/React references to route definitions, or backend-http client requests to Express/FastAPI/Flask/Django/Spring/Go/gin/echo/Rails route facts.
 user-invocable: true
 arguments: "<client call, URL, route, endpoint, DTO, entity, or table>"
 allowed-tools: mcp__miller__trace, mcp__miller__search, mcp__miller__inspect, mcp__miller__context, mcp__miller__workspace, mcp__miller__patterns
@@ -13,7 +13,10 @@ Miller bridge tracing is provider-scoped evidence, not generic semantic magic. C
 minimal-API, and attribute-route facts — plus DTOs, entities, and EF/table signals), `nextjs` (route references
 to Next.js file routes), `nextjs-api` (fetch/axios client requests to Next.js App Router route handlers), `nuxt`
 (NuxtLink route references to Nuxt file routes), `nuxt-api` (fetch/axios client requests to Nitro server routes),
-`vue` (route references to Vue route definitions), and `react` (route references to React route definitions).
+`vue` (route references to Vue route definitions), `react` (route references to React route definitions), and
+`backend-http` (fetch/axios/`requests`/`httpx`/`net/http`/`Net::HTTP` client requests — now spanning
+python/go/java/ruby and vue beyond js/ts — to Express/Fastify/FastAPI/Flask/Django/Spring/Go net/http/gin/echo/
+Rails route facts, with cross-file mount-prefix composition and Rails resource-route expansion).
 
 ## Workflow
 
@@ -35,14 +38,17 @@ patterns(operation="search", query="react")
 patterns(operation="search", query="route")
 ```
 
-For the HTTP boundary bridges (`dotnet-web` client requests, `nextjs-api`, `nuxt-api`), audit the HTTP boundary
-fact families directly:
+For the HTTP boundary bridges (`dotnet-web` client requests, `nextjs-api`, `nuxt-api`, `backend-http`), audit the
+HTTP boundary fact families directly:
 
 ```text
 patterns(operation="search", pattern_id="http.client_request.v1")
 patterns(operation="search", pattern_id="aspnet.attribute_route.v1")
 patterns(operation="search", pattern_id="nextjs.route_handler.v1")
 patterns(operation="search", pattern_id="nuxt.server_route.v1")
+patterns(operation="search", pattern_id="express.route.v1")
+patterns(operation="search", pattern_id="fastapi.route.v1")
+patterns(operation="search", pattern_id="rails.resource_route.v1")
 ```
 
 2. Inspect the best anchor when names are ambiguous:
@@ -86,12 +92,18 @@ trace(target="<from>", mode="bridge")
   mismatch or ambiguous route matches. Server actions, middleware rewrites/redirects, runtime route rules,
   conventional (non-attribute) ASP.NET routing, relative/absolute client URLs (only `url_kind=path` is bridged),
   and Nuxt `$fetch`/`useFetch` still need extractor facts before bridge can claim them.
+- `backend-http` joins client requests to Express/Fastify/FastAPI/Flask/Django/Spring/Go net/http/gin/echo/Rails
+  route facts: High on verb match, Medium `[verb-unknown]` against a verb-less handler (`app.all`, gin/echo
+  `Any`, a method-less `@RequestMapping`, every Django URLconf), no edge on verb mismatch or an equally-specific
+  tie. Cross-file mounts (`app.use`/`include_router`/blueprint/`url_include`) and Rails `resources`/`resource`
+  compose additively, but only on an unambiguous single-file anchor. It does NOT claim regex-form Django url
+  patterns, `rails.mount` engine internals, or non-literal/dynamic route templates.
 
 ## Report
 
 State:
 
-- Provider assumption: `dotnet-web`, `nextjs`, `nextjs-api`, `nuxt`, `nuxt-api`, `vue`, `react`, or a combination
+- Provider assumption: `dotnet-web`, `nextjs`, `nextjs-api`, `nuxt`, `nuxt-api`, `vue`, `react`, `backend-http`, or a combination
 - Start node and end node if present
 - Link confidence and any flags
 - Missing evidence if the trace stops early

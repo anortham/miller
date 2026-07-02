@@ -57,7 +57,7 @@ workspace(operation="refresh")
 - `trace` empty results include `Next:` / JSON `next_actions`; follow them before treating a missing path or ref as proof.
 - `content(operation="read")` should use the `source_id` from `content(operation="search")` or `content(operation="list")`; pass the hit's `workspace_id` for cross-workspace reads.
 - `patterns` list and no-match results include `Next:` / JSON `next_actions`; run `patterns(operation="list")` before raw route/HTML/JSON/YAML/Markdown greps.
-- `trace mode=bridge` is provider-scoped to `dotnet-web`, `nextjs`, `nuxt`, `vue`, and `react`; on another stack use `mode=auto`/`refs`/`path`.
+- `trace mode=bridge` is provider-scoped to `dotnet-web`, `nextjs`, `nextjs-api`, `nuxt`, `nuxt-api`, `vue`, `react`, and `backend-http`; on another stack use `mode=auto`/`refs`/`path`.
 - Symbol search ranks `name + signature` only; docs/literals/broad source text need the row above.
 - Use `edit` for localized text changes when `query`, `anchor`, or `line` can avoid a full-file read; use normal patching for broad multi-hunk edits.
 

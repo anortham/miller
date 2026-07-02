@@ -149,11 +149,23 @@ Bridge is provider-scoped. Current packaged providers are:
   containing symbol targets a synthesized endpoint node.
 - `vue`: Vue route references to Vue route definitions.
 - `react`: React route references to React route definitions.
+- `backend-http`: fetch/axios/`requests`/`httpx`/`net/http`/`java.net.http`/`Net::HTTP` client requests
+  (`http.client_request.v1`, now spanning vue/js/jsx/tsx/ts/python/go/java/ruby beyond the JS/TS frontends)
+  joined to server route-template facts from ten backend families — Express, Fastify, FastAPI, Flask, Django,
+  Spring, Go net/http, gin, echo, and Rails (`express.route.v1`, `fastify.route.v1`, `fastapi.route.v1`,
+  `flask.route.v1`, `django.url_pattern.v1`, `spring.request_mapping.v1`, `go.net_http.route.v1`,
+  `gin.route.v1`, `echo.route.v1`, `rails.route.v1`) — emitted as `hits` edges with the `route` label. It is
+  standalone rather than descriptor-driven and hosts three Miller-owned enrichment passes (cross-file
+  mount-prefix composition, Rails resource-route expansion, and Rails `controller_action` symbol binding),
+  described below.
 
 Client-request edges are verb-aware. Client verbs are always known — `verb_source=attested`, or the fetch/axios
 spec-default GET when no literal `method` option exists — so a verb match against a verb-known handler scores
 High; a verb mismatch produces no edge; a suffix-less Nuxt handler (it answers every method, but its accepted
-verb set is not source-attested) matches route-only as Medium with the `verb_unknown` flag. Only
+verb set is not source-attested) matches route-only as Medium with the `verb_unknown` flag; likewise a
+verb-less backend handler (Express/Fastify all-method registrations, gin/echo `Any`, a method-less Spring
+`@RequestMapping`, and every Django URLconf entry — Django is verb-agnostic at the URL level) matches
+route-only as Medium `verb_unknown`, so `backend-http` shares these arms. Only
 `url_kind=path` client requests are bridge candidates. Route matching is segment-specific (bracket `[id]` and
 colon `:id` dynamic segments match one concrete segment); equally-specific ambiguous matches produce no edge
 and are counted in diagnostics.
@@ -163,15 +175,46 @@ rewrites or redirects, runtime routing, conventional (non-attribute) ASP.NET rou
 client URLs (only `url_kind=path`), or Nuxt `$fetch`/`useFetch` composables (the extractor emits fetch/axios
 facts only).
 
+The `backend-http` provider grows through three Miller-owned enrichment passes, all unambiguous-or-nothing —
+ambiguity poisons a candidate, it never degrades it to a lower band. (1) Cross-file mount-prefix composition
+anchors each `express.router_mount.v1`, `fastapi.include_router.v1`, `flask.blueprint_registration.v1`, or
+`django.url_include.v1` fact to route facts in exactly ONE other file (Django by the included module path, the
+others by the mount target's trailing identifier), then APPENDS prefixed route variants
+(`JoinRoute(mount_path, route_path)`); a mount that anchors to zero or multiple files composes nothing and is
+counted in `unanchoredMounts`. Composition is strictly additive — the original un-prefixed route facts are
+always kept, because a route fact carries no receiver identity proving it belongs to the mounted router rather
+than a direct handler in the same file. (2) Rails resource expansion turns each `rails.resource_route.v1` fact
+into the concrete verb-known REST handlers Rails doctrine implies (`resources` → 8 collection entries,
+`resource` → 7 singular entries, filtered by `only`/`except`, prefixed by `scope_path`). (3) Rails controller
+binding resolves a `rails.route.v1` `controller_action` (`users#show`) or an expanded action to the ONE
+non-test controller method symbol that matches — a second collision poisons the binding, falling back to a
+synthesized endpoint node. Rails semantics are Miller's job per the julie-extractors handoff; the other nine
+families carry their own verb-known route templates.
+
+A non-test csharp `http.client_request.v1` structural fact (a `HttpClient` call such as
+`HttpClient.GetAsync("/api/users/42")`) is a real client call, so it feeds the `dotnet-web` boundary as
+service-to-service client evidence — csharp is no longer blanket-excluded from client bridging. Test-project
+HttpClient calls stay filtered by the fact's `is_test` guard.
+
+`backend-http` does NOT claim: Django `url_pattern` facts in `route_syntax="regex"` form (no
+`normalized_route_template`, so the blank route is honestly excluded, never synthesized from the regex);
+`rails.mount.v1` Rack-app/engine internals (its mounted routes never reach the fact stream — counted as mount
+evidence only, never composed or bridged); and any non-literal or dynamic route/mount template the extractor
+could not resolve to a literal (upstream M2 silence — Miller bridges only the literal templates
+julie-extractors attests).
+
 `provider.evidence_counts` keys added by the boundary consumption: `dotnet-web.clientRequests`,
 `dotnet-web.attributeRoutes`, `nextjs-api.clientRequests`, `nextjs-api.routeHandlers`, `nextjs-api.candidates`,
-`nextjs-api.ambiguousMatches`, `nuxt-api.clientRequests`, `nuxt-api.serverRoutes`, `nuxt-api.candidates`, and
-`nuxt-api.ambiguousMatches`.
+`nextjs-api.ambiguousMatches`, `nuxt-api.clientRequests`, `nuxt-api.serverRoutes`, `nuxt-api.candidates`, `nuxt-api.ambiguousMatches`,
+`backend-http.clientRequests`, `backend-http.routeFacts`, `backend-http.mounts`, `backend-http.composedRoutes`,
+`backend-http.unanchoredMounts`, `backend-http.expandedResourceRoutes`, `backend-http.candidates`, and
+`backend-http.ambiguousMatches`.
 
-Route-string diagnostics cover the new providers with provider-prefixed codes (`nextjs-api_*` / `nuxt-api_*`
-over the suffixes `route_no_file_match`, `route_no_reference_match`, `route_ambiguous_file_match`,
-`route_no_bridge_link`, and `route_not_observed` — for example `nextjs-api_route_no_file_match`), phrased with
-the nouns "client request", "route handler" (Next.js), and "server route" (Nuxt). A provider-prefixed code is
+Route-string diagnostics cover the new providers with provider-prefixed codes (`nextjs-api_*` / `nuxt-api_*` /
+`backend-http_*` over the suffixes `route_no_file_match`, `route_no_reference_match`,
+`route_ambiguous_file_match`, `route_no_bridge_link`, and `route_not_observed` — for example
+`nextjs-api_route_no_file_match`), phrased with the nouns "client request", "route handler" (Next.js), "server
+route" (Nuxt), and "client request"/"route" (backend-http). A provider-prefixed code is
 emitted only from route facts that provider itself observed (observation-node provenance): a navigation code
 never narrates a client request, and an API code never claims another framework's endpoint. When the route's
 facts span frames — for example an unmatched client request whose only matching definition is an ASP.NET
