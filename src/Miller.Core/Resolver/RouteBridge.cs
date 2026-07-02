@@ -28,11 +28,21 @@ namespace Miller.Core.Resolver;
 /// </param>
 /// <param name="FilePath">The call's use-site file (workspace-relative), for the edge evidence.</param>
 /// <param name="Line">The 1-based use-site line, for the edge evidence (file:line).</param>
+/// <param name="AttestedVerb">
+/// The source-attested HTTP verb (canonical UPPERCASE) when the call was reduced from a 2.6.0
+/// <c>http.client_request.v1</c> fact, or null for legacy url-literal calls (every legacy call site is
+/// untouched by the default). When present it takes precedence over the lossy carrier round-trip: julie
+/// attests ANY static <c>method:</c> literal (e.g. <c>PURGE</c>), which the carrier-tail verb whitelist
+/// cannot carry — without this field such calls silently degrade to verb-unknown and fabricate Medium
+/// route-only matches against endpoints whose verb is KNOWN to differ. The synthesized carrier is kept for
+/// display continuity only.
+/// </param>
 public sealed record TsClientCall(
     LiteralRecord Literal,
     bool IsTest,
     string FilePath,
-    int Line);
+    int Line,
+    string? AttestedVerb = null);
 
 /// <summary>
 /// A C# controller action endpoint, already reduced from julie's <c>symbol_annotations</c> + the parent class
@@ -161,8 +171,7 @@ public static class RouteBridge
         {
             if (!IsRealClientCall(call))
                 continue;
-            var route = RouteNormalizer.FromClientCall(call.Literal.Carrier, call.Literal.LiteralText);
-            normalizedCalls.Add((call, route));
+            normalizedCalls.Add((call, NormalizeClientCall(call)));
         }
 
         foreach (var endpoint in input.Endpoints)
@@ -194,6 +203,21 @@ public static class RouteBridge
         }
 
         return edges;
+    }
+
+    /// <summary>
+    /// Normalize one client call's (verb, route). A source-attested verb (<see cref="TsClientCall.AttestedVerb"/>,
+    /// from a 2.6.0 <c>http.client_request.v1</c> fact) overrides the carrier-derived verb:
+    /// <see cref="RouteNormalizer.FromClientCall"/>'s carrier-tail whitelist cannot carry a non-standard attested
+    /// verb (<c>PURGE</c>), and silently degrading it to verb-unknown would fabricate route-only matches against
+    /// endpoints whose verb is KNOWN to differ. Legacy literal calls (null attested verb) are unchanged.
+    /// </summary>
+    private static NormalizedRoute NormalizeClientCall(TsClientCall call)
+    {
+        var route = RouteNormalizer.FromClientCall(call.Literal.Carrier, call.Literal.LiteralText);
+        if (string.IsNullOrWhiteSpace(call.AttestedVerb))
+            return route;
+        return new NormalizedRoute(call.AttestedVerb, route.Route, VerbKnown: true);
     }
 
     /// <summary>

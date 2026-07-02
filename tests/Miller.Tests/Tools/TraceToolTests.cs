@@ -1130,6 +1130,84 @@ public sealed class TraceToolTests
     }
 
     [Fact]
+    public void Bridge_RouteStringTarget_ModuleScopeFetch_MixedProviders_TracesBothLinks()
+    {
+        // F3 acceptance: one module-scope fetch("/api/x") (no containing symbol) in a mixed repo — an ASP.NET
+        // GET endpoint AND a Next.js route handler on the same route. Both providers must synthesize the SAME
+        // source node id for the symbol-less client, so trace "/api/x" finds ONE start and renders BOTH links
+        // instead of bailing on divergent starts.
+        StructuralFactRecord Fact(string id, string patternId, string path, string containingSymbolId, int line,
+            Dictionary<string, string> metadata) =>
+            new(id, patternId, "typescript", path, CaptureName: "capture", NodeKind: "node",
+                ContainingSymbolId: containingSymbolId,
+                Span: new StructuralFactSpan(line, 1, line, 1, line * 10, line * 10 + 1),
+                Confidence: 1.0, Metadata: metadata);
+
+        var facts = new List<StructuralFactRecord>
+        {
+            new("fact-httpget", "aspnet.attribute_route.v1", "csharp", "api/XController.cs",
+                CaptureName: "capture", NodeKind: "node", ContainingSymbolId: "sym-getx",
+                Span: new StructuralFactSpan(10, 1, 10, 1, 100, 101), Confidence: 1.0,
+                Metadata: new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["attribute_kind"] = "http_method",
+                    ["verb"] = "GET",
+                    ["effective_route_template"] = "/api/x",
+                }),
+            Fact("fact-next-get", "nextjs.route_handler.v1", "web/app/api/x/route.ts", "sym-handler", 3,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["framework"] = "nextjs",
+                    ["router"] = "app",
+                    ["route_path"] = "/api/x",
+                    ["verb"] = "GET",
+                    ["verb_source"] = "attested",
+                }),
+            Fact("fact-module-fetch", "http.client_request.v1", "web/lib/boot.ts", string.Empty, 5,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["client"] = "fetch",
+                    ["framework"] = "fetch",
+                    ["target_path"] = "/api/x",
+                    ["url_kind"] = "path",
+                    ["verb"] = "GET",
+                    ["verb_source"] = "default",
+                }),
+        };
+        var details = new List<Miller.Core.Contracts.SymbolDetail>
+        {
+            new("sym-getx", "GetX", "method", "api/XController.cs", "Task<IResult> GetX()",
+                Namespace: "Api.Controllers", IsTest: false, ParentClassName: "XController"),
+            new("sym-handler", "GET", "function", "web/app/api/x/route.ts", "GET",
+                Namespace: null, IsTest: false, ParentClassName: null),
+        };
+
+        var bridge = BridgeGraphBuilder.Build(
+            details, typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+        var indexed = new List<IndexedSymbol>
+        {
+            new(DocId: 0, SymbolId: "sym-getx", Name: "GetX", Signature: "Task<IResult> GetX()", Kind: "method",
+                Language: "csharp", FilePath: "api/XController.cs", StartLine: 10, EndLine: 12, ParentId: null, IsTest: false),
+            new(DocId: 1, SymbolId: "sym-handler", Name: "GET", Signature: "function GET", Kind: "function",
+                Language: "typescript", FilePath: "web/app/api/x/route.ts", StartLine: 3, EndLine: 5, ParentId: null, IsTest: false),
+        };
+        var index = MillerRepositoryIndex.Build(indexed, Array.Empty<GraphEdge>(), bridge);
+
+        string outp = TraceTool.Run(index, ResolverFor(index),
+            target: "/api/x", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false,
+            out int emitted, out _);
+
+        // ONE start node with BOTH Hits edges — no divergent-start bail, no false no-bridge-link diagnostic.
+        Assert.Equal(2, emitted);
+        Assert.Contains("api/x  --route-->  GetX", outp);
+        // The handler link ("GET" node, two spaces before the score) — distinct from the "GetX" line.
+        Assert.Contains("api/x  --route-->  GET  ", outp);
+        Assert.DoesNotContain("Multiple bridge starts", outp);
+        Assert.DoesNotContain("no_bridge_link", outp);
+    }
+
+    [Fact]
     public void Bridge_NuxtVerbUnknownClientRequestEdge_CompactAndJsonAgreeOnFlags()
     {
         // A suffix-less Nuxt server route answers every method: the edge is honest-Medium and flagged

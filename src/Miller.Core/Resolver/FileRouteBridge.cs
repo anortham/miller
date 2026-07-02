@@ -73,7 +73,15 @@ internal static class FileRouteBridge
             if (matches.Length == 0)
                 continue;
 
-            var bestMatch = BestMatch(matches, handler => handler.RoutePath);
+            // Verb-exact handlers outrank verb-null fallbacks: Nuxt routes GET /api/notes to notes.get.ts
+            // deterministically even when a suffix-less notes.ts coexists on the same route, so a specificity
+            // tie against a verb-null handler must not drop the attested verb-exact match as ambiguous. Only
+            // verb-exact-vs-verb-exact ties stay ambiguous; a verb-null-only candidate set keeps the
+            // route-only fallback behavior.
+            var verbExact = Array.FindAll(matches, handler => handler.Verb is not null);
+            var pool = verbExact.Length > 0 ? verbExact : matches;
+
+            var bestMatch = BestMatch(pool, handler => handler.RoutePath);
             if (bestMatch is null)
             {
                 ambiguousMatches++;
@@ -179,12 +187,15 @@ internal static class FileRouteBridge
         var handlerEvidence = new Evidence(handler.FilePath, handler.Line);
 
         // The client side is the containing frontend symbol when the fact supplied one, falling back to a
-        // route node — mirroring the navigation edge source handling.
+        // route node — mirroring the navigation edge source handling. A symbol-less source displays the
+        // CANONICAL route (no leading slash) — the exact form RouteBridge's route-node fallback uses — so one
+        // module-scope fetch("/api/x") synthesizes ONE TsType node id across providers (dotnet-web +
+        // nextjs-api/nuxt-api) instead of two divergent trace starts for the same call site.
         var sourceSymbolId = string.IsNullOrWhiteSpace(request.ContainingSymbolId)
             ? null
             : request.ContainingSymbolId;
         var sourceRef = new EdgeRef(
-            request.RoutePath,
+            sourceSymbolId is null ? CanonicalClientRoute(request.RoutePath) : request.RoutePath,
             sourceSymbolId,
             request.FilePath,
             new NameResolution(ResolutionStatus.Resolved, sourceSymbolId, 1));
@@ -209,6 +220,17 @@ internal static class FileRouteBridge
             targetRef,
             [requestEvidence, handlerEvidence],
             [new StructuralSignal(rule, Present: true, handlerEvidence)]);
+    }
+
+    /// <summary>
+    /// The canonical client-route display for a symbol-less request source: lowercased, params folded, no
+    /// leading slash — byte-identical to the route <see cref="RouteBridge"/>'s route-node fallback displays for
+    /// the same call site, so <see cref="BridgeGraph.NodeIdOf"/> synthesizes the same node id.
+    /// </summary>
+    private static string CanonicalClientRoute(string routePath)
+    {
+        var canonical = RouteNormalizer.FromClientCall("route", routePath).Route;
+        return canonical.Length == 0 ? routePath : canonical;
     }
 
     /// <summary>

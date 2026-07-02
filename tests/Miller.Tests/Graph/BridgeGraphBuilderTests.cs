@@ -2238,10 +2238,14 @@ public sealed class BridgeGraphBuilderTests
             [list, tsFn], typeArguments: [], literals: [literal], annotations: annotations,
             dbSetProperties: [], structuralFacts: facts);
 
-        // One edge per (client, endpoint) pair — and the HIGHER band survives the collapse.
+        // One edge per (client, endpoint) pair — the covered literal is suppressed pre-bridge (per-site
+        // DedupeClientCalls), so ONLY the verb-known High structural edge exists. Before suppression this
+        // held only via graph dedupe, which cannot protect a different-target false edge.
         var hit = Assert.Single(graph.Incident("sym-list"), e => e.Edge.Kind == BridgeKind.Hits);
         Assert.Equal(ConfidenceBand.High, hit.Band);
         Assert.False(hit.IsVerbUnknown);
+        Assert.Single(graph.Edges, e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.clientCalls"]);
     }
 
     [Fact]
@@ -2536,6 +2540,361 @@ public sealed class BridgeGraphBuilderTests
             node.Kind == BridgeNodeKind.Endpoint &&
             node.Display == "/api/notes" &&
             node.FilePath == "server/api/notes.ts");
+    }
+
+    // ---- adversarial-review fixes: F4 legacy-literal suppression, F1 attested-verb carry, F2 verb-exact
+    // ---- priority, F3 cross-provider source-node identity ------------------------------------------------
+
+    [Fact]
+    public void StructuralFacts_CoveredUrlLiteral_DoesNotFabricateRouteOnlyEdgeToOtherVerbEndpoint()
+    {
+        // F4: fetch("/api/orders", {method:"POST"}) is observed BOTH as a legacy url literal (carrier fetch,
+        // verb-unknown) and as an http.client_request.v1 POST fact at the SAME call site. GET and POST
+        // endpoints share the route: the structural leg correctly refuses the GET endpoint, and the covered
+        // literal must not resurrect it as a Medium route-only edge (a different target is a different edge
+        // signature, so graph dedupe cannot collapse the false edge away).
+        var list = Method("sym-list-orders", "ListOrders", "Task<IResult> ListOrders()",
+            "OrdersController", "api/OrdersController.cs");
+        var create = Method("sym-create-order", "CreateOrder", "Task<IResult> CreateOrder(CreateOrderRequest request)",
+            "OrdersController", "api/OrdersController.cs");
+        var tsFn = Type("sym-tsfn", "createOrder", "function", file: "web/api.ts");
+
+        var literal = MakeLiteral("/api/orders", kind: "url", language: "typescript",
+            carrier: "fetch", containingSymbolId: "sym-tsfn", spanStart: 80);
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-httpget",
+                patternId: "aspnet.attribute_route.v1",
+                language: "csharp",
+                path: "api/OrdersController.cs",
+                containingSymbolId: "sym-list-orders",
+                startLine: 10,
+                metadataJson: """{"attribute_kind":"http_method","verb":"GET","controller_route_template":"api/[controller]","effective_route_template":"/api/orders","route_tokens":["controller"]}"""),
+            StructuralFact(
+                factId: "fact-httppost",
+                patternId: "aspnet.attribute_route.v1",
+                language: "csharp",
+                path: "api/OrdersController.cs",
+                containingSymbolId: "sym-create-order",
+                startLine: 20,
+                metadataJson: """{"attribute_kind":"http_method","verb":"POST","controller_route_template":"api/[controller]","effective_route_template":"/api/orders","route_tokens":["controller"]}"""),
+            StructuralFact(
+                factId: "fact-fetch-post",
+                patternId: "http.client_request.v1",
+                language: "typescript",
+                path: "web/api.ts",
+                containingSymbolId: "sym-tsfn",
+                startLine: 8,
+                metadataJson: """{"client":"fetch","framework":"fetch","target_path":"/api/orders","url_kind":"path","verb":"POST","verb_source":"attested"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [list, create, tsFn], typeArguments: [], literals: [literal], annotations: [],
+            dbSetProperties: [], structuralFacts: facts);
+
+        // ONE Hits edge in the whole graph: the correct High edge to the POST action. No false Medium
+        // route-only edge to the GET action.
+        var hit = Assert.Single(graph.Edges, e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.False(hit.IsVerbUnknown);
+        Assert.Equal("sym-create-order", hit.Edge.TargetRef.SymbolId);
+        Assert.DoesNotContain(graph.Incident("sym-list-orders"), e => e.Edge.Kind == BridgeKind.Hits);
+        // The covered literal is suppressed pre-bridge: only the structural call remains.
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.clientCalls"]);
+    }
+
+    [Fact]
+    public void StructuralFacts_CoveredBareFetchLiteral_DoesNotFabricateEdgeToPostOnlyEndpoint()
+    {
+        // F4 symmetric arm: a bare fetch("/api/orders") emits a verb-unknown literal plus a verb-known GET
+        // (spec default) structural request. Against a POST-only endpoint the structural leg yields no edge —
+        // and the covered literal must not fabricate a Medium route-only edge either.
+        var create = Method("sym-create-order", "CreateOrder", "Task<IResult> CreateOrder(CreateOrderRequest request)",
+            "OrdersController", "api/OrdersController.cs");
+        var tsFn = Type("sym-tsfn", "loadOrders", "function", file: "web/api.ts");
+
+        var literal = MakeLiteral("/api/orders", kind: "url", language: "typescript",
+            carrier: "fetch", containingSymbolId: "sym-tsfn", spanStart: 80);
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-httppost",
+                patternId: "aspnet.attribute_route.v1",
+                language: "csharp",
+                path: "api/OrdersController.cs",
+                containingSymbolId: "sym-create-order",
+                startLine: 20,
+                metadataJson: """{"attribute_kind":"http_method","verb":"POST","controller_route_template":"api/[controller]","effective_route_template":"/api/orders","route_tokens":["controller"]}"""),
+            StructuralFact(
+                factId: "fact-bare-fetch",
+                patternId: "http.client_request.v1",
+                language: "typescript",
+                path: "web/api.ts",
+                containingSymbolId: "sym-tsfn",
+                startLine: 8,
+                metadataJson: """{"client":"fetch","framework":"fetch","target_path":"/api/orders","url_kind":"path","verb":"GET","verb_source":"default"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [create, tsFn], typeArguments: [], literals: [literal], annotations: [],
+            dbSetProperties: [], structuralFacts: facts);
+
+        Assert.DoesNotContain(graph.Edges, e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.clientCalls"]);
+    }
+
+    [Fact]
+    public void StructuralFacts_UncoveredUrlLiteral_SurvivesClientRequestSuppression()
+    {
+        // F4 survival guard: suppression is per-site, never global. A ky wrapper literal with no covering
+        // structural request must keep its honest Medium route-only edge even while a covered fetch literal
+        // elsewhere is suppressed.
+        var legacy = Method("sym-legacy-get", "LegacyGet", "Task<IResult> LegacyGet()",
+            "LegacyController", "api/LegacyController.cs");
+        var create = Method("sym-create-order", "CreateOrder", "Task<IResult> CreateOrder(CreateOrderRequest request)",
+            "OrdersController", "api/OrdersController.cs");
+        var tsFn = Type("sym-tsfn", "createOrder", "function", file: "web/api.ts");
+        var other = Type("sym-other", "loadLegacy", "function", file: "web/legacy.ts");
+
+        var coveredLiteral = MakeLiteral("/api/orders", kind: "url", language: "typescript",
+            carrier: "fetch", containingSymbolId: "sym-tsfn", spanStart: 80);
+        var uncoveredLiteral = MakeLiteral("/api/legacy", kind: "url", language: "typescript",
+            carrier: "ky", containingSymbolId: "sym-other", spanStart: 120);
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-httpget-legacy",
+                patternId: "aspnet.attribute_route.v1",
+                language: "csharp",
+                path: "api/LegacyController.cs",
+                containingSymbolId: "sym-legacy-get",
+                startLine: 10,
+                metadataJson: """{"attribute_kind":"http_method","verb":"GET","controller_route_template":"api/[controller]","effective_route_template":"/api/legacy","route_tokens":["controller"]}"""),
+            StructuralFact(
+                factId: "fact-httppost",
+                patternId: "aspnet.attribute_route.v1",
+                language: "csharp",
+                path: "api/OrdersController.cs",
+                containingSymbolId: "sym-create-order",
+                startLine: 20,
+                metadataJson: """{"attribute_kind":"http_method","verb":"POST","controller_route_template":"api/[controller]","effective_route_template":"/api/orders","route_tokens":["controller"]}"""),
+            StructuralFact(
+                factId: "fact-fetch-post",
+                patternId: "http.client_request.v1",
+                language: "typescript",
+                path: "web/api.ts",
+                containingSymbolId: "sym-tsfn",
+                startLine: 8,
+                metadataJson: """{"client":"fetch","framework":"fetch","target_path":"/api/orders","url_kind":"path","verb":"POST","verb_source":"attested"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [legacy, create, tsFn, other], typeArguments: [], literals: [coveredLiteral, uncoveredLiteral],
+            annotations: [], dbSetProperties: [], structuralFacts: facts);
+
+        // The uncovered ky literal keeps its verb-unknown Medium edge; the covered fetch site stays High.
+        var legacyHit = Assert.Single(graph.Incident("sym-legacy-get"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.Medium, legacyHit.Band);
+        Assert.True(legacyHit.IsVerbUnknown);
+        Assert.Equal("sym-other", legacyHit.Edge.SourceRef.SymbolId);
+        var orderHit = Assert.Single(graph.Incident("sym-create-order"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, orderHit.Band);
+        // 1 surviving literal + 1 structural request.
+        Assert.Equal(2, graph.CapabilityReport.EvidenceCounts["dotnet-web.clientCalls"]);
+    }
+
+    [Fact]
+    public void StructuralFacts_SymbollessCoveredUrlLiteral_SuppressedByFilePathFallback()
+    {
+        // F4 fallback leg: a module-scope call site has no containing symbol on either evidence form — the
+        // suppression falls back to same file path + same canonical route.
+        var list = Method("sym-list-orders", "ListOrders", "Task<IResult> ListOrders()",
+            "OrdersController", "api/OrdersController.cs");
+        var create = Method("sym-create-order", "CreateOrder", "Task<IResult> CreateOrder(CreateOrderRequest request)",
+            "OrdersController", "api/OrdersController.cs");
+
+        var literal = MakeLiteral("/api/orders", kind: "url", language: "typescript",
+            carrier: "fetch", containingSymbolId: string.Empty, spanStart: 80);
+        var sites = new Dictionary<LiteralRecord, LiteralSite> { [literal] = new("web/boot.ts", 3) };
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-httpget",
+                patternId: "aspnet.attribute_route.v1",
+                language: "csharp",
+                path: "api/OrdersController.cs",
+                containingSymbolId: "sym-list-orders",
+                startLine: 10,
+                metadataJson: """{"attribute_kind":"http_method","verb":"GET","controller_route_template":"api/[controller]","effective_route_template":"/api/orders","route_tokens":["controller"]}"""),
+            StructuralFact(
+                factId: "fact-httppost",
+                patternId: "aspnet.attribute_route.v1",
+                language: "csharp",
+                path: "api/OrdersController.cs",
+                containingSymbolId: "sym-create-order",
+                startLine: 20,
+                metadataJson: """{"attribute_kind":"http_method","verb":"POST","controller_route_template":"api/[controller]","effective_route_template":"/api/orders","route_tokens":["controller"]}"""),
+            StructuralFact(
+                factId: "fact-fetch-post",
+                patternId: "http.client_request.v1",
+                language: "typescript",
+                path: "web/boot.ts",
+                containingSymbolId: string.Empty,
+                startLine: 3,
+                metadataJson: """{"client":"fetch","framework":"fetch","target_path":"/api/orders","url_kind":"path","verb":"POST","verb_source":"attested"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [list, create], typeArguments: [], literals: [literal], annotations: [],
+            dbSetProperties: [], literalSites: sites, structuralFacts: facts);
+
+        var hit = Assert.Single(graph.Edges, e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.Equal("sym-create-order", hit.Edge.TargetRef.SymbolId);
+        Assert.DoesNotContain(graph.Incident("sym-list-orders"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.clientCalls"]);
+    }
+
+    [Fact]
+    public void StructuralFacts_AttestedNonWhitelistVerb_YieldsNoEdgeToDifferentVerbEndpoint()
+    {
+        // F1: julie 2.6.0 attests ANY static method: literal — fetch(url, {method:"PURGE"}) is verb-known
+        // PURGE. The synthesized carrier "fetch.purge" is outside VerbFromCarrier's whitelist, so the lossy
+        // round-trip degraded it to verb-unknown and fabricated a Medium route-only edge to the GET endpoint.
+        // Doctrine: both verbs known and different => NO edge; the evidence is still counted.
+        var cacheGet = Method("sym-cache-get", "GetCache", "Task<IResult> GetCache()",
+            "CacheController", "api/CacheController.cs");
+        var tsFn = Type("sym-tsfn", "purgeCache", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-httpget",
+                patternId: "aspnet.attribute_route.v1",
+                language: "csharp",
+                path: "api/CacheController.cs",
+                containingSymbolId: "sym-cache-get",
+                startLine: 10,
+                metadataJson: """{"attribute_kind":"http_method","verb":"GET","controller_route_template":"api/[controller]","effective_route_template":"/api/cache","route_tokens":["controller"]}"""),
+            StructuralFact(
+                factId: "fact-fetch-purge",
+                patternId: "http.client_request.v1",
+                language: "typescript",
+                path: "web/api.ts",
+                containingSymbolId: "sym-tsfn",
+                startLine: 8,
+                metadataJson: """{"client":"fetch","framework":"fetch","target_path":"/api/cache","url_kind":"path","verb":"PURGE","verb_source":"attested"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [cacheGet, tsFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.DoesNotContain(graph.Edges, e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.clientRequests"]);
+    }
+
+    [Fact]
+    public void ApiBridge_VerbExactHandlerBeatsVerbNullFallbackOnSameRoute()
+    {
+        // F2: Nuxt supports server/api/notes.get.ts (verb GET) coexisting with suffix-less server/api/notes.ts
+        // (verb null fallback) — Nitro routes GET to the .get.ts file deterministically. The specificity tie on
+        // the identical route must not drop the legitimate verb-exact High match as ambiguous.
+        var getHandler = Type("sym-notes-get", "handler", "function", file: "server/api/notes.get.ts");
+        var tsFn = Type("sym-tsfn", "loadNotes", "function", file: "app/composables/notes.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-nuxt-notes-get",
+                patternId: "nuxt.server_route.v1",
+                language: "typescript",
+                path: "server/api/notes.get.ts",
+                containingSymbolId: "sym-notes-get",
+                startLine: 1,
+                metadataJson: """{"framework":"nuxt","route_path":"/api/notes","verb":"GET","verb_source":"attested"}"""),
+            StructuralFact(
+                factId: "fact-nuxt-notes-fallback",
+                patternId: "nuxt.server_route.v1",
+                language: "typescript",
+                path: "server/api/notes.ts",
+                containingSymbolId: string.Empty,
+                startLine: 1,
+                metadataJson: """{"framework":"nuxt","route_path":"/api/notes"}"""),
+            StructuralFact(
+                factId: "fact-fetch-notes",
+                patternId: "http.client_request.v1",
+                language: "typescript",
+                path: "app/composables/notes.ts",
+                containingSymbolId: "sym-tsfn",
+                startLine: 6,
+                metadataJson: """{"client":"fetch","framework":"fetch","target_path":"/api/notes","url_kind":"path","verb":"GET","verb_source":"default"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [getHandler, tsFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hit = Assert.Single(graph.Edges, e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.False(hit.IsVerbUnknown);
+        Assert.Equal("sym-notes-get", hit.Edge.TargetRef.SymbolId);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["nuxt-api.candidates"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["nuxt-api.ambiguousMatches"]);
+    }
+
+    [Fact]
+    public void ApiBridge_SymbollessClientRequest_SharesOneSourceNodeWithDotnetWeb()
+    {
+        // F3: one module-scope fetch("/api/x") in a mixed repo (ASP.NET endpoint + Next.js route handler on
+        // the same route) must synthesize ONE TsType source node across providers. dotnet-web's RouteBridge
+        // uses the canonical route ("api/x", no leading slash); the file-route client-request edge must use
+        // the identical form or trace sees two divergent starts and bails.
+        var getX = Method("sym-getx", "GetX", "Task<IResult> GetX()", "XController", "api/XController.cs");
+        var handler = Type("sym-handler", "GET", "function", file: "web/app/api/x/route.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-httpget",
+                patternId: "aspnet.attribute_route.v1",
+                language: "csharp",
+                path: "api/XController.cs",
+                containingSymbolId: "sym-getx",
+                startLine: 10,
+                metadataJson: """{"attribute_kind":"http_method","verb":"GET","controller_route_template":"api/[controller]","effective_route_template":"/api/x","route_tokens":["controller"]}"""),
+            StructuralFact(
+                factId: "fact-next-get",
+                patternId: "nextjs.route_handler.v1",
+                language: "typescript",
+                path: "web/app/api/x/route.ts",
+                containingSymbolId: "sym-handler",
+                startLine: 3,
+                metadataJson: """{"framework":"nextjs","router":"app","route_path":"/api/x","verb":"GET","verb_source":"attested"}"""),
+            StructuralFact(
+                factId: "fact-module-fetch",
+                patternId: "http.client_request.v1",
+                language: "typescript",
+                path: "web/lib/boot.ts",
+                containingSymbolId: string.Empty,
+                startLine: 5,
+                metadataJson: """{"client":"fetch","framework":"fetch","target_path":"/api/x","url_kind":"path","verb":"GET","verb_source":"default"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [getX, handler], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hits = graph.Edges.Where(e => e.Edge.Kind == BridgeKind.Hits).ToList();
+        Assert.Equal(2, hits.Count);
+
+        string expectedSourceId = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, "api/x");
+        Assert.All(hits, hit => Assert.Equal(
+            expectedSourceId,
+            BridgeGraph.NodeIdOf(hit.Edge.SourceRef, hit.Edge.Kind, EndpointSide.Source)));
+
+        // Both Hits edges are incident on the ONE shared source node — the trace start.
+        Assert.Equal(2, graph.Incident(expectedSourceId).Count(e => e.Edge.Kind == BridgeKind.Hits));
+        Assert.Contains(graph.Incident(expectedSourceId), e => e.Edge.TargetRef.SymbolId == "sym-getx");
+        Assert.Contains(graph.Incident(expectedSourceId), e => e.Edge.TargetRef.SymbolId == "sym-handler");
     }
 
     [Fact]

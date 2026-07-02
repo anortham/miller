@@ -20,8 +20,16 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
     {
     }
 
+    /// <summary>
+    /// The structural client-call reduction: every call (route references + client requests) in
+    /// <paramref name="Calls"/>, plus the <c>http.client_request.v1</c>-derived subset in
+    /// <paramref name="ClientRequestCalls"/> — the covering set for <see cref="DedupeClientCalls"/> (only a
+    /// structural client REQUEST describes the same fetch/axios call site a legacy url literal does; a
+    /// route-reference fact never suppresses a literal).
+    /// </summary>
     private sealed record StructuralClientCallReduction(
         IReadOnlyList<TsClientCall> Calls,
+        IReadOnlyList<TsClientCall> ClientRequestCalls,
         (int Htmx, int Vue, int React, int NextJs, int Nuxt, int ClientRequests) Counts);
 
     /// <summary>
@@ -47,9 +55,11 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
         var attributeRoutes = ReduceAttributeRouteEndpoints(context.StructuralFacts, context.SymbolsById);
         var structuralEndpoints = minimalApiEndpoints.Concat(attributeRoutes.Endpoints).ToList();
         var endpoints = DedupeEndpoints(annotationEndpoints, structuralEndpoints);
-        var literalClientCalls = ReduceClientCalls(context.Literals, context.SymbolsById, context.LiteralSites);
         var structuralClientCallReduction = ReduceStructuralClientCalls(context.StructuralFacts, context.SymbolsById);
         var structuralClientCalls = structuralClientCallReduction.Calls;
+        var literalClientCalls = DedupeClientCalls(
+            ReduceClientCalls(context.Literals, context.SymbolsById, context.LiteralSites),
+            structuralClientCallReduction.ClientRequestCalls);
         var clientCalls = literalClientCalls.Concat(structuralClientCalls).ToList();
         var observationNodes = BuildStructuralRouteObservationNodes(structuralClientCalls, structuralEndpoints);
         var structuralCallCounts = structuralClientCallReduction.Counts;
@@ -359,6 +369,77 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
         return endpoints;
     }
 
+    /// <summary>
+    /// Collapse overlapping client-call evidence: a legacy url literal and an <c>http.client_request.v1</c>
+    /// structural fact for the SAME call site describe ONE client call — the structural request wins (its verb
+    /// is source-attested; the legacy literal is verb-unknown, and letting it through fabricates Medium
+    /// route-only edges to endpoints whose verb is KNOWN to differ — a different target means a different edge
+    /// signature, so graph dedupe cannot collapse them). Same site = same canonical route
+    /// (<see cref="RouteNormalizer"/>) AND same containing symbol id; when either side has no containing
+    /// symbol, same file path + same canonical route. A literal with no covering structural request
+    /// (ky/got/$fetch/HttpClient wrappers, …) always survives — suppression is per-site, never global.
+    /// </summary>
+    private static List<TsClientCall> DedupeClientCalls(
+        IReadOnlyList<TsClientCall> literalClientCalls,
+        IReadOnlyList<TsClientCall> structuralClientRequests)
+    {
+        if (structuralClientRequests.Count == 0)
+            return literalClientCalls.ToList();
+
+        var symbolKeys = new HashSet<(string SymbolId, string Route)>();
+        var fileKeys = new HashSet<(string FilePath, string Route)>();
+        var symbollessFileKeys = new HashSet<(string FilePath, string Route)>();
+
+        foreach (var request in structuralClientRequests)
+        {
+            var route = CanonicalClientRoute(request);
+            if (route.Length == 0)
+                continue;
+
+            if (!string.IsNullOrEmpty(request.Literal.ContainingSymbolId))
+                symbolKeys.Add((request.Literal.ContainingSymbolId, route));
+            else if (request.FilePath.Length > 0)
+                symbollessFileKeys.Add((request.FilePath, route));
+
+            if (request.FilePath.Length > 0)
+                fileKeys.Add((request.FilePath, route));
+        }
+
+        var calls = new List<TsClientCall>();
+        foreach (var call in literalClientCalls)
+        {
+            if (IsCoveredByStructuralRequest(call, symbolKeys, fileKeys, symbollessFileKeys))
+                continue;
+            calls.Add(call);
+        }
+        return calls;
+    }
+
+    private static bool IsCoveredByStructuralRequest(
+        TsClientCall call,
+        HashSet<(string SymbolId, string Route)> symbolKeys,
+        HashSet<(string FilePath, string Route)> fileKeys,
+        HashSet<(string FilePath, string Route)> symbollessFileKeys)
+    {
+        var route = CanonicalClientRoute(call);
+        if (route.Length == 0)
+            return false;
+
+        if (!string.IsNullOrEmpty(call.Literal.ContainingSymbolId))
+        {
+            if (symbolKeys.Contains((call.Literal.ContainingSymbolId, route)))
+                return true;
+            // The structural side has no containing symbol: fall back to file path + canonical route.
+            return call.FilePath.Length > 0 && symbollessFileKeys.Contains((call.FilePath, route));
+        }
+
+        // The literal side has no containing symbol: fall back to file path + canonical route.
+        return call.FilePath.Length > 0 && fileKeys.Contains((call.FilePath, route));
+    }
+
+    private static string CanonicalClientRoute(TsClientCall call) =>
+        RouteNormalizer.FromClientCall(call.Literal.Carrier, call.Literal.LiteralText).Route;
+
     private static string SyntheticEndpointDisplay(string verb, string route)
     {
         var displayRoute = RouteNormalizer.FromClientCall("fetch", route).Route;
@@ -416,6 +497,7 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
         IReadOnlyDictionary<string, SymbolDetail> symbolsById)
     {
         var calls = new List<TsClientCall>();
+        var clientRequestCalls = new List<TsClientCall>();
         int htmx = 0;
         int vue = 0;
         int react = 0;
@@ -432,7 +514,9 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
                 if (StructuralRouteFactAdapter.TryReadClientRequest(fact, symbolsById, out var request))
                 {
                     clientRequests++;
-                    calls.Add(ToClientCall(request));
+                    var call = ToClientCall(request);
+                    calls.Add(call);
+                    clientRequestCalls.Add(call);
                 }
                 continue;
             }
@@ -443,7 +527,7 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
                 calls.Add(ToClientCall(reference));
             }
         }
-        return new StructuralClientCallReduction(calls, (htmx, vue, react, nextjs, nuxt, clientRequests));
+        return new StructuralClientCallReduction(calls, clientRequestCalls, (htmx, vue, react, nextjs, nuxt, clientRequests));
     }
 
     private static bool IsStructuralClientCallPattern(string patternId) =>
@@ -492,15 +576,18 @@ public sealed class DotnetWebBridgeProvider : IBridgeProvider
             Language: request.Fact.Language,
             ContainingSymbolId: request.ContainingSymbolId,
             Span: new SourceSpan(request.Fact.Span.StartByte, request.Fact.Span.EndByte));
-        return new TsClientCall(literal, IsTest: false, request.FilePath, request.Line);
+        // The attested verb rides on the call directly: the synthesized carrier round-trip is lossy for
+        // non-whitelist verbs (fetch(url, {method:"PURGE"}) attests PURGE, which VerbFromCarrier cannot carry).
+        return new TsClientCall(literal, IsTest: false, request.FilePath, request.Line, AttestedVerb: request.Verb);
     }
 
     /// <summary>
     /// Carrier synthesis for an <c>http.client_request.v1</c> fact: <c>"&lt;client&gt;.&lt;lowerverb&gt;"</c>
-    /// (<c>fetch.get</c>, <c>axios.post</c>, …) so <c>RouteNormalizer.VerbFromCarrier</c> attests the verb.
-    /// Both <c>verb_source</c> values (<c>attested</c> and <c>default</c>) are verb-known per the verb-honesty
-    /// doctrine — the extractor stays silent when the method option is non-literal, so <c>default</c> genuinely
-    /// means the runtime verb is GET by spec.
+    /// (<c>fetch.get</c>, <c>axios.post</c>, …), kept for display continuity — the verb itself is carried by
+    /// <see cref="TsClientCall.AttestedVerb"/> so a non-whitelist attested verb (PURGE) never degrades to
+    /// verb-unknown in the round-trip. Both <c>verb_source</c> values (<c>attested</c> and <c>default</c>) are
+    /// verb-known per the verb-honesty doctrine — the extractor stays silent when the method option is
+    /// non-literal, so <c>default</c> genuinely means the runtime verb is GET by spec.
     /// </summary>
     private static string ClientRequestCarrier(StructuralClientRequest request) =>
         request.Client.ToLowerInvariant() + "." + request.Verb.ToLowerInvariant();
