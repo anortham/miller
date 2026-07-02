@@ -87,6 +87,10 @@ public static class BridgeGraphBuilder
         var notes = new List<string>();
         var evidenceCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         var observationNodes = new Dictionary<string, BridgeNode>(StringComparer.Ordinal);
+        // node id -> the provider ids that observed it. A node emitted by several providers (e.g. one
+        // client-request route observed by dotnet-web, nextjs-api, and nuxt-api) carries all of them, so
+        // route diagnostics can scope "who observed this fact" per provider instead of pooling by node kind.
+        var observationProviders = new Dictionary<string, SortedSet<string>>(StringComparer.Ordinal);
 
         if (providers.Count == 0)
             notes.Add("no bridge providers enabled");
@@ -110,6 +114,7 @@ public static class BridgeGraphBuilder
                          throw new InvalidOperationException($"Bridge provider '{provider.Id}' returned null.");
             AddEvidenceCounts(evidenceCounts, result.EvidenceCounts);
             AddObservationNodes(observationNodes, result.ObservationNodes);
+            AddObservationProvenance(observationProviders, result.ObservationNodes.Keys, provider.Id);
 
             if (result.Active)
             {
@@ -141,7 +146,7 @@ public static class BridgeGraphBuilder
             skippedProviders,
             notes,
             evidenceCounts);
-        return BridgeGraph.Build(scored, nodes, capabilityReport);
+        return BridgeGraph.Build(scored, nodes, capabilityReport, MaterializeProvenance(observationProviders));
     }
 
     // ============================ node construction ============================================================
@@ -209,6 +214,31 @@ public static class BridgeGraphBuilder
     {
         foreach (var item in source.OrderBy(kv => kv.Key, StringComparer.Ordinal))
             target.TryAdd(item.Key, item.Value);
+    }
+
+    private static void AddObservationProvenance(
+        Dictionary<string, SortedSet<string>> target,
+        IEnumerable<string> nodeIds,
+        string providerId)
+    {
+        foreach (var nodeId in nodeIds)
+        {
+            if (!target.TryGetValue(nodeId, out var providers))
+            {
+                providers = new SortedSet<string>(StringComparer.Ordinal);
+                target[nodeId] = providers;
+            }
+            providers.Add(providerId);
+        }
+    }
+
+    private static IReadOnlyDictionary<string, IReadOnlyList<string>> MaterializeProvenance(
+        Dictionary<string, SortedSet<string>> observationProviders)
+    {
+        var provenance = new Dictionary<string, IReadOnlyList<string>>(observationProviders.Count, StringComparer.Ordinal);
+        foreach (var (nodeId, providers) in observationProviders)
+            provenance[nodeId] = providers.ToArray();
+        return provenance;
     }
 
     // ============================ shared helpers ===============================================================

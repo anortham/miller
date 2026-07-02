@@ -67,18 +67,27 @@ public sealed class BridgeGraph
     private readonly IReadOnlyDictionary<string, BridgeNode> _nodes;
     private readonly IReadOnlyList<ScoredEdge> _edges;
 
+    // node id -> the provider ids that OBSERVED the node (observation-node provenance; empty for edge-built
+    // nodes and for graphs built without provenance). Diagnostics-only — never consulted by Walk/Incident.
+    private readonly IReadOnlyDictionary<string, IReadOnlyList<string>> _observationProviders;
+
     private static readonly ScoredEdge[] NoEdges = [];
+    private static readonly string[] NoProviders = [];
+    private static readonly IReadOnlyDictionary<string, IReadOnlyList<string>> NoProvenance =
+        new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
 
     private BridgeGraph(
         IReadOnlyDictionary<string, ScoredEdge[]> adjacency,
         IReadOnlyDictionary<string, BridgeNode> nodes,
         IReadOnlyList<ScoredEdge> edges,
-        BridgeCapabilityReport capabilityReport)
+        BridgeCapabilityReport capabilityReport,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> observationProviders)
     {
         _adjacency = adjacency;
         _nodes = nodes;
         _edges = edges;
         CapabilityReport = capabilityReport;
+        _observationProviders = observationProviders;
     }
 
     public BridgeCapabilityReport CapabilityReport { get; }
@@ -88,6 +97,24 @@ public sealed class BridgeGraph
 
     /// <summary>The bridge node lookup admitted to the graph, including edge-less structural fact nodes.</summary>
     public IReadOnlyDictionary<string, BridgeNode> Nodes => _nodes;
+
+    /// <summary>
+    /// True when this graph carries observation-node provenance (built through <see cref="BridgeGraphBuilder"/>,
+    /// which records the emitting provider ids per observation node). A graph built without provenance answers
+    /// false, and consumers should fall back to pooled node sets rather than treating every node as unclaimed.
+    /// </summary>
+    public bool HasObservationProvenance => _observationProviders.Count > 0;
+
+    /// <summary>
+    /// The provider ids that observed node <paramref name="id"/> (a node emitted by several providers carries
+    /// all of them). Empty for edge-built nodes, unknown ids, and graphs built without provenance. Provenance
+    /// is a diagnostics input only — edge building, scoring, and traversal never consult it.
+    /// </summary>
+    public IReadOnlyList<string> ObservationProviders(string id)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        return _observationProviders.TryGetValue(id, out var providers) ? providers : NoProviders;
+    }
 
     /// <summary>
     /// Build a bridge graph from <paramref name="scoredEdges"/> and a <paramref name="nodes"/> lookup. Each edge is
@@ -100,11 +127,17 @@ public sealed class BridgeGraph
     /// </summary>
     /// <param name="scoredEdges">The surviving scored bridge edges (post-scorer; nulls already dropped by the caller).</param>
     /// <param name="nodes">The node lookup: node id → <see cref="BridgeNode"/> (built by the caller for every endpoint).</param>
+    /// <param name="capabilityReport">The provider capability report, or null for <see cref="BridgeCapabilityReport.Empty"/>.</param>
+    /// <param name="observationProviders">
+    /// Optional observation-node provenance: node id → the provider ids that observed it (see
+    /// <see cref="ObservationProviders"/>). Null or empty means no provenance is carried.
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="scoredEdges"/> or <paramref name="nodes"/> is null.</exception>
     public static BridgeGraph Build(
         IReadOnlyList<ScoredEdge> scoredEdges,
         IReadOnlyDictionary<string, BridgeNode> nodes,
-        BridgeCapabilityReport? capabilityReport = null)
+        BridgeCapabilityReport? capabilityReport = null,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? observationProviders = null)
     {
         ArgumentNullException.ThrowIfNull(scoredEdges);
         ArgumentNullException.ThrowIfNull(nodes);
@@ -148,7 +181,10 @@ public sealed class BridgeGraph
             adjacency,
             new Dictionary<string, BridgeNode>(nodes, StringComparer.Ordinal),
             uniqueEdges.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => kv.Value).ToArray(),
-            capabilityReport ?? BridgeCapabilityReport.Empty);
+            capabilityReport ?? BridgeCapabilityReport.Empty,
+            observationProviders is null || observationProviders.Count == 0
+                ? NoProvenance
+                : new Dictionary<string, IReadOnlyList<string>>(observationProviders, StringComparer.Ordinal));
     }
 
     /// <summary>

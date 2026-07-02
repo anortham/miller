@@ -831,9 +831,7 @@ public sealed class TraceTool
             if (TryBuildFileRouteDiagnostic(
                     graph,
                     targetRoute,
-                    frontendPresent,
-                    fileRoutePresent,
-                    backendPresent,
+                    targetRouteKey,
                     frontendRoutes,
                     fileRoutes,
                     backendRoutes,
@@ -871,35 +869,79 @@ public sealed class TraceTool
         return true;
     }
 
+    /// <summary>
+    /// The per-provider route diagnostic table, scoped by observation-node provenance: a row's reference and
+    /// definition sets contain only the routes THAT provider observed (<see cref="BridgeGraph.ObservationProviders"/>),
+    /// so a navigation row can never narrate a client request and an API row can never claim another framework's
+    /// endpoint. Claims from every participating row are collected first — row order never decides. A single row
+    /// whose definition side matches the target wins (the frame with matching definitions is the honest story); a
+    /// single reference-only claim wins only when NO pooled definition fact matches the target (otherwise another
+    /// frame owns the definition and this row's "no matching definition" noun would lie); zero or conflicting
+    /// claims fall back to the pooled generic diagnostics in <see cref="TryBuildRouteDiagnostic"/>. A graph built
+    /// without provenance (hand-assembled node maps) keeps the pooled per-row inputs.
+    /// </summary>
     private static bool TryBuildFileRouteDiagnostic(
         BridgeGraph graph,
         string targetRoute,
-        bool routeReferencePresent,
-        bool fileRoutePresent,
-        bool backendPresent,
-        IReadOnlyList<(string Normalized, string Display)> routeReferences,
-        IReadOnlyList<(string Normalized, string Display)> fileRoutes,
-        IReadOnlyList<(string Normalized, string Display)> backendRoutes,
+        string targetRouteKey,
+        IReadOnlyList<(string Normalized, string Display)> pooledReferences,
+        IReadOnlyList<(string Normalized, string Display)> pooledFileRoutes,
+        IReadOnlyList<(string Normalized, string Display)> pooledBackendRoutes,
         out BridgeRouteDiagnostic diagnostic)
     {
+        bool scoped = graph.HasObservationProvenance;
+        bool pooledDefinitionMatchesTarget =
+            AnyRouteMatches(pooledFileRoutes, targetRoute, targetRouteKey) ||
+            AnyRouteMatches(pooledBackendRoutes, targetRoute, targetRouteKey);
+
+        var definitionMatchClaims = new List<BridgeRouteDiagnostic>();
+        var referenceOnlyClaims = new List<BridgeRouteDiagnostic>();
+
         foreach (var provider in FileRouteDiagnosticProviders)
         {
             if (!ProviderParticipates(graph, provider))
                 continue;
 
             bool isApiProvider = provider.DefinitionNodeKind == BridgeNodeKind.Endpoint;
-            if (TryBuildFrameworkFileRouteDiagnostic(
+            IReadOnlyList<(string Normalized, string Display)> routeReferences = scoped
+                ? ObservedRoutes(graph, BridgeNodeKind.TsType, provider.ProviderId).ToArray()
+                : pooledReferences;
+            IReadOnlyList<(string Normalized, string Display)> definitionRoutes = scoped
+                ? ObservedRoutes(graph, provider.DefinitionNodeKind, provider.ProviderId).ToArray()
+                : (isApiProvider ? pooledBackendRoutes : pooledFileRoutes);
+
+            if (!TryBuildFrameworkFileRouteDiagnostic(
                     graph,
                     provider,
                     targetRoute,
-                    routeReferencePresent,
-                    definitionPresent: isApiProvider ? backendPresent : fileRoutePresent,
+                    routeReferencePresent: RoutePresent(routeReferences, targetRouteKey),
+                    definitionPresent: RoutePresent(definitionRoutes, targetRouteKey),
                     routeReferences,
-                    definitionRoutes: isApiProvider ? backendRoutes : fileRoutes,
-                    out diagnostic))
+                    definitionRoutes,
+                    out var claim,
+                    out bool definitionMatchesTarget))
             {
-                return true;
+                continue;
             }
+
+            if (definitionMatchesTarget)
+                definitionMatchClaims.Add(claim);
+            else if (!pooledDefinitionMatchesTarget)
+                referenceOnlyClaims.Add(claim);
+            // else: another frame's definition fact matches the target — this row's "no matching definition"
+            // noun cannot tell the honest story; the pooled generic diagnostics can.
+        }
+
+        if (definitionMatchClaims.Count == 1)
+        {
+            diagnostic = definitionMatchClaims[0];
+            return true;
+        }
+
+        if (definitionMatchClaims.Count == 0 && referenceOnlyClaims.Count == 1)
+        {
+            diagnostic = referenceOnlyClaims[0];
+            return true;
         }
 
         diagnostic = new BridgeRouteDiagnostic(
@@ -916,12 +958,13 @@ public sealed class TraceTool
         bool definitionPresent,
         IReadOnlyList<(string Normalized, string Display)> routeReferences,
         IReadOnlyList<(string Normalized, string Display)> definitionRoutes,
-        out BridgeRouteDiagnostic diagnostic)
+        out BridgeRouteDiagnostic diagnostic,
+        out bool definitionMatchesTarget)
     {
         var matchingDefinitions = definitionRoutes
             .Where(route => Miller.Core.Resolver.FileRouteMatcher.Matches(targetRoute, route.Display))
             .ToArray();
-        bool definitionMatchesTarget = definitionPresent || matchingDefinitions.Length > 0;
+        definitionMatchesTarget = definitionPresent || matchingDefinitions.Length > 0;
 
         int ambiguousMatches = FileRouteEvidenceCount(graph, provider.ProviderId, "ambiguousMatches");
         if (routeReferencePresent && ambiguousMatches > 0 && matchingDefinitions.Length > 0)
@@ -992,9 +1035,22 @@ public sealed class TraceTool
     private static int FileRouteEvidenceCount(BridgeGraph graph, string providerId, string name) =>
         graph.CapabilityReport.EvidenceCounts.TryGetValue(providerId + "." + name, out int count) ? count : 0;
 
-    private static IEnumerable<(string Normalized, string Display)> ObservedRoutes(BridgeGraph graph, BridgeNodeKind kind) =>
+    private static bool RoutePresent(IReadOnlyList<(string Normalized, string Display)> routes, string targetRouteKey) =>
+        routes.Any(route => string.Equals(route.Normalized, targetRouteKey, StringComparison.Ordinal));
+
+    // True when any observed route matches the target exactly (normalized) or as a dynamic-segment file
+    // route/handler template — the same match semantics the per-provider rows use for their definition side.
+    private static bool AnyRouteMatches(
+        IReadOnlyList<(string Normalized, string Display)> routes, string targetRoute, string targetRouteKey) =>
+        RoutePresent(routes, targetRouteKey) ||
+        routes.Any(route => Miller.Core.Resolver.FileRouteMatcher.Matches(targetRoute, route.Display));
+
+    // Pooled when providerId is null; scoped to one provider's observation-node provenance otherwise.
+    private static IEnumerable<(string Normalized, string Display)> ObservedRoutes(
+        BridgeGraph graph, BridgeNodeKind kind, string? providerId = null) =>
         graph.Nodes.Values
-            .Where(node => node.Kind == kind)
+            .Where(node => node.Kind == kind &&
+                (providerId is null || graph.ObservationProviders(node.Id).Contains(providerId, StringComparer.Ordinal)))
             .Select(NodeRouteDisplay)
             .Where(route => route is not null)
             .Select(route => (Normalized: RouteNormalizer.FromClientCall("fetch", route!).Route, Display: NormalizeRouteDisplay(route!)))

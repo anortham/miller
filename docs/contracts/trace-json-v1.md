@@ -170,7 +170,13 @@ facts only).
 Route-string diagnostics cover the new providers with provider-prefixed codes (`nextjs-api_*` / `nuxt-api_*`
 over the suffixes `route_no_file_match`, `route_no_reference_match`, `route_ambiguous_file_match`,
 `route_no_bridge_link`, and `route_not_observed` — for example `nextjs-api_route_no_file_match`), phrased with
-the nouns "client request", "route handler" (Next.js), and "server route" (Nuxt).
+the nouns "client request", "route handler" (Next.js), and "server route" (Nuxt). A provider-prefixed code is
+emitted only from route facts that provider itself observed (observation-node provenance): a navigation code
+never narrates a client request, and an API code never claims another framework's endpoint. When the route's
+facts span frames — for example an unmatched client request whose only matching definition is an ASP.NET
+endpoint — or when several providers claim the same route, the diagnostic falls back to the generic
+un-prefixed codes (`route_no_backend_match`, `route_no_frontend_match`, `route_no_bridge_link`,
+`route_not_observed`).
 
 Empty bridge results are valid when a workspace is outside those providers or no bridge evidence exists.
 `not_on_bridge` and `no_bridge_links` diagnostics include `next_actions` for ordinary refs, ordinary graph

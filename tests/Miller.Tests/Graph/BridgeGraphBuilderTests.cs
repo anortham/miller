@@ -2898,6 +2898,59 @@ public sealed class BridgeGraphBuilderTests
     }
 
     [Fact]
+    public void Build_DefaultProviders_RecordsObservationNodeProvenancePerProvider()
+    {
+        // One node per provider family, plus the shared http.client_request.v1 fact BOTH api providers
+        // observe: the merged graph must remember exactly which provider(s) emitted each observation node.
+        var handler = Type("sym-handler", "GET", "function", file: "web/app/api/messages/route.ts");
+        var tsFn = Type("sym-tsfn", "createMessage", "function", file: "web/lib/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "sf-dashboard-page",
+                patternId: "nextjs.file_route.v1",
+                language: "tsx",
+                path: "web/app/dashboard/page.tsx",
+                containingSymbolId: string.Empty,
+                startLine: 1,
+                metadataJson: """{"route_path":"/dashboard"}"""),
+            StructuralFact(
+                factId: "sf-messages-handler",
+                patternId: "nextjs.route_handler.v1",
+                language: "typescript",
+                path: "web/app/api/messages/route.ts",
+                containingSymbolId: "sym-handler",
+                startLine: 1,
+                metadataJson: """{"framework":"nextjs","router":"app","route_path":"/api/messages","verb":"GET","verb_source":"attested"}"""),
+            StructuralFact(
+                factId: "sf-post-messages",
+                patternId: "http.client_request.v1",
+                language: "typescript",
+                path: "web/lib/api.ts",
+                containingSymbolId: "sym-tsfn",
+                startLine: 8,
+                metadataJson: """{"client":"fetch","framework":"fetch","target_path":"/api/messages","url_kind":"path","verb":"POST","verb_source":"attested"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [handler, tsFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.True(graph.HasObservationProvenance);
+        Assert.Equal(
+            ["nextjs"],
+            graph.ObservationProviders(BridgeGraph.SynthesizeId(BridgeNodeKind.FileRoute, "/dashboard")));
+        Assert.Equal(
+            ["nextjs-api"],
+            graph.ObservationProviders(BridgeGraph.SynthesizeId(BridgeNodeKind.Endpoint, "GET /api/messages")));
+        var requestProviders = graph.ObservationProviders(BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, "/api/messages"));
+        Assert.Contains("nextjs-api", requestProviders);
+        Assert.Contains("nuxt-api", requestProviders);
+        Assert.DoesNotContain("nextjs", requestProviders);
+        Assert.Empty(graph.ObservationProviders("nope"));
+    }
+
+    [Fact]
     public void Build_null_collections_throw()
     {
         Assert.Throws<ArgumentNullException>(() => BridgeGraphBuilder.Build(null!, [], [], [], []));

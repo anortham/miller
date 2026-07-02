@@ -94,6 +94,44 @@ public sealed class TraceToolTests
 
     private static SmartTargetResolver ResolverFor(MillerRepositoryIndex index) => new(index);
 
+    // Build an index whose bridge graph comes from the REAL BridgeGraphBuilder run over structural facts, so
+    // observation nodes carry per-provider provenance exactly as production does. The provenance-scoped route
+    // diagnostics under test need it; a hand-built BridgeGraph.Build node map carries none and pools instead.
+    private static MillerRepositoryIndex BuildBridgeIndexFromStructuralFacts(
+        IReadOnlyList<Miller.Core.Contracts.SymbolDetail> symbols,
+        IReadOnlyList<StructuralFactRecord> facts)
+    {
+        var bridge = BridgeGraphBuilder.Build(
+            symbols, typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+        return MillerRepositoryIndex.Build(Array.Empty<IndexedSymbol>(), Array.Empty<GraphEdge>(), bridge);
+    }
+
+    private static Miller.Core.Contracts.SymbolDetail DetailMethod(string id, string name, string parentClassName, string file) =>
+        new(id, name, "method", file, Signature: name, Namespace: "Api.Controllers", IsTest: false, ParentClassName: parentClassName);
+
+    private static Miller.Core.Contracts.SymbolDetail DetailFunction(string id, string name, string file) =>
+        new(id, name, "function", file, Signature: name, Namespace: null, IsTest: false, ParentClassName: null);
+
+    private static StructuralFactRecord StructuralFact(
+        string factId, string patternId, string language, string path, string? containingSymbolId,
+        int startLine, string metadataJson)
+    {
+        using var document = JsonDocument.Parse(metadataJson);
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var property in document.RootElement.EnumerateObject())
+        {
+            metadata[property.Name] = property.Value.ValueKind == JsonValueKind.String
+                ? property.Value.GetString() ?? string.Empty
+                : property.Value.GetRawText();
+        }
+        return new StructuralFactRecord(
+            FactId: factId, PatternId: patternId, Language: language, Path: path,
+            CaptureName: "framework.route", NodeKind: "node", ContainingSymbolId: containingSymbolId,
+            Span: new StructuralFactSpan(startLine, 1, startLine, 1, startLine * 10, startLine * 10 + 1),
+            Confidence: 1.0, Metadata: metadata);
+    }
+
     private static string ReadTelemetryMetadata(string telemetryDb)
     {
         using var conn = new SqliteConnection(new SqliteConnectionStringBuilder
@@ -1863,6 +1901,153 @@ public sealed class TraceToolTests
         Assert.Contains("backend route fact exists: /keep-alive.html", outp);
         Assert.Contains("no matching frontend route fact", outp);
         Assert.Contains("observed frontend routes: /calendar", outp);
+    }
+
+    // ---------- mode: bridge — provenance-scoped route diagnostics ----------
+    // These fixtures run the REAL BridgeGraphBuilder so observation nodes carry per-provider provenance:
+    // a diagnostic row may only narrate facts its own provider observed (no wrong-noun shadowing, no
+    // foreign-endpoint claims).
+
+    [Fact]
+    public void Bridge_RouteStringTarget_NextJsPagesAndApi_ApiDiagnosticNotShadowedByNavigationRow()
+    {
+        // A normal Next.js repo: a /dashboard page (file-route fact), a GET-only route handler at
+        // /api/messages, and an attested-POST fetch to /api/messages (verb mismatch -> correctly no edge).
+        // The fetch observation node is a CLIENT REQUEST, not a navigation route reference: the nextjs
+        // navigation row must not narrate it as "route reference exists ... observed file routes: /dashboard",
+        // and the honest nextjs-api story must not be shadowed by row order.
+        var handler = DetailFunction("sym-handler", "GET", "web/app/api/messages/route.ts");
+        var tsFn = DetailFunction("sym-tsfn", "createMessage", "web/lib/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact("sf-dashboard-page", "nextjs.file_route.v1", "tsx", "web/app/dashboard/page.tsx",
+                string.Empty, 1, """{"route_path":"/dashboard"}"""),
+            StructuralFact("sf-messages-handler", "nextjs.route_handler.v1", "typescript",
+                "web/app/api/messages/route.ts", "sym-handler", 1,
+                """{"framework":"nextjs","router":"app","route_path":"/api/messages","verb":"GET","verb_source":"attested"}"""),
+            StructuralFact("sf-post-messages", "http.client_request.v1", "typescript", "web/lib/api.ts",
+                "sym-tsfn", 8,
+                """{"client":"fetch","framework":"fetch","target_path":"/api/messages","url_kind":"path","verb":"POST","verb_source":"attested"}"""),
+        };
+        var index = BuildBridgeIndexFromStructuralFacts([handler, tsFn], facts);
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "/api/messages", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false, json: true,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement diagnostic = Assert.Single(doc.RootElement.GetProperty("diagnostics").EnumerateArray());
+        Assert.Equal("nextjs-api_route_no_bridge_link", diagnostic.GetProperty("code").GetString());
+        Assert.Contains("Next.js client request and route handler facts exist for /api/messages",
+            diagnostic.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public void Bridge_RouteStringTarget_NextJsPagesAndApi_NavigationDiagnosticKeepsNavNounForPageRoute()
+    {
+        // Same mixed repo shape, but the traced route is a real navigation reference (<Link href="/dashboard">)
+        // with no matching page: the navigation row still owns that story with navigation nouns.
+        var handler = DetailFunction("sym-handler", "GET", "web/app/api/messages/route.ts");
+        var tsFn = DetailFunction("sym-tsfn", "createMessage", "web/lib/api.ts");
+        var nav = DetailFunction("sym-nav", "Nav", "web/Nav.tsx");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact("sf-dashboard-link", "nextjs.route_reference.v1", "tsx", "web/Nav.tsx",
+                "sym-nav", 10, """{"framework":"nextjs","target_path":"/dashboard"}"""),
+            StructuralFact("sf-settings-page", "nextjs.file_route.v1", "tsx", "web/app/settings/page.tsx",
+                string.Empty, 1, """{"route_path":"/settings"}"""),
+            StructuralFact("sf-messages-handler", "nextjs.route_handler.v1", "typescript",
+                "web/app/api/messages/route.ts", "sym-handler", 1,
+                """{"framework":"nextjs","router":"app","route_path":"/api/messages","verb":"GET","verb_source":"attested"}"""),
+            StructuralFact("sf-post-messages", "http.client_request.v1", "typescript", "web/lib/api.ts",
+                "sym-tsfn", 8,
+                """{"client":"fetch","framework":"fetch","target_path":"/api/messages","url_kind":"path","verb":"POST","verb_source":"attested"}"""),
+        };
+        var index = BuildBridgeIndexFromStructuralFacts([handler, tsFn, nav], facts);
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "/dashboard", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false, json: true,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement diagnostic = Assert.Single(doc.RootElement.GetProperty("diagnostics").EnumerateArray());
+        Assert.Equal("nextjs_route_no_file_match", diagnostic.GetProperty("code").GetString());
+        Assert.Contains("Next.js route reference exists: /dashboard", diagnostic.GetProperty("message").GetString());
+        Assert.Contains("observed file routes: /settings", diagnostic.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public void Bridge_RouteStringTarget_MixedMonorepo_AspNetRouteNotClaimedByNextJsApi()
+    {
+        // Monorepo: one Next.js handler at /api/health, an ASP.NET attribute-route GET endpoint at /api/orders,
+        // and an attested-POST fetch to /api/orders (verb mismatch -> no edge). Nothing Next.js serves
+        // /api/orders, so the diagnostic must not claim "Next.js ... route handler facts exist for /api/orders";
+        // the pooled generic story is the honest fallback.
+        var list = DetailMethod("sym-orders", "List", "OrdersController", "Api/OrdersController.cs");
+        var tsFn = DetailFunction("sym-tsfn", "createOrder", "web/src/lib/api.ts");
+        var health = DetailFunction("sym-health", "GET", "web/app/api/health/route.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact("sf-health-handler", "nextjs.route_handler.v1", "typescript",
+                "web/app/api/health/route.ts", "sym-health", 1,
+                """{"framework":"nextjs","router":"app","route_path":"/api/health","verb":"GET","verb_source":"attested"}"""),
+            StructuralFact("sf-orders-endpoint", "aspnet.attribute_route.v1", "csharp",
+                "Api/OrdersController.cs", "sym-orders", 12,
+                """{"attribute_kind":"http_method","verb":"GET","controller_route_template":"api/[controller]","effective_route_template":"/api/orders","route_tokens":["controller"]}"""),
+            StructuralFact("sf-post-orders", "http.client_request.v1", "typescript", "web/src/lib/api.ts",
+                "sym-tsfn", 5,
+                """{"client":"fetch","framework":"fetch","target_path":"/api/orders","url_kind":"path","verb":"POST","verb_source":"attested"}"""),
+        };
+        var index = BuildBridgeIndexFromStructuralFacts([list, tsFn, health], facts);
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "/api/orders", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false, json: true,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement diagnostic = Assert.Single(doc.RootElement.GetProperty("diagnostics").EnumerateArray());
+        string? message = diagnostic.GetProperty("message").GetString();
+        Assert.Equal("route_no_bridge_link", diagnostic.GetProperty("code").GetString());
+        Assert.Contains("frontend and backend route facts exist for /api/orders", message);
+        Assert.DoesNotContain("Next.js", message);
+    }
+
+    [Fact]
+    public void Bridge_RouteStringTarget_MixedMonorepo_NextJsHandlerAtTracedRoute_KeepsNextJsApiDiagnostic()
+    {
+        // Control for the foreign-endpoint case: the Next.js handler actually serves the traced route
+        // (GET /api/orders) and the fetch is attested POST (verb mismatch -> no edge). Both Next.js facts
+        // genuinely exist for the route, so the provider-framed diagnostic stays.
+        var list = DetailMethod("sym-orders", "List", "OrdersController", "Api/OrdersController.cs");
+        var tsFn = DetailFunction("sym-tsfn", "createOrder", "web/src/lib/api.ts");
+        var handler = DetailFunction("sym-handler", "GET", "web/app/api/orders/route.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact("sf-orders-handler", "nextjs.route_handler.v1", "typescript",
+                "web/app/api/orders/route.ts", "sym-handler", 1,
+                """{"framework":"nextjs","router":"app","route_path":"/api/orders","verb":"GET","verb_source":"attested"}"""),
+            StructuralFact("sf-orders-endpoint", "aspnet.attribute_route.v1", "csharp",
+                "Api/OrdersController.cs", "sym-orders", 12,
+                """{"attribute_kind":"http_method","verb":"GET","controller_route_template":"api/[controller]","effective_route_template":"/api/orders","route_tokens":["controller"]}"""),
+            StructuralFact("sf-post-orders", "http.client_request.v1", "typescript", "web/src/lib/api.ts",
+                "sym-tsfn", 5,
+                """{"client":"fetch","framework":"fetch","target_path":"/api/orders","url_kind":"path","verb":"POST","verb_source":"attested"}"""),
+        };
+        var index = BuildBridgeIndexFromStructuralFacts([list, tsFn, handler], facts);
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "/api/orders", mode: "bridge", to: null, depth: 2, limit: 20, fullFormat: false, json: true,
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement diagnostic = Assert.Single(doc.RootElement.GetProperty("diagnostics").EnumerateArray());
+        Assert.Equal("nextjs-api_route_no_bridge_link", diagnostic.GetProperty("code").GetString());
+        Assert.Contains("Next.js client request and route handler facts exist for /api/orders",
+            diagnostic.GetProperty("message").GetString());
     }
 
     [Fact]

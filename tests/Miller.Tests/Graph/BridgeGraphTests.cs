@@ -109,6 +109,35 @@ public sealed class BridgeGraphTests
     }
 
     [Fact]
+    public void Build_without_observation_provenance_defaults_to_empty()
+    {
+        var (graph, dtoId, _, _) = BuildChain();
+
+        Assert.False(graph.HasObservationProvenance);
+        Assert.Empty(graph.ObservationProviders(dtoId));
+    }
+
+    [Fact]
+    public void Build_carries_observation_provenance_for_lookup()
+    {
+        var routeId = BridgeGraph.SynthesizeId(BridgeNodeKind.TsType, "/api/messages");
+        var nodes = new Dictionary<string, BridgeNode>(StringComparer.Ordinal)
+        {
+            [routeId] = new(routeId, BridgeNodeKind.TsType, "/api/messages", "web/api.ts", 8),
+        };
+        var provenance = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+        {
+            [routeId] = ["nextjs-api", "nuxt-api"],
+        };
+
+        var graph = BridgeGraph.Build([], nodes, capabilityReport: null, observationProviders: provenance);
+
+        Assert.True(graph.HasObservationProvenance);
+        Assert.Equal(["nextjs-api", "nuxt-api"], graph.ObservationProviders(routeId));
+        Assert.Empty(graph.ObservationProviders("unknown"));
+    }
+
+    [Fact]
     public void NodeKindFor_NavigatesTo_UsesNextRouteTarget()
     {
         Assert.Equal(BridgeNodeKind.TsType, BridgeGraph.NodeKindFor(BridgeKind.NavigatesTo, EndpointSide.Source));
