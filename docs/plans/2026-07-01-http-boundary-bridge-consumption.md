@@ -68,9 +68,9 @@ Run `scripts/restore-julie-extract.sh`, then `dotnet build Miller.slnx -c Releas
 **Approach:** 2.6.0 keeps schema_version=3, extract_contract_version=3, blake3 (verified by live scan) — `MillerExtractContract` needs no change. The release-workflow target matrix is unchanged. Version-aware leadership treats 2.6.0 as newer and force-rescans on claim by design; no action needed.
 
 **Acceptance criteria:**
-- [ ] `julie-pins.json` at 2.6.0 with the four hashes above; restore succeeds; build guard green.
-- [ ] `scripts/test.sh` green and `scripts/test.sh scale` green against the 2.6.0 binary (regression proof BEFORE consumption work).
-- [ ] Committed.
+- [x] `julie-pins.json` at 2.6.0 with the four hashes above; restore succeeds; build guard green.
+- [x] `scripts/test.sh` green and `scripts/test.sh scale` green against the 2.6.0 binary (regression proof BEFORE consumption work).
+- [x] Committed.
 
 ## Task 2: Load + Adapt the Four New Fact Families
 
@@ -88,10 +88,10 @@ Run `scripts/restore-julie-extract.sh`, then `dotnet build Miller.slnx -c Releas
 **Approach:** Client-request carrier synthesis happens in Task 3 (`<client>.<lowerverb>` so `RouteNormalizer.VerbFromCarrier` attests it). Adapter rejects: `url_kind` ≠ `path`, blank `target_path`. Do NOT reject `verb_source="default"` — it is verb-known GET per Global Constraints. Metadata values arrive as strings (non-string JSON values arrive as raw JSON text via `ParseMetadata` — `route_tokens`/`dynamic_segments` arrays are NOT needed by Miller; do not parse them).
 
 **Acceptance criteria:**
-- [ ] All four ids load through `SqliteBridgeReader` (fixture-fact test proves facts reach providers).
-- [ ] Client-request adapter: path-kind + verb + verb-source read; relative/absolute rejected; test facts rejected.
-- [ ] Handler adapter: bracket `route_path` preferred; Nuxt verb-less handler yields null verb; navigation file-route behavior unchanged (existing tests green).
-- [ ] Worker-scope verification passes, committed.
+- [x] All four ids load through `SqliteBridgeReader` (fixture-fact test proves facts reach providers).
+- [x] Client-request adapter: path-kind + verb + verb-source read; relative/absolute rejected; test facts rejected.
+- [x] Handler adapter: bracket `route_path` preferred; Nuxt verb-less handler yields null verb; navigation file-route behavior unchanged (existing tests green).
+- [x] Worker-scope verification passes, committed.
 
 ## Task 3: dotnet-web — Client Requests + Attribute-Route Endpoints
 
@@ -108,12 +108,12 @@ Run `scripts/restore-julie-extract.sh`, then `dotnet build Miller.slnx -c Releas
 **Approach:** Follow the existing `ReduceStructuralClientCalls`/`TryReduceStructuralEndpointFact` shapes. `IsRealClientCall`'s csharp exclusion must not drop js/ts/vue client requests (it won't — language comes from the fact). Keep the "active" gate backend-evidence-based: client requests alone must NOT activate dotnet-web (pure-frontend repos stay inactive — 2026-07-01 Task 4 behavior). Preserve diagnostics vocabulary.
 
 **Acceptance criteria:**
-- [ ] Attested fetch/axios facts → verb-known High `Hits` edges against both minimal-API and attribute-route endpoints (fixture-fact tests).
-- [ ] Bare fetch (verb_source=default) → GET verb-known; matches GET endpoints High; does NOT match POST-only endpoints.
-- [ ] Attribute-route endpoints: `[Route("api/[controller]")]` + `[HttpGet("{id}")]` fixture fact (effective `/api/users/{id}`) matched by client `/api/users/{}`-canonical calls; bare `[HttpPost]` inherits controller template.
-- [ ] Dedupe: no duplicate endpoints (annotation+structural same method), no duplicate/downgraded edges (literal+structural same call site); higher band survives.
-- [ ] Pure Next.js repo with client requests but zero .NET facts: dotnet-web stays inactive.
-- [ ] Existing dotnet-web tests green. Worker-scope verification passes, committed.
+- [x] Attested fetch/axios facts → verb-known High `Hits` edges against both minimal-API and attribute-route endpoints (fixture-fact tests).
+- [x] Bare fetch (verb_source=default) → GET verb-known; matches GET endpoints High; does NOT match POST-only endpoints.
+- [x] Attribute-route endpoints: `[Route("api/[controller]")]` + `[HttpGet("{id}")]` fixture fact (effective `/api/users/{id}`) matched by client `/api/users/{}`-canonical calls; bare `[HttpPost]` inherits controller template.
+- [x] Dedupe: no duplicate endpoints (annotation+structural same method), no duplicate/downgraded edges (literal+structural same call site); higher band survives.
+- [x] Pure Next.js repo with client requests but zero .NET facts: dotnet-web stays inactive.
+- [x] Existing dotnet-web tests green. Worker-scope verification passes, committed.
 
 ## Task 4: nextjs-api / nuxt-api Client→Handler Providers
 
@@ -132,12 +132,12 @@ Run `scripts/restore-julie-extract.sh`, then `dotnet build Miller.slnx -c Releas
 **Approach:** `BridgeKind.Hits` renders as `route` label and maps Source=TsType/Target=Endpoint in `NodeKindFor` — no new BridgeKind. Signals via `StructuralSignal` exactly like `RouteBridge` so `BridgeScorer` bands come out High/Medium with `IsVerbUnknown` set only on the route-only arm. Same reference facts also feed dotnet-web (Task 3) — precedent: framework route references already feed two providers; graph-level edge dedupe is by signature and the targets differ, so no conflict.
 
 **Acceptance criteria:**
-- [ ] Fixture facts: `fetch("/api/messages")` + Next `route.ts` GET handler → `Hits` High, target bound to handler symbol id.
-- [ ] `fetch("/api/users/42")` + handler `route_path=/api/users/[id]` → High (segment match); two equally-specific handlers → ambiguous count, no edge.
-- [ ] POST client request + GET-only handler → no edge. GET client + Nuxt suffix-less `server/api/notes.ts` → Medium `verb_unknown` edge.
-- [ ] Both providers active/skip/evidence-count correctly (`no nextjs-api bridge evidence` when empty); registered in both DefaultProviders lists + `CreateProvider`; `miller.json` selection works.
-- [ ] Existing navigation providers byte-identical behavior (all existing tests green).
-- [ ] Worker-scope verification passes, committed.
+- [x] Fixture facts: `fetch("/api/messages")` + Next `route.ts` GET handler → `Hits` High, target bound to handler symbol id.
+- [x] `fetch("/api/users/42")` + handler `route_path=/api/users/[id]` → High (segment match); two equally-specific handlers → ambiguous count, no edge.
+- [x] POST client request + GET-only handler → no edge. GET client + Nuxt suffix-less `server/api/notes.ts` → Medium `verb_unknown` edge.
+- [x] Both providers active/skip/evidence-count correctly (`no nextjs-api bridge evidence` when empty); registered in both DefaultProviders lists + `CreateProvider`; `miller.json` selection works.
+- [x] Existing navigation providers byte-identical behavior (all existing tests green).
+- [x] Worker-scope verification passes, committed.
 
 ## Task 5: Trace Surface — Diagnostics, Evidence Keys, Render
 
@@ -152,10 +152,10 @@ Run `scripts/restore-julie-extract.sh`, then `dotnet build Miller.slnx -c Releas
 **What to build:** Wire the new providers into the trace tool's hardcoded lists so `not_on_bridge`/route-string diagnostics and pattern-audit next_actions cover client-request/handler evidence (e.g. suggest `patterns operation=search pattern_id=http.client_request.v1`). Compact and JSON must agree on flags/bands for the new edges (no render changes expected — `Hits` already renders — but assert it).
 
 **Acceptance criteria:**
-- [ ] Route-string trace over an unmatched client request surfaces the new provider diagnostics (`route_no_backend_match`-family) with correct nouns.
-- [ ] next_actions reference the new pattern ids when route facts are absent/present appropriately.
-- [ ] Compact + JSON agree on kind/label/band/flags for client-request edges (fixture-fact TraceTool tests).
-- [ ] Worker-scope verification passes, committed.
+- [x] Route-string trace over an unmatched client request surfaces the new provider diagnostics (`route_no_backend_match`-family) with correct nouns.
+- [x] next_actions reference the new pattern ids when route facts are absent/present appropriately.
+- [x] Compact + JSON agree on kind/label/band/flags for client-request edges (fixture-fact TraceTool tests).
+- [x] Worker-scope verification passes, committed.
 
 ## Task 6: Live Scale Coverage (2.6.0 end-to-end)
 
@@ -171,9 +171,9 @@ Run `scripts/restore-julie-extract.sh`, then `dotnet build Miller.slnx -c Releas
 **Approach:** Follow `WriteNextFixture`/`WriteNuxtFixture` exactly; `_output.WriteLine` evidence; `StructuralPatternIds` SQL check for the new ids. Scale trait or the convention guard fails the build.
 
 **Acceptance criteria:**
-- [ ] All four scenarios green via `scripts/test.sh scale`.
-- [ ] Compact render lines asserted (e.g. `--route-->` + `(High)`), matching TraceTool output.
-- [ ] Worker-scope verification passes, committed.
+- [x] All four scenarios green via `scripts/test.sh scale`.
+- [x] Compact render lines asserted (e.g. `--route-->` + `(High)`), matching TraceTool output.
+- [x] Worker-scope verification passes, committed.
 
 ## Task 7: Docs, Instructions, Skill Sync + Branch Gate
 
@@ -189,10 +189,10 @@ Run `scripts/restore-julie-extract.sh`, then `dotnet build Miller.slnx -c Releas
 **What to build:** (a) trace-json-v1.md: add `nextjs-api`/`nuxt-api` to the provider scope list; REVISE the now-partially-false disclaimers ("nextjs … does not claim API route handlers …", "nuxt … does not claim Nitro/server API routes …") to state what IS claimed (source-attested route handlers / Nitro server routes via 2.6.0 facts) and what still is not (server actions, middleware rewrites, redirects, runtime routing, conventional ASP.NET routing); document new evidence-count names. (b) MILLER_AGENT_INSTRUCTIONS.md: provider list becomes `dotnet-web`, `nextjs`, `nextjs-api`, `nuxt`, `nuxt-api`, `vue`, `react`; extend the fact-feed sentence (client fetch/axios facts feed `dotnet-web` and the `*-api` providers); update the exact-string assertions in `AgentInstructionsTests` in lockstep. (c) Skill: provider list, API-handler disclaimer, pattern-audit examples (`pattern_id=http.client_request.v1`), frontmatter description; regen `skills/` and confirm byte-identical copy. CLAUDE.md needs no edit (it does not enumerate providers) — verify, and if an edit IS needed, run `scripts/sync-agents.sh` + `cmp -s CLAUDE.md AGENTS.md`.
 
 **Acceptance criteria:**
-- [ ] `AgentInstructionsTests` green with updated strings; docs match shipped behavior.
-- [ ] Skill regenerated; `skills/` matches `.agents/skills/`.
-- [ ] Branch gate green: `dotnet build Miller.slnx -c Release` + `scripts/test.sh` + `scripts/test.sh scale`.
-- [ ] Goldfish checkpoint written; all work committed locally. No push.
+- [x] `AgentInstructionsTests` green with updated strings; docs match shipped behavior.
+- [x] Skill regenerated; `skills/` matches `.agents/skills/`.
+- [x] Branch gate green: `dotnet build Miller.slnx -c Release` + `scripts/test.sh` + `scripts/test.sh scale`.
+- [x] Goldfish checkpoint written; all work committed locally. No push.
 
 ## Verification Strategy
 
