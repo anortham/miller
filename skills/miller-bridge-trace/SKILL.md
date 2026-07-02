@@ -1,6 +1,6 @@
 ---
 name: miller-bridge-trace
-description: Use when tracing Miller bridge paths in supported providers: dotnet-web URL literals to ASP.NET signals, Next.js/Nuxt route references to file routes, or Vue/React references to route definitions.
+description: Use when tracing Miller bridge paths in supported providers: dotnet-web URL literals and fetch/axios client requests to ASP.NET signals, client requests to Next.js route handlers or Nuxt server routes, Next.js/Nuxt route references to file routes, or Vue/React references to route definitions.
 user-invocable: true
 arguments: "<client call, URL, route, endpoint, DTO, entity, or table>"
 allowed-tools: mcp__miller__trace, mcp__miller__search, mcp__miller__inspect, mcp__miller__context, mcp__miller__workspace, mcp__miller__patterns
@@ -9,9 +9,11 @@ allowed-tools: mcp__miller__trace, mcp__miller__search, mcp__miller__inspect, mc
 # Miller Bridge Trace
 
 Miller bridge tracing is provider-scoped evidence, not generic semantic magic. Current providers are `dotnet-web`
-(TypeScript/JavaScript/Vue URL literals to ASP.NET endpoints, DTOs, entities, and EF/table signals), `nextjs`
-(route references to Next.js file routes), `nuxt` (NuxtLink route references to Nuxt file routes), `vue`
-(route references to Vue route definitions), and `react` (route references to React route definitions).
+(TypeScript/JavaScript/Vue URL literals and fetch/axios client requests to ASP.NET endpoints — annotation,
+minimal-API, and attribute-route facts — plus DTOs, entities, and EF/table signals), `nextjs` (route references
+to Next.js file routes), `nextjs-api` (fetch/axios client requests to Next.js App Router route handlers), `nuxt`
+(NuxtLink route references to Nuxt file routes), `nuxt-api` (fetch/axios client requests to Nitro server routes),
+`vue` (route references to Vue route definitions), and `react` (route references to React route definitions).
 
 ## Workflow
 
@@ -31,6 +33,16 @@ patterns(operation="search", query="nuxt")
 patterns(operation="search", query="vue")
 patterns(operation="search", query="react")
 patterns(operation="search", query="route")
+```
+
+For the HTTP boundary bridges (`dotnet-web` client requests, `nextjs-api`, `nuxt-api`), audit the 2.6.0 fact
+families directly:
+
+```text
+patterns(operation="search", pattern_id="http.client_request.v1")
+patterns(operation="search", pattern_id="aspnet.attribute_route.v1")
+patterns(operation="search", pattern_id="nextjs.route_handler.v1")
+patterns(operation="search", pattern_id="nuxt.server_route.v1")
 ```
 
 2. Inspect the best anchor when names are ambiguous:
@@ -68,14 +80,18 @@ trace(target="<from>", mode="bridge")
 - `[ambiguous]` means multiple plausible links exist.
 - No bridge path can mean no provider is selected, missing extractor evidence, stale index, or a real absence of cross-language linkage.
 - `nextjs` and `nuxt` cover route references to file routes; `vue` and `react` cover route references to route
-  definitions. API handlers, server actions, middleware rewrites, redirects, and runtime route rules need extractor
-  facts before bridge can claim them.
+  definitions. `nextjs-api` and `nuxt-api` claim source-attested Next.js App Router route handlers and Nuxt Nitro
+  server routes from fetch/axios client requests: High on verb match (client verbs are always known — attested or
+  the fetch/axios spec-default GET), Medium `[verb-unknown]` against suffix-less Nuxt handlers, no edge on verb
+  mismatch or ambiguous route matches. Server actions, middleware rewrites/redirects, runtime route rules,
+  conventional (non-attribute) ASP.NET routing, relative/absolute client URLs (only `url_kind=path` is bridged),
+  and Nuxt `$fetch`/`useFetch` still need extractor facts before bridge can claim them.
 
 ## Report
 
 State:
 
-- Provider assumption: `dotnet-web`, `nextjs`, `nuxt`, `vue`, `react`, or a combination
+- Provider assumption: `dotnet-web`, `nextjs`, `nextjs-api`, `nuxt`, `nuxt-api`, `vue`, `react`, or a combination
 - Start node and end node if present
 - Link confidence and any flags
 - Missing evidence if the trace stops early

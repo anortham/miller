@@ -139,11 +139,13 @@ public sealed class AgentInstructionsTests
         string instructions = AgentInstructions.Load();
         Assert.Contains("no extracted graph path within depth, not proof unrelated", instructions);
         Assert.Contains("provider-scoped to", instructions);
-        Assert.Contains("`dotnet-web`, `nextjs`, `nuxt`, `vue`, and `react`", instructions);
+        Assert.Contains("`dotnet-web`, `nextjs`, `nextjs-api`, `nuxt`, `nuxt-api`, `vue`, and `react`", instructions);
         Assert.Contains("otherwise use `mode=refs`/`mode=path` or `inspect depth=full`", instructions);
         Assert.Contains("on empty, fall back to `search mode=source`", instructions);
         Assert.Contains("follow its `Next:` actions", instructions);
         Assert.Contains("ASP.NET, htmx, and frontend route-reference facts", instructions);
+        Assert.Contains("client fetch/axios `http.client_request.v1` facts feed `dotnet-web`", instructions);
+        Assert.Contains("and the `*-api` providers", instructions);
     }
 
     [Fact]
@@ -157,6 +159,7 @@ public sealed class AgentInstructionsTests
         Assert.Contains("List/no-match results include `next_actions`", instructions);
         Assert.Contains("patterns operation=search query=route", instructions);
         Assert.Contains("patterns operation=search pattern_id=htmx.attribute.v1", instructions);
+        Assert.Contains("patterns operation=search pattern_id=http.client_request.v1", instructions);
         Assert.Contains("patterns operation=search pattern_id=vue.route_reference.v1", instructions);
     }
 

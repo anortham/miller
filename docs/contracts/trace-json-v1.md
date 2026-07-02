@@ -131,14 +131,46 @@ Bridge node `kind` values include `file_route` for framework file-route and rout
 
 Bridge is provider-scoped. Current packaged providers are:
 
-- `dotnet-web`: TypeScript/JavaScript client URL calls, ASP.NET endpoints, DTOs/entities, AutoMapper, and Entity
-  Framework/Dapper table evidence.
-- `nextjs`: route references to Next.js file routes. It does not claim API route handlers, server actions,
-  middleware rewrites, redirects, or runtime routing unless extractor facts exist for them.
-- `nuxt`: NuxtLink route references to Nuxt file routes. It does not claim Nitro/server API routes, route rules,
-  middleware redirects, or runtime routing unless extractor facts exist for them.
+- `dotnet-web`: TypeScript/JavaScript client URL calls plus fetch/axios client-request facts
+  (`http.client_request.v1`), ASP.NET endpoints from annotations, minimal-API facts, and attribute-route
+  `http_method` facts (`aspnet.attribute_route.v1`, joined on `effective_route_template` with `route_template`
+  fallback), DTOs/entities, AutoMapper, and Entity Framework/Dapper table evidence. htmx facts arrive from HTML,
+  JSX/TSX, and Vue templates alike. `controller_route` class-prefix facts and verb-less method-level `route`
+  facts are evidence-only, never endpoints. When an attribute-route structural fact and an annotation-derived
+  endpoint describe the same method and verb, the structural fact wins and one endpoint is emitted.
+- `nextjs`: route references to Next.js file routes (navigation).
+- `nextjs-api`: fetch/axios client requests (`http.client_request.v1`) to source-attested Next.js App Router
+  route handlers (`nextjs.route_handler.v1`, julie-extract 2.6.0+), emitted as `hits` edges with the `route`
+  label, bound to the exported handler symbol when the fact carries one.
+- `nuxt`: NuxtLink route references to Nuxt file routes (navigation).
+- `nuxt-api`: fetch/axios client requests to source-attested Nitro server routes (`nuxt.server_route.v1`,
+  julie-extract 2.6.0+), emitted as `hits` edges with the `route` label; a whole-file handler fact without a
+  containing symbol targets a synthesized endpoint node.
 - `vue`: Vue route references to Vue route definitions.
 - `react`: React route references to React route definitions.
+
+Client-request edges are verb-aware. Client verbs are always known — `verb_source=attested`, or the fetch/axios
+spec-default GET when no literal `method` option exists — so a verb match against a verb-known handler scores
+High; a verb mismatch produces no edge; a suffix-less Nuxt handler (it answers every method, but its accepted
+verb set is not source-attested) matches route-only as Medium with the `verb_unknown` flag. Only
+`url_kind=path` client requests are bridge candidates. Route matching is segment-specific (bracket `[id]` and
+colon `:id` dynamic segments match one concrete segment); equally-specific ambiguous matches produce no edge
+and are counted in diagnostics.
+
+Neither the `*-api` providers nor the dotnet-web boundary consumption claims server actions, middleware
+rewrites or redirects, runtime routing, conventional (non-attribute) ASP.NET routing, relative or absolute
+client URLs (only `url_kind=path`), or Nuxt `$fetch`/`useFetch` composables (the extractor emits fetch/axios
+facts only).
+
+`provider.evidence_counts` keys added by the boundary consumption: `dotnet-web.clientRequests`,
+`dotnet-web.attributeRoutes`, `nextjs-api.clientRequests`, `nextjs-api.routeHandlers`, `nextjs-api.candidates`,
+`nextjs-api.ambiguousMatches`, `nuxt-api.clientRequests`, `nuxt-api.serverRoutes`, `nuxt-api.candidates`, and
+`nuxt-api.ambiguousMatches`.
+
+Route-string diagnostics cover the new providers with provider-prefixed codes (`nextjs-api_*` / `nuxt-api_*`
+over the suffixes `route_no_file_match`, `route_no_reference_match`, `route_ambiguous_file_match`,
+`route_no_bridge_link`, and `route_not_observed` — for example `nextjs-api_route_no_file_match`), phrased with
+the nouns "client request", "route handler" (Next.js), and "server route" (Nuxt).
 
 Empty bridge results are valid when a workspace is outside those providers or no bridge evidence exists.
 `not_on_bridge` and `no_bridge_links` diagnostics include `next_actions` for ordinary refs, ordinary graph

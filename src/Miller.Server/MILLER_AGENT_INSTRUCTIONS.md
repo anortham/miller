@@ -38,10 +38,10 @@ returns ranked, structured results with fewer tokens.
 - `trace` — Follow code. `mode=refs` (name-based usages; optional
   `reference_kind=call|variable_ref|type_usage|member_access|import`; on empty, fall back to `search mode=source`),
   `mode=path` (shortest path to `to`; no path means no extracted graph path within depth, not proof unrelated),
-  `mode=bridge` (`dotnet-web`, `nextjs`, `nuxt`, `vue`, `react`). `mode=auto` is subsumed by `inspect depth=full`.
+  `mode=bridge`. `mode=auto` is subsumed by `inspect depth=full`.
   Links are flagged `[verb-unknown]`/`[ambiguous]`. Use `format=json` for
   refs/nodes/links/diagnostics/actions; `scope=<file>` for duplicate names. **`mode=bridge` is provider-scoped to
-  `dotnet-web`, `nextjs`, `nuxt`, `vue`, and `react`; otherwise use `mode=refs`/`mode=path` or `inspect depth=full`.**
+  `dotnet-web`, `nextjs`, `nextjs-api`, `nuxt`, `nuxt-api`, `vue`, and `react`; otherwise use `mode=refs`/`mode=path` or `inspect depth=full`.**
 - `impact` — What a change affects: downstream symbols and linked tests. After edits, run `impact` with no
   args to read the working-tree git diff and see what your uncommitted change affects + which tests to run.
   Or pass exactly one of `target`, `changed_paths`, `diff`, or `git=true` (`base`/`staged` imply git). Use
@@ -66,11 +66,13 @@ returns ranked, structured results with fewer tokens.
 - **New task / unfamiliar area**: `context` → `inspect` the key symbols → implement.
 - **Understand a symbol**: first use `inspect target depth=overview`; use `depth=full` for complete body/reference/call lists.
 - **Trace a flow**: `trace mode=refs` for usages, `mode=path` for A→B, `mode=bridge` for
-  `dotnet-web`/`nextjs`/`nuxt`/`vue`/`react` evidence. ASP.NET, htmx, and frontend route-reference facts feed `dotnet-web`;
-  route-fact audits: `patterns operation=search query=route`, `patterns operation=search pattern_id=htmx.attribute.v1`,
+  `dotnet-web`/`nextjs`/`nextjs-api`/`nuxt`/`nuxt-api`/`vue`/`react` evidence. ASP.NET, htmx, and frontend route-reference facts
+  feed `dotnet-web` (attribute + minimal-API routes); client fetch/axios `http.client_request.v1` facts feed `dotnet-web`
+  and the `*-api` providers; route-fact audits: `patterns operation=search query=route`,
+  `patterns operation=search pattern_id=htmx.attribute.v1`, `patterns operation=search pattern_id=http.client_request.v1`,
   `patterns operation=search pattern_id=vue.route_reference.v1`. For callers/callees use `inspect depth=full`.
   If ambiguous, retry with `scope=<file>`.
-  If `mode=path` returns no path, treat it as no extracted graph path within depth, not proof unrelated; follow its `Next:` actions.
+  A `mode=path` no-path result means no extracted graph path within depth, not proof unrelated; follow its `Next:` actions.
 - **Find docs/prose**: `search mode=content "<phrase>"` returns `path:line` + snippet.
 - **Find source-body text**: `search mode=source "<literal or phrase>"` searches verified source files.
 - **Audit registered workspaces for exact text**: `content search query="dangerous term" workspace_id=all content_kind=source`
@@ -79,9 +81,8 @@ returns ranked, structured results with fewer tokens.
   If a query has no matches, use the suggested near matches or list output instead of raw AST grepping.
 - **Inspect a large log/report**: `content import path=/tmp/build.log` → `content search query="error text"` →
   `content read source_id=... line=... context_lines=10`. Do not read or paste the full file.
-- **Research a web page**: use `miller-web-research` to fetch markdown with `browser39` into a temp file, then
-  `content add_markdown path=/tmp/page.md url=https://... display_path="title"` →
-  `content search query="phrase" content_kind=web` → bounded `content read`. Do not create repo docs for pages.
+- **Research a web page**: use `miller-web-research`: fetch markdown with `browser39`, `content add_markdown`,
+  then `content search query="phrase" content_kind=web` → bounded `content read`. Do not create repo docs for pages.
 - **Scope noisy search**: add `file_pattern=src/ui/**` or `language=typescript`.
 - **Find text only inside comments or strings**: `search "<phrase>" regions=comment` or `regions=string_literal`;
   `MILLER_REGION_INDEX=0` disables this path.
@@ -94,11 +95,11 @@ returns ranked, structured results with fewer tokens.
 - **Localized text edit**: `edit replace_text target=<file> old_text=<known-old> new_text=<new> match_mode=auto query=<nearby>`; add `line`/`anchor` for duplicates,
   review the match proof, then re-call with `apply=true`.
 - **Index looks stale**: `workspace refresh` (or `workspace full` to force a clean rebuild).
-- **Check index trust/readiness**: `workspace health` — reports stale/missing sidecars, parse diagnostics,
-  capability gaps, skipped content, and recent telemetry outcomes without hydrating the full graph.
+- **Check index trust/readiness**: `workspace health` — stale/missing sidecars, parse diagnostics, capability
+  gaps, skipped content, recent telemetry outcomes.
 - **Start work in an indexed repo**: `workspace onboarding` summarizes local telemetry into starter guidance.
-- **Diagnose leader issues**: `workspace operation=leader` reports the current indexer leader. Add `handoff=true`
-  and `wait=true` only when you want to request graceful abdication; Miller queues a request and never kills a process.
+- **Diagnose leader issues**: `workspace operation=leader`; add `handoff=true wait=true` to request graceful
+  abdication (queued; Miller never kills a process).
 - **Need another repo**: `workspace list`; if registered, pass display ID, unique prefix, full ID, or root path as
   `workspace_id` to code tools. If absent, run `workspace operation=open path=/absolute/repo`, then retry.
   `workspace_id=all` is only for `content search` text audits, not code read tools.
@@ -115,7 +116,7 @@ code, paste this block into the prompt:
       mode=source/external/web/all-text for content text, mode=markers for TODO/FIXME/HACK/XXX audits,
       regions=... for comments/strings, and filters to scope.
     - inspect(target, depth?) before reading files/symbols; depth=overview is compact, depth=full is complete.
-    - trace(target, mode?, to?, scope?, reference_kind?) before manual file hopping; use refs for usages and scope for ambiguous names. mode=path no-path means not proven unrelated; mode=bridge is provider-scoped to `dotnet-web`, `nextjs`, `nuxt`, `vue`, and `react`.
+    - trace(target, mode?, to?, scope?, reference_kind?) before manual file hopping; use refs for usages and scope for ambiguous names. mode=path no-path means not proven unrelated; mode=bridge is provider-scoped to `dotnet-web`, `nextjs`, `nextjs-api`, `nuxt`, `nuxt-api`, `vue`, and `react`.
     - impact(target?|changed_paths?|diff?|git?/base?/staged?) before refactors and to choose tests.
     - edit(operation, target, ...) to preview index-aware edits; use match_mode=auto with query/anchor/line for localized replace_text.
     - content(import|add_markdown|search|read|list|remove|export, ...) for logs, web markdown, and audits; use workspace_id=all for audits and pass hit workspace_id on reads.
