@@ -9,7 +9,9 @@ internal static class BridgeProviderSelection
     [
         DotnetWebBridgeProvider.Instance,
         FileRouteBridgeProvider.NextJs,
+        ApiRouteBridgeProvider.NextJs,
         FileRouteBridgeProvider.Nuxt,
+        ApiRouteBridgeProvider.Nuxt,
         FileRouteBridgeProvider.Vue,
         FileRouteBridgeProvider.React,
     ];
@@ -72,7 +74,9 @@ internal static class BridgeProviderSelection
         {
             DotnetWebBridgeProvider.ProviderId => DotnetWebBridgeProvider.Instance,
             NextJsBridgeProvider.ProviderId => NextJsBridgeProvider.Instance,
+            NextJsApiBridgeProvider.ProviderId => NextJsApiBridgeProvider.Instance,
             NuxtBridgeProvider.ProviderId => NuxtBridgeProvider.Instance,
+            NuxtApiBridgeProvider.ProviderId => NuxtApiBridgeProvider.Instance,
             VueBridgeProvider.ProviderId => VueBridgeProvider.Instance,
             ReactBridgeProvider.ProviderId => ReactBridgeProvider.Instance,
             _ => new UnknownBridgeProvider(providerId),

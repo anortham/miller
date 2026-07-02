@@ -8,9 +8,10 @@ namespace Miller.Core.Graph;
 /// — it takes already-loaded value records, asks bridge providers to reduce framework-specific evidence into candidate
 /// edges, scores every candidate, and builds the graph. No DB, no I/O.
 ///
-/// <para>The default providers are <see cref="DotnetWebBridgeProvider"/> plus framework file-route providers.
-/// Framework-specific reductions stay behind those providers; the builder remains provider-agnostic so future bridge
-/// models can plug in without changing scoring or graph traversal.</para>
+/// <para>The default providers are <see cref="DotnetWebBridgeProvider"/> plus the framework file-route navigation
+/// providers and the verb-aware API providers (<see cref="ApiRouteBridgeProvider"/>). Framework-specific reductions
+/// stay behind those providers; the builder remains provider-agnostic so future bridge models can plug in without
+/// changing scoring or graph traversal.</para>
 ///
 /// <para><b>Literal evidence seam (Task 9 must match this).</b> <see cref="LiteralRecord"/> surfaces only a byte
 /// <c>span</c> + <c>containing_symbol_id</c>; it does not re-expose the <c>literals</c> row's own file/line columns. So
@@ -23,7 +24,9 @@ public static class BridgeGraphBuilder
     [
         DotnetWebBridgeProvider.Instance,
         FileRouteBridgeProvider.NextJs,
+        ApiRouteBridgeProvider.NextJs,
         FileRouteBridgeProvider.Nuxt,
+        ApiRouteBridgeProvider.Nuxt,
         FileRouteBridgeProvider.Vue,
         FileRouteBridgeProvider.React,
     ];

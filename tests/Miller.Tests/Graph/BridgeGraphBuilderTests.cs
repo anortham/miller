@@ -196,6 +196,20 @@ public sealed class BridgeGraphBuilderTests
         Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["nextjs.fileRoutes"]);
         Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["nextjs.candidates"]);
         Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["nextjs.ambiguousMatches"]);
+        Assert.Contains(graph.CapabilityReport.SkippedProviders, skipped =>
+            skipped.ProviderId == "nextjs-api" &&
+            skipped.Reason.Contains("no nextjs-api bridge evidence", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(graph.CapabilityReport.SkippedProviders, skipped =>
+            skipped.ProviderId == "nuxt-api" &&
+            skipped.Reason.Contains("no nuxt-api bridge evidence", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["nextjs-api.clientRequests"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["nextjs-api.routeHandlers"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["nextjs-api.candidates"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["nextjs-api.ambiguousMatches"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["nuxt-api.clientRequests"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["nuxt-api.serverRoutes"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["nuxt-api.candidates"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["nuxt-api.ambiguousMatches"]);
     }
 
     [Fact]
@@ -2257,6 +2271,271 @@ public sealed class BridgeGraphBuilderTests
             skipped.Reason.Contains("no dotnet-web backend evidence", StringComparison.OrdinalIgnoreCase));
         Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["dotnet-web.clientRequests"]);
         Assert.Empty(graph.Edges);
+    }
+
+    // ---- Task 4: nextjs-api / nuxt-api client→handler providers (http.client_request.v1 → route handlers) ----
+
+    [Fact]
+    public void ApiBridge_FetchGet_HitsNextRouteHandlerSymbol_High()
+    {
+        var handler = Type("sym-handler", "GET", "function", file: "web/app/api/messages/route.ts");
+        var tsFn = Type("sym-tsfn", "loadMessages", "function", file: "web/lib/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-next-get",
+                patternId: "nextjs.route_handler.v1",
+                language: "typescript",
+                path: "web/app/api/messages/route.ts",
+                containingSymbolId: "sym-handler",
+                startLine: 3,
+                metadataJson: """{"framework":"nextjs","router":"app","route_path":"/api/messages","verb":"GET","verb_source":"attested"}"""),
+            StructuralFact(
+                factId: "fact-fetch-get",
+                patternId: "http.client_request.v1",
+                language: "typescript",
+                path: "web/lib/api.ts",
+                containingSymbolId: "sym-tsfn",
+                startLine: 8,
+                metadataJson: """{"client":"fetch","framework":"fetch","target_path":"/api/messages","url_kind":"path","verb":"GET","verb_source":"attested"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [handler, tsFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hit = Assert.Single(graph.Incident("sym-handler"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.False(hit.IsVerbUnknown);
+        Assert.Equal("sym-tsfn", hit.Edge.SourceRef.SymbolId);
+        Assert.Equal("sym-handler", hit.Edge.TargetRef.SymbolId);
+        Assert.Contains(hit.Edge.Evidence, e => e.FilePath == "web/lib/api.ts" && e.Line == 8);
+        Assert.Contains(hit.Edge.Evidence, e => e.FilePath == "web/app/api/messages/route.ts" && e.Line == 3);
+        Assert.Contains("nextjs-api", graph.CapabilityReport.ActiveProviders);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["nextjs-api.clientRequests"]);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["nextjs-api.routeHandlers"]);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["nextjs-api.candidates"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["nextjs-api.ambiguousMatches"]);
+        // The same client-request fact feeds dotnet-web, but with zero backend evidence it stays inactive.
+        Assert.DoesNotContain("dotnet-web", graph.CapabilityReport.ActiveProviders);
+    }
+
+    [Fact]
+    public void ApiBridge_DynamicSegmentFetch_MatchesBracketRouteHandler_High()
+    {
+        var handler = Type("sym-handler", "GET", "function", file: "web/app/api/users/[id]/route.ts");
+        var tsFn = Type("sym-tsfn", "loadUser", "function", file: "web/lib/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-next-get-id",
+                patternId: "nextjs.route_handler.v1",
+                language: "typescript",
+                path: "web/app/api/users/[id]/route.ts",
+                containingSymbolId: "sym-handler",
+                startLine: 3,
+                metadataJson: """{"framework":"nextjs","router":"app","route_path":"/api/users/[id]","normalized_route_template":"/api/users/:id","verb":"GET","verb_source":"attested"}"""),
+            StructuralFact(
+                factId: "fact-fetch-42",
+                patternId: "http.client_request.v1",
+                language: "typescript",
+                path: "web/lib/api.ts",
+                containingSymbolId: "sym-tsfn",
+                startLine: 12,
+                metadataJson: """{"client":"fetch","framework":"fetch","target_path":"/api/users/42","url_kind":"path","verb":"GET","verb_source":"default"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [handler, tsFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        // fetch("/api/users/42") segment-matches route_path=/api/users/[id]; verb-known GET (spec default) → High.
+        var hit = Assert.Single(graph.Incident("sym-handler"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.False(hit.IsVerbUnknown);
+        Assert.Equal("sym-handler", hit.Edge.TargetRef.SymbolId);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["nextjs-api.candidates"]);
+    }
+
+    [Fact]
+    public void ApiBridge_PostClient_DoesNotHitGetOnlyHandler()
+    {
+        var handler = Type("sym-handler", "GET", "function", file: "web/app/api/messages/route.ts");
+        var tsFn = Type("sym-tsfn", "createMessage", "function", file: "web/lib/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-next-get",
+                patternId: "nextjs.route_handler.v1",
+                language: "typescript",
+                path: "web/app/api/messages/route.ts",
+                containingSymbolId: "sym-handler",
+                startLine: 3,
+                metadataJson: """{"framework":"nextjs","router":"app","route_path":"/api/messages","verb":"GET","verb_source":"attested"}"""),
+            StructuralFact(
+                factId: "fact-fetch-post",
+                patternId: "http.client_request.v1",
+                language: "typescript",
+                path: "web/lib/api.ts",
+                containingSymbolId: "sym-tsfn",
+                startLine: 8,
+                metadataJson: """{"client":"fetch","framework":"fetch","target_path":"/api/messages","url_kind":"path","verb":"POST","verb_source":"attested"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [handler, tsFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        // A real verb distinction, not a route-only fallback: verb-known POST never hits a GET-only handler.
+        Assert.DoesNotContain(graph.Edges, e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Contains("nextjs-api", graph.CapabilityReport.ActiveProviders);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["nextjs-api.candidates"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["nextjs-api.ambiguousMatches"]);
+    }
+
+    [Fact]
+    public void ApiBridge_EquallySpecificHandlers_CountAmbiguous_NoEdge()
+    {
+        var handlerId = Type("sym-handler-id", "GET", "function", file: "web/app/api/users/[id]/route.ts");
+        var handlerSlug = Type("sym-handler-slug", "GET", "function", file: "web/app/api/users/[slug]/route.ts");
+        var tsFn = Type("sym-tsfn", "loadUser", "function", file: "web/lib/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-next-get-id",
+                patternId: "nextjs.route_handler.v1",
+                language: "typescript",
+                path: "web/app/api/users/[id]/route.ts",
+                containingSymbolId: "sym-handler-id",
+                startLine: 3,
+                metadataJson: """{"framework":"nextjs","router":"app","route_path":"/api/users/[id]","verb":"GET","verb_source":"attested"}"""),
+            StructuralFact(
+                factId: "fact-next-get-slug",
+                patternId: "nextjs.route_handler.v1",
+                language: "typescript",
+                path: "web/app/api/users/[slug]/route.ts",
+                containingSymbolId: "sym-handler-slug",
+                startLine: 3,
+                metadataJson: """{"framework":"nextjs","router":"app","route_path":"/api/users/[slug]","verb":"GET","verb_source":"attested"}"""),
+            StructuralFact(
+                factId: "fact-fetch-42",
+                patternId: "http.client_request.v1",
+                language: "typescript",
+                path: "web/lib/api.ts",
+                containingSymbolId: "sym-tsfn",
+                startLine: 12,
+                metadataJson: """{"client":"fetch","framework":"fetch","target_path":"/api/users/42","url_kind":"path","verb":"GET","verb_source":"default"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [handlerId, handlerSlug, tsFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.DoesNotContain(graph.Edges, e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["nextjs-api.ambiguousMatches"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["nextjs-api.candidates"]);
+    }
+
+    [Fact]
+    public void ApiBridge_GetClient_SuffixlessNuxtServerRoute_MediumVerbUnknown()
+    {
+        var tsFn = Type("sym-tsfn", "loadNotes", "function", file: "app/composables/notes.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-nuxt-notes",
+                patternId: "nuxt.server_route.v1",
+                language: "typescript",
+                path: "server/api/notes.ts",
+                containingSymbolId: string.Empty,
+                startLine: 1,
+                metadataJson: """{"framework":"nuxt","route_path":"/api/notes"}"""),
+            StructuralFact(
+                factId: "fact-fetch-notes",
+                patternId: "http.client_request.v1",
+                language: "typescript",
+                path: "app/composables/notes.ts",
+                containingSymbolId: "sym-tsfn",
+                startLine: 6,
+                metadataJson: """{"client":"fetch","framework":"fetch","target_path":"/api/notes","url_kind":"path","verb":"GET","verb_source":"default"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [tsFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        // The suffix-less server route answers every method, but its accepted verb set is not source-attested:
+        // the edge stays honest-Medium with the verb_unknown flag — never assumed GET.
+        var hit = Assert.Single(graph.Edges, e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.Medium, hit.Band);
+        Assert.True(hit.IsVerbUnknown);
+        Assert.Equal("sym-tsfn", hit.Edge.SourceRef.SymbolId);
+        Assert.Null(hit.Edge.TargetRef.SymbolId);
+        Assert.Contains("nuxt-api", graph.CapabilityReport.ActiveProviders);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["nuxt-api.clientRequests"]);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["nuxt-api.serverRoutes"]);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["nuxt-api.candidates"]);
+        // The handler has no containing symbol: the target is a synthesized Endpoint node (route-only display).
+        Assert.Contains(graph.Nodes.Values, node =>
+            node.Kind == BridgeNodeKind.Endpoint &&
+            node.Display == "/api/notes" &&
+            node.FilePath == "server/api/notes.ts");
+    }
+
+    [Fact]
+    public void ApiBridge_UnmatchedRequestsAndHandlers_BecomeObservationNodes_BothProvidersActive()
+    {
+        var handler = Type("sym-handler", "GET", "function", file: "web/app/api/messages/route.ts");
+        var tsFn = Type("sym-tsfn", "loadUnknown", "function", file: "web/lib/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            StructuralFact(
+                factId: "fact-next-get",
+                patternId: "nextjs.route_handler.v1",
+                language: "typescript",
+                path: "web/app/api/messages/route.ts",
+                containingSymbolId: "sym-handler",
+                startLine: 3,
+                metadataJson: """{"framework":"nextjs","router":"app","route_path":"/api/messages","verb":"GET","verb_source":"attested"}"""),
+            StructuralFact(
+                factId: "fact-nuxt-notes",
+                patternId: "nuxt.server_route.v1",
+                language: "typescript",
+                path: "server/api/notes.ts",
+                containingSymbolId: string.Empty,
+                startLine: 1,
+                metadataJson: """{"framework":"nuxt","route_path":"/api/notes"}"""),
+            StructuralFact(
+                factId: "fact-fetch-unknown",
+                patternId: "http.client_request.v1",
+                language: "typescript",
+                path: "web/lib/api.ts",
+                containingSymbolId: "sym-tsfn",
+                startLine: 5,
+                metadataJson: """{"client":"fetch","framework":"fetch","target_path":"/api/unknown","url_kind":"path","verb":"GET","verb_source":"default"}"""),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [handler, tsFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.DoesNotContain(graph.Edges, e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Contains("nextjs-api", graph.CapabilityReport.ActiveProviders);
+        Assert.Contains("nuxt-api", graph.CapabilityReport.ActiveProviders);
+        // Unmatched client request → canonical-route TsType node; unmatched handlers → Endpoint nodes
+        // (verb-known handlers render the dotnet-web "VERB /route" shape; verb-less ones the route alone).
+        Assert.Contains(graph.Nodes.Values, node =>
+            node.Kind == BridgeNodeKind.TsType &&
+            node.Display == "/api/unknown" &&
+            node.FilePath == "web/lib/api.ts");
+        Assert.Contains(graph.Nodes.Values, node =>
+            node.Kind == BridgeNodeKind.Endpoint &&
+            node.Display == "GET /api/messages" &&
+            node.FilePath == "web/app/api/messages/route.ts");
+        Assert.Contains(graph.Nodes.Values, node =>
+            node.Kind == BridgeNodeKind.Endpoint &&
+            node.Display == "/api/notes" &&
+            node.FilePath == "server/api/notes.ts");
     }
 
     [Fact]

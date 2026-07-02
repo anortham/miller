@@ -300,6 +300,105 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
         command.ExecuteNonQuery();
     }
 
+    // A matching Next.js client-request/route-handler pair (plan Task 4): the exported GET handler symbol,
+    // the containing client function, and the two 2.6.0 facts that bridge them.
+    private static void AddNextApiBoundaryFacts(string dbPath)
+    {
+        using var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder { DataSource = dbPath, Mode = SqliteOpenMode.ReadWrite }.ToString());
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO symbols(symbol_id, name, signature, kind, language, path, start_line, end_line, parent_symbol_id)
+            VALUES
+              ('s-next-get', 'GET', 'export async function GET(request: Request)', 'function', 'typescript', 'web/app/api/messages/route.ts', 3, 9, NULL),
+              ('s-load-messages', 'loadMessages', 'function loadMessages()', 'function', 'typescript', 'web/lib/api.ts', 4, 9, NULL);
+
+            INSERT INTO structural_facts
+                (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                 containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                 confidence, metadata_json)
+            VALUES
+              ('sf-next-msg-handler', 'f-next-msg-route', 'web/app/api/messages/route.ts', 'typescript', 'nextjs.route_handler.v1',
+               'route_handler', 'export_statement', 's-next-get', 3, 1, 9, 1, 40, 260, 1.0,
+               '{"framework":"nextjs","router":"app","route_path":"/api/messages","verb":"GET","verb_source":"attested"}'),
+              ('sf-fetch-messages', 'f-web-lib-api', 'web/lib/api.ts', 'typescript', 'http.client_request.v1',
+               'client_request', 'call_expression', 's-load-messages', 5, 3, 5, 40, 100, 140, 1.0,
+               '{"client":"fetch","framework":"fetch","target_path":"/api/messages","url_kind":"path","verb":"GET","verb_source":"default"}');
+            """;
+        command.ExecuteNonQuery();
+    }
+
+    [Fact]
+    public void Load_RootMillerJsonNextJsApiProvider_BridgesClientRequestToRouteHandler()
+    {
+        var (root, dbPath) = CreateConfiguredBridgeWorkspace("""
+            {
+              "bridge": {
+                "providers": ["nextjs-api"]
+              }
+            }
+            """);
+        try
+        {
+            AddNextApiBoundaryFacts(dbPath);
+
+            var index = RepositoryIndexLoader.Load(dbPath);
+
+            Assert.False(index.BridgeGraph.Contains("s-entity"));
+            Assert.Contains("nextjs-api", index.BridgeGraph.CapabilityReport.ActiveProviders);
+            Assert.DoesNotContain("dotnet-web", index.BridgeGraph.CapabilityReport.ActiveProviders);
+            Assert.DoesNotContain("nextjs", index.BridgeGraph.CapabilityReport.ActiveProviders);
+
+            var edge = Assert.Single(index.BridgeGraph.Edges, item => item.Edge.Kind == BridgeKind.Hits);
+            Assert.Equal(ConfidenceBand.High, edge.Band);
+            Assert.Equal("s-load-messages", edge.Edge.SourceRef.SymbolId);
+            Assert.Equal("s-next-get", edge.Edge.TargetRef.SymbolId);
+            Assert.Equal(1, index.BridgeGraph.CapabilityReport.EvidenceCounts["nextjs-api.clientRequests"]);
+            Assert.Equal(1, index.BridgeGraph.CapabilityReport.EvidenceCounts["nextjs-api.routeHandlers"]);
+            Assert.Equal(1, index.BridgeGraph.CapabilityReport.EvidenceCounts["nextjs-api.candidates"]);
+            Assert.Equal(0, index.BridgeGraph.CapabilityReport.EvidenceCounts["nextjs-api.ambiguousMatches"]);
+        }
+        finally
+        {
+            TryDelete(root);
+        }
+    }
+
+    [Fact]
+    public void Load_RootMillerJsonNuxtApiProvider_IsSelectableAndReportsEvidence()
+    {
+        var (root, dbPath) = CreateConfiguredBridgeWorkspace("""
+            {
+              "bridge": {
+                "providers": ["nuxt-api"]
+              }
+            }
+            """);
+        try
+        {
+            // The fetch /api/users request and the suffix-less /api/notes server route do not match:
+            // the provider is selected and active with evidence but emits no edge.
+            AddHttpBoundaryFacts(dbPath);
+
+            var index = RepositoryIndexLoader.Load(dbPath);
+
+            Assert.False(index.BridgeGraph.Contains("s-entity"));
+            Assert.Contains("nuxt-api", index.BridgeGraph.CapabilityReport.ActiveProviders);
+            Assert.DoesNotContain("dotnet-web", index.BridgeGraph.CapabilityReport.ActiveProviders);
+            Assert.Empty(index.BridgeGraph.Edges);
+            Assert.Equal(1, index.BridgeGraph.CapabilityReport.EvidenceCounts["nuxt-api.clientRequests"]);
+            Assert.Equal(1, index.BridgeGraph.CapabilityReport.EvidenceCounts["nuxt-api.serverRoutes"]);
+            Assert.Equal(0, index.BridgeGraph.CapabilityReport.EvidenceCounts["nuxt-api.candidates"]);
+            Assert.Equal(0, index.BridgeGraph.CapabilityReport.EvidenceCounts["nuxt-api.ambiguousMatches"]);
+        }
+        finally
+        {
+            TryDelete(root);
+        }
+    }
+
     [Fact]
     public void Load_HttpBoundaryFactFamilies_LoadThroughTheWhitelistAndBridge()
     {
@@ -417,7 +516,9 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
     {
         var providers = BridgeProviderSelection.ProvidersForDatabase(_dbPath);
 
-        Assert.Equal(["dotnet-web", "nextjs", "nuxt", "vue", "react"], providers.Select(provider => provider.Id).ToArray());
+        Assert.Equal(
+            ["dotnet-web", "nextjs", "nextjs-api", "nuxt", "nuxt-api", "vue", "react"],
+            providers.Select(provider => provider.Id).ToArray());
     }
 
     [Fact]
