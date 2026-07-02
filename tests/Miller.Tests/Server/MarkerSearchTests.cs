@@ -58,6 +58,81 @@ public sealed class MarkerSearchTests
     }
 
     [Fact]
+    public void Run_MultipleMarkersInOneRegion_CollapsesToSingleBlock()
+    {
+        var index = new StubRegionSearchIndex(
+            Hit("src/A.cs", 5, "comment", "// TODO FIXME HACK do all three", "TODO", "A.Run"));
+
+        string output = MarkerSearch.Run(
+            index,
+            MarkerSearch.ParseMarkers("TODO,FIXME,HACK"),
+            MarkerSearch.DefaultLimit,
+            excludeTests: false,
+            json: false,
+            compactBanner: null,
+            filePattern: null,
+            language: null,
+            out int count);
+
+        Assert.Equal(1, count);
+        Assert.Contains("src/A.cs:5  TODO,FIXME,HACK  comment  A.Run", output);
+        // Exactly one block — the region header appears once, not once per matched marker.
+        Assert.Equal(1, output.Split("src/A.cs:5").Length - 1);
+    }
+
+    [Fact]
+    public void Run_Limit_CountsDistinctRegionsNotMarkerPairs()
+    {
+        var index = new StubRegionSearchIndex(
+            Hit("src/A.cs", 5, "comment", "// TODO FIXME first", "TODO", "A.Run"),
+            Hit("src/B.cs", 9, "comment", "// TODO FIXME second", "TODO", "B.Run"));
+
+        string output = MarkerSearch.Run(
+            index,
+            MarkerSearch.ParseMarkers("TODO,FIXME"),
+            limit: 1,
+            excludeTests: false,
+            json: false,
+            compactBanner: null,
+            filePattern: null,
+            language: null,
+            out int count);
+
+        // Two regions each match two markers (4 marker/region pairs); limit=1 keeps one region.
+        Assert.Equal(1, count);
+        Assert.Contains("src/A.cs:5  TODO,FIXME  comment", output);
+        Assert.DoesNotContain("src/B.cs", output);
+    }
+
+    [Fact]
+    public void Run_Json_MultiMarkerRegion_HasFirstMarkerAndOrderedMarkersArray()
+    {
+        var index = new StubRegionSearchIndex(
+            Hit("src/A.cs", 5, "comment", "// HACK FIXME TODO out of order", "TODO", "A.Run"));
+
+        using JsonDocument doc = JsonDocument.Parse(MarkerSearch.Run(
+            index,
+            MarkerSearch.ParseMarkers("TODO,FIXME,HACK"),
+            MarkerSearch.DefaultLimit,
+            excludeTests: false,
+            json: true,
+            compactBanner: null,
+            filePattern: null,
+            language: null,
+            out int count));
+        JsonElement item = Assert.Single(doc.RootElement.EnumerateArray());
+
+        Assert.Equal(1, count);
+        // marker keeps its contract meaning: the first marker by canonical rank.
+        Assert.Equal("TODO", item.GetProperty("marker").GetString());
+        string[] markers = item.GetProperty("markers")
+            .EnumerateArray()
+            .Select(static e => e.GetString())
+            .ToArray()!;
+        Assert.Equal(new[] { "TODO", "FIXME", "HACK" }, markers);
+    }
+
+    [Fact]
     public void Run_AppliesFileAndLanguageFilters()
     {
         var index = new StubRegionSearchIndex(

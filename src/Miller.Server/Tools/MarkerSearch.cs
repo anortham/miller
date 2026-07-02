@@ -53,7 +53,9 @@ internal static class MarkerSearch
         if (limit < 1) limit = 1;
 
         ToolSearchFilters filters = ToolSearchFilters.Parse(filePattern, language);
-        var byKey = new Dictionary<string, MarkerSearchHit>(StringComparer.Ordinal);
+        // Key by region alone: a region matching several markers collapses to one hit that
+        // lists every matched marker, so the limit counts regions, not (marker, region) pairs.
+        var byRegion = new Dictionary<string, RegionMarkers>(StringComparer.Ordinal);
         int fetchLimit = filters.HasAny ? MaxLimit : Math.Min(limit * 4 + 10, MaxLimit);
 
         foreach (string marker in markers)
@@ -66,18 +68,40 @@ internal static class MarkerSearch
                 if (!ContainsMarker(hit.RawText, marker) && !ContainsMarker(hit.Snippet, marker))
                     continue;
 
-                string key = marker + "\0" + hit.RegionId;
-                byKey.TryAdd(key, new MarkerSearchHit(marker, hit));
+                if (!byRegion.TryGetValue(hit.RegionId, out RegionMarkers? accumulator))
+                {
+                    accumulator = new RegionMarkers(hit);
+                    byRegion[hit.RegionId] = accumulator;
+                }
+                accumulator.Markers.Add(marker);
             }
         }
 
-        return byKey.Values
+        return byRegion.Values
+            .Select(static accumulator => new MarkerSearchHit(OrderMarkers(accumulator.Markers), accumulator.Region))
             .OrderBy(static hit => hit.Region.Path, StringComparer.Ordinal)
             .ThenBy(static hit => hit.Region.Line)
-            .ThenBy(static hit => Array.IndexOf(DefaultMarkers, hit.Marker))
-            .ThenBy(static hit => hit.Marker, StringComparer.Ordinal)
+            .ThenBy(static hit => Array.IndexOf(DefaultMarkers, hit.Markers[0]))
+            .ThenBy(static hit => hit.Markers[0], StringComparer.Ordinal)
             .Take(Math.Min(limit, MaxLimit))
             .ToArray();
+    }
+
+    // Order a region's matched markers by canonical rank (DefaultMarkers index) then name —
+    // the same tiebreak the pre-collapse ordering used, so Markers[0] is the "first" marker.
+    private static IReadOnlyList<string> OrderMarkers(IEnumerable<string> markers) =>
+        markers
+            .OrderBy(static marker => Array.IndexOf(DefaultMarkers, marker))
+            .ThenBy(static marker => marker, StringComparer.Ordinal)
+            .ToArray();
+
+    private sealed class RegionMarkers
+    {
+        internal RegionMarkers(RegionSearchHit region) => Region = region;
+
+        internal RegionSearchHit Region { get; }
+
+        internal HashSet<string> Markers { get; } = new(StringComparer.Ordinal);
     }
 
     internal static IReadOnlyList<string> ParseMarkers(string? markers)
@@ -142,7 +166,7 @@ internal static class MarkerSearch
             RegionSearchHit region = hit.Region;
             var block = new StringBuilder();
             block.Append(region.Path).Append(':').Append(region.Line)
-                .Append("  ").Append(hit.Marker)
+                .Append("  ").Append(string.Join(",", hit.Markers))
                 .Append("  ").Append(region.Kind);
             if (!string.IsNullOrWhiteSpace(region.ContainingSymbolName))
                 block.Append("  ").Append(region.ContainingSymbolName);
@@ -167,7 +191,11 @@ internal static class MarkerSearch
             {
                 RegionSearchHit region = hit.Region;
                 writer.WriteStartObject();
-                writer.WriteString("marker", hit.Marker);
+                writer.WriteString("marker", hit.Markers[0]);
+                writer.WriteStartArray("markers");
+                foreach (string marker in hit.Markers)
+                    writer.WriteStringValue(marker);
+                writer.WriteEndArray();
                 writer.WriteString("file", region.Path);
                 writer.WriteNumber("line", region.Line);
                 writer.WriteString("kind", region.Kind);
@@ -186,4 +214,4 @@ internal static class MarkerSearch
     }
 }
 
-internal sealed record MarkerSearchHit(string Marker, RegionSearchHit Region);
+internal sealed record MarkerSearchHit(IReadOnlyList<string> Markers, RegionSearchHit Region);
