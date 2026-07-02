@@ -178,12 +178,15 @@ facts only).
 The `backend-http` provider grows through three Miller-owned enrichment passes, all unambiguous-or-nothing —
 ambiguity poisons a candidate, it never degrades it to a lower band. (1) Cross-file mount-prefix composition
 anchors each `express.router_mount.v1`, `fastapi.include_router.v1`, `flask.blueprint_registration.v1`, or
-`django.url_include.v1` fact to route facts in exactly ONE other file (Django by the included module path, the
+`django.url_include.v1` fact to route facts in exactly ONE anchor file (Django by the included module path, the
 others by the mount target's trailing identifier), then APPENDS prefixed route variants
 (`JoinRoute(mount_path, route_path)`); a mount that anchors to zero or multiple files composes nothing and is
-counted in `unanchoredMounts`. Composition is strictly additive — the original un-prefixed route facts are
-always kept, because a route fact carries no receiver identity proving it belongs to the mounted router rather
-than a direct handler in the same file. (2) Rails resource expansion turns each `rails.resource_route.v1` fact
+counted in `unanchoredMounts`. The anchor is usually a different file (the router's own module), but it may be
+the file that declares the mount — a same-file router whose prefix the extractor left unfolded; a same-file route
+already carrying `effective_route_template` was folded upstream and is skipped, so composition never
+double-prefixes it. Composition is strictly additive — the original un-prefixed route facts are always kept,
+because a route fact carries no receiver identity proving it belongs to the mounted router rather than a direct
+handler in the same file. (2) Rails resource expansion turns each `rails.resource_route.v1` fact
 into the concrete verb-known REST handlers Rails doctrine implies (`resources` → 8 collection entries,
 `resource` → 7 singular entries, filtered by `only`/`except`, prefixed by `scope_path`). (3) Rails controller
 binding resolves a `rails.route.v1` `controller_action` (`users#show`) or an expanded action to the ONE

@@ -1556,32 +1556,32 @@ public sealed class LiveBridgeTraceTests
             package main
 
             import (
-            	"net/http"
+                "net/http"
 
-            	"github.com/gin-gonic/gin"
-            	"github.com/labstack/echo/v4"
+                "github.com/gin-gonic/gin"
+                "github.com/labstack/echo/v4"
             )
 
             func registerMux() {
-            	http.HandleFunc("GET /api/items/{id}", showItem)
+                http.HandleFunc("GET /api/items/{id}", showItem)
             }
 
             func registerGin() {
-            	r := gin.Default()
-            	api := r.Group("/api")
-            	api.GET("/users/:id", showUser)
-            	r.Any("/ping", pingAny)
+                r := gin.Default()
+                api := r.Group("/api")
+                api.GET("/users/:id", showUser)
+                r.Any("/ping", pingAny)
             }
 
             func registerEcho() {
-            	e := echo.New()
-            	v1 := e.Group("/v1")
-            	v1.POST("/notes/:id", createNote)
+                e := echo.New()
+                v1 := e.Group("/v1")
+                v1.POST("/notes/:id", createNote)
             }
 
             func clients() {
-            	http.Get("/api/items/1")
-            	http.Get("/ping")
+                http.Get("/api/items/1")
+                http.Get("/ping")
             }
             """);
     }

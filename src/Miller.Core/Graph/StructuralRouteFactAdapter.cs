@@ -333,10 +333,36 @@ internal static class StructuralRouteFactAdapter
     private static bool IsTestPath(string path)
     {
         var normalized = path.Replace('\\', '/');
-        return normalized.Contains("/__tests__/", StringComparison.OrdinalIgnoreCase)
-            || normalized.Contains(".test.", StringComparison.OrdinalIgnoreCase)
-            || normalized.Contains(".spec.", StringComparison.OrdinalIgnoreCase);
+
+        // Filename-level markers: JS/TS (`.test.`/`.spec.`) plus the Go/Python (`foo_test.go`, `foo_test.py`) and
+        // Ruby (`foo_spec.rb`) unit-test suffixes — a route fact in one of these files is test scaffolding.
+        if (normalized.Contains(".test.", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains(".spec.", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        var file = normalized[(normalized.LastIndexOf('/') + 1)..];
+        if (file.Contains("_test.", StringComparison.OrdinalIgnoreCase) ||
+            file.Contains("_spec.", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        // Directory-segment markers, matched at slash boundaries so `latest/`, `contest/`, and `greatest.py` never
+        // false-match. Covers `__tests__/` (JS), and the `test(s)/`/`spec(s)/` conventions shared by Python, Ruby
+        // (Rails `spec/`), Go, and Java (`src/test/**`) — where a backend route fact is often module-level with no
+        // test-marked containing symbol, so the symbol check above cannot catch it.
+        return HasPathSegment(normalized, "__tests__")
+            || HasPathSegment(normalized, "test")
+            || HasPathSegment(normalized, "tests")
+            || HasPathSegment(normalized, "spec")
+            || HasPathSegment(normalized, "specs");
     }
+
+    /// <summary>True when <paramref name="segment"/> appears as a whole slash-delimited path segment.</summary>
+    private static bool HasPathSegment(string normalizedPath, string segment) =>
+        normalizedPath.Contains("/" + segment + "/", StringComparison.OrdinalIgnoreCase)
+        || normalizedPath.StartsWith(segment + "/", StringComparison.OrdinalIgnoreCase);
 }
 
 internal sealed record StructuralRouteReference(

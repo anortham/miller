@@ -4102,6 +4102,42 @@ public sealed class BridgeGraphBuilderTests
     }
 
     [Theory]
+    // Polyglot test-dir + unit-test-suffix conventions. The containing symbol is EMPTY, so the path is the only
+    // signal — a module-level backend route in a test tree carries no test-marked symbol, exactly the case the
+    // symbol check cannot catch. The pattern id is immaterial to the path predicate (isolated here).
+    [InlineData("project/tests/urls.py")]     // Django test URLconf — `tests/` dir segment
+    [InlineData("app/handlers_test.go")]      // Go unit-test file suffix `_test.`
+    [InlineData("spec/routing_spec.rb")]      // Rails/RSpec — `spec/` dir + `_spec.` suffix
+    [InlineData("src/test/java/App.java")]    // Java Maven `src/test/**` tree
+    public void StructuralRouteFactAdapter_TryReadBackendRoute_RejectsRouteInTestPath(string path)
+    {
+        var fact = Fact(
+            "sf-route-in-test", "express.route.v1", "typescript", path, string.Empty, 100,
+            new Dictionary<string, string> { ["normalized_route_template"] = "/api/users", ["verb"] = "GET" });
+
+        Assert.False(
+            StructuralRouteFactAdapter.TryReadBackendRoute(fact, new Dictionary<string, SymbolDetail>(), out _),
+            $"a route fact at test path '{path}' must be excluded from bridging");
+    }
+
+    [Theory]
+    // Production paths that only LOOK test-like — the segment/suffix check must be boundary-anchored so it never
+    // over-excludes a real route file (poisoning production bridging is worse than a missed test exclusion).
+    [InlineData("app/latest/routes.py")]      // "latest" is not the "test" segment
+    [InlineData("src/contest/api.go")]        // "contest" does not start with "test/"
+    [InlineData("web/greatest.py")]           // "greatest" carries no `_test.`/`.test.` marker
+    public void StructuralRouteFactAdapter_TryReadBackendRoute_KeepsRouteInTestLookalikePath(string path)
+    {
+        var fact = Fact(
+            "sf-route-lookalike", "express.route.v1", "typescript", path, string.Empty, 100,
+            new Dictionary<string, string> { ["normalized_route_template"] = "/api/users", ["verb"] = "GET" });
+
+        Assert.True(
+            StructuralRouteFactAdapter.TryReadBackendRoute(fact, new Dictionary<string, SymbolDetail>(), out _),
+            $"a production route fact at test-lookalike path '{path}' must still bridge");
+    }
+
+    [Theory]
     [InlineData("express.router_mount.v1")]
     [InlineData("rails.resource_route.v1")]
     [InlineData("rails.mount.v1")]
