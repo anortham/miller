@@ -178,8 +178,8 @@ Run `workspace onboarding` early for telemetry-derived guidance about THIS repo.
 **Approach:** Fire when `shown.Length > 0 && !targetSymbol.IsTest`; the hint renders after the references block (and after any truncation note). Empty-refs path keeps its existing next_actions untouched.
 
 **Acceptance criteria:**
-- [ ] Hint present on non-empty refs for non-test targets; absent for test targets and empty results. JSON unchanged.
-- [ ] Worker scope green (`--filter "FullyQualifiedName~TraceToolTests"`), committed.
+- [x] Hint present on non-empty refs for non-test targets; absent for test targets and empty results. JSON unchanged.
+- [x] Worker scope green (`--filter "FullyQualifiedName~TraceToolTests"`), committed.
 
 ### Task 5: ServerInstructions discovery core + core gates
 
