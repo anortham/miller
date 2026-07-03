@@ -592,6 +592,12 @@ public sealed class TraceTool
                 sb.Append("  ").Append(ReferenceLine(index, reference)).Append('\n');
             if (resultNote is not null)
                 sb.Append(resultNote).Append('\n');
+            // Delivery-time nudge: a non-empty ref set is a "who uses this?" answer, so the natural next move
+            // before touching the symbol is an impact check. Suppress for test targets (editing a test has no
+            // downstream blast radius worth an impact pass) and for the empty path (handled above). JSON returns
+            // earlier, so this compact-only line never perturbs structured output.
+            if (!targetSymbol.IsTest)
+                sb.Append(NextStepHint.Render($"impact target=\"{targetSymbol.Name}\"", "before editing")).Append('\n');
         }
 
         return sb.ToString().TrimEnd('\n');

@@ -928,6 +928,130 @@ public sealed class TraceToolTests
         Assert.Equal("auto", actions[1].GetProperty("args").GetProperty("mode").GetString());
     }
 
+    [Fact]
+    public void Refs_NonEmpty_AppendsImpactNudge_ForNonTestTarget()
+    {
+        var index = BuildSymbolIndex(
+            new[]
+            {
+                ("a", "Alpha", "method", "src/A.cs", 1),
+                ("caller", "CallerMethod", "method", "src/Caller.cs", 5),
+            },
+            Array.Empty<(string, string)>());
+        var references = new[]
+        {
+            new SymbolRef("Alpha", "call", "src/Caller.cs", 10, "caller"),
+        };
+
+        string outp = TraceTool.Run(index, ResolverFor(index),
+            target: "Alpha", scope: null, mode: "refs", to: null, depth: 3, limit: 20,
+            fullFormat: false, json: false, referenceKind: null, includeDefinition: true,
+            readReferences: _ => references,
+            out int emitted, out _);
+
+        Assert.Equal(1, emitted);
+        Assert.Contains("references:", outp, StringComparison.Ordinal);
+        // The nudge fires after the references block, uses the resolved target name, and is the final line.
+        Assert.EndsWith("next: impact target=\"Alpha\" — before editing", outp, StringComparison.Ordinal);
+        // Exactly one hint line.
+        Assert.Equal(1, outp.Split('\n').Count(line => line.StartsWith("next:", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void Refs_NonEmpty_TruncationNote_KeepsImpactNudgeAsFinalLine()
+    {
+        var index = BuildSymbolIndex(
+            new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
+            Array.Empty<(string, string)>());
+        var references = new[]
+        {
+            new SymbolRef("Alpha", "call", "src/One.cs", 10, null),
+            new SymbolRef("Alpha", "call", "src/Two.cs", 20, null),
+        };
+
+        string outp = TraceTool.Run(index, ResolverFor(index),
+            target: "Alpha", scope: null, mode: "refs", to: null, depth: 3, limit: 1,
+            fullFormat: false, json: false, referenceKind: null, includeDefinition: false,
+            readReferences: _ => references,
+            out int emitted, out _);
+
+        Assert.Equal(1, emitted);
+        Assert.Contains("reference trace truncated by limit.", outp, StringComparison.Ordinal);
+        // The nudge renders AFTER the truncation note.
+        Assert.EndsWith("next: impact target=\"Alpha\" — before editing", outp, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Refs_NonEmpty_TestTarget_SuppressesImpactNudge()
+    {
+        var indexed = new[]
+        {
+            new IndexedSymbol(
+                DocId: 0, SymbolId: "a", Name: "AlphaTests", Signature: "method AlphaTests()",
+                Kind: "method", Language: "csharp", FilePath: "tests/A.cs", StartLine: 1, EndLine: 1,
+                ParentId: null, IsTest: true),
+        };
+        var index = MillerRepositoryIndex.Build(indexed, Array.Empty<GraphEdge>());
+        var references = new[]
+        {
+            new SymbolRef("AlphaTests", "call", "tests/Caller.cs", 10, null),
+        };
+
+        string outp = TraceTool.Run(index, ResolverFor(index),
+            target: "AlphaTests", scope: null, mode: "refs", to: null, depth: 3, limit: 20,
+            fullFormat: false, json: false, referenceKind: null, includeDefinition: true,
+            readReferences: _ => references,
+            out int emitted, out _);
+
+        Assert.Equal(1, emitted);
+        Assert.Contains("references:", outp, StringComparison.Ordinal);
+        Assert.DoesNotContain("next:", outp, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Refs_Empty_HasNoImpactNudge()
+    {
+        var index = BuildSymbolIndex(
+            new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
+            Array.Empty<(string, string)>());
+
+        string outp = TraceTool.Run(index, ResolverFor(index),
+            target: "Alpha", scope: null, mode: "refs", to: null, depth: 3, limit: 20,
+            fullFormat: false, json: false, referenceKind: null, includeDefinition: true,
+            readReferences: _ => Array.Empty<SymbolRef>(),
+            out int emitted, out _);
+
+        Assert.Equal(0, emitted);
+        // The empty-refs path keeps its existing recovery hint / next_actions; no impact nudge.
+        Assert.DoesNotContain("next: impact", outp, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Refs_NonEmpty_Json_HasNoImpactNudge()
+    {
+        var index = BuildSymbolIndex(
+            new[]
+            {
+                ("a", "Alpha", "method", "src/A.cs", 1),
+                ("caller", "CallerMethod", "method", "src/Caller.cs", 5),
+            },
+            Array.Empty<(string, string)>());
+        var references = new[]
+        {
+            new SymbolRef("Alpha", "call", "src/Caller.cs", 10, "caller"),
+        };
+
+        string json = TraceTool.Run(index, ResolverFor(index),
+            target: "Alpha", scope: null, mode: "refs", to: null, depth: 3, limit: 20,
+            fullFormat: false, json: true, referenceKind: null, includeDefinition: true,
+            readReferences: _ => references,
+            out int emitted, out _);
+
+        Assert.Equal(1, emitted);
+        using var doc = JsonDocument.Parse(json); // still well-formed JSON
+        Assert.DoesNotContain("next: impact", json, StringComparison.Ordinal);
+    }
+
     // ---------- mode: bridge ----------
 
     [Fact]
