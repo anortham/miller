@@ -142,8 +142,8 @@ Run `workspace onboarding` early for telemetry-derived guidance about THIS repo.
 **Approach:** Fire only in symbol/auto modes with ≥1 symbol hit; suppress when the top hit is a file match, any text/content mode, markers mode, or empty results (failure path owns those). Escape the name as `context`'s `NextInspectLine` does. One line max — if a banner/rescue section already closes the output, hint goes last.
 
 **Acceptance criteria:**
-- [ ] Hint appears with real top-hit name in symbol/auto success; absent in content/source/markers/file-match/empty cases. JSON unchanged.
-- [ ] Worker scope green (`--filter "FullyQualifiedName~SearchToolTests"`), committed.
+- [x] Hint appears with real top-hit name in symbol/auto success; absent in content/source/markers/file-match/empty cases. JSON unchanged.
+- [x] Worker scope green (`--filter "FullyQualifiedName~SearchToolTests"`), committed.
 
 ### Task 3: inspect impact nudge
 
