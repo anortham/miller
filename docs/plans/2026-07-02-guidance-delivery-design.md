@@ -3,6 +3,11 @@
 **Date:** 2026-07-02
 **Status:** Approved design, pre-implementation (companion implementation plan to follow)
 **Problem owner:** Miller MCP server (`src/Miller.Server`)
+**External review:** Codex adversarial design review 2026-07-02 — verdict needs-attention,
+4 findings (2 high, 2 medium), all accepted and folded in: §1 reframed around Tool Search
+deferral (descriptions cannot carry discovery), §2 delivery matrix + accepted-loss statement
+for non-plugin installs, §4 total-schema gate + golden-content assertions, per-tool description
+budget overrides with `trace` as the drafted-first stress case.
 
 ## Problem
 
@@ -61,16 +66,35 @@ must also arrive at decision time (see Nudges).
 
 ### 1. Channel contract
 
-Guidance lives in exactly three verifiable channels:
+*(Revised 2026-07-02 after adversarial review — Codex finding 1: Claude Code defers tool
+descriptions when Tool Search is enabled (the default) — only tool NAMES and ServerInstructions
+load at session start. Descriptions therefore cannot carry tool DISCOVERY; verified live in the
+session that produced this design, where Miller's schemas arrived deferred.)*
 
-**(i) Tool descriptions — the routing contracts.** Each of the nine `[McpServerTool]`
-`[Description]`s is rewritten to be self-sufficient: one clause of what-it-does, *when to reach
-for it*, *when NOT to* (naming the tool to prefer instead), and one copyable example call.
-≤900 chars each (existing guard). Parameter descriptions stay ≤250 chars. A description must
-make sense to an agent that has received **no** ServerInstructions at all.
+Guidance lives in three verifiable channels with distinct jobs:
 
-**(ii) ServerInstructions — the ≤1,900-char core.** Rewritten top-down by importance so that
-truncation at any point after the Rules still leaves a coherent block:
+**(i) ServerInstructions — the DISCOVERY contract (≤1,900-char core).** The only
+guaranteed-at-session-start prose. Its routing table is the load-bearing artifact of this whole
+design: one line per tool saying when to reach for it, so an agent knows the tool exists before
+any schema is loaded. Rewritten top-down by importance so truncation at any point after the
+Rules still leaves a coherent block (degrades gracefully even if the shared budget delivers
+only ~500 chars):
+
+**(ii) Tool descriptions — the POST-DISCOVERY usage contracts.** Each of the nine
+`[McpServerTool]` `[Description]`s is rewritten to be self-sufficient for correct USE once
+loaded: one clause of what-it-does, when to reach for it, *when NOT to* (naming the tool to
+prefer instead), and one copyable example call. Default budget ≤900 chars; a per-tool override
+up to 1,500 chars is allowed where justified (`trace` is the known stress case — already at
+894 chars today with no example and no when-not-to clause; client-side cap is 2KB/description).
+Parameter descriptions stay ≤250 chars. **The implementation plan must contain the final
+drafted text of all nine descriptions** (golden content), with golden-content assertions for
+load-bearing clauses — marker-only checks are insufficient (Codex finding 4).
+Additionally, a TOTAL schema budget is gated, not just per-field caps: the serialized
+description+parameter text across all nine tools must stay ≤9,000 chars, with the measured
+before (4,512 chars today) and after recorded in the implementation plan (Codex finding 3 —
+in upfront-loading modes the whole schema competes for context).
+
+The ServerInstructions core layout:
 
 1. Identity line (1 line).
 2. The six behavioral rules, compressed (~700 chars).
@@ -81,11 +105,33 @@ Hard cap 1,900 chars after CRLF normalization (safety margin under the observed 
 delivery). **Nothing ships in the embedded doc beyond this core.** The old `## Workflows` and
 `## Subagent Dispatching` sections (~10k chars) are deleted from the embedded resource.
 
-**(iii) Delivery-time nudges — the adoption lever.** See §3.
+**(iii) Delivery-time nudges — the adoption lever.** See §3. Note these fire only after a tool
+is already in use — they reinforce cross-tool routing but cannot bootstrap discovery; that is
+the core's job.
 
-### 2. Tail relocation
+### 2. Tail relocation — with an explicit delivery matrix
 
-Content from the deleted tail moves to channels with verifiable delivery:
+*(Revised after adversarial review — Codex finding 2: plugin skills reach ONLY the Claude
+Code/Cursor/Codex plugin install paths; the README's manual-archive and source-checkout installs
+get no skills, and no OpenCode manifest exists. The original draft overclaimed delivery.)*
+
+Who receives what, by install path:
+
+| Install path | Core (ServerInstructions) | Tool descriptions | Nudges | Skills |
+|---|---|---|---|---|
+| Claude Code plugin | yes (subject to shared 4KB) | yes (deferred/upfront) | yes | yes |
+| Cursor / Codex plugin | yes (client-dependent limits) | yes | yes | yes |
+| Manual archive / raw MCP config | yes (client-dependent) | yes | yes | **no** |
+| Source checkout (`dotnet run`) | yes | yes | yes | **no** |
+
+**Accepted loss, stated plainly:** non-plugin installs lose the long-form workflow guidance
+they nominally receive today (on Claude Code they never actually received it — it was cut at
+2KB — but other clients may deliver the full 12k doc). Mitigation: the relocated content also
+lands in the repo docs (`docs/`, linked from README), and the core's closing line points at
+`workspace onboarding`, which is delivered via the tool channel on every install path.
+The design does NOT claim OpenCode skill delivery.
+
+Content from the deleted tail moves to:
 
 - Workflow guidance (explore-an-area, impact-before-edit, refs/path tracing, marker audits,
   cross-workspace, editing discipline) merges into the **existing** plugin-bundled skills
@@ -130,13 +176,15 @@ tool knows its result shape.
 1. `AgentInstructions.Load()` length ≤ **1,900** chars after `\r\n` normalization.
 2. Every tool name appears in the core with routing language (structural: the routing table
    contains one line per registered tool — enumerate via reflection like today's tests).
-3. Every `[McpServerTool]` `[Description]` is ≤900 chars **and** contains a when-to-use marker
-   (structural check: contains "Use " or equivalent routing phrase — exact predicate decided in
-   the implementation plan) **and** contains a when-not-to/alternative clause for the seven
-   tools cut by the 2KB window (context, trace, impact, edit, patterns, content, workspace).
+3. Every `[McpServerTool]` `[Description]` is within its per-tool budget (default 900 chars,
+   documented overrides up to 1,500) **and** matches golden-content assertions for its
+   load-bearing clauses (when-to-use, when-not-to/alternative for the seven cut tools, example
+   call) — marker-only "contains Use" checks are explicitly rejected as vacuous.
 4. Parameter descriptions ≤250 chars (existing).
-5. Hint format guard through the shared formatter.
-6. The constant `MaxServerInstructionsChars = 12_000` and the test name
+5. **Total schema budget:** the concatenated description + parameter-description text across
+   all nine tools ≤9,000 chars, with before (4,512) and after measured and recorded.
+6. Hint format guard through the shared formatter.
+7. The constant `MaxServerInstructionsChars = 12_000` and the test name
    `Load_StaysUnderClaudeCodeInstructionBudget` are removed (the new name states the real
    contract, e.g. `Load_CoreFitsClaudeCodeDeliveryWindow`).
 
@@ -150,10 +198,12 @@ tool knows its result shape.
 
 ### 6. Cross-harness posture
 
-Codex/Cursor/OpenCode receive identical tool descriptions and the same plugin skills; repo-level
-guidance continues to ship via CLAUDE.md → AGENTS.md mirroring. No harness-specific branches.
-The ServerInstructions core is written for the harshest known client (Claude Code); clients with
-bigger budgets simply get the same tight core — by design, not by accident.
+All MCP clients receive identical tool descriptions and the same ServerInstructions core;
+Claude Code/Cursor/Codex plugin installs additionally receive the skills (see the §2 delivery
+matrix — OpenCode and raw-MCP installs do not). Repo-level guidance continues to ship via
+CLAUDE.md → AGENTS.md mirroring. No harness-specific branches. The core is written for the
+harshest known client (Claude Code, shared 4KB budget); clients with bigger budgets simply get
+the same tight core — by design, not by accident.
 
 ### 7. Durable decision record
 
@@ -166,8 +216,11 @@ bigger budgets simply get the same tight core — by design, not by accident.
 
 ## Acceptance criteria (design-level)
 
-- [ ] A Claude Code agent receiving ONLY tool descriptions (zero ServerInstructions) has, for
-      every tool, enough routing guidance to know when to use it and when not to.
+- [ ] Discovery: the ≤1,900-char core alone (no descriptions loaded) tells an agent that all
+      nine tools exist and when to reach for each. Usage: each description alone (no
+      ServerInstructions delivered) is sufficient for correct use of its tool once loaded.
+- [ ] The implementation plan contains the final text of all nine descriptions and the core;
+      total schema budget measured before/after and ≤9,000 chars.
 - [ ] `AgentInstructions.Load()` ≤1,900 chars normalized; every tool named in the routing table;
       gates enumerated in §4 all enforced by `AgentInstructionsTests`.
 - [ ] Embedded doc contains no content beyond the core; Workflows/dispatch content relocated to
