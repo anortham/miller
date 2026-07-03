@@ -13,6 +13,8 @@ Use Miller's indexed context before raw file reads. The goal is to identify the 
 ## Workflow
 
 1. If the workspace may be stale, run `workspace(operation="status")`; use `workspace(operation="refresh")` when needed.
+   When you are starting fresh in an already-indexed repo, run `workspace(operation="onboarding")` first — it
+   summarizes local telemetry into starter guidance for this repo.
 2. For unfamiliar task-shaped work, start with:
 
 ```text

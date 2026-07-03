@@ -22,10 +22,15 @@ inspect(target="<candidate>")
 2. Run exactly one impact seed:
 
 ```text
+impact()
 impact(target="<symbol-or-file>")
 impact(changed_paths=["<file1>", "<file2>"])
 impact(diff="<unified diff>")
 ```
+
+With no args, `impact()` reads the working-tree git diff and maps changed ranges to impacted symbols plus likely
+tests — run it after edits, before committing, to see what your uncommitted change affects. Use `git=true`
+(`base`/`staged` imply git) to scope to a specific git diff instead.
 
 3. Inspect or trace only the risky results:
 

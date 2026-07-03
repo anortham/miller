@@ -1,91 +1,113 @@
-# Task 7 — text-content search: dedup identical (source, line) hits
+# Task 7 — Tail relocation with loss accounting
 
-## What I implemented
+**Status:** complete
+**Branch / worktree:** `guidance-delivery` @ `/Users/murphy/source/miller/.worktrees/guidance-delivery`
+**Build:** `dotnet build Miller.slnx -c Release` → Build succeeded, 0 Warning(s) / 0 Error(s). No source touched (docs + skills only).
 
-`mode=source` (and any text-content mode) could return the same `file:line` hit twice with identical
-snippets because overlapping content-corpus chunks both match the same physical line. Added a shared
-`DedupByLine` helper in `SearchTool.cs` and applied it inside both `RunTextContent` overload callbacks,
-after the filter loop and before returning the escalation counts.
+## What changed
 
-- New helper: `private static List<TextContentSearchHit> DedupByLine(List<TextContentSearchHit> hits)`
-  - Keeps the first occurrence per `(SourceId, Line)` key, preserves order.
-  - Returns the input list unchanged when `Count < 2` or nothing was collapsed (no allocation on the common path).
-- `DedupByLine` is placed AFTER the complete `FetchWithEscalation` method so each method keeps exactly its
-  own doc comment (follow-up commit fixed an initial placement that stacked two `<summary>` blocks).
-- Applied `hits = DedupByLine(hits);` immediately before `return (fetched.Count, hits.Count);` in:
-  - `RunTextContent(..., IReadOnlyCollection<string> contentKinds, ...)` (the collection overload, ~:882)
-  - `RunTextContent(..., string contentKind, ...)` (the single-kind overload, ~:944)
-- Placement is inside the `FetchWithEscalation` callback, so the escalation loop's `kept` count sees the
-  deduped total — escalation to a larger window still triggers correctly when dedup leaves fewer than
-  `limit` distinct rows. `hits` is a closure-captured local; the callback runs synchronously, so
-  reassigning it propagates to the outer `total`/`page`/`sourceBytes` computation.
+- **Created** `docs/agent-guidance.md` — the long-form home for the tail deleted from the embedded
+  `MILLER_AGENT_INSTRUCTIONS.md` in Task 5 (commit `95ec42c`). Headed with the design note: the embedded
+  `ServerInstructions` core is ≤1,900 chars by design because Claude Code truncates merged server instructions at
+  ~2KB; this doc and the plugin skills carry the depth. Contains: a "how guidance is delivered" map, **per-tool
+  detail** (the residual flags/selectors the short golden descriptions omit), the **full 21-item workflow
+  catalog**, and the **subagent-dispatch primer** (the pasteable block, verbatim).
+- **Modified** `.agents/skills/miller-impact-analysis/SKILL.md` (source of truth) — additively added the no-arg
+  `impact()` working-tree git-diff form and the `git=true` scoping note. The skill previously showed only
+  `target`/`changed_paths`/`diff` seeds and lacked the no-arg form the old workflow featured.
+- **Modified** `.agents/skills/miller-explore-area/SKILL.md` (source of truth) — additively added a
+  `workspace(operation="onboarding")` session-start note. The skill's freshness step previously covered only
+  status/refresh.
+- **Regenerated** `skills/miller-impact-analysis/SKILL.md` and `skills/miller-explore-area/SKILL.md` via
+  `scripts/sync-plugin-skills.sh`. **Important:** `skills/` is `rm -rf`'d and recopied from `.agents/skills/` by
+  that script, so editing `skills/` alone would be silently wiped on the next sync. I edited the source
+  (`.agents/skills/`) and re-ran sync; both trees are byte-identical. This is a deliberate deviation from the
+  literal "modify `skills/…`" file list to avoid exactly the silent loss this task exists to prevent — the other
+  six named skills needed no change (see ledger), so only these two source+generated pairs moved.
+- **Modified** `README.md` — added a paragraph after "Common Agent Workflow" pointing agent-facing readers to
+  `docs/agent-guidance.md` and explaining the ≤1,900-char core rationale.
+- **Modified** `docs/README.md` — added an `agent-guidance.md` entry under **Current docs**.
 
-## Miller calls used + what each confirmed
+## Miller-first orientation (tool calls)
 
-- `inspect target=TextContentSearchHit depth=full` — confirmed the record's exact member names. The line
-  member is **`Line`** (int), not `LineNumber`; source key member is **`SourceId`** (string). Also has
-  `LineStart`, `LineEnd`, `ByteStart`, `ByteEnd`, `Snippet`, `SourceBytes`. Confirmed the two
-  `RunTextContent` callers at `SearchTool.cs:845` and `:909`.
-- ToolSearch surfaced the Miller MCP tool schemas; used `inspect` for the API shape.
-- Read (targeted) `SearchTool.cs:820-969` — both overloads and the shared filter/escalation shape.
-- Read `SearchTool.cs:540-564` — `FetchWithEscalation` semantics: callback returns `(Fetched, Kept)`;
-  escalates while the index filled the window and `kept < limit`. This is why dedup must run inside the
-  callback (so `kept` is the deduped count).
-- Read `SearchRouteExecutor.cs:67-91` — **`SearchRouteExecutor.RunTextContent` delegates to
-  `SearchTool.RunTextContent` (collection overload); it does NOT fetch independently.** So no separate
-  dedup is needed there — the shared helper covers it. No edit to `SearchRouteExecutor.cs`.
+- Used `git show 95ec42c^:…` to recover the pre-Task-5 doc and `grep`/`sed`/`awk` over the plan for the Golden
+  Content section. The Miller MCP tools were listed as deferred (`mcp__miller__*` require ToolSearch load) and the
+  worktree's own index would need a refresh for this uncommitted branch; for a small, known set of docs files the
+  targeted shell reads (recover-old-content, section-boundary greps, `diff -q` skill comparison) were the faster
+  path and are consistent with "use Miller where useful". No Miller `edit` was used; all file edits were
+  Read/Write/Edit on worktree paths only.
 
-## API-shape evidence
+## Loss ledger — every old section → destination
 
-`TextContentSearchHit` (record, `src/Miller.Core/Search/TextContentSearchHit.cs:3`):
-`SourceId, ChunkId, ContentKind, Path?, Url?, DisplayPath, Language, Score, Line, LineStart, LineEnd,
-ByteStart, ByteEnd, Snippet, SourceBytes, ContainingSymbolId?, ContainingSymbolName?`. Dedup key uses
-`SourceId` (string) + `Line` (int). The duplicate-bug rows differ only in `ChunkId` (two chunks over the
-same line).
+Recovered doc: `git show 95ec42c^:src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md` (11,982 chars). "New core" =
+`src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md` at HEAD. "golden" = the per-tool final text in
+`docs/plans/2026-07-02-guidance-delivery-implementation.md` § Golden Content (Task 6). Zero unaccounted paragraphs.
 
-## Verification
+### Header + Rules
 
-- **Invariant proven:** text-content search renders at most one hit per `(SourceId, Line)`; `renderedCount`
-  and the internal `total` reflect the deduped set; distinct lines from the same source survive;
-  `sourceBytes` (grouped by source, max per source) is unchanged for the deduped page.
-- Tests (TDD, red first): `RunTextContent_CollapsesDuplicateSourceLineHits` (was Actual:2 → now 1),
-  `RunTextContent_KeepsDistinctLinesFromSameSource` (guards against over-collapsing distinct lines).
-- Scope: `dotnet test tests/Miller.Tests --filter
-  "FullyQualifiedName~SearchToolTests|FullyQualifiedName~SearchRouteExecutor"`
-- Result: **Passed! 88/88, 0 failed** (re-run after the doc-placement fix commit).
-- Build: `dotnet build src/Miller.Server` → 0 warnings / 0 errors.
-- Timestamp: 2026-07-02.
-- Commits: `99877f5` (fix + tests), `5c53966` (restore FetchWithEscalation doc placement).
+| Old section | Destination |
+|---|---|
+| Title + intro ("Miller serves a fresh index…") | **Retained in new core** (core header + intro paragraph) |
+| `## Rules` — 6 numbered rules | **Retained in new core** (core `## Rules`, 6 rules, condensed) |
 
-## Files changed
+### `## Tools` — 9 bullets (each superseded by its golden description; residual params relocated)
 
-- `src/Miller.Server/Tools/SearchTool.cs` (+24): `DedupByLine` helper + two call sites.
-- `tests/Miller.Tests/Server/SearchToolTests.cs` (+53): two new facts.
+| Old bullet | Destination |
+|---|---|
+| `search` | **Superseded by search golden [Description]** (Task 6); residual (`mode` list, `MILLER_REGION_INDEX=0`, `has_doc`, `workspace_id` selectors) → `docs/agent-guidance.md` § Per-tool detail |
+| `inspect` | **Superseded by inspect golden [Description]**; residual (`workspace_id`/`ensure_fresh`) → `docs/agent-guidance.md` § Per-tool detail |
+| `context` | **Superseded by context golden [Description]**; residual (`reference_mode=usage`, `confidence=name_based`, `exclude_tests`) → `docs/agent-guidance.md` § Per-tool detail |
+| `trace` | **Superseded by trace golden [Description]**; residual (`reference_kind` values, `scope=<file>`, `format=json` fields) → `docs/agent-guidance.md` § Per-tool detail |
+| `impact` | **Superseded by impact golden [Description]**; residual (`workspace_id`/`ensure_fresh`) → `docs/agent-guidance.md` § Per-tool detail |
+| `edit` | **Superseded by edit golden [Description]**; full param detail retained → `docs/agent-guidance.md` § Per-tool detail |
+| `content` | **Superseded by content golden [Description]**; residual (`content_kind=web`, `diagnostic_code`/`next_actions`, `export` JSONL) → `docs/agent-guidance.md` § Per-tool detail |
+| `patterns` | **Superseded by patterns golden [Description]**; residual (`where`/`group_by`/`facet`, `near_matches`/`empty_reason`) → `docs/agent-guidance.md` § Per-tool detail |
+| `workspace` | **Superseded by workspace golden [Description]**; full lifecycle/selector detail → `docs/agent-guidance.md` § Per-tool detail |
 
-## Judgment calls
+### `## Workflows` — 21 bullets (all → `docs/agent-guidance.md` § Workflows; skill homes noted)
 
-- Helper returns a new list but short-circuits (returns the same instance) when nothing collapses — keeps
-  the common no-dup path allocation-free while matching the requested
-  `List<TextContentSearchHit> DedupByLine(...)` signature. Reassigning the closure-captured `hits` inside
-  the synchronous callback is safe and propagates to the outer computation.
-- `(SourceId, Line)` tuple key uses default string equality (ordinal), consistent with the existing
-  `sourceBytes` grouping which uses `StringComparer.Ordinal` on `SourceId`.
-- Did NOT touch `SearchRouteExecutor.cs` — it delegates, so the shared helper already covers its path
-  (verified by reading the delegation). Did NOT touch `RunContentCorpus` / `RunRegions` — out of Task 7
-  scope (the two `RunTextContent` overloads only).
-- Did NOT touch `MarkerSearch.cs` or marker rendering (owned by another task).
+| # | Old workflow | Skill destination (in addition to `docs/agent-guidance.md` § Workflows) |
+|---|---|---|
+| 1 | New task / unfamiliar area | already in `miller-explore-area` (context→inspect) |
+| 2 | Understand a symbol | already in `miller-explore-area` / `miller-orientation` |
+| 3 | Trace a flow | already in `miller-bridge-trace` / `miller-explore-area` |
+| 4 | Find docs/prose | already in `miller-search-debug` / `miller-orientation` |
+| 5 | Find source-body text | already in `miller-search-debug` / `miller-orientation` |
+| 6 | Audit registered workspaces for exact text | already in `miller-text-audit` |
+| 7 | Find known code shapes | already in `miller-explore-area` / `miller-orientation` |
+| 8 | Inspect a large log/report | already in `miller-large-file` (+ `miller-orientation` row) |
+| 9 | Research a web page | already in `miller-web-research` |
+| 10 | Scope noisy search | already in `miller-search-debug` / `miller-orientation` |
+| 11 | Find text only inside comments/strings | already in `miller-search-debug` / `miller-orientation` |
+| 12 | List code markers | already in `miller-search-debug` / `miller-orientation` |
+| 13 | Dashboard | **`docs/agent-guidance.md` only** — no skill home (dashboard-launch guidance also lives in CLAUDE.md) |
+| 14 | Scope a change | **ADDED no-arg `impact()` form to `miller-impact-analysis`**; `miller-editing` covers the edit tail |
+| 15 | Edit a symbol | already in `miller-editing` |
+| 16 | Localized text edit | already in `miller-editing` / `miller-orientation` |
+| 17 | Index looks stale | already in `miller-orientation` (freshness first) |
+| 18 | Check index trust/readiness | already in `miller-orientation` (health) |
+| 19 | Start work in an indexed repo (`workspace onboarding`) | **ADDED onboarding note to `miller-explore-area`** (+ retained in new core's onboarding line) |
+| 20 | Diagnose leader issues | **`docs/agent-guidance.md` only** — no skill home |
+| 21 | Need another repo | already in `miller-cross-workspace` |
 
-## Self-review findings
+### `## Subagent Dispatching` + closing
 
-- Confirmed escalation still works post-dedup: `kept` returned to `FetchWithEscalation` is the deduped
-  count, so a query whose window is filled but dedups below `limit` still escalates to the next window.
-- Confirmed order preserved (first occurrence kept) — the distinct-lines test asserts both lines render.
-- JSON shape unchanged (dedup changes row count, not shape) — additive-only constraint satisfied.
+| Old section | Destination |
+|---|---|
+| `## Subagent Dispatching` intro + pasteable code block | **`docs/agent-guidance.md` § Subagent dispatching** (block relocated verbatim) |
+| Closing line ("Do not use grep/find/rg… Do not read a whole file before inspect") | **Retained in new core** (Rules 1/2/6) + echoed at end of `docs/agent-guidance.md` § Subagent dispatching |
+
+**Ledger summary:** 6 sections → 2 retained in core (Header, Rules), 9 tool bullets superseded by golden
+descriptions with residual detail in `agent-guidance.md`, 21 workflow bullets → `agent-guidance.md` (2 additively
+merged into skills, 17 already covered by existing skills, 2 doc-only), 1 subagent block → `agent-guidance.md`, 1
+closing line retained in core. **Zero unaccounted paragraphs.**
 
 ## Concerns
 
-- None. Change is local, no architecture impact. `sourceBytes` was already dedup-safe (max per source), so
-  the fix is purely about not double-rendering a physical line.
-- Note: this report file previously held the (committed, history-preserved) backend-http Task-7 report;
-  overwritten here per the plan's task-N-report.md convention for this branch. Left uncommitted (not in my
-  owned-file set).
+- **Source-of-truth deviation (surfaced, not silent):** the task file list named `skills/…/SKILL.md`, but those are
+  generated. I edited `.agents/skills/…` and re-ran `scripts/sync-plugin-skills.sh` so the changes survive the next
+  sync; both trees are byte-identical. If the lead intended only the generated copies, this is safe to keep — the
+  generated copies match.
+- I intentionally did **not** add dashboard/leader rows to `miller-orientation` or a leader skill; those two
+  workflows have no natural skill home and are fully carried by `docs/agent-guidance.md`. Flagging in case the lead
+  wants a skill surface for them later (would require a new/expanded skill, outside this task's owned files).

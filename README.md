@@ -94,6 +94,11 @@ For model or harness switches, the plugin also ships `handoff-out` and `handoff-
 Miller tools plus local git state to write and validate markdown packets under `.miller/handoffs/`; they are not
 new MCP tools or CLI commands, and the packets stay local unless you explicitly share them.
 
+Miller's embedded MCP server instructions are kept to a ~1,900-character discovery core on purpose (Claude Code
+truncates merged server instructions at roughly 2KB). The full workflow catalog, the subagent-dispatch primer, and
+per-tool parameter detail live in [`docs/agent-guidance.md`](docs/agent-guidance.md); plugin users also get the
+same depth through the `miller-*` skills.
+
 ### Manual Binary Install
 
 Use this path when your MCP client does not use Miller's plugin package.
