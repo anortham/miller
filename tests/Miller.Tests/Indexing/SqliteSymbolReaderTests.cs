@@ -130,8 +130,11 @@ public sealed class SqliteSymbolReaderTests
     public void Read_IsTest_FromTypedColumn_IsCrossLanguage()
     {
         // v1 promotes the cross-language test signal to a typed symbols.is_test column (INTEGER NOT NULL).
-        // Miller reads it directly (no metadata JSON parse). Verified across go/python/csharp positives + a
-        // negative; the old JSON substring-trap/malformed cases are gone with ParseTestSignals (D4).
+        // Miller reads it directly (no metadata JSON parse). Verified across go/python/csharp/rust positives +
+        // negatives; the old JSON substring-trap/malformed cases are gone with ParseTestSignals (D4). The rust
+        // rows pin CT revision-delta design §2: julie's test_detection.rs already flags #[test]/#[tokio::test]
+        // attributed functions is_test=1 (confirmed live against julie's own self-extract), and Miller's read
+        // layer is a verbatim, language-agnostic column read — no per-language branch exists to miss rust.
         using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
         {
             new JulieDbFixture.SymbolRow("a0000000000000000000000000000001", "TestAdd", "function", "go",
@@ -140,11 +143,21 @@ public sealed class SqliteSymbolReaderTests
                 "calc/test_calc.py", "def test_add()", 2, null) { IsTest = true },
             new JulieDbFixture.SymbolRow("a0000000000000000000000000000003", "Adds", "method", "csharp",
                 "Tests/CalcTests.cs", "public void Adds()", 9, null) { IsTest = true },
+            // rust: a plain #[test] fn and a #[tokio::test] async fn, both julie-flagged is_test=1.
+            new JulieDbFixture.SymbolRow("a0000000000000000000000000000004", "test_add_rejects_overflow",
+                "function", "rust", "crates/calc/src/tests/add_tests.rs",
+                "fn test_add_rejects_overflow()", 4, null) { IsTest = true },
+            new JulieDbFixture.SymbolRow("a0000000000000000000000000000005", "test_add_async_commits",
+                "function", "rust", "crates/calc/src/tests/add_tests.rs",
+                "async fn test_add_async_commits()", 11, null) { IsTest = true },
             // Non-test: column defaults to 0/false.
             new JulieDbFixture.SymbolRow("b0000000000000000000000000000001", "Add", "function", "go",
                 "math/add.go", "func Add(a, b int) int", 5, null),
             new JulieDbFixture.SymbolRow("b0000000000000000000000000000002", "helper", "function", "python",
                 "calc/util.py", "def helper()", 1, null) { IsTest = false },
+            // rust: a non-attributed helper living in the same test module — must stay false (not over-matched).
+            new JulieDbFixture.SymbolRow("b0000000000000000000000000000003", "make_fixture", "function", "rust",
+                "crates/calc/src/tests/add_tests.rs", "fn make_fixture() -> Calc", 20, null) { IsTest = false },
         });
 
         var symbols = SqliteSymbolReader.Read(fx.DbPath);
@@ -153,8 +166,11 @@ public sealed class SqliteSymbolReaderTests
         Assert.True(IsTestOf("TestAdd"), "go test → is_test column true");
         Assert.True(IsTestOf("test_add"), "python test → is_test column true");
         Assert.True(IsTestOf("Adds"), "csharp test → is_test column true");
+        Assert.True(IsTestOf("test_add_rejects_overflow"), "rust #[test] fn → is_test column true");
+        Assert.True(IsTestOf("test_add_async_commits"), "rust #[tokio::test] fn → is_test column true");
         Assert.False(IsTestOf("Add"), "default column 0 → not a test");
         Assert.False(IsTestOf("helper"), "explicit is_test=0 → not a test");
+        Assert.False(IsTestOf("make_fixture"), "rust non-attributed helper in a test module → not a test");
     }
 
     [Fact]

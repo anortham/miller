@@ -36,6 +36,8 @@ public sealed class IsTestPathTests
     [InlineData("lib/calculator_spec.rb")]   // _spec boundary (ruby/rspec)
     [InlineData("src/ParserSpec.scala")]     // PascalCase Spec suffix (scalatest)
     [InlineData("test/widget_test.dart")]    // _test boundary (dart)
+    [InlineData("crates/calc/src/parser_test.rs")]        // _test boundary (rust, file-per-test convention)
+    [InlineData("crates/calc/src/tests/add_tests.rs")]    // tests/ directory segment (rust, mod-tests convention)
     // Windows-style separators must classify identically (path is normalized).
     [InlineData(@"src\auth\tests\AuthHelper.cs")]
     public void IsTestPath_True_ForTestPaths(string path)

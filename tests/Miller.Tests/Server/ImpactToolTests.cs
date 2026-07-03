@@ -816,6 +816,105 @@ public sealed class ImpactToolTests
         Assert.Throws<ArgumentNullException>(() => new ImpactTool(null!));
     }
 
+    // ---- Rust cross-language classification (CT revision-delta design §2 / Task 3) ----
+    //
+    // julie's test_detection.rs flags rust #[test]/#[tokio::test] functions is_test=1 (verified live against
+    // julie's own self-extract: crates/julie-tools/src/tests/blast_radius_formatting_tests.rs and
+    // src/tests/tools/spillover_tests.rs both carry is_test=1 on every attributed fn). Miller's read layer
+    // (SqliteSymbolReader) and this partition (symbol.IsTest ? tests : impacted) are both a verbatim,
+    // language-agnostic column read/branch — there is no per-language gate to add. These fixtures pin that the
+    // existing chain already classifies rust correctly end-to-end (both the legacy Run path and Task 2's
+    // index-revision delta renderer), and that a non-attributed helper living in the same test module is not
+    // over-classified.
+    private const string RustParseConfigId = "20000000000000000000000000000001";
+    private const string RustTestId = "20000000000000000000000000000002";
+    private const string RustHelperId = "20000000000000000000000000000003";
+
+    // parse_config (production) ← test_parse_config_rejects_empty_input (a #[test] fn that calls it)
+    //                            ← make_fixture_config (a non-test helper in the same test file that calls it)
+    private static (MillerRepositoryIndex index, SmartTargetResolver resolver) BuildRustFixture()
+    {
+        var symbols = new List<IndexedSymbol>
+        {
+            new(0, RustParseConfigId, "parse_config", "fn parse_config(input: &str) -> Config", "function", "rust",
+                "crates/config/src/parser.rs", 10, 14, null, false),
+            new(1, RustTestId, "test_parse_config_rejects_empty_input",
+                "fn test_parse_config_rejects_empty_input()", "function", "rust",
+                "crates/config/src/tests/parser_tests.rs", 8, 12, null, IsTest: true),
+            new(2, RustHelperId, "make_fixture_config", "fn make_fixture_config() -> Config", "function", "rust",
+                "crates/config/src/tests/parser_tests.rs", 20, 24, null, false),
+        };
+        var edges = new[]
+        {
+            new GraphEdge(RustTestId, RustParseConfigId, "calls"),
+            new GraphEdge(RustHelperId, RustParseConfigId, "calls"),
+        };
+        var index = MillerRepositoryIndex.Build(symbols, edges);
+        return (index, new SmartTargetResolver(index));
+    }
+
+    [Fact]
+    public void Run_RustAttributedTestFunction_ReachedByGraph_ClassifiesAsTest_NonTestHelperExcluded()
+    {
+        var (index, resolver) = BuildRustFixture();
+
+        string output = ImpactTool.Run(index, resolver,
+            target: "parse_config", changedPaths: null, diff: null, maxDepth: 2, limit: 100, json: true,
+            out int impactedCount, out _);
+
+        using var doc = JsonDocument.Parse(output);
+        var root = doc.RootElement;
+
+        var testNames = root.GetProperty("tests").EnumerateArray()
+            .Select(e => e.GetProperty("name").GetString()).ToList();
+        var impactedNames = root.GetProperty("impacted").EnumerateArray()
+            .Select(e => e.GetProperty("name").GetString()).ToList();
+
+        Assert.Contains("test_parse_config_rejects_empty_input", testNames);
+        Assert.DoesNotContain("test_parse_config_rejects_empty_input", impactedNames);
+
+        // A non-attributed helper reached via the same edge shape must stay out of tests[].
+        Assert.Contains("make_fixture_config", impactedNames);
+        Assert.DoesNotContain("make_fixture_config", testNames);
+        Assert.Equal(1, impactedCount);
+
+        // Payload shape matches C#: name + file (kind/line/hop travel too, but name+file is the pinned minimum).
+        var testEntry = root.GetProperty("tests").EnumerateArray()
+            .Single(e => e.GetProperty("name").GetString() == "test_parse_config_rejects_empty_input");
+        Assert.Equal("crates/config/src/tests/parser_tests.rs", testEntry.GetProperty("file").GetString());
+    }
+
+    [Fact]
+    public void RenderIndexRevisionDelta_RustAttributedTestFunction_ClassifiesAsTest()
+    {
+        // Exercises Task 2's delta renderer directly — the SAME symbol.IsTest bit drives this path.
+        var (index, _) = BuildRustFixture();
+
+        string output = ImpactTool.RenderIndexRevisionDelta(
+            workspaceId: "current",
+            complete: true,
+            fromRevision: 1,
+            toRevision: 2,
+            changedPaths: new[] { "crates/config/src/parser.rs" },
+            index: index,
+            graph: index.Graph,
+            maxDepth: 2,
+            limit: 100,
+            json: true);
+
+        using var doc = JsonDocument.Parse(output);
+        var root = doc.RootElement;
+
+        var testNames = root.GetProperty("tests").EnumerateArray()
+            .Select(e => e.GetProperty("name").GetString()).ToList();
+        var impactedNames = root.GetProperty("impacted").EnumerateArray()
+            .Select(e => e.GetProperty("name").GetString()).ToList();
+
+        Assert.Contains("test_parse_config_rejects_empty_input", testNames);
+        Assert.Contains("make_fixture_config", impactedNames);
+        Assert.DoesNotContain("make_fixture_config", testNames);
+    }
+
     private sealed class RecordingGitDiffReader(params GitDiffResult[] results) : IGitDiffReader
     {
         private readonly Queue<GitDiffResult> _results = new(results);
