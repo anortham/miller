@@ -49,12 +49,13 @@ public sealed class EditTool
 
     [McpServerTool(Name = "edit")]
     [Description(
-        "Edit code with index awareness. Previews a diff by default and does NOT write; set apply=true to " +
-        "commit. Operations cover text replace, symbol body/signature rewrite, workspace-wide rename, insert, " +
-        "and doc add. replace_text can use match_mode plus query/anchor/line selectors to avoid full-file reads " +
-        "and returns match proof. If the index is stale for the target file, Miller first converges it automatically " +
-        "(briefly waiting when needed); the edit is refused only if that does not land — then re-index or " +
-        "pass allow_stale.")]
+        "Edit indexed code with proof: previews a diff and writes NOTHING by default; set apply=true to commit " +
+        "the change. Operations: replace_text (match_mode + query/anchor/line selectors avoid full-file reads; " +
+        "returns match proof), replace_symbol_body, replace_symbol_signature, rename_symbol (workspace-wide), " +
+        "insert_before/insert_after, add_doc. If the index is stale for the target file Miller converges it " +
+        "first; refused only if that fails (re-index or pass allow_stale). NOT for: creating new files (use your " +
+        "file tools) or bulk text audits (search mode=markers first). Example: edit operation=replace_text " +
+        "target=src/App.cs old_text=\"retries: 3\" new_text=\"retries: 5\".")]
     public string Edit(
         [Description("replace_text | replace_symbol_body | replace_symbol_signature | rename_symbol | insert_before | insert_after | add_doc.")]
         string operation,

@@ -38,10 +38,12 @@ public sealed class InspectTool
 
     [McpServerTool(Name = "inspect")]
     [Description(
-        "Inspect a file or symbol you can already name. Give a file path to list its symbols, or a symbol " +
-        "name to see its definition, signature, and docs. Default depth is summary. Start symbol reads with " +
-        "depth=overview for compact refs/callers/callees and a body preview; use depth=full only when you need " +
-        "the complete body or complete relation lists. Use this before reading an entire file.")]
+        "Inspect a file or symbol you can already name. A file path lists its symbols; a symbol name gives " +
+        "definition, signature, docs — depth=overview adds bounded refs/callers/callees and a body preview " +
+        "(the right first symbol read); depth=full adds the complete body and relation lists. Use before reading " +
+        "any entire file. NOT for: discovering which symbol matters in an unfamiliar area (use context) or full " +
+        "reference lists across the repo (use trace mode=refs). Example: inspect target=FullRebuildPromotion " +
+        "depth=overview.")]
     public string Inspect(
         [Description("A file path or a symbol name/id (smart-resolved).")] string target,
         [Description("summary|overview|full. overview adds bounded refs/callers/callees/body preview; full adds complete body.")]

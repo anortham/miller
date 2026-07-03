@@ -126,9 +126,13 @@ public sealed class WorkspaceTool
 
     [McpServerTool(Name = "workspace")]
     [Description(
-        "Manage the workspace index. Defaults to status. Use refresh to update stale files, full to rebuild " +
-        "from scratch, list to see registered workspaces, health for readiness, onboarding for telemetry-derived " +
-        "startup guidance, leader for leader diagnostics/handoff, and operation=dashboard for dashboard/start/open/show requests.")]
+        "Manage the workspace index. Defaults to status (freshness, revision, leader). refresh updates stale " +
+        "files; full forces a rebuild; health reports readiness + extraction quality; onboarding gives " +
+        "telemetry-derived guidance for this repo; list shows registered workspaces (filter/limit, " +
+        "recency-ordered); open registers another repo for cross-workspace reads; leader diagnoses/hands off the " +
+        "indexer lock; dashboard starts/opens the local dashboard. Use when results look stale, before " +
+        "cross-workspace queries, or at session start (onboarding). NOT for: reading code (search/inspect). " +
+        "Example: workspace operation=list filter=eros limit=10.")]
     public string Workspace(
         [Description("status|refresh|full|list|open|remove|health|onboarding|leader|dashboard. Default status.")] string operation = "status",
         [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")]

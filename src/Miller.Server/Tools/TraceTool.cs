@@ -56,16 +56,16 @@ public sealed class TraceTool
 
     [McpServerTool(Name = "trace")]
     [Description(
-        "Follow a thread of code. mode=refs lists name-based identifier references (usages); mode=path shows " +
-        "the shortest dependency path from target to 'to'; mode=bridge follows provider-scoped cross-language " +
-        "chains (dotnet-web, nextjs, nextjs-api, nuxt, nuxt-api, vue, react, backend-http) with a confidence band. " +
-        "mode=auto (callers/callees) is subsumed by " +
-        "inspect depth=full — prefer inspect for that. refs is name-based and may be empty for some " +
-        "languages; on empty, fall back to search mode=source for text occurrences. " +
-        "Reduced-confidence links are flagged [verb-unknown] / [ambiguous] — never trust an unflagged link more " +
-        "than a flagged one. Use before manual file hopping. Pass format=json for structured " +
-        "output, or format=full to also see the signals behind each bridge link in compact output. " +
-        "Empty refs/no-neighbour/no-path/unsupported results include next actions; JSON includes next_actions.")]
+        "Follow a thread of code. mode=refs lists name-based identifier references (usages) with the enclosing " +
+        "symbol per hit; mode=path finds the shortest dependency path from target to 'to'; mode=bridge follows " +
+        "provider-scoped cross-language chains (dotnet-web, nextjs, nextjs-api, nuxt, nuxt-api, vue, react, " +
+        "backend-http) with a confidence band. mode=auto (callers/callees) is subsumed by inspect depth=full — " +
+        "prefer inspect for that. refs is name-based and may be empty for some languages; on empty, fall back to " +
+        "search mode=source for text occurrences. Reduced-confidence links are flagged [verb-unknown]/[ambiguous] " +
+        "— never trust an unflagged link more than a flagged one. NOT for: a symbol's own definition/signature " +
+        "(inspect), or ranking which tests to run before a change (impact). Example: trace target=FreshnessService " +
+        "mode=refs. format=json for structure; format=full adds per-link signals in bridge output. Empty results " +
+        "include next actions.")]
     public string Trace(
         [Description("A symbol name/id where the trace starts. In bridge mode, route/table nodes and single-symbol files are also accepted.")]
         string target,

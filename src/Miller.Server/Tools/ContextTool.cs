@@ -46,11 +46,11 @@ public sealed partial class ContextTool
 
     [McpServerTool(Name = "context")]
     [Description(
-        "First call in an unfamiliar area: a small, justified bundle — the most relevant entry points and why, plus " +
-        "the next symbols to inspect. Give the task or question (optionally a failing test or stack trace) and get a " +
-        "bounded set of seed symbols with one-line reasons, capped neighbours, and copyable inspect depth=overview " +
-        "footer calls. If you " +
-        "already know the symbol, use inspect. Returns compact text by default; pass format=json to chain.")]
+        "First call in an UNFAMILIAR code area: give a task or question (optionally a failing test or stack trace) " +
+        "and get a small justified bundle — the most relevant entry-point symbols with one-line reasons, capped " +
+        "relevance-ranked neighbours, and copyable next-inspect calls, all within token_budget. NOT for: a symbol " +
+        "you can already name (inspect it) or text lookups (search). Example: context query=\"how does workspace " +
+        "refresh converge the search sidecar\". Compact by default; format=json to chain.")]
     public string Context(
         [Description("The task or question to anchor the bundle on.")] string query,
         [Description("Hard bound on the returned bundle size, in estimated tokens. Default 2000.")]

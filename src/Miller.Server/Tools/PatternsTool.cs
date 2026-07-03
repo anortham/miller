@@ -47,11 +47,12 @@ public sealed class PatternsTool
 
     [McpServerTool(Name = "patterns")]
     [Description(
-        "List, summarize, and search code-shape facts emitted by julie-extractors. Call with no args to discover " +
-        "observed pattern_id values, then search by pattern_id plus path/language/where filters, or pass a free-text " +
-        "query with no pattern_id to search across every pattern_id that contains it. Examples: " +
-        "`patterns operation=search pattern_id=aspnet.minimal_api.route.v1`; " +
-        "`patterns operation=search query=route`. List/no-match results include next_actions. Not raw AST queries.")]
+        "Query code-shape facts pre-extracted by julie-extractors (~130 pattern ids, ~36 languages: HTTP routes, " +
+        "HTML/htmx/Alpine, SQL DDL, async/await, JSON/YAML/TOML/Markdown structure). Call with no args to list " +
+        "observed pattern_id values; then operation=search with pattern_id (plus path/language/where filters) or " +
+        "a free-text query that matches pattern ids. Use INSTEAD of raw-grepping routes, config keys, or document " +
+        "structure. NOT for: raw AST queries or arbitrary text (search). Examples: patterns operation=search " +
+        "pattern_id=aspnet.minimal_api.route.v1; patterns operation=search query=route.")]
     public string Patterns(
         [Description("list|summary|search. Default list.")] string? operation = "list",
         [Description("Pattern id. Required for search unless query is given; optional for summary/list. Example: htmx.attribute.v1.")] string? pattern_id = null,

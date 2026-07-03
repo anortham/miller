@@ -132,14 +132,15 @@ public sealed class SearchTool
 
     [McpServerTool(Name = "search")]
     [Description(
-        "Search indexed code and return ranked results. Use this before shell rg/grep/cat or reading whole " +
-        "files. Pass a symbol name, an identifier, or a natural-language phrase. Test code is hidden for " +
-        "natural-language queries unless you ask for it. Use mode=markers for TODO/FIXME/HACK/XXX audits " +
-        "over comments/doc comments. Use mode=content (alias docs) to search docs/prose " +
-        "file content instead of symbols, or mode=source/external/web/all-text for content corpus text — these return " +
-        "path + line + snippet hits. Pass regions=comment, " +
-        "doc_comment, or string_literal to search only inside those source regions. Returns compact text by " +
-        "default; pass format=json to chain results.")]
+        "Search indexed code and return ranked results — use this before shell rg/grep/cat or reading whole " +
+        "files. Pass a symbol name, identifier, or natural-language phrase; test code is auto-hidden for phrase " +
+        "queries unless exclude_tests=false. Modes: mode=markers audits TODO/FIXME/HACK/XXX in comments; " +
+        "mode=content (alias docs) searches docs/config prose; mode=source searches source-body text; " +
+        "mode=external/web/all-text search imported corpus text. regions=comment,doc_comment,string_literal " +
+        "restricts to those source regions. Scope with file_pattern/language/limit. NOT for: a symbol you can " +
+        "already name exactly (inspect it), orienting on an unfamiliar area (use context), or finding who " +
+        "references a symbol (use trace). Example: search query=\"promote rebuild\" mode=source. Compact by " +
+        "default; format=json to chain.")]
     public string Search(
         [Description("Symbol name, identifier, or natural-language phrase.")] string query,
         [Description("Interpretation axis: auto|text|symbol|file|markers|content|source|external|web|all-text. Default auto.")] string mode = "auto",

@@ -33,10 +33,12 @@ public sealed class ContentTool
 
     [McpServerTool(Name = "content")]
     [Description(
-        "Import, search, read, list, remove, and export text in Miller's content corpus. Use for logs, " +
-        "CI output, web markdown, reports, large text files, and Eros JSONL chunk feeds. Search hits include " +
-        "source_id; pass it to read, with workspace_id for cross-workspace hits. Empty searches and read failures " +
-        "include recovery next_actions in JSON.")]
+        "Import, search, read, list, remove, and export text in Miller's content corpus: logs, CI output, web " +
+        "markdown, reports, large text files, JSONL feeds. Search hits carry a source_id; pass it to read for a " +
+        "bounded line window instead of loading the whole file. Use for any big non-workspace text you'd " +
+        "otherwise cat into context. NOT for: workspace source/docs text (search mode=source or mode=content) or " +
+        "code symbols (search/inspect). Example: content operation=import path=/tmp/ci.log then content " +
+        "operation=search query=\"first failing test\".")]
     public string Content(
         [Description("import|add_markdown|search|read|list|remove|export. Default list.")] string? operation = "list",
         [Description("Path to import for operation=import/add_markdown.")] string? path = null,

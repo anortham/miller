@@ -58,11 +58,12 @@ public sealed class ImpactTool
 
     [McpServerTool(Name = "impact")]
     [Description(
-        "After edits, run impact with no args to see what your uncommitted change affects and which tests to " +
-        "run. Prefer this over grepping for usages. With no args it reads the working-tree git diff and maps " +
-        "changed ranges to impacted symbols + likely tests; or pass exactly one of target (a symbol or file), " +
-        "changed_paths (a set of files), diff (a unified diff), or git/base/staged to read a specific git diff. " +
-        "Returns compact text by default; pass format=json to chain results.")]
+        "Blast-radius analysis: what a change affects and which tests to run. With NO args it reads the " +
+        "working-tree git diff and maps changed ranges to impacted symbols + likely tests — run it after edits, " +
+        "before committing. Or pass exactly one of: target (symbol or file), changed_paths, diff (unified), or " +
+        "git/base/staged for a specific git diff. Use BEFORE a refactor and AFTER edits; prefer it over grepping " +
+        "for usages when the question is \"what breaks and what do I test\". NOT for: plain reference lists " +
+        "(trace mode=refs). Example: impact target=SymbolSearchSidecar. Compact by default; format=json to chain.")]
     public string Impact(
         [Description("A symbol name/id or a file path (smart-resolved). One of target/changed_paths/diff/git.")]
         string? target = null,
