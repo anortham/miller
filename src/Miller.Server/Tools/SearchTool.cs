@@ -666,11 +666,20 @@ public sealed class SearchTool
             hasDocSymbolIds = hasDocLookup(pageIds);
         }
 
-        return json
-            ? RenderJson(kept, scores, page, hasDocSymbolIds)
-            : fileMode
-                ? RenderFileCompact(kept, page, total, compactBanner, hasDocSymbolIds)
-            : RenderCompact(kept, page, total, query, compactBanner, hasDocSymbolIds);
+        if (json)
+            return RenderJson(kept, scores, page, hasDocSymbolIds);
+        if (fileMode)
+            return RenderFileCompact(kept, page, total, compactBanner, hasDocSymbolIds);
+
+        string compact = RenderCompact(kept, page, total, query, compactBanner, hasDocSymbolIds);
+        // Delivery-time nudge: a named symbol top hit is a natural inspect target, so route the agent there.
+        // Rendered last, exactly once. Suppressed for JSON (returned above, byte-identical), file-path hits
+        // (returned above), and empty results (returned earlier). Text/content/source/markers modes never reach
+        // this symbol path — and text mode, which does, is gated out here so only symbol/auto intent nudges.
+        if (mode is SearchToolMode.Auto or SearchToolMode.Symbol)
+            compact += "\n" + NextStepHint.Render(
+                $"inspect target=\"{EscapeCallString(kept[0].Name)}\" depth=overview");
+        return compact;
 
         void AddIfVisible(IndexedSymbol sym, double score)
         {
@@ -1550,6 +1559,12 @@ public sealed class SearchTool
         string list = string.Join(", ", suggestions.Select(static s => $"{s.Name} ({s.FilePath}:{s.StartLine})"));
         return output + "\nTry: " + list;
     }
+
+    // Escape a symbol name for embedding inside a quoted tool-call argument, matching context's NextInspectLine
+    // precedent: backslash first, then quote, so a name containing either stays a single well-formed hint line.
+    private static string EscapeCallString(string value) =>
+        value.Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal);
 
     private static void AppendSymbolAnnotations(StringBuilder sb, IndexedSymbol s, IReadOnlySet<string>? hasDocSymbolIds)
     {

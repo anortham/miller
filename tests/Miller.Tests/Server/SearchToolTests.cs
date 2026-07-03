@@ -348,7 +348,7 @@ public sealed class SearchToolTests
             excludeTests: null, json: false, out int count, compactBanner: "workspace: target-ws");
 
         Assert.Equal(2, count);
-        Assert.Equal(
+        string expectedBase =
             "workspace: target-ws\n" +
             "Definition found: Alpha\n" +
             "  src/Alpha.cs:7 (method)\n" +
@@ -357,8 +357,12 @@ public sealed class SearchToolTests
             "Other matches:\n" +
             "\n" +
             "src/Beta.cs:3 (class)\n" +
-            "… 1 more (raise limit)",
-            output);
+            "… 1 more (raise limit)";
+        // The delivery-time inspect nudge fires only for symbol/auto intent — never text mode.
+        string expected = mode is SearchToolMode.Auto or SearchToolMode.Symbol
+            ? expectedBase + "\nnext: inspect target=\"Alpha\" depth=overview"
+            : expectedBase;
+        Assert.Equal(expected, output);
     }
 
     [Fact]
@@ -619,6 +623,104 @@ public sealed class SearchToolTests
         Assert.Contains("src/Alpha.cs:7", first);
         // Compact output has no blank lines.
         Assert.DoesNotContain("\n\n", output);
+    }
+
+    // ----- delivery-time inspect nudge (guidance-delivery Task 2) -----
+
+    [Theory]
+    [InlineData(SearchToolMode.Auto)]
+    [InlineData(SearchToolMode.Symbol)]
+    public void Run_SymbolSuccess_AppendsInspectNudgeNamingTopHit(SearchToolMode mode)
+    {
+        var index = new StubSymbolSearchIndex(
+            (Symbol(0, "sym-alpha", "AlphaParser", "method", "src/Alpha.cs", 7, "public void AlphaParser()"), 1.25),
+            (Symbol(1, "sym-beta", "BetaParser", "class", "src/Beta.cs", 3), 0.5));
+
+        string output = SearchTool.Run(index, "Parser", mode, limit: 10,
+            excludeTests: null, json: false, out _);
+
+        // The hint is the final line and names the top-ranked hit.
+        Assert.EndsWith("\nnext: inspect target=\"AlphaParser\" depth=overview", output);
+        // Exactly one nudge line per response.
+        Assert.Single(output.Split('\n'), l => l.StartsWith("next: ", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Run_SymbolNudge_EscapesQuotesAndBackslashesInName()
+    {
+        var index = new StubSymbolSearchIndex(
+            (Symbol(0, "sym-weird", "Weird\"Na\\me", "method", "src/W.cs", 3, "void x()"), 2.0));
+
+        string output = SearchTool.Run(index, "zzz-no-def-match", SearchToolMode.Symbol, limit: 10,
+            excludeTests: null, json: false, out _);
+
+        // Escaped the same way context's NextInspectLine does: backslash first, then quote.
+        Assert.EndsWith("next: inspect target=\"Weird\\\"Na\\\\me\" depth=overview", output);
+    }
+
+    [Fact]
+    public void Run_TextMode_DoesNotAppendInspectNudge()
+    {
+        var index = new StubSymbolSearchIndex(
+            (Symbol(0, "sym-alpha", "AlphaParser", "method", "src/Alpha.cs", 7, "public void AlphaParser()"), 1.25));
+
+        string output = SearchTool.Run(index, "Parser", SearchToolMode.Text, limit: 10,
+            excludeTests: null, json: false, out _);
+
+        Assert.DoesNotContain("next: inspect", output);
+    }
+
+    [Fact]
+    public void Run_FileTopHit_DoesNotAppendInspectNudge()
+    {
+        var index = SymbolSearchProjection.Build([
+            Symbol(0, "sym-file-hit", "ActualFileSymbol", "class",
+                "src/Miller.Server/Tools/SearchTool.cs", 9),
+        ]);
+
+        string output = SearchTool.Run(index, "SearchTool.cs", SearchToolMode.File, limit: 10,
+            excludeTests: null, json: false, out _);
+
+        Assert.DoesNotContain("next: inspect", output);
+    }
+
+    [Fact]
+    public void Run_EmptySymbolResults_DoNotAppendInspectNudge()
+    {
+        var index = new StubSymbolSearchIndex();
+
+        string output = SearchTool.Run(index, "NothingMatchesHere", SearchToolMode.Auto, limit: 10,
+            excludeTests: null, json: false, out int count);
+
+        Assert.Equal(0, count);
+        Assert.DoesNotContain("next: inspect", output);
+    }
+
+    [Fact]
+    public void Run_SymbolJson_RemainsByteIdenticalWithoutNudge()
+    {
+        var index = new StubSymbolSearchIndex(
+            (Symbol(0, "sym-alpha", "Alpha", "method", "src/Alpha.cs", 7, "public void Alpha()"), 1.25));
+
+        string output = SearchTool.Run(index, "Alpha", SearchToolMode.Symbol, limit: 10,
+            excludeTests: null, json: true, out _);
+
+        Assert.DoesNotContain("next:", output);
+        Assert.Equal(
+            "[{\"name\":\"Alpha\",\"kind\":\"method\",\"file\":\"src/Alpha.cs\",\"line\":7," +
+            "\"signature\":\"public void Alpha()\",\"score\":1.25,\"symbol_id\":\"sym-alpha\"}]",
+            output);
+    }
+
+    [Fact]
+    public void RunContentCorpus_Compact_DoesNotAppendInspectNudge()
+    {
+        var index = TextContentIndex(CorpusHit(
+            "docs/guide.md", TextContentKind.WorkspaceDocs, line: 3, snippet: "freshness gate details"));
+
+        string output = SearchTool.RunContentCorpus(index, "freshness", limit: 10, json: false, out _);
+
+        Assert.DoesNotContain("next: inspect", output);
     }
 
     [Fact]
@@ -979,7 +1081,8 @@ public sealed class SearchToolTests
             excludeTests: false, json: false, out _);
 
         var renderedNames = output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
-            .Where(l => !l.StartsWith('…') && !l.Contains("more") && !l.EndsWith(':'))
+            .Where(l => !l.StartsWith('…') && !l.Contains("more") && !l.EndsWith(':')
+                        && !l.StartsWith("next: ", StringComparison.Ordinal)) // skip the delivery-time nudge line
             .Select(l => l.StartsWith("  :")
                 ? l.TrimStart().Split(' ', StringSplitOptions.RemoveEmptyEntries)[1] // grouped row: ":line Name kind…"
                 : l.Split("  ", StringSplitOptions.RemoveEmptyEntries)[0].Trim())    // flat row: "Name  kind  path:line…"
