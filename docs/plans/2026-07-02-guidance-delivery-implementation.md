@@ -160,8 +160,8 @@ Run `workspace onboarding` early for telemetry-derived guidance about THIS repo.
 **Approach:** Fire when depth is overview or full AND `refs.Count >= 4` AND `!sym.IsTest`. Suppress at depth=summary and for file listings. N = `refs.Count`.
 
 **Acceptance criteria:**
-- [ ] Hint fires at ≥4 non-test refs (overview + full), absent at ≤3 refs / test symbols / summary / file listings. JSON unchanged.
-- [ ] Worker scope green (`--filter "FullyQualifiedName~InspectToolTests"`), committed.
+- [x] Hint fires at ≥4 non-test refs (overview + full), absent at ≤3 refs / test symbols / summary / file listings. JSON unchanged.
+- [x] Worker scope green (`--filter "FullyQualifiedName~InspectToolTests"`), committed.
 
 ### Task 4: trace refs nudge
 
