@@ -5,14 +5,14 @@
   },
   "metadata": {
     "description": "Local SQLite-backed code intelligence, content search, and workspace freshness plugins for coding agents.",
-    "version": "1.3.2"
+    "version": "1.4.0"
   },
   "plugins": [
     {
       "name": "miller",
       "source": "./",
       "description": "Local SQLite-backed code intelligence, content search, and workspace freshness for coding agents.",
-      "version": "1.3.2",
+      "version": "1.4.0",
       "author": {
         "name": "Alan Northam"
       },
