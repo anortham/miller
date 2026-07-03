@@ -257,6 +257,16 @@ Run `workspace onboarding` early for telemetry-derived guidance about THIS repo.
 
 ---
 
-## Run Report (fill during execution)
+## Run Report (2026-07-02 execution)
 
-Ledger + before/after: schema char totals (4,522 → measured), core chars (11,856 → measured ≤1,900), live `trace refs`/`inspect`/`search` renders showing nudges, truncation-window render of the new core.
+All 8 tasks complete; every acceptance criterion ticked. One judgment call and one plan defect, both resolved:
+- Search nudge is SUPPRESSED when the auto-mode rescue fires (rescue owns the closing affordance) — resolves the plan's ambiguous "hint goes last" wording per the design's one-affordance rule (fix commit 18d4415).
+- The planned params-inclusive 9,000-char total gate was unsatisfiable (params alone: 7,853). Shipped gate is descriptions-only ≤9,000 + per-param ≤250; full schema total is report-only. Design doc/ADR/CLAUDE.md corrected (commit 439731e).
+
+Before/after evidence:
+- Embedded core: 11,982 → 1,887 chars CRLF-normalized (real ceiling 1,900; measured Claude Code cut 2,047). Whole doc now inside the delivery window; routing table names all nine tools (gate: Load_RoutingTableNamesEveryTool).
+- Descriptions: 4,512 → 5,821 chars total (≤9,000); per-tool: search 815/1100, inspect 518/900, context 496/900, trace 947/1500, impact 605/900, edit 668/900, patterns 593/900, content 543/900, workspace 636/900. All byte-identical to the plan's golden texts (lead verified programmatically). Full schema (desc+params) 12,365 → 13,674, report-only.
+- Nudges proven by unit tests (exact-line asserts): search 94/94, inspect 49/49 (7 new), trace 91/91 (5 new), NextStepHint 16/16. JSON byte-identical in all suppression tests.
+- Tail: zero unaccounted paragraphs (Task 7 ledger, .razorback/sdd/task-7-report.md); long-form home docs/agent-guidance.md; 2 skill merges via .agents/skills source + sync.
+- Branch gate: Release build 0 warnings/0 errors; fast 2766/2766; scale 45/45. One pre-existing flake (WorkspaceIndexProviderTests.InFlightStaleLoadCannotEvictNewerCacheEntry) failed once mid-run, passed in isolation and on full-suite rerun — unrelated to this branch.
+- Telemetry follow-up checkpoint due ~2026-07-23 (design doc §5).
