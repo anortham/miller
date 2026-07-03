@@ -90,7 +90,9 @@ Parameter descriptions stay ≤250 chars. **The implementation plan must contain
 drafted text of all nine descriptions** (golden content), with golden-content assertions for
 load-bearing clauses — marker-only checks are insufficient (Codex finding 4).
 Additionally, a TOTAL schema budget is gated, not just per-field caps: the serialized
-description+parameter text across all nine tools must stay ≤9,000 chars, with the measured
+description text across all nine tools must stay ≤9,000 chars (parameter descriptions are
+gated per-param at ≤250; a params-inclusive ceiling was found unsatisfiable during execution —
+params alone measure 7,853 chars), with the measured
 before (4,512 chars today) and after recorded in the implementation plan (Codex finding 3 —
 in upfront-loading modes the whole schema competes for context).
 
@@ -182,7 +184,8 @@ tool knows its result shape.
    call) — marker-only "contains Use" checks are explicitly rejected as vacuous.
 4. Parameter descriptions ≤250 chars (existing).
 5. **Total schema budget:** the concatenated description + parameter-description text across
-   all nine tools ≤9,000 chars, with before (4,512) and after measured and recorded.
+   all nine tools ≤9,000 chars descriptions-only (params gated ≤250 each; params-inclusive total
+   report-only), with before (4,512) and after (5,821) measured and recorded.
 6. Hint format guard through the shared formatter.
 7. The constant `MaxServerInstructionsChars = 12_000` and the test name
    `Load_StaysUnderClaudeCodeInstructionBudget` are removed (the new name states the real
@@ -222,7 +225,8 @@ the same tight core — by design, not by accident.
       nine tools exist and when to reach for each. Usage: each description alone (no
       ServerInstructions delivered) is sufficient for correct use of its tool once loaded.
 - [ ] The implementation plan contains the final text of all nine descriptions and the core;
-      total schema budget measured before/after and ≤9,000 chars.
+      total description budget measured before/after (4,512 → 5,821) and ≤9,000 chars
+      descriptions-only; full schema total (13,674) recorded as report-only evidence.
 - [ ] `AgentInstructions.Load()` ≤1,900 chars normalized; every tool named in the routing table;
       gates enumerated in §4 all enforced by `AgentInstructionsTests`.
 - [ ] Embedded doc contains no content beyond the core; Workflows/dispatch content relocated to

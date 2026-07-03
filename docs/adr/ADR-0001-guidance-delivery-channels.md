@@ -45,8 +45,9 @@ their own CLAUDE.md.
 2. **Tool `[Description]`s = the POST-DISCOVERY usage contracts.** Each of the nine descriptions is
    self-sufficient for correct USE once loaded: what-it-does, when to reach for it, when NOT to
    (naming the tool to prefer instead), and one copyable example. Budgets: ≤900 default, `trace`
-   ≤1,500, `search` ≤1,100; parameter descriptions ≤250; total description + parameter text across
-   all nine tools ≤9,000 chars (measured 4,522 before this work).
+   ≤1,500, `search` ≤1,100; parameter descriptions ≤250; total description text across all nine
+   tools ≤9,000 chars (descriptions-only: 4,512 before this work, 5,821 after; the params-inclusive
+   schema total — 13,674 after — is surfaced in the gate's failure message as report-only evidence).
 3. **Success-path nudges = the adoption lever.** One contextual next-step line through the shared
    `NextStepHint` formatter — compact output only, max one line per response, real copyable
    targets, per-tool suppression rules. JSON output is byte-identical (no nudges). Nudges reinforce
