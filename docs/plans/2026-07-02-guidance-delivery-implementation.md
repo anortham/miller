@@ -252,8 +252,8 @@ Run `workspace onboarding` early for telemetry-derived guidance about THIS repo.
 **What to build:** The durable decision record so no future session re-invents a 12k budget, per the ADR template in razorback architecture-quality (Context / Decision / Consequences / Applies To / Future Agents).
 
 **Acceptance criteria:**
-- [ ] ADR-0001 committed with the 2026-07-02 measurement; CLAUDE.md bullet added; AGENTS.md re-synced byte-identical; design doc checkpoint line added.
-- [ ] Build green, committed.
+- [x] ADR-0001 committed with the 2026-07-02 measurement; CLAUDE.md bullet added; AGENTS.md re-synced byte-identical; design doc checkpoint line added.
+- [x] Build green, committed.
 
 ---
 
