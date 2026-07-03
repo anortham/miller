@@ -124,8 +124,8 @@ Run `workspace onboarding` early for telemetry-derived guidance about THIS repo.
 **Approach:** Pure static, no I/O. Reject strings containing `\n`. Tests: format shape, reason optional, guard throws.
 
 **Acceptance criteria:**
-- [ ] Format exactly `next: …` / `next: … — …`; guards proven by tests.
-- [ ] Worker scope green (`--filter "FullyQualifiedName~NextStepHintTests"`), committed.
+- [x] Format exactly `next: …` / `next: … — …`; guards proven by tests.
+- [x] Worker scope green (`--filter "FullyQualifiedName~NextStepHintTests"`), committed.
 
 ### Task 2: search success nudge
 
