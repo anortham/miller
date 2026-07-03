@@ -1,0 +1,161 @@
+using Microsoft.Data.Sqlite;
+
+namespace Miller.Indexing;
+
+/// <summary>Whether an index-revision delta could be reconstructed for the requested span (R0/R3).</summary>
+public enum RevisionDeltaStatus
+{
+    /// <summary>The span <c>(from, to]</c> is fully journaled; <see cref="RevisionDeltaResult.ChangedPaths"/>
+    /// is a truthful file delta for it.</summary>
+    Complete,
+
+    /// <summary>The mechanism cannot vouch for the span (no journal, pruned/rebuilt history, a base ahead of
+    /// current, or a read failure). Callers must fall back conservatively — never treat the empty path list as a
+    /// truthful "nothing changed".</summary>
+    Unavailable,
+}
+
+/// <summary>
+/// The result of an index-revision delta query. <see cref="ToRevision"/> is the revision the delta was actually
+/// computed to (the current index revision at read time), reported even when <see cref="Status"/> is
+/// <see cref="RevisionDeltaStatus.Unavailable"/> so callers can compare it against the revision they observed.
+/// <see cref="ChangedPaths"/> is workspace-relative and empty whenever the status is not
+/// <see cref="RevisionDeltaStatus.Complete"/>. <see cref="Reason"/> is a stable machine token for logging/tests.
+/// </summary>
+public sealed record RevisionDeltaResult(
+    RevisionDeltaStatus Status,
+    long FromRevision,
+    long ToRevision,
+    IReadOnlyList<string> ChangedPaths,
+    string Reason);
+
+/// <summary>
+/// Computes the file delta between a base index revision and the current index revision from julie-extract's own
+/// per-file change journal — the <c>revision_file_changes</c> table (each row stamps a <c>path</c> with the
+/// <c>revision_id</c> it changed at and a <c>change_kind</c> of inserted/updated/deleted). This is the
+/// per-file-revision-stamp mechanism the CT revision-delta contract calls for (design
+/// 2026-07-03-ct-revision-delta-design.md §1): Miller keeps no separate journal because the extract already is one.
+///
+/// <para><b>Truthful inclusion (R1).</b> The journal records every file julie-extract processed for a revision,
+/// including files that produce no code symbols (config, docs, data-shaped json/yaml) — so a change to a file
+/// Miller does not parse into symbols still appears. It answers "what that Miller watches changed on disk", not
+/// "what got indexed into the symbol graph". Renames land as a delete of the old path plus an insert of the new;
+/// both appear.</para>
+///
+/// <para><b>Honest span failure (R3).</b> The reader never returns a guessed-empty delta it cannot vouch for. A
+/// base ahead of the current revision (a full rebuild restarted the counter, or a bogus base), a base below the
+/// retained history floor (pruned/rebuilt history), a missing journal, or a read failure each yield
+/// <see cref="RevisionDeltaStatus.Unavailable"/>. Exclusion of ignored/tooling paths (R2) is the caller's edge —
+/// this reader reports the raw journal, which already omits ignored paths because Miller never feeds them to the
+/// extractor; the delta tool re-applies Miller's watch/ignore policy as defense-in-depth.</para>
+/// </summary>
+public static class RevisionDeltaReader
+{
+    /// <summary>
+    /// Read the delta for <paramref name="fromRevision"/> (exclusive) to the current index revision (inclusive)
+    /// from the extract DB at <paramref name="extractDbPath"/>. Never throws for an expected condition (missing
+    /// DB, missing journal, unreconstructable span, WAL/read failure) — those map to
+    /// <see cref="RevisionDeltaStatus.Unavailable"/>.
+    /// </summary>
+    public static RevisionDeltaResult Read(string extractDbPath, long fromRevision)
+    {
+        string abs;
+        try
+        {
+            abs = Path.GetFullPath(extractDbPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return Unavailable(fromRevision, toRevision: 0, "invalid_db_path");
+        }
+
+        // A missing extract DB is not a crash: the mechanism simply cannot vouch for any span.
+        if (!File.Exists(abs))
+            return Unavailable(fromRevision, toRevision: 0, "no_index");
+
+        try
+        {
+            using SqliteConnection conn = SqliteReadOnlyAccess.Open(abs);
+
+            // An extract predating the change journal (older julie-extract) cannot serve deltas → unavailable, so
+            // Eros negotiates via the capability and never interprets a legacy-shaped response as "complete".
+            if (!TableExists(conn, "extraction_revisions") || !TableExists(conn, "revision_file_changes"))
+                return Unavailable(fromRevision, toRevision: 0, "no_journal");
+
+            long current = ScalarLong(conn, "SELECT MAX(revision_id) FROM extraction_revisions;");
+            long? floor = ScalarNullableLong(conn, "SELECT MIN(revision_id) FROM extraction_revisions;");
+
+            // --- R3 span validation (never a guessed-empty delta) ---
+            if (fromRevision < 0)
+                return Unavailable(fromRevision, current, "invalid_from_revision");
+            if (fromRevision > current)
+                // The requested base is ahead of the current revision: the counter went backward (a full rebuild
+                // restarted julie's revision counter) or the base is bogus. We cannot reconstruct this span.
+                return Unavailable(fromRevision, current, "from_after_current");
+            if (floor is long retainedFloor && fromRevision < retainedFloor - 1)
+                // History below the base was pruned/rebuilt: revisions between the base and the retained floor are
+                // unrecorded, so the span is unreconstructable.
+                return Unavailable(fromRevision, current, "pruned_history");
+
+            // The half-open span (from, current] is fully journaled; report every path it touched.
+            IReadOnlyList<string> paths = ReadChangedPaths(conn, fromRevision, current);
+            return new RevisionDeltaResult(RevisionDeltaStatus.Complete, fromRevision, current, paths, "complete");
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or SqliteException or IOException)
+        {
+            // WAL-sidecar / read-only / corrupt-DB failure mid-read: cannot vouch for the span → unavailable,
+            // not a thrown exception the CLI would surface as an error.
+            return Unavailable(fromRevision, toRevision: 0, "read_error");
+        }
+    }
+
+    private static RevisionDeltaResult Unavailable(long fromRevision, long toRevision, string reason) =>
+        new(RevisionDeltaStatus.Unavailable, fromRevision, toRevision, Array.Empty<string>(), reason);
+
+    private static IReadOnlyList<string> ReadChangedPaths(SqliteConnection conn, long fromRevision, long toRevision)
+    {
+        using SqliteCommand cmd = conn.CreateCommand();
+        cmd.CommandText =
+            "SELECT DISTINCT path FROM revision_file_changes " +
+            "WHERE revision_id > $from AND revision_id <= $to ORDER BY path;";
+        cmd.Parameters.AddWithValue("$from", fromRevision);
+        cmd.Parameters.AddWithValue("$to", toRevision);
+
+        var paths = new List<string>();
+        using SqliteDataReader reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            if (reader.IsDBNull(0))
+                continue;
+            string path = reader.GetString(0);
+            if (!string.IsNullOrWhiteSpace(path))
+                paths.Add(path);
+        }
+
+        return paths;
+    }
+
+    private static bool TableExists(SqliteConnection conn, string tableName)
+    {
+        using SqliteCommand cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $name LIMIT 1;";
+        cmd.Parameters.AddWithValue("$name", tableName);
+        return cmd.ExecuteScalar() is not null;
+    }
+
+    private static long ScalarLong(SqliteConnection conn, string sql)
+    {
+        using SqliteCommand cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        object? value = cmd.ExecuteScalar();
+        return value is null or DBNull ? 0L : Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static long? ScalarNullableLong(SqliteConnection conn, string sql)
+    {
+        using SqliteCommand cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        object? value = cmd.ExecuteScalar();
+        return value is null or DBNull ? null : Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
+    }
+}

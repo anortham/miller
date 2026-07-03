@@ -354,6 +354,17 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Equal("refresh --json --wait", refreshWaitContract.GetProperty("command").GetString());
         Assert.Equal(1, refreshWaitContract.GetProperty("schema_version").GetInt32());
 
+        // The index-revision delta contract (CT revision-delta R4): the negotiated feature string Eros gates on
+        // is in the top-level `features` array, and the versioned CLI surface is registered under json_contracts.
+        string[] features = root.GetProperty("features").EnumerateArray().Select(f => f.GetString()).ToArray()!;
+        Assert.Contains("impact_index_revision_delta", features);
+        JsonElement deltaContract = Assert.Single(
+            root.GetProperty("json_contracts").EnumerateArray(),
+            item => item.GetProperty("name").GetString() == "impact_index_revision_delta");
+        Assert.Equal("impact --json --from-index-revision N", deltaContract.GetProperty("command").GetString());
+        Assert.Equal(1, deltaContract.GetProperty("schema_version").GetInt32());
+        Assert.Equal("docs/contracts/impact-index-revision-delta-v1.md", deltaContract.GetProperty("doc").GetString());
+
         JsonElement[] exports = root.GetProperty("supported_export_formats").EnumerateArray().ToArray();
         JsonElement export = Assert.Single(exports, item => item.GetProperty("name").GetString() == "content_corpus");
         Assert.Equal("jsonl", export.GetProperty("format").GetString());

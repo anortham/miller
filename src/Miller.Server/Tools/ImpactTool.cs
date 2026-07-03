@@ -7,6 +7,7 @@ using Miller.Core.Diff;
 using Miller.Core.Graph;
 using Miller.Indexing;
 using Miller.Server.Git;
+using Miller.Server.Hosting;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
 using Miller.Server.Workspaces;
@@ -347,6 +348,156 @@ public sealed class ImpactTool
         return json
             ? RenderJson(impacted, tests, note)
             : RenderCompact(impacted, tests, note);
+    }
+
+    // ---------- index-revision delta (CT revision-delta contract R0–R2) ----------
+
+    /// <summary>
+    /// R2 truthful exclusion: drop any journal path that Miller's existing watch/ignore policy would never watch
+    /// (tooling/build dirs: <c>.git</c>, <c>.miller</c>, <c>.julie</c>, <c>target</c>, <c>node_modules</c>,
+    /// <c>bin</c>, <c>obj</c>, … and workspace <c>.gitignore</c>/<c>.julieignore</c> matches). The journal already
+    /// omits these because Miller never feeds them to the extractor; re-applying <see cref="WatchPathFilter"/> here
+    /// makes the exclusion a property of the delta itself — a stale journal row for a now-ignored path can never
+    /// leak into <c>changed_paths</c>. Paths are workspace-relative; order is preserved.
+    /// </summary>
+    public static IReadOnlyList<string> FilterWatchedDeltaPaths(string workspaceRoot, IReadOnlyList<string> paths)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
+        ArgumentNullException.ThrowIfNull(paths);
+        if (paths.Count == 0)
+            return paths;
+
+        var kept = new List<string>(paths.Count);
+        foreach (string relative in paths)
+        {
+            if (string.IsNullOrWhiteSpace(relative))
+                continue;
+            string absolute = Path.Combine(workspaceRoot, relative);
+            if (WatchPathFilter.ShouldProcess(workspaceRoot, absolute))
+                kept.Add(relative);
+        }
+
+        return kept;
+    }
+
+    /// <summary>
+    /// Render the typed index-revision delta envelope (R0): always <c>workspace_id</c>, <c>delta_status</c>
+    /// (<c>complete</c>|<c>unavailable</c>), <c>from_revision</c>, <c>to_revision</c>, <c>changed_paths</c>, plus
+    /// the existing impact shape (<c>impacted</c>/<c>tests</c>) computed over the changed paths. When
+    /// <paramref name="complete"/> is false the delta is unavailable: <c>changed_paths</c>/<c>impacted</c>/
+    /// <c>tests</c> are empty and only the revisions are reported. <paramref name="index"/> and
+    /// <paramref name="graph"/> may be null (no index loaded / nothing changed) — then <c>impacted</c>/<c>tests</c>
+    /// are empty but <c>changed_paths</c> is still reported truthfully.
+    /// </summary>
+    public static string RenderIndexRevisionDelta(
+        string workspaceId,
+        bool complete,
+        long fromRevision,
+        long toRevision,
+        IReadOnlyList<string> changedPaths,
+        ISymbolLookupIndex? index,
+        ISymbolGraphReachability? graph,
+        int maxDepth,
+        int limit,
+        bool json)
+    {
+        ArgumentNullException.ThrowIfNull(changedPaths);
+        IReadOnlyList<string> paths = complete ? changedPaths : Array.Empty<string>();
+
+        var impacted = new List<Reached>();
+        var tests = new List<Reached>();
+        if (complete && index is not null && graph is not null && paths.Count > 0)
+            (impacted, tests) = ReachFromChangedPaths(index, graph, paths, maxDepth, limit);
+
+        return json
+            ? RenderDeltaJson(workspaceId, complete, fromRevision, toRevision, paths, impacted, tests)
+            : RenderDeltaCompact(workspaceId, complete, fromRevision, toRevision, paths, impacted, tests);
+    }
+
+    // Seed every changed path's symbols, then partition the bounded reverse-reachability set into impacted symbols
+    // vs likely tests — the SAME core Run uses for a changed-paths impact query (D3/D5), just without the notes.
+    private static (List<Reached> Impacted, List<Reached> Tests) ReachFromChangedPaths(
+        ISymbolLookupIndex index, ISymbolGraphReachability graph,
+        IReadOnlyList<string> changedPaths, int maxDepth, int limit)
+    {
+        if (maxDepth < 1) maxDepth = 1;
+        if (limit < 1) limit = 1;
+
+        var seedIds = new List<string>();
+        foreach (string path in changedPaths)
+            SeedFromFile(index, path, seedIds);
+
+        var impacted = new List<Reached>();
+        var tests = new List<Reached>();
+        if (seedIds.Count == 0)
+            return (impacted, tests);
+
+        IReadOnlyList<ReachedNode> reached = graph.Reach(seedIds, maxDepth, limit, Direction.Reverse);
+        var symbolsById = SymbolLookupBatch.FindBySymbolIds(index, reached.Select(static node => node.Id));
+        foreach (ReachedNode node in reached)
+        {
+            if (!symbolsById.TryGetValue(node.Id, out IndexedSymbol? symbol))
+                continue; // inconsistent build — drop rather than NRE (mirrors Run)
+            (symbol.IsTest ? tests : impacted).Add(new Reached(symbol, node.Hop));
+        }
+
+        return (impacted, tests);
+    }
+
+    private static string RenderDeltaJson(
+        string workspaceId, bool complete, long fromRevision, long toRevision,
+        IReadOnlyList<string> changedPaths, IReadOnlyList<Reached> impacted, IReadOnlyList<Reached> tests)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var w = NewWriter(buffer))
+        {
+            w.WriteStartObject();
+            w.WriteString("workspace_id", workspaceId ?? string.Empty);
+            w.WriteString("delta_status", complete ? "complete" : "unavailable");
+            w.WriteNumber("from_revision", fromRevision);
+            w.WriteNumber("to_revision", toRevision);
+            w.WritePropertyName("changed_paths");
+            w.WriteStartArray();
+            foreach (string path in changedPaths)
+                w.WriteStringValue(path);
+            w.WriteEndArray();
+            w.WritePropertyName("impacted");
+            WriteReachedArray(w, impacted);
+            w.WritePropertyName("tests");
+            WriteReachedArray(w, tests);
+            w.WriteEndObject();
+        }
+
+        return Utf8(buffer);
+    }
+
+    private static string RenderDeltaCompact(
+        string workspaceId, bool complete, long fromRevision, long toRevision,
+        IReadOnlyList<string> changedPaths, IReadOnlyList<Reached> impacted, IReadOnlyList<Reached> tests)
+    {
+        var sb = new StringBuilder();
+        sb.Append("index-revision delta  ").Append(workspaceId ?? string.Empty).Append('\n');
+        sb.Append("status: ").Append(complete ? "complete" : "unavailable")
+          .Append("  from_revision: ").Append(fromRevision)
+          .Append("  to_revision: ").Append(toRevision).Append('\n');
+        if (!complete)
+        {
+            sb.Append("delta unavailable — falling back conservatively (no truthful changed_paths).");
+            return sb.ToString();
+        }
+
+        sb.Append("changed_paths (").Append(changedPaths.Count).Append("):");
+        if (changedPaths.Count == 0)
+            sb.Append(" none");
+        sb.Append('\n');
+        foreach (string path in changedPaths)
+            sb.Append("  ").Append(path).Append('\n');
+        sb.Append("impacted (").Append(impacted.Count).Append("):\n");
+        AppendReachedGroups(sb, impacted);
+        sb.Append("likely tests (").Append(tests.Count).Append("):\n");
+        AppendReachedGroups(sb, tests);
+
+        return sb.ToString().TrimEnd('\n');
     }
 
     /// <summary>A reached symbol carrying its blast-radius hop distance (for provenance ordering + display).</summary>

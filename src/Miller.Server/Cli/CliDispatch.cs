@@ -762,6 +762,12 @@ public static class CliDispatch
         IGitDiffReader gitDiffReader)
     {
         CliOptions o = CliOptions.Parse(args, "json", "git", "staged");
+
+        // The index-revision delta channel (CT revision-delta contract R0) is its own mode: it never overloads
+        // --base (a git ref), and it emits the typed delta envelope instead of a plain impact result.
+        if (o.Has("from-index-revision"))
+            return ImpactIndexRevisionDelta(o, ctx, outw, err);
+
         string? target = string.IsNullOrWhiteSpace(o.Query) ? null : o.Query;
         string[]? changedPaths = ImpactChangedPaths(o);
         string? diff = o.Value("diff");
@@ -821,8 +827,70 @@ public static class CliDispatch
     }
 
     private const string ImpactUsage =
-        "miller impact <symbol>|--changed-paths PATH[,PATH...]|--diff DIFF|--git [--base REF] [--staged] " +
+        "miller impact <symbol>|--changed-paths PATH[,PATH...]|--diff DIFF|--git [--base REF] [--staged]|" +
+        "--from-index-revision N " +
         "[--workspace-id SELECTOR] [--workspace DIR] [--max-depth N] [--limit N] [--json]";
+
+    private const string ImpactDeltaUsage =
+        "miller impact --from-index-revision N [--workspace-id SELECTOR] [--workspace DIR] " +
+        "[--max-depth N] [--limit N] [--json]";
+
+    // The index-revision delta mode (CT revision-delta contract R0–R3): emit the typed delta envelope
+    // (workspace_id/delta_status/from_revision/to_revision/changed_paths + impacted/tests) for the span between
+    // the requested base revision and the current index revision, sourced from julie-extract's change journal.
+    private static int ImpactIndexRevisionDelta(CliOptions o, WorkspaceContext ctx, TextWriter outw, TextWriter err)
+    {
+        string? raw = o.Value("from-index-revision");
+        if (string.IsNullOrWhiteSpace(raw)
+            || !long.TryParse(raw, System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out long fromRevision))
+            return Usage(err, ImpactDeltaUsage);
+
+        // This channel is exclusive: it must not be combined with a symbol/changed-paths/diff/git base.
+        if (!string.IsNullOrWhiteSpace(o.Query) || o.Has("changed-paths") || o.Has("changed-path")
+            || o.Has("diff") || o.Has("git") || o.Has("staged") || o.Has("base"))
+            return Usage(err, ImpactDeltaUsage);
+
+        if (!TryResolveReadContext(ctx, o, err, out ctx))
+            return 2;
+
+        bool json = o.Has("json");
+        // Echo the caller's selector verbatim so the envelope's workspace_id always matches what Eros asked for;
+        // fall back to the resolved workspace identity when no selector was passed (CLI against the current repo).
+        string workspaceId = o.Value("workspace-id")
+            ?? ctx.WorkspaceId ?? ctx.CanonicalRoot ?? ctx.WorkspaceRoot;
+
+        RevisionDeltaResult delta = RevisionDeltaReader.Read(ctx.ExtractDbPath, fromRevision);
+        bool complete = delta.Status == RevisionDeltaStatus.Complete;
+
+        // R2: exclude ignored/tooling paths before they can reach the envelope (defense-in-depth over the journal).
+        IReadOnlyList<string> changedPaths = complete
+            ? ImpactTool.FilterWatchedDeltaPaths(ctx.WorkspaceRoot, delta.ChangedPaths)
+            : Array.Empty<string>();
+
+        ISymbolLookupIndex? index = null;
+        SqliteSymbolGraphIndex? graph = null;
+        try
+        {
+            // Load the symbol index/graph only when there is a truthful, non-empty delta to analyse — the common
+            // "no source change since last poll" case emits an empty complete envelope without touching the index.
+            if (complete && changedPaths.Count > 0 && TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex loaded))
+            {
+                index = loaded;
+                graph = new SqliteSymbolGraphIndex(ctx.ExtractDbPath);
+            }
+
+            string output = ImpactTool.RenderIndexRevisionDelta(
+                workspaceId, complete, fromRevision, delta.ToRevision, changedPaths,
+                index, graph, o.Int("max-depth", 2), o.Int("limit", 100), json);
+            outw.WriteLine(output);
+            return 0;
+        }
+        finally
+        {
+            graph?.Dispose();
+        }
+    }
 
     private static int Trace(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {

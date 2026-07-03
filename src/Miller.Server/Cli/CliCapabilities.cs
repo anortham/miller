@@ -9,6 +9,35 @@ namespace Miller.Server.Cli;
 
 internal static class CliCapabilities
 {
+    /// <summary>
+    /// The negotiated capability wire string for the index-revision delta mode
+    /// (<c>miller impact --from-index-revision N</c> → the typed delta envelope; CT revision-delta contract R4).
+    /// Eros enables its CT skip/absorption semantics ONLY when this string is present in the top-level
+    /// <c>features</c> array; an older Miller without the mechanism simply omits it, so version skew degrades by
+    /// negotiation, never by interpreting a failed or legacy-shaped response.
+    /// </summary>
+    public const string ImpactIndexRevisionDeltaFeature = "impact_index_revision_delta";
+
+    /// <summary>
+    /// Whether this build ships the index-revision delta mechanism (the <c>revision_file_changes</c> journal query
+    /// in <see cref="Miller.Indexing.RevisionDeltaReader"/>). This build always does; the constant makes the R4
+    /// gate explicit and lets a future build that drops the mechanism stop advertising it in one place.
+    /// </summary>
+    public const bool ImpactIndexRevisionDeltaActive = true;
+
+    /// <summary>
+    /// The top-level <c>features</c> array (R4): the negotiated capability strings Eros checks before enabling a
+    /// capability-gated behavior. Pure and gated so the "advertise only when active; absent when inactive"
+    /// contract is directly testable — a feature appears iff its flag is set.
+    /// </summary>
+    public static IReadOnlyList<string> NegotiatedFeatures(bool impactIndexRevisionDelta)
+    {
+        var features = new List<string>();
+        if (impactIndexRevisionDelta)
+            features.Add(ImpactIndexRevisionDeltaFeature);
+        return features;
+    }
+
     private static readonly string[] JsonCommands =
     [
         "capabilities --json",
@@ -65,6 +94,8 @@ internal static class CliCapabilities
         ("trace", "trace --json", 1, "docs/contracts/trace-json-v1.md"),
         ("patterns", "patterns --json", 1, "docs/contracts/patterns-json-v1.md"),
         ("metrics", "metrics <churn|clones|complexity> --json", 1, "docs/contracts/metrics-json-v1.md"),
+        ("impact_index_revision_delta", "impact --json --from-index-revision N", 1,
+            "docs/contracts/impact-index-revision-delta-v1.md"),
     ];
 
     public static string Render(bool json)
@@ -90,6 +121,9 @@ internal static class CliCapabilities
         sb.AppendLine($"symbol_search_sidecar: {(sidecar.Enabled ? "enabled" : "disabled")}");
         sb.AppendLine($"source_region_index: {(sidecar.RegionOptions.Enabled ? "enabled" : "disabled")}");
         sb.AppendLine("reference_aware_context: enabled");
+        sb.AppendLine("features:");
+        foreach (string feature in NegotiatedFeatures(ImpactIndexRevisionDeltaActive))
+            sb.AppendLine("  - " + feature);
         sb.AppendLine("supported_export_formats:");
         sb.AppendLine("  - content_corpus jsonl via `miller content export`");
         sb.AppendLine("  - telemetry jsonl via `miller telemetry export --jsonl`");
@@ -145,6 +179,14 @@ internal static class CliCapabilities
             w.WriteBoolean("reference_aware_context", true);
             w.WriteBoolean("dashboard", true);
             w.WriteEndObject();
+
+            // The negotiated feature strings Eros gates capability-specific behavior on (R4). A feature appears
+            // here only when its mechanism is active in this build; an older Miller omits it.
+            w.WritePropertyName("features");
+            w.WriteStartArray();
+            foreach (string feature in NegotiatedFeatures(ImpactIndexRevisionDeltaActive))
+                w.WriteStringValue(feature);
+            w.WriteEndArray();
 
             w.WritePropertyName("json_commands");
             w.WriteStartArray();
