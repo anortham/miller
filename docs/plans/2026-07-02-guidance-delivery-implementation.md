@@ -235,8 +235,8 @@ Run `workspace onboarding` early for telemetry-derived guidance about THIS repo.
 **Approach:** Ledger first (map each paragraph), then edit. Skill edits are additive/merging — do not rewrite unrelated skill content. No new skills. Verify each named skill exists before editing.
 
 **Acceptance criteria:**
-- [ ] `docs/agent-guidance.md` exists, linked from README + docs map; skill merges done; loss ledger complete with zero unaccounted paragraphs.
-- [ ] No test scope (docs task) — build still green (`dotnet build Miller.slnx -c Release`), committed.
+- [x] `docs/agent-guidance.md` exists, linked from README + docs map; skill merges done; loss ledger complete with zero unaccounted paragraphs.
+- [x] No test scope (docs task) — build still green (`dotnet build Miller.slnx -c Release`), committed.
 
 ### Task 8: ADR, CLAUDE.md, evidence loop
 
