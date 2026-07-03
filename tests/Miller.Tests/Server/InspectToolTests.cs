@@ -637,6 +637,119 @@ public sealed class InspectToolTests
         Assert.Contains("no span recorded", output, StringComparison.OrdinalIgnoreCase);
     }
 
+    // ---- Impact nudge (high-dependent symbols) ----
+
+    // A single symbol "Hot" with a controllable number of name-based references (dependents) and an
+    // is_test flag, so the impact-nudge threshold/test-suppression can be pinned in isolation. The refs
+    // carry a NULL containing id so no callers section is emitted, keeping the output focused.
+    private static JulieDbFixture HotSymbolFixture(int refCount, bool isTest, string name = "Hot")
+    {
+        const string hotId = "dd000000000000000000000000000001";
+        var rows = new[]
+        {
+            new JulieDbFixture.SymbolRow(hotId, name, "method", "csharp",
+                "src/Hot.cs", $"public void {name}()", 2, null)
+            {
+                IsTest = isTest,
+            },
+        };
+        var identifiers = Enumerable.Range(0, refCount)
+            .Select(i => new JulieDbFixture.IdentifierRow(
+                "ee" + i.ToString("x30"), name, "call", "csharp", "src/Caller.cs", 10 + i, null))
+            .ToArray();
+        return JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract,
+            rows, identifiers: identifiers, workspaceId: "ws-inspect-hot");
+    }
+
+    [Fact]
+    public void Run_SymbolOverview_HighDependents_AppendsImpactHintLast()
+    {
+        using var fx = HotSymbolFixture(refCount: 4, isTest: false);
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "Hot", depth: "overview", kind: null, scope: null, limit: 50, json: false, out _);
+
+        Assert.Contains("next: impact target=\"Hot\" — 4 dependents", output);
+        // Rendered as the final line of the response.
+        Assert.EndsWith("next: impact target=\"Hot\" — 4 dependents", output);
+    }
+
+    [Fact]
+    public void Run_SymbolFull_HighDependents_AppendsImpactHintLast()
+    {
+        using var fx = HotSymbolFixture(refCount: 4, isTest: false);
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "Hot", depth: "full", kind: null, scope: null, limit: 50, json: false, out _);
+
+        Assert.Contains("next: impact target=\"Hot\" — 4 dependents", output);
+        Assert.EndsWith("next: impact target=\"Hot\" — 4 dependents", output);
+    }
+
+    [Fact]
+    public void Run_SymbolOverview_ThreeDependents_NoImpactHint()
+    {
+        using var fx = HotSymbolFixture(refCount: 3, isTest: false);
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "Hot", depth: "overview", kind: null, scope: null, limit: 50, json: false, out _);
+
+        Assert.DoesNotContain("next:", output);
+    }
+
+    [Fact]
+    public void Run_SymbolSummary_HighDependents_NoImpactHint()
+    {
+        using var fx = HotSymbolFixture(refCount: 4, isTest: false);
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "Hot", depth: "summary", kind: null, scope: null, limit: 50, json: false, out _);
+
+        Assert.DoesNotContain("next:", output);
+    }
+
+    [Fact]
+    public void Run_SymbolOverview_TestSymbol_NoImpactHint()
+    {
+        using var fx = HotSymbolFixture(refCount: 4, isTest: true);
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "Hot", depth: "overview", kind: null, scope: null, limit: 50, json: false, out _);
+
+        Assert.DoesNotContain("next:", output);
+    }
+
+    [Fact]
+    public void Run_FileListing_HighDependents_NoImpactHint()
+    {
+        using var fx = FixtureWithNoisyFileSummary();
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "src/SearchTool.cs", depth: "overview", kind: null, scope: null, limit: 50, json: false, out _);
+
+        Assert.DoesNotContain("next:", output);
+    }
+
+    [Fact]
+    public void Run_SymbolOverview_HighDependents_Json_OmitsImpactHint()
+    {
+        using var fx = HotSymbolFixture(refCount: 4, isTest: false);
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "Hot", depth: "overview", kind: null, scope: null, limit: 50, json: true, out _);
+
+        Assert.DoesNotContain("next:", output);
+        using var doc = JsonDocument.Parse(output); // still valid JSON, byte-shape unchanged
+        Assert.Equal("Hot", doc.RootElement.GetProperty("symbol").GetProperty("name").GetString());
+    }
+
     // ---- Ambiguity ----
 
     [Fact]

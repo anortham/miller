@@ -118,6 +118,10 @@ public sealed class InspectTool
     private const int OverviewBodyPreviewMaxLines = 16;
     private const int OverviewBodyPreviewMaxChars = 700;
 
+    // Minimum name-based reference count at which a compact symbol read (overview/full) earns a trailing
+    // "run impact" nudge. Below this the symbol is not hot enough for the hint to add value.
+    private const int ImpactHintMinReferences = 4;
+
     private enum InspectDepth
     {
         Summary,
@@ -466,6 +470,13 @@ public sealed class InspectTool
         {
             sb.Append(body.Text ?? RenderBodyUnavailableNote(body.UnavailableReason));
         }
+
+        // Delivery-time nudge (compact only; this path is overview/full — summary returned early). A symbol
+        // with many dependents is a natural impact-analysis target; a test symbol is not, so suppress it there.
+        // Rendered last, exactly once, and only in compact output (JSON shape stays byte-identical).
+        if (!sym.IsTest && refs.Count >= ImpactHintMinReferences)
+            sb.Append('\n').Append(NextStepHint.Render(
+                $"impact target=\"{sym.Name}\"", $"{refs.Count} dependents"));
 
         return sb.ToString().TrimEnd('\n');
     }
