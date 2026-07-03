@@ -1,106 +1,97 @@
-# Task 2 — `workspace list` recency ordering, default cap, filter
+# Task 2 — search success nudge
 
-**Status:** DONE (green). Supersedes stale prior `backend-http` content from an earlier SDD run.
+**Status:** complete
+**Commit:** 44d286d `feat(search): next-step inspect nudge on symbol hits`
+**Branch/worktree:** guidance-delivery @ `/Users/murphy/source/miller/.worktrees/guidance-delivery`
 
-## What I implemented
+## What shipped
 
-Render-layer changes only (No Architecture Impact). `workspace list` now orders by relevance and
-caps compact output so a 100+-row registry no longer dumps ~3.5k tokens.
+When compact (non-JSON) symbol search returns hits, `SearchTool.Run` now appends one final line:
 
-- **`WorkspaceListEntry` gains `DateTimeOffset LastSeenAt`** (`WorkspaceRender.cs:56`). Added as the
-  last positional param with `= default` so every existing construction site (incl. the un-owned
-  `WorkspaceRenderTests.cs`) still compiles unchanged.
-- **Ordering** (`WorkspaceRender.OrderAndFilter`): current workspace first
-  (`OrderByDescending(Current)`), then `LastSeenAt` descending. LINQ `OrderBy` is stable, so ties keep
-  the registry's own order.
-- **Filter**: case-insensitive substring on `DisplayId` OR `Root`, applied before the cap. No-match
-  renders a helpful line with the total registered count instead of an empty string.
-- **Compact cap** (`ListCompact`): default 20 (`WorkspaceRender.DefaultListLimit`), `<=0` unlimited.
-  Renders at most `limit` entries then a tail `… N more — raise limit or pass filter=<substring>`.
-- **Omitted error visibility**: when any omitted (past-cap) entry is `state=error`, appends
-  `errors: N workspace(s) in error state — filter or raise limit to see them`.
-- **JSON** (`ListJson`): unlimited by default (existing consumers), narrows only on a positive explicit
-  `limit`; ordered current-first; every row gains additive `last_seen_at` (ISO-8601 round-trip).
-- **Assembler** (`WorkspaceFactsAssembler.ToListEntries`): maps `row.LastSeenAt` onto the entry.
-- **MCP `workspace` tool**: new optional `filter` (string, default null) and `limit` (int?, default null
-  → 20 compact / unlimited JSON) params with `[Description]` attributes, threaded through `Dispatch` →
-  `RenderRegistryList` → `WorkspaceRender.List`. Not a new tool (adding params is approved by the plan).
-- **CLI `workspace list`**: `--filter <s>` / `--limit <n>` mapped to the same core (`o.Value("filter")`,
-  `o.Has("limit") ? o.Int("limit", DefaultListLimit) : null`). Help text updated.
-- **Agent instructions doc**: minimal note `list shows the registry (filter/limit)` — kept terse because
-  the embedded doc had only 37 chars of headroom under the 12k budget; final length 11982.
+```
+next: inspect target="<top-hit name>" depth=overview
+```
 
-## Miller calls used + what each confirmed
+rendered through the shared `NextStepHint.Render` formatter (Task 1). The hint is the last line,
+exactly once per response, and names the top-ranked kept hit (`kept[0].Name`).
 
-- `inspect WorkspaceListEntry depth=overview` — confirmed the record-struct shape (8 positional params)
-  and listed callers/refs to update.
-- `trace WorkspaceListEntry mode=refs` — enumerated all 15 construction/type-usage sites across
-  `CliDispatch.cs`, `WorkspaceFactsAssembler.cs`, `WorkspaceRender.cs`, `WorkspaceTool.cs`, and 3 test
-  files, proving a defaulted trailing param was needed to keep un-owned `WorkspaceRenderTests.cs` green.
-- Targeted `Read` on `RenderRegistryList`, `Dispatch`, `WorkspaceList`, `ToListEntries`,
-  `WorkspaceRegistry.{UpsertSeen,List}`, `CliOptions`.
+### Suppression (verified by tests)
+- **JSON output** — returned before the nudge branch; byte-identical.
+- **File-path top hit** — `fileMode` returns via `RenderFileCompact` before the nudge branch.
+- **Empty results** — the `total == 0` failure paths return earlier and own their own hints.
+- **Text mode** — routes through `Run` and renders symbol shape, but is gated out; only
+  `mode is Auto or Symbol` nudges.
+- **content/source/external/web/all-text/markers/regions modes** — structurally never reach `Run`
+  (they route through `RunContent`/`RunContentCorpus`/`RunTextContent`/`RunRegions`/`RunMarkers`),
+  so no nudge is possible.
 
-## API-shape evidence
+### Escaping
+Symbol name is escaped via a new private `EscapeCallString` (backslash-first, then quote) mirroring
+`ContextTool.NextInspectLine`, so a name containing `"` or `\` stays a single well-formed line.
 
-- `WorkspaceRegistryRow.LastSeenAt` is a non-null `DateTimeOffset` (`WorkspaceRegistryRow.cs:21`) — safe
-  to map without a null guard.
-- `WorkspaceRegistry.UpsertSeen(..., DateTimeOffset? seenAtUtc = null)` lets tests seed distinct
-  last-seen stamps for deterministic recency ordering.
-- `Utf8JsonWriter.WriteString(name, DateTimeOffset)` emits ISO-8601 (additive `last_seen_at`).
-- `CliOptions.Int(name, fallback)` + `.Has(name)` give explicit-vs-default detection for the CLI limit.
+## Design decision — placement inside `Run`
+File ownership was decisive. `SearchTool.Search` dispatches the symbol route through
+`SearchRouteExecutor.RunSymbols` (a file I do not own), which passes `Run`'s output through
+unchanged. `Run` is the only place in `SearchTool.cs` with access to `kept[0]`, `fileMode`, `mode`,
+and `json`, so the nudge is computed there and flows straight to the response. This also matches the
+sibling precedent (InspectTool/TraceTool append their nudge inside the pure render path).
 
-## Verification
+Auto-mode rescue (`RenderAutoTextRescueCompact`) wraps `Run`'s primary output when symbol results are
+weak; in that case the nudge concludes the primary symbol block and the rescue's own `Rerun with
+mode=…` addendum follows. Existing rescue tests use `Assert.Contains` and remain green. Still exactly
+one `next:` line per response.
 
-- **Invariant proven**: `workspace list` renders the current workspace first, then most-recently-seen,
-  caps compact output at `limit` (default 20) with an accurate omitted-count tail, surfaces omitted
-  error-state rows, narrows by case-insensitive `filter` (no-match → helpful line), and keeps JSON an
-  unlimited, additive-`last_seen_at` shape unless a positive limit is given — across both the MCP tool
-  and the CLI dispatch path.
-- **Scope**: `dotnet test tests/Miller.Tests --filter
-  "FullyQualifiedName~WorkspaceToolTests|FullyQualifiedName~WorkspaceFactsAssembler|FullyQualifiedName~AgentInstructions|FullyQualifiedName~CliDispatchTests"`
-- **Result**: Passed! Failed: 0, Passed: 226, Skipped: 0.
-- **Build**: `dotnet build src/Miller.Server -c Release` → 0 warnings / 0 errors.
-- Timestamp: 2026-07-02. SHA: see commit trailer.
+## Miller-first orientation (calls made)
+- `inspect src/Miller.Server/Tools/SearchTool.cs kind=method` — confirmed the symbol map: `Run :592`
+  is the symbol-route core; `RunContent*`/`RunTextContent`/`RunRegions` are separate methods (so
+  content/markers modes never reach `Run`); confirmed my added `EscapeCallString :1565` and the
+  `RenderCompact`/`RenderFileCompact`/`RenderDefinitionCompact` renderers. Validated the API shape
+  used for placement.
+- Cross-checked `SearchRouteExecutor.RunSymbols` (read-only) — verified it returns `Run`'s output
+  verbatim in `SearchRouteExecutionResult`, so a nudge added in `Run` reaches the client unmodified.
+- Used Read/Edit only on worktree paths; never used Miller `edit`.
 
-New tests: `WorkspaceToolTests` (cap+tail+current-first, filter narrow, filter no-match, omitted-error
-summary, JSON unlimited+last_seen_at, JSON explicit limit); `WorkspaceFactsAssemblerTests` (LastSeenAt
-mapping); `CliDispatchTests` (`--filter`, `--limit` + tail).
+## Tests (TDD: red → green)
+Added to `SearchToolTests.cs`:
+- `Run_SymbolSuccess_AppendsInspectNudgeNamingTopHit` (Theory: Auto, Symbol) — hint is last line,
+  names real top hit, exactly one `next:` line.
+- `Run_SymbolNudge_EscapesQuotesAndBackslashesInName` — quote/backslash escaping.
+- `Run_TextMode_DoesNotAppendInspectNudge`
+- `Run_FileTopHit_DoesNotAppendInspectNudge`
+- `Run_EmptySymbolResults_DoNotAppendInspectNudge`
+- `Run_SymbolJson_RemainsByteIdenticalWithoutNudge`
+- `RunContentCorpus_Compact_DoesNotAppendInspectNudge`
 
-## Files changed
+Updated two existing tests for the new (correct) behavior:
+- `Run_SymbolModes_RenderExactCompactShape` — now mode-aware (Auto/Symbol expect the nudge suffix;
+  Text does not).
+- `Run_PreservesIndexOrdering_DoesNotReSort` — line parser skips the `next:` nudge line.
 
-- `src/Miller.Server/Tools/WorkspaceRender.cs`
-- `src/Miller.Server/Tools/WorkspaceFactsAssembler.cs`
-- `src/Miller.Server/Tools/WorkspaceTool.cs`
-- `src/Miller.Server/Cli/CliDispatch.cs` (workspace-list region only)
-- `src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md`
-- `tests/Miller.Tests/Server/WorkspaceToolTests.cs`
-- `tests/Miller.Tests/Server/WorkspaceFactsAssemblerTests.cs`
-- `tests/Miller.Tests/Server/Cli/CliDispatchTests.cs`
-
-## Judgment calls
-
-- `LastSeenAt` added as a **defaulted** trailing param (not required) so un-owned test/production
-  construction sites compile unchanged — the only site passing a real value is `ToListEntries`.
-- Header made explicit about capping/filtering (`# workspaces (20 of 26)` / `... matched, ...
-  registered; filter="..."`) but kept exactly `# workspaces (N)` when nothing is omitted and no filter,
-  preserving the un-owned `WorkspaceRenderTests` header assertion.
-- JSON ordered current-first too (additive; order isn't a documented contract) for consistency with
-  compact; existing JSON shape tests still pass.
-- Agent-instructions note kept terse due to the 12k-char embedded-doc budget. The full contract lives in
-  the MCP param `[Description]`s and CLI help text.
-
-## Self-review findings
-
-- Confirmed `limit <= 0` = unlimited in both compact and JSON.
-- Confirmed no-match filter returns a non-empty, count-bearing line (not `""`).
-- Confirmed omitted-error summary fires only for rows actually omitted past the cap.
-- Confirmed the CLI distinguishes explicit `--limit` from the default (via `o.Has`), so JSON stays
-  unlimited when `--limit` is absent.
+### Verification
+- `dotnet test --filter FullyQualifiedName~SearchToolTests` → **Passed! 92/0/0**.
+- `scripts/test.sh` (full fast suite) → **Passed! 2750/0/0**, 9s (under the 30s budget).
 
 ## Concerns
+- Under auto-mode source/docs rescue the `next:` nudge is not the literal final line (the rescue
+  addendum follows it); it still appears exactly once and concludes the primary block. This is
+  one-line-max compliant. If the plan intends the nudge strictly after the rescue addendum, that
+  would require touching the rescue wrapper — flagged rather than silently changed.
+- No other files touched. Sibling report files (`task-1/3/4/5-report.md`) were left dirty and out of
+  my commit.
 
-- **Shared build coupling**: the test assembly briefly failed to COMPILE mid-run because a sibling's
-  `InspectTool.cs` (Task 5) was mid-edit (CS0103 on `AppendGroupedReferences`/`DistinctCallees`). It
-  resolved on its own; my scope then passed 226/226. No action needed.
-- The embedded agent-instructions doc is near its 12k budget (now 11982); further additions by other
-  tasks may need trimming.
+## Fix follow-up — rescue owns its closing affordance (lead ruling)
+Lead ruled the nudge must be **suppressed entirely** when the auto-mode source/docs/config rescue
+fires, not merely precede it. Design rule: max one next-step affordance per output; the rescue's
+`Rerun with mode=…` line is the single closing affordance, and it only fires when symbol results look
+weak, so a `next: inspect` on a weak top hit competes with it.
+
+- `RenderAutoTextRescueCompact` (SearchTool.cs) now strips the trailing `next: ` line from
+  `primaryOutput` via new helper `StripTrailingNextHint` before composing the rescue block.
+  Deterministic: NextStepHint emits the hint as one line with no trailing newline, so dropping the
+  final line iff it starts with `"next: "` is unambiguous. Rationale recorded in a code comment.
+- New TDD tests (SearchToolTests.cs): `Search_AutoMode_SourceRescue_SuppressesInspectNudge` and
+  `Search_AutoMode_DocsConfigRescue_SuppressesInspectNudge` — assert the rescue output contains NO
+  `next: ` line and still carries `Rerun with mode=source`/`mode=content`. Non-rescue symbol
+  successes keep the nudge (existing tests stay green).
+- Verification: `dotnet test tests/Miller.Tests --filter FullyQualifiedName~SearchToolTests` →
+  **Passed! 94/0/0**.

@@ -1,87 +1,62 @@
-# Task 5 — `inspect depth=full`: dedup callees, group references by file
+# Task 5 Report — ServerInstructions discovery core + core gates
 
-## Status
-DONE.
+## Status: COMPLETE (worker scope green)
 
-## What I implemented
-Compact-rendering-only changes in `RenderSymbolCompact` (`InspectTool.cs`). JSON path untouched.
+## Files changed (owned, committed)
+- `src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md` — entire content replaced with the golden discovery core (verbatim from the plan, no wording change).
+- `tests/Miller.Tests/Server/AgentInstructionsTests.cs` — core gates rewritten.
 
-1. **References grouped by file.** The `## references` block now prints one `path:l1,l2,…` line per file
-   instead of one `path:line` row per reference. New helper `AppendGroupedReferences` groups the
-   `refs.Take(relationLimit)` slice with an insertion-ordered map (first-seen file order; incoming line order
-   within a file). Grouping happens **after** `Take(relationLimit)`, and `AppendOmittedLine` still counts the
-   underlying `refs.Count` against `relationLimit` — the ref limit / omitted semantics are unchanged; only the
-   rendering of the kept refs is compacted.
+## Miller-first orientation (API-shape evidence)
+- `inspect tests/Miller.Tests/Server/AgentInstructionsTests.cs` — confirmed the reflection mechanism: `DiscoverToolMethods()` → `ToolName(method)` exposed as `ToolNames()` MemberData, and the three constants (`MaxServerInstructionsChars=12_000` at :18, `MaxToolDescriptionChars=900`, `MaxParameterDescriptionChars=250`). Confirmed which tests read `Load()` vs a tool `[Description]` attribute before editing.
+- `inspect AgentInstructions depth=overview` — confirmed the API shape I must NOT change: `public static string Load()` (no args, returns string), backed by embedded resource `MILLER_AGENT_INSTRUCTIONS.md`. The embedded-resource load path is untouched; I only replaced the resource content.
 
-2. **Callees deduped by name.** The `## callees` block now collapses repeated callee names via new helper
-   `DistinctCallees` (returns a `DistinctCallee` record-struct list: first-seen name, first location, count).
-   Rendered as `Name  path:line`, with ` ×N` appended only when `N>1`. Dedup runs **before** `Take(relationLimit)`
-   so full depth spends its 50-row budget on 50 *distinct* callees. No name is filtered (no keyword blocklist —
-   `nameof`/`ArgumentException` still render; only the repetition cost is removed). `AppendOmittedLine` is called
-   with the **distinct** count (`distinctCallees.Count`) so `... N more callees` can never overstate.
+(Miller MCP serves the main checkout; all edits were made with Read/Write/Edit on worktree paths. Miller `edit` was NOT used.)
 
-Overview depth reuses the exact same rendering with its own `OverviewRelationLimit` (3); both depths are covered
-by tests.
+## Char measurements (gate invariant evidence)
+| Doc | raw chars | CRLF-normalized |
+|-----|-----------|-----------------|
+| OLD `MILLER_AGENT_INSTRUCTIONS.md` | 11,856 | 11,982 |
+| NEW discovery core | 1,861 | **1,887** |
 
-## Miller MCP calls used + what each confirmed
-Per the task note, the Miller index serves the main checkout (no Task-4 changes), so I used Miller for
-symbol/API-shape discovery and read the **worktree** files for exact edit text.
-- Region orientation done via direct Read of the worktree `InspectTool.cs` (the authoritative post-Task-4 text) —
-  Miller's served copy predates this branch, so editing off it would be unsafe. I confirmed the region line numbers
-  (`RenderSymbolCompact` :375, references :415-422, callees :433-440) with `grep -n` on the worktree file and
-  re-located them post-Task-4.
-- API-shape evidence gathered by reading source directly (worktree):
-  - `ExtractReader.ReadReferences` / `ReadCallees` (`src/Miller.Indexing/ExtractReader.cs:145,165`) both return
-    `IReadOnlyList<SymbolRef>`, `ORDER BY path, start_line, identifier_id` — so refs/callees arrive already
-    path/line ordered (a file's ref sites are contiguous; my insertion-ordered map is robust regardless).
-  - `SymbolRef` (`src/Miller.Indexing/SymbolDetail.cs:38`) = `(Name, Kind, FilePath, StartLine, ContainingSymbolId)`.
-    Callees are `SymbolRef` too — dedup key is `Name`, rendered location is `FilePath:StartLine`.
-  - JSON path (`RenderSymbolJson`, `InspectTool.cs`) reads `ReadCallees`/`ReadReferences` independently and emits
-    one object per raw row — confirmed untouched by my change.
+- New core is 1,887 CRLF-normalized — matches the plan's pre-measurement, ≤ 1,900 gate. No whitespace trim needed; golden text shipped verbatim.
+- The OLD doc's 11,982 normalized chars "passed" the fictional 12,000-char budget by 18 chars — the old gate would have failed on the next paragraph, and the doc was already ~6x past Claude Code's real ~2KB ServerInstructions truncation window (measured cut at char 2,047 on 2026-07-02).
 
-## API-shape evidence
-- References query orders by `path, start_line, identifier_id`; callees additionally filter
-  `containing_symbol_id = $cid AND kind = 'call'`. Grouping/dedup are pure post-processing over these ordered lists.
-- `AppendOmittedLine(sb, total, visible, label)` prints `... {total-visible} more {label} (use depth=full)` only
-  when `total > visible`. For callees I pass the **deduped** total; for references I pass the raw ref total (spec).
+## Gate invariants (what the rewritten tests prove)
+1. `Load_CoreFitsClaudeCodeDeliveryWindow` — `Load()` after `ReplaceLineEndings("\r\n")` ≤ **1,900** chars, so the embedded doc survives Claude Code's ~2KB/shared-4KB ServerInstructions truncation. Comment cites the real limit + 2,047 measured cut (2026-07-02). Replaces the deleted 12k-fiction gate.
+2. `Load_RoutingTableNamesEveryTool` — reflection-driven `[Theory]` over every `[McpServerTool]` name; asserts a routing line `- <name> — ` (em dash) exists per tool. A new tool without a routing line fails here. (Retargets the old `Load_DocumentsEveryTool` from backtick-name mention to the real routing table.)
+3. `Load_ReturnsNonEmptyInstructions` — kept; still pins the lead rule `Search before reading`.
+4. `Load_PinsBehavioralAdoptionLanguage` — retargeted from removed old-doc phrases to new-core behavioral phrases actually present: `One Miller call beats shell greps and full-file reads`, `Structure before content`, `Impact before changing`, `do NOT re-verify Miller results with grep/find`.
 
-## Verification
-- **Invariant proven:** At `depth=full`, compact `## references` renders exactly one comma-joined `path:lines`
-  line per file and compact `## callees` renders each callee name once with a `×N` count (N>1 only), with dedup
-  applied before the relation limit and omitted-counts reflecting refs (references) / distinct names (callees);
-  the JSON output remains raw and undeduped (4 ref objects / 6 callee objects, no `×`).
-- **Scope:** `dotnet test tests/Miller.Tests --filter "FullyQualifiedName~InspectToolTests"`
-- **Result:** Passed — Failed: 0, Passed: 42, Skipped: 0 (3 new tests + 39 existing). Build compiled clean
-  under `TreatWarningsAsErrors` (0 warnings / 0 errors).
-- **Timestamp:** 2026-07-02
-- **SHA:** see commit below.
+## Deletions / retargets (loss accounting)
+Deleted (constant + fiction gate), as instructed:
+- constant `MaxServerInstructionsChars = 12_000` → now `= 1_900`.
+- `Load_StaysUnderClaudeCodeInstructionBudget` → replaced by `Load_CoreFitsClaudeCodeDeliveryWindow`.
 
-New tests:
-- `Run_SymbolFull_GroupsReferencesByFile_AndDedupsCallees` — grouped `src/a.cs:5,8,12` + `src/b.cs:3`; callees
-  `TryParse ×2`, `nameof ×2`, single-occurrence `Validate`/`Check` uncounted; no `more callees` line under the 50 limit.
-- `Run_SymbolOverview_OmittedCounts_UseRefsAndDistinctCallees` — overview limit 3: refs omitted counts underlying
-  refs (`... 1 more refs`, one grouped file line); callees omitted counts distinct names (`... 1 more callees`,
-  explicitly NOT `... 3 more callees` that 6 raw sites would give) → proves dedup-before-limit.
-- `Run_SymbolFull_Json_KeepsRawUndedupedRefsAndCallees` — parses JSON: `refs` length 4, `callees` length 6, no `×`.
+Retargeted (intent preserved):
+- `Load_DocumentsEveryTool` → `Load_RoutingTableNamesEveryTool` (same reflection MemberData; asserts routing line instead of backtick mention).
+- `Load_PinsBehavioralAdoptionLanguage` (phrases swapped to new-core equivalents).
 
-## Files changed
-- `src/Miller.Server/Tools/InspectTool.cs` — references/callees blocks in `RenderSymbolCompact` + two private
-  helpers (`AppendGroupedReferences`, `DistinctCallees` + `DistinctCallee` record-struct). Did not touch
-  `BodyPreview`/`FilterDocCommentLines` (Task 4).
-- `tests/Miller.Tests/Server/InspectToolTests.cs` — `GroupAndDedupFixture` + 3 tests.
-- `.razorback/sdd/task-5-report.md` — this report (overwrote a stale report from a superseded plan).
+Deleted because the content is DELIBERATELY no longer in the discovery core (moved to tool `[Description]` attributes in Task 6, or to skills/docs in Task 7 / CLAUDE.md). Each is a superseded core-content assertion, not a narrowed requirement — destinations noted:
+- `Load_DocumentsCrossWorkspaceReadParameters` → params now live in the tool descriptions (Task 6 description-clause gates).
+- `Load_SearchModeEnum_IncludesContentMode` → search modes now in the `search` [Description] (Task 6).
+- `Load_DocumentsRegionSearchAndHasDoc` → regions/has_doc now in the `search` [Description] (Task 6).
+- `Load_DocumentsSubagentToolPrimer` → subagent primer relocated to skills / `docs/agent-guidance.md` (Task 7).
+- `Load_DocumentsTraceRecoveryGuidance` → trace recovery detail now in the `trace` [Description] (Task 6).
+- `Load_DocumentsContentAndPatternsRecoveryGuidance` → content/patterns recovery detail now in those [Description]s (Task 6).
+- `Load_DocumentsOverviewFirstInspectGuidance` → overview-first guidance now in the `inspect` [Description] (Task 6; the `InspectToolDescription_*` gate already guards it).
+- `Load_DocumentsDashboardLaunchWorkflow` → dashboard routing kept in the `workspace` [Description] (`WorkspaceToolDescription_RoutesDashboardLaunchRequests` still guards it) + CLAUDE.md.
+- `Load_DocumentsWebContentWorkflow` → web-research workflow relocated to the `miller-web-research` skill (Task 7).
+- `Load_DocumentsTokenSavingEditWorkflow` → edit selectors now in the `edit` [Description] (`EditToolDescription_DocumentsTokenSavingSelectors` still guards it).
 
-## Judgment calls
-- **Insertion-ordered map for grouping** rather than relying on contiguity. Refs are already path-ordered so a
-  simple consecutive group would work, but the map costs nothing and is order-robust if ordering ever changes.
-- **`DistinctCallee` record-struct** for the deduped list (clear field names, cheap `with`-mutation of count).
-- **Exact overview ref line** asserted (`src/a.cs:5,8,12`, `src/b.cs` absent) so the test pins that grouping runs
-  on the post-`Take` slice, not the whole list.
+Untouched (NOT my task): all `*ToolDescription*` gates and `ToolDescriptions_StayWithinClaudeCodeBudgets` (≤900/≤250) — these read `[Description]` attributes, which Task 5 does not modify; they still pass against the current (old) descriptions. Task 6 owns them.
 
-## Self-review findings
-- Existing `Run_SymbolFull_OnMethod_ShowsRefsCallersCalleesBody` still passes: GetUser's two refs live in two
-  different files, so each renders as its own single-line group — `Contains` assertions unaffected. Verified green.
-- Confirmed `×` (U+00D7) appears only in compact output; JSON test asserts its absence there.
+Kept as-is: `Load_DoesNotAdvertiseTodosAsSeparateMcpTool`, `Load_DoesNotAdvertiseMetricsAsMcpTool` (DoesNotContain guards — still valid), `PublicMcpToolNames_AreTheDocumented1_0Surface` (reflection surface pin).
 
-## Concerns
-None. No architecture impact; change is confined to two compact-render blocks + two private helpers.
+## Verification (worker red → green)
+- RED (new gates vs old doc): `Failed: 11, Passed: 18, Total: 29` — `Load_CoreFitsClaudeCodeDeliveryWindow` (11982 > 1900), `Load_RoutingTableNamesEveryTool` (all 9, no `- <name> — ` in old doc), `Load_PinsBehavioralAdoptionLanguage`.
+- GREEN (new gates vs golden core): `dotnet test tests/Miller.Tests --filter "FullyQualifiedName~AgentInstructionsTests"` → **Passed: 29, Failed: 0, Total: 29**, 45 ms.
+
+## Concerns / notes for the lead
+- Description-gate tests still green because descriptions are unchanged; Task 6 will retarget the description-phrase assertions when it swaps in the golden descriptions and adds the trace≤1,500 / search≤1,100 budget overrides. No conflict with my changes.
+- No plan mismatch: golden core shipped verbatim, fit ≤1,900 without any whitespace trim.
+- `.razorback/sdd/task-1-report.md` shows as modified from the parallel Task 1 worker — left untouched. Commit includes ONLY my two owned files.

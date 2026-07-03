@@ -1,71 +1,34 @@
-# Task 8 — single-say recovery text (content empty search + onboarding unresolved rows)
+# Task 8 report — ADR-0001, CLAUDE.md bullet, evidence loop
 
-## Status: DONE
+**Status:** complete
+**Worktree:** `/Users/murphy/source/miller/.worktrees/guidance-delivery` (branch `guidance-delivery`)
 
 ## What changed
 
-Two double-say trims in the render layer. No JSON changes on either surface; compact output shrinks
-without losing information.
-
-### 1. `ContentTool.RenderNoResultsCompact` (content empty search)
-- **Before:** stated the recovery advice twice — once as a three-clause prose sentence
-  (`Try content_kind=…; use workspace_id=all only…; use search mode=source…`) and again as the
-  structured `Next:` action block, which already encodes all three (`content_kind=all-text`,
-  `workspace_id=all`, `mode=source`).
-- **After:** dropped the prose sentence. Kept `No results for content <op>.` and the fact line
-  `Tried content_kind=<kind>.` (states what was attempted — not duplicated by Next). `AppendContentNextActions`
-  unchanged, so the advice now appears exactly once.
-- `RenderNoResultsJson` untouched (it only ever carried `next_actions`).
-
-### 2. `WorkspaceRender.OnboardingCompact` hot-targets loop
-- **Before:** `facts.HotTargets.Take(5)` rendered one line per row, including unresolved hashes whose
-  label is the placeholder `unresolved repeated target` (conveys nothing individually).
-- **After:** partition rows by the same predicate `TargetLabel` uses for the placeholder — added
-  `IsUnresolvedTarget(target) => target.Path is null && target.Name is null` (equivalent to
-  `Confidence == "unresolved_hash"` as produced by `WorkspaceTargetHashResolver.ResolveOne`). Resolved
-  rows render as before, still capped at `.Take(5)`. Any unresolved rows (however many) collapse into a
-  single aggregate line: `- unresolved repeated targets: N (M calls total)` where N = count, M = summed
-  calls. If ALL hot targets are unresolved, only the aggregate line renders under `hot targets:`.
-- `WriteHotTargetsJson` untouched — JSON still emits every row per-row.
-
-## Interfaces confirmed (evidence)
-- `RecoveredTargetHash` (`src/Miller.Indexing/WorkspaceTargetHashResolver.cs:22`): unresolved rows carry
-  `Confidence="unresolved_hash"` with `SymbolId/Name/Kind/Path/StartLine` all null.
-- `TargetLabel` (`WorkspaceRender.cs:1341`): falls through to `"unresolved repeated target"` exactly when
-  `Path is null && Name is null` — the predicate reused for `IsUnresolvedTarget`.
-- `SearchNoResultsNextActions`/`AppendContentNextActions`/`FormatContentActionCommand`: the Next block
-  renders `content search … content_kind=source workspace_id=all` and `search … mode=source`, so the
-  advice tokens survive prose removal.
-- `content_kind="docs"` normalizes to canonical `workspace_docs` (`TextContentKind.cs:6`) before rendering.
-
-Miller MCP read tools were not directly available in this agent's tool surface; per the task's own caution
-(the served index lacks this branch's changes) I read the exact worktree files instead — appropriate here.
-
-## Tests (TDD — failing first, then implement)
-`tests/Miller.Tests/Server/ContentToolTests.cs`
-- Rewrote `Content_SearchNoResults_CompactStatesRecoveryAdviceOnceInNextBlock`: asserts the fact line
-  present, `Next:` present, `workspace_id=all` and `mode=source` each appear **exactly once**, and the three
-  old prose clauses are ABSENT.
-
-`tests/Miller.Tests/Server/WorkspaceRenderTests.cs`
-- `Onboarding_Compact_CollapsesUnresolvedHotTargetsIntoOneAggregateLine` (mixed): resolved row renders
-  individually; 2 unresolved rows collapse to `- unresolved repeated targets: 2 (5 calls total)`; exactly one
-  aggregate line; no per-row unresolved line.
-- `Onboarding_Compact_AllUnresolvedHotTargets_RendersOnlyAggregateLine`: header + single aggregate line only.
-- `Onboarding_Json_KeepsUnresolvedHotTargetsPerRow`: JSON keeps all 3 rows, 2 with `confidence=unresolved_hash`
-  (proves JSON unchanged).
-
-## Invariant proven
-The recovery advice on the content empty-search surface, and each unresolved hot-target, is expressed **at most
-once** in compact output (advice → Next block only; unresolved rows → one aggregate line regardless of count),
-while JSON on both surfaces is byte-shape unchanged.
+- **Created `docs/adr/ADR-0001-guidance-delivery-channels.md`.** `docs/adr/` did not exist, so this is
+  the first ADR. Shape: Context / Decision / Consequences / Applies To / Future Agents. Captures the
+  2026-07-02 measurement (11,856-char doc cut at char 2,047), issue #43474, Tool Search deferral of
+  descriptions, and the telemetry baseline (two surviving tools took ~73% of 5,249 calls; seven cut
+  tools nearly unused). Documents the three-channel decision (core ≤1,900 discovery / descriptions
+  ≤900·1,500·1,100 usage / NextStepHint nudges) plus tail relocation and the accepted non-plugin loss.
+- **Modified `CLAUDE.md`** — one load-bearing bullet appended to the end of "## Server host & startup"
+  (after the Agent instructions bullet), matching neighbour style: descriptions = usage contract
+  (≤900 default / documented overrides), core = discovery contract (≤1,900; ~2KB truncation inside a
+  shared ~4KB block), do not grow either or re-invent the 12k budget without reading ADR-0001; gates
+  live in `AgentInstructionsTests`.
+- **Ran `scripts/sync-agents.sh`** — regenerated `AGENTS.md`; `cmp -s CLAUDE.md AGENTS.md` → SYNCED.
+  AGENTS.md not hand-edited.
+- **Modified `docs/plans/2026-07-02-guidance-delivery-design.md`** — appended one line to "### 5.
+  Evidence loop (report-only)": follow-up checkpoint due ~2026-07-23, re-read tool mix with
+  `miller workspace onboarding --json` and append the before/after comparison to the doc.
 
 ## Verification
-From the worktree:
-`dotnet test tests/Miller.Tests --filter "FullyQualifiedName~ContentToolTests|FullyQualifiedName~WorkspaceRenderTests|FullyQualifiedName~WorkspaceToolTests|FullyQualifiedName~Onboarding"`
-→ **Passed! Failed: 0, Passed: 116, Skipped: 0.** Build clean (warnings-as-errors, 0/0).
+
+- `cmp -s CLAUDE.md AGENTS.md && echo SYNCED` → **SYNCED** (harness docs are byte-identical mirrors).
+- `dotnet build Miller.slnx -c Release` → **Build succeeded, 0 Warning(s), 0 Error(s)**.
+- Docs-only task; no test scope owned (per plan Task 8 — no worker filter).
 
 ## Concerns
-None. Ownership boundaries respected: only `ContentTool.cs` (RenderNoResultsCompact region),
-`WorkspaceRender.cs` (OnboardingCompact hot-targets region + adjacent TargetLabel helper), and the two test
-files were touched. The Task-2 list region and sibling-owned files were not disturbed.
+
+None. Commit scope limited to the four owned files (ADR, CLAUDE.md, AGENTS.md, design doc) by explicit
+path; this report is intentionally left uncommitted (not in the owned set). Did not push.

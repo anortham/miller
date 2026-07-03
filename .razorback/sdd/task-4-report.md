@@ -1,64 +1,64 @@
-# Task 4 — `inspect depth=overview` strips doc-comment lines from body preview
+# Task 4 — trace refs nudge
 
-## What I implemented
-- `BodyPreview` (`src/Miller.Server/Tools/InspectTool.cs`) now filters doc-comment lines out of the
-  normalized body **before** applying the `OverviewBodyPreviewMaxLines=16` / `OverviewBodyPreviewMaxChars=700`
-  caps, so the overview budget shows real code instead of member docs that already duplicate the `doc:` section.
-- Added a private helper `FilterDocCommentLines(IReadOnlyList<string>)` next to `BodyPreview`. It drops:
-  - lines whose trimmed form starts with `///` or `//!` (C#/Rust doc comments),
-  - `/** … */` blocks inclusive (a small `inBlockDoc` flag: a line starting `/**` opens the block unless it
-    also contains `*/` on the same line; the block ends on the first line containing `*/`).
-  It keeps ordinary `//` and `#` comments (code commentary, not doc duplication). Python `"""` docstrings are
-  string literals and are left untouched (not in scope).
-- Truncation semantics: caps are applied to the **filtered** lines exactly as before. Dropping doc lines alone
-  never sets `Truncated`; `Truncated` is only set when the filtered content still exceeds the line or char cap.
-- `depth=full` path is untouched — it renders `body.Text` directly and never calls `BodyPreview`, so full output
-  is byte-identical to before.
+**Status:** ✅ Complete
+**Commit:** `a6f9029` — `feat(trace): impact nudge after non-empty refs`
+**Branch/worktree:** `guidance-delivery` @ `/Users/murphy/source/miller/.worktrees/guidance-delivery`
 
-Edit was confined strictly to the `BodyPreview` region plus the new adjacent private helper; the
-`RenderSymbolCompact` references/callees blocks were not touched (clean composition with the sibling worker).
+> Note: this file previously held an unrelated "inspect depth=overview strips doc-comment lines"
+> report (a different plan run). Overwritten per the Task 4 assignment, which designated this path.
 
-## Miller calls used + what each confirmed
-- `inspect BodyPreview depth=overview` — confirmed the method signature, its call sites
-  (`RenderSymbolCompact` :375 compact path, `RenderSymbolJson` :462 JSON path) and the exact pre-edit body,
-  so I knew both overview render paths share `BodyPreview` and the JSON `body_preview` field benefits too.
-- ToolSearch loaded the Miller MCP tool schemas (server serves the main checkout, content-identical at HEAD).
+## What changed
 
-## API-shape evidence
-- Caps `OverviewBodyPreviewMaxLines=16` / `OverviewBodyPreviewMaxChars=700` at InspectTool.cs:118-119.
-- `BodyPreviewResult(string? Text, bool Truncated)` record struct at :574; consumed in compact
-  (:447-453, appends `"... body preview truncated (use depth=full)"` only when `Truncated`) and JSON
-  (:538-551, writes `body_preview` / `body_preview_truncated`).
-- Body text source: `ExtractReader.ReadBody` → `SourceTextDecoder.SliceUtf8ByteSpan(text, startByte, endByte)`
-  where `endByte` is **exclusive** and clamped to byte length (SourceTextDecoder.cs:42-56) — so the test fixture
-  uses `BodyEndByte = Encoding.UTF8.GetByteCount(content)` to slice the whole file.
+In `TraceTool.RunRefs` compact (non-JSON) `mode=refs` output, when at least one reference is
+shown AND the resolved target is not a test symbol (`targetSymbol.IsTest == false`), a single
+final line is appended after the references block and after any truncation note:
+
+```
+next: impact target="<target name>" — before editing
+```
+
+Rendered via `NextStepHint.Render($"impact target=\"{targetSymbol.Name}\"", "before editing")`.
+
+- **JSON byte-identical** — the JSON branch returns earlier (before the compact `StringBuilder`
+  render), so it is untouched.
+- **Empty refs unchanged** — the `shown.Length == 0` branch (existing recovery hint + `next_actions`)
+  is the `if` arm; the nudge lives only in the `else` (non-empty) arm.
+- **Test targets suppressed** — `if (!targetSymbol.IsTest)` guard.
+- **Exactly one hint line max** — appended once at the tail; `TrimEnd('\n')` keeps it as the last line.
+
+Files touched (only these two):
+- `src/Miller.Server/Tools/TraceTool.cs` — the `else` branch of the compact refs render.
+- `tests/Miller.Tests/Tools/TraceToolTests.cs` — 5 new tests.
+
+## Miller-first orientation (calls + evidence)
+
+- `inspect src/Miller.Server/Tools/TraceTool.cs` → located `RunRefs` (:492) and `ReferenceLine`
+  (:600); confirmed the compact refs render lives inside `RunRefs`, JSON path exits earlier.
+- Read `src/Miller.Server/Tools/NextStepHint.cs` → confirmed
+  `internal static string Render(string toolCall, string? reason = null)` yields
+  `next: <toolCall> — <reason>` (U+2014, single line, no trailing newline).
+- Read `TraceTool.cs` refs region → confirmed `targetSymbol` is non-null at the render (guarded at
+  :526), carries `IsTest`, and that the truncation note (`"reference trace truncated by limit."`)
+  is appended inside the same `else` arm before the tail.
+
+## TDD
+
+Tests written first (red), then implementation (green):
+1. `Refs_NonEmpty_AppendsImpactNudge_ForNonTestTarget` — hint present, real target name, ends the output, exactly one `next:` line.
+2. `Refs_NonEmpty_TruncationNote_KeepsImpactNudgeAsFinalLine` — nudge renders after the truncation note.
+3. `Refs_NonEmpty_TestTarget_SuppressesImpactNudge` — no `next:` for an `IsTest` target.
+4. `Refs_Empty_HasNoImpactNudge` — empty path emits no `next: impact`.
+5. `Refs_NonEmpty_Json_HasNoImpactNudge` — JSON still well-formed, no `next: impact`.
 
 ## Verification
-- Invariant proven: the overview body preview drops `///`, `//!`, and `/** … */` doc-comment lines while
-  keeping plain `//` and `#` comments and code; filtering alone does not flag truncation; `depth=full` body
-  is unchanged and still contains every doc-comment line.
-- Scope: `dotnet test tests/Miller.Tests --filter "FullyQualifiedName~InspectToolTests"` (worker-red-green).
-- Result: **Passed! Failed: 0, Passed: 39, Skipped: 0** (2 new tests), Duration ~0.5s.
-- Timestamp: 2026-07-02.
 
-## Files changed
-- `src/Miller.Server/Tools/InspectTool.cs` — `BodyPreview` + new `FilterDocCommentLines` helper.
-- `tests/Miller.Tests/Server/InspectToolTests.cs` — `DocCommentBodyContent`/`DocCommentBodyFixture` +
-  `Run_SymbolOverview_BodyPreview_DropsDocCommentLines_KeepsCodeAndPlainComments` and
-  `Run_SymbolFull_Body_IsByteIdenticalIncludingDocComments`.
+`dotnet test tests/Miller.Tests --filter "FullyQualifiedName~TraceToolTests"` →
+**Passed! Failed: 0, Passed: 91, Skipped: 0** (188 ms). Build clean under warnings-as-errors.
 
-## Judgment calls
-- Truncation: implemented so caps apply to filtered lines and dropping alone never sets `Truncated`, matching
-  the spec ("dropping alone doesn't mean truncation"). A body short only after filtering shows no truncation
-  note; a genuinely long body still does.
-- Single-line `/** … */` is dropped without opening the block flag (checks for `*/` on the same line).
-- Kept `#` and `//` deliberately — they are commentary, not the doc duplication the audit flagged.
-
-## Self-review findings
-- Verified `depth=full` never routes through `BodyPreview` (separate branch at InspectTool.cs:454-457), so
-  the byte-identical guarantee holds structurally, not just by test.
-- JSON overview path also benefits (same helper) — no separate change needed; existing JSON body-preview tests
-  still pass.
+Gate invariant satisfied: the refs→impact nudge fires only on non-empty, non-test compact refs
+output.
 
 ## Concerns
-- None. Edit is localized; other workers' InspectTool regions were not touched.
+
+None. Scope stayed within the two owned files; other worktree changes
+(`.razorback/sdd/task-1-report.md`, `task-5-report.md`) are other agents' and were left untouched.

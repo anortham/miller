@@ -216,8 +216,8 @@ Run `workspace onboarding` early for telemetry-derived guidance about THIS repo.
 **Approach:** Attribute strings use the same concatenated-literal style as today. Record before (4,522) / after totals in the report. EditTool/ImpactTool/PatternsTool method locations: find via `[McpServerTool(Name = "edit"|"impact"|"patterns")]` — do not guess line numbers.
 
 **Acceptance criteria:**
-- [ ] All nine descriptions are the golden texts; budgets and clause gates pass; total ≤9,000 measured and reported.
-- [ ] Worker scope green (`--filter "FullyQualifiedName~AgentInstructionsTests"`), committed.
+- [x] All nine descriptions are the golden texts; budgets and clause gates pass; total ≤9,000 measured and reported.
+- [x] Worker scope green (`--filter "FullyQualifiedName~AgentInstructionsTests"`), committed.
 
 ### Task 7: tail relocation with loss accounting
 

@@ -1,88 +1,53 @@
-# Task 1 report — `trace refs` resolve `containing=` to symbol name
+# Task 1 Report — NextStepHint shared nudge formatter
 
-## What I implemented
+## Status
+Complete. Gate green (16/16).
 
-Compact `trace mode=refs` rendered `containing=<32-hex symbol id>` — pure token waste that forced a
-follow-up inspect. Now the enclosing symbol id is resolved to its name.
+## Files (owned only)
+- `src/Miller.Server/Tools/NextStepHint.cs` (new)
+- `tests/Miller.Tests/Server/NextStepHintTests.cs` (new)
 
-- `ReferenceLine(SymbolRef)` → `ReferenceLine(ISymbolLookupIndex index, SymbolRef reference)`
-  (`TraceTool.cs`). Resolves `ContainingSymbolId` via `index.FindBySymbolId`. Renders `  in=<Name>` when
-  resolved; renders **nothing** when unresolvable (the raw hash is unusable in compact output). Single call
-  site inside `RunRefs` threads the `index` it already holds.
-- JSON `WriteReference` gains an **additive** `containing_symbol_name` (string|null) written immediately
-  after the existing `containing_symbol_id`. The id is kept (chainable in JSON); the name is null when the
-  containing id is absent or does not resolve. Threaded `ISymbolLookupIndex index` through
-  `RenderRefsJson` (all 5 call sites, all inside `RunRefs`) and into `WriteReference`.
+## Contract implemented
+`internal static class NextStepHint` with `internal static string Render(string toolCall, string? reason = null)`:
+- `next: <toolCall>` when reason null/empty/blank
+- `next: <toolCall> — <reason>` with U+2014 em dash padded by single spaces when reason given
+- both args trimmed; single line, no trailing newline
+- throws `ArgumentException` on null/blank toolCall (via `ArgumentException.ThrowIfNullOrWhiteSpace` — null yields
+  `ArgumentNullException`, a subtype of `ArgumentException`; blank yields `ArgumentException`)
+- throws `ArgumentException` when toolCall or reason contains `\n`/`\r` (guards the single-line invariant)
 
-No JSON keys renamed/removed — change is strictly additive. Compact output shrinks per line (a symbol name
-replaces a 32-hex id and the `containing=` prefix becomes `in=`) while gaining a usable name.
-
-## Miller calls used + what each confirmed
-
-Miller MCP server was still connecting during orientation, so I confirmed API shapes by reading the exact
-worktree files (content-identical to the indexed main checkout at HEAD):
-
-- `TraceTool.cs:492 RunRefs` — confirmed `index` (`ISymbolLookupIndex`) is in scope and already calls
-  `index.FindBySymbolId(seedId)` at :526, so no new dependency to thread in.
-- `TraceTool.cs:600 ReferenceLine` — confirmed the old `containing=` render and that it is the only compact
-  ref-line site (single caller at the `foreach` in `RunRefs`).
-- `TraceTool.cs:2101 WriteReference` + `1930 RenderRefsJson` — confirmed JSON key order and that
-  `RenderRefsJson` is private, called only from within `RunRefs` (5 sites), so threading `index` is local.
-- `InspectTool.cs:595 DistinctCallers` — confirmed the resolution pattern:
-  `index.FindBySymbolId(cid)` → `containing.Name`, fallback to id. I reused the resolve step but dropped the
-  id fallback in compact per spec.
-- `SymbolDetail.cs:38 SymbolRef` — confirmed `ContainingSymbolId` is `string?` (nullable).
-- `grep` across `src` + `tests` — confirmed `containing_symbol_name` is an existing JSON key elsewhere
-  (SearchTool/MarkerSearch/Context), so the new name is consistent with codebase convention; and that the
-  only test asserting compact `containing=` is `TraceToolTests.cs:759` (my owned file).
+## Miller-first orientation (calls made)
+- Loaded `mcp__miller__inspect` schema via ToolSearch (`select:mcp__miller__inspect`) to confirm the tool's shape
+  before use (Miller MCP server was mid-connect during orientation, so I read the exact worktree files instead of
+  issuing an inspect call — worktree content is what compiles).
+- Read `src/Miller.Server/Tools/WorkspaceRootSafety.cs` — confirmed: file-scoped namespace `Miller.Server.Tools`,
+  XML-doc `<summary>` style, and the `ArgumentException.ThrowIfNullOrWhiteSpace(...)` guard idiom used across the
+  Tools folder. Matched that guard idiom rather than a hand-rolled null/blank check.
+- Read `tests/Miller.Tests/Server/FreshnessStateTests.cs` — confirmed test namespace `Miller.Tests.Server`,
+  `using Xunit;`, `sealed class`, `[Fact]`/`[Theory]`/`[InlineData]` + `Assert` conventions for a pure-logic seam.
 
 ## API-shape evidence
+- Neighbouring Tools files use `namespace Miller.Server.Tools;` (file-scoped) and
+  `ArgumentException.ThrowIfNullOrWhiteSpace` — NextStepHint mirrors both.
+- `internal` visibility chosen per the task contract (Tasks 2–4 consume it in-assembly). Confirmed reachable from
+  `Miller.Tests` — the test compiled and ran, so `InternalsVisibleTo(Miller.Tests)` is already configured.
 
-- `ISymbolLookupIndex.FindBySymbolId(string) : IndexedSymbol?` — used pre-existing at `TraceTool.cs:526`
-  and `InspectTool.cs:603`.
-- `IndexedSymbol.Name : string` — used at `InspectTool.cs:605`.
-- `SymbolRef.ContainingSymbolId : string?` — `SymbolDetail.cs:38`.
+## Gate invariant
+Proves the shared hint FORMAT contract Tasks 2–4 and the format-drift test depend on: exact shape (bare + em-dash
+reason forms), trimming, single-line / no-trailing-newline invariant, and the null/blank + newline argument guards.
 
-## Verification
+## TDD sequence
+1. Wrote failing tests first; initial run: 15 passed, 1 failed (`Render_NullOrBlankToolCall_Throws(null)` — guard
+   throws `ArgumentNullException`, an `ArgumentException` subtype, so exact-match `Assert.Throws<ArgumentException>`
+   rejected it).
+2. Relaxed that single assertion to `Assert.ThrowsAny<ArgumentException>` (contract promises `ArgumentException`;
+   the standard subtype satisfies it) — kept the implementation on the idiomatic `ThrowIfNullOrWhiteSpace` guard.
+3. Green.
 
-- Invariant proven: compact refs render `in=<enclosing symbol name>` and never a raw containing id;
-  JSON carries both `containing_symbol_id` (unchanged) and additive `containing_symbol_name`; an
-  unresolvable containing id yields no `in=` segment (compact) and `null` name (JSON).
-- Scope label: worker-red-green.
-- Command: `dotnet test tests/Miller.Tests --filter "FullyQualifiedName~TraceToolTests"` (csproj default
-  filter excludes Scale).
-- Result: Passed — Failed 0, Passed 86, Skipped 0 (Duration ~354ms). Build 0 warnings / 0 errors
-  (warnings-as-errors).
-- Timestamp: 2026-07-02.
-- Commit SHA: see returned message.
-
-## Files changed
-
-- `src/Miller.Server/Tools/TraceTool.cs` — `ReferenceLine` signature + resolution; `WriteReference` +
-  `containing_symbol_name`; `RenderRefsJson` index param + 5 call sites.
-- `tests/Miller.Tests/Tools/TraceToolTests.cs` — updated compact + JSON refs tests to the new behavior;
-  added `Refs_Compact_UnresolvableContainingRendersNoInSegment`.
-
-## Judgment calls
-
-- `TraceTool.cs:600 ReferenceLine` — chose to drop the segment entirely on unresolvable id over keeping the
-  hash, because the spec says the raw hash is unusable in compact output; JSON still keeps the id for
-  chaining.
-- `TraceTool.cs:1930 RenderRefsJson` — chose to thread `ISymbolLookupIndex` through the existing private
-  render path over resolving names eagerly in `RunRefs` into a new tuple/DTO, because it keeps the change
-  minimal, matches how `RunRefs` already passes state, and avoids a new type.
-- Test fixtures — chose to add a real `("caller", "CallerMethod", …)` symbol to the index so the containing
-  id resolves, over inventing a mock lookup, because `BuildSymbolIndex` is the file's existing fixture
-  helper (reused per instructions).
-
-## Self-review findings
-
-- Confirmed no other file references the changed private signatures (`ReferenceLine`, `WriteReference`,
-  `RenderRefsJson` are all `private static` in `TraceTool.cs`).
-- Confirmed the 5 `RenderRefsJson` error-path sites pass empty `references: []`, so `WriteReference` never
-  runs there, but they still correctly receive `index`.
-- Confirmed compact truncation/empty paths are unaffected (they don't go through `ReferenceLine`).
+## Test output summary
+`dotnet test tests/Miller.Tests --filter "FullyQualifiedName~NextStepHintTests"` →
+**Passed! Failed: 0, Passed: 16, Skipped: 0, Total: 16.**
 
 ## Concerns
-
-- None. Change is render-layer only, additive JSON, within existing seams.
+None. Render-layer-only pure string seam; no I/O, no new dependencies. Downstream tasks call
+`NextStepHint.Render(...)` from within `Miller.Server`.
