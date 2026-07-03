@@ -634,8 +634,10 @@ Warnings are errors (`Directory.Build.props`).
   instead of guessing.
 - Bridge trace (`trace mode=bridge`) is provider-scoped, not a general all-language/all-framework feature. Current
   providers are `dotnet-web` (ASP.NET controllers, TypeScript/JS client URL calls, AutoMapper, Entity Framework),
-  `nextjs` (route references to file routes), `nuxt` (NuxtLink route references to Nuxt file routes), `vue`
-  (Vue route references to route definitions), and `react` (React route references to route definitions).
+  `nextjs`/`nextjs-api` (route references to file routes, client requests to Next.js route handlers),
+  `nuxt`/`nuxt-api` (NuxtLink route references to Nuxt file routes, client requests to Nuxt server routes), `vue`
+  (Vue route references to route definitions), `react` (React route references to route definitions), and
+  `backend-http` (client requests to Express/Fastify/FastAPI/Flask/Django/Spring/Go/gin/echo/Rails route templates).
   API handlers, server actions, middleware rewrites, redirects, and runtime route rules need extractor facts before bridge can claim them. The mode intentionally uses the full bridge graph
   for provider-scoped evidence. Normal `search`, `inspect`, graph-only `context`, `impact`, non-bridge `trace`,
   and workspace status/list stay on projection-specific read paths.
