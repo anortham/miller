@@ -1877,6 +1877,68 @@ public sealed class SearchToolTests
     }
 
     [Fact]
+    public void Search_AutoMode_SourceRescue_SuppressesInspectNudge()
+    {
+        // The rescue owns the output's single closing affordance ("Rerun with mode=source ..."); the
+        // inspect nudge on a weak top hit would compete with it, so the nudge must be dropped entirely.
+        string root = Path.Combine(Path.GetTempPath(), "miller-rescue-nudge-" + Guid.NewGuid().ToString("N"));
+        var weakSymbol = Symbol(
+            1,
+            "weak-helper",
+            "KnownSourceErrorHelper",
+            "class",
+            "src/KnownSourceErrorHelper.cs",
+            7,
+            "public sealed class KnownSourceErrorHelper");
+        var provider = new FixedSymbolSearchProvider(
+            new StubSymbolSearchIndex((weakSymbol, 0.05)),
+            root,
+            TextContentIndex(SourceHit(
+                "src/Api.cs",
+                line: 42,
+                snippet: "throw new InvalidOperationException(\"KnownSourceError\");")));
+        var tool = new SearchTool(provider, provider);
+
+        string output = tool.Search("KnownSourceError"); // mode defaults to auto
+
+        Assert.Contains("Source matches also found:", output);
+        Assert.Contains("Rerun with mode=source", output);
+        Assert.DoesNotContain("\nnext: ", output);
+        Assert.DoesNotContain("next: inspect", output);
+    }
+
+    [Fact]
+    public void Search_AutoMode_DocsConfigRescue_SuppressesInspectNudge()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-docs-rescue-nudge-" + Guid.NewGuid().ToString("N"));
+        var weakSymbol = Symbol(
+            1,
+            "workspace-health-symbol",
+            "WorkspaceHealthSnapshot",
+            "class",
+            "src/WorkspaceHealthSnapshot.cs",
+            12,
+            "public sealed class WorkspaceHealthSnapshot");
+        var provider = new FixedSymbolSearchProvider(
+            new StubSymbolSearchIndex((weakSymbol, 0.1)),
+            root,
+            TextContentIndex(
+                CorpusHit(
+                    "docs/workspace-health.md",
+                    TextContentKind.WorkspaceDocs,
+                    line: 9,
+                    snippet: "workspace health explains stale sidecars and recovery steps")));
+        var tool = new SearchTool(provider, provider);
+
+        string output = tool.Search("workspace health"); // mode defaults to auto
+
+        Assert.Contains("Docs/config matches also found:", output);
+        Assert.Contains("Rerun with mode=content", output);
+        Assert.DoesNotContain("\nnext: ", output);
+        Assert.DoesNotContain("next: inspect", output);
+    }
+
+    [Fact]
     public void Search_AutoMode_StrongExactDefinition_DoesNotResolveTextContentProvider()
     {
         string root = Path.Combine(Path.GetTempPath(), "miller-strong-search-" + Guid.NewGuid().ToString("N"));

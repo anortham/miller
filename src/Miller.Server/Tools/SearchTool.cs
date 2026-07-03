@@ -1261,7 +1261,13 @@ public sealed class SearchTool
         var sb = new StringBuilder();
         if (primaryCount > 0)
         {
-            sb.Append(primaryOutput.TrimEnd('\n')).Append("\n\n");
+            // Design rule: max one next-step affordance per output. The rescue's "Rerun with mode=…" line
+            // is this output's single closing affordance, and it only fires when symbol results look weak —
+            // a "next: inspect" nudge on a weak top hit would compete with it. So drop the trailing inspect
+            // nudge that RunAutoSearch appended to primaryOutput. NextStepHint renders the hint as a single
+            // line with no trailing newline, so dropping the final line iff it starts with "next: " is
+            // deterministic.
+            sb.Append(StripTrailingNextHint(primaryOutput.TrimEnd('\n'))).Append("\n\n");
         }
         else if (!string.IsNullOrWhiteSpace(compactBanner))
         {
@@ -1272,6 +1278,17 @@ public sealed class SearchTool
         sb.Append(rescueOutput.TrimEnd('\n'));
         sb.Append('\n').Append(rerunHint);
         return sb.ToString();
+    }
+
+    // Drop a trailing "next: …" nudge line (see RenderAutoTextRescueCompact rationale). Deterministic
+    // because NextStepHint emits the hint as one line with no trailing newline.
+    private static string StripTrailingNextHint(string output)
+    {
+        int lastNewline = output.LastIndexOf('\n');
+        string lastLine = lastNewline < 0 ? output : output[(lastNewline + 1)..];
+        if (!lastLine.StartsWith("next: ", StringComparison.Ordinal))
+            return output;
+        return lastNewline < 0 ? string.Empty : output[..lastNewline];
     }
 
     private static bool HasConcreteExactDefinition(ISymbolLookupIndex index, string query)
