@@ -580,9 +580,10 @@ public sealed class BackendHttpBridgeProvider : IBridgeProvider
 
     /// <summary>
     /// Parse a Rails action list. The 2.7.0 contract types <c>only</c>/<c>except</c> as JSON string arrays, so parse
-    /// with <see cref="JsonSerializer"/> first; on failure fall back to a bracket/comma split so a raw ruby array
-    /// (<c>[:index, :show]</c>) still works — the task asks for leading-<c>:</c> tolerance so Task 7's live extract
-    /// cannot surprise the filter. Each element is normalized to a lowercased action name.
+    /// with <see cref="JsonDocument"/> first (AOT-safe; reflection-based deserialize fails the Native AOT publish);
+    /// on failure fall back to a bracket/comma split so a raw ruby array (<c>[:index, :show]</c>) still works — the
+    /// task asks for leading-<c>:</c> tolerance so Task 7's live extract cannot surprise the filter. Each element is
+    /// normalized to a lowercased action name.
     /// </summary>
     private static HashSet<string> ParseActionList(string raw)
     {
@@ -593,12 +594,14 @@ public sealed class BackendHttpBridgeProvider : IBridgeProvider
 
         try
         {
-            var parsed = JsonSerializer.Deserialize<List<string>>(trimmed);
-            if (parsed is not null)
+            using var doc = JsonDocument.Parse(trimmed);
+            if (doc.RootElement.ValueKind == JsonValueKind.Array)
             {
-                foreach (var element in parsed)
+                foreach (var element in doc.RootElement.EnumerateArray())
                 {
-                    var action = NormalizeAction(element);
+                    if (element.ValueKind != JsonValueKind.String)
+                        continue;
+                    var action = NormalizeAction(element.GetString()!);
                     if (action.Length > 0)
                         actions.Add(action);
                 }
