@@ -197,8 +197,8 @@ Run `workspace onboarding` early for telemetry-derived guidance about THIS repo.
 **Approach:** Golden text verbatim; if >1,900 chars normalized, trim whitespace only, else plan-mismatch. Keep the embedded-resource loading path untouched. Other AgentInstructionsTests members that assert against tool-list phrases in the old doc must be updated to the new core's phrasing — enumerate them first (`--filter AgentInstructionsTests` red run).
 
 **Acceptance criteria:**
-- [ ] `Load()` ≤1,900 normalized; every tool named in a routing line; 12k constant + fiction test gone.
-- [ ] Worker scope green (`--filter "FullyQualifiedName~AgentInstructionsTests"`), committed.
+- [x] `Load()` ≤1,900 normalized; every tool named in a routing line; 12k constant + fiction test gone.
+- [x] Worker scope green (`--filter "FullyQualifiedName~AgentInstructionsTests"`), committed.
 
 ### Task 6: nine golden descriptions + description gates
 
