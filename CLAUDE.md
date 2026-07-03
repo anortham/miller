@@ -253,6 +253,16 @@ scripts/test.ps1 all
   [`MILLER_AGENT_INSTRUCTIONS.md`](src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md), embedded in the binary
   and set as `ServerInstructions`. Edit the markdown; `AgentInstructionsTests` guards that every tool stays
   documented.
+- **Guidance delivery channels (load-bearing).** Guidance rides three channels with distinct jobs: the
+  embedded `MILLER_AGENT_INSTRUCTIONS.md` core is the DISCOVERY contract (≤1,900 chars — Claude Code truncates
+  MCP `ServerInstructions` at ~2KB/server inside a shared ~4KB block, silent and mid-sentence, so the routing
+  table is written most-important-first); the nine tool `[Description]`s are the post-discovery USAGE contracts
+  (≤900 default, `trace` ≤1,500, `search` ≤1,100, total ≤9,000 with params — descriptions are deferred under
+  Tool Search and cannot carry discovery); one-line success-path nudges through `NextStepHint` are the adoption
+  lever (compact-only, JSON untouched). Do NOT grow the core or a description budget, re-add a long embedded
+  tail, or re-invent the deleted 12k budget without first reading
+  [`docs/adr/ADR-0001-guidance-delivery-channels.md`](docs/adr/ADR-0001-guidance-delivery-channels.md); gates
+  live in `AgentInstructionsTests`.
 
 ## AGENTS.md is generated
 

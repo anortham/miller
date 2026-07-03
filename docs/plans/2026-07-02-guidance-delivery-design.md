@@ -195,6 +195,8 @@ tool knows its result shape.
   (`workspace onboarding --json` / telemetry export) and append a follow-up section comparing
   share for the starved tools (context, trace, impact, patterns, edit). Report-only — no
   numeric gate, because the telemetry population is small and maintainer-skewed.
+- Follow-up checkpoint due ~2026-07-23: re-read the tool mix with `miller workspace onboarding --json`
+  and append the before/after comparison to this doc.
 
 ### 6. Cross-harness posture
 
