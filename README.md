@@ -275,8 +275,9 @@ selector: display ID, unique prefix, full ID, registered root path, `current`, o
 shortest extracted graph path to `to`, and `mode=bridge` follows provider-scoped bridge evidence. Current providers
 are `dotnet-web`, `nextjs`, `nextjs-api`, `nuxt`, `nuxt-api`, `vue`, `react`, and `backend-http`; they link route
 references to file routes/definitions, client requests to Next.js/Nuxt route handlers, and client requests
-(fetch/axios/`requests`/`httpx`/`net/http`/`Net::HTTP`/`HttpClient`) to Express/Fastify/FastAPI/Flask/Django/Spring/
-Go/gin/echo/Rails route templates — not every framework route shape.
+(fetch/axios/`requests`/`httpx`/`net/http`/`Net::HTTP`/`HttpClient`/Ktor/Guzzle/Req/reqwest) to
+Express/Fastify/FastAPI/Flask/Django/Spring/Go/gin/echo/Rails/NestJS/Laravel/Phoenix/axum/actix route templates —
+not every framework route shape.
 No-path, unsupported bridge, and ambiguous-target results include bounded next actions; JSON callers get the same
 guidance in additive `next_actions` rows.
 
@@ -637,7 +638,8 @@ Warnings are errors (`Directory.Build.props`).
   `nextjs`/`nextjs-api` (route references to file routes, client requests to Next.js route handlers),
   `nuxt`/`nuxt-api` (NuxtLink route references to Nuxt file routes, client requests to Nuxt server routes), `vue`
   (Vue route references to route definitions), `react` (React route references to route definitions), and
-  `backend-http` (client requests to Express/Fastify/FastAPI/Flask/Django/Spring/Go/gin/echo/Rails route templates).
+  `backend-http` (client requests to Express/Fastify/FastAPI/Flask/Django/Spring/Go/gin/echo/Rails/
+  NestJS/Laravel/Phoenix/axum/actix route templates).
   API handlers, server actions, middleware rewrites, redirects, and runtime route rules need extractor facts before bridge can claim them. The mode intentionally uses the full bridge graph
   for provider-scoped evidence. Normal `search`, `inspect`, graph-only `context`, `impact`, non-bridge `trace`,
   and workspace status/list stay on projection-specific read paths.

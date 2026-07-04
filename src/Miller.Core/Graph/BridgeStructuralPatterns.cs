@@ -17,10 +17,10 @@ public static class BridgeStructuralPatterns
     public const string NuxtServerRoute = "nuxt.server_route.v1";
     public const string AspNetAttributeRoute = "aspnet.attribute_route.v1";
 
-    // Backend HTTP boundary families (julie-extractors 2.7.0). Route-template families (10) join
+    // Backend HTTP boundary families, wave 1 (julie-extractors 2.7.0). Route-template families (10) join
     // client requests to server handlers via normalized_route_template; mount/include families (4)
     // are cross-file prefix-join inputs; Rails resource_route expands to routes and rails.mount is
-    // evidence-only.
+    // evidence-only. Wave 2 (2.8.0) adds twelve more just below.
     public const string ExpressRoute = "express.route.v1";
     public const string ExpressRouterMount = "express.router_mount.v1";
     public const string FastifyRoute = "fastify.route.v1";
@@ -37,6 +37,25 @@ public static class BridgeStructuralPatterns
     public const string RailsRoute = "rails.route.v1";
     public const string RailsResourceRoute = "rails.resource_route.v1";
     public const string RailsMount = "rails.mount.v1";
+
+    // Backend HTTP boundary families, wave 2 (julie-extractors 2.8.0 "finish the HTTP boundary lane"): six more
+    // mainstream stacks. Route-template families (NestJS/Laravel/Phoenix/axum/actix) join client requests on
+    // normalized_route_template exactly like the 2.7.0 families; the resource_route families are aggregate
+    // declarations expanded to concrete routes on Miller's side (as with rails.resource_route); the prefix/mount
+    // families are cross-file prefix-join inputs. Kotlin+Spring routes reuse SpringRequestMapping and the four new
+    // client languages reuse HttpClientRequest, so neither needs a new id here.
+    public const string NestJsRoute = "nestjs.route.v1";
+    public const string LaravelRoute = "laravel.route.v1";
+    public const string LaravelResourceRoute = "laravel.resource_route.v1";
+    public const string LaravelRoutePrefix = "laravel.route_prefix.v1";
+    public const string PhoenixRoute = "phoenix.route.v1";
+    public const string PhoenixResourceRoute = "phoenix.resource_route.v1";
+    public const string PhoenixForward = "phoenix.forward.v1";
+    public const string AxumRoute = "axum.route.v1";
+    public const string AxumNest = "axum.nest.v1";
+    public const string ActixAttributeRoute = "actix.attribute_route.v1";
+    public const string ActixScopeRoute = "actix.scope_route.v1";
+    public const string ActixMount = "actix.mount.v1";
 
     /// <summary>
     /// The <c>SqliteBridgeReader.ReadStructuralFacts</c> SQL load whitelist: a pattern id absent here never
@@ -74,13 +93,29 @@ public static class BridgeStructuralPatterns
         RailsRoute,
         RailsResourceRoute,
         RailsMount,
+        // julie-extractors 2.8.0 wave 2.
+        NestJsRoute,
+        LaravelRoute,
+        LaravelResourceRoute,
+        LaravelRoutePrefix,
+        PhoenixRoute,
+        PhoenixResourceRoute,
+        PhoenixForward,
+        AxumRoute,
+        AxumNest,
+        ActixAttributeRoute,
+        ActixScopeRoute,
+        ActixMount,
     ];
 
     /// <summary>
-    /// The 10 backend route-template families the <c>backend-http</c> provider joins against
-    /// <c>normalized_route_template</c>. Excludes the four mount/include families (prefix-join inputs),
-    /// <see cref="RailsResourceRoute"/> (expanded to routes on Miller's side), and <see cref="RailsMount"/>
-    /// (evidence-only). Consumed by <c>StructuralRouteFactAdapter.TryReadBackendRoute</c> as the family gate.
+    /// The 16 backend route-template families the <c>backend-http</c> provider joins against
+    /// <c>normalized_route_template</c> (2.7.0: Express/Fastify/FastAPI/Flask/Django/Spring/Go net-http/gin/echo/
+    /// Rails; 2.8.0: NestJS/Laravel/Phoenix/axum + both actix provenances). Excludes the prefix/mount families
+    /// (cross-file prefix-join inputs), the <see cref="RailsResourceRoute"/>/<see cref="LaravelResourceRoute"/>/
+    /// <see cref="PhoenixResourceRoute"/> aggregate declarations (expanded to concrete routes on Miller's side),
+    /// and <see cref="RailsMount"/> (evidence-only). Consumed by
+    /// <c>StructuralRouteFactAdapter.TryReadBackendRoute</c> as the family gate.
     /// </summary>
     public static readonly IReadOnlyList<string> BackendRoutePatternIds =
     [
@@ -94,5 +129,14 @@ public static class BridgeStructuralPatterns
         GinRoute,
         EchoRoute,
         RailsRoute,
+        // julie-extractors 2.8.0: plain route-template families (each carries normalized_route_template, so
+        // TryReadBackendRoute joins them with no family-specific read change). actix has two route provenances
+        // (attribute macros + scope call routing) mirroring the shipped ASP.NET attribute-vs-call split.
+        NestJsRoute,
+        LaravelRoute,
+        PhoenixRoute,
+        AxumRoute,
+        ActixAttributeRoute,
+        ActixScopeRoute,
     ];
 }

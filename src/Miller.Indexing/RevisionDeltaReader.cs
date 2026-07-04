@@ -26,6 +26,7 @@ public sealed record RevisionDeltaResult(
     RevisionDeltaStatus Status,
     long FromRevision,
     long ToRevision,
+    string? ArtifactId,
     IReadOnlyList<string> ChangedPaths,
     string Reason);
 
@@ -57,7 +58,7 @@ public static class RevisionDeltaReader
     /// DB, missing journal, unreconstructable span, WAL/read failure) — those map to
     /// <see cref="RevisionDeltaStatus.Unavailable"/>.
     /// </summary>
-    public static RevisionDeltaResult Read(string extractDbPath, long fromRevision)
+    public static RevisionDeltaResult Read(string extractDbPath, long fromRevision, string? fromArtifactId = null)
     {
         string abs;
         try
@@ -66,12 +67,12 @@ public static class RevisionDeltaReader
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {
-            return Unavailable(fromRevision, toRevision: 0, "invalid_db_path");
+            return Unavailable(fromRevision, toRevision: 0, artifactId: null, "invalid_db_path");
         }
 
         // A missing extract DB is not a crash: the mechanism simply cannot vouch for any span.
         if (!File.Exists(abs))
-            return Unavailable(fromRevision, toRevision: 0, "no_index");
+            return Unavailable(fromRevision, toRevision: 0, artifactId: null, "no_index");
 
         try
         {
@@ -80,37 +81,44 @@ public static class RevisionDeltaReader
             // An extract predating the change journal (older julie-extract) cannot serve deltas → unavailable, so
             // Eros negotiates via the capability and never interprets a legacy-shaped response as "complete".
             if (!TableExists(conn, "extraction_revisions") || !TableExists(conn, "revision_file_changes"))
-                return Unavailable(fromRevision, toRevision: 0, "no_journal");
+                return Unavailable(fromRevision, toRevision: 0, artifactId: null, "no_journal");
 
             long current = ScalarLong(conn, "SELECT MAX(revision_id) FROM extraction_revisions;");
             long? floor = ScalarNullableLong(conn, "SELECT MIN(revision_id) FROM extraction_revisions;");
+            string? artifactId = ReadArtifactId(conn);
 
             // --- R3 span validation (never a guessed-empty delta) ---
             if (fromRevision < 0)
-                return Unavailable(fromRevision, current, "invalid_from_revision");
+                return Unavailable(fromRevision, current, artifactId, "invalid_from_revision");
+            if (string.IsNullOrWhiteSpace(artifactId))
+                return Unavailable(fromRevision, current, artifactId, "no_artifact_id");
+            if (string.IsNullOrWhiteSpace(fromArtifactId))
+                return Unavailable(fromRevision, current, artifactId, "missing_from_artifact_id");
+            if (!string.Equals(fromArtifactId, artifactId, StringComparison.Ordinal))
+                return Unavailable(fromRevision, current, artifactId, "artifact_changed");
             if (fromRevision > current)
                 // The requested base is ahead of the current revision: the counter went backward (a full rebuild
                 // restarted julie's revision counter) or the base is bogus. We cannot reconstruct this span.
-                return Unavailable(fromRevision, current, "from_after_current");
+                return Unavailable(fromRevision, current, artifactId, "from_after_current");
             if (floor is long retainedFloor && fromRevision < retainedFloor - 1)
                 // History below the base was pruned/rebuilt: revisions between the base and the retained floor are
                 // unrecorded, so the span is unreconstructable.
-                return Unavailable(fromRevision, current, "pruned_history");
+                return Unavailable(fromRevision, current, artifactId, "pruned_history");
 
             // The half-open span (from, current] is fully journaled; report every path it touched.
             IReadOnlyList<string> paths = ReadChangedPaths(conn, fromRevision, current);
-            return new RevisionDeltaResult(RevisionDeltaStatus.Complete, fromRevision, current, paths, "complete");
+            return new RevisionDeltaResult(RevisionDeltaStatus.Complete, fromRevision, current, artifactId, paths, "complete");
         }
         catch (Exception ex) when (ex is InvalidOperationException or SqliteException or IOException)
         {
             // WAL-sidecar / read-only / corrupt-DB failure mid-read: cannot vouch for the span → unavailable,
             // not a thrown exception the CLI would surface as an error.
-            return Unavailable(fromRevision, toRevision: 0, "read_error");
+            return Unavailable(fromRevision, toRevision: 0, artifactId: null, "read_error");
         }
     }
 
-    private static RevisionDeltaResult Unavailable(long fromRevision, long toRevision, string reason) =>
-        new(RevisionDeltaStatus.Unavailable, fromRevision, toRevision, Array.Empty<string>(), reason);
+    private static RevisionDeltaResult Unavailable(long fromRevision, long toRevision, string? artifactId, string reason) =>
+        new(RevisionDeltaStatus.Unavailable, fromRevision, toRevision, artifactId, Array.Empty<string>(), reason);
 
     private static IReadOnlyList<string> ReadChangedPaths(SqliteConnection conn, long fromRevision, long toRevision)
     {
@@ -157,5 +165,16 @@ public static class RevisionDeltaReader
         cmd.CommandText = sql;
         object? value = cmd.ExecuteScalar();
         return value is null or DBNull ? null : Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static string? ReadArtifactId(SqliteConnection conn)
+    {
+        if (!TableExists(conn, "artifact_metadata"))
+            return null;
+
+        using SqliteCommand cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT value FROM artifact_metadata WHERE key = 'artifact_id' LIMIT 1;";
+        object? value = cmd.ExecuteScalar();
+        return value is null or DBNull ? null : Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture);
     }
 }

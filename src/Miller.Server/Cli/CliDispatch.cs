@@ -828,11 +828,11 @@ public static class CliDispatch
 
     private const string ImpactUsage =
         "miller impact <symbol>|--changed-paths PATH[,PATH...]|--diff DIFF|--git [--base REF] [--staged]|" +
-        "--from-index-revision N " +
+        "--from-index-revision N [--from-artifact-id ID] " +
         "[--workspace-id SELECTOR] [--workspace DIR] [--max-depth N] [--limit N] [--json]";
 
     private const string ImpactDeltaUsage =
-        "miller impact --from-index-revision N [--workspace-id SELECTOR] [--workspace DIR] " +
+        "miller impact --from-index-revision N [--from-artifact-id ID] [--workspace-id SELECTOR] [--workspace DIR] " +
         "[--max-depth N] [--limit N] [--json]";
 
     // The index-revision delta mode (CT revision-delta contract R0–R3): emit the typed delta envelope
@@ -843,7 +843,8 @@ public static class CliDispatch
         string? raw = o.Value("from-index-revision");
         if (string.IsNullOrWhiteSpace(raw)
             || !long.TryParse(raw, System.Globalization.NumberStyles.Integer,
-                System.Globalization.CultureInfo.InvariantCulture, out long fromRevision))
+                System.Globalization.CultureInfo.InvariantCulture, out long fromRevision)
+            || fromRevision < 0)
             return Usage(err, ImpactDeltaUsage);
 
         // This channel is exclusive: it must not be combined with a symbol/changed-paths/diff/git base.
@@ -860,7 +861,9 @@ public static class CliDispatch
         string workspaceId = o.Value("workspace-id")
             ?? ctx.WorkspaceId ?? ctx.CanonicalRoot ?? ctx.WorkspaceRoot;
 
-        RevisionDeltaResult delta = RevisionDeltaReader.Read(ctx.ExtractDbPath, fromRevision);
+        string? rawArtifactId = o.Value("from-artifact-id");
+        string? fromArtifactId = string.IsNullOrWhiteSpace(rawArtifactId) ? null : rawArtifactId;
+        RevisionDeltaResult delta = RevisionDeltaReader.Read(ctx.ExtractDbPath, fromRevision, fromArtifactId);
         bool complete = delta.Status == RevisionDeltaStatus.Complete;
 
         // R2: exclude ignored/tooling paths before they can reach the envelope (defense-in-depth over the journal).
@@ -882,7 +885,8 @@ public static class CliDispatch
 
             string output = ImpactTool.RenderIndexRevisionDelta(
                 workspaceId, complete, fromRevision, delta.ToRevision, changedPaths,
-                index, graph, o.Int("max-depth", 2), o.Int("limit", 100), json);
+                index, graph, o.Int("max-depth", 2), o.Int("limit", 100), json,
+                delta.ArtifactId, fromArtifactId, delta.Reason);
             outw.WriteLine(output);
             return 0;
         }

@@ -60,11 +60,25 @@ public static class FileRouteMatcher
             if (route[index] == '#')
                 return index;
 
-            if (route[index] == '?' && !IsColonOptionalMarker(route, index))
+            if (route[index] == '?' && !IsColonOptionalMarker(route, index) && !IsBraceOptionalMarker(route, index))
                 return index;
         }
 
         return -1;
+    }
+
+    // Laravel's optional route param is the brace form "{id?}" (effective_route_template preserves the raw '?'; only
+    // normalize_brace_template folds it away). The '?' immediately before the segment-closing '}' is that marker, not
+    // a query-string separator — without this, SuffixStart truncates "/users/{id?}" to "/users/{id" (an unmatchable
+    // literal) and every optional-param Laravel route inside a prefix group loses its bridge edge.
+    private static bool IsBraceOptionalMarker(string route, int markerIndex)
+    {
+        if (markerIndex + 1 >= route.Length || route[markerIndex + 1] != '}')
+            return false;
+
+        var segmentStart = route.LastIndexOf('/', markerIndex - 1);
+        segmentStart = segmentStart < 0 ? 0 : segmentStart + 1;
+        return segmentStart < markerIndex && route[segmentStart] == '{';
     }
 
     internal static bool IsDynamicSegment(string segment) =>

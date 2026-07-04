@@ -12,19 +12,24 @@ index-revision base rides its own flag. The mode is advertised by capability —
 ## Command
 
 ```
-miller impact --workspace-id <SELECTOR> --json --from-index-revision <N>
+miller impact --workspace-id <SELECTOR> --json --from-index-revision <N> --from-artifact-id <ID>
 ```
 
 - `--from-index-revision <N>`: the base index revision (a non-negative integer — the `revision_id` counter
   reported by `workspace status`/`refresh` as `revision`/`LatestRevision`). The delta covers the half-open span
   `(N, current]`.
+- `--from-artifact-id <ID>`: the base artifact generation id from `workspace status --json` field
+  `index.artifact_id`. A matching artifact id is required for a `"complete"` delta because full rebuilds replace
+  the DB and restart the revision counter. If this flag is missing or does not match the current artifact id, the
+  command returns `delta_status: "unavailable"` rather than guessing from the numeric revision alone.
 - `--workspace-id <SELECTOR>` / `--workspace <DIR>`: the usual read-context selector.
 - `--json`: selects the envelope below. Without it, a human-readable compact summary is written instead; the
   envelope is the stable machine surface.
 - `--max-depth <N>` / `--limit <N>`: bound the `impacted`/`tests` reverse-reachability, as for a normal impact.
 
 The mode is exclusive: combining `--from-index-revision` with a symbol target, `--changed-paths`, `--diff`, or
-`--git`/`--base`/`--staged` is a usage error (exit 2). A missing or non-integer value is a usage error (exit 2).
+`--git`/`--base`/`--staged` is a usage error (exit 2). A missing, negative, or non-integer revision value is a
+usage error (exit 2).
 
 ## Top-level shape
 
@@ -32,6 +37,9 @@ The mode is exclusive: combining `--from-index-revision` with a symbol target, `
 {
   "workspace_id": "…",
   "delta_status": "complete",
+  "artifact_id": "artifact-current",
+  "from_artifact_id": "artifact-current",
+  "delta_reason": "complete",
   "from_revision": 267,
   "to_revision": 273,
   "changed_paths": ["src/Service.cs", "fixtures/sample-data.csv"],
@@ -47,6 +55,12 @@ The mode is exclusive: combining `--from-index-revision` with a symbol target, `
 - `delta_status` (string): exactly `"complete"` or `"unavailable"`. This is the ONLY completeness signal.
   Consumers must treat a missing field, or any value other than `"complete"`, as unavailable, and must NEVER infer
   completeness from the presence or emptiness of `changed_paths`.
+- `artifact_id` (string or null): the current extract artifact generation id. Consumers should persist this with
+  `to_revision` as the next base watermark.
+- `from_artifact_id` (string or null): echoes the caller's `--from-artifact-id`, or null when omitted.
+- `delta_reason` (string): stable diagnostic token for logging and fixtures, such as `"complete"`,
+  `"missing_from_artifact_id"`, `"artifact_changed"`, `"from_after_current"`, `"pruned_history"`, `"no_journal"`,
+  or `"read_error"`. Consumers must still gate behavior on `delta_status`, not this field.
 - `from_revision` (integer): the base revision passed in.
 - `to_revision` (integer): the revision the delta was ACTUALLY computed to — the current index revision at read
   time. Reported even when `delta_status` is `"unavailable"` so a consumer can compare it against the revision it
@@ -82,6 +96,8 @@ When the mechanism cannot vouch for the span it returns `delta_status: "unavaila
 
 - the base is ahead of the current revision (`from_revision > to_revision`) — a full rebuild restarted julie's
   revision counter (a new index generation), or the base is bogus;
+- the caller omits `--from-artifact-id`, the current artifact has no readable id, or the caller's artifact id does
+  not match the current artifact id — the numeric revision may belong to a different DB generation;
 - the base is below the retained history floor — earlier revisions were pruned/rebuilt and the span cannot be
   reconstructed;
 - the extract has no change journal (an older julie-extract predating it), the extract DB is missing, or a read
@@ -93,13 +109,12 @@ observe the skew.
 A base equal to the current revision, or a span in which nothing changed, is `"complete"` with an empty
 `changed_paths` — a truthful "nothing changed since the base", distinct from unavailable.
 
-### Generation boundary (known limitation)
+### Generation boundary
 
-The base is a bare integer with no generation token. The common rebuild case — where the restarted counter is at
-or below the base — is caught as `from_after_current`. A pathological case (a rebuild restarts the counter, then
-the new generation climbs back past the old base before the consumer polls again) is not detectable from the
-integer alone; it is closed on the consumer side by the `to_revision` echo plus the consumer's rejection of any
-response whose `to_revision` differs from the revision it observed.
+The base is a revision plus an artifact id. Miller returns `"complete"` only when the caller's artifact id matches
+the current artifact id and the revision span is reconstructable inside that same artifact generation. This closes
+the full-rebuild case where julie's restarted counter later climbs past an old base revision: the numeric span may
+look valid, but the artifact id mismatch forces `"unavailable"`.
 
 ## Capability
 

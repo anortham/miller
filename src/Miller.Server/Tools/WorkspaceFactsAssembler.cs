@@ -41,6 +41,7 @@ internal static class WorkspaceFactsAssembler
                 LatestObservedRevision: revision,
                 IndexFresh: IndexFresh(row, profile),
                 QueueEmpty: true,
+                ArtifactId: TryReadArtifactId(row.IndexDbPath),
                 FreshnessStatus: FreshnessStatus(row, profile),
                 WarningText: WarningText(row, profile),
                 DisplayId: row.DisplayId,
@@ -80,6 +81,7 @@ internal static class WorkspaceFactsAssembler
             LatestObservedRevision: 0,
             IndexFresh: null,
             QueueEmpty: true,
+            ArtifactId: TryReadArtifactId(context.ExtractDbPath),
             FreshnessStatus: "unregistered",
             ServerVersion: MillerVersion.Current,
             ServerProcessId: Environment.ProcessId,
@@ -216,6 +218,19 @@ internal static class WorkspaceFactsAssembler
         UsesMcpFreshness(profile)
             ? WorkspaceFreshnessView.WarningTextFor(refreshResult: null)
             : row.LastError;
+
+    private static string? TryReadArtifactId(string dbPath)
+    {
+        try
+        {
+            using var reader = new FreshnessReader(dbPath);
+            return reader.ArtifactId();
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or InvalidOperationException or IOException or SqliteException)
+        {
+            return null;
+        }
+    }
 
     private static bool IsHealthProfile(WorkspaceRegisteredFactsProfile profile) =>
         profile is WorkspaceRegisteredFactsProfile.CliHealth or WorkspaceRegisteredFactsProfile.McpHealth;

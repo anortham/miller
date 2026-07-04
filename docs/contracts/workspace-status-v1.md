@@ -41,6 +41,8 @@ continuous testing, launcher smokes, fleet inventory, and local readiness checks
 - `known_extensions`: number of known extracted extensions.
 - `built_revision`: revision used to build the in-memory index.
 - `latest_revision`: latest readable extract revision observed on disk.
+- `artifact_id`: current extract artifact generation ID, or `null` when unavailable. Pair this with
+  `latest_revision` when calling `impact --from-index-revision`.
 - `index_fresh`: `true`, `false`, or `null` when freshness is not known.
 - `freshness_status`: stable status string such as `ready`, `stale`, or `missing`.
 - `warning`: warning text, or `null`.
@@ -67,6 +69,7 @@ Eros CT may depend on:
 
 - `index.built_revision`
 - `index.latest_revision`
+- `index.artifact_id`
 - `index.freshness_status`
 - `index.queue_empty`
 - `index.content_corpus.state`

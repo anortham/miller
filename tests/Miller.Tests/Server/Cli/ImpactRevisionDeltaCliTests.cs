@@ -16,6 +16,8 @@ namespace Miller.Tests.Server.Cli;
 /// </summary>
 public sealed class ImpactRevisionDeltaCliTests : IDisposable
 {
+    private const string DefaultArtifactId = "artifact-default";
+
     private readonly string _dir;
 
     public ImpactRevisionDeltaCliTests()
@@ -67,7 +69,11 @@ public sealed class ImpactRevisionDeltaCliTests : IDisposable
             changes: new[] { new JulieDbFixture.RevisionFileChangeRow(2, "src/Service.cs", "updated") });
 
         var (code, outText, errText) = Run(
-            new[] { "impact", "--workspace-id", "current", "--json", "--from-index-revision", "1" },
+            new[]
+            {
+                "impact", "--workspace-id", "current", "--json",
+                "--from-index-revision", "1", "--from-artifact-id", DefaultArtifactId,
+            },
             Context(fx));
 
         Assert.Equal(0, code);
@@ -79,6 +85,9 @@ public sealed class ImpactRevisionDeltaCliTests : IDisposable
         // Byte-for-byte frozen contract (Eros Task 1 fixtures): field names + types.
         Assert.Equal("current", root.GetProperty("workspace_id").GetString());
         Assert.Equal("complete", root.GetProperty("delta_status").GetString());
+        Assert.Equal(DefaultArtifactId, root.GetProperty("artifact_id").GetString());
+        Assert.Equal(DefaultArtifactId, root.GetProperty("from_artifact_id").GetString());
+        Assert.Equal("complete", root.GetProperty("delta_reason").GetString());
         Assert.Equal(1, root.GetProperty("from_revision").GetInt64());
         Assert.Equal(2, root.GetProperty("to_revision").GetInt64());
         Assert.Equal(JsonValueKind.Array, root.GetProperty("changed_paths").ValueKind);
@@ -105,7 +114,11 @@ public sealed class ImpactRevisionDeltaCliTests : IDisposable
             });
 
         var (code, outText, _) = Run(
-            new[] { "impact", "--workspace-id", "current", "--json", "--from-index-revision", "1" },
+            new[]
+            {
+                "impact", "--workspace-id", "current", "--json",
+                "--from-index-revision", "1", "--from-artifact-id", DefaultArtifactId,
+            },
             Context(fx));
 
         Assert.Equal(0, code);
@@ -128,15 +141,69 @@ public sealed class ImpactRevisionDeltaCliTests : IDisposable
             changes: new[] { new JulieDbFixture.RevisionFileChangeRow(2, "src/Service.cs", "updated") });
 
         var (code, outText, _) = Run(
-            new[] { "impact", "--workspace-id", "current", "--json", "--from-index-revision", "999" },
+            new[]
+            {
+                "impact", "--workspace-id", "current", "--json",
+                "--from-index-revision", "999", "--from-artifact-id", DefaultArtifactId,
+            },
             Context(fx));
 
         Assert.Equal(0, code);
         using JsonDocument doc = JsonDocument.Parse(outText);
         JsonElement root = doc.RootElement;
         Assert.Equal("unavailable", root.GetProperty("delta_status").GetString());
+        Assert.Equal("from_after_current", root.GetProperty("delta_reason").GetString());
         Assert.Equal(999, root.GetProperty("from_revision").GetInt64());
         Assert.Equal(2, root.GetProperty("to_revision").GetInt64());
+        Assert.Empty(root.GetProperty("changed_paths").EnumerateArray());
+    }
+
+    [Fact]
+    public void Delta_Json_MissingArtifactBase_IsUnavailable_NotComplete()
+    {
+        using JulieDbFixture fx = Build(
+            revisions: new[] { new JulieDbFixture.RevisionRow(1), new JulieDbFixture.RevisionRow(2) },
+            changes: new[] { new JulieDbFixture.RevisionFileChangeRow(2, "src/Service.cs", "updated") });
+
+        var (code, outText, errText) = Run(
+            new[] { "impact", "--workspace-id", "current", "--json", "--from-index-revision", "1" },
+            Context(fx));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        JsonElement root = doc.RootElement;
+        Assert.Equal("unavailable", root.GetProperty("delta_status").GetString());
+        Assert.Equal("missing_from_artifact_id", root.GetProperty("delta_reason").GetString());
+        Assert.Equal(DefaultArtifactId, root.GetProperty("artifact_id").GetString());
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("from_artifact_id").ValueKind);
+        Assert.Empty(root.GetProperty("changed_paths").EnumerateArray());
+    }
+
+    [Fact]
+    public void Delta_Json_ArtifactMismatch_IsUnavailableEvenWhenRevisionSpanLooksComplete()
+    {
+        using JulieDbFixture fx = Build(
+            revisions: new[] { new JulieDbFixture.RevisionRow(51), new JulieDbFixture.RevisionRow(101) },
+            changes: new[] { new JulieDbFixture.RevisionFileChangeRow(101, "src/Service.cs", "updated") });
+
+        var (code, outText, errText) = Run(
+            new[]
+            {
+                "impact", "--workspace-id", "current", "--json",
+                "--from-index-revision", "50", "--from-artifact-id", "artifact-before-rebuild",
+            },
+            Context(fx));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        JsonElement root = doc.RootElement;
+        Assert.Equal("unavailable", root.GetProperty("delta_status").GetString());
+        Assert.Equal("artifact_changed", root.GetProperty("delta_reason").GetString());
+        Assert.Equal(DefaultArtifactId, root.GetProperty("artifact_id").GetString());
+        Assert.Equal("artifact-before-rebuild", root.GetProperty("from_artifact_id").GetString());
+        Assert.Equal(101, root.GetProperty("to_revision").GetInt64());
         Assert.Empty(root.GetProperty("changed_paths").EnumerateArray());
     }
 
@@ -156,6 +223,25 @@ public sealed class ImpactRevisionDeltaCliTests : IDisposable
     }
 
     [Fact]
+    public void Delta_NegativeRevision_IsUsageError()
+    {
+        using JulieDbFixture fx = Build(
+            revisions: new[] { new JulieDbFixture.RevisionRow(1) },
+            changes: Array.Empty<JulieDbFixture.RevisionFileChangeRow>());
+
+        var (code, _, errText) = Run(
+            new[]
+            {
+                "impact", "--workspace-id", "current", "--json",
+                "--from-index-revision", "-1", "--from-artifact-id", DefaultArtifactId,
+            },
+            Context(fx));
+
+        Assert.Equal(2, code);
+        Assert.Contains("--from-index-revision", errText);
+    }
+
+    [Fact]
     public void Delta_RejectsCombiningWithSymbolTarget()
     {
         using JulieDbFixture fx = Build(
@@ -163,7 +249,11 @@ public sealed class ImpactRevisionDeltaCliTests : IDisposable
             changes: Array.Empty<JulieDbFixture.RevisionFileChangeRow>());
 
         var (code, _, errText) = Run(
-            new[] { "impact", "--workspace-id", "current", "--json", "--from-index-revision", "1", "SomeSymbol" },
+            new[]
+            {
+                "impact", "--workspace-id", "current", "--json",
+                "--from-index-revision", "1", "--from-artifact-id", DefaultArtifactId, "SomeSymbol",
+            },
             Context(fx));
 
         Assert.Equal(2, code);

@@ -509,17 +509,17 @@ public sealed class LiveBridgeTraceTests
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────────────────────
-    // TASK 7 — backend-http boundary language-parity gate (julie-extract 2.7.0). One grouped polyglot fixture
-    // per scenario, each extracted LIVE through the real binary, proving Miller CONSUMES every new route/mount
-    // family and every new client language end-to-end (fact emission → backend-http provider → Hits edge → band
-    // → rendered trace). Six behavioral group tests plus one aggregation test that unions per-family emission and
-    // per-client-language emission across ALL group workspaces.
+    // TASK 7 — backend-http boundary language-parity gate (julie-extract 2.7.0 + 2.8.0). One grouped polyglot
+    // fixture per scenario, each extracted LIVE through the real binary, proving Miller CONSUMES every new
+    // route/mount family and every new client language end-to-end (fact emission → backend-http provider → Hits
+    // edge → band → rendered trace). Seven behavioral group tests plus one aggregation test that unions per-family
+    // emission and per-client-language emission across ALL group workspaces.
     //
     // SCOPE OF THE PARITY CLAIM (state it, don't imply): these tests live-verify Miller's per-family CONSUMPTION
     // and per-client-language CONSUMPTION on REPRESENTATIVE fixtures — one idiomatic shape per family, one client
     // per language. The full per-language×per-family matrix (express in js AND jsx AND ts AND tsx, spring across
     // annotation shapes, etc.) is owned UPSTREAM by julie-extractors' capability-matrix and golden gates; Miller
-    // does not re-prove extractor coverage. It proves that each of the 16 families and each of the 7 client
+    // does not re-prove extractor coverage. It proves that each of the 28 families and each of the 12 client
     // languages, once emitted, actually bridges through the backend-http/dotnet-web providers Miller ships.
     // ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -546,12 +546,16 @@ public sealed class LiveBridgeTraceTests
         Assert.All(directHits, h => Assert.Equal(ConfidenceBand.High, h.Band));
         Assert.All(directHits, h => Assert.False(h.IsVerbUnknown));
 
-        // Cross-file mounted express route: app.use("/users", usersRouter) composes the mount prefix onto
-        // usersRouter.ts's router.get("/:id") ⇒ /users/:id, so client /users/1 (axios GET) bridges High. The
-        // composed handler keeps the route fact's file, so the Hits edge targets server/usersRouter.ts.
-        Assert.True(graph.CapabilityReport.EvidenceCounts["backend-http.composedRoutes"] >= 1,
-            "the express app.use mount must compose at least one /users/:id route onto usersRouter.ts");
-        var mountedHits = HitsInto(graph, "server/usersRouter.ts");
+        // Same-file mounted express route (julie-extract 2.8.1 contract): app.use("/users", usersRouter) with the
+        // router created in the SAME file attests the mount target as an ExpressRouter, so express.router_mount.v1
+        // emits AND the extractor folds the mount prefix into the route fact's effective_route_template (/users/:id).
+        // 2.8.1 narrowed router_mount.v1 to same-file attested routers — v2.8.0 over-emitted for any app.use target
+        // (middleware, cross-file imports); cross-file composition is still proven for axum/actix/phoenix in
+        // BackendHttpV280Group_*. The client /users/1 (axios GET) joins the already-effective route DIRECTLY at High
+        // (composedRoutes==0 — an effective route is never double-composed; see
+        // BackendHttp_route_with_effective_template_is_never_double_composed).
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["backend-http.composedRoutes"]);
+        var mountedHits = HitsInto(graph, "server/app.ts");
         Assert.NotEmpty(mountedHits);
         Assert.All(mountedHits, h => Assert.Equal(ConfidenceBand.High, h.Band));
 
@@ -561,7 +565,7 @@ public sealed class LiveBridgeTraceTests
         Assert.All(fastifyHits, h => Assert.Equal(ConfidenceBand.High, h.Band));
 
         // The Vue SFC's <script> client request emits http.client_request.v1 with language=vue and bridges the
-        // same composed /users/:id route — proving vue is a first-class backend-http client language.
+        // same effective /users/:id route — proving vue is a first-class backend-http client language.
         Assert.Contains("vue", StructuralFactLanguages(work.Db, "http.client_request.v1"));
         Assert.Contains(mountedHits, h => string.Equals(h.Edge.SourceRef.FilePath, "web/Panel.vue", StringComparison.Ordinal));
 
@@ -572,7 +576,7 @@ public sealed class LiveBridgeTraceTests
         Assert.Contains("--route-->", rendered);
         Assert.Contains("(High)", rendered);
 
-        _output.WriteLine("BACKEND-HTTP JS/TS GROUP — express direct + cross-file mount + fastify + vue client verified:");
+        _output.WriteLine("BACKEND-HTTP JS/TS GROUP — express direct + same-file mount + fastify + vue client verified:");
         _output.WriteLine($"  Patterns: {string.Join(", ", expressPatterns.Order(StringComparer.Ordinal))}");
         _output.WriteLine($"  composedRoutes={graph.CapabilityReport.EvidenceCounts["backend-http.composedRoutes"]} directHits={directHits.Count} mountedHits={mountedHits.Count} fastifyHits={fastifyHits.Count}");
         _output.WriteLine(rendered);
@@ -790,9 +794,262 @@ public sealed class LiveBridgeTraceTests
         _output.WriteLine(rendered);
     }
 
+    // ── julie-extract 2.8.0 wave 2: six more backend stacks + four more client languages, extracted LIVE. ──────
+    [Fact]
+    public void BackendHttpV280Group_NestjsLaravelPhoenixAxumActix_LiveBridges()
+    {
+        string binary = ScaleTestSupport.RequireJulieServer();
+        using var work = new TempWorkspace();
+        WriteV280BackendGroup(work.Repo);
+
+        var index = ExtractAndLoad(binary, work);
+
+        // Emission: every 2.8.0 route / resource / mount family appears in the real extract.
+        Assert.Contains("nestjs.route.v1", StructuralPatternIds(work.Db, "nestjs.%"));
+        var laravel = StructuralPatternIds(work.Db, "laravel.%");
+        Assert.Contains("laravel.route.v1", laravel);
+        Assert.Contains("laravel.resource_route.v1", laravel);
+        Assert.Contains("laravel.route_prefix.v1", laravel);
+        var phoenix = StructuralPatternIds(work.Db, "phoenix.%");
+        Assert.Contains("phoenix.route.v1", phoenix);
+        Assert.Contains("phoenix.resource_route.v1", phoenix);
+        Assert.Contains("phoenix.forward.v1", phoenix);
+        var axum = StructuralPatternIds(work.Db, "axum.%");
+        Assert.Contains("axum.route.v1", axum);
+        Assert.Contains("axum.nest.v1", axum);
+        var actix = StructuralPatternIds(work.Db, "actix.%");
+        Assert.Contains("actix.attribute_route.v1", actix);
+        Assert.Contains("actix.scope_route.v1", actix);
+        Assert.Contains("actix.mount.v1", actix);
+
+        // The four new http.client_request.v1 languages emit.
+        var clientLangs = StructuralFactLanguages(work.Db, "http.client_request.v1");
+        Assert.Contains("kotlin", clientLangs);
+        Assert.Contains("php", clientLangs);
+        Assert.Contains("elixir", clientLangs);
+        Assert.Contains("rust", clientLangs);
+
+        var graph = index.BridgeGraph;
+        Assert.Contains("backend-http", graph.CapabilityReport.ActiveProviders);
+
+        // Consumption end-to-end: laravel Route::resource (8) + phoenix scoped resources (8) expand to concrete routes.
+        Assert.True(graph.CapabilityReport.EvidenceCounts["backend-http.expandedResourceRoutes"] >= 8,
+            "laravel Route::resource + phoenix resources must expand to concrete verb-known routes");
+
+        // Representative cross-language DIRECT join: a Kotlin Ktor client GET /cats/1 bridges to the NestJS controller's
+        // @Get(':id') under @Controller('cats') (effective /cats/:id), verb-known ⇒ High.
+        var nestHits = HitsInto(graph, "nest/cats.controller.ts");
+        Assert.NotEmpty(nestHits);
+        Assert.Contains(nestHits, h => h.Band == ConfidenceBand.High && !h.IsVerbUnknown);
+
+        // The four review fixes, each proven on REAL v2.8.0 data by a composed/expanded/optional join landing on an
+        // ISOLABLE handler file — every one of these would be EMPTY under the corresponding bug:
+        //   #2 namespaced phoenix forward "/admin", MyAppWeb.AdminRouter → composed /admin/dashboard.
+        Assert.NotEmpty(HitsInto(graph, "phoenix/admin_router.ex"));
+        //   #1 scoped phoenix resources "/api"+"/posts" prefixed ONCE → /api/posts (a doubled /api/api/posts misses).
+        Assert.NotEmpty(HitsInto(graph, "phoenix/api_router.ex"));
+        //   #3 axum .nest("/api", api::routes()) — '::'-qualified target anchors api.rs → composed /api/orders/1.
+        Assert.NotEmpty(HitsInto(graph, "axum/api.rs"));
+        //   #3 actix web::scope("/admin").configure(admin::configure) — '::'-qualified → composed /admin/settings.
+        Assert.NotEmpty(HitsInto(graph, "actix/admin.rs"));
+        //   #4 laravel optional {id?} inside a prefix group → /admin/reports/99 (brace-optional must stay dynamic).
+        Assert.NotEmpty(HitsInto(graph, "laravel/admin.php"));
+
+        _output.WriteLine("BACKEND-HTTP 2.8.0 GROUP — nestjs/laravel/phoenix/axum/actix families + kt/php/ex/rs clients:");
+        _output.WriteLine($"  families: nestjs={StructuralPatternIds(work.Db, "nestjs.%").Count} laravel={laravel.Count} "
+            + $"phoenix={phoenix.Count} axum={axum.Count} actix={actix.Count}");
+        _output.WriteLine($"  expandedResourceRoutes={graph.CapabilityReport.EvidenceCounts["backend-http.expandedResourceRoutes"]} "
+            + $"composedRoutes={graph.CapabilityReport.EvidenceCounts["backend-http.composedRoutes"]} "
+            + $"candidates={graph.CapabilityReport.EvidenceCounts["backend-http.candidates"]}");
+        _output.WriteLine($"  client languages: {string.Join(", ", clientLangs.Order(StringComparer.Ordinal))}");
+    }
+
+    private static void WriteV280BackendGroup(string repo)
+    {
+        string nest = Path.Combine(repo, "nest");
+        string laravel = Path.Combine(repo, "laravel");
+        string phoenix = Path.Combine(repo, "phoenix");
+        string axum = Path.Combine(repo, "axum");
+        string actix = Path.Combine(repo, "actix");
+        string client = Path.Combine(repo, "client");
+        foreach (var dir in new[] { nest, laravel, phoenix, axum, actix, client })
+            Directory.CreateDirectory(dir);
+
+        // NestJS — @Controller('cats') prefix folds into effective /cats/:id and /cats.
+        File.WriteAllText(Path.Combine(nest, "cats.controller.ts"), """
+            import { Controller, Get, Post } from '@nestjs/common';
+
+            @Controller('cats')
+            export class CatsController {
+              @Get(':id')
+              findOne() {
+                return null;
+              }
+
+              @Post()
+              create() {
+                return null;
+              }
+            }
+            """);
+
+        // Laravel — web.php: a call route + a resource. admin.php (own file, so the join is isolable): a prefix group
+        // with an OPTIONAL param, whose effective_route_template "/admin/reports/{id?}" must still match a client
+        // GET /admin/reports/99 (regression: the brace-optional marker must not be treated as a query suffix).
+        File.WriteAllText(Path.Combine(laravel, "web.php"), """
+            <?php
+            use Illuminate\Support\Facades\Route;
+
+            Route::get('/books/{id}', [BookController::class, 'show']);
+            Route::resource('photos', PhotoController::class);
+            """);
+        File.WriteAllText(Path.Combine(laravel, "admin.php"), """
+            <?php
+            use Illuminate\Support\Facades\Route;
+
+            Route::prefix('admin')->group(function () {
+                Route::get('/reports/{id?}', [ReportController::class, 'show']);
+            });
+            """);
+
+        // Phoenix — router.ex: a call route + a forward to a NAMESPACED router module (real Phoenix; the forwarded
+        // module symbol is named by its full dotted alias). admin_router.ex + api_router.ex are separate files so the
+        // composed /admin/dashboard and the scoped-resource /api/posts joins land on isolable targets.
+        File.WriteAllText(Path.Combine(phoenix, "router.ex"), """
+            defmodule MyAppWeb.Router do
+              use Phoenix.Router
+
+              get "/articles/:id", ArticleController, :show
+              forward "/admin", MyAppWeb.AdminRouter
+            end
+            """);
+        File.WriteAllText(Path.Combine(phoenix, "admin_router.ex"), """
+            defmodule MyAppWeb.AdminRouter do
+              use Phoenix.Router
+
+              get "/dashboard", DashboardController, :index
+            end
+            """);
+        // Scoped resource: `scope "/api" do resources "/posts" end` — the resource's normalized_resource_path ALREADY
+        // folds in "/api", so the expander must prefix ONCE (regression: no /api/api/posts double-prefix).
+        File.WriteAllText(Path.Combine(phoenix, "api_router.ex"), """
+            defmodule MyAppWeb.ApiRouter do
+              use Phoenix.Router
+
+              scope "/api" do
+                resources "/posts", PostController
+              end
+            end
+            """);
+
+        // axum — a direct route plus a cross-file .nest with a PATH-QUALIFIED target `api::routes()` (idiomatic Rust;
+        // regression: the '::' must split so the leaf fn name "routes" anchors api.rs).
+        File.WriteAllText(Path.Combine(axum, "api.rs"), """
+            use axum::{routing::get, Router};
+
+            pub fn routes() -> Router {
+                Router::new().route("/orders/{id}", get(order))
+            }
+
+            async fn order() {}
+            """);
+        File.WriteAllText(Path.Combine(axum, "main.rs"), """
+            use axum::{routing::get, Router};
+
+            mod api;
+
+            fn app() -> Router {
+                Router::new()
+                    .route("/widgets/{id}", get(show))
+                    .nest("/api", api::routes())
+            }
+
+            async fn show() {}
+            """);
+
+        // actix — an attribute route, a scope route, and a web::scope(...).configure(...) mount with a PATH-QUALIFIED
+        // configure target `admin::configure` (regression: '::' split anchors the leaf fn "configure" in admin.rs).
+        File.WriteAllText(Path.Combine(actix, "admin.rs"), """
+            use actix_web::{get, web, HttpResponse, Responder};
+
+            #[get("/settings")]
+            async fn settings() -> impl Responder {
+                HttpResponse::Ok().finish()
+            }
+
+            pub fn configure(cfg: &mut web::ServiceConfig) {
+                cfg.service(settings);
+            }
+            """);
+        File.WriteAllText(Path.Combine(actix, "main.rs"), """
+            use actix_web::{get, web, App, HttpResponse, Responder};
+
+            mod admin;
+
+            #[get("/gadgets/{id}")]
+            async fn gadget() -> impl Responder {
+                HttpResponse::Ok().finish()
+            }
+
+            async fn items() -> impl Responder {
+                HttpResponse::Ok().finish()
+            }
+
+            fn make_app() -> App<()> {
+                App::new()
+                    .service(web::scope("/store").route("/items/{id}", web::get().to(items)))
+                    .service(web::scope("/admin").configure(admin::configure))
+            }
+            """);
+
+        // Clients in the four new http.client_request.v1 languages, each a path-kind call to a distinct DIRECT route.
+        File.WriteAllText(Path.Combine(client, "Client.kt"), """
+            import io.ktor.client.HttpClient
+            import io.ktor.client.request.get
+
+            suspend fun loadCat(client: HttpClient) {
+                client.get("/cats/1")
+            }
+            """);
+        File.WriteAllText(Path.Combine(client, "client.php"), """
+            <?php
+            use Illuminate\Support\Facades\Http;
+
+            function loadBook() {
+                Http::get('/books/1');
+            }
+            """);
+        File.WriteAllText(Path.Combine(client, "client.ex"), """
+            defmodule MyApp.Client do
+              def load_article do
+                Req.get("/articles/1")
+              end
+            end
+            """);
+        File.WriteAllText(Path.Combine(client, "client.rs"), """
+            use reqwest;
+
+            async fn load_widget() {
+                reqwest::get("/widgets/1").await;
+            }
+            """);
+
+        // A TypeScript client that calls the COMPOSED / EXPANDED / OPTIONAL paths — the ones that only exist if the
+        // four review fixes hold. Each targets an isolable handler file so its join proves one fix on real data.
+        File.WriteAllText(Path.Combine(client, "composed.ts"), """
+            export async function callComposed() {
+              await fetch('/admin/dashboard');   // phoenix forward → admin_router.ex (finding #2: namespaced module)
+              await fetch('/api/posts');          // phoenix scoped resource → api_router.ex (finding #1: prefix once)
+              await fetch('/api/orders/1');       // axum nest api::routes() → api.rs (finding #3: '::' split)
+              await fetch('/admin/settings');     // actix mount admin::configure → admin.rs (finding #3: '::' split)
+              await fetch('/admin/reports/99');   // laravel optional {id?} in prefix group → admin.php (finding #4)
+            }
+            """);
+    }
+
     // ── The parity gate: aggregate per-family + per-client-language emission across ALL group workspaces ──────
     [Fact]
-    public void BackendHttpParityGate_AllSixteenFamiliesAndSevenClientLanguagesEmitLive()
+    public void BackendHttpParityGate_AllTwentyEightFamiliesAndTwelveClientLanguagesEmitLive()
     {
         string binary = ScaleTestSupport.RequireJulieServer();
 
@@ -807,6 +1064,7 @@ public sealed class LiveBridgeTraceTests
             ("java", WriteJavaBackendGroup),
             ("ruby", WriteRubyBackendGroup),
             ("csharp", WriteCsharpBackendGroup),
+            ("v2.8.0", WriteV280BackendGroup),
         };
 
         var emittedPatternIds = new HashSet<string>(StringComparer.Ordinal);
@@ -824,39 +1082,46 @@ public sealed class LiveBridgeTraceTests
                 + $"{StructuralPatternIds(work.Db, "%").Count(id => RequiredFamilies.Contains(id))} target families present");
         }
 
-        // The 16 route/mount families the backend-http lane added in julie-extract 2.7.0 (release notes §New
-        // Structural-Fact Families). Every one must emit at least once, or Miller's consumer is proving a subset.
+        // The 28 route/mount families the backend-http lane spans (julie-extract 2.7.0's 16 + 2.8.0's 12; release
+        // notes §New Structural-Fact Families). Every one must emit at least once, or Miller's consumer is a subset.
         foreach (var family in RequiredFamilies)
             Assert.Contains(family, emittedPatternIds);
 
-        // http.client_request.v1 now emits from seven client-language fixtures. js/ts counts as javascript AND
-        // typescript; the remaining five are vue, python, go, java, ruby, csharp. A client language that
+        // http.client_request.v1 emits from twelve client languages: js/ts (javascript + typescript), plus vue,
+        // python, go, java, ruby, csharp (2.7.0) and kotlin, php, elixir, rust (2.8.0). A client language that
         // silently emits zero fails the test.
         foreach (var lang in RequiredClientLanguages)
             Assert.Contains(lang, emittedClientLanguages);
 
-        _output.WriteLine("BACKEND-HTTP PARITY GATE — all 16 families + all client languages emit live:");
-        _output.WriteLine($"  families ({RequiredFamilies.Length}/16): {string.Join(", ", RequiredFamilies.Order(StringComparer.Ordinal))}");
+        _output.WriteLine("BACKEND-HTTP PARITY GATE — all 28 families + all client languages emit live:");
+        _output.WriteLine($"  families ({RequiredFamilies.Length}/28): {string.Join(", ", RequiredFamilies.Order(StringComparer.Ordinal))}");
         _output.WriteLine($"  client languages: {string.Join(", ", emittedClientLanguages.Order(StringComparer.Ordinal))}");
     }
 
-    // The 16 backend route/mount fact families (julie-extract 2.7.0). Kept as one explicit list so a dropped or
-    // renamed family FAILS loudly rather than silently shrinking the parity claim.
+    // The 28 backend route/mount fact families (julie-extract 2.7.0's 16 + 2.8.0's 12). Kept as one explicit list
+    // so a dropped or renamed family FAILS loudly rather than silently shrinking the parity claim.
     private static readonly string[] RequiredFamilies =
     {
+        // 2.7.0 wave 1 (16).
         "express.route.v1", "express.router_mount.v1", "fastify.route.v1",
         "fastapi.route.v1", "fastapi.include_router.v1", "flask.route.v1", "flask.blueprint_registration.v1",
         "django.url_pattern.v1", "django.url_include.v1", "spring.request_mapping.v1",
         "go.net_http.route.v1", "gin.route.v1", "echo.route.v1",
         "rails.route.v1", "rails.resource_route.v1", "rails.mount.v1",
+        // 2.8.0 wave 2 (12).
+        "nestjs.route.v1",
+        "laravel.route.v1", "laravel.resource_route.v1", "laravel.route_prefix.v1",
+        "phoenix.route.v1", "phoenix.resource_route.v1", "phoenix.forward.v1",
+        "axum.route.v1", "axum.nest.v1",
+        "actix.attribute_route.v1", "actix.scope_route.v1", "actix.mount.v1",
     };
 
     // The distinct client languages http.client_request.v1 must cover live (js/ts split into javascript +
-    // typescript; plus vue, python, go, java, ruby, csharp = 8 distinct languages, the "seven client-language
-    // fixtures" of the plan since js/ts share the JS/TS group).
+    // typescript; plus vue, python, go, java, ruby, csharp from 2.7.0, and kotlin/php/elixir/rust from 2.8.0).
     private static readonly string[] RequiredClientLanguages =
     {
         "javascript", "typescript", "vue", "python", "go", "java", "ruby", "csharp",
+        "kotlin", "php", "elixir", "rust",
     };
 
     private static List<ScoredEdge> HitsInto(BridgeGraph graph, string filePath) =>
@@ -1397,10 +1662,13 @@ public sealed class LiveBridgeTraceTests
     // controllers) are split across files exactly as the enrichment passes need.
     // ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
-    // JS/TS group: a direct express route, a cross-file app.use("/users", usersRouter) mount composing onto a
-    // sibling router file, a fastify shorthand route, and fetch/axios clients — including a Vue SFC client.
-    // (usersRouter uses `const` + a separate `export {}`: an inline `export const x = express.Router()` defeats
-    // 2.7.0's in-file receiver tracing, so the router route would not emit — verified against the binary.)
+    // JS/TS group: a direct express route, a SAME-FILE app.use("/users", usersRouter) mount (router created in the
+    // same file — julie-extract 2.8.1's router_mount.v1 contract attests the mount target only when it is an in-file
+    // express.Router() receiver; v2.8.0 over-emitted for any app.use target, including middleware and cross-file
+    // imports), a fastify shorthand route, and fetch/axios clients — including a Vue SFC client. The extractor folds
+    // the mount prefix into the route fact's effective_route_template (/users/:id), so the client joins the
+    // already-effective route directly (composedRoutes==0). Cross-file mount composition is still proven for
+    // axum/actix/phoenix in the v2.8.0 group.
     private static void WriteJsTsBackendGroup(string repo)
     {
         string server = Path.Combine(repo, "server");
@@ -1408,21 +1676,15 @@ public sealed class LiveBridgeTraceTests
         Directory.CreateDirectory(server);
         Directory.CreateDirectory(web);
 
-        File.WriteAllText(Path.Combine(server, "usersRouter.ts"), """
-            import express from "express";
-
-            const usersRouter = express.Router();
-
-            usersRouter.get("/:id", (_req, res) => res.send("user"));
-
-            export { usersRouter };
-            """);
         File.WriteAllText(Path.Combine(server, "app.ts"), """
             import express from "express";
-            import { usersRouter } from "./usersRouter";
 
             export function buildApp(): void {
               const app = express();
+              const usersRouter = express.Router();
+
+              usersRouter.get("/:id", (_req, res) => res.send("user"));
+
               app.use("/users", usersRouter);
             }
             """);

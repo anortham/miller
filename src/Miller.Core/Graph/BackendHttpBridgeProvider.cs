@@ -5,13 +5,14 @@ using System.Text.Json;
 namespace Miller.Core.Graph;
 
 /// <summary>
-/// Verb-aware backend HTTP boundary bridge provider (julie-extractors 2.7.0): joins
-/// <c>http.client_request.v1</c> fetch/axios call sites to server route-template facts from the 10
-/// <see cref="BridgeStructuralPatterns.BackendRoutePatternIds"/> families (Express/Fastify/FastAPI/Flask/
-/// Django/Spring/Go net-http/gin/echo/Rails), emitting <see cref="BridgeKind.Hits"/> edges. It sits beside the
-/// framework-specific verb-aware API arm (<see cref="ApiRouteBridgeProvider"/>) but is standalone rather than
-/// descriptor-driven: it collects a broad route-family set plus the cross-file mount/include inputs, giving the
-/// later enrichment passes (mount composition, Rails resource expansion) a single place to grow.
+/// Verb-aware backend HTTP boundary bridge provider (julie-extractors 2.7.0/2.8.0): joins
+/// <c>http.client_request.v1</c> client call sites (fetch/axios plus the 2.8.0 Kotlin/PHP/Elixir/Rust clients) to
+/// server route-template facts from the 16 <see cref="BridgeStructuralPatterns.BackendRoutePatternIds"/> families
+/// (2.7.0 Express/Fastify/FastAPI/Flask/Django/Spring/Go net-http/gin/echo/Rails; 2.8.0 NestJS/Laravel/Phoenix/axum
+/// + both actix provenances), emitting <see cref="BridgeKind.Hits"/> edges. It sits beside the framework-specific
+/// verb-aware API arm (<see cref="ApiRouteBridgeProvider"/>) but is standalone rather than descriptor-driven: it
+/// collects a broad route-family set plus the cross-file mount/include inputs, giving the later enrichment passes
+/// (mount composition, resource expansion for rails/laravel/phoenix) a single place to grow.
 ///
 /// <para>All verb rules come free from <see cref="FileRouteBridge.ResolveClientRequests"/>: handler verb equal ⇒
 /// High (<see cref="SignalRule.RouteVerbMatch"/>); handler verb different ⇒ no edge; handler verb null ⇒ Medium
@@ -66,10 +67,12 @@ public sealed class BackendHttpBridgeProvider : IBridgeProvider
                 continue;
             }
 
-            // Task 4: rails.resource_route.v1 matches none of the reads above (it is NOT in BackendRoutePatternIds).
-            // Collect the raw fact and expand it into concrete verb-known route handlers below. The IsTestFact filter
-            // mirrors the route/mount reads so a resources declaration in a test-scoped routes file never expands.
-            if (string.Equals(fact.PatternId, BridgeStructuralPatterns.RailsResourceRoute, StringComparison.Ordinal))
+            // The resource_route families (rails / laravel / phoenix — 2.8.0 added the last two) match none of the
+            // reads above (they are aggregate declarations, NOT in BackendRoutePatternIds — they carry no
+            // normalized_route_template). Collect the raw fact and expand it into concrete verb-known route handlers
+            // below. The IsTestFact filter mirrors the route/mount reads so a resources declaration in a test-scoped
+            // routes file never expands.
+            if (IsResourceRouteFamily(fact.PatternId))
             {
                 if (!StructuralRouteFactAdapter.IsTestFact(fact, context.SymbolsById))
                     resourceFacts.Add(fact);
@@ -194,9 +197,17 @@ public sealed class BackendHttpBridgeProvider : IBridgeProvider
             if (routeFamily is null)
                 continue; // Unknown/evidence-only family (rails.mount never reaches this list) — never composes.
 
-            var anchorFile = string.Equals(mount.Fact.PatternId, BridgeStructuralPatterns.DjangoUrlInclude, StringComparison.Ordinal)
-                ? AnchorByModulePath(mount, backendRoutes)
-                : AnchorByIdentifier(mount, routeFamily, backendRoutes, nameToFiles);
+            var anchorFile = mount.Fact.PatternId switch
+            {
+                // django: "shop.urls" → file suffix "shop/urls.py".
+                BridgeStructuralPatterns.DjangoUrlInclude => AnchorByModulePath(mount, backendRoutes),
+                // phoenix.forward: the target is an Elixir module alias whose defining symbol is named with the FULL
+                // dotted path ("MyAppWeb.AdminRouter"), so leaf-stripping to "AdminRouter" would never match — anchor
+                // by the whole module name instead.
+                BridgeStructuralPatterns.PhoenixForward => AnchorByModuleName(mount, routeFamily, backendRoutes, nameToFiles),
+                // express/fastapi/flask/axum/actix: bare (or Rust `::`-pathed) trailing identifier.
+                _ => AnchorByIdentifier(mount, routeFamily, backendRoutes, nameToFiles),
+            };
 
             if (anchorFile is null)
             {
@@ -224,13 +235,28 @@ public sealed class BackendHttpBridgeProvider : IBridgeProvider
         return new MountComposition(composed, unanchored);
     }
 
-    /// <summary>Map a mount/include family to the route-template family it prefixes. Null for anything else.</summary>
+    /// <summary>
+    /// Map a mount/include family to the route-template family it prefixes. Null for anything else.
+    /// <para>2.8.0: <c>axum.nest</c> prefixes <c>axum.route</c>; <c>phoenix.forward</c> prefixes
+    /// <c>phoenix.route</c>; <c>laravel.route_prefix</c> prefixes <c>laravel.route</c> (but carries no
+    /// <c>mount_target</c>, so <see cref="AnchorByIdentifier"/> can never anchor it — it stays an evidence-only
+    /// unanchored mount, its same-file effect already folded into the route facts' <c>effective_route_template</c>).
+    /// <c>actix.mount</c> (<c>web::scope(...).configure(fn)</c> / <c>.service(handler)</c>) prefixes the attribute
+    /// provenance <c>actix.attribute_route</c> — the common case where the configured fn registers
+    /// <c>#[get]</c>-style handlers; an inline <c>web::scope(...).route(...)</c> inside the configured fn (a
+    /// scope-route) is not cross-composed (rare, and same-file scopes already fold into
+    /// <c>effective_route_template</c>).</para>
+    /// </summary>
     private static string? RouteFamilyForMount(string mountPatternId) => mountPatternId switch
     {
         BridgeStructuralPatterns.ExpressRouterMount => BridgeStructuralPatterns.ExpressRoute,
         BridgeStructuralPatterns.FastApiIncludeRouter => BridgeStructuralPatterns.FastApiRoute,
         BridgeStructuralPatterns.FlaskBlueprintRegistration => BridgeStructuralPatterns.FlaskRoute,
         BridgeStructuralPatterns.DjangoUrlInclude => BridgeStructuralPatterns.DjangoUrlPattern,
+        BridgeStructuralPatterns.AxumNest => BridgeStructuralPatterns.AxumRoute,
+        BridgeStructuralPatterns.ActixMount => BridgeStructuralPatterns.ActixAttributeRoute,
+        BridgeStructuralPatterns.PhoenixForward => BridgeStructuralPatterns.PhoenixRoute,
+        BridgeStructuralPatterns.LaravelRoutePrefix => BridgeStructuralPatterns.LaravelRoute,
         _ => null,
     };
 
@@ -302,6 +328,42 @@ public sealed class BackendHttpBridgeProvider : IBridgeProvider
     }
 
     /// <summary>
+    /// Tier 2b (phoenix.forward): anchor by the FULL module-name target. Elixir names a module symbol by its whole
+    /// dotted alias (<c>defmodule MyAppWeb.AdminRouter</c> ⇒ symbol name <c>MyAppWeb.AdminRouter</c>), and
+    /// <c>forward "/admin", MyAppWeb.AdminRouter</c> emits that same verbatim text as <c>mount_target</c> — so the
+    /// leaf-stripping <see cref="ExtractIdentifier"/> would miss. Match the mount target (call args dropped) against
+    /// symbol names directly; the anchor file must both define that module AND own ≥1 phoenix route fact. Exactly one
+    /// file anchors; zero or ties compose nothing. A bare <c>defmodule HealthPlug</c> target still matches (name ==
+    /// target). An aliased short form (<c>forward "/admin", AdminRouter</c> after <c>alias …AdminRouter</c>) stays
+    /// unanchored — Miller does not resolve Elixir aliases.
+    /// </summary>
+    private static string? AnchorByModuleName(
+        StructuralMountFact mount,
+        string routeFamily,
+        IReadOnlyList<StructuralRouteHandler> backendRoutes,
+        IReadOnlyDictionary<string, HashSet<string>> nameToFiles)
+    {
+        var target = mount.MountTarget?.Trim() ?? string.Empty;
+        var call = target.IndexOf('(', StringComparison.Ordinal);
+        if (call >= 0)
+            target = target[..call].Trim();
+        if (target.Length == 0 || !nameToFiles.TryGetValue(target, out var definingFiles) || definingFiles.Count == 0)
+            return null;
+
+        var candidates = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var route in backendRoutes)
+        {
+            if (!string.Equals(route.Fact.PatternId, routeFamily, StringComparison.Ordinal))
+                continue;
+            var path = Normalize(route.Fact.Path);
+            if (definingFiles.Contains(path))
+                candidates.Add(path);
+        }
+
+        return candidates.Count == 1 ? candidates.First() : null;
+    }
+
+    /// <summary>
     /// One name→distinct-non-test-defining-files lookup, built once per run. A symbol's file defines its name; test
     /// symbols never seed an anchor (route facts are already non-test).
     /// </summary>
@@ -340,7 +402,9 @@ public sealed class BackendHttpBridgeProvider : IBridgeProvider
         if (text.Length == 0)
             return (null, null);
 
-        var segments = text.Split('.');
+        // Rust path syntax uses '::' (axum `.nest("/api", api::routes())`, actix `.service(handlers::dashboard)`);
+        // fold it to '.' so the trailing fn/module segment is reached the same way as a JS/Python dotted target.
+        var segments = text.Replace("::", ".").Split('.');
         var last = segments[^1].Trim();
         if (!IsIdentifierLike(last))
             return (null, null);
@@ -433,62 +497,245 @@ public sealed class BackendHttpBridgeProvider : IBridgeProvider
         ("destroy", "DELETE", ""),
     ];
 
+    // Laravel Route::resource(...) → the 7 RESTful routes (8 verb entries — update answers PUT AND PATCH). Suffix is
+    // appended to "/{resource_name}"; the member param is a placeholder ({id}) — the resolver folds every param to
+    // the same wildcard, so its NAME never affects a match. Action names ARE the controller method names.
+    private static readonly (string Action, string Verb, string Suffix)[] LaravelResourceRoutes =
+    [
+        ("index",   "GET",    ""),
+        ("create",  "GET",    "/create"),
+        ("store",   "POST",   ""),
+        ("show",    "GET",    "/{id}"),
+        ("edit",    "GET",    "/{id}/edit"),
+        ("update",  "PUT",    "/{id}"),
+        ("update",  "PATCH",  "/{id}"),
+        ("destroy", "DELETE", "/{id}"),
+    ];
+
+    // Laravel Route::apiResource(...) → the API subset: no create, no edit (the HTML-form-only routes). 5 routes /
+    // 6 verb entries.
+    private static readonly (string Action, string Verb, string Suffix)[] LaravelApiResourceRoutes =
+    [
+        ("index",   "GET",    ""),
+        ("store",   "POST",   ""),
+        ("show",    "GET",    "/{id}"),
+        ("update",  "PUT",    "/{id}"),
+        ("update",  "PATCH",  "/{id}"),
+        ("destroy", "DELETE", "/{id}"),
+    ];
+
+    // Phoenix resources "/x", Ctrl → the 7 RESTful routes (8 verb entries — update answers PATCH AND PUT). Suffix is
+    // appended to the base resource PATH (normalized_resource_path). Phoenix uses ":id" params and names the destroy
+    // action "delete".
+    private static readonly (string Action, string Verb, string Suffix)[] PhoenixResourceRoutes =
+    [
+        ("index",   "GET",    ""),
+        ("edit",    "GET",    "/:id/edit"),
+        ("new",     "GET",    "/new"),
+        ("show",    "GET",    "/:id"),
+        ("create",  "POST",   ""),
+        ("update",  "PATCH",  "/:id"),
+        ("update",  "PUT",    "/:id"),
+        ("delete",  "DELETE", "/:id"),
+    ];
+
+    /// <summary>True for the three aggregate resource-declaration families expanded below (never route-template reads).</summary>
+    private static bool IsResourceRouteFamily(string patternId) =>
+        string.Equals(patternId, BridgeStructuralPatterns.RailsResourceRoute, StringComparison.Ordinal) ||
+        string.Equals(patternId, BridgeStructuralPatterns.LaravelResourceRoute, StringComparison.Ordinal) ||
+        string.Equals(patternId, BridgeStructuralPatterns.PhoenixResourceRoute, StringComparison.Ordinal);
+
     /// <summary>
-    /// Expand every collected <c>rails.resource_route.v1</c> fact into concrete verb-known route handlers by Rails
-    /// doctrine. The base path segment is <c>resource_name</c> (leading <c>:</c> stripped); <c>only</c>/<c>except</c>
-    /// (JSON string arrays, tolerant of a leading <c>:</c> and a raw ruby form) filter the ACTION set;
-    /// <c>scope_path</c> prefixes every path via <see cref="JoinRoute"/>. Both kinds map to a PLURAL controller
-    /// (collection <c>resource_name</c> is already plural; a singular one is pluralized first); each entry binds to
-    /// the conventional action method when a unique non-test match exists, else to the fact's containing symbol id.
+    /// Expand every collected resource-declaration fact (rails/laravel/phoenix) into concrete verb-known route
+    /// handlers by each framework's REST doctrine. Rails and the two 2.8.0 families all lack a
+    /// <c>normalized_route_template</c> (they are aggregate declarations), so none can be read by
+    /// <see cref="StructuralRouteFactAdapter.TryReadBackendRoute"/> — the concrete routes are synthesized here
+    /// instead. Each entry binds to its controller action method when a unique non-test match exists, else to the
+    /// fact's containing symbol id (a routes-file declaration usually has none ⇒ a synthesized endpoint node).
     /// </summary>
     private static IReadOnlyList<StructuralRouteHandler> ExpandResourceRoutes(
         IReadOnlyList<StructuralFactRecord> resourceFacts,
         IReadOnlyDictionary<string, string?> controllerMethods)
     {
         var expanded = new List<StructuralRouteHandler>();
-        if (resourceFacts.Count == 0)
-            return expanded;
-
         foreach (var fact in resourceFacts)
         {
-            var rawName = StructuralRouteFactAdapter.MetadataString(fact, "resource_name");
-            if (rawName is null)
-                continue;
-            var resourceName = StripLeadingColon(rawName.Trim());
-            if (resourceName.Length == 0)
-                continue;
-
-            var kind = StructuralRouteFactAdapter.MetadataString(fact, "resource_kind")?.Trim() ?? string.Empty;
-            var singular = string.Equals(kind, "singular", StringComparison.OrdinalIgnoreCase);
-            var collection = string.Equals(kind, "collection", StringComparison.OrdinalIgnoreCase);
-            if (!singular && !collection)
-                continue; // Unknown resource_kind → expand nothing (honest: never fabricate a route shape).
-
-            // Rails maps BOTH kinds to a PLURAL controller: `resources :users` → UsersController; `resource :profile`
-            // → ProfilesController (pluralize, then CamelCase + "Controller"). A singular ProfileController never binds.
-            var controllerClass = CamelCase(singular ? Pluralize(resourceName) : resourceName) + "Controller";
-
-            var allowed = ComputeAllowedActions(fact); // null ⇒ every conventional action.
-            var scopePath = StructuralRouteFactAdapter.MetadataString(fact, "scope_path");
-            var table = singular ? SingularRoutes : CollectionRoutes;
-
-            foreach (var (action, verb, suffix) in table)
+            switch (fact.PatternId)
             {
-                if (allowed is not null && !allowed.Contains(action))
-                    continue;
-
-                var path = "/" + resourceName + suffix;
-                if (!string.IsNullOrWhiteSpace(scopePath))
-                    path = JoinRoute(scopePath, path);
-
-                var boundId = ResolveControllerMethod(controllerMethods, controllerClass, action)
-                    ?? (fact.ContainingSymbolId ?? string.Empty);
-
-                expanded.Add(new StructuralRouteHandler(fact, path, verb, boundId, fact.Path, fact.Span.StartLine));
+                case BridgeStructuralPatterns.RailsResourceRoute:
+                    ExpandRailsResource(fact, controllerMethods, expanded);
+                    break;
+                case BridgeStructuralPatterns.LaravelResourceRoute:
+                    ExpandLaravelResource(fact, controllerMethods, expanded);
+                    break;
+                case BridgeStructuralPatterns.PhoenixResourceRoute:
+                    ExpandPhoenixResource(fact, controllerMethods, expanded);
+                    break;
             }
         }
 
         return expanded;
+    }
+
+    /// <summary>
+    /// Rails <c>resources</c>/<c>resource</c> doctrine. The base path segment is <c>resource_name</c> (leading
+    /// <c>:</c> stripped); <c>only</c>/<c>except</c> (JSON string arrays, tolerant of a leading <c>:</c> and a raw
+    /// ruby form) filter the ACTION set; <c>scope_path</c> prefixes every path. Both kinds map to a PLURAL controller
+    /// (collection <c>resource_name</c> is already plural; a singular one is pluralized first — a singular
+    /// <c>ProfileController</c> never binds).
+    /// </summary>
+    private static void ExpandRailsResource(
+        StructuralFactRecord fact,
+        IReadOnlyDictionary<string, string?> controllerMethods,
+        List<StructuralRouteHandler> expanded)
+    {
+        var rawName = StructuralRouteFactAdapter.MetadataString(fact, "resource_name");
+        if (rawName is null)
+            return;
+        var resourceName = StripLeadingColon(rawName.Trim());
+        if (resourceName.Length == 0)
+            return;
+
+        var kind = StructuralRouteFactAdapter.MetadataString(fact, "resource_kind")?.Trim() ?? string.Empty;
+        var singular = string.Equals(kind, "singular", StringComparison.OrdinalIgnoreCase);
+        var collection = string.Equals(kind, "collection", StringComparison.OrdinalIgnoreCase);
+        if (!singular && !collection)
+            return; // Unknown resource_kind → expand nothing (honest: never fabricate a route shape).
+
+        var controllerClass = CamelCase(singular ? Pluralize(resourceName) : resourceName) + "Controller";
+        var allowed = ComputeAllowedActions(fact); // null ⇒ every conventional action.
+        var scopePath = StructuralRouteFactAdapter.MetadataString(fact, "scope_path");
+        var table = singular ? SingularRoutes : CollectionRoutes;
+
+        foreach (var (action, verb, suffix) in table)
+        {
+            if (allowed is not null && !allowed.Contains(action))
+                continue;
+            AddResourceHandler(expanded, fact, "/" + resourceName, suffix, verb, scopePath, controllerClass, action, controllerMethods);
+        }
+    }
+
+    /// <summary>
+    /// Laravel <c>Route::resource</c> (7 routes) / <c>Route::apiResource</c> (5 — no create/edit) doctrine. Base is
+    /// <c>/{resource_name}</c>; the optional <c>route_group_prefix</c> prefixes every path. The <c>controller</c>
+    /// metadata is a class reference whose leaf name binds directly to the action method (Laravel action names ARE
+    /// the controller method names). An unknown <c>resource_kind</c> expands nothing.
+    /// </summary>
+    private static void ExpandLaravelResource(
+        StructuralFactRecord fact,
+        IReadOnlyDictionary<string, string?> controllerMethods,
+        List<StructuralRouteHandler> expanded)
+    {
+        var rawName = StructuralRouteFactAdapter.MetadataString(fact, "resource_name");
+        if (rawName is null)
+            return;
+        var resourceName = rawName.Trim().Trim('/');
+        if (resourceName.Length == 0)
+            return;
+
+        var kind = StructuralRouteFactAdapter.MetadataString(fact, "resource_kind")?.Trim() ?? string.Empty;
+        var table = string.Equals(kind, "resource", StringComparison.OrdinalIgnoreCase) ? LaravelResourceRoutes
+            : string.Equals(kind, "api_resource", StringComparison.OrdinalIgnoreCase) ? LaravelApiResourceRoutes
+            : null;
+        if (table is null)
+            return;
+
+        var controllerClass = ControllerLeaf(StructuralRouteFactAdapter.MetadataString(fact, "controller"));
+        var groupPrefix = StructuralRouteFactAdapter.MetadataString(fact, "route_group_prefix");
+        foreach (var (action, verb, suffix) in table)
+            AddResourceHandler(expanded, fact, "/" + resourceName, suffix, verb, groupPrefix, controllerClass, action, controllerMethods);
+    }
+
+    /// <summary>
+    /// Phoenix <c>resources "/x", Ctrl</c> doctrine (the 7 RESTful routes). Unlike rails/laravel the base is a PATH,
+    /// not a bare name. CRITICAL: <c>normalized_resource_path</c> ALREADY folds in the same-file scope prefix
+    /// (contract: "Normalized resource path including same-file scope prefix"), so when it is present the base is
+    /// complete and <c>route_group_prefix</c> must NOT be re-applied — doing so double-prefixes every route
+    /// (<c>scope "/api" do resources "/users" end</c> ⇒ <c>/api/api/users</c>, joining nothing). Only when falling
+    /// back to the raw <c>resource_path</c> (scope NOT folded) is <c>route_group_prefix</c> applied. Elixir controller
+    /// functions are typically not method symbols with a parent class, so binding usually falls back to a synthesized
+    /// endpoint node — honest, and the join still forms.
+    /// </summary>
+    private static void ExpandPhoenixResource(
+        StructuralFactRecord fact,
+        IReadOnlyDictionary<string, string?> controllerMethods,
+        List<StructuralRouteHandler> expanded)
+    {
+        var normalized = StructuralRouteFactAdapter.MetadataString(fact, "normalized_resource_path");
+        string basePath;
+        string? groupPrefix;
+        if (!string.IsNullOrWhiteSpace(normalized))
+        {
+            // Scope prefix already folded into the normalized path — use it verbatim, do NOT re-apply the prefix.
+            var trimmed = normalized.Trim().Trim('/');
+            basePath = trimmed.Length == 0 ? string.Empty : "/" + trimmed;
+            groupPrefix = null;
+        }
+        else
+        {
+            var raw = StructuralRouteFactAdapter.MetadataString(fact, "resource_path");
+            if (string.IsNullOrWhiteSpace(raw))
+                return;
+            var trimmed = raw.Trim().Trim('/');
+            basePath = trimmed.Length == 0 ? string.Empty : "/" + trimmed;
+            // Raw path carries no scope — apply the same-file prefix here.
+            groupPrefix = StructuralRouteFactAdapter.MetadataString(fact, "route_group_prefix");
+        }
+
+        var controllerClass = ControllerLeaf(StructuralRouteFactAdapter.MetadataString(fact, "controller"));
+        foreach (var (action, verb, suffix) in PhoenixResourceRoutes)
+            AddResourceHandler(expanded, fact, basePath, suffix, verb, groupPrefix, controllerClass, action, controllerMethods);
+    }
+
+    /// <summary>
+    /// Append one expanded resource handler: <c>path = basePath + suffix</c>, prefixed by <paramref name="groupPrefix"/>
+    /// via <see cref="JoinRoute"/> when present; bound to the controller action method when
+    /// <paramref name="controllerClass"/> resolves uniquely, else to the fact's containing symbol id (blank ⇒ a
+    /// synthesized endpoint node). Every entry carries the resource fact's declaring file/line.
+    /// </summary>
+    private static void AddResourceHandler(
+        List<StructuralRouteHandler> expanded,
+        StructuralFactRecord fact,
+        string basePath,
+        string suffix,
+        string verb,
+        string? groupPrefix,
+        string? controllerClass,
+        string action,
+        IReadOnlyDictionary<string, string?> controllerMethods)
+    {
+        var path = basePath + suffix;
+        if (!string.IsNullOrWhiteSpace(groupPrefix))
+            path = JoinRoute(groupPrefix, path);
+
+        var boundId = (controllerClass is null
+                ? null
+                : ResolveControllerMethod(controllerMethods, controllerClass, action))
+            ?? (fact.ContainingSymbolId ?? string.Empty);
+
+        expanded.Add(new StructuralRouteHandler(fact, path, verb, boundId, fact.Path, fact.Span.StartLine));
+    }
+
+    /// <summary>
+    /// The leaf controller name from a possibly-namespaced reference: <c>App\Http\Controllers\PhotoController</c> →
+    /// <c>PhotoController</c>, <c>MyAppWeb.UserController</c> → <c>UserController</c>, <c>Users::Api::PostsController</c>
+    /// → <c>PostsController</c>. Null/blank ⇒ null (⇒ no controller binding; the endpoint falls back). The leaf is what
+    /// <see cref="SymbolDetail.ParentClassName"/> carries, so a namespaced fact value still resolves.
+    /// </summary>
+    private static string? ControllerLeaf(string? controller)
+    {
+        if (string.IsNullOrWhiteSpace(controller))
+            return null;
+        var text = controller.Trim();
+        var cut = -1;
+        for (var i = 0; i < text.Length; i++)
+        {
+            if (text[i] is '\\' or '.' or '/' or ':')
+                cut = i;
+        }
+        var leaf = cut >= 0 && cut < text.Length - 1 ? text[(cut + 1)..] : cut < 0 ? text : string.Empty;
+        leaf = leaf.Trim();
+        return leaf.Length == 0 ? null : leaf;
     }
 
     /// <summary>

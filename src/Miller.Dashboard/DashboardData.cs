@@ -967,19 +967,20 @@ public static class DashboardData
         };
 
         return new WorkspaceFacts(
-            workspace.CanonicalRoot,
-            workspace.WorkspaceId,
-            workspace.IndexDbPath,
+            Root: workspace.CanonicalRoot,
+            WorkspaceId: workspace.WorkspaceId,
+            DbPath: workspace.IndexDbPath,
             IsLeader: false,
-            dashboardFacts.SymbolCount,
-            SafeInt(dashboardFacts.LanguageCount),
-            expectedRevision,
-            dashboardFacts.LastRevision ?? expectedRevision,
-            DashboardIndexFresh(workspace, dashboardFacts),
+            DocumentCount: dashboardFacts.SymbolCount,
+            KnownExtensionsCount: SafeInt(dashboardFacts.LanguageCount),
+            BuiltRevision: expectedRevision,
+            LatestObservedRevision: dashboardFacts.LastRevision ?? expectedRevision,
+            IndexFresh: DashboardIndexFresh(workspace, dashboardFacts),
             QueueEmpty: true,
-            freshnessStatus,
-            dashboardFacts.Message ?? dashboardFacts.RegistryLastError,
-            workspace.DisplayId,
+            ArtifactId: dashboardFacts.ArtifactId,
+            FreshnessStatus: freshnessStatus,
+            WarningText: dashboardFacts.Message ?? dashboardFacts.RegistryLastError,
+            DisplayId: workspace.DisplayId,
             SearchSidecar: searchSidecar,
             ContentCorpus: contentCorpus);
     }

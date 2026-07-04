@@ -3118,8 +3118,8 @@ public sealed class BridgeGraphBuilderTests
 
     // ============================ backend-http provider (plan Task 2) ==========================================
     // These fixtures exercise BackendHttpBridgeProvider through the default BridgeGraphBuilder.Build set: a
-    // http.client_request.v1 fetch/axios call site joins a backend route-template family (the 10
-    // BackendRoutePatternIds) via FileRouteBridge.ResolveClientRequests — every verb rule inherited from that
+        // http.client_request.v1 client call sites join backend route-template families
+        // (BridgeStructuralPatterns.BackendRoutePatternIds) via FileRouteBridge.ResolveClientRequests — every verb rule inherited from that
     // resolver. Assertions are caller-facing (graph.Incident / CapabilityReport), never on private helpers.
 
     [Fact]
@@ -3913,11 +3913,12 @@ public sealed class BridgeGraphBuilderTests
     // ===== Task 1: Backend HTTP boundary — whitelist + adapter reads (16 new families) =====
 
     [Fact]
-    public void BridgeStructuralPatterns_BridgeFactPatternIds_ContainsAll16BackendFamilies()
+    public void BridgeStructuralPatterns_BridgeFactPatternIds_ContainsAll28BackendFamilies()
     {
         // The load whitelist (SqliteBridgeReader SQL gate): an id absent here never reaches a provider.
         var backendIds = new[]
         {
+            // 2.7.0 wave 1 (16).
             BridgeStructuralPatterns.ExpressRoute,
             BridgeStructuralPatterns.ExpressRouterMount,
             BridgeStructuralPatterns.FastifyRoute,
@@ -3934,20 +3935,33 @@ public sealed class BridgeGraphBuilderTests
             BridgeStructuralPatterns.RailsRoute,
             BridgeStructuralPatterns.RailsResourceRoute,
             BridgeStructuralPatterns.RailsMount,
+            // 2.8.0 wave 2 (12): six more stacks — routes, resource declarations, and prefix/mount families.
+            BridgeStructuralPatterns.NestJsRoute,
+            BridgeStructuralPatterns.LaravelRoute,
+            BridgeStructuralPatterns.LaravelResourceRoute,
+            BridgeStructuralPatterns.LaravelRoutePrefix,
+            BridgeStructuralPatterns.PhoenixRoute,
+            BridgeStructuralPatterns.PhoenixResourceRoute,
+            BridgeStructuralPatterns.PhoenixForward,
+            BridgeStructuralPatterns.AxumRoute,
+            BridgeStructuralPatterns.AxumNest,
+            BridgeStructuralPatterns.ActixAttributeRoute,
+            BridgeStructuralPatterns.ActixScopeRoute,
+            BridgeStructuralPatterns.ActixMount,
         };
 
-        Assert.Equal(16, backendIds.Length); // self-check: every constant enumerated
+        Assert.Equal(28, backendIds.Length); // self-check: every constant enumerated
         foreach (var id in backendIds)
             Assert.Contains(id, BridgeStructuralPatterns.BridgeFactPatternIds);
     }
 
     [Fact]
-    public void BridgeStructuralPatterns_BackendRoutePatternIds_ContainsTheTenRouteFamiliesOnly()
+    public void BridgeStructuralPatterns_BackendRoutePatternIds_ContainsTheSixteenRouteFamiliesOnly()
     {
         var routeIds = BridgeStructuralPatterns.BackendRoutePatternIds;
 
-        Assert.Equal(10, routeIds.Count);
-        // The 10 route-template families the provider joins against normalized_route_template.
+        Assert.Equal(16, routeIds.Count);
+        // The 16 route-template families the provider joins against normalized_route_template (2.7.0 + 2.8.0).
         Assert.Contains(BridgeStructuralPatterns.ExpressRoute, routeIds);
         Assert.Contains(BridgeStructuralPatterns.FastifyRoute, routeIds);
         Assert.Contains(BridgeStructuralPatterns.FastApiRoute, routeIds);
@@ -3958,13 +3972,25 @@ public sealed class BridgeGraphBuilderTests
         Assert.Contains(BridgeStructuralPatterns.GinRoute, routeIds);
         Assert.Contains(BridgeStructuralPatterns.EchoRoute, routeIds);
         Assert.Contains(BridgeStructuralPatterns.RailsRoute, routeIds);
-        // Mount families and Rails evidence-only families are NOT route-template inputs.
+        Assert.Contains(BridgeStructuralPatterns.NestJsRoute, routeIds);
+        Assert.Contains(BridgeStructuralPatterns.LaravelRoute, routeIds);
+        Assert.Contains(BridgeStructuralPatterns.PhoenixRoute, routeIds);
+        Assert.Contains(BridgeStructuralPatterns.AxumRoute, routeIds);
+        Assert.Contains(BridgeStructuralPatterns.ActixAttributeRoute, routeIds);
+        Assert.Contains(BridgeStructuralPatterns.ActixScopeRoute, routeIds);
+        // Mount/prefix families, resource-declaration families, and Rails evidence-only are NOT route-template inputs.
         Assert.DoesNotContain(BridgeStructuralPatterns.ExpressRouterMount, routeIds);
         Assert.DoesNotContain(BridgeStructuralPatterns.FastApiIncludeRouter, routeIds);
         Assert.DoesNotContain(BridgeStructuralPatterns.FlaskBlueprintRegistration, routeIds);
         Assert.DoesNotContain(BridgeStructuralPatterns.DjangoUrlInclude, routeIds);
         Assert.DoesNotContain(BridgeStructuralPatterns.RailsResourceRoute, routeIds);
         Assert.DoesNotContain(BridgeStructuralPatterns.RailsMount, routeIds);
+        Assert.DoesNotContain(BridgeStructuralPatterns.LaravelResourceRoute, routeIds);
+        Assert.DoesNotContain(BridgeStructuralPatterns.LaravelRoutePrefix, routeIds);
+        Assert.DoesNotContain(BridgeStructuralPatterns.PhoenixResourceRoute, routeIds);
+        Assert.DoesNotContain(BridgeStructuralPatterns.PhoenixForward, routeIds);
+        Assert.DoesNotContain(BridgeStructuralPatterns.AxumNest, routeIds);
+        Assert.DoesNotContain(BridgeStructuralPatterns.ActixMount, routeIds);
     }
 
     [Fact]
@@ -4141,6 +4167,11 @@ public sealed class BridgeGraphBuilderTests
     [InlineData("express.router_mount.v1")]
     [InlineData("rails.resource_route.v1")]
     [InlineData("rails.mount.v1")]
+    [InlineData("laravel.resource_route.v1")] // 2.8.0 aggregate declaration — expanded, never read as a route
+    [InlineData("phoenix.resource_route.v1")]
+    [InlineData("axum.nest.v1")]              // 2.8.0 mount family — not a route-template family
+    [InlineData("actix.mount.v1")]
+    [InlineData("laravel.route_prefix.v1")]
     public void StructuralRouteFactAdapter_TryReadBackendRoute_RejectsNonRouteFamilies(string patternId)
     {
         var fact = Fact(
@@ -4286,6 +4317,9 @@ public sealed class BridgeGraphBuilderTests
     [InlineData("rails.mount.v1")]
     [InlineData("express.route.v1")]
     [InlineData("nextjs.route_handler.v1")]
+    [InlineData("nestjs.route.v1")]           // 2.8.0 plain route family — not a mount
+    [InlineData("laravel.resource_route.v1")] // 2.8.0 resource declaration — not a mount
+    [InlineData("actix.attribute_route.v1")]
     public void StructuralRouteFactAdapter_TryReadMountFact_RejectsNonMountFamilies(string patternId)
     {
         var fact = Fact(
@@ -4640,5 +4674,520 @@ public sealed class BridgeGraphBuilderTests
         var hit = Assert.Single(graph.Incident("sym-client-fn"), e => e.Edge.Kind == BridgeKind.Hits);
         Assert.Equal(ConfidenceBand.High, hit.Band);
         Assert.Null(hit.Edge.TargetRef.SymbolId);
+    }
+
+    // ============================ backend-http provider — julie-extractors 2.8.0 wave 2 =========================
+    // Six more backend stacks join through the SAME machinery: plain route families (NestJS/Laravel/Phoenix/axum +
+    // both actix provenances) read via TryReadBackendRoute; laravel/phoenix resource declarations expand like Rails;
+    // axum.nest / actix.mount / phoenix.forward compose cross-file prefixes; laravel.route_prefix is target-less
+    // evidence. Kotlin+Spring routes and the four new client languages reuse existing ids (no test needed here — a
+    // spring.request_mapping.v1 route and an http.client_request.v1 call already have coverage above).
+
+    [Theory]
+    [InlineData("nestjs.route.v1", "typescript")]
+    [InlineData("laravel.route.v1", "php")]
+    [InlineData("phoenix.route.v1", "elixir")]
+    [InlineData("axum.route.v1", "rust")]
+    [InlineData("actix.attribute_route.v1", "rust")]
+    public void BackendHttp_v280_plain_route_family_hits_client_High(string patternId, string language)
+    {
+        // Invariant (language parity): each new plain route family carries normalized_route_template and joins a
+        // verb-equal client request at High, bound to the route fact's handler symbol — with no family-specific read.
+        var handler = Method("sym-handler", "handle", "handle()", string.Empty, "server/app_routes");
+        var clientFn = Type("sym-client-fn", "load", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-client", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch",
+                    ["target_path"] = "/api/widgets",
+                    ["url_kind"] = "path",
+                    ["verb"] = "GET",
+                    ["verb_source"] = "attested",
+                }),
+            Fact("sf-route", patternId, language, "server/app_routes", "sym-handler", 200,
+                new Dictionary<string, string>
+                {
+                    ["normalized_route_template"] = "/api/widgets",
+                    ["verb"] = "GET",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [handler, clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hit = Assert.Single(graph.Incident("sym-handler"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.False(hit.IsVerbUnknown);
+        Assert.Equal("sym-handler", hit.Edge.TargetRef.SymbolId);
+        Assert.Contains("backend-http", graph.CapabilityReport.ActiveProviders);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["backend-http.routeFacts"]);
+    }
+
+    [Fact]
+    public void BackendHttp_actix_scope_route_prefers_effective_template_over_scope_local()
+    {
+        // Invariant: actix.scope_route.v1 always carries route_group_prefix + effective_route_template (the scope
+        // prefix folded). TryReadBackendRoute prefers effective_route_template, so a client to the ABSOLUTE path
+        // joins — the scope-local normalized_route_template (/users) alone would MISS /api/users.
+        var handler = Method("sym-actix", "create", "create()", string.Empty, "src/routes.rs");
+        var clientFn = Type("sym-client-fn", "create", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-client", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch", ["target_path"] = "/api/users", ["url_kind"] = "path",
+                    ["verb"] = "POST", ["verb_source"] = "attested",
+                }),
+            Fact("sf-actix-scope", "actix.scope_route.v1", "rust", "src/routes.rs", "sym-actix", 200,
+                new Dictionary<string, string>
+                {
+                    ["route_group_prefix"] = "/api",
+                    ["route_template"] = "/users",
+                    ["normalized_route_template"] = "/users",
+                    ["effective_route_template"] = "/api/users",
+                    ["verb"] = "POST",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [handler, clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hit = Assert.Single(graph.Incident("sym-actix"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.False(hit.IsVerbUnknown);
+    }
+
+    [Theory]
+    [InlineData("axum.nest.v1", "rust")]
+    [InlineData("actix.mount.v1", "rust")]
+    [InlineData("phoenix.forward.v1", "elixir")]
+    public void StructuralRouteFactAdapter_TryReadMountFact_ReadsV280TargetedMountFamilies(string patternId, string language)
+    {
+        var fact = Fact("sf-mount", patternId, language, "src/app", "sym-app", 100,
+            new Dictionary<string, string>
+            {
+                ["mount_path"] = "/admin",
+                ["normalized_mount_path"] = "/admin",
+                ["mount_target"] = "admin_routes",
+            });
+
+        Assert.True(StructuralRouteFactAdapter.TryReadMountFact(fact, new Dictionary<string, SymbolDetail>(), out var mount));
+        Assert.Equal("/admin", mount.MountPath);
+        Assert.Equal("admin_routes", mount.MountTarget);
+    }
+
+    [Fact]
+    public void StructuralRouteFactAdapter_TryReadMountFact_LaravelRoutePrefixReadsWithNoTarget()
+    {
+        // Invariant: laravel.route_prefix.v1 (a Route::prefix(...)->group closure) carries mount_path only — no
+        // same-file named mount_target. It reads as a mount fact with an EMPTY target, so it composes nothing
+        // cross-file (evidence-only); its same-file effect already lives on the route facts' effective_route_template.
+        var fact = Fact("sf-prefix", "laravel.route_prefix.v1", "php", "routes/web.php", string.Empty, 100,
+            new Dictionary<string, string>
+            {
+                ["mount_path"] = "/admin",
+                ["normalized_mount_path"] = "/admin",
+            });
+
+        Assert.True(StructuralRouteFactAdapter.TryReadMountFact(fact, new Dictionary<string, SymbolDetail>(), out var mount));
+        Assert.Equal("/admin", mount.MountPath);
+        Assert.Equal(string.Empty, mount.MountTarget);
+    }
+
+    [Theory]
+    [InlineData("api_routes()", "api_routes")]  // bare target imported via `use crate::api::api_routes;`
+    [InlineData("api::routes()", "routes")]     // idiomatic Rust path-qualified target (review finding #3: '::' must split)
+    public void BackendHttp_axum_nest_composes_prefixed_route_High(string mountTarget, string routerFnName)
+    {
+        // Invariant: axum .route("/{id}") in src/api.rs (the nested router fn also defined there) + .nest("/api", <target>)
+        // in src/main.rs → composed /api/:id joins fetch("/api/42") at High, bound to the route's handler symbol. The
+        // path-qualified form api::routes() must anchor on the fn's leaf name ("routes"), not the whole "api::routes".
+        var handler = Method("sym-axum-show", "show", "show()", string.Empty, "src/api.rs");
+        var routerFn = Type("sym-api-routes", routerFnName, "function", file: "src/api.rs");
+        var appSym = Type("sym-app", "app", "variable", file: "src/main.rs");
+        var clientFn = Type("sym-client-fn", "loadUser", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-client-get", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch", ["target_path"] = "/api/42", ["url_kind"] = "path",
+                    ["verb"] = "GET", ["verb_source"] = "default",
+                }),
+            Fact("sf-axum-route", "axum.route.v1", "rust", "src/api.rs", "sym-axum-show", 200,
+                new Dictionary<string, string>
+                {
+                    ["normalized_route_template"] = "/:id",
+                    ["verb"] = "GET",
+                }),
+            Fact("sf-axum-nest", "axum.nest.v1", "rust", "src/main.rs", "sym-app", 300,
+                new Dictionary<string, string>
+                {
+                    ["normalized_mount_path"] = "/api",
+                    ["mount_target"] = mountTarget,
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [handler, routerFn, appSym, clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hit = Assert.Single(graph.Incident("sym-axum-show"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.Equal("sym-axum-show", hit.Edge.TargetRef.SymbolId);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["backend-http.composedRoutes"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["backend-http.unanchoredMounts"]);
+    }
+
+    [Theory]
+    [InlineData("admin_config", "admin_config")]  // bare configure target
+    [InlineData("config::admin", "admin")]        // path-qualified configure target (review finding #3: '::' must split)
+    public void BackendHttp_actix_mount_composes_attribute_route_High(string mountTarget, string configFnName)
+    {
+        // Invariant: actix web::scope("/admin").configure(<target>) mounts the attribute-routed handlers the
+        // configured fn registers → composed /admin/users joins fetch POST /admin/users at High. The path-qualified
+        // form config::admin must anchor on the fn's leaf name ("admin"), not the whole "config::admin".
+        var handler = Method("sym-actix-create", "create", "create()", string.Empty, "src/admin.rs");
+        var configFn = Type("sym-admin-config", configFnName, "function", file: "src/admin.rs");
+        var appSym = Type("sym-app", "app", "variable", file: "src/main.rs");
+        var clientFn = Type("sym-client-fn", "createUser", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-client-post", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch", ["target_path"] = "/admin/users", ["url_kind"] = "path",
+                    ["verb"] = "POST", ["verb_source"] = "attested",
+                }),
+            Fact("sf-actix-attr", "actix.attribute_route.v1", "rust", "src/admin.rs", "sym-actix-create", 200,
+                new Dictionary<string, string>
+                {
+                    ["normalized_route_template"] = "/users",
+                    ["verb"] = "POST",
+                }),
+            Fact("sf-actix-mount", "actix.mount.v1", "rust", "src/main.rs", "sym-app", 300,
+                new Dictionary<string, string>
+                {
+                    ["normalized_mount_path"] = "/admin",
+                    ["mount_target"] = mountTarget,
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [handler, configFn, appSym, clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hit = Assert.Single(graph.Incident("sym-actix-create"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["backend-http.composedRoutes"]);
+    }
+
+    [Theory]
+    [InlineData("MyAppWeb.AdminRouter")]  // namespaced module — real Phoenix (review finding #2: leaf-strip would miss)
+    [InlineData("HealthPlug")]            // bare single-segment module still anchors (name == target)
+    public void BackendHttp_phoenix_forward_composes_prefixed_route_High(string moduleName)
+    {
+        // Invariant: phoenix forward "/admin", <Module> + a phoenix.route "/dashboard" in that module's file →
+        // composed /admin/dashboard joins fetch GET /admin/dashboard at High. Elixir names the module symbol by its
+        // FULL dotted alias, so anchoring must match the whole mount_target, not just its leaf segment.
+        var handler = Method("sym-dash", "dashboard", "dashboard()", string.Empty, "lib/admin_router.ex");
+        var routerSym = Type("sym-admin-router", moduleName, "module", file: "lib/admin_router.ex");
+        var clientFn = Type("sym-client-fn", "openDashboard", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-client-get", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch", ["target_path"] = "/admin/dashboard", ["url_kind"] = "path",
+                    ["verb"] = "GET", ["verb_source"] = "default",
+                }),
+            Fact("sf-phoenix-route", "phoenix.route.v1", "elixir", "lib/admin_router.ex", "sym-dash", 200,
+                new Dictionary<string, string>
+                {
+                    ["normalized_route_template"] = "/dashboard",
+                    ["verb"] = "GET",
+                }),
+            Fact("sf-phoenix-forward", "phoenix.forward.v1", "elixir", "lib/router.ex", string.Empty, 300,
+                new Dictionary<string, string>
+                {
+                    ["normalized_mount_path"] = "/admin",
+                    ["mount_target"] = moduleName,
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [handler, routerSym, clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hit = Assert.Single(graph.Incident("sym-dash"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["backend-http.composedRoutes"]);
+    }
+
+    [Fact]
+    public void BackendHttp_laravel_route_prefix_is_target_less_evidence_composes_nothing()
+    {
+        // Invariant: laravel.route_prefix.v1 carries no mount_target, so it can never anchor cross-file — it is
+        // counted as an unanchored mount and composes nothing. A same-file direct laravel route is unaffected.
+        var handler = Method("sym-dash", "index", "index()", string.Empty, "routes/web.php");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-laravel-route", "laravel.route.v1", "php", "routes/web.php", "sym-dash", 100,
+                new Dictionary<string, string>
+                {
+                    ["normalized_route_template"] = "/dashboard",
+                    ["verb"] = "GET",
+                }),
+            Fact("sf-laravel-prefix", "laravel.route_prefix.v1", "php", "routes/web.php", string.Empty, 200,
+                new Dictionary<string, string>
+                {
+                    ["mount_path"] = "/admin",
+                    ["normalized_mount_path"] = "/admin",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [handler], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.Contains("backend-http", graph.CapabilityReport.ActiveProviders);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["backend-http.mounts"]);
+        Assert.Equal(0, graph.CapabilityReport.EvidenceCounts["backend-http.composedRoutes"]);
+        Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["backend-http.unanchoredMounts"]);
+    }
+
+    [Fact]
+    public void BackendHttp_laravel_resource_expands_to_eight_and_index_joins_client()
+    {
+        // Invariant: Route::resource('photos', ...) expands to 8 verb entries (update answers PUT AND PATCH); a GET
+        // client to /photos joins the index route (High, verb-known).
+        var clientFn = Type("sym-client-fn", "listPhotos", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-photos", "laravel.resource_route.v1", "php", "routes/web.php", string.Empty, 200,
+                new Dictionary<string, string> { ["resource_name"] = "photos", ["resource_kind"] = "resource" }),
+            Fact("sf-client-index", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch", ["target_path"] = "/photos", ["url_kind"] = "path",
+                    ["verb"] = "GET", ["verb_source"] = "default",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.Contains("backend-http", graph.CapabilityReport.ActiveProviders);
+        Assert.Equal(8, graph.CapabilityReport.EvidenceCounts["backend-http.expandedResourceRoutes"]);
+        var hit = Assert.Single(graph.Incident("sym-client-fn"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.False(hit.IsVerbUnknown);
+    }
+
+    [Fact]
+    public void BackendHttp_laravel_api_resource_expands_to_six_no_create_no_edit()
+    {
+        // Invariant: Route::apiResource drops the HTML-form-only create+edit routes → 6 verb entries.
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-photos", "laravel.resource_route.v1", "php", "routes/api.php", string.Empty, 200,
+                new Dictionary<string, string> { ["resource_name"] = "photos", ["resource_kind"] = "api_resource" }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.Equal(6, graph.CapabilityReport.EvidenceCounts["backend-http.expandedResourceRoutes"]);
+    }
+
+    [Fact]
+    public void BackendHttp_laravel_resource_binds_namespaced_controller_action_method()
+    {
+        // Invariant: the resource fact's namespaced `controller` reference resolves by its LEAF name to the action
+        // method symbol; a GET /photos client binds to PhotoController::index.
+        var indexMethod = Method("sym-photo-index", "index", "index()", "PhotoController", "app/Http/Controllers/PhotoController.php");
+        var clientFn = Type("sym-client-fn", "listPhotos", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-photos", "laravel.resource_route.v1", "php", "routes/web.php", string.Empty, 200,
+                new Dictionary<string, string>
+                {
+                    ["resource_name"] = "photos",
+                    ["resource_kind"] = "resource",
+                    ["controller"] = "App\\Http\\Controllers\\PhotoController",
+                }),
+            Fact("sf-client-index", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch", ["target_path"] = "/photos", ["url_kind"] = "path",
+                    ["verb"] = "GET", ["verb_source"] = "default",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [indexMethod, clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hit = Assert.Single(graph.Incident("sym-photo-index"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+        Assert.Equal("sym-photo-index", hit.Edge.TargetRef.SymbolId);
+    }
+
+    [Fact]
+    public void BackendHttp_phoenix_resources_expands_to_eight_and_index_joins_client()
+    {
+        // Invariant: resources "/users", UserController expands to 8 verb entries off the base PATH
+        // (normalized_resource_path); a GET client to /users joins index at High.
+        var clientFn = Type("sym-client-fn", "listUsers", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-users", "phoenix.resource_route.v1", "elixir", "lib/router.ex", string.Empty, 200,
+                new Dictionary<string, string>
+                {
+                    ["resource_path"] = "/users",
+                    ["normalized_resource_path"] = "/users",
+                    ["controller"] = "UserController",
+                }),
+            Fact("sf-client-index", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch", ["target_path"] = "/users", ["url_kind"] = "path",
+                    ["verb"] = "GET", ["verb_source"] = "default",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.Contains("backend-http", graph.CapabilityReport.ActiveProviders);
+        Assert.Equal(8, graph.CapabilityReport.EvidenceCounts["backend-http.expandedResourceRoutes"]);
+        var hit = Assert.Single(graph.Incident("sym-client-fn"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
+    }
+
+    [Fact]
+    public void BackendHttp_phoenix_scoped_resources_prefix_once_not_twice()
+    {
+        // Invariant (regression, review finding #1): a scoped `scope "/api" do resources "/users", UserController end`
+        // emits phoenix.resource_route.v1 with normalized_resource_path ALREADY folding in the scope ("/api/users")
+        // AND route_group_prefix="/api" (contract: normalized_resource_path "including same-file scope prefix"). The
+        // expander must prefix ONCE: routes live at /api/users…, NOT /api/api/users…. A client GET /api/users joins
+        // index at High; /api/api/users (the double-prefix bug) and bare /users join nothing.
+        var clientPrefixed = Type("sym-client-prefixed", "listApiUsers", "function", file: "web/api.ts");
+        var clientDouble = Type("sym-client-double", "listDoubled", "function", file: "web/api.ts");
+        var clientBare = Type("sym-client-bare", "listUsers", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-users", "phoenix.resource_route.v1", "elixir", "lib/router.ex", string.Empty, 200,
+                new Dictionary<string, string>
+                {
+                    ["resource_path"] = "/users",
+                    ["normalized_resource_path"] = "/api/users", // scope already folded in (per contract + extractor)
+                    ["route_group_prefix"] = "/api",
+                    ["controller"] = "UserController",
+                }),
+            Fact("sf-client-prefixed", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-prefixed", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch", ["target_path"] = "/api/users", ["url_kind"] = "path",
+                    ["verb"] = "GET", ["verb_source"] = "default",
+                }),
+            Fact("sf-client-double", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-double", 105,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch", ["target_path"] = "/api/api/users", ["url_kind"] = "path",
+                    ["verb"] = "GET", ["verb_source"] = "default",
+                }),
+            Fact("sf-client-bare", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-bare", 110,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch", ["target_path"] = "/users", ["url_kind"] = "path",
+                    ["verb"] = "GET", ["verb_source"] = "default",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [clientPrefixed, clientDouble, clientBare], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.Single(graph.Incident("sym-client-prefixed"), e => e.Edge.Kind == BridgeKind.Hits);
+        // The double-prefix bug would have put every route under /api/api — a client there must NOT join.
+        Assert.DoesNotContain(graph.Incident("sym-client-double"), e => e.Edge.Kind == BridgeKind.Hits);
+        // The bare /users no longer exists — every route is under /api — so it joins nothing.
+        Assert.DoesNotContain(graph.Incident("sym-client-bare"), e => e.Edge.Kind == BridgeKind.Hits);
+    }
+
+    [Fact]
+    public void BackendHttp_phoenix_scoped_resources_raw_path_fallback_applies_prefix_once()
+    {
+        // Invariant: when normalized_resource_path is absent, the expander falls back to the RAW resource_path (no
+        // scope folded) and applies route_group_prefix exactly once → /api/users. Guards the else-branch of the fix.
+        var clientPrefixed = Type("sym-client-prefixed", "listApiUsers", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-users", "phoenix.resource_route.v1", "elixir", "lib/router.ex", string.Empty, 200,
+                new Dictionary<string, string>
+                {
+                    ["resource_path"] = "/users",
+                    ["route_group_prefix"] = "/api",
+                    ["controller"] = "UserController",
+                }),
+            Fact("sf-client-prefixed", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-prefixed", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch", ["target_path"] = "/api/users", ["url_kind"] = "path",
+                    ["verb"] = "GET", ["verb_source"] = "default",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [clientPrefixed], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        Assert.Single(graph.Incident("sym-client-prefixed"), e => e.Edge.Kind == BridgeKind.Hits);
+    }
+
+    [Fact]
+    public void BackendHttp_laravel_prefix_group_optional_param_joins_High()
+    {
+        // Invariant (regression, review finding #4): a Laravel route with an OPTIONAL param inside a prefix group
+        // (`Route::prefix('admin')->group(fn: Route::get('/users/{id?}', ...))`) emits effective_route_template
+        // "/admin/users/{id?}" (raw '?' preserved) alongside normalized "/admin/users/:id". TryReadBackendRoute
+        // prefers effective, so the matcher must treat the brace-optional "{id?}" as a dynamic segment — a client
+        // GET /admin/users/42 joins at High rather than being truncated to an unmatchable literal.
+        var handler = Method("sym-show", "show", "show()", string.Empty, "routes/web.php");
+        var clientFn = Type("sym-client-fn", "loadUser", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-laravel-route", "laravel.route.v1", "php", "routes/web.php", "sym-show", 100,
+                new Dictionary<string, string>
+                {
+                    ["effective_route_template"] = "/admin/users/{id?}",
+                    ["normalized_route_template"] = "/admin/users/:id",
+                    ["route_group_prefix"] = "/admin",
+                    ["verb"] = "GET",
+                }),
+            Fact("sf-client-get", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 200,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch", ["target_path"] = "/admin/users/42", ["url_kind"] = "path",
+                    ["verb"] = "GET", ["verb_source"] = "attested",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [handler, clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hit = Assert.Single(graph.Incident("sym-show"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.High, hit.Band);
     }
 }

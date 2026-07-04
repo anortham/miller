@@ -94,7 +94,7 @@ internal static class CliCapabilities
         ("trace", "trace --json", 1, "docs/contracts/trace-json-v1.md"),
         ("patterns", "patterns --json", 1, "docs/contracts/patterns-json-v1.md"),
         ("metrics", "metrics <churn|clones|complexity> --json", 1, "docs/contracts/metrics-json-v1.md"),
-        ("impact_index_revision_delta", "impact --json --from-index-revision N", 1,
+        ("impact_index_revision_delta", "impact --json --from-index-revision N --from-artifact-id ID", 1,
             "docs/contracts/impact-index-revision-delta-v1.md"),
     ];
 

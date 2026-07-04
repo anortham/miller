@@ -22,6 +22,11 @@ internal static class StructuralRouteFactAdapter
     private const string FastApiIncludeRouterPattern = BridgeStructuralPatterns.FastApiIncludeRouter;
     private const string FlaskBlueprintRegistrationPattern = BridgeStructuralPatterns.FlaskBlueprintRegistration;
     private const string DjangoUrlIncludePattern = BridgeStructuralPatterns.DjangoUrlInclude;
+    // julie-extractors 2.8.0 prefix/mount families.
+    private const string AxumNestPattern = BridgeStructuralPatterns.AxumNest;
+    private const string ActixMountPattern = BridgeStructuralPatterns.ActixMount;
+    private const string PhoenixForwardPattern = BridgeStructuralPatterns.PhoenixForward;
+    private const string LaravelRoutePrefixPattern = BridgeStructuralPatterns.LaravelRoutePrefix;
 
     public static bool TryReadRouteReference(
         StructuralFactRecord fact,
@@ -164,13 +169,14 @@ internal static class StructuralRouteFactAdapter
     }
 
     /// <summary>
-    /// Read a backend HTTP route-template fact (2.7.0: the 10 <see cref="BridgeStructuralPatterns.BackendRoutePatternIds"/>
-    /// families — Express/Fastify/FastAPI/Flask/Django/Spring/Go net-http/gin/echo/Rails). Sibling to
-    /// <see cref="TryReadRouteHandler"/>, but the route-path precedence differs: backend families carry NO
-    /// bracket-form <c>route_path</c>, so the join key is <c>effective_route_template</c> (same-file prefix folded)
-    /// preferred over <c>normalized_route_template</c>. A blank route is rejected — this honestly excludes Django
-    /// <c>route_syntax="regex"</c> facts (no <c>normalized_route_template</c>), never synthesizing a route from a regex.
-    /// A Spring <c>attribute_kind="class_route"</c> fact is a controller prefix, never an endpoint (mirrors ASP.NET
+    /// Read a backend HTTP route-template fact (the 16 <see cref="BridgeStructuralPatterns.BackendRoutePatternIds"/>
+    /// families — 2.7.0 Express/Fastify/FastAPI/Flask/Django/Spring/Go net-http/gin/echo/Rails; 2.8.0 NestJS/Laravel/
+    /// Phoenix/axum + both actix provenances). Sibling to <see cref="TryReadRouteHandler"/>, but the route-path
+    /// precedence differs: backend families carry NO bracket-form <c>route_path</c>, so the join key is
+    /// <c>effective_route_template</c> (same-file prefix folded) preferred over <c>normalized_route_template</c>.
+    /// A blank route is rejected — this honestly excludes Django <c>route_syntax="regex"</c> facts (no
+    /// <c>normalized_route_template</c>), never synthesizing a route from a regex. A Spring
+    /// <c>attribute_kind="class_route"</c> fact is a controller prefix, never an endpoint (mirrors ASP.NET
     /// <c>controller_route</c>), and is rejected. The verb is NULLABLE UPPERCASE: verbless facts (Express <c>app.all</c>,
     /// gin/echo <c>Any</c>, method-less <c>@RequestMapping</c>, Django URLconf) yield a null verb → downstream Medium
     /// <c>verb_unknown</c>, never an assumed GET. Reuses <see cref="StructuralRouteHandler"/> so
@@ -213,7 +219,8 @@ internal static class StructuralRouteFactAdapter
 
     /// <summary>
     /// Read a cross-file route-mount/include fact (2.7.0: <c>express.router_mount.v1</c>,
-    /// <c>fastapi.include_router.v1</c>, <c>flask.blueprint_registration.v1</c>, <c>django.url_include.v1</c>).
+    /// <c>fastapi.include_router.v1</c>, <c>flask.blueprint_registration.v1</c>, <c>django.url_include.v1</c>;
+    /// 2.8.0: <c>axum.nest.v1</c>, <c>actix.mount.v1</c>, <c>phoenix.forward.v1</c>, <c>laravel.route_prefix.v1</c>).
     /// <c>rails.mount.v1</c> is deliberately NOT read here — it mounts Rack apps whose internal routes are not
     /// in the fact stream, so it is evidence-only. The mount prefix is <c>normalized_mount_path</c> preferred
     /// over <c>mount_path</c>; a fact with NEITHER is rejected — an un-prefixed <c>include_router</c>/
@@ -278,7 +285,7 @@ internal static class StructuralRouteFactAdapter
         string.Equals(patternId, NextJsRouteHandlerPattern, StringComparison.Ordinal) ||
         string.Equals(patternId, NuxtServerRoutePattern, StringComparison.Ordinal);
 
-    // The 10 backend route-template families are the single source of truth in BridgeStructuralPatterns —
+    // The backend route-template families are the single source of truth in BridgeStructuralPatterns —
     // gate against that list so the adapter and the provider can never drift.
     private static bool IsBackendRoutePattern(string patternId) =>
         BridgeStructuralPatterns.BackendRoutePatternIds.Contains(patternId, StringComparer.Ordinal);
@@ -287,7 +294,14 @@ internal static class StructuralRouteFactAdapter
         string.Equals(patternId, ExpressRouterMountPattern, StringComparison.Ordinal) ||
         string.Equals(patternId, FastApiIncludeRouterPattern, StringComparison.Ordinal) ||
         string.Equals(patternId, FlaskBlueprintRegistrationPattern, StringComparison.Ordinal) ||
-        string.Equals(patternId, DjangoUrlIncludePattern, StringComparison.Ordinal);
+        string.Equals(patternId, DjangoUrlIncludePattern, StringComparison.Ordinal) ||
+        // 2.8.0: axum .nest / actix web::scope(...).configure|.service / phoenix forward carry a mount_target;
+        // laravel Route::prefix(...)->group closures carry mount_path only (no same-file named target), so they
+        // read as an evidence-only mount that composes nothing cross-file until a target-less anchor path exists.
+        string.Equals(patternId, AxumNestPattern, StringComparison.Ordinal) ||
+        string.Equals(patternId, ActixMountPattern, StringComparison.Ordinal) ||
+        string.Equals(patternId, PhoenixForwardPattern, StringComparison.Ordinal) ||
+        string.Equals(patternId, LaravelRoutePrefixPattern, StringComparison.Ordinal);
 
     private static string? RouteReferencePath(StructuralFactRecord fact) =>
         MetadataString(fact, "target_path")

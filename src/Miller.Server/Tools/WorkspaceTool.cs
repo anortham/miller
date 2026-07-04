@@ -492,6 +492,7 @@ public sealed class WorkspaceTool
             LatestObservedRevision: _freshness.LatestObservedRevision,
             IndexFresh: _freshProbe.Compute(),
             QueueEmpty: _indexer.QueueEmpty,
+            ArtifactId: _holder.BuiltArtifactId,
             FreshnessStatus: "current",
             DisplayId: CurrentDisplayId(),
             ServerVersion: MillerVersion.Current,

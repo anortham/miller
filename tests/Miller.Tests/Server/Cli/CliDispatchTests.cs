@@ -282,7 +282,7 @@ public sealed class CliDispatchTests : IDisposable
         Assert.StartsWith("1.4.1", root.GetProperty("miller").GetProperty("version").GetString());
 
         JsonElement julie = root.GetProperty("julie_extract");
-        Assert.Equal("2.7.0", julie.GetProperty("pinned_version").GetString());
+        Assert.Equal("2.8.1", julie.GetProperty("pinned_version").GetString());
         Assert.Equal(3, julie.GetProperty("sqlite_schema_version").GetInt64());
         Assert.Equal(3, julie.GetProperty("extract_contract_version").GetInt64());
         Assert.Equal(3, julie.GetProperty("report_schema_version").GetInt64());
@@ -361,7 +361,9 @@ public sealed class CliDispatchTests : IDisposable
         JsonElement deltaContract = Assert.Single(
             root.GetProperty("json_contracts").EnumerateArray(),
             item => item.GetProperty("name").GetString() == "impact_index_revision_delta");
-        Assert.Equal("impact --json --from-index-revision N", deltaContract.GetProperty("command").GetString());
+        Assert.Equal(
+            "impact --json --from-index-revision N --from-artifact-id ID",
+            deltaContract.GetProperty("command").GetString());
         Assert.Equal(1, deltaContract.GetProperty("schema_version").GetInt32());
         Assert.Equal("docs/contracts/impact-index-revision-delta-v1.md", deltaContract.GetProperty("doc").GetString());
 

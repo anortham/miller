@@ -25,6 +25,7 @@ public sealed class WorkspaceRenderTests
         KnownExtensionsCount: 7,
         BuiltRevision: 42,
         LatestObservedRevision: 42,
+        ArtifactId: "artifact-ws-123",
         IndexFresh: true,
         QueueEmpty: true);
 
@@ -426,6 +427,7 @@ public sealed class WorkspaceRenderTests
         Assert.Equal(7, idx.GetProperty("known_extensions").GetInt64());
         Assert.Equal(42, idx.GetProperty("built_revision").GetInt64());
         Assert.Equal(42, idx.GetProperty("latest_revision").GetInt64());
+        Assert.Equal("artifact-ws-123", idx.GetProperty("artifact_id").GetString());
         Assert.True(idx.GetProperty("index_fresh").GetBoolean());
         Assert.True(idx.GetProperty("queue_empty").GetBoolean());
 

@@ -399,7 +399,10 @@ public sealed class ImpactTool
         ISymbolGraphReachability? graph,
         int maxDepth,
         int limit,
-        bool json)
+        bool json,
+        string? artifactId = null,
+        string? fromArtifactId = null,
+        string deltaReason = "complete")
     {
         ArgumentNullException.ThrowIfNull(changedPaths);
         IReadOnlyList<string> paths = complete ? changedPaths : Array.Empty<string>();
@@ -410,8 +413,8 @@ public sealed class ImpactTool
             (impacted, tests) = ReachFromChangedPaths(index, graph, paths, maxDepth, limit);
 
         return json
-            ? RenderDeltaJson(workspaceId, complete, fromRevision, toRevision, paths, impacted, tests)
-            : RenderDeltaCompact(workspaceId, complete, fromRevision, toRevision, paths, impacted, tests);
+            ? RenderDeltaJson(workspaceId, complete, fromRevision, toRevision, artifactId, fromArtifactId, deltaReason, paths, impacted, tests)
+            : RenderDeltaCompact(workspaceId, complete, fromRevision, toRevision, artifactId, fromArtifactId, deltaReason, paths, impacted, tests);
     }
 
     // Seed every changed path's symbols, then partition the bounded reverse-reachability set into impacted symbols
@@ -446,6 +449,7 @@ public sealed class ImpactTool
 
     private static string RenderDeltaJson(
         string workspaceId, bool complete, long fromRevision, long toRevision,
+        string? artifactId, string? fromArtifactId, string deltaReason,
         IReadOnlyList<string> changedPaths, IReadOnlyList<Reached> impacted, IReadOnlyList<Reached> tests)
     {
         var buffer = new ArrayBufferWriter<byte>();
@@ -454,6 +458,11 @@ public sealed class ImpactTool
             w.WriteStartObject();
             w.WriteString("workspace_id", workspaceId ?? string.Empty);
             w.WriteString("delta_status", complete ? "complete" : "unavailable");
+            if (artifactId is null) w.WriteNull("artifact_id");
+            else w.WriteString("artifact_id", artifactId);
+            if (fromArtifactId is null) w.WriteNull("from_artifact_id");
+            else w.WriteString("from_artifact_id", fromArtifactId);
+            w.WriteString("delta_reason", deltaReason);
             w.WriteNumber("from_revision", fromRevision);
             w.WriteNumber("to_revision", toRevision);
             w.WritePropertyName("changed_paths");
@@ -473,6 +482,7 @@ public sealed class ImpactTool
 
     private static string RenderDeltaCompact(
         string workspaceId, bool complete, long fromRevision, long toRevision,
+        string? artifactId, string? fromArtifactId, string deltaReason,
         IReadOnlyList<string> changedPaths, IReadOnlyList<Reached> impacted, IReadOnlyList<Reached> tests)
     {
         var sb = new StringBuilder();
@@ -480,6 +490,9 @@ public sealed class ImpactTool
         sb.Append("status: ").Append(complete ? "complete" : "unavailable")
           .Append("  from_revision: ").Append(fromRevision)
           .Append("  to_revision: ").Append(toRevision).Append('\n');
+        sb.Append("artifact_id: ").Append(artifactId ?? "unknown")
+          .Append("  from_artifact_id: ").Append(fromArtifactId ?? "missing")
+          .Append("  reason: ").Append(deltaReason).Append('\n');
         if (!complete)
         {
             sb.Append("delta unavailable — falling back conservatively (no truthful changed_paths).");

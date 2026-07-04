@@ -33,6 +33,7 @@ namespace Miller.Server.Tools;
 /// not surfaced. Useful when verifying that a restarted stdio MCP server is actually a new process.</param>
 /// <param name="SearchSidecar">Status of the Miller-owned <c>search.db</c> sidecar, when known.</param>
 /// <param name="ContentCorpus">Status of the Miller-owned <c>content.db</c> sidecar, when known.</param>
+/// <param name="ArtifactId">The current extract artifact generation id, or null when the artifact is missing or unreadable.</param>
 public readonly record struct WorkspaceFacts(
     string Root,
     string? WorkspaceId,
@@ -50,7 +51,8 @@ public readonly record struct WorkspaceFacts(
     string? ServerVersion = null,
     int? ServerProcessId = null,
     SearchSidecarFacts? SearchSidecar = null,
-    ContentCorpusFacts? ContentCorpus = null);
+    ContentCorpusFacts? ContentCorpus = null,
+    string? ArtifactId = null);
 
 /// <summary>A registry-backed row rendered by <c>workspace list</c>.</summary>
 /// <remarks><see cref="LastSeenAt"/> drives recency ordering (current first, then most-recently-seen); it is
@@ -374,6 +376,8 @@ public static class WorkspaceRender
             w.WriteNumber("known_extensions", facts.KnownExtensionsCount);
             w.WriteNumber("built_revision", facts.BuiltRevision);
             w.WriteNumber("latest_revision", facts.LatestObservedRevision);
+            if (facts.ArtifactId is null) w.WriteNull("artifact_id");
+            else w.WriteString("artifact_id", facts.ArtifactId);
             if (facts.IndexFresh is { } fresh) w.WriteBoolean("index_fresh", fresh);
             else w.WriteNull("index_fresh");
             if (facts.FreshnessStatus is null) w.WriteNull("freshness_status");
