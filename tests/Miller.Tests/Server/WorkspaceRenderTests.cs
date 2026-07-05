@@ -800,6 +800,18 @@ public sealed class WorkspaceRenderTests
         Assert.False(root.GetProperty("swapped").GetBoolean());
         Assert.Equal(42, root.GetProperty("revision").GetInt64());
         Assert.Equal(JsonValueKind.Null, root.GetProperty("note").ValueKind);
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("artifact_id").ValueKind);
+    }
+
+    [Fact]
+    public void Action_Json_IncludesArtifactIdWhenPresent()
+    {
+        var result = new WorkspaceActionResult(
+            Operation: "refresh", Scanned: false, Swapped: true, Revision: 99, Note: null,
+            ArtifactId: "art-eros-1");
+
+        using var doc = JsonDocument.Parse(WorkspaceRender.Action(result, json: true));
+        Assert.Equal("art-eros-1", doc.RootElement.GetProperty("artifact_id").GetString());
     }
 
     [Fact]

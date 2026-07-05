@@ -127,6 +127,49 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
     }
 
     [Fact]
+    public void Refresh_UnlockedTargetWithNoNewRevision_ReturnsScanArtifactId()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("unchanged-artifact");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 7);
+        var service = NewService(
+            registry,
+            scan: (_, _, _) => NoChangeReport(root, dbPath, "target-ws", revision: 7),
+            acquireLock: _ => new NoopLease());
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws");
+
+        Assert.Equal("a", result.ArtifactId);
+    }
+
+    [Fact]
+    public void Refresh_NoChangeWithReportArtifactMissing_FallsBackToPreScanArtifactId()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("unchanged-prescan-artifact");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 7);
+        int artifactReads = 0;
+        var service = NewService(
+            registry,
+            scan: (_, _, _) =>
+            {
+                Assert.Equal(1, artifactReads);
+                return NoChangeReport(root, dbPath, "target-ws", revision: 7) with { Artifact = null };
+            },
+            acquireLock: _ => new NoopLease(),
+            readArtifactId: _ => ++artifactReads == 1 ? "artifact-before" : null);
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws");
+
+        Assert.Equal(WorkspaceRefreshStatus.Unchanged, result.Status);
+        Assert.Equal("artifact-before", result.ArtifactId);
+    }
+
+    [Fact]
     public void Refresh_ForceRebuildThatResetsTheRevisionCounter_ReportsRefreshed()
     {
         using var registry = WorkspaceRegistry.Open(_registryDbPath);

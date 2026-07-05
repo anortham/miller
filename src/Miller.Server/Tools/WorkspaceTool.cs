@@ -492,13 +492,30 @@ public sealed class WorkspaceTool
             LatestObservedRevision: _freshness.LatestObservedRevision,
             IndexFresh: _freshProbe.Compute(),
             QueueEmpty: _indexer.QueueEmpty,
-            ArtifactId: _holder.BuiltArtifactId,
+            ArtifactId: CurrentArtifactId(),
             FreshnessStatus: "current",
             DisplayId: CurrentDisplayId(),
             ServerVersion: MillerVersion.Current,
             ServerProcessId: Environment.ProcessId,
             SearchSidecar: _sidecar.Inspect(_workspace.ExtractDbPath, builtRevision),
             ContentCorpus: _contentSidecar.Inspect(_workspace.ExtractDbPath, builtRevision));
+    }
+
+    private string? CurrentArtifactId()
+    {
+        if (!string.IsNullOrWhiteSpace(_holder.BuiltArtifactId))
+            return _holder.BuiltArtifactId;
+
+        try
+        {
+            using var reader = new FreshnessReader(_workspace.ExtractDbPath);
+            return reader.ArtifactId();
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or IOException or InvalidOperationException
+                                       or SqliteException)
+        {
+            return null;
+        }
     }
 
     // ---------- refresh / full ----------
@@ -509,6 +526,7 @@ public sealed class WorkspaceTool
     // in-memory index current without waiting for the 2s loop tick.
     private string RenderAction(string operation, bool force, bool json)
     {
+        string? artifactIdBeforeScan = CurrentArtifactId();
         ScanOutcome scan = _indexer.TryScanAsLeader(force);
 
         string? note = scan.Result switch
@@ -533,7 +551,13 @@ public sealed class WorkspaceTool
         PollResult poll = _freshness.PollNow();
 
         bool scanned = scan.Result == ScanOutcome.Kind.Scanned;
-        var result = new WorkspaceActionResult(operation, scanned, poll.Swapped, poll.Revision, note);
+        var result = new WorkspaceActionResult(
+            operation,
+            scanned,
+            poll.Swapped,
+            poll.Revision,
+            note,
+            ArtifactId: CurrentArtifactId() ?? artifactIdBeforeScan);
         return WorkspaceRender.Action(result, json);
     }
 
@@ -548,6 +572,19 @@ public sealed class WorkspaceTool
             return (RenderAction(operation, force, json), 1, TelemetryOutcome.Ok);
 
         WorkspaceRefreshResult refresh = _crossWorkspaceRefresh.Refresh(target.WorkspaceId, force);
+        WorkspaceRegistryRow row = target.Row
+            ?? throw new InvalidOperationException($"Workspace registry row '{target.WorkspaceId}' was not resolved.");
+        string? artifactId = refresh.ArtifactId;
+        if (string.IsNullOrWhiteSpace(artifactId))
+        {
+            artifactId = WorkspaceFactsAssembler.FromRegisteredRow(
+                _registry,
+                row,
+                WorkspaceRegisteredFactsProfile.McpStatus,
+                _sidecar,
+                _contentSidecar).ArtifactId;
+        }
+
         string? noteText = refresh.Error ?? refresh.WarningText;
         var result = new WorkspaceActionResult(
             operation,
@@ -559,7 +596,8 @@ public sealed class WorkspaceTool
             Root: refresh.WorkspaceRoot,
             Status: refresh.StatusText,
             ScanDurationMs: (long?)refresh.ScanDuration?.TotalMilliseconds,
-            DurationMs: (long?)refresh.TotalDuration?.TotalMilliseconds);
+            DurationMs: (long?)refresh.TotalDuration?.TotalMilliseconds,
+            ArtifactId: artifactId);
         return (WorkspaceRender.Action(result, json), 1, TelemetryOutcome.Ok);
     }
 

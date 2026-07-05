@@ -1286,6 +1286,18 @@ public sealed class WorkspaceToolTests : IDisposable
     }
 
     [Fact]
+    public void Refresh_CurrentWorkspaceJson_IncludesArtifactIdFromIndexDb()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        var (tool, _, _, _) = BuildTool(fx, builtRevision: 4, workspaceId: Ws);
+
+        string output = tool.Workspace(operation: "refresh", format: "json");
+
+        using var doc = JsonDocument.Parse(output);
+        Assert.Equal("artifact-" + Ws, doc.RootElement.GetProperty("artifact_id").GetString());
+    }
+
+    [Fact]
     public void Refresh_RegisteredWorkspaceId_UsesCrossWorkspaceRefreshService()
     {
         using var current = CreateSynth(revision: 4, workspaceId: Ws);
@@ -1310,6 +1322,30 @@ public sealed class WorkspaceToolTests : IDisposable
         Assert.Contains("scanned: yes", output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("status: refreshed", output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("10", output);
+    }
+
+    [Fact]
+    public void Refresh_RegisteredWorkspaceJson_FillsMissingArtifactIdFromStatusFacts()
+    {
+        using var current = CreateSynth(revision: 4, workspaceId: Ws);
+        using var other = CreateSynth(revision: 9, workspaceId: OtherWs);
+        WorkspaceToolHarness harness = BuildHarness(
+            current,
+            builtRevision: 4,
+            workspaceId: Ws,
+            crossWorkspaceScan: (root, db, _) => Report(root, db, OtherWs, revision: 9) with
+            {
+                Status = "no_change",
+                Artifact = null,
+            });
+        string otherRoot = Path.GetDirectoryName(other.DbPath)!;
+        harness.Registry.UpsertSeen(OtherWs, "other-111111111111", otherRoot, other.DbPath, WorkspaceRegistryState.Ready);
+        harness.Registry.MarkScanned(OtherWs, revision: 9);
+
+        string output = harness.Tool.Workspace(operation: "refresh", workspace_id: OtherWs, format: "json");
+
+        using var doc = JsonDocument.Parse(output);
+        Assert.Equal("artifact-" + OtherWs, doc.RootElement.GetProperty("artifact_id").GetString());
     }
 
     [Fact]

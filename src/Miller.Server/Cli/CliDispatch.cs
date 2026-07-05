@@ -1438,7 +1438,7 @@ public static class CliDispatch
         var refresh = new CrossWorkspaceRefreshService(registry, runner, sidecar);
         WorkspaceRefreshResult result = refresh.Refresh(row.WorkspaceId, force);
 
-        var action = WorkspaceRefreshAction(result, force, sidecar);
+        var action = WorkspaceRefreshAction(result, force, sidecar, registry);
         outw.WriteLine(WorkspaceRender.Action(action, json));
         return RefreshExitCode(result.Status);
     }
@@ -1477,7 +1477,8 @@ public static class CliDispatch
     private static WorkspaceActionResult WorkspaceRefreshAction(
         WorkspaceRefreshResult result,
         bool force,
-        SymbolSearchSidecar sidecar)
+        SymbolSearchSidecar sidecar,
+        WorkspaceRegistry? registry = null)
     {
         long revision = result.Revision ?? 0;
         bool? indexFresh = result.Status switch
@@ -1504,7 +1505,27 @@ public static class CliDispatch
             SearchSidecar: sidecar.Inspect(result.IndexDbPath, revision),
             ContentCorpus: new ContentCorpusSidecar().Inspect(result.IndexDbPath, revision),
             ScanDurationMs: (long?)result.ScanDuration?.TotalMilliseconds,
-            DurationMs: (long?)result.TotalDuration?.TotalMilliseconds);
+            DurationMs: (long?)result.TotalDuration?.TotalMilliseconds,
+            ArtifactId: ArtifactIdForAction(result, registry));
+    }
+
+    private static string? ArtifactIdForAction(WorkspaceRefreshResult result, WorkspaceRegistry? registry)
+    {
+        if (!string.IsNullOrWhiteSpace(result.ArtifactId))
+            return result.ArtifactId;
+        if (registry is null)
+            return null;
+
+        WorkspaceRegistryRow? row = registry.Get(result.WorkspaceId);
+        if (row is null)
+            return null;
+
+        return WorkspaceFactsAssembler.FromRegisteredRow(
+            registry,
+            row,
+            WorkspaceRegisteredFactsProfile.CliStatus,
+            SymbolSearchSidecar.Disabled,
+            new ContentCorpusSidecar()).ArtifactId;
     }
 
     // ---------- open (bootstrap a fresh directory) ----------
@@ -1572,7 +1593,8 @@ public static class CliDispatch
             Root: result.WorkspaceRoot,
             Status: result.StatusText,
             ScanDurationMs: (long?)result.ScanDuration?.TotalMilliseconds,
-            DurationMs: (long?)result.TotalDuration?.TotalMilliseconds);
+            DurationMs: (long?)result.TotalDuration?.TotalMilliseconds,
+            ArtifactId: ArtifactIdForAction(result, registry));
         outw.WriteLine(WorkspaceRender.Action(action, json));
         return RefreshExitCode(result.Status);
     }

@@ -127,7 +127,8 @@ public sealed class CrossWorkspaceRefreshService
                 row.LastRevision,
                 Scanned: false,
                 Error: error,
-                TotalDuration: total.Elapsed);
+                TotalDuration: total.Elapsed,
+                ArtifactId: TryReadArtifactId(row));
         }
 
         try
@@ -145,7 +146,8 @@ public sealed class CrossWorkspaceRefreshService
                 row.LastRevision,
                 Scanned: false,
                 Error: ex.Message,
-                TotalDuration: total.Elapsed);
+                TotalDuration: total.Elapsed,
+                ArtifactId: TryReadArtifactId(row));
         }
 
         string millerDir = Path.GetDirectoryName(row.IndexDbPath)
@@ -172,10 +174,12 @@ public sealed class CrossWorkspaceRefreshService
                     row.LastRevision,
                     Scanned: false,
                     Error: verdict.Reason + IneligibleRemedy,
-                    TotalDuration: total.Elapsed);
+                    TotalDuration: total.Elapsed,
+                    ArtifactId: TryReadArtifactId(row));
             }
         }
 
+        string? artifactIdBeforeScan = TryReadArtifactId(row);
         var scanClock = Stopwatch.StartNew();
         try
         {
@@ -202,6 +206,7 @@ public sealed class CrossWorkspaceRefreshService
             WorkspaceRefreshStatus status = report.IsNoChange
                 ? WorkspaceRefreshStatus.Unchanged
                 : WorkspaceRefreshStatus.Refreshed;
+            string? artifactId = report.Artifact?.ArtifactId ?? TryReadArtifactId(row) ?? artifactIdBeforeScan;
             return new WorkspaceRefreshResult(
                 status,
                 row.WorkspaceId,
@@ -211,7 +216,8 @@ public sealed class CrossWorkspaceRefreshService
                 Scanned: true,
                 WarningText: warning,
                 ScanDuration: scanClock.Elapsed,
-                TotalDuration: total.Elapsed);
+                TotalDuration: total.Elapsed,
+                ArtifactId: artifactId);
         }
         catch (Exception ex)
         {
@@ -228,7 +234,8 @@ public sealed class CrossWorkspaceRefreshService
                 Scanned: false,
                 Error: ex.Message,
                 ScanDuration: scanClock.Elapsed,
-                TotalDuration: total.Elapsed);
+                TotalDuration: total.Elapsed,
+                ArtifactId: TryReadArtifactId(row));
         }
     }
 
@@ -306,7 +313,8 @@ public sealed class CrossWorkspaceRefreshService
                         row.IndexDbPath,
                         latest,
                         Scanned: false,
-                        TotalDuration: total.Elapsed);
+                        TotalDuration: total.Elapsed,
+                        ArtifactId: TryReadArtifactId(row));
                 }
             }
 
@@ -325,7 +333,8 @@ public sealed class CrossWorkspaceRefreshService
                 Revision: null,
                 Scanned: false,
                 Error: error,
-                TotalDuration: total.Elapsed);
+                TotalDuration: total.Elapsed,
+                ArtifactId: TryReadArtifactId(row));
         }
 
         string warning = requestWarning ??
@@ -341,7 +350,8 @@ public sealed class CrossWorkspaceRefreshService
             lastReadableRevision,
             Scanned: false,
             WarningText: warning,
-            TotalDuration: total.Elapsed);
+            TotalDuration: total.Elapsed,
+            ArtifactId: TryReadArtifactId(row));
     }
 
     private bool TryReadLatestRevision(WorkspaceRegistryRow row, out long revision)

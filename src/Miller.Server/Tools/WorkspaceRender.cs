@@ -94,7 +94,8 @@ public readonly record struct WorkspaceActionResult(
     SearchSidecarFacts? SearchSidecar = null,
     ContentCorpusFacts? ContentCorpus = null,
     long? ScanDurationMs = null,
-    long? DurationMs = null);
+    long? DurationMs = null,
+    string? ArtifactId = null);
 
 /// <summary>The result of starting or reusing the local loopback dashboard from the <c>workspace</c> tool.</summary>
 internal readonly record struct WorkspaceDashboardResult(
@@ -1432,6 +1433,8 @@ public static class WorkspaceRender
             WriteSearchSidecarJson(w, result.SearchSidecar);
             w.WritePropertyName("content_corpus");
             WriteContentCorpusJson(w, result.ContentCorpus);
+            if (string.IsNullOrEmpty(result.ArtifactId)) w.WriteNull("artifact_id");
+            else w.WriteString("artifact_id", result.ArtifactId);
             w.WriteEndObject();
         }
         return Utf8(buffer);

@@ -32,7 +32,8 @@ public sealed record WorkspaceRefreshResult(
     string? WarningText = null,
     string? Error = null,
     TimeSpan? ScanDuration = null,
-    TimeSpan? TotalDuration = null)
+    TimeSpan? TotalDuration = null,
+    string? ArtifactId = null)
 {
     public string StatusText =>
         Status switch
