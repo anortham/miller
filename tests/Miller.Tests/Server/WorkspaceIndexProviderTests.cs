@@ -951,10 +951,10 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 return RepositoryIndexLoader.Load(path);
             });
 
-        Task<WorkspaceReadContext> first = Task.Run(() => provider.Resolve("target-ws", ensureFresh: false));
+        Task<WorkspaceReadContext> first = RunBlockingResolve(() => provider.Resolve("target-ws", ensureFresh: false));
         Task timeout = Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         Assert.Same(loadStarted.Task, await Task.WhenAny(loadStarted.Task, timeout));
-        Task<WorkspaceReadContext> second = Task.Run(() => provider.Resolve("target-ws", ensureFresh: false));
+        Task<WorkspaceReadContext> second = RunBlockingResolve(() => provider.Resolve("target-ws", ensureFresh: false));
         releaseLoad.Set();
 
         WorkspaceReadContext[] contexts = await Task.WhenAll(first, second);
@@ -989,11 +989,11 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             });
 
         Task<WorkspaceContentSearchContext> first =
-            Task.Run(() => provider.ResolveContentSearch("target-ws", ensureFresh: false));
+            RunBlockingResolve(() => provider.ResolveContentSearch("target-ws", ensureFresh: false));
         Task timeout = Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         Assert.Same(loadStarted.Task, await Task.WhenAny(loadStarted.Task, timeout));
         Task<WorkspaceContentSearchContext> second =
-            Task.Run(() => provider.ResolveContentSearch("target-ws", ensureFresh: false));
+            RunBlockingResolve(() => provider.ResolveContentSearch("target-ws", ensureFresh: false));
         releaseLoad.Set();
 
         WorkspaceContentSearchContext[] contexts = await Task.WhenAll(first, second);
@@ -1109,14 +1109,14 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 return RepositoryIndexLoader.Load(path);
             });
 
-        Task<WorkspaceReadContext> first = Task.Run(() => provider.Resolve("target-ws", ensureFresh: false));
+        Task<WorkspaceReadContext> first = RunBlockingResolve(() => provider.Resolve("target-ws", ensureFresh: false));
         Task timeout = Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         Assert.Same(startedA.Task, await Task.WhenAny(startedA.Task, timeout));
 
         registry.UpsertSeen("target-ws", "target-111111111111", root, targetB.DbPath);
         registry.MarkScanned("target-ws", revision: 2);
 
-        Task<WorkspaceReadContext> second = Task.Run(() => provider.Resolve("target-ws", ensureFresh: false));
+        Task<WorkspaceReadContext> second = RunBlockingResolve(() => provider.Resolve("target-ws", ensureFresh: false));
         Assert.Same(startedB.Task, await Task.WhenAny(startedB.Task, timeout));
 
         releaseA.Set();
@@ -1169,7 +1169,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             });
 
         Task<WorkspaceSymbolSearchContext> first =
-            Task.Run(() => provider.ResolveSymbolSearch("target-ws", ensureFresh: false));
+            RunBlockingResolve(() => provider.ResolveSymbolSearch("target-ws", ensureFresh: false));
         Task timeout = Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         Assert.Same(startedA.Task, await Task.WhenAny(startedA.Task, timeout));
 
@@ -1177,7 +1177,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         registry.MarkScanned("target-ws", revision: 2);
 
         Task<WorkspaceSymbolSearchContext> second =
-            Task.Run(() => provider.ResolveSymbolSearch("target-ws", ensureFresh: false));
+            RunBlockingResolve(() => provider.ResolveSymbolSearch("target-ws", ensureFresh: false));
         Assert.Same(startedB.Task, await Task.WhenAny(startedB.Task, timeout));
 
         releaseA.Set();
@@ -1228,7 +1228,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             });
 
         Task<WorkspaceContentSearchContext> first =
-            Task.Run(() => provider.ResolveContentSearch("target-ws", ensureFresh: false));
+            RunBlockingResolve(() => provider.ResolveContentSearch("target-ws", ensureFresh: false));
         Task firstTimeout = Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         Assert.Same(startedA.Task, await Task.WhenAny(startedA.Task, firstTimeout));
 
@@ -1236,7 +1236,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         registry.MarkScanned("target-ws", revision: 2);
 
         Task<WorkspaceContentSearchContext> second =
-            Task.Run(() => provider.ResolveContentSearch("target-ws", ensureFresh: false));
+            RunBlockingResolve(() => provider.ResolveContentSearch("target-ws", ensureFresh: false));
         Task secondTimeout = Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         Assert.Same(startedB.Task, await Task.WhenAny(startedB.Task, secondTimeout));
 
@@ -1468,6 +1468,13 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             loadRegionSearch ?? ((dbPath, revision) => FtsRegionSearchIndex.Open(SymbolSearchSidecar.SearchDbPathFor(dbPath), revision)),
             currentIndexFresh ?? (_ => true),
             sidecar ?? SymbolSearchSidecar.Disabled);
+
+    private static Task<T> RunBlockingResolve<T>(Func<T> resolve) =>
+        Task.Factory.StartNew(
+            resolve,
+            TestContext.Current.CancellationToken,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
 
     // Build the on-disk search.db sidecar next to a fixture's symbols.db (the path the router derives), stamped
     // with the given extract revision — the Phase-3 freshness key.
