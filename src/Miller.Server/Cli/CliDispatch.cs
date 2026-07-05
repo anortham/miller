@@ -99,7 +99,7 @@ public static class CliDispatch
                     if (rest.Count > 0 && rest[0].Equals("export", StringComparison.OrdinalIgnoreCase))
                         return ArtifactExport(rest, context, stdout, stderr,
                             "miller patterns export [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]",
-                            PatternFactsExportReader.ExportJsonLines);
+                            PatternFactsExportReader.WriteJsonLines);
                     return Patterns(rest, context, stdout, stderr);
                 case "metrics":
                     return Metrics(rest, context, stdout, stderr);
@@ -108,15 +108,15 @@ public static class CliDispatch
                 case "symbols":
                     return ArtifactExport(rest, context, stdout, stderr,
                         "miller symbols export [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]",
-                        SymbolExportReader.ExportJsonLines);
+                        SymbolExportReader.WriteJsonLines);
                 case "references":
                     return ArtifactExport(rest, context, stdout, stderr,
                         "miller references export [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]",
-                        ReferenceExportReader.ExportJsonLines);
+                        ReferenceExportReader.WriteJsonLines);
                 case "complexity":
                     return ArtifactExport(rest, context, stdout, stderr,
                         "miller complexity export [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]",
-                        ComplexityExportReader.ExportJsonLines);
+                        ComplexityExportReader.WriteJsonLines);
                 case "refresh":
                     return Refresh(rest, context, stdout, stderr);
                 case "inspect":
@@ -622,9 +622,7 @@ public static class CliDispatch
         if (operation != "export" || o.Positionals.Count > 0)
             return Usage(err, "miller telemetry export [--jsonl] [--workspace-id ID|all]");
 
-        string output = TelemetryExportReader.ExportJsonLines(ctx.TelemetryDbPath, o.Value("workspace-id"));
-        if (output.Length > 0)
-            outw.Write(output);
+        TelemetryExportReader.WriteJsonLines(ctx.TelemetryDbPath, outw, o.Value("workspace-id"));
         return 0;
     }
 
@@ -638,7 +636,7 @@ public static class CliDispatch
         TextWriter outw,
         TextWriter err,
         string usage,
-        Func<string, string> export)
+        Action<string, TextWriter> export)
     {
         if (args.Count == 0 || args[0] is "--help" or "-h" or "help")
             return Usage(err, usage);
@@ -651,9 +649,7 @@ public static class CliDispatch
         if (!RequireIndex(ctx, err))
             return 3;
 
-        string output = export(ctx.ExtractDbPath);
-        if (output.Length > 0)
-            outw.Write(output);
+        export(ctx.ExtractDbPath, outw);
         return 0;
     }
 

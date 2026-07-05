@@ -29,9 +29,17 @@ public sealed class TelemetryLedger : IDisposable
             est_tokens INTEGER, index_fresh INTEGER CHECK (index_fresh IS NULL OR index_fresh IN (0,1)),
             target_hash TEXT, metadata_json TEXT NOT NULL DEFAULT '{}'
         ) STRICT;
-        CREATE INDEX IF NOT EXISTS idx_tool_telemetry_ts ON tool_telemetry(ts);
-        CREATE INDEX IF NOT EXISTS idx_tool_telemetry_tool ON tool_telemetry(tool);
-        CREATE INDEX IF NOT EXISTS idx_tool_telemetry_ws ON tool_telemetry(workspace_id);
+        DROP INDEX IF EXISTS idx_tool_telemetry_ts;
+        DROP INDEX IF EXISTS idx_tool_telemetry_tool;
+        DROP INDEX IF EXISTS idx_tool_telemetry_ws;
+        CREATE INDEX IF NOT EXISTS idx_tool_telemetry_ts_id ON tool_telemetry(ts DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_tool_telemetry_ws_ts_id ON tool_telemetry(workspace_id, ts DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_tool_telemetry_outcome_ts_id ON tool_telemetry(outcome, ts DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_tool_telemetry_ws_outcome_ts_id ON tool_telemetry(workspace_id, outcome, ts DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_tool_telemetry_tool_ts_id ON tool_telemetry(tool, ts DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_tool_telemetry_ws_tool_ts_id ON tool_telemetry(workspace_id, tool, ts DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_tool_telemetry_tool_duration ON tool_telemetry(tool, duration_ms);
+        CREATE INDEX IF NOT EXISTS idx_tool_telemetry_ws_tool_duration ON tool_telemetry(workspace_id, tool, duration_ms);
         """;
 
     private readonly object _gate = new();

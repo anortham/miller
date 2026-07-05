@@ -43,6 +43,42 @@ public sealed class TelemetryLedgerTests : IDisposable
     private static string Sha256Hex(string raw) =>
         Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(raw)));
 
+    private static string ExplainPlan(SqliteConnection connection, string sql, params (string, object?)[] parameters)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "EXPLAIN QUERY PLAN " + sql;
+        foreach (var (name, value) in parameters)
+            cmd.Parameters.AddWithValue(name, value ?? DBNull.Value);
+        using var reader = cmd.ExecuteReader();
+        var details = new List<string>();
+        while (reader.Read())
+            details.Add(reader.GetString(3));
+        return string.Join('\n', details);
+    }
+
+    private static void AssertPlanUsesIndex(
+        SqliteConnection connection,
+        string sql,
+        string indexName,
+        params (string, object?)[] parameters)
+    {
+        string plan = ExplainPlan(connection, sql, parameters);
+        Assert.Contains(indexName, plan, StringComparison.Ordinal);
+    }
+
+    private static bool IndexExists(SqliteConnection connection, string indexName)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT 1
+            FROM sqlite_master
+            WHERE type = 'index' AND name = $name
+            LIMIT 1;
+            """;
+        cmd.Parameters.AddWithValue("$name", indexName);
+        return cmd.ExecuteScalar() is not null;
+    }
+
     private int RowCount()
     {
         using var c = new SqliteConnection(ReadOnlyUnpooled(_dbPath));
@@ -88,6 +124,92 @@ public sealed class TelemetryLedgerTests : IDisposable
     {
         using var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ws1");
         Assert.Equal(0, RowCount());
+    }
+
+    [Fact]
+    public void Open_CreatesDashboardQueryIndexes()
+    {
+        using (TelemetryLedger.Open(_dbPath, workspaceId: "ws1"))
+        {
+        }
+
+        using var c = new SqliteConnection(ReadOnlyUnpooled(_dbPath));
+        c.Open();
+        AssertPlanUsesIndex(
+            c,
+            "SELECT id FROM tool_telemetry ORDER BY ts DESC, id DESC LIMIT 20;",
+            "idx_tool_telemetry_ts_id");
+        AssertPlanUsesIndex(
+            c,
+            "SELECT id FROM tool_telemetry WHERE workspace_id IS $ws ORDER BY ts DESC, id DESC LIMIT 20;",
+            "idx_tool_telemetry_ws_ts_id",
+            ("$ws", "ws1"));
+        AssertPlanUsesIndex(
+            c,
+            "SELECT id FROM tool_telemetry WHERE outcome = 'error' ORDER BY ts DESC, id DESC LIMIT 8;",
+            "idx_tool_telemetry_outcome_ts_id");
+        AssertPlanUsesIndex(
+            c,
+            "SELECT id FROM tool_telemetry WHERE workspace_id IS $ws AND outcome = 'error' ORDER BY ts DESC, id DESC LIMIT 8;",
+            "idx_tool_telemetry_ws_outcome_ts_id",
+            ("$ws", "ws1"));
+        AssertPlanUsesIndex(
+            c,
+            "SELECT outcome FROM tool_telemetry WHERE tool = $tool ORDER BY ts DESC, id DESC LIMIT 1;",
+            "idx_tool_telemetry_tool_ts_id",
+            ("$tool", "search"));
+        AssertPlanUsesIndex(
+            c,
+            "SELECT outcome FROM tool_telemetry WHERE workspace_id IS $ws AND tool = $tool ORDER BY ts DESC, id DESC LIMIT 1;",
+            "idx_tool_telemetry_ws_tool_ts_id",
+            ("$ws", "ws1"),
+            ("$tool", "search"));
+        AssertPlanUsesIndex(
+            c,
+            "SELECT duration_ms FROM tool_telemetry WHERE tool = $tool ORDER BY duration_ms ASC LIMIT 1;",
+            "idx_tool_telemetry_tool_duration",
+            ("$tool", "search"));
+        AssertPlanUsesIndex(
+            c,
+            "SELECT duration_ms FROM tool_telemetry WHERE workspace_id IS $ws AND tool = $tool ORDER BY duration_ms ASC LIMIT 1;",
+            "idx_tool_telemetry_ws_tool_duration",
+            ("$ws", "ws1"),
+            ("$tool", "search"));
+    }
+
+    [Fact]
+    public void Open_DropsSupersededSingleColumnIndexes()
+    {
+        using (TelemetryLedger.Open(_dbPath, workspaceId: "ws1"))
+        {
+        }
+
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString()))
+        {
+            connection.Open();
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = """
+                CREATE INDEX idx_tool_telemetry_ts ON tool_telemetry(ts);
+                CREATE INDEX idx_tool_telemetry_tool ON tool_telemetry(tool);
+                CREATE INDEX idx_tool_telemetry_ws ON tool_telemetry(workspace_id);
+                """;
+            cmd.ExecuteNonQuery();
+        }
+
+        using (TelemetryLedger.Open(_dbPath, workspaceId: "ws1"))
+        {
+        }
+
+        using var c = new SqliteConnection(ReadOnlyUnpooled(_dbPath));
+        c.Open();
+        Assert.False(IndexExists(c, "idx_tool_telemetry_ts"));
+        Assert.False(IndexExists(c, "idx_tool_telemetry_tool"));
+        Assert.False(IndexExists(c, "idx_tool_telemetry_ws"));
     }
 
     [Fact]

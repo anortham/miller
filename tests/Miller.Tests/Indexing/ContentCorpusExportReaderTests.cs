@@ -47,7 +47,7 @@ public sealed class ContentCorpusExportReaderTests : IDisposable
             rows.Select(row => row.GetProperty("content_kind").GetString()));
 
         JsonElement source = rows.Single(row => row.GetProperty("content_kind").GetString() == TextContentKind.WorkspaceSource);
-        Assert.Equal(1, source.GetProperty("schema_version").GetInt32());
+        Assert.Equal(ContentCorpusSchema.SchemaVersion, source.GetProperty("schema_version").GetInt32());
         Assert.Equal("workspace-1", source.GetProperty("workspace_id").GetString());
         Assert.Equal(12, source.GetProperty("workspace_revision").GetInt64());
         Assert.Equal("src/Api.cs", source.GetProperty("path").GetString());

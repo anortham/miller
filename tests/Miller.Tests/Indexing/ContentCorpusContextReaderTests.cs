@@ -97,6 +97,71 @@ public sealed class ContentCorpusContextReaderTests : IDisposable
         Assert.Empty(hits);
     }
 
+    [Fact]
+    public void Schema_CreatesSourceLineIndex_ForWindowReadsAndSourceDeletes()
+    {
+        using var connection = OpenRead();
+
+        string readWindowPlan = ExplainPlan(
+            connection,
+            """
+            SELECT chunk_id
+            FROM content_chunks
+            WHERE source_id = $source
+              AND line_end >= $start
+              AND line_start <= $end
+            ORDER BY line_start, chunk_id;
+            """,
+            ("$source", "source-src/OrderService.cs"),
+            ("$start", 10),
+            ("$end", 20));
+        string deletePlan = ExplainPlan(
+            connection,
+            "DELETE FROM content_chunks WHERE source_id = $source;",
+            ("$source", "source-src/OrderService.cs"));
+
+        Assert.Contains("ix_content_chunks_source_line", readWindowPlan, StringComparison.Ordinal);
+        Assert.DoesNotContain("USE TEMP B-TREE", readWindowPlan, StringComparison.Ordinal);
+        Assert.Contains("ix_content_chunks_source_line", deletePlan, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Schema_CreatesSymbolIndexes_ForContainingSymbolChunkReads()
+    {
+        using var connection = OpenRead();
+
+        string symbolIdPlan = ExplainPlan(
+            connection,
+            """
+            SELECT chunk_id
+            FROM content_chunks
+            WHERE content_kind = $kind
+              AND containing_symbol_id = $symbol_id
+            ORDER BY display_path, line_start, chunk_id
+            LIMIT $limit;
+            """,
+            ("$kind", TextContentKind.WorkspaceSource),
+            ("$symbol_id", "service-id"),
+            ("$limit", 4));
+        string symbolNamePlan = ExplainPlan(
+            connection,
+            """
+            SELECT chunk_id
+            FROM content_chunks
+            WHERE content_kind = $kind
+              AND containing_symbol_id IS NULL
+              AND containing_symbol_name = $symbol_name
+            ORDER BY display_path, line_start, chunk_id
+            LIMIT $limit;
+            """,
+            ("$kind", TextContentKind.WorkspaceSource),
+            ("$symbol_name", "OrderService"),
+            ("$limit", 4));
+
+        Assert.Contains("ix_content_chunks_symbol_id", symbolIdPlan, StringComparison.Ordinal);
+        Assert.Contains("ix_content_chunks_symbol_name", symbolNamePlan, StringComparison.Ordinal);
+    }
+
     public void Dispose()
     {
         // The SUT opens its content.db connection internally (pooled), so the test cannot set Pooling=false on it.
@@ -111,6 +176,31 @@ public sealed class ContentCorpusContextReaderTests : IDisposable
         catch (DirectoryNotFoundException)
         {
         }
+    }
+
+    private SqliteConnection OpenRead()
+    {
+        var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _contentDbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        return connection;
+    }
+
+    private static string ExplainPlan(SqliteConnection connection, string sql, params (string, object?)[] parameters)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "EXPLAIN QUERY PLAN " + sql;
+        foreach (var (name, value) in parameters)
+            command.Parameters.AddWithValue(name, value ?? DBNull.Value);
+        using var reader = command.ExecuteReader();
+        var details = new List<string>();
+        while (reader.Read())
+            details.Add(reader.GetString(3));
+        return string.Join('\n', details);
     }
 
     private void InsertChunk(

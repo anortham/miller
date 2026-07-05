@@ -282,7 +282,7 @@ public sealed class ContentToolTests : IDisposable
         string line = Assert.Single(jsonl.Split('\n', StringSplitOptions.RemoveEmptyEntries));
         using JsonDocument doc = JsonDocument.Parse(line);
         JsonElement row = doc.RootElement;
-        Assert.Equal(1, row.GetProperty("schema_version").GetInt32());
+        Assert.Equal(ContentCorpusSchema.SchemaVersion, row.GetProperty("schema_version").GetInt32());
         Assert.Equal(TextContentKind.Web, row.GetProperty("content_kind").GetString());
         Assert.Equal("https://example.test/export-tool", row.GetProperty("url").GetString());
         Assert.Equal("Tool Export Page", row.GetProperty("display_path").GetString());

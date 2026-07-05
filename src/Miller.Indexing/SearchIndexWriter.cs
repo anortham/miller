@@ -30,10 +30,10 @@ public static class SearchIndexWriter
     private const int ParameterChunkSize = 500;
 
     /// <summary>
-    /// The on-disk schema version stamped into <c>meta.schema_version</c>. Bumped 5→6 so artifacts built
-    /// with a different source-region option are rejected and rebuilt.
+    /// The on-disk schema version stamped into <c>meta.schema_version</c>. Bumped 6→7 so artifacts without
+    /// the incremental path-delete indexes are rejected and rebuilt.
     /// </summary>
-    public const int SchemaVersion = 6;
+    public const int SchemaVersion = 7;
 
     private const string SchemaDdl = """
         CREATE VIRTUAL TABLE symbols_fts USING fts5(
@@ -51,6 +51,7 @@ public static class SearchIndexWriter
             doc_len INTEGER);
         CREATE INDEX ix_search_symbols_kind ON search_symbols(kind);
         CREATE INDEX ix_search_symbols_lang ON search_symbols(language);
+        CREATE INDEX ix_search_symbols_path_symbol ON search_symbols(path, symbol_id);
         CREATE VIRTUAL TABLE regions_fts USING fts5(
             region_id UNINDEXED, body, tokenize='unicode61 remove_diacritics 0');
         CREATE TABLE search_regions(
@@ -67,6 +68,7 @@ public static class SearchIndexWriter
             raw_text TEXT NOT NULL,
             doc_len INTEGER NOT NULL);
         CREATE INDEX ix_search_regions_kind ON search_regions(kind);
+        CREATE INDEX ix_search_regions_path_region ON search_regions(path, region_id);
         CREATE TABLE meta(
             revision INTEGER,
             doc_count INTEGER,

@@ -1259,33 +1259,60 @@ public static class DashboardData
         bool allWorkspaces)
     {
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT tool,
-                   COUNT(*) AS calls,
-                   AVG(duration_ms) AS avg_ms,
-                   MAX(duration_ms) AS max_ms,
-                   SUM(CASE WHEN outcome = 'error' THEN 1 ELSE 0 END) AS errors,
-                   COALESCE(SUM(est_tokens), 0) AS sum_tokens,
-                   MAX(ts) AS last_call_ts,
-                   (SELECT latest.outcome
-                    FROM tool_telemetry latest
-                    WHERE ($all = 1 OR latest.workspace_id IS $ws) AND latest.tool = tool_telemetry.tool
-                    ORDER BY latest.ts DESC, latest.id DESC
-                    LIMIT 1) AS last_outcome,
-                   MAX(CASE WHEN outcome = 'error' THEN ts END) AS last_error_ts,
-                   (SELECT latest_error.error_kind
-                    FROM tool_telemetry latest_error
-                    WHERE ($all = 1 OR latest_error.workspace_id IS $ws)
-                      AND latest_error.tool = tool_telemetry.tool
-                      AND latest_error.outcome = 'error'
-                    ORDER BY latest_error.ts DESC, latest_error.id DESC
-                    LIMIT 1) AS last_error_kind
-            FROM tool_telemetry
-            WHERE ($all = 1 OR workspace_id IS $ws)
-            GROUP BY tool
-            ORDER BY tool;
-            """;
-        AddScopeParameters(cmd, workspaceId, allWorkspaces);
+        cmd.CommandText = allWorkspaces
+            ? """
+              SELECT tool,
+                     COUNT(*) AS calls,
+                     AVG(duration_ms) AS avg_ms,
+                     MAX(duration_ms) AS max_ms,
+                     SUM(CASE WHEN outcome = 'error' THEN 1 ELSE 0 END) AS errors,
+                     COALESCE(SUM(est_tokens), 0) AS sum_tokens,
+                     MAX(ts) AS last_call_ts,
+                     (SELECT latest.outcome
+                      FROM tool_telemetry latest
+                      WHERE latest.tool = tool_telemetry.tool
+                      ORDER BY latest.ts DESC, latest.id DESC
+                      LIMIT 1) AS last_outcome,
+                     MAX(CASE WHEN outcome = 'error' THEN ts END) AS last_error_ts,
+                     (SELECT latest_error.error_kind
+                      FROM tool_telemetry latest_error
+                      WHERE latest_error.tool = tool_telemetry.tool
+                        AND latest_error.outcome = 'error'
+                      ORDER BY latest_error.ts DESC, latest_error.id DESC
+                      LIMIT 1) AS last_error_kind
+              FROM tool_telemetry
+              GROUP BY tool
+              ORDER BY tool;
+              """
+            : """
+              SELECT tool,
+                     COUNT(*) AS calls,
+                     AVG(duration_ms) AS avg_ms,
+                     MAX(duration_ms) AS max_ms,
+                     SUM(CASE WHEN outcome = 'error' THEN 1 ELSE 0 END) AS errors,
+                     COALESCE(SUM(est_tokens), 0) AS sum_tokens,
+                     MAX(ts) AS last_call_ts,
+                     (SELECT latest.outcome
+                      FROM tool_telemetry latest
+                      WHERE latest.workspace_id IS $ws
+                        AND latest.tool = tool_telemetry.tool
+                      ORDER BY latest.ts DESC, latest.id DESC
+                      LIMIT 1) AS last_outcome,
+                     MAX(CASE WHEN outcome = 'error' THEN ts END) AS last_error_ts,
+                     (SELECT latest_error.error_kind
+                      FROM tool_telemetry latest_error
+                      WHERE latest_error.workspace_id IS $ws
+                        AND latest_error.tool = tool_telemetry.tool
+                        AND latest_error.outcome = 'error'
+                      ORDER BY latest_error.ts DESC, latest_error.id DESC
+                      LIMIT 1) AS last_error_kind
+              FROM tool_telemetry
+              WHERE workspace_id IS $ws
+              GROUP BY tool
+              ORDER BY tool;
+              """;
+        if (!allWorkspaces)
+            cmd.Parameters.AddWithValue("$ws", (object?)workspaceId ?? DBNull.Value);
         using var reader = cmd.ExecuteReader();
         var stats = new List<DashboardToolStat>();
         while (reader.Read())
@@ -1328,15 +1355,25 @@ public static class DashboardData
             : "NULL AS error_detail";
 
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = $"""
-            SELECT ts, tool, op, error_kind, duration_ms,
-                   {idSelect}, {workspaceIdSelect}, {errorMessageSelect}, {errorDetailSelect}
-            FROM tool_telemetry
-            WHERE ($all = 1 OR workspace_id IS $ws) AND outcome = 'error'
-            ORDER BY ts DESC, id DESC
-            LIMIT 8;
-            """;
-        AddScopeParameters(cmd, workspaceId, allWorkspaces);
+        cmd.CommandText = allWorkspaces
+            ? $"""
+              SELECT ts, tool, op, error_kind, duration_ms,
+                     {idSelect}, {workspaceIdSelect}, {errorMessageSelect}, {errorDetailSelect}
+              FROM tool_telemetry
+              WHERE outcome = 'error'
+              ORDER BY ts DESC, id DESC
+              LIMIT 8;
+              """
+            : $"""
+              SELECT ts, tool, op, error_kind, duration_ms,
+                     {idSelect}, {workspaceIdSelect}, {errorMessageSelect}, {errorDetailSelect}
+              FROM tool_telemetry
+              WHERE workspace_id IS $ws AND outcome = 'error'
+              ORDER BY ts DESC, id DESC
+              LIMIT 8;
+              """;
+        if (!allWorkspaces)
+            cmd.Parameters.AddWithValue("$ws", (object?)workspaceId ?? DBNull.Value);
         using var reader = cmd.ExecuteReader();
         var errors = new List<DashboardRecentError>();
         while (reader.Read())
@@ -1363,9 +1400,11 @@ public static class DashboardData
         bool allWorkspaces)
     {
         using var cmd = connection.CreateCommand();
-        cmd.CommandText =
-            "SELECT COUNT(*), MIN(ts), MAX(ts) FROM tool_telemetry WHERE ($all = 1 OR workspace_id IS $ws);";
-        AddScopeParameters(cmd, workspaceId, allWorkspaces);
+        cmd.CommandText = allWorkspaces
+            ? "SELECT COUNT(*), MIN(ts), MAX(ts) FROM tool_telemetry;"
+            : "SELECT COUNT(*), MIN(ts), MAX(ts) FROM tool_telemetry WHERE workspace_id IS $ws;";
+        if (!allWorkspaces)
+            cmd.Parameters.AddWithValue("$ws", (object?)workspaceId ?? DBNull.Value);
         using var reader = cmd.ExecuteReader();
         if (!reader.Read())
             return (0, null, null);
@@ -1385,20 +1424,15 @@ public static class DashboardData
     {
         long offset = (long)Math.Floor((count - 1) * 0.95);
         using var cmd = connection.CreateCommand();
-        cmd.CommandText =
-            "SELECT duration_ms FROM tool_telemetry WHERE tool = $tool AND ($all = 1 OR workspace_id IS $ws) " +
-            "ORDER BY duration_ms ASC LIMIT 1 OFFSET $offset;";
+        cmd.CommandText = allWorkspaces
+            ? "SELECT duration_ms FROM tool_telemetry WHERE tool = $tool ORDER BY duration_ms ASC LIMIT 1 OFFSET $offset;"
+            : "SELECT duration_ms FROM tool_telemetry WHERE workspace_id IS $ws AND tool = $tool ORDER BY duration_ms ASC LIMIT 1 OFFSET $offset;";
         cmd.Parameters.AddWithValue("$tool", tool);
-        AddScopeParameters(cmd, workspaceId, allWorkspaces);
+        if (!allWorkspaces)
+            cmd.Parameters.AddWithValue("$ws", (object?)workspaceId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$offset", offset);
         object? value = cmd.ExecuteScalar();
         return value is null or DBNull ? 0 : Convert.ToInt64(value, CultureInfo.InvariantCulture);
-    }
-
-    private static void AddScopeParameters(SqliteCommand cmd, string? workspaceId, bool allWorkspaces)
-    {
-        cmd.Parameters.AddWithValue("$all", allWorkspaces ? 1 : 0);
-        cmd.Parameters.AddWithValue("$ws", (object?)workspaceId ?? DBNull.Value);
     }
 
 }

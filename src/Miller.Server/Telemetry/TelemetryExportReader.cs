@@ -12,13 +12,21 @@ public static class TelemetryExportReader
 
     public static string ExportJsonLines(string telemetryDbPath, string? workspaceId = null)
     {
+        using var writer = new StringWriter();
+        WriteJsonLines(telemetryDbPath, writer, workspaceId);
+        return writer.ToString();
+    }
+
+    public static void WriteJsonLines(string telemetryDbPath, TextWriter writer, string? workspaceId = null)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(telemetryDbPath);
+        ArgumentNullException.ThrowIfNull(writer);
         if (!File.Exists(telemetryDbPath))
-            return string.Empty;
+            return;
 
         using var connection = OpenReadOnly(telemetryDbPath);
         if (!TableExists(connection, "tool_telemetry"))
-            return string.Empty;
+            return;
 
         using var cmd = connection.CreateCommand();
         bool allWorkspaces = string.IsNullOrWhiteSpace(workspaceId)
@@ -29,11 +37,12 @@ public static class TelemetryExportReader
         if (!allWorkspaces)
             cmd.Parameters.AddWithValue("$workspace_id", workspaceId);
 
-        var sb = new StringBuilder();
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
-            sb.Append(RenderRow(reader)).Append('\n');
-        return sb.ToString();
+        {
+            writer.Write(RenderRow(reader));
+            writer.Write('\n');
+        }
     }
 
     private const string SelectSql = """

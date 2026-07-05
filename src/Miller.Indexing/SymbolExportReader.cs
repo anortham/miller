@@ -20,7 +20,15 @@ public static class SymbolExportReader
 
     public static string ExportJsonLines(string symbolsDbPath)
     {
+        using var writer = new StringWriter();
+        WriteJsonLines(symbolsDbPath, writer);
+        return writer.ToString();
+    }
+
+    public static void WriteJsonLines(string symbolsDbPath, TextWriter writer)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(symbolsDbPath);
+        ArgumentNullException.ThrowIfNull(writer);
 
         using SqliteConnection connection = SqliteReadOnlyAccess.Open(symbolsDbPath);
         JulieSchemaGate.Verify(connection);
@@ -36,11 +44,12 @@ public static class SymbolExportReader
             ORDER BY path, start_line, symbol_id;
             """;
 
-        var sb = new StringBuilder();
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
-            sb.Append(RenderRow(reader)).Append('\n');
-        return sb.ToString();
+        {
+            writer.Write(RenderRow(reader));
+            writer.Write('\n');
+        }
     }
 
     private static string RenderRow(SqliteDataReader reader)

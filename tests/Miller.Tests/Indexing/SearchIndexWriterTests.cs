@@ -57,6 +57,18 @@ public sealed class SearchIndexWriterTests : IDisposable
         return cmd.ExecuteScalar();
     }
 
+    private static string ExplainPlan(SqliteConnection c, string sql, params (string, object?)[] ps)
+    {
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "EXPLAIN QUERY PLAN " + sql;
+        foreach (var (k, v) in ps) cmd.Parameters.AddWithValue(k, v ?? DBNull.Value);
+        using var reader = cmd.ExecuteReader();
+        var details = new List<string>();
+        while (reader.Read())
+            details.Add(reader.GetString(3));
+        return string.Join('\n', details);
+    }
+
     private static long Long(object? o) => Convert.ToInt64(o);
 
     private static int TokenCount(string text)
@@ -331,6 +343,29 @@ public sealed class SearchIndexWriterTests : IDisposable
         Assert.Equal(0L, Long(Scalar(c, "SELECT region_index_enabled FROM meta")));
         Assert.Equal(0L, Long(Scalar(c, "SELECT COUNT(*) FROM search_regions")));
         Assert.Equal(0L, Long(Scalar(c, "SELECT COUNT(*) FROM regions_fts")));
+    }
+
+    [Fact]
+    public void Write_CreatesPathIndexes_ForIncrementalFileChangeDeletes()
+    {
+        const string path = "src/A.cs";
+        SearchIndexWriter.Write(
+            _dbPath,
+            new[] { Sym(0, "a", "A", "class A", "class", "csharp", path, 1, 2) },
+            revision: 3);
+
+        using var c = OpenRead();
+        string symbolPlan = ExplainPlan(
+            c,
+            "SELECT symbol_id FROM search_symbols WHERE path IN ($path);",
+            ("$path", path));
+        string regionPlan = ExplainPlan(
+            c,
+            "SELECT region_id FROM search_regions WHERE path IN ($path);",
+            ("$path", path));
+
+        Assert.Contains("ix_search_symbols_path_symbol", symbolPlan, StringComparison.Ordinal);
+        Assert.Contains("ix_search_regions_path_region", regionPlan, StringComparison.Ordinal);
     }
 
     [Fact]

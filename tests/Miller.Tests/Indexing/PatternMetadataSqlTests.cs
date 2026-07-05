@@ -149,6 +149,17 @@ public sealed class PatternMetadataSqlTests
     }
 
     [Fact]
+    public void Export_WriteJsonLines_MatchesStringExport()
+    {
+        using var fx = CreatePatternFixture();
+        using var writer = new StringWriter();
+
+        PatternFactsExportReader.WriteJsonLines(fx.DbPath, writer);
+
+        Assert.Equal(PatternFactsExportReader.ExportJsonLines(fx.DbPath), writer.ToString());
+    }
+
+    [Fact]
     public void Export_MissingStructuralFactsTableThrowsCleanError()
     {
         using var fx = CreatePatternFixture();

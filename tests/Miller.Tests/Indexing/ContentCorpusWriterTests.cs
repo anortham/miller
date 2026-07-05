@@ -101,7 +101,7 @@ public sealed class ContentCorpusWriterTests : IDisposable
             revision: 12);
 
         Assert.Equal("current", facts.State);
-        Assert.Equal(1, facts.SchemaVersion);
+        Assert.Equal(ContentCorpusSchema.SchemaVersion, facts.SchemaVersion);
         Assert.Equal(12, facts.WorkspaceRevision);
         Assert.Equal(3, facts.SourceCount);
         Assert.Equal(3, facts.ChunkCount);
@@ -180,7 +180,7 @@ public sealed class ContentCorpusWriterTests : IDisposable
         ContentCorpusWriter.Write(_contentDbPath, fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 1);
 
         using var connection = OpenRead();
-        Assert.Equal(1L, ScalarLong(connection, "SELECT schema_version FROM content_meta"));
+        Assert.Equal(ContentCorpusSchema.SchemaVersion, ScalarLong(connection, "SELECT schema_version FROM content_meta"));
         Assert.Equal(1L, ScalarLong(connection, "SELECT COUNT(*) FROM content_sources"));
     }
 

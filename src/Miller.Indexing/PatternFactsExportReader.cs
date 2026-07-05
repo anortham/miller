@@ -15,7 +15,15 @@ public static class PatternFactsExportReader
 
     public static string ExportJsonLines(string symbolsDbPath)
     {
+        using var writer = new StringWriter();
+        WriteJsonLines(symbolsDbPath, writer);
+        return writer.ToString();
+    }
+
+    public static void WriteJsonLines(string symbolsDbPath, TextWriter writer)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(symbolsDbPath);
+        ArgumentNullException.ThrowIfNull(writer);
 
         using SqliteConnection connection = SqliteReadOnlyAccess.Open(symbolsDbPath);
         JulieSchemaGate.Verify(connection);
@@ -31,11 +39,12 @@ public static class PatternFactsExportReader
             ORDER BY path, start_byte, structural_fact_id;
             """;
 
-        var sb = new StringBuilder();
         using SqliteDataReader reader = cmd.ExecuteReader();
         while (reader.Read())
-            sb.Append(RenderRow(reader)).Append('\n');
-        return sb.ToString();
+        {
+            writer.Write(RenderRow(reader));
+            writer.Write('\n');
+        }
     }
 
     private static bool TableExists(SqliteConnection connection, string tableName)

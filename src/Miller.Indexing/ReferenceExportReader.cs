@@ -19,7 +19,15 @@ public static class ReferenceExportReader
 
     public static string ExportJsonLines(string symbolsDbPath)
     {
+        using var writer = new StringWriter();
+        WriteJsonLines(symbolsDbPath, writer);
+        return writer.ToString();
+    }
+
+    public static void WriteJsonLines(string symbolsDbPath, TextWriter writer)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(symbolsDbPath);
+        ArgumentNullException.ThrowIfNull(writer);
 
         using SqliteConnection connection = SqliteReadOnlyAccess.Open(symbolsDbPath);
         JulieSchemaGate.Verify(connection);
@@ -42,11 +50,12 @@ public static class ReferenceExportReader
             ORDER BY i.path, i.start_byte, i.identifier_id;
             """;
 
-        var sb = new StringBuilder();
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
-            sb.Append(RenderRow(reader, artifactId, workspaceRevision)).Append('\n');
-        return sb.ToString();
+        {
+            writer.Write(RenderRow(reader, artifactId, workspaceRevision));
+            writer.Write('\n');
+        }
     }
 
     private static string? ReadArtifactId(SqliteConnection connection)
