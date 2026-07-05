@@ -86,6 +86,8 @@ file, line, region kind, language, containing symbol when known, and snippet tex
 The `refresh --json --wait` response uses the same action shape as `workspace refresh --json`, plus
 post-refresh artifact facts when available:
 
+- `artifact_id`: workspace artifact generation id when the index artifact is known; required companion for
+  Eros/Miller index-revision delta (`impact --from-index-revision` + `--from-artifact-id`).
 - `index_fresh`: `true` for `refreshed`/`unchanged`, `false` for lock-busy or failed convergence.
 - `scan_duration_ms`: wall milliseconds of the julie-extract scan attempt when one ran — present even for
   `failed` (a timed-out, killed scan reports roughly the timeout), `null` when no scan ran (e.g. `lock_busy`).

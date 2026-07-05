@@ -1,6 +1,6 @@
 {
   "name": "miller",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "Local SQLite-backed code intelligence, content search, and workspace freshness for coding agents.",
   "author": {
     "name": "Alan Northam"
