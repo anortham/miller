@@ -131,7 +131,7 @@ Capabilities advertise this feed as:
   "name": "content_corpus",
   "command": "miller content export",
   "format": "jsonl",
-  "schema_version": 1,
+  "schema_version": 2,
   "chunker_version": "line-v1",
   "filters": ["--kind", "--content-workspace-id"]
 }

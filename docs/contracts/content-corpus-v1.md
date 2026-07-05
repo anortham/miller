@@ -1,6 +1,10 @@
 # Miller content corpus v1 contract
 
-Status: active local contract for Miller `.miller/content.db` schema version 1.
+Status: active local contract for Miller `.miller/content.db` schema version 2.
+
+Schema version 2 adds read-path indexes for source-window reads, source deletes, and containing-symbol chunk
+lookups. The content kinds, chunker version, table fields, and JSONL field set remain unchanged from schema
+version 1.
 
 `content.db` is a Miller-owned sidecar for chunked text content. It is separate from `symbols.db` and
 `search.db`: `symbols.db` remains the `julie-extract` structured artifact, `search.db` remains symbol and
@@ -19,7 +23,7 @@ Every source and chunk has exactly one `content_kind`.
 | `external_file` | Explicit content import | User-provided text outside the workspace, such as logs, reports, traces, or generated text artifacts. | Added, replaced, read, searched, exported, and removed through Miller content commands. |
 | `web` | Explicit content import | Browser or fetch output imported as page text/markdown with a URL. | Added, replaced, read, searched, exported, and removed through Miller content commands. |
 
-Unknown content kinds are invalid for schema v1. Future kinds require a schema/contract revision.
+Unknown content kinds are invalid for this contract. Future kinds require a schema/contract revision.
 
 ## Tables
 
@@ -104,7 +108,7 @@ Singleton key/value facts for status, freshness, and dashboard display.
 
 | Field | Type | Required | Description |
 |---|---|---:|---|
-| `schema_version` | `INTEGER NOT NULL` | yes | Must be `1` for this contract. |
+| `schema_version` | `INTEGER NOT NULL` | yes | Must be `2` for this contract. |
 | `workspace_revision` | `INTEGER NULL` | no | Workspace revision the workspace-derived partition matches. |
 | `chunker_version` | `TEXT NOT NULL` | yes | Version string for line/byte chunking behavior. |
 | `source_count` | `INTEGER NOT NULL` | yes | Active source rows. |
@@ -155,7 +159,7 @@ field set.
 
 | Field | Required | Description |
 |---|---:|---|
-| `schema_version` | yes | `1`. |
+| `schema_version` | yes | `2`. |
 | `workspace_id` | no | Workspace ID, when available. |
 | `workspace_revision` | no | Workspace revision, when available. |
 | `source_id` | yes | Source row ID. |
