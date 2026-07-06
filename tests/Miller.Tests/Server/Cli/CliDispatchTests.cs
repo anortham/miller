@@ -333,7 +333,7 @@ public sealed class CliDispatchTests : IDisposable
         JsonElement metricsContract = Assert.Single(
             root.GetProperty("json_contracts").EnumerateArray(),
             item => item.GetProperty("name").GetString() == "metrics");
-        Assert.Equal("metrics <churn|clones|complexity> --json", metricsContract.GetProperty("command").GetString());
+        Assert.Equal("metrics <churn|clones|complexity|risk> --json", metricsContract.GetProperty("command").GetString());
         Assert.Equal(1, metricsContract.GetProperty("schema_version").GetInt32());
 
         JsonElement workspaceStatusContract = Assert.Single(

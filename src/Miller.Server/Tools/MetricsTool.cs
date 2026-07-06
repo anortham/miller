@@ -43,7 +43,15 @@ public static class MetricsTool
                 json,
                 includeCommits,
                 historyReader),
-            _ => throw new InvalidOperationException("metrics operation must be churn, clones, or complexity."),
+            "risk" => RunRisk(
+                dbPath,
+                workspaceRoot,
+                string.IsNullOrWhiteSpace(range) ? "HEAD~20..HEAD" : range,
+                boundedLimit,
+                json,
+                includeTests,
+                historyReader),
+            _ => throw new InvalidOperationException("metrics operation must be churn, clones, complexity, or risk."),
         };
     }
 
@@ -104,6 +112,26 @@ public static class MetricsTool
             historyReader);
         return new MetricsToolResult(
             json ? RenderChurnJson(report) : RenderChurnCompact(report),
+            report.Rows.Count);
+    }
+
+    private static MetricsToolResult RunRisk(
+        string dbPath,
+        string? workspaceRoot,
+        string range,
+        int limit,
+        bool json,
+        bool includeTests,
+        IGitHistoryReader? historyReader)
+    {
+        if (string.IsNullOrWhiteSpace(workspaceRoot))
+            throw new InvalidOperationException("metrics risk requires a workspace root.");
+        if (historyReader is null)
+            throw new InvalidOperationException("metrics risk requires a git history reader.");
+
+        RiskReport report = RiskRanking.Read(dbPath, workspaceRoot, range, limit, includeTests, historyReader);
+        return new MetricsToolResult(
+            json ? RenderRiskJson(report) : RenderRiskCompact(report),
             report.Rows.Count);
     }
 
@@ -298,6 +326,74 @@ public static class MetricsTool
                 foreach (string commit in row.Commits)
                     writer.WriteStringValue(commit);
                 writer.WriteEndArray();
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    private static string RenderRiskCompact(RiskReport report)
+    {
+        if (report.Rows.Count == 0)
+            return "No risk rows.";
+
+        var sb = new StringBuilder();
+        sb.Append("# risk ").AppendLine(report.Range);
+        sb.Append("score = ").AppendLine(RiskRanking.ScoreFormula);
+        sb.AppendLine("score\tcommits\tlines\tseverity\tbasis\tpath\tsymbol");
+        foreach (RiskRow row in report.Rows)
+        {
+            sb.Append(row.Score).Append('\t')
+              .Append(row.CommitCount).Append('\t')
+              .Append(row.ChangedLines).Append('\t')
+              .Append(ComplexityRankingReader.SeverityName(row.Severity)).Append('\t')
+              .Append(row.Basis).Append('\t')
+              .Append(row.Path);
+            if (row.Line is { } line)
+                sb.Append(':').Append(line);
+            sb.Append('\t')
+              .Append(row.SymbolName ?? "");
+            if (row.IsTest)
+                sb.Append("\ttest");
+            sb.AppendLine();
+        }
+        return sb.ToString().TrimEnd();
+    }
+
+    private static string RenderRiskJson(RiskReport report)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (Utf8JsonWriter writer = NewWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteNumber("schema_version", 1);
+            writer.WriteString("operation", "risk");
+            writer.WriteString("range", report.Range);
+            writer.WriteString("score_formula", RiskRanking.ScoreFormula);
+            writer.WriteString(
+                "mapping_note",
+                "risk rows are the intersection of churn and complexity evidence mapped to the current index; churn-only and complexity-only rows are omitted");
+            writer.WriteStartArray("rows");
+            foreach (RiskRow row in report.Rows)
+            {
+                writer.WriteStartObject();
+                writer.WriteString("basis", row.Basis);
+                if (row.SymbolId is null) writer.WriteNull("symbol_id"); else writer.WriteString("symbol_id", row.SymbolId);
+                if (row.SymbolName is null) writer.WriteNull("symbol_name"); else writer.WriteString("symbol_name", row.SymbolName);
+                if (row.SymbolKind is null) writer.WriteNull("symbol_kind"); else writer.WriteString("symbol_kind", row.SymbolKind);
+                writer.WriteString("path", row.Path);
+                if (row.Line is null) writer.WriteNull("line"); else writer.WriteNumber("line", row.Line.Value);
+                writer.WriteNumber("commit_count", row.CommitCount);
+                writer.WriteNumber("changed_lines", row.ChangedLines);
+                writer.WriteString("last_commit_at_utc", row.LastCommitAtUtc);
+                writer.WriteNumber("decision_count", row.DecisionCount);
+                writer.WriteNumber("loop_count", row.LoopCount);
+                writer.WriteNumber("max_nesting_depth", row.MaxNestingDepth);
+                writer.WriteString("severity", ComplexityRankingReader.SeverityName(row.Severity));
+                writer.WriteBoolean("is_test", row.IsTest);
+                writer.WriteNumber("score", row.Score);
                 writer.WriteEndObject();
             }
             writer.WriteEndArray();
