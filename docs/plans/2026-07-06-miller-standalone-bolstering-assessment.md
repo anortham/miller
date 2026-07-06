@@ -1,7 +1,41 @@
 # Miller Standalone Bolstering Assessment
 
 Date: 2026-07-06
-Status: assessment for user review — no direction approved yet, nothing implemented.
+Status: consensus reached (Claude + Codex adversarial review, user-directed); implementation started
+on the amended priorities below. The original roadmap section is retained below for history.
+
+## Consensus amendments (Codex adversarial review, 2026-07-06)
+
+Codex verdict on the original roadmap: rework. Verified findings that changed the plan:
+
+1. **`metrics hotspots` name is taken.** `hotspots` is an existing CLI alias normalized to
+   `complexity` (`MetricsTool.NormalizeOperation`, `CliDispatch`). Reusing it would silently change
+   an existing alias. The churn×complexity feature is renamed **`metrics risk`**.
+2. **Dead-code cannot be reference-graph-based today.** The live Miller artifact has 90,742
+   `identifiers` rows and **0 resolved `target_symbol_id`** rows; the references contract itself
+   says null targets must not be read as absence of usage. Dead-code candidates are demoted to P3
+   as an evidence-gated, name-based-liveness prototype (a symbol is a candidate only when its name
+   never appears as an identifier outside its own definition — conservative: collisions hide dead
+   code rather than flagging live code), scoped to non-public symbols in high-evidence languages,
+   with per-language confidence labels. Blocked-on: extractor reference resolution quality.
+3. **Signals rollup moves ahead of dead-code.** `miller report` composes only reliable facts
+   (health, markers, complexity, clones, churn, risk); dead-code is omitted until P3 earns
+   confidence.
+4. **Not just a cheap join.** `metrics risk` must join churn and complexity *before* limiting
+   (top-N∩top-N misses real hotspots), define file-only/null-symbol tiers, align test filtering,
+   and carry a performance budget on git range size.
+5. **Contract discipline.** Each new operation is a documented additive update to
+   `metrics-json-v1` (or a new contract doc for `report`), advertised in `capabilities --json`,
+   with tests.
+6. **P4 history must be keyed by `(workspace_id, artifact_id, revision)`** plus extractor version
+   — never revision alone, because full rebuilds restart the revision counter.
+7. **Dashboard consumes cached/snapshotted facts, CLI first.** No git subprocess on dashboard
+   page load; churn/risk reach the dashboard via cached facts or an explicit refresh action.
+8. **MCP stance holds by default.** No new MCP tools; if MCP-only clients later need `report`,
+   that is an explicit user-approval discussion, not a default.
+
+**Amended priority order: P1 `metrics risk` → P2 `miller report` (no dead-code) → P3 dead-code
+candidates prototype (evidence-gated) → P4 history/trends.**
 
 ## Context
 
@@ -43,7 +77,7 @@ CLI already ships the raw facts Eros was meant to consume:
 | Semantic/vector retrieval, embeddings | No | No | Keep out (or revisit as an explicit opt-in later) |
 | Confidence/evidence views, commercial orchestration | No | Partially | Keep out — onboarding panel covers the useful subset |
 
-## Proposed roadmap (priority order)
+## Original proposed roadmap (superseded by the consensus amendments above)
 
 ### P1 — Hotspots: `metrics hotspots`
 
@@ -98,4 +132,5 @@ distribution, clone count, marker count over time). Needs design: when snapshots
 - [x] CLI fact surfaces verified against actual binary and contracts
 - [x] Eros-deferred capabilities enumerated with absorb/keep-out verdicts
 - [x] Prioritized roadmap with rationale
-- [ ] User picks direction (which priorities to green-light) — pending
+- [x] User picks direction — Codex adversarial review requested, consensus amendments folded in,
+      implementation green-lit on the amended P1→P2 order (2026-07-06)
