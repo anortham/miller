@@ -11,11 +11,16 @@ current-vs-historical documentation map.
 
 The Julie replacement story is Miller + `julie-extractors` + Eros, not Miller alone. Miller replaces Julie's
 deterministic local agent-tool core: search, inspect, context, refs, trace/path, impact, editing, workspace
-lifecycle, content/web/text import, patterns, marker audits, telemetry, and JSON/JSONL feeds.
+lifecycle, content/web/text import, patterns, marker audits, telemetry, JSON/JSONL feeds, **and deterministic
+local analysis reports** (`metrics churn|clones|complexity|risk`, the composed `miller report` rollup).
 `julie-extractors` / `julie-extract` owns parser-backed extraction and standalone extract workflows. Eros owns
-semantic/vector retrieval, guidance, confidence/evidence views, signals reports, dead-code/hotspot/clone workflows,
-history, and commercial orchestration. Do not add Miller surfaces merely to absorb Eros-level reports or
-`julie-extractors` extraction ownership.
+what requires semantics or fleet state: semantic/vector retrieval and embeddings, guidance and
+confidence/evidence views, cross-workspace/fleet ranking, suppression persistence, and commercial orchestration.
+(2026-07-06 consensus, Eros not shipping: Miller absorbed the deterministic signals/hotspot workflows —
+see `docs/plans/2026-07-06-miller-standalone-bolstering-assessment.md`. Dead-code candidates stay out until
+extractor reference resolution earns them; metric history/trends are a designed-not-built P4.) Do not add
+Miller surfaces that need embeddings or semantic ranking, and do not absorb `julie-extractors` extraction
+ownership.
 
 Adding a new MCP tool requires **explicit user approval** before implementation. Keep the MCP surface stingy:
 prefer improving an existing tool, adding a CLI/export contract, writing a skill, or surfacing data on the

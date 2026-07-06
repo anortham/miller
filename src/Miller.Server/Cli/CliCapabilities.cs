@@ -61,6 +61,7 @@ internal static class CliCapabilities
         "metrics clones --json",
         "metrics complexity --json",
         "metrics risk --json",
+        "report --json",
         "telemetry export --jsonl",
         "symbols export --jsonl",
         "references export --jsonl",
@@ -95,6 +96,7 @@ internal static class CliCapabilities
         ("trace", "trace --json", 1, "docs/contracts/trace-json-v1.md"),
         ("patterns", "patterns --json", 1, "docs/contracts/patterns-json-v1.md"),
         ("metrics", "metrics <churn|clones|complexity|risk> --json", 1, "docs/contracts/metrics-json-v1.md"),
+        ("report", "report --json", 1, "docs/contracts/report-json-v1.md"),
         ("impact_index_revision_delta", "impact --json --from-index-revision N --from-artifact-id ID", 1,
             "docs/contracts/impact-index-revision-delta-v1.md"),
     ];

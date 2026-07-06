@@ -103,6 +103,8 @@ public static class CliDispatch
                     return Patterns(rest, context, stdout, stderr);
                 case "metrics":
                     return Metrics(rest, context, stdout, stderr);
+                case "report":
+                    return Report(rest, context, stdout, stderr);
                 case "telemetry":
                     return Telemetry(rest, context, stdout, stderr);
                 case "symbols":
@@ -608,6 +610,63 @@ public static class CliDispatch
                 or SqliteException)
         {
             err.WriteLine("metrics failed: " + ex.Message);
+            return 3;
+        }
+    }
+
+    private static int Report(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
+    {
+        const string usage = "miller report [--json] [--workspace-id SELECTOR] [--workspace DIR] [--range REV..REV] [--limit N] [--include-tests|--exclude-tests]";
+        if (args.Count > 0 && args[0] is "--help" or "-h" or "help")
+            return Usage(err, usage);
+
+        CliOptions o = CliOptions.Parse(args.ToArray(), "json", "include-tests", "exclude-tests");
+        if (o.Positionals.Count > 0)
+            return Usage(err, usage);
+        if (!TryResolveReadContext(ctx, o, err, out ctx))
+            return 2;
+        if (!RequireIndex(ctx, err))
+            return 3;
+
+        try
+        {
+            // Markers ride the region search sidecar; the section reports itself unavailable when the
+            // sidecar is disabled or the search.db cannot be opened, instead of failing the report.
+            IRegionSearchIndex? regionIndex = null;
+            SymbolSearchSidecar sidecar = SymbolSearchSidecar.FromEnvironment();
+            if (sidecar.Enabled && sidecar.RegionOptions.Enabled)
+            {
+                try
+                {
+                    using var freshness = new FreshnessReader(ctx.ExtractDbPath);
+                    long revision = freshness.LatestRevision();
+                    regionIndex = FtsRegionSearchIndex.Open(
+                        SymbolSearchSidecar.SearchDbPathFor(ctx.ExtractDbPath), revision);
+                }
+                catch (Exception ex) when (ex is InvalidOperationException or IOException or SqliteException)
+                {
+                    regionIndex = null;
+                }
+            }
+
+            ReportToolResult result = ReportTool.Run(
+                ctx.ExtractDbPath,
+                ctx.WorkspaceRoot,
+                range: o.Value("range", "HEAD~20..HEAD"),
+                sectionLimit: o.Int("limit", ReportTool.DefaultSectionLimit),
+                json: o.Has("json"),
+                includeTests: !o.Has("exclude-tests"),
+                historyReader: new ProcessGitHistoryReader(),
+                regionIndex: regionIndex);
+            WriteOutput(outw, result.Output);
+            return 0;
+        }
+        catch (Exception ex) when (
+            ex is FileNotFoundException or InvalidOperationException or IOException
+                or UnauthorizedAccessException or ArgumentException or NotSupportedException
+                or SqliteException)
+        {
+            err.WriteLine("report failed: " + ex.Message);
             return 3;
         }
     }
@@ -1955,8 +2014,10 @@ public static class CliDispatch
                              op = list | summary | search
                              [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--query TEXT] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]
           metrics <op>       Report deterministic local metrics.
-                             op = churn | clones | complexity
+                             op = churn | clones | complexity | risk
                              [--workspace-id SELECTOR] [--workspace DIR] [--limit N] [--json] [--range REV..REV] [--include-commits] [--min-count N] [--max-symbols-per-group N] [--min-severity low|moderate|high] [--include-tests|--exclude-tests]
+          report             One composed repo-quality report: index counts, extraction health, markers, complexity, clones, churn, risk.
+                             [--json] [--workspace-id SELECTOR] [--workspace DIR] [--range REV..REV] [--limit N] [--include-tests|--exclude-tests]
           telemetry <op>     Export machine-global Miller telemetry.
                              export [--jsonl] [--workspace-id ID|all]
           symbols <op>       Bulk-export every symbol row for fleet rollups.   # JSONL

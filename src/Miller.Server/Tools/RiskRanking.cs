@@ -29,12 +29,26 @@ public static class RiskRanking
             includeCommits: false,
             historyReader);
 
+        return FromChurn(symbolsDbPath, churn, limit, includeTests);
+    }
+
+    /// <summary>
+    /// Ranks risk from an already-read churn report so callers composing several sections (e.g.
+    /// `miller report`) parse git history once. The churn report must be un-limited (or limited
+    /// far above <paramref name="limit"/>): the join happens over the full churn set.
+    /// </summary>
+    public static RiskReport FromChurn(
+        string symbolsDbPath,
+        ChurnReport churn,
+        int limit,
+        bool includeTests)
+    {
         string[] paths = churn.Rows.Select(static row => row.Path).Distinct(StringComparer.Ordinal).ToArray();
         IReadOnlyList<ComplexityHotspot> complexity = paths.Length == 0
             ? []
             : ComplexityRankingReader.ReadForPaths(symbolsDbPath, paths, includeTests);
 
-        return new RiskReport(range, Join(churn.Rows, complexity, limit));
+        return new RiskReport(churn.Range, Join(churn.Rows, complexity, limit));
     }
 
     internal static IReadOnlyList<RiskRow> Join(
