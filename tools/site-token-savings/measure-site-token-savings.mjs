@@ -2,12 +2,12 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..", "..");
-const sourceRoot = resolve(repoRoot, "..");
+const sourceRoot = resolveSampleSourceRoot();
 const defaultMiller = join(repoRoot, "src", "Miller.Server", "bin", "Release", "net10.0", "miller");
 const miller = process.env.MILLER_BINARY || defaultMiller;
 
@@ -72,6 +72,27 @@ function run(command, args) {
   return result.stdout;
 }
 
+function resolveSampleSourceRoot() {
+  if (process.env.MILLER_SITE_METRICS_SOURCE_ROOT) {
+    return resolve(process.env.MILLER_SITE_METRICS_SOURCE_ROOT);
+  }
+
+  const git = spawnSync("git", ["rev-parse", "--git-common-dir"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+
+  if (git.status === 0) {
+    const commonDir = git.stdout.trim();
+    const commonPath = resolve(repoRoot, commonDir);
+    if (basename(commonPath) === ".git") {
+      return resolve(dirname(commonPath), "..");
+    }
+  }
+
+  return resolve(repoRoot, "..");
+}
+
 function bytes(text) {
   return Buffer.byteLength(text, "utf8");
 }
@@ -92,7 +113,9 @@ const rows = workflows.map((workflow) => {
   const root = join(sourceRoot, workflow.repo);
   const sourcePath = join(root, workflow.file);
   if (!existsSync(sourcePath)) {
-    throw new Error(`Source file not found for ${workflow.repo}: ${sourcePath}`);
+    throw new Error(
+      `Source file not found for ${workflow.repo}: ${sourcePath}. Set MILLER_SITE_METRICS_SOURCE_ROOT to the directory containing the sampled repos.`,
+    );
   }
 
   const output = run(miller, workflow.command);
@@ -138,6 +161,6 @@ const markdown = [
   `| **total** |  |  | **${totals.sourceBytes.toLocaleString("en-US")}** | **${totals.millerBytes.toLocaleString("en-US")}** | **${totals.savedTokens.toLocaleString("en-US")}** | **${totals.savingsPercent.toFixed(1)}%** |`,
 ].join("\n");
 
-console.log(JSON.stringify({ measuredAt: new Date().toISOString(), miller, rows, totals }, null, 2));
+console.log(JSON.stringify({ measuredAt: new Date().toISOString(), miller, sourceRoot, rows, totals }, null, 2));
 console.log("\n--- markdown ---\n");
 console.log(markdown);
