@@ -170,7 +170,7 @@ public sealed class ContentTool
                 .Sum(static group => group.Max(static hit => hit.SourceBytes));
             telemetry.Outcome = hits.Count == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
             if (hits.Count == 0)
-                telemetry.SetEmptyReason("no_content_hits");
+                SetContentSearchEmptyTelemetry(telemetry, query, contentKind);
         }
 
         return json ? RenderSearchJson(hits, query, contentKind) : RenderSearchCompact(hits, query, contentKind);
@@ -210,7 +210,7 @@ public sealed class ContentTool
                 .Sum(static group => group.Max(static hit => hit.Hit.SourceBytes));
             telemetry.Outcome = page.Length == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
             if (page.Length == 0)
-                telemetry.SetEmptyReason("no_content_hits");
+                SetContentSearchEmptyTelemetry(telemetry, query, contentKind);
         }
 
         return json
@@ -461,6 +461,14 @@ public sealed class ContentTool
         telemetry.SetMetadata("limit_bucket", LimitBucket(limit));
         telemetry.SetMetadata("workspace_all", string.Equals(workspaceId, "all", StringComparison.OrdinalIgnoreCase));
         telemetry.SetMetadata("has_workspace_selector", !string.IsNullOrWhiteSpace(workspaceId));
+    }
+
+    private static void SetContentSearchEmptyTelemetry(TelemetryScope telemetry, string query, string contentKind)
+    {
+        string queryShape = SearchTool.QueryShapeFor(query);
+        telemetry.SetEmptyReason("no_content_hits");
+        telemetry.SetMetadata("query_shape", queryShape);
+        telemetry.SetMetadata("empty_diagnosis", SearchTool.EmptyDiagnosisForContentSearch(contentKind, queryShape));
     }
 
     private static string LimitBucket(int limit) => limit switch

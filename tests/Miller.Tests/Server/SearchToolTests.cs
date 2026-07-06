@@ -308,7 +308,123 @@ public sealed class SearchToolTests
             Assert.True(doc.RootElement.GetProperty("has_file_pattern").GetBoolean());
             Assert.True(doc.RootElement.GetProperty("has_language").GetBoolean());
             Assert.Equal("no_symbol_hits", doc.RootElement.GetProperty("empty_reason").GetString());
+            Assert.Equal("identifier_like", doc.RootElement.GetProperty("query_shape").GetString());
+            Assert.Equal("true_no_hit", doc.RootElement.GetProperty("empty_diagnosis").GetString());
             Assert.False(row.MetadataJson.Contains("NoSuchSymbol", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void Search_ModeSource_EmptyDocsLikeQuery_RecordsModeMismatchDiagnosis()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "miller-search-source-mismatch-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string telemetryDb = Path.Combine(dir, "telemetry.db");
+        var provider = new FixedSymbolSearchProvider(
+            SymbolSearchProjection.Build(Array.Empty<IndexedSymbol>()),
+            Path.Combine(dir, "root"),
+            TextContentIndex());
+        var tool = new SearchTool(provider, provider);
+
+        try
+        {
+            using (var ledger = TelemetryLedger.Open(telemetryDb, "current-ws", Path.Combine(dir, "root")))
+            {
+                using var scope = ledger.Measure("search", op: null);
+                string output = tool.Search("workspace health setup guide", mode: "source", limit: 3);
+                Assert.Contains("No text hits", output, StringComparison.Ordinal);
+                Assert.Contains("mode=content", output, StringComparison.Ordinal);
+            }
+
+            var row = ReadTelemetryOpMetadata(telemetryDb);
+            Assert.Equal("source", row.Op);
+            Assert.Equal("empty", row.Outcome);
+            using JsonDocument doc = JsonDocument.Parse(row.MetadataJson);
+            Assert.Equal("text_content", doc.RootElement.GetProperty("route").GetString());
+            Assert.Equal("no_text_hits", doc.RootElement.GetProperty("empty_reason").GetString());
+            Assert.Equal("docs_like", doc.RootElement.GetProperty("query_shape").GetString());
+            Assert.Equal("mode_mismatch", doc.RootElement.GetProperty("empty_diagnosis").GetString());
+            Assert.DoesNotContain("workspace health setup guide", row.MetadataJson, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void Search_ModeContent_EmptySourceLikeQuery_RecordsModeMismatchDiagnosis()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "miller-search-content-mismatch-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string telemetryDb = Path.Combine(dir, "telemetry.db");
+        var provider = new FixedSymbolSearchProvider(
+            SymbolSearchProjection.Build(Array.Empty<IndexedSymbol>()),
+            Path.Combine(dir, "root"),
+            TextContentIndex());
+        var tool = new SearchTool(provider, provider);
+
+        try
+        {
+            using (var ledger = TelemetryLedger.Open(telemetryDb, "current-ws", Path.Combine(dir, "root")))
+            {
+                using var scope = ledger.Measure("search", op: null);
+                string output = tool.Search("if (value == null)", mode: "content", limit: 3);
+                Assert.Contains("No text hits", output, StringComparison.Ordinal);
+                Assert.Contains("mode=source", output, StringComparison.Ordinal);
+            }
+
+            var row = ReadTelemetryOpMetadata(telemetryDb);
+            Assert.Equal("content", row.Op);
+            Assert.Equal("empty", row.Outcome);
+            using JsonDocument doc = JsonDocument.Parse(row.MetadataJson);
+            Assert.Equal("content", doc.RootElement.GetProperty("route").GetString());
+            Assert.Equal("no_text_hits", doc.RootElement.GetProperty("empty_reason").GetString());
+            Assert.Equal("source_like", doc.RootElement.GetProperty("query_shape").GetString());
+            Assert.Equal("mode_mismatch", doc.RootElement.GetProperty("empty_diagnosis").GetString());
+            Assert.DoesNotContain("if (value == null)", row.MetadataJson, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void Search_ModeContent_EmptyShortQuery_RecordsQueryShapeDiagnosis()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "miller-search-content-short-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string telemetryDb = Path.Combine(dir, "telemetry.db");
+        var provider = new FixedSymbolSearchProvider(
+            SymbolSearchProjection.Build(Array.Empty<IndexedSymbol>()),
+            Path.Combine(dir, "root"),
+            TextContentIndex());
+        var tool = new SearchTool(provider, provider);
+
+        try
+        {
+            using (var ledger = TelemetryLedger.Open(telemetryDb, "current-ws", Path.Combine(dir, "root")))
+            {
+                using var scope = ledger.Measure("search", op: null);
+                string output = tool.Search("x", mode: "content", limit: 3);
+                Assert.Contains("No text hits", output, StringComparison.Ordinal);
+                Assert.Contains("longer query", output, StringComparison.Ordinal);
+            }
+
+            var row = ReadTelemetryOpMetadata(telemetryDb);
+            Assert.Equal("content", row.Op);
+            Assert.Equal("empty", row.Outcome);
+            using JsonDocument doc = JsonDocument.Parse(row.MetadataJson);
+            Assert.Equal("content", doc.RootElement.GetProperty("route").GetString());
+            Assert.Equal("no_text_hits", doc.RootElement.GetProperty("empty_reason").GetString());
+            Assert.Equal("short", doc.RootElement.GetProperty("query_shape").GetString());
+            Assert.Equal("query_shape", doc.RootElement.GetProperty("empty_diagnosis").GetString());
+            Assert.DoesNotContain("\"x\"", row.MetadataJson, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {

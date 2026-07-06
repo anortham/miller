@@ -159,7 +159,32 @@ public sealed class ContentToolTests : IDisposable
         Assert.Equal("6-10", doc.RootElement.GetProperty("limit_bucket").GetString());
         Assert.False(doc.RootElement.GetProperty("workspace_all").GetBoolean());
         Assert.Equal("no_content_hits", doc.RootElement.GetProperty("empty_reason").GetString());
+        Assert.Equal("identifier_like", doc.RootElement.GetProperty("query_shape").GetString());
+        Assert.Equal("true_no_hit", doc.RootElement.GetProperty("empty_diagnosis").GetString());
         Assert.DoesNotContain("MissingSecretValue", row.MetadataJson, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Content_SearchDocsSourceLikeQuery_RecordsModeMismatchDiagnosis()
+    {
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+
+        using (var ledger = TelemetryLedger.Open(_workspace.TelemetryDbPath, _workspace.WorkspaceId, _workspace.WorkspaceRoot))
+        {
+            using var scope = ledger.Measure("content", op: null);
+            string output = tool.Content("search", query: "if (value == null)", content_kind: "docs", limit: 3);
+            Assert.Contains("No results", output, StringComparison.Ordinal);
+        }
+
+        var row = ReadTelemetryOpMetadata(_workspace.TelemetryDbPath);
+        Assert.Equal("search", row.Op);
+        Assert.Equal("empty", row.Outcome);
+        using JsonDocument doc = JsonDocument.Parse(row.MetadataJson);
+        Assert.Equal("workspace_docs", doc.RootElement.GetProperty("content_kind").GetString());
+        Assert.Equal("no_content_hits", doc.RootElement.GetProperty("empty_reason").GetString());
+        Assert.Equal("source_like", doc.RootElement.GetProperty("query_shape").GetString());
+        Assert.Equal("mode_mismatch", doc.RootElement.GetProperty("empty_diagnosis").GetString());
+        Assert.DoesNotContain("if (value == null)", row.MetadataJson, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

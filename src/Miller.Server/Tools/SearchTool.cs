@@ -69,6 +69,16 @@ public sealed class SearchTool
         TextContentKind.WorkspaceConfig,
     ];
 
+    private static readonly HashSet<string> PathQueryExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".cs", ".fs", ".vb", ".csproj", ".fsproj", ".vbproj", ".sln", ".slnx",
+        ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
+        ".py", ".rs", ".go", ".java", ".kt", ".kts", ".swift", ".rb", ".php",
+        ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp",
+        ".json", ".yaml", ".yml", ".toml", ".xml", ".sql",
+        ".md", ".txt", ".sh", ".ps1", ".html", ".css", ".scss", ".razor", ".cshtml",
+    };
+
     private readonly IWorkspaceSearchProvider _workspaceProvider;
     private readonly IWorkspaceRegionSearchProvider _regionProvider;
     private readonly IWorkspaceTextContentSearchProvider _textContentProvider;
@@ -326,7 +336,7 @@ public sealed class SearchTool
                 scope.ResultCount = count;
                 scope.Outcome = count == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
                 if (count == 0)
-                    scope.SetEmptyReason(EmptyReasonFor(route));
+                    ApplyEmptyTelemetry(scope, route, query);
             }
             return output;
         }
@@ -484,6 +494,76 @@ public sealed class SearchTool
         _ => "no_hits",
     };
 
+    private static void ApplyEmptyTelemetry(TelemetryScope scope, SearchRoute route, string query)
+    {
+        string queryShape = QueryShapeFor(query);
+        scope.SetEmptyReason(EmptyReasonFor(route));
+        scope.SetMetadata("query_shape", queryShape);
+        scope.SetMetadata("empty_diagnosis", EmptyDiagnosisFor(route, queryShape));
+    }
+
+    internal static string QueryShapeFor(string query)
+    {
+        string trimmed = query.Trim();
+        if (trimmed.Length <= 2)
+            return "short";
+        if (LooksLikePathQueryShape(trimmed))
+            return "path_like";
+        if (LooksLikeDocsOrConfigQuery(trimmed))
+            return "docs_like";
+        if (LooksLikeSourceCodeQuery(trimmed))
+            return "source_like";
+        if (IsNaturalLanguagePhrase(trimmed))
+            return "natural_language";
+        return "identifier_like";
+    }
+
+    internal static string EmptyDiagnosisForContentSearch(string contentKind, string queryShape)
+    {
+        if (queryShape is "short" or "path_like")
+            return "query_shape";
+        if (queryShape == "docs_like" && string.Equals(contentKind, TextContentKind.WorkspaceSource, StringComparison.Ordinal))
+            return "mode_mismatch";
+        if (queryShape == "source_like" &&
+            (string.Equals(contentKind, TextContentKind.WorkspaceDocs, StringComparison.Ordinal) ||
+             string.Equals(contentKind, TextContentKind.WorkspaceConfig, StringComparison.Ordinal)))
+            return "mode_mismatch";
+        return "true_no_hit";
+    }
+
+    private static string EmptyDiagnosisFor(SearchRoute route, string queryShape)
+    {
+        if (queryShape is "short" or "path_like")
+            return "query_shape";
+
+        return route.Kind switch
+        {
+            SearchRouteKind.Symbols when queryShape is "docs_like" or "source_like" or "natural_language" =>
+                "mode_mismatch",
+            SearchRouteKind.Content => EmptyDiagnosisForContentSearch(TextContentKind.WorkspaceDocs, queryShape),
+            SearchRouteKind.TextContent when route.ContentKinds is not null =>
+                EmptyDiagnosisForTextContent(route.ContentKinds, queryShape),
+            _ => "true_no_hit",
+        };
+    }
+
+    private static string EmptyDiagnosisForTextContent(IReadOnlyCollection<string> contentKinds, string queryShape)
+    {
+        if (queryShape is "short" or "path_like")
+            return "query_shape";
+
+        bool searchesSource = contentKinds.Contains(TextContentKind.WorkspaceSource);
+        bool searchesDocsOrConfig =
+            contentKinds.Contains(TextContentKind.WorkspaceDocs) ||
+            contentKinds.Contains(TextContentKind.WorkspaceConfig);
+
+        if (searchesSource && !searchesDocsOrConfig && queryShape == "docs_like")
+            return "mode_mismatch";
+        if (searchesDocsOrConfig && !searchesSource && queryShape == "source_like")
+            return "mode_mismatch";
+        return "true_no_hit";
+    }
+
     private const int EmptyHintQueryLimit = 60;
 
     // search·file empty (63% empty on mac): a path fragment that indexed no file. Echo a bounded query so the
@@ -500,14 +580,21 @@ public sealed class SearchTool
     private static string TextContentEmptyHint(IReadOnlyCollection<string> contentKinds, string query)
     {
         string q = Truncate(query, EmptyHintQueryLimit);
+        string queryShape = QueryShapeFor(query);
         bool hasWorkspace = false;
         bool hasImported = false;
+        bool hasSource = false;
+        bool hasDocsOrConfig = false;
         foreach (string kind in contentKinds)
         {
             if (kind == TextContentKind.ExternalFile || kind == TextContentKind.Web)
                 hasImported = true;
             else
                 hasWorkspace = true;
+            if (kind == TextContentKind.WorkspaceSource)
+                hasSource = true;
+            if (kind == TextContentKind.WorkspaceDocs || kind == TextContentKind.WorkspaceConfig)
+                hasDocsOrConfig = true;
         }
         string where = (hasWorkspace, hasImported) switch
         {
@@ -515,7 +602,19 @@ public sealed class SearchTool
             (false, true) => "`content list` to see imported sources",
             _ => "`workspace refresh` or `content list` for imported sources",
         };
-        return $"No text hits. Try broader terms, {where}, or `search {q}` for symbols.";
+
+        string? shapeHint = queryShape switch
+        {
+            "short" => "a longer query",
+            "path_like" => "mode=file for path fragments",
+            "docs_like" when hasSource && !hasDocsOrConfig => "mode=content for docs/config",
+            "source_like" when hasDocsOrConfig && !hasSource => "mode=source for source-body text",
+            _ => null,
+        };
+
+        return shapeHint is null
+            ? $"No text hits. Try broader terms, {where}, or `search {q}` for symbols."
+            : $"No text hits. Try {shapeHint}, broader terms, {where}, or `search {q}` for symbols.";
     }
 
     private const int OutsideScopeHintLimit = 3;
@@ -1313,6 +1412,32 @@ public sealed class SearchTool
         foreach (char ch in query)
         {
             if (char.IsPunctuation(ch) && ch is not '_' and not '-' and not '.')
+                return true;
+        }
+        return false;
+    }
+
+    private static bool LooksLikePathQueryShape(string query)
+    {
+        if (query.StartsWith("./", StringComparison.Ordinal) ||
+            query.StartsWith("../", StringComparison.Ordinal) ||
+            query.StartsWith("~/", StringComparison.Ordinal))
+            return true;
+
+        bool hasWhitespace = query.Any(char.IsWhiteSpace);
+        if (!hasWhitespace && query.Any(static ch => ch is '/' or '\\'))
+            return true;
+
+        string ext = Path.GetExtension(query);
+        return !hasWhitespace && PathQueryExtensions.Contains(ext);
+    }
+
+    private static bool LooksLikeSourceCodeQuery(string query)
+    {
+        foreach (char ch in query)
+        {
+            if (ch is '(' or ')' or '{' or '}' or '[' or ']' or ';' or '=' or '<' or '>' or '!'
+                or '&' or '|' or '+' or '*' or '%' or ':' or '"' or '\'' or '`')
                 return true;
         }
         return false;
