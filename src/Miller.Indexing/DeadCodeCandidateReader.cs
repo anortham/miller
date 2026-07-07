@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using Microsoft.Data.Sqlite;
 using Miller.Core.DeadCode;
 
@@ -362,26 +363,34 @@ public static class DeadCodeCandidateReader
         var matched = new HashSet<string>(StringComparer.Ordinal);
         int filesScanned = 0;
         int filesSkippedStale = 0;
-        var fileText = new Dictionary<string, string?>(StringComparer.Ordinal); // path → verified text (once/file)
+        // path → verified raw bytes (read + hashed ONCE per file). Regions slice these bytes directly: the
+        // artifact's span offsets are byte offsets into exactly the bytes the hash covered, so slicing raw bytes
+        // avoids the per-region full-file UTF-8 re-encode the old text-based slice paid (regions × file-size CPU;
+        // adversarial-review finding on PR #5).
+        var fileBytes = new Dictionary<string, byte[]?>(StringComparer.Ordinal);
 
         foreach (var region in regions)
         {
-            if (!fileText.TryGetValue(region.Path, out string? text))
+            if (!fileBytes.TryGetValue(region.Path, out byte[]? bytes))
             {
-                text = ReadVerifiedFileText(workspaceRoot, region);
-                fileText[region.Path] = text;
-                if (text is null)
+                bytes = ReadVerifiedFileBytes(workspaceRoot, region);
+                fileBytes[region.Path] = bytes;
+                if (bytes is null)
                     filesSkippedStale++;
                 else
                     filesScanned++;
             }
 
-            if (text is null)
+            if (bytes is null)
                 continue;
 
-            string? literal = SourceTextDecoder.SliceUtf8ByteSpan(text, region.StartByte, region.EndByte);
-            if (literal is null)
+            if (region.StartByte < 0 || region.EndByte <= region.StartByte || region.StartByte >= bytes.Length)
                 continue;
+
+            int end = Math.Min(region.EndByte, bytes.Length);
+            // Invalid UTF-8 inside the slice decodes to U+FFFD, which can never match a candidate name — same
+            // conservative outcome as the old skip-undecodable-file behavior, scoped per region.
+            string literal = Encoding.UTF8.GetString(bytes, region.StartByte, end - region.StartByte);
 
             foreach (var (name, ids) in nameToSymbolIds)
                 if (literal.Contains(name, StringComparison.Ordinal))
@@ -422,10 +431,11 @@ public static class DeadCodeCandidateReader
 
     /// <summary>
     /// The freshness-guarded source re-read mirrored from <c>SearchIndexWriter.ReadVerifiedFileText</c>: resolve
-    /// under the workspace root, require the on-disk byte length AND blake3 to match the artifact's stored facts,
-    /// then decode. Returns null (⇒ STALE / missing) on any mismatch — a stale file never suppresses a candidate.
+    /// under the workspace root, require the on-disk byte length AND blake3 to match the artifact's stored facts.
+    /// Returns the RAW verified bytes (the artifact's span offsets index these bytes exactly); null (⇒ STALE /
+    /// missing) on any mismatch — a stale file never suppresses a candidate.
     /// </summary>
-    private static string? ReadVerifiedFileText(string workspaceRoot, LiteralRegion region)
+    private static byte[]? ReadVerifiedFileBytes(string workspaceRoot, LiteralRegion region)
     {
         try
         {
@@ -440,7 +450,7 @@ public static class DeadCodeCandidateReader
                     ContentHasher.Blake3Hex(bytes), ContentHasher.NormalizeHash(region.ContentHash)))
                 return null;
 
-            return SourceTextDecoder.TryDecode(bytes, out string text) ? text : null;
+            return bytes;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {
