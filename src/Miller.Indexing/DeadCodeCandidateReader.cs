@@ -140,7 +140,7 @@ public static class DeadCodeCandidateReader
 
     private readonly record struct CandidateTuple(
         string SymbolId, string FileId, string Path, string Language, string Name, string Kind,
-        string? Visibility, int StartLine, long? StartByte, long? EndByte);
+        string? Visibility, int StartLine, long? StartByte, long? EndByte, string? Signature);
 
     private static List<DeadCodeSymbolRow> LoadCandidateRows(
         SqliteConnection connection,
@@ -207,6 +207,7 @@ public static class DeadCodeCandidateReader
                 ParentSymbolId: parentSymbolId,
                 HasAnnotation: annotatedSymbols.Contains(t.SymbolId),
                 HasStructuralFactSelfOrAncestor: SelfOrAncestorInSet(t.SymbolId, parent, structuralFactSymbols),
+                IsOverrideMember: DeadCodeCandidates.IsOverrideSignature(t.Signature),
                 NameMatchesOutside: ExecCount(nameCmd),
                 ResolvedInbound: ExecCount(resolvedCmd),
                 PendingResolvedInbound: ExecCount(pendingCmd),
@@ -230,7 +231,8 @@ public static class DeadCodeCandidateReader
         }
 
         cmd.CommandText = $"""
-            SELECT symbol_id, file_id, path, language, name, kind, visibility, start_line, start_byte, end_byte
+            SELECT symbol_id, file_id, path, language, name, kind, visibility, start_line, start_byte, end_byte,
+                   signature
             FROM symbols
             WHERE kind IN ({string.Join(", ", placeholders)})
             ORDER BY path, start_line, symbol_id;
@@ -250,7 +252,8 @@ public static class DeadCodeCandidateReader
                 Visibility: reader.IsDBNull(6) ? null : reader.GetString(6),
                 StartLine: reader.IsDBNull(7) ? 0 : (int)reader.GetInt64(7),
                 StartByte: reader.IsDBNull(8) ? null : reader.GetInt64(8),
-                EndByte: reader.IsDBNull(9) ? null : reader.GetInt64(9)));
+                EndByte: reader.IsDBNull(9) ? null : reader.GetInt64(9),
+                Signature: reader.IsDBNull(10) ? null : reader.GetString(10)));
         }
 
         return tuples;

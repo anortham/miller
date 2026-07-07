@@ -1,5 +1,5 @@
 {
-  "version": "2.9.0",
+  "version": "2.10.0",
   "binary": "julie-extract",
   "archiveInnerPathTemplate": "dist/{triple}/julie-extract{exe}",
   "urlTemplate": "https://github.com/anortham/julie-extractors/releases/download/v{VER}/{asset}",

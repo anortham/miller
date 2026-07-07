@@ -34,7 +34,8 @@ public sealed class DeadCodeCandidatesTests
         string? symbolId = null,
         int startLine = 1,
         long startByte = 0,
-        long endByte = 0) =>
+        long endByte = 0,
+        bool isOverrideMember = false) =>
         new(
             SymbolId: symbolId ?? ("sym-" + name),
             Name: name,
@@ -49,6 +50,7 @@ public sealed class DeadCodeCandidatesTests
             ParentSymbolId: parentSymbolId,
             HasAnnotation: hasAnnotation,
             HasStructuralFactSelfOrAncestor: hasStructuralFactSelfOrAncestor,
+            IsOverrideMember: isOverrideMember,
             NameMatchesOutside: nameMatchesOutside,
             ResolvedInbound: resolvedInbound,
             PendingResolvedInbound: pendingResolvedInbound,
@@ -64,14 +66,14 @@ public sealed class DeadCodeCandidatesTests
 
     private static void AssertNoSuppressions(DeadCodeResult result)
     {
-        Assert.Equal(9, result.Suppressions.Count);
+        Assert.Equal(10, result.Suppressions.Count);
         foreach (var id in DeadCodeCandidates.SuppressionRuleIds)
             Assert.Equal(0, result.Suppressions[id]);
     }
 
     private static void AssertOnlySuppression(DeadCodeResult result, string ruleId)
     {
-        Assert.Equal(9, result.Suppressions.Count);
+        Assert.Equal(10, result.Suppressions.Count);
         foreach (var id in DeadCodeCandidates.SuppressionRuleIds)
             Assert.Equal(id == ruleId ? 1 : 0, result.Suppressions[id]);
     }
@@ -79,13 +81,13 @@ public sealed class DeadCodeCandidatesTests
     // ---- public contract shape -------------------------------------------------------------------------------
 
     [Fact]
-    public void SuppressionRuleIds_are_the_nine_ids_in_table_order()
+    public void SuppressionRuleIds_are_the_ten_ids_in_table_order()
     {
         Assert.Equal(
             new[]
             {
-                "public_api", "visibility_unknown", "test_symbol", "entry_point", "framework_bound",
-                "annotated", "generated_path", "low_evidence_language", "string_literal_match",
+                "public_api", "visibility_unknown", "test_symbol", "entry_point", "override_member",
+                "framework_bound", "annotated", "generated_path", "low_evidence_language", "string_literal_match",
             },
             DeadCodeCandidates.SuppressionRuleIds);
     }
@@ -232,6 +234,47 @@ public sealed class DeadCodeCandidatesTests
             CSharpResolverCovered);
         Assert.Empty(result.Candidates);
         AssertOnlySuppression(result, "entry_point");
+    }
+
+    [Fact]
+    public void Rule_override_member_suppresses_override_row()
+    {
+        var result = DeadCodeCandidates.Evaluate(
+            [Row(name: "ExecuteAsync", isOverrideMember: true)], CSharpResolverCovered);
+        Assert.Empty(result.Candidates);
+        AssertOnlySuppression(result, "override_member");
+    }
+
+    [Fact]
+    public void Rule_test_symbol_suppresses_test_path_without_extractor_flag()
+    {
+        var result = DeadCodeCandidates.Evaluate(
+            [Row(name: "BeginScope", path: "tests/Miller.Tests/Server/FakeLogger.cs")], CSharpResolverCovered);
+        Assert.Empty(result.Candidates);
+        AssertOnlySuppression(result, "test_symbol");
+    }
+
+    [Fact]
+    public void Rule_test_symbol_path_check_matches_whole_segments_only()
+    {
+        // "Latest" / "protest" contain the substring but are not test path segments — still a candidate.
+        var result = DeadCodeCandidates.Evaluate(
+            [Row(name: "Widget", path: "src/protest/LatestReport.cs")], CSharpResolverCovered);
+        Assert.Single(result.Candidates);
+        AssertNoSuppressions(result);
+    }
+
+    [Fact]
+    public void IsOverrideSignature_matches_override_modifiers_not_identifier_substrings()
+    {
+        Assert.True(DeadCodeCandidates.IsOverrideSignature(
+            "protected override async Task ExecuteAsync(CancellationToken stoppingToken)"));
+        Assert.True(DeadCodeCandidates.IsOverrideSignature("Protected Overrides Sub OnStart()"));
+        Assert.True(DeadCodeCandidates.IsOverrideSignature("override fun toString(): String"));
+        Assert.False(DeadCodeCandidates.IsOverrideSignature("fn override_config(&self) -> Config"));
+        Assert.False(DeadCodeCandidates.IsOverrideSignature("public int OverrideCount { get; }"));
+        Assert.False(DeadCodeCandidates.IsOverrideSignature(null));
+        Assert.False(DeadCodeCandidates.IsOverrideSignature(""));
     }
 
     [Fact]
@@ -410,8 +453,8 @@ public sealed class DeadCodeCandidatesTests
         Assert.Equal(1, applied.Suppressions["string_literal_match"]);
         Assert.Empty(applied.NeedsLiteralScan);
         Assert.Equal(result.Examined, applied.Examined);
-        // All nine ids still present.
-        Assert.Equal(9, applied.Suppressions.Count);
+        // All ten ids still present.
+        Assert.Equal(10, applied.Suppressions.Count);
     }
 
     [Fact]

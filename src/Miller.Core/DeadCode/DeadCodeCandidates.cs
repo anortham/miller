@@ -34,6 +34,7 @@ public static class DeadCodeCandidates
     private const string VisibilityUnknown = "visibility_unknown";
     private const string TestSymbol = "test_symbol";
     private const string EntryPoint = "entry_point";
+    private const string OverrideMember = "override_member";
     private const string FrameworkBound = "framework_bound";
     private const string Annotated = "annotated";
     private const string GeneratedPath = "generated_path";
@@ -51,12 +52,12 @@ public static class DeadCodeCandidates
     };
 
     /// <summary>
-    /// The nine suppression rule ids in TABLE ORDER — the single source of the ids and their output order, so the
+    /// The ten suppression rule ids in TABLE ORDER — the single source of the ids and their output order, so the
     /// Indexing / Server layers cannot drift the set or its ordering.
     /// </summary>
     public static IReadOnlyList<string> SuppressionRuleIds { get; } =
     [
-        PublicApi, VisibilityUnknown, TestSymbol, EntryPoint, FrameworkBound,
+        PublicApi, VisibilityUnknown, TestSymbol, EntryPoint, OverrideMember, FrameworkBound,
         Annotated, GeneratedPath, LowEvidenceLanguage, StringLiteralMatch,
     ];
 
@@ -204,11 +205,14 @@ public static class DeadCodeCandidates
         if (string.IsNullOrWhiteSpace(row.Visibility))
             return VisibilityUnknown;
 
-        if (row.IsTestSelfOrAncestor)
+        if (row.IsTestSelfOrAncestor || IsTestPath(row.Path))
             return TestSymbol;
 
         if (IsEntryPoint(row))
             return EntryPoint;
+
+        if (row.IsOverrideMember)
+            return OverrideMember;
 
         if (row.HasStructuralFactSelfOrAncestor)
             return FrameworkBound;
@@ -228,6 +232,41 @@ public static class DeadCodeCandidates
             return StringLiteralMatch;
 
         return null;
+    }
+
+    // Whole path segments that mark test trees. The extractor's is_test flag misses helper types declared inside
+    // test files (a fake logger has no test attribute), so the test_symbol rule also fires on path evidence.
+    // Whole-segment match only — "src/protest/" or "LatestReport.cs" must not fire.
+    private static readonly string[] TestPathSegments = ["test", "tests", "__tests__"];
+
+    private static bool IsTestPath(string path)
+    {
+        foreach (var segment in Normalize(path).Split('/'))
+        {
+            foreach (var testSegment in TestPathSegments)
+            {
+                if (string.Equals(segment, testSegment, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// True when a symbol's signature carries an <c>override</c>-family modifier (C#/Kotlin/Swift/Scala
+    /// <c>override</c>, VB <c>Overrides</c>): the member is invoked through its base contract, so zero inbound
+    /// name/graph evidence is expected and it must not be flagged. Whole-word match — identifiers that merely
+    /// contain the word (<c>override_config</c>, <c>OverrideCount</c>) do not fire. Java's <c>@Override</c> is an
+    /// annotation, covered by the <c>annotated</c> rule.
+    /// </summary>
+    public static bool IsOverrideSignature(string? signature)
+    {
+        if (string.IsNullOrEmpty(signature))
+            return false;
+
+        return System.Text.RegularExpressions.Regex.IsMatch(
+            signature, @"\boverrides?\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
     }
 
     private static bool IsEntryPoint(DeadCodeSymbolRow row)

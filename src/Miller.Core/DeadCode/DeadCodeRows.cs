@@ -7,7 +7,9 @@ namespace Miller.Core.DeadCode;
 /// <remarks>
 /// The closure booleans (<see cref="IsTestSelfOrAncestor"/>, <see cref="HasStructuralFactSelfOrAncestor"/>) are
 /// computed by the reader's <c>parent_symbol_id</c> walk; Core TRUSTS them as given rather than re-walking parents.
-/// <see cref="HasAnnotation"/> is SELF-only. <see cref="LiteralMatch"/> drives the two-phase literal scan:
+/// <see cref="HasAnnotation"/> is SELF-only. <see cref="IsOverrideMember"/> is computed by the reader from
+/// <c>symbols.signature</c> via <see cref="DeadCodeCandidates.IsOverrideSignature"/> (Core owns the policy, the
+/// reader owns the julie column). <see cref="LiteralMatch"/> drives the two-phase literal scan:
 /// <c>null</c> = not yet scanned (provisional candidate), <c>true</c> = the name was found in a string literal
 /// (suppressed), <c>false</c> = scanned with no match (candidate). <see cref="StartByte"/> / <see cref="EndByte"/>
 /// are carried faithfully for downstream consumers even though the evaluator itself does not read them.
@@ -26,6 +28,7 @@ public sealed record DeadCodeSymbolRow(
     string? ParentSymbolId,
     bool HasAnnotation,
     bool HasStructuralFactSelfOrAncestor,
+    bool IsOverrideMember,
     int NameMatchesOutside,
     int ResolvedInbound,
     int PendingResolvedInbound,
