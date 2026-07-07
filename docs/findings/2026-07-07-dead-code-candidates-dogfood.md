@@ -1,6 +1,6 @@
 # Dead-code candidates dogfood — evidence gate (Task 5)
 
-**Date:** 2026-07-07 · **Status:** ❌ **GATE FAILED — do not surface `references candidates`** ·
+**Date:** 2026-07-07 · **Status:** ✅ **GATE PASSED (final re-run; see FINAL VERDICT below) — original first-run verdict preserved beneath** ·
 **Feature under test:** `miller references candidates [--json]` (design
 `docs/plans/2026-07-07-dead-code-candidates-design.md` rev 2) ·
 **Binary:** `1.4.5+1fe27ca2f833` (Release) · **Extractor:** `julie-extract 2.9.0` (schema v4,
@@ -24,6 +24,47 @@ receiver has **zero** `identifiers` rows carrying its name and is falsely flagge
 Per the Task 5 brief this is a **stop-and-report gate**, not a fix lane. The findings below are recorded;
 no "success" commit is made; the false positives are reported to the lead as a design/data mismatch. The
 lead owns any corrective dispatch against Core/Indexing/CLI. Task 5 edits no code.
+
+---
+
+## FINAL VERDICT (2026-07-07 evening) — ✅ GATE PASSED: 392 → 5, zero confirmed-live
+
+The corrective work the first-run addendum called for is complete, and the gate now
+passes literally. Re-run on a full-repo scan with julie-extract **v2.10.0**
+(variable_ref emission across 30 languages — receivers, bare reads, initializer
+members — plus two adversarial-review predicate fixes and two grammar-level fixes)
+and two new Miller evaluator rules:
+
+| Stage | Binary / evaluator | Candidates | Confirmed live |
+|---|---|---:|---:|
+| First run (this doc's original verdict) | 2.9.0 / 9 rules | 392 | ≈388 (99%) |
+| variable_ref emission | 2.10.0 @ adc4d4b / 9 rules | 15 | ≈10 |
+| + override_member + test-path rules | 2.10.0 / 10 rules | 10 | 5 |
+| + live_member_container rule | 2.10.0 / 11 rules | 9 | 4 |
+| + razor grammar fix + C# A*B recovery | 2.10.0 final / 11 rules | **5** | **0** |
+
+The final five, each hand-verified:
+
+1. `RegionBackendMetadata` (SearchTool.cs, constant) — dead, first-run-verified.
+2. `TextContentBackendMetadata` (SearchTool.cs, constant) — dead, first-run-verified.
+3. `SearchBackendMetadata` (SearchTool.cs, method) — dead, first-run-verified.
+4. `UnknownWorkspaceIdNote` (WorkspaceTool.cs, method) — dead, first-run-verified.
+5. `IFS` (scripts/release-promote.sh, constant) — write-only (`while IFS= read`);
+   a TRUE find under the pre-agreed write-only rule. Nuance: setting `IFS` is
+   consumed by the shell runtime, so it is idiomatic rather than deletable — the
+   surface's "fact to check, not a verdict" framing covers exactly this case.
+
+Precision: **100% by the pre-agreed classification** (5/5 true finds; ≈1% on the
+first run). The design's hard gate — zero confirmed-live symbols among Miller-repo
+candidates — is met. `references candidates` is cleared to surface.
+
+What it took (cross-repo ledger): julie-extractors variable_ref emission (30
+languages, locked complement-arm contract), the v2.9.0 savepoint-quadratic scan fix
+(425.9 s → ~7.6 s), java FQ-static-receiver + python match-binding predicate fixes
+(Codex adversarial review), a tree-sitter-razor grammar fix for attribute values
+(anortham fork, upstream PR tris203/tree-sitter-razor#27), a C# `A * B`
+pointer-mis-parse recovery heuristic, and Miller-side rules `override_member` and
+`live_member_container` plus a test-path fallback for `test_symbol`.
 
 ---
 
