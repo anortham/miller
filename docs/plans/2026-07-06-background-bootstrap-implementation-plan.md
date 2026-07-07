@@ -260,10 +260,10 @@ invariant and the new env knob (do not restructure other sections); finish with 
 `dotnet build Miller.slnx -c Release` (0 warnings), recording both in the ledger.
 
 **Acceptance criteria:**
-- [ ] Rebind notice rendered only when Running-while-bound; absent otherwise
-- [ ] CLAUDE.md updated, AGENTS.md regenerated, `cmp -s` clean
-- [ ] Branch gate green: fast + scale suites, Release build 0 warnings
-- [ ] Worker-scope verification passes; `serial-worker-commit` with recorded SHA
+- [x] Rebind notice rendered only when Running-while-bound; absent otherwise
+- [x] CLAUDE.md updated, AGENTS.md regenerated, `cmp -s` clean
+- [x] Branch gate green: fast + scale suites, Release build 0 warnings
+- [x] Worker-scope verification passes; `serial-worker-commit` with recorded SHA
 
 ---
 

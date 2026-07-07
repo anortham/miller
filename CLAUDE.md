@@ -161,9 +161,12 @@ scripts/test.ps1 all
 - **Host lifecycle gotcha (load-bearing).** The .NET Generic Host CONSTRUCTS every `IHostedService` up
   front, then calls `StartAsync` on each in registration order. Registration order orders `StartAsync`, NOT
   construction. So **no hosted-service constructor may read an `IndexBootstrapService` getter**
-  (`Holder`/`Resolver`/`Workspace`/`Ledger`) — they throw until the bootstrap's `StartAsync` has run. The
-  M3 services take only the bootstrap and read its getters lazily inside `ExecuteAsync`. The whole host
-  graph is registered in one testable place,
+  (`Holder`/`Resolver`/`Workspace`/`Ledger`) — they throw until the bootstrap is BOUND, not merely until
+  `StartAsync` has returned. The initial scan runs in the background; tool calls wait only for the
+  `MILLER_BOOTSTRAP_GRACE_SECONDS` window (default `5`, `0` = immediate fail-fast) and then return an
+  actionable not-ready/failed tool result. The `workspace` tool's unbound status is rendered by the binding
+  filter because the real tool cannot construct until bound. The M3 services take only the bootstrap and read
+  its getters lazily inside `ExecuteAsync`. The whole host graph is registered in one testable place,
   [`MillerServiceRegistration.AddMillerServices`](src/Miller.Server/Hosting/MillerServiceRegistration.cs);
   `HostStartupRegistrationTests` resolves the hosted-service set before bootstrap to guard this.
 - **Version-aware leadership (load-bearing invariant).** The artifact's `artifact_metadata.binary_version`
