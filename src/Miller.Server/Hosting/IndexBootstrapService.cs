@@ -128,9 +128,11 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
 
-        string canonicalRoot = source == WorkspaceBindingResolver.WorkspaceSource.Cwd
-            ? WorkspaceRootSafety.CanonicalizeAndRejectSensitiveRoot(workspaceRoot, fromCwd: true)
-            : PathCanonicalizer.CanonicalizeRoot(workspaceRoot);
+        // EVERY binding source passes the sensitive-root guard, not just Cwd. A session launched with
+        // cwd=$HOME defers bootstrap correctly, but the MCP client then offers file://$HOME as its root —
+        // trusting the Roots (or Env) source unguarded kicked off a full home-directory scan (2026-07-06).
+        string canonicalRoot = WorkspaceRootSafety.CanonicalizeAndRejectSensitiveRoot(
+            workspaceRoot, fromCwd: source == WorkspaceBindingResolver.WorkspaceSource.Cwd);
 
         lock (_gate)
         {

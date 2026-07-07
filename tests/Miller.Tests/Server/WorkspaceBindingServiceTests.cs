@@ -29,6 +29,38 @@ public sealed class WorkspaceBindingServiceTests
     }
 
     [Fact]
+    public void BootstrapForRoot_RejectsSensitiveRootFromMcpRoots()
+    {
+        // Incident 2026-07-06: sessions launched with cwd=$HOME correctly deferred bootstrap, but the MCP
+        // client then offered file://$HOME as its root and the Roots source bound it UNGUARDED — kicking off
+        // a full julie-extract scan of the home directory. Every binding source must pass the sensitive-root
+        // guard, not just Cwd.
+        var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
+        bootstrap.TestBootstrapInterceptor = (_, _) => throw new InvalidOperationException(
+            "guard must reject before any bootstrap work runs");
+
+        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => bootstrap.BootstrapForRoot(home, WorkspaceBindingResolver.WorkspaceSource.Roots));
+        Assert.Contains("sensitive system path", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void BootstrapForRoot_RejectsSensitiveRootFromEnv()
+    {
+        var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
+        bootstrap.TestBootstrapInterceptor = (_, _) => throw new InvalidOperationException(
+            "guard must reject before any bootstrap work runs");
+
+        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => bootstrap.BootstrapForRoot(home, WorkspaceBindingResolver.WorkspaceSource.Env));
+        Assert.Contains("sensitive system path", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task EnsurePrimaryBoundFromRootsAsync_BindsDeferredBootstrap()
     {
         string project = CreateTempDir();
