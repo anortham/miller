@@ -19,6 +19,9 @@
 - Evidence labels are provenance, never certainty: `name` and `name+resolver` (resolver label requires ≥ 10% measured per-language resolution coverage in the artifact, computed at query time — no hardcoded language lists).
 - Compact header must include verbatim: `resolver: <status> — candidates are facts to check, not deletions to make.` where `<status>` is the artifact's `reference_resolution_status` metadata value (fallback `unknown` when the key is absent).
 - JSON envelope: `schema_version: 1`, `candidates[]` (symbol_id, name, kind, language, path, start_line, visibility, evidence_label, evidence{name_matches, resolved_inbound, pending_resolved_inbound, calls_inbound}), `suppressions{rule_id: count}`, `literal_scan{files_scanned, files_skipped_stale}`, `language_coverage[]` (language, identifiers, resolved_pct), `examined`, `artifact{artifact_id, revision, reference_resolution_status, reference_resolution_version}`.
+- `resolved_pct` is a 0–100 number rounded to one decimal (e.g. `15.6`, `10.0` for 1-of-10) — NOT a 0–1 ratio. The plan-review doubt pass flagged this as a cross-task drift risk; every task uses this convention.
+- CLI JSON is rendered with `Utf8JsonWriter` + manual snake_case field writes, the existing CLI convention (`CliCapabilities`, `ReferenceExportReader`). There is NO CLI source-generated serializer context — do not invent one or use reflection-based `JsonSerializer` (AOT).
+- Suppression booleans are ancestor-closed where the design says so: `test_symbol` and `framework_bound` suppress on the symbol OR any `parent_symbol_id` ancestor; `annotated` is self-only. Row-record field names carry the closure explicitly (see Task 1 Produces).
 - Generated-path globs (conservative): `*.g.cs`, `*.generated.*`, `obj/`, `bin/`, `node_modules/`, `*.designer.cs`, `wwwroot/lib/`.
 - No new MCP tool. No dashboard/`miller report`/README/agent-instructions surfacing (evidence-gated). `MILLER_AGENT_INSTRUCTIONS.md` untouched.
 - Build: 0 warnings / 0 errors (warnings are errors). `Miller.Core` stays zero-I/O.
@@ -70,7 +73,7 @@ Commit mode: `serial-worker-commit` for every task.
 
 **Interfaces:**
 - Consumes: nothing (pure).
-- Produces: `DeadCodeSymbolRow` (SymbolId, Name, Kind, Language, Path, StartLine, StartByte, EndByte, Visibility (string?), IsTest (bool), ParentSymbolId (string?), HasAnnotation (bool), HasStructuralFact (bool), NameMatchesOutside (int), ResolvedInbound (int), PendingResolvedInbound (int), CallsInbound (int), LiteralMatch (bool?) — null = not yet scanned); `LanguageCoverageRow` (Language, IdentifierCount, ResolvedCount); `DeadCodeCandidates.Evaluate(IReadOnlyList<DeadCodeSymbolRow>, IReadOnlyList<LanguageCoverageRow>) -> DeadCodeResult` where `DeadCodeResult` carries `Candidates` (list with `EvidenceLabel`), `Suppressions` (rule_id -> count, all nine ids always present), `Examined` (int). Also `DeadCodeCandidates.IsSyntaxInvokedName(string name, string kind) -> bool` and `DeadCodeCandidates.CandidateKinds` (the set), both public for the reader's SQL prefilter and tests.
+- Produces: `DeadCodeSymbolRow` (SymbolId, Name, Kind, Language, Path, StartLine, StartByte, EndByte, Visibility (string?), IsTestSelfOrAncestor (bool — ancestor-closed via `parent_symbol_id`, computed by the caller), ParentSymbolId (string?), HasAnnotation (bool — SELF only), HasStructuralFactSelfOrAncestor (bool — ancestor-closed, computed by the caller), NameMatchesOutside (int), ResolvedInbound (int), PendingResolvedInbound (int), CallsInbound (int), LiteralMatch (bool?) — null = not yet scanned); `LanguageCoverageRow` (Language, IdentifierCount, ResolvedCount); `DeadCodeCandidates.Evaluate(IReadOnlyList<DeadCodeSymbolRow>, IReadOnlyList<LanguageCoverageRow>) -> DeadCodeResult` where `DeadCodeResult` carries `Candidates` (list with `EvidenceLabel`), `Suppressions` (rule_id -> count, all nine ids always present), `Examined` (int). Core trusts the closure booleans as given — the ancestor walk is the reader's job (Task 2); Core tests still cover a parent-only-test and parent-only-structural-fact row proving the closed booleans suppress. Also `DeadCodeCandidates.IsSyntaxInvokedName(string name, string kind) -> bool` and `DeadCodeCandidates.CandidateKinds` (the set), both public for the reader's SQL prefilter and tests.
 - Produces: two-phase contract — `Evaluate` treats `LiteralMatch == true` as the `string_literal_match` suppression; `LiteralMatch == null` rows are returned in `DeadCodeResult.NeedsLiteralScan` so the reader can scan survivors only and call `Evaluate` semantics again via `DeadCodeCandidates.ApplyLiteralScan(result, matchedSymbolIds)`.
 
 **Contract inputs:** Global Constraints (kinds, exclusions, nine rule ids, evidence-label rules, ≥10% coverage threshold). Entry-point names: `Main`, `main`, plus path-tail heuristic `Program.cs` per the design.
@@ -83,7 +86,7 @@ Commit mode: `serial-worker-commit` for every task.
 
 **What to build:** The entire candidate/suppression/evidence decision as pure functions over plain records, per design §Candidate rule + §Suppression rules + §Evidence provenance. Suppression precedence: kind/name-shape exclusion removes a symbol from `Examined` candidates entirely (not a suppression count); the nine rules apply in table order, first match wins for the count, and any match suppresses.
 
-**Approach:** TDD. Follow `Miller.Core` conventions (records, no I/O, no Sqlite references). Keep evidence-label logic reading only `LanguageCoverageRow` data. Cover in tests: candidate found; alive-by-name / alive-by-resolved / alive-by-pending / alive-by-calls each prevent candidacy; each of the nine rules fires and counts; finalizer `~Resource`, indexer `this[int index]`, `operator +`, `op_Addition`, `Finalize` excluded; evidence-label split at the 10% boundary (9.9% → `name`, 10% → `name+resolver`); NULL visibility → `visibility_unknown`; two-phase literal-scan contract (`NeedsLiteralScan` then `ApplyLiteralScan` suppresses matched ids under `string_literal_match`).
+**Approach:** TDD. Follow `Miller.Core` conventions (records, no I/O, no Sqlite references). Keep evidence-label logic reading only `LanguageCoverageRow` data. Cover in tests: candidate found; alive-by-name / alive-by-resolved / alive-by-pending / alive-by-calls each prevent candidacy; each of the nine rules fires and counts; finalizer `~Resource`, indexer `this[int index]`, `operator +`, `op_Addition`, `Finalize` excluded; evidence-label split at the 10% boundary (9.9% → `name`, 10% → `name+resolver`); NULL visibility → `visibility_unknown`; rows with `IsTestSelfOrAncestor`/`HasStructuralFactSelfOrAncestor` set (ancestor-only case) suppress under `test_symbol`/`framework_bound`; two-phase literal-scan contract (`NeedsLiteralScan` then `ApplyLiteralScan` suppresses matched ids under `string_literal_match`).
 
 **Acceptance criteria:**
 - [ ] All rule-fidelity behaviors above proven red→green in `DeadCodeCandidatesTests`
@@ -102,7 +105,45 @@ Commit mode: `serial-worker-commit` for every task.
 - Consumes: Task 1's `DeadCodeCandidates` API (rows, `Evaluate`, `ApplyLiteralScan`, `IsSyntaxInvokedName`, `CandidateKinds`).
 - Produces: `DeadCodeCandidateReader.Read(string symbolsDbPath, string workspaceRoot) -> DeadCodeCandidateReport` where the report carries `DeadCodeResult` plus `LanguageCoverage`, `LiteralScan` (FilesScanned, FilesSkippedStale), and `Artifact` (ArtifactId, Revision, ReferenceResolutionStatus (fallback `"unknown"`), ReferenceResolutionVersion (nullable)). Task 3 renders exactly this report.
 
-**Contract inputs:** Real v4 DDL verified live this session — `identifier_resolutions` (identifier_id PK REFERENCES identifiers CASCADE, target_symbol_id REFERENCES symbols CASCADE, tier, confidence REAL, method TEXT, outcome TEXT NOT NULL, candidates INTEGER, resolved_at_revision INTEGER NOT NULL, CHECK ((outcome = 'resolved') = (target_symbol_id IS NOT NULL))); `pending_resolutions` (pending_relationship_id PK REFERENCES pending_relationships CASCADE, target_symbol_id TEXT NOT NULL REFERENCES symbols CASCADE, tier INTEGER NOT NULL, confidence REAL NOT NULL, method TEXT NOT NULL, resolved_at_revision INTEGER NOT NULL) with index `idx_pending_resolutions_target`; artifact_metadata keys `reference_resolution_status` / `reference_resolution_version`. Copy DDL into the fixture verbatim (fixture-fidelity rule). Existing span-read pattern: `src/Miller.Indexing/SqliteSourceRegionReader.cs` + `SourceRegionRow.cs`; freshness guard via `files.content_hash` (blake3, normalized) as used by existing source re-readers.
+**Contract inputs:** Real v4 DDL verified live this session — copy into the fixture VERBATIM including FKs, CHECK, and indexes (fixture-fidelity rule; the plan-review doubt pass flagged delegated DDL discovery as a drift risk):
+
+```sql
+CREATE TABLE identifier_resolutions (
+  identifier_id TEXT PRIMARY KEY REFERENCES identifiers(identifier_id) ON DELETE CASCADE,
+  target_symbol_id TEXT REFERENCES symbols(symbol_id) ON DELETE CASCADE,
+  tier INTEGER, confidence REAL, method TEXT, outcome TEXT NOT NULL, candidates INTEGER,
+  resolved_at_revision INTEGER NOT NULL,
+  CHECK ((outcome = 'resolved') = (target_symbol_id IS NOT NULL))
+);
+CREATE INDEX idx_identifier_resolutions_target ON identifier_resolutions(target_symbol_id);
+CREATE TABLE pending_relationships (
+  pending_relationship_id TEXT PRIMARY KEY, from_symbol_id TEXT NOT NULL,
+  caller_scope_symbol_id TEXT, file_id TEXT NOT NULL, path TEXT NOT NULL, kind TEXT NOT NULL,
+  target_display_name TEXT NOT NULL, target_terminal_name TEXT NOT NULL, target_receiver TEXT,
+  target_namespace_json TEXT NOT NULL, target_import_context TEXT,
+  start_line INTEGER NOT NULL, start_column INTEGER, end_line INTEGER, end_column INTEGER,
+  start_byte INTEGER, end_byte INTEGER, confidence REAL NOT NULL, metadata_json TEXT,
+  FOREIGN KEY (from_symbol_id) REFERENCES symbols(symbol_id) ON DELETE CASCADE,
+  FOREIGN KEY (caller_scope_symbol_id) REFERENCES symbols(symbol_id) ON DELETE SET NULL,
+  FOREIGN KEY (file_id) REFERENCES files(file_id) ON DELETE CASCADE
+);
+CREATE INDEX idx_pending_terminal ON pending_relationships(target_terminal_name);
+CREATE INDEX idx_pending_file ON pending_relationships(file_id);
+CREATE INDEX idx_pending_from ON pending_relationships(from_symbol_id);
+CREATE INDEX idx_pending_caller_scope ON pending_relationships(caller_scope_symbol_id);
+CREATE TABLE pending_resolutions (
+  pending_relationship_id TEXT PRIMARY KEY
+    REFERENCES pending_relationships(pending_relationship_id) ON DELETE CASCADE,
+  target_symbol_id TEXT NOT NULL REFERENCES symbols(symbol_id) ON DELETE CASCADE,
+  tier INTEGER NOT NULL, confidence REAL NOT NULL, method TEXT NOT NULL,
+  resolved_at_revision INTEGER NOT NULL
+);
+CREATE INDEX idx_pending_resolutions_target ON pending_resolutions(target_symbol_id);
+```
+
+(If the fixture already has a `pending_relationships` table with fewer columns/keys, upgrade it to this shape.) artifact_metadata keys: `reference_resolution_status` / `reference_resolution_version`. Existing span-read pattern: `src/Miller.Indexing/SqliteSourceRegionReader.cs` + `SourceRegionRow.cs`; freshness guard via `files.content_hash` (blake3, normalized) as used by existing source re-readers.
+
+**Schema-gate reality (plan-review finding, verified):** `JulieSchemaGate` validates only `artifact_metadata` values — it does NOT check table presence. A v4-stamped artifact missing the resolution tables passes the gate and would surface as a raw `SqliteException` (CLI exit 1, not the rebuild-oriented exit 3). The reader must therefore validate its required tables (`identifier_resolutions`, `pending_resolutions`, `pending_relationships`) via `sqlite_master` up front and throw the same incompatible-artifact exception type the gate uses (see `JulieSchemaGate`/`IncompatibleExtract` handling in `ReferenceExportReader`'s call path) so the CLI maps it to exit 3 with the rebuild message. Tests: one per missing required table against a v4-stamped DB.
 
 **File ownership:** Create: `src/Miller.Indexing/DeadCodeCandidateReader.cs`; Modify: `tests/Miller.Tests/Indexing/JulieDbFixture.cs`, `tests/Miller.Tests/Indexing/JulieDbFixtureCurrentSchemaTests.cs`; Test: `tests/Miller.Tests/Indexing/DeadCodeCandidateReaderTests.cs`
 
@@ -110,13 +151,13 @@ Commit mode: `serial-worker-commit` for every task.
 
 **Dependency reason:** Consumes Task 1's contracts; produces the reader API Task 3 wires.
 
-**What to build:** The SQL + literal-scan half per design §Architecture. One pass, no full identifiers materialization: per-symbol counts via indexed subqueries/CTEs (`identifiers` name-match outside the symbol's `[start_byte,end_byte]`+file OR `containing_symbol_id`; `identifier_resolutions` inbound from outside; `pending_resolutions JOIN pending_relationships` inbound from outside using the pending row's file/`caller_scope_symbol_id`/span context; `relationships` inbound from outside). Then `Evaluate`, then the literal scan LAST over `NeedsLiteralScan` survivors only: collect `string_literal` rows from `source_regions` grouped by file, re-read each file once, verify `files.content_hash` (skip + count stale files as `FilesSkippedStale`), substring-search surviving candidate names within literal spans, `ApplyLiteralScan`. Missing v4 tables (v3 artifact) must fail with the schema-gate error, not silently return zero — the D5 gate runs before the read, same as `ReferenceExportReader`.
+**What to build:** The SQL + literal-scan half per design §Architecture. One pass, no full identifiers materialization: per-symbol counts via indexed subqueries/CTEs (`identifiers` name-match outside the symbol's `[start_byte,end_byte]`+file OR `containing_symbol_id` — `idx_identifiers_name_kind` serves the name lookup; `identifier_resolutions` inbound from outside via `idx_identifier_resolutions_target`; `pending_resolutions JOIN pending_relationships` inbound from outside using the pending row's file/`caller_scope_symbol_id`/span context; `relationships` inbound from outside). The reader also computes the ancestor closures for `IsTestSelfOrAncestor` and `HasStructuralFactSelfOrAncestor` by walking `parent_symbol_id` (recursive CTE or in-memory parent map — parent maps are small). Then `Evaluate`, then the literal scan LAST over `NeedsLiteralScan` survivors only: collect `string_literal` rows from `source_regions` grouped by file, re-read each file once, verify `files.content_hash` (skip + count stale files as `FilesSkippedStale`), substring-search surviving candidate names within literal spans, `ApplyLiteralScan`. The D5 gate runs before the read (same as `ReferenceExportReader`) AND the reader validates required-table presence per the Schema-gate reality note above — a v4-stamped artifact missing resolution tables must exit 3 with the rebuild message, never a raw SqliteException or a silent zero.
 
-**Approach:** TDD against the extended `JulieDbFixture`. Extend the fixture with the three v4 tables (also `pending_relationships` if absent — copy real columns from a live probe: run `.tools/julie-extract scan` on a temp dir and `.schema pending_relationships`, do not invent) and builder methods (`AddIdentifierResolution`, `AddPendingResolution`, …). Extend `JulieDbFixtureCurrentSchemaTests` to require the new tables/columns/CHECK. Reader tests cover: candidate emitted with all evidence counts zero; saved-by-pending-resolution-only (no `identifier_resolutions` row — doubt-pass finding 2); literal match found in a real temp file under the workspace root suppresses (`string_literal_match`); stale content hash counts as skipped and does NOT suppress; artifact block populated incl. `reference_resolution_status` fallback `unknown` when key absent; coverage rows computed per language.
+**Approach:** TDD against the extended `JulieDbFixture`. Extend the fixture with the pinned DDL above and builder methods (`AddIdentifierResolution`, `AddPendingRelationship`, `AddPendingResolution`, …). Extend `JulieDbFixtureCurrentSchemaTests` to assert the new tables, columns, the `identifier_resolutions` CHECK constraint, and ALL pinned indexes — not table presence alone. Reader tests cover: candidate emitted with all evidence counts zero; saved-by-pending-resolution-only (no `identifier_resolutions` row — doubt-pass finding 2); parent-only `is_test` ancestor suppresses (`test_symbol`); parent-only structural fact suppresses (`framework_bound`); literal match found in a real temp file under the workspace root suppresses (`string_literal_match`); stale content hash counts as skipped and does NOT suppress; v4-stamped DB missing each required resolution table throws the incompatible-artifact exception (one test per table); artifact block populated incl. `reference_resolution_status` fallback `unknown` when key absent; coverage rows computed per language.
 
 **Acceptance criteria:**
-- [ ] Fixture carries the real v4 resolution DDL incl. the CHECK constraint; schema-guard test extended
-- [ ] Reader behaviors above proven red→green in `DeadCodeCandidateReaderTests`
+- [ ] Fixture carries the pinned v4 DDL verbatim (FKs, CHECK, all indexes); schema-guard test asserts indexes + CHECK, not just tables/columns
+- [ ] Reader behaviors above proven red→green in `DeadCodeCandidateReaderTests`, incl. ancestor-closure suppressions and one incompatible-artifact test per missing required table
 - [ ] Literal scan reads each literal-bearing file at most once and only runs when survivors exist
 - [ ] Worker-scope verification passes; `serial-worker-commit` with recorded SHA
 
@@ -140,9 +181,9 @@ Commit mode: `serial-worker-commit` for every task.
 
 **Dependency reason:** Consumes Task 2's reader API.
 
-**What to build:** `miller references candidates [--json] [--limit N] [--workspace-id SELECTOR] [--workspace DIR]`. Compact: header with examined count + verbatim resolver line; candidate lines; footer with suppression counts (all nine ids), literal-scan coverage, per-language coverage table. JSON: the exact envelope. AOT note: add any new serialized types to the existing JSON serializer context (`CliDispatch` JSON output follows the source-generated context pattern — match it, reflection-based serialization breaks the AOT publish).
+**What to build:** `miller references candidates [--json] [--limit N] [--workspace-id SELECTOR] [--workspace DIR]`. Compact: header with examined count + verbatim resolver line; candidate lines; footer with suppression counts (all nine ids), literal-scan coverage, per-language coverage table. JSON: the exact envelope, rendered with `Utf8JsonWriter` + manual snake_case field writes per Global Constraints — the existing CLI convention (`CliCapabilities.Render`, `ReferenceExportReader.WriteJsonLines`). There is no CLI source-generated serializer context; do not create one or use reflection `JsonSerializer` (AOT). Routing note: `ArtifactExport` (`CliDispatch.cs:692`) hardwires `operation == "export"`; branch on the op inside `case "references":` before delegating (candidates gets its own handler, export keeps `ArtifactExport`).
 
-**Approach:** TDD via `CliDispatchTests` against the extended fixture: compact candidate + suppressed counts + header string; `--json` envelope field-complete (assert every Global-Constraints field name); `--limit` honored; v3-artifact fixture (schema gate) exits 3 with the rebuild message like other artifact commands; capabilities assertions extended (boolean + json_commands + json_contracts). Scale test: scan a small temp fixture workspace containing a deliberately-dead private helper plus a reflection-string case with the REAL binary, run the CLI end-to-end, assert the dead helper appears and the reflection-named symbol is suppressed `string_literal_match`, and per-language coverage renders.
+**Approach:** TDD via `CliDispatchTests` against the extended fixture: compact candidate + suppressed counts + header string; `--json` envelope field-complete (assert every Global-Constraints field name) PLUS one exact-value assertion for `resolved_pct` with a 1-of-10 language fixture (`10.0`, not `0.1` — pins the 0–100 one-decimal convention); `--limit` honored; v3-artifact fixture (schema gate) exits 3 with the rebuild message like other artifact commands; v4-stamped fixture missing a resolution table also exits 3 (Task 2's reader validation surfacing through the CLI); capabilities assertions extended (boolean + json_commands + json_contracts). Scale test: scan a small temp fixture workspace containing a deliberately-dead private helper plus a reflection-string case with the REAL binary, run the CLI end-to-end, assert the dead helper appears and the reflection-named symbol is suppressed `string_literal_match`, and per-language coverage renders.
 
 **Acceptance criteria:**
 - [ ] Compact and JSON outputs match Global Constraints exactly; `--limit` honored; resolver status line present
@@ -188,7 +229,12 @@ Commit mode: `serial-worker-commit` for every task.
 - Consumes: the built Release CLI (`src/Miller.Server/bin/Release/net10.0/miller`) and v4 artifacts produced by `.tools/julie-extract` 2.9.0.
 - Produces: the findings doc gating any future surfacing (report/dashboard/README/agent guidance).
 
-**Contract inputs:** Design §Evidence gate. v4 scratch artifacts: build fresh ones with `.tools/julie-extract scan --root <repo> --db <scratch>/x.db` for `/Users/murphy/source/miller` and `/Users/murphy/source/julie-extractors` (do NOT rebuild the live `.miller/symbols.db` artifacts — the user-scope installed Miller still expects schema 3; run the CLI against the scratch DBs via `--workspace`-style selection or the reader's direct db path as `CliDispatchTests` does with `Context(...)` — if the CLI cannot target a scratch artifact cleanly, run `references candidates` through a temporary registered workspace copy and say so in the findings doc).
+**Contract inputs:** Design §Evidence gate. **Pinned dogfood recipe** (plan-review finding: the built CLI has no direct-DB flag, `--workspace`/`--workspace-id` resolve through the registry, and `CliDispatchTests.Context(...)` is a test seam, not a CLI path — do NOT touch the live `.miller/symbols.db` artifacts; the user-scope installed Miller still expects schema 3):
+
+1. For each repo (`/Users/murphy/source/miller`, `/Users/murphy/source/julie-extractors`): `git clone --local <repo> <scratch>/<name>` (temp source copy in the session scratchpad).
+2. `.tools/julie-extract scan --root <scratch>/<name> --db <scratch>/<name>/.miller/symbols.db` (v4 artifact inside the COPY's `.miller`).
+3. Run the freshly built Release binary with the copy as cwd: `cd <scratch>/<name> && <repo-root>/src/Miller.Server/bin/Release/net10.0/miller references candidates --json` (cwd-based `WorkspaceContext` resolution finds `<cwd>/.miller/symbols.db`; no registry entry, no live-state contact).
+4. Delete the copies afterwards.
 
 **File ownership:** Create: `docs/findings/2026-07-07-dead-code-candidates-dogfood.md`
 
@@ -196,9 +242,28 @@ Commit mode: `serial-worker-commit` for every task.
 
 **Dependency reason:** Runs the Task 3 binary against real artifacts; is the design's evidence gate.
 
-**What to build:** Run candidates against both repos. Record: examined/candidate/suppression counts, per-language coverage, literal-scan coverage, full candidate lists. **Hand-verify every Miller-repo candidate** (read each symbol and its references; classify true-dead / false-positive / uncertain with file:line notes). Hard gate: zero confirmed-live symbols in the list. If any false positive is found: record it, tighten per design intent (report a plan mismatch if the fix needs a rule change beyond the design), re-run.
+**What to build:** Run candidates against both repos per the pinned recipe. Record: examined/candidate/suppression counts, per-language coverage, literal-scan coverage, full candidate lists. **Hand-verify every Miller-repo candidate** (read each symbol and its references; classify true-dead / false-positive / uncertain with file:line notes). Hard gate: zero confirmed-live symbols in the list.
+
+**This task is a verification GATE, not a fix lane** (plan-review finding: Task 5 owns only the findings doc). If any confirmed-live candidate is found: record it in the findings doc with the evidence, do NOT commit a success result, STOP and report the false positive to the lead as a plan/design mismatch. The lead dispatches the corrective work against the owning tasks' files and re-runs this gate. Task 5 never edits Core/Indexing/CLI code.
 
 **Acceptance criteria:**
 - [ ] Findings doc records both repos' runs with the full evidence and the hand-verification table
-- [ ] Hard gate met: no confirmed-live symbol among Miller-repo candidates (or the mismatch is reported and resolved)
+- [ ] Hard gate met: no confirmed-live symbol among Miller-repo candidates — or the gate STOPPED and reported the false positive to the lead (no success commit)
+- [ ] Live workspace artifacts and registry untouched (scratch copies only)
 - [ ] Worker-scope verification passes; `serial-worker-commit` with recorded SHA
+
+## Review log
+
+- **Rev 2 (2026-07-07):** Codex adversarial plan review (verdict: needs-attention, 7 findings — all
+  verified against live code/artifact and folded in): (1) `JulieSchemaGate` validates metadata only,
+  so Task 2 gained explicit required-table validation → incompatible-artifact exception → CLI exit 3,
+  with per-missing-table tests; (2) Task 5's dogfood recipe pinned to temp source copies scanned into
+  `<copy>/.miller/symbols.db` and run with cwd-based resolution — no direct-DB flag exists and the
+  test `Context(...)` seam is not a CLI path; (3) ancestor-closure made explicit in the row contract
+  (`IsTestSelfOrAncestor`, `HasStructuralFactSelfOrAncestor`, reader computes the walk) with
+  parent-only tests in both Core and Reader; (4) full v4 DDL (FKs, CHECK, all indexes, incl.
+  `pending_relationships`) pinned in Task 2 verbatim and the schema-guard test extended to assert
+  indexes; (5) Task 5 converted to a stop-and-report verification gate (owns only the findings doc,
+  never edits code); (6) the invented "CLI serializer context" replaced with the real convention —
+  `Utf8JsonWriter` manual snake_case (no CLI source-generated context exists); (7) `resolved_pct`
+  pinned as 0–100 one-decimal with an exact-value 1-of-10 CLI test.
