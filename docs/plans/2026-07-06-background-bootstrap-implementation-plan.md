@@ -222,10 +222,10 @@ failed text + retry started, unbound `workspace` → successful snapshot render,
 `workspace` → passthrough.
 
 **Acceptance criteria:**
-- [ ] All eight filter behaviors above tested and green; texts match Global Constraints verbatim
-- [ ] Ordering pin test locks binding-outside-telemetry (or documents + pins reality per plan
+- [x] All eight filter behaviors above tested and green; texts match Global Constraints verbatim
+- [x] Ordering pin test locks binding-outside-telemetry (or documents + pins reality per plan
       mismatch note)
-- [ ] Worker-scope verification passes; `serial-worker-commit` with recorded SHA
+- [x] Worker-scope verification passes; `serial-worker-commit` with recorded SHA
 
 ### Task 4: Status surfaces, CLAUDE.md, branch gate
 

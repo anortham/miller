@@ -10,7 +10,11 @@ public interface IWorkspaceBindingService
 
     bool IsDeferred { get; }
 
+    BootstrapSnapshot Snapshot { get; }
+
     Task WaitUntilBoundAsync(CancellationToken cancellationToken);
+
+    Task WaitForRunAsync(int runGeneration, CancellationToken cancellationToken);
 
     Task EnsurePrimaryBoundAsync(McpServer server, CancellationToken cancellationToken);
 
@@ -42,8 +46,13 @@ public sealed class WorkspaceBindingService : IWorkspaceBindingService
 
     public bool IsDeferred => _bootstrap.IsDeferred;
 
+    public BootstrapSnapshot Snapshot => _bootstrap.Snapshot;
+
     public Task WaitUntilBoundAsync(CancellationToken cancellationToken) =>
         _bootstrap.WaitUntilBoundAsync(cancellationToken);
+
+    public Task WaitForRunAsync(int runGeneration, CancellationToken cancellationToken) =>
+        _bootstrap.WaitForRunAsync(runGeneration, cancellationToken);
 
     public void MarkRootsDirty()
     {
