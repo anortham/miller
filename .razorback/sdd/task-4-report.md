@@ -1,64 +1,76 @@
-# Task 4 — trace refs nudge
+# Task 4 report — contract docs + boundary amendments (dead-code candidates)
 
-**Status:** ✅ Complete
-**Commit:** `a6f9029` — `feat(trace): impact nudge after non-empty refs`
-**Branch/worktree:** `guidance-delivery` @ `/Users/murphy/source/miller/.worktrees/guidance-delivery`
+**Branch:** `feat/dead-code-candidates` · **Start HEAD:** b9c7bdb · **Commit mode:** serial-worker-commit
+**Status:** COMPLETE — all gates green.
 
-> Note: this file previously held an unrelated "inspect depth=overview strips doc-comment lines"
-> report (a different plan run). Overwritten per the Task 4 assignment, which designated this path.
+## What changed (owned files)
 
-## What changed
+1. **Created `docs/contracts/references-candidates-v1.md`** — full contract for `references candidates`:
+   status experimental/evidence-gated (gate PASSED 2026-07-07, cites the findings doc); invocation/selectors;
+   exit codes (0/2/3, v3 + v4-missing-resolution both exit 3); candidate rule summary; ALL ELEVEN suppression
+   rules in table order with semantics + source; evidence-label section ("provenance, not certainty", the
+   ≥10% query-time threshold, the partial-resolver caveat, and the write-only/comment-only "facts to check,
+   not verdicts" stance); compact + `--json` envelope with a field table and a worked JSON example;
+   capabilities keys; boundary.
+2. **`docs/contracts/references-export-v1.md`** — replaced the stale "Eros owns candidate ranking,
+   generated/framework suppression…" sentence (lines 5–8) per the 2026-07-06 consensus: Miller owns the
+   deterministic candidate listing; persistence/history/dashboards/cross-workspace stay out.
+3. **`docs/contracts/cli-eros-v1.md`** — added a `references candidates --json` row to the Stable JSON
+   commands table; amended the bottom Boundary paragraph and the references-export feed description so no
+   sentence assigns dead-code candidate listing to Eros.
+4. **`docs/README.md`** — contracts-map entry for the new doc.
+5. **`CLAUDE.md`** — 1.0-boundary sentence rewritten: dead-code candidates SHIPPED as an evidence-gated CLI
+   surface, gate PASSED 2026-07-07 with julie-extract 2.10.0 variable_ref emission (392→5, zero
+   confirmed-live), report/dashboard/MCP surfacing still needs explicit approval. `scripts/sync-agents.sh`
+   ran; `cmp -s CLAUDE.md AGENTS.md` clean.
 
-In `TraceTool.RunRefs` compact (non-JSON) `mode=refs` output, when at least one reference is
-shown AND the resolved target is not a test symbol (`targetSymbol.IsTest == false`), a single
-final line is appended after the references block and after any truncation note:
+## Shapes verified against shipped code (file:line — read raw, index not trusted)
 
-```
-next: impact target="<target name>" — before editing
-```
+Copied verbatim from Task 3 code, not from memory:
 
-Rendered via `NextStepHint.Render($"impact target=\"{targetSymbol.Name}\"", "before editing")`.
+- **Eleven suppression rule ids + table order** — `src/Miller.Core/DeadCode/DeadCodeCandidates.cs:59-63`
+  (`SuppressionRuleIds`): public_api, visibility_unknown, test_symbol, entry_point, override_member,
+  live_member_container, framework_bound, annotated, generated_path, low_evidence_language,
+  string_literal_match. Per-rule semantics from `FirstSuppressionRule` (`DeadCodeCandidates.cs:219-264`) and
+  helpers (test-path 269-283, override 292-299, entry_point 301-308, generated 310-325, evidence label
+  329-339).
+- **Compact header string** — `CliDispatch.cs:772-774`: `candidates: N of M symbols examined · resolver:
+  <status> — candidates are facts to check, not deletions to make.`
+- **Compact candidate line / suppressed / literal_scan / coverage** — `CliDispatch.cs:776-808`
+  (`unknown` for null visibility :781; `showing top K of N by path` :788-790; coverage ` resolved` vs
+  ` — name-evidence only` at pct≥10 :807).
+- **JSON envelope** — `CliDispatch.cs:813-896`: `schema_version` (:823, =1 at :899); `candidates[]` fields
+  symbol_id/name/kind/language/path/start_line/visibility(null-safe)/evidence_label (:830-837) + nested
+  `evidence{name_matches, resolved_inbound, pending_resolved_inbound, calls_inbound}` (:838-844);
+  `suppressions{rule_id:count}` (:849-853); `literal_scan{files_scanned, files_skipped_stale}` (:855-859);
+  `language_coverage[]{language, identifiers, resolved_pct}` (:861-871); `examined` (:873);
+  `artifact{artifact_id(null-safe), revision(null-safe), reference_resolution_status,
+  reference_resolution_version(null-safe)}` (:875-890).
+- **resolved_pct convention** — 0–100, one decimal (`ResolvedPercent`, `DeadCodeCandidates.cs:102-108`).
+- **Capabilities keys** — `optional_features.references_candidates: true` (`CliCapabilities.cs:186`, compact
+  :129); `json_commands` has `references candidates --json` (:68); `json_contracts` `references_candidates`
+  v1 → `docs/contracts/references-candidates-v1.md` (:103).
+- **`--limit` bounds only the candidate list** — `CliDispatch.cs:757-764, 729-730`; default 50 (:755).
+- **Exit-code mapping** — reader validation → `IncompatibleExtractException` → exit 3 (`CliDispatch.cs:726-728`).
 
-- **JSON byte-identical** — the JSON branch returns earlier (before the compact `StringBuilder`
-  render), so it is untouched.
-- **Empty refs unchanged** — the `shown.Length == 0` branch (existing recovery hint + `next_actions`)
-  is the `if` arm; the nudge lives only in the `else` (non-empty) arm.
-- **Test targets suppressed** — `if (!targetSymbol.IsTest)` guard.
-- **Exactly one hint line max** — appended once at the tail; `TrimEnd('\n')` keeps it as the last line.
+## Miller MCP usage
 
-Files touched (only these two):
-- `src/Miller.Server/Tools/TraceTool.cs` — the `else` branch of the compact refs render.
-- `tests/Miller.Tests/Tools/TraceToolTests.cs` — 5 new tests.
+Did not rely on the Miller index for shapes (index may lag the last commits, per brief) — all field names and
+strings were verified by raw `Read`/`grep` on the source files cited above.
 
-## Miller-first orientation (calls + evidence)
+## Gates
 
-- `inspect src/Miller.Server/Tools/TraceTool.cs` → located `RunRefs` (:492) and `ReferenceLine`
-  (:600); confirmed the compact refs render lives inside `RunRefs`, JSON path exits earlier.
-- Read `src/Miller.Server/Tools/NextStepHint.cs` → confirmed
-  `internal static string Render(string toolCall, string? reason = null)` yields
-  `next: <toolCall> — <reason>` (U+2014, single line, no trailing newline).
-- Read `TraceTool.cs` refs region → confirmed `targetSymbol` is non-null at the render (guarded at
-  :526), carries `IsTest`, and that the truncation note (`"reference trace truncated by limit."`)
-  is appended inside the same `else` arm before the tail.
+- `scripts/test.sh` (fast suite): **Passed! Failed: 0, Passed: 2957, Skipped: 0** (incl. AgentInstructionsTests
+  and the capabilities/doc gates). Wall 21s.
+- `cmp -s CLAUDE.md AGENTS.md`: **clean** after `scripts/sync-agents.sh`.
+- New contract doc: **no TBDs**.
 
-## TDD
+## Judgment calls
 
-Tests written first (red), then implementation (green):
-1. `Refs_NonEmpty_AppendsImpactNudge_ForNonTestTarget` — hint present, real target name, ends the output, exactly one `next:` line.
-2. `Refs_NonEmpty_TruncationNote_KeepsImpactNudgeAsFinalLine` — nudge renders after the truncation note.
-3. `Refs_NonEmpty_TestTarget_SuppressesImpactNudge` — no `next:` for an `IsTest` target.
-4. `Refs_Empty_HasNoImpactNudge` — empty path emits no `next: impact`.
-5. `Refs_NonEmpty_Json_HasNoImpactNudge` — JSON still well-formed, no `next: impact`.
-
-## Verification
-
-`dotnet test tests/Miller.Tests --filter "FullyQualifiedName~TraceToolTests"` →
-**Passed! Failed: 0, Passed: 91, Skipped: 0** (188 ms). Build clean under warnings-as-errors.
-
-Gate invariant satisfied: the refs→impact nudge fires only on non-empty, non-test compact refs
-output.
-
-## Concerns
-
-None. Scope stayed within the two owned files; other worktree changes
-(`.razorback/sdd/task-1-report.md`, `task-5-report.md`) are other agents' and were left untouched.
+- Plan text said "nine" suppression rules and the older CLAUDE wording; used the brief's correction + the code
+  as single source → documented **eleven** in code order.
+- Beyond the two required contract edits, also softened one adjacent references-export feed sentence in
+  `cli-eros-v1.md` that implied Eros owns dead-code, to keep the doc internally consistent. Surgical; no
+  scope creep — persistence/history/ranking/fleet remain Eros's in every amended sentence.
+- Contract states the gate PASSED (per the findings FINAL VERDICT), and keeps the surface explicitly
+  CLI-only with report/dashboard/MCP gated on user approval.

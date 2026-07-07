@@ -1,4 +1,10 @@
+using System.Buffers;
+using System.Globalization;
+using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
+using Miller.Core.DeadCode;
 using Miller.Indexing;
 using Miller.Server.Git;
 using Miller.Server.Hosting;
@@ -103,6 +109,8 @@ public static class CliDispatch
                     return Patterns(rest, context, stdout, stderr);
                 case "metrics":
                     return Metrics(rest, context, stdout, stderr);
+                case "report":
+                    return Report(rest, context, stdout, stderr);
                 case "telemetry":
                     return Telemetry(rest, context, stdout, stderr);
                 case "symbols":
@@ -110,6 +118,10 @@ public static class CliDispatch
                         "miller symbols export [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]",
                         SymbolExportReader.WriteJsonLines);
                 case "references":
+                    // `references candidates` is the deterministic dead-code candidate listing (Miller-owned,
+                    // named suppressions); every other op (i.e. `export`) keeps the bulk JSONL fact feed unchanged.
+                    if (rest.Count > 0 && rest[0].Equals("candidates", StringComparison.OrdinalIgnoreCase))
+                        return ReferencesCandidates(rest.Skip(1).ToList(), context, stdout, stderr);
                     return ArtifactExport(rest, context, stdout, stderr,
                         "miller references export [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]",
                         ReferenceExportReader.WriteJsonLines);
@@ -569,13 +581,13 @@ public static class CliDispatch
 
     private static int Metrics(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
-        const string usage = "miller metrics <churn|clones|complexity> [--workspace-id SELECTOR] [--workspace DIR] [--limit N] [--json] [--range REV..REV] [--include-commits] [--min-count N] [--max-symbols-per-group N] [--min-severity low|moderate|high] [--include-tests|--exclude-tests]";
+        const string usage = "miller metrics <churn|clones|complexity|risk> [--workspace-id SELECTOR] [--workspace DIR] [--limit N] [--json] [--range REV..REV] [--include-commits] [--min-count N] [--max-symbols-per-group N] [--min-severity low|moderate|high] [--include-tests|--exclude-tests]";
         if (args.Count > 0 && args[0] is "--help" or "-h" or "help")
             return Usage(err, usage);
 
         bool firstTokenIsFlag = args.Count > 0 && args[0].StartsWith("--", StringComparison.Ordinal);
         string operation = args.Count == 0 || firstTokenIsFlag ? "complexity" : args[0].ToLowerInvariant();
-        if (operation is not ("churn" or "clones" or "clone" or "duplicate" or "duplicates" or "complexity" or "hotspots"))
+        if (operation is not ("churn" or "clones" or "clone" or "duplicate" or "duplicates" or "complexity" or "hotspots" or "risk"))
             return Usage(err, usage);
 
         CliOptions o = CliOptions.Parse((firstTokenIsFlag ? args : args.Skip(1)).ToArray(), "json", "include-tests", "exclude-tests", "include-commits");
@@ -608,6 +620,63 @@ public static class CliDispatch
                 or SqliteException)
         {
             err.WriteLine("metrics failed: " + ex.Message);
+            return 3;
+        }
+    }
+
+    private static int Report(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
+    {
+        const string usage = "miller report [--json] [--workspace-id SELECTOR] [--workspace DIR] [--range REV..REV] [--limit N] [--include-tests|--exclude-tests]";
+        if (args.Count > 0 && args[0] is "--help" or "-h" or "help")
+            return Usage(err, usage);
+
+        CliOptions o = CliOptions.Parse(args.ToArray(), "json", "include-tests", "exclude-tests");
+        if (o.Positionals.Count > 0)
+            return Usage(err, usage);
+        if (!TryResolveReadContext(ctx, o, err, out ctx))
+            return 2;
+        if (!RequireIndex(ctx, err))
+            return 3;
+
+        try
+        {
+            // Markers ride the region search sidecar; the section reports itself unavailable when the
+            // sidecar is disabled or the search.db cannot be opened, instead of failing the report.
+            IRegionSearchIndex? regionIndex = null;
+            SymbolSearchSidecar sidecar = SymbolSearchSidecar.FromEnvironment();
+            if (sidecar.Enabled && sidecar.RegionOptions.Enabled)
+            {
+                try
+                {
+                    using var freshness = new FreshnessReader(ctx.ExtractDbPath);
+                    long revision = freshness.LatestRevision();
+                    regionIndex = FtsRegionSearchIndex.Open(
+                        SymbolSearchSidecar.SearchDbPathFor(ctx.ExtractDbPath), revision);
+                }
+                catch (Exception ex) when (ex is InvalidOperationException or IOException or SqliteException)
+                {
+                    regionIndex = null;
+                }
+            }
+
+            ReportToolResult result = ReportTool.Run(
+                ctx.ExtractDbPath,
+                ctx.WorkspaceRoot,
+                range: o.Value("range", "HEAD~20..HEAD"),
+                sectionLimit: o.Int("limit", ReportTool.DefaultSectionLimit),
+                json: o.Has("json"),
+                includeTests: !o.Has("exclude-tests"),
+                historyReader: new ProcessGitHistoryReader(),
+                regionIndex: regionIndex);
+            WriteOutput(outw, result.Output);
+            return 0;
+        }
+        catch (Exception ex) when (
+            ex is FileNotFoundException or InvalidOperationException or IOException
+                or UnauthorizedAccessException or ArgumentException or NotSupportedException
+                or SqliteException)
+        {
+            err.WriteLine("report failed: " + ex.Message);
             return 3;
         }
     }
@@ -652,6 +721,182 @@ public static class CliDispatch
         export(ctx.ExtractDbPath, outw);
         return 0;
     }
+
+    // The deterministic dead-code candidate listing (`references candidates`; dead-code candidates design rev 2):
+    // a fact list with NAMED suppressions, not a verdict. The Indexing reader owns all query-time work (the schema
+    // gate, the required-table validation, the four inbound-evidence counts, coverage, and the two-phase literal
+    // scan); an incompatible/partial artifact surfaces through the shared IncompatibleExtractException → exit-3
+    // mapping in Run. `--limit` bounds ONLY the candidate list; examined / suppressions / literal_scan /
+    // language_coverage stay full totals.
+    private static int ReferencesCandidates(
+        IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
+    {
+        const string usage =
+            "miller references candidates [--json] [--limit N] [--workspace-id SELECTOR] [--workspace DIR]";
+        if (args.Count > 0 && args[0] is "--help" or "-h" or "help")
+            return Usage(err, usage);
+
+        CliOptions o = CliOptions.Parse(args, "json");
+        if (o.Positionals.Count > 0)
+            return Usage(err, usage);
+        if (!TryResolveReadContext(ctx, o, err, out ctx))
+            return 2;
+        if (!RequireIndex(ctx, err))
+            return 3;
+
+        int limit = o.Int("limit", DeadCodeCandidatesDefaultLimit);
+        DeadCodeCandidateReport report = DeadCodeCandidateReader.Read(ctx.ExtractDbPath, ctx.WorkspaceRoot);
+        outw.WriteLine(o.Has("json")
+            ? RenderCandidatesJson(report, limit)
+            : RenderCandidatesCompact(report, limit));
+        return 0;
+    }
+
+    private const int DeadCodeCandidatesDefaultLimit = 50;
+
+    // Sort the surviving candidates by (path, start_line) and take the first `limit` — the ONLY block `--limit`
+    // bounds. A stable OrderBy preserves the reader's symbol_id tiebreak within an equal (path, start_line).
+    private static List<DeadCodeCandidate> ShownCandidates(DeadCodeResult result, int limit) =>
+        result.Candidates
+            .OrderBy(c => c.Path, StringComparer.Ordinal)
+            .ThenBy(c => c.StartLine)
+            .Take(limit < 0 ? 0 : limit)
+            .ToList();
+
+    private static string RenderCandidatesCompact(DeadCodeCandidateReport report, int limit)
+    {
+        DeadCodeResult result = report.Result;
+        List<DeadCodeCandidate> shown = ShownCandidates(result, limit);
+
+        var sb = new StringBuilder();
+        sb.Append("candidates: ").Append(result.Candidates.Count).Append(" of ").Append(result.Examined)
+            .Append(" symbols examined · resolver: ").Append(report.Artifact.ReferenceResolutionStatus)
+            .Append(" — candidates are facts to check, not deletions to make.");
+
+        foreach (DeadCodeCandidate c in shown)
+        {
+            sb.Append('\n')
+                .Append(c.Name).Append(' ').Append(c.Kind).Append(' ').Append(c.Language).Append(' ')
+                .Append(c.Path).Append(':').Append(c.StartLine).Append(' ')
+                .Append(c.Visibility ?? "unknown").Append(" evidence=").Append(c.EvidenceLabel)
+                .Append(" [name_matches=").Append(c.NameMatches)
+                .Append(" resolved_in=").Append(c.ResolvedInbound)
+                .Append(" pending_in=").Append(c.PendingResolvedInbound)
+                .Append(" calls_in=").Append(c.CallsInbound).Append(']');
+        }
+
+        if (result.Candidates.Count > shown.Count)
+            sb.Append('\n').Append("showing top ").Append(shown.Count).Append(" of ")
+                .Append(result.Candidates.Count).Append(" by path");
+
+        sb.Append('\n').Append("suppressed:");
+        foreach (string id in DeadCodeCandidates.SuppressionRuleIds)
+            sb.Append(' ').Append(id).Append('=').Append(result.Suppressions[id]);
+
+        sb.Append('\n').Append("literal_scan: files_scanned=").Append(report.LiteralScan.FilesScanned)
+            .Append(" files_skipped_stale=").Append(report.LiteralScan.FilesSkippedStale);
+
+        sb.Append('\n').Append("coverage:");
+        bool first = true;
+        foreach (LanguageCoverageRow cov in report.LanguageCoverage)
+        {
+            double pct = DeadCodeCandidates.ResolvedPercent(cov.IdentifierCount, cov.ResolvedCount);
+            sb.Append(first ? " " : "; ");
+            first = false;
+            sb.Append(cov.Language).Append(": ").Append(pct.ToString("0.0", CultureInfo.InvariantCulture)).Append('%')
+                .Append(pct >= 10.0 ? " resolved" : " — name-evidence only");
+        }
+
+        return sb.ToString();
+    }
+
+    private static string RenderCandidatesJson(DeadCodeCandidateReport report, int limit)
+    {
+        DeadCodeResult result = report.Result;
+        List<DeadCodeCandidate> shown = ShownCandidates(result, limit);
+
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var w = new Utf8JsonWriter(buffer,
+            new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
+        {
+            w.WriteStartObject();
+            w.WriteNumber("schema_version", DeadCodeCandidatesSchemaVersion);
+
+            w.WritePropertyName("candidates");
+            w.WriteStartArray();
+            foreach (DeadCodeCandidate c in shown)
+            {
+                w.WriteStartObject();
+                w.WriteString("symbol_id", c.SymbolId);
+                w.WriteString("name", c.Name);
+                w.WriteString("kind", c.Kind);
+                w.WriteString("language", c.Language);
+                w.WriteString("path", c.Path);
+                w.WriteNumber("start_line", c.StartLine);
+                if (c.Visibility is null) w.WriteNull("visibility"); else w.WriteString("visibility", c.Visibility);
+                w.WriteString("evidence_label", c.EvidenceLabel);
+                w.WritePropertyName("evidence");
+                w.WriteStartObject();
+                w.WriteNumber("name_matches", c.NameMatches);
+                w.WriteNumber("resolved_inbound", c.ResolvedInbound);
+                w.WriteNumber("pending_resolved_inbound", c.PendingResolvedInbound);
+                w.WriteNumber("calls_inbound", c.CallsInbound);
+                w.WriteEndObject();
+                w.WriteEndObject();
+            }
+            w.WriteEndArray();
+
+            w.WritePropertyName("suppressions");
+            w.WriteStartObject();
+            foreach (string id in DeadCodeCandidates.SuppressionRuleIds)
+                w.WriteNumber(id, result.Suppressions[id]);
+            w.WriteEndObject();
+
+            w.WritePropertyName("literal_scan");
+            w.WriteStartObject();
+            w.WriteNumber("files_scanned", report.LiteralScan.FilesScanned);
+            w.WriteNumber("files_skipped_stale", report.LiteralScan.FilesSkippedStale);
+            w.WriteEndObject();
+
+            w.WritePropertyName("language_coverage");
+            w.WriteStartArray();
+            foreach (LanguageCoverageRow cov in report.LanguageCoverage)
+            {
+                w.WriteStartObject();
+                w.WriteString("language", cov.Language);
+                w.WriteNumber("identifiers", cov.IdentifierCount);
+                w.WriteNumber("resolved_pct", DeadCodeCandidates.ResolvedPercent(cov.IdentifierCount, cov.ResolvedCount));
+                w.WriteEndObject();
+            }
+            w.WriteEndArray();
+
+            w.WriteNumber("examined", result.Examined);
+
+            w.WritePropertyName("artifact");
+            w.WriteStartObject();
+            if (report.Artifact.ArtifactId is null)
+                w.WriteNull("artifact_id");
+            else
+                w.WriteString("artifact_id", report.Artifact.ArtifactId);
+            if (report.Artifact.Revision is null)
+                w.WriteNull("revision");
+            else
+                w.WriteNumber("revision", report.Artifact.Revision.Value);
+            w.WriteString("reference_resolution_status", report.Artifact.ReferenceResolutionStatus);
+            if (report.Artifact.ReferenceResolutionVersion is null)
+                w.WriteNull("reference_resolution_version");
+            else
+                w.WriteString("reference_resolution_version", report.Artifact.ReferenceResolutionVersion);
+            w.WriteEndObject();
+
+            w.WriteEndObject();
+        }
+
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    // The references-candidates-v1 JSON envelope version (docs/contracts/references-candidates-v1.md).
+    private const int DeadCodeCandidatesSchemaVersion = 1;
 
     private static int Refresh(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
@@ -1955,14 +2200,17 @@ public static class CliDispatch
                              op = list | summary | search
                              [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--query TEXT] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]
           metrics <op>       Report deterministic local metrics.
-                             op = churn | clones | complexity
+                             op = churn | clones | complexity | risk
                              [--workspace-id SELECTOR] [--workspace DIR] [--limit N] [--json] [--range REV..REV] [--include-commits] [--min-count N] [--max-symbols-per-group N] [--min-severity low|moderate|high] [--include-tests|--exclude-tests]
+          report             One composed repo-quality report: index counts, extraction health, markers, complexity, clones, churn, risk.
+                             [--json] [--workspace-id SELECTOR] [--workspace DIR] [--range REV..REV] [--limit N] [--include-tests|--exclude-tests]
           telemetry <op>     Export machine-global Miller telemetry.
                              export [--jsonl] [--workspace-id ID|all]
           symbols <op>       Bulk-export every symbol row for fleet rollups.   # JSONL
                              export [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]
-          references <op>    Bulk-export identifier/reference usage facts.   # JSONL
-                             export [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]
+          references <op>    Bulk-export identifier/reference usage facts, or list dead-code candidates.
+                             export     [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]   # JSONL fact feed
+                             candidates [--json] [--limit N] [--workspace-id SELECTOR] [--workspace DIR]
           complexity <op>    Bulk-export per-symbol/per-file complexity metrics.   # JSONL
                              export [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]
           refresh            Refresh a registered workspace index and return after convergence attempt.

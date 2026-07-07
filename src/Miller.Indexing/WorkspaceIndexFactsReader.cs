@@ -20,6 +20,23 @@ public static class WorkspaceIndexFactsReader
         return new WorkspaceIndexFacts(documentCount, knownExtensionsCount);
     }
 
+    /// <summary>Bounded scalar counts for report/status surfaces; does not hydrate symbols.</summary>
+    public static WorkspaceSymbolCounts ReadSymbolCounts(string dbPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
+
+        using SqliteConnection connection = SqliteReadOnlyAccess.Open(dbPath);
+        JulieSchemaGate.Verify(connection);
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT COUNT(*), COUNT(DISTINCT path), COUNT(DISTINCT language)
+            FROM symbols WHERE name IS NOT NULL;
+            """;
+        using SqliteDataReader reader = command.ExecuteReader();
+        reader.Read();
+        return new WorkspaceSymbolCounts(reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2));
+    }
+
     private static long ReadDocumentCount(SqliteConnection connection)
     {
         using SqliteCommand command = connection.CreateCommand();
@@ -58,3 +75,5 @@ public static class WorkspaceIndexFactsReader
 }
 
 public sealed record WorkspaceIndexFacts(long DocumentCount, int KnownExtensionsCount);
+
+public sealed record WorkspaceSymbolCounts(long Symbols, long Files, long Languages);

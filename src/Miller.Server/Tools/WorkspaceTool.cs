@@ -37,6 +37,7 @@ public sealed class WorkspaceTool
     private readonly IndexerService _indexer;
     private readonly FreshnessService _freshness;
     private readonly IndexFreshProbe _freshProbe;
+    private readonly IndexBootstrapService _bootstrap;
     private readonly TelemetryLedger _ledger;
     private readonly WorkspaceRegistry _registry;
     private readonly CrossWorkspaceRefreshService _crossWorkspaceRefresh;
@@ -55,6 +56,7 @@ public sealed class WorkspaceTool
         IndexerService indexer,
         FreshnessService freshness,
         IndexFreshProbe freshProbe,
+        IndexBootstrapService bootstrap,
         TelemetryLedger ledger,
         JulieExtractRunner runner,
         WorkspaceRegistry registry,
@@ -67,6 +69,7 @@ public sealed class WorkspaceTool
             indexer,
             freshness,
             freshProbe,
+            bootstrap,
             ledger,
             runner,
             registry,
@@ -85,6 +88,7 @@ public sealed class WorkspaceTool
         IndexerService indexer,
         FreshnessService freshness,
         IndexFreshProbe freshProbe,
+        IndexBootstrapService bootstrap,
         TelemetryLedger ledger,
         JulieExtractRunner runner,
         WorkspaceRegistry registry,
@@ -100,6 +104,7 @@ public sealed class WorkspaceTool
         ArgumentNullException.ThrowIfNull(indexer);
         ArgumentNullException.ThrowIfNull(freshness);
         ArgumentNullException.ThrowIfNull(freshProbe);
+        ArgumentNullException.ThrowIfNull(bootstrap);
         ArgumentNullException.ThrowIfNull(ledger);
         ArgumentNullException.ThrowIfNull(runner);
         ArgumentNullException.ThrowIfNull(registry);
@@ -114,6 +119,7 @@ public sealed class WorkspaceTool
         _indexer = indexer;
         _freshness = freshness;
         _freshProbe = freshProbe;
+        _bootstrap = bootstrap;
         _ledger = ledger;
         _registry = registry;
         _crossWorkspaceRefresh = crossWorkspaceRefresh;
@@ -220,7 +226,11 @@ public sealed class WorkspaceTool
 
     private string RenderStatus(bool json) =>
         WorkspaceRender.Status(
-            AssembleFacts(), _ledger.Summarize(), json, ReadLeaderFacts(_workspace.ExtractDbPath, ownWorkspace: true));
+            AssembleFacts(),
+            _ledger.Summarize(),
+            json,
+            ReadLeaderFacts(_workspace.ExtractDbPath, ownWorkspace: true),
+            _bootstrap.Snapshot);
 
     private string RenderHealth(bool json)
     {

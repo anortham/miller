@@ -231,12 +231,13 @@ Design choices that follow from this:
 The 1.0 replacement story is the product family, not Miller alone:
 
 - **Miller** replaces Julie's deterministic local agent-tool core: search, inspect, context, references, trace/path,
-  impact, editing, workspace lifecycle, content/web/text import, structural facts, marker audits, telemetry, and
-  JSON/JSONL feeds.
+  impact, editing, workspace lifecycle, content/web/text import, structural facts, marker audits, telemetry,
+  JSON/JSONL feeds, and deterministic local analysis reports (`metrics churn|clones|complexity|risk` and the
+  composed `miller report` repo-quality rollup).
 - **`julie-extractors` / `julie-extract`** owns parser-backed extraction. Miller consumes its artifacts and ships a
   pinned extractor for its own indexing workflow; standalone extraction workflows belong in `julie-extractors`.
-- **Eros** owns higher-level intelligence: semantic/vector retrieval, guidance, confidence/evidence views, signals
-  reports, dead-code/hotspot/clone workflows, history, and commercial orchestration.
+- **Eros** owns what requires semantics or fleet state: semantic/vector retrieval and embeddings, guidance,
+  confidence/evidence views, cross-workspace ranking, suppression persistence, and commercial orchestration.
 
 That boundary is deliberate. Miller should stay predictable and local; the product layer above it decides what the
 facts mean and what to do next.

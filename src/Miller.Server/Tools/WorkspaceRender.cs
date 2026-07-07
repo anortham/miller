@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using Miller.Indexing;
+using Miller.Server;
 using Miller.Server.Telemetry;
 
 namespace Miller.Server.Tools;
@@ -207,8 +208,13 @@ public static class WorkspaceRender
     /// process's eligibility verdict, the compact role label can explain a permanently-outdated reader
     /// (<c>reader (extractor outdated: own X &lt; index Y)</c>) instead of looking mysteriously idle.
     /// </summary>
-    public static string Status(WorkspaceFacts facts, TelemetrySummary telemetry, bool json, LeaderHealthFacts? leader) =>
-        json ? StatusJson(facts, telemetry, leader) : StatusCompact(facts, telemetry, leader);
+    public static string Status(
+        WorkspaceFacts facts,
+        TelemetrySummary telemetry,
+        bool json,
+        LeaderHealthFacts? leader,
+        BootstrapSnapshot? bootstrap = null) =>
+        json ? StatusJson(facts, telemetry, leader) : StatusCompact(facts, telemetry, leader, bootstrap);
 
     // "leader" / "reader" / "reader (extractor outdated: own X < index Y)" — the D6 role string. The outdated
     // form fires only when the verdict is ineligible AND both versions prove the downgrade direction.
@@ -222,7 +228,11 @@ public static class WorkspaceRender
         return "reader";
     }
 
-    private static string StatusCompact(WorkspaceFacts facts, TelemetrySummary telemetry, LeaderHealthFacts? leader)
+    private static string StatusCompact(
+        WorkspaceFacts facts,
+        TelemetrySummary telemetry,
+        LeaderHealthFacts? leader,
+        BootstrapSnapshot? bootstrap)
     {
         var sb = new StringBuilder();
         sb.Append("# workspace");
@@ -252,11 +262,28 @@ public static class WorkspaceRender
             sb.Append("content_db: ").Append(ContentCorpusLabel(corpus, facts.BuiltRevision)).Append('\n');
         if (!string.IsNullOrEmpty(facts.WarningText))
             sb.Append("warning: ").Append(facts.WarningText).Append('\n');
+        if (bootstrap is { Phase: BootstrapPhase.Running, CanonicalRoot.Length: > 0 })
+        {
+            sb.Append("rebinding: ")
+              .Append(bootstrap.CanonicalRoot)
+              .Append(" (started ")
+              .Append(ElapsedSeconds(bootstrap.StartedAtUtc))
+              .Append("s ago)\n");
+        }
 
         string telemetryLine = TelemetryLine(telemetry);
         if (!string.IsNullOrEmpty(telemetryLine))
             sb.Append(telemetryLine).Append('\n');
         return sb.ToString().TrimEnd('\n');
+    }
+
+    private static long ElapsedSeconds(DateTimeOffset? startedAtUtc)
+    {
+        if (startedAtUtc is null)
+            return 0;
+
+        var elapsed = DateTimeOffset.UtcNow - startedAtUtc.Value;
+        return Math.Max(0, (long)elapsed.TotalSeconds);
     }
 
     private static string SearchSidecarLabel(SearchSidecarFacts facts) => facts.State switch

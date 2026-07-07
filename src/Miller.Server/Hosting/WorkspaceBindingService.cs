@@ -10,7 +10,11 @@ public interface IWorkspaceBindingService
 
     bool IsDeferred { get; }
 
+    BootstrapSnapshot Snapshot { get; }
+
     Task WaitUntilBoundAsync(CancellationToken cancellationToken);
+
+    Task WaitForRunAsync(int runGeneration, CancellationToken cancellationToken);
 
     Task EnsurePrimaryBoundAsync(McpServer server, CancellationToken cancellationToken);
 
@@ -42,8 +46,13 @@ public sealed class WorkspaceBindingService : IWorkspaceBindingService
 
     public bool IsDeferred => _bootstrap.IsDeferred;
 
+    public BootstrapSnapshot Snapshot => _bootstrap.Snapshot;
+
     public Task WaitUntilBoundAsync(CancellationToken cancellationToken) =>
         _bootstrap.WaitUntilBoundAsync(cancellationToken);
+
+    public Task WaitForRunAsync(int runGeneration, CancellationToken cancellationToken) =>
+        _bootstrap.WaitForRunAsync(runGeneration, cancellationToken);
 
     public void MarkRootsDirty()
     {
@@ -63,7 +72,7 @@ public sealed class WorkspaceBindingService : IWorkspaceBindingService
     {
         ArgumentNullException.ThrowIfNull(server);
 
-        if (_bootstrap.IsBound && !NeedsRefresh())
+        if (IsSettled())
             return;
 
         IReadOnlyList<string>? rootUris = await GetRootUrisAsync(server, cancellationToken).ConfigureAwait(false);
@@ -73,13 +82,13 @@ public sealed class WorkspaceBindingService : IWorkspaceBindingService
     private async Task EnsurePrimaryBoundCoreAsync(
         IReadOnlyList<string>? rootUris, CancellationToken cancellationToken)
     {
-        if (_bootstrap.IsBound && !NeedsRefresh())
+        if (IsSettled())
             return;
 
         await _bindLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (_bootstrap.IsBound && !NeedsRefresh())
+            if (IsSettled())
                 return;
 
             var resolved = WorkspaceBindingResolver.TryResolve(Environment.CurrentDirectory, rootUris)
@@ -88,13 +97,16 @@ public sealed class WorkspaceBindingService : IWorkspaceBindingService
             _logger.LogInformation(
                 "Binding primary workspace to {Root} (source={Source}).",
                 resolved.Path, resolved.Source);
-            _bootstrap.BootstrapForRoot(resolved.Path, resolved.Source);
+            var outcome = _bootstrap.BootstrapForRoot(resolved.Path, resolved.Source);
 
-            lock (_gate)
+            if (outcome != BindOutcome.RebindDeferred)
             {
-                _rootsDirty = false;
-                if (rootUris is not null)
-                    _cachedRootUris = rootUris;
+                lock (_gate)
+                {
+                    _rootsDirty = false;
+                    if (rootUris is not null)
+                        _cachedRootUris = rootUris;
+                }
             }
         }
         finally
@@ -102,6 +114,16 @@ public sealed class WorkspaceBindingService : IWorkspaceBindingService
             _bindLock.Release();
         }
     }
+
+    /// <summary>
+    /// Settled = bound with no rebind pending or in flight. Keyed on the snapshot PHASE, not
+    /// <c>IsBound</c>: after a failed background rebind the old workspace stays bound (IsBound true)
+    /// but the phase is Failed — the next ensure call must re-enter <c>BootstrapForRoot</c> to start
+    /// the retry (design: Failed → BootstrapForRoot (retry) → Running), or the Failed state strands
+    /// with no in-band recovery.
+    /// </summary>
+    private bool IsSettled() =>
+        _bootstrap.Snapshot.Phase == BootstrapPhase.Bound && !NeedsRefresh();
 
     private bool NeedsRefresh()
     {

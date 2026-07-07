@@ -10,16 +10,18 @@ namespace Miller.Indexing;
 /// </summary>
 internal static class MillerExtractContract
 {
-    // julie-extract v3: sqlite_schema_version 3 / extract_contract_version 3 / report_schema_version 3.
-    // v3 adds parser-backed structural_facts and complexity_metrics, while keeping symbol body_hash as the
-    // clone-ready normalized body fingerprint.
-    public const long ExpectedSchemaVersion = 3;
-    public const long ExpectedSqliteSchemaVersion = 3;
+    // julie-extract schema v4 (product 2.9.0): sqlite_schema_version 4 / extract_contract_version 3 /
+    // report_schema_version 3. v4 adds workspace reference resolution: pending_resolutions and
+    // identifier_resolutions overlay tables, an FK-consistent identifiers.target_symbol_id, and the
+    // artifact_metadata key reference_resolution_version (currently 1). The extract contract and report
+    // schema are unchanged from v3.
+    public const long ExpectedSchemaVersion = 4;
+    public const long ExpectedSqliteSchemaVersion = 4;
     public const long ExpectedExtractContractVersion = 3;
     public const long ExpectedReportSchemaVersion = 3;
     public const string ExpectedHashAlgorithm = "blake3";
 
     // Download pin only (restore-script + julie-pins.json target). This is the PRODUCT version,
-    // orthogonal to the runtime schema/contract gate above (D7): product 2.5.x ships schema/contract 3.
-    public const string PinnedJulieExtractVersion = "2.8.1"; // julie-extractors release tag v2.8.1 (published 2026-07-04).
+    // orthogonal to the runtime schema/contract gate above (D7): product 2.9.x/2.10.x ships schema 4 / contract 3.
+    public const string PinnedJulieExtractVersion = "2.10.0"; // julie-extractors v2.10.0 (variable_ref emission; release pending — pins sha256s still v2.9.0 until assets publish).
 }

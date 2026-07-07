@@ -137,7 +137,7 @@ public sealed class WorkspaceToolTests : IDisposable
             utcNow: () => DateTimeOffset.UtcNow,
             sidecar: SymbolSearchSidecar.Disabled);
         var tool = new WorkspaceTool(
-            holder, workspace, indexer, freshness, probe, ledger, runner, registry, crossRefresh,
+            holder, workspace, indexer, freshness, probe, bootstrap, ledger, runner, registry, crossRefresh,
             SymbolSearchSidecar.Disabled,
             openScan ?? ((scanRoot, scanDb, force) => runner.Scan(scanRoot, scanDb, force)),
             acquireLock ?? (millerDir => SingleWriterLock.TryAcquire(millerDir)),
@@ -147,7 +147,7 @@ public sealed class WorkspaceToolTests : IDisposable
                 ProcessId: null,
                 Message: "already running")),
             NullLogger<WorkspaceTool>.Instance);
-        return new WorkspaceToolHarness(tool, indexer, ledger, root, workspace, registry);
+        return new WorkspaceToolHarness(tool, indexer, ledger, root, workspace, registry, bootstrap);
     }
 
     private static string DisplayFor(string canonicalRoot, string workspaceId) =>
@@ -159,7 +159,8 @@ public sealed class WorkspaceToolTests : IDisposable
         TelemetryLedger Ledger,
         string Root,
         WorkspaceContext Workspace,
-        WorkspaceRegistry Registry);
+        WorkspaceRegistry Registry,
+        IndexBootstrapService Bootstrap);
 
     private static JulieDbFixture CreateSynth(long revision, string? workspaceId) =>
         JulieDbFixture.Create(
@@ -359,6 +360,36 @@ public sealed class WorkspaceToolTests : IDisposable
         Assert.Contains("reader", output, StringComparison.OrdinalIgnoreCase);
         // The seeded telemetry row shows in the embedded breakdown.
         Assert.Contains("search", output);
+        Assert.DoesNotContain("rebinding:", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Status_WhenRebindRunning_RendersCompactNotice()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        var harness = BuildHarness(fx, builtRevision: 4, workspaceId: Ws);
+        string rebindRoot = NewTempDir("rebind-running");
+        string canonicalRebindRoot = PathCanonicalizer.CanonicalizeRoot(rebindRoot);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.Bootstrap.TestRunBootstrapOverride = _ =>
+        {
+            release.Task.GetAwaiter().GetResult();
+        };
+
+        try
+        {
+            var outcome = harness.Bootstrap.BootstrapForRoot(
+                rebindRoot, WorkspaceBindingResolver.WorkspaceSource.Roots);
+            Assert.Equal(BindOutcome.Started, outcome);
+
+            string output = harness.Tool.Workspace(operation: "status");
+
+            Assert.Contains($"rebinding: {canonicalRebindRoot} (started 0s ago)", output);
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
     }
 
     [Fact]

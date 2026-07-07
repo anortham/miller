@@ -60,9 +60,12 @@ internal static class CliCapabilities
         "metrics churn --json",
         "metrics clones --json",
         "metrics complexity --json",
+        "metrics risk --json",
+        "report --json",
         "telemetry export --jsonl",
         "symbols export --jsonl",
         "references export --jsonl",
+        "references candidates --json",
         "complexity export --jsonl",
         "workspace status --json",
         "workspace health --json",
@@ -93,9 +96,11 @@ internal static class CliCapabilities
         ("refresh_wait", "refresh --json --wait", 1, "docs/contracts/refresh-wait-v1.md"),
         ("trace", "trace --json", 1, "docs/contracts/trace-json-v1.md"),
         ("patterns", "patterns --json", 1, "docs/contracts/patterns-json-v1.md"),
-        ("metrics", "metrics <churn|clones|complexity> --json", 1, "docs/contracts/metrics-json-v1.md"),
+        ("metrics", "metrics <churn|clones|complexity|risk> --json", 1, "docs/contracts/metrics-json-v1.md"),
+        ("report", "report --json", 1, "docs/contracts/report-json-v1.md"),
         ("impact_index_revision_delta", "impact --json --from-index-revision N --from-artifact-id ID", 1,
             "docs/contracts/impact-index-revision-delta-v1.md"),
+        ("references_candidates", "references candidates --json", 1, "docs/contracts/references-candidates-v1.md"),
     ];
 
     public static string Render(bool json)
@@ -121,6 +126,7 @@ internal static class CliCapabilities
         sb.AppendLine($"symbol_search_sidecar: {(sidecar.Enabled ? "enabled" : "disabled")}");
         sb.AppendLine($"source_region_index: {(sidecar.RegionOptions.Enabled ? "enabled" : "disabled")}");
         sb.AppendLine("reference_aware_context: enabled");
+        sb.AppendLine("references_candidates: enabled");
         sb.AppendLine("features:");
         foreach (string feature in NegotiatedFeatures(ImpactIndexRevisionDeltaActive))
             sb.AppendLine("  - " + feature);
@@ -177,6 +183,7 @@ internal static class CliCapabilities
             w.WriteNumber("source_region_max_bytes", sidecar.RegionOptions.MaxRegionBytes);
             w.WriteBoolean("content_corpus", true);
             w.WriteBoolean("reference_aware_context", true);
+            w.WriteBoolean("references_candidates", true);
             w.WriteBoolean("dashboard", true);
             w.WriteEndObject();
 

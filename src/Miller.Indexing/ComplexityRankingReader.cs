@@ -63,33 +63,86 @@ public static class ComplexityRankingReader
         var results = new List<ComplexityHotspot>();
         using SqliteDataReader reader = command.ExecuteReader();
         while (reader.Read())
+            results.Add(MapRow(reader));
+
+        return results;
+    }
+
+    /// <summary>
+    /// Reads every complexity row on the given workspace-relative paths, with no severity floor
+    /// and no limit. Used by risk ranking to join complexity against churn BEFORE limiting;
+    /// callers bound the path set (e.g. by the paths a git range touched), not the row count.
+    /// </summary>
+    public static IReadOnlyList<ComplexityHotspot> ReadForPaths(
+        string symbolsDbPath,
+        IReadOnlyCollection<string> paths,
+        bool includeTests = true)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(symbolsDbPath);
+        ArgumentNullException.ThrowIfNull(paths);
+        if (paths.Count == 0)
+            return [];
+
+        using SqliteConnection connection = SqliteReadOnlyAccess.Open(symbolsDbPath);
+        JulieSchemaGate.Verify(connection);
+
+        var results = new List<ComplexityHotspot>();
+        // Stay far below SQLite's parameter ceiling; churn path sets are small but unbounded ranges exist.
+        foreach (string[] chunk in paths.Distinct(StringComparer.Ordinal).Chunk(500))
         {
-            int decisionCount = reader.GetInt32(8);
-            int nesting = reader.GetInt32(10);
-            results.Add(new ComplexityHotspot(
-                Severity: Classify(decisionCount, nesting),
-                ComplexityMetricId: reader.GetString(0),
-                Path: reader.GetString(1),
-                Language: reader.GetString(2),
-                Scope: reader.GetString(3),
-                SymbolId: reader.IsDBNull(4) ? null : reader.GetString(4),
-                AlgorithmId: reader.GetString(5),
-                CoveredLines: reader.GetInt32(6),
-                CoveredBytes: reader.GetInt32(7),
-                DecisionCount: decisionCount,
-                LoopCount: reader.GetInt32(9),
-                MaxNestingDepth: nesting,
-                ParameterCount: reader.IsDBNull(11) ? null : reader.GetInt32(11),
-                StartLine: reader.GetInt32(12),
-                EndLine: reader.GetInt32(13),
-                StartByte: reader.GetInt32(14),
-                EndByte: reader.GetInt32(15),
-                SymbolName: reader.IsDBNull(16) ? null : reader.GetString(16),
-                SymbolKind: reader.IsDBNull(17) ? null : reader.GetString(17),
-                IsTest: reader.GetInt64(18) != 0));
+            using SqliteCommand command = connection.CreateCommand();
+            string[] parameterNames = new string[chunk.Length];
+            for (var i = 0; i < chunk.Length; i++)
+            {
+                parameterNames[i] = "$p" + i;
+                command.Parameters.AddWithValue(parameterNames[i], chunk[i]);
+            }
+            command.CommandText = $"""
+                SELECT cm.complexity_metric_id, cm.path, cm.language, cm.scope, cm.symbol_id, cm.algorithm_id,
+                       cm.covered_lines, cm.covered_bytes, cm.decision_count, cm.loop_count, cm.max_nesting_depth,
+                       cm.parameter_count, cm.start_line, cm.end_line, cm.start_byte, cm.end_byte,
+                       s.name, s.kind, COALESCE(s.is_test, 0) AS is_test
+                FROM complexity_metrics cm
+                LEFT JOIN symbols s ON s.symbol_id = cm.symbol_id
+                WHERE ($include_tests = 1 OR COALESCE(s.is_test, 0) = 0)
+                  AND cm.path IN ({string.Join(", ", parameterNames)})
+                ORDER BY cm.path, cm.start_line, cm.complexity_metric_id;
+                """;
+            command.Parameters.AddWithValue("$include_tests", includeTests ? 1 : 0);
+
+            using SqliteDataReader reader = command.ExecuteReader();
+            while (reader.Read())
+                results.Add(MapRow(reader));
         }
 
         return results;
+    }
+
+    private static ComplexityHotspot MapRow(SqliteDataReader reader)
+    {
+        int decisionCount = reader.GetInt32(8);
+        int nesting = reader.GetInt32(10);
+        return new ComplexityHotspot(
+            Severity: Classify(decisionCount, nesting),
+            ComplexityMetricId: reader.GetString(0),
+            Path: reader.GetString(1),
+            Language: reader.GetString(2),
+            Scope: reader.GetString(3),
+            SymbolId: reader.IsDBNull(4) ? null : reader.GetString(4),
+            AlgorithmId: reader.GetString(5),
+            CoveredLines: reader.GetInt32(6),
+            CoveredBytes: reader.GetInt32(7),
+            DecisionCount: decisionCount,
+            LoopCount: reader.GetInt32(9),
+            MaxNestingDepth: nesting,
+            ParameterCount: reader.IsDBNull(11) ? null : reader.GetInt32(11),
+            StartLine: reader.GetInt32(12),
+            EndLine: reader.GetInt32(13),
+            StartByte: reader.GetInt32(14),
+            EndByte: reader.GetInt32(15),
+            SymbolName: reader.IsDBNull(16) ? null : reader.GetString(16),
+            SymbolKind: reader.IsDBNull(17) ? null : reader.GetString(17),
+            IsTest: reader.GetInt64(18) != 0);
     }
 
     public static bool TryParseSeverity(string? value, out ComplexitySeverity severity)

@@ -117,7 +117,7 @@ public sealed class LiveWorkspaceTests : IDisposable
         var crossRefresh = new CrossWorkspaceRefreshService(registry, runner, SymbolSearchSidecar.Disabled);
 
         var tool = new WorkspaceTool(
-            holder, workspace, indexer, freshness, probe, ledger, runner, registry, crossRefresh,
+            holder, workspace, indexer, freshness, probe, bootstrap, ledger, runner, registry, crossRefresh,
             SymbolSearchSidecar.Disabled,
             NullLogger<WorkspaceTool>.Instance);
         return (tool, indexer, holder, ledger, root, dbPath, runner);

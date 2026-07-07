@@ -296,4 +296,115 @@ public sealed class JulieDbFixtureCurrentSchemaTests
             "pending_relationships", "type_facts" })
             Assert.True(TableExists(c, t), $"v1 artifact table '{t}' must exist");
     }
+
+    // ---- v4 reference-resolution tables (identifier_resolutions / pending_resolutions) + pinned indexes ----
+
+    [Fact]
+    public void Fixture_EmitsV4ResolutionTables()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+        using var c = Open(fx.DbPath);
+        foreach (var t in new[] { "identifier_resolutions", "pending_resolutions", "pending_relationships" })
+            Assert.True(TableExists(c, t), $"v4 resolution table '{t}' must exist");
+    }
+
+    [Fact]
+    public void Fixture_IdentifierResolutions_UseCurrentColumnSet()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+        using var c = Open(fx.DbPath);
+        foreach (var column in new[]
+        {
+            "identifier_id", "target_symbol_id", "tier", "confidence", "method",
+            "outcome", "candidates", "resolved_at_revision",
+        })
+            Assert.True(ColumnExists(c, "identifier_resolutions", column),
+                $"identifier_resolutions.{column} must exist");
+    }
+
+    [Fact]
+    public void Fixture_IdentifierResolutions_EnforceOutcomeTargetCheckConstraint()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+
+        // A 'resolved' outcome REQUIRES a non-null target_symbol_id (CHECK ((outcome='resolved') = (target IS NOT NULL))).
+        var resolvedWithoutTarget = Assert.Throws<SqliteException>(() => ExecWrite(fx.DbPath, """
+            INSERT INTO identifier_resolutions
+                (identifier_id, target_symbol_id, tier, confidence, method, outcome, candidates, resolved_at_revision)
+            VALUES ('ir-bad-1', NULL, 1, 1.0, 'exact', 'resolved', 1, 1);
+            """));
+        Assert.Contains("CHECK", resolvedWithoutTarget.Message, StringComparison.OrdinalIgnoreCase);
+
+        // A non-'resolved' outcome REQUIRES a null target_symbol_id.
+        Assert.Throws<SqliteException>(() => ExecWrite(fx.DbPath, """
+            INSERT INTO identifier_resolutions
+                (identifier_id, target_symbol_id, tier, confidence, method, outcome, candidates, resolved_at_revision)
+            VALUES ('ir-bad-2', 'sym-x', 1, 1.0, 'exact', 'ambiguous', 3, 1);
+            """));
+
+        // Both consistent shapes insert cleanly.
+        ExecWrite(fx.DbPath, """
+            INSERT INTO identifier_resolutions
+                (identifier_id, target_symbol_id, tier, confidence, method, outcome, candidates, resolved_at_revision)
+            VALUES ('ir-ok-resolved', 'sym-x', 1, 1.0, 'exact', 'resolved', 1, 1),
+                   ('ir-ok-unresolved', NULL, 1, 1.0, 'exact', 'ambiguous', 3, 1);
+            """);
+        using var c = Open(fx.DbPath);
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM identifier_resolutions;";
+        Assert.Equal(2L, System.Convert.ToInt64(cmd.ExecuteScalar()));
+    }
+
+    [Fact]
+    public void Fixture_PendingResolutions_UseCurrentColumnSet()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+        using var c = Open(fx.DbPath);
+        foreach (var column in new[]
+        {
+            "pending_relationship_id", "target_symbol_id", "tier", "confidence", "method", "resolved_at_revision",
+        })
+            Assert.True(ColumnExists(c, "pending_resolutions", column),
+                $"pending_resolutions.{column} must exist");
+    }
+
+    [Fact]
+    public void Fixture_PendingRelationships_UseCurrentColumnSet()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+        using var c = Open(fx.DbPath);
+        foreach (var column in new[]
+        {
+            "pending_relationship_id", "from_symbol_id", "caller_scope_symbol_id", "file_id", "path", "kind",
+            "target_display_name", "target_terminal_name", "target_receiver", "target_namespace_json",
+            "target_import_context", "start_byte", "end_byte", "confidence",
+        })
+            Assert.True(ColumnExists(c, "pending_relationships", column),
+                $"pending_relationships.{column} must exist");
+    }
+
+    [Fact]
+    public void Fixture_V4ResolutionIndexes_Exist()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+        using var c = Open(fx.DbPath);
+        foreach (var index in new[]
+        {
+            "idx_identifier_resolutions_target", "idx_pending_terminal", "idx_pending_file",
+            "idx_pending_from", "idx_pending_caller_scope", "idx_pending_resolutions_target",
+        })
+            Assert.True(IndexExists(c, index), $"pinned v4 index '{index}' must exist");
+    }
+
+    private static void ExecWrite(string dbPath, string sql)
+    {
+        // ForeignKeys=false matches the fixture's relaxed-FK philosophy so the CHECK-constraint assertions do not
+        // trip on unseeded target_symbol_id references; the CHECK itself is enforced independent of the FK pragma.
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        { DataSource = dbPath, Mode = SqliteOpenMode.ReadWrite, Pooling = false, ForeignKeys = false }.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
+    }
 }

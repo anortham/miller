@@ -11,14 +11,16 @@ namespace Miller.Tests.Indexing;
 public sealed class MillerExtractContractTests
 {
     [Fact]
-    public void ContractPinsJulieExtractV3Versions()
+    public void ContractPinsJulieExtractSchemaV4Versions()
     {
-        Assert.Equal(3, MillerExtractContract.ExpectedSchemaVersion);
-        Assert.Equal(3, MillerExtractContract.ExpectedSqliteSchemaVersion);
+        // Schema v4 (product 2.9.0) adds workspace reference resolution; the extract contract and
+        // report schema stayed at 3 (additive artifact change, verified on a live 2.9.0 scan report).
+        Assert.Equal(4, MillerExtractContract.ExpectedSchemaVersion);
+        Assert.Equal(4, MillerExtractContract.ExpectedSqliteSchemaVersion);
         Assert.Equal(3, MillerExtractContract.ExpectedExtractContractVersion);
         Assert.Equal(3, MillerExtractContract.ExpectedReportSchemaVersion);
         Assert.Equal("blake3", MillerExtractContract.ExpectedHashAlgorithm);
-        Assert.Equal("2.8.1", MillerExtractContract.PinnedJulieExtractVersion);
+        Assert.Equal("2.10.0", MillerExtractContract.PinnedJulieExtractVersion);
         Assert.False(string.IsNullOrWhiteSpace(MillerExtractContract.PinnedJulieExtractVersion));
     }
 
