@@ -401,6 +401,40 @@ public sealed class WorkspaceBindingServiceTests
         Assert.Equal(canonicalB, bootstrap.Workspace.CanonicalRoot);
     }
 
+    [Fact]
+    public async Task RebindFailureWhileBound_NextEnsureStartsRetry()
+    {
+        string projectA = CreateTempDir();
+        string projectB = CreateTempDir();
+        string canonicalA = PathCanonicalizer.CanonicalizeRoot(projectA);
+        string canonicalB = PathCanonicalizer.CanonicalizeRoot(projectB);
+        var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
+        bootstrap.TestRunBootstrapOverride = canonicalRoot => SeedEmptyWorkspace(bootstrap, canonicalRoot);
+        var binding = new WorkspaceBindingService(bootstrap, NullLogger<WorkspaceBindingService>.Instance);
+        var ct = TestContext.Current.CancellationToken;
+
+        await binding.EnsurePrimaryBoundFromRootsAsync([$"file://{projectA}"], ct);
+        await WaitUntilAsync(() => bootstrap.IsBound, ct);
+
+        bootstrap.TestRunBootstrapOverride = _ => throw new InvalidOperationException("synthetic rebind failure");
+        binding.MarkRootsDirty();
+        await binding.EnsurePrimaryBoundFromRootsAsync([$"file://{projectB}"], ct);
+        await WaitUntilAsync(() => bootstrap.Snapshot.Phase == BootstrapPhase.Failed, ct);
+
+        // The failed rebind keeps the previous workspace serving...
+        Assert.True(bootstrap.IsBound);
+        Assert.Equal(canonicalA, bootstrap.Workspace.CanonicalRoot);
+
+        // ...and the NEXT ensure call must start the retry (design: Failed → BootstrapForRoot (retry) → Running),
+        // not early-return on IsBound and strand the Failed phase with no in-band recovery.
+        bootstrap.TestRunBootstrapOverride = canonicalRoot => SeedEmptyWorkspace(bootstrap, canonicalRoot);
+        await binding.EnsurePrimaryBoundFromRootsAsync([$"file://{projectB}"], ct);
+        await WaitUntilAsync(() =>
+            bootstrap.Snapshot.Phase == BootstrapPhase.Bound &&
+            IndexBootstrapService.RootPathsEqual(bootstrap.Workspace.CanonicalRoot, canonicalB), ct);
+        Assert.Null(bootstrap.Snapshot.LastFailureMessage);
+    }
+
     private static string CreateTempDir()
     {
         string dir = Path.Combine(Path.GetTempPath(), "miller-bindsvc-" + Guid.NewGuid().ToString("N"));

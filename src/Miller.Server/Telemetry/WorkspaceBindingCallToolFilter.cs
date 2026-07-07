@@ -23,11 +23,20 @@ public static class WorkspaceBindingCallToolFilter
                 await binding.EnsurePrimaryBoundAsync(server, cancellationToken).ConfigureAwait(false);
 
                 var snapshot = binding.Snapshot;
-                if (IsWorkspaceTool(request) && snapshot.Phase != BootstrapPhase.Bound)
-                    return TextResult(RenderWorkspaceSnapshot(snapshot), isError: false);
-
                 if (snapshot.Phase == BootstrapPhase.Bound)
                     return await next(request, cancellationToken).ConfigureAwait(false);
+
+                // The workspace tool is exempt on IsBound, not Phase: while a rebind is running or
+                // after one failed, the previous workspace is still bound and the tool constructs —
+                // it must flow through so `workspace status` keeps working (and renders the rebind
+                // notice). Only when nothing is bound does the filter render the snapshot itself,
+                // because the tool cannot construct before the first bind.
+                if (IsWorkspaceTool(request))
+                {
+                    if (snapshot.IsBound)
+                        return await next(request, cancellationToken).ConfigureAwait(false);
+                    return TextResult(RenderWorkspaceSnapshot(snapshot), isError: false);
+                }
 
                 if (snapshot.LastFailureMessage is { Length: > 0 } lastFailure)
                     return TextResult(FailedText(lastFailure), isError: true);

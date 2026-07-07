@@ -24,7 +24,8 @@ public sealed record BootstrapSnapshot(
     DateTimeOffset? StartedAtUtc,
     string? FailureMessage,
     string? LastFailureMessage,
-    int RunGeneration);
+    int RunGeneration,
+    bool IsBound);
 
 internal enum BindOutcome
 {
@@ -129,7 +130,8 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                     _startedAtUtc,
                     _failureMessage,
                     _lastFailureMessage,
-                    _runGeneration);
+                    _runGeneration,
+                    _bound is not null);
             }
         }
     }
@@ -313,6 +315,8 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
 
             result = RunBootstrap(canonicalRoot, source);
             published = PublishBoundWorkspace(result, runGeneration);
+            if (!published && !result.UsesExistingLedger)
+                result.Bound.Ledger?.Dispose();
         }
         catch (Exception ex)
         {

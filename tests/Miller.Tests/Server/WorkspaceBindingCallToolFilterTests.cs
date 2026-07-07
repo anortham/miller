@@ -227,6 +227,61 @@ public sealed class WorkspaceBindingCallToolFilterTests
     }
 
     [Fact]
+    public async Task RebindRunningWhileBound_WorkspaceToolCallsNextHandler()
+    {
+        var binding = new ScriptedBindingService
+        {
+            Snapshot = RunningSnapshot("/tmp/miller-rebind-b", runGeneration: 31, isBound: true),
+        };
+        int nextCalls = 0;
+
+        var result = await InvokeFilterAsync(binding, "workspace", (_, _) =>
+        {
+            nextCalls++;
+            return Task.FromResult(TextResult("workspace-status-with-rebind-notice"));
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, nextCalls);
+        Assert.Equal("workspace-status-with-rebind-notice", ResultText(result));
+    }
+
+    [Fact]
+    public async Task RebindFailedWhileBound_WorkspaceToolCallsNextHandler()
+    {
+        var binding = new ScriptedBindingService
+        {
+            Snapshot = FailedSnapshot("/tmp/miller-rebind-b", "rebind failure", runGeneration: 33, isBound: true),
+        };
+        int nextCalls = 0;
+
+        var result = await InvokeFilterAsync(binding, "workspace", (_, _) =>
+        {
+            nextCalls++;
+            return Task.FromResult(TextResult("workspace-status-after-failed-rebind"));
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, nextCalls);
+        Assert.Equal("workspace-status-after-failed-rebind", ResultText(result));
+    }
+
+    [Fact]
+    public async Task RebindRunningWhileBound_NonWorkspaceToolStillReturnsNotReady()
+    {
+        using var env = ScopedEnvironment.Set("MILLER_BOOTSTRAP_GRACE_SECONDS", "0");
+        var binding = new ScriptedBindingService
+        {
+            Snapshot = RunningSnapshot("/tmp/miller-rebind-b", runGeneration: 35, isBound: true),
+        };
+
+        var result = await InvokeFilterAsync(
+            binding, "search", (_, _) => Task.FromResult(TextResult("stale-answer-from-old-root")),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(true, result.IsError);
+        Assert.Contains("/tmp/miller-rebind-b", ResultText(result), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task CallToolFilter_InvokesBindingBeforeToolHandler()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -348,31 +403,36 @@ public sealed class WorkspaceBindingCallToolFilterTests
             StartedAtUtc: null,
             FailureMessage: null,
             LastFailureMessage: null,
-            runGeneration);
+            runGeneration,
+            IsBound: true);
 
     private static BootstrapSnapshot RunningSnapshot(
         string canonicalRoot,
         int runGeneration,
-        string? lastFailureMessage = null) =>
+        string? lastFailureMessage = null,
+        bool isBound = false) =>
         new(
             BootstrapPhase.Running,
             canonicalRoot,
             DateTimeOffset.UtcNow.AddSeconds(1),
             FailureMessage: null,
             lastFailureMessage,
-            runGeneration);
+            runGeneration,
+            isBound);
 
     private static BootstrapSnapshot FailedSnapshot(
         string canonicalRoot,
         string failureMessage,
-        int runGeneration) =>
+        int runGeneration,
+        bool isBound = false) =>
         new(
             BootstrapPhase.Failed,
             canonicalRoot,
             StartedAtUtc: null,
             failureMessage,
             failureMessage,
-            runGeneration);
+            runGeneration,
+            isBound);
 
     private static CallToolResult TextResult(string text, bool isError = false) =>
         new()
