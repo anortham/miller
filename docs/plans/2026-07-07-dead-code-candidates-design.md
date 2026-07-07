@@ -41,7 +41,13 @@ A symbol S (from `symbols`) is a candidate iff ALL of:
 1. **Definition kind.** `S.kind ∈ {function, method, class, struct, interface, enum, delegate,
    property, constant}` — the definition kinds worth reporting. Excluded: `variable`, `field`,
    `import`, `export`, `module`, `namespace`, `enum_member`, `constructor` (constructors follow
-   their type; fields/variables are too noisy for a prototype).
+   their type; fields/variables are too noisy for a prototype). **Also excluded: syntax-invoked
+   member shapes** that are never referenced by an identifier bearing their own name — names
+   starting `~` (finalizers/destructors), names containing `this[` (indexers), names starting
+   `operator` or `op_` (operator overloads), and `Finalize`. (Doubt-pass finding 1: a live
+   private C# finalizer `~Resource` and indexer `this[int index]` pass every evidence check;
+   they are invoked by syntax, not by name.) The exclusion list is a named table in
+   `Miller.Core`, extensible per language.
 2. **Name-based liveness fails.** No row in `identifiers` has `name = S.name` outside S's own
    definition (an identifier is "inside" when `containing_symbol_id = S.symbol_id` OR it lies
    within S's `[start_byte, end_byte]` span in S's file). Same-name matches anywhere else in the
@@ -49,8 +55,12 @@ A symbol S (from `symbols`) is a candidate iff ALL of:
 3. **No resolved inbound evidence.** Zero `identifier_resolutions` rows with
    `target_symbol_id = S.symbol_id` originating outside S (per the same inside-test on the
    resolved identifier), AND zero `relationships` rows with `to_symbol_id = S.symbol_id` from
-   outside S. This is where v4 earns its keep: a resolved edge from an *aliased* usage (identifier
-   name ≠ symbol name) rescues a symbol that name-matching alone would falsely flag.
+   outside S, AND zero `pending_resolutions` rows with `target_symbol_id = S.symbol_id` whose
+   joined `pending_relationships` row originates outside S. (Doubt-pass finding 2:
+   `pending_resolutions` is independent inbound evidence — on the live Miller artifact at least
+   one resolved pending target has no `identifier_resolutions` row at all.) Resolution is where
+   v4 earns its keep: a resolved edge from an *aliased* usage (identifier name ≠ symbol name)
+   rescues a symbol that name-matching alone would falsely flag.
 4. **No named suppression applies** (see below).
 
 ### Suppression rules (each named, each counted in output)
@@ -65,48 +75,71 @@ A symbol S (from `symbols`) is a candidate iff ALL of:
 | `annotated` | symbol carries any `symbol_annotations` row (attributes/decorators frequently mean reflection/framework discovery — `[Fact]`, `[JsonProperty]`, `@app.route`, …) | `symbol_annotations` |
 | `generated_path` | path matches conservative generated-code globs (`*.g.cs`, `*.generated.*`, `obj/`, `bin/`, `node_modules/`, `*.designer.cs`, `wwwroot/lib/`) | `symbols.path` |
 | `low_evidence_language` | the symbol's language has zero identifier rows in this artifact (nothing to test liveness against — e.g. css/html) | computed |
+| `string_literal_match` | the symbol's name appears in workspace string-literal text — reflection/config/DI-by-name usage (`GetMethod("Foo")`, route strings, serialized member names). Implemented by scanning the artifact's `string_literal` `source_regions` spans (75,818 on the live Miller scan) and re-reading only those spans from source with the established `files.content_hash` freshness guard. The scan runs on the *surviving candidate set only* (small), so it reads each literal-bearing file at most once. Files whose content hash is stale are counted and reported as unscanned. | `source_regions` + source re-read |
 
 `visibility_unknown` is the honesty rule the live data forces: 26,925 of 38,670 symbols carry
 NULL visibility. A prototype that flagged them would be guessing about public exposure. The
 output's suppression counts make the cost visible per repo, which is exactly the evidence needed
 to decide whether per-language visibility inference is worth extractor work later.
 
-### Confidence labels (per candidate)
+### Evidence provenance (per candidate) — not certainty grades
 
-- `strong` — the candidate's language has resolution coverage ≥ 10% in *this artifact*
-  (measured: resolved identifiers / identifiers for that language) AND the symbol's file had at
-  least one resolution attempt. Both name evidence and resolution evidence agree it is unused.
-- `moderate` — everything else that survives the rule (name evidence alone; resolver largely
-  blind in this language).
+(Doubt-pass finding 3: a `strong` label over a 15%-coverage resolver reads as deletion-grade
+certainty it cannot deliver. Labels therefore state what evidence was consulted, never how sure
+we are.)
 
-Thresholds are computed from the artifact at query time — never hardcoded per language — so the
-labels stay honest as the resolver improves.
+- `evidence=name` — name-based liveness plus literal-scan found nothing; the resolver was
+  effectively blind for this language (below 10% measured coverage in this artifact).
+- `evidence=name+resolver` — the above AND the language has ≥ 10% measured resolution coverage
+  in this artifact, so resolver silence carries some additional weight.
+
+Coverage is computed from the artifact at query time (resolved identifiers / identifiers per
+language) — never hardcoded. Every output (compact header and JSON) carries the artifact's
+`reference_resolution_status` (`partial` on all current real scans) and
+`reference_resolution_version` verbatim, so no consumer can mistake a candidate list built on a
+partial resolver for a verdict. The compact header states it plainly:
+`resolver: partial — candidates are facts to check, not deletions to make.`
 
 ## Output
 
-**Compact:** header (`candidates: N of M symbols examined`), one line per candidate —
-`name kind language path:line visibility confidence [name_matches=0 resolved_in=0 calls_in=0]` —
-then a footer: suppression counts by rule id and a per-language coverage table
-(`csharp: 15.6% resolved; razor: 2.1% — name-evidence only`). Bounded (default top 50 by
-file path; `--limit`).
+**Compact:** header (`candidates: N of M symbols examined · resolver: partial — candidates are
+facts to check, not deletions to make`), one line per candidate —
+`name kind language path:line visibility evidence=… [name_matches=0 resolved_in=0 pending_in=0 calls_in=0]` —
+then a footer: suppression counts by rule id, literal-scan coverage (files scanned / skipped
+stale), and a per-language coverage table (`csharp: 15.6% resolved; razor: 2.1% — name-evidence
+only`). Bounded (default top 50 by file path; `--limit`).
 
 **`--json`:** new contract doc `docs/contracts/references-candidates-v1.md` (additive, versioned
 per the contract discipline): `schema_version: 1`, `candidates[]` (symbol_id, name, kind,
-language, path, start_line, visibility, confidence, evidence{name_matches, resolved_inbound,
-calls_inbound}), `suppressions{rule_id: count}`, `language_coverage[]` (language, identifiers,
-resolved_pct), `examined`, `artifact{artifact_id, revision, reference_resolution_version}`.
-Advertised in `capabilities --json` under `optional_features.references_candidates`.
+language, path, start_line, visibility, evidence_label, evidence{name_matches, resolved_inbound,
+pending_resolved_inbound, calls_inbound}), `suppressions{rule_id: count}`,
+`literal_scan{files_scanned, files_skipped_stale}`, `language_coverage[]` (language, identifiers,
+resolved_pct), `examined`, `artifact{artifact_id, revision, reference_resolution_status,
+reference_resolution_version}`.
+
+**Capabilities** (doubt-pass finding 4 — follow the existing shape, all three surfaces):
+`optional_features.references_candidates: true` (boolean feature flag, same pattern as
+`reference_aware_context`), a `json_commands` entry for `references candidates --json`, and a
+`json_contracts` entry naming `references-candidates-v1`. **In the same slice**, amend the stale
+boundary sentences: `docs/contracts/references-export-v1.md` ("Eros owns candidate ranking …")
+and the corresponding `docs/contracts/cli-eros-v1.md` line must reflect the 2026-07-06 consensus
+— deterministic candidate listing with named suppressions is Miller-owned; ranking beyond the
+deterministic rule, suppression *persistence*, history, and fleet workflows stay out.
 
 ## Architecture
 
 Follows the `ReferenceExportReader` seam exactly — no new architecture:
 
-- `Miller.Core`: pure candidate/suppression/confidence logic over plain row records
-  (`DeadCodeCandidates.Evaluate(...)`) — unit-testable in milliseconds, zero I/O.
+- `Miller.Core`: pure candidate/suppression/evidence-label logic over plain row records
+  (`DeadCodeCandidates.Evaluate(...)`), including the syntax-invoked name-shape exclusion table
+  — unit-testable in milliseconds, zero I/O.
 - `Miller.Indexing`: `DeadCodeCandidateReader` — SQL that pages the needed rows (symbols of
-  candidate kinds; identifier name-match counts via indexed lookups; resolved-inbound counts;
-  structural-fact/annotation suppression sets) and feeds `Miller.Core`. One pass, no full-table
-  materialization of identifiers.
+  candidate kinds; identifier name-match counts via indexed lookups; resolved/pending/calls
+  inbound counts; structural-fact/annotation suppression sets) and feeds `Miller.Core`. One
+  pass, no full-table materialization of identifiers. The `string_literal_match` scan runs
+  LAST, over the surviving candidate set only: collect `string_literal` `source_regions` spans,
+  group by file, re-read each literal-bearing file once under the `files.content_hash` guard,
+  and search the (small) candidate-name set within literal spans.
 - `Miller.Server`: `CliDispatch` wiring (`references candidates`), compact render, JSON
   serializer context entries, `CliCapabilities` advertisement.
 
@@ -115,8 +148,11 @@ Follows the `ReferenceExportReader` seam exactly — no new architecture:
 - Fast suite: contract-faithful v4 fixtures (real column shapes incl. `identifier_resolutions`
   with the `outcome='resolved' ⇔ target NOT NULL` CHECK — per the fixture-fidelity rule).
   Cover: candidate found; saved-by-name-match; saved-by-resolved-alias-edge (identifier name ≠
-  symbol name); each suppression rule fires and is counted; confidence split; visibility NULL
-  path; JSON shape.
+  symbol name); saved-by-pending-resolution-only (no identifier_resolutions row — doubt-pass
+  finding 2); finalizer/indexer/operator names excluded by rule 1 (doubt-pass finding 1);
+  reflection-string suppression via `string_literal_match` incl. the stale-file-skipped counter;
+  each suppression rule fires and is counted; evidence-label split; visibility NULL path; JSON
+  shape incl. `reference_resolution_status`.
 - Scale suite: one test scanning a small multi-language fixture with the real binary, asserting
   the command runs end-to-end and per-language coverage renders.
 - CLI contract tests extend `CliDispatchTests` (existing seams: `SetIdentifierTarget`,
@@ -143,15 +179,33 @@ Before this feature is mentioned in `miller report`, the dashboard, README, or a
 ## Acceptance criteria
 
 - [ ] `miller references candidates` and `--json` run against a v4 artifact; compact and JSON
-      shapes match this doc; `--limit` honored.
+      shapes match this doc; `--limit` honored; `reference_resolution_status` present in both
+      outputs.
 - [ ] Rule fidelity proven by fast tests: alive-by-name, alive-by-resolved-alias-edge,
-      alive-by-calls-edge each prevent candidacy; all eight suppression rules fire, are counted,
-      and are named in output.
-- [ ] Confidence labels derive from artifact-measured per-language coverage (no hardcoded
-      language lists).
-- [ ] `references-candidates-v1.md` contract committed; `capabilities --json` advertises it;
-      contract test added.
+      alive-by-pending-resolution-only, and alive-by-calls-edge each prevent candidacy;
+      finalizer/indexer/operator name shapes are excluded by rule 1; all nine suppression rules
+      fire, are counted, and are named in output.
+- [ ] Evidence labels state provenance (`name` / `name+resolver`), derive from
+      artifact-measured per-language coverage (no hardcoded language lists), and never use
+      certainty words.
+- [ ] `references-candidates-v1.md` contract committed; `capabilities --json` advertises it via
+      `optional_features` + `json_commands` + `json_contracts`; contract test added;
+      `references-export-v1.md` and `cli-eros-v1.md` boundary language amended in the same
+      slice.
 - [ ] Fast suite stays fast; the one real-binary test is `Category=Scale` via
       `ScaleTestSupport`.
 - [ ] Dogfood evidence recorded in `docs/findings/` with hand-verified precision on the Miller
       repo (evidence gate for any further surfacing).
+
+## Review log
+
+- **Rev 2 (2026-07-07):** Codex adversarial doubt pass (verdict: needs-attention, 4 findings —
+  all verified against the live v4 artifact and folded in): (1) syntax-invoked members
+  (finalizers, indexers, operators) excluded by name shape in rule 1; (2) `pending_resolutions`
+  added as inbound evidence in rule 3; (3) `strong`/`moderate` certainty labels replaced with
+  evidence-provenance labels plus mandatory `reference_resolution_status` in all output; (4)
+  capabilities advertisement widened to `json_commands`/`json_contracts` and the stale
+  Eros-ownership sentences in `references-export-v1.md`/`cli-eros-v1.md` amended in-slice. Also
+  added the `string_literal_match` suppression (reflection/config-string usage) via
+  `source_regions` span re-reads — the artifact's `literals` table holds only classified
+  sql/url rows (6 on the live scan) and cannot serve this purpose.
