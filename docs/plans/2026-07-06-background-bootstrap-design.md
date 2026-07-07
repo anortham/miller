@@ -1,7 +1,8 @@
 # Background Bootstrap + Fast Not-Ready Tool Responses — Design
 
 Date: 2026-07-06
-Status: design for user review (lightweight path — same-session implementation intended)
+Status: design for user review, rev 2 — Codex design review findings folded in (see "Review
+record" at the end); same-session implementation intended
 Driver: 2026-07-06 incident follow-up. The sensitive-root bind fix (`d225dc5`) removed the
 *trigger*, but the underlying UX defect remains: the first MCP tool call runs the entire initial
 julie-extract scan synchronously, and every other call waits behind it with no timeout — 30
@@ -36,8 +37,18 @@ Bound ──BootstrapForRoot (new root)──▶ Running   (existing rebind sema
 ```
 
 State transitions happen under the existing `_gate`. Exposed as
-`BootstrapSnapshot { Phase, CanonicalRoot?, StartedAtUtc?, FailureMessage? }` — a read-only
-snapshot property, safe to render from any thread.
+`BootstrapSnapshot { Phase, CanonicalRoot?, StartedAtUtc?, FailureMessage?, RunGeneration }` — a
+read-only snapshot property, safe to render from any thread.
+
+**Atomic publication (review blocker 1):** today `RunBootstrap` writes `_holder` first and
+`IsBound` is just `_holder is not null` — safe only because everything runs under `_gate` on the
+caller's thread. On a background task that ordering is a torn-state hazard. The background run
+builds a complete immutable `BoundWorkspace { Holder, Resolver, Workspace, Ledger }` in locals,
+then publishes it in ONE step under `_gate` — registry ready-marking and
+`ledger.RebindWorkspace` happen at that same publish point (review should-fix: today they run
+mid-scan, so telemetry attribution and registry state could reflect a bind that then fails), and
+only then does `SignalBound` fire. `IsBound` reads the published record. On background failure:
+state → `Failed`, registry row marked error best-effort, nothing published.
 
 ### `BootstrapForRoot` splits into synchronous gate + background work
 
@@ -54,10 +65,14 @@ snapshot property, safe to render from any thread.
 - On exception: state → `Failed(message)`, error logged; the binding gate is NOT signaled.
   A later `BootstrapForRoot` for the same root retries from `Failed` (self-healing after a
   transient failure — e.g. julie-extract binary restored).
-- A `BootstrapForRoot` for a DIFFERENT root while `Running` is ignored with a warning log
-  (callers see not-ready for the in-flight root; the rebind happens naturally on the next
-  `EnsurePrimaryBound` after the current run completes). Rebind-while-running is rare
-  (roots/list_changed mid-scan) and serializing it is simpler than a preemption protocol.
+- `BootstrapForRoot` returns a `BindOutcome` (`Started | AlreadyBound | JoinedRunning |
+  RebindDeferred`). A DIFFERENT root while `Running` returns `RebindDeferred` with a warning log
+  — and critically, `WorkspaceBindingService` clears `_rootsDirty` ONLY for `Started` /
+  `AlreadyBound` / `JoinedRunning` outcomes (review blocker 2: the current unconditional clear
+  at `WorkspaceBindingService.cs:93-98` would otherwise strand the session on the old root
+  forever — once the old-root run bound, `IsBound && !NeedsRefresh` early-returns and the new
+  root is never bound). With the dirty flag preserved, the first call after the in-flight run
+  completes re-resolves roots and starts the rebind. No preemption protocol needed.
 - Internal test seam `TestRunBootstrapOverride: Action<string>?` — replaces `RunBootstrap` in
   the background task so tests can simulate slow (block on a gate) and failing (throw)
   bootstraps deterministically.
@@ -68,26 +83,49 @@ After `EnsurePrimaryBoundAsync` returns (now fast — it only triggers/joins the
 consults the snapshot:
 
 - `Bound` → call the tool handler (today's happy path).
-- `Running` → await the binding gate with a **grace timeout** (default 5s; env knob
-  `MILLER_BOOTSTRAP_GRACE_SECONDS`, `0` = julie-style immediate fail-fast). If the gate opens in
-  time → proceed to the handler. If not → return
+- `Running` → await a **run-generation-keyed gate** with a **grace timeout** (default 5s; env
+  knob `MILLER_BOOTSTRAP_GRACE_SECONDS`, `0` = julie-style immediate fail-fast). Generation-keyed
+  because `WaitUntilBoundAsync` returns immediately whenever ANY holder exists (review blocker
+  4): during a rebind — `Bound(A) → Running(B)` — the old gate reads "bound" and tools would
+  silently answer from workspace A while B indexes. The filter waits on THIS run's completion;
+  if it opens in time → proceed. If not → return
   `CallToolResult { IsError = true }` with:
   `"Miller is indexing this workspace for the first time: <root> (started <N>s ago). Tool calls
   will work once indexing completes — retry shortly, or run 'workspace status' for progress."`
   A tool-result error (not a protocol error) so agents read the text and retry naturally.
-- `Failed` → return `CallToolResult { IsError = true }` with the stored failure message plus
-  `"The next tool call retries bootstrap automatically."` (and it does — `Failed → Running`).
+- `Failed` → one exact contract (review should-fix: "return stored error, next call retries"
+  was ambiguous because `EnsurePrimaryBoundCoreAsync` re-triggers `BootstrapForRoot` BEFORE the
+  filter inspects state, so the filter would observe `Running`, not `Failed`): the call that
+  finds `Failed` STARTS the retry (`Failed → Running`) and returns
+  `CallToolResult { IsError = true }` with `"bootstrap failed: <stored message>; retry started —
+  call again shortly."` The snapshot keeps `LastFailureMessage` through the retry so the text is
+  available while `Running`.
 - `Idle` with no resolvable root → existing `CreateBindingFailureException` behavior unchanged.
 
 `EnsurePrimaryBoundCoreAsync` no longer holds `_bindLock` for the scan duration (BootstrapForRoot
 returns after dispatch), so queued calls fall through to the grace-wait immediately.
 
-**Workspace-tool exemption:** the `workspace` tool bypasses the not-ready gate so
-`workspace status`/`health` are usable DURING indexing (julie parity: `manage_workspace` worked
-while indexing). When unbound, `workspace status` renders the bootstrap snapshot only —
-`"bootstrap: running <root>, started <N>s ago"` or `"bootstrap: failed — <message>"` — without
-touching index getters (which throw pre-bound). Other workspace operations that need the index
-report the same not-ready line instead of throwing.
+**Workspace-tool exemption — rendered by the FILTER, not the tool (review blocker 3):**
+`WorkspaceTool`'s constructor requires `IndexHolder`, `WorkspaceContext`, `TelemetryLedger`,
+`JulieExtractRunner`, … — all resolved through bootstrap getters that THROW before binding
+(`MillerServiceRegistration.cs:45-48`), so an unbound `workspace` call cannot even construct the
+tool. Instead: when the snapshot is not `Bound` and the tool name is `workspace`
+(`request.Params?.Name`, same pattern telemetry uses), the filter itself returns a SUCCESSFUL
+`CallToolResult` rendering the bootstrap snapshot — `"bootstrap: running <root>, started <N>s
+ago"` / `"bootstrap: failed — <message>"` — for every operation, without invoking the tool.
+Once bound, `workspace` flows normally (and its status render gains a one-line rebind notice
+when a new run is in flight, via an injected `IndexBootstrapService` snapshot — constructible
+because the tool only resolves when bound). julie parity: `manage_workspace` worked while
+indexing.
+
+### Filter ordering and telemetry (review should-fix)
+
+`Program.cs` composes the binding filter OUTSIDE the telemetry filter. That order is now
+load-bearing twice over: telemetry's filter resolves `TelemetryLedger` (a bound-only getter)
+before calling `next`, so it must never run for unbound calls — and consequently not-ready
+responses are NOT telemetered (they are logged by the binding filter instead; acceptable and now
+documented). An integration test pins the composition order so a refactor cannot silently flip
+it.
 
 ### Eager startup path
 
@@ -113,8 +151,9 @@ on failure (same as today's deferred-never-bound case).
   `src/Miller.Server/Telemetry/WorkspaceBindingCallToolFilter.cs` (grace wait + not-ready/failed
   results + workspace-tool exemption), `src/Miller.Server/Tools/WorkspaceTool.cs` +
   `WorkspaceRender` (unbound status rendering).
-- Test: `tests/Miller.Tests/Server/WorkspaceBindingServiceTests.cs` (state transitions, retry
-  from Failed, different-root-while-running ignored),
+- Test: `tests/Miller.Tests/Server/WorkspaceBindingServiceTests.cs` (state transitions,
+  atomic-publication visibility, `BindOutcome` contract, retry-from-Failed contract,
+  rebind-deferred keeps `_rootsDirty` and rebinds after the in-flight run),
   `tests/Miller.Tests/Server/WorkspaceBindingCallToolFilterTests.cs` (new: grace path, not-ready
   result, failed result, workspace exemption, `MILLER_BOOTSTRAP_GRACE_SECONDS=0`),
   `tests/Miller.Tests/Server/WorkspaceToolTests.cs` (unbound status render).
@@ -130,7 +169,44 @@ on failure (same as today's deferred-never-bound case).
 - [ ] Tool calls after a bootstrap failure return the stored error and the next call retries.
 - [ ] `workspace status`/`health` work during indexing and render the bootstrap snapshot when
       unbound.
+- [ ] `BoundWorkspace` publishes atomically under `_gate`; registry-ready + ledger rebind occur
+      only at the publish point; failed rebind keeps the previous workspace serving (existing
+      `HostStartupRegistrationTests` behavior preserved).
+- [ ] Grace wait is run-generation-keyed; during a rebind, tools return not-ready for the new
+      run rather than silently answering from the old root.
+- [ ] `RebindDeferred` preserves `_rootsDirty`; the deferred rebind starts on the first call
+      after the in-flight run completes (regression test for the stranded-root sequence).
+- [ ] Filter composition order (binding outside telemetry) pinned by an integration test;
+      not-ready responses documented as logged-not-telemetered.
+- [ ] CLAUDE.md host-lifecycle section updated ("getters throw until BOUND", not "until
+      StartAsync"); AGENTS.md regenerated in sync.
 - [ ] Existing binding/bootstrap tests pass unchanged (synchronous `TestBootstrapInterceptor`
       seam preserved).
 - [ ] Fast suite green within budget; no new Scale-tagged tests needed (all simulation via the
       test seams, no real julie-extract spawn).
+
+## Review record (Codex, read-only, 2026-07-06)
+
+Verdict on rev 1: not implement-ready — 4 blockers, 3 should-fix, 1 nit. All verified against
+code before acceptance; all folded into rev 2:
+
+1. **Confirmed — background publication unsafe as drafted** (`_holder` first, `IsBound` =
+   holder-null check). → Atomic `BoundWorkspace` publish under `_gate`, then signal.
+2. **Confirmed — ignore-rebind-while-Running strands the session on the old root** (unconditional
+   `_rootsDirty` clear). → `BindOutcome` return; dirty cleared only on accepting outcomes.
+3. **Confirmed — workspace-tool exemption impossible with current DI** (ctor needs bound-only
+   getters). → Snapshot rendered by the filter itself; tool untouched when unbound.
+4. **Confirmed — `WaitUntilBoundAsync` breaks the grace wait for rebinds** (returns immediately
+   when any holder exists). → Run-generation-keyed gate.
+5. **Accepted — Failed-retry contract was ambiguous.** → Retry-starts-and-reports contract.
+6. **Accepted — filter/telemetry ordering unspecified.** → Binding outside telemetry, pinned by
+   test; not-ready responses logged, not telemetered.
+7. **Accepted — registry/ledger writes mid-scan corrupt attribution on failed rebinds.** →
+   Moved to the atomic publish point; failure marks registry error best-effort.
+8. **Accepted (nit) — CLAUDE.md lifecycle wording.** → "until bound" language + AGENTS regen in
+   the implementation slice.
+
+Dropped by the reviewer after verification: `CallToolResult{IsError}` expressibility and
+tool-name access in filters (both already used by `TelemetryCallToolFilter`), and M3
+hosted-service lifecycle concerns (constructors already take bootstrap lazily; guard test
+covers it).
