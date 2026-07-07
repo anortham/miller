@@ -9,7 +9,7 @@ namespace Miller.Tests.Core;
 ///
 /// <para>Every fixture uses ONLY the load-bearing public contract:
 /// <c>DeadCodeSymbolRow</c> / <c>LanguageCoverageRow</c> inputs and the <c>DeadCodeResult</c> output.
-/// The nine suppression rule ids and their table order are asserted against
+/// The eleven suppression rule ids and their table order are asserted against
 /// <see cref="DeadCodeCandidates.SuppressionRuleIds"/>.</para>
 /// </summary>
 public sealed class DeadCodeCandidatesTests
@@ -66,14 +66,14 @@ public sealed class DeadCodeCandidatesTests
 
     private static void AssertNoSuppressions(DeadCodeResult result)
     {
-        Assert.Equal(10, result.Suppressions.Count);
+        Assert.Equal(11, result.Suppressions.Count);
         foreach (var id in DeadCodeCandidates.SuppressionRuleIds)
             Assert.Equal(0, result.Suppressions[id]);
     }
 
     private static void AssertOnlySuppression(DeadCodeResult result, string ruleId)
     {
-        Assert.Equal(10, result.Suppressions.Count);
+        Assert.Equal(11, result.Suppressions.Count);
         foreach (var id in DeadCodeCandidates.SuppressionRuleIds)
             Assert.Equal(id == ruleId ? 1 : 0, result.Suppressions[id]);
     }
@@ -81,13 +81,14 @@ public sealed class DeadCodeCandidatesTests
     // ---- public contract shape -------------------------------------------------------------------------------
 
     [Fact]
-    public void SuppressionRuleIds_are_the_ten_ids_in_table_order()
+    public void SuppressionRuleIds_are_the_eleven_ids_in_table_order()
     {
         Assert.Equal(
             new[]
             {
                 "public_api", "visibility_unknown", "test_symbol", "entry_point", "override_member",
-                "framework_bound", "annotated", "generated_path", "low_evidence_language", "string_literal_match",
+                "live_member_container", "framework_bound", "annotated", "generated_path",
+                "low_evidence_language", "string_literal_match",
             },
             DeadCodeCandidates.SuppressionRuleIds);
     }
@@ -243,6 +244,46 @@ public sealed class DeadCodeCandidatesTests
             [Row(name: "ExecuteAsync", isOverrideMember: true)], CSharpResolverCovered);
         Assert.Empty(result.Candidates);
         AssertOnlySuppression(result, "override_member");
+    }
+
+    [Fact]
+    public void Rule_live_member_container_suppresses_type_whose_member_has_inbound_evidence()
+    {
+        // A static extension class (TelemetryOutcomeExtensions shape): the class NAME appears nowhere, but its
+        // member (outcome.ToStorageString()) has inbound calls. The container must not be flagged.
+        var rows = new[]
+        {
+            Row(name: "TelemetryOutcomeExtensions", kind: "class", visibility: "internal",
+                symbolId: "sym-Container"),
+            Row(name: "ToStorageString", kind: "method", visibility: "public",
+                parentSymbolId: "sym-Container", callsInbound: 1),
+        };
+
+        var result = DeadCodeCandidates.Evaluate(rows, CSharpResolverCovered);
+
+        // The class is suppressed as live_member_container; the member is alive-by-evidence (silent, not counted).
+        Assert.Empty(result.Candidates);
+        AssertOnlySuppression(result, "live_member_container");
+        Assert.Equal(2, result.Examined);
+    }
+
+    [Fact]
+    public void Rule_live_member_container_does_not_fire_when_no_member_has_evidence()
+    {
+        // Same container shape but the member shows ZERO inbound evidence: the container is NOT rescued and
+        // remains a candidate (conservative — a fact to check).
+        var rows = new[]
+        {
+            Row(name: "OrphanContainer", kind: "class", visibility: "internal", symbolId: "sym-Container"),
+            Row(name: "OrphanMethod", kind: "method", visibility: "private", parentSymbolId: "sym-Container"),
+        };
+
+        var result = DeadCodeCandidates.Evaluate(rows, CSharpResolverCovered);
+
+        // No member evidence -> live_member_container count stays 0; both zero-evidence rows are candidates.
+        Assert.Equal(0, result.Suppressions["live_member_container"]);
+        Assert.Contains(result.Candidates, c => c.SymbolId == "sym-Container");
+        Assert.Contains(result.Candidates, c => c.Name == "OrphanMethod");
     }
 
     [Fact]
@@ -453,8 +494,8 @@ public sealed class DeadCodeCandidatesTests
         Assert.Equal(1, applied.Suppressions["string_literal_match"]);
         Assert.Empty(applied.NeedsLiteralScan);
         Assert.Equal(result.Examined, applied.Examined);
-        // All ten ids still present.
-        Assert.Equal(10, applied.Suppressions.Count);
+        // All eleven ids still present.
+        Assert.Equal(11, applied.Suppressions.Count);
     }
 
     [Fact]

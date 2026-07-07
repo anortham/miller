@@ -12,7 +12,7 @@ public sealed record DeadCodeCandidate(
 
 /// <summary>
 /// The result of <see cref="DeadCodeCandidates.Evaluate"/>: the surviving candidates, the per-rule suppression
-/// counts (ALL nine rule ids always present, even when 0), the examined count (symbols that survived exclusion),
+/// counts (ALL eleven rule ids always present, even when 0), the examined count (symbols that survived exclusion),
 /// and the provisional candidates still awaiting the reader's literal scan (<see cref="NeedsLiteralScan"/>).
 /// </summary>
 public sealed record DeadCodeResult(
@@ -35,6 +35,7 @@ public static class DeadCodeCandidates
     private const string TestSymbol = "test_symbol";
     private const string EntryPoint = "entry_point";
     private const string OverrideMember = "override_member";
+    private const string LiveMemberContainer = "live_member_container";
     private const string FrameworkBound = "framework_bound";
     private const string Annotated = "annotated";
     private const string GeneratedPath = "generated_path";
@@ -52,14 +53,20 @@ public static class DeadCodeCandidates
     };
 
     /// <summary>
-    /// The ten suppression rule ids in TABLE ORDER — the single source of the ids and their output order, so the
+    /// The eleven suppression rule ids in TABLE ORDER — the single source of the ids and their output order, so the
     /// Indexing / Server layers cannot drift the set or its ordering.
     /// </summary>
     public static IReadOnlyList<string> SuppressionRuleIds { get; } =
     [
-        PublicApi, VisibilityUnknown, TestSymbol, EntryPoint, OverrideMember, FrameworkBound,
-        Annotated, GeneratedPath, LowEvidenceLanguage, StringLiteralMatch,
+        PublicApi, VisibilityUnknown, TestSymbol, EntryPoint, OverrideMember, LiveMemberContainer,
+        FrameworkBound, Annotated, GeneratedPath, LowEvidenceLanguage, StringLiteralMatch,
     ];
+
+    // Type kinds that CONTAIN members — a static extension class, a partial container, an interface with a
+    // referenced member. Delegates and other candidate kinds have no members and are deliberately excluded, so
+    // the live_member_container rule only rescues genuine containers.
+    private static readonly IReadOnlySet<string> TypeContainerKinds =
+        new HashSet<string>(StringComparer.Ordinal) { "class", "struct", "interface", "enum" };
 
     // Visibility values treated as exported / public (conservative — suppressing more avoids false positives).
     private static readonly IReadOnlySet<string> ExportedVisibilities =
@@ -103,7 +110,7 @@ public static class DeadCodeCandidates
     /// <summary>
     /// Evaluate the candidate + suppression rules over the reader's rows. See the design doc for the full decision
     /// logic; the short version: exclude non-candidate kinds and syntax-invoked names, drop alive-by-evidence
-    /// symbols silently, then apply the nine suppression rules in table order (first match wins the count). What
+    /// symbols silently, then apply the eleven suppression rules in table order (first match wins the count). What
     /// remains is a candidate; a candidate whose <see cref="DeadCodeSymbolRow.LiteralMatch"/> is <c>null</c> is
     /// provisional and also listed in <see cref="DeadCodeResult.NeedsLiteralScan"/>.
     /// </summary>
@@ -123,6 +130,20 @@ public static class DeadCodeCandidates
         foreach (var id in SuppressionRuleIds)
             suppressions[id] = 0;
 
+        // Parent ids of candidate-kind members that show inbound evidence — the input to the live_member_container
+        // rule. Built once over the LOADED rows (candidate kinds only, per DeadCodeSymbolRow's contract): a
+        // container whose only members are non-candidate kinds (fields, constructors) never appears here, so it
+        // stays a candidate (conservative direction). O(n) over the rows already passed to Evaluate.
+        var parentsWithLiveMember = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var row in rows)
+        {
+            if (row.ParentSymbolId is not null
+                && CandidateKinds.Contains(row.Kind)
+                && (row.NameMatchesOutside > 0 || row.ResolvedInbound > 0
+                    || row.PendingResolvedInbound > 0 || row.CallsInbound > 0))
+                parentsWithLiveMember.Add(row.ParentSymbolId);
+        }
+
         var candidates = new List<DeadCodeCandidate>();
         var needsLiteralScan = new List<DeadCodeSymbolRow>();
         int examined = 0;
@@ -140,7 +161,7 @@ public static class DeadCodeCandidates
                 || row.PendingResolvedInbound > 0 || row.CallsInbound > 0)
                 continue;
 
-            var suppressingRule = FirstSuppressionRule(row, coverageByLanguage);
+            var suppressingRule = FirstSuppressionRule(row, coverageByLanguage, parentsWithLiveMember);
             if (suppressingRule is not null)
             {
                 suppressions[suppressingRule]++;
@@ -197,7 +218,8 @@ public static class DeadCodeCandidates
     /// </summary>
     private static string? FirstSuppressionRule(
         DeadCodeSymbolRow row,
-        IReadOnlyDictionary<string, LanguageCoverageRow> coverageByLanguage)
+        IReadOnlyDictionary<string, LanguageCoverageRow> coverageByLanguage,
+        IReadOnlySet<string> parentsWithLiveMember)
     {
         if (!string.IsNullOrWhiteSpace(row.Visibility) && ExportedVisibilities.Contains(row.Visibility))
             return PublicApi;
@@ -213,6 +235,13 @@ public static class DeadCodeCandidates
 
         if (row.IsOverrideMember)
             return OverrideMember;
+
+        // A TYPE-kind row (class/struct/interface/enum) whose name shows no inbound evidence but at least one of its
+        // loaded members does — the classic C# static extension class shape (the class name appears nowhere;
+        // callers write `outcome.ToStorageString()`). The container is alive through its members, so it must not be
+        // flagged. Only rows already past the alive-by-evidence drop and the earlier rules reach here.
+        if (TypeContainerKinds.Contains(row.Kind) && parentsWithLiveMember.Contains(row.SymbolId))
+            return LiveMemberContainer;
 
         if (row.HasStructuralFactSelfOrAncestor)
             return FrameworkBound;
