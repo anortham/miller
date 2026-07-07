@@ -175,9 +175,9 @@ starts on the next ensure call (snapshot root == B). Keep `EnsurePrimaryBoundFro
 test seam behavior intact.
 
 **Acceptance criteria:**
-- [ ] Stranded-root regression sequence passes (fails on pre-task code)
-- [ ] Dirty cleared on accepting outcomes only; existing binding tests pass
-- [ ] Worker-scope verification passes; `serial-worker-commit` with recorded SHA
+- [x] Stranded-root regression sequence passes (fails on pre-task code)
+- [x] Dirty cleared on accepting outcomes only; existing binding tests pass
+- [x] Worker-scope verification passes; `serial-worker-commit` with recorded SHA
 
 ### Task 3: Filter — grace wait, not-ready/failed results, workspace snapshot render, ordering pin
 

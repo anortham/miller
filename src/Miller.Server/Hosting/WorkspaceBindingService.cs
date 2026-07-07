@@ -88,13 +88,16 @@ public sealed class WorkspaceBindingService : IWorkspaceBindingService
             _logger.LogInformation(
                 "Binding primary workspace to {Root} (source={Source}).",
                 resolved.Path, resolved.Source);
-            _bootstrap.BootstrapForRoot(resolved.Path, resolved.Source);
+            var outcome = _bootstrap.BootstrapForRoot(resolved.Path, resolved.Source);
 
-            lock (_gate)
+            if (outcome != BindOutcome.RebindDeferred)
             {
-                _rootsDirty = false;
-                if (rootUris is not null)
-                    _cachedRootUris = rootUris;
+                lock (_gate)
+                {
+                    _rootsDirty = false;
+                    if (rootUris is not null)
+                        _cachedRootUris = rootUris;
+                }
             }
         }
         finally
