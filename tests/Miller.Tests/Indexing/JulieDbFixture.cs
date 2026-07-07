@@ -108,6 +108,158 @@ internal sealed class JulieDbFixture : IDisposable
             throw new InvalidOperationException($"Expected one files row for '{relPath}', updated {updated}.");
     }
 
+    // ---- v4 reference-resolution + suppression-evidence builders --------------------------------------------
+    // These mutate the already-created DB over a fresh ReadWrite (Pooling=false) connection — the same pattern as
+    // ReplaceFileBytesAndRefreshHash. FK enforcement is OFF on the new connection (SQLite per-connection default),
+    // so a row may reference a symbol/file the fixture did not seed; the identifier_resolutions CHECK is still
+    // enforced (a 'resolved' outcome REQUIRES a non-null target). Consumed by the dead-code reader tests and Task 3.
+
+    private void ExecuteWrite(string sql, Action<SqliteParameterCollection> bind)
+    {
+        // ForeignKeys=false mirrors Create's `PRAGMA foreign_keys=OFF` so a builder may reference a symbol/file
+        // the fixture did not seed; the identifier_resolutions CHECK is enforced regardless of the FK pragma.
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        { DataSource = DbPath, Mode = SqliteOpenMode.ReadWrite, Pooling = false, ForeignKeys = false }.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        bind(command.Parameters);
+        command.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// Insert an <c>identifier_resolutions</c> row: the resolved/ambiguous outcome for one identifier reference.
+    /// A <c>resolved</c> outcome REQUIRES a non-null <paramref name="targetSymbolId"/> (the CHECK enforces it).
+    /// </summary>
+    public void AddIdentifierResolution(
+        string identifierId, string? targetSymbolId, string outcome = "resolved",
+        int tier = 1, double confidence = 1.0, string method = "exact", int candidates = 1,
+        long resolvedAtRevision = 1)
+    {
+        ExecuteWrite("""
+            INSERT INTO identifier_resolutions
+                (identifier_id, target_symbol_id, tier, confidence, method, outcome, candidates, resolved_at_revision)
+            VALUES ($id, $target, $tier, $conf, $method, $outcome, $cands, $rev);
+            """, p =>
+        {
+            p.AddWithValue("$id", identifierId);
+            p.AddWithValue("$target", (object?)targetSymbolId ?? DBNull.Value);
+            p.AddWithValue("$tier", tier);
+            p.AddWithValue("$conf", confidence);
+            p.AddWithValue("$method", method);
+            p.AddWithValue("$outcome", outcome);
+            p.AddWithValue("$cands", candidates);
+            p.AddWithValue("$rev", resolvedAtRevision);
+        });
+    }
+
+    /// <summary>
+    /// Insert a <c>pending_relationships</c> row (a deferred call/reference awaiting resolution). <c>file_id</c>
+    /// is derived from <paramref name="filePath"/> via the shared helper; <paramref name="startByte"/>/
+    /// <paramref name="endByte"/> are the (nullable) origin span the reader's inside-S test consults.
+    /// </summary>
+    public void AddPendingRelationship(
+        string pendingRelationshipId, string fromSymbolId, string filePath,
+        string? callerScopeSymbolId = null, int? startByte = null, int? endByte = null,
+        string kind = "call", string targetDisplayName = "Target", string targetTerminalName = "Target",
+        int startLine = 1, double confidence = 1.0)
+    {
+        ExecuteWrite("""
+            INSERT INTO pending_relationships
+                (pending_relationship_id, from_symbol_id, caller_scope_symbol_id, file_id, path, kind,
+                 target_display_name, target_terminal_name, target_receiver, target_namespace_json,
+                 target_import_context, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                 confidence, metadata_json)
+            VALUES ($id, $from, $caller, $fid, $path, $kind, $display, $terminal, NULL, '[]', NULL,
+                    $sl, NULL, NULL, NULL, $sb, $eb, $conf, NULL);
+            """, p =>
+        {
+            p.AddWithValue("$id", pendingRelationshipId);
+            p.AddWithValue("$from", fromSymbolId);
+            p.AddWithValue("$caller", (object?)callerScopeSymbolId ?? DBNull.Value);
+            p.AddWithValue("$fid", FileId(filePath));
+            p.AddWithValue("$path", filePath);
+            p.AddWithValue("$kind", kind);
+            p.AddWithValue("$display", targetDisplayName);
+            p.AddWithValue("$terminal", targetTerminalName);
+            p.AddWithValue("$sl", startLine);
+            p.AddWithValue("$sb", (object?)startByte ?? DBNull.Value);
+            p.AddWithValue("$eb", (object?)endByte ?? DBNull.Value);
+            p.AddWithValue("$conf", confidence);
+        });
+    }
+
+    /// <summary>
+    /// Insert a <c>pending_resolutions</c> row: the resolved target for a pending relationship. Independent of
+    /// <c>identifier_resolutions</c> — a pending relationship can resolve with NO identifier_resolutions row.
+    /// </summary>
+    public void AddPendingResolution(
+        string pendingRelationshipId, string targetSymbolId,
+        int tier = 1, double confidence = 1.0, string method = "exact", long resolvedAtRevision = 1)
+    {
+        ExecuteWrite("""
+            INSERT INTO pending_resolutions
+                (pending_relationship_id, target_symbol_id, tier, confidence, method, resolved_at_revision)
+            VALUES ($id, $target, $tier, $conf, $method, $rev);
+            """, p =>
+        {
+            p.AddWithValue("$id", pendingRelationshipId);
+            p.AddWithValue("$target", targetSymbolId);
+            p.AddWithValue("$tier", tier);
+            p.AddWithValue("$conf", confidence);
+            p.AddWithValue("$method", method);
+            p.AddWithValue("$rev", resolvedAtRevision);
+        });
+    }
+
+    /// <summary>
+    /// Insert a <c>structural_facts</c> row bound to <paramref name="containingSymbolId"/> (the framework-bound
+    /// source the reader treats as a suppression signal on the symbol OR any ancestor).
+    /// </summary>
+    public void AddStructuralFact(
+        string structuralFactId, string? containingSymbolId, string path,
+        string language = "csharp", string patternId = "custom.pattern.v1",
+        string captureName = "attribute", string nodeKind = "attribute")
+    {
+        ExecuteWrite("""
+            INSERT INTO structural_facts
+                (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                 containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                 confidence, metadata_json)
+            VALUES ($id, $fid, $path, $lang, $pattern, $capture, $node, $symbol,
+                    1, 1, 1, 2, 0, 1, 1.0, NULL);
+            """, p =>
+        {
+            p.AddWithValue("$id", structuralFactId);
+            p.AddWithValue("$fid", FileId(path));
+            p.AddWithValue("$path", path);
+            p.AddWithValue("$lang", language);
+            p.AddWithValue("$pattern", patternId);
+            p.AddWithValue("$capture", captureName);
+            p.AddWithValue("$node", nodeKind);
+            p.AddWithValue("$symbol", (object?)containingSymbolId ?? DBNull.Value);
+        });
+    }
+
+    /// <summary>
+    /// Insert a <c>symbol_annotations</c> row for <paramref name="symbolId"/> (the SELF-only annotated signal the
+    /// reader reads via <c>SELECT DISTINCT symbol_id FROM symbol_annotations</c>).
+    /// </summary>
+    public void AddSymbolAnnotation(
+        string annotationId, string symbolId, string annotation = "Obsolete", string annotationKey = "obsolete")
+    {
+        ExecuteWrite("""
+            INSERT INTO symbol_annotations (annotation_id, symbol_id, annotation, annotation_key, raw_text, carrier)
+            VALUES ($id, $sid, $ann, $key, NULL, NULL);
+            """, p =>
+        {
+            p.AddWithValue("$id", annotationId);
+            p.AddWithValue("$sid", symbolId);
+            p.AddWithValue("$ann", annotation);
+            p.AddWithValue("$key", annotationKey);
+        });
+    }
+
     /// <summary>
     /// A row as written into the synthesized v1 <c>symbols</c> table. The first eight fields are the M1 read
     /// projection; the remaining detail/body columns (M2 <c>ReadDetail</c>/<c>ReadBody</c>) and the typed test
@@ -277,7 +429,9 @@ internal sealed class JulieDbFixture : IDisposable
         IReadOnlyList<RelationshipRow>? relationships = null,
         string? hashAlgorithm = MillerExtractContract.ExpectedHashAlgorithm,
         IReadOnlyList<FileSpec>? extraFiles = null,
-        IReadOnlyList<SourceRegionRow>? sourceRegions = null)
+        IReadOnlyList<SourceRegionRow>? sourceRegions = null,
+        string? referenceResolutionStatus = "partial",
+        string? referenceResolutionVersion = "1")
     {
         string dir = Path.Combine(Path.GetTempPath(), "miller-julie-fixture-" + Guid.NewGuid().ToString("N"));
         System.IO.Directory.CreateDirectory(dir);
@@ -325,6 +479,13 @@ internal sealed class JulieDbFixture : IDisposable
             Exec(conn, LanguageCapabilityFixturesDdl);
             Exec(conn, LanguageCapabilityGapsDdl);
             Exec(conn, PendingRelationshipsDdl);
+            Exec(conn, PendingRelationshipsIndexesDdl);
+            // v4 reference-resolution overlay tables + their pinned indexes (created empty; seeded by the
+            // AddIdentifierResolution / AddPendingResolution builders when a test needs resolution evidence).
+            Exec(conn, IdentifierResolutionsDdl);
+            Exec(conn, IdentifierResolutionsIndexDdl);
+            Exec(conn, PendingResolutionsDdl);
+            Exec(conn, PendingResolutionsIndexDdl);
             Exec(conn, TypeFactsDdl);
             if (createMetadataTable) Exec(conn, MetadataDdl);
 
@@ -584,6 +745,13 @@ internal sealed class JulieDbFixture : IDisposable
 
                 if (hashAlgorithm is not null)
                     Meta("hash_algorithm", hashAlgorithm);
+
+                // v4 reference-resolution metadata keys (schema 4 / product 2.9.0). Included by default for
+                // fidelity; a test passes null for either to exercise the reader's unknown/null fallbacks.
+                if (referenceResolutionStatus is not null)
+                    Meta("reference_resolution_status", referenceResolutionStatus);
+                if (referenceResolutionVersion is not null)
+                    Meta("reference_resolution_version", referenceResolutionVersion);
             }
         }
 
@@ -1182,6 +1350,9 @@ internal sealed class JulieDbFixture : IDisposable
         );
         """;
 
+    // v4 pinned shape: the columns are unchanged from v1, but the FKs (from_symbol_id / caller_scope_symbol_id /
+    // file_id) and the four lookup indexes are added so the synthetic artifact matches the reference-resolution
+    // contract the dead-code reader depends on (schema v4 / product 2.9.0).
     private const string PendingRelationshipsDdl = """
         CREATE TABLE IF NOT EXISTS pending_relationships (
             pending_relationship_id TEXT PRIMARY KEY,
@@ -1202,9 +1373,55 @@ internal sealed class JulieDbFixture : IDisposable
             start_byte INTEGER,
             end_byte INTEGER,
             confidence REAL NOT NULL,
-            metadata_json TEXT
+            metadata_json TEXT,
+            FOREIGN KEY (from_symbol_id) REFERENCES symbols(symbol_id) ON DELETE CASCADE,
+            FOREIGN KEY (caller_scope_symbol_id) REFERENCES symbols(symbol_id) ON DELETE SET NULL,
+            FOREIGN KEY (file_id) REFERENCES files(file_id) ON DELETE CASCADE
         );
         """;
+
+    private const string PendingRelationshipsIndexesDdl = """
+        CREATE INDEX IF NOT EXISTS idx_pending_terminal ON pending_relationships(target_terminal_name);
+        CREATE INDEX IF NOT EXISTS idx_pending_file ON pending_relationships(file_id);
+        CREATE INDEX IF NOT EXISTS idx_pending_from ON pending_relationships(from_symbol_id);
+        CREATE INDEX IF NOT EXISTS idx_pending_caller_scope ON pending_relationships(caller_scope_symbol_id);
+        """;
+
+    // v4 overlay: identifier_resolutions (the resolved/ambiguous outcome for a plain identifier reference). The
+    // CHECK ties outcome='resolved' to a non-null target_symbol_id — a faithful copy of the pinned contract.
+    private const string IdentifierResolutionsDdl = """
+        CREATE TABLE IF NOT EXISTS identifier_resolutions (
+            identifier_id TEXT PRIMARY KEY REFERENCES identifiers(identifier_id) ON DELETE CASCADE,
+            target_symbol_id TEXT REFERENCES symbols(symbol_id) ON DELETE CASCADE,
+            tier INTEGER,
+            confidence REAL,
+            method TEXT,
+            outcome TEXT NOT NULL,
+            candidates INTEGER,
+            resolved_at_revision INTEGER NOT NULL,
+            CHECK ((outcome = 'resolved') = (target_symbol_id IS NOT NULL))
+        );
+        """;
+
+    private const string IdentifierResolutionsIndexDdl =
+        "CREATE INDEX IF NOT EXISTS idx_identifier_resolutions_target ON identifier_resolutions(target_symbol_id);";
+
+    // v4 overlay: pending_resolutions (the resolved target for a deferred/pending relationship). Independent of
+    // identifier_resolutions — a pending relationship can resolve with no identifier_resolutions row.
+    private const string PendingResolutionsDdl = """
+        CREATE TABLE IF NOT EXISTS pending_resolutions (
+            pending_relationship_id TEXT PRIMARY KEY
+                REFERENCES pending_relationships(pending_relationship_id) ON DELETE CASCADE,
+            target_symbol_id TEXT NOT NULL REFERENCES symbols(symbol_id) ON DELETE CASCADE,
+            tier INTEGER NOT NULL,
+            confidence REAL NOT NULL,
+            method TEXT NOT NULL,
+            resolved_at_revision INTEGER NOT NULL
+        );
+        """;
+
+    private const string PendingResolutionsIndexDdl =
+        "CREATE INDEX IF NOT EXISTS idx_pending_resolutions_target ON pending_resolutions(target_symbol_id);";
 
     private const string TypeFactsDdl = """
         CREATE TABLE IF NOT EXISTS type_facts (
