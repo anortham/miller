@@ -18,6 +18,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`contracts/trace-json-v1.md`](contracts/trace-json-v1.md) - active trace JSON contract for auto/path/refs/bridge output and additive `next_actions`.
 - [`contracts/content-corpus-v1.md`](contracts/content-corpus-v1.md) - active content corpus schema/export contract.
 - [`contracts/references-export-v1.md`](contracts/references-export-v1.md) - active references/usage JSONL export contract.
+- [`contracts/references-candidates-v1.md`](contracts/references-candidates-v1.md) - experimental, evidence-gated dead-code candidate listing CLI contract (`references candidates`).
 - [`contracts/patterns-json-v1.md`](contracts/patterns-json-v1.md) - active patterns JSON contract over extractor structural facts.
 - [`contracts/metrics-json-v1.md`](contracts/metrics-json-v1.md) - active metrics JSON contract for churn, clone groups, and complexity ranking.
 - [`plans/2026-06-26-miller-five-gap-implementation-plan.md`](plans/2026-06-26-miller-five-gap-implementation-plan.md) - historical implementation plan for metrics, empty-state recovery, leader handoff, dashboard panels, and clone/complexity discovery; the metrics MCP-tool portions were superseded by the CLI-only metrics contract.

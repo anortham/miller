@@ -66,6 +66,7 @@ Current `json_commands` include:
 | `telemetry export --jsonl` | Export raw Miller telemetry rows for Eros dashboard/history ingestion. |
 | `symbols export --jsonl` | Bulk-export one row per symbol for fleet rollups (counts, kinds, doc coverage, clones). |
 | `references export --jsonl` | Bulk-export one row per identifier/reference usage fact for dead-code candidate workflows. |
+| `references candidates --json` | Deterministic dead-code candidate listing with named suppressions (experimental, evidence-gated; CLI-only). See [`references-candidates-v1.md`](references-candidates-v1.md). |
 | `complexity export --jsonl` | Bulk-export per-symbol/per-file complexity metric rows for fleet hotspot ranking. |
 | `patterns export --jsonl` | Bulk-export structural fact rows for fleet code-shape inventory. |
 | `dashboard --json` | Start/reuse the local dashboard helper and return its URL. |
@@ -156,8 +157,9 @@ with the standard rebuild message. Fields (`schema_version` 1):
 - `is_test` — boolean; julie's cross-language test signal (prod/test splits).
 
 `miller references export --jsonl [--workspace-id SELECTOR] [--workspace DIR]` emits one JSON line per
-`identifiers` row, ordered `(path, start_byte, identifier_id)`. This is a fact feed for Eros dead-code and
-usage workflows, not a Miller ranking/workflow surface. See [`references-export-v1.md`](references-export-v1.md)
+`identifiers` row, ordered `(path, start_byte, identifier_id)`. This is a raw usage fact feed, not a ranking
+surface; Miller's own deterministic dead-code candidate listing is `references candidates`
+([`references-candidates-v1.md`](references-candidates-v1.md)). See [`references-export-v1.md`](references-export-v1.md)
 for field-level guarantees. Fields (`schema_version` 1):
 
 - `identifier_id` — julie's identifier-row ID; this is the source fact ID.
@@ -270,6 +272,8 @@ result such as `workspace remove` returning `not_found` with exit code `0`.
 Miller should add new CLI JSON/export surfaces when Eros needs stable code facts or operations. Do not add a
 private Eros-to-Miller protocol until documented JSON, JSONL, and local artifacts are proven insufficient.
 
-The references export is intentionally narrow: Miller exports deterministic usage facts, while Eros owns
-dead-code ranking, generated/framework suppression, history, cleanup tasks, confidence views, and
-multi-workspace reporting.
+The references export is intentionally narrow: Miller exports deterministic usage facts. Per the 2026-07-06
+consensus, Miller also owns the deterministic dead-code **candidate** listing with named suppressions
+(`references candidates`; [`references-candidates-v1.md`](references-candidates-v1.md), experimental and
+CLI-only). Ranking beyond the deterministic rule, suppression **persistence**, candidate history, cleanup
+tasks, confidence views, and multi-workspace reporting stay out of Miller.

@@ -17,8 +17,12 @@ local analysis reports** (`metrics churn|clones|complexity|risk`, the composed `
 what requires semantics or fleet state: semantic/vector retrieval and embeddings, guidance and
 confidence/evidence views, cross-workspace/fleet ranking, suppression persistence, and commercial orchestration.
 (2026-07-06 consensus, Eros not shipping: Miller absorbed the deterministic signals/hotspot workflows —
-see `docs/plans/2026-07-06-miller-standalone-bolstering-assessment.md`. Dead-code candidates stay out until
-extractor reference resolution earns them; metric history/trends are a designed-not-built P4.) Do not add
+see `docs/plans/2026-07-06-miller-standalone-bolstering-assessment.md`. Dead-code candidates SHIPPED as an
+evidence-gated CLI surface (`miller references candidates`, `docs/contracts/references-candidates-v1.md`); the
+gate PASSED 2026-07-07 with julie-extract 2.10.0 `variable_ref` emission (392 → 5 candidates, zero
+confirmed-live — `docs/findings/2026-07-07-dead-code-candidates-dogfood.md`), but report/dashboard/MCP
+surfacing still requires explicit user approval per the MCP-stinginess rule; metric history/trends are a
+designed-not-built P4.) Do not add
 Miller surfaces that need embeddings or semantic ranking, and do not absorb `julie-extractors` extraction
 ownership.
 
