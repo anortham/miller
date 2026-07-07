@@ -27,6 +27,48 @@ lead owns any corrective dispatch against Core/Indexing/CLI. Task 5 edits no cod
 
 ---
 
+## LEAD ADDENDUM (2026-07-07, post-gate investigation) — the failure is a FIXABLE incomplete-signal defect, NOT a design dead-end
+
+The Task 5 analysis is correct about what it tested: name-death computed from `identifiers.name` **alone**
+is broken, because C# emits the reference identifier keyed by the terminal token, never the receiver. But
+that is not the only reference signal in the v4 artifact. Direct DB investigation (fresh `src/`-only v4
+scan) found two signals the **as-built Task 2 reader never consulted**:
+
+1. **`pending_relationships` carries the receiver.** For `GraphTraversal.Reach(...)` there are 4 rows with
+   `kind=calls, target_terminal_name=Reach, target_receiver=GraphTraversal, target_display_name=GraphTraversal.Reach`.
+   The receiver/qualifier — the exact thing name-death is blind to — is a first-class column. Matching a
+   symbol's name against `pending_relationships.target_receiver`/`target_terminal_name` (plus resolved
+   `relationships.to_symbol_id`) marks static-access helpers alive.
+2. **A same-file code-occurrence check** (a whole-word appearance of the symbol's name in CODE within its own
+   file, outside its definition span — reusing the existing freshness-guarded file scan) marks same-file bare
+   `const`/field reads alive. These reads emit **no** identifier/relationship in C# at all, so a scoped
+   lexical liveness *save* is the pragmatic signal; it only ever suppresses (conservative, aligned with
+   "facts to check, not deletions").
+
+**Measured on the `src/`-only artifact (328 candidates from the as-built reader):**
+
+| Corrected liveness signal | Candidates rescued |
+|---|---:|
+| reference graph (`pending_relationships` receiver/terminal + resolved `relationships` inbound) | 65 |
+| same-file code occurrence | 235 |
+| **residual (would-be candidates after the fix)** | **28 (8%)** |
+
+16 of the 28 residual are `*ForTest` methods referenced only from `tests/` (excluded from a `src/`-only
+scan — rescued on a full-repo scan); the rest are genuine finds the Task 5 hand-verification already
+confirmed dead (`RegionBackendMetadata`, `TextContentBackendMetadata`, `SearchBackendMetadata`,
+`UnknownWorkspaceIdNote`) plus framework-override blind spots (`ExecuteAsync` overrides of
+`BackgroundService`) that a small override/entry-point suppression clears.
+
+**Corrected verdict:** the as-built reader fails the gate, but the fix is entirely Miller-side and reuses
+data already in the artifact + existing scan plumbing — NOT an extraction rewrite. A cleaner long-term
+option is for julie-extractors to emit `variable_ref` identifiers for C# bare reads (the kind exists in the
+enum but C# does not emit it), giving a structured signal instead of the same-file lexical scan; that is an
+all-languages extractor enhancement, not a blocker for the Miller-side fix. **Corrective dispatch: revise
+the Task 1 evaluator contract + Task 2 reader to add graph-receiver liveness and same-file code occurrence,
+then re-run this gate on a full-repo scan.**
+
+---
+
 ## Headline numbers
 
 | Repo | Examined | Candidates | Confirmed live (false positive) | Plausibly dead (correct) | Precision | CLI wall-clock (compact / --json) |
