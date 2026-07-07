@@ -133,15 +133,15 @@ A keeps serving. Concurrency test: two threads call `BootstrapForRoot` for the s
 `Started`, one `JoinedRunning`, single background run.
 
 **Acceptance criteria:**
-- [ ] `d225dc5` guard tests and all existing bootstrap/host tests pass unchanged
-- [ ] Slow-run simulation: `IsBound` false, snapshot `Running` with root+start time, host
+- [x] `d225dc5` guard tests and all existing bootstrap/host tests pass unchanged
+- [x] Slow-run simulation: `IsBound` false, snapshot `Running` with root+start time, host
       `StartAsync` returns immediately in BOTH eager and deferred paths
-- [ ] Failed-run simulation: snapshot `Failed`+message, gate unsignaled, registry error-marked,
+- [x] Failed-run simulation: snapshot `Failed`+message, gate unsignaled, registry error-marked,
       same-root retry transitions to `Running`
-- [ ] Atomic publication proven: no observer sees `IsBound==true` before the full
+- [x] Atomic publication proven: no observer sees `IsBound==true` before the full
       `BoundWorkspace` (test polls getters from another thread during a gated publish)
-- [ ] `WaitForRunAsync` completes on that run's bind AND on its failure
-- [ ] Worker-scope verification passes; `serial-worker-commit` with recorded SHA
+- [x] `WaitForRunAsync` completes on that run's bind AND on its failure
+- [x] Worker-scope verification passes; `serial-worker-commit` with recorded SHA
 
 ### Task 2: BindOutcome / rootsDirty contract in WorkspaceBindingService
 
@@ -232,13 +232,15 @@ failed text + retry started, unbound `workspace` → successful snapshot render,
 **Files:**
 - Modify: `src/Miller.Server/Tools/WorkspaceTool.cs` (status op), `src/Miller.Server/Tools/WorkspaceRender.cs:193` (status render — one-line rebind notice when a new run is in flight while bound)
 - Modify: `CLAUDE.md` "Host lifecycle gotcha" + "Server host & startup" sections ("getters throw until BOUND", background bootstrap, `MILLER_BOOTSTRAP_GRACE_SECONDS`), then `scripts/sync-agents.sh`, then `cmp -s CLAUDE.md AGENTS.md`
-- Test: `tests/Miller.Tests/Server/WorkspaceToolTests.cs`
+- Test: `tests/Miller.Tests/Server/WorkspaceToolTests.cs` (bound-side rebind notice only; unbound
+  `workspace` snapshot rendering belongs to Task 3's filter tests because the tool cannot
+  construct before binding)
 
 **Interfaces:**
 - Consumes: Task 1's snapshot (inject `IndexBootstrapService` into `WorkspaceTool` — safe, the
   tool only constructs when bound; the UNBOUND case is fully handled by Task 3's filter render
   and needs nothing here).
-- Produces: `workspace status` shows `rebinding: <new root> (started <N>s ago)` when
+- Produces: bound `workspace status` shows `rebinding: <new root> (started <N>s ago)` when
   `Snapshot.Phase == Running` while bound; docs match shipped behavior.
 
 **Contract inputs:** design rev 2 §"Workspace-tool exemption" (bound-side notice only) and the

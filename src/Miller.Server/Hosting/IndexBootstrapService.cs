@@ -10,6 +10,30 @@ using Miller.Server.Tools;
 
 namespace Miller.Server;
 
+public enum BootstrapPhase
+{
+    Idle,
+    Running,
+    Bound,
+    Failed,
+}
+
+public sealed record BootstrapSnapshot(
+    BootstrapPhase Phase,
+    string? CanonicalRoot,
+    DateTimeOffset? StartedAtUtc,
+    string? FailureMessage,
+    string? LastFailureMessage,
+    int RunGeneration);
+
+internal enum BindOutcome
+{
+    Started,
+    AlreadyBound,
+    JoinedRunning,
+    RebindDeferred,
+}
+
 /// <summary>
 /// The startup bootstrap (M2 §7). Registered as an <see cref="IHostedService"/> BEFORE the MCP host so its
 /// <see cref="StartAsync"/> runs to completion — building the in-memory index and opening the telemetry
@@ -32,10 +56,14 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     private readonly ILogger<IndexBootstrapService> _logger;
     private readonly object _gate = new();
 
-    private IndexHolder? _holder;
-    private SmartTargetResolver? _resolver;
-    private WorkspaceContext? _workspace;
-    private TelemetryLedger? _ledger;
+    private BoundWorkspace? _bound;
+    private BootstrapPhase _phase = BootstrapPhase.Idle;
+    private string? _snapshotRoot;
+    private DateTimeOffset? _startedAtUtc;
+    private string? _failureMessage;
+    private string? _lastFailureMessage;
+    private int _runGeneration;
+    private TaskCompletionSource _runCompletion = CreateBindingGate();
 
     public IndexBootstrapService(ILogger<IndexBootstrapService> logger)
     {
@@ -43,33 +71,68 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         _logger = logger;
     }
 
+    private sealed record BoundWorkspace(
+        IndexHolder Holder,
+        SmartTargetResolver Resolver,
+        WorkspaceContext Workspace,
+        TelemetryLedger? Ledger);
+
+    private sealed record BootstrapRunResult(
+        BoundWorkspace Bound,
+        string StableWorkspaceId,
+        WorkspaceRegistryState RegistryStateAfterLoad,
+        bool DidScan,
+        long? ScanRevision,
+        long BuiltRevision,
+        int Pruned,
+        long ElapsedMilliseconds,
+        int DocumentCount,
+        bool UsesExistingLedger);
+
+    private BoundWorkspace CurrentBound =>
+        Volatile.Read(ref _bound) ?? throw new InvalidOperationException("Holder requested before bootstrap completed.");
+
     /// <summary>
     /// The live index holder (M3): seeded with the initial index + its built revision; the freshness service
     /// swaps a fresh index in as the writer advances. Throws if accessed before <see cref="StartAsync"/> completes.
     /// </summary>
-    public IndexHolder Holder =>
-        _holder ?? throw new InvalidOperationException("Holder requested before bootstrap completed.");
+    public IndexHolder Holder => CurrentBound.Holder;
 
     /// <summary>The initially-built repository index. Prefer <see cref="Holder"/> for live freshness.</summary>
     public MillerRepositoryIndex Index => Holder.Current;
 
-    public SmartTargetResolver Resolver =>
-        _resolver ?? throw new InvalidOperationException("Resolver requested before bootstrap completed.");
+    public SmartTargetResolver Resolver => CurrentBound.Resolver;
 
-    public WorkspaceContext Workspace =>
-        _workspace ?? throw new InvalidOperationException("WorkspaceContext requested before bootstrap completed.");
+    public WorkspaceContext Workspace => CurrentBound.Workspace;
 
     public TelemetryLedger Ledger =>
-        _ledger ?? throw new InvalidOperationException("TelemetryLedger requested before bootstrap completed.");
+        CurrentBound.Ledger ?? throw new InvalidOperationException("TelemetryLedger requested before bootstrap completed.");
 
     /// <summary>True once a primary workspace has been bootstrapped (eager or deferred).</summary>
-    public bool IsBound => _holder is not null;
+    public bool IsBound => Volatile.Read(ref _bound) is not null;
 
     /// <summary>True when startup deferred binding until MCP roots or the first tool call.</summary>
     public bool IsDeferred { get; private set; }
 
     /// <summary>Increments when the primary workspace is (re)bound; background services observe changes.</summary>
     public int BindingGeneration => Volatile.Read(ref _bindingGeneration);
+
+    public BootstrapSnapshot Snapshot
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return new BootstrapSnapshot(
+                    _phase,
+                    _phase == BootstrapPhase.Bound ? _bound?.Workspace.CanonicalRoot : _snapshotRoot,
+                    _startedAtUtc,
+                    _failureMessage,
+                    _lastFailureMessage,
+                    _runGeneration);
+            }
+        }
+    }
 
     private int _bindingGeneration;
     private TaskCompletionSource _bindingReady = CreateBindingGate();
@@ -83,6 +146,24 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         if (IsBound)
             return Task.CompletedTask;
         return _bindingReady.Task.WaitAsync(cancellationToken);
+    }
+
+    public Task WaitForRunAsync(int runGeneration, CancellationToken cancellationToken)
+    {
+        Task wait;
+        lock (_gate)
+        {
+            if (runGeneration <= 0 ||
+                runGeneration != _runGeneration ||
+                _phase != BootstrapPhase.Running)
+            {
+                return Task.CompletedTask;
+            }
+
+            wait = _runCompletion.Task;
+        }
+
+        return wait.WaitAsync(cancellationToken);
     }
 
     internal sealed record BootstrapScanDecision(
@@ -116,15 +197,17 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
 
     /// <summary>
     /// Test-only hook: when set, invoked instead of <see cref="RunBootstrap"/> after canonical-root resolution.
-    /// Return true when the interceptor fully handled binding (including <see cref="SignalBound"/> if needed).
+    /// Return true when the interceptor fully handled binding.
     /// </summary>
     internal Func<string, WorkspaceBindingResolver.WorkspaceSource, bool>? TestBootstrapInterceptor { get; set; }
+
+    internal Action<string>? TestRunBootstrapOverride { get; set; }
 
     /// <summary>
     /// Bind and bootstrap the primary workspace. Idempotent when already bound to the same canonical root;
     /// re-bootstraps when the canonical root changes (MCP roots/list_changed).
     /// </summary>
-    internal void BootstrapForRoot(string workspaceRoot, WorkspaceBindingResolver.WorkspaceSource source)
+    internal BindOutcome BootstrapForRoot(string workspaceRoot, WorkspaceBindingResolver.WorkspaceSource source)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
 
@@ -134,34 +217,76 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         string canonicalRoot = WorkspaceRootSafety.CanonicalizeAndRejectSensitiveRoot(
             workspaceRoot, fromCwd: source == WorkspaceBindingResolver.WorkspaceSource.Cwd);
 
+        int runGeneration = 0;
+        bool dispatch = false;
         lock (_gate)
         {
-            if (_workspace?.CanonicalRoot is not null &&
-                IndexBootstrapService.RootPathsEqual(_workspace.CanonicalRoot, canonicalRoot))
+            if (_phase == BootstrapPhase.Running)
             {
-                return;
+                if (RootPathsEqual(_snapshotRoot, canonicalRoot))
+                    return BindOutcome.JoinedRunning;
+
+                _logger.LogWarning(
+                    "Workspace rebind to {NewRoot} deferred while bootstrap for {RunningRoot} is still running.",
+                    canonicalRoot, _snapshotRoot ?? "(unknown)");
+                return BindOutcome.RebindDeferred;
             }
 
-            if (_holder is not null)
+            var bound = _bound;
+            if (bound?.Workspace.CanonicalRoot is not null &&
+                RootPathsEqual(bound.Workspace.CanonicalRoot, canonicalRoot))
+            {
+                if (_phase == BootstrapPhase.Failed)
+                {
+                    _phase = BootstrapPhase.Bound;
+                    _snapshotRoot = bound.Workspace.CanonicalRoot;
+                    _startedAtUtc = null;
+                    _failureMessage = null;
+                    _lastFailureMessage = null;
+                }
+                return BindOutcome.AlreadyBound;
+            }
+
+            if (bound is not null)
             {
                 _logger.LogInformation(
                     "Rebinding primary workspace from {OldRoot} to {NewRoot}.",
-                    _workspace?.CanonicalRoot ?? "(unknown)", canonicalRoot);
+                    bound.Workspace.CanonicalRoot ?? "(unknown)", canonicalRoot);
             }
 
             if (TestBootstrapInterceptor?.Invoke(canonicalRoot, source) == true)
-                return;
+                return BindOutcome.Started;
 
-            RunBootstrap(canonicalRoot, source);
-            SignalBound();
+            runGeneration = StartRunLocked(canonicalRoot);
+            dispatch = true;
         }
+
+        if (dispatch)
+            _ = Task.Run(() => RunBootstrapInBackground(canonicalRoot, source, runGeneration));
+
+        return BindOutcome.Started;
     }
 
-    private void SignalBound()
+    private int StartRunLocked(string canonicalRoot)
+    {
+        if (_phase != BootstrapPhase.Failed)
+            _lastFailureMessage = null;
+
+        _phase = BootstrapPhase.Running;
+        _snapshotRoot = canonicalRoot;
+        _startedAtUtc = DateTimeOffset.UtcNow;
+        _failureMessage = null;
+        _runGeneration++;
+        _runCompletion = CreateBindingGate();
+        return _runGeneration;
+    }
+
+    private void SignalBoundLocked()
     {
         int gen = Interlocked.Increment(ref _bindingGeneration);
         var gate = Interlocked.Exchange(ref _bindingReady, CreateBindingGate());
         gate.TrySetResult();
+        _runCompletion.TrySetResult();
         _logger.LogDebug("Primary workspace bound (generation {Generation}).", gen);
     }
 
@@ -173,12 +298,37 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         BootstrapForRoot(startup.Path, startup.Source);
     }
 
-    private void RunBootstrap(string canonicalRoot, WorkspaceBindingResolver.WorkspaceSource source)
+    private void RunBootstrapInBackground(
+        string canonicalRoot, WorkspaceBindingResolver.WorkspaceSource source, int runGeneration)
+    {
+        BootstrapRunResult? result = null;
+        bool published = false;
+        try
+        {
+            if (TestRunBootstrapOverride is { } runOverride)
+            {
+                runOverride(canonicalRoot);
+                return;
+            }
+
+            result = RunBootstrap(canonicalRoot, source);
+            published = PublishBoundWorkspace(result, runGeneration);
+        }
+        catch (Exception ex)
+        {
+            if (result is not null && !published && !result.UsesExistingLedger)
+                result.Bound.Ledger?.Dispose();
+            MarkBootstrapFailed(canonicalRoot, runGeneration, ex);
+        }
+    }
+
+    private BootstrapRunResult RunBootstrap(string canonicalRoot, WorkspaceBindingResolver.WorkspaceSource source)
     {
         // The telemetry ledger is opened late but must be disposed if ANY later step throws (otherwise the
         // ledger stays open + the telemetry DB locked, but is never assigned to _ledger so Dispose() misses
         // it). Track it in a local and dispose on failure before the exception propagates.
         TelemetryLedger? ledger = null;
+        bool usesExistingLedger = false;
         try
         {
             var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -296,12 +446,6 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             long builtRevision = scanRevision
                 ?? ReadLatestRevisionOrZero(canonicalDbPath, stableWorkspaceId);
 
-            if (didScan)
-                MarkRegistryScanned(workspace, stableWorkspaceId, scanRevision ?? builtRevision);
-            else
-                RegisterBootstrapWorkspace(
-                    workspace, stableWorkspaceId, scanDecision.RegistryStateAfterLoad, builtRevision);
-
             // Open the SEPARATE, writable telemetry ledger (never the read-only extract) + prune old rows.
             // The ledger is MACHINE-GLOBAL (shared <home>/.miller/telemetry.db across every workspace), so its
             // directory is NOT the per-repo .miller created above — ensure it exists before opening. Each row
@@ -310,14 +454,16 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             // the open connection (the outer catch covers every OTHER post-open step the same way).
             Directory.CreateDirectory(Path.GetDirectoryName(workspace.TelemetryDbPath)!);
             int pruned;
-            if (_ledger is null)
+            var existingLedger = Volatile.Read(ref _bound)?.Ledger;
+            if (existingLedger is null)
             {
                 ledger = OpenAndPrune(
                     workspace.TelemetryDbPath, stableWorkspaceId, workspace.WorkspaceRoot, retentionDays: 30, out pruned);
             }
             else
             {
-                ledger = _ledger;
+                ledger = existingLedger;
+                usesExistingLedger = true;
                 pruned = 0;
             }
 
@@ -328,29 +474,103 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             var holder = new IndexHolder(index, builtRevision, ReadArtifactIdOrNull(canonicalDbPath));
             var resolver = new SmartTargetResolver(holder); // holder-backed: live freshness per call (M3 step 10)
 
-            if (ReferenceEquals(ledger, _ledger))
-                ledger.RebindWorkspace(stableWorkspaceId, workspace.WorkspaceRoot);
-
-            _holder = holder;
-            _resolver = resolver;
-            _workspace = workspace;
-            _ledger = ledger; // only published once every preceding step succeeded
-
             var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(startedAt);
-            _logger.LogInformation(
-                "Bootstrap ready: {Count} symbols indexed at revision {Rev}, workspace_id={Ws}, " +
-                "{Pruned} telemetry rows pruned, in {Ms}ms.",
-                index.DocumentCount, builtRevision, stableWorkspaceId, pruned,
-                (long)elapsed.TotalMilliseconds);
+            return new BootstrapRunResult(
+                new BoundWorkspace(holder, resolver, workspace, ledger),
+                stableWorkspaceId,
+                scanDecision.RegistryStateAfterLoad,
+                didScan,
+                scanRevision,
+                builtRevision,
+                pruned,
+                (long)elapsed.TotalMilliseconds,
+                index.DocumentCount,
+                usesExistingLedger);
         }
         catch
         {
             // Partial-initialization cleanup: if the ledger was opened but a later step threw, dispose it so
             // the telemetry DB is not left locked / its WAL in an indeterminate state. _ledger was not yet
             // assigned, so Dispose() would otherwise leak it.
-            if (ledger is not null && !ReferenceEquals(ledger, _ledger))
+            if (ledger is not null && !usesExistingLedger)
                 ledger.Dispose();
             throw;
+        }
+    }
+
+    private bool PublishBoundWorkspace(BootstrapRunResult result, int runGeneration)
+    {
+        lock (_gate)
+        {
+            if (_phase != BootstrapPhase.Running || _runGeneration != runGeneration)
+                return false;
+
+            if (result.DidScan)
+                MarkRegistryScanned(result.Bound.Workspace, result.StableWorkspaceId, result.ScanRevision ?? result.BuiltRevision);
+            else
+                RegisterBootstrapWorkspace(
+                    result.Bound.Workspace,
+                    result.StableWorkspaceId,
+                    result.RegistryStateAfterLoad,
+                    result.BuiltRevision);
+
+            if (result.UsesExistingLedger)
+                result.Bound.Ledger?.RebindWorkspace(result.StableWorkspaceId, result.Bound.Workspace.WorkspaceRoot);
+
+            _bound = result.Bound;
+            _phase = BootstrapPhase.Bound;
+            _snapshotRoot = result.Bound.Workspace.CanonicalRoot;
+            _startedAtUtc = null;
+            _failureMessage = null;
+            _lastFailureMessage = null;
+            SignalBoundLocked();
+
+            _logger.LogInformation(
+                "Bootstrap ready: {Count} symbols indexed at revision {Rev}, workspace_id={Ws}, " +
+                "{Pruned} telemetry rows pruned, in {Ms}ms.",
+                result.DocumentCount, result.BuiltRevision, result.StableWorkspaceId, result.Pruned,
+                result.ElapsedMilliseconds);
+            return true;
+        }
+    }
+
+    private void MarkBootstrapFailed(string canonicalRoot, int runGeneration, Exception error)
+    {
+        bool shouldMarkRegistry;
+        lock (_gate)
+        {
+            if (_phase != BootstrapPhase.Running || _runGeneration != runGeneration)
+                return;
+
+            string message = error.Message;
+            _phase = BootstrapPhase.Failed;
+            _snapshotRoot = canonicalRoot;
+            _failureMessage = message;
+            _lastFailureMessage = message;
+            _runCompletion.TrySetResult();
+            shouldMarkRegistry = true;
+        }
+
+        _logger.LogError(error, "Bootstrap failed for {Root}.", canonicalRoot);
+        if (!shouldMarkRegistry)
+            return;
+
+        try
+        {
+            string stableWorkspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot);
+            string canonicalDbPath = Path.Combine(canonicalRoot, ".miller", "symbols.db");
+            Directory.CreateDirectory(Path.GetDirectoryName(canonicalDbPath)!);
+            var workspace = WorkspaceContext.Create(canonicalRoot, AppContext.BaseDirectory) with
+            {
+                WorkspaceId = stableWorkspaceId,
+                CanonicalRoot = canonicalRoot,
+                CanonicalExtractDbPath = canonicalDbPath,
+            };
+            MarkRegistryError(workspace, stableWorkspaceId, error.Message);
+        }
+        catch (Exception markError)
+        {
+            _logger.LogWarning(markError, "Failed to mark bootstrap error for {Root}.", canonicalRoot);
         }
     }
 
@@ -640,20 +860,24 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         ArgumentNullException.ThrowIfNull(holder);
         lock (_gate)
         {
-            if (_workspace?.CanonicalRoot is not null &&
+            var bound = _bound;
+            if (bound?.Workspace.CanonicalRoot is not null &&
                 workspace.CanonicalRoot is not null &&
-                IndexBootstrapService.RootPathsEqual(_workspace.CanonicalRoot, workspace.CanonicalRoot))
+                IndexBootstrapService.RootPathsEqual(bound.Workspace.CanonicalRoot, workspace.CanonicalRoot))
             {
                 return;
             }
-            _workspace = workspace;
-            _holder = holder;
-            _resolver = new SmartTargetResolver(holder);
-            SignalBound();
+            _bound = new BoundWorkspace(holder, new SmartTargetResolver(holder), workspace, Ledger: null);
+            _phase = BootstrapPhase.Bound;
+            _snapshotRoot = workspace.CanonicalRoot;
+            _startedAtUtc = null;
+            _failureMessage = null;
+            _lastFailureMessage = null;
+            SignalBoundLocked();
         }
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-    public void Dispose() => _ledger?.Dispose();
+    public void Dispose() => Volatile.Read(ref _bound)?.Ledger?.Dispose();
 }

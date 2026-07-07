@@ -61,6 +61,172 @@ public sealed class WorkspaceBindingServiceTests
     }
 
     [Fact]
+    public async Task BootstrapForRoot_DispatchesRunInBackgroundAndPublishesOnlyWhenComplete()
+    {
+        string project = CreateTempDir();
+        var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        bootstrap.TestRunBootstrapOverride = canonicalRoot =>
+        {
+            started.TrySetResult();
+            release.Task.GetAwaiter().GetResult();
+            SeedEmptyWorkspace(bootstrap, canonicalRoot);
+        };
+
+        int runGeneration;
+        try
+        {
+            var outcome = bootstrap.BootstrapForRoot(project, WorkspaceBindingResolver.WorkspaceSource.Roots);
+
+            Assert.Equal(BindOutcome.Started, outcome);
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            Assert.False(bootstrap.IsBound);
+            var snapshot = bootstrap.Snapshot;
+            runGeneration = snapshot.RunGeneration;
+            Assert.Equal(BootstrapPhase.Running, snapshot.Phase);
+            Assert.Equal(PathCanonicalizer.CanonicalizeRoot(project), snapshot.CanonicalRoot);
+            Assert.NotNull(snapshot.StartedAtUtc);
+            Assert.Null(snapshot.FailureMessage);
+            Assert.Throws<InvalidOperationException>(() => bootstrap.Holder);
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+
+        await bootstrap.WaitForRunAsync(runGeneration, TestContext.Current.CancellationToken);
+        Assert.True(bootstrap.IsBound);
+        Assert.Equal(BootstrapPhase.Bound, bootstrap.Snapshot.Phase);
+        Assert.Equal(PathCanonicalizer.CanonicalizeRoot(project), bootstrap.Workspace.CanonicalRoot);
+    }
+
+    [Fact]
+    public async Task BootstrapForRoot_WhenRunFails_MarksFailedCompletesRunWaitAndRetries()
+    {
+        string project = CreateTempDir();
+        var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
+        bootstrap.TestRunBootstrapOverride = _ => throw new InvalidOperationException("synthetic async failure");
+
+        var outcome = bootstrap.BootstrapForRoot(project, WorkspaceBindingResolver.WorkspaceSource.Roots);
+        Assert.Equal(BindOutcome.Started, outcome);
+        int failedRunGeneration = bootstrap.Snapshot.RunGeneration;
+
+        await bootstrap.WaitForRunAsync(failedRunGeneration, TestContext.Current.CancellationToken);
+
+        var failed = bootstrap.Snapshot;
+        Assert.Equal(BootstrapPhase.Failed, failed.Phase);
+        Assert.Equal("synthetic async failure", failed.FailureMessage);
+        Assert.Equal("synthetic async failure", failed.LastFailureMessage);
+        Assert.False(bootstrap.IsBound);
+
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(project);
+        var failedWorkspace = WorkspaceContext.Create(canonicalRoot, AppContext.BaseDirectory) with
+        {
+            WorkspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot),
+            CanonicalRoot = canonicalRoot,
+            CanonicalExtractDbPath = Path.Combine(canonicalRoot, ".miller", "symbols.db"),
+        };
+        WorkspaceRegistryRow? row = null;
+        await WaitUntilAsync(() =>
+        {
+            using var registry = WorkspaceRegistry.Open(failedWorkspace.RegistryDbPath);
+            row = registry.Get(failedWorkspace.WorkspaceId);
+            return row is not null;
+        }, TestContext.Current.CancellationToken);
+        Assert.Equal(WorkspaceRegistryState.Error, row!.State);
+        Assert.Equal("synthetic async failure", row.LastError);
+
+        bootstrap.TestRunBootstrapOverride = canonicalRoot => SeedEmptyWorkspace(bootstrap, canonicalRoot);
+        var retryOutcome = bootstrap.BootstrapForRoot(project, WorkspaceBindingResolver.WorkspaceSource.Roots);
+        Assert.Equal(BindOutcome.Started, retryOutcome);
+        int retryRunGeneration = bootstrap.Snapshot.RunGeneration;
+
+        await bootstrap.WaitForRunAsync(retryRunGeneration, TestContext.Current.CancellationToken);
+
+        Assert.True(bootstrap.IsBound);
+        Assert.Equal(BootstrapPhase.Bound, bootstrap.Snapshot.Phase);
+        Assert.Equal(PathCanonicalizer.CanonicalizeRoot(project), bootstrap.Workspace.CanonicalRoot);
+    }
+
+    [Fact]
+    public async Task BootstrapForRoot_WhenSameRootAlreadyRunning_JoinsExistingRun()
+    {
+        string project = CreateTempDir();
+        int runs = 0;
+        var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        bootstrap.TestRunBootstrapOverride = canonicalRoot =>
+        {
+            Interlocked.Increment(ref runs);
+            started.TrySetResult();
+            release.Task.GetAwaiter().GetResult();
+            SeedEmptyWorkspace(bootstrap, canonicalRoot);
+        };
+
+        int runGeneration;
+        try
+        {
+            var first = bootstrap.BootstrapForRoot(project, WorkspaceBindingResolver.WorkspaceSource.Roots);
+            Assert.Equal(BindOutcome.Started, first);
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            runGeneration = bootstrap.Snapshot.RunGeneration;
+
+            var second = bootstrap.BootstrapForRoot(project, WorkspaceBindingResolver.WorkspaceSource.Roots);
+
+            Assert.Equal(BindOutcome.JoinedRunning, second);
+            Assert.Equal(1, runs);
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+
+        await bootstrap.WaitForRunAsync(runGeneration, TestContext.Current.CancellationToken);
+        Assert.True(bootstrap.IsBound);
+    }
+
+    [Fact]
+    public async Task StartAsync_WithUsableCwd_ReturnsBeforeBackgroundRunCompletes()
+    {
+        string project = CreateTempDir();
+        var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        bootstrap.TestRunBootstrapOverride = canonicalRoot =>
+        {
+            started.TrySetResult();
+            release.Task.GetAwaiter().GetResult();
+            SeedEmptyWorkspace(bootstrap, canonicalRoot);
+        };
+
+        string previous = Directory.GetCurrentDirectory();
+        int runGeneration;
+        try
+        {
+            Directory.SetCurrentDirectory(project);
+            await bootstrap.StartAsync(TestContext.Current.CancellationToken);
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+            Assert.False(bootstrap.IsDeferred);
+            Assert.False(bootstrap.IsBound);
+            var snapshot = bootstrap.Snapshot;
+            runGeneration = snapshot.RunGeneration;
+            Assert.Equal(BootstrapPhase.Running, snapshot.Phase);
+            Assert.Equal(PathCanonicalizer.CanonicalizeRoot(project), snapshot.CanonicalRoot);
+        }
+        finally
+        {
+            Directory.SetCurrentDirectory(previous);
+            release.TrySetResult();
+        }
+
+        await bootstrap.WaitForRunAsync(runGeneration, TestContext.Current.CancellationToken);
+        Assert.True(bootstrap.IsBound);
+    }
+
+    [Fact]
     public async Task EnsurePrimaryBoundFromRootsAsync_BindsDeferredBootstrap()
     {
         string project = CreateTempDir();
@@ -178,5 +344,30 @@ public sealed class WorkspaceBindingServiceTests
         string dir = Path.Combine(Path.GetTempPath(), "miller-bindsvc-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         return dir;
+    }
+
+    private static void SeedEmptyWorkspace(IndexBootstrapService bootstrap, string canonicalRoot)
+    {
+        var workspace = WorkspaceContext.Create(canonicalRoot, AppContext.BaseDirectory) with
+        {
+            WorkspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot),
+            CanonicalRoot = canonicalRoot,
+        };
+        bootstrap.SeedForTest(workspace, new IndexHolder(
+            MillerRepositoryIndex.Build(Array.Empty<IndexedSymbol>()), builtRevision: 0));
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition, CancellationToken cancellationToken)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (condition())
+                return;
+            await Task.Delay(10, cancellationToken);
+        }
+
+        Assert.True(condition(), "condition was not met before the timeout");
     }
 }
