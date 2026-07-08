@@ -128,11 +128,11 @@ Commit mode: Tasks 1, 4, 7 `serial-worker-commit`; Batch A and Batch B tasks `pa
 **Approach:** Keep the aggregates reader read-only (`SqliteReadOnlyAccess.Open`, same as `CloneGroupReader`). Complexity percentiles via SQL (`ORDER BY value LIMIT 1 OFFSET (count*p)/100` pattern or read values and compute in C# — either, but bounded). Do not add any polling, timer, or watcher: the hook is strictly within the existing converge call. The Scale test rides the existing julie-spawning workspace-test pattern with `ScaleTestSupport.RequireJulieServer()` and the class-level Scale trait.
 
 **Acceptance criteria:**
-- [ ] After a (simulated) converge, `history.db` holds one `source='converge'` snapshot with the metric set above; marker metrics absent when no region index.
-- [ ] A history failure (locked/corrupt file) does not change converge behavior or throw out of the hook (test by pre-holding the lock / pre-corrupting).
-- [ ] Same-revision re-converge records nothing new (dedup observed through the store).
-- [ ] Scale e2e: real extract → converge → snapshot present with plausible values.
-- [ ] Worker-scope verification passes and the verified diff is handed to the lead (parallel-lead-commit).
+- [x] After a (simulated) converge, `history.db` holds one `source='converge'` snapshot with the metric set above; marker metrics absent when no region index.
+- [x] A history failure (locked/corrupt file) does not change converge behavior or throw out of the hook (test by pre-holding the lock / pre-corrupting).
+- [x] Same-revision re-converge records nothing new (dedup observed through the store).
+- [x] Scale e2e: real extract → converge → snapshot present with plausible values.
+- [x] Worker-scope verification passes and the verified diff is handed to the lead (parallel-lead-commit).
 
 ---
 
