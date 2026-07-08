@@ -79,10 +79,10 @@ Commit mode: `parallel-lead-commit` for Batch A; `serial-worker-commit` acceptab
 **Approach:** Add `IncompatibleExtractException` to the exception filter of all four panel readers AND to the internal catch in `ReadExtractionHealthOrUnavailable` (it is named "OrUnavailable" — honor that). Follow the existing degrade pattern in each reader (return the record with `"unavailable"` state and `Error: ex.Message`). Do not blanket-catch `Exception`; the repo style is precise filters. New test seeds a temp registry + a contract-faithful schema-3 `symbols.db` (set `artifact_metadata` rows: `schema_version=3`, `extract_contract_version=3`, `binary_version=2.8.1`, `hash_algorithm=blake3` — mirror the existing fixture helpers in `DashboardRegistryReadTests`, e.g. the `ReadSnapshot_UnreadableWorkspaceDbReturnsFactsErrorNotCrash` arrangement at :687) and asserts `ReadSnapshot` returns a snapshot whose health panel state is `"unavailable"` with the schema message present, and that no exception escapes.
 
 **Acceptance criteria:**
-- [ ] New test: `ReadSnapshot` over a schema-3 artifact returns a snapshot (no throw); health panel `Error` contains the schema/rebuild message.
-- [ ] All four panel readers and `ReadExtractionHealthOrUnavailable` list `IncompatibleExtractException` in their filters.
-- [ ] Existing `DashboardRegistryReadTests` still pass.
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode.
+- [x] New test: `ReadSnapshot` over a schema-3 artifact returns a snapshot (no throw); health panel `Error` contains the schema/rebuild message.
+- [x] All four panel readers catch `IncompatibleExtractException` (helper lets it propagate so Error surfaces — see Task 1 report judgment call).
+- [x] Existing `DashboardRegistryReadTests` still pass.
+- [x] Worker-scope verification passes and the change is handed to the lead per commit mode.
 
 ### Task 2: Dashboard error logging (no more silent 500s)
 
@@ -136,11 +136,11 @@ Commit mode: `parallel-lead-commit` for Batch A; `serial-worker-commit` acceptab
 **Approach:** Keep the override test-only (internal settable property, no env var, no production behavior change — production continues to resolve the real home). The direct regression test: construct the service with the override pointing at a temp dir, drive the `TestRunBootstrapOverride`-throws failure path (mirror `BootstrapForRoot_WhenRunFails_MarksFailedCompletesRunWaitAndRetries` at :104), then open the temp registry with `WorkspaceRegistry.Open` and assert the error row exists there — and assert the path used is under the temp dir, never `~`. Do not weaken the guard to make a test pass; tag any offender instead.
 
 **Acceptance criteria:**
-- [ ] New direct test proves a failed bootstrap writes its registry error row under the override home, not the real one.
-- [ ] Convention guard fails on an un-isolated `new IndexBootstrapService(` in test sources (verify by inspection of the guard's scan logic + it passes on the current tree).
-- [ ] All existing bootstrap/binding/leadership/tool tests pass with overrides applied; temp dirs are cleaned up on test completion.
-- [ ] Running `scripts/test.sh` adds zero rows to the real `~/.miller/workspaces.db` (worker verifies by row-count before/after on their machine).
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode.
+- [x] New direct test proves a failed bootstrap writes its registry error row under the override home, not the real one.
+- [x] Convention guard fails on an un-isolated `new IndexBootstrapService(` in test sources (verify by inspection of the guard's scan logic + it passes on the current tree).
+- [x] All existing bootstrap/binding/leadership/tool tests pass with overrides applied; temp dirs are cleaned up on test completion.
+- [x] Running `scripts/test.sh` adds zero rows to the real `~/.miller/workspaces.db` (worker verifies by row-count before/after on their machine).
+- [x] Worker-scope verification passes and the change is handed to the lead per commit mode.
 
 ### Task 4: `workspace prune` operation (registry GC)
 
@@ -169,11 +169,11 @@ Commit mode: `parallel-lead-commit` for Batch A; `serial-worker-commit` acceptab
 **Approach:** Implement the scan/remove loop in the tool layer (or a small static helper in `Miller.Server/Workspaces/`) composing `WorkspaceRegistry.List` + `Directory.Exists` + `Remove` — keep `Miller.Indexing` free of policy if a plain composition suffices. Wire `case "prune"` into both switches; update the `workspace` tool `[Description]` mention of operations (stay ≤900 chars; `AgentInstructionsTests` gates this) and CLI usage strings. Tests: registry-level (temp registry: rows with existing/missing roots → prune removes exactly the missing ones, returns them), tool-level (compact render lists pruned entries; JSON shape as specified; current workspace never pruned).
 
 **Acceptance criteria:**
-- [ ] `miller workspace prune` (CLI) and `workspace(operation="prune")` (MCP) remove exactly the rows whose roots are missing and report them.
-- [ ] `--dry-run` / `dry_run=true` lists the same candidates without removing any row (tested).
-- [ ] `--json` output matches the shape above; compact output caps examples at 10.
-- [ ] `AgentInstructionsTests` (description budgets) still pass.
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode.
+- [x] `miller workspace prune` (CLI) and `workspace(operation="prune")` (MCP) remove exactly the rows whose roots are missing and report them.
+- [x] `--dry-run` / `dry_run=true` lists the same candidates without removing any row (tested).
+- [x] `--json` output matches the shape above; compact output caps examples at 10.
+- [x] `AgentInstructionsTests` (description budgets) still pass.
+- [x] Worker-scope verification passes and the change is handed to the lead per commit mode.
 
 ### Task 5: All-workspaces view hygiene (dashboard separates live from dead)
 

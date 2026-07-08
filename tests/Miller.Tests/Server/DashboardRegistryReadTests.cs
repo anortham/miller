@@ -712,6 +712,38 @@ public sealed class DashboardRegistryReadTests : IDisposable
     }
 
     [Fact]
+    public void ReadSnapshot_IncompatibleSchemaArtifactReturnsHealthUnavailableNotCrash()
+    {
+        using JulieDbFixture fixture = JulieDbFixture.Create(
+            schemaVersion: 3,
+            contractValue: "3",
+            rows: Array.Empty<JulieDbFixture.SymbolRow>());
+        Exec(fixture.DbPath, """
+            UPDATE artifact_metadata SET value = '2.8.1' WHERE key = 'binary_version';
+            """);
+        using (var registry = WorkspaceRegistry.Open(_registryDb))
+        {
+            registry.UpsertSeen(
+                "ws-schema3",
+                "schema3-abcd1234",
+                fixture.WorkspaceRoot,
+                fixture.DbPath,
+                WorkspaceRegistryState.Ready,
+                DateTimeOffset.Parse("2026-05-31T10:00:00Z"));
+            registry.MarkScanned("ws-schema3", 1, DateTimeOffset.Parse("2026-05-31T10:01:00Z"));
+        }
+
+        DashboardSnapshot snapshot = DashboardData.ReadSnapshot(_registryDb, _telemetryDb, workspaceId: "ws-schema3");
+
+        Assert.NotNull(snapshot.Health);
+        Assert.Equal("ws-schema3", snapshot.Health!.WorkspaceId);
+        Assert.Equal("unavailable", snapshot.Health.State);
+        Assert.False(string.IsNullOrWhiteSpace(snapshot.Health.Error));
+        Assert.Contains("workspace full", snapshot.Health.Error!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("3", snapshot.Health.Error!, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ReadSnapshot_ReadsIndexFactsOnlyForSelectedWorkspace()
     {
         using JulieDbFixture selectedFixture = JulieDbFixture.Create(

@@ -868,7 +868,7 @@ public static class DashboardData
         }
         catch (Exception ex) when (
             ex is KeyNotFoundException or SqliteException or IOException or InvalidOperationException
-                or UnauthorizedAccessException)
+                or UnauthorizedAccessException or IncompatibleExtractException)
         {
             return new DashboardLocalMetricsPanel(
                 workspace.WorkspaceId,
@@ -916,7 +916,7 @@ public static class DashboardData
         }
         catch (Exception ex) when (
             ex is KeyNotFoundException or SqliteException or IOException or InvalidOperationException
-                or UnauthorizedAccessException)
+                or UnauthorizedAccessException or IncompatibleExtractException)
         {
             return new DashboardPatternInventoryPanel(
                 workspace.WorkspaceId,
@@ -957,9 +957,10 @@ public static class DashboardData
         try
         {
             WorkspaceFacts facts = BuildWorkspaceFacts(workspace, dashboardFacts);
-            WorkspaceExtractionHealthFacts extraction = ReadExtractionHealthOrUnavailable(
-                workspace.IndexDbPath,
-                facts.WarningText ?? facts.FreshnessStatus);
+            // Call the schema-gated reader directly so IncompatibleExtractException reaches this
+            // method's catch and surfaces as panel state "unavailable" with rebuild guidance in Error.
+            // (ReadExtractionHealthOrUnavailable would swallow it into section warnings.)
+            WorkspaceExtractionHealthFacts extraction = WorkspaceHealthReader.Read(workspace.IndexDbPath);
             LeaderHealthFacts leader = LeaderHealthFacts.Read(Path.GetDirectoryName(workspace.IndexDbPath) ?? workspace.CanonicalRoot) with
             {
                 ArtifactExtractorVersion = ExtractBinaryVersionReader.TryRead(workspace.IndexDbPath),
@@ -988,7 +989,7 @@ public static class DashboardData
         }
         catch (Exception ex) when (
             ex is KeyNotFoundException or SqliteException or IOException or InvalidOperationException
-                or UnauthorizedAccessException)
+                or UnauthorizedAccessException or IncompatibleExtractException)
         {
             return new DashboardWorkspaceHealthPanel(
                 workspace.WorkspaceId,
@@ -1040,7 +1041,7 @@ public static class DashboardData
         }
         catch (Exception ex) when (
             ex is KeyNotFoundException or SqliteException or IOException or InvalidOperationException
-                or UnauthorizedAccessException)
+                or UnauthorizedAccessException or IncompatibleExtractException)
         {
             return new DashboardWorkspaceOnboardingPanel(
                 workspace.WorkspaceId,
@@ -1147,6 +1148,10 @@ public static class DashboardData
         {
             return WorkspaceHealthReader.Read(indexDbPath);
         }
+        // IncompatibleExtractException is intentionally NOT caught here: both callers
+        // (ReadWorkspaceHealthPanel / ReadPatternInventoryPanel) catch it at the panel
+        // boundary so the rebuild guidance lands in the panel Error field instead of being
+        // downgraded to usable_with_warnings via unavailable extraction sections.
         catch (Exception ex) when (ex is FileNotFoundException or SqliteException or InvalidOperationException)
         {
             string message = string.IsNullOrWhiteSpace(error) ? ex.Message : error;
