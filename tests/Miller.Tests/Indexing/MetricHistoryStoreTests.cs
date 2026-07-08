@@ -344,6 +344,9 @@ public sealed class MetricHistoryStoreTests : IDisposable
     [Fact]
     public void RenameAside_preserves_wal_resident_committed_data_under_one_stamp_and_deletes_nothing()
     {
+        if (OperatingSystem.IsWindows())
+            Assert.Skip("Windows prevents renaming the main DB while the SQLite pin required for WAL-resident frames is open.");
+
         // The load-bearing recovery case: a valid-header WAL-mode db whose body is corrupted, with committed frames
         // still RESIDENT in the -wal (uncheckpointed). SQLite keeps such a -wal on the failing connection's close, so
         // RenameAside must MOVE the whole bundle aside — never delete — or committed, non-derivable history is lost.
@@ -352,8 +355,8 @@ public sealed class MetricHistoryStoreTests : IDisposable
         MetricHistoryStore.RecordConverge(_dbPath, Snapshot("converge", revision: 1, metrics: ("symbol_count", 100, null)));
 
         // Hold a second connection open with autocheckpoint disabled so extra committed frames stay in the -wal (a
-        // lone connection would checkpoint-and-truncate the -wal on close). SQLite opens with FILE_SHARE_DELETE, so
-        // holding this handle still permits RenameAside's rename cross-platform.
+        // lone connection would checkpoint-and-truncate the -wal on close). This POSIX coverage is skipped on
+        // Windows above because Windows blocks the main DB rename while this SQLite handle is open.
         using (var pin = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = _dbPath,
@@ -418,18 +421,25 @@ public sealed class MetricHistoryStoreTests : IDisposable
 
     private static void CorruptSqliteBodyPreservingHeader(string path)
     {
-        // Match SQLite's sharing expectations on Windows while the pin connection keeps WAL frames resident.
-        using var fs = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete);
-        byte[] bytes = new byte[checked((int)fs.Length)];
-        fs.ReadExactly(bytes);
+        // Match SQLite's sharing expectations on Windows for any incidental shared handles.
+        byte[] bytes = ReadSharedBytes(path);
 
         for (int i = 200; i < Math.Min(bytes.Length, 8000); i++)
             bytes[i] = 0xEE;
 
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
         fs.Position = 0;
         fs.Write(bytes);
         fs.SetLength(bytes.Length);
         fs.Flush(flushToDisk: true);
+    }
+
+    private static byte[] ReadSharedBytes(string path)
+    {
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        byte[] bytes = new byte[checked((int)fs.Length)];
+        fs.ReadExactly(bytes);
+        return bytes;
     }
 
     // ---- present-but-unreadable (fails visibly, never a silent empty) ----------------------------------------
