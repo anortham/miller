@@ -477,6 +477,19 @@ public sealed class MetricsToolTests
         Assert.DoesNotContain("complexity_p90", metricNames);
     }
 
+    [Fact]
+    public void RunHistory_PresentButUnreadableHistoryDb_ThrowsTypedException()
+    {
+        using var fx = HistoryFixture();
+        string historyDb = MetricSnapshotAggregates.HistoryDbPathFor(fx.DbPath);
+        File.WriteAllText(historyDb, "this is not a sqlite database, just garbage");
+
+        // A broken sidecar must NOT render the friendly empty-history path — it surfaces as a typed failure the CLI
+        // maps to exit 3.
+        Assert.Throws<MetricHistoryUnreadableException>(() =>
+            MetricsTool.RunHistory(historyDb, "ws-test", Array.Empty<string>(), limit: 20, json: false));
+    }
+
     private static JulieDbFixture HistoryFixture() =>
         JulieDbFixture.Create(
             JulieDbFixture.PinnedSchema,

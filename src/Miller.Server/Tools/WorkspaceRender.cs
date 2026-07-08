@@ -313,13 +313,16 @@ public static class WorkspaceRender
         };
     }
 
-    // "present  N snapshots  <size>  schema v1" / "absent" — the append-only metric-history sidecar. A recovered
-    // corruption (a history.db.corrupt-* renamed aside) is flagged so an operator can see history was reset.
+    // "present  N snapshots  <size>  schema v1" / "absent" / "unreadable" — the append-only metric-history sidecar. A
+    // recovered corruption (a history.db.corrupt-* renamed aside) is flagged so an operator can see history was reset;
+    // a PRESENT-but-unreadable file reads "unreadable" (never a healthy-looking "present  0 snapshots").
     private static string HistorySidecarLabel(MetricHistoryStatus history)
     {
         string recovered = history.CorruptRecovered ? "  corrupt-recovered" : string.Empty;
         if (!history.Present)
             return "absent" + recovered;
+        if (history.Unreadable)
+            return "unreadable" + recovered;
 
         return string.Create(
             CultureInfo.InvariantCulture,
@@ -485,6 +488,7 @@ public static class WorkspaceRender
 
         w.WriteStartObject();
         w.WriteBoolean("present", history.Present);
+        w.WriteBoolean("unreadable", history.Unreadable);
         w.WriteNumber("schema_version", history.SchemaVersion);
         w.WriteNumber("snapshot_count", history.SnapshotCount);
         w.WriteNumber("size_bytes", history.SizeBytes);

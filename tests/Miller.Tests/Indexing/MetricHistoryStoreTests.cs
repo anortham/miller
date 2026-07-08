@@ -341,6 +341,116 @@ public sealed class MetricHistoryStoreTests : IDisposable
         Assert.Equal(1L, status.SnapshotCount);
     }
 
+    [Fact]
+    public void RenameAside_preserves_wal_resident_committed_data_under_one_stamp_and_deletes_nothing()
+    {
+        // The load-bearing recovery case: a valid-header WAL-mode db whose body is corrupted, with committed frames
+        // still RESIDENT in the -wal (uncheckpointed). SQLite keeps such a -wal on the failing connection's close, so
+        // RenameAside must MOVE the whole bundle aside — never delete — or committed, non-derivable history is lost.
+        // (A header-less garbage file is a different case: SQLite deletes its orphan -wal on close before recovery can
+        // run, and a wal with no anchoring db is unrecoverable anyway — see RenameAside_no_siblings below.)
+        MetricHistoryStore.RecordConverge(_dbPath, Snapshot("converge", revision: 1, metrics: ("symbol_count", 100, null)));
+
+        // Hold a second connection open with autocheckpoint disabled so extra committed frames stay in the -wal (a
+        // lone connection would checkpoint-and-truncate the -wal on close). SQLite opens with FILE_SHARE_DELETE, so
+        // holding this handle still permits RenameAside's rename cross-platform.
+        using (var pin = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString()))
+        {
+            pin.Open();
+            ExecOn(pin, "PRAGMA wal_autocheckpoint=0;");
+            ExecOn(pin, "INSERT INTO snapshots(recorded_at_utc,workspace_id,artifact_id,revision,extractor_version," +
+                        "miller_version,source) VALUES('t','ws-1','art-2',2,'x','y','converge');");
+            Assert.True(new FileInfo(_dbPath + "-wal").Length > 0, "precondition: committed frames resident in -wal");
+
+            // Corrupt the MAIN db body while keeping the 'SQLite format 3\0' header magic intact so SQLite still
+            // recognizes it as a WAL-mode database (and thus does NOT treat the -wal as a deletable orphan).
+            byte[] bytes = File.ReadAllBytes(_dbPath);
+            for (int i = 200; i < Math.Min(bytes.Length, 8000); i++)
+                bytes[i] = 0xEE;
+            File.WriteAllBytes(_dbPath, bytes);
+
+            // Trigger the reactive corruption recovery.
+            var result = MetricHistoryStore.RecordConverge(
+                _dbPath, Snapshot("converge", revision: 3, artifactId: "art-3", metrics: ("symbol_count", 200, null)));
+            Assert.Equal(MetricHistoryWriteResult.Recorded, result);
+        }
+
+        string[] corruptMain = Directory.EnumerateFiles(_dir, MetricHistoryStore.HistoryDbFileName + ".corrupt-*")
+            .Where(p => !p.EndsWith("-wal", StringComparison.Ordinal) && !p.EndsWith("-shm", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Single(corruptMain);
+        string stamped = corruptMain[0];
+
+        // WAL-resident committed data preserved under the SAME stamp (SQLite-replayable naming), never deleted.
+        Assert.True(File.Exists(stamped + "-wal"), "corrupt -wal (committed frames) must be preserved, never deleted");
+        Assert.True(new FileInfo(stamped + "-wal").Length > 0);
+        Assert.True(File.Exists(stamped + "-shm"), "corrupt -shm must be preserved, never deleted");
+
+        // And the current snapshot still landed in a fresh DB.
+        using var c = OpenRead();
+        Assert.Equal(1L, Convert.ToInt64(Scalar(c, "SELECT COUNT(*) FROM snapshots;"), CultureInfo.InvariantCulture));
+    }
+
+    [Fact]
+    public void RenameAside_no_siblings_is_fine_main_still_moves()
+    {
+        // No -wal/-shm present. The main file must still move aside and the snapshot land.
+        File.WriteAllText(_dbPath, "garbage, not a database");
+
+        var result = MetricHistoryStore.RecordRun(
+            _dbPath, Snapshot("report", revision: 1, metrics: ("symbol_count", 5, null)), () => ("art-1", 1));
+        Assert.Equal(MetricHistoryWriteResult.Recorded, result);
+
+        string[] corruptMain = Directory.EnumerateFiles(_dir, MetricHistoryStore.HistoryDbFileName + ".corrupt-*")
+            .Where(p => !p.EndsWith("-wal", StringComparison.Ordinal) && !p.EndsWith("-shm", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Single(corruptMain);
+    }
+
+    private static void ExecOn(SqliteConnection c, string sql)
+    {
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.ExecuteNonQuery();
+    }
+
+    // ---- present-but-unreadable (fails visibly, never a silent empty) ----------------------------------------
+
+    [Fact]
+    public void ReadTrend_present_but_unreadable_throws_typed_exception()
+    {
+        // A PRESENT-but-corrupt file must NOT degrade to an empty trend — it throws so the CLI/dashboard fail visibly.
+        File.WriteAllText(_dbPath, "this is not a sqlite database, just garbage");
+
+        Assert.Throws<MetricHistoryUnreadableException>(() =>
+            MetricHistoryStore.ReadTrend(_dbPath, new[] { "symbol_count" }, limit: 20, maxPoints: 0));
+    }
+
+    [Fact]
+    public void ReadTrend_absent_file_is_empty_success()
+    {
+        // No file at all is a normal fresh workspace — empty-success, never the unreadable exception.
+        var trend = MetricHistoryStore.ReadTrend(_dbPath, new[] { "symbol_count" }, limit: 20, maxPoints: 0);
+        Assert.Empty(trend);
+    }
+
+    [Fact]
+    public void ReadStatus_present_but_unreadable_sets_the_Unreadable_flag()
+    {
+        File.WriteAllText(_dbPath, "this is not a sqlite database, just garbage");
+
+        var status = MetricHistoryStore.ReadStatus(_dbPath);
+        Assert.True(status.Present);
+        Assert.True(status.Unreadable);
+        // Not a silent healthy-looking schema-0/count-0 default: the flag is what health reads.
+        Assert.Equal(0L, status.SnapshotCount);
+    }
+
     // ---- trend ordering + downsampling ----------------------------------------------------------------------
 
     [Fact]
@@ -429,6 +539,7 @@ public sealed class MetricHistoryStoreTests : IDisposable
         Assert.Equal(2L, status.SnapshotCount);
         Assert.True(status.SizeBytes > 0);
         Assert.False(status.CorruptRecovered);
+        Assert.False(status.Unreadable);
     }
 
     [Fact]

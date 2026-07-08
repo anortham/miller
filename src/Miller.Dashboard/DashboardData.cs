@@ -241,17 +241,24 @@ public sealed record DashboardTrendSeries(
 /// <summary>
 /// The workspace-detail "Trends" panel model: one <see cref="DashboardTrendSeries"/> per deterministic metric that
 /// has any recorded history. Empty <see cref="Series"/> ⟹ the panel renders its empty-state line (no history.db, or
-/// a history.db with none of the tracked metrics yet). Read-only aggregate facts — no index hydration.
+/// a history.db with none of the tracked metrics yet). <see cref="Unreadable"/> ⟹ the history.db is PRESENT but could
+/// not be read; the panel renders a distinct "history unreadable" state instead of "no trend data yet" so a broken
+/// sidecar never looks like a fresh one. Read-only aggregate facts — no index hydration.
 /// </summary>
 public sealed record DashboardWorkspaceTrendsPanel(
     [property: JsonPropertyName("workspace_id")] string? WorkspaceId,
-    [property: JsonPropertyName("series")] IReadOnlyList<DashboardTrendSeries> Series)
+    [property: JsonPropertyName("series")] IReadOnlyList<DashboardTrendSeries> Series,
+    [property: JsonPropertyName("unreadable")] bool Unreadable = false)
 {
     [JsonIgnore]
     public bool HasData => Series.Count > 0;
 
     public static DashboardWorkspaceTrendsPanel Empty(string? workspaceId) =>
         new(workspaceId, Array.Empty<DashboardTrendSeries>());
+
+    /// <summary>A PRESENT-but-unreadable history.db: no series, but flagged so the panel renders an error state.</summary>
+    public static DashboardWorkspaceTrendsPanel UnreadablePanel(string? workspaceId) =>
+        new(workspaceId, Array.Empty<DashboardTrendSeries>(), Unreadable: true);
 }
 
 /// <summary>

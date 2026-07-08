@@ -1529,6 +1529,22 @@ public sealed class DashboardRegistryReadTests : IDisposable
         DashboardWorkspaceTrendsPanel panel = DashboardIndexFactsReader.ReadTrends(workspace);
 
         Assert.False(panel.HasData);
+        Assert.False(panel.Unreadable); // absent ⟹ fresh-workspace empty state, not the error state.
+        Assert.Empty(panel.Series);
+        Assert.Equal("ws-a", panel.WorkspaceId);
+    }
+
+    [Fact]
+    public void ReadTrends_PresentButUnreadableHistoryDb_ReturnsErrorFlaggedEmptyPanel()
+    {
+        DashboardWorkspaceRow workspace = WorkspaceRowWithMiller(out string historyDbPath);
+        File.WriteAllText(historyDbPath, "this is not a sqlite database, just garbage");
+
+        DashboardWorkspaceTrendsPanel panel = DashboardIndexFactsReader.ReadTrends(workspace);
+
+        // Downgraded to an empty panel BUT flagged so the panel renders "history unreadable", not "no trend data yet".
+        Assert.False(panel.HasData);
+        Assert.True(panel.Unreadable);
         Assert.Empty(panel.Series);
         Assert.Equal("ws-a", panel.WorkspaceId);
     }

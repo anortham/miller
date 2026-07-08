@@ -29,9 +29,10 @@ public static class DashboardIndexFactsReader
     /// <summary>
     /// Read the workspace's metric trends from its <c>history.db</c> sidecar (sibling of <c>symbols.db</c>) for the
     /// fixed sparkline metric set, downsampled to <see cref="TrendMaxPoints"/> points per metric. Read-only aggregate
-    /// facts — it opens only the append-only history sidecar and never hydrates the index. A missing/unreadable
-    /// history.db, or one with none of the tracked metrics, yields an empty panel (the caller renders the empty
-    /// state). Never throws (<see cref="MetricHistoryStore.ReadTrend"/> is best-effort).
+    /// facts — it opens only the append-only history sidecar and never hydrates the index. A missing history.db, or
+    /// one with none of the tracked metrics, yields an empty panel (the caller renders the empty state). A
+    /// PRESENT-but-unreadable history.db yields an empty panel flagged <see cref="DashboardWorkspaceTrendsPanel.Unreadable"/>
+    /// so the caller renders a distinct error state. Never throws.
     /// </summary>
     public static DashboardWorkspaceTrendsPanel ReadTrends(DashboardWorkspaceRow workspace)
     {
@@ -48,8 +49,17 @@ public static class DashboardIndexFactsReader
         }
 
         string[] metricNames = Array.ConvertAll(TrendMetrics, static m => m.Metric);
-        IReadOnlyList<MetricHistoryTrendPoint> points =
-            MetricHistoryStore.ReadTrend(historyDbPath, metricNames, limit: 0, maxPoints: TrendMaxPoints);
+        IReadOnlyList<MetricHistoryTrendPoint> points;
+        try
+        {
+            points = MetricHistoryStore.ReadTrend(historyDbPath, metricNames, limit: 0, maxPoints: TrendMaxPoints);
+        }
+        catch (MetricHistoryUnreadableException)
+        {
+            // Present-but-unreadable history.db: downgrade to an empty panel BUT carry the error flag so the panel
+            // renders "history unreadable" instead of the fresh-workspace "no trend data yet" hint.
+            return DashboardWorkspaceTrendsPanel.UnreadablePanel(workspace.WorkspaceId);
+        }
 
         // Group the flattened rows by metric (each already ordered by snapshot_id) so a per-metric value series can
         // be assembled without re-sorting.

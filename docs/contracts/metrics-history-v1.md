@@ -85,11 +85,15 @@ recorded_at_utc	revision	source	<metric_1>	<metric_2>	…
 
 ### Empty / missing history
 
-Exit `0` with a single nudge line — never an error:
+An **absent** or empty `history.db` is a normal state — exit `0` with a single nudge line, never an error:
 
 ```
 no trend data yet — run `miller report`.
 ```
+
+A **present-but-unreadable** `history.db` (corrupt/locked/not-a-db) is distinct: it is an operational failure
+surfaced as `metrics failed: …` with exit `3`, never the friendly exit-`0` nudge above. A broken sidecar must
+fail visibly rather than read as an empty trend.
 
 ## `--json` Envelope
 

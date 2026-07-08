@@ -687,6 +687,31 @@ public sealed class WorkspaceRenderTests
         Assert.True(history.GetProperty("corrupt_recovered").GetBoolean());
     }
 
+    [Fact]
+    public void Health_Compact_RendersHistorySidecarUnreadableDistinctly()
+    {
+        var unreadable = HealthWithHistory(new MetricHistoryStatus(
+            Present: true, SchemaVersion: 0, SnapshotCount: 0, SizeBytes: 512, CorruptRecovered: false, Unreadable: true));
+        string text = WorkspaceRender.Health(unreadable, json: false);
+
+        // A broken sidecar must read "unreadable", never a healthy-looking "present  0 snapshots".
+        Assert.Contains("history_db: unreadable", text);
+        Assert.DoesNotContain("present  0 snapshots", text);
+    }
+
+    [Fact]
+    public void Health_Json_RendersHistorySidecarUnreadableFlag()
+    {
+        var unreadable = HealthWithHistory(new MetricHistoryStatus(
+            Present: true, SchemaVersion: 0, SnapshotCount: 0, SizeBytes: 512, CorruptRecovered: false, Unreadable: true));
+
+        using var doc = JsonDocument.Parse(WorkspaceRender.Health(unreadable, json: true));
+        JsonElement history = doc.RootElement.GetProperty("index").GetProperty("history_db");
+
+        Assert.True(history.GetProperty("present").GetBoolean());
+        Assert.True(history.GetProperty("unreadable").GetBoolean());
+    }
+
     private static WorkspaceHealthFacts HealthWithHistory(MetricHistoryStatus history) =>
         new(
             StatusFacts: Facts(),

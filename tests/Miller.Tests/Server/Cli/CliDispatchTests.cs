@@ -452,6 +452,21 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Contains("no trend data yet", outText);
     }
 
+    [Fact]
+    public void MetricsHistory_PresentButUnreadableHistoryDb_ExitThreeOperationalFailure()
+    {
+        using var fx = MetricsHistoryDb();
+        string historyDb = MetricSnapshotAggregates.HistoryDbPathFor(fx.DbPath);
+        File.WriteAllText(historyDb, "this is not a sqlite database, just garbage");
+
+        var (code, _, errText) = Run(
+            new[] { "metrics", "history" }, Context(fx.DbPath, fx.WorkspaceRoot));
+
+        // A broken sidecar is an operational failure — exit 3 with `metrics failed: …`, NOT the friendly exit-0 nudge.
+        Assert.Equal(3, code);
+        Assert.Contains("metrics failed", errText);
+    }
+
     private static JulieDbFixture MetricsHistoryDb() =>
         JulieDbFixture.Create(
             JulieDbFixture.PinnedSchema,

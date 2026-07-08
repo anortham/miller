@@ -675,10 +675,12 @@ public static class CliDispatch
             WriteOutput(outw, result.Output);
             return 0;
         }
+        // A PRESENT-but-unreadable history.db is an operational failure (exit 3), NOT the friendly empty-history
+        // exit-0 path — an absent file stays empty-success inside RunHistory (see docs/contracts/metrics-history-v1.md).
         catch (Exception ex) when (
             ex is FileNotFoundException or InvalidOperationException or IOException
                 or UnauthorizedAccessException or ArgumentException or NotSupportedException
-                or SqliteException)
+                or SqliteException or MetricHistoryUnreadableException)
         {
             err.WriteLine("metrics failed: " + ex.Message);
             return 3;

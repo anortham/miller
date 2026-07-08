@@ -49,12 +49,30 @@ public sealed record MetricHistoryTrendPoint(
     double Value);
 
 /// <summary>Best-effort status of a workspace's <c>history.db</c> sidecar for <c>workspace health</c>.</summary>
+/// <param name="Unreadable">
+/// The file is PRESENT but could not be read (corrupt/locked/not-a-db). Distinct from absent (<paramref name="Present"/>
+/// false) so <c>workspace health</c> surfaces a broken sidecar visibly instead of a healthy-looking <c>0 snapshots</c>.
+/// </param>
 public sealed record MetricHistoryStatus(
     bool Present,
     int SchemaVersion,
     long SnapshotCount,
     long SizeBytes,
-    bool CorruptRecovered);
+    bool CorruptRecovered,
+    bool Unreadable = false);
+
+/// <summary>
+/// Thrown by <see cref="MetricHistoryStore.ReadTrend"/> when a PRESENT <c>history.db</c> exists but cannot be read
+/// (corrupt/locked/not-a-db). An ABSENT file is empty-success, never this exception — so read surfaces can fail
+/// VISIBLY (CLI exit 3, dashboard error panel) instead of rendering a broken sidecar as "no trend data yet".
+/// </summary>
+public sealed class MetricHistoryUnreadableException : Exception
+{
+    public MetricHistoryUnreadableException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
 
 /// <summary>
 /// The single owner of <c>&lt;workspace&gt;/.miller/history.db</c> — a workspace-local, append-only SQLite sidecar
@@ -64,9 +82,11 @@ public sealed record MetricHistoryStatus(
 ///
 /// <para>Multi-process append is handled by construction: WAL mode; the leader's converge write is non-blocking
 /// (<c>busy_timeout=0</c>, skip-on-busy) so it never stalls indexing; CLI heavy arms use a short busy timeout.
-/// Corruption is unrecoverable data — on an open/integrity failure the file is renamed aside to
-/// <c>history.db.corrupt-&lt;utc-stamp&gt;</c> and a fresh DB started. A <c>schema_version</c> newer than this
-/// binary knows is skip-never-destroy (append-only history has no rebuild escape hatch).</para>
+/// Corruption is unrecoverable in place — on an open/integrity failure the WHOLE bundle (main file plus its
+/// <c>-wal</c>/<c>-shm</c> siblings) is renamed aside under one <c>history.db.corrupt-&lt;utc-stamp&gt;</c> stamp
+/// (never deleted, so committed WAL-resident snapshots survive as a replayable image) and a fresh DB started. A
+/// <c>schema_version</c> newer than this binary knows is skip-never-destroy (append-only history has no rebuild
+/// escape hatch).</para>
 ///
 /// <para>Design: docs/plans/2026-07-07-metric-history-design.md.</para>
 /// </summary>
@@ -289,6 +309,10 @@ public static class MetricHistoryStore
     /// <c>recorded_at_utc</c> is display metadata only), each metric series uniform-stride downsampled to at most
     /// <paramref name="maxPoints"/> points. A <paramref name="limit"/>/<paramref name="maxPoints"/> ≤ 0 means "no
     /// limit"/"no downsampling". A missing metric is an absent row, never 0.
+    ///
+    /// <para>An ABSENT <c>history.db</c> (or an empty metric request) is empty-success. A PRESENT-but-unreadable file
+    /// throws <see cref="MetricHistoryUnreadableException"/> so the read surfaces fail visibly (CLI exit 3, dashboard
+    /// error panel) rather than degrading a corrupt sidecar to a silent "no trend data yet".</para>
     /// </summary>
     public static IReadOnlyList<MetricHistoryTrendPoint> ReadTrend(
         string historyDbPath, IReadOnlyList<string> metrics, int limit, int maxPoints)
@@ -342,13 +366,17 @@ public static class MetricHistoryStore
                     Value: reader.GetDouble(6)));
             }
         }
-        catch (SqliteException)
+        catch (SqliteException ex)
         {
-            return Array.Empty<MetricHistoryTrendPoint>();
+            // The file is PRESENT (checked above) but unreadable — corrupt/locked/not-a-db. Fail VISIBLY so the CLI
+            // exits 3 and the dashboard shows an error panel, never a silent "no trend data yet" over a broken sidecar.
+            throw new MetricHistoryUnreadableException(
+                $"history.db is present but could not be read: {ex.Message}", ex);
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex)
         {
-            return Array.Empty<MetricHistoryTrendPoint>();
+            throw new MetricHistoryUnreadableException(
+                $"history.db is present but could not be read: {ex.Message}", ex);
         }
 
         // Downsample per-metric series (rows are already grouped by metric, ordered by snapshot_id), then flatten
@@ -364,7 +392,11 @@ public static class MetricHistoryStore
         return result;
     }
 
-    /// <summary>Best-effort sidecar status for <c>workspace health</c>. Never throws; unreadable ⟹ defaults.</summary>
+    /// <summary>
+    /// Best-effort sidecar status for <c>workspace health</c>. Never throws. A PRESENT-but-unreadable file is
+    /// reported with <see cref="MetricHistoryStatus.Unreadable"/> set (not a silent schema-0/count-0 default) so
+    /// health can surface a broken sidecar visibly.
+    /// </summary>
     public static MetricHistoryStatus ReadStatus(string historyDbPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(historyDbPath);
@@ -379,6 +411,7 @@ public static class MetricHistoryStore
         long sizeBytes = new FileInfo(full).Length;
         int schemaVersion = 0;
         long snapshotCount = 0;
+        bool unreadable = false;
         try
         {
             using var connection = SqliteReadOnlyAccess.Open(full);
@@ -387,10 +420,10 @@ public static class MetricHistoryStore
             cmd.CommandText = "SELECT COUNT(*) FROM snapshots;";
             snapshotCount = Convert.ToInt64(cmd.ExecuteScalar() ?? 0L, CultureInfo.InvariantCulture);
         }
-        catch (SqliteException) { /* unreadable; best-effort defaults */ }
-        catch (InvalidOperationException) { /* WAL sidecar dir not writable; best-effort defaults */ }
+        catch (SqliteException) { unreadable = true; /* present but corrupt/locked/not-a-db */ }
+        catch (InvalidOperationException) { unreadable = true; /* WAL sidecar dir not writable / unreadable */ }
 
-        return new MetricHistoryStatus(Present: true, schemaVersion, snapshotCount, sizeBytes, corruptRecovered);
+        return new MetricHistoryStatus(Present: true, schemaVersion, snapshotCount, sizeBytes, corruptRecovered, unreadable);
     }
 
     // ---- internals -------------------------------------------------------------------------------------------
@@ -515,6 +548,12 @@ public static class MetricHistoryStore
         return Convert.ToInt64(cmd.ExecuteScalar() ?? 0L, CultureInfo.InvariantCulture);
     }
 
+    // Move the WHOLE unusable bundle aside under ONE stamp — main file plus its `-wal`/`-shm` siblings — and NEVER
+    // delete. history.db runs in WAL mode and is append-only, NOT derivable: committed snapshots can live only in the
+    // `-wal` until checkpoint, so deleting it would irreversibly discard committed data. The siblings are renamed to
+    // `<newname>-wal` / `<newname>-shm` (exactly what SQLite expects) so the moved-aside bundle stays a coherent,
+    // replayable image an operator can recover from. Sibling moves are best-effort per file (a missing `-shm` is fine),
+    // but the main-file move is load-bearing so the fresh DB starts clean.
     private static void RenameAside(string historyDbPath)
     {
         SqliteConnection.ClearAllPools();
@@ -524,18 +563,19 @@ public static class MetricHistoryStore
             target = historyDbPath + ".corrupt-" + stamp + "-" + Guid.NewGuid().ToString("N");
 
         File.Move(historyDbPath, target);
-        TryDelete(historyDbPath + "-wal");
-        TryDelete(historyDbPath + "-shm");
+        // Preserve the WAL/SHM under the SAME stamp so the bundle remains replayable (never delete committed data).
+        TryMove(historyDbPath + "-wal", target + "-wal");
+        TryMove(historyDbPath + "-shm", target + "-shm");
     }
 
-    private static void TryDelete(string path)
+    private static void TryMove(string source, string destination)
     {
         try
         {
-            if (File.Exists(path))
-                File.Delete(path);
+            if (File.Exists(source))
+                File.Move(source, destination);
         }
-        catch (IOException) { /* best effort */ }
+        catch (IOException) { /* best effort — a lost -shm is harmless; the -wal preservation is the priority */ }
         catch (UnauthorizedAccessException) { /* best effort */ }
     }
 

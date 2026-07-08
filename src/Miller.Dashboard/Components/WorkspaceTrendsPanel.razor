@@ -10,7 +10,14 @@
 
     @if (Trends is null || !Trends.HasData)
     {
-        <p class="empty">No trend data yet — run <code>miller report</code> to record metric history.</p>
+        @if (Trends is { Unreadable: true })
+        {
+            <p class="empty">Metric history is unreadable — the <code>history.db</code> sidecar is present but could not be read.</p>
+        }
+        else
+        {
+            <p class="empty">No trend data yet — run <code>miller report</code> to record metric history.</p>
+        }
     }
     else
     {
