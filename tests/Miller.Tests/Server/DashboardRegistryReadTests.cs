@@ -113,6 +113,8 @@ public sealed class DashboardRegistryReadTests : IDisposable
         Assert.Equal("search", search.Tool);
         Assert.Equal(12, search.MaxMs);
         Assert.Equal(20, search.SumEstTokens);
+        // Healthy read: the degrade channel stays clean so no-data never looks like corruption.
+        Assert.Null(summary.Error);
     }
 
     [Fact]
@@ -1663,6 +1665,9 @@ public sealed class DashboardRegistryReadTests : IDisposable
         Assert.Equal(0, summary.TotalCalls);
         Assert.Empty(summary.Tools);
         Assert.Empty(summary.RecentErrors);
+        // A corrupt DB must be distinguishable from a healthy empty one: the caught message rides Error.
+        Assert.False(string.IsNullOrWhiteSpace(summary.Error));
+        Assert.StartsWith("telemetry read degraded:", summary.Error);
     }
 
     [Fact]
@@ -1674,6 +1679,9 @@ public sealed class DashboardRegistryReadTests : IDisposable
 
         Assert.Equal("ws-a", feed.WorkspaceId);
         Assert.Empty(feed.Entries);
+        // A corrupt DB must be distinguishable from a healthy empty feed: the caught message rides Error.
+        Assert.False(string.IsNullOrWhiteSpace(feed.Error));
+        Assert.StartsWith("telemetry read degraded:", feed.Error);
     }
 
     [Fact]

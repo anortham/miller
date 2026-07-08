@@ -18,6 +18,11 @@
                 hx-swap="outerHTML">Refresh</button>
     </div>
 
+    @if (!string.IsNullOrWhiteSpace(Telemetry.Error))
+    {
+        <p class="notice error-notice"><strong>Telemetry unavailable</strong> @Telemetry.Error</p>
+    }
+
     @if (string.IsNullOrWhiteSpace(SelectedWorkspaceId))
     {
         <p class="empty">Select a workspace to view captured telemetry.</p>

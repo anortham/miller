@@ -28,7 +28,8 @@ public sealed record DashboardTelemetrySummary(
     [property: JsonPropertyName("total_calls")] long TotalCalls,
     [property: JsonPropertyName("window_start_ts")] string? WindowStartTs,
     [property: JsonPropertyName("window_end_ts")] string? WindowEndTs,
-    [property: JsonPropertyName("recent_errors")] IReadOnlyList<DashboardRecentError> RecentErrors);
+    [property: JsonPropertyName("recent_errors")] IReadOnlyList<DashboardRecentError> RecentErrors,
+    [property: JsonPropertyName("error")] string? Error = null);
 
 public sealed record DashboardToolStat(
     [property: JsonPropertyName("tool")] string Tool,
@@ -72,7 +73,8 @@ public sealed record DashboardActivityEntry(
 
 public sealed record DashboardActivityFeed(
     [property: JsonPropertyName("workspace_id")] string? WorkspaceId,
-    [property: JsonPropertyName("entries")] IReadOnlyList<DashboardActivityEntry> Entries);
+    [property: JsonPropertyName("entries")] IReadOnlyList<DashboardActivityEntry> Entries,
+    [property: JsonPropertyName("error")] string? Error = null);
 
 public sealed record DashboardRuntimeInfo(
     [property: JsonPropertyName("registry_db_path")] string RegistryDbPath,
@@ -590,8 +592,9 @@ public static class DashboardData
         catch (Exception ex) when (
             ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException)
         {
-            // A corrupt/truncated shared telemetry.db must not 500 the page spine — degrade to the empty shape.
-            return EmptyTelemetrySummary(workspaceId);
+            // A corrupt/truncated shared telemetry.db must not 500 the page spine — degrade to the empty shape,
+            // but carry the underlying message so the panel can distinguish corruption from a healthy no-data DB.
+            return EmptyTelemetrySummary(workspaceId) with { Error = $"telemetry read degraded: {ex.Message}" };
         }
     }
 
@@ -628,8 +631,12 @@ public static class DashboardData
         catch (Exception ex) when (
             ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException)
         {
-            // A corrupt/truncated shared telemetry.db must not 500 the page spine — degrade to the empty feed.
-            return new DashboardActivityFeed(scope, Array.Empty<DashboardActivityEntry>());
+            // A corrupt/truncated shared telemetry.db must not 500 the page spine — degrade to the empty feed,
+            // but carry the underlying message so the panel can distinguish corruption from a healthy no-data DB.
+            return new DashboardActivityFeed(
+                scope,
+                Array.Empty<DashboardActivityEntry>(),
+                $"telemetry read degraded: {ex.Message}");
         }
     }
 

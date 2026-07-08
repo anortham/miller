@@ -103,6 +103,8 @@ public sealed class DashboardActivityFeedTests : IDisposable
         DashboardActivityFeed feed = DashboardData.ReadRecentActivity(_telemetryDb, _registryDb, "ws-a");
 
         Assert.Empty(feed.Entries);
+        // A missing DB is a healthy no-data state, not a corruption: the degrade channel stays clean.
+        Assert.Null(feed.Error);
     }
 
     [Fact]
@@ -303,6 +305,74 @@ public sealed class DashboardActivityFeedTests : IDisposable
 
         Assert.Contains("id=\"activity-feed-panel\"", workspaceHtml);
         Assert.Contains("hx-get=\"/fragments/activity?workspace_id=ws-a\"", workspaceHtml);
+    }
+
+    [Fact]
+    public async Task TelemetryPanel_RendersDegradeNoticeWhenErrorPresent()
+    {
+        var telemetry = new DashboardTelemetrySummary(
+            "ws-a", [], 0, null, null, [],
+            Error: "telemetry read degraded: database disk image is malformed");
+
+        string html = await RenderComponentAsync<TelemetryPanel>(new Dictionary<string, object?>
+        {
+            ["Telemetry"] = telemetry,
+            ["SelectedWorkspaceId"] = "ws-a",
+        });
+
+        // Same notice markup/classes as the registry-unavailable notice in WorkspaceIndex.
+        Assert.Contains("class=\"notice error-notice\"", html);
+        Assert.Contains("telemetry read degraded: database disk image is malformed", html);
+        // The (empty) panel content still renders below the notice.
+        Assert.Contains("No telemetry recorded", html);
+    }
+
+    [Fact]
+    public async Task TelemetryPanel_HealthyEmptyRendersNoDegradeNotice()
+    {
+        var telemetry = new DashboardTelemetrySummary("ws-a", [], 0, null, null, []);
+
+        string html = await RenderComponentAsync<TelemetryPanel>(new Dictionary<string, object?>
+        {
+            ["Telemetry"] = telemetry,
+            ["SelectedWorkspaceId"] = "ws-a",
+        });
+
+        Assert.DoesNotContain("error-notice", html);
+        Assert.Contains("No telemetry recorded", html);
+    }
+
+    [Fact]
+    public async Task ActivityFeedPanel_RendersDegradeNoticeWhenErrorPresent()
+    {
+        var feed = new DashboardActivityFeed(
+            "ws-a",
+            Array.Empty<DashboardActivityEntry>(),
+            Error: "telemetry read degraded: database disk image is malformed");
+
+        string html = await RenderComponentAsync<ActivityFeedPanel>(new Dictionary<string, object?>
+        {
+            ["Feed"] = feed,
+        });
+
+        Assert.Contains("class=\"notice error-notice\"", html);
+        Assert.Contains("telemetry read degraded: database disk image is malformed", html);
+        // The (empty) feed content still renders below the notice.
+        Assert.Contains("No tool calls recorded yet", html);
+    }
+
+    [Fact]
+    public async Task ActivityFeedPanel_HealthyEmptyRendersNoDegradeNotice()
+    {
+        var feed = new DashboardActivityFeed("ws-a", Array.Empty<DashboardActivityEntry>());
+
+        string html = await RenderComponentAsync<ActivityFeedPanel>(new Dictionary<string, object?>
+        {
+            ["Feed"] = feed,
+        });
+
+        Assert.DoesNotContain("error-notice", html);
+        Assert.Contains("No tool calls recorded yet", html);
     }
 
     [Fact]

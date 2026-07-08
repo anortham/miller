@@ -14,6 +14,11 @@
         <span class="live-dot" aria-label="Updating every 5 seconds when tab is visible"></span>
     </div>
 
+    @if (!string.IsNullOrWhiteSpace(Feed.Error))
+    {
+        <p class="notice error-notice"><strong>Activity unavailable</strong> @Feed.Error</p>
+    }
+
     @if (Feed.Entries.Count == 0)
     {
         <p class="empty">No tool calls recorded yet. Activity appears here as agents use Miller.</p>
