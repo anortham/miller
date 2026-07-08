@@ -564,7 +564,10 @@ public static class DashboardData
     /// the sentinel <c>all</c> aggregates across every workspace (workspace ids are SHA-256 hex, so the
     /// sentinel cannot collide); any other value scopes with <c>workspace_id IS $ws</c>.
     /// </summary>
-    public static DashboardTelemetrySummary ReadTelemetrySummary(string telemetryDbPath, string? workspaceId)
+    public static DashboardTelemetrySummary ReadTelemetrySummary(
+        string telemetryDbPath,
+        string? workspaceId,
+        string? registryDbPath = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(telemetryDbPath);
         bool allWorkspaces = string.Equals(workspaceId, "all", StringComparison.Ordinal);
@@ -580,7 +583,8 @@ public static class DashboardData
 
             var tools = ReadToolStats(connection, scope, allWorkspaces);
             (long totalCalls, string? windowStart, string? windowEnd) = ReadTotals(connection, scope, allWorkspaces);
-            IReadOnlyList<DashboardRecentError> recentErrors = ReadRecentErrors(connection, scope, allWorkspaces);
+            IReadOnlyList<DashboardRecentError> recentErrors =
+                ReadRecentErrors(connection, scope, allWorkspaces, registryDbPath);
             return new DashboardTelemetrySummary(workspaceId, tools, totalCalls, windowStart, windowEnd, recentErrors);
         }
         catch (Exception ex) when (
@@ -868,7 +872,7 @@ public static class DashboardData
     {
         IReadOnlyList<DashboardWorkspaceRow> workspaces = ReadWorkspaces(registryDbPath);
         string? selectedWorkspaceId = SelectWorkspace(workspaces, telemetryDbPath, workspaceId, preferredWorkspaceRoot);
-        DashboardTelemetrySummary telemetry = ReadTelemetrySummary(telemetryDbPath, selectedWorkspaceId);
+        DashboardTelemetrySummary telemetry = ReadTelemetrySummary(telemetryDbPath, selectedWorkspaceId, registryDbPath);
         DashboardWorkspaceRow? selectedWorkspace = workspaces.FirstOrDefault(
             row => string.Equals(row.WorkspaceId, selectedWorkspaceId, StringComparison.Ordinal));
         DashboardWorkspaceFacts? selectedFacts = selectedWorkspace is null
@@ -1267,8 +1271,10 @@ public static class DashboardData
     public static string RenderWorkspacesJson(string registryDbPath) =>
         JsonSerializer.Serialize(ReadWorkspaces(registryDbPath), JsonContext.IReadOnlyListDashboardWorkspaceRow);
 
-    public static string RenderTelemetryJson(string telemetryDbPath, string? workspaceId) =>
-        JsonSerializer.Serialize(ReadTelemetrySummary(telemetryDbPath, workspaceId), JsonContext.DashboardTelemetrySummary);
+    public static string RenderTelemetryJson(string telemetryDbPath, string? workspaceId, string? registryDbPath = null) =>
+        JsonSerializer.Serialize(
+            ReadTelemetrySummary(telemetryDbPath, workspaceId, registryDbPath),
+            JsonContext.DashboardTelemetrySummary);
 
     public static string RenderSnapshotJson(
         string registryDbPath,
@@ -1517,6 +1523,12 @@ public static class DashboardData
               """;
         if (!allWorkspaces)
             cmd.Parameters.AddWithValue("$ws", (object?)workspaceId ?? DBNull.Value);
+
+        // One extra grouped pass over the window computes EVERY tool's p95 (was an N+1: one ordered
+        // ORDER BY duration_ms LIMIT 1 OFFSET n query per tool row). Total telemetry queries for the summary
+        // are now bounded (this grouped stats query + one duration scan), independent of tool count.
+        IReadOnlyDictionary<string, long> p95ByTool = ComputeP95ByTool(connection, workspaceId, allWorkspaces);
+
         using var reader = cmd.ExecuteReader();
         var stats = new List<DashboardToolStat>();
         while (reader.Read())
@@ -1527,7 +1539,7 @@ public static class DashboardData
                 tool,
                 calls,
                 reader.GetDouble(2),
-                ComputeP95(connection, workspaceId, allWorkspaces, tool, calls),
+                p95ByTool.TryGetValue(tool, out long p95) ? p95 : 0,
                 reader.GetInt64(3),
                 reader.GetInt64(4),
                 reader.GetInt64(5),
@@ -1540,10 +1552,61 @@ public static class DashboardData
         return stats;
     }
 
-    private static IReadOnlyList<DashboardRecentError> ReadRecentErrors(
+    /// <summary>
+    /// Per-tool p95 latency in ONE pass over the window's rows, replacing the former per-tool
+    /// <c>ComputeP95</c> query loop. Preserves the exact semantics of the old
+    /// <c>ORDER BY duration_ms ASC LIMIT 1 OFFSET floor((count-1)*0.95)</c>: rows are read ordered by
+    /// <c>(tool, duration_ms ASC)</c> — so within each tool NULL durations sort first and values ascend,
+    /// identical to the old per-tool query — and the p95 is the value at 0-based index
+    /// <c>floor((count-1)*0.95)</c> (a NULL there degrades to 0, matching the old scalar read). Ordering is
+    /// value-based, so ties need no secondary key: the duration at a given offset is deterministic regardless
+    /// of row order within equal-duration runs.
+    /// </summary>
+    private static IReadOnlyDictionary<string, long> ComputeP95ByTool(
         SqliteConnection connection,
         string? workspaceId,
         bool allWorkspaces)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = allWorkspaces
+            ? "SELECT tool, duration_ms FROM tool_telemetry ORDER BY tool, duration_ms ASC;"
+            : "SELECT tool, duration_ms FROM tool_telemetry WHERE workspace_id IS $ws ORDER BY tool, duration_ms ASC;";
+        if (!allWorkspaces)
+            cmd.Parameters.AddWithValue("$ws", (object?)workspaceId ?? DBNull.Value);
+
+        var durations = new Dictionary<string, List<long?>>(StringComparer.Ordinal);
+        using (var reader = cmd.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                string tool = reader.GetString(0);
+                long? duration = reader.IsDBNull(1) ? null : reader.GetInt64(1);
+                if (!durations.TryGetValue(tool, out List<long?>? ordered))
+                {
+                    ordered = new List<long?>();
+                    durations[tool] = ordered;
+                }
+
+                ordered.Add(duration);
+            }
+        }
+
+        var p95 = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach ((string tool, List<long?> ordered) in durations)
+        {
+            long offset = (long)Math.Floor((ordered.Count - 1) * 0.95);
+            long? value = ordered[(int)offset];
+            p95[tool] = value ?? 0;
+        }
+
+        return p95;
+    }
+
+    private static IReadOnlyList<DashboardRecentError> ReadRecentErrors(
+        SqliteConnection connection,
+        string? workspaceId,
+        bool allWorkspaces,
+        string? registryDbPath)
     {
         string idSelect = ColumnExists(connection, "tool_telemetry", "id")
             ? "id"
@@ -1579,20 +1642,44 @@ public static class DashboardData
         if (!allWorkspaces)
             cmd.Parameters.AddWithValue("$ws", (object?)workspaceId ?? DBNull.Value);
         using var reader = cmd.ExecuteReader();
-        var errors = new List<DashboardRecentError>();
+        var rows = new List<(string? WorkspaceId, DashboardRecentError Error)>();
         while (reader.Read())
         {
-            errors.Add(new DashboardRecentError(
+            string? rowWorkspaceId = reader.IsDBNull(6) ? null : reader.GetString(6);
+            rows.Add((rowWorkspaceId, new DashboardRecentError(
                 reader.GetString(0),
                 reader.GetString(1),
                 reader.IsDBNull(2) ? null : reader.GetString(2),
                 reader.IsDBNull(3) ? null : reader.GetString(3),
                 reader.GetInt64(4),
                 reader.IsDBNull(5) ? null : reader.GetString(5),
-                reader.IsDBNull(6) ? null : reader.GetString(6),
+                rowWorkspaceId,
                 WorkspaceDisplayId: null,
                 reader.IsDBNull(7) ? null : reader.GetString(7),
-                reader.IsDBNull(8) ? null : reader.GetString(8)));
+                reader.IsDBNull(8) ? null : reader.GetString(8))));
+        }
+
+        // Resolve the registered display id for each errored workspace so machine-wide errors can name which
+        // workspace faulted. The registry path is threaded explicitly from the caller (ReadSnapshot / the
+        // endpoints already carry both paths); a null path — or a missing/corrupt registry, which
+        // ReadWorkspaces degrades safely to an empty list — leaves display ids null. Per the contract, an
+        // UNREGISTERED id also stays null (not the raw id).
+        IReadOnlyDictionary<string, string> displayIds =
+            rows.Count == 0 || string.IsNullOrWhiteSpace(registryDbPath)
+                ? new Dictionary<string, string>(StringComparer.Ordinal)
+                : ReadWorkspaces(registryDbPath).ToDictionary(
+                    row => row.WorkspaceId,
+                    row => row.DisplayId,
+                    StringComparer.Ordinal);
+
+        var errors = new List<DashboardRecentError>(rows.Count);
+        foreach ((string? rowWorkspaceId, DashboardRecentError error) in rows)
+        {
+            string? displayId = rowWorkspaceId is not null
+                && displayIds.TryGetValue(rowWorkspaceId, out string? resolved)
+                ? resolved
+                : null;
+            errors.Add(error with { WorkspaceDisplayId = displayId });
         }
 
         return errors;
@@ -1617,26 +1704,6 @@ public static class DashboardData
             reader.GetInt64(0),
             reader.IsDBNull(1) ? null : reader.GetString(1),
             reader.IsDBNull(2) ? null : reader.GetString(2));
-    }
-
-    private static long ComputeP95(
-        SqliteConnection connection,
-        string? workspaceId,
-        bool allWorkspaces,
-        string tool,
-        long count)
-    {
-        long offset = (long)Math.Floor((count - 1) * 0.95);
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = allWorkspaces
-            ? "SELECT duration_ms FROM tool_telemetry WHERE tool = $tool ORDER BY duration_ms ASC LIMIT 1 OFFSET $offset;"
-            : "SELECT duration_ms FROM tool_telemetry WHERE workspace_id IS $ws AND tool = $tool ORDER BY duration_ms ASC LIMIT 1 OFFSET $offset;";
-        cmd.Parameters.AddWithValue("$tool", tool);
-        if (!allWorkspaces)
-            cmd.Parameters.AddWithValue("$ws", (object?)workspaceId ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("$offset", offset);
-        object? value = cmd.ExecuteScalar();
-        return value is null or DBNull ? 0 : Convert.ToInt64(value, CultureInfo.InvariantCulture);
     }
 
 }

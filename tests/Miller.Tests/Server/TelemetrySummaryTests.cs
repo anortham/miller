@@ -1,4 +1,6 @@
 using Microsoft.Data.Sqlite;
+using Miller.Dashboard;
+using Miller.Indexing;
 using Miller.Server.Telemetry;
 using Xunit;
 
@@ -221,5 +223,255 @@ public sealed class TelemetrySummaryTests : IDisposable
         var summary = ledger.Summarize(); // best-effort: disposed → empty, never throws
         Assert.Empty(summary.Tools);
         Assert.Equal(0, summary.TotalCalls);
+    }
+}
+
+/// <summary>
+/// Contract pin for the DASHBOARD telemetry read path (<see cref="DashboardData.ReadTelemetrySummary"/>),
+/// distinct from the server-side <see cref="TelemetryLedger.Summarize"/> above. These pin the exact P95
+/// percentile semantics BEFORE the N+1 → single-pass rewrite (Task 5): p95 = the ascending-sorted duration at
+/// 0-based index <c>floor((count-1)*0.95)</c> per tool, computed over the same telemetry window in one pass;
+/// plus the recent-errors display-id resolution from the sibling registry (<c>workspaces.db</c>). Runs against
+/// REAL temp <c>telemetry.db</c> + <c>workspaces.db</c> siblings — fast, so it stays in the default suite.
+/// </summary>
+public sealed class DashboardTelemetrySummaryTests : IDisposable
+{
+    private readonly string _dir;
+    private readonly string _telemetryDb;
+    private readonly string _registryDb;
+
+    public DashboardTelemetrySummaryTests()
+    {
+        _dir = Path.Combine(Path.GetTempPath(), "miller-dash-summary-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_dir);
+        // The dashboard reader derives the registry path as the telemetry DB's sibling, so they MUST co-locate
+        // (this mirrors DashboardPaths, which resolves both under ~/.miller by default).
+        _telemetryDb = Path.Combine(_dir, "telemetry.db");
+        _registryDb = Path.Combine(_dir, "workspaces.db");
+    }
+
+    public void Dispose()
+    {
+        // The dashboard readers use Pooling=false, but clear defensively before deleting the SQLite files.
+        SqliteConnection.ClearAllPools();
+        try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }
+    }
+
+    /// <summary>
+    /// Insert one telemetry row via direct SQL (the ledger's prepared INSERT does not let us pin ts/duration).
+    /// Opening the ledger once first creates the <c>tool_telemetry</c> schema.
+    /// </summary>
+    private string InsertRow(
+        string tool,
+        long durationMs,
+        string outcome,
+        string ts,
+        string workspaceId = "ws-a",
+        string? errorKind = null,
+        string? errorMessage = null,
+        string? errorDetail = null,
+        string? id = null)
+    {
+        using (TelemetryLedger.Open(_telemetryDb, workspaceId, "/repo/test"))
+        {
+            // Ensure schema exists before the deterministic direct insert.
+        }
+
+        using var c = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _telemetryDb, Mode = SqliteOpenMode.ReadWrite, Pooling = false,
+        }.ToString());
+        c.Open();
+        using var cmd = c.CreateCommand();
+        string rowId = id ?? Guid.CreateVersion7().ToString();
+        cmd.CommandText =
+            "INSERT INTO tool_telemetry (id, ts, tool, workspace_id, duration_ms, outcome, error_kind, " +
+            "error_message, error_detail) " +
+            "VALUES ($id, $ts, $tool, $ws, $dur, $outcome, $errkind, $errmsg, $errdetail);";
+        cmd.Parameters.AddWithValue("$id", rowId);
+        cmd.Parameters.AddWithValue("$ts", ts);
+        cmd.Parameters.AddWithValue("$tool", tool);
+        cmd.Parameters.AddWithValue("$ws", workspaceId);
+        cmd.Parameters.AddWithValue("$dur", durationMs);
+        cmd.Parameters.AddWithValue("$outcome", outcome);
+        cmd.Parameters.AddWithValue("$errkind", (object?)errorKind ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$errmsg", (object?)errorMessage ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$errdetail", (object?)errorDetail ?? DBNull.Value);
+        cmd.ExecuteNonQuery();
+        return rowId;
+    }
+
+    private void SeedRegistry(string workspaceId, string displayId)
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDb);
+        registry.UpsertSeen(
+            workspaceId,
+            displayId,
+            Path.Combine(_dir, displayId),
+            Path.Combine(_dir, displayId, ".miller", "symbols.db"),
+            WorkspaceRegistryState.Current,
+            DateTimeOffset.Parse("2026-05-31T10:00:00Z"));
+    }
+
+    private DashboardToolStat ToolStat(string? scope, string tool) =>
+        Assert.Single(DashboardData.ReadTelemetrySummary(_telemetryDb, scope).Tools, t => t.Tool == tool);
+
+    // ---- P95 percentile semantics (pinned BEFORE the single-pass rewrite) ----
+
+    [Fact]
+    public void P95_KnownDistribution_Scoped_UsesFloorOffset()
+    {
+        // 100 rows durations 1..100. offset = floor((100-1)*0.95) = floor(94.05) = 94 → 0-based index 94 = 95.
+        for (int i = 1; i <= 100; i++)
+            InsertRow("search", i, "ok", $"2026-05-01T00:{i / 60:00}:{i % 60:00}.000Z");
+
+        DashboardToolStat search = ToolStat("ws-a", "search");
+        Assert.Equal(100, search.Calls);
+        Assert.Equal(95, search.P95Ms);
+        Assert.Equal(100, search.MaxMs);
+    }
+
+    [Fact]
+    public void P95_KnownDistribution_MachineWide_MatchesScopedFormula()
+    {
+        // Exercises the allWorkspaces SQL branch. Same 1..100 distribution → same p95 = 95.
+        for (int i = 1; i <= 100; i++)
+            InsertRow("search", i, "ok", $"2026-05-01T00:{i / 60:00}:{i % 60:00}.000Z");
+
+        DashboardToolStat search = ToolStat("all", "search");
+        Assert.Equal(95, search.P95Ms);
+        Assert.Equal(100, search.MaxMs);
+    }
+
+    [Fact]
+    public void P95_SingleRow_IsThatRowsDuration()
+    {
+        InsertRow("search", 42, "ok", "2026-05-01T00:00:00.000Z");
+        Assert.Equal(42, ToolStat("ws-a", "search").P95Ms); // offset floor(0*0.95)=0 → the only row
+    }
+
+    [Fact]
+    public void P95_TwoRows_ReturnsLowerSample_PinsFloorRounding()
+    {
+        // The floor offset means 2 samples yield the LOWER value, not the higher. This odd-but-current
+        // behavior must survive the rewrite byte-for-byte.
+        InsertRow("search", 10, "ok", "2026-05-01T00:00:00.000Z");
+        InsertRow("search", 90, "ok", "2026-05-01T00:00:01.000Z");
+        Assert.Equal(10, ToolStat("ws-a", "search").P95Ms); // offset floor(1*0.95)=0 → sorted[0] = 10
+    }
+
+    [Fact]
+    public void P95_AllEqualDurations_IsThatDuration()
+    {
+        for (int i = 0; i < 5; i++)
+            InsertRow("search", 42, "ok", $"2026-05-01T00:00:{i:00}.000Z");
+        Assert.Equal(42, ToolStat("ws-a", "search").P95Ms); // offset floor(4*0.95)=3 → sorted[3] = 42
+    }
+
+    [Fact]
+    public void P95_ZeroDuration_IsPreservedNotTreatedAsMissing()
+    {
+        InsertRow("search", 0, "ok", "2026-05-01T00:00:00.000Z");
+        Assert.Equal(0, ToolStat("ws-a", "search").P95Ms); // a real 0ms row, not the null→0 fallback
+    }
+
+    [Fact]
+    public void P95_MultipleTools_UnevenCounts_ComputedIndependentlyInOnePass()
+    {
+        // tool-a: 3 rows 10/20/30 → offset floor(2*0.95)=1 → sorted[1] = 20
+        InsertRow("tool-a", 10, "ok", "2026-05-01T00:00:00.000Z");
+        InsertRow("tool-a", 20, "ok", "2026-05-01T00:00:01.000Z");
+        InsertRow("tool-a", 30, "ok", "2026-05-01T00:00:02.000Z");
+        // tool-b: 1 row 99 → offset 0 → 99
+        InsertRow("tool-b", 99, "ok", "2026-05-01T00:00:03.000Z");
+        // tool-c: 20 rows 1..20 → offset floor(19*0.95)=18 → sorted[18] = 19
+        for (int i = 1; i <= 20; i++)
+            InsertRow("tool-c", i, "ok", $"2026-05-01T00:01:{i:00}.000Z");
+
+        Assert.Equal(20, ToolStat("ws-a", "tool-a").P95Ms);
+        Assert.Equal(99, ToolStat("ws-a", "tool-b").P95Ms);
+        Assert.Equal(19, ToolStat("ws-a", "tool-c").P95Ms);
+    }
+
+    [Fact]
+    public void P95_MachineWide_PoolsAcrossWorkspacesLikeTheOldPerToolQuery()
+    {
+        // The machine-wide p95 pools every workspace's rows for a tool. tool durations 10,20,30,40,50 across
+        // two workspaces → offset floor(4*0.95)=3 → sorted[3] = 40.
+        InsertRow("search", 10, "ok", "2026-05-01T00:00:00.000Z", workspaceId: "ws-a");
+        InsertRow("search", 30, "ok", "2026-05-01T00:00:01.000Z", workspaceId: "ws-a");
+        InsertRow("search", 50, "ok", "2026-05-01T00:00:02.000Z", workspaceId: "ws-a");
+        InsertRow("search", 20, "ok", "2026-05-01T00:00:03.000Z", workspaceId: "ws-b");
+        InsertRow("search", 40, "ok", "2026-05-01T00:00:04.000Z", workspaceId: "ws-b");
+
+        Assert.Equal(40, ToolStat("all", "search").P95Ms);
+    }
+
+    [Fact]
+    public void EmptyWindow_NoRows_YieldsNoTools()
+    {
+        using (TelemetryLedger.Open(_telemetryDb, "ws-a", "/repo/test")) { }
+        DashboardTelemetrySummary summary = DashboardData.ReadTelemetrySummary(_telemetryDb, "ws-a");
+        Assert.Empty(summary.Tools);
+        Assert.Equal(0, summary.TotalCalls);
+    }
+
+    // ---- recent-errors display-id resolution (B5 fix) ----
+
+    [Fact]
+    public void MachineWide_RecentErrors_ResolveRegisteredDisplayIds_NullForUnregistered()
+    {
+        SeedRegistry("ws-a", "alpha-abcd1234");
+        InsertRow("search", 5, "error", "2026-05-31T10:00:00.000Z", workspaceId: "ws-a",
+            errorKind: "InvalidOperationException");
+        InsertRow("inspect", 6, "error", "2026-05-31T10:01:00.000Z", workspaceId: "ws-zzz",
+            errorKind: "KeyNotFoundException");
+
+        DashboardTelemetrySummary summary = DashboardData.ReadTelemetrySummary(_telemetryDb, "all", _registryDb);
+
+        DashboardRecentError registered = Assert.Single(summary.RecentErrors, e => e.WorkspaceId == "ws-a");
+        Assert.Equal("alpha-abcd1234", registered.WorkspaceDisplayId);
+        DashboardRecentError unregistered = Assert.Single(summary.RecentErrors, e => e.WorkspaceId == "ws-zzz");
+        Assert.Null(unregistered.WorkspaceDisplayId);
+    }
+
+    [Fact]
+    public void Scoped_RecentErrors_ResolveRegisteredDisplayId()
+    {
+        SeedRegistry("ws-a", "alpha-abcd1234");
+        InsertRow("search", 5, "error", "2026-05-31T10:00:00.000Z", workspaceId: "ws-a",
+            errorKind: "InvalidOperationException");
+
+        DashboardRecentError error = Assert.Single(
+            DashboardData.ReadTelemetrySummary(_telemetryDb, "ws-a", _registryDb).RecentErrors);
+        Assert.Equal("ws-a", error.WorkspaceId);
+        Assert.Equal("alpha-abcd1234", error.WorkspaceDisplayId);
+    }
+
+    [Fact]
+    public void NullRegistryDbPath_DisplayIdStaysNull_EvenWhenRegistryExists()
+    {
+        // Explicit path threading: a null registryDbPath yields null display ids even though a resolvable
+        // registry sits right beside the telemetry DB — there is NO sibling-path guessing.
+        SeedRegistry("ws-a", "alpha-abcd1234");
+        InsertRow("search", 5, "error", "2026-05-31T10:00:00.000Z", workspaceId: "ws-a",
+            errorKind: "InvalidOperationException");
+
+        DashboardRecentError error = Assert.Single(
+            DashboardData.ReadTelemetrySummary(_telemetryDb, "ws-a").RecentErrors); // registryDbPath omitted → null
+        Assert.Equal("ws-a", error.WorkspaceId);
+        Assert.Null(error.WorkspaceDisplayId);
+    }
+
+    [Fact]
+    public void MissingRegistryFile_DisplayIdStaysNull()
+    {
+        // A registry path that does not exist degrades safely (ReadWorkspaces returns empty) → null display id.
+        InsertRow("search", 5, "error", "2026-05-31T10:00:00.000Z", workspaceId: "ws-a",
+            errorKind: "InvalidOperationException");
+
+        DashboardRecentError error = Assert.Single(
+            DashboardData.ReadTelemetrySummary(_telemetryDb, "ws-a", _registryDb).RecentErrors);
+        Assert.Null(error.WorkspaceDisplayId);
     }
 }

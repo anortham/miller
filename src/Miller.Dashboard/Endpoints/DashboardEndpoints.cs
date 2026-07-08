@@ -24,7 +24,7 @@ internal static class DashboardEndpoints
                     paths.TelemetryDbPath,
                     paths.RegistryDbPath,
                     workspaceId: null),
-                Telemetry = DashboardData.ReadTelemetrySummary(paths.TelemetryDbPath, "all"),
+                Telemetry = DashboardData.ReadTelemetrySummary(paths.TelemetryDbPath, "all", paths.RegistryDbPath),
             })
             {
                 PreventStreamingRendering = true,
@@ -96,7 +96,7 @@ internal static class DashboardEndpoints
         endpoints.MapGet("/fragments/telemetry", (string? workspace_id) =>
             new RazorComponentResult<TelemetryPanel>(new
             {
-                Telemetry = DashboardData.ReadTelemetrySummary(paths.TelemetryDbPath, workspace_id),
+                Telemetry = DashboardData.ReadTelemetrySummary(paths.TelemetryDbPath, workspace_id, paths.RegistryDbPath),
                 SelectedWorkspaceId = workspace_id,
             })
             {
@@ -181,7 +181,7 @@ internal static class DashboardEndpoints
             "application/json; charset=utf-8"));
 
         endpoints.MapGet("/telemetry.json", (string? workspace_id) => Results.Text(
-            DashboardData.RenderTelemetryJson(paths.TelemetryDbPath, workspace_id),
+            DashboardData.RenderTelemetryJson(paths.TelemetryDbPath, workspace_id, paths.RegistryDbPath),
             "application/json; charset=utf-8"));
 
         endpoints.MapGet("/snapshot.json", (string? workspace_id) => Results.Text(

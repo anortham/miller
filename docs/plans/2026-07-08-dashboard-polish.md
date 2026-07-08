@@ -206,10 +206,10 @@ Commit mode: `parallel-lead-commit` for Batches A and B; `serial-worker-commit` 
 **Approach:** Write the pinning tests FIRST against the current implementation (several tools, uneven call counts, known durations → exact expected P95 per the current OFFSET formula; include the 1-row and 2-row edge cases where OFFSET rounding matters). Then rewrite the SQL and prove byte-identical results. Keep the `ColumnExists` degradation for old schemas. For display ids, read the workspace map once (it is already available in the calling scope — inspect `ReadTelemetrySummary` at :549 for what is in hand) instead of adding per-row lookups.
 
 **Acceptance criteria:**
-- [ ] Pinning tests written against the CURRENT implementation pass unchanged against the rewrite (same counts and P95s, including 1- and 2-sample tools).
-- [ ] The rewritten path issues one grouped query for stats + P95 (no per-tool query loop).
-- [ ] Recent errors carry resolved display ids when the workspace is registered; null only for unregistered ids.
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode.
+- [x] Pinning tests written against the CURRENT implementation pass unchanged against the rewrite (same counts and P95s, including 1- and 2-sample tools).
+- [x] The rewritten path issues one grouped query for stats + P95 (no per-tool query loop).
+- [x] Recent errors carry resolved display ids when the workspace is registered; null only for unregistered ids.
+- [x] Worker-scope verification passes and the change is handed to the lead per commit mode.
 
 ### Task 6: Detail-page polish (feedback, sparklines, id chips)
 
