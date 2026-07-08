@@ -233,7 +233,8 @@ The 1.0 replacement story is the product family, not Miller alone:
 - **Miller** replaces Julie's deterministic local agent-tool core: search, inspect, context, references, trace/path,
   impact, editing, workspace lifecycle, content/web/text import, structural facts, marker audits, telemetry,
   JSON/JSONL feeds, and deterministic local analysis reports (`metrics churn|clones|complexity|risk` and the
-  composed `miller report` repo-quality rollup).
+  composed `miller report` repo-quality rollup), plus per-workspace metric-history trends (`miller metrics
+  history` and dashboard trend sparklines) over those recorded facts.
 - **`julie-extractors` / `julie-extract`** owns parser-backed extraction. Miller consumes its artifacts and ships a
   pinned extractor for its own indexing workflow; standalone extraction workflows belong in `julie-extractors`.
 - **Eros** owns what requires semantics or fleet state: semantic/vector retrieval and embeddings, guidance,
@@ -322,6 +323,18 @@ miller metrics clones --min-count 2
 miller metrics complexity --min-severity moderate --exclude-tests
 ```
 
+`miller metrics history` reads a per-workspace record of how those signals move over time — symbol count,
+complexity p90, clone groups, markers, and dead-code candidate counts — recorded automatically after each index
+converge and when the heavy commands run. It only reads the recorded trend (append-only `.miller/history.db`); the
+same trends render as sparklines on the dashboard workspace detail view, and `workspace health` reports the history
+sidecar's status and size. The `--json` envelope is a stable contract
+([`docs/contracts/metrics-history-v1.md`](docs/contracts/metrics-history-v1.md)):
+
+```bash
+miller metrics history
+miller metrics history --metric complexity_p90,dead_code_candidate_count --limit 30 --json
+```
+
 ## Using Miller
 
 The single `miller` binary runs two ways:
@@ -402,7 +415,9 @@ workspace(operation="dashboard", port=4977)
 Open the printed URL to view registered workspaces and scoped per-tool telemetry. Set `MILLER_REGISTRY_DB`,
 `MILLER_TELEMETRY_DB`, or `MILLER_DASHBOARD_WEBROOT` only when testing non-default paths.
 The selected-workspace detail view also surfaces local complexity hotspots and body-hash clone groups from the
-artifact. Git churn stays in the CLI-only `miller metrics churn` path because it reads a revision range from git.
+artifact, plus metric-history trend sparklines (symbol count, complexity p90, clone groups, markers, dead-code
+candidate count) read from the workspace's `.miller/history.db`. Git churn stays in the CLI-only
+`miller metrics churn` path because it reads a revision range from git.
 
 ## Agent Plugin Details
 

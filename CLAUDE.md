@@ -20,9 +20,12 @@ confidence/evidence views, cross-workspace/fleet ranking, suppression persistenc
 see `docs/plans/2026-07-06-miller-standalone-bolstering-assessment.md`. Dead-code candidates SHIPPED as an
 evidence-gated CLI surface (`miller references candidates`, `docs/contracts/references-candidates-v1.md`); the
 gate PASSED 2026-07-07 with julie-extract 2.10.0 `variable_ref` emission (392 → 5 candidates, zero
-confirmed-live — `docs/findings/2026-07-07-dead-code-candidates-dogfood.md`), but report/dashboard/MCP
-surfacing still requires explicit user approval per the MCP-stinginess rule; metric history/trends are a
-designed-not-built P4.) Do not add
+confirmed-live — `docs/findings/2026-07-07-dead-code-candidates-dogfood.md`); count-level report/dashboard
+surfacing of candidates (trend counts `dead_code_candidate_count` and suppressed totals) was APPROVED by the
+user 2026-07-07, while per-symbol candidate detail stays CLI-only and any new MCP tool still requires explicit
+approval per the MCP-stinginess rule. Metric history/trends SHIPPED as the P4 slice: an append-only `history.db`
+sidecar (hybrid converge/heavy-arm snapshots), the `miller metrics history` CLI verb
+(`docs/contracts/metrics-history-v1.md`), dashboard trend sparklines, and `workspace health` history status.) Do not add
 Miller surfaces that need embeddings or semantic ranking, and do not absorb `julie-extractors` extraction
 ownership.
 

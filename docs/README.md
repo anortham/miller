@@ -21,6 +21,9 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`contracts/references-candidates-v1.md`](contracts/references-candidates-v1.md) - experimental, evidence-gated dead-code candidate listing CLI contract (`references candidates`).
 - [`contracts/patterns-json-v1.md`](contracts/patterns-json-v1.md) - active patterns JSON contract over extractor structural facts.
 - [`contracts/metrics-json-v1.md`](contracts/metrics-json-v1.md) - active metrics JSON contract for churn, clone groups, and complexity ranking.
+- [`contracts/metrics-history-v1.md`](contracts/metrics-history-v1.md) - active metric-history JSON contract for `miller metrics history` trend reads over the append-only `history.db` sidecar.
+- [`plans/2026-07-07-metric-history-design.md`](plans/2026-07-07-metric-history-design.md) - design record for the P4 metric-history/trends slice (`history.db` sidecar, hybrid converge/heavy-arm snapshots, dashboard sparklines).
+- [`plans/2026-07-07-metric-history-implementation-plan.md`](plans/2026-07-07-metric-history-implementation-plan.md) - implementation plan for the P4 metric-history/trends slice.
 - [`plans/2026-06-26-miller-five-gap-implementation-plan.md`](plans/2026-06-26-miller-five-gap-implementation-plan.md) - historical implementation plan for metrics, empty-state recovery, leader handoff, dashboard panels, and clone/complexity discovery; the metrics MCP-tool portions were superseded by the CLI-only metrics contract.
 - [`findings/2026-06-26-five-gap-implementation.md`](findings/2026-06-26-five-gap-implementation.md) - historical implementation evidence and boundary notes for the five-gap plan; use `contracts/metrics-json-v1.md` for the current CLI-only metrics surface.
 - [`findings/2026-06-27-miller-julie-foundation-effectiveness-matrix.md`](findings/2026-06-27-miller-julie-foundation-effectiveness-matrix.md) - active Miller/Julie foundation matrix finding and adaptation-candidate ranking.
