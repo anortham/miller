@@ -4,7 +4,7 @@
     <div class="panel-heading">
         <div>
             <h2>Workspaces</h2>
-            <p>@Index.WorkspaceCount.ToString("N0", CultureInfo.InvariantCulture) registered · click to inspect</p>
+            <p>@Index.WorkspaceCount.ToString("N0", CultureInfo.InvariantCulture) registered · @Index.LiveCount.ToString("N0", CultureInfo.InvariantCulture) live · click to inspect</p>
         </div>
         <div class="workspace-index-actions">
             <label class="sr-only" for="workspace-filter">Filter workspaces</label>
@@ -25,38 +25,81 @@
     }
     else
     {
-        <div class="ws-index" role="table">
-            <div class="ws-index-head" role="row" aria-hidden="true">
-                <span></span>
-                <span>Workspace</span>
-                <span>State</span>
-                <span class="ws-num">Files</span>
-                <span class="ws-num">Symbols</span>
-                <span>Languages</span>
-                <span class="ws-num">Rev</span>
+        var live = Index.Entries.Where(static e => !e.IsStale).ToList();
+        var stale = Index.Entries.Where(static e => e.IsStale).ToList();
+
+        @if (live.Count > 0)
+        {
+            <div class="ws-index" role="table">
+                <div class="ws-index-head" role="row" aria-hidden="true">
+                    <span></span>
+                    <span>Workspace</span>
+                    <span>State</span>
+                    <span class="ws-num">Files</span>
+                    <span class="ws-num">Symbols</span>
+                    <span>Languages</span>
+                    <span class="ws-num">Rev</span>
+                </div>
+                @foreach (DashboardWorkspaceIndexEntry entry in live)
+                {
+                    <a class="ws-index-row" role="row" href="/workspace?workspace_id=@Esc(entry.Workspace.WorkspaceId)">
+                        <span class="workspace-status-rail @StateClass(entry.Workspace.State)" aria-hidden="true"></span>
+                        <span class="workspace-row-main">
+                            <span class="workspace-name">@entry.Workspace.DisplayId</span>
+                            <code class="workspace-path">@entry.Workspace.CanonicalRoot</code>
+                            @if (!string.IsNullOrWhiteSpace(entry.Workspace.LastError))
+                            {
+                                <span class="workspace-error muted">@entry.Workspace.LastError</span>
+                            }
+                        </span>
+                        <span class="ws-cell">
+                            <span class="workspace-state @StateClass(entry.Workspace.State)">@entry.Workspace.State</span>
+                        </span>
+                        <span class="ws-cell ws-num">@Stat(entry, entry.Facts.FileCount)</span>
+                        <span class="ws-cell ws-num">@Stat(entry, entry.Facts.SymbolCount)</span>
+                        <span class="ws-cell ws-langs">@LanguageSummary(entry)</span>
+                        <span class="ws-cell ws-num">@(entry.Workspace.LastRevision?.ToString("N0", CultureInfo.InvariantCulture) ?? "—")</span>
+                    </a>
+                }
             </div>
-            @foreach (DashboardWorkspaceIndexEntry entry in Index.Entries)
-            {
-                <a class="ws-index-row" role="row" href="/workspace?workspace_id=@Esc(entry.Workspace.WorkspaceId)">
-                    <span class="workspace-status-rail @StateClass(entry.Workspace.State)" aria-hidden="true"></span>
-                    <span class="workspace-row-main">
-                        <span class="workspace-name">@entry.Workspace.DisplayId</span>
-                        <code class="workspace-path">@entry.Workspace.CanonicalRoot</code>
-                        @if (!string.IsNullOrWhiteSpace(entry.Workspace.LastError))
-                        {
-                            <span class="workspace-error muted">@entry.Workspace.LastError</span>
-                        }
-                    </span>
-                    <span class="ws-cell">
-                        <span class="workspace-state @StateClass(entry.Workspace.State)">@entry.Workspace.State</span>
-                    </span>
-                    <span class="ws-cell ws-num">@Stat(entry, entry.Facts.FileCount)</span>
-                    <span class="ws-cell ws-num">@Stat(entry, entry.Facts.SymbolCount)</span>
-                    <span class="ws-cell ws-langs">@LanguageSummary(entry)</span>
-                    <span class="ws-cell ws-num">@(entry.Workspace.LastRevision?.ToString("N0", CultureInfo.InvariantCulture) ?? "—")</span>
-                </a>
-            }
-        </div>
+        }
+
+        @if (stale.Count > 0)
+        {
+            <details class="panel-collapse ws-stale-collapse">
+                <summary class="panel-collapse-summary">
+                    <span>@stale.Count.ToString("N0", CultureInfo.InvariantCulture) stale registrations — run <code>miller workspace prune</code> to clean up</span>
+                    <span class="muted">missing root or errored</span>
+                </summary>
+                <div class="ws-index ws-index-stale" role="table">
+                    @foreach (DashboardWorkspaceIndexEntry entry in stale)
+                    {
+                        <a class="ws-index-row" role="row" href="/workspace?workspace_id=@Esc(entry.Workspace.WorkspaceId)">
+                            <span class="workspace-status-rail @StateClass(entry.Workspace.State)" aria-hidden="true"></span>
+                            <span class="workspace-row-main">
+                                <span class="workspace-name">@entry.Workspace.DisplayId</span>
+                                <code class="workspace-path">@entry.Workspace.CanonicalRoot</code>
+                                @if (!entry.RootExists)
+                                {
+                                    <span class="workspace-error muted">root missing</span>
+                                }
+                                else if (!string.IsNullOrWhiteSpace(entry.Workspace.LastError))
+                                {
+                                    <span class="workspace-error muted">@entry.Workspace.LastError</span>
+                                }
+                            </span>
+                            <span class="ws-cell">
+                                <span class="workspace-state @StateClass(entry.Workspace.State)">@entry.Workspace.State</span>
+                            </span>
+                            <span class="ws-cell ws-num">@Stat(entry, entry.Facts.FileCount)</span>
+                            <span class="ws-cell ws-num">@Stat(entry, entry.Facts.SymbolCount)</span>
+                            <span class="ws-cell ws-langs">@LanguageSummary(entry)</span>
+                            <span class="ws-cell ws-num">@(entry.Workspace.LastRevision?.ToString("N0", CultureInfo.InvariantCulture) ?? "—")</span>
+                        </a>
+                    }
+                </div>
+            </details>
+        }
     }
 </section>
 

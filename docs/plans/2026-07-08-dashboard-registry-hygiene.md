@@ -199,9 +199,9 @@ Commit mode: `parallel-lead-commit` for Batch A; `serial-worker-commit` acceptab
 **Approach:** Compute `RootExists` in `ReadIndex` (one `Directory.Exists` per row); group in the razor component, not in SQL. Keep markup consistent with the existing card/list styles in `WorkspaceIndex.razor` (match its class names; no new CSS file). Tests assert the new counts and flags from a temp registry with a mix of existing/missing roots and error states.
 
 **Acceptance criteria:**
-- [ ] `ReadIndex` returns `RootExists` per entry and correct live/missing/error counts (unit-tested).
-- [ ] All-workspaces view groups live entries above a de-emphasized stale section with the prune hint (verified by rendering test if a precedent exists in the suite, else by Task 6 live check).
-- [ ] Worker-scope verification passes and the change is committed per commit mode.
+- [x] `ReadIndex` returns `RootExists` per entry and correct live/missing/error counts (unit-tested).
+- [x] All-workspaces view groups live entries above a de-emphasized stale section with the prune hint (verified by rendering test if a precedent exists in the suite, else by Task 6 live check).
+- [x] Worker-scope verification passes and the change is committed per commit mode.
 
 ### Task 6: One-time machine cleanup + AccessIQ rebuild (ops)
 

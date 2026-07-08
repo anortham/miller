@@ -11,7 +11,7 @@
             <div class="hero-copy">
                 <p class="eyebrow">Local index status</p>
                 <h1>Miller Workspaces</h1>
-                <p class="hero-subtitle">Every code workspace Miller has indexed on this machine. Select one to inspect its index, context savings, and telemetry.</p>
+                <p class="hero-subtitle">Every code workspace Miller has indexed on this machine. Live roots first; stale (missing root or errored) registrations are collapsed below with a prune hint.</p>
             </div>
             <div class="hero-side">
                 <div class="theme-switch-wrapper">
@@ -27,8 +27,12 @@
                 </nav>
                 <div class="hero-metrics" aria-label="Machine-wide totals">
                     <div>
+                        <strong>@Index.LiveCount.ToString("N0", CultureInfo.InvariantCulture)</strong>
+                        <span>live</span>
+                    </div>
+                    <div>
                         <strong>@Index.WorkspaceCount.ToString("N0", CultureInfo.InvariantCulture)</strong>
-                        <span>workspaces</span>
+                        <span>registered</span>
                     </div>
                     <div>
                         <strong>@Index.TotalFiles.ToString("N0", CultureInfo.InvariantCulture)</strong>

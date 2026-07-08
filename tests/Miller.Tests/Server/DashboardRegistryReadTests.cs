@@ -1180,13 +1180,14 @@ public sealed class DashboardRegistryReadTests : IDisposable
                             new DashboardLanguageStat("csharp", FileCount: 3, SymbolCount: 3, ContentBytes: 11_200),
                             new DashboardLanguageStat("markdown", FileCount: 1, SymbolCount: 0, ContentBytes: 1_600),
                         ],
-                        SymbolKinds: [])),
+                        SymbolKinds: []),
+                    RootExists: true),
                 new DashboardWorkspaceIndexEntry(
                     new DashboardWorkspaceRow(
                         "ws-b",
                         "beta-efgh5678",
-                        "/repo/b",
-                        "/repo/b/.miller/symbols.db",
+                        "/repo/b-gone",
+                        "/repo/b-gone/.miller/symbols.db",
                         "2026-05-31T10:00:00Z",
                         null,
                         null,
@@ -1195,18 +1196,22 @@ public sealed class DashboardRegistryReadTests : IDisposable
                     DashboardIndexFactsReader.Read(new DashboardWorkspaceRow(
                         "ws-b",
                         "beta-efgh5678",
-                        "/repo/b",
-                        "/repo/b/.miller/symbols.db",
+                        "/repo/b-gone",
+                        "/repo/b-gone/.miller/symbols.db",
                         "2026-05-31T10:00:00Z",
                         null,
                         null,
                         "missing",
-                        "missing index"))),
+                        "missing index")),
+                    RootExists: false),
             ],
             WorkspaceCount: 2,
             TotalFiles: 4,
             TotalSymbols: 3,
-            LanguageCount: 2);
+            LanguageCount: 2,
+            LiveCount: 1,
+            MissingRootCount: 1,
+            ErrorCount: 0);
 
         string html = await RenderComponentAsync<WorkspacesShell>(new Dictionary<string, object?>
         {
@@ -1223,7 +1228,74 @@ public sealed class DashboardRegistryReadTests : IDisposable
         Assert.Contains("csharp", html);
         Assert.Contains("id=\"workspace-filter\"", html);
         Assert.Contains("x-data=\"workspaceIndexFilter\"", html);
+        Assert.Contains("ws-stale-collapse", html);
+        Assert.Contains("miller workspace prune", html);
+        Assert.Contains("root missing", html);
         Assert.DoesNotContain("Index.Entries", html);
+    }
+
+    [Fact]
+    public void ReadIndex_AnnotatesRootExistsAndLiveMissingErrorCounts()
+    {
+        string liveRoot = Path.Combine(_dir, "live-root");
+        Directory.CreateDirectory(liveRoot);
+        string missingRoot = Path.Combine(_dir, "missing-root");
+        // missingRoot intentionally not created
+
+        using JulieDbFixture liveFixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            rows:
+            [
+                new JulieDbFixture.SymbolRow(
+                    "s1", "Live", "class", "csharp", "src/Live.cs", "class Live", 1, null),
+            ]);
+
+        using (var registry = WorkspaceRegistry.Open(_registryDb))
+        {
+            registry.UpsertSeen(
+                "ws-live",
+                "live-abcd1234",
+                liveRoot,
+                liveFixture.DbPath,
+                WorkspaceRegistryState.Ready,
+                DateTimeOffset.Parse("2026-05-31T10:00:00Z"));
+            registry.UpsertSeen(
+                "ws-gone",
+                "gone-abcd1234",
+                missingRoot,
+                Path.Combine(missingRoot, ".miller", "symbols.db"),
+                WorkspaceRegistryState.Stale,
+                DateTimeOffset.Parse("2026-05-31T09:00:00Z"));
+            registry.UpsertSeen(
+                "ws-err",
+                "err-abcd1234",
+                liveRoot,
+                Path.Combine(liveRoot, "no-such-symbols.db"),
+                WorkspaceRegistryState.Error,
+                DateTimeOffset.Parse("2026-05-31T08:00:00Z"));
+            registry.MarkError("ws-err", "synthetic error", DateTimeOffset.Parse("2026-05-31T08:01:00Z"));
+        }
+
+        DashboardWorkspaceIndex index = DashboardData.ReadIndex(_registryDb);
+
+        Assert.Equal(3, index.WorkspaceCount);
+        Assert.Equal(1, index.LiveCount);
+        Assert.Equal(1, index.MissingRootCount);
+        Assert.Equal(1, index.ErrorCount);
+
+        DashboardWorkspaceIndexEntry live = Assert.Single(index.Entries, e => e.Workspace.WorkspaceId == "ws-live");
+        Assert.True(live.RootExists);
+        Assert.False(live.IsStale);
+
+        DashboardWorkspaceIndexEntry gone = Assert.Single(index.Entries, e => e.Workspace.WorkspaceId == "ws-gone");
+        Assert.False(gone.RootExists);
+        Assert.True(gone.IsStale);
+
+        DashboardWorkspaceIndexEntry err = Assert.Single(index.Entries, e => e.Workspace.WorkspaceId == "ws-err");
+        Assert.True(err.RootExists);
+        Assert.True(err.IsStale);
+        Assert.Equal("error", err.Workspace.State);
     }
 
     [Fact]

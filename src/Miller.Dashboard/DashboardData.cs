@@ -412,11 +412,18 @@ public sealed record DashboardSnapshot
 
 public sealed record DashboardWorkspaceIndexEntry(
     [property: JsonPropertyName("workspace")] DashboardWorkspaceRow Workspace,
-    [property: JsonPropertyName("facts")] DashboardWorkspaceFacts Facts)
+    [property: JsonPropertyName("facts")] DashboardWorkspaceFacts Facts,
+    [property: JsonPropertyName("root_exists")] bool RootExists)
 {
     /// <summary>True when the index DB was opened and its facts are real (not missing/unreadable).</summary>
     [JsonIgnore]
     public bool HasFacts => Facts.Status is not ("missing" or "unreadable");
+
+    /// <summary>True when the root is gone or the registry row is in error — shown in the stale section.</summary>
+    [JsonIgnore]
+    public bool IsStale =>
+        !RootExists ||
+        string.Equals(Workspace.State, "error", StringComparison.OrdinalIgnoreCase);
 }
 
 public sealed record DashboardWorkspaceIndex(
@@ -424,7 +431,10 @@ public sealed record DashboardWorkspaceIndex(
     [property: JsonPropertyName("workspace_count")] int WorkspaceCount,
     [property: JsonPropertyName("total_files")] long TotalFiles,
     [property: JsonPropertyName("total_symbols")] long TotalSymbols,
-    [property: JsonPropertyName("language_count")] int LanguageCount);
+    [property: JsonPropertyName("language_count")] int LanguageCount,
+    [property: JsonPropertyName("live_count")] int LiveCount = 0,
+    [property: JsonPropertyName("missing_root_count")] int MissingRootCount = 0,
+    [property: JsonPropertyName("error_count")] int ErrorCount = 0);
 
 public static class DashboardData
 {
@@ -446,11 +456,22 @@ public static class DashboardData
         long totalSymbols = 0;
         var languages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+        int liveCount = 0;
+        int missingRootCount = 0;
+        int errorCount = 0;
+
         foreach (DashboardWorkspaceRow workspace in workspaces)
         {
+            bool rootExists = Directory.Exists(workspace.CanonicalRoot);
             DashboardWorkspaceFacts facts = DashboardIndexFactsCache.Read(workspace);
-            var entry = new DashboardWorkspaceIndexEntry(workspace, facts);
+            var entry = new DashboardWorkspaceIndexEntry(workspace, facts, rootExists);
             entries.Add(entry);
+            if (!rootExists)
+                missingRootCount++;
+            if (string.Equals(workspace.State, "error", StringComparison.OrdinalIgnoreCase))
+                errorCount++;
+            if (!entry.IsStale)
+                liveCount++;
             if (entry.HasFacts)
             {
                 totalFiles += facts.FileCount;
@@ -460,7 +481,15 @@ public static class DashboardData
             }
         }
 
-        return new DashboardWorkspaceIndex(entries, workspaces.Count, totalFiles, totalSymbols, languages.Count);
+        return new DashboardWorkspaceIndex(
+            entries,
+            workspaces.Count,
+            totalFiles,
+            totalSymbols,
+            languages.Count,
+            liveCount,
+            missingRootCount,
+            errorCount);
     }
 
     public static string RenderIndexJson(string registryDbPath) =>
@@ -1148,13 +1177,14 @@ public static class DashboardData
         {
             return WorkspaceHealthReader.Read(indexDbPath);
         }
-        // IncompatibleExtractException is intentionally NOT caught here: both callers
-        // (ReadWorkspaceHealthPanel / ReadPatternInventoryPanel) catch it at the panel
-        // boundary so the rebuild guidance lands in the panel Error field instead of being
-        // downgraded to usable_with_warnings via unavailable extraction sections.
-        catch (Exception ex) when (ex is FileNotFoundException or SqliteException or InvalidOperationException)
+        catch (Exception ex) when (
+            ex is FileNotFoundException or SqliteException or InvalidOperationException
+                or IncompatibleExtractException)
         {
-            string message = string.IsNullOrWhiteSpace(error) ? ex.Message : error;
+            // Prefer the schema-gate / IO message (includes rebuild guidance) over the caller hint.
+            string message = ex is IncompatibleExtractException || string.IsNullOrWhiteSpace(error)
+                ? ex.Message
+                : error;
             return new WorkspaceExtractionHealthFacts(
                 HealthFactSection<ParseDiagnosticGroup>.Unavailable(message),
                 HealthFactSection<CapabilityGapGroup>.Unavailable(message),
