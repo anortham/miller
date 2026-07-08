@@ -67,11 +67,17 @@
                 else
                 {
                     <ol>
-                        @foreach (DashboardMetricCloneGroup group in Metrics.CloneGroups)
+                        @for (int i = 0; i < Metrics.CloneGroups.Count; i++)
                         {
+                            DashboardMetricCloneGroup group = Metrics.CloneGroups[i];
+                            string hashCopyId = "copy-clone-hash-" + i.ToString(CultureInfo.InvariantCulture);
                             <li>
                                 <div class="breakdown-row">
-                                    <code>@group.BodyHash</code>
+                                    <span class="clone-hash-chip">
+                                        <code class="id-chip" title="@group.BodyHash">@ChipText(group.BodyHash)</code>
+                                        <span id="@hashCopyId" class="copy-source hidden-copy">@group.BodyHash</span>
+                                        <button class="copy-issue-button" type="button" data-copy-target="@hashCopyId" aria-label="Copy clone body hash">Copy</button>
+                                    </span>
                                     <span>@FormatCount(group.Count, "symbol")</span>
                                 </div>
                                 <small>@CloneSummary(group)</small>
@@ -90,6 +96,14 @@
     private string Subtitle => Metrics is null
         ? "No workspace selected"
         : "Artifact facts from complexity metrics and body hashes";
+
+    private const int ChipHeadLength = 12;
+
+    // Truncate a long body hash to a copyable chip label; full value rides in title/copy source.
+    private static string ChipText(string? value) =>
+        string.IsNullOrEmpty(value) ? string.Empty
+        : value.Length <= ChipHeadLength ? value
+        : value[..ChipHeadLength] + "…";
 
     private static string HotspotName(DashboardMetricComplexityHotspot hotspot) =>
         string.IsNullOrWhiteSpace(hotspot.SymbolName) ? hotspot.Path : hotspot.SymbolName;

@@ -459,6 +459,149 @@ public sealed class DashboardActivityFeedTests : IDisposable
     }
 
     [Fact]
+    public async Task WorkspaceDetailPanel_RefreshButtonShowsInProgressIndicator()
+    {
+        var facts = new DashboardWorkspaceFacts(
+            "ws-a", "alpha-abcd1234", "/repo/a", "/repo/a/.miller/symbols.db",
+            "ready", null, 1, 1, 1, 100, 42, "2026-06-12T09:00:00Z", "fresh",
+            Array.Empty<DashboardLanguageStat>(), Array.Empty<DashboardSymbolKindStat>());
+
+        string html = await RenderComponentAsync<WorkspaceDetailPanel>(new Dictionary<string, object?>
+        {
+            ["Facts"] = facts,
+        });
+
+        // Idle label plus an htmx-request-only "Refreshing…" indicator, both inside the button.
+        Assert.Contains("refresh-button-label", html);
+        Assert.Contains("refresh-button-indicator", html);
+        Assert.Contains("Refreshing", html);
+    }
+
+    [Fact]
+    public async Task WorkspaceDetailPanel_OpenFolderIsButtonWithToastHook()
+    {
+        var facts = new DashboardWorkspaceFacts(
+            "ws-a", "alpha-abcd1234", "/repo/a", "/repo/a/.miller/symbols.db",
+            "ready", null, 1, 1, 1, 100, 42, "2026-06-12T09:00:00Z", "fresh",
+            Array.Empty<DashboardLanguageStat>(), Array.Empty<DashboardSymbolKindStat>());
+
+        string html = await RenderComponentAsync<WorkspaceDetailPanel>(new Dictionary<string, object?>
+        {
+            ["Facts"] = facts,
+        });
+
+        // Real button styling (not the .subtle-link look) plus a success-toast hook the JS reads on 2xx.
+        Assert.Contains("open-folder-button", html);
+        Assert.DoesNotContain("subtle-link open-folder-link", html);
+        Assert.Contains("data-toast-success=", html);
+        Assert.Contains("hx-post=\"/workspaces/ws-a/open-folder\"", html);
+    }
+
+    [Fact]
+    public async Task WorkspaceDetailPanel_ArtifactIdRendersTruncatedCopyableChip()
+    {
+        var facts = new DashboardWorkspaceFacts(
+            "ws-a", "alpha-abcd1234", "/repo/a", "/repo/a/.miller/symbols.db",
+            "ready", null, 1, 1, 1, 100, 42, "2026-06-12T09:00:00Z", "fresh",
+            Array.Empty<DashboardLanguageStat>(), Array.Empty<DashboardSymbolKindStat>(),
+            ArtifactId: "artifact-0123456789-tail");
+
+        string html = await RenderComponentAsync<WorkspaceDetailPanel>(new Dictionary<string, object?>
+        {
+            ["Facts"] = facts,
+        });
+
+        Assert.Contains("artifact-012&#x2026;", html);                            // first 12 chars + ellipsis
+        Assert.Contains("title=\"artifact-0123456789-tail\"", html);            // full value in title
+        Assert.Contains("id=\"copy-artifact-id\"", html);                       // hidden full-value copy source
+        Assert.Contains("data-copy-target=\"copy-artifact-id\"", html);         // reuses the copy-button pattern
+    }
+
+    [Fact]
+    public async Task WorkspaceDetailPanel_JargonTermsCarryTitleExplanations()
+    {
+        var facts = new DashboardWorkspaceFacts(
+            "ws-a", "alpha-abcd1234", "/repo/a", "/repo/a/.miller/symbols.db",
+            "ready", null, 1, 1, 1, 100, 42, "2026-06-12T09:00:00Z", "fresh",
+            Array.Empty<DashboardLanguageStat>(), Array.Empty<DashboardSymbolKindStat>());
+
+        string html = await RenderComponentAsync<WorkspaceDetailPanel>(new Dictionary<string, object?>
+        {
+            ["Facts"] = facts,
+        });
+
+        Assert.Contains("<dt title=\"", html);
+        Assert.Contains("revision", html, StringComparison.OrdinalIgnoreCase);
+        // Each called-out term gets a plain-English hover explanation.
+        Assert.Contains("re-extract", html, StringComparison.OrdinalIgnoreCase); // revision explanation
+        Assert.Contains("full rebuild", html, StringComparison.OrdinalIgnoreCase); // artifact explanation
+        Assert.Contains("derived search index", html, StringComparison.OrdinalIgnoreCase); // sidecar explanation
+    }
+
+    [Fact]
+    public async Task WorkspaceDetailPanel_LastScanRendersRelativeTime()
+    {
+        var facts = new DashboardWorkspaceFacts(
+            "ws-a", "alpha-abcd1234", "/repo/a", "/repo/a/.miller/symbols.db",
+            "ready", null, 1, 1, 1, 100, 42, "2026-06-12T09:00:00Z", "fresh",
+            Array.Empty<DashboardLanguageStat>(), Array.Empty<DashboardSymbolKindStat>());
+
+        string html = await RenderComponentAsync<WorkspaceDetailPanel>(new Dictionary<string, object?>
+        {
+            ["Facts"] = facts,
+        });
+
+        Assert.Contains("data-ts=\"2026-06-12T09:00:00Z\"", html);        // raw ISO stays in data-ts
+        Assert.DoesNotContain(">2026-06-12T09:00:00Z</time>", html);      // visible text is humanized
+        Assert.Contains(" ago</time>", html);
+    }
+
+    [Fact]
+    public async Task WorkspaceLocalMetricsPanel_CloneHashRendersTruncatedCopyableChip()
+    {
+        var metrics = new DashboardLocalMetricsPanel(
+            "ws-a",
+            "ready",
+            Array.Empty<DashboardMetricComplexityHotspot>(),
+            [
+                new DashboardMetricCloneGroup(
+                    "blake3:0123456789abcdef",
+                    2,
+                    [new DashboardMetricCloneSymbol("Foo", "method", "src/A.cs", 10)]),
+            ]);
+
+        string html = await RenderComponentAsync<WorkspaceLocalMetricsPanel>(new Dictionary<string, object?>
+        {
+            ["Metrics"] = metrics,
+        });
+
+        Assert.Contains("blake3:01234&#x2026;", html);                            // first 12 chars + ellipsis
+        Assert.Contains("title=\"blake3:0123456789abcdef\"", html);             // full value in title
+        Assert.Contains("id=\"copy-clone-hash-0\"", html);                      // hidden full-value copy source
+        Assert.Contains("data-copy-target=\"copy-clone-hash-0\"", html);        // reuses the copy-button pattern
+    }
+
+    [Fact]
+    public async Task WorkspaceTrendsPanel_SparklineShowsMinMaxLatestLabels()
+    {
+        var trends = new DashboardWorkspaceTrendsPanel(
+            "ws-a",
+            [
+                new DashboardTrendSeries("symbol_count", "symbols", [10d, 30d, 20d], First: 10d, Latest: 20d),
+            ]);
+
+        string html = await RenderComponentAsync<WorkspaceTrendsPanel>(new Dictionary<string, object?>
+        {
+            ["Trends"] = trends,
+        });
+
+        Assert.Contains("sparkline-scale", html);
+        Assert.Contains("min 10", html);
+        Assert.Contains("max 30", html);
+        Assert.Contains("latest 20", html);
+    }
+
+    [Fact]
     public void TryRefreshWorkspace_WrapsFailuresInsteadOfThrowing()
     {
         using (var registry = WorkspaceRegistry.Open(_registryDb))

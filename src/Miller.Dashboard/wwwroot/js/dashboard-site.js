@@ -206,6 +206,20 @@
         updateRelativeTimes(document);
     }, 5000);
 
+    // Success toast for actions that opt in via data-toast-success (e.g. Open folder). The action
+    // itself has no visible swap (hx-swap="none"), so without this it would look like nothing happened.
+    document.body.addEventListener('htmx:afterRequest', function (event) {
+        var detail = event.detail;
+        var elt = detail && detail.elt;
+        if (!elt || typeof elt.getAttribute !== 'function') {
+            return;
+        }
+        var message = elt.getAttribute('data-toast-success');
+        if (message && detail.successful) {
+            window.showDashboardToast(message, 'ok');
+        }
+    });
+
     document.body.addEventListener('htmx:responseError', function (event) {
         var status = event.detail && event.detail.xhr ? event.detail.xhr.status : 0;
         var msg = status === 400

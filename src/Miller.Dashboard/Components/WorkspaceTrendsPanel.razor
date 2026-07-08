@@ -31,12 +31,19 @@
                     </div>
                     @if (series.HasTrend)
                     {
-                        <svg class="sparkline" viewBox="@DashboardSparkline.ViewBox" preserveAspectRatio="none"
-                             role="img" aria-label="@SparklineLabel(series)">
-                            <polyline points="@DashboardSparkline.Points(series.Points)" fill="none"
-                                      stroke="currentColor" stroke-width="1.5"
-                                      stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" />
-                        </svg>
+                        <div class="trend-plot">
+                            <svg class="sparkline" viewBox="@DashboardSparkline.ViewBox" preserveAspectRatio="none"
+                                 role="img" aria-label="@SparklineLabel(series)">
+                                <polyline points="@DashboardSparkline.Points(series.Points)" fill="none"
+                                          stroke="currentColor" stroke-width="1.5"
+                                          stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" />
+                            </svg>
+                            <small class="sparkline-scale">
+                                <span title="Lowest value across the recorded history">min @FormatValue(SeriesMin(series))</span>
+                                <span title="Highest value across the recorded history">max @FormatValue(SeriesMax(series))</span>
+                                <span title="Most recent recorded value">latest @FormatValue(series.Latest)</span>
+                            </small>
+                        </div>
                         <small class="trend-delta">@DeltaLabel(series)</small>
                     }
                     else
@@ -67,6 +74,11 @@
         string sign = delta > 0 ? "+" : string.Empty;
         return FormatCount(series.Points.Count, "point") + " · " + sign + FormatValue(delta) + " since first";
     }
+
+    // HasTrend guarantees Points.Count >= 2, so Min/Max are always defined here.
+    private static double SeriesMin(DashboardTrendSeries series) => series.Points.Min();
+
+    private static double SeriesMax(DashboardTrendSeries series) => series.Points.Max();
 
     private static string SparklineLabel(DashboardTrendSeries series) =>
         series.Label + " trend: " + FormatValue(series.First) + " to " + FormatValue(series.Latest);

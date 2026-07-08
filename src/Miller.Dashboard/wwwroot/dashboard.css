@@ -1383,3 +1383,54 @@ tr.has-errors td:nth-child(6) {
   content: "\25BC";
   opacity: 0.7;
 }
+
+/* ---- Detail-page polish (Task 6): refresh indicator, chips, sparkline scale ---- */
+
+/* Refresh button swaps its label for a "Refreshing…" indicator while the htmx request is in flight.
+   The requesting element carries .htmx-request (htmx default), so no separate hx-indicator target. */
+.refresh-button-indicator { display: none; }
+
+.refresh-button.htmx-request .refresh-button-label { display: none; }
+
+.refresh-button.htmx-request .refresh-button-indicator { display: inline; }
+
+/* Success toast tone — overrides the danger-coloured base for opt-in confirmations. */
+.dashboard-toast-ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
+/* Truncated copyable identifier chip (artifact id, clone body hash). Full value lives in title + the
+   adjacent .hidden-copy copy source; the visible label is already truncated server-side. */
+.id-chip {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-soft);
+  cursor: help;
+}
+
+.clone-hash-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* Sparkline min/max/latest scale labels beside the polyline. */
+.trend-plot {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sparkline-scale {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-feature-settings: var(--tnum);
+  font-size: 11px;
+}

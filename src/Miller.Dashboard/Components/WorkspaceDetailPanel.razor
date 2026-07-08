@@ -16,11 +16,15 @@
                         hx-post="/fragments/refresh?workspace_id=@Esc(Facts.WorkspaceId)"
                         hx-target="#workspace-detail-stack"
                         hx-swap="outerHTML"
-                        hx-disabled-elt="this">Refresh index</button>
-                <button class="subtle-link open-folder-link"
+                        hx-disabled-elt="this">
+                    <span class="refresh-button-label">Refresh index</span>
+                    <span class="refresh-button-indicator" aria-hidden="true">Refreshing…</span>
+                </button>
+                <button class="refresh-button open-folder-button"
                         type="button"
                         hx-post="/workspaces/@Esc(Facts.WorkspaceId)/open-folder"
-                        hx-swap="none">Open folder</button>
+                        hx-swap="none"
+                        data-toast-success="Opening the workspace folder…">Open folder</button>
                 <span class="workspace-state @StateClass(Facts.Status)">@Facts.Status</span>
             </div>
         }
@@ -74,7 +78,7 @@
                 </dd>
             </div>
             <div>
-                <dt>Revision</dt>
+                <dt title="A counter Miller bumps every time it re-extracts this workspace; a higher number means a newer index.">Revision</dt>
                 <dd>
                     @(Facts.IndexRevision?.ToString("N0", CultureInfo.InvariantCulture) ?? Facts.LastRevision?.ToString("N0", CultureInfo.InvariantCulture) ?? "n/a")
                     @if (Facts.LastRevision is not null && Facts.IndexRevision is not null && Facts.LastRevision != Facts.IndexRevision)
@@ -92,7 +96,7 @@
                     }
                     else
                     {
-                        <time class="rel-ts timestamp" datetime="@Facts.LastScanAt" data-ts="@Facts.LastScanAt">@Facts.LastScanAt</time>
+                        <time class="rel-ts timestamp" datetime="@Facts.LastScanAt" data-ts="@Facts.LastScanAt">@RelativeTime(Facts.LastScanAt, Now)</time>
                     }
                 </dd>
             </div>
@@ -101,11 +105,22 @@
                 <dd>@(Facts.ExtractorVersion ?? "n/a")</dd>
             </div>
             <div>
-                <dt>Artifact</dt>
-                <dd>@(Facts.ArtifactId ?? "n/a")</dd>
+                <dt title="The extractor output database Miller reads. Its id changes on every full rebuild of the index.">Artifact</dt>
+                <dd>
+                    @if (string.IsNullOrWhiteSpace(Facts.ArtifactId))
+                    {
+                        <span class="muted">n/a</span>
+                    }
+                    else
+                    {
+                        <span class="id-chip" title="@Facts.ArtifactId">@ChipText(Facts.ArtifactId)</span>
+                        <span id="copy-artifact-id" class="copy-source hidden-copy">@Facts.ArtifactId</span>
+                        <button class="copy-issue-button" type="button" data-copy-target="copy-artifact-id" aria-label="Copy artifact id">Copy</button>
+                    }
+                </dd>
             </div>
             <div>
-                <dt>Search sidecar</dt>
+                <dt title="A derived search index Miller builds next to the main database so symbol lookups stay fast.">Search sidecar</dt>
                 <dd>
                     search.db @Facts.SearchSidecarStatus
                     @if (!string.IsNullOrWhiteSpace(SidecarRemediationHint(Facts.SearchSidecarStatus)))
@@ -115,7 +130,7 @@
                 </dd>
             </div>
             <div>
-                <dt>Content sidecar</dt>
+                <dt title="A derived text index for searching file and doc contents, built alongside the main database.">Content sidecar</dt>
                 <dd>
                     content.db @Facts.ContentSidecarStatus
                     @if (!string.IsNullOrWhiteSpace(SidecarRemediationHint(Facts.ContentSidecarStatus)))
@@ -207,6 +222,17 @@
     [Parameter] public DashboardWorkspaceFacts? Facts { get; set; }
 
     [Parameter] public WorkspaceRefreshResult? RefreshResult { get; set; }
+
+    // One "now" per render so the last-scan <time> humanizes against the same instant the client repaints from.
+    private readonly DateTimeOffset Now = DateTimeOffset.UtcNow;
+
+    private const int ChipHeadLength = 12;
+
+    // Truncate a long identifier to a copyable chip label (first N chars + ellipsis); full value rides in title/copy source.
+    private static string ChipText(string? value) =>
+        string.IsNullOrEmpty(value) ? string.Empty
+        : value.Length <= ChipHeadLength ? value
+        : value[..ChipHeadLength] + "…";
 
     private string Subtitle => Facts is null
         ? "No workspace selected"
