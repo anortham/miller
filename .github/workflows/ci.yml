@@ -81,7 +81,7 @@ jobs:
   windows-fast:
     if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: windows-2025
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7.0.0
 
@@ -102,9 +102,10 @@ jobs:
       - name: Test (default suite via PowerShell wrapper)
         shell: pwsh
         env:
-          # Windows hosted runners are much slower than local/Ubuntu for test discovery/execution.
-          # Keep the budget high enough for normal runner variance but low enough to catch a true runaway.
-          FAST_BUDGET_SECONDS: 420
+          # Windows hosted runners are much slower than local/Ubuntu for test discovery/execution, and restore/build
+          # consume ~2 minutes before this step starts. Keep this high enough for normal runner variance while still
+          # catching a true runaway.
+          FAST_BUDGET_SECONDS: 600
         run: ./scripts/test.ps1 fast --no-build
 
   windows-scale-smoke:
