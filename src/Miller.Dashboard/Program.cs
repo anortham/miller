@@ -49,9 +49,16 @@ var host = new HostBuilder()
                     {
                         await next(context);
                     }
+                    catch (Exception ex) when (context.RequestAborted.IsCancellationRequested)
+                    {
+                        // Client disconnects are routine, not failures; don't pollute the error log.
+                        logger.LogDebug(ex, "Dashboard request aborted by client");
+                    }
                     catch (Exception ex)
                     {
                         logger.LogError(ex, "Unhandled dashboard request exception");
+                        if (context.Response.HasStarted)
+                            throw; // Headers are gone; rewriting the response would itself throw.
                         context.Response.StatusCode = StatusCodes.Status500InternalServerError;
                         context.Response.ContentType = "text/plain; charset=utf-8";
                         await context.Response.WriteAsync(

@@ -2461,6 +2461,24 @@ public sealed class CliDispatchTests : IDisposable
         Assert.DoesNotContain("symbols:", outText);
     }
 
+    [Theory]
+    [InlineData("--id", "some-ws")]
+    [InlineData("--path", "/some/dir")]
+    [InlineData("--workspace-id", "some-ws")]
+    public void WorkspacePrune_RejectsSelectors_InsteadOfSilentlyPruningGlobally(string flag, string value)
+    {
+        // prune is registry-wide; accepting-and-ignoring a selector would surprise a user who expected a
+        // scoped prune with a machine-wide removal. Reject with usage guidance instead (exit 2, like remove).
+        var (code, outText, errText) = Run(
+            new[] { "workspace", "prune", flag, value },
+            Context(Path.Combine(_dir, "symbols.db")));
+
+        Assert.Equal(2, code);
+        Assert.Empty(outText);
+        Assert.Contains("no selector", errText);
+        Assert.Contains("workspace remove", errText);
+    }
+
     // refresh/full status→exit-code map (cli-eros-v1): exit 0 = the payload is ingestable, which INCLUDES
     // lock_busy — the latest readable DB is served and a live leader owns convergence; `status`/`index_fresh`
     // in the payload are the freshness gate (2026-06-11 Eros ask). Unusable-index states (missing root/index,

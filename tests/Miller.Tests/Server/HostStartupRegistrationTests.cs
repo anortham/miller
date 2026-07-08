@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -22,8 +23,21 @@ namespace Miller.Tests.Server;
 /// <c>ExecuteAsync</c>, after bootstrap <c>StartAsync</c> has populated them). Registration is exercised through
 /// the SAME <see cref="MillerServiceRegistration.AddMillerServices"/> production uses, so test and host cannot drift.
 /// </summary>
-public sealed class HostStartupRegistrationTests
+public sealed class HostStartupRegistrationTests : IDisposable
 {
+    private readonly List<string> _tempRoots = [];
+
+    public void Dispose()
+    {
+        SqliteConnection.ClearAllPools(); // pooled handles under a deleted dir crash the WAL checkpoint at exit
+        foreach (string root in _tempRoots)
+        {
+            try { Directory.Delete(root, recursive: true); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+    }
+
     [Fact]
     public void ResolvingHostedServices_BeforeBootstrapRuns_DoesNotTouchBootstrapGetters()
     {
@@ -60,7 +74,7 @@ public sealed class HostStartupRegistrationTests
         bootstrap.TestHomeDirectoryOverride = tempHome;
         bootstrap.TestBootstrapInterceptor = (canonicalRoot, _) =>
         {
-            var workspace = WorkspaceContext.Create(canonicalRoot, AppContext.BaseDirectory) with
+            var workspace = WorkspaceContext.Create(canonicalRoot, AppContext.BaseDirectory, tempHome) with
             {
                 WorkspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot),
                 CanonicalRoot = canonicalRoot,
@@ -105,7 +119,7 @@ public sealed class HostStartupRegistrationTests
             if (PathCanonicalizer.CanonicalizeRoot(rootB) == canonicalRoot)
                 throw new InvalidOperationException("synthetic bootstrap failure");
 
-            var workspace = WorkspaceContext.Create(canonicalRoot, AppContext.BaseDirectory) with
+            var workspace = WorkspaceContext.Create(canonicalRoot, AppContext.BaseDirectory, tempHome) with
             {
                 WorkspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot),
                 CanonicalRoot = canonicalRoot,
@@ -130,10 +144,11 @@ public sealed class HostStartupRegistrationTests
         Assert.Same(firstHolder, bootstrap.Holder);
     }
 
-    private static string CreateTempRoot()
+    private string CreateTempRoot()
     {
         string root = Path.Combine(Path.GetTempPath(), "miller-host-registration-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
+        _tempRoots.Add(root);
         return root;
     }
 }

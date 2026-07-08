@@ -744,6 +744,39 @@ public sealed class DashboardRegistryReadTests : IDisposable
     }
 
     [Fact]
+    public void ReadSnapshot_MissingIndexDbRendersDegradedHealthPanelNotBlank()
+    {
+        // Regression guard: only IncompatibleExtractException may blank the whole health panel. A plain
+        // missing symbols.db (never indexed / .miller deleted) must degrade the extraction SECTIONS while
+        // the panel keeps rendering leader/sidecar facts — that is what ReadExtractionHealthOrUnavailable
+        // is for, and bypassing it lost exactly this behavior once already.
+        string root = Path.Combine(_dir, "never-indexed-root");
+        Directory.CreateDirectory(root);
+        using (var registry = WorkspaceRegistry.Open(_registryDb))
+        {
+            registry.UpsertSeen(
+                "ws-noindex",
+                "noindex-abcd1234",
+                root,
+                Path.Combine(root, ".miller", "symbols.db"),
+                WorkspaceRegistryState.Ready,
+                DateTimeOffset.Parse("2026-05-31T10:00:00Z"));
+        }
+
+        DashboardSnapshot snapshot = DashboardData.ReadSnapshot(_registryDb, _telemetryDb, workspaceId: "ws-noindex");
+
+        Assert.NotNull(snapshot.Health);
+        Assert.Equal("ws-noindex", snapshot.Health!.WorkspaceId);
+        // A COMPUTED verdict (possibly "unavailable" — that is the honest health state for a missing index)
+        // with real leader/sidecar facts and no Error — NOT the catch's canned blank shape, whose signature
+        // is Error != null + summary "workspace health is unavailable" + all statuses "unknown".
+        Assert.Null(snapshot.Health.Error);
+        Assert.NotEqual("workspace health is unavailable", snapshot.Health.Summary);
+        Assert.NotEqual("unknown", snapshot.Health.SearchSidecarStatus);
+        Assert.NotEqual("unknown", snapshot.Health.ContentSidecarStatus);
+    }
+
+    [Fact]
     public void ReadSnapshot_ReadsIndexFactsOnlyForSelectedWorkspace()
     {
         using JulieDbFixture selectedFixture = JulieDbFixture.Create(
@@ -1275,14 +1308,24 @@ public sealed class DashboardRegistryReadTests : IDisposable
                 WorkspaceRegistryState.Error,
                 DateTimeOffset.Parse("2026-05-31T08:00:00Z"));
             registry.MarkError("ws-err", "synthetic error", DateTimeOffset.Parse("2026-05-31T08:01:00Z"));
+            // Both missing-root AND errored: must count as missing-root ONLY so the counts stay a partition.
+            registry.UpsertSeen(
+                "ws-gone-err",
+                "goneerr-abcd1234",
+                Path.Combine(_dir, "missing-err-root"),
+                Path.Combine(_dir, "missing-err-root", ".miller", "symbols.db"),
+                WorkspaceRegistryState.Error,
+                DateTimeOffset.Parse("2026-05-31T07:00:00Z"));
+            registry.MarkError("ws-gone-err", "synthetic error", DateTimeOffset.Parse("2026-05-31T07:01:00Z"));
         }
 
         DashboardWorkspaceIndex index = DashboardData.ReadIndex(_registryDb);
 
-        Assert.Equal(3, index.WorkspaceCount);
+        Assert.Equal(4, index.WorkspaceCount);
         Assert.Equal(1, index.LiveCount);
-        Assert.Equal(1, index.MissingRootCount);
+        Assert.Equal(2, index.MissingRootCount);
         Assert.Equal(1, index.ErrorCount);
+        Assert.Equal(index.WorkspaceCount, index.LiveCount + index.MissingRootCount + index.ErrorCount);
 
         DashboardWorkspaceIndexEntry live = Assert.Single(index.Entries, e => e.Workspace.WorkspaceId == "ws-live");
         Assert.True(live.RootExists);

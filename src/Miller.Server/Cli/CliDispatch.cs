@@ -1479,6 +1479,13 @@ public static class CliDispatch
             case "remove":
                 return WorkspaceRemove(ctx, id, path, json, outw, err);
             case "prune":
+                if (id is not null || path is not null)
+                {
+                    err.WriteLine(
+                        "workspace prune is registry-wide and takes no selector; it removes every row whose " +
+                        "root is missing. Drop --id/--path (use `workspace remove` for a single workspace).");
+                    return 2;
+                }
                 return WorkspacePrune(ctx, json, dryRun: o.Has("dry-run"), outw);
             default:
                 err.WriteLine($"unknown workspace operation '{operation}'. Use status|health|onboarding|leader|list|refresh|full|open|remove|prune.");

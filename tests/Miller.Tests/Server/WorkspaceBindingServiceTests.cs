@@ -155,12 +155,13 @@ public sealed class WorkspaceBindingServiceTests
 
             string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(project);
             string workspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot);
-            string registryPath = Path.Combine(tempHome, ".miller", "workspaces.db");
+            // Derive the registry path through the SAME production seam MarkBootstrapFailed uses
+            // (WorkspaceContext.Create with the home override) — a hand-built Path.Combine can only ever
+            // assert about itself. The row-exists poll below then proves the service wrote THERE. (The
+            // "never the real home" half is enforced operationally: no test may open ~/.miller/workspaces.db,
+            // so it cannot be asserted here without violating the very invariant it guards.)
+            string registryPath = WorkspaceContext.Create(canonicalRoot, AppContext.BaseDirectory, tempHome).RegistryDbPath;
             Assert.StartsWith(tempHome, registryPath, StringComparison.Ordinal);
-            Assert.DoesNotContain(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                registryPath,
-                StringComparison.Ordinal);
 
             WorkspaceRegistryRow? row = null;
             await WaitUntilAsync(() =>
@@ -600,7 +601,9 @@ public sealed class WorkspaceBindingServiceTests
 
     private static void DeleteTempDir(string dir)
     {
-        try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+        try { Directory.Delete(dir, recursive: true); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
     }
 
     private static void SeedEmptyWorkspace(IndexBootstrapService bootstrap, string canonicalRoot, string tempHome)

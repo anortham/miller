@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using System;
 using System.Threading;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -21,17 +22,39 @@ namespace Miller.Tests.Server;
 /// <c>PollNow</c> is the on-demand seam the hosted loop and the tool share; the live timer path is the Scale
 /// suite (<see cref="LiveFreshnessTests"/>).
 /// </summary>
-public sealed class FreshnessServicePollNowTests
+public sealed class FreshnessServicePollNowTests : IDisposable
 {
     private const string Ws = "ws-pollnow-001";
+
+    // Static because the service factory below is static; xUnit runs this class's tests serially,
+    // so draining the bag per-test Dispose never races another test in this class.
+    private static readonly System.Collections.Concurrent.ConcurrentBag<string> TempHomes = [];
+
+    private static string CreateTempHome()
+    {
+        string tempHome = Path.Combine(Path.GetTempPath(), "miller-freshness-home-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempHome);
+        TempHomes.Add(tempHome);
+        return tempHome;
+    }
+
+    public void Dispose()
+    {
+        SqliteConnection.ClearAllPools(); // pooled handles under a deleted dir crash the WAL checkpoint at exit
+        while (TempHomes.TryTake(out string? dir))
+        {
+            try { Directory.Delete(dir, recursive: true); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+    }
 
     // A never-started FreshnessService (the host loop's ExecuteAsync never ran), constructed over a bootstrap
     // whose workspace points at the supplied DB. PollNow must build a transient reader/rebuilder from the
     // workspace and poll without requiring the loop to have initialised _reader/_rebuilder.
     private static FreshnessService NewServiceOverDb(string dbPath, string? workspaceId, IndexHolder holder)
     {
-        string tempHome = Path.Combine(Path.GetTempPath(), "miller-freshness-home-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(tempHome);
+        string tempHome = CreateTempHome();
         var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
         bootstrap.TestHomeDirectoryOverride = tempHome;
         var workspace = WorkspaceContext.Create(Path.GetDirectoryName(dbPath)!, AppContext.BaseDirectory, tempHome) with

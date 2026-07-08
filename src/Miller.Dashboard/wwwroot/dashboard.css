@@ -386,14 +386,6 @@ h3 {
   letter-spacing: 0.13em;
 }
 
-/* ---- Layout --------------------------------------------------------- */
-.layout {
-  display: grid;
-  grid-template-columns: minmax(340px, 0.42fr) minmax(0, 1fr);
-  gap: 18px;
-  align-items: start;
-}
-
 .main-stack {
   display: grid;
   gap: 18px;
@@ -446,36 +438,6 @@ h3 {
 }
 
 /* ---- Workspaces ----------------------------------------------------- */
-.workspace-table {
-  display: grid;
-  gap: 0;
-  max-height: calc(100vh - 210px);
-  overflow: auto;
-  background: var(--surface);
-}
-
-.workspace-row {
-  display: grid;
-  grid-template-columns: 4px minmax(0, 1fr) minmax(105px, auto);
-  gap: 14px;
-  width: 100%;
-  min-height: 76px;
-  padding: 0;
-  border: 0;
-  border-bottom: 1px solid var(--rule);
-  background: var(--surface);
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: background-color 0.1s ease;
-}
-
-.workspace-row:hover { background: var(--surface-inset); }
-
-.workspace-row.selected {
-  background: var(--accent-soft);
-}
-
 .workspace-status-rail {
   width: 4px;
   min-height: 100%;
@@ -516,15 +478,6 @@ h3 {
   padding: 0;
   font-family: var(--font-mono);
   font-size: 11px;
-}
-
-.workspace-row-stats {
-  display: grid;
-  justify-items: end;
-  align-content: center;
-  gap: 7px;
-  min-width: 0;
-  padding: 12px 16px 12px 0;
 }
 
 /* ---- Flat status tags (shared) ------------------------------------- */
@@ -571,13 +524,6 @@ h3 {
 }
 
 .outcome.ok { color: var(--ok); background: var(--ok-soft); border-color: var(--ok); }
-
-.workspace-meta {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--muted);
-}
 
 /* ---- Workspace index (landing list, full width) -------------------- */
 .ws-index { display: grid; }
@@ -1431,17 +1377,6 @@ tr.has-errors td:nth-child(6) {
   .metric:last-child,
   .fact-list div:last-child,
   .breakdown + .breakdown:last-child { border-bottom: 0; }
-
-  .workspace-row { grid-template-columns: 4px minmax(0, 1fr); }
-
-  .workspace-row-stats {
-    grid-column: 2;
-    grid-template-columns: auto auto;
-    justify-content: start;
-    justify-items: start;
-    gap: 12px;
-    padding: 0 16px 12px 0;
-  }
 
   .recent-errors li { grid-template-columns: 1fr; gap: 6px; align-items: start; }
 }

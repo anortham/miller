@@ -27,6 +27,8 @@
     {
         var live = Index.Entries.Where(static e => !e.IsStale).ToList();
         var stale = Index.Entries.Where(static e => e.IsStale).ToList();
+        var staleMissing = stale.Count(static e => !e.RootExists);
+        var staleErrored = stale.Count - staleMissing;
 
         @if (live.Count > 0)
         {
@@ -46,7 +48,7 @@
                         <span class="workspace-status-rail @StateClass(entry.Workspace.State)" aria-hidden="true"></span>
                         <span class="workspace-row-main">
                             <span class="workspace-name">@entry.Workspace.DisplayId</span>
-                            <code class="workspace-path">@entry.Workspace.CanonicalRoot</code>
+                            <code class="workspace-path" title="@entry.Workspace.CanonicalRoot">@entry.Workspace.CanonicalRoot</code>
                             @if (!string.IsNullOrWhiteSpace(entry.Workspace.LastError))
                             {
                                 <span class="workspace-error muted">@entry.Workspace.LastError</span>
@@ -68,8 +70,21 @@
         {
             <details class="panel-collapse ws-stale-collapse">
                 <summary class="panel-collapse-summary">
-                    <span>@stale.Count.ToString("N0", CultureInfo.InvariantCulture) stale registrations — run <code>miller workspace prune</code> to clean up</span>
-                    <span class="muted">missing root or errored</span>
+                    <span>@stale.Count.ToString("N0", CultureInfo.InvariantCulture) stale registrations</span>
+                    <span class="muted">
+                        @if (staleMissing > 0)
+                        {
+                            <text>@staleMissing.ToString("N0", CultureInfo.InvariantCulture) missing root — run <code>miller workspace prune</code> to remove</text>
+                        }
+                        @if (staleMissing > 0 && staleErrored > 0)
+                        {
+                            <text> · </text>
+                        }
+                        @if (staleErrored > 0)
+                        {
+                            <text>@staleErrored.ToString("N0", CultureInfo.InvariantCulture) errored — refresh, or <code>workspace remove</code> if abandoned</text>
+                        }
+                    </span>
                 </summary>
                 <div class="ws-index ws-index-stale" role="table">
                     @foreach (DashboardWorkspaceIndexEntry entry in stale)
@@ -78,7 +93,7 @@
                             <span class="workspace-status-rail @StateClass(entry.Workspace.State)" aria-hidden="true"></span>
                             <span class="workspace-row-main">
                                 <span class="workspace-name">@entry.Workspace.DisplayId</span>
-                                <code class="workspace-path">@entry.Workspace.CanonicalRoot</code>
+                                <code class="workspace-path" title="@entry.Workspace.CanonicalRoot">@entry.Workspace.CanonicalRoot</code>
                                 @if (!entry.RootExists)
                                 {
                                     <span class="workspace-error muted">root missing</span>
@@ -100,6 +115,8 @@
                 </div>
             </details>
         }
+
+        <p class="empty ws-filter-empty" hidden>No workspaces match the filter.</p>
     }
 </section>
 

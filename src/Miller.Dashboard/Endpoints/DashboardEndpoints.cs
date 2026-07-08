@@ -37,7 +37,16 @@ internal static class DashboardEndpoints
                 paths.TelemetryDbPath,
                 workspace_id,
                 launchDirectory);
-            return new RazorComponentResult<WorkspaceShell>(new
+            // A requested id that did not resolve must not silently render the fallback workspace.
+            if (!string.IsNullOrWhiteSpace(workspace_id) &&
+                snapshot.Workspaces.Count > 0 &&
+                !string.Equals(snapshot.SelectedWorkspaceId, workspace_id, StringComparison.Ordinal))
+            {
+                return Results.NotFound(
+                    $"workspace_id '{workspace_id}' is not registered — open / for the workspace list.");
+            }
+
+            return (IResult)new RazorComponentResult<WorkspaceShell>(new
             {
                 Snapshot = snapshot,
                 Activity = DashboardData.ReadRecentActivity(

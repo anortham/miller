@@ -426,6 +426,11 @@ public sealed record DashboardWorkspaceIndexEntry(
         string.Equals(Workspace.State, "error", StringComparison.OrdinalIgnoreCase);
 }
 
+/// <summary>
+/// The counts form a partition: <c>live_count + missing_root_count + error_count == workspace_count</c>.
+/// A row that is both missing-root and errored counts as missing-root only (prune is its remedy);
+/// <c>error_count</c> covers errored rows whose root still exists.
+/// </summary>
 public sealed record DashboardWorkspaceIndex(
     [property: JsonPropertyName("entries")] IReadOnlyList<DashboardWorkspaceIndexEntry> Entries,
     [property: JsonPropertyName("workspace_count")] int WorkspaceCount,
@@ -466,11 +471,13 @@ public static class DashboardData
             DashboardWorkspaceFacts facts = DashboardIndexFactsCache.Read(workspace);
             var entry = new DashboardWorkspaceIndexEntry(workspace, facts, rootExists);
             entries.Add(entry);
+            // Partition: live + missing_root + error == workspace_count. A row that is both
+            // missing-root and errored counts as missing-root (prune is its remedy).
             if (!rootExists)
                 missingRootCount++;
-            if (string.Equals(workspace.State, "error", StringComparison.OrdinalIgnoreCase))
+            else if (string.Equals(workspace.State, "error", StringComparison.OrdinalIgnoreCase))
                 errorCount++;
-            if (!entry.IsStale)
+            else
                 liveCount++;
             if (entry.HasFacts)
             {
@@ -986,10 +993,12 @@ public static class DashboardData
         try
         {
             WorkspaceFacts facts = BuildWorkspaceFacts(workspace, dashboardFacts);
-            // Call the schema-gated reader directly so IncompatibleExtractException reaches this
-            // method's catch and surfaces as panel state "unavailable" with rebuild guidance in Error.
-            // (ReadExtractionHealthOrUnavailable would swallow it into section warnings.)
-            WorkspaceExtractionHealthFacts extraction = WorkspaceHealthReader.Read(workspace.IndexDbPath);
+            // Non-schema read failures (missing/locked/corrupt db) degrade to unavailable SECTIONS so the
+            // panel still renders leader/sidecar facts; IncompatibleExtractException propagates out of the
+            // helper to this method's catch so the rebuild guidance lands in the panel's Error.
+            WorkspaceExtractionHealthFacts extraction = ReadExtractionHealthOrUnavailable(
+                workspace.IndexDbPath,
+                facts.WarningText ?? facts.FreshnessStatus);
             LeaderHealthFacts leader = LeaderHealthFacts.Read(Path.GetDirectoryName(workspace.IndexDbPath) ?? workspace.CanonicalRoot) with
             {
                 ArtifactExtractorVersion = ExtractBinaryVersionReader.TryRead(workspace.IndexDbPath),
@@ -1177,14 +1186,12 @@ public static class DashboardData
         {
             return WorkspaceHealthReader.Read(indexDbPath);
         }
+        // IncompatibleExtractException deliberately NOT caught: the schema-gate message must reach the
+        // panel-level catch (state "unavailable" + rebuild guidance in Error), not sink into section warnings.
         catch (Exception ex) when (
-            ex is FileNotFoundException or SqliteException or InvalidOperationException
-                or IncompatibleExtractException)
+            ex is FileNotFoundException or SqliteException or InvalidOperationException)
         {
-            // Prefer the schema-gate / IO message (includes rebuild guidance) over the caller hint.
-            string message = ex is IncompatibleExtractException || string.IsNullOrWhiteSpace(error)
-                ? ex.Message
-                : error;
+            string message = string.IsNullOrWhiteSpace(error) ? ex.Message : error;
             return new WorkspaceExtractionHealthFacts(
                 HealthFactSection<ParseDiagnosticGroup>.Unavailable(message),
                 HealthFactSection<CapabilityGapGroup>.Unavailable(message),

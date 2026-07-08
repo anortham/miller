@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using System.Threading;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -17,8 +18,31 @@ namespace Miller.Tests.Server;
 /// through injected funcs — no real lock files, no subprocess, no wall-clock timers; ticks are driven via the
 /// <c>*ForTest</c> seams and clocks are injected.
 /// </summary>
-public sealed class IndexerServiceLeadershipTests
+public sealed class IndexerServiceLeadershipTests : IDisposable
 {
+    // Static because the service factory below is static; xUnit runs this class's tests serially,
+    // so draining the bag per-test Dispose never races another test in this class.
+    private static readonly System.Collections.Concurrent.ConcurrentBag<string> TempHomes = [];
+
+    private static string CreateTempHome()
+    {
+        string tempHome = Path.Combine(Path.GetTempPath(), "miller-leadership-home-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempHome);
+        TempHomes.Add(tempHome);
+        return tempHome;
+    }
+
+    public void Dispose()
+    {
+        SqliteConnection.ClearAllPools(); // pooled handles under a deleted dir crash the WAL checkpoint at exit
+        while (TempHomes.TryTake(out string? dir))
+        {
+            try { Directory.Delete(dir, recursive: true); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+    }
+
     private sealed class TestLease : IDisposable
     {
         public bool Disposed { get; private set; }
@@ -117,8 +141,7 @@ public sealed class IndexerServiceLeadershipTests
         Func<int, DateTimeOffset?, bool>? processAliveProbeWithObserved = null,
         ILogger<IndexerService>? logger = null)
     {
-        string tempHome = Path.Combine(Path.GetTempPath(), "miller-leadership-home-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(tempHome);
+        string tempHome = CreateTempHome();
         var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
         bootstrap.TestHomeDirectoryOverride = tempHome;
         return new(
@@ -344,7 +367,7 @@ public sealed class IndexerServiceLeadershipTests
             bootstrap.TestHomeDirectoryOverride = tempHome;
             bootstrap.TestBootstrapInterceptor = (canonicalRoot, _) =>
             {
-                var workspace = WorkspaceContext.Create(canonicalRoot, AppContext.BaseDirectory) with
+                var workspace = WorkspaceContext.Create(canonicalRoot, AppContext.BaseDirectory, tempHome) with
                 {
                     WorkspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot),
                     CanonicalRoot = canonicalRoot,

@@ -1029,7 +1029,7 @@ public sealed class WorkspaceTool
             "remove" => "workspace remove requires a path: workspace(operation=\"remove\", path=\"/repo\"). " +
                         "It deletes that path's .miller index dir (the live workspace is refused).",
             _ => $"unknown workspace operation '{operation}'. " +
-                 "Use status|refresh|full|list|open|remove|prune|health|onboarding|dashboard (default status).",
+                 "Use status|refresh|full|list|open|remove|prune|health|onboarding|leader|dashboard (default status).",
         };
         return json ? ServerJson.Note(message) : message;
     }

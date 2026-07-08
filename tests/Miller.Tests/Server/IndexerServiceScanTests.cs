@@ -22,8 +22,31 @@ namespace Miller.Tests.Server;
 /// through the internal test seam that mirrors the production publish under <c>_opsGate</c>. The live subprocess
 /// path is the Scale suite (<see cref="LiveWorkspaceTests"/>).
 /// </summary>
-public sealed class IndexerServiceScanTests
+public sealed class IndexerServiceScanTests : IDisposable
 {
+    // Static because the service factories below are static; xUnit runs this class's tests serially,
+    // so draining the bag per-test Dispose never races another test in this class.
+    private static readonly System.Collections.Concurrent.ConcurrentBag<string> TempHomes = [];
+
+    private static string CreateTempHome()
+    {
+        string tempHome = Path.Combine(Path.GetTempPath(), "miller-scan-home-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempHome);
+        TempHomes.Add(tempHome);
+        return tempHome;
+    }
+
+    public void Dispose()
+    {
+        SqliteConnection.ClearAllPools(); // pooled handles under a deleted dir crash the WAL checkpoint at exit
+        while (TempHomes.TryTake(out string? dir))
+        {
+            try { Directory.Delete(dir, recursive: true); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+    }
+
     /// <summary>A fake <see cref="IExtractOps"/> recording the force value of each scan; can be told to throw.</summary>
     private sealed class RecordingScanOps : IExtractOps
     {
@@ -132,8 +155,7 @@ public sealed class IndexerServiceScanTests
         Func<string, FullScanDrainResult>? drainFullScanRequests = null,
         Func<string, FileConvergeDrainResult>? drainFileConvergeRequests = null)
     {
-        string tempHome = Path.Combine(Path.GetTempPath(), "miller-scan-home-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(tempHome);
+        string tempHome = CreateTempHome();
         var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
         bootstrap.TestHomeDirectoryOverride = tempHome;
         return new(
@@ -489,8 +511,7 @@ public sealed class IndexerServiceScanTests
         // M4: an unclaimable (wedged) request is a real diagnostic the first time, but it recurs every 250ms
         // tick until the TTL sweep clears it — the repeat must drop to Debug, not warn forever.
         var logger = new RecordingLogger<IndexerService>();
-        string tempHome = Path.Combine(Path.GetTempPath(), "miller-scan-home-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(tempHome);
+        string tempHome = CreateTempHome();
         var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
         bootstrap.TestHomeDirectoryOverride = tempHome;
         var service = new IndexerService(
