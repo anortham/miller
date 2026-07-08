@@ -581,12 +581,18 @@ public static class CliDispatch
 
     private static int Metrics(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
-        const string usage = "miller metrics <churn|clones|complexity|risk> [--workspace-id SELECTOR] [--workspace DIR] [--limit N] [--json] [--range REV..REV] [--include-commits] [--min-count N] [--max-symbols-per-group N] [--min-severity low|moderate|high] [--include-tests|--exclude-tests]";
+        const string usage = "miller metrics <churn|clones|complexity|risk|history> [--workspace-id SELECTOR] [--workspace DIR] [--limit N] [--json] [--range REV..REV] [--include-commits] [--min-count N] [--max-symbols-per-group N] [--min-severity low|moderate|high] [--include-tests|--exclude-tests] [--metric a,b,…]";
         if (args.Count > 0 && args[0] is "--help" or "-h" or "help")
             return Usage(err, usage);
 
         bool firstTokenIsFlag = args.Count > 0 && args[0].StartsWith("--", StringComparison.Ordinal);
         string operation = args.Count == 0 || firstTokenIsFlag ? "complexity" : args[0].ToLowerInvariant();
+
+        // `history` is a read over the metric-history sidecar (history.db), not a git/symbols metric run: it takes a
+        // different flag set (--metric) and renders a trend, so it branches out before the churn/risk recorder path.
+        if (operation == "history")
+            return MetricsHistory(args.Skip(1).ToList(), ctx, outw, err);
+
         if (operation is not ("churn" or "clones" or "clone" or "duplicate" or "duplicates" or "complexity" or "hotspots" or "risk"))
             return Usage(err, usage);
 
@@ -639,6 +645,69 @@ public static class CliDispatch
             return 3;
         }
     }
+
+    // `miller metrics history` — read-only trend over the workspace history.db sidecar (no git, no recording). The
+    // JSON envelope is the stable metrics-history-v1 contract Eros consumes (docs/contracts/metrics-history-v1.md).
+    private static int MetricsHistory(
+        IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
+    {
+        const string usage =
+            "miller metrics history [--metric a,b,…] [--limit N] [--json] [--workspace-id SELECTOR] [--workspace DIR]";
+        if (args.Count > 0 && args[0] is "--help" or "-h" or "help")
+            return Usage(err, usage);
+
+        CliOptions o = CliOptions.Parse(args.ToArray(), "json");
+        if (o.Positionals.Count > 0)
+            return Usage(err, usage);
+        if (!TryResolveReadContext(ctx, o, err, out ctx))
+            return 2;
+        if (!RequireIndex(ctx, err))
+            return 3;
+
+        IReadOnlyList<string> metrics = ParseMetricFilter(args);
+        int limit = o.Int("limit", MetricsTool.DefaultHistoryLimit);
+        string workspaceId = ResolveWorkspaceId(ctx);
+
+        try
+        {
+            string historyDbPath = MetricSnapshotAggregates.HistoryDbPathFor(ctx.ExtractDbPath);
+            MetricsToolResult result = MetricsTool.RunHistory(historyDbPath, workspaceId, metrics, limit, o.Has("json"));
+            WriteOutput(outw, result.Output);
+            return 0;
+        }
+        catch (Exception ex) when (
+            ex is FileNotFoundException or InvalidOperationException or IOException
+                or UnauthorizedAccessException or ArgumentException or NotSupportedException
+                or SqliteException)
+        {
+            err.WriteLine("metrics failed: " + ex.Message);
+            return 3;
+        }
+    }
+
+    // Collect --metric values, supporting BOTH comma-separated (`--metric a,b`) and repeated (`--metric a --metric b`)
+    // forms, de-duplicated in first-seen order. An empty result ⟹ MetricsTool.RunHistory applies its default set.
+    private static IReadOnlyList<string> ParseMetricFilter(IReadOnlyList<string> args)
+    {
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string raw in CollectRepeatedOptionValues(args, "metric"))
+        {
+            foreach (string part in raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                if (seen.Add(part))
+                    result.Add(part);
+            }
+        }
+        return result;
+    }
+
+    // The workspace id for the metrics-history-v1 envelope: the bootstrap-set id when known, else derived from the
+    // canonical root — the same resolution CaptureHeavyArmIdentity uses, so a read and a write agree on identity.
+    private static string ResolveWorkspaceId(WorkspaceContext ctx) =>
+        !string.IsNullOrWhiteSpace(ctx.WorkspaceId)
+            ? ctx.WorkspaceId!
+            : WorkspaceId.FromCanonicalRoot(Path.GetFullPath(ctx.CanonicalRoot ?? ctx.WorkspaceRoot));
 
     private static int Report(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
@@ -2371,9 +2440,10 @@ public static class CliDispatch
           patterns <op>      List, summarize, or search extractor-recognized code-shape facts.
                              op = list | summary | search
                              [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--query TEXT] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]
-          metrics <op>       Report deterministic local metrics.
-                             op = churn | clones | complexity | risk
+          metrics <op>       Report deterministic local metrics, or a recorded metric-history trend.
+                             op = churn | clones | complexity | risk | history
                              [--workspace-id SELECTOR] [--workspace DIR] [--limit N] [--json] [--range REV..REV] [--include-commits] [--min-count N] [--max-symbols-per-group N] [--min-severity low|moderate|high] [--include-tests|--exclude-tests]
+                             history [--metric a,b,…] [--limit N] [--json] [--workspace-id SELECTOR] [--workspace DIR]
           report             One composed repo-quality report: index counts, extraction health, markers, complexity, clones, churn, risk.
                              [--json] [--workspace-id SELECTOR] [--workspace DIR] [--range REV..REV] [--limit N] [--include-tests|--exclude-tests]
           telemetry <op>     Export machine-global Miller telemetry.

@@ -343,6 +343,167 @@ public sealed class MetricsToolTests
             EndByte = line * 10 + 40,
         };
 
+    // ---- metrics history: read-only trend surface (Task 4) --------------------------------------------------
+
+    [Fact]
+    public void RunHistory_Compact_OneLinePerSnapshot_NewestLast_AbsentMetricDash()
+    {
+        using var fx = HistoryFixture();
+        string historyDb = MetricSnapshotAggregates.HistoryDbPathFor(fx.DbPath);
+        SeedHistorySnapshot(historyDb, "art-1", revision: 40, source: "converge",
+            recordedAt: DateTime.Parse("2026-07-01T10:00:00Z").ToUniversalTime(),
+            ("symbol_count", 1000), ("complexity_p90", 7));
+        SeedHistorySnapshot(historyDb, "art-1", revision: 41, source: "converge",
+            recordedAt: DateTime.Parse("2026-07-02T10:00:00Z").ToUniversalTime(),
+            ("symbol_count", 1200));
+
+        MetricsToolResult result = MetricsTool.RunHistory(
+            historyDb, "ws-test", new[] { "symbol_count", "complexity_p90" }, limit: 20, json: false);
+
+        string[] lines = result.Output.Split('\n');
+        Assert.Equal("# metric history", lines[0]);
+        Assert.Equal("recorded_at_utc\trevision\tsource\tsymbol_count\tcomplexity_p90", lines[1]);
+        // Newest LAST: revision 40 line precedes revision 41 line.
+        int i40 = Array.FindIndex(lines, l => l.Contains("\t40\t"));
+        int i41 = Array.FindIndex(lines, l => l.Contains("\t41\t"));
+        Assert.True(i40 >= 0 && i41 > i40);
+        Assert.EndsWith("\t1000\t7", lines[i40]);
+        // revision 41 recorded no complexity_p90 ⟹ absent renders "-", never a fabricated 0.
+        Assert.EndsWith("\t1200\t-", lines[i41]);
+    }
+
+    [Fact]
+    public void RunHistory_Json_EnvelopeFiltersMetrics_BoundsLimit()
+    {
+        using var fx = HistoryFixture();
+        string historyDb = MetricSnapshotAggregates.HistoryDbPathFor(fx.DbPath);
+        for (int rev = 1; rev <= 5; rev++)
+            SeedHistorySnapshot(historyDb, "art-1", rev, "converge",
+                DateTime.Parse("2026-07-01T10:00:00Z").AddDays(rev).ToUniversalTime(),
+                ("symbol_count", 1000 + rev), ("clone_group_count", rev));
+
+        // --metric filters to symbol_count only; --limit 3 bounds to the most recent 3 snapshots.
+        MetricsToolResult result = MetricsTool.RunHistory(
+            historyDb, "ws-abc", new[] { "symbol_count" }, limit: 3, json: true);
+
+        using var doc = JsonDocument.Parse(result.Output);
+        JsonElement root = doc.RootElement;
+        Assert.Equal("ws-abc", root.GetProperty("workspace_id").GetString());
+        JsonElement metrics = root.GetProperty("metrics");
+        JsonElement series = Assert.Single(metrics.EnumerateArray());
+        Assert.Equal("symbol_count", series.GetProperty("metric").GetString());
+        JsonElement[] points = series.GetProperty("points").EnumerateArray().ToArray();
+        Assert.Equal(3, points.Length); // limit bound
+        // Newest last, snapshot_id order: last point is revision 5 / value 1005.
+        Assert.Equal(5, points[^1].GetProperty("revision").GetInt64());
+        Assert.Equal(1005, points[^1].GetProperty("value").GetDouble());
+        Assert.Equal("art-1", points[^1].GetProperty("artifact_id").GetString());
+        Assert.Equal("converge", points[^1].GetProperty("source").GetString());
+        Assert.False(points[^1].TryGetProperty("recorded_at_utc", out _) == false); // field present
+    }
+
+    [Fact]
+    public void RunHistory_OrdersBySnapshotId_NotByRecordedAt()
+    {
+        using var fx = HistoryFixture();
+        string historyDb = MetricSnapshotAggregates.HistoryDbPathFor(fx.DbPath);
+        // Snapshot A inserted first (lower snapshot_id) but with a LATER wall-clock than snapshot B.
+        SeedHistorySnapshot(historyDb, "art-1", revision: 1, source: "converge",
+            recordedAt: DateTime.Parse("2026-07-05T00:00:00Z").ToUniversalTime(), ("symbol_count", 100));
+        SeedHistorySnapshot(historyDb, "art-1", revision: 2, source: "converge",
+            recordedAt: DateTime.Parse("2026-07-01T00:00:00Z").ToUniversalTime(), ("symbol_count", 200));
+
+        MetricsToolResult result = MetricsTool.RunHistory(
+            historyDb, "ws-test", new[] { "symbol_count" }, limit: 20, json: true);
+
+        using var doc = JsonDocument.Parse(result.Output);
+        JsonElement[] points = doc.RootElement.GetProperty("metrics")[0].GetProperty("points").EnumerateArray().ToArray();
+        // Insertion order (snapshot_id), NOT recorded_at_utc order: the 2026-07-05 point (value 100) comes first.
+        Assert.Equal(100, points[0].GetProperty("value").GetDouble());
+        Assert.Equal("2026-07-05T00:00:00.0000000Z", points[0].GetProperty("recorded_at_utc").GetString());
+        Assert.Equal(200, points[1].GetProperty("value").GetDouble());
+    }
+
+    [Fact]
+    public void RunHistory_EmptyHistory_Compact_FriendlyExitZeroMessage()
+    {
+        using var fx = HistoryFixture();
+        string historyDb = MetricSnapshotAggregates.HistoryDbPathFor(fx.DbPath);
+
+        MetricsToolResult result = MetricsTool.RunHistory(
+            historyDb, "ws-test", Array.Empty<string>(), limit: 20, json: false);
+
+        Assert.Equal(0, result.ResultCount);
+        Assert.Equal("no trend data yet — run `miller report`.", result.Output);
+    }
+
+    [Fact]
+    public void RunHistory_EmptyHistory_Json_EmptyMetricsArrayWithWorkspaceId()
+    {
+        using var fx = HistoryFixture();
+        string historyDb = MetricSnapshotAggregates.HistoryDbPathFor(fx.DbPath);
+
+        MetricsToolResult result = MetricsTool.RunHistory(
+            historyDb, "ws-empty", Array.Empty<string>(), limit: 20, json: true);
+
+        using var doc = JsonDocument.Parse(result.Output);
+        JsonElement root = doc.RootElement;
+        Assert.Equal("ws-empty", root.GetProperty("workspace_id").GetString());
+        Assert.Empty(root.GetProperty("metrics").EnumerateArray());
+    }
+
+    [Fact]
+    public void RunHistory_OmittedMetricFilter_UsesDefaultSet()
+    {
+        using var fx = HistoryFixture();
+        string historyDb = MetricSnapshotAggregates.HistoryDbPathFor(fx.DbPath);
+        SeedHistorySnapshot(historyDb, "art-1", revision: 1, source: "converge",
+            recordedAt: DateTime.Parse("2026-07-01T00:00:00Z").ToUniversalTime(),
+            ("symbol_count", 10), ("marker_total", 3));
+        SeedHistorySnapshot(historyDb, "art-1", revision: 2, source: "candidates",
+            recordedAt: DateTime.Parse("2026-07-02T00:00:00Z").ToUniversalTime(),
+            ("dead_code_candidate_count", 5));
+
+        MetricsToolResult result = MetricsTool.RunHistory(
+            historyDb, "ws-test", Array.Empty<string>(), limit: 20, json: true);
+
+        using var doc = JsonDocument.Parse(result.Output);
+        string[] metricNames = doc.RootElement.GetProperty("metrics").EnumerateArray()
+            .Select(m => m.GetProperty("metric").GetString()!).ToArray();
+        Assert.Contains("symbol_count", metricNames);
+        Assert.Contains("marker_total", metricNames);
+        Assert.Contains("dead_code_candidate_count", metricNames);
+        // complexity_p90 / clone_group_count are in the default set but were never recorded ⟹ omitted, not empty.
+        Assert.DoesNotContain("complexity_p90", metricNames);
+    }
+
+    private static JulieDbFixture HistoryFixture() =>
+        JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[] { Row("aa11223344556677889900aabbccf099", "Anchor", "src/A.cs", 1) });
+
+    private static void SeedHistorySnapshot(
+        string historyDbPath,
+        string artifactId,
+        long revision,
+        string source,
+        DateTime recordedAt,
+        params (string Metric, double Value)[] metrics)
+    {
+        var snapshot = new MetricHistorySnapshot(
+            WorkspaceId: "ws-test",
+            ArtifactId: artifactId,
+            Revision: revision,
+            ExtractorVersion: "2.11.0",
+            MillerVersion: "test",
+            Source: source,
+            Metrics: metrics.Select(m => new MetricHistoryPoint(m.Metric, m.Value, null)).ToList());
+        MetricHistoryWriteResult outcome = MetricHistoryStore.RecordRun(
+            historyDbPath, snapshot, () => (artifactId, revision), recordedAt);
+        Assert.Equal(MetricHistoryWriteResult.Recorded, outcome);
+    }
+
     private static void SeedComplexity(
         string dbPath,
         string metricId,

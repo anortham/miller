@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Globalization;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -51,6 +52,26 @@ public static class MetricsTool
     public const int DefaultLimit = 50;
     public const int MaxLimit = 500;
     public const int DefaultCloneSymbolsPerGroup = CloneGroupReader.DefaultSymbolsPerGroup;
+
+    /// <summary>Default snapshot window for <c>metrics history</c> — the most recent 20 snapshots.</summary>
+    public const int DefaultHistoryLimit = 20;
+
+    /// <summary>The <c>metrics history --json</c> envelope version (docs/contracts/metrics-history-v1.md).</summary>
+    public const int HistorySchemaVersion = 1;
+
+    /// <summary>
+    /// The default metric set for <c>metrics history</c> when <c>--metric</c> is omitted: one cheap-arm rollup per
+    /// signal family (symbols, complexity, clones, markers) plus the dead-code heavy-arm count. Names are the
+    /// canonical producer consts so the read surface can never drift from what the write arms emit.
+    /// </summary>
+    public static readonly IReadOnlyList<string> DefaultHistoryMetrics =
+    [
+        MetricSnapshotAggregates.SymbolCount,
+        MetricSnapshotAggregates.ComplexityP90,
+        MetricSnapshotAggregates.CloneGroupCount,
+        MetricSnapshotAggregates.MarkerTotal,
+        MetricHistoryHeavyArm.DeadCodeCandidateCount,
+    ];
 
     internal static MetricsToolResult Run(
         string dbPath,
@@ -129,6 +150,43 @@ public static class MetricsTool
         return new MetricsToolResult(
             json ? RenderComplexityJson(hotspots, severity) : RenderComplexityCompact(hotspots),
             hotspots.Count,
+            SnapshotMetrics: null);
+    }
+
+    /// <summary>
+    /// Read the metric-history trend from a workspace <c>history.db</c> and render it (compact table or the stable
+    /// <c>metrics-history-v1</c> JSON envelope). Pure and read-only — it records nothing. <paramref name="metrics"/>
+    /// empty ⟹ <see cref="DefaultHistoryMetrics"/>; a snapshot window of the most recent <paramref name="limit"/>
+    /// snapshots is read with NO downsampling (raw points — downsampling is a dashboard concern). An empty/missing
+    /// history is a friendly exit-0 state, never an error: the compact form nudges to <c>miller report</c>, the JSON
+    /// form emits <c>workspace_id</c> plus an empty <c>metrics</c> array.
+    /// </summary>
+    internal static MetricsToolResult RunHistory(
+        string historyDbPath,
+        string workspaceId,
+        IReadOnlyList<string> metrics,
+        int limit,
+        bool json)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(historyDbPath);
+
+        IReadOnlyList<string> requested = metrics is { Count: > 0 } ? metrics : DefaultHistoryMetrics;
+        string[] wanted = requested
+            .Where(static m => !string.IsNullOrWhiteSpace(m))
+            .Select(static m => m.Trim())
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (wanted.Length == 0)
+            wanted = DefaultHistoryMetrics.ToArray();
+
+        int boundedLimit = Math.Clamp(limit, 1, MaxLimit);
+        // maxPoints <= 0 ⟹ no downsampling: the CLI shows every recorded point. Downsampling stays a dashboard concern.
+        IReadOnlyList<MetricHistoryTrendPoint> points =
+            MetricHistoryStore.ReadTrend(historyDbPath, wanted, boundedLimit, maxPoints: 0);
+
+        return new MetricsToolResult(
+            json ? RenderHistoryJson(workspaceId, wanted, points) : RenderHistoryCompact(wanted, points),
+            points.Count,
             SnapshotMetrics: null);
     }
 
@@ -474,6 +532,112 @@ public static class MetricsTool
             writer.WriteEndObject();
         }
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    // Compact trend: one line per snapshot, oldest FIRST / newest LAST so each metric column reads as a trend down
+    // the page. `wanted` fixes the column order; a metric absent from a snapshot renders "-" (an absent row, never
+    // a fabricated 0). Points arrive snapshot_id-ordered from ReadTrend; the pivot re-sorts by snapshot_id defensively.
+    private static string RenderHistoryCompact(
+        IReadOnlyList<string> wanted, IReadOnlyList<MetricHistoryTrendPoint> points)
+    {
+        if (points.Count == 0)
+            return "no trend data yet — run `miller report`.";
+
+        var order = new List<long>();
+        var byId = new Dictionary<long, HistorySnapshotRow>();
+        foreach (MetricHistoryTrendPoint p in points)
+        {
+            if (!byId.TryGetValue(p.SnapshotId, out HistorySnapshotRow? row))
+            {
+                row = new HistorySnapshotRow(p.RecordedAtUtc, p.Revision, p.Source);
+                byId[p.SnapshotId] = row;
+                order.Add(p.SnapshotId);
+            }
+            row.Values[p.Metric] = p.Value;
+        }
+        order.Sort();
+
+        var sb = new StringBuilder();
+        sb.AppendLine("# metric history");
+        sb.Append("recorded_at_utc\trevision\tsource");
+        foreach (string metric in wanted)
+            sb.Append('\t').Append(metric);
+        sb.AppendLine();
+
+        foreach (long id in order)
+        {
+            HistorySnapshotRow row = byId[id];
+            sb.Append(row.RecordedAtUtc).Append('\t').Append(row.Revision).Append('\t').Append(row.Source);
+            foreach (string metric in wanted)
+                sb.Append('\t').Append(row.Values.TryGetValue(metric, out double v) ? FormatMetricValue(v) : "-");
+            sb.AppendLine();
+        }
+        return sb.ToString().TrimEnd();
+    }
+
+    // The stable metrics-history-v1 envelope: { schema_version, workspace_id, metrics: [{ metric, points: [...] }] }.
+    // Metric series are emitted in `wanted` order; a metric with no recorded points is omitted (so an empty/missing
+    // history yields metrics: []). Points inside a series stay snapshot_id-ordered (newest last).
+    private static string RenderHistoryJson(
+        string workspaceId, IReadOnlyList<string> wanted, IReadOnlyList<MetricHistoryTrendPoint> points)
+    {
+        var byMetric = new Dictionary<string, List<MetricHistoryTrendPoint>>(StringComparer.Ordinal);
+        foreach (MetricHistoryTrendPoint p in points)
+        {
+            if (!byMetric.TryGetValue(p.Metric, out List<MetricHistoryTrendPoint>? list))
+            {
+                list = new List<MetricHistoryTrendPoint>();
+                byMetric[p.Metric] = list;
+            }
+            list.Add(p);
+        }
+
+        var buffer = new ArrayBufferWriter<byte>();
+        using (Utf8JsonWriter writer = NewWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteNumber("schema_version", HistorySchemaVersion);
+            writer.WriteString("workspace_id", workspaceId);
+            writer.WriteStartArray("metrics");
+            foreach (string metric in wanted)
+            {
+                if (!byMetric.TryGetValue(metric, out List<MetricHistoryTrendPoint>? series) || series.Count == 0)
+                    continue;
+                writer.WriteStartObject();
+                writer.WriteString("metric", metric);
+                writer.WriteStartArray("points");
+                foreach (MetricHistoryTrendPoint pt in series)
+                {
+                    writer.WriteStartObject();
+                    writer.WriteString("recorded_at_utc", pt.RecordedAtUtc);
+                    writer.WriteString("artifact_id", pt.ArtifactId);
+                    writer.WriteNumber("revision", pt.Revision);
+                    writer.WriteString("source", pt.Source);
+                    writer.WriteNumber("value", pt.Value);
+                    writer.WriteEndObject();
+                }
+                writer.WriteEndArray();
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    // Integral values render without a decimal tail (symbol_count=1200, not 1200.0); a fractional metric such as an
+    // interpolated complexity_p90 keeps up to three significant fractional digits.
+    private static string FormatMetricValue(double value) =>
+        !double.IsInfinity(value) && !double.IsNaN(value) && value == Math.Floor(value)
+            ? ((long)value).ToString(CultureInfo.InvariantCulture)
+            : value.ToString("0.###", CultureInfo.InvariantCulture);
+
+    private sealed class HistorySnapshotRow(string recordedAtUtc, long revision, string source)
+    {
+        public string RecordedAtUtc { get; } = recordedAtUtc;
+        public long Revision { get; } = revision;
+        public string Source { get; } = source;
+        public Dictionary<string, double> Values { get; } = new(StringComparer.Ordinal);
     }
 
     private static string NormalizeOperation(string? operation)
