@@ -193,11 +193,11 @@ Commit mode: Tasks 1, 4, 7 `serial-worker-commit`; Batch A and Batch B tasks `pa
 **What to build:** The read verb and its stable contract doc. Follow the existing `metrics` operation pattern (`RunClones`/`RunComplexity` shape: parse → reader → compact/JSON render).
 
 **Acceptance criteria:**
-- [ ] Compact and `--json` outputs match the contract doc; `--metric` filters; `--limit` bounds.
-- [ ] Ordering by `snapshot_id` is observable (seeded out-of-order timestamps render in insertion order).
-- [ ] Empty history is a friendly exit-0 message in compact and an empty `metrics` array in JSON.
-- [ ] `capabilities --json` lists the new surface.
-- [ ] Worker-scope verification passes and the change is committed by the worker (serial-worker-commit).
+- [x] Compact and `--json` outputs match the contract doc; `--metric` filters; `--limit` bounds.
+- [x] Ordering by `snapshot_id` is observable (seeded out-of-order timestamps render in insertion order).
+- [x] Empty history is a friendly exit-0 message in compact and an empty `metrics` array in JSON.
+- [x] `capabilities --json` lists the new surface.
+- [x] Worker-scope verification passes and the change is committed by the worker (serial-worker-commit).
 
 ---
 
