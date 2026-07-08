@@ -1268,6 +1268,107 @@ public sealed class DashboardRegistryReadTests : IDisposable
         Assert.DoesNotContain("Index.Entries", html);
     }
 
+    private static DashboardWorkspaceIndex SampleWorkspaceIndex(string? error = null)
+    {
+        var liveRow = new DashboardWorkspaceRow(
+            "ws-a", "alpha-abcd1234", "/repo/a", "/repo/a/.miller/symbols.db",
+            "2026-05-31T10:00:00Z", "2026-05-31T10:01:00Z", 42, "ready", null);
+        var liveFacts = new DashboardWorkspaceFacts(
+            "ws-a", "alpha-abcd1234", "/repo/a", "/repo/a/.miller/symbols.db", "ready", null,
+            FileCount: 4, SymbolCount: 3, LanguageCount: 2, ContentBytes: 12_800,
+            LastRevision: 42, LastScanAt: "2026-05-31T10:01:00Z", SearchSidecarStatus: "fresh",
+            Languages: [new DashboardLanguageStat("csharp", 3, 3, 11_200)], SymbolKinds: []);
+        var staleRow = new DashboardWorkspaceRow(
+            "ws-b", "beta-efgh5678", "/repo/b-gone", "/repo/b-gone/.miller/symbols.db",
+            "2026-05-31T10:00:00Z", null, null, "missing", "missing index");
+
+        return new DashboardWorkspaceIndex(
+            Entries:
+            [
+                new DashboardWorkspaceIndexEntry(liveRow, liveFacts, RootExists: true),
+                new DashboardWorkspaceIndexEntry(staleRow, DashboardIndexFactsReader.Read(staleRow), RootExists: false),
+            ],
+            WorkspaceCount: 2, TotalFiles: 4, TotalSymbols: 3, LanguageCount: 2,
+            LiveCount: 1, MissingRootCount: 1, ErrorCount: 0, Error: error);
+    }
+
+    [Fact]
+    public async Task WorkspaceIndex_DropsAriaTableAndRowRoles()
+    {
+        string html = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
+        {
+            ["Index"] = SampleWorkspaceIndex(),
+        });
+
+        // A6/A1-a11y: anchor rows must not carry malformed table/row ARIA roles.
+        Assert.DoesNotContain("role=\"table\"", html);
+        Assert.DoesNotContain("role=\"row\"", html);
+        // Rows remain honest links, and the grid classes (not roles) carry the visual layout.
+        Assert.Contains("<a class=\"ws-index-row\"", html);
+        Assert.Contains("class=\"ws-index\"", html);
+    }
+
+    [Fact]
+    public async Task WorkspaceIndex_SortableHeadersAreButtonsWithAriaSort()
+    {
+        string html = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
+        {
+            ["Index"] = SampleWorkspaceIndex(),
+        });
+
+        // Each numeric/name column header is a button carrying aria-sort state for client-side sorting.
+        Assert.Contains("data-sort-col=\"workspace\"", html);
+        Assert.Contains("data-sort-col=\"files\"", html);
+        Assert.Contains("data-sort-col=\"symbols\"", html);
+        Assert.Contains("data-sort-col=\"rev\"", html);
+        Assert.Contains("aria-sort=\"none\"", html);
+        Assert.Contains("class=\"ws-sort", html);
+        // Rows expose clean numeric sort keys so JS sorts values, not formatted strings.
+        Assert.Contains("data-sort-files=\"4\"", html);
+        Assert.Contains("data-sort-symbols=\"3\"", html);
+        Assert.Contains("data-sort-rev=\"42\"", html);
+        Assert.Contains("data-sort-name=\"alpha-abcd1234\"", html);
+    }
+
+    [Fact]
+    public async Task WorkspaceIndex_PollsWorkspacesFragmentVisibilityGated()
+    {
+        string html = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
+        {
+            ["Index"] = SampleWorkspaceIndex(),
+        });
+
+        // A6: the section refreshes itself from the orphaned fragment route, visibility-gated.
+        Assert.Contains("hx-get=\"/fragments/workspaces\"", html);
+        Assert.Contains("data-poll-trigger=\"every 30s\"", html);
+        Assert.Contains("hx-trigger=\"every 30s\"", html);
+        Assert.Contains("hx-swap=\"outerHTML\"", html);
+    }
+
+    [Fact]
+    public async Task WorkspaceIndex_RendersRegistryErrorNotice()
+    {
+        string html = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
+        {
+            ["Index"] = SampleWorkspaceIndex(error: "registry read degraded: database is locked"),
+        });
+
+        // Task 1's Index.Error surfaces as a visible notice using the existing error styling.
+        Assert.Contains("class=\"notice error-notice\"", html);
+        Assert.Contains("registry read degraded: database is locked", html);
+    }
+
+    [Fact]
+    public async Task WorkspaceIndex_OmitsErrorNoticeWhenErrorIsNull()
+    {
+        string html = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
+        {
+            ["Index"] = SampleWorkspaceIndex(error: null),
+        });
+
+        Assert.DoesNotContain("error-notice", html);
+    }
+
     [Fact]
     public void ReadIndex_AnnotatesRootExistsAndLiveMissingErrorCounts()
     {

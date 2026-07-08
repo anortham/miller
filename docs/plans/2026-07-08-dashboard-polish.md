@@ -177,11 +177,11 @@ Commit mode: `parallel-lead-commit` for Batches A and B; `serial-worker-commit` 
 **Approach:** ARIA: drop `role="table"`/`role="row"`/the `aria-hidden` header-row role usage; rows stay `<a class="ws-index-row">` (a list of links is honest semantics; keep the visual grid via CSS classes, which do not depend on the roles). Auto-refresh: swap only the list markup (rows + stale section), not the panel heading/filter input — putting the `hx-get="/fragments/workspaces"` target on an inner container whose fragment response matches is the cleanest state-preservation move; gate with the existing visibility mechanism. NOTE: `/fragments/workspaces` returns the whole `WorkspaceIndex` component — if you swap an inner container instead, use `hx-select` to pick the matching inner node from the response rather than changing the endpoint. After each swap, re-apply the current filter and sort (listen once in `dashboard-site.js`, mirroring the issue-detail open-state pattern). Sort: extend `workspaceIndexFilter` (or a sibling CSP factory) with a `sortBy(column)` toggle that reorders the row elements in place; header cells become `<button>`s with `aria-sort` state. Render the `Index.Error` notice with the existing notice/error styles when set. Render tests: no `role="table"` in output; sortable headers are buttons; error notice renders when `Error` is set; polling attributes present.
 
 **Acceptance criteria:**
-- [ ] List markup contains no ARIA table roles; rows remain anchors; sortable headers are buttons with `aria-sort`.
-- [ ] Landing list polls `/fragments/workspaces` every 30s, visibility-gated, and a swap does not clear filter text, sort order, or a manually-opened stale section (JS behavior; markup contract render-tested, live-verified in Task 7).
-- [ ] `Index.Error` (Task 1) renders as a visible notice with the existing error styling.
-- [ ] Existing list render tests still pass (stale split, prune hint, filter empty-state).
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode.
+- [x] List markup contains no ARIA table roles; rows remain anchors; sortable headers are buttons with `aria-sort`.
+- [x] Landing list polls `/fragments/workspaces` every 30s, visibility-gated, and a swap does not clear filter text, sort order, or a manually-opened stale section (JS behavior; markup contract render-tested, live-verified in Task 7).
+- [x] `Index.Error` (Task 1) renders as a visible notice with the existing error styling.
+- [x] Existing list render tests still pass (stale split, prune hint, filter empty-state).
+- [x] Worker-scope verification passes and the change is handed to the lead per commit mode.
 
 ### Task 5: Telemetry query efficiency + display-id fix
 

@@ -3,6 +3,19 @@
 (function () {
     var openIssueDetails = window.__millerOpenIssueDetails || (window.__millerOpenIssueDetails = new Set());
 
+    // Filter/sort/stale-open state for the #workspace-index section. It survives the 30s htmx
+    // poll that swaps the whole section (mirrors openIssueDetails above): the store lives at
+    // module scope, outside the swapped DOM, so a swap cannot clear it. The workspaceIndexFilter
+    // Alpine component (alpine-components.js) rehydrates from this store on init() and writes back
+    // on every change; declaring it here guarantees the shape exists before Alpine's deferred load.
+    window.__millerWorkspaceIndexState = window.__millerWorkspaceIndexState || {
+        query: '',
+        autoOpenedStale: false,
+        sortColumn: null,
+        sortDir: 'asc',
+        staleOpen: false,
+    };
+
     function issueKey(details) {
         return details.getAttribute('data-issue-id') || details.id || '';
     }

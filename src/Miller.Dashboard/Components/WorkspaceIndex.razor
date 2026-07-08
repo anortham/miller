@@ -1,6 +1,13 @@
 @namespace Miller.Dashboard.Components
 
-<section id="workspace-index" class="panel ws-index-panel" x-data="workspaceIndexFilter" aria-label="Registered workspaces">
+<section id="workspace-index"
+         class="panel ws-index-panel"
+         x-data="workspaceIndexFilter"
+         aria-label="Registered workspaces"
+         hx-get="/fragments/workspaces"
+         data-poll-trigger="every 30s"
+         hx-trigger="every 30s"
+         hx-swap="outerHTML">
     <div class="panel-heading">
         <div>
             <h2>Workspaces</h2>
@@ -19,6 +26,11 @@
         </div>
     </div>
 
+    @if (!string.IsNullOrWhiteSpace(Index.Error))
+    {
+        <p class="notice error-notice"><strong>Registry unavailable</strong> @Index.Error</p>
+    }
+
     @if (Index.Entries.Count == 0)
     {
         <p class="empty">No registered workspaces yet.</p>
@@ -32,19 +44,19 @@
 
         @if (live.Count > 0)
         {
-            <div class="ws-index" role="table">
-                <div class="ws-index-head" role="row" aria-hidden="true">
-                    <span></span>
-                    <span>Workspace</span>
+            <div class="ws-index">
+                <div class="ws-index-head">
+                    <span aria-hidden="true"></span>
+                    <button type="button" class="ws-sort" data-sort-col="workspace" aria-sort="none" x-on:click="onSort($event)">Workspace</button>
                     <span>State</span>
-                    <span class="ws-num">Files</span>
-                    <span class="ws-num">Symbols</span>
+                    <button type="button" class="ws-sort ws-num" data-sort-col="files" aria-sort="none" x-on:click="onSort($event)">Files</button>
+                    <button type="button" class="ws-sort ws-num" data-sort-col="symbols" aria-sort="none" x-on:click="onSort($event)">Symbols</button>
                     <span>Languages</span>
-                    <span class="ws-num">Rev</span>
+                    <button type="button" class="ws-sort ws-num" data-sort-col="rev" aria-sort="none" x-on:click="onSort($event)">Rev</button>
                 </div>
                 @foreach (DashboardWorkspaceIndexEntry entry in live)
                 {
-                    <a class="ws-index-row" role="row" href="/workspace?workspace_id=@Esc(entry.Workspace.WorkspaceId)">
+                    <a class="ws-index-row" href="/workspace?workspace_id=@Esc(entry.Workspace.WorkspaceId)" @attributes="SortKeys(entry)">
                         <span class="workspace-status-rail @StateClass(entry.Workspace.State)" aria-hidden="true"></span>
                         <span class="workspace-row-main">
                             <span class="workspace-name">@entry.Workspace.DisplayId</span>
@@ -86,10 +98,10 @@
                         }
                     </span>
                 </summary>
-                <div class="ws-index ws-index-stale" role="table">
+                <div class="ws-index ws-index-stale">
                     @foreach (DashboardWorkspaceIndexEntry entry in stale)
                     {
-                        <a class="ws-index-row" role="row" href="/workspace?workspace_id=@Esc(entry.Workspace.WorkspaceId)">
+                        <a class="ws-index-row" href="/workspace?workspace_id=@Esc(entry.Workspace.WorkspaceId)" @attributes="SortKeys(entry)">
                             <span class="workspace-status-rail @StateClass(entry.Workspace.State)" aria-hidden="true"></span>
                             <span class="workspace-row-main">
                                 <span class="workspace-name">@entry.Workspace.DisplayId</span>
@@ -123,6 +135,16 @@
 @code {
     [Parameter, EditorRequired] public DashboardWorkspaceIndex Index { get; set; } =
         new(Array.Empty<DashboardWorkspaceIndexEntry>(), 0, 0, 0, 0);
+
+    // Clean numeric/name sort keys so the client sorts on values, not formatted "1,234"/"—" strings.
+    // Fact-less rows use -1 so they sort below rows that have real counts.
+    private static Dictionary<string, object> SortKeys(DashboardWorkspaceIndexEntry entry) => new()
+    {
+        ["data-sort-files"] = entry.HasFacts ? entry.Facts.FileCount : -1,
+        ["data-sort-symbols"] = entry.HasFacts ? entry.Facts.SymbolCount : -1,
+        ["data-sort-rev"] = entry.Workspace.LastRevision ?? -1,
+        ["data-sort-name"] = entry.Workspace.DisplayId,
+    };
 
     private static string Stat(DashboardWorkspaceIndexEntry entry, long value) =>
         entry.HasFacts ? value.ToString("N0", CultureInfo.InvariantCulture) : "—";
