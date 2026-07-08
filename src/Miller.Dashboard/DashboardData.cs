@@ -439,7 +439,8 @@ public sealed record DashboardWorkspaceIndex(
     [property: JsonPropertyName("language_count")] int LanguageCount,
     [property: JsonPropertyName("live_count")] int LiveCount = 0,
     [property: JsonPropertyName("missing_root_count")] int MissingRootCount = 0,
-    [property: JsonPropertyName("error_count")] int ErrorCount = 0);
+    [property: JsonPropertyName("error_count")] int ErrorCount = 0,
+    [property: JsonPropertyName("error")] string? Error = null);
 
 public static class DashboardData
 {
@@ -455,7 +456,7 @@ public static class DashboardData
     /// </summary>
     public static DashboardWorkspaceIndex ReadIndex(string registryDbPath)
     {
-        IReadOnlyList<DashboardWorkspaceRow> workspaces = ReadWorkspaces(registryDbPath);
+        (IReadOnlyList<DashboardWorkspaceRow> workspaces, string? registryError) = TryReadWorkspaces(registryDbPath);
         var entries = new List<DashboardWorkspaceIndexEntry>(workspaces.Count);
         long totalFiles = 0;
         long totalSymbols = 0;
@@ -496,49 +497,66 @@ public static class DashboardData
             languages.Count,
             liveCount,
             missingRootCount,
-            errorCount);
+            errorCount,
+            registryError);
     }
 
     public static string RenderIndexJson(string registryDbPath) =>
         JsonSerializer.Serialize(ReadIndex(registryDbPath), JsonContext.DashboardWorkspaceIndex);
 
-    public static IReadOnlyList<DashboardWorkspaceRow> ReadWorkspaces(string registryDbPath)
+    /// <summary>
+    /// Registry rows for the page spine. A corrupt/truncated <c>workspaces.db</c> degrades to an EMPTY list
+    /// instead of throwing so no dashboard page 500s; callers that surface the failure to the user
+    /// (<see cref="ReadIndex"/>) use <see cref="TryReadWorkspaces"/> to also carry the error message.
+    /// </summary>
+    public static IReadOnlyList<DashboardWorkspaceRow> ReadWorkspaces(string registryDbPath) =>
+        TryReadWorkspaces(registryDbPath).Rows;
+
+    private static (IReadOnlyList<DashboardWorkspaceRow> Rows, string? Error) TryReadWorkspaces(string registryDbPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(registryDbPath);
         if (!File.Exists(registryDbPath))
-            return Array.Empty<DashboardWorkspaceRow>();
+            return (Array.Empty<DashboardWorkspaceRow>(), null);
 
-        using var connection = OpenReadOnly(registryDbPath);
-        if (!TableExists(connection, "workspaces"))
-            return Array.Empty<DashboardWorkspaceRow>();
-
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT workspace_id, display_id, canonical_root, index_db_path, last_seen_at, last_scan_at,
-                   last_revision, state, last_error
-            FROM workspaces
-            ORDER BY CASE WHEN state IN ('current','ready','loaded_existing') THEN 0 ELSE 1 END,
-                     display_id COLLATE NOCASE,
-                     display_id,
-                     workspace_id;
-            """;
-        using var reader = cmd.ExecuteReader();
-        var rows = new List<DashboardWorkspaceRow>();
-        while (reader.Read())
+        try
         {
-            rows.Add(new DashboardWorkspaceRow(
-                reader.GetString(0),
-                reader.GetString(1),
-                reader.GetString(2),
-                reader.GetString(3),
-                reader.GetString(4),
-                reader.IsDBNull(5) ? null : reader.GetString(5),
-                reader.IsDBNull(6) ? null : reader.GetInt64(6),
-                reader.GetString(7),
-                reader.IsDBNull(8) ? null : reader.GetString(8)));
-        }
+            using var connection = OpenReadOnly(registryDbPath);
+            if (!TableExists(connection, "workspaces"))
+                return (Array.Empty<DashboardWorkspaceRow>(), null);
 
-        return rows;
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = """
+                SELECT workspace_id, display_id, canonical_root, index_db_path, last_seen_at, last_scan_at,
+                       last_revision, state, last_error
+                FROM workspaces
+                ORDER BY CASE WHEN state IN ('current','ready','loaded_existing') THEN 0 ELSE 1 END,
+                         display_id COLLATE NOCASE,
+                         display_id,
+                         workspace_id;
+                """;
+            using var reader = cmd.ExecuteReader();
+            var rows = new List<DashboardWorkspaceRow>();
+            while (reader.Read())
+            {
+                rows.Add(new DashboardWorkspaceRow(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    reader.GetString(3),
+                    reader.GetString(4),
+                    reader.IsDBNull(5) ? null : reader.GetString(5),
+                    reader.IsDBNull(6) ? null : reader.GetInt64(6),
+                    reader.GetString(7),
+                    reader.IsDBNull(8) ? null : reader.GetString(8)));
+            }
+
+            return (rows, null);
+        }
+        catch (Exception ex) when (
+            ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException)
+        {
+            return (Array.Empty<DashboardWorkspaceRow>(), $"Workspace registry is unreadable: {ex.Message}");
+        }
     }
 
     /// <summary>
@@ -552,33 +570,35 @@ public static class DashboardData
         bool allWorkspaces = string.Equals(workspaceId, "all", StringComparison.Ordinal);
         string? scope = allWorkspaces ? null : workspaceId;
         if (!File.Exists(telemetryDbPath))
-        {
-            return new DashboardTelemetrySummary(
-                workspaceId,
-                Array.Empty<DashboardToolStat>(),
-                0,
-                null,
-                null,
-                Array.Empty<DashboardRecentError>());
-        }
+            return EmptyTelemetrySummary(workspaceId);
 
-        using var connection = OpenReadOnly(telemetryDbPath);
-        if (!TableExists(connection, "tool_telemetry"))
+        try
         {
-            return new DashboardTelemetrySummary(
-                workspaceId,
-                Array.Empty<DashboardToolStat>(),
-                0,
-                null,
-                null,
-                Array.Empty<DashboardRecentError>());
-        }
+            using var connection = OpenReadOnly(telemetryDbPath);
+            if (!TableExists(connection, "tool_telemetry"))
+                return EmptyTelemetrySummary(workspaceId);
 
-        var tools = ReadToolStats(connection, scope, allWorkspaces);
-        (long totalCalls, string? windowStart, string? windowEnd) = ReadTotals(connection, scope, allWorkspaces);
-        IReadOnlyList<DashboardRecentError> recentErrors = ReadRecentErrors(connection, scope, allWorkspaces);
-        return new DashboardTelemetrySummary(workspaceId, tools, totalCalls, windowStart, windowEnd, recentErrors);
+            var tools = ReadToolStats(connection, scope, allWorkspaces);
+            (long totalCalls, string? windowStart, string? windowEnd) = ReadTotals(connection, scope, allWorkspaces);
+            IReadOnlyList<DashboardRecentError> recentErrors = ReadRecentErrors(connection, scope, allWorkspaces);
+            return new DashboardTelemetrySummary(workspaceId, tools, totalCalls, windowStart, windowEnd, recentErrors);
+        }
+        catch (Exception ex) when (
+            ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException)
+        {
+            // A corrupt/truncated shared telemetry.db must not 500 the page spine — degrade to the empty shape.
+            return EmptyTelemetrySummary(workspaceId);
+        }
     }
+
+    private static DashboardTelemetrySummary EmptyTelemetrySummary(string? workspaceId) =>
+        new(
+            workspaceId,
+            Array.Empty<DashboardToolStat>(),
+            0,
+            null,
+            null,
+            Array.Empty<DashboardRecentError>());
 
     /// <summary>
     /// Newest-first per-call rows for the live activity feed. A null/blank <paramref name="workspaceId"/>
@@ -597,6 +617,24 @@ public static class DashboardData
         if (!File.Exists(telemetryDbPath))
             return new DashboardActivityFeed(scope, Array.Empty<DashboardActivityEntry>());
 
+        try
+        {
+            return ReadRecentActivityCore(telemetryDbPath, registryDbPath, scope, limit);
+        }
+        catch (Exception ex) when (
+            ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException)
+        {
+            // A corrupt/truncated shared telemetry.db must not 500 the page spine — degrade to the empty feed.
+            return new DashboardActivityFeed(scope, Array.Empty<DashboardActivityEntry>());
+        }
+    }
+
+    private static DashboardActivityFeed ReadRecentActivityCore(
+        string telemetryDbPath,
+        string registryDbPath,
+        string? scope,
+        int limit)
+    {
         using var connection = OpenReadOnly(telemetryDbPath);
         if (!TableExists(connection, "tool_telemetry"))
             return new DashboardActivityFeed(scope, Array.Empty<DashboardActivityEntry>());
@@ -731,12 +769,12 @@ public static class DashboardData
         if (!File.Exists(telemetryDbPath))
             return DashboardContextSavingsSummary.NotTracked(workspaceId);
 
-        using var connection = OpenReadOnly(telemetryDbPath);
-        if (!TableExists(connection, "tool_telemetry"))
-            return DashboardContextSavingsSummary.NotTracked(workspaceId);
-
         try
         {
+            using var connection = OpenReadOnly(telemetryDbPath);
+            if (!TableExists(connection, "tool_telemetry"))
+                return DashboardContextSavingsSummary.NotTracked(workspaceId);
+
             using var cmd = connection.CreateCommand();
             cmd.CommandText = """
                 SELECT COUNT(*) AS tracked_calls,
@@ -774,8 +812,10 @@ public static class DashboardData
                 ReadContextSavingsTools(connection, workspaceId),
                 ComputeSavingsRatio(sourceBytes, savedBytes));
         }
-        catch (SqliteException)
+        catch (Exception ex) when (
+            ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException)
         {
+            // A corrupt/truncated shared telemetry.db (or a failed open) must not 500 the page spine.
             return DashboardContextSavingsSummary.NotTracked(workspaceId);
         }
     }
@@ -1230,8 +1270,14 @@ public static class DashboardData
     public static string RenderTelemetryJson(string telemetryDbPath, string? workspaceId) =>
         JsonSerializer.Serialize(ReadTelemetrySummary(telemetryDbPath, workspaceId), JsonContext.DashboardTelemetrySummary);
 
-    public static string RenderSnapshotJson(string registryDbPath, string telemetryDbPath, string? workspaceId) =>
-        JsonSerializer.Serialize(ReadSnapshot(registryDbPath, telemetryDbPath, workspaceId), JsonContext.DashboardSnapshot);
+    public static string RenderSnapshotJson(
+        string registryDbPath,
+        string telemetryDbPath,
+        string? workspaceId,
+        string? preferredWorkspaceRoot = null) =>
+        JsonSerializer.Serialize(
+            ReadSnapshot(registryDbPath, telemetryDbPath, workspaceId, preferredWorkspaceRoot),
+            JsonContext.DashboardSnapshot);
 
     public static string RenderRefreshJson(WorkspaceRefreshResult result) =>
         JsonSerializer.Serialize(result, JsonContext.WorkspaceRefreshResult);
@@ -1275,27 +1321,37 @@ public static class DashboardData
             .Select(row => row.WorkspaceId)
             .ToHashSet(StringComparer.Ordinal);
 
-        using var connection = OpenReadOnly(telemetryDbPath);
-        if (!TableExists(connection, "tool_telemetry"))
-            return null;
-
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT workspace_id
-            FROM tool_telemetry
-            WHERE workspace_id IS NOT NULL
-            GROUP BY workspace_id
-            ORDER BY COUNT(*) DESC, workspace_id;
-            """;
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        try
         {
-            string workspaceId = reader.GetString(0);
-            if (registeredIds.Contains(workspaceId))
-                return workspaceId;
-        }
+            using var connection = OpenReadOnly(telemetryDbPath);
+            if (!TableExists(connection, "tool_telemetry"))
+                return null;
 
-        return null;
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = """
+                SELECT workspace_id
+                FROM tool_telemetry
+                WHERE workspace_id IS NOT NULL
+                GROUP BY workspace_id
+                ORDER BY COUNT(*) DESC, workspace_id;
+                """;
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                string workspaceId = reader.GetString(0);
+                if (registeredIds.Contains(workspaceId))
+                    return workspaceId;
+            }
+
+            return null;
+        }
+        catch (Exception ex) when (
+            ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException)
+        {
+            // A corrupt/truncated shared telemetry.db must not 500 the /workspace page: fall back to the
+            // registry-order default selection (ReadSnapshot picks workspaces[0]).
+            return null;
+        }
     }
 
     private static bool SameRoot(string left, string right)

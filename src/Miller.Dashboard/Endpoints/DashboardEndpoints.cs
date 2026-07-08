@@ -185,7 +185,7 @@ internal static class DashboardEndpoints
             "application/json; charset=utf-8"));
 
         endpoints.MapGet("/snapshot.json", (string? workspace_id) => Results.Text(
-            DashboardData.RenderSnapshotJson(paths.RegistryDbPath, paths.TelemetryDbPath, workspace_id),
+            DashboardData.RenderSnapshotJson(paths.RegistryDbPath, paths.TelemetryDbPath, workspace_id, launchDirectory),
             "application/json; charset=utf-8"));
 
         endpoints.MapGet("/diagnostics.json", () => Results.Text(
@@ -194,7 +194,9 @@ internal static class DashboardEndpoints
 
         endpoints.MapPost("/workspaces/{workspace_id}/refresh", (string workspace_id) =>
         {
-            var result = DashboardData.RefreshWorkspace(paths.RegistryDbPath, paths.ToolsRoot, workspace_id);
+            // Parity with the htmx /fragments/refresh route: any failure (unregistered id, missing extractor,
+            // scan fault) renders as a Failed result body instead of a 500 with an empty body.
+            var result = DashboardData.TryRefreshWorkspace(paths.RegistryDbPath, paths.ToolsRoot, workspace_id);
             return Results.Text(
                 DashboardData.RenderRefreshJson(result),
                 "application/json; charset=utf-8");

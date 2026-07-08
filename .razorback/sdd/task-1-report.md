@@ -1,72 +1,61 @@
-# Task 1 Report: Dashboard survives incompatible artifacts
+# Task 1 report — Page-spine resilience + endpoint parity
 
-**Status:** DONE
-**implementation commit SHA:** 79ba1d5
+## Status: DONE
 
-## Summary
+## Worktree state
+- Path: `/Users/murphy/source/miller/.worktrees/dashboard-polish`
+- Branch: `feat/dashboard-polish`
+- HEAD at report time: `187ce3d` (base advanced from 6207978 while I worked — lead committed a parallel task; my edits sit on top cleanly)
+- Dirty state: only my three owned files modified (no staging/commit per parallel-lead-commit mode):
+  - `M src/Miller.Dashboard/DashboardData.cs`
+  - `M src/Miller.Dashboard/Endpoints/DashboardEndpoints.cs`
+  - `M tests/Miller.Tests/Server/DashboardRegistryReadTests.cs`
 
-`ReadSnapshot` panel readers degrade on schema-incompatible workspace artifacts instead of letting `IncompatibleExtractException` escape as a Kestrel 500. Health panel state is `"unavailable"` with the schema/rebuild guidance (`workspace full`) in `Error`.
+## What I built
 
-## Miller orientation
+### DashboardData.cs — spine reader resilience
+1. **`DashboardWorkspaceIndex`** gained one additive nullable field: `[JsonPropertyName("error")] string? Error = null` (last positional param, default null — no existing call site breaks; Task 4 renders it).
+2. **`ReadWorkspaces` split** into public non-throwing `ReadWorkspaces` (returns `.Rows`) + private `TryReadWorkspaces` returning `(IReadOnlyList<DashboardWorkspaceRow> Rows, string? Error)`. The registry open + query are now inside a precise catch filter; a corrupt/truncated `workspaces.db` degrades to an empty list. `ReadIndex` calls `TryReadWorkspaces` and carries the message into `DashboardWorkspaceIndex.Error`. Because `ReadWorkspaces` is now non-throwing, every downstream spine caller (`ReadSnapshot`, `ReadRecentActivity` display-id map, `RenderWorkspacesJson`, `ReadWorkspaceFacts`) stops throwing on a corrupt registry for free.
+3. **`ReadTelemetrySummary`** — connection open + queries wrapped in the precise filter; added private `EmptyTelemetrySummary(workspaceId)` helper (dedupes the three empty-shape sites) returned on degrade.
+4. **`ReadRecentActivity`** — body extracted to private `ReadRecentActivityCore(...)`; the public method wraps the call in the precise filter and returns an empty `DashboardActivityFeed` on degrade.
+5. **`ReadContextSavings`** — the A1 bug fix: `OpenReadOnly` + `TableExists` moved INSIDE the `try` (they previously sat outside it), and the catch broadened from `SqliteException`-only to the precise filter.
+6. **`SelectTelemetryWorkspace`** — also opens `telemetry.db` and sits on the `ReadSnapshot` path, so it was wrapped too; on a corrupt telemetry DB it returns null and `ReadSnapshot` falls back to registry-order `workspaces[0]`. (Not named in the brief's four readers, but required so `/workspace` does not 500 on corrupt telemetry — the selection runs before `ReadTelemetrySummary`.)
+7. **`RenderSnapshotJson`** — added optional `string? preferredWorkspaceRoot = null` and forwarded it to `ReadSnapshot`. Additive overload; the existing 3-arg test still compiles.
 
-1. **`context(query=…IncompatibleExtractException degrade…)`** — located panel readers, `IncompatibleExtractException`, and existing `DashboardRegistryReadTests` fixtures.
-2. **`inspect(target=WorkspaceHealthReader.Read)`** — confirmed `JulieSchemaGate.Verify` throws `IncompatibleExtractException` on schema mismatch.
+All new catches use exactly `ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException` (mirrors the panel readers; no blanket `Exception`).
 
-## Root cause
-
-Panel catch filters listed `KeyNotFoundException | SqliteException | IOException | InvalidOperationException | UnauthorizedAccessException` only. Schema-3 artifacts throw `IncompatibleExtractException` from `JulieSchemaGate.Verify` via `WorkspaceHealthReader.Read`, which escaped the filters → 500.
-
-A second trap: catching that exception only inside `ReadExtractionHealthOrUnavailable` and continuing through `WorkspaceHealthFacts.Create` maps unavailable extraction sections to `usable_with_warnings`, so the health panel never got `Error`/rebuild text.
-
-## Approach (final)
-
-1. Add `IncompatibleExtractException` to the exception filters of:
-   - `ReadLocalMetricsPanel`
-   - `ReadPatternInventoryPanel`
-   - `ReadWorkspaceHealthPanel`
-   - `ReadWorkspaceOnboardingPanel`
-   - `ReadExtractionHealthOrUnavailable`
-2. `ReadWorkspaceHealthPanel` calls `WorkspaceHealthReader.Read` **directly** (not via `OrUnavailable`) so the exception reaches the panel catch and returns `"unavailable"` + `Error: ex.Message` (rebuild guidance).
-3. `ReadExtractionHealthOrUnavailable` still lists `IncompatibleExtractException` (plan requirement) and prefers `ex.Message` for that type over the caller hint — used by pattern inventory / other callers that go through the helper.
-4. No blanket `catch (Exception)`.
-
-## Test
-
-`ReadSnapshot_IncompatibleSchemaArtifactReturnsHealthUnavailableNotCrash` seeds temp registry + schema-3 `symbols.db` via `JulieDbFixture.Create(schemaVersion: 3, contractValue: "3", …)` and sets `binary_version=2.8.1`. Asserts:
-
-- `ReadSnapshot` returns (no throw)
-- health panel `State == "unavailable"`
-- `Error` contains `"workspace full"` and `"3"`
-
-## Files changed
-
-| File | Change |
-|------|--------|
-| `src/Miller.Dashboard/DashboardData.cs` | Five catch sites include `IncompatibleExtractException`; health panel uses direct `WorkspaceHealthReader.Read` |
-| `tests/Miller.Tests/Server/DashboardRegistryReadTests.cs` | New schema-3 `ReadSnapshot` degrade test |
+### DashboardEndpoints.cs — endpoint parity
+- `/snapshot.json` now passes `launchDirectory` as `preferredWorkspaceRoot` (A5) → selects the same default workspace as `/workspace`.
+- `/workspaces/{workspace_id}/refresh` now calls `TryRefreshWorkspace` instead of the throwing `RefreshWorkspace` (A4) → an unregistered id renders a Failed result body, not a 500. Matches the htmx `/fragments/refresh` route.
 
 ## Judgment calls
+- **`SelectTelemetryWorkspace` wrapped (DashboardData.cs, `SelectTelemetryWorkspace`):** Not in the brief's explicit four-reader list, but it opens `telemetry.db` on the `ReadSnapshot` critical path before `ReadTelemetrySummary` runs. Leaving it unguarded would still 500 `/workspace` on a corrupt telemetry DB, defeating the task intent. It is inside my owned file and its degrade (return null → fall back to `workspaces[0]`) is the existing no-telemetry behavior.
+- **`EmptyTelemetrySummary` + `ReadRecentActivityCore` helpers:** extracted only to keep the degrade shape single-sourced and the try/catch shallow. Pure refactor, same public surface.
+- **JSON refresh property casing:** `WorkspaceRefreshResult` carries no `[JsonPropertyName]` and `DashboardJsonContext` sets no naming policy, so it serializes PascalCase (`WorkspaceId`, `StatusText`). Test asserts against that real shape (`StatusText == "failed"`) rather than an invented snake_case contract — I did not add attributes (out of scope + would be a contract change).
+- **Endpoint A4 guard is a source-scan** (`JsonRefreshEndpoint_UsesNonThrowingRefreshPath`) mirroring the existing `DashboardHost_PreservesFragmentCompatibilityRoutes` pattern, because spinning a full Razor host for one route is disproportionate; the behavioral proof that the non-throwing path yields a Failed body is `TryRefreshWorkspace_UnregisteredIdReturnsFailedJsonNotThrow`.
 
-| Decision | Rationale |
-|----------|-----------|
-| Health panel bypasses `OrUnavailable` | Helper degrade → `WorkspaceHealthFacts` → `usable_with_warnings` would hide rebuild guidance from `Error` |
-| Keep `IncompatibleExtractException` on `OrUnavailable` filter | Matches plan acceptance; pattern path still degrades safely; prefers gate message over caller hint |
-| Prefer `ex.Message` for `IncompatibleExtractException` in helper | Caller hint is often a stale freshness string, not rebuild guidance |
+## Miller calls used
+- `workspace list filter=miller` — confirmed the worktree isn't indexed (rev 1) but the main checkout `miller-b275269b2d7c` reflects the same base; used it as `workspace_id` for all reads.
+- `inspect src/Miller.Dashboard/DashboardData.cs` — full symbol map (line numbers for all spine readers/records) before reading regions.
+- `trace RenderSnapshotJson mode=refs` — confirmed exactly 2 callers (`DashboardEndpoints.cs:188` + the contract test), so an additive optional param is safe.
+- `inspect WorkspaceRefreshResult depth=overview` — confirmed record shape (`Status`, `WorkspaceId`, `Error`, `StatusText`) and that `TryRefreshWorkspace` already returns Failed on any exception.
+- `inspect CrossWorkspaceRefreshService.Refresh depth=full` — confirmed an unregistered id fails at `GetRequiredRow` BEFORE any `_scan` spawn, so my refresh test does not spawn julie-extract and is correctly non-Scale.
 
-## Verification
+## API-shape evidence
+- `DashboardContextSavingsSummary.NotTracked(workspaceId)` (DashboardData.cs:339) — reused as the context-savings degrade shape.
+- `DashboardActivityFeed(string? WorkspaceId, IReadOnlyList<DashboardActivityEntry> Entries)` (:73) — empty feed shape.
+- `DashboardTelemetrySummary(workspaceId, tools, totalCalls, windowStart, windowEnd, recentErrors)` (:25) — empty summary shape.
+- `ReadSnapshot(registryDbPath, telemetryDbPath, workspaceId, preferredWorkspaceRoot = null)` (:823) already had the 4th param — `RenderSnapshotJson` simply forwards it.
+- `WorkspaceRegistry.UpsertSeen(...)` / `WorkspaceRegistryState` / `TelemetryLedger` / `InsertTelemetryRow` helper — reused from existing tests verbatim.
 
-| Scope | Command | Result |
-|-------|---------|--------|
-| worker-red-green | `dotnet test tests/Miller.Tests/Miller.Tests.csproj --filter "FullyQualifiedName~DashboardRegistryReadTests"` | **Passed: 31, Failed: 0** |
+## Gates
+- **worker-red-green:** `dotnet test … --filter "Category!=Scale&FullyQualifiedName~DashboardRegistryReadTests"` → **Passed 42 / Failed 0** (33 pre-existing + 9 new). Proves: corrupt `workspaces.db` → `ReadIndex` empty + `Error` set and `ReadSnapshot` no-throw; corrupt `telemetry.db` → telemetry summary + activity feed + context savings degrade with no throw; `/snapshot.json` (`RenderSnapshotJson` + preferred root) selects the same workspace as `/workspace`; unregistered refresh id → Failed JSON body; JSON refresh route rides `TryRefreshWorkspace`.
+- **worker-ceiling:** `scripts/test.sh` → **Passed 3091 / Failed 0** (wall 19s). Proves no regression across the fast suite.
+- **build guard:** `dotnet build Miller.slnx -c Release` → **0 Warning(s) / 0 Error(s)** (TreatWarningsAsErrors holds).
 
-## Acceptance criteria
+## New tests added
+`ReadIndex_CorruptRegistryDbReturnsEmptyIndexWithError`, `ReadWorkspaces_CorruptRegistryDbDegradesToEmptyNotCrash`, `ReadSnapshot_CorruptRegistryDbReturnsSnapshotNotCrash`, `ReadTelemetrySummary_CorruptTelemetryDbDegradesToEmpty`, `ReadRecentActivity_CorruptTelemetryDbDegradesToEmpty`, `ReadSnapshot_CorruptTelemetryDbDegradesTelemetryPanelsNotCrash`, `TryRefreshWorkspace_UnregisteredIdReturnsFailedJsonNotThrow`, `JsonRefreshEndpoint_UsesNonThrowingRefreshPath`, `RenderSnapshotJson_PreferredRootMatchesWorkspacePageSelection`. All use per-test temp dirs (garbage-byte `.db` fixtures, mirroring the existing unreadable-workspace test); `OpenReadOnly` sets `Pooling=false` so no `ClearAllPools` is needed.
 
-- [x] New test: `ReadSnapshot` over schema-3 artifact returns snapshot (no throw); health `Error` contains schema/rebuild message
-- [x] All four panel readers and `ReadExtractionHealthOrUnavailable` list `IncompatibleExtractException`
-- [x] Existing `DashboardRegistryReadTests` still pass (31/31)
-- [x] Worker-scope verification passed; handed to lead (no commit per `parallel-lead-commit`)
-
-## Concerns
-
-- Health panel intentionally does not use `ReadExtractionHealthOrUnavailable` for the schema-gated read; other IO failures still degrade via the panel catch. Pattern inventory still uses the helper (and its panel catch as backup).
-- Index facts reader (`DashboardIndexFactsReader`) still does not catch `IncompatibleExtractException` — out of Task 1 ownership (Task 5 / ReadIndex). Schema-3 fixtures that only lack gate verification on the facts path may still show non-unreadable facts while health is unavailable; that is acceptable for this task’s AccessIQ-500 fix.
+## Remaining / notes
+- `WorkspaceIndex.razor` rendering of the new `Error` field is Task 4 (not touched). The field only needed to serialize + be asserted here.
+- No JSON property renamed or removed; the only new field is `error` (snake_case) on `DashboardWorkspaceIndex`.

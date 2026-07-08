@@ -9,6 +9,7 @@ using Miller.Dashboard.Components;
 using Miller.Dashboard;
 using Miller.Indexing;
 using Miller.Server.Telemetry;
+using Miller.Server.Workspaces;
 using Miller.Tests.Indexing;
 using Xunit;
 
@@ -1514,6 +1515,165 @@ public sealed class DashboardRegistryReadTests : IDisposable
     {
         Assert.Empty(DashboardData.ReadWorkspaces(_registryDb));
         Assert.Equal(0, DashboardData.ReadTelemetrySummary(_telemetryDb, "missing").TotalCalls);
+    }
+
+    [Fact]
+    public void ReadIndex_CorruptRegistryDbReturnsEmptyIndexWithError()
+    {
+        File.WriteAllText(_registryDb, "not a sqlite database");
+
+        DashboardWorkspaceIndex index = DashboardData.ReadIndex(_registryDb);
+
+        Assert.Empty(index.Entries);
+        Assert.Equal(0, index.WorkspaceCount);
+        Assert.False(string.IsNullOrWhiteSpace(index.Error));
+    }
+
+    [Fact]
+    public void ReadWorkspaces_CorruptRegistryDbDegradesToEmptyNotCrash()
+    {
+        File.WriteAllText(_registryDb, "not a sqlite database");
+
+        IReadOnlyList<DashboardWorkspaceRow> rows = DashboardData.ReadWorkspaces(_registryDb);
+
+        Assert.Empty(rows);
+    }
+
+    [Fact]
+    public void ReadSnapshot_CorruptRegistryDbReturnsSnapshotNotCrash()
+    {
+        File.WriteAllText(_registryDb, "not a sqlite database");
+
+        DashboardSnapshot snapshot = DashboardData.ReadSnapshot(_registryDb, _telemetryDb, workspaceId: null);
+
+        Assert.Empty(snapshot.Workspaces);
+        Assert.Empty(snapshot.WorkspaceFacts);
+        Assert.Equal("not_tracked", snapshot.ContextSavings.Status);
+    }
+
+    [Fact]
+    public void ReadTelemetrySummary_CorruptTelemetryDbDegradesToEmpty()
+    {
+        File.WriteAllText(_telemetryDb, "not a sqlite database");
+
+        DashboardTelemetrySummary summary = DashboardData.ReadTelemetrySummary(_telemetryDb, "ws-a");
+
+        Assert.Equal("ws-a", summary.WorkspaceId);
+        Assert.Equal(0, summary.TotalCalls);
+        Assert.Empty(summary.Tools);
+        Assert.Empty(summary.RecentErrors);
+    }
+
+    [Fact]
+    public void ReadRecentActivity_CorruptTelemetryDbDegradesToEmpty()
+    {
+        File.WriteAllText(_telemetryDb, "not a sqlite database");
+
+        DashboardActivityFeed feed = DashboardData.ReadRecentActivity(_telemetryDb, _registryDb, workspaceId: "ws-a");
+
+        Assert.Equal("ws-a", feed.WorkspaceId);
+        Assert.Empty(feed.Entries);
+    }
+
+    [Fact]
+    public void ReadSnapshot_CorruptTelemetryDbDegradesTelemetryPanelsNotCrash()
+    {
+        using (var registry = WorkspaceRegistry.Open(_registryDb))
+        {
+            registry.UpsertSeen(
+                "ws-a",
+                "alpha-abcd1234",
+                "/repo/a",
+                "/repo/a/.miller/symbols.db",
+                WorkspaceRegistryState.Ready,
+                DateTimeOffset.Parse("2026-05-31T10:00:00Z"));
+        }
+        File.WriteAllText(_telemetryDb, "not a sqlite database");
+
+        DashboardSnapshot snapshot = DashboardData.ReadSnapshot(_registryDb, _telemetryDb, workspaceId: null);
+
+        // SelectTelemetryWorkspace degrades to null on a corrupt telemetry DB → falls back to workspaces[0].
+        Assert.Equal("ws-a", snapshot.SelectedWorkspaceId);
+        Assert.Equal(0, snapshot.Telemetry.TotalCalls);
+        Assert.Empty(snapshot.Telemetry.Tools);
+        Assert.Equal("not_tracked", snapshot.ContextSavings.Status);
+    }
+
+    [Fact]
+    public void TryRefreshWorkspace_UnregisteredIdReturnsFailedJsonNotThrow()
+    {
+        // Empty-but-valid registry: an unregistered id must degrade to a Failed result, never throw a 500.
+        using (WorkspaceRegistry.Open(_registryDb))
+        {
+        }
+        string toolsRoot = Path.Combine(_dir, ".tools");
+
+        WorkspaceRefreshResult result = DashboardData.TryRefreshWorkspace(_registryDb, toolsRoot, "does-not-exist");
+
+        Assert.Equal(WorkspaceRefreshStatus.Failed, result.Status);
+        Assert.False(string.IsNullOrWhiteSpace(result.Error));
+
+        using var doc = JsonDocument.Parse(DashboardData.RenderRefreshJson(result));
+        Assert.Equal("does-not-exist", doc.RootElement.GetProperty("WorkspaceId").GetString());
+        Assert.Equal("failed", doc.RootElement.GetProperty("StatusText").GetString());
+    }
+
+    [Fact]
+    public void JsonRefreshEndpoint_UsesNonThrowingRefreshPath()
+    {
+        // A4 guard: the JSON refresh route must ride TryRefreshWorkspace (like the htmx /fragments/refresh route),
+        // not the throwing RefreshWorkspace, so an unregistered id renders a failed body instead of a 500.
+        string endpoints = File.ReadAllText(Path.Combine(
+            Miller.Tests.ScaleTestSupport.RepoRoot(),
+            "src",
+            "Miller.Dashboard",
+            "Endpoints",
+            "DashboardEndpoints.cs"));
+
+        int route = endpoints.IndexOf("/workspaces/{workspace_id}/refresh", StringComparison.Ordinal);
+        Assert.True(route >= 0, "JSON refresh route not found");
+        string block = endpoints[route..Math.Min(endpoints.Length, route + 400)];
+        Assert.Contains("TryRefreshWorkspace", block, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderSnapshotJson_PreferredRootMatchesWorkspacePageSelection()
+    {
+        using (var registry = WorkspaceRegistry.Open(_registryDb))
+        {
+            registry.UpsertSeen(
+                "ws-a",
+                "alpha-abcd1234",
+                "/repo/a",
+                "/repo/a/.miller/symbols.db",
+                WorkspaceRegistryState.Ready,
+                DateTimeOffset.Parse("2026-05-31T10:00:00Z"));
+            registry.UpsertSeen(
+                "ws-b",
+                "beta-efgh5678",
+                "/repo/b",
+                "/repo/b/.miller/symbols.db",
+                WorkspaceRegistryState.Ready,
+                DateTimeOffset.Parse("2026-05-31T11:00:00Z"));
+        }
+        // Telemetry favors ws-a; the preferred root must still win, matching the /workspace page.
+        InsertTelemetryRow("ws-a", "search", "ok", "2026-05-31T10:02:00.000Z", durationMs: 5);
+
+        string json = DashboardData.RenderSnapshotJson(
+            _registryDb,
+            _telemetryDb,
+            workspaceId: null,
+            preferredWorkspaceRoot: "/repo/b");
+
+        using var doc = JsonDocument.Parse(json);
+        string? jsonSelected = doc.RootElement.GetProperty("selected_workspace_id").GetString();
+
+        string? pageSelected = DashboardData
+            .ReadSnapshot(_registryDb, _telemetryDb, workspaceId: null, preferredWorkspaceRoot: "/repo/b")
+            .SelectedWorkspaceId;
+
+        Assert.Equal("ws-b", jsonSelected);
+        Assert.Equal(pageSelected, jsonSelected);
     }
 
     private static async Task<string> RenderComponentAsync<TComponent>(Dictionary<string, object?> parameters)

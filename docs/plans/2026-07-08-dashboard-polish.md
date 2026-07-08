@@ -84,12 +84,12 @@ Commit mode: `parallel-lead-commit` for Batches A and B; `serial-worker-commit` 
 **Approach:** Wrap each spine reader's connection open + queries in the repo's precise catch filter (`SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException` — mirror the panel readers, do NOT blanket-catch). On catch: `ReadWorkspaces` propagates nothing — instead `ReadIndex`/`ReadSnapshot` callers receive an empty list plus the new `DashboardWorkspaceIndex.Error`; telemetry/activity/context-savings readers return their existing empty/NotTracked shapes (carry the exception message into an existing `Error`/message field where the shape has one — inspect the records first with Miller, do not invent fields beyond the one named above). `WorkspaceIndex.razor` is owned by Task 4 — do NOT touch it; the `Error` field only needs to serialize and be asserted in tests this task (Task 4 renders it). Fix `ReadContextSavings` by moving the `OpenReadOnly` inside its try. Switch `/workspaces/{workspace_id}/refresh` to `TryRefreshWorkspace` and render the failed result as JSON (same `RenderRefreshJson`). Add the `preferredWorkspaceRoot` parameter to `RenderSnapshotJson` and pass `launchDirectory` from the endpoint. Tests: corrupt-file fixtures (write garbage bytes to a `.db` path, as the existing unreadable-workspace test does) for registry and telemetry → `ReadSnapshot` + `ReadIndex` + `ReadRecentActivity` + `ReadContextSavings` return degrade shapes, no throw; snapshot-parity test proving `RenderSnapshotJson` with a preferred root selects the same workspace `/workspace` would.
 
 **Acceptance criteria:**
-- [ ] Corrupt `workspaces.db` → `ReadIndex` returns an empty index with `Error` set; `ReadSnapshot` returns a snapshot (no throw).
-- [ ] Corrupt `telemetry.db` → telemetry summary, activity feed, and context savings degrade to their empty shapes (no throw).
-- [ ] `/workspaces/{id}/refresh` with an unregistered id returns a JSON failed-result body, not a 500.
-- [ ] `/snapshot.json` (via `RenderSnapshotJson` with a preferred root) selects the same default workspace as the `/workspace` page.
-- [ ] Existing `DashboardRegistryReadTests` still pass.
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode.
+- [x] Corrupt `workspaces.db` → `ReadIndex` returns an empty index with `Error` set; `ReadSnapshot` returns a snapshot (no throw).
+- [x] Corrupt `telemetry.db` → telemetry summary, activity feed, and context savings degrade to their empty shapes (no throw).
+- [x] `/workspaces/{id}/refresh` with an unregistered id returns a JSON failed-result body, not a 500.
+- [x] `/snapshot.json` (via `RenderSnapshotJson` with a preferred root) selects the same default workspace as the `/workspace` page.
+- [x] Existing `DashboardRegistryReadTests` still pass.
+- [x] Worker-scope verification passes and the change is handed to the lead per commit mode.
 
 ### Task 2: Formatting foundations (relative time + bytes)
 
