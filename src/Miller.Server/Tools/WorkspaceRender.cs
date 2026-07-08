@@ -184,6 +184,18 @@ public readonly record struct WorkspaceRemoveResult(
 }
 
 /// <summary>
+/// The result of a <c>prune</c> pass: registry rows whose <c>canonical_root</c> no longer exists, plus the
+/// count of rows kept (existing roots and any protected current workspace).
+/// </summary>
+public readonly record struct WorkspacePruneResult(
+    bool DryRun,
+    IReadOnlyList<WorkspacePruneEntry> Pruned,
+    int Kept);
+
+/// <summary>One registry row removed (or that would be removed in dry-run) by <c>prune</c>.</summary>
+public readonly record struct WorkspacePruneEntry(string WorkspaceId, string DisplayId, string Root);
+
+/// <summary>
 /// The PURE renderers for the <c>workspace</c> tool (M7 decision-2/6). Deterministic, no I/O: each takes an
 /// already-assembled fact/result record (the tool does the SQLite/subprocess work) and produces compact
 /// token-thrifty markdown or a structured JSON document. The status view embeds the
@@ -1647,6 +1659,49 @@ public static class WorkspaceRender
             else w.WriteString("root", result.Root);
             w.WriteBoolean("index_dir_deleted", result.IndexDirDeleted);
             w.WriteString("message", RemoveCompact(result));
+            w.WriteEndObject();
+        }
+        return Utf8(buffer);
+    }
+
+    // ---------- prune ----------
+
+    /// <summary>Render a <c>prune</c> result (removed / would-remove + kept count).</summary>
+    public static string Prune(WorkspacePruneResult result, bool json) =>
+        json ? PruneJson(result) : PruneCompact(result);
+
+    private const int PruneCompactExampleCap = 10;
+
+    private static string PruneCompact(WorkspacePruneResult result)
+    {
+        var lines = new List<string>
+        {
+            result.DryRun ? $"would prune: {result.Pruned.Count}" : $"pruned: {result.Pruned.Count}",
+        };
+        foreach (WorkspacePruneEntry entry in result.Pruned.Take(PruneCompactExampleCap))
+            lines.Add($"  {entry.DisplayId} {entry.Root}");
+        lines.Add($"kept: {result.Kept}");
+        return string.Join('\n', lines);
+    }
+
+    private static string PruneJson(WorkspacePruneResult result)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var w = NewWriter(buffer))
+        {
+            w.WriteStartObject();
+            w.WriteBoolean("dry_run", result.DryRun);
+            w.WriteStartArray("pruned");
+            foreach (WorkspacePruneEntry entry in result.Pruned)
+            {
+                w.WriteStartObject();
+                w.WriteString("workspace_id", entry.WorkspaceId);
+                w.WriteString("display_id", entry.DisplayId);
+                w.WriteString("root", entry.Root);
+                w.WriteEndObject();
+            }
+            w.WriteEndArray();
+            w.WriteNumber("kept", result.Kept);
             w.WriteEndObject();
         }
         return Utf8(buffer);

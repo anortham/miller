@@ -1478,8 +1478,10 @@ public static class CliDispatch
                 return WorkspaceOpen(ctx, path, full: o.Has("full"), json, outw, err);
             case "remove":
                 return WorkspaceRemove(ctx, id, path, json, outw, err);
+            case "prune":
+                return WorkspacePrune(ctx, json, dryRun: o.Has("dry-run"), outw);
             default:
-                err.WriteLine($"unknown workspace operation '{operation}'. Use status|health|onboarding|leader|list|refresh|full|open|remove.");
+                err.WriteLine($"unknown workspace operation '{operation}'. Use status|health|onboarding|leader|list|refresh|full|open|remove|prune.");
                 return 2;
         }
     }
@@ -2092,6 +2094,25 @@ public static class CliDispatch
         return RefreshExitCode(result.Status);
     }
 
+    // ---------- prune (registry GC for gone roots) ----------
+
+    // Remove registry rows whose canonical_root no longer exists. Never prunes the current workspace row (guarded
+    // by workspace_id). Does not open symbols.db or spawn julie-extract.
+    private static int WorkspacePrune(
+        WorkspaceContext ctx, bool json, bool dryRun, TextWriter outw)
+    {
+        using WorkspaceRegistry registry = WorkspaceRegistry.Open(ctx.RegistryDbPath);
+        WorkspaceRegistryRow? currentRow = FindCurrentWorkspaceRow(registry, ctx);
+        WorkspaceRegistryPrune.Result result = WorkspaceRegistryPrune.Run(
+            registry, currentRow?.WorkspaceId, dryRun);
+        var rendered = new WorkspacePruneResult(
+            result.DryRun,
+            result.Pruned.Select(e => new WorkspacePruneEntry(e.WorkspaceId, e.DisplayId, e.Root)).ToArray(),
+            result.Kept);
+        outw.WriteLine(WorkspaceRender.Prune(rendered, json));
+        return 0;
+    }
+
     // ---------- remove (delete a workspace's .miller index dir) ----------
 
     // Delete a workspace's `.miller` index dir + unregister it. Ported from the server's WorkspaceTool.Remove
@@ -2478,10 +2499,11 @@ public static class CliDispatch
                              [--workspace-id SELECTOR] [--workspace DIR] [--scope FILE] [--mode auto|path|refs|bridge] [--to SYMBOL] [--reference-kind KIND] [--no-definition] [--depth N] [--limit N] [--full] [--json]
           dashboard          Start or reuse the machine-global loopback dashboard.
                              [--port N] [--json]
-          workspace [op]     Index lifecycle. op = status (default) | health | onboarding | leader | list | refresh | full | open | remove.
+          workspace [op]     Index lifecycle. op = status (default) | health | onboarding | leader | list | refresh | full | open | remove | prune.
                              open   [--path DIR] [--full]   Register + index a directory (creates .miller/symbols.db).
                              leader [--handoff] [--wait]    Diagnose current leader and optionally request graceful handoff.
                              remove (--id ID | --path DIR)  Delete a workspace's .miller index dir.
+                             prune  [--dry-run]              Remove registry rows whose roots no longer exist.
                              [--id|--workspace-id SELECTOR] [--path|--workspace DIR] [--json]
           version            Print the build version (e.g. 0.3.2+<sha>).
           help               Show this help.
@@ -2506,8 +2528,9 @@ public static class CliDispatch
           full     Force a full re-index (ignores the freshness check).
           open     Register + index a directory (creates .miller/symbols.db).  [--path DIR] [--full]
           remove   Delete a workspace's .miller index dir.                     (--id ID | --path DIR)
+          prune    Remove registry rows whose roots no longer exist.           [--dry-run]
 
-        Selectors / flags: [--id|--workspace-id SELECTOR] [--path|--workspace DIR] [--json] [--handoff] [--wait]
+        Selectors / flags: [--id|--workspace-id SELECTOR] [--path|--workspace DIR] [--json] [--handoff] [--wait] [--dry-run]
           --workspace-id aliases --id; --workspace (a directory, resolved against the cwd) aliases --path —
           the same selector flags every read verb accepts.
         """;

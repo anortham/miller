@@ -135,12 +135,12 @@ public sealed class WorkspaceTool
         "Manage the workspace index. Defaults to status (freshness, revision, leader). refresh updates stale " +
         "files; full forces a rebuild; health reports readiness + extraction quality; onboarding gives " +
         "telemetry-derived guidance for this repo; list shows registered workspaces (filter/limit, " +
-        "recency-ordered); open registers another repo for cross-workspace reads; leader diagnoses/hands off the " +
-        "indexer lock; dashboard starts/opens the local dashboard. Use when results look stale, before " +
-        "cross-workspace queries, or at session start (onboarding). NOT for: reading code (search/inspect). " +
-        "Example: workspace operation=list filter=eros limit=10.")]
+        "recency-ordered); open registers another repo for cross-workspace reads; prune removes registry rows " +
+        "whose roots are gone; leader diagnoses/hands off the indexer lock; dashboard starts/opens the local " +
+        "dashboard. Use when results look stale, before cross-workspace queries, or at session start (onboarding). " +
+        "NOT for: reading code (search/inspect). Example: workspace operation=list filter=eros limit=10.")]
     public string Workspace(
-        [Description("status|refresh|full|list|open|remove|health|onboarding|leader|dashboard. Default status.")] string operation = "status",
+        [Description("status|refresh|full|list|open|remove|prune|health|onboarding|leader|dashboard. Default status.")] string operation = "status",
         [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")]
         string? workspace_id = null,
         [Description("A workspace root path. Required for open; optional for status/health/onboarding/refresh/full/remove.")]
@@ -155,7 +155,9 @@ public sealed class WorkspaceTool
         [Description("operation=list only: case-insensitive substring filter on display id or root, applied before the cap. Default null (no filter).")]
         string? filter = null,
         [Description("operation=list only: max compact entries before the omitted-count tail. Default 20; <=0 unlimited. JSON is unlimited unless set to a positive value.")]
-        int? limit = null)
+        int? limit = null,
+        [Description("operation=prune only: list candidates without removing registry rows. Default false.")]
+        bool dry_run = false)
     {
         var telemetry = TelemetryContext.Current;
         // D7: stamp the operation sub-axis onto the ambient scope so the central filter's row records
@@ -168,7 +170,7 @@ public sealed class WorkspaceTool
             bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
 
             (string output, int resultCount, TelemetryOutcome outcome) = Dispatch(
-                operation, workspace_id, path, port, json, handoff, wait, filter, limit);
+                operation, workspace_id, path, port, json, handoff, wait, filter, limit, dry_run);
 
             if (telemetry is not null)
             {
@@ -193,7 +195,7 @@ public sealed class WorkspaceTool
     // (for the telemetry KPI), and the outcome. An unknown operation is a usage note (Empty, not an error).
     private (string output, int resultCount, TelemetryOutcome outcome) Dispatch(
         string? operation, string? workspaceId, string? path, int? port, bool json, bool handoff, bool wait,
-        string? filter = null, int? limit = null)
+        string? filter = null, int? limit = null, bool dryRun = false)
     {
         switch (operation?.ToLowerInvariant())
         {
@@ -215,6 +217,8 @@ public sealed class WorkspaceTool
                 return Open(path, json);
             case "remove":
                 return Remove(workspaceId, path, json);
+            case "prune":
+                return Prune(json, dryRun);
             case "dashboard":
                 return Dashboard(port, json);
             default:
@@ -745,6 +749,22 @@ public sealed class WorkspaceTool
         _ => outcome.ToString().ToLowerInvariant(),
     };
 
+    // ---------- prune ----------
+
+    // Remove registry rows whose canonical_root no longer exists. Never prunes the current workspace row (guarded
+    // by workspace_id). Does not open symbols.db or spawn julie-extract.
+    private (string output, int resultCount, TelemetryOutcome outcome) Prune(bool json, bool dryRun)
+    {
+        WorkspaceRegistryPrune.Result result =
+            WorkspaceRegistryPrune.Run(_registry, _workspace.WorkspaceId, dryRun);
+        var rendered = new WorkspacePruneResult(
+            result.DryRun,
+            result.Pruned.Select(e => new WorkspacePruneEntry(e.WorkspaceId, e.DisplayId, e.Root)).ToArray(),
+            result.Kept);
+        int count = result.Pruned.Count;
+        return (WorkspaceRender.Prune(rendered, json), count, count > 0 ? TelemetryOutcome.Ok : TelemetryOutcome.Empty);
+    }
+
     // ---------- remove ----------
 
     // Delete a workspace's `.miller` index dir (decision-1/8). SAFETY: refuse the live workspace (it is in use —
@@ -1009,7 +1029,7 @@ public sealed class WorkspaceTool
             "remove" => "workspace remove requires a path: workspace(operation=\"remove\", path=\"/repo\"). " +
                         "It deletes that path's .miller index dir (the live workspace is refused).",
             _ => $"unknown workspace operation '{operation}'. " +
-                 "Use status|refresh|full|list|open|remove|health|onboarding|dashboard (default status).",
+                 "Use status|refresh|full|list|open|remove|prune|health|onboarding|dashboard (default status).",
         };
         return json ? ServerJson.Note(message) : message;
     }
