@@ -2230,6 +2230,30 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void WorkspaceHealth_Json_ReportsHistorySidecarStatus()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+        SeedHealthRows(fx.DbPath);
+        SeedRegisteredWorkspace("target-ws", "target-111111111111", fx.WorkspaceRoot, fx.DbPath);
+        SeedHistorySnapshot(
+            MetricSnapshotAggregates.HistoryDbPathFor(fx.DbPath),
+            "artifact-hist", 3, "converge", new DateTime(2026, 7, 8, 10, 0, 0, DateTimeKind.Utc),
+            ("symbol_count", 42));
+
+        var (code, outText, errText) = Run(
+            new[] { "workspace", "health", "--id", "target-ws", "--json" },
+            Context(Path.Combine(_dir, "current", ".miller", "symbols.db")));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        JsonElement history = doc.RootElement.GetProperty("index").GetProperty("history_db");
+        Assert.Equal(JsonValueKind.Object, history.ValueKind);
+        Assert.True(history.GetProperty("present").GetBoolean());
+        Assert.Equal(1, history.GetProperty("snapshot_count").GetInt64());
+    }
+
+    [Fact]
     public void WorkspaceLeader_Json_RendersLeaderDiagnostics()
     {
         using var fx = JulieDbFixture.CreateDefault();

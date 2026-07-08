@@ -1589,7 +1589,8 @@ public static class CliDispatch
             outw.WriteLine(WorkspaceRender.Health(
                 WorkspaceHealthFacts.Create(
                     facts, TelemetrySummary.Empty, new TelemetryHealthFacts(0, 0, 0), extraction,
-                    CliLeaderFacts(row.IndexDbPath)),
+                    CliLeaderFacts(row.IndexDbPath),
+                    CliHistoryStatus(row.IndexDbPath)),
                 json));
             return 0;
         }
@@ -1607,7 +1608,8 @@ public static class CliDispatch
             outw.WriteLine(WorkspaceRender.Health(
                 WorkspaceHealthFacts.Create(
                     facts, TelemetrySummary.Empty, new TelemetryHealthFacts(0, 0, 0), extraction,
-                    CliLeaderFacts(currentRow.IndexDbPath)),
+                    CliLeaderFacts(currentRow.IndexDbPath),
+                    CliHistoryStatus(currentRow.IndexDbPath)),
                 json));
             return 0;
         }
@@ -1626,10 +1628,16 @@ public static class CliDispatch
                 TelemetrySummary.Empty,
                 new TelemetryHealthFacts(0, 0, 0),
                 WorkspaceHealthReader.Read(ctx.ExtractDbPath),
-                CliLeaderFacts(ctx.ExtractDbPath)),
+                CliLeaderFacts(ctx.ExtractDbPath),
+                CliHistoryStatus(ctx.ExtractDbPath)),
             json));
         return 0;
     }
+
+    // Same best-effort history-sidecar status the MCP health surface reports (WorkspaceTool.ReadHistoryStatus);
+    // never throws — absent/unreadable degrades to a status the render can show.
+    private static MetricHistoryStatus CliHistoryStatus(string indexDbPath) =>
+        MetricHistoryStore.ReadStatus(MetricSnapshotAggregates.HistoryDbPathFor(indexDbPath));
 
     private static int WorkspaceLeader(
         WorkspaceContext ctx,
