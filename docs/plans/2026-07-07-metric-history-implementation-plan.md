@@ -226,10 +226,10 @@ Commit mode: Tasks 1, 4, 7 `serial-worker-commit`; Batch A and Batch B tasks `pa
 **Approach:** Preserve the existing comment discipline in `DeleteContentsExceptLock` (it documents WHY). Regression test: hold `content.lock` from a second handle, run remove, assert refused-in-use rather than a crash or partial delete; repeat for `history.lock`.
 
 **Acceptance criteria:**
-- [ ] Remove acquires indexer → content → history locks; any unavailable ⟹ refused-in-use, nothing deleted.
-- [ ] Held lock files survive `DeleteContentsExceptLock`; debris removed after release; emptied dir removal unchanged.
-- [ ] Regression: remove during an in-flight content import no longer deletes `content.db` mid-write.
-- [ ] Worker-scope verification passes and the verified diff is handed to the lead (parallel-lead-commit).
+- [x] Remove acquires indexer → content → history locks; any unavailable ⟹ refused-in-use, nothing deleted.
+- [x] Held lock files survive `DeleteContentsExceptLock`; debris removed after release; emptied dir removal unchanged.
+- [x] Regression: remove during an in-flight content import no longer deletes `content.db` mid-write.
+- [x] Worker-scope verification passes and the verified diff is handed to the lead (parallel-lead-commit).
 
 ---
 

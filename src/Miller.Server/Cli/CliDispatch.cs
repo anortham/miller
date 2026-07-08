@@ -1936,18 +1936,21 @@ public static class CliDispatch
             return RemoveExitCode(WorkspaceRemoveResult.Outcome.NotFound);
         }
 
-        // Delete the index data while HOLDING the writer lock, so no Miller process can start writing this
-        // index mid-delete. Only the held lock file itself is skipped (an open FileShare.None handle cannot be
-        // deleted on Windows); after release, the leftover lock file + empty dir are removed best-effort — a
+        // Delete the index data while HOLDING all three workspace-local write leases (indexer → content →
+        // history), so no Miller process can start writing this index — nor a CLI content import / history append,
+        // which hold content.lock / history.lock WITHOUT the indexer lock — mid-delete. Any lease unavailable ⇒
+        // refuse, delete nothing. Only the held lock files are skipped (an open FileShare.None handle cannot be
+        // deleted on Windows); after release, the leftover lock files + empty dir are removed best-effort — a
         // writer that sneaks in after release finds an already-empty index and does a clean rebuild.
-        using (IDisposable? lease = SingleWriterLock.TryAcquire(millerDir))
+        using (WorkspaceWriteLeases? leases =
+            WorkspaceWriteLeases.TryAcquireForRemove(millerDir, SingleWriterLock.TryAcquire))
         {
-            if (lease is null)
+            if (leases is null)
             {
                 outw.WriteLine(WorkspaceRender.Remove(WorkspaceRemoveResult.RefusedInUse(millerDir, workspaceId, root), json));
                 return RemoveExitCode(WorkspaceRemoveResult.Outcome.RefusedInUse);
             }
-            SingleWriterLock.DeleteContentsExceptLock(millerDir);
+            SingleWriterLock.DeleteContentsExceptLock(millerDir, WorkspaceWriteLeases.SidecarLockFileNames);
         }
 
         SingleWriterLock.TryDeleteEmptiedDir(millerDir);

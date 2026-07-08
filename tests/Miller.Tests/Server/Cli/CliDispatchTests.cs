@@ -2539,6 +2539,57 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void WorkspaceRemove_DuringInFlightContentImport_RefusedExitThree_ContentDbIntact()
+    {
+        // Regression for the pre-existing defect: a CLI content import holds content.lock WITHOUT the indexer
+        // lock. remove must acquire content.lock too, so it refuses (deletes nothing) rather than delete
+        // content.db mid-import (Windows sharing-violation crash / POSIX unlinked-inode writes).
+        string sub = Path.Combine(_dir, "ws-content-busy");
+        string millerDir = Path.Combine(sub, ".miller");
+        Directory.CreateDirectory(millerDir);
+        string contentDb = Path.Combine(millerDir, "content.db");
+        File.WriteAllText(contentDb, "content-corpus");
+
+        using (ContentCorpusWriteLock heldContent =
+            ContentCorpusWriteLock.AcquireFor(contentDb, TimeSpan.FromSeconds(30)))
+        {
+            var (code, outText, _) = Run(new[] { "workspace", "remove", "--path", sub },
+                Context(Path.Combine(_dir, "symbols.db")));
+
+            Assert.Equal(3, code);
+            Assert.Contains("in use", outText);
+            Assert.True(Directory.Exists(millerDir));           // not deleted while the import holds content.lock
+            Assert.True(File.Exists(contentDb));                // content.db intact — no partial delete
+            Assert.Equal("content-corpus", File.ReadAllText(contentDb));
+        }
+    }
+
+    [Fact]
+    public void WorkspaceRemove_DuringInFlightHistoryAppend_RefusedExitThree_HistoryDbIntact()
+    {
+        // Same regression shape for history.lock: a heavy-metric append holds history.lock without the indexer
+        // lock; remove must refuse and leave history.db intact.
+        string sub = Path.Combine(_dir, "ws-history-busy");
+        string millerDir = Path.Combine(sub, ".miller");
+        Directory.CreateDirectory(millerDir);
+        string historyDb = Path.Combine(millerDir, "history.db");
+        File.WriteAllText(historyDb, "metric-history");
+
+        using (MetricHistoryWriteLock heldHistory =
+            MetricHistoryWriteLock.AcquireFor(historyDb, TimeSpan.FromSeconds(30)))
+        {
+            var (code, outText, _) = Run(new[] { "workspace", "remove", "--path", sub },
+                Context(Path.Combine(_dir, "symbols.db")));
+
+            Assert.Equal(3, code);
+            Assert.Contains("in use", outText);
+            Assert.True(Directory.Exists(millerDir));           // not deleted while the append holds history.lock
+            Assert.True(File.Exists(historyDb));                // history.db intact — no partial delete
+            Assert.Equal("metric-history", File.ReadAllText(historyDb));
+        }
+    }
+
+    [Fact]
     public void WorkspaceRemove_ByPath_GoneDir_PrunesStaleRow()
     {
         // R4: the dir is already deleted but a registry row still points at it. remove --path must prune the

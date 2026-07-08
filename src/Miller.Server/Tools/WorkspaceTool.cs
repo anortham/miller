@@ -780,23 +780,24 @@ public sealed class WorkspaceTool
             return (WorkspaceRender.Remove(notFound, json), 0, TelemetryOutcome.Empty);
         }
 
-        IDisposable? lease = _acquireWriterLock(millerDir);
-        if (lease is null)
+        WorkspaceWriteLeases? leases = WorkspaceWriteLeases.TryAcquireForRemove(millerDir, _acquireWriterLock);
+        if (leases is null)
         {
             var refused = WorkspaceRemoveResult.RefusedInUse(millerDir);
             return (WorkspaceRender.Remove(refused, json), 0, TelemetryOutcome.Empty);
         }
-        // Delete the index data while HOLDING the lock so no other instance can start writing here mid-delete.
-        // Only the held lock file is skipped (a FileShare.None handle blocks deleting the open file on Windows);
-        // after release, the leftover lock file + empty dir are removed best-effort — a writer that sneaks in
-        // after release finds an already-empty index and does a clean rebuild.
+        // Delete the index data while HOLDING all three workspace-local write leases (indexer → content →
+        // history) so no other instance — nor a CLI content import / history append that holds only the sidecar
+        // lock — can start writing here mid-delete. Only the held lock files are skipped (a FileShare.None handle
+        // blocks deleting the open file on Windows); after release, the leftover lock files + empty dir are
+        // removed best-effort — a writer that sneaks in after release finds an already-empty index and rebuilds.
         try
         {
-            SingleWriterLock.DeleteContentsExceptLock(millerDir);
+            SingleWriterLock.DeleteContentsExceptLock(millerDir, WorkspaceWriteLeases.SidecarLockFileNames);
         }
         finally
         {
-            lease.Dispose();
+            leases.Dispose();
         }
 
         SingleWriterLock.TryDeleteEmptiedDir(millerDir);
@@ -831,21 +832,21 @@ public sealed class WorkspaceTool
             return (WorkspaceRender.Remove(staleRemoved, json), 1, TelemetryOutcome.Ok);
         }
 
-        IDisposable? lease = _acquireWriterLock(millerDir);
-        if (lease is null)
+        WorkspaceWriteLeases? leases = WorkspaceWriteLeases.TryAcquireForRemove(millerDir, _acquireWriterLock);
+        if (leases is null)
         {
             var refused = WorkspaceRemoveResult.RefusedInUse(millerDir, row.WorkspaceId, row.CanonicalRoot);
             return (WorkspaceRender.Remove(refused, json), 0, TelemetryOutcome.Empty);
         }
-        // Delete index data under the held lock, then best-effort remove the lock file + empty dir after
-        // release. See the path-only Remove branch for the full rationale.
+        // Delete index data under all three held leases (indexer → content → history), then best-effort remove
+        // the lock files + empty dir after release. See the path-only Remove branch for the full rationale.
         try
         {
-            SingleWriterLock.DeleteContentsExceptLock(millerDir);
+            SingleWriterLock.DeleteContentsExceptLock(millerDir, WorkspaceWriteLeases.SidecarLockFileNames);
         }
         finally
         {
-            lease.Dispose();
+            leases.Dispose();
         }
 
         SingleWriterLock.TryDeleteEmptiedDir(millerDir);

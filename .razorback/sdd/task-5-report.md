@@ -1,62 +1,123 @@
-# Task 5 Report — ServerInstructions discovery core + core gates
+# Task 5 — `workspace remove` coordinates with all workspace-local locks
 
-## Status: COMPLETE (worker scope green)
+**Status:** COMPLETE
+**Test summary:** assigned scope 153/153 pass; WorkspaceTool 61/61; full fast suite 2982/2982 (20s, under 30s ceiling).
+**Commit SHA:** none — parallel-lead-commit (no `git add`/`commit`).
 
-## Files changed (owned, committed)
-- `src/Miller.Server/MILLER_AGENT_INSTRUCTIONS.md` — entire content replaced with the golden discovery core (verbatim from the plan, no wording change).
-- `tests/Miller.Tests/Server/AgentInstructionsTests.cs` — core gates rewritten.
+## What I implemented
 
-## Miller-first orientation (API-shape evidence)
-- `inspect tests/Miller.Tests/Server/AgentInstructionsTests.cs` — confirmed the reflection mechanism: `DiscoverToolMethods()` → `ToolName(method)` exposed as `ToolNames()` MemberData, and the three constants (`MaxServerInstructionsChars=12_000` at :18, `MaxToolDescriptionChars=900`, `MaxParameterDescriptionChars=250`). Confirmed which tests read `Load()` vs a tool `[Description]` attribute before editing.
-- `inspect AgentInstructions depth=overview` — confirmed the API shape I must NOT change: `public static string Load()` (no args, returns string), backed by embedded resource `MILLER_AGENT_INSTRUCTIONS.md`. The embedded-resource load path is untouched; I only replaced the resource content.
+Both `workspace remove` paths now acquire ALL THREE workspace-local write leases in a single fixed order
+before any delete, so a remove can never race an in-flight sidecar write:
 
-(Miller MCP serves the main checkout; all edits were made with Read/Write/Edit on worktree paths. Miller `edit` was NOT used.)
+1. **`SingleWriterLock.DeleteContentsExceptLock`** — generalized to take an explicit
+   `IReadOnlySet<string>? additionalHeldLockFileNames` (default `null`). It always skips the intrinsic
+   `indexer.lock` and, in addition, skips exactly the caller-supplied held lock names. It is an EXPLICIT
+   set, not a blanket `*.lock` skip — a stray unheld `.lock` file is treated as index debris and deleted
+   (a leaked lock stays visible instead of being silently preserved). The parameterless call is
+   byte-for-byte back-compatible (only `indexer.lock` survives). The existing why-comment discipline is
+   preserved and extended.
 
-## Char measurements (gate invariant evidence)
-| Doc | raw chars | CRLF-normalized |
-|-----|-----------|-----------------|
-| OLD `MILLER_AGENT_INSTRUCTIONS.md` | 11,856 | 11,982 |
-| NEW discovery core | 1,861 | **1,887** |
+2. **New shared helper `WorkspaceWriteLeases`** (added to `SingleWriterLock.cs`) — one small helper, not a
+   lock-manager abstraction. `TryAcquireForRemove(millerDir, acquireIndexerLock, timeout?)` acquires the
+   indexer lock (via a caller-supplied try-acquire: CLI passes `SingleWriterLock.TryAcquire`, server passes
+   its injected `_acquireWriterLock`), then `content.lock` (`ContentCorpusWriteLock`), then `history.lock`
+   (`MetricHistoryWriteLock`), each with a short timeout. ANY lease unavailable ⟹ it releases whatever it
+   already took (reverse order) and returns `null` — the caller's existing refused-in-use result, nothing
+   deleted. `Dispose` releases all three in reverse order. It also exposes `SidecarLockFileNames`
+   (`content.lock` + `history.lock`) as the explicit skip-set for `DeleteContentsExceptLock`, so the fixed
+   lock order and the skip-set live in exactly one place and cannot drift between the two remove paths.
 
-- New core is 1,887 CRLF-normalized — matches the plan's pre-measurement, ≤ 1,900 gate. No whitespace trim needed; golden text shipped verbatim.
-- The OLD doc's 11,982 normalized chars "passed" the fictional 12,000-char budget by 18 chars — the old gate would have failed on the next paragraph, and the doc was already ~6x past Claude Code's real ~2KB ServerInstructions truncation window (measured cut at char 2,047 on 2026-07-02).
+3. **CLI `CliDispatch.WorkspaceRemove` → `RemoveMillerDir`** — swapped the lone `SingleWriterLock.TryAcquire`
+   guard for `WorkspaceWriteLeases.TryAcquireForRemove`; delete now passes `SidecarLockFileNames`. Result
+   shapes (`WorkspaceRemoveResult.RefusedInUse`, exit code 3) unchanged.
 
-## Gate invariants (what the rewritten tests prove)
-1. `Load_CoreFitsClaudeCodeDeliveryWindow` — `Load()` after `ReplaceLineEndings("\r\n")` ≤ **1,900** chars, so the embedded doc survives Claude Code's ~2KB/shared-4KB ServerInstructions truncation. Comment cites the real limit + 2,047 measured cut (2026-07-02). Replaces the deleted 12k-fiction gate.
-2. `Load_RoutingTableNamesEveryTool` — reflection-driven `[Theory]` over every `[McpServerTool]` name; asserts a routing line `- <name> — ` (em dash) exists per tool. A new tool without a routing line fails here. (Retargets the old `Load_DocumentsEveryTool` from backtick-name mention to the real routing table.)
-3. `Load_ReturnsNonEmptyInstructions` — kept; still pins the lead rule `Search before reading`.
-4. `Load_PinsBehavioralAdoptionLanguage` — retargeted from removed old-doc phrases to new-core behavioral phrases actually present: `One Miller call beats shell greps and full-file reads`, `Structure before content`, `Impact before changing`, `do NOT re-verify Miller results with grep/find`.
+4. **Server `WorkspaceTool` remove (both branches: path-only `Remove` and `RemoveResolvedTarget`)** — same
+   swap, using the injected `_acquireWriterLock` as the indexer-acquire. Result shapes and telemetry outcomes
+   unchanged. The non-remove `_acquireWriterLock` prime-scan site (~:680) was left untouched.
 
-## Deletions / retargets (loss accounting)
-Deleted (constant + fiction gate), as instructed:
-- constant `MaxServerInstructionsChars = 12_000` → now `= 1_900`.
-- `Load_StaysUnderClaudeCodeInstructionBudget` → replaced by `Load_CoreFitsClaudeCodeDeliveryWindow`.
+## Why (defect fixed)
 
-Retargeted (intent preserved):
-- `Load_DocumentsEveryTool` → `Load_RoutingTableNamesEveryTool` (same reflection MemberData; asserts routing line instead of backtick mention).
-- `Load_PinsBehavioralAdoptionLanguage` (phrases swapped to new-core equivalents).
+Pre-existing bug: CLI content imports hold `content.lock` WITHOUT the indexer lock, so the old remove
+(indexer-lock-only guard) could delete `content.db` mid-import (Windows sharing-violation crash / POSIX
+unlinked-inode writes). `history.lock` (new this branch) is a third uncoordinated lock with the same
+exposure. Remove now co-holds all three.
 
-Deleted because the content is DELIBERATELY no longer in the discovery core (moved to tool `[Description]` attributes in Task 6, or to skills/docs in Task 7 / CLAUDE.md). Each is a superseded core-content assertion, not a narrowed requirement — destinations noted:
-- `Load_DocumentsCrossWorkspaceReadParameters` → params now live in the tool descriptions (Task 6 description-clause gates).
-- `Load_SearchModeEnum_IncludesContentMode` → search modes now in the `search` [Description] (Task 6).
-- `Load_DocumentsRegionSearchAndHasDoc` → regions/has_doc now in the `search` [Description] (Task 6).
-- `Load_DocumentsSubagentToolPrimer` → subagent primer relocated to skills / `docs/agent-guidance.md` (Task 7).
-- `Load_DocumentsTraceRecoveryGuidance` → trace recovery detail now in the `trace` [Description] (Task 6).
-- `Load_DocumentsContentAndPatternsRecoveryGuidance` → content/patterns recovery detail now in those [Description]s (Task 6).
-- `Load_DocumentsOverviewFirstInspectGuidance` → overview-first guidance now in the `inspect` [Description] (Task 6; the `InspectToolDescription_*` gate already guards it).
-- `Load_DocumentsDashboardLaunchWorkflow` → dashboard routing kept in the `workspace` [Description] (`WorkspaceToolDescription_RoutesDashboardLaunchRequests` still guards it) + CLAUDE.md.
-- `Load_DocumentsWebContentWorkflow` → web-research workflow relocated to the `miller-web-research` skill (Task 7).
-- `Load_DocumentsTokenSavingEditWorkflow` → edit selectors now in the `edit` [Description] (`EditToolDescription_DocumentsTokenSavingSelectors` still guards it).
+## Verification
 
-Untouched (NOT my task): all `*ToolDescription*` gates and `ToolDescriptions_StayWithinClaudeCodeBudgets` (≤900/≤250) — these read `[Description]` attributes, which Task 5 does not modify; they still pass against the current (old) descriptions. Task 6 owns them.
+- **Invariant:** remove acquires indexer→content→history and refuses (deletes nothing) if any is held; held
+  lock files survive the gutting and are cleaned up after release; back-compat delete keeps only `indexer.lock`.
+- **Assigned scope command:**
+  `dotnet test tests/Miller.Tests/Miller.Tests.csproj -c Release --filter "(FullyQualifiedName~SingleWriterLock|FullyQualifiedName~CliDispatch)&Category!=Scale"`
+- **Result:** Passed 153 / Failed 0 / Skipped 0 (~5s).
+- **Ceiling command:** `scripts/test.sh` → Passed 2982 / Failed 0, wall time 20s (< 30s ceiling).
+- **Also ran (touched-file guard):** `--filter "FullyQualifiedName~WorkspaceTool&Category!=Scale"` → 61/61.
+- **Build:** `dotnet build Miller.slnx -c Release` → 0 warnings / 0 errors.
+- **Timestamp:** 2026-07-07.
 
-Kept as-is: `Load_DoesNotAdvertiseTodosAsSeparateMcpTool`, `Load_DoesNotAdvertiseMetricsAsMcpTool` (DoesNotContain guards — still valid), `PublicMcpToolNames_AreTheDocumented1_0Surface` (reflection surface pin).
+## Files changed
 
-## Verification (worker red → green)
-- RED (new gates vs old doc): `Failed: 11, Passed: 18, Total: 29` — `Load_CoreFitsClaudeCodeDeliveryWindow` (11982 > 1900), `Load_RoutingTableNamesEveryTool` (all 9, no `- <name> — ` in old doc), `Load_PinsBehavioralAdoptionLanguage`.
-- GREEN (new gates vs golden core): `dotnet test tests/Miller.Tests --filter "FullyQualifiedName~AgentInstructionsTests"` → **Passed: 29, Failed: 0, Total: 29**, 45 ms.
+- `src/Miller.Indexing/SingleWriterLock.cs` — generalized `DeleteContentsExceptLock`; added `WorkspaceWriteLeases`.
+- `src/Miller.Server/Cli/CliDispatch.cs` — `RemoveMillerDir` (inside `WorkspaceRemove` region only).
+- `src/Miller.Server/Tools/WorkspaceTool.cs` — both remove call sites (`Remove` path-only + `RemoveResolvedTarget`).
+- `tests/Miller.Tests/Indexing/SingleWriterLockTests.cs` — 7 new tests.
+- `tests/Miller.Tests/Server/Cli/CliDispatchTests.cs` — 2 new remove-race regression tests.
 
-## Concerns / notes for the lead
-- Description-gate tests still green because descriptions are unchanged; Task 6 will retarget the description-phrase assertions when it swaps in the golden descriptions and adds the trace≤1,500 / search≤1,100 budget overrides. No conflict with my changes.
-- No plan mismatch: golden core shipped verbatim, fit ≤1,900 without any whitespace trim.
-- `.razorback/sdd/task-1-report.md` shows as modified from the parallel Task 1 worker — left untouched. Commit includes ONLY my two owned files.
+## New tests (each maps to an acceptance criterion)
+
+- `DeleteContentsExceptLock_WithHeldSidecarLocks_KeepsThem_ButDeletesUnheldLockDebris` — held locks survive,
+  unheld `stale.lock` debris deleted.
+- `DeleteContentsExceptLock_DefaultSkipSet_StillKeepsOnlyIndexerLock` — back-compat.
+- `WorkspaceWriteLeases_OnAllFreeLocks_AcquiresAllThree` — all three exclusively held after acquire.
+- `WorkspaceWriteLeases_WhenIndexerLockHeld_Refuses`
+- `WorkspaceWriteLeases_WhenContentLockHeld_Refuses_AndReleasesTheIndexerLock`
+- `WorkspaceWriteLeases_WhenHistoryLockHeld_Refuses_AndReleasesIndexerAndContent` (partial-acquire rollback)
+- `WorkspaceWriteLeases_Dispose_ReleasesAllThree_MakingThemReacquirable`
+- `WorkspaceRemove_DuringInFlightContentImport_RefusedExitThree_ContentDbIntact` (CLI public surface)
+- `WorkspaceRemove_DuringInFlightHistoryAppend_RefusedExitThree_HistoryDbIntact` (CLI public surface)
+
+## Codebase orientation (calls + confirmations)
+
+Miller MCP was not used directly — I am a subagent sharing the lead's single Miller MCP connection (per
+project memory, one stuck call jams all), so I oriented with Read/grep over the worktree, which holds this
+branch's new files that the shared Miller index (serving the main checkout) does not have. Each contract was
+verified by reading source, not guessed:
+
+- Read `SingleWriterLock.cs` — confirmed `LockFileName="indexer.lock"`, existing `DeleteContentsExceptLock`
+  skipped only `indexer.lock`, `TryDeleteEmptiedDir` best-effort. Preserved the why-comment discipline.
+- Read `ContentCorpusWriteLock.cs` — confirmed `LockFileName="content.lock"`,
+  `AcquireFor(contentDbPath, TimeSpan?)` derives the lock path from the DB path's DIRECTORY and throws
+  `TimeoutException` on expiry; lock lives next to the DB in `.miller/`.
+- Read `MetricHistoryWriteLock.cs` (new file, read directly) — confirmed same shape,
+  `LockFileName="history.lock"`, `AcquireFor(historyDbPath, TimeSpan?)`.
+- Read `MetricHistoryStore.cs` — confirmed `HistoryDbFileName="history.db"` const (used to build the history
+  DB path); `ContentCorpusSidecar.ContentDbPathFor` uses literal `"content.db"` (matched that literal).
+- grep for `DeleteContentsExceptLock` / `TryDeleteEmptiedDir` callers — confirmed exactly three production
+  sites (CLI `RemoveMillerDir`, WorkspaceTool `Remove` + `RemoveResolvedTarget`) plus the two test files;
+  safe to change the signature (added an optional param, so no caller breaks).
+- Read WorkspaceTool ctor + line ~680 — confirmed `_acquireWriterLock` is injected and the ~680 site is the
+  prime-scan path, NOT a remove path; left it untouched.
+- Read `WorkspaceToolTests.cs` remove tests — confirmed harness uses real `SingleWriterLock.TryAcquire` by
+  default and `NoopLease` in the delete-happy cases; my real sidecar-lock acquisition succeeds on free locks
+  and refuses on held ones without breaking them (re-ran: 61/61).
+
+## Judgment calls
+
+- **Short acquire timeout = 2s** (`WorkspaceWriteLeases.DefaultTimeout`). Design says "short timeout (2–5s)";
+  a remove is interactive/CI teardown, so refuse-promptly beats block-long. Both CLI regression tests hold
+  the lock for the whole call and thus each spend ~2s before the refusal — well within the fast-suite budget
+  (full suite 20s). Direct helper tests pass a 200ms timeout to stay fast.
+- **`DeleteContentsExceptLock` param is `additionalHeldLockFileNames`** (added to the always-skipped
+  `indexer.lock`) rather than a full replacement set — keeps the parameterless overload byte-identical and
+  keeps the "explicit, not `*.lock`-blanket" property the task requires.
+- **Helper lives in `SingleWriterLock.cs`** (an owned file, same namespace as all three locks) rather than a
+  new file, so the fixed lock order + skip-set have a single home. Deliberately minimal (acquire-in-order /
+  dispose-in-reverse), not a general lock manager.
+- **DB-path literal `"content.db"`** passed to `ContentCorpusWriteLock.AcquireFor` mirrors the existing
+  `ContentCorpusSidecar` literal (no shared const exists); the lock only needs the directory.
+
+## Concerns
+
+- None blocking. Minor: the `"content.db"` filename is a literal in two places (sidecar + this helper); a
+  shared const would be marginally safer but is out of scope for this task's owned files.
+- Cross-process behavior is exercised in-process (a second file handle stands in for another instance),
+  matching the existing `SingleWriterLockTests` convention; no julie spawn, so all additions stay fast-suite.
