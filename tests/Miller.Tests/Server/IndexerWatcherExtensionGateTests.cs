@@ -77,7 +77,10 @@ public sealed class IndexerWatcherExtensionGateTests
     // ExecuteAsync, which these tests never start — nothing here can spawn a process.
     private static (IndexerService Service, RecordingOps Ops) NewLeader(string root)
     {
+        string tempHome = Path.Combine(root, "home");
+        Directory.CreateDirectory(tempHome);
         var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
+        bootstrap.TestHomeDirectoryOverride = tempHome;
         bootstrap.SeedForTest(
             new WorkspaceContext(
                 root,

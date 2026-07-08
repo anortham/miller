@@ -30,8 +30,11 @@ public sealed class FreshnessServicePollNowTests
     // workspace and poll without requiring the loop to have initialised _reader/_rebuilder.
     private static FreshnessService NewServiceOverDb(string dbPath, string? workspaceId, IndexHolder holder)
     {
+        string tempHome = Path.Combine(Path.GetTempPath(), "miller-freshness-home-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempHome);
         var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
-        var workspace = WorkspaceContext.Create(Path.GetDirectoryName(dbPath)!, AppContext.BaseDirectory) with
+        bootstrap.TestHomeDirectoryOverride = tempHome;
+        var workspace = WorkspaceContext.Create(Path.GetDirectoryName(dbPath)!, AppContext.BaseDirectory, tempHome) with
         {
             ExtractDbPath = dbPath,
             WorkspaceId = workspaceId,

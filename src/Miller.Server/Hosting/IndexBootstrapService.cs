@@ -206,6 +206,16 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     internal Action<string>? TestRunBootstrapOverride { get; set; }
 
     /// <summary>
+    /// Test-only home directory override for <see cref="WorkspaceContext.Create"/>. When set, every workspace
+    /// context the bootstrap builds (including <see cref="MarkBootstrapFailed"/>) routes registry/telemetry
+    /// paths under this directory instead of the real user profile.
+    /// </summary>
+    internal string? TestHomeDirectoryOverride { get; set; }
+
+    private WorkspaceContext CreateWorkspaceContext(string canonicalRoot) =>
+        WorkspaceContext.Create(canonicalRoot, AppContext.BaseDirectory, TestHomeDirectoryOverride);
+
+    /// <summary>
     /// Bind and bootstrap the primary workspace. Idempotent when already bound to the same canonical root;
     /// re-bootstraps when the canonical root changes (MCP roots/list_changed).
     /// </summary>
@@ -336,7 +346,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         try
         {
             var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
-            var ctx = WorkspaceContext.Create(canonicalRoot, AppContext.BaseDirectory);
+            var ctx = CreateWorkspaceContext(canonicalRoot);
 
             string canonicalDbPath = Path.Combine(canonicalRoot, ".miller", "symbols.db");
             string stableWorkspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot);
@@ -564,7 +574,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             string stableWorkspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot);
             string canonicalDbPath = Path.Combine(canonicalRoot, ".miller", "symbols.db");
             Directory.CreateDirectory(Path.GetDirectoryName(canonicalDbPath)!);
-            var workspace = WorkspaceContext.Create(canonicalRoot, AppContext.BaseDirectory) with
+            var workspace = CreateWorkspaceContext(canonicalRoot) with
             {
                 WorkspaceId = stableWorkspaceId,
                 CanonicalRoot = canonicalRoot,

@@ -56,6 +56,8 @@ public sealed class HostStartupRegistrationTests
 
         using var provider = services.BuildServiceProvider();
         var bootstrap = provider.GetRequiredService<IndexBootstrapService>();
+        string tempHome = CreateTempRoot();
+        bootstrap.TestHomeDirectoryOverride = tempHome;
         bootstrap.TestBootstrapInterceptor = (canonicalRoot, _) =>
         {
             var workspace = WorkspaceContext.Create(canonicalRoot, AppContext.BaseDirectory) with
@@ -96,6 +98,8 @@ public sealed class HostStartupRegistrationTests
 
         using var provider = services.BuildServiceProvider();
         var bootstrap = provider.GetRequiredService<IndexBootstrapService>();
+        string tempHome = CreateTempRoot();
+        bootstrap.TestHomeDirectoryOverride = tempHome;
         bootstrap.TestBootstrapInterceptor = (canonicalRoot, _) =>
         {
             if (PathCanonicalizer.CanonicalizeRoot(rootB) == canonicalRoot)

@@ -124,8 +124,12 @@ public sealed class VersionAwareLeadershipScaleTests
             // --- instance A: an older-fitness leader. ONLY its own version is injected; the artifact-version
             // read, yield drain, leader-identity read, alive probes, clock, and cooldown all run for real.
             int aAcquireAttempts = 0;
+            string tempHomeA = Path.Combine(work, "home-a");
+            Directory.CreateDirectory(tempHomeA);
+            var aBootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
+            aBootstrap.TestHomeDirectoryOverride = tempHomeA;
             var instanceA = new IndexerService(
-                new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance),
+                aBootstrap,
                 NullLogger<IndexerService>.Instance,
                 NullLoggerFactory.Instance,
                 tryAcquireLeadership: dir =>
@@ -143,6 +147,7 @@ public sealed class VersionAwareLeadershipScaleTests
             // at the repo's .tools, so JulieExtractRunner.Locate + QueryVersion run the live binary); its scans
             // are the real JulieExtractOps behind a recording wrapper.
             var bBootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
+            bBootstrap.TestHomeDirectoryOverride = home;
             bBootstrap.SeedForTest(
                 workspace,
                 new IndexHolder(MillerRepositoryIndex.Build(System.Array.Empty<IndexedSymbol>()), builtRevision: 0));

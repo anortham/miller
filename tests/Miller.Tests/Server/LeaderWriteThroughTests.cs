@@ -66,6 +66,7 @@ public sealed class LeaderWriteThroughTests : IDisposable
     private static (IndexerService indexer, IndexBootstrapService bootstrap) NewIndexer(WorkspaceContext workspace)
     {
         var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
+        bootstrap.TestHomeDirectoryOverride = Path.GetDirectoryName(Path.GetDirectoryName(workspace.RegistryDbPath));
         bootstrap.SeedForTest(
             workspace,
             new IndexHolder(MillerRepositoryIndex.Build(Array.Empty<IndexedSymbol>()), builtRevision: 0));

@@ -115,9 +115,14 @@ public sealed class IndexerServiceLeadershipTests
         Func<DateTimeOffset>? clock = null,
         Func<int, bool>? processAliveProbe = null,
         Func<int, DateTimeOffset?, bool>? processAliveProbeWithObserved = null,
-        ILogger<IndexerService>? logger = null) =>
-        new(
-            new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance),
+        ILogger<IndexerService>? logger = null)
+    {
+        string tempHome = Path.Combine(Path.GetTempPath(), "miller-leadership-home-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempHome);
+        var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
+        bootstrap.TestHomeDirectoryOverride = tempHome;
+        return new(
+            bootstrap,
             logger ?? NullLogger<IndexerService>.Instance,
             NullLoggerFactory.Instance,
             tryAcquireLeadership ?? (_ => null),
@@ -136,6 +141,7 @@ public sealed class IndexerServiceLeadershipTests
             clock: clock,
             processAliveProbe: processAliveProbeWithObserved
                 ?? (processAliveProbe is null ? null : (pid, _) => processAliveProbe(pid)));
+    }
 
     private static WorkspaceContext CreateWorkspace(string dir)
     {
@@ -160,7 +166,9 @@ public sealed class IndexerServiceLeadershipTests
         string? ownVersion,
         string? artifactVersion)
     {
+        string tempHome = Path.GetDirectoryName(Path.GetDirectoryName(workspace.RegistryDbPath))!;
         var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
+        bootstrap.TestHomeDirectoryOverride = tempHome;
         bootstrap.SeedForTest(
             workspace,
             new IndexHolder(MillerRepositoryIndex.Build(System.Array.Empty<IndexedSymbol>()), builtRevision: 0));
@@ -330,7 +338,10 @@ public sealed class IndexerServiceLeadershipTests
         var attemptsGate = new object();
         try
         {
+            string tempHome = Path.Combine(dir, "home");
+            Directory.CreateDirectory(tempHome);
             var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
+            bootstrap.TestHomeDirectoryOverride = tempHome;
             bootstrap.TestBootstrapInterceptor = (canonicalRoot, _) =>
             {
                 var workspace = WorkspaceContext.Create(canonicalRoot, AppContext.BaseDirectory) with

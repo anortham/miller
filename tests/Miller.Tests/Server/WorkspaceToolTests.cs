@@ -90,10 +90,14 @@ public sealed class WorkspaceToolTests : IDisposable
         var holder = new IndexHolder(MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath)), builtRevision);
 
         var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
+        bootstrap.TestHomeDirectoryOverride = home;
         bootstrap.SeedForTest(workspace, holder);
 
+        string indexerHome = NewTempDir("indexer-home");
+        var indexerBootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
+        indexerBootstrap.TestHomeDirectoryOverride = indexerHome;
         var indexer = new IndexerService(
-            new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance),
+            indexerBootstrap,
             NullLogger<IndexerService>.Instance, NullLoggerFactory.Instance, SymbolSearchSidecar.Disabled);
         var freshness = new FreshnessService(bootstrap, NullLogger<FreshnessService>.Instance);
 

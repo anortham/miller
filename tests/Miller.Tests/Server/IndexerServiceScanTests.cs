@@ -130,9 +130,14 @@ public sealed class IndexerServiceScanTests
     // defaults OFF, so the disabled (byte-identical) path is what these no-workspace tests exercise.
     private static IndexerService NewService(
         Func<string, FullScanDrainResult>? drainFullScanRequests = null,
-        Func<string, FileConvergeDrainResult>? drainFileConvergeRequests = null) =>
-        new(
-            new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance),
+        Func<string, FileConvergeDrainResult>? drainFileConvergeRequests = null)
+    {
+        string tempHome = Path.Combine(Path.GetTempPath(), "miller-scan-home-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempHome);
+        var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
+        bootstrap.TestHomeDirectoryOverride = tempHome;
+        return new(
+            bootstrap,
             NullLogger<IndexerService>.Instance,
             NullLoggerFactory.Instance,
             tryAcquireLeadership: _ => null,
@@ -142,6 +147,7 @@ public sealed class IndexerServiceScanTests
             attachFileWatchers: false,
             drainFullScanRequests: drainFullScanRequests,
             drainFileConvergeRequests: drainFileConvergeRequests);
+    }
 
     // A leader-capable instance whose bootstrap is SEEDED with a workspace (so TryScanAsLeader can read its
     // CanonicalExtractDbPath for the sidecar build) and whose sidecar gate is the caller's choice. Not started —
@@ -151,7 +157,9 @@ public sealed class IndexerServiceScanTests
         SymbolSearchSidecar sidecar,
         Func<string, FileConvergeDrainResult>? drainFileConvergeRequests = null)
     {
+        string tempHome = Path.GetDirectoryName(Path.GetDirectoryName(workspace.RegistryDbPath))!;
         var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
+        bootstrap.TestHomeDirectoryOverride = tempHome;
         bootstrap.SeedForTest(
             workspace,
             new IndexHolder(MillerRepositoryIndex.Build(System.Array.Empty<IndexedSymbol>()), builtRevision: 0));
@@ -176,7 +184,9 @@ public sealed class IndexerServiceScanTests
         Func<WorkspaceContext, string, string, IExtractOps> createOps,
         SymbolSearchSidecar? sidecar = null)
     {
+        string tempHome = Path.GetDirectoryName(Path.GetDirectoryName(workspace.RegistryDbPath))!;
         var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
+        bootstrap.TestHomeDirectoryOverride = tempHome;
         bootstrap.SeedForTest(
             workspace,
             new IndexHolder(MillerRepositoryIndex.Build(System.Array.Empty<IndexedSymbol>()), builtRevision: 0));
@@ -479,8 +489,12 @@ public sealed class IndexerServiceScanTests
         // M4: an unclaimable (wedged) request is a real diagnostic the first time, but it recurs every 250ms
         // tick until the TTL sweep clears it — the repeat must drop to Debug, not warn forever.
         var logger = new RecordingLogger<IndexerService>();
+        string tempHome = Path.Combine(Path.GetTempPath(), "miller-scan-home-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempHome);
+        var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
+        bootstrap.TestHomeDirectoryOverride = tempHome;
         var service = new IndexerService(
-            new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance),
+            bootstrap,
             logger,
             NullLoggerFactory.Instance,
             tryAcquireLeadership: _ => null,
