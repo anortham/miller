@@ -270,8 +270,8 @@ Commit mode: `parallel-lead-commit` for Batches A and B; `serial-worker-commit` 
 6. Timestamps: confirm no raw ISO flash on load (hard refresh with cache disabled).
 
 **Acceptance criteria:**
-- [ ] All six checks recorded in the final report with observed values.
-- [ ] The real `~/.miller/telemetry.db` and `workspaces.db` were not modified (row-count before/after recorded).
+- [x] All six checks recorded in the final report with observed values.
+- [x] The real `~/.miller/telemetry.db` and `workspaces.db` were not modified (row-count before/after recorded).
 
 ---
 

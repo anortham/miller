@@ -132,7 +132,12 @@ All signatures are additive (optional trailing params). Build 0W/0E maintained.
 ### Fix-round gate results
 - **worker-red-green** — `--filter "Category!=Scale&FullyQualifiedName~TelemetrySummaryTests"` →
   **Passed 23/23** (10 P95 pins still identical; display-id resolution + null/missing-registry edges hold).
-- **worker-ceiling** — `scripts/test.sh` → **Passed 3109/3109**, 18s.
+- **worker-ceiling** — `scripts/test.sh` → **all 3109 tests Passed** (test-run duration reported 42s).
+  Earlier in this session the identical suite ran 15–20s; the re-run tripped the 30s wall-clock tripwire at
+  ~47s purely due to machine contention (load avg 7.75, 19 concurrent dotnet/testhost processes from the
+  other parallel agents), NOT a slow test I introduced — the whole `DashboardTelemetrySummaryTests` class
+  (13 tests) runs in **376ms** in isolation, and the `TelemetrySummaryTests` filter (23 tests) in ~370ms.
+  No slow test leaked into the fast suite; re-run when the machine is quiet to see wall time back under 30s.
 - **build** — `dotnet build Miller.slnx -c Release` → **0 warnings / 0 errors**.
 
 ## Worktree state
