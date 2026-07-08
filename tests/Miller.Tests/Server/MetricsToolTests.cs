@@ -1,5 +1,8 @@
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
+using Miller.Indexing;
+using Miller.Server;
+using Miller.Server.Cli;
 using Miller.Server.Git;
 using Miller.Server.Tools;
 using Miller.Tests.Indexing;
@@ -9,6 +12,170 @@ namespace Miller.Tests.Server;
 
 public sealed class MetricsToolTests
 {
+    // ---- heavy-arm metric-history: churn fact-surfacing + CLI recorder wiring (Task 3) ----------------------
+
+    [Fact]
+    public void RunChurn_SurfacesChurnFilesChangedSnapshotMetric()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[] { Row("aa11223344556677889900aabbccf001", "ChangedSymbol", "src/A.cs", 5) });
+
+        // Two distinct changed paths (src/A.cs maps to a symbol, src/Missing.cs is file-only) ⟹ 2 files changed.
+        var history = new StubGitHistoryReader(new GitHistoryResult(
+            Success: true,
+            Commits:
+            [
+                new GitHistoryCommit(
+                    Commit: "abc1234",
+                    AuthorTimeUtc: DateTimeOffset.Parse("2026-06-20T12:00:00Z"),
+                    Diff: """
+                        diff --git a/src/A.cs b/src/A.cs
+                        --- a/src/A.cs
+                        +++ b/src/A.cs
+                        @@ -5,1 +5,1 @@
+                        -old
+                        +new
+                        diff --git a/src/Missing.cs b/src/Missing.cs
+                        --- a/src/Missing.cs
+                        +++ b/src/Missing.cs
+                        @@ -2,1 +2,1 @@
+                        -old
+                        +new
+                        """),
+            ],
+            Error: null));
+
+        MetricsToolResult result = MetricsTool.Run(
+            fx.DbPath, operation: "churn", limit: 50, json: true, minCount: 2,
+            maxSymbolsPerGroup: MetricsTool.DefaultCloneSymbolsPerGroup, minSeverity: "moderate",
+            includeTests: true, workspaceRoot: fx.WorkspaceRoot, range: "HEAD~20..HEAD",
+            includeCommits: false, historyReader: history);
+
+        MetricHistoryPoint point = Assert.Single(result.SnapshotMetrics!);
+        Assert.Equal("churn_files_changed", point.Metric);
+        Assert.Equal(2.0, point.Value);
+        Assert.Contains("\"range\":\"HEAD~20..HEAD\"", point.DetailJson!);
+        Assert.Contains("\"limit\":50", point.DetailJson!);
+    }
+
+    [Fact]
+    public void RunClones_LeavesSnapshotMetricsNull()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[] { Row("aa11223344556677889900aabbccf011", "Solo", "src/A.cs", 3) });
+
+        MetricsToolResult result = MetricsTool.Run(
+            fx.DbPath, operation: "clones", limit: 10, json: true, minCount: 2,
+            maxSymbolsPerGroup: MetricsTool.DefaultCloneSymbolsPerGroup, minSeverity: "moderate", includeTests: true);
+
+        Assert.Null(result.SnapshotMetrics);
+    }
+
+    [Fact]
+    public void RecordHeavyArmSnapshot_Churn_WritesChurnSnapshotToHistoryDb()
+    {
+        using var fx = ChurnRecordingFixture();
+        MetricsToolResult result = RunChurnOneFile(fx);
+        WorkspaceContext ctx = Context(fx);
+
+        CliDispatch.HeavyArmIdentity? identity = CliDispatch.CaptureHeavyArmIdentity(ctx);
+        Assert.NotNull(identity);
+
+        var warn = new StringWriter();
+        MetricHistoryWriteResult? outcome = CliDispatch.RecordHeavyArmSnapshot(
+            ctx, identity, "churn", result.SnapshotMetrics!, canonical: true, warn);
+
+        Assert.Equal(MetricHistoryWriteResult.Recorded, outcome);
+        Assert.Empty(warn.ToString());
+        var rows = ReadHistoryMetrics(fx);
+        Assert.Contains(rows, r => r.Source == "churn" && r.Metric == "churn_files_changed" && r.Value == 1.0);
+    }
+
+    [Fact]
+    public void RecordHeavyArmSnapshot_NonCanonicalRun_SkipsRecording()
+    {
+        using var fx = ChurnRecordingFixture();
+        MetricsToolResult result = RunChurnOneFile(fx);
+        WorkspaceContext ctx = Context(fx);
+        CliDispatch.HeavyArmIdentity? identity = CliDispatch.CaptureHeavyArmIdentity(ctx);
+
+        var warn = new StringWriter();
+        MetricHistoryWriteResult? outcome = CliDispatch.RecordHeavyArmSnapshot(
+            ctx, identity, "churn", result.SnapshotMetrics!, canonical: false, warn);
+
+        Assert.Null(outcome);
+        Assert.Empty(warn.ToString());
+        Assert.False(File.Exists(MetricSnapshotAggregates.HistoryDbPathFor(fx.DbPath)));
+    }
+
+    private static JulieDbFixture ChurnRecordingFixture() =>
+        JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[] { Row("aa11223344556677889900aabbccf021", "ChangedSymbol", "src/A.cs", 5) },
+            revisions: new[] { new JulieDbFixture.RevisionRow(1) });
+
+    private static MetricsToolResult RunChurnOneFile(JulieDbFixture fx)
+    {
+        var history = new StubGitHistoryReader(new GitHistoryResult(
+            Success: true,
+            Commits:
+            [
+                new GitHistoryCommit(
+                    Commit: "abc1234",
+                    AuthorTimeUtc: DateTimeOffset.Parse("2026-06-20T12:00:00Z"),
+                    Diff: """
+                        diff --git a/src/A.cs b/src/A.cs
+                        --- a/src/A.cs
+                        +++ b/src/A.cs
+                        @@ -5,1 +5,1 @@
+                        -old
+                        +new
+                        """),
+            ],
+            Error: null));
+        return MetricsTool.Run(
+            fx.DbPath, operation: "churn", limit: 50, json: true, minCount: 2,
+            maxSymbolsPerGroup: MetricsTool.DefaultCloneSymbolsPerGroup, minSeverity: "moderate",
+            includeTests: true, workspaceRoot: fx.WorkspaceRoot, range: "HEAD~20..HEAD",
+            includeCommits: false, historyReader: history);
+    }
+
+    private static WorkspaceContext Context(JulieDbFixture fx) =>
+        new(
+            WorkspaceRoot: fx.WorkspaceRoot,
+            ExtractDbPath: fx.DbPath,
+            TelemetryDbPath: Path.Combine(fx.Directory, "telemetry.db"),
+            RegistryDbPath: Path.Combine(fx.Directory, "workspaces.db"),
+            ToolsRoot: Path.Combine(fx.Directory, ".tools"),
+            WorkspaceId: "ws-test");
+
+    private static List<(string Source, string Metric, double Value, string? Detail)> ReadHistoryMetrics(
+        JulieDbFixture fx)
+    {
+        var rows = new List<(string, string, double, string?)>();
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = MetricSnapshotAggregates.HistoryDbPathFor(fx.DbPath),
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText =
+            "SELECT s.source, m.metric, m.value, m.detail_json FROM snapshot_metrics m " +
+            "JOIN snapshots s ON s.snapshot_id = m.snapshot_id ORDER BY s.source, m.metric;";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            rows.Add((reader.GetString(0), reader.GetString(1), reader.GetDouble(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3)));
+        return rows;
+    }
+
     [Fact]
     public void RunClonesJson_ReturnsCloneGroups()
     {

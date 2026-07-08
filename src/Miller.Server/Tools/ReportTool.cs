@@ -47,7 +47,69 @@ public static class ReportTool
 
         var report = new ReportFacts(
             effectiveRange, limit, index, extraction, markers, complexity, clones, git);
-        return new ReportToolResult(json ? RenderJson(report) : RenderCompact(report));
+        return new ReportToolResult(
+            json ? RenderJson(report) : RenderCompact(report),
+            BuildSnapshotMetrics(report));
+    }
+
+    // The heavy-arm `source='report'` snapshot: only facts the report composes EXACTLY, keyed on the canonical
+    // metric names Task 4/6 read. Pure — it projects `report`, never recomputes. Cheap-arm names reuse
+    // MetricSnapshotAggregates so the report and the leader converge arm never drift; the git scalars reuse the
+    // shared heavy-arm vocabulary.
+    //
+    // clone_group_count is deliberately NOT recorded here: the report composes only a top-SectionLimit clone list,
+    // so report.Clones.Count is a TRUNCATED value, while the leader converge arm records the EXACT GROUP BY count
+    // under the same metric name every revision. MetricHistoryStore.ReadTrend flattens points by metric name across
+    // ALL sources (it never inspects detail_json), so a truncated report value would poison the converge trend into
+    // a sawtooth. Design rule: a metric is exact or absent, never misleading — and converge already owns the exact
+    // count, so the report arm simply omits it (recomputing an exact count here is converge's job, not the report's).
+    //
+    // The metrics that ARE recorded are all exact or bound-consistent with their converge twin:
+    //   symbol/file/language — same WorkspaceIndexFactsReader.ReadSymbolCounts COUNT shape as the converge arm (exact);
+    //   marker_total — same MarkerSearch.MaxLimit (500) bound the converge arm uses, so the two mix cleanly.
+    // Absent-vs-zero holds: no marker section ⟹ no marker_total row; git unavailable ⟹ no churn/risk rows;
+    // risk available but empty ⟹ risk_top_score absent (a max over nothing is undefined). risk_top_score is the
+    // global max (risk rows are score-desc, so it is limit-insensitive), so it stays consistent across arms.
+    private static IReadOnlyList<MetricHistoryPoint> BuildSnapshotMetrics(ReportFacts report)
+    {
+        var points = new List<MetricHistoryPoint>
+        {
+            new(MetricSnapshotAggregates.SymbolCount, report.Index.Symbols, null),
+            new(MetricSnapshotAggregates.FileCount, report.Index.Files, null),
+            new(MetricSnapshotAggregates.LanguageCount, report.Index.Languages, null),
+        };
+
+        if (report.Markers.Available)
+            points.Add(new MetricHistoryPoint(
+                MetricSnapshotAggregates.MarkerTotal, report.Markers.Total, MarkerDetailJson(report.Markers.Counts)));
+
+        if (report.Git.Available)
+        {
+            string detail = MetricHistoryHeavyArm.RangeLimitDetail(report.Range, report.SectionLimit);
+            int filesChanged = report.Git.Churn!.Rows.Select(row => row.Path).Distinct(StringComparer.Ordinal).Count();
+            points.Add(new MetricHistoryPoint(MetricHistoryHeavyArm.ChurnFilesChanged, filesChanged, detail));
+            if (report.Git.Risk!.Rows.Count > 0)
+                points.Add(new MetricHistoryPoint(
+                    MetricHistoryHeavyArm.RiskTopScore, report.Git.Risk.Rows.Max(row => row.Score), detail));
+        }
+
+        return points;
+    }
+
+    // Per-marker breakdown (TODO/FIXME/HACK/XXX counts in report order) for the marker_total detail_json — mirrors
+    // the leader converge arm's marker detail so both snapshots carry the same self-describing shape.
+    private static string MarkerDetailJson(IReadOnlyList<MarkerCount> counts)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var w = new Utf8JsonWriter(
+            buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
+        {
+            w.WriteStartObject();
+            foreach (MarkerCount count in counts)
+                w.WriteNumber(count.Marker, count.Count);
+            w.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
     }
 
     private static IndexSection ReadIndexSection(string dbPath)
@@ -426,4 +488,10 @@ public static class ReportTool
     }
 }
 
-internal readonly record struct ReportToolResult(string Output);
+/// <param name="SnapshotMetrics">
+/// The heavy-arm <c>source='report'</c> metric-history points the CLI recorder appends for a canonical run. The
+/// tool core stays side-effect-free: it only COMPUTES the points from the facts it composed; the actual
+/// <c>history.db</c> write happens in the CLI handler.
+/// </param>
+internal readonly record struct ReportToolResult(
+    string Output, IReadOnlyList<MetricHistoryPoint> SnapshotMetrics);

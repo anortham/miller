@@ -7,6 +7,45 @@ using Miller.Server.Git;
 
 namespace Miller.Server.Tools;
 
+/// <summary>
+/// The heavy-arm metric-history vocabulary shared across the commands that record snapshots
+/// (<c>miller report</c>, <c>metrics churn|risk</c>, <c>references candidates</c>): the <c>snapshots.source</c>
+/// values and the heavy-only metric names, plus the tiny <c>detail_json</c> params builder those producers stamp.
+/// The cheap-arm names (<c>symbol_count</c>, <c>clone_group_count</c>, …) stay single-sourced on
+/// <see cref="MetricSnapshotAggregates"/>; only names the cheap arm does NOT emit live here so producer and the
+/// Task 4/6 read surfaces never drift. Design: docs/plans/2026-07-07-metric-history-design.md ("Heavy arm").
+/// </summary>
+internal static class MetricHistoryHeavyArm
+{
+    // snapshots.source values (the computing operation — one command run = one coherent snapshot).
+    public const string ReportSource = "report";
+    public const string ChurnSource = "churn";
+    public const string RiskSource = "risk";
+    public const string CandidatesSource = "candidates";
+
+    // Heavy-only metric names (the cheap arm never emits these; the Task 4/6 read surfaces key off them).
+    public const string ChurnFilesChanged = "churn_files_changed";
+    public const string RiskTopScore = "risk_top_score";
+    public const string RiskRows = "risk_rows";
+    public const string DeadCodeCandidateCount = "dead_code_candidate_count";
+    public const string DeadCodeSuppressedTotal = "dead_code_suppressed_total";
+
+    /// <summary>The canonical params stamped in <c>detail_json</c> so a churn/risk trend point is self-describing.</summary>
+    public static string RangeLimitDetail(string range, int limit)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var w = new Utf8JsonWriter(
+            buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
+        {
+            w.WriteStartObject();
+            w.WriteString("range", range);
+            w.WriteNumber("limit", limit);
+            w.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+}
+
 public static class MetricsTool
 {
     public const int DefaultLimit = 50;
@@ -35,6 +74,8 @@ public static class MetricsTool
         {
             "clones" => RunClones(dbPath, boundedLimit, json, minCount, maxSymbolsPerGroup),
             "complexity" => RunComplexity(dbPath, boundedLimit, json, minSeverity, includeTests),
+            // NOTE: churn/risk carry SnapshotMetrics for the CLI heavy-arm history recorder; clones/complexity
+            // leave it null (the leader converge arm already records clone_group_count from symbols.db).
             "churn" => RunChurn(
                 dbPath,
                 workspaceRoot,
@@ -66,7 +107,8 @@ public static class MetricsTool
         IReadOnlyList<CloneGroup> groups = CloneGroupReader.Read(dbPath, limit, minCount, boundedSymbolLimit);
         return new MetricsToolResult(
             json ? RenderClonesJson(groups, boundedSymbolLimit) : RenderClonesCompact(groups, boundedSymbolLimit),
-            groups.Count);
+            groups.Count,
+            SnapshotMetrics: null);
     }
 
     private static MetricsToolResult RunComplexity(
@@ -86,7 +128,8 @@ public static class MetricsTool
             includeTests);
         return new MetricsToolResult(
             json ? RenderComplexityJson(hotspots, severity) : RenderComplexityCompact(hotspots),
-            hotspots.Count);
+            hotspots.Count,
+            SnapshotMetrics: null);
     }
 
     private static MetricsToolResult RunChurn(
@@ -112,7 +155,23 @@ public static class MetricsTool
             historyReader);
         return new MetricsToolResult(
             json ? RenderChurnJson(report) : RenderChurnCompact(report),
-            report.Rows.Count);
+            report.Rows.Count,
+            ChurnSnapshotMetrics(report, limit));
+    }
+
+    // The heavy-arm churn snapshot: churn_files_changed = distinct changed paths among the (bounded) churn rows,
+    // range+limit stamped in detail_json. Reuses the already-composed rows — no second git parse. A genuinely
+    // empty churn is 0 files changed (git was available), which the recorder writes as a real value.
+    private static IReadOnlyList<MetricHistoryPoint> ChurnSnapshotMetrics(ChurnReport report, int limit)
+    {
+        int filesChanged = report.Rows.Select(row => row.Path).Distinct(StringComparer.Ordinal).Count();
+        return
+        [
+            new MetricHistoryPoint(
+                MetricHistoryHeavyArm.ChurnFilesChanged,
+                filesChanged,
+                MetricHistoryHeavyArm.RangeLimitDetail(report.Range, limit)),
+        ];
     }
 
     private static MetricsToolResult RunRisk(
@@ -132,7 +191,22 @@ public static class MetricsTool
         RiskReport report = RiskRanking.Read(dbPath, workspaceRoot, range, limit, includeTests, historyReader);
         return new MetricsToolResult(
             json ? RenderRiskJson(report) : RenderRiskCompact(report),
-            report.Rows.Count);
+            report.Rows.Count,
+            RiskSnapshotMetrics(report, limit));
+    }
+
+    // The heavy-arm risk snapshot: risk_rows = number of risk rows (a real value, recorded even when 0 because git
+    // was available), and risk_top_score = the highest score — ABSENT when there are no rows (a max over nothing is
+    // undefined, per the absent-vs-zero rule), never a fabricated 0. range+limit stamped in detail_json.
+    private static IReadOnlyList<MetricHistoryPoint> RiskSnapshotMetrics(RiskReport report, int limit)
+    {
+        string detail = MetricHistoryHeavyArm.RangeLimitDetail(report.Range, limit);
+        var points = new List<MetricHistoryPoint>(2);
+        if (report.Rows.Count > 0)
+            points.Add(new MetricHistoryPoint(
+                MetricHistoryHeavyArm.RiskTopScore, report.Rows.Max(row => row.Score), detail));
+        points.Add(new MetricHistoryPoint(MetricHistoryHeavyArm.RiskRows, report.Rows.Count, detail));
+        return points;
     }
 
     private static string RenderClonesCompact(IReadOnlyList<CloneGroup> groups, int symbolLimit)
@@ -419,4 +493,10 @@ public static class MetricsTool
         new(buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
 }
 
-internal readonly record struct MetricsToolResult(string Output, int ResultCount);
+/// <param name="SnapshotMetrics">
+/// The heavy-arm metric-history points the CLI recorder appends for a canonical churn/risk run, or <c>null</c> for
+/// operations that do not record (clones/complexity). The tool core stays side-effect-free: it only COMPUTES the
+/// points from the facts it already produced; the actual <c>history.db</c> write happens in the CLI handler.
+/// </param>
+internal readonly record struct MetricsToolResult(
+    string Output, int ResultCount, IReadOnlyList<MetricHistoryPoint>? SnapshotMetrics = null);

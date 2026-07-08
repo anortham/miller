@@ -1,5 +1,8 @@
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
+using Miller.Indexing;
+using Miller.Server;
+using Miller.Server.Cli;
 using Miller.Server.Git;
 using Miller.Server.Tools;
 using Miller.Tests.Indexing;
@@ -9,6 +12,139 @@ namespace Miller.Tests.Server;
 
 public sealed class RiskMetricsToolTests
 {
+    // ---- heavy-arm metric-history: risk fact-surfacing + CLI recorder wiring (Task 3) ----------------------
+
+    [Fact]
+    public void RunRisk_SurfacesTopScoreAndRowCountSnapshotMetrics()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[] { Row("aa11223344556677889900aabbccf101", "RiskySymbol", "src/Risky.cs", 5) });
+        SeedComplexity(fx.DbPath, "metric-risky", "src/Risky.cs", "aa11223344556677889900aabbccf101", 18, 3);
+
+        MetricsToolResult result = Run(fx, CommitTouching("src/Risky.cs", 5, "abc1234"));
+
+        var byName = result.SnapshotMetrics!.ToDictionary(p => p.Metric, p => p.Value);
+        Assert.Equal(23.0, byName["risk_top_score"]);
+        Assert.Equal(1.0, byName["risk_rows"]);
+    }
+
+    [Fact]
+    public void RunRisk_ZeroRows_OmitsTopScoreButRecordsRowCountZero()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                Row("aa11223344556677889900aabbccf111", "ChurnedOnly", "src/ChurnedOnly.cs", 5),
+                Row("aa11223344556677889900aabbccf112", "ComplexOnly", "src/ComplexOnly.cs", 5),
+            });
+        // Complexity only on the un-churned symbol ⟹ empty risk intersection ⟹ 0 rows.
+        SeedComplexity(fx.DbPath, "metric-complex-only", "src/ComplexOnly.cs", "aa11223344556677889900aabbccf112", 20, 4);
+
+        MetricsToolResult result = Run(fx, CommitTouching("src/ChurnedOnly.cs", 5, "aaa1111"));
+
+        Assert.Equal(0, result.ResultCount);
+        // risk_rows=0 is a real value (git was available); risk_top_score is ABSENT (max over no rows is undefined).
+        MetricHistoryPoint rows = Assert.Single(result.SnapshotMetrics!);
+        Assert.Equal("risk_rows", rows.Metric);
+        Assert.Equal(0.0, rows.Value);
+    }
+
+    [Fact]
+    public void RecordHeavyArmSnapshot_ChurnThenRisk_WritesTwoIndependentSnapshotsAtOneRevision()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[] { Row("aa11223344556677889900aabbccf121", "RiskySymbol", "src/Risky.cs", 5) },
+            revisions: new[] { new JulieDbFixture.RevisionRow(1) });
+        SeedComplexity(fx.DbPath, "metric-risky", "src/Risky.cs", "aa11223344556677889900aabbccf121", 18, 3);
+        var history = CommitTouching("src/Risky.cs", 5, "abc1234");
+
+        MetricsToolResult churn = MetricsTool.Run(
+            fx.DbPath, operation: "churn", limit: 50, json: true, minCount: 2,
+            maxSymbolsPerGroup: MetricsTool.DefaultCloneSymbolsPerGroup, minSeverity: "moderate",
+            includeTests: true, workspaceRoot: fx.WorkspaceRoot, range: "HEAD~20..HEAD",
+            includeCommits: false, historyReader: history);
+        MetricsToolResult risk = Run(fx, history);
+
+        WorkspaceContext ctx = Context(fx);
+        CliDispatch.HeavyArmIdentity? identity = CliDispatch.CaptureHeavyArmIdentity(ctx);
+        var warn = new StringWriter();
+
+        var churnAt = new DateTime(2026, 7, 7, 10, 0, 0, DateTimeKind.Utc);
+        var riskAt = new DateTime(2026, 7, 7, 10, 5, 0, DateTimeKind.Utc);
+        Assert.Equal(MetricHistoryWriteResult.Recorded, CliDispatch.RecordHeavyArmSnapshot(
+            ctx, identity, "churn", churn.SnapshotMetrics!, canonical: true, warn, churnAt));
+        Assert.Equal(MetricHistoryWriteResult.Recorded, CliDispatch.RecordHeavyArmSnapshot(
+            ctx, identity, "risk", risk.SnapshotMetrics!, canonical: true, warn, riskAt));
+
+        Assert.Empty(warn.ToString());
+        var snapshots = ReadSnapshots(fx);
+        Assert.Equal(2, snapshots.Count);
+        // Two snapshots at the same revision, distinct sources and independent timestamps.
+        Assert.Equal(new[] { "churn", "risk" }, snapshots.Select(s => s.Source).OrderBy(s => s).ToArray());
+        Assert.All(snapshots, s => Assert.Equal(1L, s.Revision));
+        Assert.NotEqual(
+            snapshots.Single(s => s.Source == "churn").RecordedAtUtc,
+            snapshots.Single(s => s.Source == "risk").RecordedAtUtc);
+    }
+
+    [Fact]
+    public void RecordHeavyArmSnapshot_IdentityChangedMidCommand_SkipsRecording()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[] { Row("aa11223344556677889900aabbccf131", "RiskySymbol", "src/Risky.cs", 5) },
+            revisions: new[] { new JulieDbFixture.RevisionRow(1) });
+        SeedComplexity(fx.DbPath, "metric-risky", "src/Risky.cs", "aa11223344556677889900aabbccf131", 18, 3);
+
+        MetricsToolResult risk = Run(fx, CommitTouching("src/Risky.cs", 5, "abc1234"));
+        WorkspaceContext ctx = Context(fx);
+        CliDispatch.HeavyArmIdentity? identity = CliDispatch.CaptureHeavyArmIdentity(ctx);
+
+        // Simulate a full-rebuild promotion between capture and append: the live artifact_id changes.
+        Exec(fx.DbPath, "UPDATE artifact_metadata SET value = 'artifact-promoted' WHERE key = 'artifact_id';");
+
+        var warn = new StringWriter();
+        MetricHistoryWriteResult? outcome = CliDispatch.RecordHeavyArmSnapshot(
+            ctx, identity, "risk", risk.SnapshotMetrics!, canonical: true, warn);
+
+        Assert.Equal(MetricHistoryWriteResult.SkippedIdentityChanged, outcome);
+        Assert.Empty(warn.ToString());
+    }
+
+    private static WorkspaceContext Context(JulieDbFixture fx) =>
+        new(
+            WorkspaceRoot: fx.WorkspaceRoot,
+            ExtractDbPath: fx.DbPath,
+            TelemetryDbPath: Path.Combine(fx.Directory, "telemetry.db"),
+            RegistryDbPath: Path.Combine(fx.Directory, "workspaces.db"),
+            ToolsRoot: Path.Combine(fx.Directory, ".tools"),
+            WorkspaceId: "ws-test");
+
+    private static List<(string Source, long Revision, string RecordedAtUtc)> ReadSnapshots(JulieDbFixture fx)
+    {
+        var rows = new List<(string, long, string)>();
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = MetricSnapshotAggregates.HistoryDbPathFor(fx.DbPath),
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT source, revision, recorded_at_utc FROM snapshots ORDER BY snapshot_id;";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            rows.Add((reader.GetString(0), reader.GetInt64(1), reader.GetString(2)));
+        return rows;
+    }
+
     [Fact]
     public void RunRiskJson_JoinsChurnAndComplexityOnSymbolId()
     {

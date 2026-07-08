@@ -2,6 +2,8 @@ using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Miller.Core.Search;
 using Miller.Indexing;
+using Miller.Server;
+using Miller.Server.Cli;
 using Miller.Server.Git;
 using Miller.Server.Tools;
 using Miller.Tests.Indexing;
@@ -11,6 +13,213 @@ namespace Miller.Tests.Server;
 
 public sealed class ReportToolTests
 {
+    // ---- heavy-arm metric-history: report fact-surfacing + CLI recording end-to-end (Task 3) ----------------
+
+    [Fact]
+    public void Run_SurfacesIndexMarkerAndGitSnapshotMetrics_ButNotBoundedCloneCount()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                Row("aa11223344556677889900aabbcd0001", "RiskySymbol", "src/Risky.cs", 5),
+                Row("aa11223344556677889900aabbcd0002", "CopyA", "src/A.cs", 3),
+                Row("aa11223344556677889900aabbcd0003", "CopyB", "src/B.cs", 7),
+            });
+        Exec(fx.DbPath, """
+            UPDATE symbols SET body_hash = 'report-clone-hash' WHERE symbol_id IN
+                ('aa11223344556677889900aabbcd0002', 'aa11223344556677889900aabbcd0003');
+            """);
+        SeedComplexity(fx.DbPath, "metric-risky", "src/Risky.cs", "aa11223344556677889900aabbcd0001", 18, 3);
+
+        ReportToolResult result = ReportTool.Run(
+            fx.DbPath, fx.WorkspaceRoot, range: "HEAD~20..HEAD", sectionLimit: 10, json: true,
+            includeTests: true, historyReader: CommitTouching("src/Risky.cs", 5, "abc1234"),
+            regionIndex: new StubRegionSearchIndex(Hit("src/S.cs", 10, "TODO fix the widget")));
+
+        var byName = result.SnapshotMetrics.ToDictionary(p => p.Metric, p => p);
+        Assert.Equal(3.0, byName["symbol_count"].Value);
+        Assert.Equal(3.0, byName["file_count"].Value);
+        Assert.Equal(1.0, byName["language_count"].Value);
+        // clone_group_count is NOT recorded by the report arm — the report's clone list is bounded to SectionLimit,
+        // and the leader converge arm owns the exact count under the same metric name.
+        Assert.DoesNotContain("clone_group_count", byName.Keys);
+        Assert.Equal(1.0, byName["marker_total"].Value);
+        Assert.Contains("TODO", byName["marker_total"].DetailJson!);
+        Assert.Equal(1.0, byName["churn_files_changed"].Value);
+        Assert.Equal(23.0, byName["risk_top_score"].Value);
+    }
+
+    [Fact]
+    public void Run_GitAndMarkersUnavailable_SnapshotMetricsHoldOnlyIndexCounts()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[] { Row("aa11223344556677889900aabbcd0011", "Symbol", "src/S.cs", 5) });
+
+        ReportToolResult result = ReportTool.Run(
+            fx.DbPath, fx.WorkspaceRoot, range: "HEAD~20..HEAD", sectionLimit: 10, json: true,
+            includeTests: true,
+            historyReader: new StubGitHistoryReader(new GitHistoryResult(false, [], "no git")),
+            regionIndex: null);
+
+        var names = result.SnapshotMetrics.Select(p => p.Metric).ToHashSet();
+        // Only the exact index scalars survive: no git ⟹ no churn/risk rows; no region index ⟹ no marker_total;
+        // clone_group_count is converge-owned (exact) and never recorded by the report arm.
+        Assert.Contains("symbol_count", names);
+        Assert.Contains("file_count", names);
+        Assert.Contains("language_count", names);
+        Assert.DoesNotContain("clone_group_count", names);
+        Assert.DoesNotContain("marker_total", names);
+        Assert.DoesNotContain("churn_files_changed", names);
+        Assert.DoesNotContain("risk_top_score", names);
+    }
+
+    [Fact]
+    public void Cli_Report_DefaultParams_WritesReportSnapshot()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[] { Row("aa11223344556677889900aabbcd0021", "Symbol", "src/S.cs", 5) },
+            revisions: new[] { new JulieDbFixture.RevisionRow(1) });
+
+        var (code, _, errText) = RunCli(new[] { "report" }, Context(fx));
+
+        Assert.Equal(0, code);
+        var rows = ReadHistoryMetrics(fx);
+        // Git sections are unavailable (temp dir is not a git repo), but the index scalars are recorded.
+        Assert.Contains(rows, r => r.Source == "report" && r.Metric == "symbol_count" && r.Value == 1.0);
+        Assert.Contains(rows, r => r.Source == "report" && r.Metric == "file_count");
+        Assert.Contains(rows, r => r.Source == "report" && r.Metric == "language_count");
+        Assert.DoesNotContain("metric history", errText); // no warning line on a clean write
+    }
+
+    [Fact]
+    public void Cli_Report_NonDefaultRange_SkipsRecording()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[] { Row("aa11223344556677889900aabbcd0031", "Symbol", "src/S.cs", 5) },
+            revisions: new[] { new JulieDbFixture.RevisionRow(1) });
+
+        var (code, _, _) = RunCli(new[] { "report", "--range", "HEAD~5..HEAD" }, Context(fx));
+
+        Assert.Equal(0, code);
+        Assert.False(File.Exists(MetricSnapshotAggregates.HistoryDbPathFor(fx.DbPath)));
+    }
+
+    [Fact]
+    public void Cli_Candidates_DefaultParams_WritesCandidatesSnapshot()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow(
+                    "sym-cand", "UnusedHelper", "method", "csharp", "src/Helper.cs", "sig UnusedHelper", 1, null)
+                {
+                    Visibility = "private", StartByte = 0, EndByte = 40,
+                },
+            },
+            identifiers: new[]
+            {
+                new JulieDbFixture.IdentifierRow("id-benign", "SomethingElse", "call", "csharp", "src/Other.cs", 1, null)
+                {
+                    StartByte = 100, EndByte = 110,
+                },
+            },
+            revisions: new[] { new JulieDbFixture.RevisionRow(1) });
+
+        var (code, outText, errText) = RunCli(new[] { "references", "candidates" }, Context(fx));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("candidates:", outText);
+        var rows = ReadHistoryMetrics(fx);
+        Assert.Contains(rows, r => r.Source == "candidates" && r.Metric == "dead_code_candidate_count");
+        var suppressed = Assert.Single(rows, r => r.Metric == "dead_code_suppressed_total");
+        Assert.Equal("candidates", suppressed.Source);
+        Assert.Contains("public_api", suppressed.Detail!); // per-rule suppressed breakdown in detail_json
+    }
+
+    [Fact]
+    public void Cli_Candidates_HistoryWriteFailure_LeavesOutputAndExitCodeUnchangedAndWarns()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow(
+                    "sym-cand", "UnusedHelper", "method", "csharp", "src/Helper.cs", "sig UnusedHelper", 1, null)
+                {
+                    Visibility = "private", StartByte = 0, EndByte = 40,
+                },
+            },
+            identifiers: new[]
+            {
+                new JulieDbFixture.IdentifierRow("id-benign", "SomethingElse", "call", "csharp", "src/Other.cs", 1, null)
+                {
+                    StartByte = 100, EndByte = 110,
+                },
+            },
+            revisions: new[] { new JulieDbFixture.RevisionRow(1) });
+
+        // Make the history sidecar path unwritable: a DIRECTORY where history.db must be a file ⟹ the append throws,
+        // which the recorder swallows to a warning without touching the command's stdout or exit code.
+        Directory.CreateDirectory(MetricSnapshotAggregates.HistoryDbPathFor(fx.DbPath));
+
+        var (code, outText, errText) = RunCli(new[] { "references", "candidates" }, Context(fx));
+
+        Assert.Equal(0, code);
+        Assert.Contains("candidates:", outText);
+        Assert.Contains("metric history", errText);
+    }
+
+    private static (int Code, string Out, string Err) RunCli(IReadOnlyList<string> args, WorkspaceContext ctx)
+    {
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+        int code = CliDispatch.Run(args, ctx, stdout, stderr);
+        return (code, stdout.ToString(), stderr.ToString());
+    }
+
+    private static WorkspaceContext Context(JulieDbFixture fx) =>
+        new(
+            WorkspaceRoot: fx.WorkspaceRoot,
+            ExtractDbPath: fx.DbPath,
+            TelemetryDbPath: Path.Combine(fx.Directory, "telemetry.db"),
+            RegistryDbPath: Path.Combine(fx.Directory, "workspaces.db"),
+            ToolsRoot: Path.Combine(fx.Directory, ".tools"),
+            WorkspaceId: "ws-test");
+
+    private static List<(string Source, string Metric, double Value, string? Detail)> ReadHistoryMetrics(
+        JulieDbFixture fx)
+    {
+        var rows = new List<(string, string, double, string?)>();
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = MetricSnapshotAggregates.HistoryDbPathFor(fx.DbPath),
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText =
+            "SELECT s.source, m.metric, m.value, m.detail_json FROM snapshot_metrics m " +
+            "JOIN snapshots s ON s.snapshot_id = m.snapshot_id ORDER BY s.source, m.metric;";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            rows.Add((reader.GetString(0), reader.GetString(1), reader.GetDouble(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3)));
+        return rows;
+    }
+
     [Fact]
     public void RunJson_ComposesIndexHealthComplexityClonesChurnAndRisk()
     {

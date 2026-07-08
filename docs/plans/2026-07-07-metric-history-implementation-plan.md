@@ -161,11 +161,11 @@ Commit mode: Tasks 1, 4, 7 `serial-worker-commit`; Batch A and Batch B tasks `pa
 **Approach:** Do not recompute anything for recording — reuse the values already in the composed facts records. Non-canonical run tests assert NO snapshot was written. Keep the tools' pure cores side-effect-free where possible: prefer recording from the CLI handler layer, passing in the computed facts.
 
 **Acceptance criteria:**
-- [ ] Default-params `miller report` / `metrics churn` / `metrics risk` / `references candidates` each write their snapshot with the metric names above.
-- [ ] Non-default params (e.g. `--range 90d`) ⟹ normal output, no snapshot.
-- [ ] History-write failure ⟹ command output and exit code unchanged, warning logged.
-- [ ] Churn-then-risk at one revision: two snapshots, independent timestamps.
-- [ ] Worker-scope verification passes and the verified diff is handed to the lead (parallel-lead-commit).
+- [x] Default-params `miller report` / `metrics churn` / `metrics risk` / `references candidates` each write their snapshot with the metric names above.
+- [x] Non-default params (e.g. `--range 90d`) ⟹ normal output, no snapshot.
+- [x] History-write failure ⟹ command output and exit code unchanged, warning logged.
+- [x] Churn-then-risk at one revision: two snapshots, independent timestamps.
+- [x] Worker-scope verification passes and the verified diff is handed to the lead (parallel-lead-commit).
 
 ---
 

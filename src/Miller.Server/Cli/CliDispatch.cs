@@ -596,6 +596,14 @@ public static class CliDispatch
         if (!RequireIndex(ctx, err))
             return 3;
 
+        // Only churn/risk record (the git-backed arms); clones/complexity are covered by the leader converge arm.
+        // Canonical = default range/limit/test-filter and no --include-commits; capture identity BEFORE computing.
+        bool recordable = operation is "churn" or "risk";
+        bool canonical = recordable
+            && !o.Has("range") && !o.Has("limit")
+            && !o.Has("include-tests") && !o.Has("exclude-tests") && !o.Has("include-commits");
+        HeavyArmIdentity? identity = canonical ? CaptureHeavyArmIdentity(ctx) : null;
+
         try
         {
             MetricsToolResult result = MetricsTool.Run(
@@ -612,6 +620,14 @@ public static class CliDispatch
                 includeCommits: o.Has("include-commits"),
                 historyReader: new ProcessGitHistoryReader());
             WriteOutput(outw, result.Output);
+            if (recordable)
+                RecordHeavyArmSnapshot(
+                    ctx,
+                    identity,
+                    operation == "churn" ? MetricHistoryHeavyArm.ChurnSource : MetricHistoryHeavyArm.RiskSource,
+                    result.SnapshotMetrics ?? Array.Empty<MetricHistoryPoint>(),
+                    canonical,
+                    err);
             return 0;
         }
         catch (Exception ex) when (
@@ -637,6 +653,10 @@ public static class CliDispatch
             return 2;
         if (!RequireIndex(ctx, err))
             return 3;
+
+        // Record only a default-params run (range/limit/test-filter untouched); capture identity BEFORE computing.
+        bool canonical = !o.Has("range") && !o.Has("limit") && !o.Has("exclude-tests") && !o.Has("include-tests");
+        HeavyArmIdentity? identity = canonical ? CaptureHeavyArmIdentity(ctx) : null;
 
         try
         {
@@ -669,6 +689,8 @@ public static class CliDispatch
                 historyReader: new ProcessGitHistoryReader(),
                 regionIndex: regionIndex);
             WriteOutput(outw, result.Output);
+            RecordHeavyArmSnapshot(
+                ctx, identity, MetricHistoryHeavyArm.ReportSource, result.SnapshotMetrics, canonical, err);
             return 0;
         }
         catch (Exception ex) when (
@@ -745,10 +767,18 @@ public static class CliDispatch
             return 3;
 
         int limit = o.Int("limit", DeadCodeCandidatesDefaultLimit);
+
+        // --limit bounds only the displayed list; the recorded counts are full totals. A default-limit run is
+        // canonical; capture identity BEFORE the reader computes so a mid-command rebuild is caught at append time.
+        bool canonical = !o.Has("limit");
+        HeavyArmIdentity? identity = canonical ? CaptureHeavyArmIdentity(ctx) : null;
+
         DeadCodeCandidateReport report = DeadCodeCandidateReader.Read(ctx.ExtractDbPath, ctx.WorkspaceRoot);
         outw.WriteLine(o.Has("json")
             ? RenderCandidatesJson(report, limit)
             : RenderCandidatesCompact(report, limit));
+        RecordHeavyArmSnapshot(
+            ctx, identity, MetricHistoryHeavyArm.CandidatesSource, CandidateSnapshotMetrics(report), canonical, err);
         return 0;
     }
 
@@ -897,6 +927,145 @@ public static class CliDispatch
 
     // The references-candidates-v1 JSON envelope version (docs/contracts/references-candidates-v1.md).
     private const int DeadCodeCandidatesSchemaVersion = 1;
+
+    // ---------- heavy-arm metric-history recording (report / metrics churn|risk / references candidates) ----------
+    //
+    // The single CLI-side hook the three heavy commands share. Each command captures the artifact identity BEFORE it
+    // computes (below), renders normally, then hands the already-composed metric points here. Recording is
+    // best-effort telemetry: a failed history write warns on stderr and NEVER changes the command's output or exit
+    // code. Only CANONICAL (default-params) runs record — a non-default run renders as usual and skips, because a
+    // trend line that mixes ranges/limits is incomparable. Design: docs/plans/2026-07-07-metric-history-design.md.
+
+    /// <summary>The artifact identity a heavy command captured before computing, for the append-time re-check.</summary>
+    internal readonly record struct HeavyArmIdentity(
+        string WorkspaceId, string ArtifactId, long Revision, string ExtractorVersion);
+
+    /// <summary>
+    /// Capture <c>(workspace_id, artifact_id, revision, extractor_version)</c> from the workspace's <c>symbols.db</c>
+    /// BEFORE the command computes, so a full-rebuild promotion mid-command is caught by the append-time re-check.
+    /// Returns <c>null</c> — recording is skipped silently — when there is no stable identity to attach history to
+    /// (no <c>.miller</c> index, no artifact_id, no revision yet) or the DB cannot be read. Never throws.
+    /// </summary>
+    internal static HeavyArmIdentity? CaptureHeavyArmIdentity(WorkspaceContext ctx)
+    {
+        try
+        {
+            string extractDbPath = ctx.ExtractDbPath;
+            if (!File.Exists(extractDbPath))
+                return null; // unregistered / no .miller ⟹ nothing to attach history to.
+
+            using var freshness = new FreshnessReader(extractDbPath);
+            string? artifactId = freshness.ArtifactId();
+            long revision = freshness.LatestRevision();
+            if (string.IsNullOrWhiteSpace(artifactId) || revision <= 0)
+                return null; // no stable artifact identity / no revision ⟹ cannot key a snapshot.
+
+            string workspaceId = ctx.WorkspaceId
+                ?? WorkspaceId.FromCanonicalRoot(Path.GetFullPath(ctx.CanonicalRoot ?? ctx.WorkspaceRoot));
+            if (string.IsNullOrWhiteSpace(workspaceId))
+                return null;
+
+            string extractorVersion = ExtractBinaryVersionReader.TryRead(extractDbPath) ?? string.Empty;
+            return new HeavyArmIdentity(workspaceId, artifactId!, revision, extractorVersion);
+        }
+        catch (Exception ex) when (
+            ex is IOException or InvalidOperationException or UnauthorizedAccessException
+                or ArgumentException or SqliteException)
+        {
+            return null; // identity unreadable ⟹ skip recording, never disturb the command.
+        }
+    }
+
+    /// <summary>
+    /// Append the heavy-arm snapshot the command just computed. No-op when the run was non-canonical, produced no
+    /// metrics, or had no capturable identity. The <c>RecordRun</c> re-check re-reads the live identity inside the
+    /// append transaction and skips on a mismatch (artifact replaced mid-command). Any failure is swallowed to a
+    /// stderr warning — the command's output and exit code are already committed.
+    /// </summary>
+    internal static MetricHistoryWriteResult? RecordHeavyArmSnapshot(
+        WorkspaceContext ctx,
+        HeavyArmIdentity? captured,
+        string source,
+        IReadOnlyList<MetricHistoryPoint> metrics,
+        bool canonical,
+        TextWriter warn,
+        DateTime? recordedAtUtc = null)
+    {
+        if (!canonical || captured is not { } id || metrics.Count == 0)
+            return null;
+
+        try
+        {
+            var snapshot = new MetricHistorySnapshot(
+                WorkspaceId: id.WorkspaceId,
+                ArtifactId: id.ArtifactId,
+                Revision: id.Revision,
+                ExtractorVersion: id.ExtractorVersion,
+                MillerVersion: MillerVersion.Current,
+                Source: source,
+                Metrics: metrics);
+
+            string historyDbPath = MetricSnapshotAggregates.HistoryDbPathFor(ctx.ExtractDbPath);
+            return MetricHistoryStore.RecordRun(
+                historyDbPath, snapshot, () => RecheckHeavyArmIdentity(ctx.ExtractDbPath), recordedAtUtc);
+        }
+        catch (Exception ex)
+        {
+            warn.WriteLine($"metric history: {source} snapshot not recorded ({ex.Message}).");
+            return null;
+        }
+    }
+
+    // The append-time identity re-read: the live (artifact_id, revision) the store compares against the captured
+    // snapshot identity. On any read failure it returns a guaranteed-mismatch sentinel so the store skips recording
+    // rather than stamping the captured identity onto numbers read from a since-replaced artifact.
+    private static (string ArtifactId, long Revision) RecheckHeavyArmIdentity(string extractDbPath)
+    {
+        try
+        {
+            using var freshness = new FreshnessReader(extractDbPath);
+            return (freshness.ArtifactId() ?? string.Empty, freshness.LatestRevision());
+        }
+        catch (Exception ex) when (
+            ex is IOException or InvalidOperationException or UnauthorizedAccessException
+                or ArgumentException or SqliteException)
+        {
+            return (string.Empty, -1);
+        }
+    }
+
+    // The heavy-arm `source='candidates'` snapshot: the full dead-code candidate count and suppressed total (both
+    // are full totals — `--limit` bounds only the displayed list, never these), with the per-rule suppressed
+    // breakdown in detail_json (the count-level surfacing approved 2026-07-07; per-symbol detail stays CLI-only).
+    private static IReadOnlyList<MetricHistoryPoint> CandidateSnapshotMetrics(DeadCodeCandidateReport report)
+    {
+        int suppressedTotal = 0;
+        foreach (int count in report.Result.Suppressions.Values)
+            suppressedTotal += count;
+
+        return
+        [
+            new MetricHistoryPoint(MetricHistoryHeavyArm.DeadCodeCandidateCount, report.Result.Candidates.Count, null),
+            new MetricHistoryPoint(
+                MetricHistoryHeavyArm.DeadCodeSuppressedTotal,
+                suppressedTotal,
+                SuppressionDetailJson(report.Result.Suppressions)),
+        ];
+    }
+
+    private static string SuppressionDetailJson(IReadOnlyDictionary<string, int> suppressions)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var w = new Utf8JsonWriter(
+            buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
+        {
+            w.WriteStartObject();
+            foreach (string id in DeadCodeCandidates.SuppressionRuleIds)
+                w.WriteNumber(id, suppressions.TryGetValue(id, out int count) ? count : 0);
+            w.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
 
     private static int Refresh(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
