@@ -57,6 +57,9 @@ Current `json_commands` include:
 | `metrics churn --json` | Local git commit-range churn mapped to the current index. See [`metrics-json-v1.md`](metrics-json-v1.md). |
 | `metrics clones --json` | Duplicate groups by identical non-empty body hash. See [`metrics-json-v1.md`](metrics-json-v1.md). |
 | `metrics complexity --json` | Bounded complexity hotspot report with transparent thresholds. See [`metrics-json-v1.md`](metrics-json-v1.md). |
+| `metrics risk --json` | Churn × complexity risk hotspot ranking with a transparent score formula. See [`metrics-json-v1.md`](metrics-json-v1.md). |
+| `metrics history --json` | Read-only metric trend points from the append-only `history.db` sidecar. See [`metrics-history-v1.md`](metrics-history-v1.md). |
+| `report --json` | Composed deterministic repo rollup (index, markers, complexity, clones, churn, risk). See [`report-json-v1.md`](report-json-v1.md). |
 | `content import --json` | Import local external text into `content.db`. |
 | `content add-markdown --json` | Import browser/fetched markdown with URL metadata into `content.db`. |
 | `content search --json` | Search content DB rows. |

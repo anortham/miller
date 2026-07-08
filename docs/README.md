@@ -39,6 +39,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`release-process.md`](release-process.md) - current release validation and promotion flow.
 - [`release-notes/v1.5.0.md`](release-notes/v1.5.0.md) - latest release notes.
 - [`findings/2026-07-08-v1.5.0-release-verification.md`](findings/2026-07-08-v1.5.0-release-verification.md) - live `v1.5.0` release verification.
+- [`findings/2026-07-08-v1.5.0-dogfood.md`](findings/2026-07-08-v1.5.0-dogfood.md) - v1.5.0 dead-code/metric-history dogfood plus the full-rebuild timing baseline (8.4 s).
 - [`findings/2026-07-06-v1.4.5-release-verification.md`](findings/2026-07-06-v1.4.5-release-verification.md) - live `v1.4.5` release verification.
 - [`release-notes/v1.3.2.md`](release-notes/v1.3.2.md) - historical `v1.3.2` release notes.
 - [`findings/2026-07-02-v1.3.2-release-verification.md`](findings/2026-07-02-v1.3.2-release-verification.md) - live `v1.3.2` release verification.

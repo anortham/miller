@@ -582,6 +582,9 @@ Text output is a compact human-facing contract and JSON output is the integratio
 - `symbols export --jsonl`, `references export --jsonl`, and `complexity export --jsonl` write deterministic
   artifact fact feeds for fleet rollups and Eros workflows. `references export` is a usage-fact feed, not a
   dead-code ranking tool.
+- `references candidates [--json]` is the dead-code candidate surface: an evidence-gated, deterministic listing
+  with named suppression counts and per-language resolution coverage (experimental, CLI-only; contract in
+  `docs/contracts/references-candidates-v1.md`). Candidates are facts to check, not deletions to make.
 - Eros-facing CLI contracts live in `docs/contracts/cli-eros-v1.md`; workspace onboarding JSON fields live in
   `docs/contracts/workspace-onboarding-v1.md`; trace JSON fields live in `docs/contracts/trace-json-v1.md`;
   content export fields live in `docs/contracts/content-corpus-v1.md`; and references export fields live in
