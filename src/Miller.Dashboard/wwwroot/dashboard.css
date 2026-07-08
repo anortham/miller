@@ -24,36 +24,41 @@
 }
 
 :root {
+  /* Enables light-dark() below and the UA form-control defaults for both schemes.
+     Each themed token is defined ONCE as light-dark(<light>, <dark>); the explicit
+     html[data-theme=...] stamps at the end only flip color-scheme, so a theme change
+     is made in a single place. No-JS users still get OS-preference dark. */
   color-scheme: light dark;
 
-  /* ---- Light: warm paper -------------------------------------------- */
-  --paper: #f1ece1;          /* canvas */
-  --grid: rgba(26, 23, 18, 0.05);   /* graph-paper rule */
-  --surface: #fbf9f3;        /* card */
-  --surface-inset: #f5f1e7;  /* tinted bands inside cards */
+  /* ---- Themed tokens — light-dark(<light>, <dark>) ------------------- */
+  --paper: light-dark(#f1ece1, #121110);                 /* canvas */
+  --grid: light-dark(rgba(26, 23, 18, 0.05), rgba(255, 255, 255, 0.028));  /* graph-paper rule */
+  --surface: light-dark(#fbf9f3, #1a1916);               /* card */
+  --surface-inset: light-dark(#f5f1e7, #211f1b);         /* tinted bands inside cards */
 
-  --ink: #1a1611;            /* warm near-black */
-  --ink-soft: #4b463d;
-  --muted: #8c8576;
+  --ink: light-dark(#1a1611, #ece6d8);                   /* warm near-black / warm off-white */
+  --ink-soft: light-dark(#4b463d, #c0baaa);
+  --muted: light-dark(#6f6959, #a49e8d);                 /* AA ≥4.5:1 on surface in both themes */
 
-  --rule: #ddd6c6;           /* hairline */
-  --rule-strong: #c3bba7;
+  --rule: light-dark(#ddd6c6, #2c2925);                  /* hairline */
+  --rule-strong: light-dark(#c3bba7, #423e38);
 
-  --accent: #0c7d72;         /* teal — the one accent */
-  --accent-ink: #075d54;     /* accent as text on paper */
-  --accent-soft: #dcebe6;    /* flat accent fill */
+  --accent: light-dark(#0c7d72, #2fb3a3);                /* teal — the one accent */
+  --accent-ink: light-dark(#075d54, #46c7b6);            /* accent as text */
+  --accent-soft: light-dark(#dcebe6, #16302d);           /* flat accent fill */
 
-  --ok: #3f7d39;
-  --ok-soft: #dde9d3;
-  --warn: #9a6207;
-  --warn-soft: #f0e4c8;
-  --err: #b23a25;
-  --err-soft: #f1d9d1;
+  --ok: light-dark(#3f7d39, #6aa85f);
+  --ok-soft: light-dark(#dde9d3, #1c2a18);
+  --warn: light-dark(#9a6207, #c98f2e);
+  --warn-soft: light-dark(#f0e4c8, #2e2410);
+  --err: light-dark(#b23a25, #d36a52);
+  --err-soft: light-dark(#f1d9d1, #2e1813);
 
   /* hard, blur-less offset — printed/mechanical, not a soft glow */
-  --lift: 3px 3px 0 0 rgba(26, 22, 17, 0.05);
-  --lift-hover: 5px 5px 0 0 rgba(26, 22, 17, 0.08);
+  --lift: 3px 3px 0 0 light-dark(rgba(26, 22, 17, 0.05), rgba(0, 0, 0, 0.35));
+  --lift-hover: 5px 5px 0 0 light-dark(rgba(26, 22, 17, 0.08), rgba(0, 0, 0, 0.45));
 
+  /* ---- Non-themed tokens -------------------------------------------- */
   --radius: 2px;
 
   --font-sans: 'Archivo', system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -62,58 +67,9 @@
   --tnum: "tnum" 1, "lnum" 1;   /* tabular lining figures for data */
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --paper: #121110;
-    --grid: rgba(255, 255, 255, 0.028);
-    --surface: #1a1916;
-    --surface-inset: #211f1b;
-
-    --ink: #ece6d8;
-    --ink-soft: #c0baaa;
-    --muted: #8f897a;
-
-    --rule: #2c2925;
-    --rule-strong: #423e38;
-
-    --accent: #2fb3a3;
-    --accent-ink: #46c7b6;
-    --accent-soft: #16302d;
-
-    --ok: #6aa85f;
-    --ok-soft: #1c2a18;
-    --warn: #c98f2e;
-    --warn-soft: #2e2410;
-    --err: #d36a52;
-    --err-soft: #2e1813;
-
-    --lift: 3px 3px 0 0 rgba(0, 0, 0, 0.35);
-    --lift-hover: 5px 5px 0 0 rgba(0, 0, 0, 0.45);
-  }
-}
-
-html[data-theme="dark"] {
-  --paper: #121110;
-  --grid: rgba(255, 255, 255, 0.028);
-  --surface: #1a1916;
-  --surface-inset: #211f1b;
-  --ink: #ece6d8;
-  --ink-soft: #c0baaa;
-  --muted: #8f897a;
-  --rule: #2c2925;
-  --rule-strong: #423e38;
-  --accent: #2fb3a3;
-  --accent-ink: #46c7b6;
-  --accent-soft: #16302d;
-  --ok: #6aa85f;
-  --ok-soft: #1c2a18;
-  --warn: #c98f2e;
-  --warn-soft: #2e2410;
-  --err: #d36a52;
-  --err-soft: #2e1813;
-  --lift: 3px 3px 0 0 rgba(0, 0, 0, 0.35);
-  --lift-hover: 5px 5px 0 0 rgba(0, 0, 0, 0.45);
-}
+/* Explicit toggle stamp overrides OS preference; light-dark() reads color-scheme. */
+html[data-theme="dark"] { color-scheme: dark; }
+html[data-theme="light"] { color-scheme: light; }
 
 * { box-sizing: border-box; }
 
