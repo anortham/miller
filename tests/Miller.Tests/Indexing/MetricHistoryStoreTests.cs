@@ -369,10 +369,7 @@ public sealed class MetricHistoryStoreTests : IDisposable
 
             // Corrupt the MAIN db body while keeping the 'SQLite format 3\0' header magic intact so SQLite still
             // recognizes it as a WAL-mode database (and thus does NOT treat the -wal as a deletable orphan).
-            byte[] bytes = File.ReadAllBytes(_dbPath);
-            for (int i = 200; i < Math.Min(bytes.Length, 8000); i++)
-                bytes[i] = 0xEE;
-            File.WriteAllBytes(_dbPath, bytes);
+            CorruptSqliteBodyPreservingHeader(_dbPath);
 
             // Trigger the reactive corruption recovery.
             var result = MetricHistoryStore.RecordConverge(
@@ -417,6 +414,22 @@ public sealed class MetricHistoryStoreTests : IDisposable
         using var cmd = c.CreateCommand();
         cmd.CommandText = sql;
         cmd.ExecuteNonQuery();
+    }
+
+    private static void CorruptSqliteBodyPreservingHeader(string path)
+    {
+        // Match SQLite's sharing expectations on Windows while the pin connection keeps WAL frames resident.
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete);
+        byte[] bytes = new byte[checked((int)fs.Length)];
+        fs.ReadExactly(bytes);
+
+        for (int i = 200; i < Math.Min(bytes.Length, 8000); i++)
+            bytes[i] = 0xEE;
+
+        fs.Position = 0;
+        fs.Write(bytes);
+        fs.SetLength(bytes.Length);
+        fs.Flush(flushToDisk: true);
     }
 
     // ---- present-but-unreadable (fails visibly, never a silent empty) ----------------------------------------

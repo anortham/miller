@@ -412,7 +412,7 @@ public sealed class MetricsToolTests
         MetricsToolResult result = MetricsTool.RunHistory(
             historyDb, "ws-test", new[] { "symbol_count", "complexity_p90" }, limit: 20, json: false);
 
-        string[] lines = result.Output.Split('\n');
+        string[] lines = result.Output.Split('\n').Select(static l => l.TrimEnd('\r')).ToArray();
         Assert.Equal("# metric history", lines[0]);
         Assert.Equal("recorded_at_utc\trevision\tsource\tsymbol_count\tcomplexity_p90", lines[1]);
         // Newest LAST: revision 40 line precedes revision 41 line.
