@@ -106,7 +106,31 @@ jobs:
           # consume ~2 minutes before this step starts. Keep this high enough for normal runner variance while still
           # catching a true runaway.
           FAST_BUDGET_SECONDS: 600
-        run: ./scripts/test.ps1 fast --no-build
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $results = Join-Path $PWD 'TestResults'
+          $start = Get-Date
+          dotnet test Miller.slnx --no-build -c Release --filter "Category!=Scale" `
+            --results-directory "$results" `
+            --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type none
+          $code = $LASTEXITCODE
+          $elapsed = [int][Math]::Ceiling(((Get-Date) - $start).TotalSeconds)
+          Write-Host "Default suite wall time: ${elapsed}s (Windows CI ceiling ${env:FAST_BUDGET_SECONDS}s)"
+
+          if ($code -ne 0) {
+            Get-ChildItem -Path "$results" -Recurse -Filter 'Sequence*.xml' -ErrorAction SilentlyContinue |
+              ForEach-Object {
+                Write-Host "::group::Blame sequence $($_.FullName)"
+                Get-Content $_.FullName
+                Write-Host "::endgroup::"
+              }
+            exit $code
+          }
+
+          if ($elapsed -gt [int]$env:FAST_BUDGET_SECONDS) {
+            Write-Error "Default test suite took ${elapsed}s (>${env:FAST_BUDGET_SECONDS}s Windows CI ceiling). Investigate slow tests or tag them [Trait(`"Category`",`"Scale`")]."
+            exit 1
+          }
 
   windows-scale-smoke:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
