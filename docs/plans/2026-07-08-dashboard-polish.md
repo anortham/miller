@@ -238,11 +238,11 @@ Commit mode: `parallel-lead-commit` for Batches A and B; `serial-worker-commit` 
 **Approach:** Refresh: use htmx's indicator contract (`hx-indicator` + a "Refreshing…" label span shown via the `.htmx-request` class on the button) instead of only the global opacity rule. Open-folder: style as a real button (existing button classes, not `.subtle-link`); in `dashboard-site.js`, toast success on `htmx:afterRequest` with a 2xx for that button (match by id or data attribute — keep it CSP-safe, no inline JS). Sparklines: render min/max (and latest value) as small text labels beside the svg from the series data already in hand — no charting library. Chips: truncate to the first 12 chars + ellipsis, full value in `title`, reuse the existing copy-button pattern for the artifact id and clone body hash. Any `<time>` on the detail page that still renders raw ISO text gets the Task 2 `RelativeTime` treatment. Render tests: refresh button carries the indicator markup; open-folder is a button with the toast hook attribute; sparkline labels present; chips truncate with full-value `title`.
 
 **Acceptance criteria:**
-- [ ] Refresh button shows an in-progress label via the htmx indicator mechanism (render-tested markup).
-- [ ] Open-folder renders as a button and success produces a toast (markup render-tested; toast live-verified in Task 7).
-- [ ] Sparklines display min/max/latest labels derived from the series.
-- [ ] Artifact id and clone body hash render as truncated copyable chips with full value in `title`; sidecar/artifact/revision labels carry `title` explanations.
-- [ ] Worker-scope verification passes and the change is committed per commit mode.
+- [x] Refresh button shows an in-progress label via the htmx indicator mechanism (render-tested markup).
+- [x] Open-folder renders as a button and success produces a toast (markup render-tested; toast live-verified in Task 7).
+- [x] Sparklines display min/max/latest labels derived from the series.
+- [x] Artifact id and clone body hash render as truncated copyable chips with full value in `title`; sidecar/artifact/revision labels carry `title` explanations.
+- [x] Worker-scope verification passes and the change is committed per commit mode.
 
 ### Task 7: Lead live verification (ops, report-only)
 
