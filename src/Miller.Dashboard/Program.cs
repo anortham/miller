@@ -1,4 +1,7 @@
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Miller.Dashboard;
 using Miller.Dashboard.Endpoints;
 using Miller.Server;
@@ -25,6 +28,9 @@ var host = new HostBuilder()
     .ConfigureWebHost(webBuilder =>
     {
         webBuilder
+            .ConfigureLogging(logging =>
+                logging.AddSimpleConsole()
+                    .SetMinimumLevel(LogLevel.Information))
             .UseKestrel()
             .UseContentRoot(AppContext.BaseDirectory)
             .UseUrls(paths.Url)
@@ -35,6 +41,23 @@ var host = new HostBuilder()
             })
             .Configure(app =>
             {
+                var logger = app.ApplicationServices.GetRequiredService<ILoggerFactory>()
+                    .CreateLogger("Miller.Dashboard");
+                app.Use(async (context, next) =>
+                {
+                    try
+                    {
+                        await next(context);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogError(ex, "Unhandled dashboard request exception");
+                        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+                        context.Response.ContentType = "text/plain; charset=utf-8";
+                        await context.Response.WriteAsync(
+                            $"miller-dashboard error: {ex.GetType().Name}: {ex.Message}");
+                    }
+                });
                 app.UseRouting();
                 app.UseEndpoints(endpoints =>
                 {
