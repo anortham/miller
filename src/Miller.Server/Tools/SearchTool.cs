@@ -414,28 +414,15 @@ public sealed class SearchTool
     }
 
     /// <summary>
-    /// Telemetry metadata recording which backend served a symbol search — <c>disk</c> when the on-disk
+    /// Telemetry value recording which backend served a symbol search — <c>disk</c> when the on-disk
     /// <see cref="FtsSymbolSearchIndex"/> sidecar answered, <c>memory</c> when the in-memory index did. This is
     /// the observable "disk path taken" signal from the sidecar design's risk list: an unexpected memory route
     /// should be easy to distinguish from the default disk route. Every symbol search stamps its backend into the
-    /// telemetry row's <c>metadata_json</c> so it can be read back per call and aggregated ad hoc (e.g.
-    /// <c>json_extract(metadata_json, '$.search_backend')</c>). No dashboard surface consumes it yet — it is
-    /// recorded for diagnosis; <c>SearchToolTests.Search_RecordsServingBackend_InTelemetryMetadata</c> pins it.
+    /// telemetry row's <c>metadata_json</c> (via <c>SetMetadata("search_backend", …)</c>) so it can be read back
+    /// per call and aggregated ad hoc (e.g. <c>json_extract(metadata_json, '$.search_backend')</c>). No dashboard
+    /// surface consumes it yet — it is recorded for diagnosis;
+    /// <c>SearchToolTests.Search_RecordsServingBackend_InTelemetryMetadata</c> pins it.
     /// </summary>
-    internal const string DiskBackendMetadata = "{\"search_backend\":\"disk\"}";
-
-    /// <summary>In-memory backend marker (see <see cref="DiskBackendMetadata"/>).</summary>
-    internal const string MemoryBackendMetadata = "{\"search_backend\":\"memory\"}";
-
-    /// <summary>Region text is always served from the disk sidecar.</summary>
-    internal const string RegionBackendMetadata = "{\"search_backend\":\"region_disk\"}";
-
-    /// <summary>Workspace source text is served from the content corpus sidecar.</summary>
-    internal const string TextContentBackendMetadata = "{\"search_backend\":\"content_disk\"}";
-
-    private static string SearchBackendMetadata(ISymbolLookupIndex index) =>
-        index is FtsSymbolSearchIndex ? DiskBackendMetadata : MemoryBackendMetadata;
-
     private static string SearchBackendName(ISymbolLookupIndex index) =>
         index is FtsSymbolSearchIndex ? "disk" : "memory";
 

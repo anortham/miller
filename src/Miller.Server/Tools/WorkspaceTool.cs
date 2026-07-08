@@ -973,10 +973,6 @@ public sealed class WorkspaceTool
         }
     }
 
-    private static string UnknownWorkspaceIdNote(string workspaceId) =>
-        $"unknown workspace selector '{workspaceId}'. Run workspace(operation=\"list\") to see display IDs/root paths, or " +
-        "workspace(operation=\"open\", path=\"/repo\") to register a workspace.";
-
     private static string UnknownWorkspacePathNote(string path) =>
         $"unknown workspace path '{path}'. Run workspace(operation=\"open\", path=\"{path}\") " +
         "to register it first.";
