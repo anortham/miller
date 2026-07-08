@@ -259,11 +259,11 @@ Commit mode: Tasks 1, 4, 7 `serial-worker-commit`; Batch A and Batch B tasks `pa
 **Approach:** Follow `ReadSearchSidecarStatus` in `DashboardIndexFactsReader` for the sidecar-probe pattern. Keep SVG generation in C# (testable), the `.razor` file thin. Absent metrics simply don't get a sparkline row.
 
 **Acceptance criteria:**
-- [ ] Workspace detail shows sparklines for available metrics from a seeded `history.db`; <2 points ⟹ the empty-state line.
-- [ ] Missing `history.db` ⟹ panel renders the empty state; no error.
-- [ ] `workspace health` compact + JSON include history status/size; corrupt-recovered is surfaced.
-- [ ] No full-index load added to any dashboard path.
-- [ ] Worker-scope verification passes and the verified diff is handed to the lead (parallel-lead-commit).
+- [x] Workspace detail shows sparklines for available metrics from a seeded `history.db`; <2 points ⟹ the empty-state line.
+- [x] Missing `history.db` ⟹ panel renders the empty state; no error.
+- [x] `workspace health` compact + JSON include history status/size; corrupt-recovered is surfaced.
+- [x] No full-index load added to any dashboard path.
+- [x] Worker-scope verification passes and the verified diff is handed to the lead (parallel-lead-commit).
 
 ---
 

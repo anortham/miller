@@ -69,14 +69,16 @@ public sealed record WorkspaceHealthFacts(
     IReadOnlyList<string> RecommendedActions,
     HealthState State,
     string Summary,
-    LeaderHealthFacts? Leader = null)
+    LeaderHealthFacts? Leader = null,
+    MetricHistoryStatus? History = null)
 {
     public static WorkspaceHealthFacts Create(
         WorkspaceFacts statusFacts,
         TelemetrySummary telemetry,
         TelemetryHealthFacts telemetryHealth,
         WorkspaceExtractionHealthFacts extraction,
-        LeaderHealthFacts? leader = null)
+        LeaderHealthFacts? leader = null,
+        MetricHistoryStatus? history = null)
     {
         var warnings = new List<HealthWarning>();
         var recommended = new List<string>();
@@ -152,7 +154,8 @@ public sealed record WorkspaceHealthFacts(
             recommended.Distinct(StringComparer.Ordinal).ToArray(),
             state,
             summary,
-            leader);
+            leader,
+            history);
     }
 
     public static string StateName(HealthState state) => state switch

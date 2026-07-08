@@ -1454,4 +1454,155 @@ public sealed class DashboardRegistryReadTests : IDisposable
         cmd.ExecuteNonQuery();
         return rowId;
     }
+
+    // ---- metric trends (history.db sidecar) ----
+
+    private DashboardWorkspaceRow WorkspaceRowWithMiller(out string historyDbPath)
+    {
+        string millerDir = Path.Combine(_dir, "repo", ".miller");
+        Directory.CreateDirectory(millerDir);
+        string indexDbPath = Path.Combine(millerDir, "symbols.db");
+        historyDbPath = MetricSnapshotAggregates.HistoryDbPathFor(indexDbPath);
+        return new DashboardWorkspaceRow(
+            WorkspaceId: "ws-a",
+            DisplayId: "alpha-abcd1234",
+            CanonicalRoot: Path.Combine(_dir, "repo"),
+            IndexDbPath: indexDbPath,
+            LastSeenAt: "2026-07-07T10:00:00Z",
+            LastScanAt: "2026-07-07T10:01:00Z",
+            LastRevision: 3,
+            State: "ready",
+            LastError: null);
+    }
+
+    private static void RecordSnapshot(
+        string historyDbPath, long revision, params (string Metric, double Value)[] metrics)
+    {
+        var snapshot = new MetricHistorySnapshot(
+            WorkspaceId: "ws-a",
+            ArtifactId: "art-1",
+            Revision: revision,
+            ExtractorVersion: "2.11.0",
+            MillerVersion: "0.9.9",
+            Source: "converge",
+            Metrics: metrics.Select(m => new MetricHistoryPoint(m.Metric, m.Value, null)).ToList());
+        MetricHistoryWriteResult result = MetricHistoryStore.RecordConverge(historyDbPath, snapshot);
+        Assert.Equal(MetricHistoryWriteResult.Recorded, result);
+    }
+
+    [Fact]
+    public void ReadTrends_BuildsSparklineSeriesForAvailableMetricsInCanonicalOrder()
+    {
+        DashboardWorkspaceRow workspace = WorkspaceRowWithMiller(out string historyDbPath);
+        // symbol_count + complexity_p90 get >=2 points (sparkline); marker_total gets 1 point (<2 => hint);
+        // clone_group_count + dead_code_candidate_count stay absent (no row).
+        RecordSnapshot(historyDbPath, 1, ("symbol_count", 100), ("complexity_p90", 8));
+        RecordSnapshot(historyDbPath, 2, ("symbol_count", 110), ("complexity_p90", 9));
+        RecordSnapshot(historyDbPath, 3, ("symbol_count", 120), ("complexity_p90", 9), ("marker_total", 4));
+
+        DashboardWorkspaceTrendsPanel panel = DashboardIndexFactsReader.ReadTrends(workspace);
+
+        Assert.True(panel.HasData);
+        Assert.Equal("ws-a", panel.WorkspaceId);
+        // Canonical order: symbol_count, complexity_p90, marker_total (clone/dead-code absent).
+        Assert.Equal(
+            new[] { "symbol_count", "complexity_p90", "marker_total" },
+            panel.Series.Select(s => s.Metric).ToArray());
+
+        DashboardTrendSeries symbols = panel.Series[0];
+        Assert.True(symbols.HasTrend);
+        Assert.Equal(new[] { 100d, 110d, 120d }, symbols.Points.ToArray());
+        Assert.Equal(100d, symbols.First);
+        Assert.Equal(120d, symbols.Latest);
+
+        DashboardTrendSeries markers = panel.Series[2];
+        Assert.False(markers.HasTrend); // single point => empty-state hint row, still present
+        Assert.Single(markers.Points);
+    }
+
+    [Fact]
+    public void ReadTrends_MissingHistoryDb_ReturnsEmptyPanelWithoutError()
+    {
+        DashboardWorkspaceRow workspace = WorkspaceRowWithMiller(out _);
+        // No history.db written.
+
+        DashboardWorkspaceTrendsPanel panel = DashboardIndexFactsReader.ReadTrends(workspace);
+
+        Assert.False(panel.HasData);
+        Assert.Empty(panel.Series);
+        Assert.Equal("ws-a", panel.WorkspaceId);
+    }
+
+    [Fact]
+    public void ReadSnapshot_PopulatesTrendsForSelectedWorkspace()
+    {
+        string millerDir = Path.Combine(_dir, "repo", ".miller");
+        Directory.CreateDirectory(millerDir);
+        string indexDbPath = Path.Combine(millerDir, "symbols.db");
+        string historyDbPath = MetricSnapshotAggregates.HistoryDbPathFor(indexDbPath);
+        RecordSnapshot(historyDbPath, 1, ("symbol_count", 50));
+        RecordSnapshot(historyDbPath, 2, ("symbol_count", 60));
+
+        using (var registry = WorkspaceRegistry.Open(_registryDb))
+        {
+            registry.UpsertSeen(
+                "ws-a",
+                "alpha-abcd1234",
+                Path.Combine(_dir, "repo"),
+                indexDbPath,
+                WorkspaceRegistryState.Ready,
+                DateTimeOffset.Parse("2026-07-07T10:00:00Z"));
+        }
+
+        DashboardSnapshot snapshot = DashboardData.ReadSnapshot(_registryDb, _telemetryDb, "ws-a");
+
+        Assert.NotNull(snapshot.Trends);
+        Assert.True(snapshot.Trends!.HasData);
+        DashboardTrendSeries series = Assert.Single(snapshot.Trends.Series);
+        Assert.Equal("symbol_count", series.Metric);
+        Assert.Equal(new[] { 50d, 60d }, series.Points.ToArray());
+    }
+
+    [Fact]
+    public void Sparkline_Points_EmptyForFewerThanTwoValues()
+    {
+        Assert.Equal(string.Empty, DashboardSparkline.Points(Array.Empty<double>()));
+        Assert.Equal(string.Empty, DashboardSparkline.Points(new[] { 5d }));
+    }
+
+    [Fact]
+    public void Sparkline_Points_SpansWidthAndInvertsMaxToTop()
+    {
+        string points = DashboardSparkline.Points(new[] { 0d, 10d });
+        string[] pairs = points.Split(' ');
+        Assert.Equal(2, pairs.Length);
+
+        // First x == 0, last x == full width; higher value (10) => smaller y than lower value (0).
+        (double x0, double y0) = ParsePair(pairs[0]);
+        (double x1, double y1) = ParsePair(pairs[1]);
+        Assert.Equal(0d, x0);
+        Assert.Equal(DashboardSparkline.ViewWidth, x1);
+        Assert.True(y1 < y0);
+    }
+
+    [Fact]
+    public void Sparkline_Points_FlatSeriesDrawsCenteredLine()
+    {
+        string points = DashboardSparkline.Points(new[] { 7d, 7d, 7d });
+        string[] pairs = points.Split(' ');
+        double mid = DashboardSparkline.ViewHeight / 2d;
+        foreach (string pair in pairs)
+        {
+            (double _, double y) = ParsePair(pair);
+            Assert.Equal(mid, y, precision: 2);
+        }
+    }
+
+    private static (double X, double Y) ParsePair(string pair)
+    {
+        string[] parts = pair.Split(',');
+        return (
+            double.Parse(parts[0], System.Globalization.CultureInfo.InvariantCulture),
+            double.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture));
+    }
 }

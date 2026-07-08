@@ -1,111 +1,115 @@
-# Task 6 report — nine golden tool descriptions + description gates
+# Task 6 — Dashboard trends + `workspace health` history surfacing
 
-**Status:** complete, worker scope green.
-**Branch/worktree:** `guidance-delivery` @ `/Users/murphy/source/miller/.worktrees/guidance-delivery`.
-(This file previously held a superseded, unrelated "search mode=markers collapse" Task 6 report; overwritten per
-the guidance-delivery plan's Task 6 report destination.)
+**Status:** COMPLETE. `commit SHA: none - parallel-lead-commit`
 
-## What changed
+**One-line test summary:** Fast suite green — 3004 passed / 0 failed / 0 skipped (22s, under the 30s ceiling); assigned scope (`~Dashboard|~WorkspaceHealth`) 94 passed; `WorkspaceRenderTests` 47 passed.
 
-Replaced the `[Description]` attribute on the `[McpServerTool]` method of all nine tools with the pre-approved
-golden text (impl-plan § "Tool descriptions (Task 6) — final text per tool"), and rewrote the description gates in
-`AgentInstructionsTests.cs`. No method bodies, parameter descriptions, or other file content touched.
+## What I implemented
 
-Ten files (all owned):
-- `src/Miller.Server/Tools/{SearchTool,InspectTool,ContextTool,TraceTool,ImpactTool,EditTool,PatternsTool,ContentTool,WorkspaceTool}.cs`
-- `tests/Miller.Tests/Server/AgentInstructionsTests.cs`
-
-## Golden-text fidelity
-
-Each new attribute was reconstructed (concatenated string literals joined) and compared **byte-for-byte** to the
-plan's blockquote text — all nine `match=True`, no wording change, only concatenation whitespace.
-
-## Per-tool char counts (attribute description text, after)
-
-| tool | chars | budget | result |
-|------|------:|-------:|--------|
-| search | 815 | 1,100 | OK |
-| inspect | 518 | 900 | OK |
-| context | 496 | 900 | OK |
-| trace | 947 | 1,500 | OK |
-| impact | 605 | 900 | OK |
-| edit | 668 | 900 | OK |
-| patterns | 593 | 900 | OK |
-| content | 543 | 900 | OK |
-| workspace | 636 | 900 | OK |
-
-## Before/after totals
-
-- **Descriptions-only total (design §4 baseline metric): before 4,512 → after 5,821 chars** (≤ 9,000). The
-  impl-plan quotes "4,522"; design §4 quotes "4,512"; direct source measurement gives **4,512** (the ~10-char
-  delta is em-dash/escape counting). Used the design's exact 4,512 baseline.
-- Parameter-description text (unchanged by this task): **7,853 chars**.
-- Full serialized schema (descriptions + params): before 12,365 → after **13,674 chars** (reported for
-  transparency; see the gate-semantics note).
-
-## Gate rewrite (AgentInstructionsTests.cs)
-
-Removed the single `ToolDescriptions_StayWithinClaudeCodeBudgets` (≤900) theory and the five bespoke old-wording
-content assertions (`InspectToolDescription_DocumentsOverviewFirstGuidance`,
-`TraceToolDescription_DocumentsRecoveryGuidance`, `ContentAndPatternsToolDescriptions_DocumentRecoveryGuidance`,
-`WorkspaceToolDescription_RoutesDashboardLaunchRequests`, `EditToolDescription_DocumentsTokenSavingSelectors`) —
-those pinned pre-golden phrasing and are superseded by the generic golden-clause gate. New gates:
-
-1. **Per-tool budget** — `ToolDescriptions_StayWithinPerToolBudget` (theory over reflected tool methods),
-   table-driven: default 900, documented overrides `trace`=1,500, `search`=1,100. Comment records the client-side
-   ~2KB/description hard cap.
-2. **Golden-clause assertions** — `ToolDescriptions_AreSelfSufficientUsageContracts` (theory): every description
-   contains `NOT for:` and an example call; for the seven tools cut by the old ~2KB window (context, trace,
-   impact, edit, patterns, content, workspace) the `NOT for:` clause (extracted from `NOT for:` up to the example)
-   must name ≥1 other Miller tool by name.
-   - **Note:** the example check matches `Example` (not the literal `Example:`) because the `patterns` golden text
-     legitimately uses the plural `Examples:`; requiring `Example:` verbatim would force a wording change to golden
-     text (a plan mismatch). Matching `Example` faithfully validates the example-clause contract for all nine.
-3. **Total schema budget** — `CombinedToolDescriptions_StayWithinTotalSchemaBudget` (fact): asserts the combined
-   nine-description text ≤ 9,000; failure message includes the measured description total, the parameter total, and
-   the full schema total.
-4. **Parameter-description gate (≤250)** — preserved verbatim in a dedicated theory
-   `ToolParameterDescriptions_StayWithinBudget` (same logic, unchanged threshold).
-
-Task 5's core gates were **not** touched (`Load_CoreFitsClaudeCodeDeliveryWindow`, `Load_RoutingTableNamesEveryTool`,
-`Load_PinsBehavioralAdoptionLanguage`), nor the todos/metrics negative tests or `PublicMcpToolNames`.
-
-## Gate-semantics note (one concern for the lead to confirm)
-
-The lead/impl-plan/CLAUDE.md phrase the total gate as "description **+ all parameter-description** text ≤ 9,000".
-That is **unsatisfiable as literally written**: parameter descriptions alone are 7,853 chars, so descriptions+params
-is 12,365 today and 13,674 after — already far over 9,000 before this task, and no in-scope golden/param edit can
-fix it. The design doc's own recorded baseline resolves the intent: design §4 states "before (4,512 chars today)",
-and **4,512 is exactly the descriptions-only total** (a params-inclusive baseline would read 12,365). Items 4 (each
-param ≤250) and 5 (total ≤9,000) are the two separate schema-bloat guards; the ≤9,000 total tracks the description
-text that actually grows. I implemented the gate as **descriptions-only ≤ 9,000** (before 4,512 → after 5,821) —
-the only reading consistent with the design's stated baseline and achievable — while the test's failure message
-still surfaces the full descriptions+params schema total. If the lead intends a params-inclusive ceiling, the
-threshold must rise above ~13,674 (a design decision), so it is flagged here rather than silently chosen.
-
-## TDD evidence (red → green)
-
-- **Red** (new gates vs. old descriptions): `ToolDescriptions_AreSelfSufficientUsageContracts` failed for all nine
-  ("… description must include a 'NOT for:' routing clause") — 9 failed / 34 passed / 43 total.
-- **Green** (after golden swap): **43 passed / 0 failed / 0 skipped**, 43 ms.
+1. **Trend read model + reader** (`DashboardIndexFactsReader.ReadTrends`): probes the workspace's append-only
+   `history.db` (sibling of `symbols.db`) via `MetricHistoryStore.ReadTrend(path, metrics, limit:0, maxPoints:50)`,
+   groups the flattened points per metric, and builds one `DashboardTrendSeries` per metric that has ≥1 recorded
+   point — in the exact canonical order `symbol_count, complexity_p90, clone_group_count, marker_total,
+   dead_code_candidate_count`. Absent metric ⟹ no row (never a 0 row). Read-only sidecar open, **no index
+   hydration** — same probe shape as `ReadSearchSidecarStatus`. Follows the local-metrics pattern: called directly
+   in `ReadSnapshot` (not routed through `DashboardIndexFactsCache`, matching `ReadLocalMetricsPanel`).
+2. **Records + pure SVG helper** (`DashboardData.cs`): `DashboardTrendSeries` (metric/label/points/first/latest,
+   `HasTrend` = ≥2 points), `DashboardWorkspaceTrendsPanel` (`HasData`, `Empty(id)`), and `DashboardSparkline` — a
+   pure static helper producing the SVG `polyline points` string over a fixed `0 0 100 24` viewBox (min at bottom,
+   max at top; flat series ⟹ centred line; <2 points ⟹ empty string). `Trends` wired onto `DashboardSnapshot`.
+3. **`WorkspaceTrendsPanel.razor`** (thin): one row per available metric; ≥2 points ⟹ inline SVG sparkline +
+   delta label; <2 points ⟹ `no trend data yet — run miller report`; empty `Series` ⟹ panel empty-state line.
+   Added to `WorkspaceDetailStack.razor` where the local-metrics panel lives. Local-first CSS (sparkline geometry,
+   theme-var stroke) appended to `dashboard.css`.
+4. **`workspace health` history line**: `WorkspaceHealthFacts` gained an optional `MetricHistoryStatus History`
+   (threaded through `Create`); both call sites in `WorkspaceTool` (own + cross-workspace health) now pass
+   `MetricHistoryStore.ReadStatus(MetricSnapshotAggregates.HistoryDbPathFor(dbPath))`. `WorkspaceRender.Health`
+   renders compact `history_db: present  N snapshots  <size>  schema vX[  corrupt-recovered]` / `absent[
+   corrupt-recovered]`, and a JSON `index.history_db` block (`present`/`schema_version`/`snapshot_count`/
+   `size_bytes`/`corrupt_recovered`).
 
 ## Verification
 
-`cd .worktrees/guidance-delivery && dotnet test tests/Miller.Tests --filter "FullyQualifiedName~AgentInstructionsTests"`
-→ **Passed! Failed: 0, Passed: 43, Skipped: 0, Total: 43**. Build succeeded under warnings-as-errors (0 warnings).
+- **Invariant:** dashboard trend + health surfaces are read-only aggregate facts, no full-index load; absent metric
+  is an absent row.
+- **Scope/command (assigned):**
+  `dotnet test tests/Miller.Tests/Miller.Tests.csproj -c Release --filter "(FullyQualifiedName~Dashboard|FullyQualifiedName~WorkspaceHealth)&Category!=Scale"`
+  → **94 passed, 0 failed** (314 ms).
+- **Worker ceiling:** `scripts/test.sh` → **3004 passed, 0 failed, 0 skipped**, 22s wall (<30s ceiling). Build 0
+  warnings / 0 errors (Release, warnings-as-errors).
+- Extra: `--filter FullyQualifiedName~WorkspaceRenderTests` → 47 passed (my health-render tests live there and fall
+  outside the assigned `~WorkspaceHealth` substring — see concerns).
+- **Timestamp:** 2026-07-07.
 
-**Gate invariant proven:** every tool description is a self-sufficient post-discovery usage contract — carries a
-`NOT for:` routing clause (naming another tool for the seven cut tools) and a copyable example — within its
-per-tool budget and the combined description budget.
+## Files changed (all within owned scope)
 
-## Miller-first orientation (evidence)
+- `src/Miller.Dashboard/DashboardIndexFactsReader.cs` — `ReadTrends` + metric set/labels + dead-code const.
+- `src/Miller.Dashboard/DashboardData.cs` — trend records, `DashboardSparkline`, `Trends` on snapshot + wiring.
+- `src/Miller.Dashboard/Components/WorkspaceTrendsPanel.razor` — **new** thin panel.
+- `src/Miller.Dashboard/Components/WorkspaceDetailStack.razor` — panel placed after local-metrics.
+- `src/Miller.Dashboard/wwwroot/dashboard.css` — sparkline/trend styles (additive; judgment call, see below).
+- `src/Miller.Server/Tools/WorkspaceHealthFacts.cs` — optional `History` field threaded through `Create`.
+- `src/Miller.Server/Tools/WorkspaceRender.cs` — compact `history_db` line + JSON `history_db` block + helpers.
+- `src/Miller.Server/Tools/WorkspaceTool.cs` — `ReadHistoryStatus` helper, passed at both health call sites.
+- `tests/Miller.Tests/Server/DashboardRegistryReadTests.cs` — trend reader + snapshot + sparkline geometry tests.
+- `tests/Miller.Tests/Server/WorkspaceRenderTests.cs` — health compact + JSON history-surfacing tests.
 
-- `grep [McpServerTool(Name=…)]` across the nine tool files confirmed each decorated method + line, so each
-  `[Description]` edit targeted the method attribute only (not a parameter/class attribute).
-- `Read` on each worktree file confirmed the exact current concatenated-literal attribute text before editing
-  (Miller `edit` never used; worktree text read directly per task rule).
-- Miller `inspect` (summary) confirmed API shape: `EditTool.cs` → `Edit :50 [McpServerTool(Name = "edit")]`;
-  `AgentInstructionsTests.cs` → gate members `ToolDescriptions_StayWithinPerToolBudget :152`,
-  `ToolParameterDescriptions_StayWithinBudget :167`, `ToolDescriptions_AreSelfSufficientUsageContracts :184`,
-  `CombinedToolDescriptions_StayWithinTotalSchemaBudget :215`, and constants `MaxCombinedToolDescriptionChars=9_000`,
-  `DefaultToolDescriptionChars=900`, `MaxParameterDescriptionChars=250`.
+## Miller calls + confirmations (branch new files Read directly per instructions)
+
+- `ToolSearch select:...` loaded the Miller MCP tool schemas (deferred). The Miller index serves the **main**
+  checkout; every file I edited on `feat/metric-history` is either new-on-branch or diverged, so per the task's
+  hard requirement I Read them directly rather than trusting the stale main index. Files Read + confirmed:
+  `MetricSnapshotAggregates.cs` (metric-name consts `SymbolCount/ComplexityP90/CloneGroupCount/MarkerTotal`,
+  `HistoryDbPathFor`), `MetricHistoryStore.cs` (`ReadTrend` signature + snapshot_id ordering + uniform-stride
+  downsample; `ReadStatus` → `MetricHistoryStatus(Present,SchemaVersion,SnapshotCount,SizeBytes,CorruptRecovered)`,
+  never throws), `DashboardIndexFactsReader.cs` (`ReadSearchSidecarStatus` probe template, read-only open),
+  `DashboardData.cs` (`DashboardLocalMetricsPanel`/`DashboardSnapshot`/`ReadSnapshot`/`ReadLocalMetricsPanel` — the
+  not-cached direct-read pattern), `WorkspaceLocalMetricsPanel.razor`/`ContextSavingsPanel.razor`/
+  `WorkspaceDetailStack.razor` (panel + CSS conventions + stack wiring), `WorkspaceHealthReader.cs`/
+  `WorkspaceHealthFacts.cs` (`Create` shape + optional-arg convention), `WorkspaceRender.cs` (Health compact/JSON
+  render points, sidecar label + JSON-writer patterns), `WorkspaceTool.cs` (~237 own + ~339 cross-workspace health
+  `Create` call sites, `ReadLeaderFacts` helper style).
+
+## API-shape evidence
+
+- `MetricHistoryStore.ReadTrend(string, IReadOnlyList<string>, int limit, int maxPoints)` returns
+  `IReadOnlyList<MetricHistoryTrendPoint(SnapshotId,RecordedAtUtc,ArtifactId,Revision,Source,Metric,Value)]`,
+  ordered by snapshot_id, per-metric downsampled; `File.Exists` false ⟹ empty (drives the missing-db empty panel).
+- `MetricSnapshotAggregates.HistoryDbPathFor(symbolsDbPath)` → sibling `history.db` (throws only on a dir-less path,
+  caught in `ReadTrends`).
+- `MetricHistoryStore.ReadStatus` is best-effort/non-throwing → safe inside the health path with no guard.
+- Metric-name consts consumed from `MetricSnapshotAggregates`; `dead_code_candidate_count` has no shared const in
+  `src/Miller.Indexing` yet (only in the sibling's test), so pinned as
+  `DashboardIndexFactsReader.DeadCodeCandidateCountMetric`.
+
+## Self-review findings
+
+- Absent-vs-zero honoured: `values.Count == 0` ⟹ `continue` (no row); a 1-point metric IS a present series with
+  `HasTrend=false` (renders the run-`miller report` hint), distinct from an absent metric.
+- No index hydration on any dashboard path: `ReadTrends` opens only `history.db` (read-only); `ReadStatus` likewise.
+- Trends deliberately NOT cached (mirrors `ReadLocalMetricsPanel`) — consistent with the existing panel pattern.
+- Source-gen JSON: the new nested records reach the graph via `DashboardSnapshot.Trends`, so they serialize under
+  the existing `DashboardJsonContext` with no extra `[JsonSerializable]` (build 0-warning confirms).
+
+## Judgment calls
+
+1. **`dead_code_candidate_count` literal:** no shared const exists in `src/Miller.Indexing` on this branch (the
+   sibling task adds the producer), so I pinned it locally as `DeadCodeCandidateCountMetric` with a note to switch
+   to a shared const when it lands. I did not touch any sibling file.
+2. **`dashboard.css`:** not in the explicit owned-file list, but the sparkline styles are part of this panel and
+   purely additive (new `.trend-*`/`.sparkline` selectors, theme-var driven, local-first — no external assets). The
+   only Batch-B sibling (Task 3, heavy arms/CLI) does not touch the dashboard, so no conflict.
+3. **JSON placement:** put `history_db` inside the health JSON `index` object next to `search_sidecar`/
+   `content_corpus` (the other Miller-owned sidecars) for locality; additive, existing keys untouched.
+4. **`maxPoints=50, limit=0`:** downsampling to 50 as specified; `limit=0` (unbounded snapshots) so the whole series
+   is considered before the 50-point stride, matching the store's "≤0 = no limit" contract.
+
+## Concerns
+
+- My health compact/JSON surfacing tests live in `WorkspaceRenderTests` (that is where Health rendering is tested),
+  which is **not** matched by the assigned filter's `~WorkspaceHealth` substring — so the assigned-scope run
+  (94 passed) exercises the trend reader + the `WorkspaceHealth*` facts tests but not the two render tests. I ran
+  `WorkspaceRenderTests` explicitly (47 passed) and the full fast suite (3004 passed) to cover them. No behavior
+  gap; only a filter-substring mismatch.
+- `history.db` grows append-only; `ReadTrend` reads all matching rows then downsamples to 50 in-memory. Fine for a
+  workspace-local sidecar today; if snapshot volume ever explodes, add a snapshot-count cap via the `limit` arg.

@@ -239,7 +239,8 @@ public sealed class WorkspaceTool
             _ledger.Summarize(),
             _ledger.SummarizeOutcomes(),
             WorkspaceHealthReader.Read(_workspace.ExtractDbPath),
-            ReadLeaderFacts(_workspace.ExtractDbPath, ownWorkspace: true));
+            ReadLeaderFacts(_workspace.ExtractDbPath, ownWorkspace: true),
+            ReadHistoryStatus(_workspace.ExtractDbPath));
         return WorkspaceRender.Health(health, json);
     }
 
@@ -258,6 +259,11 @@ public sealed class WorkspaceTool
     // process's probed extractor version, and the artifact's recorded binary_version. The IndexerService verdict
     // applies only to OUR workspace's artifact, so for a cross-workspace target it stays null (this process is
     // not a writer candidate there — its eligibility says nothing about that workspace's convergence).
+    // Best-effort status of the workspace's append-only metric history sidecar (sibling of symbols.db). Never
+    // throws — a missing/unreadable history.db degrades to an absent-present status the health surface renders.
+    private static MetricHistoryStatus ReadHistoryStatus(string indexDbPath) =>
+        MetricHistoryStore.ReadStatus(MetricSnapshotAggregates.HistoryDbPathFor(indexDbPath));
+
     private LeaderHealthFacts ReadLeaderFacts(string indexDbPath, bool ownWorkspace) =>
         LeaderHealthFacts.Read(Path.GetDirectoryName(indexDbPath)!) with
         {
@@ -341,7 +347,8 @@ public sealed class WorkspaceTool
             _ledger.SummarizeForWorkspace(row.WorkspaceId),
             _ledger.SummarizeOutcomesForWorkspace(row.WorkspaceId),
             extraction,
-            ReadLeaderFacts(row.IndexDbPath, ownWorkspace: false));
+            ReadLeaderFacts(row.IndexDbPath, ownWorkspace: false),
+            ReadHistoryStatus(row.IndexDbPath));
         return (WorkspaceRender.Health(health, json), 1, TelemetryOutcome.Ok);
     }
 

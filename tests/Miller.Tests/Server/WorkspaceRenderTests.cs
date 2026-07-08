@@ -656,6 +656,50 @@ public sealed class WorkspaceRenderTests
         Assert.Equal("inspect parse diagnostics", root.GetProperty("recommended_actions")[0].GetString());
     }
 
+    [Fact]
+    public void Health_Compact_RendersHistorySidecarPresenceAndCorruptRecovery()
+    {
+        var present = HealthWithHistory(new MetricHistoryStatus(
+            Present: true, SchemaVersion: 1, SnapshotCount: 7, SizeBytes: 4096, CorruptRecovered: false));
+        string presentText = WorkspaceRender.Health(present, json: false);
+        Assert.Contains("history_db: present  7 snapshots", presentText);
+        Assert.Contains("schema v1", presentText);
+
+        var recovered = HealthWithHistory(new MetricHistoryStatus(
+            Present: false, SchemaVersion: 0, SnapshotCount: 0, SizeBytes: 0, CorruptRecovered: true));
+        string recoveredText = WorkspaceRender.Health(recovered, json: false);
+        Assert.Contains("history_db: absent  corrupt-recovered", recoveredText);
+    }
+
+    [Fact]
+    public void Health_Json_RendersHistorySidecarBlock()
+    {
+        var health = HealthWithHistory(new MetricHistoryStatus(
+            Present: true, SchemaVersion: 1, SnapshotCount: 7, SizeBytes: 4096, CorruptRecovered: true));
+
+        using var doc = JsonDocument.Parse(WorkspaceRender.Health(health, json: true));
+        JsonElement history = doc.RootElement.GetProperty("index").GetProperty("history_db");
+
+        Assert.True(history.GetProperty("present").GetBoolean());
+        Assert.Equal(1, history.GetProperty("schema_version").GetInt32());
+        Assert.Equal(7, history.GetProperty("snapshot_count").GetInt64());
+        Assert.Equal(4096, history.GetProperty("size_bytes").GetInt64());
+        Assert.True(history.GetProperty("corrupt_recovered").GetBoolean());
+    }
+
+    private static WorkspaceHealthFacts HealthWithHistory(MetricHistoryStatus history) =>
+        new(
+            StatusFacts: Facts(),
+            Telemetry: TelemetrySummary.Empty,
+            TelemetryHealth: new TelemetryHealthFacts(OkCount: 5, EmptyCount: 1, ErrorCount: 0),
+            Extraction: ExtractionHealth(),
+            Warnings: Array.Empty<HealthWarning>(),
+            RecommendedActions: Array.Empty<string>(),
+            State: HealthState.Ready,
+            Summary: "index and sidecars are ready",
+            Leader: null,
+            History: history);
+
     // ---- list ----
 
     [Fact]

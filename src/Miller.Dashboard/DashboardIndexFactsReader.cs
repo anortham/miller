@@ -8,6 +8,80 @@ public static class DashboardIndexFactsReader
 {
     private static readonly ContentCorpusSidecar ContentSidecar = new();
 
+    // The heavy-arm metric recorded by the dead-code-candidates command. That producer is a sibling task; there is
+    // no shared const in Miller.Indexing yet, so the literal string is pinned here next to the other metric names.
+    // Keep in step with the candidates arm's metric name when the shared const lands.
+    internal const string DeadCodeCandidateCountMetric = "dead_code_candidate_count";
+
+    // The exact sparkline metric set (design "Dashboard" section), in display order. Each entry pairs the stored
+    // metric name with the row label. Metrics with no recorded history become an ABSENT row, never a zero row.
+    private static readonly (string Metric, string Label)[] TrendMetrics =
+    {
+        (MetricSnapshotAggregates.SymbolCount, "Symbols"),
+        (MetricSnapshotAggregates.ComplexityP90, "Complexity p90"),
+        (MetricSnapshotAggregates.CloneGroupCount, "Clone groups"),
+        (MetricSnapshotAggregates.MarkerTotal, "Markers"),
+        (DeadCodeCandidateCountMetric, "Dead-code candidates"),
+    };
+
+    private const int TrendMaxPoints = 50;
+
+    /// <summary>
+    /// Read the workspace's metric trends from its <c>history.db</c> sidecar (sibling of <c>symbols.db</c>) for the
+    /// fixed sparkline metric set, downsampled to <see cref="TrendMaxPoints"/> points per metric. Read-only aggregate
+    /// facts — it opens only the append-only history sidecar and never hydrates the index. A missing/unreadable
+    /// history.db, or one with none of the tracked metrics, yields an empty panel (the caller renders the empty
+    /// state). Never throws (<see cref="MetricHistoryStore.ReadTrend"/> is best-effort).
+    /// </summary>
+    public static DashboardWorkspaceTrendsPanel ReadTrends(DashboardWorkspaceRow workspace)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+
+        string historyDbPath;
+        try
+        {
+            historyDbPath = MetricSnapshotAggregates.HistoryDbPathFor(workspace.IndexDbPath);
+        }
+        catch (ArgumentException)
+        {
+            return DashboardWorkspaceTrendsPanel.Empty(workspace.WorkspaceId);
+        }
+
+        string[] metricNames = Array.ConvertAll(TrendMetrics, static m => m.Metric);
+        IReadOnlyList<MetricHistoryTrendPoint> points =
+            MetricHistoryStore.ReadTrend(historyDbPath, metricNames, limit: 0, maxPoints: TrendMaxPoints);
+
+        // Group the flattened rows by metric (each already ordered by snapshot_id) so a per-metric value series can
+        // be assembled without re-sorting.
+        var valuesByMetric = new Dictionary<string, List<double>>(StringComparer.Ordinal);
+        foreach (MetricHistoryTrendPoint point in points)
+        {
+            if (!valuesByMetric.TryGetValue(point.Metric, out List<double>? series))
+            {
+                series = new List<double>();
+                valuesByMetric[point.Metric] = series;
+            }
+
+            series.Add(point.Value);
+        }
+
+        var seriesList = new List<DashboardTrendSeries>(TrendMetrics.Length);
+        foreach ((string metric, string label) in TrendMetrics)
+        {
+            if (!valuesByMetric.TryGetValue(metric, out List<double>? values) || values.Count == 0)
+                continue; // absent metric ⟹ no row.
+
+            seriesList.Add(new DashboardTrendSeries(
+                metric,
+                label,
+                values,
+                First: values[0],
+                Latest: values[^1]));
+        }
+
+        return new DashboardWorkspaceTrendsPanel(workspace.WorkspaceId, seriesList);
+    }
+
     public static IReadOnlyList<DashboardWorkspaceFacts> Read(IReadOnlyList<DashboardWorkspaceRow> workspaces)
     {
         ArgumentNullException.ThrowIfNull(workspaces);
