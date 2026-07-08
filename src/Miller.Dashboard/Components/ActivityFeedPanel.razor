@@ -24,7 +24,7 @@
             @foreach (DashboardActivityEntry entry in Feed.Entries)
             {
                 <li class="activity-row">
-                    <time class="rel-ts timestamp" datetime="@entry.Ts" data-ts="@entry.Ts">@entry.Ts</time>
+                    <time class="rel-ts timestamp" datetime="@entry.Ts" data-ts="@entry.Ts">@RelativeTime(entry.Ts, Now)</time>
                     <code class="activity-tool">@entry.Tool</code>
                     @if (!string.IsNullOrWhiteSpace(entry.Op))
                     {
@@ -82,6 +82,9 @@
 @code {
     [Parameter, EditorRequired] public DashboardActivityFeed Feed { get; set; } =
         new(null, Array.Empty<DashboardActivityEntry>());
+
+    // One "now" per render so every row humanizes against the same instant.
+    private readonly DateTimeOffset Now = DateTimeOffset.UtcNow;
 
     private bool MachineWide => Feed.WorkspaceId is null;
 

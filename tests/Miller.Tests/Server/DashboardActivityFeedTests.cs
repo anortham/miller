@@ -224,6 +224,9 @@ public sealed class DashboardActivityFeedTests : IDisposable
         Assert.Contains("hx-get=\"/fragments/activity?workspace_id=ws-a\"", html);
         Assert.Contains("every 5s", html);
         Assert.Contains("data-ts=\"2026-06-12T10:00:00.000Z\"", html);
+        // Server-side humanized text renders inside time.rel-ts; the raw ISO stays only in data-ts/datetime.
+        Assert.DoesNotContain(">2026-06-12T10:00:00.000Z</time>", html);
+        Assert.Contains(" ago</time>", html);
         Assert.Contains("search", html);
         Assert.Contains("12 ms", html);
         // Scoped feed: rows do not repeat the workspace name.
@@ -365,6 +368,13 @@ public sealed class DashboardActivityFeedTests : IDisposable
         Assert.Contains("data-ts=\"2026-06-12T10:01:00.000Z\"", html);
         Assert.Contains("data-ts=\"2026-06-12T10:00:30.000Z\"", html);
         Assert.Contains("rel-ts", html);
+        // <time> text is humanized server-side; raw ISO stays only in data-ts/datetime.
+        Assert.DoesNotContain(">2026-06-12T10:01:00.000Z</time>", html);
+        Assert.Contains(" ago</time>", html);
+        // Window label is humanized to a short absolute form — no raw ISO timestamp string.
+        Assert.Contains("Jun 12, 10:00 UTC", html);
+        Assert.Contains("Jun 12, 10:01 UTC", html);
+        Assert.DoesNotContain("from 2026-06-12T10:00:00.000Z to 2026-06-12T10:01:00.000Z", html);
     }
 
     [Fact]

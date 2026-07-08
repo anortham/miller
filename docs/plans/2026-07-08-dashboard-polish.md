@@ -117,10 +117,10 @@ Commit mode: `parallel-lead-commit` for Batches A and B; `serial-worker-commit` 
 **Approach:** `RelativeTime` is pure and takes `now` explicitly (deterministic tests; callers pass `DateTimeOffset.UtcNow`). In the razor components, render `RelativeTime(...)` as the `<time>` element's text while keeping `data-ts`/`datetime` attributes carrying the ISO value. For the telemetry window label, humanize both endpoints (a short absolute form like `"Jun 8 14:02"` is acceptable for window bounds if relative reads oddly — pick one and test it). Unparseable timestamp strings fall back to rendering the raw value (never throw). GB tier mirrors the existing MB formatting style ("N1" + suffix).
 
 **Acceptance criteria:**
-- [ ] `DashboardFormatTests` pin `RelativeTime` buckets (seconds/minutes/hours/days) and `FormatBytes` GB tier, including the fallback for unparseable input.
-- [ ] Rendered activity feed markup contains humanized text inside `time.rel-ts` while `data-ts` still carries the ISO value (render test).
-- [ ] Telemetry window label no longer contains a raw `+00:00` ISO string (render test).
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode.
+- [x] `DashboardFormatTests` pin `RelativeTime` buckets (seconds/minutes/hours/days) and `FormatBytes` GB tier, including the fallback for unparseable input.
+- [x] Rendered activity feed markup contains humanized text inside `time.rel-ts` while `data-ts` still carries the ISO value (render test).
+- [x] Telemetry window label no longer contains a raw `+00:00` ISO string (render test).
+- [x] Worker-scope verification passes and the change is handed to the lead per commit mode.
 
 ### Task 3: Theme tokens via light-dark() + contrast
 

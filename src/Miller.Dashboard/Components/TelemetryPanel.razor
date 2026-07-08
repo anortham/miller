@@ -61,7 +61,7 @@
                                 }
                                 else
                                 {
-                                    <time class="rel-ts timestamp" datetime="@tool.LastCallTs" data-ts="@tool.LastCallTs">@tool.LastCallTs</time>
+                                    <time class="rel-ts timestamp" datetime="@tool.LastCallTs" data-ts="@tool.LastCallTs">@RelativeTime(tool.LastCallTs, Now)</time>
                                 }
                             </td>
                             <td class="telemetry-col-optional">
@@ -72,7 +72,7 @@
                                 else
                                 {
                                     <span class="error-kind">@tool.LastErrorKind</span>
-                                    <time class="rel-ts timestamp" datetime="@tool.LastErrorTs" data-ts="@tool.LastErrorTs">@tool.LastErrorTs</time>
+                                    <time class="rel-ts timestamp" datetime="@tool.LastErrorTs" data-ts="@tool.LastErrorTs">@RelativeTime(tool.LastErrorTs, Now)</time>
                                 }
                             </td>
                             <td class="telemetry-col-optional">@tool.SumEstTokens.ToString("N0", CultureInfo.InvariantCulture)</td>
@@ -90,7 +90,7 @@
                     @foreach (DashboardRecentError error in Telemetry.RecentErrors)
                     {
                         <li>
-                            <time class="rel-ts timestamp" datetime="@error.Ts" data-ts="@error.Ts">@error.Ts</time>
+                            <time class="rel-ts timestamp" datetime="@error.Ts" data-ts="@error.Ts">@RelativeTime(error.Ts, Now)</time>
                             <code>@error.Tool</code>
                             @if (!string.IsNullOrWhiteSpace(error.Op))
                             {
@@ -141,12 +141,16 @@
 
     [Parameter] public string? SelectedWorkspaceId { get; set; }
 
+    // One "now" per render so every row humanizes against the same instant.
+    private readonly DateTimeOffset Now = DateTimeOffset.UtcNow;
+
     private bool AllWorkspaces => string.Equals(SelectedWorkspaceId, "all", StringComparison.Ordinal);
 
+    // Short absolute UTC bounds — a relative "from … to …" reads oddly for a fixed window.
     private string WindowLabel =>
         Telemetry.WindowStartTs is null || Telemetry.WindowEndTs is null
             ? string.Empty
-            : $"from {Telemetry.WindowStartTs} to {Telemetry.WindowEndTs}";
+            : $"from {AbsoluteShort(Telemetry.WindowStartTs)} to {AbsoluteShort(Telemetry.WindowEndTs)}";
 
     private static string DisplayOutcome(string? value) =>
         string.IsNullOrWhiteSpace(value) ? "unknown" : value;

@@ -28,8 +28,69 @@ public static class DashboardFormat
             return kb.ToString("0.0", CultureInfo.InvariantCulture) + " KB";
 
         double mb = kb / 1000d;
-        return mb.ToString("0.0", CultureInfo.InvariantCulture) + " MB";
+        if (mb < 1000)
+            return mb.ToString("0.0", CultureInfo.InvariantCulture) + " MB";
+
+        double gb = mb / 1000d;
+        return gb.ToString("0.0", CultureInfo.InvariantCulture) + " GB";
     }
+
+    /// <summary>
+    /// Server-side humanized "time ago" so <c>&lt;time&gt;</c> elements read correctly at first paint and
+    /// with JS off. Buckets MUST mirror <c>dashboard-site.js</c> <c>updateRelativeTimes</c> so the server
+    /// text and the first client repaint agree. Pure: the caller passes <paramref name="now"/> explicitly.
+    /// </summary>
+    public static string RelativeTime(DateTimeOffset value, DateTimeOffset now)
+    {
+        // JS: Math.max(0, Math.floor((now - parsed) / 1000)) — clamp future timestamps to 0.
+        double deltaSeconds = (now - value).TotalSeconds;
+        long seconds = deltaSeconds <= 0 ? 0 : (long)Math.Floor(deltaSeconds);
+
+        if (seconds < 5)
+            return "just now";
+        if (seconds < 60)
+            return seconds.ToString(CultureInfo.InvariantCulture) + "s ago";
+        if (seconds < 3600)
+            return (seconds / 60).ToString(CultureInfo.InvariantCulture) + "m ago";
+        if (seconds < 86400)
+            return (seconds / 3600).ToString(CultureInfo.InvariantCulture) + "h ago";
+        return (seconds / 86400).ToString(CultureInfo.InvariantCulture) + "d ago";
+    }
+
+    /// <summary>
+    /// String overload for the ISO ("O") timestamps the dashboard stores. Unparseable input falls back to
+    /// rendering the raw value (never throws); null/empty renders empty.
+    /// </summary>
+    public static string RelativeTime(string? value, DateTimeOffset now)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+
+        return TryParseTimestamp(value, out DateTimeOffset parsed)
+            ? RelativeTime(parsed, now)
+            : value;
+    }
+
+    /// <summary>
+    /// Short absolute UTC form (e.g. <c>"Jun 12, 10:00 UTC"</c>) for window bounds where a relative label
+    /// reads oddly. Unparseable input falls back to the raw value (never throws).
+    /// </summary>
+    public static string AbsoluteShort(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return value ?? string.Empty;
+
+        return TryParseTimestamp(value, out DateTimeOffset parsed)
+            ? parsed.UtcDateTime.ToString("MMM d, HH:mm 'UTC'", CultureInfo.InvariantCulture)
+            : value;
+    }
+
+    private static bool TryParseTimestamp(string value, out DateTimeOffset parsed) =>
+        DateTimeOffset.TryParse(
+            value,
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.RoundtripKind | DateTimeStyles.AssumeUniversal,
+            out parsed);
 
     public static string FormatSavingsRatio(double? ratio) =>
         ratio is null ? "—" : (ratio.Value * 100).ToString("0.0", CultureInfo.InvariantCulture) + "%";
