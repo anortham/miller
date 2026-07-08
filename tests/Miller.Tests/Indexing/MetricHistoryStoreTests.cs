@@ -291,8 +291,10 @@ public sealed class MetricHistoryStoreTests : IDisposable
     // ---- corruption ------------------------------------------------------------------------------------------
 
     [Fact]
-    public void Corrupt_file_is_renamed_aside_and_a_fresh_db_started()
+    public void RecordConverge_corrupt_file_is_reactively_renamed_aside_and_the_snapshot_still_lands()
     {
+        // No proactive probe: the corruption is only discovered when the write itself opens the DB, which must
+        // rename the garbage aside and retry the write once so the current snapshot still lands.
         File.WriteAllText(_dbPath, "this is not a sqlite database at all, just garbage bytes");
 
         var result = MetricHistoryStore.RecordConverge(
@@ -311,6 +313,32 @@ public sealed class MetricHistoryStoreTests : IDisposable
         Assert.True(status.CorruptRecovered);
         Assert.Equal(1L, status.SnapshotCount);
         Assert.Equal(MetricHistoryStore.SchemaVersion, status.SchemaVersion);
+    }
+
+    [Fact]
+    public void RecordRun_corrupt_file_is_reactively_renamed_aside_and_the_snapshot_still_lands()
+    {
+        File.WriteAllText(_dbPath, "this is not a sqlite database at all, just garbage bytes");
+
+        var result = MetricHistoryStore.RecordRun(
+            _dbPath, Snapshot("report", revision: 1, metrics: ("symbol_count", 42, null)), () => ("art-1", 1));
+
+        Assert.Equal(MetricHistoryWriteResult.Recorded, result);
+
+        var corruptSiblings = Directory.EnumerateFiles(_dir, MetricHistoryStore.HistoryDbFileName + ".corrupt-*").ToArray();
+        Assert.Single(corruptSiblings);
+
+        using (var c = OpenRead())
+        {
+            Assert.Equal(1L, Convert.ToInt64(Scalar(c, "SELECT COUNT(*) FROM snapshots;"), CultureInfo.InvariantCulture));
+            Assert.Equal(42.0, Convert.ToDouble(
+                Scalar(c, "SELECT value FROM snapshot_metrics WHERE metric='symbol_count';"), CultureInfo.InvariantCulture));
+        }
+
+        var status = MetricHistoryStore.ReadStatus(_dbPath);
+        Assert.True(status.Present);
+        Assert.True(status.CorruptRecovered);
+        Assert.Equal(1L, status.SnapshotCount);
     }
 
     // ---- trend ordering + downsampling ----------------------------------------------------------------------

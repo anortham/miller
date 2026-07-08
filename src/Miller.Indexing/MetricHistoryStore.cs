@@ -89,7 +89,6 @@ public static class MetricHistoryStore
     private static readonly TimeSpan RunLockTimeout = TimeSpan.FromSeconds(5);
     private const int ConvergeDbTimeoutSeconds = 1;
     private const int RunDbTimeoutSeconds = 2;
-    private const int CorruptProbeTimeoutSeconds = 1;
 
     private const int SqliteBusy = 5;   // SQLITE_BUSY
     private const int SqliteLocked = 6; // SQLITE_LOCKED
@@ -132,7 +131,6 @@ public static class MetricHistoryStore
         ArgumentNullException.ThrowIfNull(snapshot);
 
         EnsureDirectory(historyDbPath);
-        RecoverIfCorrupt(historyDbPath);
 
         MetricHistoryWriteLock lease;
         try
@@ -148,32 +146,48 @@ public static class MetricHistoryStore
         {
             try
             {
-                using var connection = OpenForWrite(historyDbPath, ConvergeDbTimeoutSeconds);
-                if (IsNewerSchema(connection))
-                    return MetricHistoryWriteResult.SkippedNewerSchema;
-                EnsureSchema(connection);
-
-                using var tx = connection.BeginTransaction();
-                using (var insert = connection.CreateCommand())
-                {
-                    insert.CommandText = InsertSnapshotSql(orIgnore: true);
-                    BindSnapshot(insert, snapshot, FormatTimestamp(recordedAtUtc));
-                    if (insert.ExecuteNonQuery() == 0)
-                    {
-                        tx.Rollback();
-                        return MetricHistoryWriteResult.SkippedDuplicate;
-                    }
-                }
-
-                InsertMetrics(connection, LastInsertRowId(connection), snapshot.Metrics);
-                tx.Commit();
-                return MetricHistoryWriteResult.Recorded;
+                return ConvergeTransaction(historyDbPath, snapshot, recordedAtUtc);
             }
             catch (SqliteException ex) when (IsBusy(ex))
             {
                 return MetricHistoryWriteResult.SkippedBusy;
             }
+            catch (SqliteException ex) when (IsCorruption(ex))
+            {
+                // Reactive recovery: corruption is only discovered when the write opens/reads the DB. Rename the
+                // unusable file aside and retry the append ONCE against a fresh DB so this snapshot still lands. A
+                // second corruption is not retried — it propagates for the hook caller to wrap.
+                RenameAside(Path.GetFullPath(historyDbPath));
+                return ConvergeTransaction(historyDbPath, snapshot, recordedAtUtc);
+            }
         }
+    }
+
+    // The converge append body. Runs under a held MetricHistoryWriteLock; may throw a corruption-class
+    // SqliteException (SQLITE_CORRUPT/SQLITE_NOTADB) which the caller turns into a single rename-aside retry.
+    private static MetricHistoryWriteResult ConvergeTransaction(
+        string historyDbPath, MetricHistorySnapshot snapshot, DateTime? recordedAtUtc)
+    {
+        using var connection = OpenForWrite(historyDbPath, ConvergeDbTimeoutSeconds);
+        if (IsNewerSchema(connection))
+            return MetricHistoryWriteResult.SkippedNewerSchema;
+        EnsureSchema(connection);
+
+        using var tx = connection.BeginTransaction();
+        using (var insert = connection.CreateCommand())
+        {
+            insert.CommandText = InsertSnapshotSql(orIgnore: true);
+            BindSnapshot(insert, snapshot, FormatTimestamp(recordedAtUtc));
+            if (insert.ExecuteNonQuery() == 0)
+            {
+                tx.Rollback();
+                return MetricHistoryWriteResult.SkippedDuplicate;
+            }
+        }
+
+        InsertMetrics(connection, LastInsertRowId(connection), snapshot.Metrics);
+        tx.Commit();
+        return MetricHistoryWriteResult.Recorded;
     }
 
     /// <summary>
@@ -194,7 +208,6 @@ public static class MetricHistoryStore
         ArgumentNullException.ThrowIfNull(identityRecheck);
 
         EnsureDirectory(historyDbPath);
-        RecoverIfCorrupt(historyDbPath);
 
         MetricHistoryWriteLock lease;
         try
@@ -210,47 +223,64 @@ public static class MetricHistoryStore
         {
             try
             {
-                using var connection = OpenForWrite(historyDbPath, RunDbTimeoutSeconds);
-                if (IsNewerSchema(connection))
-                    return MetricHistoryWriteResult.SkippedNewerSchema;
-                EnsureSchema(connection);
-
-                using var tx = connection.BeginTransaction();
-
-                (string artifactId, long revision) = identityRecheck();
-                if (!string.Equals(artifactId, snapshot.ArtifactId, StringComparison.Ordinal)
-                    || revision != snapshot.Revision)
-                {
-                    tx.Rollback();
-                    return MetricHistoryWriteResult.SkippedIdentityChanged;
-                }
-
-                using (var delete = connection.CreateCommand())
-                {
-                    delete.CommandText =
-                        "DELETE FROM snapshots WHERE artifact_id = $art AND revision = $rev AND source = $src;";
-                    delete.Parameters.AddWithValue("$art", snapshot.ArtifactId);
-                    delete.Parameters.AddWithValue("$rev", snapshot.Revision);
-                    delete.Parameters.AddWithValue("$src", snapshot.Source);
-                    delete.ExecuteNonQuery();
-                }
-
-                using (var insert = connection.CreateCommand())
-                {
-                    insert.CommandText = InsertSnapshotSql(orIgnore: false);
-                    BindSnapshot(insert, snapshot, FormatTimestamp(recordedAtUtc));
-                    insert.ExecuteNonQuery();
-                }
-
-                InsertMetrics(connection, LastInsertRowId(connection), snapshot.Metrics);
-                tx.Commit();
-                return MetricHistoryWriteResult.Recorded;
+                return RunTransaction(historyDbPath, snapshot, identityRecheck, recordedAtUtc);
             }
             catch (SqliteException ex) when (IsBusy(ex))
             {
                 return MetricHistoryWriteResult.SkippedBusy;
             }
+            catch (SqliteException ex) when (IsCorruption(ex))
+            {
+                // Reactive recovery: rename the unusable file aside and retry the append ONCE (see RecordConverge).
+                RenameAside(Path.GetFullPath(historyDbPath));
+                return RunTransaction(historyDbPath, snapshot, identityRecheck, recordedAtUtc);
+            }
         }
+    }
+
+    // The heavy-arm per-source upsert body. Runs under a held MetricHistoryWriteLock; may throw a corruption-class
+    // SqliteException which the caller turns into a single rename-aside retry.
+    private static MetricHistoryWriteResult RunTransaction(
+        string historyDbPath,
+        MetricHistorySnapshot snapshot,
+        Func<(string ArtifactId, long Revision)> identityRecheck,
+        DateTime? recordedAtUtc)
+    {
+        using var connection = OpenForWrite(historyDbPath, RunDbTimeoutSeconds);
+        if (IsNewerSchema(connection))
+            return MetricHistoryWriteResult.SkippedNewerSchema;
+        EnsureSchema(connection);
+
+        using var tx = connection.BeginTransaction();
+
+        (string artifactId, long revision) = identityRecheck();
+        if (!string.Equals(artifactId, snapshot.ArtifactId, StringComparison.Ordinal)
+            || revision != snapshot.Revision)
+        {
+            tx.Rollback();
+            return MetricHistoryWriteResult.SkippedIdentityChanged;
+        }
+
+        using (var delete = connection.CreateCommand())
+        {
+            delete.CommandText =
+                "DELETE FROM snapshots WHERE artifact_id = $art AND revision = $rev AND source = $src;";
+            delete.Parameters.AddWithValue("$art", snapshot.ArtifactId);
+            delete.Parameters.AddWithValue("$rev", snapshot.Revision);
+            delete.Parameters.AddWithValue("$src", snapshot.Source);
+            delete.ExecuteNonQuery();
+        }
+
+        using (var insert = connection.CreateCommand())
+        {
+            insert.CommandText = InsertSnapshotSql(orIgnore: false);
+            BindSnapshot(insert, snapshot, FormatTimestamp(recordedAtUtc));
+            insert.ExecuteNonQuery();
+        }
+
+        InsertMetrics(connection, LastInsertRowId(connection), snapshot.Metrics);
+        tx.Commit();
+        return MetricHistoryWriteResult.Recorded;
     }
 
     /// <summary>
@@ -483,44 +513,6 @@ public static class MetricHistoryStore
         using var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT last_insert_rowid();";
         return Convert.ToInt64(cmd.ExecuteScalar() ?? 0L, CultureInfo.InvariantCulture);
-    }
-
-    private static void RecoverIfCorrupt(string historyDbPath)
-    {
-        string full = Path.GetFullPath(historyDbPath);
-        if (!File.Exists(full))
-            return;
-
-        bool corrupt = false;
-        try
-        {
-            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-            {
-                DataSource = full,
-                Mode = SqliteOpenMode.ReadWrite,
-                Pooling = false,
-                DefaultTimeout = CorruptProbeTimeoutSeconds, // never block behind a live writer just to probe
-            }.ToString());
-            connection.Open();
-            using var cmd = connection.CreateCommand();
-            cmd.CommandText = "PRAGMA quick_check;";
-            corrupt = cmd.ExecuteScalar() is not string ok
-                || !string.Equals(ok, "ok", StringComparison.OrdinalIgnoreCase);
-        }
-        catch (SqliteException ex) when (IsBusy(ex))
-        {
-            // Another writer holds the DB — it is clearly a live, valid database, not corrupt. Skip the probe.
-            return;
-        }
-        catch (SqliteException ex) when (IsCorruption(ex))
-        {
-            corrupt = true;
-        }
-
-        if (!corrupt)
-            return;
-
-        RenameAside(full);
     }
 
     private static void RenameAside(string historyDbPath)
