@@ -61,6 +61,58 @@ public sealed class MetricsToolTests
     }
 
     [Fact]
+    public void RunChurn_FilesChangedIsExact_NotBoundedByRowLimit()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[] { Row("aa11223344556677889900aabbccf002", "ChangedSymbol", "src/A.cs", 5) });
+
+        // Three distinct changed paths but limit: 1 ⟹ rows are truncated to one, yet churn_files_changed must be
+        // the EXACT pre-truncation count (3). The report arm records the same metric name at a different row limit,
+        // and ReadTrend flattens by name — a row-bounded value here would mix non-comparable points in one series.
+        var history = new StubGitHistoryReader(new GitHistoryResult(
+            Success: true,
+            Commits:
+            [
+                new GitHistoryCommit(
+                    Commit: "abc1234",
+                    AuthorTimeUtc: DateTimeOffset.Parse("2026-06-20T12:00:00Z"),
+                    Diff: """
+                        diff --git a/src/A.cs b/src/A.cs
+                        --- a/src/A.cs
+                        +++ b/src/A.cs
+                        @@ -5,1 +5,1 @@
+                        -old
+                        +new
+                        diff --git a/src/B.cs b/src/B.cs
+                        --- a/src/B.cs
+                        +++ b/src/B.cs
+                        @@ -2,1 +2,1 @@
+                        -old
+                        +new
+                        diff --git a/src/C.cs b/src/C.cs
+                        --- a/src/C.cs
+                        +++ b/src/C.cs
+                        @@ -9,1 +9,1 @@
+                        -old
+                        +new
+                        """),
+            ],
+            Error: null));
+
+        MetricsToolResult result = MetricsTool.Run(
+            fx.DbPath, operation: "churn", limit: 1, json: true, minCount: 2,
+            maxSymbolsPerGroup: MetricsTool.DefaultCloneSymbolsPerGroup, minSeverity: "moderate",
+            includeTests: true, workspaceRoot: fx.WorkspaceRoot, range: "HEAD~20..HEAD",
+            includeCommits: false, historyReader: history);
+
+        MetricHistoryPoint point = Assert.Single(result.SnapshotMetrics!);
+        Assert.Equal("churn_files_changed", point.Metric);
+        Assert.Equal(3.0, point.Value);
+    }
+
+    [Fact]
     public void RunClones_LeavesSnapshotMetricsNull()
     {
         using var fx = JulieDbFixture.Create(

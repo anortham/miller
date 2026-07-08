@@ -16,7 +16,7 @@ public sealed class ReportToolTests
     // ---- heavy-arm metric-history: report fact-surfacing + CLI recording end-to-end (Task 3) ----------------
 
     [Fact]
-    public void Run_SurfacesIndexMarkerAndGitSnapshotMetrics_ButNotBoundedCloneCount()
+    public void Run_SurfacesIndexAndGitSnapshotMetrics_ButNotBoundedCloneOrMarkerCounts()
     {
         using var fx = JulieDbFixture.Create(
             JulieDbFixture.PinnedSchema,
@@ -42,13 +42,62 @@ public sealed class ReportToolTests
         Assert.Equal(3.0, byName["symbol_count"].Value);
         Assert.Equal(3.0, byName["file_count"].Value);
         Assert.Equal(1.0, byName["language_count"].Value);
-        // clone_group_count is NOT recorded by the report arm — the report's clone list is bounded to SectionLimit,
-        // and the leader converge arm owns the exact count under the same metric name.
+        // clone_group_count and marker_total are NOT recorded by the report arm: the report's clone list is bounded
+        // to SectionLimit and its marker set is capped at a FINAL 500 (vs converge's per-marker cap), so the leader
+        // converge arm owns both exact series under the same metric names.
         Assert.DoesNotContain("clone_group_count", byName.Keys);
-        Assert.Equal(1.0, byName["marker_total"].Value);
-        Assert.Contains("TODO", byName["marker_total"].DetailJson!);
+        Assert.DoesNotContain("marker_total", byName.Keys);
         Assert.Equal(1.0, byName["churn_files_changed"].Value);
         Assert.Equal(23.0, byName["risk_top_score"].Value);
+    }
+
+    [Fact]
+    public void Run_ChurnFilesChangedIsExact_NotBoundedBySectionLimit()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[] { Row("aa11223344556677889900aabbcd0021", "ChangedSymbol", "src/A.cs", 5) });
+
+        // Three distinct changed paths with sectionLimit: 1 ⟹ display rows truncate to one, but the recorded
+        // churn_files_changed must be the EXACT pre-truncation count (3) — the same value `metrics churn` records
+        // for this range regardless of either command's row limit (ReadTrend flattens by metric name).
+        var history = new StubGitHistoryReader(new GitHistoryResult(
+            Success: true,
+            Commits:
+            [
+                new GitHistoryCommit(
+                    Commit: "abc1234",
+                    AuthorTimeUtc: DateTimeOffset.Parse("2026-06-20T12:00:00Z"),
+                    Diff: """
+                        diff --git a/src/A.cs b/src/A.cs
+                        --- a/src/A.cs
+                        +++ b/src/A.cs
+                        @@ -5,1 +5,1 @@
+                        -old
+                        +new
+                        diff --git a/src/B.cs b/src/B.cs
+                        --- a/src/B.cs
+                        +++ b/src/B.cs
+                        @@ -2,1 +2,1 @@
+                        -old
+                        +new
+                        diff --git a/src/C.cs b/src/C.cs
+                        --- a/src/C.cs
+                        +++ b/src/C.cs
+                        @@ -9,1 +9,1 @@
+                        -old
+                        +new
+                        """),
+            ],
+            Error: null));
+
+        ReportToolResult result = ReportTool.Run(
+            fx.DbPath, fx.WorkspaceRoot, range: "HEAD~20..HEAD", sectionLimit: 1, json: true,
+            includeTests: true, historyReader: history, regionIndex: null);
+
+        var byName = result.SnapshotMetrics.ToDictionary(p => p.Metric, p => p);
+        Assert.Equal(3.0, byName["churn_files_changed"].Value);
     }
 
     [Fact]

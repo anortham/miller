@@ -217,20 +217,18 @@ public static class MetricsTool
             ChurnSnapshotMetrics(report, limit));
     }
 
-    // The heavy-arm churn snapshot: churn_files_changed = distinct changed paths among the (bounded) churn rows,
-    // range+limit stamped in detail_json. Reuses the already-composed rows — no second git parse. A genuinely
-    // empty churn is 0 files changed (git was available), which the recorder writes as a real value.
-    private static IReadOnlyList<MetricHistoryPoint> ChurnSnapshotMetrics(ChurnReport report, int limit)
-    {
-        int filesChanged = report.Rows.Select(row => row.Path).Distinct(StringComparer.Ordinal).Count();
-        return
-        [
-            new MetricHistoryPoint(
-                MetricHistoryHeavyArm.ChurnFilesChanged,
-                filesChanged,
-                MetricHistoryHeavyArm.RangeLimitDetail(report.Range, limit)),
-        ];
-    }
+    // The heavy-arm churn snapshot: churn_files_changed = the EXACT distinct changed-path count for the range
+    // (ChurnReport.TotalFilesChanged, computed before row truncation), range+limit stamped in detail_json. Exactness
+    // is load-bearing: the report arm records the same metric name at a different row limit, and ReadTrend flattens
+    // by name — a row-bounded count here would mix non-comparable values into one series. A genuinely empty churn is
+    // 0 files changed (git was available), which the recorder writes as a real value.
+    private static IReadOnlyList<MetricHistoryPoint> ChurnSnapshotMetrics(ChurnReport report, int limit) =>
+    [
+        new MetricHistoryPoint(
+            MetricHistoryHeavyArm.ChurnFilesChanged,
+            report.TotalFilesChanged,
+            MetricHistoryHeavyArm.RangeLimitDetail(report.Range, limit)),
+    ];
 
     private static MetricsToolResult RunRisk(
         string dbPath,

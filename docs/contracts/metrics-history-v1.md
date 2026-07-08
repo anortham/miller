@@ -158,6 +158,17 @@ An empty/missing history:
   that mixes parameters is incomparable. Recording is best-effort telemetry: a failed write warns on
   stderr and never changes the command's output or exit code.
 
+Because the reader flattens points by metric name across ALL sources, **every value recorded under one
+name must be exactly comparable across its producers** ("exact or absent, never misleading"):
+
+- `clone_group_count` and `marker_total` are recorded **only** by the converge arm. The report renders its
+  own bounded clone/marker sections but does not record them — its bounds (top-SectionLimit clones; a
+  final 500-region marker cap vs converge's per-marker cap) would mix non-comparable values into the
+  converge-owned series.
+- `churn_files_changed` is the **exact** distinct changed-path count for the range, computed before any
+  row truncation, so `report` (section limit 10) and `metrics churn` (limit 50) record identical values
+  for the same range. `risk_top_score` is the global maximum and is likewise limit-insensitive.
+
 The **absent-vs-zero rule** is load-bearing on both sides: a metric whose source was unavailable is an
 absent row, never `0`; a count that genuinely evaluated to `0` with its source present is recorded as `0`.
 

@@ -57,19 +57,23 @@ public static class ReportTool
     // MetricSnapshotAggregates so the report and the leader converge arm never drift; the git scalars reuse the
     // shared heavy-arm vocabulary.
     //
-    // clone_group_count is deliberately NOT recorded here: the report composes only a top-SectionLimit clone list,
-    // so report.Clones.Count is a TRUNCATED value, while the leader converge arm records the EXACT GROUP BY count
-    // under the same metric name every revision. MetricHistoryStore.ReadTrend flattens points by metric name across
-    // ALL sources (it never inspects detail_json), so a truncated report value would poison the converge trend into
-    // a sawtooth. Design rule: a metric is exact or absent, never misleading — and converge already owns the exact
-    // count, so the report arm simply omits it (recomputing an exact count here is converge's job, not the report's).
+    // clone_group_count AND marker_total are deliberately NOT recorded here. MetricHistoryStore.ReadTrend flattens
+    // points by metric name across ALL sources (it never inspects detail_json), so any value the report records
+    // must be exactly comparable with the leader converge arm's value for the same name — the design rule is a
+    // metric is exact or absent, never misleading. Both fail that bar from the report side:
+    //   clone_group_count — the report composes only a top-SectionLimit clone list, while converge records the
+    //     EXACT GROUP BY count every revision; a truncated report value would poison the trend into a sawtooth.
+    //   marker_total — the report's MarkerSearch.FindMarkers caps the FINAL collapsed region set at MaxLimit (500),
+    //     while the converge arm caps at 500 PER MARKER KIND with no final cap (up to ~4x500 distinct regions), so
+    //     above 500 marker regions the two diverge under one name. Converge owns the series; the report omits it.
     //
-    // The metrics that ARE recorded are all exact or bound-consistent with their converge twin:
-    //   symbol/file/language — same WorkspaceIndexFactsReader.ReadSymbolCounts COUNT shape as the converge arm (exact);
-    //   marker_total — same MarkerSearch.MaxLimit (500) bound the converge arm uses, so the two mix cleanly.
-    // Absent-vs-zero holds: no marker section ⟹ no marker_total row; git unavailable ⟹ no churn/risk rows;
-    // risk available but empty ⟹ risk_top_score absent (a max over nothing is undefined). risk_top_score is the
-    // global max (risk rows are score-desc, so it is limit-insensitive), so it stays consistent across arms.
+    // The metrics that ARE recorded are exact and limit-insensitive across every producer:
+    //   symbol/file/language — same WorkspaceIndexFactsReader.ReadSymbolCounts COUNT shape as the converge arm;
+    //   churn_files_changed — ChurnReport.TotalFilesChanged, the exact pre-truncation distinct-path count, the
+    //     same value `metrics churn` records regardless of either command's row limit;
+    //   risk_top_score — the global max (risk rows are score-desc, so it is limit-insensitive).
+    // Absent-vs-zero holds: git unavailable ⟹ no churn/risk rows; risk available but empty ⟹ risk_top_score
+    // absent (a max over nothing is undefined).
     private static IReadOnlyList<MetricHistoryPoint> BuildSnapshotMetrics(ReportFacts report)
     {
         var points = new List<MetricHistoryPoint>
@@ -79,37 +83,17 @@ public static class ReportTool
             new(MetricSnapshotAggregates.LanguageCount, report.Index.Languages, null),
         };
 
-        if (report.Markers.Available)
-            points.Add(new MetricHistoryPoint(
-                MetricSnapshotAggregates.MarkerTotal, report.Markers.Total, MarkerDetailJson(report.Markers.Counts)));
-
         if (report.Git.Available)
         {
             string detail = MetricHistoryHeavyArm.RangeLimitDetail(report.Range, report.SectionLimit);
-            int filesChanged = report.Git.Churn!.Rows.Select(row => row.Path).Distinct(StringComparer.Ordinal).Count();
-            points.Add(new MetricHistoryPoint(MetricHistoryHeavyArm.ChurnFilesChanged, filesChanged, detail));
+            points.Add(new MetricHistoryPoint(
+                MetricHistoryHeavyArm.ChurnFilesChanged, report.Git.Churn!.TotalFilesChanged, detail));
             if (report.Git.Risk!.Rows.Count > 0)
                 points.Add(new MetricHistoryPoint(
                     MetricHistoryHeavyArm.RiskTopScore, report.Git.Risk.Rows.Max(row => row.Score), detail));
         }
 
         return points;
-    }
-
-    // Per-marker breakdown (TODO/FIXME/HACK/XXX counts in report order) for the marker_total detail_json — mirrors
-    // the leader converge arm's marker detail so both snapshots carry the same self-describing shape.
-    private static string MarkerDetailJson(IReadOnlyList<MarkerCount> counts)
-    {
-        var buffer = new ArrayBufferWriter<byte>();
-        using (var w = new Utf8JsonWriter(
-            buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
-        {
-            w.WriteStartObject();
-            foreach (MarkerCount count in counts)
-                w.WriteNumber(count.Marker, count.Count);
-            w.WriteEndObject();
-        }
-        return Encoding.UTF8.GetString(buffer.WrittenSpan);
     }
 
     private static IndexSection ReadIndexSection(string dbPath)
@@ -172,7 +156,7 @@ public static class ReportTool
             // One git history parse feeds both sections: full churn for the risk join, top-N for display.
             ChurnReport fullChurn = GitChurnAnalyzer.Read(
                 dbPath, workspaceRoot, range, limit: int.MaxValue, includeCommits: false, historyReader);
-            var churn = new ChurnReport(fullChurn.Range, fullChurn.Rows.Take(limit).ToArray());
+            var churn = new ChurnReport(fullChurn.Range, fullChurn.Rows.Take(limit).ToArray(), fullChurn.TotalFilesChanged);
             RiskReport risk = RiskRanking.FromChurn(dbPath, fullChurn, limit, includeTests);
             return new GitSections(Available: true, Reason: null, churn, risk);
         }

@@ -26,11 +26,13 @@ public static class GitChurnAnalyzer
 
         MillerRepositoryIndex index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(symbolsDbPath));
         var aggregates = new Dictionary<ChurnKey, ChurnAccumulator>();
+        var changedPaths = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (GitHistoryCommit commit in history.Commits)
         {
             foreach (DiffFile file in DiffTargets.Parse(commit.Diff))
             {
+                changedPaths.Add(file.Path);
                 IReadOnlyList<IndexedSymbol> fileSymbols = index.FindByFilePath(file.Path);
                 bool matchedAnySymbol = false;
                 int changedLines = file.Changed.Sum(static range => Math.Max(1, range.EndLine - range.StartLine + 1));
@@ -60,7 +62,7 @@ public static class GitChurnAnalyzer
             .Take(limit)
             .ToArray();
 
-        return new ChurnReport(range, rows);
+        return new ChurnReport(range, rows, changedPaths.Count);
 
         void Accumulate(
             ChurnKey key,
@@ -198,7 +200,13 @@ public static class GitChurnAnalyzer
     }
 }
 
-public sealed record ChurnReport(string Range, IReadOnlyList<ChurnRow> Rows);
+/// <param name="TotalFilesChanged">
+/// EXACT count of distinct file paths changed in the range, computed before <c>Rows</c> is truncated to the
+/// display limit. This is the value metric-history snapshots record as <c>churn_files_changed</c>: it must stay
+/// limit-independent so the report arm (section limit 10) and the churn arm (limit 50) write comparable points
+/// under one metric name.
+/// </param>
+public sealed record ChurnReport(string Range, IReadOnlyList<ChurnRow> Rows, int TotalFilesChanged);
 
 public sealed record ChurnRow(
     string MappingBasis,
