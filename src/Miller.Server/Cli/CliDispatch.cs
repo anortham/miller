@@ -581,12 +581,18 @@ public static class CliDispatch
 
     private static int Metrics(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
-        const string usage = "miller metrics <churn|clones|complexity|risk> [--workspace-id SELECTOR] [--workspace DIR] [--limit N] [--json] [--range REV..REV] [--include-commits] [--min-count N] [--max-symbols-per-group N] [--min-severity low|moderate|high] [--include-tests|--exclude-tests]";
+        const string usage = "miller metrics <churn|clones|complexity|risk|history> [--workspace-id SELECTOR] [--workspace DIR] [--limit N] [--json] [--range REV..REV] [--include-commits] [--min-count N] [--max-symbols-per-group N] [--min-severity low|moderate|high] [--include-tests|--exclude-tests] [--metric a,b,…]";
         if (args.Count > 0 && args[0] is "--help" or "-h" or "help")
             return Usage(err, usage);
 
         bool firstTokenIsFlag = args.Count > 0 && args[0].StartsWith("--", StringComparison.Ordinal);
         string operation = args.Count == 0 || firstTokenIsFlag ? "complexity" : args[0].ToLowerInvariant();
+
+        // `history` is a read over the metric-history sidecar (history.db), not a git/symbols metric run: it takes a
+        // different flag set (--metric) and renders a trend, so it branches out before the churn/risk recorder path.
+        if (operation == "history")
+            return MetricsHistory(args.Skip(1).ToList(), ctx, outw, err);
+
         if (operation is not ("churn" or "clones" or "clone" or "duplicate" or "duplicates" or "complexity" or "hotspots" or "risk"))
             return Usage(err, usage);
 
@@ -595,6 +601,14 @@ public static class CliDispatch
             return 2;
         if (!RequireIndex(ctx, err))
             return 3;
+
+        // Only churn/risk record (the git-backed arms); clones/complexity are covered by the leader converge arm.
+        // Canonical = default range/limit/test-filter and no --include-commits; capture identity BEFORE computing.
+        bool recordable = operation is "churn" or "risk";
+        bool canonical = recordable
+            && !o.Has("range") && !o.Has("limit")
+            && !o.Has("include-tests") && !o.Has("exclude-tests") && !o.Has("include-commits");
+        HeavyArmIdentity? identity = canonical ? CaptureHeavyArmIdentity(ctx) : null;
 
         try
         {
@@ -612,6 +626,14 @@ public static class CliDispatch
                 includeCommits: o.Has("include-commits"),
                 historyReader: new ProcessGitHistoryReader());
             WriteOutput(outw, result.Output);
+            if (recordable)
+                RecordHeavyArmSnapshot(
+                    ctx,
+                    identity,
+                    operation == "churn" ? MetricHistoryHeavyArm.ChurnSource : MetricHistoryHeavyArm.RiskSource,
+                    result.SnapshotMetrics ?? Array.Empty<MetricHistoryPoint>(),
+                    canonical,
+                    err);
             return 0;
         }
         catch (Exception ex) when (
@@ -623,6 +645,71 @@ public static class CliDispatch
             return 3;
         }
     }
+
+    // `miller metrics history` — read-only trend over the workspace history.db sidecar (no git, no recording). The
+    // JSON envelope is the stable metrics-history-v1 contract Eros consumes (docs/contracts/metrics-history-v1.md).
+    private static int MetricsHistory(
+        IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
+    {
+        const string usage =
+            "miller metrics history [--metric a,b,…] [--limit N] [--json] [--workspace-id SELECTOR] [--workspace DIR]";
+        if (args.Count > 0 && args[0] is "--help" or "-h" or "help")
+            return Usage(err, usage);
+
+        CliOptions o = CliOptions.Parse(args.ToArray(), "json");
+        if (o.Positionals.Count > 0)
+            return Usage(err, usage);
+        if (!TryResolveReadContext(ctx, o, err, out ctx))
+            return 2;
+        if (!RequireIndex(ctx, err))
+            return 3;
+
+        IReadOnlyList<string> metrics = ParseMetricFilter(args);
+        int limit = o.Int("limit", MetricsTool.DefaultHistoryLimit);
+        string workspaceId = ResolveWorkspaceId(ctx);
+
+        try
+        {
+            string historyDbPath = MetricSnapshotAggregates.HistoryDbPathFor(ctx.ExtractDbPath);
+            MetricsToolResult result = MetricsTool.RunHistory(historyDbPath, workspaceId, metrics, limit, o.Has("json"));
+            WriteOutput(outw, result.Output);
+            return 0;
+        }
+        // A PRESENT-but-unreadable history.db is an operational failure (exit 3), NOT the friendly empty-history
+        // exit-0 path — an absent file stays empty-success inside RunHistory (see docs/contracts/metrics-history-v1.md).
+        catch (Exception ex) when (
+            ex is FileNotFoundException or InvalidOperationException or IOException
+                or UnauthorizedAccessException or ArgumentException or NotSupportedException
+                or SqliteException or MetricHistoryUnreadableException)
+        {
+            err.WriteLine("metrics failed: " + ex.Message);
+            return 3;
+        }
+    }
+
+    // Collect --metric values, supporting BOTH comma-separated (`--metric a,b`) and repeated (`--metric a --metric b`)
+    // forms, de-duplicated in first-seen order. An empty result ⟹ MetricsTool.RunHistory applies its default set.
+    private static IReadOnlyList<string> ParseMetricFilter(IReadOnlyList<string> args)
+    {
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string raw in CollectRepeatedOptionValues(args, "metric"))
+        {
+            foreach (string part in raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                if (seen.Add(part))
+                    result.Add(part);
+            }
+        }
+        return result;
+    }
+
+    // The workspace id for the metrics-history-v1 envelope: the bootstrap-set id when known, else derived from the
+    // canonical root — the same resolution CaptureHeavyArmIdentity uses, so a read and a write agree on identity.
+    private static string ResolveWorkspaceId(WorkspaceContext ctx) =>
+        !string.IsNullOrWhiteSpace(ctx.WorkspaceId)
+            ? ctx.WorkspaceId!
+            : WorkspaceId.FromCanonicalRoot(Path.GetFullPath(ctx.CanonicalRoot ?? ctx.WorkspaceRoot));
 
     private static int Report(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
@@ -637,6 +724,10 @@ public static class CliDispatch
             return 2;
         if (!RequireIndex(ctx, err))
             return 3;
+
+        // Record only a default-params run (range/limit/test-filter untouched); capture identity BEFORE computing.
+        bool canonical = !o.Has("range") && !o.Has("limit") && !o.Has("exclude-tests") && !o.Has("include-tests");
+        HeavyArmIdentity? identity = canonical ? CaptureHeavyArmIdentity(ctx) : null;
 
         try
         {
@@ -669,6 +760,8 @@ public static class CliDispatch
                 historyReader: new ProcessGitHistoryReader(),
                 regionIndex: regionIndex);
             WriteOutput(outw, result.Output);
+            RecordHeavyArmSnapshot(
+                ctx, identity, MetricHistoryHeavyArm.ReportSource, result.SnapshotMetrics, canonical, err);
             return 0;
         }
         catch (Exception ex) when (
@@ -745,10 +838,18 @@ public static class CliDispatch
             return 3;
 
         int limit = o.Int("limit", DeadCodeCandidatesDefaultLimit);
+
+        // --limit bounds only the displayed list; the recorded counts are full totals. A default-limit run is
+        // canonical; capture identity BEFORE the reader computes so a mid-command rebuild is caught at append time.
+        bool canonical = !o.Has("limit");
+        HeavyArmIdentity? identity = canonical ? CaptureHeavyArmIdentity(ctx) : null;
+
         DeadCodeCandidateReport report = DeadCodeCandidateReader.Read(ctx.ExtractDbPath, ctx.WorkspaceRoot);
         outw.WriteLine(o.Has("json")
             ? RenderCandidatesJson(report, limit)
             : RenderCandidatesCompact(report, limit));
+        RecordHeavyArmSnapshot(
+            ctx, identity, MetricHistoryHeavyArm.CandidatesSource, CandidateSnapshotMetrics(report), canonical, err);
         return 0;
     }
 
@@ -897,6 +998,145 @@ public static class CliDispatch
 
     // The references-candidates-v1 JSON envelope version (docs/contracts/references-candidates-v1.md).
     private const int DeadCodeCandidatesSchemaVersion = 1;
+
+    // ---------- heavy-arm metric-history recording (report / metrics churn|risk / references candidates) ----------
+    //
+    // The single CLI-side hook the three heavy commands share. Each command captures the artifact identity BEFORE it
+    // computes (below), renders normally, then hands the already-composed metric points here. Recording is
+    // best-effort telemetry: a failed history write warns on stderr and NEVER changes the command's output or exit
+    // code. Only CANONICAL (default-params) runs record — a non-default run renders as usual and skips, because a
+    // trend line that mixes ranges/limits is incomparable. Design: docs/plans/2026-07-07-metric-history-design.md.
+
+    /// <summary>The artifact identity a heavy command captured before computing, for the append-time re-check.</summary>
+    internal readonly record struct HeavyArmIdentity(
+        string WorkspaceId, string ArtifactId, long Revision, string ExtractorVersion);
+
+    /// <summary>
+    /// Capture <c>(workspace_id, artifact_id, revision, extractor_version)</c> from the workspace's <c>symbols.db</c>
+    /// BEFORE the command computes, so a full-rebuild promotion mid-command is caught by the append-time re-check.
+    /// Returns <c>null</c> — recording is skipped silently — when there is no stable identity to attach history to
+    /// (no <c>.miller</c> index, no artifact_id, no revision yet) or the DB cannot be read. Never throws.
+    /// </summary>
+    internal static HeavyArmIdentity? CaptureHeavyArmIdentity(WorkspaceContext ctx)
+    {
+        try
+        {
+            string extractDbPath = ctx.ExtractDbPath;
+            if (!File.Exists(extractDbPath))
+                return null; // unregistered / no .miller ⟹ nothing to attach history to.
+
+            using var freshness = new FreshnessReader(extractDbPath);
+            string? artifactId = freshness.ArtifactId();
+            long revision = freshness.LatestRevision();
+            if (string.IsNullOrWhiteSpace(artifactId) || revision <= 0)
+                return null; // no stable artifact identity / no revision ⟹ cannot key a snapshot.
+
+            string workspaceId = ctx.WorkspaceId
+                ?? WorkspaceId.FromCanonicalRoot(Path.GetFullPath(ctx.CanonicalRoot ?? ctx.WorkspaceRoot));
+            if (string.IsNullOrWhiteSpace(workspaceId))
+                return null;
+
+            string extractorVersion = ExtractBinaryVersionReader.TryRead(extractDbPath) ?? string.Empty;
+            return new HeavyArmIdentity(workspaceId, artifactId!, revision, extractorVersion);
+        }
+        catch (Exception ex) when (
+            ex is IOException or InvalidOperationException or UnauthorizedAccessException
+                or ArgumentException or SqliteException)
+        {
+            return null; // identity unreadable ⟹ skip recording, never disturb the command.
+        }
+    }
+
+    /// <summary>
+    /// Append the heavy-arm snapshot the command just computed. No-op when the run was non-canonical, produced no
+    /// metrics, or had no capturable identity. The <c>RecordRun</c> re-check re-reads the live identity inside the
+    /// append transaction and skips on a mismatch (artifact replaced mid-command). Any failure is swallowed to a
+    /// stderr warning — the command's output and exit code are already committed.
+    /// </summary>
+    internal static MetricHistoryWriteResult? RecordHeavyArmSnapshot(
+        WorkspaceContext ctx,
+        HeavyArmIdentity? captured,
+        string source,
+        IReadOnlyList<MetricHistoryPoint> metrics,
+        bool canonical,
+        TextWriter warn,
+        DateTime? recordedAtUtc = null)
+    {
+        if (!canonical || captured is not { } id || metrics.Count == 0)
+            return null;
+
+        try
+        {
+            var snapshot = new MetricHistorySnapshot(
+                WorkspaceId: id.WorkspaceId,
+                ArtifactId: id.ArtifactId,
+                Revision: id.Revision,
+                ExtractorVersion: id.ExtractorVersion,
+                MillerVersion: MillerVersion.Current,
+                Source: source,
+                Metrics: metrics);
+
+            string historyDbPath = MetricSnapshotAggregates.HistoryDbPathFor(ctx.ExtractDbPath);
+            return MetricHistoryStore.RecordRun(
+                historyDbPath, snapshot, () => RecheckHeavyArmIdentity(ctx.ExtractDbPath), recordedAtUtc);
+        }
+        catch (Exception ex)
+        {
+            warn.WriteLine($"metric history: {source} snapshot not recorded ({ex.Message}).");
+            return null;
+        }
+    }
+
+    // The append-time identity re-read: the live (artifact_id, revision) the store compares against the captured
+    // snapshot identity. On any read failure it returns a guaranteed-mismatch sentinel so the store skips recording
+    // rather than stamping the captured identity onto numbers read from a since-replaced artifact.
+    private static (string ArtifactId, long Revision) RecheckHeavyArmIdentity(string extractDbPath)
+    {
+        try
+        {
+            using var freshness = new FreshnessReader(extractDbPath);
+            return (freshness.ArtifactId() ?? string.Empty, freshness.LatestRevision());
+        }
+        catch (Exception ex) when (
+            ex is IOException or InvalidOperationException or UnauthorizedAccessException
+                or ArgumentException or SqliteException)
+        {
+            return (string.Empty, -1);
+        }
+    }
+
+    // The heavy-arm `source='candidates'` snapshot: the full dead-code candidate count and suppressed total (both
+    // are full totals — `--limit` bounds only the displayed list, never these), with the per-rule suppressed
+    // breakdown in detail_json (the count-level surfacing approved 2026-07-07; per-symbol detail stays CLI-only).
+    private static IReadOnlyList<MetricHistoryPoint> CandidateSnapshotMetrics(DeadCodeCandidateReport report)
+    {
+        int suppressedTotal = 0;
+        foreach (int count in report.Result.Suppressions.Values)
+            suppressedTotal += count;
+
+        return
+        [
+            new MetricHistoryPoint(MetricHistoryHeavyArm.DeadCodeCandidateCount, report.Result.Candidates.Count, null),
+            new MetricHistoryPoint(
+                MetricHistoryHeavyArm.DeadCodeSuppressedTotal,
+                suppressedTotal,
+                SuppressionDetailJson(report.Result.Suppressions)),
+        ];
+    }
+
+    private static string SuppressionDetailJson(IReadOnlyDictionary<string, int> suppressions)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var w = new Utf8JsonWriter(
+            buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
+        {
+            w.WriteStartObject();
+            foreach (string id in DeadCodeCandidates.SuppressionRuleIds)
+                w.WriteNumber(id, suppressions.TryGetValue(id, out int count) ? count : 0);
+            w.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
 
     private static int Refresh(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
@@ -1936,18 +2176,21 @@ public static class CliDispatch
             return RemoveExitCode(WorkspaceRemoveResult.Outcome.NotFound);
         }
 
-        // Delete the index data while HOLDING the writer lock, so no Miller process can start writing this
-        // index mid-delete. Only the held lock file itself is skipped (an open FileShare.None handle cannot be
-        // deleted on Windows); after release, the leftover lock file + empty dir are removed best-effort — a
+        // Delete the index data while HOLDING all three workspace-local write leases (indexer → content →
+        // history), so no Miller process can start writing this index — nor a CLI content import / history append,
+        // which hold content.lock / history.lock WITHOUT the indexer lock — mid-delete. Any lease unavailable ⇒
+        // refuse, delete nothing. Only the held lock files are skipped (an open FileShare.None handle cannot be
+        // deleted on Windows); after release, the leftover lock files + empty dir are removed best-effort — a
         // writer that sneaks in after release finds an already-empty index and does a clean rebuild.
-        using (IDisposable? lease = SingleWriterLock.TryAcquire(millerDir))
+        using (WorkspaceWriteLeases? leases =
+            WorkspaceWriteLeases.TryAcquireForRemove(millerDir, SingleWriterLock.TryAcquire))
         {
-            if (lease is null)
+            if (leases is null)
             {
                 outw.WriteLine(WorkspaceRender.Remove(WorkspaceRemoveResult.RefusedInUse(millerDir, workspaceId, root), json));
                 return RemoveExitCode(WorkspaceRemoveResult.Outcome.RefusedInUse);
             }
-            SingleWriterLock.DeleteContentsExceptLock(millerDir);
+            SingleWriterLock.DeleteContentsExceptLock(millerDir, WorkspaceWriteLeases.SidecarLockFileNames);
         }
 
         SingleWriterLock.TryDeleteEmptiedDir(millerDir);
@@ -2199,9 +2442,10 @@ public static class CliDispatch
           patterns <op>      List, summarize, or search extractor-recognized code-shape facts.
                              op = list | summary | search
                              [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--query TEXT] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]
-          metrics <op>       Report deterministic local metrics.
-                             op = churn | clones | complexity | risk
+          metrics <op>       Report deterministic local metrics, or a recorded metric-history trend.
+                             op = churn | clones | complexity | risk | history
                              [--workspace-id SELECTOR] [--workspace DIR] [--limit N] [--json] [--range REV..REV] [--include-commits] [--min-count N] [--max-symbols-per-group N] [--min-severity low|moderate|high] [--include-tests|--exclude-tests]
+                             history [--metric a,b,…] [--limit N] [--json] [--workspace-id SELECTOR] [--workspace DIR]
           report             One composed repo-quality report: index counts, extraction health, markers, complexity, clones, churn, risk.
                              [--json] [--workspace-id SELECTOR] [--workspace DIR] [--range REV..REV] [--limit N] [--include-tests|--exclude-tests]
           telemetry <op>     Export machine-global Miller telemetry.

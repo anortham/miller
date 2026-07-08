@@ -1,136 +1,113 @@
-# Task 2 Report — Indexing reader + v4 fixture extension
+# Task 2 — Leader converge arm + aggregates (Batch A)
 
-**Status:** DONE
-**Branch:** `feat/dead-code-candidates`
-**Commit mode:** serial-worker-commit (owned files only; not pushed)
+## Status
+COMPLETE. Assigned fast tests + Scale e2e green; worker-ceiling `scripts/test.sh` green (2995 passed).
+Commit SHA: none - parallel-lead-commit.
 
-## What was built
-
-`DeadCodeCandidateReader` (Miller.Indexing) — the read-side of `miller references candidates`. It opens the
-artifact read-only, runs `JulieSchemaGate.Verify`, then does the ordered pipeline from the brief:
-
-1. **Required-table validation** (after the metadata gate): `sqlite_master` check for
-   `identifier_resolutions`, `pending_resolutions`, `pending_relationships`; any missing ⇒
-   `IncompatibleExtractException` (→ CLI exit 3). One reader test per table.
-2. **Closure inputs over ALL symbols**: `parent_symbol_id` map + `is_test` set (one pass), plus the DISTINCT
-   `structural_facts.containing_symbol_id` set and DISTINCT `symbol_annotations.symbol_id` set.
-3. **Candidate rows** (`kind IN DeadCodeCandidates.CandidateKinds`): read tuples first (reader closed), then per
-   candidate compute the ancestor closures (`IsTestSelfOrAncestor`, `HasStructuralFactSelfOrAncestor`, cycle-safe
-   walk) and the four inbound counts via **per-symbol indexed subqueries** (never materializing all identifiers).
-   Inside-S test is NULL-safe (`COALESCE(... , 0) = 0`) so a NULL span / NULL containing-symbol reads as "outside".
-   - `NameMatchesOutside`, `ResolvedInbound` (identifier_resolutions JOIN identifiers, outside S),
-     `PendingResolvedInbound` (pending_resolutions JOIN pending_relationships, outside S — independent of
-     identifier_resolutions), `CallsInbound` (relationships to S from ≠ S). `LiteralMatch = null`.
-4. **Coverage universe** = UNION of `symbols.language` and `files.language`, LEFT-joined to identifier/resolved
-   counts. A language with symbols but zero identifiers (css/html) is emitted with `IdentifierCount = 0` so Core's
-   `low_evidence_language` fires. Proven by `Read_LanguageWithSymbolsButZeroIdentifiers_...`.
-5. `DeadCodeCandidates.Evaluate(rows, coverage)`.
-6. **Literal scan LAST**, only over `result.NeedsLiteralScan` survivors; skipped entirely when empty. Reads each
-   literal-bearing file at most once (path-keyed cache), mirrors `SearchIndexWriter.ReadVerifiedFileText`
-   (blake3 + content_bytes freshness guard); stale/missing ⇒ `FilesSkippedStale++` and NO suppression. Slices with
-   `SourceTextDecoder.SliceUtf8ByteSpan`, Ordinal substring match ⇒ `ApplyLiteralScan`.
-7. **Artifact block**: `artifact_id`, `MAX(revision_id)`, `reference_resolution_status` (fallback `"unknown"`),
-   `reference_resolution_version` (null when absent).
-
-### Reader API produced (Task 3 renders exactly this — stable)
-- `DeadCodeCandidateReader.Read(string symbolsDbPath, string workspaceRoot) -> DeadCodeCandidateReport`
-- `DeadCodeCandidateReport(DeadCodeResult Result, IReadOnlyList<LanguageCoverageRow> LanguageCoverage,
-  DeadCodeLiteralScan LiteralScan, DeadCodeArtifact Artifact)`
-- `DeadCodeLiteralScan(int FilesScanned, int FilesSkippedStale)`
-- `DeadCodeArtifact(string? ArtifactId, long? Revision, string ReferenceResolutionStatus,
-  string? ReferenceResolutionVersion)`
-
-`Read` returns the FINAL report (two-phase literal scan already applied). Task 3 only renders.
-
-## Fixture builder method names + signatures added (Task 3 needs these)
-
-All are **public instance methods on `JulieDbFixture`** that mutate the already-created DB over a fresh
-`ReadWrite`, `Pooling=false`, `ForeignKeys=false` connection (same precedent as `ReplaceFileBytesAndRefreshHash`;
-FKs relaxed like `Create`, but the `identifier_resolutions` CHECK is still enforced):
-
-```csharp
-public void AddIdentifierResolution(
-    string identifierId, string? targetSymbolId, string outcome = "resolved",
-    int tier = 1, double confidence = 1.0, string method = "exact", int candidates = 1,
-    long resolvedAtRevision = 1);
-
-public void AddPendingRelationship(
-    string pendingRelationshipId, string fromSymbolId, string filePath,
-    string? callerScopeSymbolId = null, int? startByte = null, int? endByte = null,
-    string kind = "call", string targetDisplayName = "Target", string targetTerminalName = "Target",
-    int startLine = 1, double confidence = 1.0);
-
-public void AddPendingResolution(
-    string pendingRelationshipId, string targetSymbolId,
-    int tier = 1, double confidence = 1.0, string method = "exact", long resolvedAtRevision = 1);
-
-public void AddStructuralFact(
-    string structuralFactId, string? containingSymbolId, string path,
-    string language = "csharp", string patternId = "custom.pattern.v1",
-    string captureName = "attribute", string nodeKind = "attribute");
-
-public void AddSymbolAnnotation(
-    string annotationId, string symbolId, string annotation = "Obsolete", string annotationKey = "obsolete");
-```
-
-`JulieDbFixture.Create(...)` gained two trailing optional params (default-included for v4 fidelity; pass `null` to
-omit and exercise the reader's `unknown`/null fallbacks):
-```csharp
-string? referenceResolutionStatus = "partial",
-string? referenceResolutionVersion = "1"
-```
-
-### Fixture DDL changes
-- `pending_relationships` upgraded to the pinned v4 shape: added the three FKs (`from_symbol_id`,
-  `caller_scope_symbol_id`, `file_id`) and the four indexes (`idx_pending_terminal`, `idx_pending_file`,
-  `idx_pending_from`, `idx_pending_caller_scope`).
-- New tables `identifier_resolutions` (with the `CHECK ((outcome='resolved') = (target_symbol_id IS NOT NULL))`)
-  and `pending_resolutions`, plus indexes `idx_identifier_resolutions_target`, `idx_pending_resolutions_target`.
-- New v4 metadata keys `reference_resolution_status` / `reference_resolution_version`.
+## What I implemented
+- **`src/Miller.Indexing/MetricSnapshotAggregates.cs`** (new): the cheap arm.
+  - `ReadConvergeMetrics(string symbolsDbPath, IRegionSearchIndex? regionIndex)` → `IReadOnlyList<MetricHistoryPoint>`:
+    `symbol_count`, `file_count`, `language_count` (always), `clone_group_count` (always; 0 is real),
+    `complexity_p50/p90/max` (absent when no complexity rows), and `marker_total` **only when a region index is
+    supplied** (per-marker breakdown in `detail_json`). One read-only connection, one bounded aggregate pass.
+  - `RecordConverge(symbolsDbPath, workspaceId, revision, millerVersion, regionIndex=null, onError=null, recordedAtUtc=null)`
+    → `MetricHistoryWriteResult?`: reads artifact identity + aggregates, builds a `source='converge'` snapshot, and
+    calls `MetricHistoryStore.RecordConverge`. **Never throws, never blocks** (catch-all → `onError` + return null;
+    the store is skip-on-busy). Returns null when nothing recorded (no revision/workspace/artifact-id, no metrics).
+  - `HistoryDbPathFor(symbolsDbPath)` helper (sibling `history.db`).
+- **`src/Miller.Server/Hosting/IndexerSidecarConverger.cs`**: added `RecordConvergeHistory(...)` called at the end of
+  `Converge`, AFTER the content/search sidecar steps, independent of their success. Passes `regionIndex: null` and an
+  `onError` that logs a warning via the existing `_logger`.
+- **`src/Miller.Server/Workspaces/CrossWorkspaceRefreshService.cs`**: single `MetricSnapshotAggregates.RecordConverge`
+  call at the end of `TryConvergeSidecar` (the one-shot refresh path). No logger on this service ⟹ silent swallow,
+  matching its existing best-effort sidecar behaviour.
+- `MillerServiceRegistration.cs` **not modified** — recording is a static call with no new dependency to wire.
 
 ## Verification
-- **worker-red-green** — RED first (guard tests failed on missing tables/indexes/CHECK; reader tests failed via
-  `NotImplementedException`), then GREEN:
-  `dotnet test ... --filter "FullyQualifiedName~DeadCodeCandidateReader"` → **18 passed**;
-  `... ~JulieDbFixtureCurrentSchema` → **19 passed** (14 pre-existing + 5 new v4 guards).
-- **worker-ceiling** — `scripts/test.sh` (fast suite, `Category!=Scale`): **2943 passed, 0 failed** (17s wall,
-  under the 30s ceiling). Invariant: the fast suite stays green and pure (no julie subprocess). The
-  `ScaleTraitConventionTests` guard passed — the new fixture-based tests correctly carry NO `[Trait("Category",
-  "Scale")]` and do not spawn julie-extract.
-- **Build** — Release with `TreatWarningsAsErrors`: **0 warnings / 0 errors**.
-- Known-flaky `IndexerServiceScanTests.StartAsync_WhenEnabledLeaderAndSidecarBuildFails_StillMarksRegistryScanned`
-  did not fail in this run.
+- Command 1 (assigned): `dotnet test tests/Miller.Tests/Miller.Tests.csproj -c Release --no-build --filter "(FullyQualifiedName~MetricSnapshotAggregates|FullyQualifiedName~IndexerSidecarConvergerHistory)&Category!=Scale"`
+  → **13 passed, 0 failed**.
+- Command 2 (Scale, real `.tools/julie-extract` 2.11.0 present): `... --filter "FullyQualifiedName~MetricHistoryConvergeScale"`
+  → **1 passed, 0 failed**.
+- Ceiling: `scripts/test.sh` → **2995 passed, 0 failed** (fast suite, 21s wall; includes `ScaleTraitConventionTests`).
+- Build: `dotnet build Miller.slnx -c Release` → **0 warnings / 0 errors**.
+- Timestamp: 2026-07-07 (local session).
 
-## Seam files read directly (Miller search/inspect down) + what they confirmed
-- `src/Miller.Indexing/ReferenceExportReader.cs` — `SqliteReadOnlyAccess.Open` + `JulieSchemaGate.Verify` first,
-  `artifact_id` metadata read, `MAX(revision_id) FROM extraction_revisions`. Mirrored for the artifact block.
-- `src/Miller.Indexing/JulieSchemaGate.cs` — reuse of `IncompatibleExtractException` and its missing-table message
-  style; confirmed the gate checks metadata VALUES only, not table presence (hence the required-table step).
-- `src/Miller.Indexing/SqliteSourceRegionReader.cs` + `SourceRegionRow.cs` — the `source_regions`⋈`files`
-  (content_hash/content_bytes) shape and `kind='string_literal'` filter.
-- `src/Miller.Indexing/SearchIndexWriter.cs` (`ReadVerifiedFileText`, ~691–722) — the exact freshness guard
-  (`ResolveUnderRoot` → `File.ReadAllBytes` → length + `Blake3Hex`/`NormalizeHash` match → `TryDecode`) mirrored
-  verbatim for the literal scan.
-- `src/Miller.Indexing/SourceTextDecoder.cs` — `SliceUtf8ByteSpan` returns `null` on an out-of-range/empty span.
-- `src/Miller.Indexing/IncompatibleExtractException.cs` — public sealed, `(string)` and `(string, Exception)` ctors.
-- `tests/Miller.Tests/Indexing/PatternFactsReaderTests.cs` — the `Create(...)` + post-creation `Exec`/`DROP TABLE`
-  convention the reader tests follow (structural_facts INSERT column set, missing-table test pattern).
+## Files changed
+- Created: `src/Miller.Indexing/MetricSnapshotAggregates.cs`
+- Modified: `src/Miller.Server/Hosting/IndexerSidecarConverger.cs`, `src/Miller.Server/Workspaces/CrossWorkspaceRefreshService.cs`
+- Tests: `tests/Miller.Tests/Indexing/MetricSnapshotAggregatesTests.cs`,
+  `tests/Miller.Tests/Server/IndexerSidecarConvergerHistoryTests.cs`,
+  `tests/Miller.Tests/Server/MetricHistoryConvergeScaleTests.cs`
 
-## Concerns / notes for downstream
-- **Per-candidate subqueries at scale.** Four indexed subqueries per candidate-kind symbol, as the brief
-  prescribed ("do NOT materialize all identifiers"). Fixture-fast; on a ~38k-symbol real artifact this is many
-  round-trips. Task 3's Scale test should confirm the wall-clock is acceptable; if it is not, the fix is a batched
-  aggregate query, not a change to the Core contract.
-- **FK enforcement is ON by default in Microsoft.Data.Sqlite.** The new fixture write helpers set
-  `ForeignKeys=false` to match `Create`'s `PRAGMA foreign_keys=OFF`, so a builder row may reference an unseeded
-  symbol/file. The `identifier_resolutions` CHECK is enforced regardless — `AddIdentifierResolution` callers must
-  keep `outcome='resolved'` consistent with a non-null target.
-- **Report not committed.** Per the strict `serial-worker-commit` "owned files only" instruction, this report and
-  the pre-existing `task-1-report.md` / `.memories/` changes were left unstaged. (This path previously held an
-  unrelated stale report; overwritten per the lead's explicit instruction to write here.)
+## Miller calls + confirmations (API-shape evidence)
+- `inspect IndexerSidecarConverger depth=full` → `Converge(string? symbolsDbPath, string workspaceRoot, string? workspaceId, long revision, bool fullRebuild)` returns void, swallows sidecar failures; confirmed the hook point and that recording must be independent of sidecar success.
+- `inspect CrossWorkspaceRefreshService depth=full` → `private void TryConvergeSidecar(string symbolsDbPath, string workspaceRoot, string? workspaceId, long revision)`; runs under the workspace `SingleWriterLock`; confirmed the second hook site.
+- `inspect CloneGroupReader depth=full` → clone grouping CTE: `body_hash IS NOT NULL AND body_hash != '' GROUP BY body_hash HAVING COUNT(*) >= 2`; reused the shape for `clone_group_count`.
+- `inspect ComplexityRankingReader depth=full` → `complexity_metrics` real columns (`decision_count`, `max_nesting_depth`, …); chose `decision_count` as the percentile scalar.
+- `inspect MillerVersion depth=full` → `public static string Current`; namespace `Miller.Server` (NOT `Miller.Indexing`), so the version is passed INTO `RecordConverge` as a parameter (layering).
+- `inspect ExtractBinaryVersionReader depth=full` → `TryRead(SqliteConnection)`/`TryRead(string?)`, null-on-any-failure; reused for `extractor_version`.
+- `inspect FreshnessReader depth=overview` + read → `ArtifactId()` = `SELECT value FROM artifact_metadata WHERE key='artifact_id'`; my `ReadMetaValue` mirrors it on a shared connection.
+- `search WorkspaceIndexFactsReader` + read → `ReadSymbolCounts` SQL `SELECT COUNT(*), COUNT(DISTINCT path), COUNT(DISTINCT language) FROM symbols WHERE name IS NOT NULL` — reused verbatim for the three counts.
+- `search ReadMarkerSection` + read `ReportTool`/`MarkerSearch` → marker set {TODO,FIXME,HACK,XXX}, comment kinds {comment,doc_comment}, region-dedup + word-boundary `ContainsMarker`; replicated (MarkerSearch is Server-internal, unreachable from Indexing).
+- `search IRegionSearchIndex` / read `RegionSearchHit` → `Search(query, IReadOnlySet<string> kinds, int limit, bool excludeTests)` and hit fields `RawText/Snippet/RegionId`; used in the marker aggregate + the fake test double.
+- Read `MetricHistoryStore.cs` / `MetricHistoryWriteLock.cs` (Task 1) → `RecordConverge` is INSERT-OR-IGNORE dedup on `(artifact_id, revision, source)`, TimeSpan.Zero skip-on-busy, reactive corruption rename-aside-and-retry-once; drove the dedup + lock-held + corrupt tests off these.
+- Read `JulieDbFixture.cs` → contract-faithful builder seeds `artifact_metadata.artifact_id="artifact-<ws>"`, `binary_version`, `complexity_metrics`, and `extraction_revisions`; used for all fast fixtures.
 
-## Files
-- Create: `src/Miller.Indexing/DeadCodeCandidateReader.cs`
-- Modify: `tests/Miller.Tests/Indexing/JulieDbFixture.cs`
-- Modify: `tests/Miller.Tests/Indexing/JulieDbFixtureCurrentSchemaTests.cs`
-- Create: `tests/Miller.Tests/Indexing/DeadCodeCandidateReaderTests.cs`
+## Self-review findings
+- Only the six owned files changed (`git status --short` verified); no sibling-owned files touched.
+- Absent-vs-zero rule honored: complexity omitted on empty facts (`ReadConvergeMetrics_OmitsComplexity_WhenNoComplexityRows`); marker omitted when region index null (`..._OmitsMarkerMetric_WhenNoRegionIndex`); clone/marker `0` recorded when the source IS available.
+- Non-blocking/non-throwing verified through the hook: history-lock-held ⟹ skip, no throw, sidecar step still ran; corrupt file ⟹ recover + record, no throw.
+- Same-revision dedup verified both directly (`SkippedDuplicate`) and through the converger (one snapshot).
+
+## Judgment calls
+- `MetricSnapshotAggregates.RecordConverge — millerVersion is a parameter` rather than calling `MillerVersion.Current`, because `MillerVersion` lives in `Miller.Server` and this class is in the lower `Miller.Indexing` layer. Both hook sites (under `Miller.Server.*`) pass `MillerVersion.Current`.
+- `IndexerSidecarConverger.cs / CrossWorkspaceRefreshService.cs — both hooks pass regionIndex: null` (⟹ marker metrics absent on the converge arm). Plan-consistent ("passing null is plan-consistent; note it as a judgment call"): neither converge path opens a region search index, and building one under the ops gate adds I/O the design does not want. Markers are recorded instead by the heavy `miller report` arm (Task 3). `ReadConvergeMetrics` still fully supports a supplied index (tested with a fake).
+- `MetricSnapshotAggregates — complexity percentiles over decision_count` (the cyclomatic-style scalar `ComplexityRankingReader` ranks by); no single composite "complexity score" exists in the schema. Type-7 (linear-interpolation) percentiles.
+- `MetricSnapshotAggregates — marker vocabulary + word-boundary matcher duplicated from MarkerSearch` because `MarkerSearch` is `internal` to `Miller.Server.Tools` and cannot be referenced from `Miller.Indexing`. Kept minimal and commented "keep the two in step".
+- `RecordConverge catches Exception broadly` (not a narrow set) — deliberate for a best-effort telemetry hook the design mandates must "never fail or delay indexing".
+
+## Concerns
+- **Marker metrics never recorded by the converge arm in production** (both hooks pass null). By design (heavy `report` arm records markers), but the automatic `converge` trend line will not carry `marker_total`. If product later wants markers on the converge cadence, the hook would open `FtsRegionSearchIndex` on `search.db` — a follow-up, not this task.
+- `ReadIdentity` opens a second read-only connection separate from `ReadConvergeMetrics` (2 opens per converge). Negligible for best-effort telemetry; left un-folded to keep the pure metric reader free of identity concerns.
+- The corrupt-file recovery path exercises `MetricHistoryStore.RenameAside` → `SqliteConnection.ClearAllPools()` (Task 1 code, process-global). No flakiness observed under the parallel full-suite run, matching Task 1's own corruption test.
+
+---
+
+## Fix round (lead inline review — wire region index into the converge hook)
+
+**Finding addressed:** the marker path was dead in production (both hooks passed `regionIndex: null`). Now both
+converge hooks open the region search index just built into `search.db` and pass it to `RecordConverge`, so
+`marker_total` (+ per-marker `detail_json`) rides the CONVERGE cadence per the design's cheap-arm table.
+
+**Miller call for this round:** `inspect FtsRegionSearchIndex depth=full` → confirmed `Open(string searchDbPath,
+long expectedRevision)` **THROWS** on every unavailability (missing/stale `search.db`, schema mismatch, malformed
+meta, region tables/columns absent when region search is disabled) and **never returns null**; the type is **not
+`IDisposable`** (per-`Search` connections are `Pooling=false` and disposed). So every failure is caught → null and
+no disposal is needed.
+
+**Changes:**
+1. `IndexerSidecarConverger`: `RecordConvergeHistory` now takes `searchDbPath` and calls a new `TryOpenRegionIndex`
+   that opens `FtsRegionSearchIndex.Open(searchDbPath, revision)` when `_searchEnabled`, catching
+   `IOException`/`InvalidOperationException`/`SqliteException`/`ArgumentException` → null (logged at Debug). The
+   just-converged `search.db` is at the current `revision`, so `Open`'s revision guard matches; a failed/disabled
+   search convergence degrades cleanly to no marker metric. Stale comment updated.
+2. `CrossWorkspaceRefreshService.TryConvergeSidecar`: the search db path IS naturally in scope
+   (`SymbolSearchSidecar.SearchDbPathFor(symbolsDbPath)`) and the enable flags are on `_sidecar`, so it wires the
+   region index symmetrically — gated on `_sidecar.Enabled && _sidecar.RegionOptions.Enabled`, same catch→null.
+   (No new parameter plumbed; no asymmetry.)
+3. `IndexerSidecarConvergerHistoryTests`: added `Converge_WithRegionSearchDb_RecordsMarkerTotalAndBreakdown` — a
+   pre-written region-bearing `search.db` (same shape `SearchIndexWriter` emits) at the converge revision ⟹ the
+   snapshot carries `marker_total=1` and `detail_json={"TODO":1,"FIXME":0,"HACK":0,"XXX":0}`. The existing
+   search-disabled test keeps the absent (not 0) assertion. `NewConverger` parameterized with `searchEnabled`.
+4. Updated the now-stale "the converger holds none" comment.
+
+**Fix-round verification (2026-07-07):**
+- Assigned filter: `... --filter "(FullyQualifiedName~MetricSnapshotAggregates|FullyQualifiedName~IndexerSidecarConvergerHistory)&Category!=Scale"` → **14 passed, 0 failed** (was 13; +1 marker-wiring test).
+- Scale e2e: `... --filter "FullyQualifiedName~MetricHistoryConvergeScale"` → **1 passed, 0 failed**.
+- Worker ceiling: `scripts/test.sh` → **2996 passed, 0 failed** (21s wall).
+- Build: `dotnet build Miller.slnx -c Release` → **0 warnings / 0 errors**.
+
+**Note:** the marker vocabulary + `ContainsMarker` duplication in `MetricSnapshotAggregates` is now
+production-reachable (as the lead noted), so the "keep the two in step" comment stands as the intended contract.
+The Scale e2e still calls `RecordConverge` with `regionIndex: null` (aggregates-over-real-extract proof); the
+region-index wiring is proven by the fast converger test above rather than rebuilding a real `search.db` in Scale.

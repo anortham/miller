@@ -316,6 +316,7 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Contains("patterns --json", commands);
         Assert.Contains("metrics clones --json", commands);
         Assert.Contains("metrics complexity --json", commands);
+        Assert.Contains("metrics history --json", commands);
         Assert.Contains("references export --jsonl", commands);
 
         JsonElement traceContract = Assert.Single(
@@ -335,6 +336,13 @@ public sealed class CliDispatchTests : IDisposable
             item => item.GetProperty("name").GetString() == "metrics");
         Assert.Equal("metrics <churn|clones|complexity|risk> --json", metricsContract.GetProperty("command").GetString());
         Assert.Equal(1, metricsContract.GetProperty("schema_version").GetInt32());
+
+        JsonElement metricsHistoryContract = Assert.Single(
+            root.GetProperty("json_contracts").EnumerateArray(),
+            item => item.GetProperty("name").GetString() == "metrics_history");
+        Assert.Equal("metrics history --json", metricsHistoryContract.GetProperty("command").GetString());
+        Assert.Equal(1, metricsHistoryContract.GetProperty("schema_version").GetInt32());
+        Assert.Equal("docs/contracts/metrics-history-v1.md", metricsHistoryContract.GetProperty("doc").GetString());
 
         JsonElement workspaceStatusContract = Assert.Single(
             root.GetProperty("json_contracts").EnumerateArray(),
@@ -386,6 +394,109 @@ public sealed class CliDispatchTests : IDisposable
         JsonElement structuralFactsExport = Assert.Single(exports, item => item.GetProperty("name").GetString() == "structural_facts");
         Assert.Equal("miller patterns export --jsonl", structuralFactsExport.GetProperty("command").GetString());
         Assert.Equal(PatternFactsExportReader.SchemaVersion, structuralFactsExport.GetProperty("schema_version").GetInt32());
+    }
+
+    [Fact]
+    public void MetricsHistory_Compact_RendersTrendNewestLast()
+    {
+        using var fx = MetricsHistoryDb();
+        string historyDb = MetricSnapshotAggregates.HistoryDbPathFor(fx.DbPath);
+        SeedHistorySnapshot(historyDb, "art-1", 40, "converge",
+            DateTime.Parse("2026-07-01T00:00:00Z").ToUniversalTime(), ("symbol_count", 1000));
+        SeedHistorySnapshot(historyDb, "art-1", 41, "converge",
+            DateTime.Parse("2026-07-02T00:00:00Z").ToUniversalTime(), ("symbol_count", 1200));
+
+        var (code, outText, errText) = Run(
+            new[] { "metrics", "history", "--metric", "symbol_count" }, Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("# metric history", outText);
+        Assert.True(outText.IndexOf("1000", StringComparison.Ordinal) < outText.IndexOf("1200", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void MetricsHistory_Json_EmitsStableEnvelope()
+    {
+        using var fx = MetricsHistoryDb();
+        string historyDb = MetricSnapshotAggregates.HistoryDbPathFor(fx.DbPath);
+        SeedHistorySnapshot(historyDb, "art-1", 40, "converge",
+            DateTime.Parse("2026-07-01T00:00:00Z").ToUniversalTime(), ("symbol_count", 1000), ("clone_group_count", 2));
+
+        var (code, outText, errText) = Run(
+            new[] { "metrics", "history", "--metric", "symbol_count", "--json" }, Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using var doc = JsonDocument.Parse(outText);
+        JsonElement root = doc.RootElement;
+        Assert.True(root.TryGetProperty("workspace_id", out JsonElement ws) &&
+            !string.IsNullOrWhiteSpace(ws.GetString()));
+        JsonElement series = Assert.Single(root.GetProperty("metrics").EnumerateArray());
+        Assert.Equal("symbol_count", series.GetProperty("metric").GetString());
+        JsonElement point = Assert.Single(series.GetProperty("points").EnumerateArray());
+        Assert.Equal(1000, point.GetProperty("value").GetDouble());
+        Assert.Equal("art-1", point.GetProperty("artifact_id").GetString());
+    }
+
+    [Fact]
+    public void MetricsHistory_EmptyHistory_ExitZeroFriendlyMessage()
+    {
+        using var fx = MetricsHistoryDb();
+
+        var (code, outText, errText) = Run(
+            new[] { "metrics", "history" }, Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("no trend data yet", outText);
+    }
+
+    [Fact]
+    public void MetricsHistory_PresentButUnreadableHistoryDb_ExitThreeOperationalFailure()
+    {
+        using var fx = MetricsHistoryDb();
+        string historyDb = MetricSnapshotAggregates.HistoryDbPathFor(fx.DbPath);
+        File.WriteAllText(historyDb, "this is not a sqlite database, just garbage");
+
+        var (code, _, errText) = Run(
+            new[] { "metrics", "history" }, Context(fx.DbPath, fx.WorkspaceRoot));
+
+        // A broken sidecar is an operational failure — exit 3 with `metrics failed: …`, NOT the friendly exit-0 nudge.
+        Assert.Equal(3, code);
+        Assert.Contains("metrics failed", errText);
+    }
+
+    private static JulieDbFixture MetricsHistoryDb() =>
+        JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow("sym-anchor", "Anchor", "class", "csharp",
+                    "src/Anchor.cs", "public class Anchor", 1, ParentId: null),
+            },
+            revisions: new[] { new JulieDbFixture.RevisionRow(1, "fresh") });
+
+    private static void SeedHistorySnapshot(
+        string historyDbPath,
+        string artifactId,
+        long revision,
+        string source,
+        DateTime recordedAt,
+        params (string Metric, double Value)[] metrics)
+    {
+        var snapshot = new MetricHistorySnapshot(
+            WorkspaceId: "ws-test",
+            ArtifactId: artifactId,
+            Revision: revision,
+            ExtractorVersion: "2.11.0",
+            MillerVersion: "test",
+            Source: source,
+            Metrics: metrics.Select(m => new MetricHistoryPoint(m.Metric, m.Value, null)).ToList());
+        MetricHistoryWriteResult outcome = MetricHistoryStore.RecordRun(
+            historyDbPath, snapshot, () => (artifactId, revision), recordedAt);
+        Assert.Equal(MetricHistoryWriteResult.Recorded, outcome);
     }
 
     [Fact]
@@ -2535,6 +2646,57 @@ public sealed class CliDispatchTests : IDisposable
             Assert.Equal(3, code);
             Assert.Contains("in use", outText);
             Assert.True(Directory.Exists(millerDir)); // not deleted while held
+        }
+    }
+
+    [Fact]
+    public void WorkspaceRemove_DuringInFlightContentImport_RefusedExitThree_ContentDbIntact()
+    {
+        // Regression for the pre-existing defect: a CLI content import holds content.lock WITHOUT the indexer
+        // lock. remove must acquire content.lock too, so it refuses (deletes nothing) rather than delete
+        // content.db mid-import (Windows sharing-violation crash / POSIX unlinked-inode writes).
+        string sub = Path.Combine(_dir, "ws-content-busy");
+        string millerDir = Path.Combine(sub, ".miller");
+        Directory.CreateDirectory(millerDir);
+        string contentDb = Path.Combine(millerDir, "content.db");
+        File.WriteAllText(contentDb, "content-corpus");
+
+        using (ContentCorpusWriteLock heldContent =
+            ContentCorpusWriteLock.AcquireFor(contentDb, TimeSpan.FromSeconds(30)))
+        {
+            var (code, outText, _) = Run(new[] { "workspace", "remove", "--path", sub },
+                Context(Path.Combine(_dir, "symbols.db")));
+
+            Assert.Equal(3, code);
+            Assert.Contains("in use", outText);
+            Assert.True(Directory.Exists(millerDir));           // not deleted while the import holds content.lock
+            Assert.True(File.Exists(contentDb));                // content.db intact — no partial delete
+            Assert.Equal("content-corpus", File.ReadAllText(contentDb));
+        }
+    }
+
+    [Fact]
+    public void WorkspaceRemove_DuringInFlightHistoryAppend_RefusedExitThree_HistoryDbIntact()
+    {
+        // Same regression shape for history.lock: a heavy-metric append holds history.lock without the indexer
+        // lock; remove must refuse and leave history.db intact.
+        string sub = Path.Combine(_dir, "ws-history-busy");
+        string millerDir = Path.Combine(sub, ".miller");
+        Directory.CreateDirectory(millerDir);
+        string historyDb = Path.Combine(millerDir, "history.db");
+        File.WriteAllText(historyDb, "metric-history");
+
+        using (MetricHistoryWriteLock heldHistory =
+            MetricHistoryWriteLock.AcquireFor(historyDb, TimeSpan.FromSeconds(30)))
+        {
+            var (code, outText, _) = Run(new[] { "workspace", "remove", "--path", sub },
+                Context(Path.Combine(_dir, "symbols.db")));
+
+            Assert.Equal(3, code);
+            Assert.Contains("in use", outText);
+            Assert.True(Directory.Exists(millerDir));           // not deleted while the append holds history.lock
+            Assert.True(File.Exists(historyDb));                // history.db intact — no partial delete
+            Assert.Equal("metric-history", File.ReadAllText(historyDb));
         }
     }
 

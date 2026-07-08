@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -220,6 +221,102 @@ public sealed record DashboardLocalMetricsPanel(
     [property: JsonPropertyName("clone_groups")] IReadOnlyList<DashboardMetricCloneGroup> CloneGroups,
     [property: JsonPropertyName("error")] string? Error = null);
 
+/// <summary>
+/// One metric's trend line for the workspace-detail Trends panel: the ordered per-snapshot values (already
+/// downsampled to at most <c>maxPoints</c> by the store) plus its first/latest for a compact delta label. A series
+/// is only present when its metric has at least one recorded point — an ABSENT metric never becomes a zero row.
+/// </summary>
+public sealed record DashboardTrendSeries(
+    [property: JsonPropertyName("metric")] string Metric,
+    [property: JsonPropertyName("label")] string Label,
+    [property: JsonPropertyName("points")] IReadOnlyList<double> Points,
+    [property: JsonPropertyName("first")] double First,
+    [property: JsonPropertyName("latest")] double Latest)
+{
+    /// <summary>A single point cannot draw a line; the panel shows the "run miller report" hint for these.</summary>
+    [JsonIgnore]
+    public bool HasTrend => Points.Count >= 2;
+}
+
+/// <summary>
+/// The workspace-detail "Trends" panel model: one <see cref="DashboardTrendSeries"/> per deterministic metric that
+/// has any recorded history. Empty <see cref="Series"/> ⟹ the panel renders its empty-state line (no history.db, or
+/// a history.db with none of the tracked metrics yet). <see cref="Unreadable"/> ⟹ the history.db is PRESENT but could
+/// not be read; the panel renders a distinct "history unreadable" state instead of "no trend data yet" so a broken
+/// sidecar never looks like a fresh one. Read-only aggregate facts — no index hydration.
+/// </summary>
+public sealed record DashboardWorkspaceTrendsPanel(
+    [property: JsonPropertyName("workspace_id")] string? WorkspaceId,
+    [property: JsonPropertyName("series")] IReadOnlyList<DashboardTrendSeries> Series,
+    [property: JsonPropertyName("unreadable")] bool Unreadable = false)
+{
+    [JsonIgnore]
+    public bool HasData => Series.Count > 0;
+
+    public static DashboardWorkspaceTrendsPanel Empty(string? workspaceId) =>
+        new(workspaceId, Array.Empty<DashboardTrendSeries>());
+
+    /// <summary>A PRESENT-but-unreadable history.db: no series, but flagged so the panel renders an error state.</summary>
+    public static DashboardWorkspaceTrendsPanel UnreadablePanel(string? workspaceId) =>
+        new(workspaceId, Array.Empty<DashboardTrendSeries>(), Unreadable: true);
+}
+
+/// <summary>
+/// Pure, local-first inline-SVG sparkline geometry — no external assets, no rendering framework. Given an ordered
+/// value series it produces the <c>points</c> attribute for an SVG <c>&lt;polyline&gt;</c> inside a fixed viewBox,
+/// normalising the values across the height (min at the bottom, max at the top; a flat series draws a mid line).
+/// Kept out of the .razor so it is unit-testable in isolation.
+/// </summary>
+public static class DashboardSparkline
+{
+    public const double ViewWidth = 100d;
+    public const double ViewHeight = 24d;
+    private const double PadY = 2d; // keep the stroke off the top/bottom edges of the viewBox.
+
+    /// <summary>The <c>viewBox</c> string for the sparkline SVG, e.g. <c>"0 0 100 24"</c>.</summary>
+    public static string ViewBox { get; } = string.Create(
+        CultureInfo.InvariantCulture, $"0 0 {ViewWidth} {ViewHeight}");
+
+    /// <summary>
+    /// Build the SVG <c>polyline</c> <c>points</c> string (space-separated <c>x,y</c> pairs) for
+    /// <paramref name="values"/>. Returns an empty string for fewer than two points (no line to draw).
+    /// </summary>
+    public static string Points(IReadOnlyList<double> values)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        int n = values.Count;
+        if (n < 2)
+            return string.Empty;
+
+        double min = values[0];
+        double max = values[0];
+        for (int i = 1; i < n; i++)
+        {
+            if (values[i] < min) min = values[i];
+            if (values[i] > max) max = values[i];
+        }
+
+        double range = max - min;
+        double usableHeight = ViewHeight - (2 * PadY);
+        var sb = new StringBuilder(n * 12);
+        for (int i = 0; i < n; i++)
+        {
+            double x = n == 1 ? 0d : (double)i * ViewWidth / (n - 1);
+            // Flat series ⟹ a centred horizontal line; otherwise invert so the max value sits at the top.
+            double normalized = range <= 0d ? 0.5d : (values[i] - min) / range;
+            double y = ViewHeight - PadY - (normalized * usableHeight);
+            if (i > 0)
+                sb.Append(' ');
+            sb.Append(Coord(x)).Append(',').Append(Coord(y));
+        }
+
+        return sb.ToString();
+    }
+
+    private static string Coord(double value) =>
+        Math.Round(value, 2).ToString("0.##", CultureInfo.InvariantCulture);
+}
+
 public sealed record DashboardContextSavingsTool(
     [property: JsonPropertyName("tool")] string Tool,
     [property: JsonPropertyName("tracked_calls")] long TrackedCalls,
@@ -263,7 +360,8 @@ public sealed record DashboardSnapshot
         DashboardWorkspaceHealthPanel? Health = null,
         DashboardPatternInventoryPanel? PatternInventory = null,
         DashboardWorkspaceOnboardingPanel? Onboarding = null,
-        DashboardLocalMetricsPanel? LocalMetrics = null)
+        DashboardLocalMetricsPanel? LocalMetrics = null,
+        DashboardWorkspaceTrendsPanel? Trends = null)
     {
         this.Workspaces = Workspaces;
         this.Telemetry = Telemetry;
@@ -275,6 +373,7 @@ public sealed record DashboardSnapshot
         this.PatternInventory = PatternInventory;
         this.Onboarding = Onboarding;
         this.LocalMetrics = LocalMetrics;
+        this.Trends = Trends;
     }
 
     [JsonPropertyName("workspaces")]
@@ -306,6 +405,9 @@ public sealed record DashboardSnapshot
 
     [JsonPropertyName("local_metrics")]
     public DashboardLocalMetricsPanel? LocalMetrics { get; init; }
+
+    [JsonPropertyName("trends")]
+    public DashboardWorkspaceTrendsPanel? Trends { get; init; }
 }
 
 public sealed record DashboardWorkspaceIndexEntry(
@@ -712,6 +814,9 @@ public static class DashboardData
         DashboardLocalMetricsPanel? localMetrics = selectedWorkspace is null || selectedFacts is null
             ? null
             : ReadLocalMetricsPanel(selectedWorkspace);
+        DashboardWorkspaceTrendsPanel? trends = selectedWorkspace is null || selectedFacts is null
+            ? null
+            : DashboardIndexFactsReader.ReadTrends(selectedWorkspace);
         return new DashboardSnapshot(
             workspaces,
             telemetry,
@@ -722,7 +827,8 @@ public static class DashboardData
             health,
             patternInventory,
             onboarding,
-            localMetrics);
+            localMetrics,
+            trends);
     }
 
     private static DashboardLocalMetricsPanel? ReadLocalMetricsPanel(DashboardWorkspaceRow workspace)

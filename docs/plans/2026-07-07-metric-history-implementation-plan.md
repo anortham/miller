@@ -128,11 +128,11 @@ Commit mode: Tasks 1, 4, 7 `serial-worker-commit`; Batch A and Batch B tasks `pa
 **Approach:** Keep the aggregates reader read-only (`SqliteReadOnlyAccess.Open`, same as `CloneGroupReader`). Complexity percentiles via SQL (`ORDER BY value LIMIT 1 OFFSET (count*p)/100` pattern or read values and compute in C# — either, but bounded). Do not add any polling, timer, or watcher: the hook is strictly within the existing converge call. The Scale test rides the existing julie-spawning workspace-test pattern with `ScaleTestSupport.RequireJulieServer()` and the class-level Scale trait.
 
 **Acceptance criteria:**
-- [ ] After a (simulated) converge, `history.db` holds one `source='converge'` snapshot with the metric set above; marker metrics absent when no region index.
-- [ ] A history failure (locked/corrupt file) does not change converge behavior or throw out of the hook (test by pre-holding the lock / pre-corrupting).
-- [ ] Same-revision re-converge records nothing new (dedup observed through the store).
-- [ ] Scale e2e: real extract → converge → snapshot present with plausible values.
-- [ ] Worker-scope verification passes and the verified diff is handed to the lead (parallel-lead-commit).
+- [x] After a (simulated) converge, `history.db` holds one `source='converge'` snapshot with the metric set above; marker metrics absent when no region index.
+- [x] A history failure (locked/corrupt file) does not change converge behavior or throw out of the hook (test by pre-holding the lock / pre-corrupting).
+- [x] Same-revision re-converge records nothing new (dedup observed through the store).
+- [x] Scale e2e: real extract → converge → snapshot present with plausible values.
+- [x] Worker-scope verification passes and the verified diff is handed to the lead (parallel-lead-commit).
 
 ---
 
@@ -161,11 +161,11 @@ Commit mode: Tasks 1, 4, 7 `serial-worker-commit`; Batch A and Batch B tasks `pa
 **Approach:** Do not recompute anything for recording — reuse the values already in the composed facts records. Non-canonical run tests assert NO snapshot was written. Keep the tools' pure cores side-effect-free where possible: prefer recording from the CLI handler layer, passing in the computed facts.
 
 **Acceptance criteria:**
-- [ ] Default-params `miller report` / `metrics churn` / `metrics risk` / `references candidates` each write their snapshot with the metric names above.
-- [ ] Non-default params (e.g. `--range 90d`) ⟹ normal output, no snapshot.
-- [ ] History-write failure ⟹ command output and exit code unchanged, warning logged.
-- [ ] Churn-then-risk at one revision: two snapshots, independent timestamps.
-- [ ] Worker-scope verification passes and the verified diff is handed to the lead (parallel-lead-commit).
+- [x] Default-params `miller report` / `metrics churn` / `metrics risk` / `references candidates` each write their snapshot with the metric names above.
+- [x] Non-default params (e.g. `--range 90d`) ⟹ normal output, no snapshot.
+- [x] History-write failure ⟹ command output and exit code unchanged, warning logged.
+- [x] Churn-then-risk at one revision: two snapshots, independent timestamps.
+- [x] Worker-scope verification passes and the verified diff is handed to the lead (parallel-lead-commit).
 
 ---
 
@@ -193,11 +193,11 @@ Commit mode: Tasks 1, 4, 7 `serial-worker-commit`; Batch A and Batch B tasks `pa
 **What to build:** The read verb and its stable contract doc. Follow the existing `metrics` operation pattern (`RunClones`/`RunComplexity` shape: parse → reader → compact/JSON render).
 
 **Acceptance criteria:**
-- [ ] Compact and `--json` outputs match the contract doc; `--metric` filters; `--limit` bounds.
-- [ ] Ordering by `snapshot_id` is observable (seeded out-of-order timestamps render in insertion order).
-- [ ] Empty history is a friendly exit-0 message in compact and an empty `metrics` array in JSON.
-- [ ] `capabilities --json` lists the new surface.
-- [ ] Worker-scope verification passes and the change is committed by the worker (serial-worker-commit).
+- [x] Compact and `--json` outputs match the contract doc; `--metric` filters; `--limit` bounds.
+- [x] Ordering by `snapshot_id` is observable (seeded out-of-order timestamps render in insertion order).
+- [x] Empty history is a friendly exit-0 message in compact and an empty `metrics` array in JSON.
+- [x] `capabilities --json` lists the new surface.
+- [x] Worker-scope verification passes and the change is committed by the worker (serial-worker-commit).
 
 ---
 
@@ -226,10 +226,10 @@ Commit mode: Tasks 1, 4, 7 `serial-worker-commit`; Batch A and Batch B tasks `pa
 **Approach:** Preserve the existing comment discipline in `DeleteContentsExceptLock` (it documents WHY). Regression test: hold `content.lock` from a second handle, run remove, assert refused-in-use rather than a crash or partial delete; repeat for `history.lock`.
 
 **Acceptance criteria:**
-- [ ] Remove acquires indexer → content → history locks; any unavailable ⟹ refused-in-use, nothing deleted.
-- [ ] Held lock files survive `DeleteContentsExceptLock`; debris removed after release; emptied dir removal unchanged.
-- [ ] Regression: remove during an in-flight content import no longer deletes `content.db` mid-write.
-- [ ] Worker-scope verification passes and the verified diff is handed to the lead (parallel-lead-commit).
+- [x] Remove acquires indexer → content → history locks; any unavailable ⟹ refused-in-use, nothing deleted.
+- [x] Held lock files survive `DeleteContentsExceptLock`; debris removed after release; emptied dir removal unchanged.
+- [x] Regression: remove during an in-flight content import no longer deletes `content.db` mid-write.
+- [x] Worker-scope verification passes and the verified diff is handed to the lead (parallel-lead-commit).
 
 ---
 
@@ -259,11 +259,11 @@ Commit mode: Tasks 1, 4, 7 `serial-worker-commit`; Batch A and Batch B tasks `pa
 **Approach:** Follow `ReadSearchSidecarStatus` in `DashboardIndexFactsReader` for the sidecar-probe pattern. Keep SVG generation in C# (testable), the `.razor` file thin. Absent metrics simply don't get a sparkline row.
 
 **Acceptance criteria:**
-- [ ] Workspace detail shows sparklines for available metrics from a seeded `history.db`; <2 points ⟹ the empty-state line.
-- [ ] Missing `history.db` ⟹ panel renders the empty state; no error.
-- [ ] `workspace health` compact + JSON include history status/size; corrupt-recovered is surfaced.
-- [ ] No full-index load added to any dashboard path.
-- [ ] Worker-scope verification passes and the verified diff is handed to the lead (parallel-lead-commit).
+- [x] Workspace detail shows sparklines for available metrics from a seeded `history.db`; <2 points ⟹ the empty-state line.
+- [x] Missing `history.db` ⟹ panel renders the empty state; no error.
+- [x] `workspace health` compact + JSON include history status/size; corrupt-recovered is surfaced.
+- [x] No full-index load added to any dashboard path.
+- [x] Worker-scope verification passes and the verified diff is handed to the lead (parallel-lead-commit).
 
 ---
 
@@ -288,6 +288,6 @@ Commit mode: Tasks 1, 4, 7 `serial-worker-commit`; Batch A and Batch B tasks `pa
 **What to build:** The boundary/doc truth-up. Edit `CLAUDE.md` only, then run `scripts/sync-agents.sh` and confirm `cmp -s CLAUDE.md AGENTS.md`.
 
 **Acceptance criteria:**
-- [ ] CLAUDE.md boundary paragraph reflects shipped P4 + the dead-code surfacing approval; AGENTS.md regenerated byte-identical.
-- [ ] README + docs/README.md updated; no stale "designed-not-built" language remains.
-- [ ] Worker-scope verification passes (fast suite — `AgentInstructionsTests` guards doc/tool sync) and the change is committed by the worker (serial-worker-commit).
+- [x] CLAUDE.md boundary paragraph reflects shipped P4 + the dead-code surfacing approval; AGENTS.md regenerated byte-identical.
+- [x] README + docs/README.md updated; no stale "designed-not-built" language remains.
+- [x] Worker-scope verification passes (fast suite — `AgentInstructionsTests` guards doc/tool sync) and the change is committed by the worker (serial-worker-commit).

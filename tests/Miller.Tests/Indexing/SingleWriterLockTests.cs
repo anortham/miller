@@ -197,6 +197,143 @@ public sealed class SingleWriterLockTests
         SingleWriterLock.TryDeleteEmptiedDir(dir.Path);
     }
 
+    // ---- generalized skip-set: DeleteContentsExceptLock must keep every HELD lock, but still delete debris ----
+
+    [Fact]
+    public void DeleteContentsExceptLock_WithHeldSidecarLocks_KeepsThem_ButDeletesUnheldLockDebris()
+    {
+        // The remove flow holds indexer.lock + content.lock + history.lock across the delete; all three must
+        // survive. But a stray, UNHELD *.lock file is index debris and MUST be deleted — the skip-set is
+        // explicit, not a blanket "*.lock" skip that would hide a leaked lock.
+        using var dir = new TempMillerDir();
+        File.WriteAllText(Path.Combine(dir.Path, "symbols.db"), "db");
+        File.WriteAllText(Path.Combine(dir.Path, "content.db"), "content");
+        File.WriteAllText(Path.Combine(dir.Path, "history.db"), "history");
+        File.WriteAllText(Path.Combine(dir.Path, "content.lock"), "");
+        File.WriteAllText(Path.Combine(dir.Path, "history.lock"), "");
+        File.WriteAllText(Path.Combine(dir.Path, "stale.lock"), ""); // debris — unheld, must be deleted
+
+        using var lease = SingleWriterLock.TryAcquire(dir.Path);
+        Assert.NotNull(lease);
+
+        SingleWriterLock.DeleteContentsExceptLock(dir.Path, WorkspaceWriteLeases.SidecarLockFileNames);
+
+        string[] survivors = Directory.GetFileSystemEntries(dir.Path)
+            .Select(Path.GetFileName)
+            .OrderBy(n => n, StringComparer.Ordinal)
+            .ToArray()!;
+        Assert.Equal(new[] { "content.lock", "history.lock", "indexer.lock" }, survivors);
+    }
+
+    [Fact]
+    public void DeleteContentsExceptLock_DefaultSkipSet_StillKeepsOnlyIndexerLock()
+    {
+        // Back-compat: the parameterless overload behaves exactly as before — only indexer.lock survives.
+        using var dir = new TempMillerDir();
+        File.WriteAllText(Path.Combine(dir.Path, "symbols.db"), "db");
+        File.WriteAllText(Path.Combine(dir.Path, "content.lock"), ""); // NOT held here ⇒ debris ⇒ deleted
+
+        using var lease = SingleWriterLock.TryAcquire(dir.Path);
+        Assert.NotNull(lease);
+
+        SingleWriterLock.DeleteContentsExceptLock(dir.Path);
+
+        Assert.Equal(
+            new[] { Path.Combine(dir.Path, SingleWriterLock.LockFileName) },
+            Directory.GetFileSystemEntries(dir.Path));
+    }
+
+    // ---- WorkspaceWriteLeases: fixed-order acquisition of all three remove leases ----
+
+    private static readonly TimeSpan ShortTimeout = TimeSpan.FromMilliseconds(200);
+
+    [Fact]
+    public void WorkspaceWriteLeases_OnAllFreeLocks_AcquiresAllThree()
+    {
+        using var dir = new TempMillerDir();
+
+        using WorkspaceWriteLeases? leases =
+            WorkspaceWriteLeases.TryAcquireForRemove(dir.Path, SingleWriterLock.TryAcquire, ShortTimeout);
+
+        Assert.NotNull(leases);
+        // While held, every underlying lock is exclusive: a second acquire of any of the three is refused.
+        Assert.Null(SingleWriterLock.TryAcquire(dir.Path));
+        Assert.Throws<TimeoutException>(() =>
+            ContentCorpusWriteLock.AcquireFor(Path.Combine(dir.Path, "content.db"), ShortTimeout));
+        Assert.Throws<TimeoutException>(() =>
+            MetricHistoryWriteLock.AcquireFor(Path.Combine(dir.Path, "history.db"), ShortTimeout));
+    }
+
+    [Fact]
+    public void WorkspaceWriteLeases_WhenIndexerLockHeld_Refuses()
+    {
+        using var dir = new TempMillerDir();
+        using SingleWriterLock? held = SingleWriterLock.TryAcquire(dir.Path);
+        Assert.NotNull(held);
+
+        WorkspaceWriteLeases? leases =
+            WorkspaceWriteLeases.TryAcquireForRemove(dir.Path, SingleWriterLock.TryAcquire, ShortTimeout);
+
+        Assert.Null(leases); // indexer unavailable ⇒ whole bundle refused
+    }
+
+    [Fact]
+    public void WorkspaceWriteLeases_WhenContentLockHeld_Refuses_AndReleasesTheIndexerLock()
+    {
+        // Regression for the pre-existing defect: an in-flight content import holds content.lock WITHOUT the
+        // indexer lock. Remove must refuse (delete nothing) — and must not strand the indexer lease it briefly took.
+        using var dir = new TempMillerDir();
+        using ContentCorpusWriteLock heldContent =
+            ContentCorpusWriteLock.AcquireFor(Path.Combine(dir.Path, "content.db"), ShortTimeout);
+
+        WorkspaceWriteLeases? leases =
+            WorkspaceWriteLeases.TryAcquireForRemove(dir.Path, SingleWriterLock.TryAcquire, ShortTimeout);
+
+        Assert.Null(leases);
+        // The indexer lock the bundle grabbed first must have been released on the refusal.
+        using SingleWriterLock? afterIndexer = SingleWriterLock.TryAcquire(dir.Path);
+        Assert.NotNull(afterIndexer);
+    }
+
+    [Fact]
+    public void WorkspaceWriteLeases_WhenHistoryLockHeld_Refuses_AndReleasesIndexerAndContent()
+    {
+        using var dir = new TempMillerDir();
+        using MetricHistoryWriteLock heldHistory =
+            MetricHistoryWriteLock.AcquireFor(Path.Combine(dir.Path, "history.db"), ShortTimeout);
+
+        WorkspaceWriteLeases? leases =
+            WorkspaceWriteLeases.TryAcquireForRemove(dir.Path, SingleWriterLock.TryAcquire, ShortTimeout);
+
+        Assert.Null(leases);
+        // Both leases taken before history must have been released on the refusal.
+        using SingleWriterLock? afterIndexer = SingleWriterLock.TryAcquire(dir.Path);
+        Assert.NotNull(afterIndexer);
+        using ContentCorpusWriteLock afterContent =
+            ContentCorpusWriteLock.AcquireFor(Path.Combine(dir.Path, "content.db"), ShortTimeout);
+        Assert.NotNull(afterContent);
+    }
+
+    [Fact]
+    public void WorkspaceWriteLeases_Dispose_ReleasesAllThree_MakingThemReacquirable()
+    {
+        using var dir = new TempMillerDir();
+
+        WorkspaceWriteLeases? leases =
+            WorkspaceWriteLeases.TryAcquireForRemove(dir.Path, SingleWriterLock.TryAcquire, ShortTimeout);
+        Assert.NotNull(leases);
+        leases!.Dispose();
+
+        using SingleWriterLock? indexer = SingleWriterLock.TryAcquire(dir.Path);
+        Assert.NotNull(indexer);
+        using ContentCorpusWriteLock content =
+            ContentCorpusWriteLock.AcquireFor(Path.Combine(dir.Path, "content.db"), ShortTimeout);
+        Assert.NotNull(content);
+        using MetricHistoryWriteLock history =
+            MetricHistoryWriteLock.AcquireFor(Path.Combine(dir.Path, "history.db"), ShortTimeout);
+        Assert.NotNull(history);
+    }
+
     private sealed class IOExceptionWithHResult : IOException
     {
         public IOExceptionWithHResult(int hresult) => HResult = hresult;

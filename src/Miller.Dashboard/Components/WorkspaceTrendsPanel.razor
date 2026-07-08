@@ -1,0 +1,73 @@
+@namespace Miller.Dashboard.Components
+
+<section id="workspace-trends-panel" class="panel trends-panel" aria-label="Metric trends">
+    <div class="panel-heading">
+        <div>
+            <h2>Trends</h2>
+            <p>@Subtitle</p>
+        </div>
+    </div>
+
+    @if (Trends is null || !Trends.HasData)
+    {
+        @if (Trends is { Unreadable: true })
+        {
+            <p class="empty">Metric history is unreadable — the <code>history.db</code> sidecar is present but could not be read.</p>
+        }
+        else
+        {
+            <p class="empty">No trend data yet — run <code>miller report</code> to record metric history.</p>
+        }
+    }
+    else
+    {
+        <div class="trend-list">
+            @foreach (DashboardTrendSeries series in Trends.Series)
+            {
+                <div class="trend-row">
+                    <div class="trend-label">
+                        <span>@series.Label</span>
+                        <strong>@FormatValue(series.Latest)</strong>
+                    </div>
+                    @if (series.HasTrend)
+                    {
+                        <svg class="sparkline" viewBox="@DashboardSparkline.ViewBox" preserveAspectRatio="none"
+                             role="img" aria-label="@SparklineLabel(series)">
+                            <polyline points="@DashboardSparkline.Points(series.Points)" fill="none"
+                                      stroke="currentColor" stroke-width="1.5"
+                                      stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" />
+                        </svg>
+                        <small class="trend-delta">@DeltaLabel(series)</small>
+                    }
+                    else
+                    {
+                        <small class="empty-inline">No trend data yet — run <code>miller report</code></small>
+                    }
+                </div>
+            }
+        </div>
+    }
+</section>
+
+@code {
+    [Parameter] public DashboardWorkspaceTrendsPanel? Trends { get; set; }
+
+    private string Subtitle => Trends is null || !Trends.HasData
+        ? "Deterministic metric history"
+        : FormatCount(Trends.Series.Count, "metric") + " tracked from history.db";
+
+    private static string FormatValue(double value) =>
+        value == Math.Floor(value) && Math.Abs(value) < 1e15
+            ? ((long)value).ToString("N0", CultureInfo.InvariantCulture)
+            : value.ToString("0.##", CultureInfo.InvariantCulture);
+
+    private static string DeltaLabel(DashboardTrendSeries series)
+    {
+        double delta = series.Latest - series.First;
+        string sign = delta > 0 ? "+" : string.Empty;
+        return FormatCount(series.Points.Count, "point") + " · " + sign + FormatValue(delta) + " since first";
+    }
+
+    private static string SparklineLabel(DashboardTrendSeries series) =>
+        series.Label + " trend: " + FormatValue(series.First) + " to " + FormatValue(series.Latest);
+}

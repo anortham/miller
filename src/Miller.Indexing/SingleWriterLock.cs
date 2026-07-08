@@ -76,17 +76,30 @@ public sealed class SingleWriterLock : IDisposable
     }
 
     /// <summary>
-    /// Delete everything inside <paramref name="millerDir"/> EXCEPT the lock file. Call ONLY while HOLDING the
-    /// writer lock: the destructive part of a workspace remove must happen under mutual exclusion so a writer
-    /// that acquires the lock later finds an already-empty index (clean rebuild), never a half-deleted live one.
-    /// The held lock file is skipped because an open <see cref="FileShare.None"/> handle cannot be deleted on
-    /// Windows; the caller releases the lease and then calls <see cref="TryDeleteEmptiedDir"/>.
+    /// Delete everything inside <paramref name="millerDir"/> EXCEPT the held lock files. Call ONLY while HOLDING
+    /// the writer lock (and any workspace-local sidecar write leases named in
+    /// <paramref name="additionalHeldLockFileNames"/>): the destructive part of a workspace remove must happen
+    /// under mutual exclusion so a writer that acquires the lock later finds an already-empty index (clean
+    /// rebuild), never a half-deleted live one. A held lock file is skipped because an open
+    /// <see cref="FileShare.None"/> handle cannot be deleted on Windows; the caller releases the lease(s) and then
+    /// calls <see cref="TryDeleteEmptiedDir"/>.
+    ///
+    /// <para>The indexer <see cref="LockFileName"/> is ALWAYS skipped (it is intrinsic to this lock's own remove
+    /// contract). <paramref name="additionalHeldLockFileNames"/> is the EXPLICIT set of any other lock files the
+    /// caller is holding across the delete (e.g. <c>content.lock</c>, <c>history.lock</c>). It is deliberately an
+    /// explicit set, NOT a blanket <c>*.lock</c> skip — a stray, unheld <c>.lock</c> file is index debris that
+    /// SHOULD be deleted here, and silently keeping it would hide a leaked-lock bug.</para>
     /// </summary>
-    public static void DeleteContentsExceptLock(string millerDir)
+    public static void DeleteContentsExceptLock(
+        string millerDir, IReadOnlySet<string>? additionalHeldLockFileNames = null)
     {
+        var skip = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { LockFileName };
+        if (additionalHeldLockFileNames is not null)
+            skip.UnionWith(additionalHeldLockFileNames);
+
         foreach (string entry in Directory.EnumerateFileSystemEntries(millerDir))
         {
-            if (string.Equals(Path.GetFileName(entry), LockFileName, StringComparison.OrdinalIgnoreCase))
+            if (skip.Contains(Path.GetFileName(entry)))
                 continue;
             if (Directory.Exists(entry))
                 Directory.Delete(entry, recursive: true);
@@ -123,5 +136,106 @@ public sealed class SingleWriterLock : IDisposable
             return;
         _stream = null;
         stream.Dispose();
+    }
+}
+
+/// <summary>
+/// The bundle of workspace-local write leases a destructive <c>workspace remove</c> must hold before deleting a
+/// <c>.miller</c> dir. It exists to fix a real defect: CLI content imports hold <c>content.lock</c>
+/// (<see cref="ContentCorpusWriteLock"/>) WITHOUT the indexer lock, and history appends hold <c>history.lock</c>
+/// (<see cref="MetricHistoryWriteLock"/>) the same way — so guarding a remove with only the indexer
+/// <see cref="SingleWriterLock"/> could delete <c>content.db</c>/<c>history.db</c> out from under an in-flight
+/// write (Windows sharing-violation crash / POSIX unlinked-inode writes).
+///
+/// <para>Both remove call sites (the CLI <c>workspace remove</c> and the server <c>WorkspaceTool</c> remove
+/// operation) acquire all three through <see cref="TryAcquireForRemove"/> so the FIXED lock order — indexer
+/// <c>SingleWriterLock</c> → <c>content.lock</c> → <c>history.lock</c> — lives in exactly one place and cannot
+/// drift between the two paths. That single order is what lets every writer pair avoid deadlock. This is one
+/// small shared helper, not a general lock manager: it only acquires-in-order and disposes-in-reverse.</para>
+/// </summary>
+public sealed class WorkspaceWriteLeases : IDisposable
+{
+    /// <summary>
+    /// The sidecar write-lock file names held ACROSS the delete in addition to the intrinsic indexer
+    /// <see cref="SingleWriterLock.LockFileName"/> — the explicit skip-set to pass
+    /// <see cref="SingleWriterLock.DeleteContentsExceptLock"/> so these held files survive the gutting and are
+    /// cleaned up (with the indexer lock file) by <see cref="SingleWriterLock.TryDeleteEmptiedDir"/> after release.
+    /// </summary>
+    public static readonly IReadOnlySet<string> SidecarLockFileNames =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ContentCorpusWriteLock.LockFileName,
+            MetricHistoryWriteLock.LockFileName,
+        };
+
+    /// <summary>
+    /// The short per-lock acquire budget for a remove. A remove is interactive/CI teardown, not a long-running
+    /// writer: if a sidecar lock is genuinely held by an in-flight import/append, we want to refuse promptly
+    /// (nothing deleted) rather than block. Judgment call within the design's "short timeout" band.
+    /// </summary>
+    public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(2);
+
+    private readonly IDisposable _indexer;
+    private readonly IDisposable _content;
+    private readonly IDisposable _history;
+
+    private WorkspaceWriteLeases(IDisposable indexer, IDisposable content, IDisposable history)
+    {
+        _indexer = indexer;
+        _content = content;
+        _history = history;
+    }
+
+    /// <summary>
+    /// Acquire the indexer, content, and history write leases IN THAT FIXED ORDER, then hand back a bundle that
+    /// releases them in reverse on <see cref="Dispose"/>. Returns <c>null</c> if ANY lease is unavailable — the
+    /// caller's existing refused-in-use result — after releasing whatever was already taken, so a refusal never
+    /// leaves a lease dangling and nothing is deleted.
+    ///
+    /// <para>The indexer acquisition is supplied by <paramref name="acquireIndexerLock"/> (the CLI passes
+    /// <see cref="SingleWriterLock.TryAcquire"/>; the server passes its injected try-acquire) — a single
+    /// non-blocking attempt, matching the existing remove behavior. The content and history leases poll up to
+    /// <paramref name="timeout"/> (default <see cref="DefaultTimeout"/>) and throw
+    /// <see cref="TimeoutException"/> on expiry, which is treated as unavailable.</para>
+    /// </summary>
+    public static WorkspaceWriteLeases? TryAcquireForRemove(
+        string millerDir, Func<string, IDisposable?> acquireIndexerLock, TimeSpan? timeout = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(millerDir);
+        ArgumentNullException.ThrowIfNull(acquireIndexerLock);
+
+        IDisposable? indexer = acquireIndexerLock(millerDir);
+        if (indexer is null)
+            return null; // another writer owns the index — refuse, delete nothing.
+
+        TimeSpan effective = timeout ?? DefaultTimeout;
+        ContentCorpusWriteLock? content = null;
+        MetricHistoryWriteLock? history = null;
+        try
+        {
+            // The locks live NEXT TO their DB inside the same .miller dir; the *.db filename only supplies the
+            // directory the lock derives its sibling <c>*.lock</c> path from.
+            content = ContentCorpusWriteLock.AcquireFor(Path.Combine(millerDir, "content.db"), effective);
+            history = MetricHistoryWriteLock.AcquireFor(
+                Path.Combine(millerDir, MetricHistoryStore.HistoryDbFileName), effective);
+            return new WorkspaceWriteLeases(indexer, content, history);
+        }
+        catch (TimeoutException)
+        {
+            // A sidecar lock is held by an in-flight import/append: release what we took (reverse order) and
+            // refuse. content.db/history.db are left intact.
+            history?.Dispose();
+            content?.Dispose();
+            indexer.Dispose();
+            return null;
+        }
+    }
+
+    /// <summary>Release all three leases in reverse acquisition order (history → content → indexer).</summary>
+    public void Dispose()
+    {
+        _history.Dispose();
+        _content.Dispose();
+        _indexer.Dispose();
     }
 }

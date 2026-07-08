@@ -313,6 +313,32 @@ public static class WorkspaceRender
         };
     }
 
+    // "present  N snapshots  <size>  schema v1" / "absent" / "unreadable" — the append-only metric-history sidecar. A
+    // recovered corruption (a history.db.corrupt-* renamed aside) is flagged so an operator can see history was reset;
+    // a PRESENT-but-unreadable file reads "unreadable" (never a healthy-looking "present  0 snapshots").
+    private static string HistorySidecarLabel(MetricHistoryStatus history)
+    {
+        string recovered = history.CorruptRecovered ? "  corrupt-recovered" : string.Empty;
+        if (!history.Present)
+            return "absent" + recovered;
+        if (history.Unreadable)
+            return "unreadable" + recovered;
+
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"present  {history.SnapshotCount} snapshots  {FormatBytes(history.SizeBytes)}  schema v{history.SchemaVersion}{recovered}");
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes < 1024)
+            return bytes.ToString(CultureInfo.InvariantCulture) + " B";
+        double kb = bytes / 1024d;
+        if (kb < 1024)
+            return kb.ToString("0.#", CultureInfo.InvariantCulture) + " KB";
+        return (kb / 1024d).ToString("0.#", CultureInfo.InvariantCulture) + " MB";
+    }
+
     // "fresh" / "STALE (built N < latest M)" / "unknown" — a stale index is called out, never silently glossed.
     private static string FreshLabel(WorkspaceFacts facts) => facts.IndexFresh switch
     {
@@ -452,6 +478,24 @@ public static class WorkspaceRender
         w.WriteEndObject();
     }
 
+    private static void WriteHistorySidecarJson(Utf8JsonWriter w, MetricHistoryStatus? history)
+    {
+        if (history is null)
+        {
+            w.WriteNullValue();
+            return;
+        }
+
+        w.WriteStartObject();
+        w.WriteBoolean("present", history.Present);
+        w.WriteBoolean("unreadable", history.Unreadable);
+        w.WriteNumber("schema_version", history.SchemaVersion);
+        w.WriteNumber("snapshot_count", history.SnapshotCount);
+        w.WriteNumber("size_bytes", history.SizeBytes);
+        w.WriteBoolean("corrupt_recovered", history.CorruptRecovered);
+        w.WriteEndObject();
+    }
+
     private static void WriteContentCorpusJson(Utf8JsonWriter w, ContentCorpusFacts? facts)
     {
         if (facts is null)
@@ -580,6 +624,8 @@ public static class WorkspaceRender
             sb.Append("search_db: ").Append(SearchSidecarLabel(sidecar)).Append('\n');
         if (status.ContentCorpus is { } corpus)
             sb.Append("content_db: ").Append(ContentCorpusLabel(corpus, status.BuiltRevision)).Append('\n');
+        if (facts.History is { } history)
+            sb.Append("history_db: ").Append(HistorySidecarLabel(history)).Append('\n');
         sb.Append("quality: ")
           .Append(ParseDiagnosticCount(facts.Extraction).ToString(CultureInfo.InvariantCulture))
           .Append(" parse diagnostics  ")
@@ -717,6 +763,8 @@ public static class WorkspaceRender
             WriteSearchSidecarJson(w, status.SearchSidecar);
             w.WritePropertyName("content_corpus");
             WriteContentCorpusJson(w, status.ContentCorpus);
+            w.WritePropertyName("history_db");
+            WriteHistorySidecarJson(w, facts.History);
             w.WriteEndObject();
 
             w.WritePropertyName("extraction_quality");
