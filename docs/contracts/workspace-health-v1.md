@@ -47,7 +47,14 @@ Removing or renaming documented fields requires a new contract version.
   `index_frozen_extractor_outdated` (the responding process is ineligible AND no live leader exists — nobody
   can index; upgrade miller or restore the pinned extractor via `scripts/restore-julie-extract`).
 - `index`: `document_count`, `known_extensions`, `built_revision`, `latest_revision`, `index_fresh`,
-  `freshness_status`, `warning`, `queue_empty`, `search_sidecar`, and `content_corpus`.
+  `freshness_status`, `warning`, `queue_empty`, `search_sidecar`, `content_corpus`, and `history_db`.
+  `history_db` is `null` only when history facts were not gathered; otherwise it is an object with:
+  - `present`: whether `<workspace>/.miller/history.db` exists.
+  - `unreadable`: whether a present sidecar could not be opened/read.
+  - `schema_version`: metric-history schema version, or `0` when absent/unreadable.
+  - `snapshot_count`: number of metric snapshots readable from the sidecar.
+  - `size_bytes`: sidecar file size in bytes.
+  - `corrupt_recovered`: whether a prior corrupt bundle has been preserved aside.
 - `extraction_quality.parse_diagnostics`: `available`, `error`, and grouped rows with `language`, `kind`, `count`.
 - `extraction_quality.capability_gaps`: `available`, `error`, and grouped rows with `language`, `capability`,
   `status`, `count`.
