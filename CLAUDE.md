@@ -228,7 +228,9 @@ scripts/test.ps1 all
   B's selector to `search`/`inspect`/`context`/`impact`/`trace`/`patterns`. If B is not registered, run
   `workspace open` with its root path first. `workspace_id=all` is only for `content search` text audits, not
   symbol/code read tools. The dashboard reads the registry, shared telemetry DB, and read-only aggregate facts
-  from workspace artifacts. It must not hydrate full indexes just to render list/detail views.
+  from workspace artifacts, and may perform registry-lifecycle mutations (workspace remove/prune) through its
+  antiforgery-protected POST endpoints backed by the shared `WorkspaceRemoval`/`WorkspaceRegistryPrune` cores
+  (ADR-0002). It must not hydrate full indexes just to render list/detail views.
 - **Hash split.** Stable `workspace_id` is SHA-256 of the canonical root. File freshness uses
   `files.content_hash` (`blake3:<hex>`, normalized before comparison) and is guarded by
   `artifact_metadata.hash_algorithm=blake3`.

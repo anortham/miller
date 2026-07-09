@@ -2122,11 +2122,12 @@ public static class CliDispatch
 
     // ---------- remove (delete a workspace's .miller index dir) ----------
 
-    // Delete a workspace's `.miller` index dir + unregister it. Ported from the server's WorkspaceTool.Remove
-    // minus the in-process "live workspace" refusal — the one-shot CLI serves nothing in-process, so the
-    // cross-process single-writer lock is the only guard against deleting a dir a running Miller owns. Requires
-    // an explicit selector (--id or --path); there is no current-dir default (deleting the dir you stand in by
-    // accident is a foot-gun).
+    // Delete a workspace's `.miller` index dir + unregister it. The removal semantics (gone-root prune, in-use
+    // lock refusal, lease co-holding) live in the shared WorkspaceRemoval core; this verb only parses the
+    // selector, renders the result, and maps the exit code. liveRoot is null — the one-shot CLI serves nothing
+    // in-process, so the cross-process single-writer lock is the only guard against deleting a dir a running
+    // Miller owns. Requires an explicit selector (--id or --path); there is no current-dir default (deleting the
+    // dir you stand in by accident is a foot-gun).
     private static int WorkspaceRemove(
         WorkspaceContext ctx, string? id, string? path, bool json, TextWriter outw, TextWriter err)
     {
@@ -2138,102 +2139,26 @@ public static class CliDispatch
 
         using WorkspaceRegistry registry = WorkspaceRegistry.Open(ctx.RegistryDbPath);
 
-        // By id: resolve the registry row, then delete its .miller dir + unregister.
+        WorkspaceRemoveResult result;
         if (!string.IsNullOrWhiteSpace(id))
         {
-            WorkspaceRegistryRow row;
             try
             {
-                row = WorkspaceRegistrySelector.Resolve(registry, id!);
+                result = WorkspaceRemoval.RemoveById(registry, id!, liveRoot: null);
             }
             catch (KeyNotFoundException ex)
             {
                 err.WriteLine(ex.Message);
                 return 2;
             }
-            string millerDir = Path.GetDirectoryName(row.IndexDbPath)
-                ?? throw new InvalidOperationException(
-                    $"Cannot determine the .miller directory for index DB path '{row.IndexDbPath}'.");
-            return RemoveMillerDir(registry, row.WorkspaceId, row.CanonicalRoot, millerDir, json, outw);
         }
-
-        // By path. A GONE dir cannot be canonicalized, so best-effort prune a registry row whose canonical root
-        // lexically matches the full path (R4 — lets a CI teardown clean the registry after deleting the repo).
-        string fullPath = Path.GetFullPath(path!);
-        if (!Directory.Exists(fullPath))
+        else
         {
-            string goneMillerDir = Path.Combine(fullPath, ".miller");
-            WorkspaceRegistryRow? stale =
-                WorkspaceRegistryRootMatcher.FindByPossiblyMissingPath(registry.List(), fullPath);
-            if (stale is not null)
-            {
-                registry.Remove(stale.WorkspaceId);
-                outw.WriteLine(WorkspaceRender.Remove(
-                    WorkspaceRemoveResult.Removed(
-                        goneMillerDir,
-                        stale.WorkspaceId,
-                        stale.CanonicalRoot,
-                        indexDirDeleted: false), json));
-                return RemoveExitCode(WorkspaceRemoveResult.Outcome.Removed);
-            }
-            outw.WriteLine(WorkspaceRender.Remove(WorkspaceRemoveResult.NotFound(goneMillerDir), json));
-            return RemoveExitCode(WorkspaceRemoveResult.Outcome.NotFound);
+            result = WorkspaceRemoval.RemoveByPath(registry, path!, liveRoot: null);
         }
 
-        // Existing dir: canonicalize and match a registry row (ordinal canonical root, like the server's
-        // FindByCanonicalRoot), falling back to a local .miller cleanup when no row is registered.
-        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(fullPath);
-        WorkspaceRegistryRow? match = WorkspaceRegistryRootMatcher.FindByRoot(registry.List(), canonicalRoot);
-        string millerDirByPath = match is { } m
-            ? Path.GetDirectoryName(m.IndexDbPath) ?? Path.Combine(canonicalRoot, ".miller")
-            : Path.Combine(canonicalRoot, ".miller");
-        return RemoveMillerDir(registry, match?.WorkspaceId, match?.CanonicalRoot ?? canonicalRoot, millerDirByPath, json, outw);
-    }
-
-    // Delete one `.miller` dir under the cross-process writer lock. Missing dir ⇒ a clean not-found (prune any
-    // stale row); lock held by another writer ⇒ refused, NOT deleted; otherwise delete + unregister.
-    private static int RemoveMillerDir(
-        WorkspaceRegistry registry, string? workspaceId, string? root, string millerDir, bool json, TextWriter outw)
-    {
-        if (!Directory.Exists(millerDir))
-        {
-            if (workspaceId is not null)
-            {
-                registry.Remove(workspaceId);
-                outw.WriteLine(WorkspaceRender.Remove(
-                    WorkspaceRemoveResult.Removed(
-                        millerDir,
-                        workspaceId,
-                        root,
-                        indexDirDeleted: false), json));
-                return RemoveExitCode(WorkspaceRemoveResult.Outcome.Removed);
-            }
-            outw.WriteLine(WorkspaceRender.Remove(WorkspaceRemoveResult.NotFound(millerDir, workspaceId, root), json));
-            return RemoveExitCode(WorkspaceRemoveResult.Outcome.NotFound);
-        }
-
-        // Delete the index data while HOLDING all three workspace-local write leases (indexer → content →
-        // history), so no Miller process can start writing this index — nor a CLI content import / history append,
-        // which hold content.lock / history.lock WITHOUT the indexer lock — mid-delete. Any lease unavailable ⇒
-        // refuse, delete nothing. Only the held lock files are skipped (an open FileShare.None handle cannot be
-        // deleted on Windows); after release, the leftover lock files + empty dir are removed best-effort — a
-        // writer that sneaks in after release finds an already-empty index and does a clean rebuild.
-        using (WorkspaceWriteLeases? leases =
-            WorkspaceWriteLeases.TryAcquireForRemove(millerDir, SingleWriterLock.TryAcquire))
-        {
-            if (leases is null)
-            {
-                outw.WriteLine(WorkspaceRender.Remove(WorkspaceRemoveResult.RefusedInUse(millerDir, workspaceId, root), json));
-                return RemoveExitCode(WorkspaceRemoveResult.Outcome.RefusedInUse);
-            }
-            SingleWriterLock.DeleteContentsExceptLock(millerDir, WorkspaceWriteLeases.SidecarLockFileNames);
-        }
-
-        SingleWriterLock.TryDeleteEmptiedDir(millerDir);
-        if (workspaceId is not null)
-            registry.Remove(workspaceId);
-        outw.WriteLine(WorkspaceRender.Remove(WorkspaceRemoveResult.Removed(millerDir, workspaceId, root), json));
-        return RemoveExitCode(WorkspaceRemoveResult.Outcome.Removed);
+        outw.WriteLine(WorkspaceRender.Remove(result, json));
+        return RemoveExitCode(result.Result);
     }
 
     // Map a refresh/full outcome to a process exit code (cli-eros-v1: exit 0 = ingestable payload, exit 3 =

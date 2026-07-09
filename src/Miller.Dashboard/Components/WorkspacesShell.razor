@@ -46,7 +46,7 @@
             </div>
         </header>
 
-        <WorkspaceIndex Index="Index" />
+        <WorkspaceIndex Index="Index" Notice="@Notice" NoticeDetail="@NoticeDetail" />
         <ActivityFeedPanel Feed="EffectiveActivity" />
         @if (Telemetry is not null)
         {
@@ -68,6 +68,12 @@
         new(Array.Empty<DashboardWorkspaceIndexEntry>(), 0, 0, 0, 0);
 
     [Parameter] public DashboardActivityFeed? Activity { get; set; }
+
+    /// <summary>Remove/prune outcome code from a post-redirect-get; forwarded to the workspace index notice.</summary>
+    [Parameter] public string? Notice { get; set; }
+
+    /// <summary>Detail for the outcome notice (workspace root, pruned count, or error message).</summary>
+    [Parameter] public string? NoticeDetail { get; set; }
 
     [Parameter] public DashboardTelemetrySummary? Telemetry { get; set; }
 
