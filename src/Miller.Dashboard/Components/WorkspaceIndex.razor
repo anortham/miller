@@ -1,4 +1,5 @@
 @namespace Miller.Dashboard.Components
+@using Microsoft.AspNetCore.Components.Forms
 
 <section id="workspace-index"
          class="panel ws-index-panel"
@@ -31,6 +32,12 @@
         <p class="notice error-notice"><strong>Registry unavailable</strong> @Index.Error</p>
     }
 
+    @* Remove/prune outcomes arrive as a post-redirect-get query param; the next 30s fragment poll clears them. *@
+    @if (NoticeMessage is not null)
+    {
+        <p class="@(NoticeIsError ? "notice error-notice" : "notice")">@NoticeMessage</p>
+    }
+
     @if (Index.Entries.Count == 0)
     {
         <p class="empty">No registered workspaces yet.</p>
@@ -56,15 +63,16 @@
                 </div>
                 @foreach (DashboardWorkspaceIndexEntry entry in live)
                 {
-                    <a class="ws-index-row" href="/workspace?workspace_id=@Esc(entry.Workspace.WorkspaceId)" @attributes="SortKeys(entry)">
+                    <div class="ws-index-row" @attributes="SortKeys(entry)">
                         <span class="workspace-status-rail @StateClass(entry.Workspace.State)" aria-hidden="true"></span>
                         <span class="workspace-row-main">
-                            <span class="workspace-name">@entry.Workspace.DisplayId</span>
+                            <a class="workspace-name" style="text-decoration: none" href="/workspace?workspace_id=@Esc(entry.Workspace.WorkspaceId)">@entry.Workspace.DisplayId</a>
                             <code class="workspace-path" title="@entry.Workspace.CanonicalRoot">@entry.Workspace.CanonicalRoot</code>
                             @if (!string.IsNullOrWhiteSpace(entry.Workspace.LastError))
                             {
                                 <span class="workspace-error muted">@entry.Workspace.LastError</span>
                             }
+                            @RemoveConfirm(entry)
                         </span>
                         <span class="ws-cell">
                             <span class="workspace-state @StateClass(entry.Workspace.State)">@entry.Workspace.State</span>
@@ -73,7 +81,7 @@
                         <span class="ws-cell ws-num">@Stat(entry, entry.Facts.SymbolCount)</span>
                         <span class="ws-cell ws-langs">@LanguageSummary(entry)</span>
                         <span class="ws-cell ws-num">@(entry.Workspace.LastRevision?.ToString("N0", CultureInfo.InvariantCulture) ?? "—")</span>
-                    </a>
+                    </div>
                 }
             </div>
         }
@@ -86,7 +94,7 @@
                     <span class="muted">
                         @if (staleMissing > 0)
                         {
-                            <text>@staleMissing.ToString("N0", CultureInfo.InvariantCulture) missing root — run <code>miller workspace prune</code> to remove</text>
+                            <text>@staleMissing.ToString("N0", CultureInfo.InvariantCulture) missing root — prune below or run <code>miller workspace prune</code></text>
                         }
                         @if (staleMissing > 0 && staleErrored > 0)
                         {
@@ -98,13 +106,21 @@
                         }
                     </span>
                 </summary>
+                @if (staleMissing > 0)
+                {
+                    <form class="detail-actions" method="post" action="/workspaces/prune">
+                        <AntiforgeryToken />
+                        <button type="submit" class="refresh-button">Prune @staleMissing.ToString("N0", CultureInfo.InvariantCulture) stale</button>
+                        <span class="muted">removes every registration whose root folder no longer exists</span>
+                    </form>
+                }
                 <div class="ws-index ws-index-stale">
                     @foreach (DashboardWorkspaceIndexEntry entry in stale)
                     {
-                        <a class="ws-index-row" href="/workspace?workspace_id=@Esc(entry.Workspace.WorkspaceId)" @attributes="SortKeys(entry)">
+                        <div class="ws-index-row" @attributes="SortKeys(entry)">
                             <span class="workspace-status-rail @StateClass(entry.Workspace.State)" aria-hidden="true"></span>
                             <span class="workspace-row-main">
-                                <span class="workspace-name">@entry.Workspace.DisplayId</span>
+                                <a class="workspace-name" style="text-decoration: none" href="/workspace?workspace_id=@Esc(entry.Workspace.WorkspaceId)">@entry.Workspace.DisplayId</a>
                                 <code class="workspace-path" title="@entry.Workspace.CanonicalRoot">@entry.Workspace.CanonicalRoot</code>
                                 @if (!entry.RootExists)
                                 {
@@ -114,6 +130,7 @@
                                 {
                                     <span class="workspace-error muted">@entry.Workspace.LastError</span>
                                 }
+                                @RemoveConfirm(entry)
                             </span>
                             <span class="ws-cell">
                                 <span class="workspace-state @StateClass(entry.Workspace.State)">@entry.Workspace.State</span>
@@ -122,7 +139,7 @@
                             <span class="ws-cell ws-num">@Stat(entry, entry.Facts.SymbolCount)</span>
                             <span class="ws-cell ws-langs">@LanguageSummary(entry)</span>
                             <span class="ws-cell ws-num">@(entry.Workspace.LastRevision?.ToString("N0", CultureInfo.InvariantCulture) ?? "—")</span>
-                        </a>
+                        </div>
                     }
                 </div>
             </details>
@@ -135,6 +152,49 @@
 @code {
     [Parameter, EditorRequired] public DashboardWorkspaceIndex Index { get; set; } =
         new(Array.Empty<DashboardWorkspaceIndexEntry>(), 0, 0, 0, 0);
+
+    /// <summary>Outcome code from a remove/prune post-redirect-get (see DashboardEndpoints); null hides the notice.</summary>
+    [Parameter] public string? Notice { get; set; }
+
+    /// <summary>Human detail for the notice: the workspace root/selector, a pruned count, or an error message.</summary>
+    [Parameter] public string? NoticeDetail { get; set; }
+
+    // Per-row remove: a CSS-only details/summary expand around an SSR confirm form. Rendered once here so the
+    // live and stale sections cannot drift.
+    private RenderFragment RemoveConfirm(DashboardWorkspaceIndexEntry entry) =>
+        @<details>
+            <summary class="subtle-link">Remove…</summary>
+            <form class="detail-actions" method="post" action="/workspace/remove">
+                <AntiforgeryToken />
+                <input type="hidden" name="workspace_id" value="@entry.Workspace.WorkspaceId">
+                <span class="muted">Removes this registration and deletes its <code>.miller</code> index data (rebuildable via <code>workspace open</code>).</span>
+                <button type="submit" class="refresh-button">Confirm remove</button>
+                <a class="subtle-link" href="/">Cancel</a>
+            </form>
+        </details>;
+
+    // The notice codes are a closed set; an unrecognised code (the query param is craftable) renders nothing.
+    private string? NoticeMessage => Notice switch
+    {
+        "removed" => $"Removed {Subject} — its .miller index data was deleted (reopen anytime with workspace open).",
+        "removed-registration" => $"Removed registration {Subject} — no index data was on disk.",
+        "remove-refused-in-use" => $"Remove refused — {Subject} is in use by another Miller process.",
+        "remove-refused-live" => $"Remove refused — {Subject} is a live workspace.",
+        "remove-not-found" => $"No registered workspace matched {Subject}.",
+        "remove-error" => $"Remove failed: {NoticeDetail}",
+        "pruned" => PrunedMessage,
+        _ => null,
+    };
+
+    private bool NoticeIsError =>
+        Notice is "remove-refused-in-use" or "remove-refused-live" or "remove-not-found" or "remove-error";
+
+    private string Subject => string.IsNullOrWhiteSpace(NoticeDetail) ? "the workspace" : NoticeDetail!;
+
+    private string PrunedMessage =>
+        int.TryParse(NoticeDetail, NumberStyles.Integer, CultureInfo.InvariantCulture, out int n) && n > 0
+            ? $"Pruned {n.ToString("N0", CultureInfo.InvariantCulture)} stale registration{(n == 1 ? "" : "s")}."
+            : "No stale registrations to prune.";
 
     // Clean numeric/name sort keys so the client sorts on values, not formatted "1,234"/"—" strings.
     // Fact-less rows use -1 so they sort below rows that have real counts.

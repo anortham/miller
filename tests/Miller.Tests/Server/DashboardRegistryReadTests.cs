@@ -1302,11 +1302,13 @@ public sealed class DashboardRegistryReadTests : IDisposable
             ["Index"] = SampleWorkspaceIndex(),
         });
 
-        // A6/A1-a11y: anchor rows must not carry malformed table/row ARIA roles.
+        // A6/A1-a11y: rows must not carry malformed table/row ARIA roles.
         Assert.DoesNotContain("role=\"table\"", html);
         Assert.DoesNotContain("role=\"row\"", html);
-        // Rows remain honest links, and the grid classes (not roles) carry the visual layout.
-        Assert.Contains("<a class=\"ws-index-row\"", html);
+        // The workspace name is an honest link (the row itself hosts the remove form, so it is a div),
+        // and the grid classes (not roles) carry the visual layout.
+        Assert.Contains("<div class=\"ws-index-row\"", html);
+        Assert.Contains("<a class=\"workspace-name\"", html);
         Assert.Contains("class=\"ws-index\"", html);
     }
 
@@ -1369,6 +1371,84 @@ public sealed class DashboardRegistryReadTests : IDisposable
         });
 
         Assert.DoesNotContain("error-notice", html);
+    }
+
+    [Fact]
+    public async Task WorkspaceIndex_RendersRemoveConfirmFormPerRow()
+    {
+        string html = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
+        {
+            ["Index"] = SampleWorkspaceIndex(),
+        });
+
+        // Every entry — live and stale — carries an expandable confirm form posting to the remove endpoint.
+        Assert.Contains("action=\"/workspace/remove\"", html);
+        Assert.Contains("name=\"workspace_id\" value=\"ws-a\"", html);
+        Assert.Contains("name=\"workspace_id\" value=\"ws-b\"", html);
+        // The confirm copy states the consequence and the recovery path.
+        Assert.Contains("workspace open", html);
+        Assert.Contains("Confirm remove", html);
+        Assert.Contains("Cancel", html);
+        // Antiforgery token on the mutation form, so an arbitrary page cannot POST to the local port.
+        Assert.Contains("name=\"__RequestVerificationToken\"", html);
+    }
+
+    [Fact]
+    public async Task WorkspaceIndex_RendersPruneButtonForMissingRoots()
+    {
+        string html = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
+        {
+            ["Index"] = SampleWorkspaceIndex(),
+        });
+
+        // The stale section offers one-click prune for missing-root registrations (sample has exactly one).
+        Assert.Contains("action=\"/workspaces/prune\"", html);
+        Assert.Contains("Prune 1 stale", html);
+    }
+
+    [Fact]
+    public async Task WorkspaceIndex_RendersRemoveOutcomeNotices()
+    {
+        string pruned = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
+        {
+            ["Index"] = SampleWorkspaceIndex(),
+            ["Notice"] = "pruned",
+            ["NoticeDetail"] = "2",
+        });
+        Assert.Contains("Pruned 2 stale registration", pruned);
+        Assert.DoesNotContain("error-notice", pruned);
+
+        string refused = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
+        {
+            ["Index"] = SampleWorkspaceIndex(),
+            ["Notice"] = "remove-refused-in-use",
+            ["NoticeDetail"] = "/repo/a",
+        });
+        Assert.Contains("error-notice", refused);
+        Assert.Contains("/repo/a", refused);
+        Assert.Contains("in use", refused);
+
+        // An unrecognised code renders nothing (the notice rides a query param anyone can craft).
+        string unknown = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
+        {
+            ["Index"] = SampleWorkspaceIndex(),
+            ["Notice"] = "bogus-code",
+            ["NoticeDetail"] = "x",
+        });
+        Assert.DoesNotContain("bogus-code", unknown);
+    }
+
+    [Fact]
+    public async Task WorkspacesShell_ForwardsOutcomeNoticeToIndex()
+    {
+        string html = await RenderComponentAsync<WorkspacesShell>(new Dictionary<string, object?>
+        {
+            ["Index"] = SampleWorkspaceIndex(),
+            ["Notice"] = "removed",
+            ["NoticeDetail"] = "/repo/a",
+        });
+
+        Assert.Contains("Removed /repo/a", html);
     }
 
     [Fact]
@@ -1790,6 +1870,10 @@ public sealed class DashboardRegistryReadTests : IDisposable
     {
         var services = new ServiceCollection();
         services.AddLogging();
+        // The remove/prune forms embed <AntiforgeryToken/>; outside a real HTTP request the provider is this
+        // fixed-token stub so the hidden input still renders (the value is never validated here).
+        services.AddSingleton<Microsoft.AspNetCore.Components.Forms.AntiforgeryStateProvider>(
+            new FixedAntiforgeryStateProvider());
         IServiceProvider provider = services.BuildServiceProvider();
         await using var renderer = new HtmlRenderer(
             provider,
@@ -1799,6 +1883,13 @@ public sealed class DashboardRegistryReadTests : IDisposable
             var output = await renderer.RenderComponentAsync<TComponent>(ParameterView.FromDictionary(parameters));
             return output.ToHtmlString();
         });
+    }
+
+    private sealed class FixedAntiforgeryStateProvider :
+        Microsoft.AspNetCore.Components.Forms.AntiforgeryStateProvider
+    {
+        public override Microsoft.AspNetCore.Components.Forms.AntiforgeryRequestToken? GetAntiforgeryToken() =>
+            new("render-test-token", "__RequestVerificationToken");
     }
 
     private static void Exec(string dbPath, string sql)

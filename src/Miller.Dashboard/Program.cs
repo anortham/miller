@@ -38,6 +38,9 @@ var host = new HostBuilder()
             {
                 services.AddRouting();
                 services.AddRazorComponents();
+                // The remove/prune form posts are antiforgery-validated (ADR-0002); the <AntiforgeryToken/>
+                // component and the form-binding validation both need the antiforgery services + middleware.
+                services.AddAntiforgery();
             })
             .Configure(app =>
             {
@@ -66,6 +69,7 @@ var host = new HostBuilder()
                     }
                 });
                 app.UseRouting();
+                app.UseAntiforgery();
                 app.UseEndpoints(endpoints =>
                 {
                     endpoints.MapMethods(
