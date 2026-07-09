@@ -1354,6 +1354,7 @@ public static class CliDispatch
 
         ISymbolLookupIndex? index = null;
         SqliteSymbolGraphIndex? graph = null;
+        bool indexLoaded = false;
         try
         {
             // Load the symbol index/graph only when there is a truthful, non-empty delta to analyse — the common
@@ -1362,12 +1363,13 @@ public static class CliDispatch
             {
                 index = loaded;
                 graph = new SqliteSymbolGraphIndex(ctx.ExtractDbPath);
+                indexLoaded = true;
             }
 
             string output = ImpactTool.RenderIndexRevisionDelta(
                 workspaceId, complete, fromRevision, delta.ToRevision, changedPaths,
                 index, graph, o.Int("max-depth", 2), o.Int("limit", 100), json,
-                delta.ArtifactId, fromArtifactId, delta.Reason);
+                delta.ArtifactId, fromArtifactId, delta.Reason, indexAvailable: indexLoaded);
             outw.WriteLine(output);
             return 0;
         }

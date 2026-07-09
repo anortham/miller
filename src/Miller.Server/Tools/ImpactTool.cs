@@ -402,55 +402,80 @@ public sealed class ImpactTool
         bool json,
         string? artifactId = null,
         string? fromArtifactId = null,
-        string deltaReason = "complete")
+        string deltaReason = "complete",
+        bool indexAvailable = true)
     {
         ArgumentNullException.ThrowIfNull(changedPaths);
+        if (maxDepth < 1) maxDepth = 1;
+        if (limit < 1) limit = 1;
         IReadOnlyList<string> paths = complete ? changedPaths : Array.Empty<string>();
 
-        var impacted = new List<Reached>();
-        var tests = new List<Reached>();
-        if (complete && index is not null && graph is not null && paths.Count > 0)
-            (impacted, tests) = ReachFromChangedPaths(index, graph, paths, maxDepth, limit);
+        ImpactTraversal traversal;
+        if (!complete)
+            traversal = NotRun("delta_unavailable");
+        else if (paths.Count == 0)
+            traversal = NotRun("no_changes");
+        else if (!indexAvailable || index is null || graph is null)
+            traversal = NotRun("index_unavailable");
+        else
+            traversal = ReachFromChangedPaths(index, graph, paths, maxDepth, limit);
 
         return json
-            ? RenderDeltaJson(workspaceId, complete, fromRevision, toRevision, artifactId, fromArtifactId, deltaReason, paths, impacted, tests)
-            : RenderDeltaCompact(workspaceId, complete, fromRevision, toRevision, artifactId, fromArtifactId, deltaReason, paths, impacted, tests);
+            ? RenderDeltaJson(workspaceId, complete, fromRevision, toRevision, artifactId, fromArtifactId,
+                deltaReason, paths, maxDepth, limit, traversal)
+            : RenderDeltaCompact(workspaceId, complete, fromRevision, toRevision, artifactId, fromArtifactId,
+                deltaReason, paths, maxDepth, limit, traversal);
+
+        static ImpactTraversal NotRun(string reason) =>
+            new([], [], null, [], [], "not_run", reason);
     }
 
     // Seed every changed path's symbols, then partition the bounded reverse-reachability set into impacted symbols
     // vs likely tests — the SAME core Run uses for a changed-paths impact query (D3/D5), just without the notes.
-    private static (List<Reached> Impacted, List<Reached> Tests) ReachFromChangedPaths(
+    private static ImpactTraversal ReachFromChangedPaths(
         ISymbolLookupIndex index, ISymbolGraphReachability graph,
         IReadOnlyList<string> changedPaths, int maxDepth, int limit)
     {
-        if (maxDepth < 1) maxDepth = 1;
-        if (limit < 1) limit = 1;
-
         var seedIds = new List<string>();
+        var seededPaths = new List<string>();
+        var unseededPaths = new List<string>();
         foreach (string path in changedPaths)
-            SeedFromFile(index, path, seedIds);
+        {
+            if (SeedFromFile(index, path, seedIds) > 0)
+                seededPaths.Add(path);
+            else
+                unseededPaths.Add(path);
+        }
 
         var impacted = new List<Reached>();
         var tests = new List<Reached>();
         if (seedIds.Count == 0)
-            return (impacted, tests);
+            return new(impacted, tests, null, seededPaths, unseededPaths, "not_run", "no_seeds");
 
-        IReadOnlyList<ReachedNode> reached = graph.Reach(seedIds, maxDepth, limit, Direction.Reverse);
-        var symbolsById = SymbolLookupBatch.FindBySymbolIds(index, reached.Select(static node => node.Id));
-        foreach (ReachedNode node in reached)
+        GraphReachResult graphResult = graph.ReachWithEvidence(seedIds, maxDepth, limit, Direction.Reverse);
+        var symbolsById = SymbolLookupBatch.FindBySymbolIds(index, graphResult.Nodes.Select(static node => node.Id));
+        foreach (ReachedNode node in graphResult.Nodes)
         {
             if (!symbolsById.TryGetValue(node.Id, out IndexedSymbol? symbol))
                 continue; // inconsistent build — drop rather than NRE (mirrors Run)
             (symbol.IsTest ? tests : impacted).Add(new Reached(symbol, node.Hop));
         }
 
-        return (impacted, tests);
+        string status = graphResult.Exhausted ? "exhausted" : "truncated";
+        string reason = (graphResult.TruncatedByDepth, graphResult.TruncatedByLimit) switch
+        {
+            (true, true) => "depth_and_limit",
+            (true, false) => "depth",
+            (false, true) => "limit",
+            _ => "complete",
+        };
+        return new(impacted, tests, graphResult, seededPaths, unseededPaths, status, reason);
     }
 
     private static string RenderDeltaJson(
         string workspaceId, bool complete, long fromRevision, long toRevision,
         string? artifactId, string? fromArtifactId, string deltaReason,
-        IReadOnlyList<string> changedPaths, IReadOnlyList<Reached> impacted, IReadOnlyList<Reached> tests)
+        IReadOnlyList<string> changedPaths, int maxDepth, int limit, ImpactTraversal traversal)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var w = NewWriter(buffer))
@@ -471,9 +496,30 @@ public sealed class ImpactTool
                 w.WriteStringValue(path);
             w.WriteEndArray();
             w.WritePropertyName("impacted");
-            WriteReachedArray(w, impacted);
+            WriteReachedArray(w, traversal.Impacted);
             w.WritePropertyName("tests");
-            WriteReachedArray(w, tests);
+            WriteReachedArray(w, traversal.Tests);
+            w.WritePropertyName("traversal");
+            w.WriteStartObject();
+            w.WriteString("status", traversal.Status);
+            w.WriteString("reason", traversal.Reason);
+            w.WriteNumber("max_depth", maxDepth);
+            w.WriteNumber("limit", limit);
+            w.WriteNumber("reached_count", traversal.Graph?.ReachedCount ?? 0);
+            w.WriteNumber("returned_count", traversal.Impacted.Count + traversal.Tests.Count);
+            w.WriteBoolean("truncated_by_depth", traversal.Graph?.TruncatedByDepth ?? false);
+            w.WriteBoolean("truncated_by_limit", traversal.Graph?.TruncatedByLimit ?? false);
+            w.WritePropertyName("seeded_paths");
+            w.WriteStartArray();
+            foreach (string path in traversal.SeededPaths)
+                w.WriteStringValue(path);
+            w.WriteEndArray();
+            w.WritePropertyName("unseeded_paths");
+            w.WriteStartArray();
+            foreach (string path in traversal.UnseededPaths)
+                w.WriteStringValue(path);
+            w.WriteEndArray();
+            w.WriteEndObject();
             w.WriteEndObject();
         }
 
@@ -483,7 +529,7 @@ public sealed class ImpactTool
     private static string RenderDeltaCompact(
         string workspaceId, bool complete, long fromRevision, long toRevision,
         string? artifactId, string? fromArtifactId, string deltaReason,
-        IReadOnlyList<string> changedPaths, IReadOnlyList<Reached> impacted, IReadOnlyList<Reached> tests)
+        IReadOnlyList<string> changedPaths, int maxDepth, int limit, ImpactTraversal traversal)
     {
         var sb = new StringBuilder();
         sb.Append("index-revision delta  ").Append(workspaceId ?? string.Empty).Append('\n');
@@ -493,6 +539,10 @@ public sealed class ImpactTool
         sb.Append("artifact_id: ").Append(artifactId ?? "unknown")
           .Append("  from_artifact_id: ").Append(fromArtifactId ?? "missing")
           .Append("  reason: ").Append(deltaReason).Append('\n');
+        sb.Append("traversal: ").Append(traversal.Status).Append('/').Append(traversal.Reason)
+          .Append("  max_depth: ").Append(maxDepth).Append("  limit: ").Append(limit)
+          .Append("  reached: ").Append(traversal.Graph?.ReachedCount ?? 0)
+          .Append("  returned: ").Append(traversal.Impacted.Count + traversal.Tests.Count).Append('\n');
         if (!complete)
         {
             sb.Append("delta unavailable — falling back conservatively (no truthful changed_paths).");
@@ -505,16 +555,37 @@ public sealed class ImpactTool
         sb.Append('\n');
         foreach (string path in changedPaths)
             sb.Append("  ").Append(path).Append('\n');
-        sb.Append("impacted (").Append(impacted.Count).Append("):\n");
-        AppendReachedGroups(sb, impacted);
-        sb.Append("likely tests (").Append(tests.Count).Append("):\n");
-        AppendReachedGroups(sb, tests);
+        sb.Append("seeded_paths (").Append(traversal.SeededPaths.Count).Append("):");
+        if (traversal.SeededPaths.Count == 0)
+            sb.Append(" none");
+        sb.Append('\n');
+        foreach (string path in traversal.SeededPaths)
+            sb.Append("  ").Append(path).Append('\n');
+        sb.Append("unseeded_paths (").Append(traversal.UnseededPaths.Count).Append("):");
+        if (traversal.UnseededPaths.Count == 0)
+            sb.Append(" none");
+        sb.Append('\n');
+        foreach (string path in traversal.UnseededPaths)
+            sb.Append("  ").Append(path).Append('\n');
+        sb.Append("impacted (").Append(traversal.Impacted.Count).Append("):\n");
+        AppendReachedGroups(sb, traversal.Impacted);
+        sb.Append("likely tests (").Append(traversal.Tests.Count).Append("):\n");
+        AppendReachedGroups(sb, traversal.Tests);
 
         return sb.ToString().TrimEnd('\n');
     }
 
     /// <summary>A reached symbol carrying its blast-radius hop distance (for provenance ordering + display).</summary>
     private readonly record struct Reached(IndexedSymbol Symbol, int Hop);
+
+    private sealed record ImpactTraversal(
+        IReadOnlyList<Reached> Impacted,
+        IReadOnlyList<Reached> Tests,
+        GraphReachResult? Graph,
+        IReadOnlyList<string> SeededPaths,
+        IReadOnlyList<string> UnseededPaths,
+        string Status,
+        string Reason);
 
     // ---------- seed resolution ----------
 

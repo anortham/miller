@@ -94,9 +94,48 @@ public sealed class ImpactRevisionDeltaCliTests : IDisposable
         Assert.Equal(JsonValueKind.Array, root.GetProperty("impacted").ValueKind);
         Assert.Equal(JsonValueKind.Array, root.GetProperty("tests").ValueKind);
 
+        JsonElement traversal = root.GetProperty("traversal");
+        Assert.Equal("exhausted", traversal.GetProperty("status").GetString());
+        Assert.Equal("complete", traversal.GetProperty("reason").GetString());
+        Assert.Equal(2, traversal.GetProperty("max_depth").GetInt32());
+        Assert.Equal(100, traversal.GetProperty("limit").GetInt32());
+        Assert.Equal(0, traversal.GetProperty("reached_count").GetInt32());
+        Assert.Equal(0, traversal.GetProperty("returned_count").GetInt32());
+        Assert.False(traversal.GetProperty("truncated_by_depth").GetBoolean());
+        Assert.False(traversal.GetProperty("truncated_by_limit").GetBoolean());
+        Assert.Equal(new[] { "src/Service.cs" }, traversal.GetProperty("seeded_paths").EnumerateArray()
+            .Select(static item => item.GetString()));
+        Assert.Empty(traversal.GetProperty("unseeded_paths").EnumerateArray());
+
         string[] changed = root.GetProperty("changed_paths").EnumerateArray()
             .Select(e => e.GetString()).ToArray()!;
         Assert.Contains("src/Service.cs", changed);
+    }
+
+    [Fact]
+    public void Delta_Json_CompleteEmptyDelta_ReportsTraversalNotRunForNoChanges()
+    {
+        using JulieDbFixture fx = Build(
+            revisions: new[] { new JulieDbFixture.RevisionRow(1) },
+            changes: Array.Empty<JulieDbFixture.RevisionFileChangeRow>());
+
+        var (code, outText, errText) = Run(
+            new[]
+            {
+                "impact", "--workspace-id", "current", "--json",
+                "--from-index-revision", "1", "--from-artifact-id", DefaultArtifactId,
+                "--max-depth", "0", "--limit", "0",
+            },
+            Context(fx));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        JsonElement traversal = doc.RootElement.GetProperty("traversal");
+        Assert.Equal("not_run", traversal.GetProperty("status").GetString());
+        Assert.Equal("no_changes", traversal.GetProperty("reason").GetString());
+        Assert.Equal(1, traversal.GetProperty("max_depth").GetInt32());
+        Assert.Equal(1, traversal.GetProperty("limit").GetInt32());
     }
 
     [Fact]
@@ -156,6 +195,8 @@ public sealed class ImpactRevisionDeltaCliTests : IDisposable
         Assert.Equal(999, root.GetProperty("from_revision").GetInt64());
         Assert.Equal(2, root.GetProperty("to_revision").GetInt64());
         Assert.Empty(root.GetProperty("changed_paths").EnumerateArray());
+        Assert.Equal("not_run", root.GetProperty("traversal").GetProperty("status").GetString());
+        Assert.Equal("delta_unavailable", root.GetProperty("traversal").GetProperty("reason").GetString());
     }
 
     [Fact]

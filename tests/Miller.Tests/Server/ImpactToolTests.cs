@@ -111,6 +111,50 @@ public sealed class ImpactToolTests
     private static MillerRepositoryIndex EmptyIndex() =>
         MillerRepositoryIndex.Build(Array.Empty<IndexedSymbol>(), Array.Empty<GraphEdge>());
 
+    // Seed.cs ← Direct.cs ← Deep.cs, plus DirectTest.cs → Seed.cs. This shape exercises
+    // independent depth and limit truncation while retaining the extractor-owned IsTest partition.
+    private static MillerRepositoryIndex BuildTraversalEvidenceFixture()
+    {
+        const string seedId = "30000000000000000000000000000001";
+        const string directId = "30000000000000000000000000000002";
+        const string directTestId = "30000000000000000000000000000003";
+        const string deepId = "30000000000000000000000000000004";
+        var symbols = new List<IndexedSymbol>
+        {
+            new(0, seedId, "Seed", "void Seed()", "method", "csharp", "src/Seed.cs", 1, 3, null, false),
+            new(1, directId, "Direct", "void Direct()", "method", "csharp", "src/Direct.cs", 1, 3, null, false),
+            new(2, directTestId, "DirectTest", "void DirectTest()", "method", "csharp",
+                "tests/DirectTests.cs", 1, 3, null, IsTest: true),
+            new(3, deepId, "Deep", "void Deep()", "method", "csharp", "src/Deep.cs", 1, 3, null, false),
+        };
+        var edges = new[]
+        {
+            new GraphEdge(directId, seedId, "calls"),
+            new GraphEdge(directTestId, seedId, "calls"),
+            new GraphEdge(deepId, directId, "calls"),
+        };
+        return MillerRepositoryIndex.Build(symbols, edges);
+    }
+
+    private static JsonElement Traversal(JsonElement root)
+    {
+        JsonElement traversal = root.GetProperty("traversal");
+        Assert.Equal(
+            new[]
+            {
+                "status", "reason", "max_depth", "limit", "reached_count", "returned_count",
+                "truncated_by_depth", "truncated_by_limit", "seeded_paths", "unseeded_paths",
+            },
+            traversal.EnumerateObject().Select(static property => property.Name));
+        return traversal;
+    }
+
+    private static void AssertReturnedCountMatchesEnvelope(JsonElement root)
+    {
+        int rendered = root.GetProperty("impacted").GetArrayLength() + root.GetProperty("tests").GetArrayLength();
+        Assert.Equal(rendered, Traversal(root).GetProperty("returned_count").GetInt32());
+    }
+
     private static string ReadTelemetryMetadata(string telemetryDb)
     {
         using var conn = new SqliteConnection(new SqliteConnectionStringBuilder
@@ -913,6 +957,153 @@ public sealed class ImpactToolTests
         Assert.Contains("test_parse_config_rejects_empty_input", testNames);
         Assert.Contains("make_fixture_config", impactedNames);
         Assert.DoesNotContain("make_fixture_config", testNames);
+        Assert.Equal("exhausted", Traversal(root).GetProperty("status").GetString());
+        AssertReturnedCountMatchesEnvelope(root);
+    }
+
+    [Fact]
+    public void RenderIndexRevisionDelta_CompleteEmptyDelta_ReportsNoChangesAndEffectiveBounds()
+    {
+        string output = ImpactTool.RenderIndexRevisionDelta(
+            "current", complete: true, 4, 4, Array.Empty<string>(),
+            index: null, graph: null, maxDepth: 0, limit: 0, json: true);
+
+        using var doc = JsonDocument.Parse(output);
+        JsonElement traversal = Traversal(doc.RootElement);
+        Assert.Equal("not_run", traversal.GetProperty("status").GetString());
+        Assert.Equal("no_changes", traversal.GetProperty("reason").GetString());
+        Assert.Equal(1, traversal.GetProperty("max_depth").GetInt32());
+        Assert.Equal(1, traversal.GetProperty("limit").GetInt32());
+        Assert.Equal(0, traversal.GetProperty("reached_count").GetInt32());
+        Assert.Equal(0, traversal.GetProperty("returned_count").GetInt32());
+        Assert.False(traversal.GetProperty("truncated_by_depth").GetBoolean());
+        Assert.False(traversal.GetProperty("truncated_by_limit").GetBoolean());
+        Assert.Empty(traversal.GetProperty("seeded_paths").EnumerateArray());
+        Assert.Empty(traversal.GetProperty("unseeded_paths").EnumerateArray());
+    }
+
+    [Fact]
+    public void RenderIndexRevisionDelta_UnavailableDelta_ReportsDeltaUnavailable()
+    {
+        string output = ImpactTool.RenderIndexRevisionDelta(
+            "current", complete: false, 9, 2, new[] { "src/Seed.cs" },
+            index: null, graph: null, maxDepth: 2, limit: 100, json: true,
+            deltaReason: "from_after_current");
+
+        using var doc = JsonDocument.Parse(output);
+        JsonElement root = doc.RootElement;
+        JsonElement traversal = Traversal(root);
+        Assert.Equal("unavailable", root.GetProperty("delta_status").GetString());
+        Assert.Empty(root.GetProperty("changed_paths").EnumerateArray());
+        Assert.Equal("not_run", traversal.GetProperty("status").GetString());
+        Assert.Equal("delta_unavailable", traversal.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public void RenderIndexRevisionDelta_ChangedPathsWithoutLoadedIndex_ReportsIndexUnavailable()
+    {
+        MillerRepositoryIndex index = BuildTraversalEvidenceFixture();
+        string output = ImpactTool.RenderIndexRevisionDelta(
+            "current", complete: true, 1, 2, new[] { "src/Seed.cs" },
+            index, index.Graph, maxDepth: 2, limit: 100, json: true,
+            indexAvailable: false);
+
+        using var doc = JsonDocument.Parse(output);
+        JsonElement traversal = Traversal(doc.RootElement);
+        Assert.Equal("not_run", traversal.GetProperty("status").GetString());
+        Assert.Equal("index_unavailable", traversal.GetProperty("reason").GetString());
+        Assert.Empty(traversal.GetProperty("seeded_paths").EnumerateArray());
+        Assert.Empty(traversal.GetProperty("unseeded_paths").EnumerateArray());
+    }
+
+    [Fact]
+    public void RenderIndexRevisionDelta_AllUnseededPaths_ReportsEveryPathAndNoSeeds()
+    {
+        MillerRepositoryIndex index = EmptyIndex();
+        string[] paths = ["config/settings.json", "src/Deleted.cs"];
+        string output = ImpactTool.RenderIndexRevisionDelta(
+            "current", complete: true, 1, 2, paths,
+            index, index.Graph, maxDepth: 2, limit: 100, json: true);
+
+        using var doc = JsonDocument.Parse(output);
+        JsonElement traversal = Traversal(doc.RootElement);
+        Assert.Equal("not_run", traversal.GetProperty("status").GetString());
+        Assert.Equal("no_seeds", traversal.GetProperty("reason").GetString());
+        Assert.Empty(traversal.GetProperty("seeded_paths").EnumerateArray());
+        Assert.Equal(paths, traversal.GetProperty("unseeded_paths").EnumerateArray()
+            .Select(static item => item.GetString()));
+    }
+
+    [Fact]
+    public void RenderIndexRevisionDelta_MixedSeededAndUnseededPaths_CanExhaustGraph()
+    {
+        MillerRepositoryIndex index = BuildTraversalEvidenceFixture();
+        string output = ImpactTool.RenderIndexRevisionDelta(
+            "current", complete: true, 1, 2, new[] { "src/Seed.cs", "config/settings.json" },
+            index, index.Graph, maxDepth: 5, limit: 100, json: true);
+
+        using var doc = JsonDocument.Parse(output);
+        JsonElement root = doc.RootElement;
+        JsonElement traversal = Traversal(root);
+        Assert.Equal("exhausted", traversal.GetProperty("status").GetString());
+        Assert.Equal("complete", traversal.GetProperty("reason").GetString());
+        Assert.Equal(3, traversal.GetProperty("reached_count").GetInt32());
+        Assert.Equal(new[] { "src/Seed.cs" }, traversal.GetProperty("seeded_paths").EnumerateArray()
+            .Select(static item => item.GetString()));
+        Assert.Equal(new[] { "config/settings.json" }, traversal.GetProperty("unseeded_paths").EnumerateArray()
+            .Select(static item => item.GetString()));
+        AssertReturnedCountMatchesEnvelope(root);
+    }
+
+    [Fact]
+    public void RenderIndexRevisionDelta_DepthBoundary_ReportsDepthTruncation()
+    {
+        MillerRepositoryIndex index = BuildTraversalEvidenceFixture();
+        string output = ImpactTool.RenderIndexRevisionDelta(
+            "current", true, 1, 2, new[] { "src/Seed.cs" }, index, index.Graph, 1, 100, true);
+
+        using var doc = JsonDocument.Parse(output);
+        JsonElement traversal = Traversal(doc.RootElement);
+        Assert.Equal("truncated", traversal.GetProperty("status").GetString());
+        Assert.Equal("depth", traversal.GetProperty("reason").GetString());
+        Assert.Equal(2, traversal.GetProperty("reached_count").GetInt32());
+        Assert.True(traversal.GetProperty("truncated_by_depth").GetBoolean());
+        Assert.False(traversal.GetProperty("truncated_by_limit").GetBoolean());
+        AssertReturnedCountMatchesEnvelope(doc.RootElement);
+    }
+
+    [Fact]
+    public void RenderIndexRevisionDelta_LimitBoundary_ReportsPreLimitCount()
+    {
+        MillerRepositoryIndex index = BuildTraversalEvidenceFixture();
+        string output = ImpactTool.RenderIndexRevisionDelta(
+            "current", true, 1, 2, new[] { "src/Seed.cs" }, index, index.Graph, 5, 2, true);
+
+        using var doc = JsonDocument.Parse(output);
+        JsonElement traversal = Traversal(doc.RootElement);
+        Assert.Equal("truncated", traversal.GetProperty("status").GetString());
+        Assert.Equal("limit", traversal.GetProperty("reason").GetString());
+        Assert.Equal(3, traversal.GetProperty("reached_count").GetInt32());
+        Assert.False(traversal.GetProperty("truncated_by_depth").GetBoolean());
+        Assert.True(traversal.GetProperty("truncated_by_limit").GetBoolean());
+        AssertReturnedCountMatchesEnvelope(doc.RootElement);
+    }
+
+    [Fact]
+    public void RenderIndexRevisionDelta_DepthAndLimitBoundaries_ReportCombinedTruncation()
+    {
+        MillerRepositoryIndex index = BuildTraversalEvidenceFixture();
+        string output = ImpactTool.RenderIndexRevisionDelta(
+            "current", true, 1, 2, new[] { "src/Seed.cs" }, index, index.Graph, 1, 1, true);
+
+        using var doc = JsonDocument.Parse(output);
+        JsonElement traversal = Traversal(doc.RootElement);
+        Assert.Equal("truncated", traversal.GetProperty("status").GetString());
+        Assert.Equal("depth_and_limit", traversal.GetProperty("reason").GetString());
+        Assert.Equal(2, traversal.GetProperty("reached_count").GetInt32());
+        Assert.True(traversal.GetProperty("truncated_by_depth").GetBoolean());
+        Assert.True(traversal.GetProperty("truncated_by_limit").GetBoolean());
+        AssertReturnedCountMatchesEnvelope(doc.RootElement);
     }
 
     private sealed class RecordingGitDiffReader(params GitDiffResult[] results) : IGitDiffReader
