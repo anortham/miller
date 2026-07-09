@@ -72,7 +72,7 @@
                             {
                                 <span class="workspace-error muted">@entry.Workspace.LastError</span>
                             }
-                            @RemoveConfirm(entry)
+                            <WorkspaceRemoveConfirm WorkspaceId="@entry.Workspace.WorkspaceId" />
                         </span>
                         <span class="ws-cell">
                             <span class="workspace-state @StateClass(entry.Workspace.State)">@entry.Workspace.State</span>
@@ -130,7 +130,7 @@
                                 {
                                     <span class="workspace-error muted">@entry.Workspace.LastError</span>
                                 }
-                                @RemoveConfirm(entry)
+                                <WorkspaceRemoveConfirm WorkspaceId="@entry.Workspace.WorkspaceId" />
                             </span>
                             <span class="ws-cell">
                                 <span class="workspace-state @StateClass(entry.Workspace.State)">@entry.Workspace.State</span>
@@ -158,20 +158,6 @@
 
     /// <summary>Human detail for the notice: the workspace root/selector, a pruned count, or an error message.</summary>
     [Parameter] public string? NoticeDetail { get; set; }
-
-    // Per-row remove: a CSS-only details/summary expand around an SSR confirm form. Rendered once here so the
-    // live and stale sections cannot drift.
-    private RenderFragment RemoveConfirm(DashboardWorkspaceIndexEntry entry) =>
-        @<details>
-            <summary class="subtle-link">Remove…</summary>
-            <form class="detail-actions" method="post" action="/workspace/remove">
-                <AntiforgeryToken />
-                <input type="hidden" name="workspace_id" value="@entry.Workspace.WorkspaceId">
-                <span class="muted">Removes this registration and deletes its <code>.miller</code> index data (rebuildable via <code>workspace open</code>).</span>
-                <button type="submit" class="refresh-button">Confirm remove</button>
-                <a class="subtle-link" href="/">Cancel</a>
-            </form>
-        </details>;
 
     // The notice codes are a closed set; an unrecognised code (the query param is craftable) renders nothing.
     private string? NoticeMessage => Notice switch

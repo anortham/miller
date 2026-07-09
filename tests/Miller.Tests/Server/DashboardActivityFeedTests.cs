@@ -743,6 +743,10 @@ public sealed class DashboardActivityFeedTests : IDisposable
     {
         var services = new ServiceCollection();
         services.AddLogging();
+        // The detail panel's remove form embeds <AntiforgeryToken/>; outside a real HTTP request the provider
+        // is this fixed-token stub so the hidden input still renders (the value is never validated here).
+        services.AddSingleton<Microsoft.AspNetCore.Components.Forms.AntiforgeryStateProvider>(
+            new FixedAntiforgeryStateProvider());
         IServiceProvider provider = services.BuildServiceProvider();
         await using var renderer = new HtmlRenderer(
             provider,
@@ -752,6 +756,13 @@ public sealed class DashboardActivityFeedTests : IDisposable
             var output = await renderer.RenderComponentAsync<TComponent>(ParameterView.FromDictionary(parameters));
             return output.ToHtmlString();
         });
+    }
+
+    private sealed class FixedAntiforgeryStateProvider :
+        Microsoft.AspNetCore.Components.Forms.AntiforgeryStateProvider
+    {
+        public override Microsoft.AspNetCore.Components.Forms.AntiforgeryRequestToken? GetAntiforgeryToken() =>
+            new("render-test-token", "__RequestVerificationToken");
     }
 
     private void InsertTelemetryRow(

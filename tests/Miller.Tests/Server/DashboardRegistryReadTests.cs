@@ -1394,6 +1394,28 @@ public sealed class DashboardRegistryReadTests : IDisposable
     }
 
     [Fact]
+    public async Task WorkspaceDetailPanel_RendersRemoveConfirmForm()
+    {
+        var facts = new DashboardWorkspaceFacts(
+            "ws-a", "alpha-abcd1234", "/repo/a", "/repo/a/.miller/symbols.db",
+            "ready", null, 1, 1, 1, 100, 42, "2026-06-12T09:00:00Z", "fresh",
+            Array.Empty<DashboardLanguageStat>(), Array.Empty<DashboardSymbolKindStat>());
+
+        string html = await RenderComponentAsync<WorkspaceDetailPanel>(new Dictionary<string, object?>
+        {
+            ["Facts"] = facts,
+        });
+
+        // The detail page carries the same expandable confirm form as the all-workspaces rows.
+        Assert.Contains("action=\"/workspace/remove\"", html);
+        Assert.Contains("name=\"workspace_id\" value=\"ws-a\"", html);
+        Assert.Contains("Confirm remove", html);
+        // Cancel returns to this workspace's page, not the all-workspaces list.
+        Assert.Contains("href=\"/workspace?workspace_id=ws-a\"", html);
+        Assert.Contains("name=\"__RequestVerificationToken\"", html);
+    }
+
+    [Fact]
     public async Task WorkspaceIndex_RendersPruneButtonForMissingRoots()
     {
         string html = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>

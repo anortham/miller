@@ -1,0 +1,23 @@
+@namespace Miller.Dashboard.Components
+@using Microsoft.AspNetCore.Components.Forms
+
+@* Shared remove control (all-workspaces rows + workspace detail page) so the confirm copy,
+   antiforgery token, and endpoint cannot drift between views. CSS-only details/summary expand
+   around an SSR confirm form — no JS. *@
+<details>
+    <summary class="subtle-link">Remove…</summary>
+    <form class="detail-actions" method="post" action="/workspace/remove">
+        <AntiforgeryToken />
+        <input type="hidden" name="workspace_id" value="@WorkspaceId">
+        <span class="muted">Removes this registration and deletes its <code>.miller</code> index data (rebuildable via <code>workspace open</code>).</span>
+        <button type="submit" class="refresh-button">Confirm remove</button>
+        <a class="subtle-link" href="@CancelHref">Cancel</a>
+    </form>
+</details>
+
+@code {
+    [Parameter, EditorRequired] public string WorkspaceId { get; set; } = string.Empty;
+
+    /// <summary>Where Cancel navigates: "/" on the all-workspaces list, the workspace's own page on detail.</summary>
+    [Parameter] public string CancelHref { get; set; } = "/";
+}
