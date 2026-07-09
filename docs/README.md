@@ -8,6 +8,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`../README.md`](../README.md) - public entry point, install paths, current architecture summary, CLI surface.
 - [`../CLAUDE.md`](../CLAUDE.md) / [`../AGENTS.md`](../AGENTS.md) - source-of-truth agent working notes and generated mirror.
 - [`agent-guidance.md`](agent-guidance.md) - long-form agent reference: full workflow catalog, subagent-dispatch primer, and per-tool parameter detail relocated from the embedded ≤1,900-char ServerInstructions core.
+- [`agent-setup-snippet.md`](agent-setup-snippet.md) - copy-paste CLAUDE.md/AGENTS.md/Cursor-rule routing snippet that keeps agents preferring Miller over shell grep when harnesses defer MCP tool schemas.
 - [`adr/ADR-0001-guidance-delivery-channels.md`](adr/ADR-0001-guidance-delivery-channels.md) - accepted decision record for the three guidance channels (ServerInstructions discovery core, tool-description usage contracts, NextStepHint nudges) and their budgets.
 - [`contracts/cli-eros-v1.md`](contracts/cli-eros-v1.md) - active Eros-facing CLI/export contract.
 - [`contracts/workspace-status-v1.md`](contracts/workspace-status-v1.md) - active workspace status JSON contract.

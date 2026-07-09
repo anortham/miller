@@ -99,6 +99,44 @@ truncates merged server instructions at roughly 2KB). The full workflow catalog,
 per-tool parameter detail live in [`docs/agent-guidance.md`](docs/agent-guidance.md); plugin users also get the
 same depth through the `miller-*` skills.
 
+### Making Agents Actually Use Miller
+
+Installing the MCP server does not guarantee an agent will use it. Newer harnesses (including current Claude Code)
+defer MCP tool schemas behind on-demand tool search, so Miller's tool descriptions may not be in the model's
+context when it picks an exploration strategy — and the built-in grep/read tools always are, so agents often fall
+back to shell searches even when Miller is faster and cheaper. Miller's embedded server instructions cannot fix
+this alone: clients truncate them, and they only load after the server connects.
+
+The reliable fix is a short routing block in instructions that are always in the model's context: user-level
+`~/.claude/CLAUDE.md` or a project `CLAUDE.md` for Claude Code, `AGENTS.md` for Codex and other AGENTS.md-aware
+harnesses, or a Cursor rule. Copy this snippet (also kept at
+[`docs/agent-setup-snippet.md`](docs/agent-setup-snippet.md) for linking):
+
+```markdown
+## Miller — code intelligence (use it before shell search)
+
+The Miller MCP server is connected. Use it for codebase exploration instead of grep/rg/find/cat
+chains and whole-file reads — it returns ranked, structured results in fewer tokens. If Miller's
+tools are deferred (schemas not yet loaded), load them via tool search rather than falling back
+to shell search.
+
+| Instead of... | Use Miller |
+|---|---|
+| grep/rg for code, text, or TODO/FIXME markers | `search` (modes: symbol, text, file, content, source, markers) |
+| reading a whole file | `inspect <file>` to list its symbols, then `inspect <symbol> depth=overview` |
+| hand-tracing usages across files | `trace <symbol>` for references; `trace A mode=path to=B` for dependency paths |
+| guessing a change's blast radius | `impact <symbol>` or `impact --git` (also suggests likely tests) |
+| orienting in an unfamiliar area | `context "<task or area>"` for a token-budgeted entry-point bundle |
+| raw find-and-replace edits | `edit` — index-aware, shows a diff preview; set apply=true only after it looks right |
+
+Rules:
+1. `search` before grep; `inspect` before reading any file whole.
+2. `trace` references before changing a public API; `impact` before refactors.
+3. Trust the index — do not re-verify Miller results with grep. If results look stale, run
+   `workspace refresh` and retry.
+4. These rules also apply to any subagents you dispatch.
+```
+
 ### Manual Binary Install
 
 Use this path when your MCP client does not use Miller's plugin package.
