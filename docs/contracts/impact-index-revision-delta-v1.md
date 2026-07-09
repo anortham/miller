@@ -44,7 +44,19 @@ usage error (exit 2).
   "to_revision": 273,
   "changed_paths": ["src/Service.cs", "fixtures/sample-data.csv"],
   "impacted": [],
-  "tests": []
+  "tests": [],
+  "traversal": {
+    "status": "exhausted",
+    "reason": "complete",
+    "max_depth": 2,
+    "limit": 100,
+    "reached_count": 0,
+    "returned_count": 0,
+    "truncated_by_depth": false,
+    "truncated_by_limit": false,
+    "seeded_paths": ["src/Service.cs"],
+    "unseeded_paths": ["fixtures/sample-data.csv"]
+  }
 }
 ```
 
@@ -70,7 +82,17 @@ usage error (exit 2).
 - `impacted` (array of objects): the existing impact shape — impacted symbols reachable from the changed paths
   (`name`, `kind`, `file`, `line`, `hop`, `symbol_id`). Empty when the delta is unavailable.
 - `tests` (array of objects): the existing impact shape — likely tests reachable from the changed paths, same
-  object shape as `impacted`. Empty when the delta is unavailable.
+  object shape as `impacted`. Empty when the delta is unavailable. This is a likely-tests list; an empty array
+  does not exonerate tests.
+- `traversal` (object): independent bounded graph-execution evidence. It has exactly `status`, `reason`,
+  `max_depth`, `limit`, `reached_count`, `returned_count`, `truncated_by_depth`, `truncated_by_limit`,
+  `seeded_paths`, and `unseeded_paths` in v1. See
+  [`impact-traversal-evidence-v1.md`](impact-traversal-evidence-v1.md) for every field and valid status/reason pair.
+
+`delta_status` meaning is unchanged by `traversal`: it remains only the changed-path journal completeness signal.
+`traversal.status: "exhausted"` is only relative to the reported seeded paths and current indexed edges. Dynamic
+dispatch, reflection, configuration, generated code, unresolved references, and missing extractor edges are
+outside that claim. `unseeded_paths` are separate warnings and are not covered by exhaustion.
 
 ## Semantics
 
@@ -124,6 +146,10 @@ The mode is advertised in `miller capabilities --json` under the top-level `feat
 string is present; an older Miller without the mechanism omits it, so version skew degrades by negotiation rather
 than by interpreting a failed or legacy-shaped response.
 
+Traversal evidence is advertised separately as `impact_traversal_evidence` with its own v1 JSON contract. The
+two feature gates are independent: the delta feature vouches for the revision span; the traversal feature
+describes bounded graph execution over the paths that could seed the current index.
+
 ## Mechanism
 
 `changed_paths` is computed from julie-extract's per-file change journal (`revision_file_changes`): each row
@@ -133,6 +159,6 @@ extract already is one, so this is a per-file-revision-stamp mechanism, not a sn
 
 ## Stability
 
-v1. Field names, `delta_status` values, and the capability/flag strings are frozen. Additive fields may appear in
-a future minor; consumers must ignore unknown fields. A breaking change ships as a new `schema_version` and a new
-contract doc.
+v1. Field names, `delta_status` values, and the capability/flag strings are frozen. The additive `traversal`
+object has its own v1 contract. Additive fields may appear in a future minor; consumers must ignore unknown
+fields. A breaking change ships as a new `schema_version` and a new contract doc.

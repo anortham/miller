@@ -27,6 +27,7 @@ Required top-level fields:
 | `optional_features.symbol_search_sidecar` | Whether this process has the search sidecar enabled. |
 | `optional_features.source_region_index` | Whether this process will populate/search source-region text. |
 | `optional_features.source_region_max_bytes` | Per-region byte cap used when source-region indexing is enabled. |
+| `features` | Independently negotiated capability strings. Gate revision-delta behavior on `impact_index_revision_delta` and traversal evidence on `impact_traversal_evidence`. |
 | `json_commands` | CLI commands with stable JSON output. |
 | `json_contracts` | Versioned JSON contracts with command, schema version, and doc path. |
 | `supported_export_formats` | Streaming export feeds supported by this build. |
@@ -51,7 +52,7 @@ Current `json_commands` include:
 | `todos --json` | CLI compatibility alias for bounded TODO/FIXME/HACK/XXX marker audits over comment/doc-comment source regions. |
 | `inspect --json` | File/symbol summary or full inspect result. |
 | `context --json` | Token-budgeted code bundle. `--reference-mode usage` adds reason/confidence-labeled usage evidence. |
-| `impact --json` | Downstream impact result for a symbol, changed paths, or diff. |
+| `impact --json` | Downstream impact result for a symbol, changed paths, or diff. Index-revision mode is documented by [`impact-index-revision-delta-v1.md`](impact-index-revision-delta-v1.md); its bounded graph evidence is documented separately by [`impact-traversal-evidence-v1.md`](impact-traversal-evidence-v1.md). |
 | `trace --json` | Structured auto/path/refs/bridge trace result. See [`trace-json-v1.md`](trace-json-v1.md). |
 | `patterns --json` | List, summarize, and search extractor-recognized code-shape facts. See [`patterns-json-v1.md`](patterns-json-v1.md). |
 | `metrics churn --json` | Local git commit-range churn mapped to the current index. See [`metrics-json-v1.md`](metrics-json-v1.md). |
@@ -77,6 +78,19 @@ Current `json_commands` include:
 
 `capabilities --json` reports `optional_features.reference_aware_context=true` when `context --reference-mode usage`
 is available.
+
+`capabilities --json` advertises index-revision impact through two additive, independent feature strings:
+
+- `impact_index_revision_delta` means Miller can report the changed-path journal envelope and its unchanged
+  `delta_status` completeness signal.
+- `impact_traversal_evidence` means that envelope includes the v1 `traversal` object with bounded graph-execution
+  evidence.
+
+Eros must gate each behavior on its own string. `traversal.status: "exhausted"` is only relative to the reported
+`seeded_paths` and current indexed edges. Dynamic dispatch, reflection, configuration, generated code, unresolved
+references, and missing extractor edges are outside the claim. `tests[]` contains likely tests, so an empty list
+does not exonerate tests; `unseeded_paths` are separate warnings. See
+[`impact-traversal-evidence-v1.md`](impact-traversal-evidence-v1.md) for every field and status/reason pair.
 
 `patterns --json` is the stable way to consume `julie-extractors` structural facts. Eros should use this command
 for known code-shape signals instead of reading Miller private SQLite tables directly.

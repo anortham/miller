@@ -302,7 +302,7 @@ public sealed class ImpactRevisionDeltaCliTests : IDisposable
     }
 
     [Fact]
-    public void Capabilities_Json_AdvertisesImpactIndexRevisionDeltaFeature_R4()
+    public void Capabilities_Json_AdvertisesIndependentImpactDeltaAndTraversalContracts()
     {
         using JulieDbFixture fx = Build(
             revisions: new[] { new JulieDbFixture.RevisionRow(1) },
@@ -315,15 +315,56 @@ public sealed class ImpactRevisionDeltaCliTests : IDisposable
         JsonElement features = doc.RootElement.GetProperty("features");
         Assert.Equal(JsonValueKind.Array, features.ValueKind);
         string[] names = features.EnumerateArray().Select(e => e.GetString()).ToArray()!;
-        Assert.Contains("impact_index_revision_delta", names);
+        Assert.Equal(CliCapabilities.ImpactIndexRevisionDeltaActive,
+            names.Contains(CliCapabilities.ImpactIndexRevisionDeltaFeature));
+        Assert.Equal(CliCapabilities.ImpactTraversalEvidenceActive,
+            names.Contains(CliCapabilities.ImpactTraversalEvidenceFeature));
+
+        JsonElement[] contracts = doc.RootElement.GetProperty("json_contracts").EnumerateArray().ToArray();
+        JsonElement[] traversalContracts = contracts
+            .Where(contract => contract.GetProperty("name").GetString() == "impact_traversal_evidence")
+            .ToArray();
+        Assert.Equal(CliCapabilities.ImpactTraversalEvidenceActive, traversalContracts.Length == 1);
+        JsonElement traversalContract = Assert.Single(traversalContracts);
+        Assert.Equal("impact --json --from-index-revision N", traversalContract.GetProperty("command").GetString());
+        Assert.Equal(1, traversalContract.GetProperty("schema_version").GetInt32());
+        Assert.Equal("docs/contracts/impact-traversal-evidence-v1.md",
+            traversalContract.GetProperty("doc").GetString());
     }
 
     [Fact]
-    public void NegotiatedFeatures_GatesOnActiveFlag_R4()
+    public void NegotiatedFeatures_GatesDeltaAndTraversalIndependently()
     {
-        // Advertise-only-when-active: the feature appears iff its flag is set. An inactive build omits it, so an
-        // old Miller degrades by negotiation rather than by a failed/legacy-shaped response.
-        Assert.Contains(CliCapabilities.ImpactIndexRevisionDeltaFeature, CliCapabilities.NegotiatedFeatures(true));
-        Assert.DoesNotContain(CliCapabilities.ImpactIndexRevisionDeltaFeature, CliCapabilities.NegotiatedFeatures(false));
+        IReadOnlyList<string> deltaOnly = CliCapabilities.NegotiatedFeatures(
+            impactIndexRevisionDelta: true, impactTraversalEvidence: false);
+        Assert.Contains(CliCapabilities.ImpactIndexRevisionDeltaFeature, deltaOnly);
+        Assert.DoesNotContain(CliCapabilities.ImpactTraversalEvidenceFeature, deltaOnly);
+
+        IReadOnlyList<string> traversalOnly = CliCapabilities.NegotiatedFeatures(
+            impactIndexRevisionDelta: false, impactTraversalEvidence: true);
+        Assert.DoesNotContain(CliCapabilities.ImpactIndexRevisionDeltaFeature, traversalOnly);
+        Assert.Contains(CliCapabilities.ImpactTraversalEvidenceFeature, traversalOnly);
+
+        IReadOnlyList<string> neither = CliCapabilities.NegotiatedFeatures(
+            impactIndexRevisionDelta: false, impactTraversalEvidence: false);
+        Assert.DoesNotContain(CliCapabilities.ImpactIndexRevisionDeltaFeature, neither);
+        Assert.DoesNotContain(CliCapabilities.ImpactTraversalEvidenceFeature, neither);
+    }
+
+    [Fact]
+    public void NegotiatedJsonContracts_GatesTraversalAndPreservesDelta()
+    {
+        var active = CliCapabilities.NegotiatedJsonContracts(impactTraversalEvidence: true);
+        var inactive = CliCapabilities.NegotiatedJsonContracts(impactTraversalEvidence: false);
+
+        Assert.Contains(active, contract => contract.Name == "impact_traversal_evidence");
+        Assert.DoesNotContain(inactive, contract => contract.Name == "impact_traversal_evidence");
+        Assert.Equal(active.Where(contract => contract.Name != "impact_traversal_evidence"), inactive);
+
+        var deltaContract = Assert.Single(inactive,
+            contract => contract.Name == CliCapabilities.ImpactIndexRevisionDeltaFeature);
+        Assert.Equal("impact --json --from-index-revision N --from-artifact-id ID", deltaContract.Command);
+        Assert.Equal(1, deltaContract.SchemaVersion);
+        Assert.Equal("docs/contracts/impact-index-revision-delta-v1.md", deltaContract.Doc);
     }
 }

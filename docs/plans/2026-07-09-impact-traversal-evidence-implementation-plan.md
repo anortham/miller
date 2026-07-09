@@ -163,11 +163,11 @@ Expected: PASS in both in-memory and SQLite implementations with identical evide
 Use `serial-worker-commit`: commit the pure graph slice after focused tests pass; record the SHA.
 
 **Acceptance criteria:**
-- [ ] Depth and limit truncation are independently observable.
-- [ ] `ReachedCount` is pre-limit and nodes remain deterministic.
-- [ ] Existing `Reach` callers retain their behavior.
-- [ ] In-memory and SQLite graph implementations agree.
-- [ ] Worker-scope verification passes and the change is committed per commit mode.
+- [x] Depth and limit truncation are independently observable.
+- [x] `ReachedCount` is pre-limit and nodes remain deterministic.
+- [x] Existing `Reach` callers retain their behavior.
+- [x] In-memory and SQLite graph implementations agree.
+- [x] Worker-scope verification passes and the change is committed per commit mode.
 
 ### Task 2: Add impact seed and traversal rendering
 
@@ -236,11 +236,11 @@ Expected: PASS; every delta response has honest independent delta and traversal 
 Use `serial-worker-commit`: commit after focused impact/CLI tests pass; record the SHA.
 
 **Acceptance criteria:**
-- [ ] No changed path silently disappears from seed accounting.
-- [ ] Index unavailable and no seeds are distinguishable.
-- [ ] Traversal evidence exactly matches public status/reason definitions.
-- [ ] Existing top-level delta fields remain byte-shape compatible except for the additive object.
-- [ ] Worker-scope verification passes and the change is committed per commit mode.
+- [x] No changed path silently disappears from seed accounting.
+- [x] Index unavailable and no seeds are distinguishable.
+- [x] Traversal evidence exactly matches public status/reason definitions.
+- [x] Existing top-level delta fields remain byte-shape compatible except for the additive object.
+- [x] Worker-scope verification passes and the change is committed per commit mode.
 
 ### Task 3: Publish capability and contract docs
 
@@ -296,11 +296,11 @@ Expected: PASS with zero build warnings/errors.
 Use `parallel-lead-commit`: hand the verified diff and ledger to the lead without committing.
 
 **Acceptance criteria:**
-- [ ] Feature negotiation is separate from revision-delta negotiation.
-- [ ] Contract docs enumerate every field/status/reason.
-- [ ] Docs state the semantic non-completeness limitation.
-- [ ] Fast suite and release build pass.
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode.
+- [x] Feature negotiation is separate from revision-delta negotiation.
+- [x] Contract docs enumerate every field/status/reason.
+- [x] Docs state the semantic non-completeness limitation.
+- [x] Fast suite and release build pass.
+- [x] Worker-scope verification passes and the change is handed to the lead per commit mode.
 
 ### Task 4: Run local Eros-facing dogfood
 
@@ -344,17 +344,17 @@ Include exact commands, outputs, timings, and a statement that traversal evidenc
 Use `parallel-lead-commit`: hand the findings doc to the lead without committing.
 
 **Acceptance criteria:**
-- [ ] Live exhausted, unseeded, and truncated payloads are recorded.
-- [ ] Truncation flags match deliberately chosen bounds.
-- [ ] Probe edits are fully restored.
-- [ ] No release/pin change occurred.
-- [ ] Worker-scope verification passes and the findings are handed to the lead per commit mode.
+- [x] Live exhausted, unseeded, and truncated payloads are recorded.
+- [x] Truncation flags match deliberately chosen bounds.
+- [x] Probe edits are fully restored.
+- [x] No release/pin change occurred.
+- [x] Worker-scope verification passes and the findings are handed to the lead per commit mode.
 
 ## Program Exit Criteria
 
-- [ ] Graph traversal reports depth and limit truncation without changing existing callers.
-- [ ] Delta JSON reports effective bounds, counts, and seeded/unseeded paths.
-- [ ] `delta_status` semantics remain unchanged.
-- [ ] Capabilities advertise the additive contract independently.
-- [ ] Fast suite, release build, and local dogfood pass.
-- [ ] Documentation explicitly forbids treating traversal exhaustion as semantic test-impact completeness.
+- [x] Graph traversal reports depth and limit truncation without changing existing callers.
+- [x] Delta JSON reports effective bounds, counts, and seeded/unseeded paths.
+- [x] `delta_status` semantics remain unchanged.
+- [x] Capabilities advertise the additive contract independently.
+- [x] Fast suite, release build, and local dogfood pass.
+- [x] Documentation explicitly forbids treating traversal exhaustion as semantic test-impact completeness.

@@ -26,15 +26,31 @@ internal static class CliCapabilities
     public const bool ImpactIndexRevisionDeltaActive = true;
 
     /// <summary>
+    /// The negotiated capability wire string for the traversal evidence object emitted by
+    /// <c>miller impact --json --from-index-revision N</c>. This is separate from delta-journal completeness:
+    /// callers can negotiate the changed-path delta and graph-traversal evidence independently.
+    /// </summary>
+    public const string ImpactTraversalEvidenceFeature = "impact_traversal_evidence";
+
+    /// <summary>
+    /// Whether this build ships the bounded traversal evidence object for index-revision impact responses.
+    /// </summary>
+    public const bool ImpactTraversalEvidenceActive = true;
+
+    /// <summary>
     /// The top-level <c>features</c> array (R4): the negotiated capability strings Eros checks before enabling a
     /// capability-gated behavior. Pure and gated so the "advertise only when active; absent when inactive"
     /// contract is directly testable — a feature appears iff its flag is set.
     /// </summary>
-    public static IReadOnlyList<string> NegotiatedFeatures(bool impactIndexRevisionDelta)
+    public static IReadOnlyList<string> NegotiatedFeatures(
+        bool impactIndexRevisionDelta,
+        bool impactTraversalEvidence)
     {
         var features = new List<string>();
         if (impactIndexRevisionDelta)
             features.Add(ImpactIndexRevisionDeltaFeature);
+        if (impactTraversalEvidence)
+            features.Add(ImpactTraversalEvidenceFeature);
         return features;
     }
 
@@ -102,8 +118,20 @@ internal static class CliCapabilities
         ("report", "report --json", 1, "docs/contracts/report-json-v1.md"),
         ("impact_index_revision_delta", "impact --json --from-index-revision N --from-artifact-id ID", 1,
             "docs/contracts/impact-index-revision-delta-v1.md"),
+        ("impact_traversal_evidence", "impact --json --from-index-revision N", 1,
+            "docs/contracts/impact-traversal-evidence-v1.md"),
         ("references_candidates", "references candidates --json", 1, "docs/contracts/references-candidates-v1.md"),
     ];
+
+    /// <summary>
+    /// The versioned JSON contracts advertised by this build. Traversal evidence is omitted when its mechanism
+    /// is inactive; every other contract remains independently available.
+    /// </summary>
+    public static IReadOnlyList<(string Name, string Command, int SchemaVersion, string Doc)>
+        NegotiatedJsonContracts(bool impactTraversalEvidence) =>
+        JsonContracts
+            .Where(contract => impactTraversalEvidence || contract.Name != ImpactTraversalEvidenceFeature)
+            .ToArray();
 
     public static string Render(bool json)
     {
@@ -130,7 +158,9 @@ internal static class CliCapabilities
         sb.AppendLine("reference_aware_context: enabled");
         sb.AppendLine("references_candidates: enabled");
         sb.AppendLine("features:");
-        foreach (string feature in NegotiatedFeatures(ImpactIndexRevisionDeltaActive))
+        foreach (string feature in NegotiatedFeatures(
+                     ImpactIndexRevisionDeltaActive,
+                     ImpactTraversalEvidenceActive))
             sb.AppendLine("  - " + feature);
         sb.AppendLine("supported_export_formats:");
         sb.AppendLine("  - content_corpus jsonl via `miller content export`");
@@ -143,7 +173,7 @@ internal static class CliCapabilities
         foreach (string command in JsonCommands)
             sb.AppendLine("  - " + command);
         sb.AppendLine("json_contracts:");
-        foreach (var jsonContract in JsonContracts)
+        foreach (var jsonContract in NegotiatedJsonContracts(ImpactTraversalEvidenceActive))
             sb.AppendLine($"  - {jsonContract.Name} v{jsonContract.SchemaVersion}: `{jsonContract.Command}` ({jsonContract.Doc})");
         return sb.ToString().TrimEnd();
     }
@@ -193,7 +223,9 @@ internal static class CliCapabilities
             // here only when its mechanism is active in this build; an older Miller omits it.
             w.WritePropertyName("features");
             w.WriteStartArray();
-            foreach (string feature in NegotiatedFeatures(ImpactIndexRevisionDeltaActive))
+            foreach (string feature in NegotiatedFeatures(
+                         ImpactIndexRevisionDeltaActive,
+                         ImpactTraversalEvidenceActive))
                 w.WriteStringValue(feature);
             w.WriteEndArray();
 
@@ -205,7 +237,7 @@ internal static class CliCapabilities
 
             w.WritePropertyName("json_contracts");
             w.WriteStartArray();
-            foreach (var jsonContract in JsonContracts)
+            foreach (var jsonContract in NegotiatedJsonContracts(ImpactTraversalEvidenceActive))
             {
                 w.WriteStartObject();
                 w.WriteString("name", jsonContract.Name);

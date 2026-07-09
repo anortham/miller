@@ -16,6 +16,8 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`contracts/workspace-onboarding-v1.md`](contracts/workspace-onboarding-v1.md) - active telemetry-derived workspace onboarding JSON contract.
 - [`contracts/workspace-leader-json-v1.md`](contracts/workspace-leader-json-v1.md) - active workspace leader diagnostics and graceful handoff JSON contract.
 - [`contracts/refresh-wait-v1.md`](contracts/refresh-wait-v1.md) - active refresh/wait JSON contract for Eros convergence.
+- [`contracts/impact-index-revision-delta-v1.md`](contracts/impact-index-revision-delta-v1.md) - active index-revision changed-path delta JSON contract and unchanged `delta_status` semantics.
+- [`contracts/impact-traversal-evidence-v1.md`](contracts/impact-traversal-evidence-v1.md) - active bounded traversal evidence JSON contract, including independent capability negotiation and scoped exhaustion limits.
 - [`contracts/trace-json-v1.md`](contracts/trace-json-v1.md) - active trace JSON contract for auto/path/refs/bridge output and additive `next_actions`.
 - [`contracts/content-corpus-v1.md`](contracts/content-corpus-v1.md) - active content corpus schema/export contract.
 - [`contracts/references-export-v1.md`](contracts/references-export-v1.md) - active references/usage JSONL export contract.
