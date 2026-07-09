@@ -1534,17 +1534,18 @@ public sealed class DashboardRegistryReadTests : IDisposable
             "Miller.Dashboard",
             "Endpoints",
             "DashboardEndpoints.cs"));
-        string program = File.ReadAllText(Path.Combine(
+        // The endpoint composition lives in DashboardHostPipeline (extracted from Program.cs for TestServer).
+        string pipeline = File.ReadAllText(Path.Combine(
             Miller.Tests.ScaleTestSupport.RepoRoot(),
             "src",
             "Miller.Dashboard",
-            "Program.cs"));
+            "DashboardHostPipeline.cs"));
 
         Assert.Contains("MapGet(\"/fragments/dashboard\"", endpoints, StringComparison.Ordinal);
         Assert.Contains("MapGet(\"/fragments/workspaces\"", endpoints, StringComparison.Ordinal);
-        Assert.Contains("MapMethods(\"/favicon.ico\"", program, StringComparison.Ordinal);
+        Assert.Contains("MapMethods(\"/favicon.ico\"", pipeline, StringComparison.Ordinal);
         Assert.Contains("MapGet(\"/diagnostics.json\"", endpoints, StringComparison.Ordinal);
-        Assert.Contains("MapDashboardEndpoints", program, StringComparison.Ordinal);
+        Assert.Contains("MapDashboardEndpoints", pipeline, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -5,6 +5,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- HTTP-level tests drive the real pipeline (DashboardHostPipeline/DashboardPaths are internal). -->
+    <InternalsVisibleTo Include="Miller.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Content Update="wwwroot/**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

@@ -26,9 +26,12 @@ endpoints in `DashboardEndpoints`:
 
 - `POST /workspace/remove` (form field `workspace_id`) → `WorkspaceRemoval.RemoveById(...,
   liveRoot: null)`, the same shared core the CLI `workspace remove` verb calls. The dashboard
-  process serves no workspace in-process, so the live-root refusal does not apply; actively served
-  workspaces remain protected by the unconditional in-use refusal (the delete only happens while
-  holding the indexer + content + history write leases).
+  process serves no workspace in-process, so the live-root refusal does not apply. Active
+  **writers** remain protected by the in-use refusal (the delete only happens while holding the
+  indexer + content + history write leases). Pure **readers** hold no lease and are NOT blocked —
+  identical to CLI remove: a reader whose index files disappear fails loudly on its next reopen
+  (the per-poll reopen discipline guarantees it notices), and the index is rebuildable with
+  `workspace open`.
 - `POST /workspaces/prune` → the existing `WorkspaceRegistryPrune.Run` helper (non-dry-run,
   no protected row).
 

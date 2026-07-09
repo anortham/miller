@@ -710,13 +710,14 @@ public sealed class DashboardActivityFeedTests : IDisposable
             Miller.Tests.ScaleTestSupport.RepoRoot(),
             "src",
             "Miller.Dashboard");
-        string program = File.ReadAllText(Path.Combine(dashboardRoot, "Program.cs"));
+        // The endpoint composition lives in DashboardHostPipeline (extracted from Program.cs for TestServer).
+        string pipeline = File.ReadAllText(Path.Combine(dashboardRoot, "DashboardHostPipeline.cs"));
         string css = File.ReadAllText(Path.Combine(dashboardRoot, "wwwroot", "dashboard.css"));
 
-        Assert.Contains("/fonts/archivo-latin.woff2", program, StringComparison.Ordinal);
-        Assert.Contains("/fonts/jetbrains-mono-latin.woff2", program, StringComparison.Ordinal);
-        Assert.Contains("/js/dashboard-site.js", program, StringComparison.Ordinal);
-        Assert.Contains("/lib/alpine/cspalpine.min.js", program, StringComparison.Ordinal);
+        Assert.Contains("/fonts/archivo-latin.woff2", pipeline, StringComparison.Ordinal);
+        Assert.Contains("/fonts/jetbrains-mono-latin.woff2", pipeline, StringComparison.Ordinal);
+        Assert.Contains("/js/dashboard-site.js", pipeline, StringComparison.Ordinal);
+        Assert.Contains("/lib/alpine/cspalpine.min.js", pipeline, StringComparison.Ordinal);
         Assert.Contains("@font-face", css, StringComparison.Ordinal);
         Assert.True(File.Exists(Path.Combine(dashboardRoot, "wwwroot", "fonts", "archivo-latin.woff2")));
         Assert.True(File.Exists(Path.Combine(dashboardRoot, "wwwroot", "fonts", "jetbrains-mono-latin.woff2")));

@@ -222,8 +222,9 @@ internal static class DashboardEndpoints
     }
 
     // The workspace_id arrives from the per-row confirm form (any registry selector works, but the form sends
-    // the full id). liveRoot is null: the dashboard process serves no workspace in-process — actively served
-    // workspaces are still protected by WorkspaceRemoval's unconditional in-use lease refusal.
+    // the full id). liveRoot is null: the dashboard process serves no workspace in-process. Active WRITERS are
+    // refused by WorkspaceRemoval's in-use lease check; pure READERS hold no lease and are not blocked — same
+    // as CLI remove — they fail loudly on their next reopen and the index is rebuildable via workspace open.
     private static string RemoveWorkspaceRedirect(string registryDbPath, string? workspaceId)
     {
         string code;
@@ -247,7 +248,6 @@ internal static class DashboardEndpoints
                     _ => "remove-not-found",
                 };
                 detail = result.Root ?? workspaceId;
-                DashboardIndexFactsCache.Clear();
             }
             catch (KeyNotFoundException)
             {
@@ -258,6 +258,12 @@ internal static class DashboardEndpoints
             {
                 // A bad registry/index state degrades to a notice on the list, never a 500.
                 (code, detail) = ("remove-error", ex.Message);
+            }
+            finally
+            {
+                // Even a FAILED remove may have deleted some index files (the delete is not atomic), so drop
+                // cached facts unconditionally — the list must never render pre-remove facts over partial state.
+                DashboardIndexFactsCache.Clear();
             }
         }
 
@@ -271,13 +277,17 @@ internal static class DashboardEndpoints
             using WorkspaceRegistry registry = WorkspaceRegistry.Open(registryDbPath);
             WorkspaceRegistryPrune.Result result =
                 WorkspaceRegistryPrune.Run(registry, protectedWorkspaceId: null, dryRun: false);
-            DashboardIndexFactsCache.Clear();
             return NoticeRedirect("pruned", result.Pruned.Count.ToString(CultureInfo.InvariantCulture));
         }
         catch (Exception ex) when (
             ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException)
         {
             return NoticeRedirect("remove-error", ex.Message);
+        }
+        finally
+        {
+            // A failed prune may still have removed some rows mid-loop; never serve pre-prune cached facts.
+            DashboardIndexFactsCache.Clear();
         }
     }
 
