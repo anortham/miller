@@ -20,6 +20,14 @@ public sealed class SymbolGraphTests
     private static (string Id, int Hop)[] Pairs(IEnumerable<ReachedNode> reached)
         => reached.Select(r => (r.Id, r.Hop)).ToArray();
 
+    private static GraphReachResult ReachWithEvidence(
+        ISymbolGraphReachability graph,
+        IEnumerable<string> starts,
+        int maxDepth,
+        int limit,
+        Direction direction = Direction.Forward)
+        => graph.ReachWithEvidence(starts, maxDepth, limit, direction);
+
     [Fact]
     public void Build_EmptyGraph_HasNoNeighboursAndEmptyReach()
     {
@@ -235,6 +243,128 @@ public sealed class SymbolGraphTests
         var reached = graph.Reach(["A"], maxDepth: 5, limit: 100, Direction.Both);
 
         Assert.Equal([("B", 1)], Pairs(reached));
+    }
+
+    [Fact]
+    public void ReachWithEvidence_EmptyGraph_IsExhausted()
+    {
+        ISymbolGraphReachability graph = SymbolGraph.Build([], []);
+
+        GraphReachResult result = ReachWithEvidence(graph, ["missing"], maxDepth: 2, limit: 100);
+
+        Assert.Empty(result.Nodes);
+        Assert.Equal(0, result.ReachedCount);
+        Assert.False(result.TruncatedByDepth);
+        Assert.False(result.TruncatedByLimit);
+        Assert.True(result.Exhausted);
+    }
+
+    [Fact]
+    public void ReachWithEvidence_ExhaustedChain_ReportsEveryReachedNode()
+    {
+        ISymbolGraphReachability graph = SymbolGraph.Build(
+            [N("A"), N("B"), N("C")],
+            [E("A", "B"), E("B", "C")]);
+
+        GraphReachResult result = ReachWithEvidence(graph, ["A"], maxDepth: 2, limit: 100);
+
+        Assert.Equal([("B", 1), ("C", 2)], Pairs(result.Nodes));
+        Assert.Equal(2, result.ReachedCount);
+        Assert.False(result.TruncatedByDepth);
+        Assert.False(result.TruncatedByLimit);
+        Assert.True(result.Exhausted);
+    }
+
+    [Fact]
+    public void ReachWithEvidence_DepthBoundaryWithUnseenNeighbour_ReportsDepthTruncation()
+    {
+        ISymbolGraphReachability graph = SymbolGraph.Build(
+            [N("A"), N("B"), N("C"), N("D")],
+            [E("A", "B"), E("B", "C"), E("C", "D")]);
+
+        GraphReachResult result = ReachWithEvidence(graph, ["A"], maxDepth: 2, limit: 100);
+
+        Assert.Equal([("B", 1), ("C", 2)], Pairs(result.Nodes));
+        Assert.Equal(2, result.ReachedCount);
+        Assert.True(result.TruncatedByDepth);
+        Assert.False(result.TruncatedByLimit);
+        Assert.False(result.Exhausted);
+    }
+
+    [Fact]
+    public void ReachWithEvidence_LimitBoundary_ReportsPreLimitCountAndDeterministicPrefix()
+    {
+        ISymbolGraphReachability graph = SymbolGraph.Build(
+            [N("A"), N("B"), N("C"), N("D")],
+            [E("A", "D"), E("A", "B"), E("A", "C")]);
+
+        GraphReachResult result = ReachWithEvidence(graph, ["A"], maxDepth: 2, limit: 2);
+
+        Assert.Equal([("B", 1), ("C", 1)], Pairs(result.Nodes));
+        Assert.Equal(3, result.ReachedCount);
+        Assert.False(result.TruncatedByDepth);
+        Assert.True(result.TruncatedByLimit);
+        Assert.False(result.Exhausted);
+    }
+
+    [Fact]
+    public void ReachWithEvidence_DepthAndLimitBoundaries_ReportIndependentTruncation()
+    {
+        ISymbolGraphReachability graph = SymbolGraph.Build(
+            [N("A"), N("B"), N("C"), N("D"), N("E")],
+            [E("A", "B"), E("A", "E"), E("B", "C"), E("C", "D")]);
+
+        GraphReachResult result = ReachWithEvidence(graph, ["A"], maxDepth: 2, limit: 2);
+
+        Assert.Equal([("B", 1), ("E", 1)], Pairs(result.Nodes));
+        Assert.Equal(3, result.ReachedCount);
+        Assert.True(result.TruncatedByDepth);
+        Assert.True(result.TruncatedByLimit);
+        Assert.False(result.Exhausted);
+    }
+
+    [Fact]
+    public void ReachWithEvidence_CycleAtDepthBoundary_HasNoUnseenNeighbour()
+    {
+        ISymbolGraphReachability graph = SymbolGraph.Build(
+            [N("A"), N("B")],
+            [E("A", "B"), E("B", "A")]);
+
+        GraphReachResult result = ReachWithEvidence(graph, ["A"], maxDepth: 1, limit: 100);
+
+        Assert.Equal([("B", 1)], Pairs(result.Nodes));
+        Assert.Equal(1, result.ReachedCount);
+        Assert.False(result.TruncatedByDepth);
+        Assert.True(result.Exhausted);
+    }
+
+    [Fact]
+    public void ReachWithEvidence_Diamond_ReportsMinimumHopAndNoFalseDepthTruncation()
+    {
+        ISymbolGraphReachability graph = SymbolGraph.Build(
+            [N("A"), N("B"), N("C"), N("D")],
+            [E("A", "B"), E("A", "C"), E("B", "D"), E("C", "D")]);
+
+        GraphReachResult result = ReachWithEvidence(graph, ["A"], maxDepth: 2, limit: 100);
+
+        Assert.Equal([("B", 1), ("C", 1), ("D", 2)], Pairs(result.Nodes));
+        Assert.Equal(3, result.ReachedCount);
+        Assert.False(result.TruncatedByDepth);
+        Assert.True(result.Exhausted);
+    }
+
+    [Fact]
+    public void ReachWithEvidence_UnknownStartIsSkipped_AndReachRemainsCompatible()
+    {
+        ISymbolGraphReachability graph = SymbolGraph.Build(
+            [N("A"), N("B")],
+            [E("A", "B")]);
+
+        GraphReachResult result = ReachWithEvidence(graph, ["missing", "A"], maxDepth: 2, limit: 100);
+
+        Assert.Equal([("B", 1)], Pairs(result.Nodes));
+        Assert.Equal(Pairs(result.Nodes), Pairs(graph.Reach(["missing", "A"], 2, 100, Direction.Forward)));
+        Assert.True(result.Exhausted);
     }
 
     [Fact]

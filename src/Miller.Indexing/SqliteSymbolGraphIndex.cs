@@ -37,7 +37,14 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
     }
 
     public IReadOnlyList<ReachedNode> Reach(IEnumerable<string> starts, int maxDepth, int limit, Direction dir) =>
-        GraphTraversal.Reach(starts, maxDepth, limit, dir, Contains, Neighbours);
+        ReachWithEvidence(starts, maxDepth, limit, dir).Nodes;
+
+    public GraphReachResult ReachWithEvidence(
+        IEnumerable<string> starts,
+        int maxDepth,
+        int limit,
+        Direction dir) =>
+        GraphTraversal.ReachWithEvidence(starts, maxDepth, limit, dir, Contains, Neighbours);
 
     public IReadOnlyList<string>? ShortestPath(string from, string to, int maxDepth) =>
         GraphTraversal.ShortestPath(from, to, maxDepth, Contains, Dependencies);

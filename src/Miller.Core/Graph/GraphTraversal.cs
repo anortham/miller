@@ -8,17 +8,24 @@ internal static class GraphTraversal
         int limit,
         Direction direction,
         Func<string, bool> contains,
+        Func<string, Direction, IEnumerable<string>> neighbours) =>
+        ReachWithEvidence(starts, maxDepth, limit, direction, contains, neighbours).Nodes;
+
+    public static GraphReachResult ReachWithEvidence(
+        IEnumerable<string> starts,
+        int maxDepth,
+        int limit,
+        Direction direction,
+        Func<string, bool> contains,
         Func<string, Direction, IEnumerable<string>> neighbours)
     {
         ArgumentNullException.ThrowIfNull(starts);
         ArgumentNullException.ThrowIfNull(contains);
         ArgumentNullException.ThrowIfNull(neighbours);
 
-        if (maxDepth <= 0 || limit <= 0)
-            return [];
-
         var hop = new Dictionary<string, int>(StringComparer.Ordinal);
         var frontier = new Queue<string>();
+        bool truncatedByDepth = false;
 
         foreach (string start in starts)
         {
@@ -33,7 +40,14 @@ internal static class GraphTraversal
             string current = frontier.Dequeue();
             int currentHop = hop[current];
             if (currentHop >= maxDepth)
+            {
+                if (currentHop == maxDepth &&
+                    neighbours(current, direction).Any(neighbour => !hop.ContainsKey(neighbour)))
+                {
+                    truncatedByDepth = true;
+                }
                 continue;
+            }
 
             int nextHop = currentHop + 1;
             foreach (string neighbour in neighbours(current, direction))
@@ -45,13 +59,18 @@ internal static class GraphTraversal
             }
         }
 
-        return hop
+        ReachedNode[] reached = hop
             .Where(static kv => kv.Value > 0)
             .OrderBy(static kv => kv.Value)
             .ThenBy(static kv => kv.Key, StringComparer.Ordinal)
-            .Take(limit)
             .Select(static kv => new ReachedNode(kv.Key, kv.Value))
             .ToArray();
+
+        return new GraphReachResult(
+            reached.Take(limit).ToArray(),
+            reached.Length,
+            truncatedByDepth,
+            reached.Length > limit);
     }
 
     public static IReadOnlyList<string>? ShortestPath(

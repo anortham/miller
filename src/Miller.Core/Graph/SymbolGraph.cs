@@ -20,6 +20,15 @@ public sealed record GraphEdge(string From, string To, string Kind);
 /// <param name="Hop">The shortest number of edges from the nearest start to this node (≥ 1).</param>
 public sealed record ReachedNode(string Id, int Hop);
 
+public sealed record GraphReachResult(
+    IReadOnlyList<ReachedNode> Nodes,
+    int ReachedCount,
+    bool TruncatedByDepth,
+    bool TruncatedByLimit)
+{
+    public bool Exhausted => !TruncatedByDepth && !TruncatedByLimit;
+}
+
 /// <summary>Which adjacency a <see cref="SymbolGraph.Reach"/> traversal follows.</summary>
 public enum Direction
 {
@@ -35,7 +44,10 @@ public enum Direction
 
 public interface ISymbolGraphReachability
 {
-    IReadOnlyList<ReachedNode> Reach(IEnumerable<string> starts, int maxDepth, int limit, Direction dir);
+    GraphReachResult ReachWithEvidence(IEnumerable<string> starts, int maxDepth, int limit, Direction dir);
+
+    IReadOnlyList<ReachedNode> Reach(IEnumerable<string> starts, int maxDepth, int limit, Direction dir) =>
+        ReachWithEvidence(starts, maxDepth, limit, dir).Nodes;
 
     IReadOnlyList<string>? ShortestPath(string from, string to, int maxDepth);
 }
@@ -168,7 +180,14 @@ public sealed class SymbolGraph : ISymbolGraphReachability
     /// <param name="dir">Which adjacency to follow (<see cref="Direction"/>).</param>
     /// <exception cref="ArgumentNullException"><paramref name="starts"/> is null.</exception>
     public IReadOnlyList<ReachedNode> Reach(IEnumerable<string> starts, int maxDepth, int limit, Direction dir) =>
-        GraphTraversal.Reach(starts, maxDepth, limit, dir, Contains, Neighbours);
+        ReachWithEvidence(starts, maxDepth, limit, dir).Nodes;
+
+    public GraphReachResult ReachWithEvidence(
+        IEnumerable<string> starts,
+        int maxDepth,
+        int limit,
+        Direction dir) =>
+        GraphTraversal.ReachWithEvidence(starts, maxDepth, limit, dir, Contains, Neighbours);
 
     /// <summary>
     /// The shortest dependency path from <paramref name="from"/> to <paramref name="to"/> as an ordered id list

@@ -16,7 +16,7 @@ public sealed class GraphTraversalTests
             ["c"] = ["d"],
         };
 
-        IReadOnlyList<ReachedNode> reached = GraphTraversal.Reach(
+        GraphReachResult result = GraphTraversal.ReachWithEvidence(
             ["missing", "a"],
             maxDepth: 2,
             limit: 10,
@@ -28,7 +28,11 @@ public sealed class GraphTraversalTests
 
         Assert.Equal(
             [new ReachedNode("b", 1), new ReachedNode("c", 1), new ReachedNode("d", 2)],
-            reached);
+            result.Nodes);
+        Assert.Equal(3, result.ReachedCount);
+        Assert.False(result.TruncatedByDepth);
+        Assert.False(result.TruncatedByLimit);
+        Assert.True(result.Exhausted);
     }
 
     [Fact]

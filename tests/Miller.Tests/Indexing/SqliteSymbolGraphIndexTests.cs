@@ -24,6 +24,40 @@ public sealed class SqliteSymbolGraphIndexTests
         }
     }
 
+    [Theory]
+    [InlineData(Direction.Forward, 1, 1)]
+    [InlineData(Direction.Reverse, 1, 1)]
+    [InlineData(Direction.Both, 2, 50)]
+    public void ReachWithEvidence_MatchesRepositoryGraphForInspectFixture(
+        Direction direction,
+        int maxDepth,
+        int limit)
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        using var sqliteGraph = new SqliteSymbolGraphIndex(fx.DbPath);
+        ISymbolGraphReachability graphInterface = sqliteGraph;
+        var full = RepositoryIndexLoader.Load(fx.DbPath);
+
+        GraphReachResult expected = full.Graph.ReachWithEvidence(
+            [JulieDbFixture.GetUserId],
+            maxDepth,
+            limit,
+            direction);
+        GraphReachResult actual = graphInterface.ReachWithEvidence(
+            [JulieDbFixture.GetUserId],
+            maxDepth,
+            limit,
+            direction);
+
+        Assert.Equal(
+            expected.Nodes.Select(static n => (n.Id, n.Hop)).ToArray(),
+            actual.Nodes.Select(static n => (n.Id, n.Hop)).ToArray());
+        Assert.Equal(expected.ReachedCount, actual.ReachedCount);
+        Assert.Equal(expected.TruncatedByDepth, actual.TruncatedByDepth);
+        Assert.Equal(expected.TruncatedByLimit, actual.TruncatedByLimit);
+        Assert.Equal(expected.Exhausted, actual.Exhausted);
+    }
+
     [Fact]
     public void ShortestPath_MatchesRepositoryGraphForInspectFixture()
     {
