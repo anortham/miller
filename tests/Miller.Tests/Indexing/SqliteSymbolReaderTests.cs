@@ -177,36 +177,7 @@ public sealed class SqliteSymbolReaderTests
     [Fact]
     public void ReadAndReadForPaths_DeriveIdenticalRoleAndCurrencyEvidence()
     {
-        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
-        {
-            new JulieDbFixture.SymbolRow("role-current", "Current", "method", "csharp",
-                "a-current.cs", "void Current()", 1, null) { IsTest = true, TestContainer = true },
-            new JulieDbFixture.SymbolRow("role-file-status", "FileStatus", "method", "csharp",
-                "b-file-status.cs", "void FileStatus()", 1, null) { IsTest = true, TestLifecycle = true },
-            new JulieDbFixture.SymbolRow("role-diagnostic", "Diagnostic", "method", "csharp",
-                "c-diagnostic.cs", "void Diagnostic()", 1, null) { TestContainer = true },
-            new JulieDbFixture.SymbolRow("role-combined", "Combined", "method", "csharp",
-                "d-combined.cs", "void Combined()", 1, null)
-                { IsTest = true, TestContainer = true, TestLifecycle = true },
-            new JulieDbFixture.SymbolRow("role-unavailable", "Unavailable", "method", "csharp",
-                "e-unavailable.cs", "void Unavailable()", 1, null) { IsTest = true },
-        });
-        ExecuteWrite(fx.DbPath, """
-            UPDATE files
-            SET status = 'failed_preserved'
-            WHERE path IN ('b-file-status.cs', 'd-combined.cs');
-
-            INSERT INTO parse_diagnostics
-                (diagnostic_id, file_id, path, language, kind, message, start_line, start_column,
-                 end_line, end_column, start_byte, end_byte, metadata_json)
-            VALUES
-                ('diag-role-1', 'file:c-diagnostic.cs', 'c-diagnostic.cs', 'csharp', 'parse_error',
-                 'diagnostic-only', 1, 1, 1, 1, 0, 1, NULL),
-                ('diag-role-2', 'file:d-combined.cs', 'd-combined.cs', 'csharp', 'parse_error',
-                 'combined', 1, 1, 1, 1, 0, 1, NULL);
-
-            DELETE FROM files WHERE path = 'e-unavailable.cs';
-            """);
+        using var fx = JulieDbFixture.CreateTestRoleEvidenceScenario("role");
 
         IReadOnlyList<IndexedSymbol> all = SqliteSymbolReader.Read(fx.DbPath);
         IReadOnlyList<IndexedSymbol> selected = SqliteSymbolReader.ReadForPaths(
@@ -234,7 +205,7 @@ public sealed class SqliteSymbolReaderTests
             new JulieDbFixture.SymbolRow("minimal-role", "MinimalRole", "method", "csharp",
                 "Minimal.cs", "void MinimalRole()", 1, null) { IsTest = true },
         });
-        ExecuteWrite(fx.DbPath, "DROP TABLE parse_diagnostics; DROP TABLE files;");
+        fx.ExecuteWrite("DROP TABLE parse_diagnostics; DROP TABLE files;");
 
         IReadOnlyList<IndexedSymbol> all = SqliteSymbolReader.Read(fx.DbPath);
         IReadOnlyList<IndexedSymbol> selected = SqliteSymbolReader.ReadForPaths(fx.DbPath, ["Minimal.cs"]);
@@ -356,19 +327,5 @@ public sealed class SqliteSymbolReaderTests
         Assert.Equal(isLifecycle, symbol.TestEvidence.IsLifecycle);
         Assert.Equal(status, symbol.TestEvidence.Status);
         Assert.Equal(reason, symbol.TestEvidence.Reason);
-    }
-
-    private static void ExecuteWrite(string dbPath, string sql)
-    {
-        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-        {
-            DataSource = dbPath,
-            Mode = SqliteOpenMode.ReadWrite,
-            Pooling = false,
-        }.ToString());
-        connection.Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        command.ExecuteNonQuery();
     }
 }

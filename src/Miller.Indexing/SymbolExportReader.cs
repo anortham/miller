@@ -33,24 +33,24 @@ public static class SymbolExportReader
         using SqliteConnection connection = SqliteReadOnlyAccess.Open(symbolsDbPath);
         JulieSchemaGate.Verify(connection);
 
+        EvidenceProjection evidence = EvidenceProjection.From(connection);
+
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = """
-            WITH diagnostic_paths AS (
-                SELECT path, 1 AS has_parse_diagnostics
-                FROM parse_diagnostics
-                GROUP BY path
-            )
+        cmd.CommandText = $"""
+            {evidence.DiagnosticPathsCte}
             SELECT s.symbol_id, s.name, s.kind, s.language, s.path,
                    s.start_line, s.end_line, s.start_byte, s.end_byte,
                    s.visibility, s.parent_symbol_id, s.signature,
                    (s.doc_comment IS NOT NULL AND s.doc_comment != '') AS has_doc,
-                   s.body_hash, s.is_test, s.test_container, s.test_lifecycle,
-                   f.status AS file_status,
-                   CASE WHEN f.path IS NULL THEN 0 ELSE 1 END AS has_file_evidence,
-                   COALESCE(d.has_parse_diagnostics, 0) AS has_parse_diagnostics
+                   s.body_hash, s.is_test,
+                   {evidence.TestContainer} AS test_container,
+                   {evidence.TestLifecycle} AS test_lifecycle,
+                   {evidence.FileStatus} AS file_status,
+                   {evidence.HasFileEvidence} AS has_file_evidence,
+                   {evidence.HasParseDiagnostics} AS has_parse_diagnostics
             FROM symbols AS s
-            LEFT JOIN files AS f ON f.path = s.path
-            LEFT JOIN diagnostic_paths AS d ON d.path = s.path
+            {evidence.FilesJoin}
+            {evidence.DiagnosticsJoin}
             ORDER BY s.path, s.start_line, s.symbol_id;
             """;
 

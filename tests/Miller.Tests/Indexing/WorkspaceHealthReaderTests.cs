@@ -73,10 +73,8 @@ public sealed class WorkspaceHealthReaderTests
         KindCoverageDomain docComments = capability.KindCoverage[0];
         Assert.Equal("doc_comments", docComments.Domain);
         Assert.Equal(["method"], docComments.Supported);
-        Assert.Equal(["property"], docComments.OpenGaps);
         Assert.Empty(docComments.NotApplicable);
-        Assert.NotNull(docComments.OpenGapEntries);
-        JsonElement legacyGap = Assert.Single(docComments.OpenGapEntries);
+        JsonElement legacyGap = Assert.Single(docComments.OpenGaps);
         Assert.Equal(JsonValueKind.String, legacyGap.ValueKind);
         Assert.Equal("property", legacyGap.GetString());
         KindCoverageDomain symbols = capability.KindCoverage[1];
@@ -87,16 +85,21 @@ public sealed class WorkspaceHealthReaderTests
         KindCoverageDomain testDetection = capability.KindCoverage[2];
         Assert.Equal("test_detection", testDetection.Domain);
         Assert.Equal(["test_case"], testDetection.Supported);
-        Assert.Equal(["test_lifecycle"], testDetection.OpenGaps);
         Assert.Equal(["test_container"], testDetection.NotApplicable);
-        Assert.NotNull(testDetection.OpenGapEntries);
-        JsonElement structuredGap = Assert.Single(testDetection.OpenGapEntries);
+        // Every artifact entry survives verbatim — the structured gap AND the four malformed entries.
+        // A dropped malformed entry would misreport declared uncertainty as a closed gap.
+        Assert.Equal(5, testDetection.OpenGaps.Count);
+        JsonElement structuredGap = testDetection.OpenGaps[0];
         Assert.Equal(JsonValueKind.Object, structuredGap.ValueKind);
         Assert.Equal("test_lifecycle", structuredGap.GetProperty("kind").GetString());
         Assert.Equal("fixture lifecycle gap", structuredGap.GetProperty("reason").GetString());
         Assert.Equal("add lifecycle golden evidence", structuredGap.GetProperty("required_closure").GetString());
         Assert.Equal("docs/plans/test-detection-closure.md",
             structuredGap.GetProperty("planned_closure_task").GetString());
+        Assert.Equal("missing kind", testDetection.OpenGaps[1].GetProperty("reason").GetString());
+        Assert.Equal(42, testDetection.OpenGaps[2].GetProperty("kind").GetInt32());
+        Assert.Equal("", testDetection.OpenGaps[3].GetString());
+        Assert.Equal(7, testDetection.OpenGaps[4].GetInt32());
 
         Assert.True(facts.Files.Available);
         Assert.Contains(facts.Files.Rows, row =>

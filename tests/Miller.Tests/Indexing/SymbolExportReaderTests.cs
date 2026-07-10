@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Xunit;
 
@@ -10,36 +9,7 @@ public sealed class SymbolExportReaderTests
     [Fact]
     public void ExportJsonLines_RemainsSchemaOneAndAddsDeterministicRoleAndCurrencyEvidence()
     {
-        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
-        {
-            new JulieDbFixture.SymbolRow("export-current", "Current", "method", "csharp",
-                "a-current.cs", "void Current()", 1, null) { IsTest = true, TestContainer = true },
-            new JulieDbFixture.SymbolRow("export-file-status", "FileStatus", "method", "csharp",
-                "b-file-status.cs", "void FileStatus()", 1, null) { IsTest = true, TestLifecycle = true },
-            new JulieDbFixture.SymbolRow("export-diagnostic", "Diagnostic", "method", "csharp",
-                "c-diagnostic.cs", "void Diagnostic()", 1, null) { TestContainer = true },
-            new JulieDbFixture.SymbolRow("export-combined", "Combined", "method", "csharp",
-                "d-combined.cs", "void Combined()", 1, null)
-                { IsTest = true, TestContainer = true, TestLifecycle = true },
-            new JulieDbFixture.SymbolRow("export-unavailable", "Unavailable", "method", "csharp",
-                "e-unavailable.cs", "void Unavailable()", 1, null) { IsTest = true },
-        });
-        ExecuteWrite(fx.DbPath, """
-            UPDATE files
-            SET status = 'failed_preserved'
-            WHERE path IN ('b-file-status.cs', 'd-combined.cs');
-
-            INSERT INTO parse_diagnostics
-                (diagnostic_id, file_id, path, language, kind, message, start_line, start_column,
-                 end_line, end_column, start_byte, end_byte, metadata_json)
-            VALUES
-                ('diag-export-1', 'file:c-diagnostic.cs', 'c-diagnostic.cs', 'csharp', 'parse_error',
-                 'diagnostic-only', 1, 1, 1, 1, 0, 1, NULL),
-                ('diag-export-2', 'file:d-combined.cs', 'd-combined.cs', 'csharp', 'parse_error',
-                 'combined', 1, 1, 1, 1, 0, 1, NULL);
-
-            DELETE FROM files WHERE path = 'e-unavailable.cs';
-            """);
+        using var fx = JulieDbFixture.CreateTestRoleEvidenceScenario("export");
 
         string first = SymbolExportReader.ExportJsonLines(fx.DbPath);
         string second = SymbolExportReader.ExportJsonLines(fx.DbPath);
@@ -75,6 +45,31 @@ public sealed class SymbolExportReaderTests
             status: "unknown", reason: "file_evidence_unavailable");
     }
 
+    [Fact]
+    public void ExportJsonLines_MissingOptionalEvidenceSources_DefaultsRoleEvidenceToUnknown()
+    {
+        // The schema gate checks artifact_metadata only, never table/column presence, so a gate-passing
+        // 2.9–2.11 artifact can lack the role columns and the files/parse_diagnostics tables. The export
+        // must degrade to unknown evidence exactly like SqliteSymbolReader, not throw SqliteException.
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
+        {
+            new JulieDbFixture.SymbolRow("minimal-export", "MinimalExport", "method", "csharp",
+                "Minimal.cs", "void MinimalExport()", 1, null) { IsTest = true },
+        });
+        fx.ExecuteWrite("""
+            DROP TABLE parse_diagnostics;
+            DROP TABLE files;
+            ALTER TABLE symbols DROP COLUMN test_container;
+            ALTER TABLE symbols DROP COLUMN test_lifecycle;
+            """);
+
+        JsonElement row = Assert.Single(ParseLines(SymbolExportReader.ExportJsonLines(fx.DbPath)));
+
+        Assert.Equal("MinimalExport", row.GetProperty("name").GetString());
+        AssertEvidence([row], "MinimalExport", isTest: true, isCase: true, isContainer: false,
+            isLifecycle: false, status: "unknown", reason: "file_evidence_unavailable");
+    }
+
     private static void AssertEvidence(
         IReadOnlyList<JsonElement> rows,
         string name,
@@ -101,18 +96,4 @@ public sealed class SymbolExportReaderTests
         .Split('\n', StringSplitOptions.RemoveEmptyEntries)
         .Select(static line => JsonDocument.Parse(line).RootElement.Clone())
         .ToArray();
-
-    private static void ExecuteWrite(string dbPath, string sql)
-    {
-        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-        {
-            DataSource = dbPath,
-            Mode = SqliteOpenMode.ReadWrite,
-            Pooling = false,
-        }.ToString());
-        connection.Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        command.ExecuteNonQuery();
-    }
 }

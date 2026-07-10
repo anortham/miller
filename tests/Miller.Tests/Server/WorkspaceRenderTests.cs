@@ -58,13 +58,15 @@ public sealed class WorkspaceRenderTests
             new LanguageCapabilitySummary("csharp", 8, 7, 3, 2, 1, 1, 6, 5, 2, 1,
                 KindCoverage:
                 [
-                    new KindCoverageDomain("doc_comments", Supported: ["method"], OpenGaps: ["property"], NotApplicable: []),
+                    new KindCoverageDomain(
+                        "doc_comments",
+                        Supported: ["method"],
+                        OpenGaps: [Json("\"property\"")],
+                        NotApplicable: []),
                     new KindCoverageDomain(
                         "test_detection",
                         Supported: ["test_case"],
-                        OpenGaps: ["test_lifecycle"],
-                        NotApplicable: ["test_container"],
-                        OpenGapEntries:
+                        OpenGaps:
                         [
                             Json("""
                                 {
@@ -74,7 +76,9 @@ public sealed class WorkspaceRenderTests
                                   "planned_closure_task": "docs/plans/test-detection-closure.md"
                                 }
                                 """),
-                        ]),
+                            Json("""{"reason": "missing kind"}"""),
+                        ],
+                        NotApplicable: ["test_container"]),
                 ]),
         }),
         StructuralFacts: HealthFactSection<StructuralFactGroup>.FromRows(new[]
@@ -672,6 +676,7 @@ public sealed class WorkspaceRenderTests
         Assert.Equal(0, docComments.GetProperty("not_applicable").GetArrayLength());
         JsonElement testDetection = capabilityRow.GetProperty("kind_coverage").GetProperty("test_detection");
         Assert.Equal("test_case", testDetection.GetProperty("supported")[0].GetString());
+        Assert.Equal(2, testDetection.GetProperty("open_gaps").GetArrayLength());
         JsonElement structuredGap = testDetection.GetProperty("open_gaps")[0];
         Assert.Equal(JsonValueKind.Object, structuredGap.ValueKind);
         Assert.Equal("test_lifecycle", structuredGap.GetProperty("kind").GetString());
@@ -679,6 +684,8 @@ public sealed class WorkspaceRenderTests
         Assert.Equal("add lifecycle golden evidence", structuredGap.GetProperty("required_closure").GetString());
         Assert.Equal("docs/plans/test-detection-closure.md",
             structuredGap.GetProperty("planned_closure_task").GetString());
+        // A kind-less entry still reaches consumers verbatim rather than silently narrowing the gap set.
+        Assert.Equal("missing kind", testDetection.GetProperty("open_gaps")[1].GetProperty("reason").GetString());
         Assert.Equal("test_container", testDetection.GetProperty("not_applicable")[0].GetString());
         Assert.True(root.GetProperty("extraction_quality").TryGetProperty("structural_facts", out JsonElement structural));
         Assert.True(structural.GetProperty("available").GetBoolean());

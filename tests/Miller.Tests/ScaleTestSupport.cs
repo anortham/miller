@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Text;
 using Xunit;
 
 namespace Miller.Tests;
@@ -77,5 +79,36 @@ public static class ScaleTestSupport
         Assert.SkipWhen(binary is null,
             "julie-extract not found in .tools/. Run scripts/restore-julie-extract.sh to enable the Scale test.");
         return binary!;
+    }
+
+    /// <summary>
+    /// Run the julie-extract CLI (a <see cref="RequireJulieServer"/> path) and return its stdout, asserting
+    /// exit code 0. Lives here so every julie-CLI scale test shares ONE process helper instead of pasting
+    /// copies that drift. stderr is drained through the async event pump while stdout is read: reading the
+    /// two redirected pipes to end sequentially deadlocks once the child fills the second pipe's OS buffer
+    /// (~64KB) while the parent is still blocked on the first.
+    /// </summary>
+    public static string RunJulie(string binary, params string[] args)
+    {
+        var start = new ProcessStartInfo(binary)
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        foreach (string arg in args)
+            start.ArgumentList.Add(arg);
+        using Process process = Process.Start(start)!;
+        var stderr = new StringBuilder();
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data is not null)
+                stderr.AppendLine(e.Data);
+        };
+        process.BeginErrorReadLine();
+        string stdout = process.StandardOutput.ReadToEnd();
+        process.WaitForExit(); // parameterless overload also drains the pending async stderr callbacks
+        Assert.True(process.ExitCode == 0, $"julie-extract {string.Join(' ', args)} failed: {stderr}");
+        return stdout;
     }
 }

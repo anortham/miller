@@ -913,27 +913,20 @@ public static class WorkspaceRender
             w.WritePropertyName(domain.Domain);
             w.WriteStartObject();
             WriteKindArray(w, "supported", domain.Supported);
-            WriteOpenGapArray(w, domain.OpenGaps, domain.OpenGapEntries);
+            WriteOpenGapArray(w, domain.OpenGaps);
             WriteKindArray(w, "not_applicable", domain.NotApplicable);
             w.WriteEndObject();
         }
         w.WriteEndObject();
     }
 
-    private static void WriteOpenGapArray(
-        Utf8JsonWriter w,
-        IReadOnlyList<string> normalizedKinds,
-        IReadOnlyList<JsonElement>? rawEntries)
+    // Artifact open_gaps entries are written verbatim (strings or structured gap objects) so declared
+    // uncertainty always reaches consumers; the shape contract lives in docs/contracts/workspace-health-v1.md.
+    private static void WriteOpenGapArray(Utf8JsonWriter w, IReadOnlyList<JsonElement> entries)
     {
-        if (rawEntries is null)
-        {
-            WriteKindArray(w, "open_gaps", normalizedKinds);
-            return;
-        }
-
         w.WritePropertyName("open_gaps");
         w.WriteStartArray();
-        foreach (JsonElement entry in rawEntries)
+        foreach (JsonElement entry in entries)
             entry.WriteTo(w);
         w.WriteEndArray();
     }

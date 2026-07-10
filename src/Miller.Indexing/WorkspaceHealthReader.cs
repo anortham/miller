@@ -146,14 +146,11 @@ public static class WorkspaceHealthReader
                 if (domain.Value.ValueKind != JsonValueKind.Object)
                     continue;
 
-                (IReadOnlyList<string> OpenGaps, IReadOnlyList<JsonElement>? Entries) =
-                    ReadOpenGaps(domain.Value);
                 domains.Add(new KindCoverageDomain(
                     Domain: domain.Name,
                     Supported: ReadKindArray(domain.Value, "supported"),
-                    OpenGaps: OpenGaps,
-                    NotApplicable: ReadKindArray(domain.Value, "not_applicable"),
-                    OpenGapEntries: Entries));
+                    OpenGaps: ReadOpenGaps(domain.Value),
+                    NotApplicable: ReadKindArray(domain.Value, "not_applicable")));
             }
 
             domains.Sort(static (a, b) => string.CompareOrdinal(a.Domain, b.Domain));
@@ -180,32 +177,20 @@ public static class WorkspaceHealthReader
         return values;
     }
 
-    private static (IReadOnlyList<string> Kinds, IReadOnlyList<JsonElement>? Entries) ReadOpenGaps(
-        JsonElement domain)
+    // Open-gap entries pass through VERBATIM — legacy kind strings, julie-extract 2.12 structured gap
+    // objects, and even entries this reader cannot interpret. Dropping a malformed entry would reinterpret
+    // declared uncertainty as an empty capability (a smaller open_gaps array reads as "fewer known gaps"),
+    // which the test-evidence uncertainty rules forbid. Consumers own the tolerance (workspace-health-v1).
+    private static IReadOnlyList<JsonElement> ReadOpenGaps(JsonElement domain)
     {
         if (!domain.TryGetProperty("open_gaps", out JsonElement array) || array.ValueKind != JsonValueKind.Array)
-            return (Array.Empty<string>(), null);
+            return Array.Empty<JsonElement>();
 
-        var kinds = new List<string>();
         var entries = new List<JsonElement>();
         foreach (JsonElement element in array.EnumerateArray())
-        {
-            string? kind = element.ValueKind switch
-            {
-                JsonValueKind.String => element.GetString(),
-                JsonValueKind.Object
-                    when element.TryGetProperty("kind", out JsonElement value)
-                         && value.ValueKind == JsonValueKind.String => value.GetString(),
-                _ => null,
-            };
-            if (string.IsNullOrWhiteSpace(kind))
-                continue;
-
-            kinds.Add(kind);
             entries.Add(element.Clone());
-        }
 
-        return (kinds, entries);
+        return entries;
     }
 
     private static IReadOnlyList<FileStatusGroup> ReadFileStatuses(SqliteConnection connection)
@@ -325,13 +310,15 @@ public sealed record LanguageCapabilitySummary(
 /// One extraction domain from the artifact's per-language kind_coverage depth contract
 /// (v2.3.0 carries ten domains: symbols, relationships, identifiers, body_spans, annotations,
 /// doc_comments, literals, source_regions, structural_facts, complexity_metrics).
+/// <see cref="OpenGaps"/> holds the artifact's open_gaps entries verbatim: legacy entries are plain
+/// kind strings; julie-extract 2.12+ test_detection entries are objects whose <c>kind</c> names the
+/// gap alongside reason/closure fields. Entries are never normalized or filtered here.
 /// </summary>
 public sealed record KindCoverageDomain(
     string Domain,
     IReadOnlyList<string> Supported,
-    IReadOnlyList<string> OpenGaps,
-    IReadOnlyList<string> NotApplicable,
-    IReadOnlyList<JsonElement>? OpenGapEntries = null);
+    IReadOnlyList<JsonElement> OpenGaps,
+    IReadOnlyList<string> NotApplicable);
 
 public sealed record FileStatusGroup(string Language, string Status, long Count);
 

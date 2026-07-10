@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.Json;
 using Miller.Core.Graph;
 using Miller.Indexing;
@@ -24,7 +23,9 @@ public sealed class LiveTestRoleEvidenceScaleTests
     public void LiveExtract_RazorAndVueRoles_RoundTripThroughReaderExportAndImpact()
     {
         string binary = ScaleTestSupport.RequireJulieServer();
-        Assert.Equal("julie-extract 2.12.0", Run(binary, "--version").Trim());
+        Assert.Equal(
+            $"julie-extract {MillerExtractContract.PinnedJulieExtractVersion}",
+            ScaleTestSupport.RunJulie(binary, "--version").Trim());
 
         string work = Path.Combine(Path.GetTempPath(), "miller-live-test-roles-" + Guid.NewGuid().ToString("N"));
         string repo = Path.Combine(work, "repo");
@@ -182,21 +183,4 @@ public sealed class LiveTestRoleEvidenceScaleTests
             Assert.Equal(symbol.TestEvidence.Reason, row.GetProperty("test_evidence_reason").GetString());
     }
 
-    private static string Run(string binary, params string[] args)
-    {
-        var start = new ProcessStartInfo(binary)
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
-        foreach (string arg in args)
-            start.ArgumentList.Add(arg);
-        using Process process = Process.Start(start)!;
-        string stdout = process.StandardOutput.ReadToEnd();
-        string stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        Assert.True(process.ExitCode == 0, $"julie-extract {string.Join(' ', args)} failed: {stderr}");
-        return stdout;
-    }
 }

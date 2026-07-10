@@ -27,7 +27,7 @@ public sealed class ScaleTraitConventionTests
 {
     // The substrings that mark a test as julie-spawning. Referencing either means the test launches the
     // real binary and therefore must be excluded from the default suite.
-    private static readonly string[] LaunchSignals = ["RequireJulieServer", "LocateJulieServer"];
+    private static readonly string[] LaunchSignals = ["RequireJulieServer", "LocateJulieServer", "RunJulie"];
 
     // Files that legitimately contain the launch-signal substrings WITHOUT spawning julie, and so must be
     // excluded from the scan: the helper that DEFINES them, and this guard that NAMES them as literals.

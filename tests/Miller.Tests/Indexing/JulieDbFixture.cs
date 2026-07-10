@@ -108,6 +108,67 @@ internal sealed class JulieDbFixture : IDisposable
             throw new InvalidOperationException($"Expected one files row for '{relPath}', updated {updated}.");
     }
 
+    /// <summary>
+    /// Run mutation SQL against the fixture DB over a fresh ReadWrite (Pooling=false) connection — the
+    /// shared escape hatch for tests that reshape the synthesized artifact (status flips, extra rows,
+    /// dropped tables/columns) beyond what the builders model.
+    /// </summary>
+    public void ExecuteWrite(string sql)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = DbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// The five-symbol test-role/currency evidence scenario proven identically by the artifact reader
+    /// (<c>SqliteSymbolReaderTests</c>) and the symbols export feed (<c>SymbolExportReaderTests</c>): one
+    /// symbol per currency rule — current, failed_preserved file status, parse diagnostics, both combined,
+    /// and a deleted files row. One builder so the two surfaces can never silently diverge on the scenario.
+    /// Symbol ids are <c><paramref name="idPrefix"/>-current</c> … <c><paramref name="idPrefix"/>-unavailable</c>.
+    /// </summary>
+    public static JulieDbFixture CreateTestRoleEvidenceScenario(string idPrefix)
+    {
+        var fx = Create(PinnedSchema, PinnedContract, new[]
+        {
+            new SymbolRow($"{idPrefix}-current", "Current", "method", "csharp",
+                "a-current.cs", "void Current()", 1, null) { IsTest = true, TestContainer = true },
+            new SymbolRow($"{idPrefix}-file-status", "FileStatus", "method", "csharp",
+                "b-file-status.cs", "void FileStatus()", 1, null) { IsTest = true, TestLifecycle = true },
+            new SymbolRow($"{idPrefix}-diagnostic", "Diagnostic", "method", "csharp",
+                "c-diagnostic.cs", "void Diagnostic()", 1, null) { TestContainer = true },
+            new SymbolRow($"{idPrefix}-combined", "Combined", "method", "csharp",
+                "d-combined.cs", "void Combined()", 1, null)
+                { IsTest = true, TestContainer = true, TestLifecycle = true },
+            new SymbolRow($"{idPrefix}-unavailable", "Unavailable", "method", "csharp",
+                "e-unavailable.cs", "void Unavailable()", 1, null) { IsTest = true },
+        });
+        fx.ExecuteWrite($"""
+            UPDATE files
+            SET status = 'failed_preserved'
+            WHERE path IN ('b-file-status.cs', 'd-combined.cs');
+
+            INSERT INTO parse_diagnostics
+                (diagnostic_id, file_id, path, language, kind, message, start_line, start_column,
+                 end_line, end_column, start_byte, end_byte, metadata_json)
+            VALUES
+                ('diag-{idPrefix}-1', 'file:c-diagnostic.cs', 'c-diagnostic.cs', 'csharp', 'parse_error',
+                 'diagnostic-only', 1, 1, 1, 1, 0, 1, NULL),
+                ('diag-{idPrefix}-2', 'file:d-combined.cs', 'd-combined.cs', 'csharp', 'parse_error',
+                 'combined', 1, 1, 1, 1, 0, 1, NULL);
+
+            DELETE FROM files WHERE path = 'e-unavailable.cs';
+            """);
+        return fx;
+    }
+
     // ---- v4 reference-resolution + suppression-evidence builders --------------------------------------------
     // These mutate the already-created DB over a fresh ReadWrite (Pooling=false) connection — the same pattern as
     // ReplaceFileBytesAndRefreshHash. FK enforcement is OFF on the new connection (SQLite per-connection default),

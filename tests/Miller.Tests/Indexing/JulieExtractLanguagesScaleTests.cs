@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.Json;
 using Miller.Indexing;
 using Xunit;
@@ -41,10 +40,12 @@ public sealed class JulieExtractLanguagesScaleTests
     public void LanguagesJson_LiveBinary_ClassifiesEveryTestRoleExactlyOncePerLanguage()
     {
         string binary = ScaleTestSupport.RequireJulieServer();
-        string json = Run(binary, "languages", "--json");
+        string json = ScaleTestSupport.RunJulie(binary, "languages", "--json");
         using JsonDocument doc = JsonDocument.Parse(json);
         JsonElement languages = doc.RootElement.GetProperty("languages").GetProperty("languages");
-        Assert.Equal(36, languages.GetArrayLength());
+        // Same generous-floor convention as the extension probe above: a new pin only ever grows the set.
+        int languageCount = languages.GetArrayLength();
+        Assert.True(languageCount >= 36, $"expected at least 36 languages, got {languageCount}");
 
         string[] expectedRoles = ["test_case", "test_container", "test_lifecycle"];
         int supportedCount = 0;
@@ -81,7 +82,8 @@ public sealed class JulieExtractLanguagesScaleTests
         }
 
         _output.WriteLine(
-            "languages=36 role_cells=108 supported={0} not_applicable={1} open_gaps={2}",
+            "languages={0} role_cells={1} supported={2} not_applicable={3} open_gaps={4}",
+            languageCount, languageCount * expectedRoles.Length,
             supportedCount, notApplicableCount, openGapCount);
     }
 
@@ -96,21 +98,4 @@ public sealed class JulieExtractLanguagesScaleTests
         classifications[role]++;
     }
 
-    private static string Run(string binary, params string[] args)
-    {
-        var start = new ProcessStartInfo(binary)
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
-        foreach (string arg in args)
-            start.ArgumentList.Add(arg);
-        using Process process = Process.Start(start)!;
-        string stdout = process.StandardOutput.ReadToEnd();
-        string stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        Assert.True(process.ExitCode == 0, $"julie-extract {string.Join(' ', args)} failed: {stderr}");
-        return stdout;
-    }
 }
