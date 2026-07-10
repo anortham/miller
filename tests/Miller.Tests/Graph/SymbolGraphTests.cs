@@ -16,6 +16,14 @@ public sealed class SymbolGraphTests
 
     private static GraphEdge E(string from, string to, string kind = "calls") => new(from, to, kind);
 
+    [Fact]
+    public void GraphNode_RemainsTraversalOnlyIdAndIsTest()
+    {
+        Assert.Equal(
+            new[] { "Id", "IsTest" },
+            typeof(GraphNode).GetProperties().Select(static property => property.Name));
+    }
+
     /// <summary>Project a reach result down to the (id, hop) pairs in their returned order.</summary>
     private static (string Id, int Hop)[] Pairs(IEnumerable<ReachedNode> reached)
         => reached.Select(r => (r.Id, r.Hop)).ToArray();

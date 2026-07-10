@@ -93,6 +93,9 @@ public sealed class ImpactRevisionDeltaCliTests : IDisposable
         Assert.Equal(JsonValueKind.Array, root.GetProperty("changed_paths").ValueKind);
         Assert.Equal(JsonValueKind.Array, root.GetProperty("impacted").ValueKind);
         Assert.Equal(JsonValueKind.Array, root.GetProperty("tests").ValueKind);
+        JsonElement testEvidenceScope = root.GetProperty("test_evidence_scope");
+        Assert.Equal("candidate_only", testEvidenceScope.GetProperty("status").GetString());
+        Assert.Equal("unknown", testEvidenceScope.GetProperty("absence").GetString());
 
         JsonElement traversal = root.GetProperty("traversal");
         Assert.Equal("exhausted", traversal.GetProperty("status").GetString());
@@ -302,7 +305,7 @@ public sealed class ImpactRevisionDeltaCliTests : IDisposable
     }
 
     [Fact]
-    public void Capabilities_Json_AdvertisesIndependentImpactDeltaAndTraversalContracts()
+    public void Capabilities_Json_AdvertisesIndependentImpactContracts()
     {
         using JulieDbFixture fx = Build(
             revisions: new[] { new JulieDbFixture.RevisionRow(1) },
@@ -319,6 +322,8 @@ public sealed class ImpactRevisionDeltaCliTests : IDisposable
             names.Contains(CliCapabilities.ImpactIndexRevisionDeltaFeature));
         Assert.Equal(CliCapabilities.ImpactTraversalEvidenceActive,
             names.Contains(CliCapabilities.ImpactTraversalEvidenceFeature));
+        Assert.Equal(CliCapabilities.ImpactTestRoleEvidenceActive,
+            names.Contains(CliCapabilities.ImpactTestRoleEvidenceFeature));
 
         JsonElement[] contracts = doc.RootElement.GetProperty("json_contracts").EnumerateArray().ToArray();
         JsonElement[] traversalContracts = contracts
@@ -332,38 +337,64 @@ public sealed class ImpactRevisionDeltaCliTests : IDisposable
         Assert.Equal(1, traversalContract.GetProperty("schema_version").GetInt32());
         Assert.Equal("docs/contracts/impact-traversal-evidence-v1.md",
             traversalContract.GetProperty("doc").GetString());
+
+        JsonElement[] testRoleContracts = contracts
+            .Where(contract => contract.GetProperty("name").GetString() == "impact_test_role_evidence")
+            .ToArray();
+        Assert.Equal(CliCapabilities.ImpactTestRoleEvidenceActive, testRoleContracts.Length == 1);
+        JsonElement testRoleContract = Assert.Single(testRoleContracts);
+        Assert.Equal("impact --json", testRoleContract.GetProperty("command").GetString());
+        Assert.Equal(1, testRoleContract.GetProperty("schema_version").GetInt32());
+        Assert.Equal("docs/contracts/impact-test-role-evidence-v1.md",
+            testRoleContract.GetProperty("doc").GetString());
     }
 
     [Fact]
-    public void NegotiatedFeatures_GatesDeltaAndTraversalIndependently()
+    public void NegotiatedFeatures_GatesImpactFeaturesIndependently()
     {
         IReadOnlyList<string> deltaOnly = CliCapabilities.NegotiatedFeatures(
-            impactIndexRevisionDelta: true, impactTraversalEvidence: false);
+            impactIndexRevisionDelta: true, impactTraversalEvidence: false, impactTestRoleEvidence: false);
         Assert.Contains(CliCapabilities.ImpactIndexRevisionDeltaFeature, deltaOnly);
         Assert.DoesNotContain(CliCapabilities.ImpactTraversalEvidenceFeature, deltaOnly);
+        Assert.DoesNotContain(CliCapabilities.ImpactTestRoleEvidenceFeature, deltaOnly);
 
         IReadOnlyList<string> traversalOnly = CliCapabilities.NegotiatedFeatures(
-            impactIndexRevisionDelta: false, impactTraversalEvidence: true);
+            impactIndexRevisionDelta: false, impactTraversalEvidence: true, impactTestRoleEvidence: false);
         Assert.DoesNotContain(CliCapabilities.ImpactIndexRevisionDeltaFeature, traversalOnly);
         Assert.Contains(CliCapabilities.ImpactTraversalEvidenceFeature, traversalOnly);
+        Assert.DoesNotContain(CliCapabilities.ImpactTestRoleEvidenceFeature, traversalOnly);
+
+        IReadOnlyList<string> testRoleOnly = CliCapabilities.NegotiatedFeatures(
+            impactIndexRevisionDelta: false, impactTraversalEvidence: false, impactTestRoleEvidence: true);
+        Assert.DoesNotContain(CliCapabilities.ImpactIndexRevisionDeltaFeature, testRoleOnly);
+        Assert.DoesNotContain(CliCapabilities.ImpactTraversalEvidenceFeature, testRoleOnly);
+        Assert.Contains(CliCapabilities.ImpactTestRoleEvidenceFeature, testRoleOnly);
 
         IReadOnlyList<string> neither = CliCapabilities.NegotiatedFeatures(
-            impactIndexRevisionDelta: false, impactTraversalEvidence: false);
+            impactIndexRevisionDelta: false, impactTraversalEvidence: false, impactTestRoleEvidence: false);
         Assert.DoesNotContain(CliCapabilities.ImpactIndexRevisionDeltaFeature, neither);
         Assert.DoesNotContain(CliCapabilities.ImpactTraversalEvidenceFeature, neither);
+        Assert.DoesNotContain(CliCapabilities.ImpactTestRoleEvidenceFeature, neither);
     }
 
     [Fact]
-    public void NegotiatedJsonContracts_GatesTraversalAndPreservesDelta()
+    public void NegotiatedJsonContracts_GatesImpactEvidenceContractsIndependently()
     {
-        var active = CliCapabilities.NegotiatedJsonContracts(impactTraversalEvidence: true);
-        var inactive = CliCapabilities.NegotiatedJsonContracts(impactTraversalEvidence: false);
+        var active = CliCapabilities.NegotiatedJsonContracts(
+            impactTraversalEvidence: true, impactTestRoleEvidence: true);
+        var neither = CliCapabilities.NegotiatedJsonContracts(
+            impactTraversalEvidence: false, impactTestRoleEvidence: false);
+        var testRoleOnly = CliCapabilities.NegotiatedJsonContracts(
+            impactTraversalEvidence: false, impactTestRoleEvidence: true);
 
         Assert.Contains(active, contract => contract.Name == "impact_traversal_evidence");
-        Assert.DoesNotContain(inactive, contract => contract.Name == "impact_traversal_evidence");
-        Assert.Equal(active.Where(contract => contract.Name != "impact_traversal_evidence"), inactive);
+        Assert.Contains(active, contract => contract.Name == "impact_test_role_evidence");
+        Assert.DoesNotContain(neither, contract => contract.Name == "impact_traversal_evidence");
+        Assert.DoesNotContain(neither, contract => contract.Name == "impact_test_role_evidence");
+        Assert.DoesNotContain(testRoleOnly, contract => contract.Name == "impact_traversal_evidence");
+        Assert.Contains(testRoleOnly, contract => contract.Name == "impact_test_role_evidence");
 
-        var deltaContract = Assert.Single(inactive,
+        var deltaContract = Assert.Single(neither,
             contract => contract.Name == CliCapabilities.ImpactIndexRevisionDeltaFeature);
         Assert.Equal("impact --json --from-index-revision N --from-artifact-id ID", deltaContract.Command);
         Assert.Equal(1, deltaContract.SchemaVersion);

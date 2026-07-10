@@ -6,6 +6,7 @@ using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
 using Miller.Tests;
+using Miller.Tests.Indexing;
 using Microsoft.Data.Sqlite;
 using Xunit;
 
@@ -50,7 +51,10 @@ public sealed class ImpactToolTests
             new(1, ProcessId, "Process", "void Process()", "method", "csharp", "src/Service.cs", 20, 30, null, false),
             new(2, HandleId, "Handle", "void Handle()", "method", "csharp", "web/Controller.cs", 5, 9, null, false),
             new(3, ProcessWorksId, "ProcessWorks", "void ProcessWorks()", "method", "csharp",
-                "tests/ServiceTests.cs", 8, 12, null, IsTest: true),
+                "tests/ServiceTests.cs", 8, 12, null, IsTest: true,
+                TestLifecycle: true,
+                TestEvidenceStatus: TestRoleEvidence.CurrentStatus,
+                TestEvidenceReason: null),
             new(4, LonelyId, "Lonely", "void Lonely()", "method", "csharp", "src/Other.cs", 1, 3, null, false),
         };
         var edges = new[]
@@ -211,6 +215,24 @@ public sealed class ImpactToolTests
         var tests = root.GetProperty("tests");
         var testNames = tests.EnumerateArray().Select(e => e.GetProperty("name").GetString()).ToList();
         Assert.Contains("ProcessWorks", testNames);
+
+        JsonElement testEvidence = Assert.Single(tests.EnumerateArray()).GetProperty("test_evidence");
+        Assert.Equal(
+            new[] { "is_test", "test_case", "test_container", "test_lifecycle", "status", "reason" },
+            testEvidence.EnumerateObject().Select(static property => property.Name));
+        Assert.True(testEvidence.GetProperty("is_test").GetBoolean());
+        Assert.False(testEvidence.GetProperty("test_case").GetBoolean());
+        Assert.False(testEvidence.GetProperty("test_container").GetBoolean());
+        Assert.True(testEvidence.GetProperty("test_lifecycle").GetBoolean());
+        Assert.Equal("current", testEvidence.GetProperty("status").GetString());
+        Assert.Equal(JsonValueKind.Null, testEvidence.GetProperty("reason").ValueKind);
+
+        JsonElement impactedEvidence = impacted[0].GetProperty("test_evidence");
+        Assert.False(impactedEvidence.GetProperty("is_test").GetBoolean());
+        Assert.Equal("unknown", impactedEvidence.GetProperty("status").GetString());
+        Assert.Equal("file_evidence_unavailable", impactedEvidence.GetProperty("reason").GetString());
+
+        AssertTestEvidenceScope(root);
     }
 
     [Fact]
@@ -631,6 +653,89 @@ public sealed class ImpactToolTests
         Assert.True(first.TryGetProperty("file", out _));
         Assert.True(first.TryGetProperty("line", out _));
         Assert.True(first.TryGetProperty("hop", out _));
+        Assert.True(first.TryGetProperty("test_evidence", out _));
+        AssertTestEvidenceScope(root);
+    }
+
+    [Fact]
+    public void Run_Json_FullSearchSidecarMatchesInMemoryTestRoleEvidence()
+    {
+        var (memory, memoryResolver) = BuildFixture();
+        IndexedSymbol[] symbols = Enumerable.Range(0, memory.DocumentCount).Select(memory.Resolve).ToArray();
+        string dir = Path.Combine(Path.GetTempPath(), "miller-impact-sidecar-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+
+        try
+        {
+            string searchDb = Path.Combine(dir, "search.db");
+            SearchIndexWriter.Write(searchDb, symbols, revision: 1);
+            FtsSymbolSearchIndex sidecar = FtsSymbolSearchIndex.Open(searchDb);
+
+            string expected = ImpactTool.Run(memory, memoryResolver,
+                target: "Validate", changedPaths: null, diff: null, maxDepth: 2, limit: 100, json: true,
+                out _, out _);
+            string actual = ImpactTool.Run(sidecar, memory.Graph, new SmartTargetResolver(sidecar),
+                target: "Validate", changedPaths: null, diff: null, maxDepth: 2, limit: 100, json: true,
+                out _, out _);
+
+            AssertImpactRoleJsonEqual(expected, actual);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
+    public void Run_Json_IncrementalSearchSidecarMatchesInMemoryTestRoleEvidence()
+    {
+        var (memory, memoryResolver) = BuildFixture();
+        IndexedSymbol[] currentSymbols = Enumerable.Range(0, memory.DocumentCount).Select(memory.Resolve).ToArray();
+        IndexedSymbol[] oldSymbols = currentSymbols
+            .Select(static symbol => symbol.SymbolId == ProcessWorksId
+                ? symbol with
+                {
+                    TestLifecycle = false,
+                    TestEvidenceStatus = TestRoleEvidence.UnknownStatus,
+                    TestEvidenceReason = TestRoleEvidence.FileStatusReason,
+                }
+                : symbol)
+            .ToArray();
+        using JulieDbFixture fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow(ProcessWorksId, "ProcessWorks", "method", "csharp",
+                    "tests/ServiceTests.cs", "void ProcessWorks()", 8, ParentId: null)
+                {
+                    EndLine = 12,
+                    IsTest = true,
+                    TestLifecycle = true,
+                },
+            });
+        string searchDb = Path.Combine(fixture.WorkspaceRoot, ".miller", "impact-search.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(searchDb)!);
+
+        SearchIndexWriter.Write(searchDb, oldSymbols, revision: 1);
+        SearchIndexWriter.ApplyFileChanges(
+            searchDb,
+            fixture.DbPath,
+            ["tests/ServiceTests.cs"],
+            revision: 2,
+            workspaceRoot: fixture.WorkspaceRoot,
+            RegionIndexOptions.Disabled);
+        FtsSymbolSearchIndex sidecar = FtsSymbolSearchIndex.Open(searchDb);
+
+        string expected = ImpactTool.Run(memory, memoryResolver,
+            target: "Validate", changedPaths: null, diff: null, maxDepth: 2, limit: 100, json: true,
+            out _, out _);
+        string actual = ImpactTool.Run(sidecar, memory.Graph, new SmartTargetResolver(sidecar),
+            target: "Validate", changedPaths: null, diff: null, maxDepth: 2, limit: 100, json: true,
+            out _, out _);
+
+        AssertImpactRoleJsonEqual(expected, actual);
     }
 
     // ---- D10 telemetry work-proxy (nodes visited) ----
@@ -926,6 +1031,8 @@ public sealed class ImpactToolTests
         var testEntry = root.GetProperty("tests").EnumerateArray()
             .Single(e => e.GetProperty("name").GetString() == "test_parse_config_rejects_empty_input");
         Assert.Equal("crates/config/src/tests/parser_tests.rs", testEntry.GetProperty("file").GetString());
+        Assert.True(testEntry.GetProperty("test_evidence").GetProperty("test_case").GetBoolean());
+        AssertTestEvidenceScope(root);
     }
 
     [Fact]
@@ -957,6 +1064,11 @@ public sealed class ImpactToolTests
         Assert.Contains("test_parse_config_rejects_empty_input", testNames);
         Assert.Contains("make_fixture_config", impactedNames);
         Assert.DoesNotContain("make_fixture_config", testNames);
+        JsonElement testEntry = root.GetProperty("tests").EnumerateArray()
+            .Single(e => e.GetProperty("name").GetString() == "test_parse_config_rejects_empty_input");
+        Assert.True(testEntry.GetProperty("test_evidence").GetProperty("is_test").GetBoolean());
+        Assert.True(testEntry.GetProperty("test_evidence").GetProperty("test_case").GetBoolean());
+        AssertTestEvidenceScope(root);
         Assert.Equal("exhausted", Traversal(root).GetProperty("status").GetString());
         AssertReturnedCountMatchesEnvelope(root);
     }
@@ -980,6 +1092,7 @@ public sealed class ImpactToolTests
         Assert.False(traversal.GetProperty("truncated_by_limit").GetBoolean());
         Assert.Empty(traversal.GetProperty("seeded_paths").EnumerateArray());
         Assert.Empty(traversal.GetProperty("unseeded_paths").EnumerateArray());
+        AssertTestEvidenceScope(doc.RootElement);
     }
 
     [Fact]
@@ -1118,6 +1231,31 @@ public sealed class ImpactToolTests
             _requests.Add(request);
             return _results.Count == 0 ? GitDiffResult.Ok("") : _results.Dequeue();
         }
+    }
+
+    private static void AssertTestEvidenceScope(JsonElement root)
+    {
+        JsonElement scope = root.GetProperty("test_evidence_scope");
+        Assert.Equal(
+            new[] { "status", "absence" },
+            scope.EnumerateObject().Select(static property => property.Name));
+        Assert.Equal("candidate_only", scope.GetProperty("status").GetString());
+        Assert.Equal("unknown", scope.GetProperty("absence").GetString());
+    }
+
+    private static void AssertImpactRoleJsonEqual(string expectedJson, string actualJson)
+    {
+        using var expected = JsonDocument.Parse(expectedJson);
+        using var actual = JsonDocument.Parse(actualJson);
+        Assert.Equal(
+            expected.RootElement.GetProperty("impacted").GetRawText(),
+            actual.RootElement.GetProperty("impacted").GetRawText());
+        Assert.Equal(
+            expected.RootElement.GetProperty("tests").GetRawText(),
+            actual.RootElement.GetProperty("tests").GetRawText());
+        Assert.Equal(
+            expected.RootElement.GetProperty("test_evidence_scope").GetRawText(),
+            actual.RootElement.GetProperty("test_evidence_scope").GetRawText());
     }
 
     private static string ValidateDiff() =>

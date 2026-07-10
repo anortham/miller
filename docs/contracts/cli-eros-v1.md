@@ -27,7 +27,7 @@ Required top-level fields:
 | `optional_features.symbol_search_sidecar` | Whether this process has the search sidecar enabled. |
 | `optional_features.source_region_index` | Whether this process will populate/search source-region text. |
 | `optional_features.source_region_max_bytes` | Per-region byte cap used when source-region indexing is enabled. |
-| `features` | Independently negotiated capability strings. Gate revision-delta behavior on `impact_index_revision_delta` and traversal evidence on `impact_traversal_evidence`. |
+| `features` | Independently negotiated capability strings. Gate revision-delta behavior on `impact_index_revision_delta`, traversal evidence on `impact_traversal_evidence`, and impact test-role evidence on `impact_test_role_evidence`. |
 | `json_commands` | CLI commands with stable JSON output. |
 | `json_contracts` | Versioned JSON contracts with command, schema version, and doc path. |
 | `supported_export_formats` | Streaming export feeds supported by this build. |
@@ -52,7 +52,7 @@ Current `json_commands` include:
 | `todos --json` | CLI compatibility alias for bounded TODO/FIXME/HACK/XXX marker audits over comment/doc-comment source regions. |
 | `inspect --json` | File/symbol summary or full inspect result. |
 | `context --json` | Token-budgeted code bundle. `--reference-mode usage` adds reason/confidence-labeled usage evidence. |
-| `impact --json` | Downstream impact result for a symbol, changed paths, or diff. Index-revision mode is documented by [`impact-index-revision-delta-v1.md`](impact-index-revision-delta-v1.md); its bounded graph evidence is documented separately by [`impact-traversal-evidence-v1.md`](impact-traversal-evidence-v1.md). |
+| `impact --json` | Downstream impact result for a symbol, changed paths, or diff. Index-revision mode is documented by [`impact-index-revision-delta-v1.md`](impact-index-revision-delta-v1.md); bounded graph evidence by [`impact-traversal-evidence-v1.md`](impact-traversal-evidence-v1.md); positive test-role evidence by [`impact-test-role-evidence-v1.md`](impact-test-role-evidence-v1.md). |
 | `trace --json` | Structured auto/path/refs/bridge trace result. See [`trace-json-v1.md`](trace-json-v1.md). |
 | `patterns --json` | List, summarize, and search extractor-recognized code-shape facts. See [`patterns-json-v1.md`](patterns-json-v1.md). |
 | `metrics churn --json` | Local git commit-range churn mapped to the current index. See [`metrics-json-v1.md`](metrics-json-v1.md). |
@@ -79,18 +79,24 @@ Current `json_commands` include:
 `capabilities --json` reports `optional_features.reference_aware_context=true` when `context --reference-mode usage`
 is available.
 
-`capabilities --json` advertises index-revision impact through two additive, independent feature strings:
+`capabilities --json` advertises impact through three additive, independent feature strings:
 
 - `impact_index_revision_delta` means Miller can report the changed-path journal envelope and its unchanged
   `delta_status` completeness signal.
 - `impact_traversal_evidence` means that envelope includes the v1 `traversal` object with bounded graph-execution
   evidence.
+- `impact_test_role_evidence` means normal and index-revision result rows carry the v1 nested `test_evidence`
+  object and result envelopes carry `test_evidence_scope`.
 
 Eros must gate each behavior on its own string. `traversal.status: "exhausted"` is only relative to the reported
 `seeded_paths` and current indexed edges. Dynamic dispatch, reflection, configuration, generated code, unresolved
 references, and missing extractor edges are outside the claim. `tests[]` contains likely tests, so an empty list
 does not exonerate tests; `unseeded_paths` are separate warnings. See
 [`impact-traversal-evidence-v1.md`](impact-traversal-evidence-v1.md) for every field and status/reason pair.
+Role flags are positive evidence only. The role scope is candidate-only and absence is unknown; compact
+`likely tests` and JSON `tests[]` may contain lifecycle hooks, so use `test_evidence.test_case` when the role
+feature is present. Eros—not Miller—owns runner inventory, freshness policy, scheduling, results, and verdicts.
+See [`impact-test-role-evidence-v1.md`](impact-test-role-evidence-v1.md).
 
 `patterns --json` is the stable way to consume `julie-extractors` structural facts. Eros should use this command
 for known code-shape signals instead of reading Miller private SQLite tables directly.
@@ -171,7 +177,15 @@ with the standard rebuild message. Fields (`schema_version` 1):
 - `visibility`, `parent_symbol_id`, `signature` — nullable strings (containment via `parent_symbol_id`).
 - `has_doc` — boolean; true when the symbol carries a non-empty doc comment (doc-coverage rollups).
 - `body_hash` — nullable string; julie's normalized body hash (clone-candidate rollups).
-- `is_test` — boolean; julie's cross-language test signal (prod/test splits).
+- `is_test` — boolean; julie's cross-language positive test signal (prod/test candidate splits).
+- `test_case`, `test_container`, `test_lifecycle` — additive boolean positive role facts. `test_case` is derived
+  as `is_test && !test_lifecycle` in this schema.
+- `test_evidence_status` — `current` or `unknown` file-evidence currency.
+- `test_evidence_reason` — nullable reason for unknown currency: `file_status`, `parse_diagnostics`,
+  `file_status_and_parse_diagnostics`, or `file_evidence_unavailable`.
+
+These fields do not form runnable-test inventory. Eros owns runner discovery, freshness, scheduling, execution
+results, and verdicts; false flags and zero counts are not proof of absence.
 
 `miller references export --jsonl [--workspace-id SELECTOR] [--workspace DIR]` emits one JSON line per
 `identifiers` row, ordered `(path, start_byte, identifier_id)`. This is a raw usage fact feed, not a ranking

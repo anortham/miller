@@ -98,7 +98,9 @@ When `status` is `not_run`, both truncation flags are false, both counts are 0, 
 - Do not reinterpret `delta_status: "complete"` as graph completeness, and do not reinterpret
   `traversal.status: "exhausted"` as revision-span completeness.
 - Treat every `unseeded_paths` entry as a separate warning/fallback input even when `status` is `exhausted`.
-- Treat `tests[]` as likely tests. An empty `tests[]` does not prove that no tests are affected.
+- Treat `tests[]` as likely tests. It may contain lifecycle hooks as well as runnable cases; when
+  `impact_test_role_evidence` is negotiated, use `test_evidence.test_case` to distinguish them. An empty
+  `tests[]` does not prove that no tests are affected.
 - Treat unknown `status`/`reason` values conservatively. Additive top-level or traversal fields may appear in a
   future minor; consumers must ignore unknown fields.
 

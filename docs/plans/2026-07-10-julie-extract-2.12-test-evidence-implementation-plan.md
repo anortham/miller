@@ -196,15 +196,15 @@ Batch A uses `parallel-lead-commit`: workers hand back verified diffs without co
 **Approach:** Write failing JSON tests first for current and unknown rows, empty results, normal impact, revision delta, and independent feature gates. Exercise both `MillerRepositoryIndex` and `FtsSymbolSearchIndex` with the same fixture and compare the role-bearing result arrays after a full build and an incremental update. Add a reflection/shape-lock test that `GraphNode` still exposes only `Id` and `IsTest`; this unchanged-contract guard is expected green before and after and does not authorize Core edits. Keep compact snapshots byte-for-byte stable and keep lifecycle rows in the legacy `tests[]` partition.
 
 **Acceptance criteria:**
-- [ ] Every reached normal/delta row contains exactly `is_test`, `test_case`, `test_container`, `test_lifecycle`, `status`, and nullable `reason` under `test_evidence`.
-- [ ] Every result-bearing normal/delta envelope contains `test_evidence_scope.status=candidate_only` and `absence=unknown`, including empty reached arrays.
-- [ ] Existing membership, order, `reached_count`, `returned_count`, traversal evidence, and compact text remain unchanged.
-- [ ] Full-build and incremental sidecar-on/off impact JSON agree on role evidence.
-- [ ] `capabilities --json` advertises the feature and schema-1 contract, and pure helper tests prove role, traversal, and revision-delta gates are independent.
-- [ ] `symbols export --jsonl` is asserted through the CLI with all five additive fields and unchanged schema 1.
-- [ ] `GraphNode` remains exactly `(Id, IsTest)` and existing reach tests remain green.
-- [ ] Docs say positive flags are evidence, absence is unknown, compact `likely tests` may contain lifecycle hooks, and Eros owns runner inventory, freshness, scheduling, results, and verdicts.
-- [ ] Worker-scope verification passes and the worker commits only owned files per `serial-worker-commit`.
+- [x] Every reached normal/delta row contains exactly `is_test`, `test_case`, `test_container`, `test_lifecycle`, `status`, and nullable `reason` under `test_evidence`.
+- [x] Every result-bearing normal/delta envelope contains `test_evidence_scope.status=candidate_only` and `absence=unknown`, including empty reached arrays.
+- [x] Existing membership, order, `reached_count`, `returned_count`, traversal evidence, and compact text remain unchanged.
+- [x] Full-build and incremental sidecar-on/off impact JSON agree on role evidence.
+- [x] `capabilities --json` advertises the feature and schema-1 contract, and pure helper tests prove role, traversal, and revision-delta gates are independent.
+- [x] `symbols export --jsonl` is asserted through the CLI with all five additive fields and unchanged schema 1.
+- [x] `GraphNode` remains exactly `(Id, IsTest)` and existing reach tests remain green.
+- [x] Docs say positive flags are evidence, absence is unknown, compact `likely tests` may contain lifecycle hooks, and Eros owns runner inventory, freshness, scheduling, results, and verdicts.
+- [x] Worker-scope verification passes and the worker commits only owned files per `serial-worker-commit`.
 
 ### Task 5: Prove the released binary and language matrix
 

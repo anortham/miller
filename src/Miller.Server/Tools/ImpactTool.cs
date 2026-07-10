@@ -499,6 +499,7 @@ public sealed class ImpactTool
             WriteReachedArray(w, traversal.Impacted);
             w.WritePropertyName("tests");
             WriteReachedArray(w, traversal.Tests);
+            WriteTestEvidenceScope(w);
             w.WritePropertyName("traversal");
             w.WriteStartObject();
             w.WriteString("status", traversal.Status);
@@ -818,6 +819,7 @@ public sealed class ImpactTool
             WriteReachedArray(w, impacted);
             w.WritePropertyName("tests");
             WriteReachedArray(w, tests);
+            WriteTestEvidenceScope(w);
             w.WriteEndObject();
         }
         return Utf8(buffer);
@@ -835,9 +837,32 @@ public sealed class ImpactTool
             w.WriteNumber("line", r.Symbol.StartLine);
             w.WriteNumber("hop", r.Hop);
             w.WriteString("symbol_id", r.Symbol.SymbolId);
+            w.WritePropertyName("test_evidence");
+            WriteTestEvidence(w, r.Symbol.TestEvidence);
             w.WriteEndObject();
         }
         w.WriteEndArray();
+    }
+
+    private static void WriteTestEvidence(Utf8JsonWriter w, TestRoleEvidence evidence)
+    {
+        w.WriteStartObject();
+        w.WriteBoolean("is_test", evidence.IsTest);
+        w.WriteBoolean("test_case", evidence.IsCase);
+        w.WriteBoolean("test_container", evidence.IsContainer);
+        w.WriteBoolean("test_lifecycle", evidence.IsLifecycle);
+        w.WriteString("status", evidence.Status);
+        if (evidence.Reason is null) w.WriteNull("reason"); else w.WriteString("reason", evidence.Reason);
+        w.WriteEndObject();
+    }
+
+    private static void WriteTestEvidenceScope(Utf8JsonWriter w)
+    {
+        w.WritePropertyName("test_evidence_scope");
+        w.WriteStartObject();
+        w.WriteString("status", "candidate_only");
+        w.WriteString("absence", "unknown");
+        w.WriteEndObject();
     }
 
     private static string RenderCandidatesNote(IReadOnlyList<IndexedSymbol> matches)

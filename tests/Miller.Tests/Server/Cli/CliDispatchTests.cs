@@ -366,6 +366,8 @@ public sealed class CliDispatchTests : IDisposable
         // is in the top-level `features` array, and the versioned CLI surface is registered under json_contracts.
         string[] features = root.GetProperty("features").EnumerateArray().Select(f => f.GetString()).ToArray()!;
         Assert.Contains("impact_index_revision_delta", features);
+        Assert.Contains("impact_traversal_evidence", features);
+        Assert.Contains("impact_test_role_evidence", features);
         JsonElement deltaContract = Assert.Single(
             root.GetProperty("json_contracts").EnumerateArray(),
             item => item.GetProperty("name").GetString() == "impact_index_revision_delta");
@@ -374,6 +376,13 @@ public sealed class CliDispatchTests : IDisposable
             deltaContract.GetProperty("command").GetString());
         Assert.Equal(1, deltaContract.GetProperty("schema_version").GetInt32());
         Assert.Equal("docs/contracts/impact-index-revision-delta-v1.md", deltaContract.GetProperty("doc").GetString());
+
+        JsonElement testRoleContract = Assert.Single(
+            root.GetProperty("json_contracts").EnumerateArray(),
+            item => item.GetProperty("name").GetString() == "impact_test_role_evidence");
+        Assert.Equal("impact --json", testRoleContract.GetProperty("command").GetString());
+        Assert.Equal(1, testRoleContract.GetProperty("schema_version").GetInt32());
+        Assert.Equal("docs/contracts/impact-test-role-evidence-v1.md", testRoleContract.GetProperty("doc").GetString());
 
         JsonElement[] exports = root.GetProperty("supported_export_formats").EnumerateArray().ToArray();
         JsonElement export = Assert.Single(exports, item => item.GetProperty("name").GetString() == "content_corpus");
@@ -1076,6 +1085,11 @@ public sealed class CliDispatchTests : IDisposable
         Assert.True(getUser.GetProperty("has_doc").GetBoolean());
         Assert.Equal("blake3:feedfacefeedface", getUser.GetProperty("body_hash").GetString());
         Assert.False(getUser.GetProperty("is_test").GetBoolean());
+        Assert.False(getUser.GetProperty("test_case").GetBoolean());
+        Assert.False(getUser.GetProperty("test_container").GetBoolean());
+        Assert.False(getUser.GetProperty("test_lifecycle").GetBoolean());
+        Assert.Equal("current", getUser.GetProperty("test_evidence_status").GetString());
+        Assert.Equal(JsonValueKind.Null, getUser.GetProperty("test_evidence_reason").ValueKind);
         Assert.True(getUser.TryGetProperty("kind", out _));
         Assert.True(getUser.TryGetProperty("signature", out _));
         Assert.True(getUser.TryGetProperty("visibility", out _));
