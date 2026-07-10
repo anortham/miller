@@ -540,7 +540,9 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
     private static string SymbolSelect(string suffix) => """
         SELECT s.doc_id,
                s.symbol_id, s.name, s.signature, s.kind, s.language, s.path,
-               s.start_line, s.end_line, s.parent_symbol_id, s.is_test, s.doc_len
+               s.start_line, s.end_line, s.parent_symbol_id, s.is_test,
+               s.test_container, s.test_lifecycle, s.test_evidence_status, s.test_evidence_reason,
+               s.doc_len
         """ + "\n" + suffix;
 
     private static IReadOnlyList<IndexedSymbol> ReadIndexedSymbols(SqliteCommand cmd)
@@ -565,8 +567,12 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
             StartLine: reader.IsDBNull(7) ? 0 : reader.GetInt32(7),
             EndLine: reader.IsDBNull(8) ? 0 : reader.GetInt32(8),
             ParentId: reader.IsDBNull(9) ? null : reader.GetString(9),
-            IsTest: !reader.IsDBNull(10) && reader.GetInt64(10) != 0);
-        int docLen = reader.IsDBNull(11) ? 0 : reader.GetInt32(11);
+            IsTest: !reader.IsDBNull(10) && reader.GetInt64(10) != 0,
+            TestContainer: reader.GetInt64(11) != 0,
+            TestLifecycle: reader.GetInt64(12) != 0,
+            TestEvidenceStatus: reader.GetString(13),
+            TestEvidenceReason: reader.IsDBNull(14) ? null : reader.GetString(14));
+        int docLen = reader.IsDBNull(15) ? 0 : reader.GetInt32(15);
         return new DiskSymbol(symbol, docLen);
     }
 

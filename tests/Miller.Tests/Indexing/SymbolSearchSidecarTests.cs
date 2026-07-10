@@ -405,7 +405,8 @@ public sealed class SymbolSearchSidecarTests : IDisposable
                 new JulieDbFixture.SymbolRow("parent", "ParentAnchor", "class", "csharp",
                     "src/AParent.cs", "public class ParentAnchor", 1, ParentId: null),
                 new JulieDbFixture.SymbolRow("child", "ChildAction", "method", "csharp",
-                    "src/BChild.cs", "void ChildAction()", 1, ParentId: "parent"),
+                    "src/BChild.cs", "void ChildAction()", 1, ParentId: "parent")
+                    { IsTest = true, TestContainer = true },
             },
             revisions: new[]
             {
@@ -422,7 +423,10 @@ public sealed class SymbolSearchSidecarTests : IDisposable
             new IndexedSymbol(0, "parent", "ParentAnchor", "public class ParentAnchor", "class",
                 "csharp", "src/AParent.cs", 1, 1, ParentId: null, IsTest: false),
             new IndexedSymbol(1, "child", "ChildAction", "void ChildAction()", "method",
-                "csharp", "src/BChild.cs", 1, 1, ParentId: "parent", IsTest: false),
+                "csharp", "src/BChild.cs", 1, 1, ParentId: "parent", IsTest: true,
+                TestContainer: false, TestLifecycle: true,
+                TestEvidenceStatus: TestRoleEvidence.UnknownStatus,
+                TestEvidenceReason: TestRoleEvidence.FileStatusReason),
         }, revision: 1, symbolsDbPath: julie.DbPath, workspaceRoot: julie.WorkspaceRoot,
             regionOptions: RegionIndexOptions.EnabledDefault);
         var sidecar = new SymbolSearchSidecar(enabled: true);
@@ -436,7 +440,18 @@ public sealed class SymbolSearchSidecarTests : IDisposable
         FtsSymbolSearchIndex index = Assert.IsType<FtsSymbolSearchIndex>(
             sidecar.TryOpen(julie.DbPath, expectedRevision: 2));
         SearchHit hit = Assert.Single(index.Search("anchorchild", limit: 10));
-        Assert.Equal("ChildAction", index.Resolve(hit.Document.DocId).Name);
+        IndexedSymbol child = index.Resolve(hit.Document.DocId);
+        Assert.Equal("ChildAction", child.Name);
+        Assert.Equal(1, child.DocId);
+        Assert.Equal(
+            new TestRoleEvidence(
+                IsTest: true,
+                IsContainer: true,
+                IsLifecycle: false,
+                Status: TestRoleEvidence.CurrentStatus,
+                Reason: null),
+            child.TestEvidence);
+        Assert.Equal(0, index.FindBySymbolId("parent")!.DocId);
     }
 
     [Fact]
@@ -557,7 +572,8 @@ public sealed class SymbolSearchSidecarTests : IDisposable
         // sidecar would self-heal to the in-memory index forever at a matching revision (the silent-disable bug
         // class of commit 5362b3d). This pins the two gates in lockstep after a schema bump.
         string searchDb = SymbolSearchSidecar.SearchDbPathFor(julie.DbPath);
-        SetSchemaVersion(searchDb, SearchIndexWriter.SchemaVersion - 1);
+        Assert.Equal(8, SearchIndexWriter.SchemaVersion);
+        SetSchemaVersion(searchDb, 7);
 
         Assert.Null(sidecar.TryOpen(julie.DbPath, expectedRevision: 5));      // read gate now rejects the stale schema
         Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 5, workspaceRoot: julie.WorkspaceRoot));          // freshness gate rebuilds at the SAME revision

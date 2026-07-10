@@ -33,8 +33,17 @@ public sealed class SearchIndexWriterTests : IDisposable
 
     private static IndexedSymbol Sym(
         int docId, string id, string name, string? sig, string kind, string lang,
-        string path, int startLine, int endLine, bool isTest = false, string? parentId = null)
-        => new(docId, id, name, sig, kind, lang, path, startLine, endLine, ParentId: parentId, IsTest: isTest);
+        string path, int startLine, int endLine, bool isTest = false, string? parentId = null,
+        bool testContainer = false, bool testLifecycle = false,
+        string testEvidenceStatus = TestRoleEvidence.UnknownStatus,
+        string? testEvidenceReason = TestRoleEvidence.FileEvidenceUnavailableReason)
+        => new(docId, id, name, sig, kind, lang, path, startLine, endLine,
+            ParentId: parentId,
+            IsTest: isTest,
+            TestContainer: testContainer,
+            TestLifecycle: testLifecycle,
+            TestEvidenceStatus: testEvidenceStatus,
+            TestEvidenceReason: testEvidenceReason);
 
     private SqliteConnection OpenRead()
     {
@@ -96,6 +105,38 @@ public sealed class SearchIndexWriterTests : IDisposable
         Assert.Equal("src/fmt.py", Scalar(c, "SELECT path FROM search_symbols WHERE symbol_id=$i", ("$i", "id1")));
         Assert.Equal(40L, Long(Scalar(c, "SELECT end_line FROM search_symbols WHERE symbol_id=$i", ("$i", "id0"))));
         Assert.Equal(1L, Long(Scalar(c, "SELECT is_test FROM search_symbols WHERE symbol_id=$i", ("$i", "id1"))));
+    }
+
+    [Fact]
+    public void Write_PersistsTestRoleAndCurrencyEvidence()
+    {
+        var syms = new[]
+        {
+            Sym(0, "case", "Case", null, "method", "csharp", "tests/Case.cs", 1, 2,
+                isTest: true,
+                testContainer: true,
+                testEvidenceStatus: TestRoleEvidence.CurrentStatus,
+                testEvidenceReason: null),
+            Sym(1, "hook", "BeforeEach", null, "method", "csharp", "tests/Hook.cs", 1, 2,
+                isTest: true,
+                testLifecycle: true,
+                testEvidenceStatus: TestRoleEvidence.UnknownStatus,
+                testEvidenceReason: TestRoleEvidence.ParseDiagnosticsReason),
+        };
+
+        SearchIndexWriter.Write(_dbPath, syms, revision: 7);
+
+        using var c = OpenRead();
+        Assert.Equal(1L, Long(Scalar(c, "SELECT is_test FROM search_symbols WHERE symbol_id='case'")));
+        Assert.Equal(1L, Long(Scalar(c, "SELECT test_container FROM search_symbols WHERE symbol_id='case'")));
+        Assert.Equal(0L, Long(Scalar(c, "SELECT test_lifecycle FROM search_symbols WHERE symbol_id='case'")));
+        Assert.Equal(TestRoleEvidence.CurrentStatus,
+            Scalar(c, "SELECT test_evidence_status FROM search_symbols WHERE symbol_id='case'"));
+        Assert.Equal(DBNull.Value,
+            Scalar(c, "SELECT test_evidence_reason FROM search_symbols WHERE symbol_id='case'"));
+        Assert.Equal(1L, Long(Scalar(c, "SELECT test_lifecycle FROM search_symbols WHERE symbol_id='hook'")));
+        Assert.Equal(TestRoleEvidence.ParseDiagnosticsReason,
+            Scalar(c, "SELECT test_evidence_reason FROM search_symbols WHERE symbol_id='hook'"));
     }
 
     [Fact]
@@ -337,6 +378,7 @@ public sealed class SearchIndexWriterTests : IDisposable
         SearchIndexWriter.Write(_dbPath, Array.Empty<IndexedSymbol>(), revision: 3);
 
         using var c = OpenRead();
+        Assert.Equal(8, SearchIndexWriter.SchemaVersion);
         Assert.Equal((long)SearchIndexWriter.SchemaVersion, Long(Scalar(c, "SELECT schema_version FROM meta")));
         Assert.Equal(0L, Long(Scalar(c, "SELECT region_count FROM meta")));
         Assert.Equal(0.0, Convert.ToDouble(Scalar(c, "SELECT region_avgdl FROM meta")), 5);

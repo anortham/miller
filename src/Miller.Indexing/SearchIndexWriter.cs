@@ -30,10 +30,10 @@ public static class SearchIndexWriter
     private const int ParameterChunkSize = 500;
 
     /// <summary>
-    /// The on-disk schema version stamped into <c>meta.schema_version</c>. Bumped 6→7 so artifacts without
-    /// the incremental path-delete indexes are rejected and rebuilt.
+    /// The on-disk schema version stamped into <c>meta.schema_version</c>. Bumped 7→8 so artifacts without
+    /// persisted test-role and evidence-currency fields are rejected and rebuilt.
     /// </summary>
-    public const int SchemaVersion = 7;
+    public const int SchemaVersion = 8;
 
     private const string SchemaDdl = """
         CREATE VIRTUAL TABLE symbols_fts USING fts5(
@@ -48,6 +48,10 @@ public static class SearchIndexWriter
             start_line INTEGER, end_line INTEGER,
             start_byte INTEGER, end_byte INTEGER,
             parent_symbol_id TEXT, is_test INTEGER,
+            test_container INTEGER NOT NULL,
+            test_lifecycle INTEGER NOT NULL,
+            test_evidence_status TEXT NOT NULL,
+            test_evidence_reason TEXT,
             doc_len INTEGER);
         CREATE INDEX ix_search_symbols_kind ON search_symbols(kind);
         CREATE INDEX ix_search_symbols_lang ON search_symbols(language);
@@ -270,8 +274,10 @@ public static class SearchIndexWriter
         symCmd.CommandText = """
             INSERT INTO search_symbols
                 (symbol_id, doc_id, name, signature, kind, language, path, start_line, end_line,
-                 start_byte, end_byte, parent_symbol_id, is_test, doc_len)
-            VALUES ($id, $doc, $name, $sig, $kind, $lang, $path, $sl, $el, $sb, $eb, $pid, $test, $dl);
+                 start_byte, end_byte, parent_symbol_id, is_test, test_container, test_lifecycle,
+                 test_evidence_status, test_evidence_reason, doc_len)
+            VALUES ($id, $doc, $name, $sig, $kind, $lang, $path, $sl, $el, $sb, $eb, $pid, $test,
+                    $testContainer, $testLifecycle, $testEvidenceStatus, $testEvidenceReason, $dl);
             """;
         var pId = symCmd.Parameters.Add("$id", SqliteType.Text);
         var pDoc = symCmd.Parameters.Add("$doc", SqliteType.Integer);
@@ -286,6 +292,10 @@ public static class SearchIndexWriter
         var pEb = symCmd.Parameters.Add("$eb", SqliteType.Integer);
         var pPid = symCmd.Parameters.Add("$pid", SqliteType.Text);
         var pTest = symCmd.Parameters.Add("$test", SqliteType.Integer);
+        var pTestContainer = symCmd.Parameters.Add("$testContainer", SqliteType.Integer);
+        var pTestLifecycle = symCmd.Parameters.Add("$testLifecycle", SqliteType.Integer);
+        var pTestEvidenceStatus = symCmd.Parameters.Add("$testEvidenceStatus", SqliteType.Text);
+        var pTestEvidenceReason = symCmd.Parameters.Add("$testEvidenceReason", SqliteType.Text);
         var pDl = symCmd.Parameters.Add("$dl", SqliteType.Integer);
 
         using var ftsCmd = connection.CreateCommand();
@@ -326,6 +336,10 @@ public static class SearchIndexWriter
             pEb.Value = DBNull.Value;
             pPid.Value = (object?)s.ParentId ?? DBNull.Value;
             pTest.Value = s.IsTest ? 1 : 0;
+            pTestContainer.Value = s.TestContainer ? 1 : 0;
+            pTestLifecycle.Value = s.TestLifecycle ? 1 : 0;
+            pTestEvidenceStatus.Value = s.TestEvidenceStatus;
+            pTestEvidenceReason.Value = (object?)s.TestEvidenceReason ?? DBNull.Value;
             pDl.Value = docLen;
             symCmd.ExecuteNonQuery();
 
@@ -495,7 +509,8 @@ public static class SearchIndexWriter
         using var cmd = connection.CreateCommand();
         cmd.CommandText = """
             SELECT doc_id, symbol_id, name, signature, kind, language, path,
-                   start_line, end_line, parent_symbol_id, is_test
+                   start_line, end_line, parent_symbol_id, is_test,
+                   test_container, test_lifecycle, test_evidence_status, test_evidence_reason
             FROM search_symbols
             WHERE symbol_id = $id;
             """;
@@ -515,7 +530,11 @@ public static class SearchIndexWriter
             StartLine: reader.IsDBNull(7) ? 0 : reader.GetInt32(7),
             EndLine: reader.IsDBNull(8) ? 0 : reader.GetInt32(8),
             ParentId: reader.IsDBNull(9) ? null : reader.GetString(9),
-            IsTest: !reader.IsDBNull(10) && reader.GetInt64(10) != 0);
+            IsTest: !reader.IsDBNull(10) && reader.GetInt64(10) != 0,
+            TestContainer: reader.GetInt64(11) != 0,
+            TestLifecycle: reader.GetInt64(12) != 0,
+            TestEvidenceStatus: reader.GetString(13),
+            TestEvidenceReason: reader.IsDBNull(14) ? null : reader.GetString(14));
     }
 
     private static void RewriteMeta(SqliteConnection connection, long revision, RegionIndexOptions regionOptions)

@@ -92,6 +92,36 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
     }
 
     [Fact]
+    public void Open_RoundTripsTestRoleAndCurrencyEvidenceThroughDiskLookups()
+    {
+        var syms = new[]
+        {
+            new IndexedSymbol(0, "suite", "Suite", "class Suite", "class", "csharp", "tests/Suite.cs",
+                StartLine: 1, EndLine: 8, ParentId: null, IsTest: true,
+                TestContainer: true, TestLifecycle: false,
+                TestEvidenceStatus: TestRoleEvidence.CurrentStatus, TestEvidenceReason: null),
+            new IndexedSymbol(1, "hook", "BeforeEach", "void BeforeEach()", "method", "csharp", "tests/Suite.cs",
+                StartLine: 2, EndLine: 3, ParentId: "suite", IsTest: true,
+                TestContainer: false, TestLifecycle: true,
+                TestEvidenceStatus: TestRoleEvidence.UnknownStatus,
+                TestEvidenceReason: TestRoleEvidence.ParseDiagnosticsReason),
+        };
+        SearchIndexWriter.Write(_dbPath, syms, revision: 42);
+
+        var index = FtsSymbolSearchIndex.Open(_dbPath);
+        var expected = syms[1].TestEvidence;
+
+        Assert.Equal(expected, index.FindBySymbolId("hook")!.TestEvidence);
+        Assert.Equal(expected, index.FindBySymbolIds(["hook"])["hook"].TestEvidence);
+        Assert.Equal(expected, Assert.Single(index.FindByName("BeforeEach")).TestEvidence);
+        Assert.Equal(expected, Assert.Single(index.FindChildren("suite")).TestEvidence);
+        Assert.Equal(expected, index.FindByFilePath("tests/Suite.cs").Single(s => s.SymbolId == "hook").TestEvidence);
+        Assert.Equal(expected, index.Resolve(1).TestEvidence);
+        SearchHit hit = Assert.Single(index.Search("BeforeEach", limit: 10));
+        Assert.Equal(expected, index.Resolve(hit.Document.DocId).TestEvidence);
+    }
+
+    [Fact]
     public void Open_UsesStoredDocId_NotSqliteRowid()
     {
         var syms = Corpus(
@@ -522,6 +552,27 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
             rw.Open();
             using var cmd = rw.CreateCommand();
             cmd.CommandText = "UPDATE meta SET schema_version = 999;";
+            cmd.ExecuteNonQuery();
+        }
+        SqliteConnection.ClearAllPools();
+
+        var ex = Assert.Throws<InvalidOperationException>(() => FtsSymbolSearchIndex.Open(_dbPath));
+        Assert.Contains("schema_version", ex.Message);
+    }
+
+    [Fact]
+    public void Open_SchemaSeven_ThrowsInsteadOfDefaultingTestEvidence()
+    {
+        SearchIndexWriter.Write(_dbPath, Corpus(("a", "Alpha", null, "class", "csharp", "src/A.cs")), 1);
+
+        using (var rw = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _dbPath, Mode = SqliteOpenMode.ReadWrite, Pooling = false,
+        }.ToString()))
+        {
+            rw.Open();
+            using var cmd = rw.CreateCommand();
+            cmd.CommandText = "UPDATE meta SET schema_version = 7;";
             cmd.ExecuteNonQuery();
         }
         SqliteConnection.ClearAllPools();
