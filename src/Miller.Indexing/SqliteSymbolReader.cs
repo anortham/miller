@@ -36,24 +36,24 @@ public static class SqliteSymbolReader
 
         JulieSchemaGate.Verify(connection);
 
+        EvidenceProjection evidence = EvidenceProjection.From(connection);
+
         using var command = connection.CreateCommand();
         // v1 columns. By-name reads (D6) decouple SELECT order from the GetX ordinals: a future column
         // add/reorder can never silently shift a value into the wrong field again.
-        command.CommandText = """
-            WITH diagnostic_paths AS (
-                SELECT path, 1 AS has_parse_diagnostics
-                FROM parse_diagnostics
-                GROUP BY path
-            )
+        command.CommandText = $"""
+            {evidence.DiagnosticPathsCte}
             SELECT ROW_NUMBER() OVER (ORDER BY s.path, s.start_line, s.symbol_id) - 1 AS doc_id,
                    s.symbol_id, s.name, s.signature, s.kind, s.language, s.path,
                    s.start_line, s.end_line, s.parent_symbol_id, s.is_test,
-                   s.test_container, s.test_lifecycle, f.status AS file_status,
-                   CASE WHEN f.path IS NULL THEN 0 ELSE 1 END AS has_file_evidence,
-                   COALESCE(d.has_parse_diagnostics, 0) AS has_parse_diagnostics
+                   {evidence.TestContainer} AS test_container,
+                   {evidence.TestLifecycle} AS test_lifecycle,
+                   {evidence.FileStatus} AS file_status,
+                   {evidence.HasFileEvidence} AS has_file_evidence,
+                   {evidence.HasParseDiagnostics} AS has_parse_diagnostics
             FROM symbols AS s
-            LEFT JOIN files AS f ON f.path = s.path
-            LEFT JOIN diagnostic_paths AS d ON d.path = s.path
+            {evidence.FilesJoin}
+            {evidence.DiagnosticsJoin}
             WHERE s.name IS NOT NULL
             ORDER BY s.path, s.start_line, s.symbol_id;
             """;
@@ -85,6 +85,11 @@ public static class SqliteSymbolReader
         using var connection = SqliteReadOnlyAccess.Open(dbPath);
         JulieSchemaGate.Verify(connection);
 
+        EvidenceProjection evidence = EvidenceProjection.From(connection);
+        string orderedCtePrefix = evidence.DiagnosticsJoin.Length == 0
+            ? "WITH"
+            : evidence.DiagnosticPathsCte + ",";
+
         var results = new List<IndexedSymbol>();
         for (int offset = 0; offset < distinctPaths.Length; offset += ParameterChunkSize)
         {
@@ -92,21 +97,19 @@ public static class SqliteSymbolReader
             using var command = connection.CreateCommand();
             string placeholders = AddPathParameters(command, distinctPaths, offset, count);
             command.CommandText = $"""
-                WITH diagnostic_paths AS (
-                    SELECT path, 1 AS has_parse_diagnostics
-                    FROM parse_diagnostics
-                    GROUP BY path
-                ),
+                {orderedCtePrefix}
                 ordered AS (
                     SELECT ROW_NUMBER() OVER (ORDER BY s.path, s.start_line, s.symbol_id) - 1 AS doc_id,
                            s.symbol_id, s.name, s.signature, s.kind, s.language, s.path,
                            s.start_line, s.end_line, s.parent_symbol_id, s.is_test,
-                           s.test_container, s.test_lifecycle, f.status AS file_status,
-                           CASE WHEN f.path IS NULL THEN 0 ELSE 1 END AS has_file_evidence,
-                           COALESCE(d.has_parse_diagnostics, 0) AS has_parse_diagnostics
+                           {evidence.TestContainer} AS test_container,
+                           {evidence.TestLifecycle} AS test_lifecycle,
+                           {evidence.FileStatus} AS file_status,
+                           {evidence.HasFileEvidence} AS has_file_evidence,
+                           {evidence.HasParseDiagnostics} AS has_parse_diagnostics
                     FROM symbols AS s
-                    LEFT JOIN files AS f ON f.path = s.path
-                    LEFT JOIN diagnostic_paths AS d ON d.path = s.path
+                    {evidence.FilesJoin}
+                    {evidence.DiagnosticsJoin}
                     WHERE s.name IS NOT NULL
                 )
                 SELECT doc_id, symbol_id, name, signature, kind, language, path,
@@ -193,5 +196,60 @@ public static class SqliteSymbolReader
             command.Parameters.AddWithValue(name, paths[offset + i]);
         }
         return string.Join(", ", placeholders);
+    }
+
+    /// <summary>
+    /// A few focused/large test artifacts model the schema gate's minimal historical shape and intentionally omit
+    /// optional evidence tables or newly additive role columns. Preserve the reader's legacy compatibility by
+    /// projecting their evidence as unknown/defaulted; released current artifacts have every source below.
+    /// </summary>
+    private readonly record struct EvidenceProjection(
+        string DiagnosticPathsCte,
+        string FilesJoin,
+        string DiagnosticsJoin,
+        string TestContainer,
+        string TestLifecycle,
+        string FileStatus,
+        string HasFileEvidence,
+        string HasParseDiagnostics)
+    {
+        public static EvidenceProjection From(SqliteConnection connection)
+        {
+            bool hasFiles = TableExists(connection, "files");
+            bool hasDiagnostics = TableExists(connection, "parse_diagnostics");
+            return new EvidenceProjection(
+                DiagnosticPathsCte: hasDiagnostics
+                    ? """
+                      WITH diagnostic_paths AS (
+                          SELECT path, 1 AS has_parse_diagnostics
+                          FROM parse_diagnostics
+                          GROUP BY path
+                      )
+                      """
+                    : string.Empty,
+                FilesJoin: hasFiles ? "LEFT JOIN files AS f ON f.path = s.path" : string.Empty,
+                DiagnosticsJoin: hasDiagnostics ? "LEFT JOIN diagnostic_paths AS d ON d.path = s.path" : string.Empty,
+                TestContainer: ColumnExists(connection, "symbols", "test_container") ? "s.test_container" : "0",
+                TestLifecycle: ColumnExists(connection, "symbols", "test_lifecycle") ? "s.test_lifecycle" : "0",
+                FileStatus: hasFiles ? "f.status" : "NULL",
+                HasFileEvidence: hasFiles ? "CASE WHEN f.path IS NULL THEN 0 ELSE 1 END" : "0",
+                HasParseDiagnostics: hasDiagnostics ? "COALESCE(d.has_parse_diagnostics, 0)" : "0");
+        }
+
+        private static bool TableExists(SqliteConnection connection, string table)
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $name;";
+            command.Parameters.AddWithValue("$name", table);
+            return command.ExecuteScalar() is not null;
+        }
+
+        private static bool ColumnExists(SqliteConnection connection, string table, string column)
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = $"SELECT 1 FROM pragma_table_info('{table}') WHERE name = $name;";
+            command.Parameters.AddWithValue("$name", column);
+            return command.ExecuteScalar() is not null;
+        }
     }
 }

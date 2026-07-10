@@ -10,10 +10,11 @@ namespace Miller.Tests.Server;
 /// with prepared, reused commands — so building the latency fixture is itself fast. The schema is the minimal v1
 /// subset the production build path (<see cref="RepositoryIndexLoader.Load"/> → <see cref="SqliteSymbolReader.Read"/>
 /// + <see cref="SymbolGraphReader.Read"/> + <see cref="SqliteBridgeReader.Read"/>) + the schema gate require:
-/// v1 <c>files</c>/<c>symbols</c> (incl. <c>end_line</c> [D7] and the typed <c>is_test</c> column) + the
+/// v1 <c>files</c>/<c>symbols</c> (incl. <c>end_line</c> [D7] and typed test-role columns) + the
 /// <c>relationships</c>/<c>identifiers</c> edge tables [D2] + the split bridge tables
 /// (<c>type_argument_usages</c>/<c>type_arguments</c>/<c>literals</c>/<c>symbol_annotations</c>) + the single
-/// <c>artifact_metadata</c> table carrying the gate's version/hash keys. The bridge + identifier tables are
+/// empty <c>parse_diagnostics</c> table used by role-evidence currency + the single <c>artifact_metadata</c>
+/// table carrying the gate's version/hash keys. The bridge + identifier tables are
 /// created empty — the rebuild latency this measures is the read+build path, and empty reads still exercise the
 /// loader's extra SELECTs.
 /// </summary>
@@ -39,12 +40,22 @@ internal static class LargeDbWriter
                 indexed_at TEXT NOT NULL, last_revision_id INTEGER NOT NULL, status TEXT NOT NULL,
                 metadata_json TEXT, content TEXT);
             """);
-        // v1 symbols: symbol_id PK, path (not file_path), parent_symbol_id (not parent_id), typed is_test column.
+        // v1 symbols: symbol_id PK, path (not file_path), parent_symbol_id (not parent_id), typed role columns.
         Exec(conn, """
             CREATE TABLE symbols (
                 symbol_id TEXT PRIMARY KEY, file_id TEXT NOT NULL, path TEXT NOT NULL, language TEXT NOT NULL,
                 name TEXT NOT NULL, kind TEXT NOT NULL, signature TEXT, start_line INTEGER, end_line INTEGER,
-                parent_symbol_id TEXT, is_test INTEGER NOT NULL DEFAULT 0, metadata_json TEXT);
+                parent_symbol_id TEXT, is_test INTEGER NOT NULL DEFAULT 0,
+                test_container INTEGER NOT NULL DEFAULT 0, test_lifecycle INTEGER NOT NULL DEFAULT 0,
+                metadata_json TEXT);
+            """);
+        Exec(conn, """
+            CREATE TABLE parse_diagnostics (
+                diagnostic_id TEXT PRIMARY KEY, file_id TEXT NOT NULL, path TEXT NOT NULL,
+                language TEXT NOT NULL, kind TEXT NOT NULL, message TEXT,
+                start_line INTEGER NOT NULL, start_column INTEGER NOT NULL,
+                end_line INTEGER NOT NULL, end_column INTEGER NOT NULL,
+                start_byte INTEGER NOT NULL, end_byte INTEGER NOT NULL, metadata_json TEXT);
             """);
         // D2 edge tables — the production build path reads both. v1 column names (relationships: relationship_id +
         // from/to/kind; identifiers: identifier_id + name/kind/path/containing_symbol_id).
@@ -118,8 +129,8 @@ internal static class LargeDbWriter
             cmd.Transaction = tx;
             cmd.CommandText =
                 "INSERT INTO symbols (symbol_id, file_id, path, language, name, kind, signature, start_line, " +
-                "end_line, parent_symbol_id, is_test, metadata_json) " +
-                "VALUES ($id, $fid, $p, $lang, $name, $kind, $sig, $sl, $el, $pid, $istest, NULL);";
+                "end_line, parent_symbol_id, is_test, test_container, test_lifecycle, metadata_json) " +
+                "VALUES ($id, $fid, $p, $lang, $name, $kind, $sig, $sl, $el, $pid, $istest, $tcont, $tlife, NULL);";
             var pId = Add(cmd, "$id");
             var pFid = Add(cmd, "$fid");
             var pPath = Add(cmd, "$p");
@@ -131,6 +142,8 @@ internal static class LargeDbWriter
             var pEl = Add(cmd, "$el");
             var pPid = Add(cmd, "$pid");
             var pIsTest = Add(cmd, "$istest");
+            var pTestContainer = Add(cmd, "$tcont");
+            var pTestLifecycle = Add(cmd, "$tlife");
             cmd.Prepare();
 
             foreach (var s in symbols)
@@ -146,6 +159,8 @@ internal static class LargeDbWriter
                 pEl.Value = s.EndLine;
                 pPid.Value = (object?)s.ParentId ?? DBNull.Value;
                 pIsTest.Value = s.IsTest ? 1 : 0;
+                pTestContainer.Value = s.TestContainer ? 1 : 0;
+                pTestLifecycle.Value = s.TestLifecycle ? 1 : 0;
                 cmd.ExecuteNonQuery();
             }
         }

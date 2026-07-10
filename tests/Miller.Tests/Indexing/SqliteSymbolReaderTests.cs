@@ -227,6 +227,24 @@ public sealed class SqliteSymbolReaderTests
     }
 
     [Fact]
+    public void ReadAndReadForPaths_MissingOptionalEvidenceTables_DefaultRoleEvidenceToUnknown()
+    {
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
+        {
+            new JulieDbFixture.SymbolRow("minimal-role", "MinimalRole", "method", "csharp",
+                "Minimal.cs", "void MinimalRole()", 1, null) { IsTest = true },
+        });
+        ExecuteWrite(fx.DbPath, "DROP TABLE parse_diagnostics; DROP TABLE files;");
+
+        IReadOnlyList<IndexedSymbol> all = SqliteSymbolReader.Read(fx.DbPath);
+        IReadOnlyList<IndexedSymbol> selected = SqliteSymbolReader.ReadForPaths(fx.DbPath, ["Minimal.cs"]);
+
+        Assert.Equal(all, selected);
+        AssertRole(all, "MinimalRole", isTest: true, isCase: true, isContainer: false, isLifecycle: false,
+            status: "unknown", reason: "file_evidence_unavailable");
+    }
+
+    [Fact]
     public void IndexedSymbol_ManualConstruction_DefaultsNewEvidenceWithoutChangingLegacyIsTest()
     {
         var symbol = new IndexedSymbol(

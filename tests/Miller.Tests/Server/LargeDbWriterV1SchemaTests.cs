@@ -76,7 +76,7 @@ public sealed class LargeDbWriterV1SchemaTests : IDisposable
         using var c = Open(_dbPath);
 
         foreach (var t in new[] { "artifact_metadata", "files", "symbols", "identifiers", "relationships",
-            "type_argument_usages", "type_arguments", "literals", "symbol_annotations" })
+            "type_argument_usages", "type_arguments", "literals", "symbol_annotations", "parse_diagnostics" })
             Assert.True(TableExists(c, t), $"v1 table '{t}' must exist");
 
         Assert.False(TableExists(c, "schema_version"), "v1 has no schema_version table");
@@ -93,6 +93,8 @@ public sealed class LargeDbWriterV1SchemaTests : IDisposable
         Assert.True(ColumnExists(c, "symbols", "path"));
         Assert.True(ColumnExists(c, "symbols", "parent_symbol_id"));
         Assert.True(ColumnExists(c, "symbols", "is_test"));
+        Assert.True(ColumnExists(c, "symbols", "test_container"));
+        Assert.True(ColumnExists(c, "symbols", "test_lifecycle"));
         Assert.False(ColumnExists(c, "symbols", "file_path"), "renamed to path");
         Assert.False(ColumnExists(c, "symbols", "parent_id"), "renamed to parent_symbol_id");
 
