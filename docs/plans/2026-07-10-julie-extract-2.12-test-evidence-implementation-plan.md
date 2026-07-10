@@ -158,12 +158,12 @@ Batch A uses `parallel-lead-commit`: workers hand back verified diffs without co
 **Approach:** Start with failing writer/reader round-trip assertions, then update DDL, insert parameters, select order, ordinals, and reconstruction together. Extend the existing incremental sidecar test so a changed file replaces case/container/lifecycle evidence through `ReadForPaths -> ApplyFileChanges -> InsertSymbols`, while an unchanged parent still supports qualified-name behavior. Reuse existing automatic rebuild and stale-reader guards; do not add an in-place migration.
 
 **Acceptance criteria:**
-- [ ] Full-build writer/reader round-trip preserves every role flag, status, reason, and legacy `is_test` value.
-- [ ] Incremental convergence replaces stale role/currency evidence for changed files without disturbing stable doc IDs or unchanged qualification parents.
-- [ ] A schema-7 sidecar at the current revision rebuilds to schema 8 automatically.
-- [ ] Direct open of a stale/incompatible sidecar fails visibly instead of defaulting the new columns.
-- [ ] Existing FTS ranking, lookup, region-index, revision, and corruption tests remain green.
-- [ ] Worker-scope verification passes and the worker commits only owned files per `serial-worker-commit`.
+- [x] Full-build writer/reader round-trip preserves every role flag, status, reason, and legacy `is_test` value.
+- [x] Incremental convergence replaces stale role/currency evidence for changed files without disturbing stable doc IDs or unchanged qualification parents.
+- [x] A schema-7 sidecar at the current revision rebuilds to schema 8 automatically.
+- [x] Direct open of a stale/incompatible sidecar fails visibly instead of defaulting the new columns.
+- [x] Existing FTS ranking, lookup, region-index, revision, and corruption tests remain green.
+- [x] Worker-scope verification passes and the worker commits only owned files per `serial-worker-commit`.
 
 ### Task 4: Expose impact, export, capability, and documentation contracts
 
