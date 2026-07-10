@@ -20,7 +20,7 @@ public sealed class MillerExtractContractTests
         Assert.Equal(3, MillerExtractContract.ExpectedExtractContractVersion);
         Assert.Equal(3, MillerExtractContract.ExpectedReportSchemaVersion);
         Assert.Equal("blake3", MillerExtractContract.ExpectedHashAlgorithm);
-        Assert.Equal("2.11.0", MillerExtractContract.PinnedJulieExtractVersion);
+        Assert.Equal("2.12.0", MillerExtractContract.PinnedJulieExtractVersion);
         Assert.False(string.IsNullOrWhiteSpace(MillerExtractContract.PinnedJulieExtractVersion));
     }
 
@@ -33,7 +33,33 @@ public sealed class MillerExtractContractTests
         string pinnedVersion = MillerExtractContract.PinnedJulieExtractVersion;
         Assert.Equal(pinnedVersion, doc.RootElement.GetProperty("version").GetString());
 
-        foreach (JsonProperty asset in doc.RootElement.GetProperty("assets").EnumerateObject())
+        JsonElement assets = doc.RootElement.GetProperty("assets");
+        Assert.Equal(
+            "julie-extract-v{VER}-aarch64-apple-darwin.tar.gz",
+            assets.GetProperty("aarch64-apple-darwin").GetProperty("name").GetString());
+        Assert.Equal(
+            "249ed102deece8841c2965d7ad370ef08e63a82d093315a21f374a4457e57812",
+            assets.GetProperty("aarch64-apple-darwin").GetProperty("sha256").GetString());
+        Assert.Equal(
+            "julie-extract-v{VER}-x86_64-apple-darwin.tar.gz",
+            assets.GetProperty("x86_64-apple-darwin").GetProperty("name").GetString());
+        Assert.Equal(
+            "29ce60fbfc96d636eb1500df3d563c8739dd7bf1ef8097f00bda531c6ca467b5",
+            assets.GetProperty("x86_64-apple-darwin").GetProperty("sha256").GetString());
+        Assert.Equal(
+            "julie-extract-v{VER}-x86_64-unknown-linux-gnu.tar.gz",
+            assets.GetProperty("x86_64-unknown-linux-gnu").GetProperty("name").GetString());
+        Assert.Equal(
+            "578946c36965e80407a26f774ea730c0bce9bd536b20ce7e46e96098ed3006a2",
+            assets.GetProperty("x86_64-unknown-linux-gnu").GetProperty("sha256").GetString());
+        Assert.Equal(
+            "julie-extract-v{VER}-x86_64-pc-windows-msvc.zip",
+            assets.GetProperty("x86_64-pc-windows-msvc").GetProperty("name").GetString());
+        Assert.Equal(
+            "b4c428bc25638381e9ad46603cc3f30cd5ebb0065f0df83134afdda43b6df9ef",
+            assets.GetProperty("x86_64-pc-windows-msvc").GetProperty("sha256").GetString());
+
+        foreach (JsonProperty asset in assets.EnumerateObject())
         {
             string? name = asset.Value.GetProperty("name").GetString();
             string? sha256 = asset.Value.GetProperty("sha256").GetString();

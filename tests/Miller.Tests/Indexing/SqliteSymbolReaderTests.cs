@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Xunit;
 
@@ -174,6 +175,83 @@ public sealed class SqliteSymbolReaderTests
     }
 
     [Fact]
+    public void ReadAndReadForPaths_DeriveIdenticalRoleAndCurrencyEvidence()
+    {
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
+        {
+            new JulieDbFixture.SymbolRow("role-current", "Current", "method", "csharp",
+                "a-current.cs", "void Current()", 1, null) { IsTest = true, TestContainer = true },
+            new JulieDbFixture.SymbolRow("role-file-status", "FileStatus", "method", "csharp",
+                "b-file-status.cs", "void FileStatus()", 1, null) { IsTest = true, TestLifecycle = true },
+            new JulieDbFixture.SymbolRow("role-diagnostic", "Diagnostic", "method", "csharp",
+                "c-diagnostic.cs", "void Diagnostic()", 1, null) { TestContainer = true },
+            new JulieDbFixture.SymbolRow("role-combined", "Combined", "method", "csharp",
+                "d-combined.cs", "void Combined()", 1, null)
+                { IsTest = true, TestContainer = true, TestLifecycle = true },
+            new JulieDbFixture.SymbolRow("role-unavailable", "Unavailable", "method", "csharp",
+                "e-unavailable.cs", "void Unavailable()", 1, null) { IsTest = true },
+        });
+        ExecuteWrite(fx.DbPath, """
+            UPDATE files
+            SET status = 'failed_preserved'
+            WHERE path IN ('b-file-status.cs', 'd-combined.cs');
+
+            INSERT INTO parse_diagnostics
+                (diagnostic_id, file_id, path, language, kind, message, start_line, start_column,
+                 end_line, end_column, start_byte, end_byte, metadata_json)
+            VALUES
+                ('diag-role-1', 'file:c-diagnostic.cs', 'c-diagnostic.cs', 'csharp', 'parse_error',
+                 'diagnostic-only', 1, 1, 1, 1, 0, 1, NULL),
+                ('diag-role-2', 'file:d-combined.cs', 'd-combined.cs', 'csharp', 'parse_error',
+                 'combined', 1, 1, 1, 1, 0, 1, NULL);
+
+            DELETE FROM files WHERE path = 'e-unavailable.cs';
+            """);
+
+        IReadOnlyList<IndexedSymbol> all = SqliteSymbolReader.Read(fx.DbPath);
+        IReadOnlyList<IndexedSymbol> selected = SqliteSymbolReader.ReadForPaths(
+            fx.DbPath,
+            all.Select(static symbol => symbol.FilePath).Reverse().Append("a-current.cs").ToArray());
+
+        Assert.Equal(all, selected);
+        AssertRole(all, "Current", isTest: true, isCase: true, isContainer: true, isLifecycle: false,
+            status: "current", reason: null);
+        AssertRole(all, "FileStatus", isTest: true, isCase: false, isContainer: false, isLifecycle: true,
+            status: "unknown", reason: "file_status");
+        AssertRole(all, "Diagnostic", isTest: false, isCase: false, isContainer: true, isLifecycle: false,
+            status: "unknown", reason: "parse_diagnostics");
+        AssertRole(all, "Combined", isTest: true, isCase: false, isContainer: true, isLifecycle: true,
+            status: "unknown", reason: "file_status_and_parse_diagnostics");
+        AssertRole(all, "Unavailable", isTest: true, isCase: true, isContainer: false, isLifecycle: false,
+            status: "unknown", reason: "file_evidence_unavailable");
+    }
+
+    [Fact]
+    public void IndexedSymbol_ManualConstruction_DefaultsNewEvidenceWithoutChangingLegacyIsTest()
+    {
+        var symbol = new IndexedSymbol(
+            DocId: 0,
+            SymbolId: "manual",
+            Name: "Manual",
+            Signature: null,
+            Kind: "method",
+            Language: "csharp",
+            FilePath: "Manual.cs",
+            StartLine: 1,
+            EndLine: 1,
+            ParentId: null,
+            IsTest: true);
+
+        Assert.True(symbol.IsTest);
+        Assert.True(symbol.TestEvidence.IsTest);
+        Assert.True(symbol.TestEvidence.IsCase);
+        Assert.False(symbol.TestEvidence.IsContainer);
+        Assert.False(symbol.TestEvidence.IsLifecycle);
+        Assert.Equal("unknown", symbol.TestEvidence.Status);
+        Assert.Equal("file_evidence_unavailable", symbol.TestEvidence.Reason);
+    }
+
+    [Fact]
     public void ToSearchableDocument_ProjectsTheScoringFields_DroppingJoinKeys()
     {
         using var fx = JulieDbFixture.CreateDefault();
@@ -240,5 +318,39 @@ public sealed class SqliteSymbolReaderTests
         // A typed, named error beats a cryptic SQLITE_CANTOPEN — the dir doesn't even exist.
         var ex = Assert.Throws<FileNotFoundException>(() => SqliteSymbolReader.Read(missing));
         Assert.Contains(missing, ex.Message);
+    }
+
+    private static void AssertRole(
+        IReadOnlyList<IndexedSymbol> symbols,
+        string name,
+        bool isTest,
+        bool isCase,
+        bool isContainer,
+        bool isLifecycle,
+        string status,
+        string? reason)
+    {
+        IndexedSymbol symbol = symbols.Single(candidate => candidate.Name == name);
+        Assert.Equal(isTest, symbol.IsTest);
+        Assert.Equal(isTest, symbol.TestEvidence.IsTest);
+        Assert.Equal(isCase, symbol.TestEvidence.IsCase);
+        Assert.Equal(isContainer, symbol.TestEvidence.IsContainer);
+        Assert.Equal(isLifecycle, symbol.TestEvidence.IsLifecycle);
+        Assert.Equal(status, symbol.TestEvidence.Status);
+        Assert.Equal(reason, symbol.TestEvidence.Reason);
+    }
+
+    private static void ExecuteWrite(string dbPath, string sql)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
     }
 }

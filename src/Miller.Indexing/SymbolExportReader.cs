@@ -35,13 +35,23 @@ public static class SymbolExportReader
 
         using var cmd = connection.CreateCommand();
         cmd.CommandText = """
-            SELECT symbol_id, name, kind, language, path,
-                   start_line, end_line, start_byte, end_byte,
-                   visibility, parent_symbol_id, signature,
-                   (doc_comment IS NOT NULL AND doc_comment != '') AS has_doc,
-                   body_hash, is_test
-            FROM symbols
-            ORDER BY path, start_line, symbol_id;
+            WITH diagnostic_paths AS (
+                SELECT path, 1 AS has_parse_diagnostics
+                FROM parse_diagnostics
+                GROUP BY path
+            )
+            SELECT s.symbol_id, s.name, s.kind, s.language, s.path,
+                   s.start_line, s.end_line, s.start_byte, s.end_byte,
+                   s.visibility, s.parent_symbol_id, s.signature,
+                   (s.doc_comment IS NOT NULL AND s.doc_comment != '') AS has_doc,
+                   s.body_hash, s.is_test, s.test_container, s.test_lifecycle,
+                   f.status AS file_status,
+                   CASE WHEN f.path IS NULL THEN 0 ELSE 1 END AS has_file_evidence,
+                   COALESCE(d.has_parse_diagnostics, 0) AS has_parse_diagnostics
+            FROM symbols AS s
+            LEFT JOIN files AS f ON f.path = s.path
+            LEFT JOIN diagnostic_paths AS d ON d.path = s.path
+            ORDER BY s.path, s.start_line, s.symbol_id;
             """;
 
         using var reader = cmd.ExecuteReader();
@@ -77,6 +87,19 @@ public static class SymbolExportReader
             w.WriteBoolean("has_doc", reader.GetInt64(12) != 0);
             ExportJson.WriteNullableString(w, "body_hash", reader, 13);
             w.WriteBoolean("is_test", reader.GetInt64(14) != 0);
+            TestRoleEvidence testEvidence = TestRoleEvidence.FromArtifactFacts(
+                isTest: reader.GetInt64(14) != 0,
+                isContainer: reader.GetInt64(15) != 0,
+                isLifecycle: reader.GetInt64(16) != 0,
+                fileStatus: reader.IsDBNull(17) ? null : reader.GetString(17),
+                hasFileEvidence: reader.GetInt64(18) != 0,
+                hasParseDiagnostics: reader.GetInt64(19) != 0);
+            w.WriteBoolean("test_case", testEvidence.IsCase);
+            w.WriteBoolean("test_container", testEvidence.IsContainer);
+            w.WriteBoolean("test_lifecycle", testEvidence.IsLifecycle);
+            w.WriteString("test_evidence_status", testEvidence.Status);
+            if (testEvidence.Reason is null) w.WriteNull("test_evidence_reason");
+            else w.WriteString("test_evidence_reason", testEvidence.Reason);
             w.WriteEndObject();
         }
 

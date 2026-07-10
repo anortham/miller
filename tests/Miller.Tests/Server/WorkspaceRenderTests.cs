@@ -53,6 +53,7 @@ public sealed class WorkspaceRenderTests
                 KindCoverage:
                 [
                     new KindCoverageDomain("doc_comments", Supported: ["method"], OpenGaps: ["property"], NotApplicable: []),
+                    new KindCoverageDomain("test_detection", Supported: ["test_case"], OpenGaps: ["test_lifecycle"], NotApplicable: ["test_container"]),
                 ]),
         }),
         StructuralFacts: HealthFactSection<StructuralFactGroup>.FromRows(new[]
@@ -648,6 +649,10 @@ public sealed class WorkspaceRenderTests
         Assert.Equal("method", docComments.GetProperty("supported")[0].GetString());
         Assert.Equal("property", docComments.GetProperty("open_gaps")[0].GetString());
         Assert.Equal(0, docComments.GetProperty("not_applicable").GetArrayLength());
+        JsonElement testDetection = capabilityRow.GetProperty("kind_coverage").GetProperty("test_detection");
+        Assert.Equal("test_case", testDetection.GetProperty("supported")[0].GetString());
+        Assert.Equal("test_lifecycle", testDetection.GetProperty("open_gaps")[0].GetString());
+        Assert.Equal("test_container", testDetection.GetProperty("not_applicable")[0].GetString());
         Assert.True(root.GetProperty("extraction_quality").TryGetProperty("structural_facts", out JsonElement structural));
         Assert.True(structural.GetProperty("available").GetBoolean());
         Assert.True(root.GetProperty("extraction_quality").TryGetProperty("complexity_metrics", out JsonElement complexity));

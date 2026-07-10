@@ -40,12 +40,22 @@ public static class SqliteSymbolReader
         // v1 columns. By-name reads (D6) decouple SELECT order from the GetX ordinals: a future column
         // add/reorder can never silently shift a value into the wrong field again.
         command.CommandText = """
-            SELECT ROW_NUMBER() OVER (ORDER BY path, start_line, symbol_id) - 1 AS doc_id,
-                   symbol_id, name, signature, kind, language, path,
-                   start_line, end_line, parent_symbol_id, is_test
-            FROM symbols
-            WHERE name IS NOT NULL
-            ORDER BY path, start_line, symbol_id;
+            WITH diagnostic_paths AS (
+                SELECT path, 1 AS has_parse_diagnostics
+                FROM parse_diagnostics
+                GROUP BY path
+            )
+            SELECT ROW_NUMBER() OVER (ORDER BY s.path, s.start_line, s.symbol_id) - 1 AS doc_id,
+                   s.symbol_id, s.name, s.signature, s.kind, s.language, s.path,
+                   s.start_line, s.end_line, s.parent_symbol_id, s.is_test,
+                   s.test_container, s.test_lifecycle, f.status AS file_status,
+                   CASE WHEN f.path IS NULL THEN 0 ELSE 1 END AS has_file_evidence,
+                   COALESCE(d.has_parse_diagnostics, 0) AS has_parse_diagnostics
+            FROM symbols AS s
+            LEFT JOIN files AS f ON f.path = s.path
+            LEFT JOIN diagnostic_paths AS d ON d.path = s.path
+            WHERE s.name IS NOT NULL
+            ORDER BY s.path, s.start_line, s.symbol_id;
             """;
 
         var results = new List<IndexedSymbol>();
@@ -82,15 +92,27 @@ public static class SqliteSymbolReader
             using var command = connection.CreateCommand();
             string placeholders = AddPathParameters(command, distinctPaths, offset, count);
             command.CommandText = $"""
-                WITH ordered AS (
-                    SELECT ROW_NUMBER() OVER (ORDER BY path, start_line, symbol_id) - 1 AS doc_id,
-                           symbol_id, name, signature, kind, language, path,
-                           start_line, end_line, parent_symbol_id, is_test
-                    FROM symbols
-                    WHERE name IS NOT NULL
+                WITH diagnostic_paths AS (
+                    SELECT path, 1 AS has_parse_diagnostics
+                    FROM parse_diagnostics
+                    GROUP BY path
+                ),
+                ordered AS (
+                    SELECT ROW_NUMBER() OVER (ORDER BY s.path, s.start_line, s.symbol_id) - 1 AS doc_id,
+                           s.symbol_id, s.name, s.signature, s.kind, s.language, s.path,
+                           s.start_line, s.end_line, s.parent_symbol_id, s.is_test,
+                           s.test_container, s.test_lifecycle, f.status AS file_status,
+                           CASE WHEN f.path IS NULL THEN 0 ELSE 1 END AS has_file_evidence,
+                           COALESCE(d.has_parse_diagnostics, 0) AS has_parse_diagnostics
+                    FROM symbols AS s
+                    LEFT JOIN files AS f ON f.path = s.path
+                    LEFT JOIN diagnostic_paths AS d ON d.path = s.path
+                    WHERE s.name IS NOT NULL
                 )
                 SELECT doc_id, symbol_id, name, signature, kind, language, path,
-                       start_line, end_line, parent_symbol_id, is_test
+                       start_line, end_line, parent_symbol_id, is_test,
+                       test_container, test_lifecycle, file_status,
+                       has_file_evidence, has_parse_diagnostics
                 FROM ordered
                 WHERE path IN ({placeholders})
                 ORDER BY path, start_line, symbol_id;
@@ -117,6 +139,11 @@ public static class SqliteSymbolReader
         int oEndLine = reader.GetOrdinal("end_line");
         int oParent = reader.GetOrdinal("parent_symbol_id");
         int oIsTest = reader.GetOrdinal("is_test");
+        int oTestContainer = reader.GetOrdinal("test_container");
+        int oTestLifecycle = reader.GetOrdinal("test_lifecycle");
+        int oFileStatus = reader.GetOrdinal("file_status");
+        int oHasFileEvidence = reader.GetOrdinal("has_file_evidence");
+        int oHasParseDiagnostics = reader.GetOrdinal("has_parse_diagnostics");
 
         while (reader.Read())
         {
@@ -129,7 +156,13 @@ public static class SqliteSymbolReader
             int startLine = reader.IsDBNull(oStartLine) ? 0 : reader.GetInt32(oStartLine); // v1 NOT NULL; guard defensive
             int endLine = reader.IsDBNull(oEndLine) ? 0 : reader.GetInt32(oEndLine);       // v1 NOT NULL; guard defensive
             string? parentId = reader.IsDBNull(oParent) ? null : reader.GetString(oParent);
-            bool isTest = reader.GetBoolean(oIsTest); // typed v1 column; replaces the metadata JSON-parse hack (D4)
+            var testEvidence = TestRoleEvidence.FromArtifactFacts(
+                isTest: reader.GetBoolean(oIsTest),
+                isContainer: reader.GetBoolean(oTestContainer),
+                isLifecycle: reader.GetBoolean(oTestLifecycle),
+                fileStatus: reader.IsDBNull(oFileStatus) ? null : reader.GetString(oFileStatus),
+                hasParseDiagnostics: reader.GetBoolean(oHasParseDiagnostics),
+                hasFileEvidence: reader.GetBoolean(oHasFileEvidence));
 
             results.Add(new IndexedSymbol(
                 DocId: reader.GetInt32(oDocId),
@@ -142,7 +175,11 @@ public static class SqliteSymbolReader
                 StartLine: startLine,
                 EndLine: endLine,
                 ParentId: parentId,
-                IsTest: isTest));
+                IsTest: testEvidence.IsTest,
+                TestContainer: testEvidence.IsContainer,
+                TestLifecycle: testEvidence.IsLifecycle,
+                TestEvidenceStatus: testEvidence.Status,
+                TestEvidenceReason: testEvidence.Reason));
         }
     }
 

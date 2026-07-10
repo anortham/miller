@@ -68,7 +68,7 @@ public sealed class WorkspaceHealthReaderTests
         Assert.Equal(2, capability.TargetTypes);
         Assert.Equal(1, capability.ActualTypes);
 
-        Assert.Equal(2, capability.KindCoverage.Count);
+        Assert.Equal(3, capability.KindCoverage.Count);
         KindCoverageDomain docComments = capability.KindCoverage[0];
         Assert.Equal("doc_comments", docComments.Domain);
         Assert.Equal(["method"], docComments.Supported);
@@ -79,6 +79,11 @@ public sealed class WorkspaceHealthReaderTests
         Assert.Equal(["class", "method"], symbols.Supported);
         Assert.Empty(symbols.OpenGaps);
         Assert.Equal(["import"], symbols.NotApplicable);
+        KindCoverageDomain testDetection = capability.KindCoverage[2];
+        Assert.Equal("test_detection", testDetection.Domain);
+        Assert.Equal(["test_case"], testDetection.Supported);
+        Assert.Equal(["test_lifecycle"], testDetection.OpenGaps);
+        Assert.Equal(["test_container"], testDetection.NotApplicable);
 
         Assert.True(facts.Files.Available);
         Assert.Contains(facts.Files.Rows, row =>
@@ -188,7 +193,7 @@ public sealed class WorkspaceHealthReaderTests
                 ('csharp', 'tree-sitter-c-sharp', '[".cs"]', 'ready',
                  8, 3, 1, 6, 2,
                  7, 2, 1, 5, 1,
-                 '{"symbols":{"supported":["class","method"],"open_gaps":[],"not_applicable":["import"]},"doc_comments":{"supported":["method"],"open_gaps":["property"],"not_applicable":[]}}');
+                 '{"symbols":{"supported":["class","method"],"open_gaps":[],"not_applicable":["import"]},"doc_comments":{"supported":["method"],"open_gaps":["property"],"not_applicable":[]},"test_detection":{"supported":["test_case"],"open_gaps":["test_lifecycle"],"not_applicable":["test_container"]}}');
             """);
         Exec(connection, """
             INSERT INTO structural_facts

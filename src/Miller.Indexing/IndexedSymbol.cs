@@ -20,8 +20,15 @@ public sealed record IndexedSymbol(
     int StartLine,      // 1-based (NULL start_line in the DB maps to 0)
     int EndLine,        // whole-symbol span end, 1-based (NULL end_line maps to 0); enables D5 diff→symbol mapping
     string? ParentId,   // julie parent_id (containment; M4)
-    bool IsTest)   // julie's typed symbols.is_test column (INTEGER NOT NULL, all 34 langs); see design D4
+    bool IsTest,        // julie's typed symbols.is_test column (INTEGER NOT NULL, all 34 langs); see design D4
+    bool TestContainer = false,
+    bool TestLifecycle = false,
+    string TestEvidenceStatus = TestRoleEvidence.UnknownStatus,
+    string? TestEvidenceReason = TestRoleEvidence.FileEvidenceUnavailableReason)
 {
+    public TestRoleEvidence TestEvidence =>
+        new(IsTest, TestContainer, TestLifecycle, TestEvidenceStatus, TestEvidenceReason);
+
     /// <summary>
     /// Project to the Core scoring document. Drops the join keys (<see cref="SymbolId"/>/<see cref="ParentId"/>)
     /// which Core never needs; the index ranks on Name + Signature (Decision D3).
