@@ -913,11 +913,29 @@ public static class WorkspaceRender
             w.WritePropertyName(domain.Domain);
             w.WriteStartObject();
             WriteKindArray(w, "supported", domain.Supported);
-            WriteKindArray(w, "open_gaps", domain.OpenGaps);
+            WriteOpenGapArray(w, domain.OpenGaps, domain.OpenGapEntries);
             WriteKindArray(w, "not_applicable", domain.NotApplicable);
             w.WriteEndObject();
         }
         w.WriteEndObject();
+    }
+
+    private static void WriteOpenGapArray(
+        Utf8JsonWriter w,
+        IReadOnlyList<string> normalizedKinds,
+        IReadOnlyList<JsonElement>? rawEntries)
+    {
+        if (rawEntries is null)
+        {
+            WriteKindArray(w, "open_gaps", normalizedKinds);
+            return;
+        }
+
+        w.WritePropertyName("open_gaps");
+        w.WriteStartArray();
+        foreach (JsonElement entry in rawEntries)
+            entry.WriteTo(w);
+        w.WriteEndArray();
     }
 
     private static void WriteKindArray(Utf8JsonWriter w, string propertyName, IReadOnlyList<string> values)

@@ -146,11 +146,14 @@ public static class WorkspaceHealthReader
                 if (domain.Value.ValueKind != JsonValueKind.Object)
                     continue;
 
+                (IReadOnlyList<string> OpenGaps, IReadOnlyList<JsonElement>? Entries) =
+                    ReadOpenGaps(domain.Value);
                 domains.Add(new KindCoverageDomain(
                     Domain: domain.Name,
                     Supported: ReadKindArray(domain.Value, "supported"),
-                    OpenGaps: ReadKindArray(domain.Value, "open_gaps"),
-                    NotApplicable: ReadKindArray(domain.Value, "not_applicable")));
+                    OpenGaps: OpenGaps,
+                    NotApplicable: ReadKindArray(domain.Value, "not_applicable"),
+                    OpenGapEntries: Entries));
             }
 
             domains.Sort(static (a, b) => string.CompareOrdinal(a.Domain, b.Domain));
@@ -175,6 +178,34 @@ public static class WorkspaceHealthReader
         }
 
         return values;
+    }
+
+    private static (IReadOnlyList<string> Kinds, IReadOnlyList<JsonElement>? Entries) ReadOpenGaps(
+        JsonElement domain)
+    {
+        if (!domain.TryGetProperty("open_gaps", out JsonElement array) || array.ValueKind != JsonValueKind.Array)
+            return (Array.Empty<string>(), null);
+
+        var kinds = new List<string>();
+        var entries = new List<JsonElement>();
+        foreach (JsonElement element in array.EnumerateArray())
+        {
+            string? kind = element.ValueKind switch
+            {
+                JsonValueKind.String => element.GetString(),
+                JsonValueKind.Object
+                    when element.TryGetProperty("kind", out JsonElement value)
+                         && value.ValueKind == JsonValueKind.String => value.GetString(),
+                _ => null,
+            };
+            if (string.IsNullOrWhiteSpace(kind))
+                continue;
+
+            kinds.Add(kind);
+            entries.Add(element.Clone());
+        }
+
+        return (kinds, entries);
     }
 
     private static IReadOnlyList<FileStatusGroup> ReadFileStatuses(SqliteConnection connection)
@@ -299,7 +330,8 @@ public sealed record KindCoverageDomain(
     string Domain,
     IReadOnlyList<string> Supported,
     IReadOnlyList<string> OpenGaps,
-    IReadOnlyList<string> NotApplicable);
+    IReadOnlyList<string> NotApplicable,
+    IReadOnlyList<JsonElement>? OpenGapEntries = null);
 
 public sealed record FileStatusGroup(string Language, string Status, long Count);
 

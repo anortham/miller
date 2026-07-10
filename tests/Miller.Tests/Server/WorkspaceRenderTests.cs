@@ -38,6 +38,12 @@ public sealed class WorkspaceRenderTests
         TotalCalls: 11, WindowStartTs: "2026-05-01T00:00:00.000Z", WindowEndTs: "2026-05-01T01:00:00.000Z",
         DroppedWrites: 0);
 
+    private static JsonElement Json(string json)
+    {
+        using JsonDocument document = JsonDocument.Parse(json);
+        return document.RootElement.Clone();
+    }
+
     private static WorkspaceExtractionHealthFacts ExtractionHealth() => new(
         ParseDiagnostics: HealthFactSection<ParseDiagnosticGroup>.FromRows(new[]
         {
@@ -53,7 +59,22 @@ public sealed class WorkspaceRenderTests
                 KindCoverage:
                 [
                     new KindCoverageDomain("doc_comments", Supported: ["method"], OpenGaps: ["property"], NotApplicable: []),
-                    new KindCoverageDomain("test_detection", Supported: ["test_case"], OpenGaps: ["test_lifecycle"], NotApplicable: ["test_container"]),
+                    new KindCoverageDomain(
+                        "test_detection",
+                        Supported: ["test_case"],
+                        OpenGaps: ["test_lifecycle"],
+                        NotApplicable: ["test_container"],
+                        OpenGapEntries:
+                        [
+                            Json("""
+                                {
+                                  "kind": "test_lifecycle",
+                                  "reason": "fixture lifecycle gap",
+                                  "required_closure": "add lifecycle golden evidence",
+                                  "planned_closure_task": "docs/plans/test-detection-closure.md"
+                                }
+                                """),
+                        ]),
                 ]),
         }),
         StructuralFacts: HealthFactSection<StructuralFactGroup>.FromRows(new[]
@@ -651,7 +672,13 @@ public sealed class WorkspaceRenderTests
         Assert.Equal(0, docComments.GetProperty("not_applicable").GetArrayLength());
         JsonElement testDetection = capabilityRow.GetProperty("kind_coverage").GetProperty("test_detection");
         Assert.Equal("test_case", testDetection.GetProperty("supported")[0].GetString());
-        Assert.Equal("test_lifecycle", testDetection.GetProperty("open_gaps")[0].GetString());
+        JsonElement structuredGap = testDetection.GetProperty("open_gaps")[0];
+        Assert.Equal(JsonValueKind.Object, structuredGap.ValueKind);
+        Assert.Equal("test_lifecycle", structuredGap.GetProperty("kind").GetString());
+        Assert.Equal("fixture lifecycle gap", structuredGap.GetProperty("reason").GetString());
+        Assert.Equal("add lifecycle golden evidence", structuredGap.GetProperty("required_closure").GetString());
+        Assert.Equal("docs/plans/test-detection-closure.md",
+            structuredGap.GetProperty("planned_closure_task").GetString());
         Assert.Equal("test_container", testDetection.GetProperty("not_applicable")[0].GetString());
         Assert.True(root.GetProperty("extraction_quality").TryGetProperty("structural_facts", out JsonElement structural));
         Assert.True(structural.GetProperty("available").GetBoolean());

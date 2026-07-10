@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Xunit;
@@ -74,6 +75,10 @@ public sealed class WorkspaceHealthReaderTests
         Assert.Equal(["method"], docComments.Supported);
         Assert.Equal(["property"], docComments.OpenGaps);
         Assert.Empty(docComments.NotApplicable);
+        Assert.NotNull(docComments.OpenGapEntries);
+        JsonElement legacyGap = Assert.Single(docComments.OpenGapEntries);
+        Assert.Equal(JsonValueKind.String, legacyGap.ValueKind);
+        Assert.Equal("property", legacyGap.GetString());
         KindCoverageDomain symbols = capability.KindCoverage[1];
         Assert.Equal("symbols", symbols.Domain);
         Assert.Equal(["class", "method"], symbols.Supported);
@@ -84,6 +89,14 @@ public sealed class WorkspaceHealthReaderTests
         Assert.Equal(["test_case"], testDetection.Supported);
         Assert.Equal(["test_lifecycle"], testDetection.OpenGaps);
         Assert.Equal(["test_container"], testDetection.NotApplicable);
+        Assert.NotNull(testDetection.OpenGapEntries);
+        JsonElement structuredGap = Assert.Single(testDetection.OpenGapEntries);
+        Assert.Equal(JsonValueKind.Object, structuredGap.ValueKind);
+        Assert.Equal("test_lifecycle", structuredGap.GetProperty("kind").GetString());
+        Assert.Equal("fixture lifecycle gap", structuredGap.GetProperty("reason").GetString());
+        Assert.Equal("add lifecycle golden evidence", structuredGap.GetProperty("required_closure").GetString());
+        Assert.Equal("docs/plans/test-detection-closure.md",
+            structuredGap.GetProperty("planned_closure_task").GetString());
 
         Assert.True(facts.Files.Available);
         Assert.Contains(facts.Files.Rows, row =>
@@ -193,7 +206,7 @@ public sealed class WorkspaceHealthReaderTests
                 ('csharp', 'tree-sitter-c-sharp', '[".cs"]', 'ready',
                  8, 3, 1, 6, 2,
                  7, 2, 1, 5, 1,
-                 '{"symbols":{"supported":["class","method"],"open_gaps":[],"not_applicable":["import"]},"doc_comments":{"supported":["method"],"open_gaps":["property"],"not_applicable":[]},"test_detection":{"supported":["test_case"],"open_gaps":["test_lifecycle"],"not_applicable":["test_container"]}}');
+                 '{"symbols":{"supported":["class","method"],"open_gaps":[],"not_applicable":["import"]},"doc_comments":{"supported":["method"],"open_gaps":["property"],"not_applicable":[]},"test_detection":{"supported":["test_case"],"open_gaps":[{"kind":"test_lifecycle","reason":"fixture lifecycle gap","required_closure":"add lifecycle golden evidence","planned_closure_task":"docs/plans/test-detection-closure.md"},{"reason":"missing kind"},{"kind":42},"",7],"not_applicable":["test_container"]}}');
             """);
         Exec(connection, """
             INSERT INTO structural_facts

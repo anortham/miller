@@ -129,7 +129,7 @@ Batch A uses `parallel-lead-commit`: workers hand back verified diffs without co
 - [x] `failed_preserved` or any other non-`indexed` file state is `unknown`, never current.
 - [x] Existing `IndexedSymbol` call sites compile without mass constructor edits and retain legacy `IsTest` behavior.
 - [x] Symbol export remains schema 1 and adds the five exact deterministic fields while retaining `is_test` and all prior fields.
-- [x] `workspace health --json` preserves the `test_detection` domain and its three classification arrays through the existing generic seam.
+- [x] `workspace health --json` preserves the `test_detection` domain, structured open-gap metadata, and all three classification arrays through the existing generic seam.
 - [x] Worker-scope verification passes and the change is handed to the lead per `parallel-lead-commit`.
 
 ### Task 3: Preserve evidence in the default search sidecar
