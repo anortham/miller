@@ -230,13 +230,13 @@ Batch A uses `parallel-lead-commit`: workers hand back verified diffs without co
 **Approach:** The new Scale class must carry `[Trait("Category", "Scale")]` at class level and obtain the binary only through `ScaleTestSupport.RequireJulieServer()`. Query role counts with the design's grouped SQL and assert every fixture language appears; separately validate that every published language has each of `test_case`, `test_container`, and `test_lifecycle` in exactly one of `supported`, `not_applicable`, or `open_gaps`. Record exact command output, counts, classifications, and negative controls as evidence, but describe zero counts only as observations.
 
 **Acceptance criteria:**
-- [ ] The live binary reports `julie-extract 2.12.0` and the restore/build guards agree.
-- [ ] Real extraction recognizes Razor `[Fact]`, Vue `<script>` and `<script setup>` call-style cases, a container, and a lifecycle hook while leaving negative controls unmarked.
-- [ ] Every language in the fixture is present in the grouped role-count query, and Miller's reader/export/impact evidence matches the SQLite flags.
-- [ ] Every language/role capability cell is classified exactly once across `supported`, `not_applicable`, and `open_gaps`; duplicates, omissions, or unknown role keys fail the test.
-- [ ] Focused Task 5 Scale filters pass, followed by `scripts/test.sh scale`, `scripts/test.sh`, and a zero-warning/zero-error Release build at the final HEAD.
-- [ ] The findings document records the verification ledger and states the candidate-only/absence-unknown boundary without a completeness claim.
-- [ ] Worker-scope verification passes and the worker commits only owned files per `serial-worker-commit`.
+- [x] The live binary reports `julie-extract 2.12.0` and the restore/build guards agree.
+- [x] Real extraction recognizes Razor `[Fact]`, Vue `<script>` and `<script setup>` call-style cases, a container, and a lifecycle hook while leaving negative controls unmarked.
+- [x] Every language in the fixture is present in the grouped role-count query, and Miller's reader/export/impact evidence matches the SQLite flags.
+- [x] Every language/role capability cell is classified exactly once across `supported`, `not_applicable`, and `open_gaps`; duplicates, omissions, or unknown role keys fail the test.
+- [x] Focused Task 5 Scale filters pass, followed by `scripts/test.sh scale`, `scripts/test.sh`, and a zero-warning/zero-error Release build at the final HEAD.
+- [x] The findings document records the verification ledger and states the candidate-only/absence-unknown boundary without a completeness claim.
+- [x] Worker-scope verification passes and the worker commits only owned files per `serial-worker-commit`.
 
 ## Final Branch Review
 

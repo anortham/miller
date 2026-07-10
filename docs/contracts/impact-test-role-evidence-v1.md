@@ -65,4 +65,3 @@ Usage and note-only error envelopes that do not contain result arrays do not car
   owns runner inventory, freshness policy, scheduling, execution results, and test verdicts.
 - Consumers must ignore additive unknown fields. Changing or removing the six nested fields or the two scope
   fields requires a new schema version.
-
