@@ -35,49 +35,27 @@ public sealed class GraphTraversalTests
         Assert.True(result.Exhausted);
     }
 
-    [Fact]
-    public void ReachWithEvidence_NonPositiveBounds_ReturnEmptyWithoutNeighbourLookup()
+    [Theory]
+    [InlineData(0, 10, 0, true, false)]
+    [InlineData(2, 0, 4, false, true)]
+    [InlineData(-1, -1, 0, true, false)]
+    public void ReachWithEvidence_NonPositiveBounds_ReportHonestTruncation(
+        int maxDepth,
+        int limit,
+        int expectedReachedCount,
+        bool expectedDepthTruncation,
+        bool expectedLimitTruncation)
     {
-        var known = new HashSet<string>(["a", "b"], StringComparer.Ordinal);
-        int neighbourCalls = 0;
+        var known = new HashSet<string>(["a", "b", "c", "d", "e"], StringComparer.Ordinal);
 
-        GraphReachResult zeroDepth = GraphTraversal.ReachWithEvidence(
-            ["a"],
-            maxDepth: 0,
-            limit: 10,
-            Direction.Forward,
-            known.Contains,
-            (_, _) =>
-            {
-                neighbourCalls++;
-                return ["b"];
-            });
+        GraphReachResult result = GraphTraversal.ReachWithEvidence(
+            ["a"], maxDepth, limit, Direction.Forward, known.Contains, RecordingNeighbours([]));
 
-        GraphReachResult zeroLimit = GraphTraversal.ReachWithEvidence(
-            ["a"],
-            maxDepth: 2,
-            limit: 0,
-            Direction.Forward,
-            known.Contains,
-            (_, _) =>
-            {
-                neighbourCalls++;
-                return ["b"];
-            });
-
-        Assert.Empty(zeroDepth.Nodes);
-        Assert.Equal(0, zeroDepth.ReachedCount);
-        Assert.False(zeroDepth.TruncatedByDepth);
-        Assert.False(zeroDepth.TruncatedByLimit);
-        Assert.True(zeroDepth.Exhausted);
-
-        Assert.Empty(zeroLimit.Nodes);
-        Assert.Equal(0, zeroLimit.ReachedCount);
-        Assert.False(zeroLimit.TruncatedByDepth);
-        Assert.False(zeroLimit.TruncatedByLimit);
-        Assert.True(zeroLimit.Exhausted);
-
-        Assert.Equal(0, neighbourCalls);
+        Assert.Empty(result.Nodes);
+        Assert.Equal(expectedReachedCount, result.ReachedCount);
+        Assert.Equal(expectedDepthTruncation, result.TruncatedByDepth);
+        Assert.Equal(expectedLimitTruncation, result.TruncatedByLimit);
+        Assert.False(result.Exhausted);
     }
 
     // a -> b -> d

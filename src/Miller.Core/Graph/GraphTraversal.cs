@@ -38,24 +38,24 @@ internal static class GraphTraversal
         ArgumentNullException.ThrowIfNull(contains);
         ArgumentNullException.ThrowIfNull(neighbours);
 
-        // Preserve the historical Reach contract: non-positive depth/limit yield an empty result
-        // without neighbour lookups. ContextTool uses maxHops=0 as a seed-only probe; probing
-        // neighbours here would add wasted SQLite work and diverge from that hop-0 contract.
-        if (maxDepth <= 0 || limit <= 0)
-            return new GraphReachResult([], 0, TruncatedByDepth: false, TruncatedByLimit: false);
+        // Evidence must remain honest even at zero bounds: a depth-zero walk can still prove that the
+        // frontier was hidden, and a limit-zero walk must still report its pre-limit reached count.
+        // Ordinary Reach keeps its historical non-positive fast return above.
+        int effectiveMaxDepth = Math.Max(0, maxDepth);
+        int effectiveLimit = Math.Max(0, limit);
 
         Dictionary<string, int> hop = Explore(
-            starts, maxDepth, direction, contains, neighbours,
+            starts, effectiveMaxDepth, direction, contains, neighbours,
             probeDepthTruncation: true, out bool truncatedByDepth);
 
         // ReachedCount is the pre-limit size, so the evidence path must materialize the whole set.
         ReachedNode[] reached = Ordered(hop).ToArray();
 
         return new GraphReachResult(
-            reached.Take(limit).ToArray(),
+            reached.Take(effectiveLimit).ToArray(),
             reached.Length,
             truncatedByDepth,
-            reached.Length > limit);
+            reached.Length > effectiveLimit);
     }
 
     /// <summary>

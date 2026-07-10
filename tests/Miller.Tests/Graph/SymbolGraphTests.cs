@@ -96,25 +96,28 @@ public sealed class SymbolGraphTests
         Assert.Empty(graph.Reach(["A"], maxDepth: 0, limit: 100, Direction.Forward));
     }
 
-    [Fact]
-    public void ReachWithEvidence_NonPositiveBounds_ReturnEmptyWithoutTruncation()
+    [Theory]
+    [InlineData(0, 10, 0, true, false)]
+    [InlineData(2, 0, 4, false, true)]
+    [InlineData(-1, -1, 0, true, false)]
+    public void ReachWithEvidence_NonPositiveBounds_ReportHonestTruncation(
+        int maxDepth,
+        int limit,
+        int expectedReachedCount,
+        bool expectedDepthTruncation,
+        bool expectedLimitTruncation)
     {
-        var graph = SymbolGraph.Build([N("A"), N("B")], [E("A", "B")]);
+        var graph = SymbolGraph.Build(
+            [N("A"), N("B"), N("C"), N("D"), N("E")],
+            [E("A", "B"), E("A", "C"), E("B", "D"), E("C", "E")]);
 
-        GraphReachResult zeroDepth = ReachWithEvidence(graph, ["A"], maxDepth: 0, limit: 100);
-        GraphReachResult zeroLimit = ReachWithEvidence(graph, ["A"], maxDepth: 2, limit: 0);
+        GraphReachResult result = ReachWithEvidence(graph, ["A"], maxDepth, limit);
 
-        Assert.Empty(zeroDepth.Nodes);
-        Assert.Equal(0, zeroDepth.ReachedCount);
-        Assert.False(zeroDepth.TruncatedByDepth);
-        Assert.False(zeroDepth.TruncatedByLimit);
-        Assert.True(zeroDepth.Exhausted);
-
-        Assert.Empty(zeroLimit.Nodes);
-        Assert.Equal(0, zeroLimit.ReachedCount);
-        Assert.False(zeroLimit.TruncatedByDepth);
-        Assert.False(zeroLimit.TruncatedByLimit);
-        Assert.True(zeroLimit.Exhausted);
+        Assert.Empty(result.Nodes);
+        Assert.Equal(expectedReachedCount, result.ReachedCount);
+        Assert.Equal(expectedDepthTruncation, result.TruncatedByDepth);
+        Assert.Equal(expectedLimitTruncation, result.TruncatedByLimit);
+        Assert.False(result.Exhausted);
     }
 
     [Fact]
