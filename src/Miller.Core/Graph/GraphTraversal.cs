@@ -8,8 +8,23 @@ internal static class GraphTraversal
         int limit,
         Direction direction,
         Func<string, bool> contains,
-        Func<string, Direction, IEnumerable<string>> neighbours) =>
-        ReachWithEvidence(starts, maxDepth, limit, direction, contains, neighbours).Nodes;
+        Func<string, Direction, IEnumerable<string>> neighbours)
+    {
+        ArgumentNullException.ThrowIfNull(starts);
+        ArgumentNullException.ThrowIfNull(contains);
+        ArgumentNullException.ThrowIfNull(neighbours);
+
+        if (maxDepth <= 0 || limit <= 0)
+            return [];
+
+        // probeDepthTruncation: false — a caller that only wants the nodes must not pay for the
+        // max-depth frontier probe, which is an uncached SQL load per node over SqliteSymbolGraphIndex.
+        Dictionary<string, int> hop =
+            Explore(starts, maxDepth, direction, contains, neighbours, probeDepthTruncation: false, out _);
+
+        // Take before materializing: only `limit` ReachedNode allocations, never the whole reached set.
+        return Ordered(hop).Take(limit).ToArray();
+    }
 
     public static GraphReachResult ReachWithEvidence(
         IEnumerable<string> starts,
@@ -23,9 +38,44 @@ internal static class GraphTraversal
         ArgumentNullException.ThrowIfNull(contains);
         ArgumentNullException.ThrowIfNull(neighbours);
 
+        // Preserve the historical Reach contract: non-positive depth/limit yield an empty result
+        // without neighbour lookups. ContextTool uses maxHops=0 as a seed-only probe; probing
+        // neighbours here would add wasted SQLite work and diverge from that hop-0 contract.
+        if (maxDepth <= 0 || limit <= 0)
+            return new GraphReachResult([], 0, TruncatedByDepth: false, TruncatedByLimit: false);
+
+        Dictionary<string, int> hop = Explore(
+            starts, maxDepth, direction, contains, neighbours,
+            probeDepthTruncation: true, out bool truncatedByDepth);
+
+        // ReachedCount is the pre-limit size, so the evidence path must materialize the whole set.
+        ReachedNode[] reached = Ordered(hop).ToArray();
+
+        return new GraphReachResult(
+            reached.Take(limit).ToArray(),
+            reached.Length,
+            truncatedByDepth,
+            reached.Length > limit);
+    }
+
+    /// <summary>
+    /// Bounded BFS from <paramref name="starts"/>, returning every visited id keyed to its minimum hop
+    /// (the starts themselves at hop 0). <paramref name="probeDepthTruncation"/> asks the walk to also report
+    /// whether any node sat beyond <paramref name="maxDepth"/>; that costs one extra neighbour lookup per
+    /// max-depth frontier node, so only an evidence-consuming caller should request it.
+    /// </summary>
+    private static Dictionary<string, int> Explore(
+        IEnumerable<string> starts,
+        int maxDepth,
+        Direction direction,
+        Func<string, bool> contains,
+        Func<string, Direction, IEnumerable<string>> neighbours,
+        bool probeDepthTruncation,
+        out bool truncatedByDepth)
+    {
+        truncatedByDepth = false;
         var hop = new Dictionary<string, int>(StringComparer.Ordinal);
         var frontier = new Queue<string>();
-        bool truncatedByDepth = false;
 
         foreach (string start in starts)
         {
@@ -41,7 +91,10 @@ internal static class GraphTraversal
             int currentHop = hop[current];
             if (currentHop >= maxDepth)
             {
-                if (currentHop == maxDepth &&
+                // BFS dequeues in hop order, so by now every node at hop <= maxDepth is already in `hop`:
+                // an unseen neighbour here can only sit beyond the depth bound. Stop probing once the flag
+                // is set — it is monotonic, and each probe is a real query on the SQLite-backed graph.
+                if (probeDepthTruncation && !truncatedByDepth && currentHop == maxDepth &&
                     neighbours(current, direction).Any(neighbour => !hop.ContainsKey(neighbour)))
                 {
                     truncatedByDepth = true;
@@ -59,19 +112,15 @@ internal static class GraphTraversal
             }
         }
 
-        ReachedNode[] reached = hop
-            .Where(static kv => kv.Value > 0)
+        return hop;
+    }
+
+    /// <summary>The reached nodes (starts excluded) in the stable (hop asc, id asc) order both Reach paths promise.</summary>
+    private static IEnumerable<ReachedNode> Ordered(Dictionary<string, int> hop) =>
+        hop.Where(static kv => kv.Value > 0)
             .OrderBy(static kv => kv.Value)
             .ThenBy(static kv => kv.Key, StringComparer.Ordinal)
-            .Select(static kv => new ReachedNode(kv.Key, kv.Value))
-            .ToArray();
-
-        return new GraphReachResult(
-            reached.Take(limit).ToArray(),
-            reached.Length,
-            truncatedByDepth,
-            reached.Length > limit);
-    }
+            .Select(static kv => new ReachedNode(kv.Key, kv.Value));
 
     public static IReadOnlyList<string>? ShortestPath(
         string from,

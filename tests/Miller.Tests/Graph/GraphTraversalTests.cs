@@ -36,6 +36,118 @@ public sealed class GraphTraversalTests
     }
 
     [Fact]
+    public void ReachWithEvidence_NonPositiveBounds_ReturnEmptyWithoutNeighbourLookup()
+    {
+        var known = new HashSet<string>(["a", "b"], StringComparer.Ordinal);
+        int neighbourCalls = 0;
+
+        GraphReachResult zeroDepth = GraphTraversal.ReachWithEvidence(
+            ["a"],
+            maxDepth: 0,
+            limit: 10,
+            Direction.Forward,
+            known.Contains,
+            (_, _) =>
+            {
+                neighbourCalls++;
+                return ["b"];
+            });
+
+        GraphReachResult zeroLimit = GraphTraversal.ReachWithEvidence(
+            ["a"],
+            maxDepth: 2,
+            limit: 0,
+            Direction.Forward,
+            known.Contains,
+            (_, _) =>
+            {
+                neighbourCalls++;
+                return ["b"];
+            });
+
+        Assert.Empty(zeroDepth.Nodes);
+        Assert.Equal(0, zeroDepth.ReachedCount);
+        Assert.False(zeroDepth.TruncatedByDepth);
+        Assert.False(zeroDepth.TruncatedByLimit);
+        Assert.True(zeroDepth.Exhausted);
+
+        Assert.Empty(zeroLimit.Nodes);
+        Assert.Equal(0, zeroLimit.ReachedCount);
+        Assert.False(zeroLimit.TruncatedByDepth);
+        Assert.False(zeroLimit.TruncatedByLimit);
+        Assert.True(zeroLimit.Exhausted);
+
+        Assert.Equal(0, neighbourCalls);
+    }
+
+    // a -> b -> d
+    //   \-> c -> e     : with maxDepth 1, both b and c sit on the frontier and both hide an unseen neighbour.
+    private static Func<string, Direction, IEnumerable<string>> RecordingNeighbours(List<string> calls)
+    {
+        var forward = new Dictionary<string, string[]>(StringComparer.Ordinal)
+        {
+            ["a"] = ["b", "c"],
+            ["b"] = ["d"],
+            ["c"] = ["e"],
+        };
+        return (id, direction) =>
+        {
+            calls.Add(id);
+            return direction == Direction.Forward && forward.TryGetValue(id, out string[]? neighbours)
+                ? neighbours
+                : [];
+        };
+    }
+
+    [Fact]
+    public void Reach_AtMaxDepth_DoesNotProbeFrontierNeighbours()
+    {
+        var known = new HashSet<string>(["a", "b", "c", "d", "e"], StringComparer.Ordinal);
+        var calls = new List<string>();
+
+        IReadOnlyList<ReachedNode> nodes = GraphTraversal.Reach(
+            ["a"], maxDepth: 1, limit: 10, Direction.Forward, known.Contains, RecordingNeighbours(calls));
+
+        Assert.Equal([new ReachedNode("b", 1), new ReachedNode("c", 1)], nodes);
+
+        // Only the expansion of "a". The frontier nodes b/c are never asked for their neighbours, because
+        // Reach discards TruncatedByDepth — probing them would be pure cost.
+        Assert.Equal(["a"], calls);
+    }
+
+    [Fact]
+    public void ReachWithEvidence_StopsProbingOnceDepthTruncationIsKnown()
+    {
+        var known = new HashSet<string>(["a", "b", "c", "d", "e"], StringComparer.Ordinal);
+        var calls = new List<string>();
+
+        GraphReachResult result = GraphTraversal.ReachWithEvidence(
+            ["a"], maxDepth: 1, limit: 10, Direction.Forward, known.Contains, RecordingNeighbours(calls));
+
+        Assert.Equal([new ReachedNode("b", 1), new ReachedNode("c", 1)], result.Nodes);
+        Assert.True(result.TruncatedByDepth);
+
+        // "a" expands; "b" is probed and proves truncation. "c" is on the same frontier and also hides an
+        // unseen neighbour, but the flag is monotonic, so it is never probed.
+        Assert.Equal(["a", "b"], calls);
+    }
+
+    [Fact]
+    public void ReachAndReachWithEvidence_AgreeOnTheReachedNodes()
+    {
+        var known = new HashSet<string>(["a", "b", "c", "d", "e"], StringComparer.Ordinal);
+
+        IReadOnlyList<ReachedNode> nodes = GraphTraversal.Reach(
+            ["a"], maxDepth: 2, limit: 10, Direction.Forward, known.Contains, RecordingNeighbours([]));
+        GraphReachResult evidence = GraphTraversal.ReachWithEvidence(
+            ["a"], maxDepth: 2, limit: 10, Direction.Forward, known.Contains, RecordingNeighbours([]));
+
+        Assert.Equal(evidence.Nodes, nodes);
+        Assert.Equal(4, evidence.ReachedCount);
+        Assert.True(evidence.Exhausted);
+    }
+
+    [Fact]
     public void ShortestPath_UsesSuppliedForwardNeighbours()
     {
         var known = new HashSet<string>(["a", "b", "c", "d"], StringComparer.Ordinal);

@@ -18,7 +18,7 @@ This is deterministic execution evidence, not a semantic completeness or safety 
 The feature string is `impact_traversal_evidence`. It is advertised independently of
 `impact_index_revision_delta` in the top-level `features` array from `miller capabilities --json`. The capability
 response also contains a `json_contracts` row named `impact_traversal_evidence`, command
-`impact --json --from-index-revision N`, `schema_version` 1, and this document's path.
+`impact --json --from-index-revision N --from-artifact-id ID`, `schema_version` 1, and this document's path.
 
 The full invocation remains:
 

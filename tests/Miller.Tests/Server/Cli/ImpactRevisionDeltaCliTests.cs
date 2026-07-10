@@ -326,7 +326,9 @@ public sealed class ImpactRevisionDeltaCliTests : IDisposable
             .ToArray();
         Assert.Equal(CliCapabilities.ImpactTraversalEvidenceActive, traversalContracts.Length == 1);
         JsonElement traversalContract = Assert.Single(traversalContracts);
-        Assert.Equal("impact --json --from-index-revision N", traversalContract.GetProperty("command").GetString());
+        Assert.Equal(
+            "impact --json --from-index-revision N --from-artifact-id ID",
+            traversalContract.GetProperty("command").GetString());
         Assert.Equal(1, traversalContract.GetProperty("schema_version").GetInt32());
         Assert.Equal("docs/contracts/impact-traversal-evidence-v1.md",
             traversalContract.GetProperty("doc").GetString());

@@ -118,7 +118,7 @@ internal static class CliCapabilities
         ("report", "report --json", 1, "docs/contracts/report-json-v1.md"),
         ("impact_index_revision_delta", "impact --json --from-index-revision N --from-artifact-id ID", 1,
             "docs/contracts/impact-index-revision-delta-v1.md"),
-        ("impact_traversal_evidence", "impact --json --from-index-revision N", 1,
+        ("impact_traversal_evidence", "impact --json --from-index-revision N --from-artifact-id ID", 1,
             "docs/contracts/impact-traversal-evidence-v1.md"),
         ("references_candidates", "references candidates --json", 1, "docs/contracts/references-candidates-v1.md"),
     ];

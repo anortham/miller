@@ -97,6 +97,27 @@ public sealed class SymbolGraphTests
     }
 
     [Fact]
+    public void ReachWithEvidence_NonPositiveBounds_ReturnEmptyWithoutTruncation()
+    {
+        var graph = SymbolGraph.Build([N("A"), N("B")], [E("A", "B")]);
+
+        GraphReachResult zeroDepth = ReachWithEvidence(graph, ["A"], maxDepth: 0, limit: 100);
+        GraphReachResult zeroLimit = ReachWithEvidence(graph, ["A"], maxDepth: 2, limit: 0);
+
+        Assert.Empty(zeroDepth.Nodes);
+        Assert.Equal(0, zeroDepth.ReachedCount);
+        Assert.False(zeroDepth.TruncatedByDepth);
+        Assert.False(zeroDepth.TruncatedByLimit);
+        Assert.True(zeroDepth.Exhausted);
+
+        Assert.Empty(zeroLimit.Nodes);
+        Assert.Equal(0, zeroLimit.ReachedCount);
+        Assert.False(zeroLimit.TruncatedByDepth);
+        Assert.False(zeroLimit.TruncatedByLimit);
+        Assert.True(zeroLimit.Exhausted);
+    }
+
+    [Fact]
     public void Reach_ExcludesTheStartsThemselves()
     {
         var graph = SymbolGraph.Build([N("A"), N("B")], [E("A", "B")]);
@@ -305,6 +326,23 @@ public sealed class SymbolGraphTests
         Assert.False(result.TruncatedByDepth);
         Assert.True(result.TruncatedByLimit);
         Assert.False(result.Exhausted);
+    }
+
+    [Fact]
+    public void ReachWithEvidence_ReachedCountExactlyLimit_IsNotTruncated()
+    {
+        ISymbolGraphReachability graph = SymbolGraph.Build(
+            [N("A"), N("B"), N("C"), N("D")],
+            [E("A", "B"), E("A", "C"), E("A", "D")]);
+
+        GraphReachResult result = ReachWithEvidence(graph, ["A"], maxDepth: 2, limit: 3);
+
+        // Every reached node is returned, so `reached.Length > limit` must stay false at the boundary.
+        Assert.Equal([("B", 1), ("C", 1), ("D", 1)], Pairs(result.Nodes));
+        Assert.Equal(3, result.ReachedCount);
+        Assert.False(result.TruncatedByDepth);
+        Assert.False(result.TruncatedByLimit);
+        Assert.True(result.Exhausted);
     }
 
     [Fact]

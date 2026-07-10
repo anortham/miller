@@ -46,6 +46,11 @@ public interface ISymbolGraphReachability
 {
     GraphReachResult ReachWithEvidence(IEnumerable<string> starts, int maxDepth, int limit, Direction dir);
 
+    /// <summary>
+    /// The reached nodes without the traversal evidence. The default discards the evidence after computing it;
+    /// an implementation whose neighbour lookup costs a query should override this to skip that work entirely
+    /// (both in-tree implementations do).
+    /// </summary>
     IReadOnlyList<ReachedNode> Reach(IEnumerable<string> starts, int maxDepth, int limit, Direction dir) =>
         ReachWithEvidence(starts, maxDepth, limit, dir).Nodes;
 
@@ -180,7 +185,7 @@ public sealed class SymbolGraph : ISymbolGraphReachability
     /// <param name="dir">Which adjacency to follow (<see cref="Direction"/>).</param>
     /// <exception cref="ArgumentNullException"><paramref name="starts"/> is null.</exception>
     public IReadOnlyList<ReachedNode> Reach(IEnumerable<string> starts, int maxDepth, int limit, Direction dir) =>
-        ReachWithEvidence(starts, maxDepth, limit, dir).Nodes;
+        GraphTraversal.Reach(starts, maxDepth, limit, dir, Contains, Neighbours);
 
     public GraphReachResult ReachWithEvidence(
         IEnumerable<string> starts,
