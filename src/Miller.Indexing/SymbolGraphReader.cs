@@ -3,12 +3,15 @@ using Miller.Core.Graph;
 namespace Miller.Indexing;
 
 /// <summary>
-/// The D2 edge-load + name-resolution layer (M5). Reads julie's two edge sources and unions them into the
+/// The D2 edge-load + name-resolution layer (M5). Reads julie's three edge sources and unions them into the
 /// resolved <see cref="GraphEdge"/> list that <see cref="MillerRepositoryIndex.Build(System.Collections.Generic.IReadOnlyList{IndexedSymbol},System.Collections.Generic.IReadOnlyList{GraphEdge})"/>
 /// feeds to the Core <see cref="SymbolGraph"/>:
 /// <list type="bullet">
 /// <item><b><c>relationships</c></b> (precise, sparse): <c>from_symbol_id → to_symbol_id</c> directly, by id,
 ///   carrying <c>kind</c>. No name resolution — both endpoints are already resolved symbol ids.</item>
+/// <item><b>resolved <c>pending_relationships</c></b> (precise, sparse): join each pending row to
+///   <c>pending_resolutions</c> by <c>pending_relationship_id</c>, then emit its <c>from_symbol_id →
+///   target_symbol_id</c> by id, carrying the pending row's <c>kind</c>. Unresolved pending rows are omitted.</item>
 /// <item><b><c>identifiers</c></b> (dense): for each row with a non-NULL <c>containing_symbol_id</c> C and a
 ///   <c>name</c> N, resolve N to <b>every</b> indexed symbol of that name <c>{T₁…Tₖ}</c> (via the supplied
 ///   resolver) and emit <c>C → Tᵢ</c>, carrying <c>kind</c>, only while K stays under the caller's ambiguity
@@ -34,7 +37,7 @@ namespace Miller.Indexing;
 public static class SymbolGraphReader
 {
     /// <summary>
-    /// Read both edge sources from the julie extract at <paramref name="dbPath"/> and union them into a resolved
+    /// Read all three edge sources from the julie extract at <paramref name="dbPath"/> and union them into a resolved
     /// edge list. <paramref name="resolveName"/> maps a symbol name to every indexed symbol id of that name (the
     /// production caller passes <see cref="MillerRepositoryIndex.FindByName"/> projected to ids); it must return
     /// an empty list — never null — for an unknown name.
@@ -66,6 +69,7 @@ public static class SymbolGraphReader
 
         var edges = new List<GraphEdge>();
         ReadRelationships(connection, edges);
+        ReadResolvedPendingRelationships(connection, edges);
         ReadIdentifiers(connection, resolveName, edges, maxNameResolutionTargets);
         return edges;
     }
@@ -95,6 +99,51 @@ public static class SymbolGraphReader
 
             edges.Add(new GraphEdge(from, to, kind));
         }
+    }
+
+    private static void ReadResolvedPendingRelationships(
+        Microsoft.Data.Sqlite.SqliteConnection connection,
+        List<GraphEdge> edges)
+    {
+        if (!HasResolvedPendingRelationshipTables(connection))
+            return;
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT pending.from_symbol_id, resolution.target_symbol_id, pending.kind
+            FROM pending_relationships AS pending
+            INNER JOIN pending_resolutions AS resolution
+                ON resolution.pending_relationship_id = pending.pending_relationship_id;
+            """;
+
+        using var reader = command.ExecuteReader();
+        int oFrom = reader.GetOrdinal("from_symbol_id");
+        int oTo = reader.GetOrdinal("target_symbol_id");
+        int oKind = reader.GetOrdinal("kind");
+        while (reader.Read())
+        {
+            string from = reader.GetString(oFrom);
+            string to = reader.GetString(oTo);
+            string kind = reader.GetString(oKind);
+
+            if (!string.Equals(from, to, StringComparison.Ordinal))
+                edges.Add(new GraphEdge(from, to, kind));
+        }
+    }
+
+    private static bool HasResolvedPendingRelationshipTables(
+        Microsoft.Data.Sqlite.SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT COUNT(*)
+            FROM sqlite_schema
+            WHERE type = 'table'
+              AND name IN ($pending, $resolutions);
+            """;
+        command.Parameters.AddWithValue("$pending", "pending_relationships");
+        command.Parameters.AddWithValue("$resolutions", "pending_resolutions");
+        return Convert.ToInt32(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture) == 2;
     }
 
     // identifiers: dense name-resolved edges. Only rows with a source node (non-NULL containing_symbol_id);

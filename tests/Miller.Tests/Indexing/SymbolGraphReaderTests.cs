@@ -10,6 +10,8 @@ namespace Miller.Tests.Indexing;
 /// resolved+unioned <see cref="GraphEdge"/> list the reader produces:
 /// <list type="bullet">
 /// <item>a precise <c>relationships</c> row becomes a by-id edge verbatim;</item>
+/// <item>a <c>pending_relationships</c> row becomes a by-id edge only when joined to its
+///   <c>pending_resolutions</c> target;</item>
 /// <item>an <c>identifiers</c> row resolves its <c>name</c> to every indexed symbol of that name and emits
 ///   <c>containing → each id</c> (homonyms over-approximate — both ids, D2 honesty clause);</item>
 /// <item>a NULL <c>containing_symbol_id</c> identifier is dropped (no source node);</item>
@@ -26,6 +28,8 @@ public sealed class SymbolGraphReaderTests
     private const string ProcessId = "00000000000000000000000000000001";
     private const string ValidateId = "00000000000000000000000000000002";
     private const string HandleId = "00000000000000000000000000000003";
+    private const string ProgramId = "00000000000000000000000000000004";
+    private const string FooId = "00000000000000000000000000000005";
     // Two symbols sharing the name "Log" — the homonym case (over-approximation).
     private const string LogAId = "0000000000000000000000000000000a";
     private const string LogBId = "0000000000000000000000000000000b";
@@ -58,6 +62,10 @@ public sealed class SymbolGraphReaderTests
                 "public void Validate()", 5, null),
             new JulieDbFixture.SymbolRow(HandleId, "Handle", "method", "csharp", "src/B.cs",
                 "public void Handle()", 1, null),
+            new JulieDbFixture.SymbolRow(ProgramId, "Program", "module", "csharp", "src/Program.cs",
+                "Program", 1, null),
+            new JulieDbFixture.SymbolRow(FooId, "Foo", "class", "csharp", "src/Foo.cs",
+                "public sealed class Foo", 1, null),
             new JulieDbFixture.SymbolRow(LogAId, "Log", "method", "csharp", "src/C.cs",
                 "public void Log()", 1, null),
             new JulieDbFixture.SymbolRow(LogBId, "Log", "method", "csharp", "src/D.cs",
@@ -204,6 +212,60 @@ public sealed class SymbolGraphReaderTests
 
         Assert.Contains(edges, e => e.From == HandleId && e.To == ValidateId);
         Assert.Contains(edges, e => e.From == ProcessId && e.To == ValidateId);
+    }
+
+    [Fact]
+    public void Read_ResolvedPendingRelationship_BecomesByIdEdge()
+    {
+        using var fx = FixtureWith(relationships: null, identifiers: null);
+        fx.AddPendingRelationship("pr1", ProgramId, "src/Program.cs", kind: "instantiates",
+            targetDisplayName: "Foo", targetTerminalName: "Foo");
+        fx.AddPendingResolution("pr1", FooId, method: "qualified_name");
+
+        var edges = SymbolGraphReader.Read(fx.DbPath, ResolverFor(NameMap));
+
+        Assert.Contains(edges, e => e.From == ProgramId && e.To == FooId && e.Kind == "instantiates");
+    }
+
+    [Fact]
+    public void Read_UnresolvedPendingRelationship_IsDropped()
+    {
+        using var fx = FixtureWith(relationships: null, identifiers: null);
+        fx.AddPendingRelationship("pr1", ProgramId, "src/Program.cs", kind: "instantiates",
+            targetDisplayName: "Foo", targetTerminalName: "Foo");
+
+        var edges = SymbolGraphReader.Read(fx.DbPath, ResolverFor(NameMap));
+
+        Assert.Empty(edges);
+    }
+
+    [Fact]
+    public void Read_ResolvedPendingRelationshipSelfLoop_IsDropped()
+    {
+        using var fx = FixtureWith(relationships: null, identifiers: null);
+        fx.AddPendingRelationship("pr1", ProgramId, "src/Program.cs", kind: "instantiates",
+            targetDisplayName: "Program", targetTerminalName: "Program");
+        fx.AddPendingResolution("pr1", ProgramId, method: "qualified_name");
+
+        var edges = SymbolGraphReader.Read(fx.DbPath, ResolverFor(NameMap));
+
+        Assert.Empty(edges);
+    }
+
+    [Fact]
+    public void Read_MissingPendingTables_PreservesExistingEdgeSources()
+    {
+        using var fx = FixtureWith(
+            relationships: new[]
+            {
+                new JulieDbFixture.RelationshipRow("r1", ProgramId, FooId, "instantiates"),
+            },
+            identifiers: null);
+        fx.ExecuteWrite("DROP TABLE pending_resolutions; DROP TABLE pending_relationships;");
+
+        var edges = SymbolGraphReader.Read(fx.DbPath, ResolverFor(NameMap));
+
+        Assert.Contains(edges, e => e.From == ProgramId && e.To == FooId && e.Kind == "instantiates");
     }
 
     [Fact]
