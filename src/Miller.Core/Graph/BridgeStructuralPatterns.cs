@@ -16,6 +16,9 @@ public static class BridgeStructuralPatterns
     public const string NextJsRouteHandler = "nextjs.route_handler.v1";
     public const string NuxtServerRoute = "nuxt.server_route.v1";
     public const string AspNetAttributeRoute = "aspnet.attribute_route.v1";
+    public const string RazorRouteReference = "razor.route_reference.v1";
+    public const string RazorPageDirective = "razor.page_directive.v1";
+    public const string BlazorComponentReference = "blazor.component_reference.v1";
 
     // Backend HTTP boundary families, wave 1 (julie-extractors 2.7.0). Route-template families (10) join
     // client requests to server handlers via normalized_route_template; mount/include families (4)
@@ -77,6 +80,9 @@ public static class BridgeStructuralPatterns
         NextJsRouteHandler,
         NuxtServerRoute,
         AspNetAttributeRoute,
+        RazorRouteReference,
+        RazorPageDirective,
+        BlazorComponentReference,
         ExpressRoute,
         ExpressRouterMount,
         FastifyRoute,

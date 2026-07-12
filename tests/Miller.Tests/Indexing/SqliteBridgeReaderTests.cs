@@ -339,6 +339,46 @@ public sealed class SqliteBridgeReaderTests : IDisposable
         Assert.Equal("/api/calendar", data.StructuralFacts.Single(f => f.FactId == "sf-aspnet-route").Metadata["effective_route_template"]);
     }
 
+    [Fact]
+    public void Read_StructuralFacts_IncludesRazorAndBlazorBridgePatternIds()
+    {
+        using (var c = OpenWrite())
+        {
+            CreateSchemaAndGate(c);
+            Exec(c, """
+                INSERT INTO structural_facts
+                    (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                     containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                     confidence, metadata_json)
+                VALUES
+                  ('sf-razor-route-ref', 'f-razor', 'Components/Nav.razor', 'razor', 'razor.route_reference.v1',
+                   'route_reference', 'attribute', 's-razor-nav', 10, 0, 10, 30, 100, 130, 1.0,
+                   '{"target_path":"/calendar","source_kind":"navlink"}'),
+                  ('sf-razor-page', 'f-razor', 'Components/Page.razor', 'razor', 'razor.page_directive.v1',
+                   'page_directive', 'directive', 's-razor-page', 1, 0, 1, 30, 131, 160, 1.0,
+                   '{"route_template":"/calendar"}'),
+                  ('sf-blazor-component', 'f-razor', 'Components/Widget.razor', 'razor', 'blazor.component_reference.v1',
+                   'component_reference', 'element', 's-razor-widget', 20, 0, 20, 30, 161, 190, 1.0,
+                   '{"component_name":"CalendarWidget"}'),
+                  ('sf-ignored', 'f-css', 'web/site.css', 'css', 'css.selector_rule.v1',
+                   'selector', 'rule_set', NULL, 60, 0, 60, 10, 200, 210, 1.0,
+                   '{"selector":".calendar"}');
+                """);
+        }
+
+        var data = SqliteBridgeReader.Read(_dbPath);
+
+        Assert.Equal(
+            new[]
+            {
+                BridgeStructuralPatterns.RazorRouteReference,
+                BridgeStructuralPatterns.RazorPageDirective,
+                BridgeStructuralPatterns.BlazorComponentReference,
+            },
+            data.StructuralFacts.Select(f => f.PatternId).ToArray());
+        Assert.DoesNotContain(data.StructuralFacts, f => f.PatternId == "css.selector_rule.v1");
+    }
+
     // ---- gate + error paths ----------------------------------------------------------------------------------
 
     [Fact]
