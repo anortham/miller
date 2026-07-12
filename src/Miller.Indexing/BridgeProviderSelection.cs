@@ -14,6 +14,7 @@ internal static class BridgeProviderSelection
         ApiRouteBridgeProvider.Nuxt,
         FileRouteBridgeProvider.Vue,
         FileRouteBridgeProvider.React,
+        FileRouteBridgeProvider.Blazor,
         BackendHttpBridgeProvider.Instance,
     ];
 
@@ -80,6 +81,7 @@ internal static class BridgeProviderSelection
             NuxtApiBridgeProvider.ProviderId => NuxtApiBridgeProvider.Instance,
             VueBridgeProvider.ProviderId => VueBridgeProvider.Instance,
             ReactBridgeProvider.ProviderId => ReactBridgeProvider.Instance,
+            "blazor" => FileRouteBridgeProvider.Blazor,
             BackendHttpBridgeProvider.ProviderId => BackendHttpBridgeProvider.Instance,
             _ => new UnknownBridgeProvider(providerId),
         };

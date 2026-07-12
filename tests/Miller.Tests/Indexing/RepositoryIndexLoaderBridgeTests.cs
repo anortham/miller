@@ -583,7 +583,7 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
         var providers = BridgeProviderSelection.ProvidersForDatabase(_dbPath);
 
         Assert.Equal(
-            ["dotnet-web", "nextjs", "nextjs-api", "nuxt", "nuxt-api", "vue", "react", "backend-http"],
+            ["dotnet-web", "nextjs", "nextjs-api", "nuxt", "nuxt-api", "vue", "react", "blazor", "backend-http"],
             providers.Select(provider => provider.Id).ToArray());
     }
 

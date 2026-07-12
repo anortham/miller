@@ -35,6 +35,13 @@ public sealed class FileRouteBridgeProvider : IBridgeProvider
             RouteReferencePattern: BridgeStructuralPatterns.ReactRouteReference,
             FileRoutePattern: BridgeStructuralPatterns.ReactRouteDefinition));
 
+    public static FileRouteBridgeProvider Blazor { get; } = new(
+        new FileRouteBridgeDescriptor(
+            ProviderId: "blazor",
+            DisplayName: "Blazor",
+            RouteReferencePattern: BridgeStructuralPatterns.RazorRouteReference,
+            FileRoutePattern: BridgeStructuralPatterns.RazorPageDirective));
+
     private readonly FileRouteBridgeDescriptor _descriptor;
 
     private FileRouteBridgeProvider(FileRouteBridgeDescriptor descriptor)
