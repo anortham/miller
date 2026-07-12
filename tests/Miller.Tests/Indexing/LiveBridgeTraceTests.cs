@@ -174,6 +174,53 @@ public sealed class LiveBridgeTraceTests
     }
 
     [Fact]
+    public void BlazorFixture_LiveExtractBuildsNavigationComponentAndDependencyChains()
+    {
+        string binary = ScaleTestSupport.RequireJulieServer();
+        using var work = new TempWorkspace();
+        WriteBlazorFixture(work.Repo);
+
+        var index = ExtractAndLoad(binary, work);
+        var patternIds = StructuralPatternIds(work.Db, "%");
+        Assert.Contains(BridgeStructuralPatterns.RazorPageDirective, patternIds);
+        Assert.Contains(BridgeStructuralPatterns.RazorRouteReference, patternIds);
+        Assert.Contains(BridgeStructuralPatterns.BlazorComponentReference, patternIds);
+
+        var navigation = Assert.Single(index.BridgeGraph.Edges, edge =>
+            edge.Edge.Kind == BridgeKind.NavigatesTo
+            && string.Equals(edge.Edge.SourceRef.Display, "/orders", StringComparison.Ordinal)
+            && string.Equals(edge.Edge.TargetRef.Display, "/orders/{orderId?}", StringComparison.Ordinal));
+        Assert.Equal(ConfidenceBand.High, navigation.Band);
+
+        string ordersId = FindSymbolId(index, "Orders", "class");
+        string sharedWidgetId = FindSymbolId(index, "SharedWidget", "class");
+        Assert.Contains(
+            index.Graph.ReachWithEvidence([sharedWidgetId], 1, 10, Direction.Reverse).Nodes,
+            node => node.Id == ordersId && node.Hop == 1);
+        Assert.Equal([ordersId, sharedWidgetId], index.Graph.ShortestPath(ordersId, sharedWidgetId, 1));
+
+        var codeBehind = Assert.Single(index.FindByName("CodeBehindMarker"));
+        Assert.Equal("Pages/Orders.razor.cs", codeBehind.FilePath);
+
+        string widgetServiceId = FindSymbolId(index, "WidgetService", "class");
+        var dependencyEdges = SymbolGraphReader.Read(
+            work.Db,
+            name => index.FindByName(name).Select(symbol => symbol.SymbolId).ToArray());
+        var instantiates = Assert.Single(dependencyEdges, edge =>
+            edge.To == widgetServiceId
+            && string.Equals(edge.Kind, "instantiates", StringComparison.Ordinal)
+            && string.Equals(index.FindBySymbolId(edge.From)?.FilePath, "Program.cs", StringComparison.Ordinal));
+        Assert.Equal(
+            [instantiates.From, widgetServiceId],
+            index.Graph.ShortestPath(instantiates.From, widgetServiceId, 1));
+
+        _output.WriteLine("BLAZOR FIXTURE — live 2.13.0 chains verified:");
+        _output.WriteLine($"  NavigateTo: {navigation.Edge.SourceRef.Display} -> {navigation.Edge.TargetRef.Display}");
+        _output.WriteLine($"  Component: Orders -> SharedWidget ({ordersId} -> {sharedWidgetId})");
+        _output.WriteLine($"  Dependency: {index.FindBySymbolId(instantiates.From)?.Name} -> WidgetService kind={instantiates.Kind}");
+    }
+
+    [Fact]
     public void NuxtFixture_RouteReferenceToFileRoute_TraceBridgeResolves()
     {
         string binary = ScaleTestSupport.RequireJulieServer();
@@ -1412,6 +1459,52 @@ public sealed class LiveBridgeTraceTests
                 </nav>
               );
             }
+            """);
+    }
+
+    private static void WriteBlazorFixture(string repo)
+    {
+        string pages = Path.Combine(repo, "Pages");
+        string shared = Path.Combine(repo, "Shared");
+        Directory.CreateDirectory(pages);
+        Directory.CreateDirectory(shared);
+
+        File.WriteAllText(Path.Combine(pages, "Orders.razor"), """
+            @page "/orders/{orderId?}"
+            @namespace BlazorFixture.Pages
+            @using BlazorFixture.Shared
+            @inject Microsoft.AspNetCore.Components.NavigationManager Navigation
+
+            <SharedWidget />
+
+            @code {
+                [Parameter]
+                public string? OrderId { get; set; }
+
+                private void GoToOrders() => Navigation.NavigateTo("/orders");
+            }
+            """);
+        File.WriteAllText(Path.Combine(pages, "Orders.razor.cs"), """
+            namespace BlazorFixture.Pages;
+
+            public partial class Orders
+            {
+                public void CodeBehindMarker() { }
+            }
+            """);
+        File.WriteAllText(Path.Combine(shared, "SharedWidget.razor"), """
+            @namespace BlazorFixture.Shared
+
+            <span>Shared widget</span>
+            """);
+        File.WriteAllText(Path.Combine(repo, "Program.cs"), """
+            using Microsoft.Extensions.DependencyInjection;
+
+            var builder = WebApplication.CreateBuilder(args);
+            builder.Services.AddScoped<IWidgetService, WidgetService>();
+
+            public interface IWidgetService;
+            public sealed class WidgetService : IWidgetService;
             """);
     }
 
