@@ -4,7 +4,7 @@
 
 **Goal:** Blazor navigation, component references, and DI registrations participate in Miller trace/impact: `NavigateTo("/x")` → `@page` component (`NavigatesTo`), shared component edit → consuming pages, `AddScoped<IFoo, Foo>()` → `Foo`.
 
-**Architecture:** A `blazor` `FileRouteBridgeProvider` descriptor (verb-blind `NavigatesTo` bridge, same seam as NextJs/Nuxt/Vue/React in `src/Miller.Core/Graph/FileRouteBridgeProvider.cs`) pairing `razor.route_reference.v1` with `razor.page_directive.v1`. Blazor route semantics (optional single-segment, catch-all) live in the adapter that reads the raw ASP.NET brace template — no colon-encoding changes that would collide with Next.js semantics. Component references consume `blazor.component_reference.v1`. DI edges come from loading resolved pending relationships that `SymbolGraphReader` ignores today.
+**Architecture:** A `blazor` `FileRouteBridgeProvider` descriptor (verb-blind `NavigatesTo` bridge, same seam as NextJs/Nuxt/Vue/React in `src/Miller.Core/Graph/FileRouteBridgeProvider.cs`) pairs `razor.route_reference.v1` with `razor.page_directive.v1`. The adapter preserves the raw ASP.NET brace template and the shared matcher learns brace optional-single and catch-all semantics without changing Next.js colon semantics. A focused `BlazorComponentGraphReader` resolves `blazor.component_reference.v1` facts against Razor component symbol metadata and emits `uses` dependency edges; DI edges come from loading resolved pending relationships that `SymbolGraphReader` ignores today.
 
 **Tech Stack:** C#/.NET, xunit, bundled julie-extract binary (pin).
 
@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Julie pin: bump `PinnedJulieExtractVersion` (`src/Miller.Indexing/MillerExtractContract.cs:26`) to the Lane 1 julie-extractors release; follow the julie-2.12 consumption precedent (commits c02550b..40772f5).
+- Julie pin: bump `PinnedJulieExtractVersion` (`src/Miller.Indexing/MillerExtractContract.cs:26`) and `scripts/julie-pins.json` to released `julie-extract` `2.13.0`; update exact-version assertions in `MillerExtractContractTests` and `CliDispatchTests`; restore the released binary before scale/build gates. SQLite schema remains `4`, extract contract `3`, and report schema `3`.
 - `dotnet build Miller.slnx -c Release` — warnings are errors.
 - Fast suite must stay <10s; live-extract tests are `Category=Scale` and must skip (not fail) without `.tools/julie-extract`.
 - A bare descriptor silently self-skips: every new fact id must be wired through ALL gates — `BridgeStructuralPatterns.BridgeFactPatternIds` (`src/Miller.Core/Graph/BridgeStructuralPatterns.cs:64-109`), both `StructuralRouteFactAdapter` allowlist gates (route-reference read ~`:31`, route read ~`:271`), both default-provider lists (`src/Miller.Indexing/BridgeProviderSelection.cs:8`, `src/Miller.Core/Graph/BridgeGraphBuilder.cs:23`), and the config-selection switch (`BridgeProviderSelection.cs:73`).
@@ -46,9 +46,9 @@
 | Task 1: Pattern ids + reader whitelist | None - serial | Modify: `src/Miller.Core/Graph/BridgeStructuralPatterns.cs`; Test: `tests/Miller.Tests/Indexing/SqliteBridgeReaderTests.cs` | Yes | Tasks 2–4 consume the new pattern constants. |
 | Task 2: Blazor route adapter + matcher semantics | Batch A | Modify: `src/Miller.Core/Graph/StructuralRouteFactAdapter.cs`, `src/Miller.Core/Resolver/FileRouteMatcher.cs`; Test: `tests/Miller.Tests/Graph/BridgeGraphBuilderTests.cs` (new Blazor region) | No | None - safe parallel batch (no file overlap with Task 4). |
 | Task 3: Blazor provider descriptor + registration | None - serial (after Task 2) | Modify: `src/Miller.Core/Graph/FileRouteBridgeProvider.cs`, `src/Miller.Core/Graph/BridgeGraphBuilder.cs:23`, `src/Miller.Indexing/BridgeProviderSelection.cs`; Test: new file `tests/Miller.Tests/Graph/BlazorBridgeProviderTests.cs` | Yes | Activation tests exercise Task 2's adapter arms; no stubs allowed, so the arms must exist first. |
-| Task 4: Component-reference impact edges | Batch A | Modify: component-fact consumption in `src/Miller.Indexing/RepositoryIndexLoader*`/graph reader path (exact site per Task 4 approach); Test: new file `tests/Miller.Tests/Graph/ComponentReferenceGraphTests.cs` | No | None - safe parallel batch (no file overlap with Task 2). |
+| Task 4: Component-reference impact edges | Batch A | Create: `src/Miller.Indexing/BlazorComponentGraphReader.cs`; Modify: `src/Miller.Indexing/RepositoryIndexLoader.cs`; Test: new file `tests/Miller.Tests/Indexing/BlazorComponentGraphReaderTests.cs` | No | None - safe parallel batch (no file overlap with Task 2). |
 | Task 5: DI edges from resolved pending relationships | None - serial (after Task 4) | Modify: `src/Miller.Indexing/SymbolGraphReader.cs:67`; Test: `tests/Miller.Tests/Indexing/SymbolGraphReaderTests.cs` or nearest existing reader test file | Yes | Shares graph-reader surface with Task 4's consumption path; land after Task 4 review. |
-| Task 6: Pin bump + live fixture + release | None - serial | Modify: `src/Miller.Indexing/MillerExtractContract.cs:26`; Test: `tests/Miller.Tests/Indexing/LiveBridgeTraceTests.cs` (new Blazor fixture) | Yes | Requires julie Lane 1 release and Tasks 1–5 merged. |
+| Task 6: Pin bump + live fixture + local release readiness | None - serial | Modify: `src/Miller.Indexing/MillerExtractContract.cs`, `scripts/julie-pins.json`, `tests/Miller.Tests/Indexing/MillerExtractContractTests.cs`, `tests/Miller.Tests/Server/Cli/CliDispatchTests.cs`; Test: `tests/Miller.Tests/Indexing/LiveBridgeTraceTests.cs` (new Blazor fixture) | Yes | Requires released julie 2.13.0 and Tasks 1–5 merged; push/publication remains approval-gated. |
 
 Batch A = {Task 2, Task 4} runs `parallel-lead-commit`; serial tasks (1, 3, 5, 6) run `serial-worker-commit`.
 
@@ -77,10 +77,10 @@ Batch A = {Task 2, Task 4} runs `parallel-lead-commit`; serial tasks (1, 3, 5, 6
 - Test: `tests/Miller.Tests/Graph/BridgeGraphBuilderTests.cs`
 
 **Interfaces:**
-- Consumes: Task 1 constants; julie fact payloads — `razor.route_reference.v1` `{route, source}` raw literal; `razor.page_directive.v1` raw ASP.NET brace template + `route_parameters` metadata (optional/catch-all flags verbatim; julie Task 5 guarantees fidelity).
-- Produces: `TryReadRouteReference` accepts `razor.route_reference.v1`; the route read yields `StructuralFileRoute` entries for `razor.page_directive.v1` where optional single segments are expanded into template variants (`/orders/{orderId?}` → `/orders/:orderId` and `/orders`) and `{*path}` maps to the existing colon catch-all form (`:path*`). One fact may yield multiple `StructuralFileRoute` rows.
+- Consumes: Task 1 constants; released 2.13.0 fact payloads — `razor.route_reference.v1` uses `target_path`, `source_kind`, `route_source`, and `framework`; `razor.page_directive.v1` carries the raw ASP.NET brace template in `route`/`route_template` plus `route_parameters` metadata.
+- Produces: `TryReadRouteReference` accepts `razor.route_reference.v1`; `TryReadFileRoute` accepts `razor.page_directive.v1` and returns its raw `route_template`; `FileRouteMatcher` treats `{id?}` as zero-or-one segment and `{*path}` as a non-empty catch-all while leaving `:name?`/`[[...slug]]` behavior unchanged.
 
-**What to build:** Adapter arms reading the raw brace template (not a pre-normalized colon template), variant expansion for trailing optional params, catch-all mapping. FileRouteMatcher changes only if variant expansion proves insufficient — prefer zero matcher changes; Next.js/Nuxt semantics must not shift.
+**What to build:** Adapter arms reading `target_path` for route references and raw `route_template` for page directives. Extend `FileRouteMatcher` directly for ASP.NET brace optional/catch-all segments; do not add a multi-route adapter API and do not rewrite brace markers into colon encodings. Preserve all existing Next.js/Nuxt semantics.
 
 **Acceptance criteria:**
 - [ ] `/orders/{orderId?}` matches `/orders` and `/orders/42`, and does NOT match `/orders/a/b` (negative multi-segment assertion)
@@ -109,18 +109,19 @@ Batch A = {Task 2, Task 4} runs `parallel-lead-commit`; serial tasks (1, 3, 5, 6
 ### Task 4: Component references in impact
 
 **Files:**
-- Modify: the structural-fact→graph consumption path (locate with Miller: where `htmx.attribute.v1`-style facts or relationships become graph edges feeding `ImpactTool`; expected in `src/Miller.Indexing/` graph load — implementer confirms exact site with `context`/`trace` before editing)
-- Test: `tests/Miller.Tests/Graph/ComponentReferenceGraphTests.cs`
+- Create: `src/Miller.Indexing/BlazorComponentGraphReader.cs`
+- Modify: `src/Miller.Indexing/RepositoryIndexLoader.cs`
+- Test: `tests/Miller.Tests/Indexing/BlazorComponentGraphReaderTests.cs`
 
 **Interfaces:**
-- Consumes: `blazor.component_reference.v1` `{tag, containing_component, namespace_context, generic_arguments, external}`.
-- Produces: reverse-reachability: impact from component `SharedWidget` reaches `PageA` (its containing component) when `PageA.razor` references `<SharedWidget />`; `external: true` facts produce no edge.
+- Consumes: the `SqliteBridgeReader` projection of `blazor.component_reference.v1` with `tag`, `containing_component`, `namespace_context`, and `generic_arguments`; released 2.13.0 emits no `external` key. Razor component symbols are `kind=class` with `metadata_json.type="razor-component"` and `metadata_json.qualifiedName`.
+- Produces: `BlazorComponentGraphReader.Read(string dbPath, IReadOnlyList<StructuralFactRecord> facts)` returning `GraphEdge` rows with kind `uses`; reverse-reachability from `SharedWidget` reaches `PageA` when `PageA.razor` references `<SharedWidget />`.
 
-**What to build:** Resolve `tag` against workspace component symbols (razor component symbols are kind Class with metadata `type: "razor-component"`); add a dependency edge containing-component → referenced component. Namespace context disambiguates same-name components; unresolvable tags are skipped, never guessed.
+**What to build:** Load only Razor component symbol ids, paths, names, and `qualifiedName` metadata from the artifact. Resolve the source by fact path plus `containing_component`. Resolve a fully-qualified tag by exact `qualifiedName`; resolve a simple tag when it has one workspace component candidate, or when exactly one candidate's qualified name equals `<namespace_context entry>.<tag>`. Add source→target `uses` edges. Missing, external, self, or still-ambiguous targets are skipped. Reorder `RepositoryIndexLoader.Load` so bridge facts are read once before dependency-graph construction, then append these edges to the ordinary relationship/identifier edges before building the index.
 
 **Acceptance criteria:**
 - [ ] `impact target=SharedWidget` (synthetic two-file fixture) lists the consuming page at hop 1
-- [ ] External (FluentUI) tags produce no edges
+- [ ] Unmatched external (FluentUI) tags produce no edges without relying on a nonexistent `external` flag
 - [ ] Ambiguous tag with two same-name components resolves by namespace context or is skipped with no wrong edge
 
 ### Task 5: DI edges from resolved pending relationships
@@ -137,22 +138,25 @@ Batch A = {Task 2, Task 4} runs `parallel-lead-commit`; serial tasks (1, 3, 5, 6
 
 **Acceptance criteria:**
 - [ ] Seeded fixture: pending `instantiates` + resolution row yields a graph edge; unresolved pending yields none
-- [ ] `trace` from an `AddScoped<IFoo, Foo>()` registration reaches `Foo` on the fixture
+- [ ] `trace` from the containing `Program`/file-scope owner symbol reaches `Foo` with `instantiates` evidence for `AddScoped<IFoo, Foo>()`
 - [ ] Graph load performance: fast suite stays <10s
 
-### Task 6: Pin bump, live Blazor fixture, release
+### Task 6: Pin bump, live Blazor fixture, and local release readiness
 
 **Files:**
 - Modify: `src/Miller.Indexing/MillerExtractContract.cs:26`
+- Modify: `scripts/julie-pins.json`
+- Modify: `tests/Miller.Tests/Indexing/MillerExtractContractTests.cs`
+- Modify: `tests/Miller.Tests/Server/Cli/CliDispatchTests.cs`
 - Test: `tests/Miller.Tests/Indexing/LiveBridgeTraceTests.cs` (new Blazor fixture group, `Category=Scale`)
 
 **Interfaces:**
-- Consumes: julie Lane 1 release (new pin), Tasks 1–5.
-- Produces: the Miller release Eros floor-bumps to.
+- Consumes: released julie-extract 2.13.0 (commit `9dcb12f9fbe65f83c2114ce5d4abb3f0d2c72826`, schema 4/contract 3/report 3), Tasks 1–5.
+- Produces: a locally verified Miller release candidate that Eros can floor-bump after explicit push/publication approval.
 
-**What to build:** Pin bump per the julie-2.12 precedent (contract tests, capability snapshot refresh). Live fixture: a `.razor` page with `@page "/orders/{orderId?}"`, a `NavigateTo("/orders")` call, a `<SharedWidget />` reference, a `Foo.razor.cs` code-behind member, and a Program.cs `AddScoped<IWidgetService, WidgetService>()` — assert via real julie-extract output: NavigatesTo chain (incl. optional-segment match), component impact reachability, DI trace.
+**What to build:** Update all pin/assertion surfaces to 2.13.0, run the restore script, and verify the restored binary version. Add a live fixture with a `.razor` page using `@page "/orders/{orderId?}"`, a `NavigateTo("/orders")` call, a `<SharedWidget />` reference, a `Foo.razor.cs` code-behind member, and Program.cs `AddScoped<IWidgetService, WidgetService>()`; assert through real julie-extract output: NavigatesTo chain (including the optional-segment match), component impact reachability, and `Program`→`WidgetService` DI trace with `instantiates` evidence. Do not push, tag, publish, or update public release metadata in this task.
 
 **Acceptance criteria:**
 - [ ] Scale suite green at the new pin; fixture skips (not fails) without `.tools/julie-extract`
 - [ ] All three live chains assert end-to-end
-- [ ] `dotnet build Miller.slnx -c Release` clean; release prepared, version recorded for Eros floor bump
+- [ ] `dotnet build Miller.slnx -c Release` clean; local release-readiness state recorded for the later approval-gated Miller publish and Eros floor bump
