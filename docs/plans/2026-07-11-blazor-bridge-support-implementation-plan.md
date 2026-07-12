@@ -120,9 +120,9 @@ Batch A = {Task 2, Task 4} runs `parallel-lead-commit`; serial tasks (1, 3, 5, 6
 **What to build:** Load only Razor component symbol ids, paths, names, and `qualifiedName` metadata from the artifact. Resolve the source by fact path plus `containing_component`. Resolve a fully-qualified tag by exact `qualifiedName`; resolve a simple tag when it has one workspace component candidate, or when exactly one candidate's qualified name equals `<namespace_context entry>.<tag>`. Add source→target `uses` edges. Missing, external, self, or still-ambiguous targets are skipped. Reorder `RepositoryIndexLoader.Load` so bridge facts are read once before dependency-graph construction, then append these edges to the ordinary relationship/identifier edges before building the index.
 
 **Acceptance criteria:**
-- [ ] `impact target=SharedWidget` (synthetic two-file fixture) lists the consuming page at hop 1
-- [ ] Unmatched external (FluentUI) tags produce no edges without relying on a nonexistent `external` flag
-- [ ] Ambiguous tag with two same-name components resolves by namespace context or is skipped with no wrong edge
+- [x] `impact target=SharedWidget` (synthetic two-file fixture) lists the consuming page at hop 1
+- [x] Unmatched external (FluentUI) tags produce no edges without relying on a nonexistent `external` flag
+- [x] Ambiguous tag with two same-name components resolves by namespace context or is skipped with no wrong edge
 
 ### Task 5: DI edges from resolved pending relationships
 

@@ -14,8 +14,8 @@ namespace Miller.Indexing;
 /// index without its graphs.
 ///
 /// <para>Order of operations: read symbols (<see cref="SqliteSymbolReader.Read"/>) → build the name→ids map
-/// from those symbols → read edges (<see cref="SymbolGraphReader.Read"/>, resolving identifier names through
-/// that map) → read the bridge breadcrumbs (<see cref="SqliteBridgeReader.Read"/>) → project the symbols to Core
+/// from those symbols → read the bridge breadcrumbs (<see cref="SqliteBridgeReader.Read"/>) → read edges
+/// (<see cref="SymbolGraphReader.Read"/>, resolving identifier names through that map) → project the symbols to Core
 /// <see cref="SymbolDetail"/>s and run <see cref="BridgeGraphBuilder.Build"/> →
 /// <see cref="MillerRepositoryIndex.Build(System.Collections.Generic.IReadOnlyList{IndexedSymbol},System.Collections.Generic.IReadOnlyList{Miller.Core.Graph.GraphEdge},Miller.Core.Graph.BridgeGraph)"/>.
 /// The name map is built once here (not via the not-yet-constructed index) so the edge resolver and the index
@@ -63,18 +63,16 @@ public static class RepositoryIndexLoader
             ids.Add(symbol.SymbolId);
         }
 
-        // 3) Read + resolve the edges (relationships ∪ name-resolved identifiers).
-        var edges = SymbolGraphReader.Read(
+        var bridgeData = SqliteBridgeReader.Read(dbPath);
+
+        var edges = new List<GraphEdge>(SymbolGraphReader.Read(
             dbPath,
             name => nameToIds.TryGetValue(name, out var ids)
                 ? ids
                 : (IReadOnlyList<string>)Array.Empty<string>(),
-            maxNameResolutionTargets: MaxIdentifierFallbackTargets);
+            maxNameResolutionTargets: MaxIdentifierFallbackTargets));
+        edges.AddRange(BlazorComponentGraphReader.Read(dbPath, bridgeData.StructuralFacts));
 
-        // 4) Read the bridge breadcrumbs (type_arguments, literals, annotations, DbSet<T> properties) and build the
-        //    M4 cross-language bridge graph. Project the symbols to Core SymbolDetails first (the legs + resolver
-        //    consume those). MEASURE the build cost (plan Task 9) — do NOT add caching/persistence speculatively.
-        var bridgeData = SqliteBridgeReader.Read(dbPath);
         var symbolDetails = ProjectToSymbolDetails(symbols);
         var bridgeProviders = BridgeProviderSelection.ProvidersForDatabase(dbPath);
 
@@ -91,7 +89,6 @@ public static class RepositoryIndexLoader
         stopwatch.Stop();
         onBridgeGraphBuilt?.Invoke(stopwatch.Elapsed);
 
-        // 5) Build the index + dependency graph + bridge graph as one immutable unit.
         return MillerRepositoryIndex.Build(symbols, edges, bridgeGraph);
     }
 
