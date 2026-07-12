@@ -24,6 +24,9 @@ public static class FileRouteMatcher
         if (IsOptionalCatchAllSegment(fileSegment))
             return isLastFileSegment;
 
+        if (IsBraceCatchAllSegment(fileSegment))
+            return isLastFileSegment;
+
         if (IsCatchAllSegment(fileSegment))
             return isLastFileSegment && referenceIndex < referenceSegments.Count;
 
@@ -113,8 +116,11 @@ public static class FileRouteMatcher
 
     internal static bool IsCatchAllSegment(string segment) =>
         (segment.StartsWith("[...", StringComparison.Ordinal) && segment.EndsWith(']')) ||
-        (segment.StartsWith("{*", StringComparison.Ordinal) && segment.EndsWith('}')) ||
+        IsBraceCatchAllSegment(segment) ||
         IsColonCatchAll(segment);
+
+    private static bool IsBraceCatchAllSegment(string segment) =>
+        segment.StartsWith("{*", StringComparison.Ordinal) && segment.EndsWith('}');
 
     internal static bool IsOptionalCatchAllSegment(string segment) =>
         (segment.StartsWith("[[...", StringComparison.Ordinal) && segment.EndsWith("]]", StringComparison.Ordinal)) ||

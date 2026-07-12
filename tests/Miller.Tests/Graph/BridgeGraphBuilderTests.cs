@@ -1756,10 +1756,10 @@ public sealed class BridgeGraphBuilderTests
     }
 
     [Fact]
-    public void FileRouteMatcher_BraceCatchAllMatchesOneOrMoreTrailingSegments()
+    public void FileRouteMatcher_BraceCatchAllMatchesZeroOrMoreTrailingSegments()
     {
         Assert.True(FileRouteMatcher.Matches("/files/a/b/c", "/files/{*path}"));
-        Assert.False(FileRouteMatcher.Matches("/files", "/files/{*path}"));
+        Assert.True(FileRouteMatcher.Matches("/files", "/files/{*path}"));
     }
 
     [Fact]

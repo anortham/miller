@@ -78,13 +78,14 @@ Batch A = {Task 2, Task 4} runs `parallel-lead-commit`; serial tasks (1, 3, 5, 6
 
 **Interfaces:**
 - Consumes: Task 1 constants; released 2.13.0 fact payloads — `razor.route_reference.v1` uses `target_path`, `source_kind`, `route_source`, and `framework`; `razor.page_directive.v1` carries the raw ASP.NET brace template in `route`/`route_template` plus `route_parameters` metadata.
-- Produces: `TryReadRouteReference` accepts `razor.route_reference.v1`; `TryReadFileRoute` accepts `razor.page_directive.v1` and returns its raw `route_template`; `FileRouteMatcher` treats `{id?}` as zero-or-one segment and `{*path}` as a non-empty catch-all while leaving `:name?`/`[[...slug]]` behavior unchanged.
+- Produces: `TryReadRouteReference` accepts `razor.route_reference.v1`; `TryReadFileRoute` accepts `razor.page_directive.v1` and returns its raw `route_template`; `FileRouteMatcher` treats `{id?}` as zero-or-one segment and ASP.NET `{*path}` as a zero-or-more catch-all while leaving required Next.js/colon catch-all behavior unchanged.
 
 **What to build:** Adapter arms reading `target_path` for route references and raw `route_template` for page directives. Extend `FileRouteMatcher` directly for ASP.NET brace optional/catch-all segments; do not add a multi-route adapter API and do not rewrite brace markers into colon encodings. Preserve all existing Next.js/Nuxt semantics.
 
 **Acceptance criteria:**
 - [x] `/orders/{orderId?}` matches `/orders` and `/orders/42`, and does NOT match `/orders/a/b` (negative multi-segment assertion)
 - [x] `/files/{*path}` matches `/files/a/b/c`
+- [x] `/files/{*path}` matches `/files` per the ASP.NET Core catch-all contract
 - [x] Existing Next.js `[[...slug]]`/`:name?` tests unchanged and green
 
 ### Task 3: Blazor provider descriptor and registration
