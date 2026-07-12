@@ -1038,6 +1038,29 @@ public sealed class BridgeGraphBuilderTests
     }
 
     [Fact]
+    public void StructuralRouteFactAdapter_TryReadRouteReference_ReadsRazorTargetPath()
+    {
+        var fact = Fact(
+            "sf-razor-orders",
+            BridgeStructuralPatterns.RazorRouteReference,
+            "razor",
+            "Components/NavMenu.razor",
+            "route_reference",
+            100,
+            new Dictionary<string, string>
+            {
+                ["target_path"] = "/orders/42",
+                ["source_kind"] = "navigate_to",
+                ["route_source"] = "string_literal",
+                ["framework"] = "blazor",
+            });
+
+        Assert.True(StructuralRouteFactAdapter.TryReadRouteReference(fact, new Dictionary<string, SymbolDetail>(), out var reference));
+        Assert.Equal("/orders/42", reference.RoutePath);
+        Assert.Null(reference.Verb);
+    }
+
+    [Fact]
     public void StructuralRouteFactAdapter_TryReadFileRoute_ReadsRoutePath()
     {
         var fact = Fact(
@@ -1056,6 +1079,27 @@ public sealed class BridgeGraphBuilderTests
         Assert.Equal("/calendar", route.RoutePath);
         Assert.Equal("web/app/calendar/page.tsx", route.FilePath);
         Assert.Equal(1, route.Line);
+    }
+
+    [Fact]
+    public void StructuralRouteFactAdapter_TryReadFileRoute_PreservesRazorRouteTemplate()
+    {
+        var fact = Fact(
+            "sf-razor-orders-page",
+            BridgeStructuralPatterns.RazorPageDirective,
+            "razor",
+            "Pages/Orders.razor",
+            string.Empty,
+            100,
+            new Dictionary<string, string>
+            {
+                ["route_template"] = "/orders/{orderId?}",
+                ["route"] = "/orders/{orderId?}",
+                ["route_parameters"] = "[{\"name\":\"orderId\",\"optional\":true,\"catch_all\":false}]",
+            });
+
+        Assert.True(StructuralRouteFactAdapter.TryReadFileRoute(fact, new Dictionary<string, SymbolDetail>(), out var route));
+        Assert.Equal("/orders/{orderId?}", route.RoutePath);
     }
 
     [Fact]
@@ -1701,6 +1745,21 @@ public sealed class BridgeGraphBuilderTests
             [NextFileRoute("/docs/[[...slug]]/edit", "web/app/docs/[[...slug]]/edit/page.tsx")]).Edges;
 
         Assert.Empty(edges);
+    }
+
+    [Fact]
+    public void FileRouteMatcher_BraceOptionalMatchesZeroOrOneSegment()
+    {
+        Assert.True(FileRouteMatcher.Matches("/orders", "/orders/{orderId?}"));
+        Assert.True(FileRouteMatcher.Matches("/orders/42", "/orders/{orderId?}"));
+        Assert.False(FileRouteMatcher.Matches("/orders/a/b", "/orders/{orderId?}"));
+    }
+
+    [Fact]
+    public void FileRouteMatcher_BraceCatchAllMatchesOneOrMoreTrailingSegments()
+    {
+        Assert.True(FileRouteMatcher.Matches("/files/a/b/c", "/files/{*path}"));
+        Assert.False(FileRouteMatcher.Matches("/files", "/files/{*path}"));
     }
 
     [Fact]

@@ -83,9 +83,9 @@ Batch A = {Task 2, Task 4} runs `parallel-lead-commit`; serial tasks (1, 3, 5, 6
 **What to build:** Adapter arms reading `target_path` for route references and raw `route_template` for page directives. Extend `FileRouteMatcher` directly for ASP.NET brace optional/catch-all segments; do not add a multi-route adapter API and do not rewrite brace markers into colon encodings. Preserve all existing Next.js/Nuxt semantics.
 
 **Acceptance criteria:**
-- [ ] `/orders/{orderId?}` matches `/orders` and `/orders/42`, and does NOT match `/orders/a/b` (negative multi-segment assertion)
-- [ ] `/files/{*path}` matches `/files/a/b/c`
-- [ ] Existing Next.js `[[...slug]]`/`:name?` tests unchanged and green
+- [x] `/orders/{orderId?}` matches `/orders` and `/orders/42`, and does NOT match `/orders/a/b` (negative multi-segment assertion)
+- [x] `/files/{*path}` matches `/files/a/b/c`
+- [x] Existing Next.js `[[...slug]]`/`:name?` tests unchanged and green
 
 ### Task 3: Blazor provider descriptor and registration
 

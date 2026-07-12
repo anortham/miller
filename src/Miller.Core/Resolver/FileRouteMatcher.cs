@@ -6,29 +6,41 @@ public static class FileRouteMatcher
     {
         var referenceSegments = RouteSegments(referenceRoute);
         var fileSegments = RouteSegments(fileRoute);
+        return Matches(referenceSegments, fileSegments, 0, 0);
+    }
 
-        var referenceIndex = 0;
-        for (var fileIndex = 0; fileIndex < fileSegments.Length; fileIndex++)
+    private static bool Matches(
+        IReadOnlyList<string> referenceSegments,
+        IReadOnlyList<string> fileSegments,
+        int referenceIndex,
+        int fileIndex)
+    {
+        if (fileIndex >= fileSegments.Count)
+            return referenceIndex == referenceSegments.Count;
+
+        var fileSegment = fileSegments[fileIndex];
+        var isLastFileSegment = fileIndex == fileSegments.Count - 1;
+
+        if (IsOptionalCatchAllSegment(fileSegment))
+            return isLastFileSegment;
+
+        if (IsCatchAllSegment(fileSegment))
+            return isLastFileSegment && referenceIndex < referenceSegments.Count;
+
+        if (IsBraceOptionalSegment(fileSegment))
         {
-            var fileSegment = fileSegments[fileIndex];
-            var isLastFileSegment = fileIndex == fileSegments.Length - 1;
-
-            if (IsOptionalCatchAllSegment(fileSegment))
-                return isLastFileSegment;
-
-            if (IsCatchAllSegment(fileSegment))
-                return isLastFileSegment && referenceIndex < referenceSegments.Length;
-
-            if (referenceIndex >= referenceSegments.Length)
-                return false;
-
-            if (!SegmentMatches(referenceSegments[referenceIndex], fileSegment))
-                return false;
-
-            referenceIndex++;
+            return Matches(referenceSegments, fileSegments, referenceIndex, fileIndex + 1) ||
+                (referenceIndex < referenceSegments.Count &&
+                 Matches(referenceSegments, fileSegments, referenceIndex + 1, fileIndex + 1));
         }
 
-        return referenceIndex == referenceSegments.Length;
+        if (referenceIndex >= referenceSegments.Count ||
+            !SegmentMatches(referenceSegments[referenceIndex], fileSegment))
+        {
+            return false;
+        }
+
+        return Matches(referenceSegments, fileSegments, referenceIndex + 1, fileIndex + 1);
     }
 
     private static bool SegmentMatches(string referenceSegment, string fileSegment) =>
@@ -93,8 +105,15 @@ public static class FileRouteMatcher
     private static bool IsBraceDynamic(string segment) =>
         segment.Length >= 2 && segment[0] == '{' && segment[^1] == '}';
 
+    private static bool IsBraceOptionalSegment(string segment) =>
+        segment.Length >= 4 &&
+        segment[0] == '{' &&
+        segment[^2] == '?' &&
+        segment[^1] == '}';
+
     internal static bool IsCatchAllSegment(string segment) =>
         (segment.StartsWith("[...", StringComparison.Ordinal) && segment.EndsWith(']')) ||
+        (segment.StartsWith("{*", StringComparison.Ordinal) && segment.EndsWith('}')) ||
         IsColonCatchAll(segment);
 
     internal static bool IsOptionalCatchAllSegment(string segment) =>

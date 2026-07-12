@@ -14,6 +14,8 @@ internal static class StructuralRouteFactAdapter
     private const string NextJsFileRoutePattern = BridgeStructuralPatterns.NextJsFileRoute;
     private const string NuxtRouteReferencePattern = BridgeStructuralPatterns.NuxtRouteReference;
     private const string NuxtFileRoutePattern = BridgeStructuralPatterns.NuxtFileRoute;
+    private const string RazorRouteReferencePattern = BridgeStructuralPatterns.RazorRouteReference;
+    private const string RazorPageDirectivePattern = BridgeStructuralPatterns.RazorPageDirective;
     private const string HttpClientRequestPattern = BridgeStructuralPatterns.HttpClientRequest;
     private const string NextJsRouteHandlerPattern = BridgeStructuralPatterns.NextJsRouteHandler;
     private const string NuxtServerRoutePattern = BridgeStructuralPatterns.NuxtServerRoute;
@@ -273,13 +275,15 @@ internal static class StructuralRouteFactAdapter
         string.Equals(patternId, VueRouteReferencePattern, StringComparison.Ordinal) ||
         string.Equals(patternId, ReactRouteReferencePattern, StringComparison.Ordinal) ||
         string.Equals(patternId, NextJsRouteReferencePattern, StringComparison.Ordinal) ||
-        string.Equals(patternId, NuxtRouteReferencePattern, StringComparison.Ordinal);
+        string.Equals(patternId, NuxtRouteReferencePattern, StringComparison.Ordinal) ||
+        string.Equals(patternId, RazorRouteReferencePattern, StringComparison.Ordinal);
 
     private static bool IsFileRoutePattern(string patternId) =>
         string.Equals(patternId, VueRouteDefinitionPattern, StringComparison.Ordinal) ||
         string.Equals(patternId, ReactRouteDefinitionPattern, StringComparison.Ordinal) ||
         string.Equals(patternId, NextJsFileRoutePattern, StringComparison.Ordinal) ||
-        string.Equals(patternId, NuxtFileRoutePattern, StringComparison.Ordinal);
+        string.Equals(patternId, NuxtFileRoutePattern, StringComparison.Ordinal) ||
+        string.Equals(patternId, RazorPageDirectivePattern, StringComparison.Ordinal);
 
     private static bool IsRouteHandlerPattern(string patternId) =>
         string.Equals(patternId, NextJsRouteHandlerPattern, StringComparison.Ordinal) ||
@@ -310,10 +314,12 @@ internal static class StructuralRouteFactAdapter
         ?? MetadataString(fact, "route_path");
 
     private static string? FileRoutePath(StructuralFactRecord fact) =>
-        MetadataString(fact, "route_path")
-        ?? MetadataString(fact, "normalized_route_template")
-        ?? MetadataString(fact, "target_path")
-        ?? MetadataString(fact, "attribute_value");
+        string.Equals(fact.PatternId, RazorPageDirectivePattern, StringComparison.Ordinal)
+            ? MetadataString(fact, "route_template") ?? MetadataString(fact, "route")
+            : MetadataString(fact, "route_path")
+                ?? MetadataString(fact, "normalized_route_template")
+                ?? MetadataString(fact, "target_path")
+                ?? MetadataString(fact, "attribute_value");
 
     private static string? HtmxVerb(StructuralFactRecord fact)
     {
