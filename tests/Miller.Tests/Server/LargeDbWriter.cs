@@ -70,6 +70,41 @@ internal static class LargeDbWriter
                 path TEXT NOT NULL, start_line INTEGER NOT NULL, start_column INTEGER NOT NULL,
                 end_line INTEGER NOT NULL, end_column INTEGER NOT NULL, containing_symbol_id TEXT, target_symbol_id TEXT);
             """);
+        Exec(conn, """
+            CREATE TABLE pending_relationships (
+                pending_relationship_id TEXT PRIMARY KEY,
+                from_symbol_id TEXT NOT NULL,
+                caller_scope_symbol_id TEXT,
+                file_id TEXT NOT NULL,
+                path TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                target_display_name TEXT NOT NULL,
+                target_terminal_name TEXT NOT NULL,
+                target_receiver TEXT,
+                target_namespace_json TEXT NOT NULL,
+                target_import_context TEXT,
+                start_line INTEGER NOT NULL,
+                start_column INTEGER,
+                end_line INTEGER,
+                end_column INTEGER,
+                start_byte INTEGER,
+                end_byte INTEGER,
+                confidence REAL NOT NULL,
+                metadata_json TEXT,
+                FOREIGN KEY (from_symbol_id) REFERENCES symbols(symbol_id) ON DELETE CASCADE,
+                FOREIGN KEY (caller_scope_symbol_id) REFERENCES symbols(symbol_id) ON DELETE SET NULL,
+                FOREIGN KEY (file_id) REFERENCES files(file_id) ON DELETE CASCADE);
+            """);
+        Exec(conn, """
+            CREATE TABLE pending_resolutions (
+                pending_relationship_id TEXT PRIMARY KEY
+                    REFERENCES pending_relationships(pending_relationship_id) ON DELETE CASCADE,
+                target_symbol_id TEXT NOT NULL REFERENCES symbols(symbol_id) ON DELETE CASCADE,
+                tier INTEGER NOT NULL,
+                confidence REAL NOT NULL,
+                method TEXT NOT NULL,
+                resolved_at_revision INTEGER NOT NULL);
+            """);
         // M4 bridge tables (v1 split). SqliteBridgeReader is on the single production RepositoryIndexLoader.Load
         // path (D9), so IndexRebuilder.Rebuild over this DB SELECTs all of them — created empty so the rebuild path
         // does not crash on "no such table". v1 moves identifier_id/path onto type_argument_usages; the args JOIN by
