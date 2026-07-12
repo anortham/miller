@@ -63,6 +63,39 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
                 CREATE TABLE relationships (
                     relationship_id TEXT PRIMARY KEY, from_symbol_id TEXT, to_symbol_id TEXT, path TEXT, kind TEXT
                 );
+                CREATE TABLE pending_relationships (
+                    pending_relationship_id TEXT PRIMARY KEY,
+                    from_symbol_id TEXT NOT NULL,
+                    caller_scope_symbol_id TEXT,
+                    file_id TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    target_display_name TEXT NOT NULL,
+                    target_terminal_name TEXT NOT NULL,
+                    target_receiver TEXT,
+                    target_namespace_json TEXT NOT NULL,
+                    target_import_context TEXT,
+                    start_line INTEGER NOT NULL,
+                    start_column INTEGER,
+                    end_line INTEGER,
+                    end_column INTEGER,
+                    start_byte INTEGER,
+                    end_byte INTEGER,
+                    confidence REAL NOT NULL,
+                    metadata_json TEXT,
+                    FOREIGN KEY (from_symbol_id) REFERENCES symbols(symbol_id) ON DELETE CASCADE,
+                    FOREIGN KEY (caller_scope_symbol_id) REFERENCES symbols(symbol_id) ON DELETE SET NULL,
+                    FOREIGN KEY (file_id) REFERENCES files(file_id) ON DELETE CASCADE
+                );
+                CREATE TABLE pending_resolutions (
+                    pending_relationship_id TEXT PRIMARY KEY
+                        REFERENCES pending_relationships(pending_relationship_id) ON DELETE CASCADE,
+                    target_symbol_id TEXT NOT NULL REFERENCES symbols(symbol_id) ON DELETE CASCADE,
+                    tier INTEGER NOT NULL,
+                    confidence REAL NOT NULL,
+                    method TEXT NOT NULL,
+                    resolved_at_revision INTEGER NOT NULL
+                );
                 CREATE TABLE type_argument_usages (
                     usage_id TEXT PRIMARY KEY, identifier_id TEXT, path TEXT, language TEXT
                 );
@@ -183,6 +216,39 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
             );
             CREATE TABLE relationships (
                 relationship_id TEXT PRIMARY KEY, from_symbol_id TEXT, to_symbol_id TEXT, path TEXT, kind TEXT
+            );
+            CREATE TABLE pending_relationships (
+                pending_relationship_id TEXT PRIMARY KEY,
+                from_symbol_id TEXT NOT NULL,
+                caller_scope_symbol_id TEXT,
+                file_id TEXT NOT NULL,
+                path TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                target_display_name TEXT NOT NULL,
+                target_terminal_name TEXT NOT NULL,
+                target_receiver TEXT,
+                target_namespace_json TEXT NOT NULL,
+                target_import_context TEXT,
+                start_line INTEGER NOT NULL,
+                start_column INTEGER,
+                end_line INTEGER,
+                end_column INTEGER,
+                start_byte INTEGER,
+                end_byte INTEGER,
+                confidence REAL NOT NULL,
+                metadata_json TEXT,
+                FOREIGN KEY (from_symbol_id) REFERENCES symbols(symbol_id) ON DELETE CASCADE,
+                FOREIGN KEY (caller_scope_symbol_id) REFERENCES symbols(symbol_id) ON DELETE SET NULL,
+                FOREIGN KEY (file_id) REFERENCES files(file_id) ON DELETE CASCADE
+            );
+            CREATE TABLE pending_resolutions (
+                pending_relationship_id TEXT PRIMARY KEY
+                    REFERENCES pending_relationships(pending_relationship_id) ON DELETE CASCADE,
+                target_symbol_id TEXT NOT NULL REFERENCES symbols(symbol_id) ON DELETE CASCADE,
+                tier INTEGER NOT NULL,
+                confidence REAL NOT NULL,
+                method TEXT NOT NULL,
+                resolved_at_revision INTEGER NOT NULL
             );
             CREATE TABLE type_argument_usages (
                 usage_id TEXT PRIMARY KEY, identifier_id TEXT, path TEXT, language TEXT
@@ -800,6 +866,39 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
                     CREATE TABLE symbols (symbol_id TEXT PRIMARY KEY, name TEXT, signature TEXT, kind TEXT, language TEXT, path TEXT, start_line INTEGER, end_line INTEGER, parent_symbol_id TEXT, is_test INTEGER NOT NULL DEFAULT 0, metadata_json TEXT);
                     CREATE TABLE identifiers (identifier_id TEXT PRIMARY KEY, name TEXT, kind TEXT, path TEXT, start_line INTEGER, containing_symbol_id TEXT, target_symbol_id TEXT);
                     CREATE TABLE relationships (relationship_id TEXT PRIMARY KEY, from_symbol_id TEXT, to_symbol_id TEXT, path TEXT, kind TEXT);
+                    CREATE TABLE pending_relationships (
+                        pending_relationship_id TEXT PRIMARY KEY,
+                        from_symbol_id TEXT NOT NULL,
+                        caller_scope_symbol_id TEXT,
+                        file_id TEXT NOT NULL,
+                        path TEXT NOT NULL,
+                        kind TEXT NOT NULL,
+                        target_display_name TEXT NOT NULL,
+                        target_terminal_name TEXT NOT NULL,
+                        target_receiver TEXT,
+                        target_namespace_json TEXT NOT NULL,
+                        target_import_context TEXT,
+                        start_line INTEGER NOT NULL,
+                        start_column INTEGER,
+                        end_line INTEGER,
+                        end_column INTEGER,
+                        start_byte INTEGER,
+                        end_byte INTEGER,
+                        confidence REAL NOT NULL,
+                        metadata_json TEXT,
+                        FOREIGN KEY (from_symbol_id) REFERENCES symbols(symbol_id) ON DELETE CASCADE,
+                        FOREIGN KEY (caller_scope_symbol_id) REFERENCES symbols(symbol_id) ON DELETE SET NULL,
+                        FOREIGN KEY (file_id) REFERENCES files(file_id) ON DELETE CASCADE
+                    );
+                    CREATE TABLE pending_resolutions (
+                        pending_relationship_id TEXT PRIMARY KEY
+                            REFERENCES pending_relationships(pending_relationship_id) ON DELETE CASCADE,
+                        target_symbol_id TEXT NOT NULL REFERENCES symbols(symbol_id) ON DELETE CASCADE,
+                        tier INTEGER NOT NULL,
+                        confidence REAL NOT NULL,
+                        method TEXT NOT NULL,
+                        resolved_at_revision INTEGER NOT NULL
+                    );
                     CREATE TABLE type_argument_usages (usage_id TEXT PRIMARY KEY, identifier_id TEXT, path TEXT, language TEXT);
                     CREATE TABLE type_arguments (type_argument_id TEXT PRIMARY KEY, usage_id TEXT, parent_type_argument_id TEXT, ordinal INTEGER, type_name TEXT);
                     CREATE TABLE literals (literal_id TEXT PRIMARY KEY, literal_text TEXT, kind TEXT, carrier TEXT, arg_position INTEGER, language TEXT, path TEXT, start_line INTEGER, end_line INTEGER, start_byte INTEGER, end_byte INTEGER, containing_symbol_id TEXT, confidence REAL);

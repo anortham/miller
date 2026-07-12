@@ -228,6 +228,23 @@ public sealed class SymbolGraphReaderTests
     }
 
     [Fact]
+    public void Load_ResolvedPendingRelationship_ReachesTargetWithInstantiatesEvidence()
+    {
+        using var fx = FixtureWith(relationships: null, identifiers: null);
+        fx.AddPendingRelationship("pr1", ProgramId, "src/Program.cs", kind: "instantiates",
+            targetDisplayName: "Foo", targetTerminalName: "Foo");
+        fx.AddPendingResolution("pr1", FooId, method: "qualified_name");
+
+        var index = RepositoryIndexLoader.Load(fx.DbPath);
+        var reach = index.Graph.ReachWithEvidence([ProgramId], 1, 10, Direction.Forward);
+        var edges = SymbolGraphReader.Read(fx.DbPath, ResolverFor(NameMap));
+
+        Assert.Contains(reach.Nodes, node => node.Id == FooId && node.Hop == 1);
+        Assert.Contains(edges, edge =>
+            edge.From == ProgramId && edge.To == FooId && edge.Kind == "instantiates");
+    }
+
+    [Fact]
     public void Read_UnresolvedPendingRelationship_IsDropped()
     {
         using var fx = FixtureWith(relationships: null, identifiers: null);
@@ -253,19 +270,13 @@ public sealed class SymbolGraphReaderTests
     }
 
     [Fact]
-    public void Read_MissingPendingTables_PreservesExistingEdgeSources()
+    public void Read_MissingRequiredPendingTables_Throws()
     {
-        using var fx = FixtureWith(
-            relationships: new[]
-            {
-                new JulieDbFixture.RelationshipRow("r1", ProgramId, FooId, "instantiates"),
-            },
-            identifiers: null);
+        using var fx = FixtureWith(relationships: null, identifiers: null);
         fx.ExecuteWrite("DROP TABLE pending_resolutions; DROP TABLE pending_relationships;");
 
-        var edges = SymbolGraphReader.Read(fx.DbPath, ResolverFor(NameMap));
-
-        Assert.Contains(edges, e => e.From == ProgramId && e.To == FooId && e.Kind == "instantiates");
+        Assert.Throws<Microsoft.Data.Sqlite.SqliteException>(
+            () => SymbolGraphReader.Read(fx.DbPath, ResolverFor(NameMap)));
     }
 
     [Fact]

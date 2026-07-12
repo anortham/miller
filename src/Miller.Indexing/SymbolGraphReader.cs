@@ -105,9 +105,6 @@ public static class SymbolGraphReader
         Microsoft.Data.Sqlite.SqliteConnection connection,
         List<GraphEdge> edges)
     {
-        if (!HasResolvedPendingRelationshipTables(connection))
-            return;
-
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT pending.from_symbol_id, resolution.target_symbol_id, pending.kind
@@ -129,21 +126,6 @@ public static class SymbolGraphReader
             if (!string.Equals(from, to, StringComparison.Ordinal))
                 edges.Add(new GraphEdge(from, to, kind));
         }
-    }
-
-    private static bool HasResolvedPendingRelationshipTables(
-        Microsoft.Data.Sqlite.SqliteConnection connection)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT COUNT(*)
-            FROM sqlite_schema
-            WHERE type = 'table'
-              AND name IN ($pending, $resolutions);
-            """;
-        command.Parameters.AddWithValue("$pending", "pending_relationships");
-        command.Parameters.AddWithValue("$resolutions", "pending_resolutions");
-        return Convert.ToInt32(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture) == 2;
     }
 
     // identifiers: dense name-resolved edges. Only rows with a source node (non-NULL containing_symbol_id);
