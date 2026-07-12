@@ -158,6 +158,6 @@ Batch A = {Task 2, Task 4} runs `parallel-lead-commit`; serial tasks (1, 3, 5, 6
 **What to build:** Update all pin/assertion surfaces to 2.13.0, run the restore script, and verify the restored binary version. Add a live fixture with a `.razor` page using `@page "/orders/{orderId?}"`, a `NavigateTo("/orders")` call, a `<SharedWidget />` reference, a `Foo.razor.cs` code-behind member, and Program.cs `AddScoped<IWidgetService, WidgetService>()`; assert through real julie-extract output: NavigatesTo chain (including the optional-segment match), component impact reachability, and `Program`→`WidgetService` DI trace with `instantiates` evidence. Do not push, tag, publish, or update public release metadata in this task.
 
 **Acceptance criteria:**
-- [ ] Scale suite green at the new pin; fixture skips (not fails) without `.tools/julie-extract`
-- [ ] All three live chains assert end-to-end
-- [ ] `dotnet build Miller.slnx -c Release` clean; local release-readiness state recorded for the later approval-gated Miller publish and Eros floor bump
+- [x] Scale suite green at the new pin; fixture skips (not fails) without `.tools/julie-extract`
+- [x] All three live chains assert end-to-end
+- [x] `dotnet build Miller.slnx -c Release` clean; local release-readiness state recorded for the later approval-gated Miller publish and Eros floor bump
