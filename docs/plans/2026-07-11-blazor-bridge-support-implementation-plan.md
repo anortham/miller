@@ -102,9 +102,9 @@ Batch A = {Task 2, Task 4} runs `parallel-lead-commit`; serial tasks (1, 3, 5, 6
 **What to build:** Descriptor + all three registration points (the config switch silently skips unknown ids — that is the self-skip trap the design calls out).
 
 **Acceptance criteria:**
-- [ ] Synthetic facts: `NavigateTo("/edr/form")` reference + `@page "/edr/form"` route bridge to a `NavigatesTo` edge
-- [ ] Provider self-skips (no activation, no errors) on a workspace with zero razor facts
-- [ ] Provider selectable by config name `blazor` and present in both default lists
+- [x] Synthetic facts: `NavigateTo("/edr/form")` reference + `@page "/edr/form"` route bridge to a `NavigatesTo` edge
+- [x] Provider self-skips (no activation, no errors) on a workspace with zero razor facts
+- [x] Provider selectable by config name `blazor` and present in both default lists
 
 ### Task 4: Component references in impact
 
