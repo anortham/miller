@@ -359,7 +359,7 @@ public sealed class SqliteBridgeReaderTests : IDisposable
                    '{"route_template":"/calendar"}'),
                   ('sf-blazor-component', 'f-razor', 'Components/Widget.razor', 'razor', 'blazor.component_reference.v1',
                    'component_reference', 'element', 's-razor-widget', 20, 0, 20, 30, 161, 190, 1.0,
-                   '{"component_name":"CalendarWidget"}'),
+                   '{"tag":"CalendarWidget","containing_component":"Widget","namespace_context":["Example.Components"],"generic_arguments":[]}'),
                   ('sf-ignored', 'f-css', 'web/site.css', 'css', 'css.selector_rule.v1',
                    'selector', 'rule_set', NULL, 60, 0, 60, 10, 200, 210, 1.0,
                    '{"selector":".calendar"}');
