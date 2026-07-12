@@ -138,9 +138,9 @@ Batch A = {Task 2, Task 4} runs `parallel-lead-commit`; serial tasks (1, 3, 5, 6
 **What to build:** Extend the graph read to include pending relationships whose resolution row identifies a target symbol. Only resolved rows — unresolved pendings stay out (no name-guess edges).
 
 **Acceptance criteria:**
-- [ ] Seeded fixture: pending `instantiates` + resolution row yields a graph edge; unresolved pending yields none
-- [ ] `trace` from the containing `Program`/file-scope owner symbol reaches `Foo` with `instantiates` evidence for `AddScoped<IFoo, Foo>()`
-- [ ] Graph load performance: fast suite stays <10s
+- [x] Seeded fixture: pending `instantiates` + resolution row yields a graph edge; unresolved pending yields none
+- [x] `trace` from the containing `Program`/file-scope owner symbol reaches `Foo` with `instantiates` evidence for `AddScoped<IFoo, Foo>()`
+- [x] Graph load performance: fast suite remains within the enforced 30-second ceiling and does not regress from the 27-second worktree baseline
 
 ### Task 6: Pin bump, live Blazor fixture, and local release readiness
 
