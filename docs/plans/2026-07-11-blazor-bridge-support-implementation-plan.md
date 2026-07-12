@@ -66,8 +66,8 @@ Batch A = {Task 2, Task 4} runs `parallel-lead-commit`; serial tasks (1, 3, 5, 6
 **What to build:** Constants + whitelist entries + reader test proving the three fact ids round-trip from a seeded sqlite fixture (follow existing whitelist tests in `SqliteBridgeReaderTests.cs`).
 
 **Acceptance criteria:**
-- [ ] Red first: reader test seeding the three fact ids fails before the whitelist change
-- [ ] All three fact ids load; unrelated ids still excluded
+- [x] Red first: reader test seeding the three fact ids fails before the whitelist change
+- [x] All three fact ids load; unrelated ids still excluded
 
 ### Task 2: Blazor route adapter and matcher semantics
 
