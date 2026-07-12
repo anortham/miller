@@ -13,6 +13,15 @@ public sealed class BlazorComponentGraphReaderTests
     private const string StoreWidgetId = "20000000000000000000000000000003";
 
     [Fact]
+    public void Read_NoBlazorFacts_ReturnsEmptyWithoutOpeningDatabase()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.db");
+
+        Assert.Empty(BlazorComponentGraphReader.Read(dbPath, []));
+        Assert.False(File.Exists(dbPath));
+    }
+
+    [Fact]
     public void Read_SimpleUniqueComponent_ProducesUsesEdgeAndReverseReachability()
     {
         using var fixture = CreateFixture(

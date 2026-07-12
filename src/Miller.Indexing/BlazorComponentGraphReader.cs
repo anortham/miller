@@ -19,6 +19,14 @@ public static class BlazorComponentGraphReader
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
         ArgumentNullException.ThrowIfNull(facts);
 
+        if (!facts.Any(fact => string.Equals(
+                fact.PatternId,
+                BridgeStructuralPatterns.BlazorComponentReference,
+                StringComparison.Ordinal)))
+        {
+            return [];
+        }
+
         var components = ReadComponents(dbPath);
         var byName = components
             .GroupBy(component => component.Name, StringComparer.Ordinal)
