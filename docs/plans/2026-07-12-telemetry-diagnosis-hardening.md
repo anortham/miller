@@ -64,7 +64,7 @@
 - Consumes: `EditService.EditResult`, `TelemetryContext.Current`, and `TelemetryScope.SetMetadata(string, string?)`.
 - Produces: nullable `EditResult.FailureReason` and persisted `metadata_json.edit_failure_reason` for error outcomes.
 
-**Contract inputs:** Stable privacy-safe buckets must cover at least `no_match`, `ambiguous_match`, `stale_target`, `invalid_request`, `target_not_found`, `apply_failed`, and `unknown`. Successful and empty/no-op edits do not emit a failure reason.
+**Contract inputs:** Stable privacy-safe buckets must cover at least `no_match`, `ambiguous_match`, `stale_target`, `invalid_request`, `target_not_found`, `apply_failed`, and `unknown`. Successful and no-op edits do not emit a failure reason; expected resolution failures may retain their existing `empty` outcome while carrying a diagnostic bucket.
 
 **File ownership:** `src/Miller.Server/Tools/EditService.cs`, `src/Miller.Server/Tools/EditTool.cs`, `tests/Miller.Tests/Server/EditToolTests.cs`
 
@@ -77,10 +77,10 @@
 **Approach:** Keep the mapping local to `EditService`; reuse its existing structured planner errors and result helpers. Exercise representative no-match, ambiguity, stale-target, invalid-request, target-not-found, and apply failure paths, plus one success case proving absence.
 
 **Acceptance criteria:**
-- [ ] Representative edit error paths return the specified stable failure buckets without changing user-facing output.
-- [ ] `EditTool` writes `edit_failure_reason` only when the structured result supplies one.
-- [ ] No raw selector, path, old text, new text, or rendered error is persisted in the new metadata value.
-- [ ] Worker-scope verification passes and the change is handed to the lead per `parallel-lead-commit`.
+- [x] Representative edit error paths return the specified stable failure buckets without changing user-facing output.
+- [x] `EditTool` writes `edit_failure_reason` only when the structured result supplies one.
+- [x] No raw selector, path, old text, new text, or rendered error is persisted in the new metadata value.
+- [x] Worker-scope verification passes and the change is handed to the lead per `parallel-lead-commit`.
 
 ### Task 2: Runtime, index-state, and wait metadata
 
@@ -108,11 +108,11 @@
 **Approach:** Initialize safe defaults before invoking the tool so every success/empty/error branch is covered. Mark only the existing refresh and lazy materialization paths; do not add timing thresholds, background work, or new locks.
 
 **Acceptance criteria:**
-- [ ] Real MCP-filter tests persist `server_version`, all three `index_state` mappings, and `wait_reason=none` by default.
-- [ ] Provider tests prove registered refresh emits `workspace_refresh`, lazy load emits `index_load`, and refresh wins when both occur.
-- [ ] Existing `index_fresh` column behavior remains unchanged.
-- [ ] No refresh, cache, or locking semantics change.
-- [ ] Worker-scope verification passes and the change is handed to the lead per `parallel-lead-commit`.
+- [x] Real MCP-filter tests persist `server_version`, all three `index_state` mappings, and `wait_reason=none` by default.
+- [x] Provider tests prove registered refresh emits `workspace_refresh`, lazy load emits `index_load`, and refresh wins when both occur.
+- [x] Existing `index_fresh` column behavior remains unchanged.
+- [x] No refresh, cache, or locking semantics change.
+- [x] Worker-scope verification passes and the change is handed to the lead per `parallel-lead-commit`.
 
 ### Task 3: File-mode path recovery guidance
 

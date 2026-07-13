@@ -1,7 +1,9 @@
 using System.Text.Json;
 using Miller.Indexing;
+using Miller.Server;
 using Miller.Server.Hosting;
 using Miller.Server.Resolution;
+using Miller.Server.Telemetry;
 using Miller.Server.Tools;
 using Miller.Tests.Indexing;
 using Xunit;
@@ -130,6 +132,23 @@ public sealed class EditToolTests : IDisposable
         return new EditService(index, resolver, fx.DbPath, _root, applier, wt, recoveryOptions: recovery);
     }
 
+    private EditTool BuildTool(JulieDbFixture fx)
+    {
+        var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath));
+        var holder = new IndexHolder(index, builtRevision: 0);
+        var resolver = new SmartTargetResolver(holder);
+        var workspace = WorkspaceContext.Create(_root, AppContext.BaseDirectory, _root) with
+        {
+            ExtractDbPath = fx.DbPath,
+        };
+        return new EditTool(
+            holder,
+            resolver,
+            workspace,
+            new EditApplier(() => new NoopLease()),
+            new RecordingWriteThrough());
+    }
+
     private static EditRequest Req(string op, string target) => new(op, target);
 
     private string AbsPath(string rel) => Path.Combine(_root, rel);
@@ -176,10 +195,10 @@ public sealed class EditToolTests : IDisposable
         });
 
         Assert.False(result.Applied);
-        Assert.Contains("@@", result.Output);                 // a unified-diff hunk header
-        Assert.Contains("return 42", result.Output);          // the new body appears as an added line
-        Assert.Contains("return _items.Sum", result.Output);  // the old body appears as a removed line
-        // Disk untouched.
+        Assert.Null(result.FailureReason);
+        Assert.Contains("@@", result.Output);
+        Assert.Contains("return 42", result.Output);
+        Assert.Contains("return _items.Sum", result.Output);
         Assert.Equal(JulieDbFixture.OrderServiceContent, File.ReadAllText(AbsPath("orders/OrderService.cs")));
         Assert.Empty(wt.Converged);
     }
@@ -512,6 +531,7 @@ public sealed class EditToolTests : IDisposable
         });
 
         Assert.False(result.Applied);
+        Assert.Null(result.FailureReason);
         Assert.Contains("No change", result.Output);
         Assert.Contains("match_mode: exact", result.Output);
         Assert.Contains("disk_verified: true", result.Output);
@@ -713,6 +733,7 @@ public sealed class EditToolTests : IDisposable
         });
 
         Assert.False(result.Applied);
+        Assert.Equal("ambiguous_match", result.FailureReason);
         Assert.Contains("ambiguous", result.Output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("line", result.Output, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(source, File.ReadAllText(AbsPath(relPath)));
@@ -733,6 +754,7 @@ public sealed class EditToolTests : IDisposable
         });
 
         Assert.False(result.Applied);
+        Assert.Equal("no_match", result.FailureReason);
         Assert.Contains("not found", result.Output);
         Assert.Equal(JulieDbFixture.OrderServiceContent, File.ReadAllText(AbsPath("orders/OrderService.cs")));
     }
@@ -760,6 +782,7 @@ public sealed class EditToolTests : IDisposable
         });
 
         Assert.False(result.Applied);
+        Assert.Equal("stale_target", result.FailureReason);
         Assert.Contains("old_text not found in current file", result.Output);
         Assert.Contains("indexed source still contains it near line 2", result.Output);
         Assert.Contains("Wait for the watcher or run workspace refresh", result.Output);
@@ -794,7 +817,6 @@ public sealed class EditToolTests : IDisposable
     {
         using var fx = JulieDbFixture.CreateForEdit();
         LayFiles(EditFixtureFiles);
-        // Mutate the disk file so it no longer matches the indexed snapshot → Stale.
         File.WriteAllText(AbsPath("orders/OrderService.cs"),
             JulieDbFixture.OrderServiceContent + "// drifted\n");
         var (svc, _) = Build(fx);
@@ -806,8 +828,8 @@ public sealed class EditToolTests : IDisposable
         });
 
         Assert.False(result.Applied);
+        Assert.Equal("stale_target", result.FailureReason);
         Assert.Contains("stale", result.Output, StringComparison.OrdinalIgnoreCase);
-        // The drifted disk content survives (no write).
         Assert.EndsWith("// drifted\n", File.ReadAllText(AbsPath("orders/OrderService.cs")));
     }
 
@@ -1075,7 +1097,6 @@ public sealed class EditToolTests : IDisposable
     [Fact]
     public void Execute_AmbiguousSymbol_ReturnsCandidates_NoWrite()
     {
-        // "Total" matches the OrderService.Total method AND the homonym Invoice.cs Total → ambiguous.
         using var fx = JulieDbFixture.CreateForEdit();
         LayFiles(EditFixtureFiles);
         var (svc, _) = Build(fx);
@@ -1087,8 +1108,8 @@ public sealed class EditToolTests : IDisposable
         });
 
         Assert.False(result.Applied);
+        Assert.Equal("ambiguous_match", result.FailureReason);
         Assert.Contains("candidate", result.Output, StringComparison.OrdinalIgnoreCase);
-        // Both files untouched.
         Assert.Equal(JulieDbFixture.OrderServiceContent, File.ReadAllText(AbsPath("orders/OrderService.cs")));
         Assert.Equal(JulieDbFixture.InvoiceContent, File.ReadAllText(AbsPath("billing/Invoice.cs")));
     }
@@ -1107,6 +1128,7 @@ public sealed class EditToolTests : IDisposable
         });
 
         Assert.False(result.Applied);
+        Assert.Equal("target_not_found", result.FailureReason);
         Assert.Contains("not found", result.Output, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -1194,16 +1216,12 @@ public sealed class EditToolTests : IDisposable
     [Fact]
     public void Execute_RenameSymbol_ApplyFails_ReportsFreshnessVerdict_OnFreshWorkspace()
     {
-        // Regression: the multi-file (rename) apply-failure path must populate the freshness verdict (IndexFresh),
-        // matching the single-file path. The workspace is laid Fresh (disk == indexed snapshot, anyStale=false),
-        // so the gate passed; we then force the APPLY to fail (writer lock unavailable). The error result must
-        // still carry IndexFresh=true — not null — so telemetry sees the gate verdict that was already computed.
         using var fx = JulieDbFixture.CreateForEdit();
         LayFiles(EditFixtureFiles);
 
         var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath));
         var resolver = new SmartTargetResolver(index);
-        var lockUnavailableApplier = new EditApplier(() => null); // simulates another instance holding the lock
+        var lockUnavailableApplier = new EditApplier(() => null);
         var wt = new RecordingWriteThrough();
         var svc = new EditService(index, resolver, fx.DbPath, _root, lockUnavailableApplier, wt);
 
@@ -1215,9 +1233,9 @@ public sealed class EditToolTests : IDisposable
 
         Assert.False(result.Applied);
         Assert.Equal("error", result.Outcome);
-        Assert.True(result.IndexFresh);     // the computed verdict is reported, not dropped to null
-        Assert.Empty(wt.Converged);         // nothing converged because nothing was written
-        // Disk untouched (apply never committed).
+        Assert.Equal("apply_failed", result.FailureReason);
+        Assert.True(result.IndexFresh);
+        Assert.Empty(wt.Converged);
         Assert.Equal(JulieDbFixture.OrderServiceContent, File.ReadAllText(AbsPath("orders/OrderService.cs")));
     }
 
@@ -1235,6 +1253,7 @@ public sealed class EditToolTests : IDisposable
         });
 
         Assert.False(result.Applied);
+        Assert.Equal("invalid_request", result.FailureReason);
         Assert.Contains("identifier", result.Output, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(JulieDbFixture.OrderServiceContent, File.ReadAllText(AbsPath("orders/OrderService.cs")));
     }
@@ -1251,7 +1270,59 @@ public sealed class EditToolTests : IDisposable
         var result = svc.Execute(Req("frobnicate", "OrderService.Total"));
 
         Assert.False(result.Applied);
+        Assert.Equal("invalid_request", result.FailureReason);
         Assert.Contains("operation", result.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Edit_PropagatesStructuredFailureReasonWithoutPersistingRawEditData()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        var (service, _) = Build(fx);
+        EditService.EditResult directResult = service.Execute(Req("replace_text", "orders/OrderService.cs") with
+        {
+            OldText = "NoSuchSecretSelector",
+            NewText = "SecretReplacement",
+            Apply = true,
+        });
+        EditTool tool = BuildTool(fx);
+
+        using var ledger = TelemetryLedger.Open(Path.Combine(_root, "telemetry.db"), "ws-edit", _root);
+        using var scope = ledger.Measure("edit", op: null);
+        string output = tool.Edit(
+            "replace_text",
+            "orders/OrderService.cs",
+            old_text: "NoSuchSecretSelector",
+            new_text: "SecretReplacement",
+            apply: true);
+
+        Assert.Equal(directResult.Output, output);
+        using JsonDocument metadata = JsonDocument.Parse(scope.MetadataJson);
+        Assert.Equal("no_match", metadata.RootElement.GetProperty("edit_failure_reason").GetString());
+        Assert.DoesNotContain("orders/OrderService.cs", scope.MetadataJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("NoSuchSecretSelector", scope.MetadataJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("SecretReplacement", scope.MetadataJson, StringComparison.Ordinal);
+        Assert.DoesNotContain(directResult.Output, scope.MetadataJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Edit_SuccessOmitsFailureReasonMetadata()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        EditTool tool = BuildTool(fx);
+
+        using var ledger = TelemetryLedger.Open(Path.Combine(_root, "telemetry.db"), "ws-edit", _root);
+        using var scope = ledger.Measure("edit", op: null);
+        string output = tool.Edit(
+            "replace_symbol_body",
+            "OrderService.Total",
+            new_text: "{ return 42; }");
+
+        Assert.Contains("Preview", output, StringComparison.Ordinal);
+        using JsonDocument metadata = JsonDocument.Parse(scope.MetadataJson);
+        Assert.False(metadata.RootElement.TryGetProperty("edit_failure_reason", out _));
     }
 
     [Fact]

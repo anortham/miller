@@ -37,6 +37,14 @@ namespace Miller.Server.Tools;
 /// </summary>
 public sealed class EditService
 {
+    private const string FailureNoMatch = "no_match";
+    private const string FailureAmbiguousMatch = "ambiguous_match";
+    private const string FailureStaleTarget = "stale_target";
+    private const string FailureInvalidRequest = "invalid_request";
+    private const string FailureTargetNotFound = "target_not_found";
+    private const string FailureApplyFailed = "apply_failed";
+    private const string FailureUnknown = "unknown";
+
     private readonly MillerRepositoryIndex _index;
     private readonly SmartTargetResolver _resolver;
     private readonly string _dbPath;
@@ -102,8 +110,10 @@ public sealed class EditService
     /// <param name="IndexFresh">The freshness verdict for the touched files (null when not evaluated, e.g. preview / error).</param>
     /// <param name="Outcome">A coarse classification for telemetry: "ok" | "empty" | "error".</param>
     /// <param name="ResultCount">Files touched (apply) or sites previewed (rename preview); 0 on error/not-found.</param>
+    /// <param name="FailureReason">A privacy-safe stable failure bucket, or null when the edit did not fail.</param>
     public readonly record struct EditResult(
-        string Output, bool Applied, bool StaleAllowed, bool? IndexFresh, string Outcome, int ResultCount);
+        string Output, bool Applied, bool StaleAllowed, bool? IndexFresh, string Outcome, int ResultCount,
+        string? FailureReason = null);
 
     /// <summary>Run the full edit pipeline for <paramref name="request"/>. Never throws for an expected condition.</summary>
     /// <exception cref="ArgumentNullException"><paramref name="request"/> is null.</exception>
@@ -114,13 +124,16 @@ public sealed class EditService
         bool json = string.Equals(request.Format, "json", StringComparison.OrdinalIgnoreCase);
 
         if (!TryParseOperation(request.Operation, out var op))
-            return Error($"unknown operation '{request.Operation}'. Valid: {string.Join(", ", OperationNames)}.", json);
+            return Error($"unknown operation '{request.Operation}'. Valid: {string.Join(", ", OperationNames)}.", json,
+                failureReason: FailureInvalidRequest);
 
         if (!TryParseOccurrence(request.Occurrence, out var occurrence))
-            return Error($"unknown occurrence '{request.Occurrence}'. Valid: first, last, all.", json);
+            return Error($"unknown occurrence '{request.Occurrence}'. Valid: first, last, all.", json,
+                failureReason: FailureInvalidRequest);
 
         if (op == EditOperation.ReplaceText && !TryParseMatchMode(request.MatchMode, out _))
-            return Error($"unknown match_mode '{request.MatchMode}'. Valid: auto, exact, normalized, fuzzy.", json);
+            return Error($"unknown match_mode '{request.MatchMode}'. Valid: auto, exact, normalized, fuzzy.", json,
+                failureReason: FailureInvalidRequest);
 
         return op == EditOperation.RenameSymbol
             ? ExecuteRename(request, json)
@@ -157,7 +170,8 @@ public sealed class EditService
                     return Error(
                         $"symbol '{sym.Value.Name}' already has a doc comment. Use replace_text to modify the " +
                         "existing doc, or insert_before to prepend lines — add_doc only documents an undocumented symbol.",
-                        json);
+                        json,
+                        failureReason: FailureInvalidRequest);
                 }
 
                 var span = ExtractReader.ReadEditSpan(_dbPath, sym.Value.SymbolId);
@@ -165,7 +179,8 @@ public sealed class EditService
                     return Error(
                         $"symbol '{sym.Value.Name}' has no recorded span in the current index — the index is " +
                         "behind the file (its id changed since the last extract). Re-index (or wait for the " +
-                        "freshness poll) and retry.", json);
+                        "freshness poll) and retry.", json,
+                        failureReason: FailureStaleTarget);
                 return PlanAndFinishSingleFile(request, op, occurrence, sym.Value.FilePath, span, json, allowRecovery);
             }
             case TargetResolution.Candidates cands:
@@ -184,7 +199,8 @@ public sealed class EditService
     {
         string absPath = ToAbsolute(relativePath);
         if (!File.Exists(absPath))
-            return Error($"file not on disk: {relativePath} (index references it, but it is missing).", json);
+            return Error($"file not on disk: {relativePath} (index references it, but it is missing).", json,
+                failureReason: FailureTargetNotFound);
 
         string content = ReadDisk(absPath);
 
@@ -193,11 +209,13 @@ public sealed class EditService
         if (op == EditOperation.ReplaceText)
         {
             if (request.NewText is null)
-                return Error("new_text is required for replace_text.", json);
+                return Error("new_text is required for replace_text.", json,
+                    failureReason: FailureInvalidRequest);
 
             var replace = PlanReplaceText(relativePath, content, request, occurrence);
             if (replace.ErrorMessage is not null)
-                return Error(replace.ErrorMessage, json);
+                return Error(replace.ErrorMessage, json,
+                    failureReason: replace.FailureReason ?? FailureUnknown);
 
             plan = replace.Plan!;
             evidence = replace.Evidence;
@@ -216,7 +234,12 @@ public sealed class EditService
         }
 
         if (!plan.IsSuccess)
-            return Error(EditPlanFailureMessage(plan.Error!, op, relativePath, request.OldText), json);
+        {
+            EditError error = plan.Error!;
+            string message = EditPlanFailureMessage(
+                error, op, relativePath, request.OldText, out string failureReason);
+            return Error(message, json, failureReason: failureReason);
+        }
 
         // replace_text edits carry empty replacements (the planner only decides spans); fill in new_text here.
         IReadOnlyList<TextEdit> edits = op == EditOperation.ReplaceText
@@ -232,7 +255,8 @@ public sealed class EditService
         {
             // A span out of range / overlap means the index span no longer fits the disk content (drift) — a
             // clean, actionable message rather than a crash.
-            return Error($"edit span does not fit the current file content ({ex.Message}); re-index and retry.", json);
+            return Error($"edit span does not fit the current file content ({ex.Message}); re-index and retry.", json,
+                failureReason: FailureStaleTarget);
         }
 
         var planned = new PlannedEdit(absPath, content, newContent, edits);
@@ -272,7 +296,7 @@ public sealed class EditService
 
         var applyResult = _applier.Apply([planned]);
         if (!applyResult.Success)
-            return Error(applyResult.Message, json, fresh);
+            return Error(applyResult.Message, json, fresh, FailureApplyFailed);
 
         _writeThrough.Converge([planned.FilePath]);
         return Applied(diff, staleAllowed: !fresh && request.AllowStale, filesWritten: applyResult.FilesWritten,
@@ -307,7 +331,8 @@ public sealed class EditService
             {
                 return ReplaceTextPlanResult.Error(
                     "no indexed edit candidates matched the selector. Narrow the edit with a different query, " +
-                    "anchor, or line hint, or retry without indexed selectors.");
+                    "anchor, or line hint, or retry without indexed selectors.",
+                    FailureNoMatch);
             }
 
             var fallback = TextReplaceMatcher.Plan(content, oldText, occurrence, matchMode);
@@ -354,7 +379,8 @@ public sealed class EditService
         {
             return ReplaceTextPlanResult.Error(
                 "indexed edit candidates were found, but old_text did not verify against the current disk text. " +
-                "Run workspace refresh or retry with current old_text.");
+                "Run workspace refresh or retry with current old_text.",
+                FailureStaleTarget);
         }
 
         if (successes.Count > 1)
@@ -364,7 +390,8 @@ public sealed class EditService
                 s.Candidate.LineEnd.ToString(System.Globalization.CultureInfo.InvariantCulture)));
             return ReplaceTextPlanResult.Error(
                 "ambiguous indexed edit candidates matched current disk text at line ranges " + examples +
-                ". Retry with a narrower line or anchor selector.");
+                ". Retry with a narrower line or anchor selector.",
+                FailureAmbiguousMatch);
         }
 
         var (plan, candidate) = successes[0];
@@ -506,7 +533,8 @@ public sealed class EditService
     private EditResult ExecuteRename(EditRequest request, bool json, bool allowRecovery = true)
     {
         if (string.IsNullOrWhiteSpace(request.NewText))
-            return Error("new_text (the new name) is required for rename_symbol.", json);
+            return Error("new_text (the new name) is required for rename_symbol.", json,
+                failureReason: FailureInvalidRequest);
 
         var resolution = ResolveSymbol(request.Target, request.Scope);
         IndexedSymbol target;
@@ -534,11 +562,13 @@ public sealed class EditService
 
         var files = BuildRenameFiles(oldName, sites, target, span);
         if (files.Count == 0)
-            return Error($"no occurrences of '{oldName}' found to rename.", json);
+            return Error($"no occurrences of '{oldName}' found to rename.", json,
+                failureReason: FailureNoMatch);
 
         RenamePlan plan = RenamePlanner.Plan(oldName, newName, files);
         if (!plan.IsSuccess)
-            return Error(plan.Error!.Message, json);
+            return Error(plan.Error!.Message, json,
+                failureReason: FailureReasonFor(plan.Error.Kind));
 
         string diff = RenderRenameDiff(plan);
         string summary = RenderRenameSummary(oldName, newName, plan);
@@ -579,7 +609,7 @@ public sealed class EditService
             // The gate has been evaluated for every touched file (anyStale), so report the freshness verdict on
             // failure too — matching the single-file apply-failure path (FinishSingleFile) so telemetry's
             // IndexFresh is populated whenever the gate ran.
-            return Error(applyResult.Message, json, !anyStale);
+            return Error(applyResult.Message, json, !anyStale, FailureApplyFailed);
 
         _writeThrough.Converge(plan.PlannedEdits.Select(p => p.FilePath).ToArray());
 
@@ -838,8 +868,8 @@ public sealed class EditService
                 w.WriteBoolean("applied", false);
                 w.WriteBoolean("index_fresh", false);
                 w.WriteString("error", reason);
-            }), false, false, false, "error", 0);
-        return new EditResult(reason, false, false, IndexFresh: false, "error", 0);
+            }), false, false, false, "error", 0, FailureStaleTarget);
+        return new EditResult(reason, false, false, IndexFresh: false, "error", 0, FailureStaleTarget);
     }
 
     /// <summary>
@@ -936,14 +966,15 @@ public sealed class EditService
                     w.WriteEndObject();
                 }
                 w.WriteEndArray();
-            }), false, false, null, "empty", matches.Count);
+            }), false, false, null, "empty", matches.Count, FailureAmbiguousMatch);
 
         var sb = new StringBuilder();
         sb.Append("Ambiguous target — multiple candidates; pass scope=<file> to disambiguate:\n");
         foreach (var s in matches)
             sb.Append("  ").Append(s.Name).Append("  ").Append(s.Kind).Append("  ")
               .Append(s.FilePath).Append(':').Append(s.StartLine).Append('\n');
-        return new EditResult(sb.ToString().TrimEnd('\n'), false, false, null, "empty", matches.Count);
+        return new EditResult(sb.ToString().TrimEnd('\n'), false, false, null, "empty", matches.Count,
+            FailureAmbiguousMatch);
     }
 
     private static EditResult NotFound(string target, bool json)
@@ -951,11 +982,12 @@ public sealed class EditService
         string msg = $"'{target}' not found. Use search/inspect to locate it.";
         return json
             ? new EditResult($"{{\"applied\":false,\"not_found\":{ServerJson.String(target)}}}",
-                false, false, null, "empty", 0)
-            : new EditResult(msg, false, false, null, "empty", 0);
+                false, false, null, "empty", 0, FailureTargetNotFound)
+            : new EditResult(msg, false, false, null, "empty", 0, FailureTargetNotFound);
     }
 
-    private static EditResult Error(string message, bool json, bool? indexFresh = null)
+    private static EditResult Error(
+        string message, bool json, bool? indexFresh = null, string failureReason = FailureUnknown)
     {
         if (json)
             return new EditResult(JsonObject(w =>
@@ -963,8 +995,8 @@ public sealed class EditService
                 w.WriteBoolean("applied", false);
                 w.WriteString("error", message);
                 if (indexFresh is { } f) w.WriteBoolean("index_fresh", f);
-            }), false, false, indexFresh, "error", 0);
-        return new EditResult($"edit: {message}", false, false, indexFresh, "error", 0);
+            }), false, false, indexFresh, "error", 0, failureReason);
+        return new EditResult($"edit: {message}", false, false, indexFresh, "error", 0, failureReason);
     }
 
     // ---------- helpers ----------
@@ -1041,8 +1073,10 @@ public sealed class EditService
 
     private static string ReadDisk(string absPath) => File.ReadAllText(absPath, Encoding.UTF8);
 
-    private string EditPlanFailureMessage(EditError error, EditOperation op, string relativePath, string? oldText)
+    private string EditPlanFailureMessage(
+        EditError error, EditOperation op, string relativePath, string? oldText, out string failureReason)
     {
+        failureReason = FailureReasonFor(error.Kind);
         if (op != EditOperation.ReplaceText ||
             error.Kind != EditErrorKind.TextNotFound ||
             string.IsNullOrEmpty(oldText))
@@ -1054,6 +1088,7 @@ public sealed class EditService
         if (match is null)
             return error.Message;
 
+        failureReason = FailureStaleTarget;
         return $"old_text not found in current file: \"{oldText}\". The indexed source still contains it " +
                $"near line {match.Line}, so the file likely changed after the index snapshot. Wait for the " +
                "watcher or run workspace refresh, then retry with the current text.";
@@ -1113,13 +1148,23 @@ public sealed class EditService
         _ => "all",
     };
 
-    private sealed record ReplaceTextPlanResult(EditPlan? Plan, EditMatchEvidence? Evidence, string? ErrorMessage)
+    private static string FailureReasonFor(EditErrorKind kind) => kind switch
+    {
+        EditErrorKind.TextNotFound => FailureNoMatch,
+        EditErrorKind.InvalidSpan => FailureStaleTarget,
+        EditErrorKind.BodySpanUnavailable or EditErrorKind.InvalidNewName or EditErrorKind.MissingArgument =>
+            FailureInvalidRequest,
+        _ => FailureUnknown,
+    };
+
+    private sealed record ReplaceTextPlanResult(
+        EditPlan? Plan, EditMatchEvidence? Evidence, string? ErrorMessage, string? FailureReason)
     {
         public static ReplaceTextPlanResult Success(EditPlan plan, EditMatchEvidence evidence) =>
-            new(plan, evidence, ErrorMessage: null);
+            new(plan, evidence, ErrorMessage: null, FailureReason: null);
 
-        public static ReplaceTextPlanResult Error(string message) =>
-            new(Plan: null, Evidence: null, message);
+        public static ReplaceTextPlanResult Error(string message, string failureReason) =>
+            new(Plan: null, Evidence: null, message, failureReason);
     }
 
     private sealed record EditMatchEvidence(

@@ -69,8 +69,8 @@ public static class TelemetryCallToolFilter
             // recording "not measured" rather than a fabricated value. Set once up front so every outcome branch
             // (ok/empty/error/throw) carries it.
             var freshProbe = request.Services?.GetService<Hosting.IndexFreshProbe>();
-            if (freshProbe is not null)
-                scope.IndexFresh = freshProbe.Compute();
+            scope.IndexFresh = freshProbe?.Compute();
+            scope.SetMetadata("server_version", global::Miller.Server.MillerVersion.Current);
 
             try
             {
@@ -139,6 +139,16 @@ public static class TelemetryCallToolFilter
                 EvaluateBudgets(budgets, loggerFactory, tool, budgetStart, scope.EstTokens ?? 0);
                 LogCallDiagnostic(tool, scope, budgetStart, ex);
                 throw;
+            }
+            finally
+            {
+                scope.SetMetadata("index_state", scope.IndexFresh switch
+                {
+                    true => "fresh",
+                    false => "stale",
+                    null => "unknown",
+                });
+                scope.SetWaitReason("none");
             }
         };
     }

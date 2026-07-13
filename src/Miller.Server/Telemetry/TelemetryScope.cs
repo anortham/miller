@@ -20,6 +20,7 @@ public sealed class TelemetryScope : IDisposable
     private readonly long _startTimestamp;
     private readonly TelemetryScope? _previousCurrent;
     private bool _disposed;
+    private bool _waitReasonSet;
 
     internal TelemetryScope(TelemetryLedger ledger, string tool, string? op, string? correlationId = null)
     {
@@ -153,6 +154,17 @@ public sealed class TelemetryScope : IDisposable
         JsonObject metadata = MetadataObject();
         metadata[key] = value;
         MetadataJson = metadata.ToJsonString();
+    }
+
+    /// <summary>Record the first wait reason observed during the call.</summary>
+    public void SetWaitReason(string reason)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        if (_waitReasonSet)
+            return;
+
+        _waitReasonSet = true;
+        SetMetadata("wait_reason", reason);
     }
 
     /// <summary>Classify an empty result with a compact, query-safe enum.</summary>

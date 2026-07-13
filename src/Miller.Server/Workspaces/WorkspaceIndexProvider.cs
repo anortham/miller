@@ -1,5 +1,6 @@
 using Miller.Indexing;
 using Miller.Server.Resolution;
+using Miller.Server.Telemetry;
 using Miller.Server.Tools;
 
 namespace Miller.Server.Workspaces;
@@ -407,6 +408,7 @@ public sealed class WorkspaceIndexProvider
         if (ensureFresh)
         {
             long revisionBeforeRefresh = row.LastRevision ?? 0;
+            TelemetryContext.Current?.SetWaitReason("workspace_refresh");
             refreshResult = _refresh(row.WorkspaceId);
             if (refreshResult.Status == WorkspaceRefreshStatus.MissingRoot)
                 throw new DirectoryNotFoundException(refreshResult.Error ?? $"Workspace root not found: {row.CanonicalRoot}");
@@ -480,6 +482,8 @@ public sealed class WorkspaceIndexProvider
 
         try
         {
+            if (!lazy.IsValueCreated)
+                TelemetryContext.Current?.SetWaitReason("index_load");
             return lazy.Value;
         }
         catch
@@ -505,6 +509,7 @@ public sealed class WorkspaceIndexProvider
             if (cachedSidecar is not null)
                 return cachedSidecar;
 
+            TelemetryContext.Current?.SetWaitReason("index_load");
             FtsSymbolSearchIndex sidecarIndex = _sidecar.OpenRequired(symbolsDbPath, key.Revision);
             return ReplaceSymbolSearchCache(key, new CachedSymbolSearch(sidecarIndex, IsSidecar: true));
         }
@@ -555,6 +560,8 @@ public sealed class WorkspaceIndexProvider
 
         try
         {
+            if (!lazy.IsValueCreated)
+                TelemetryContext.Current?.SetWaitReason("index_load");
             return lazy.Value;
         }
         catch
@@ -587,6 +594,8 @@ public sealed class WorkspaceIndexProvider
 
         try
         {
+            if (!lazy.IsValueCreated)
+                TelemetryContext.Current?.SetWaitReason("index_load");
             return lazy.Value;
         }
         catch
@@ -620,6 +629,8 @@ public sealed class WorkspaceIndexProvider
 
         try
         {
+            if (!lazy.IsValueCreated)
+                TelemetryContext.Current?.SetWaitReason("index_load");
             return lazy.Value;
         }
         catch
@@ -651,6 +662,8 @@ public sealed class WorkspaceIndexProvider
 
         try
         {
+            if (!lazy.IsValueCreated)
+                TelemetryContext.Current?.SetWaitReason("index_load");
             return lazy.Value;
         }
         catch

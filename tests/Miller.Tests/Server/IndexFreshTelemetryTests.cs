@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.IO.Pipelines;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -23,6 +24,13 @@ public sealed class FreshPinTool
 {
     [McpServerTool(Name = "fresh_pin"), Description("Returns ok (index_fresh telemetry pin).")]
     public string Ping() => "ok";
+
+    [McpServerTool(Name = "fresh_override_pin"), Description("Overrides index freshness and returns ok.")]
+    public string Override()
+    {
+        TelemetryContext.Current!.IndexFresh = false;
+        return "ok";
+    }
 }
 
 /// <summary>
@@ -51,17 +59,29 @@ public sealed class IndexFreshTelemetryTests : IDisposable
     }
 
     [Theory]
-    // built==latest && queueEmpty -> index_fresh=1; a writer-ahead revision -> index_fresh=0.
-    [InlineData(5L, 5L, true, 1)]
-    [InlineData(5L, 7L, true, 0)]
-    [InlineData(5L, 5L, false, 0)]
-    public async Task CentralFilter_StampsIndexFresh_FromTheRegisteredProbe(
-        long built, long latest, bool queueEmpty, int expectedFresh)
+    [InlineData(5L, 5L, true, false, "fresh_pin", 1, "fresh")]
+    [InlineData(5L, 7L, true, false, "fresh_pin", 0, "stale")]
+    [InlineData(5L, 5L, false, false, "fresh_pin", 0, "stale")]
+    [InlineData(5L, 5L, true, true, "fresh_pin", null, "unknown")]
+    [InlineData(5L, 5L, true, false, "fresh_override_pin", 0, "stale")]
+    public async Task CentralFilter_PersistsFinalIndexFreshAndMatchingIndexState(
+        long built,
+        long latest,
+        bool queueEmpty,
+        bool revisionReadFails,
+        string tool,
+        int? expectedFresh,
+        string expectedIndexState)
     {
         var ct = TestContext.Current.CancellationToken;
         using var fx = JulieDbFixture.CreateDefault();
         var holder = new IndexHolder(MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath)), built);
-        var probe = new IndexFreshProbe(holder, latestRevision: () => latest, queueEmpty: () => queueEmpty);
+        var probe = new IndexFreshProbe(
+            holder,
+            latestRevision: revisionReadFails
+                ? () => throw new InvalidOperationException("revision unavailable")
+                : () => latest,
+            queueEmpty: () => queueEmpty);
         using var ledger = TelemetryLedger.Open(_telemetryDb, workspaceId: "fresh-ws");
 
         var clientToServer = new Pipe();
@@ -70,7 +90,7 @@ public sealed class IndexFreshTelemetryTests : IDisposable
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton(ledger);
-        services.AddSingleton(probe); // THE wiring under test
+        services.AddSingleton(probe);
         services
             .AddMcpServer(o => { o.ServerInfo = new() { Name = "freshpin", Version = "0" }; })
             .WithStreamServerTransport(clientToServer.Reader.AsStream(), serverToClient.Writer.AsStream())
@@ -85,7 +105,7 @@ public sealed class IndexFreshTelemetryTests : IDisposable
             clientToServer.Writer.AsStream(), serverToClient.Reader.AsStream(), LoggerFactory.Create(_ => { }));
         await using var client = await McpClient.CreateAsync(clientTransport, cancellationToken: ct);
 
-        await client.CallToolAsync("fresh_pin", new Dictionary<string, object?>()!, cancellationToken: ct);
+        await client.CallToolAsync(tool, new Dictionary<string, object?>()!, cancellationToken: ct);
 
         await client.DisposeAsync();
         await clientToServer.Writer.CompleteAsync();
@@ -98,10 +118,15 @@ public sealed class IndexFreshTelemetryTests : IDisposable
         }.ToString());
         conn.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT index_fresh FROM tool_telemetry WHERE tool = 'fresh_pin';";
+        cmd.CommandText = "SELECT index_fresh, metadata_json FROM tool_telemetry WHERE tool = $tool;";
+        cmd.Parameters.AddWithValue("$tool", tool);
         using var r = cmd.ExecuteReader();
-        Assert.True(r.Read(), "the filter did not record a fresh_pin row");
-        Assert.False(r.IsDBNull(0), "index_fresh must be populated (not NULL) when a probe is registered");
-        Assert.Equal(expectedFresh, r.GetInt32(0));
+        Assert.True(r.Read(), $"the filter did not record a {tool} row");
+        Assert.Equal(expectedFresh, r.IsDBNull(0) ? null : r.GetInt32(0));
+
+        using JsonDocument metadata = JsonDocument.Parse(r.GetString(1));
+        Assert.Equal(Miller.Server.MillerVersion.Current, metadata.RootElement.GetProperty("server_version").GetString());
+        Assert.Equal(expectedIndexState, metadata.RootElement.GetProperty("index_state").GetString());
+        Assert.Equal("none", metadata.RootElement.GetProperty("wait_reason").GetString());
     }
 }

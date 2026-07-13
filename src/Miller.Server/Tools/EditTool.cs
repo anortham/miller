@@ -116,6 +116,8 @@ public sealed class EditTool
                 telemetry.SetMetadata("has_query", !string.IsNullOrEmpty(query));
                 telemetry.SetMetadata("has_anchor", !string.IsNullOrEmpty(anchor));
                 telemetry.SetMetadata("has_line", line is not null);
+                if (result.FailureReason is not null)
+                    telemetry.SetMetadata("edit_failure_reason", result.FailureReason);
                 if (telemetry.Outcome == TelemetryOutcome.Empty)
                     telemetry.SetEmptyReason("edit_noop");
             }

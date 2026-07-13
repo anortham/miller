@@ -1,7 +1,9 @@
+using System.Text.Json;
 using Miller.Core.Search;
 using Miller.Indexing;
 using Miller.Server;
 using Miller.Server.Resolution;
+using Miller.Server.Telemetry;
 using Miller.Server.Workspaces;
 using Miller.Tests.Indexing;
 using Xunit;
@@ -667,6 +669,9 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 return ContentSearchProjectionLoader.Load(dbPath, root);
             });
 
+        using var ledger = TelemetryLedger.Open(Path.Combine(_dir, "content-telemetry.db"), "current-ws");
+        using var scope = ledger.Measure("content", op: null);
+
         WorkspaceContentSearchContext context = provider.ResolveContentSearch("target-ws", ensureFresh: false);
 
         Assert.Equal("target-ws", context.WorkspaceId);
@@ -676,6 +681,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Assert.Equal(0, symbolLoadCount);
         var hit = Assert.Single(context.Index.Search("freshness", limit: 10));
         Assert.Equal("docs/guide.md", hit.Path);
+        using JsonDocument metadata = JsonDocument.Parse(scope.MetadataJson);
+        Assert.Equal("index_load", metadata.RootElement.GetProperty("wait_reason").GetString());
     }
 
     [Fact]
@@ -962,6 +969,63 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Assert.Equal(1, loadCount);
         Assert.Same(contexts[0].Index, contexts[1].Index);
         Assert.Same(contexts[0].Resolver, contexts[1].Resolver);
+    }
+
+    [Fact]
+    public async Task Resolve_RegisteredWorkspace_ConcurrentWaitersBothMarkIndexLoad()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-telemetry-single-flight");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+
+        var loadStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseLoad = new ManualResetEventSlim(initialState: false);
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            loadIndex: path =>
+            {
+                loadStarted.TrySetResult();
+                releaseLoad.Wait(TimeSpan.FromSeconds(5));
+                return RepositoryIndexLoader.Load(path);
+            });
+        using var ledger = TelemetryLedger.Open(Path.Combine(_dir, "concurrent-load-telemetry.db"), "current-ws");
+
+        Task<string> first = RunBlockingResolve(() =>
+        {
+            using TelemetryScope scope = ledger.Measure("inspect", op: null);
+            provider.Resolve("target-ws", ensureFresh: false);
+            return scope.MetadataJson;
+        });
+        Task timeout = Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.Same(loadStarted.Task, await Task.WhenAny(loadStarted.Task, timeout));
+
+        var secondScopePublished = new TaskCompletionSource<TelemetryScope>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<string> second = RunBlockingResolve(() =>
+        {
+            using TelemetryScope scope = ledger.Measure("inspect", op: null);
+            secondScopePublished.TrySetResult(scope);
+            provider.Resolve("target-ws", ensureFresh: false);
+            return scope.MetadataJson;
+        });
+        TelemetryScope secondScope = await secondScopePublished.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        bool secondMarkedWhileBlocked = SpinWait.SpinUntil(
+            () => secondScope.MetadataJson.Contains("\"wait_reason\":\"index_load\"", StringComparison.Ordinal),
+            TimeSpan.FromSeconds(2));
+
+        releaseLoad.Set();
+        string[] metadataRows = await Task.WhenAll(first, second);
+
+        Assert.True(secondMarkedWhileBlocked, "the caller waiting on the shared lazy was not marked as index_load");
+        foreach (string metadataJson in metadataRows)
+        {
+            using JsonDocument metadata = JsonDocument.Parse(metadataJson);
+            Assert.Equal("index_load", metadata.RootElement.GetProperty("wait_reason").GetString());
+        }
     }
 
     [Fact]
@@ -1280,12 +1344,49 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                     Scanned: true);
             });
 
+        using var ledger = TelemetryLedger.Open(Path.Combine(_dir, "refresh-telemetry.db"), "current-ws");
+        using var scope = ledger.Measure("inspect", op: null);
+
         WorkspaceReadContext context = provider.Resolve("target-ws", ensureFresh: true);
 
         Assert.True(refreshed);
         Assert.Equal(2, context.Revision);
         Assert.Equal("refreshed", context.FreshnessStatus);
         Assert.Null(context.WarningText);
+        using JsonDocument metadata = JsonDocument.Parse(scope.MetadataJson);
+        Assert.Equal("workspace_refresh", metadata.RootElement.GetProperty("wait_reason").GetString());
+    }
+
+    [Fact]
+    public void Resolve_RegisteredWorkspace_MarksOnlyTheFirstLazyIndexLoad()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-load-reason");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry);
+        using var ledger = TelemetryLedger.Open(Path.Combine(_dir, "load-telemetry.db"), "current-ws");
+
+        using (TelemetryScope firstScope = ledger.Measure("inspect", op: null))
+        {
+            provider.Resolve("target-ws", ensureFresh: false);
+
+            using JsonDocument metadata = JsonDocument.Parse(firstScope.MetadataJson);
+            Assert.Equal("index_load", metadata.RootElement.GetProperty("wait_reason").GetString());
+        }
+
+        using (TelemetryScope cachedScope = ledger.Measure("inspect", op: null))
+        {
+            provider.Resolve("target-ws", ensureFresh: false);
+
+            using JsonDocument metadata = JsonDocument.Parse(cachedScope.MetadataJson);
+            Assert.False(metadata.RootElement.TryGetProperty("wait_reason", out _));
+        }
     }
 
     [Fact]
