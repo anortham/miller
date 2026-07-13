@@ -137,8 +137,8 @@
 **Approach:** Branch only inside `FileEmptyHint` using the existing query-shape classifier. Preserve filtered-miss handling and all successful file rendering.
 
 **Acceptance criteria:**
-- [ ] Path-shaped file misses recommend a basename or shorter path fragment.
-- [ ] Identifier-like file misses retain current recovery wording.
-- [ ] Filtered misses still use outside-scope guidance instead of the bare file-miss hint.
-- [ ] JSON output remains unchanged.
-- [ ] Worker-scope verification passes and the change is handed to the lead per `parallel-lead-commit`.
+- [x] Path-shaped file misses recommend a basename or shorter path fragment.
+- [x] Identifier-like file misses retain current recovery wording.
+- [x] Filtered misses still use outside-scope guidance instead of the bare file-miss hint.
+- [x] JSON output remains unchanged.
+- [x] Worker-scope verification passes and the change is handed to the lead per `parallel-lead-commit`.

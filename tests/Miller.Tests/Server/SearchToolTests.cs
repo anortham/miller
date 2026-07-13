@@ -513,9 +513,61 @@ public sealed class SearchToolTests
             excludeTests: null, json: false, out int count);
 
         Assert.Equal(0, count);
-        Assert.StartsWith("No indexed file matches 'does/not/exist.cs'.", output.Trim());
-        Assert.Contains("mode=auto", output, StringComparison.Ordinal);
-        Assert.Contains("`search does/not/exist.cs` for symbols", output, StringComparison.Ordinal);
+        Assert.Equal(
+            "No indexed file matches 'does/not/exist.cs'. Try the basename `exist.cs` or a shorter path fragment first; " +
+            "then mode=auto or `search does/not/exist.cs` for symbols.",
+            output);
+    }
+
+    [Fact]
+    public void Run_FileMode_IdentifierLikeEmpty_RetainsGeneralRecoveryHint()
+    {
+        var index = SymbolSearchProjection.Build([
+            Symbol(0, "sym-file-hit", "ActualFileSymbol", "class",
+                "src/Miller.Server/Tools/SearchTool.cs", 9),
+        ]);
+
+        string output = SearchTool.Run(index, "SearchWidget", SearchToolMode.File, limit: 10,
+            excludeTests: null, json: false, out int count);
+
+        Assert.Equal(0, count);
+        Assert.Equal(
+            "No indexed file matches 'SearchWidget'. Try a shorter path fragment, mode=auto, or `search SearchWidget` for symbols.",
+            output);
+    }
+
+    [Fact]
+    public void Run_FileMode_PathShapedEmpty_BoundsQueryAndBasenameEchoes()
+    {
+        var index = SymbolSearchProjection.Build([
+            Symbol(0, "sym-file-hit", "ActualFileSymbol", "class",
+                "src/Miller.Server/Tools/SearchTool.cs", 9),
+        ]);
+        string repeated = new('a', 80);
+        string query = $"src/{repeated}.cs";
+
+        string output = SearchTool.Run(index, query, SearchToolMode.File, limit: 10,
+            excludeTests: null, json: false, out int count);
+
+        Assert.Equal(0, count);
+        Assert.DoesNotContain(query, output, StringComparison.Ordinal);
+        Assert.DoesNotContain(new string('a', 60), output, StringComparison.Ordinal);
+        Assert.Contains('…', output);
+    }
+
+    [Fact]
+    public void Run_FileMode_PathShapedEmptyJson_RemainsEmptyArray()
+    {
+        var index = SymbolSearchProjection.Build([
+            Symbol(0, "sym-file-hit", "ActualFileSymbol", "class",
+                "src/Miller.Server/Tools/SearchTool.cs", 9),
+        ]);
+
+        string output = SearchTool.Run(index, "does/not/exist.cs", SearchToolMode.File, limit: 10,
+            excludeTests: null, json: true, out int count);
+
+        Assert.Equal(0, count);
+        Assert.Equal("[]", output);
     }
 
     [Fact]

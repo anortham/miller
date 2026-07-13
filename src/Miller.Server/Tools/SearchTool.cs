@@ -553,11 +553,18 @@ public sealed class SearchTool
 
     private const int EmptyHintQueryLimit = 60;
 
-    // search·file empty (63% empty on mac): a path fragment that indexed no file. Echo a bounded query so the
-    // agent gets a copy-pasteable symbol fallback rather than a bare "No results.".
     private static string FileEmptyHint(string query)
     {
         string q = Truncate(query, EmptyHintQueryLimit);
+        if (QueryShapeFor(query) == "path_like")
+        {
+            string basename = Truncate(Path.GetFileName(query.Replace('\\', '/')), EmptyHintQueryLimit);
+            string recovery = string.IsNullOrWhiteSpace(basename)
+                ? "a shorter path fragment"
+                : $"the basename `{basename}` or a shorter path fragment";
+            return $"No indexed file matches '{q}'. Try {recovery} first; then mode=auto or `search {q}` for symbols.";
+        }
+
         return $"No indexed file matches '{q}'. Try a shorter path fragment, mode=auto, or `search {q}` for symbols.";
     }
 
