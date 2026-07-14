@@ -609,6 +609,40 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
     }
 
     [Fact]
+    public void Load_MalformedBlazorMetadata_PreservesRepositoryAndUnrelatedGraphEvidence()
+    {
+        using (var connection = new SqliteConnection(
+                   new SqliteConnectionStringBuilder { DataSource = _dbPath, Mode = SqliteOpenMode.ReadWrite }.ToString()))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                UPDATE symbols
+                SET metadata_json = '{"type":7,"qualifiedName":"Broken.ApplicationUser"}'
+                WHERE symbol_id = 's-entity';
+
+                INSERT INTO structural_facts
+                    (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                     containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                     confidence, metadata_json)
+                VALUES
+                    ('sf-blazor-malformed', 'f-form', 'components/ConnectorForm.razor', 'razor',
+                     'blazor.component_reference.v1', 'component_reference', 'markup_element', 's-connector-form',
+                     70, 8, 70, 28, 2200, 2220, 1.0,
+                     '{"tag":"Broken","containing_component":"ConnectorForm","namespace_context":[]}');
+                """;
+            command.ExecuteNonQuery();
+        }
+
+        var index = RepositoryIndexLoader.Load(_dbPath);
+
+        Assert.Equal(8, index.DocumentCount);
+        Assert.Equal("s-entity", index.FindByName("ApplicationUser").Single().SymbolId);
+        Assert.True(index.Graph.Contains("s-entity"));
+        Assert.Contains(index.BridgeGraph.Walk("s-entity", maxDepth: 3), edge => edge.Edge.Kind == BridgeKind.StoredIn);
+    }
+
+    [Fact]
     public void Load_UsesStructuralFacts_ToBridgeHtmxRouteToMinimalApiHandler()
     {
         var index = RepositoryIndexLoader.Load(_dbPath);

@@ -125,6 +125,7 @@ public static class BlazorComponentGraphReader
             using var document = JsonDocument.Parse(metadataJson);
             if (document.RootElement.ValueKind != JsonValueKind.Object
                 || !document.RootElement.TryGetProperty("type", out var type)
+                || type.ValueKind != JsonValueKind.String
                 || !string.Equals(type.GetString(), "razor-component", StringComparison.Ordinal)
                 || !document.RootElement.TryGetProperty("qualifiedName", out var qualifiedNameElement)
                 || qualifiedNameElement.ValueKind != JsonValueKind.String)
@@ -153,6 +154,7 @@ public static class BlazorComponentGraphReader
             using var document = JsonDocument.Parse(metadataJson);
             if (document.RootElement.ValueKind != JsonValueKind.Object
                 || !document.RootElement.TryGetProperty("type", out var type)
+                || type.ValueKind != JsonValueKind.String
                 || !string.Equals(type.GetString(), "razor-directive", StringComparison.Ordinal)
                 || !document.RootElement.TryGetProperty("directiveName", out var nameElement)
                 || nameElement.ValueKind != JsonValueKind.String

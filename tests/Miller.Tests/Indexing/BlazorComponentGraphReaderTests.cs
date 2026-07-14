@@ -296,6 +296,71 @@ public sealed class BlazorComponentGraphReaderTests
             BlazorComponentGraphReader.Read(fixture.DbPath, facts));
     }
 
+    [Theory]
+    [InlineData("{\"type\":7,\"qualifiedName\":\"Broken.Component\"}")]
+    [InlineData("{")]
+    public void Read_MalformedComponentMetadata_IsIgnored(string metadata)
+    {
+        using var fixture = CreateFixture(
+            Component("00000000000000000000000000000001", "Broken", "Broken.Component", "Broken.razor") with
+            {
+                Metadata = metadata,
+            },
+            Component(PageAId, "PageA", "Sample.Pages.PageA", "Pages/PageA.razor"),
+            Component(SharedWidgetId, "SharedWidget", "Sample.Shared.SharedWidget", "Shared/SharedWidget.razor"));
+        AddReference(fixture, "fact-1", "Pages/PageA.razor", "SharedWidget", "PageA", "[\"Sample.Shared\"]");
+
+        var facts = SqliteBridgeReader.Read(fixture.DbPath).StructuralFacts;
+
+        Assert.Equal(
+            [new GraphEdge(PageAId, SharedWidgetId, "uses")],
+            BlazorComponentGraphReader.Read(fixture.DbPath, facts));
+    }
+
+    [Theory]
+    [InlineData("{\"type\":7,\"directiveName\":\"using\",\"directiveValue\":\"Broken.Namespace\"}")]
+    [InlineData("{")]
+    public void Read_MalformedDirectiveMetadata_IsIgnored(string metadata)
+    {
+        using var fixture = CreateFixture(
+            Component(PageAId, "PageA", "Sample.Pages.PageA", "Pages/PageA.razor"),
+            Component(SharedWidgetId, "SharedWidget", "Sample.Shared.SharedWidget", "Shared/SharedWidget.razor"),
+            RazorDirective("00000000000000000000000000000001", "_Imports.razor", "using", "Broken.Namespace") with
+            {
+                Metadata = metadata,
+            },
+            RazorDirective("40000000000000000000000000000001", "_Imports.razor", "using", "Sample.Shared"));
+        AddReference(fixture, "fact-1", "Pages/PageA.razor", "SharedWidget", "PageA", "[]");
+
+        var facts = SqliteBridgeReader.Read(fixture.DbPath).StructuralFacts;
+
+        Assert.Equal(
+            [new GraphEdge(PageAId, SharedWidgetId, "uses")],
+            BlazorComponentGraphReader.Read(fixture.DbPath, facts));
+    }
+
+    [Fact]
+    public void Read_MissingRootPathPreservesExactAndInheritedImportResolution()
+    {
+        using var fixture = CreateFixture(
+            Component(PageAId, "PageA", "PageA", "Pages/PageA.razor"),
+            Component(SharedWidgetId, "SharedWidget", "Sample.Shared.SharedWidget", "Shared/SharedWidget.razor"),
+            Component(AdminWidgetId, "Widget", "Sample.Admin.Widget", "Admin/Widget.razor"),
+            Component(StoreWidgetId, "ProjectWidget", "ProjectWidget", "Pages/ProjectWidget.razor"),
+            RazorDirective("40000000000000000000000000000001", "_Imports.razor", "using", "Sample.Shared"));
+        fixture.ExecuteWrite("DELETE FROM artifact_metadata WHERE key = 'root_path';");
+        WriteProject(fixture, "Sample.csproj", "<Project><PropertyGroup><RootNamespace>Sample</RootNamespace></PropertyGroup></Project>");
+        AddReference(fixture, "fact-1", "Pages/PageA.razor", "SharedWidget", "PageA", "[]");
+        AddReference(fixture, "fact-2", "Pages/PageA.razor", "Sample.Admin.Widget", "PageA", "[]");
+        AddReference(fixture, "fact-3", "Pages/PageA.razor", "ProjectWidget", "PageA", "[]");
+
+        var facts = SqliteBridgeReader.Read(fixture.DbPath).StructuralFacts;
+
+        Assert.Equal(
+            [new GraphEdge(PageAId, SharedWidgetId, "uses"), new GraphEdge(PageAId, AdminWidgetId, "uses")],
+            BlazorComponentGraphReader.Read(fixture.DbPath, facts));
+    }
+
     private static JulieDbFixture.SymbolRow Component(
         string id,
         string name,
