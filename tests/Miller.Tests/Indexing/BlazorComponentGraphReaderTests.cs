@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Miller.Core.Graph;
 using Miller.Indexing;
 using Xunit;
@@ -22,12 +23,12 @@ public sealed class BlazorComponentGraphReaderTests
     }
 
     [Fact]
-    public void Read_SimpleUniqueComponent_ProducesUsesEdgeAndReverseReachability()
+    public void Read_SimpleComponentWithLocalNamespaceContext_ProducesUsesEdgeAndReverseReachability()
     {
         using var fixture = CreateFixture(
             Component(PageAId, "PageA", "Pages.PageA", "Pages/PageA.razor"),
             Component(SharedWidgetId, "SharedWidget", "Shared.SharedWidget", "Shared/SharedWidget.razor"));
-        AddReference(fixture, "fact-1", "Pages/PageA.razor", "SharedWidget", "PageA", "[]");
+        AddReference(fixture, "fact-1", "Pages/PageA.razor", "SharedWidget", "PageA", "[\"Shared\"]");
 
         var facts = SqliteBridgeReader.Read(fixture.DbPath).StructuralFacts;
         var edges = BlazorComponentGraphReader.Read(fixture.DbPath, facts);
@@ -37,6 +38,20 @@ public sealed class BlazorComponentGraphReaderTests
         var index = RepositoryIndexLoader.Load(fixture.DbPath);
         var dependent = Assert.Single(index.Dependents(SharedWidgetId));
         Assert.Equal(PageAId, dependent.SymbolId);
+    }
+
+    [Fact]
+    public void Read_SimpleUniqueComponentOutsideEffectiveNamespaces_ProducesNoEdge()
+    {
+        using var fixture = CreateFixture(
+            Component(PageAId, "PageA", "Pages.PageA", "Pages/PageA.razor"),
+            Component(SharedWidgetId, "SharedWidget", "Shared.SharedWidget", "Shared/SharedWidget.razor"));
+        AddReference(fixture, "fact-1", "Pages/PageA.razor", "SharedWidget", "PageA", "[]");
+
+        var facts = SqliteBridgeReader.Read(fixture.DbPath).StructuralFacts;
+
+        Assert.Empty(BlazorComponentGraphReader.Read(fixture.DbPath, facts));
+        Assert.Empty(RepositoryIndexLoader.Load(fixture.DbPath).Dependents(SharedWidgetId));
     }
 
     [Fact]
@@ -68,6 +83,22 @@ public sealed class BlazorComponentGraphReaderTests
     }
 
     [Fact]
+    public void Read_AmbiguousSimpleTag_UsesSourceNamespace()
+    {
+        using var fixture = CreateFixture(
+            Component(PageAId, "PageA", "Sample.Admin.PageA", "Pages/PageA.razor"),
+            Component(AdminWidgetId, "Widget", "Sample.Admin.Widget", "Features/Admin/Widget.razor"),
+            Component(StoreWidgetId, "Widget", "Sample.Store.Widget", "Features/Store/Widget.razor"));
+        AddReference(fixture, "fact-1", "Pages/PageA.razor", "Widget", "PageA", "[]");
+
+        var facts = SqliteBridgeReader.Read(fixture.DbPath).StructuralFacts;
+
+        Assert.Equal(
+            [new GraphEdge(PageAId, AdminWidgetId, "uses")],
+            BlazorComponentGraphReader.Read(fixture.DbPath, facts));
+    }
+
+    [Fact]
     public void Read_FullyQualifiedTag_ResolvesExactQualifiedName()
     {
         using var fixture = CreateFixture(
@@ -88,6 +119,142 @@ public sealed class BlazorComponentGraphReaderTests
         Assert.Equal([new GraphEdge(PageAId, StoreWidgetId, "uses")], edges);
     }
 
+    [Fact]
+    public void Read_InheritedUsingsAccumulateRootToLeafAndStayWithinSubtree()
+    {
+        const string rootWidgetId = "30000000000000000000000000000001";
+        const string otherRootWidgetId = "30000000000000000000000000000002";
+        const string nestedWidgetId = "30000000000000000000000000000003";
+        const string otherNestedWidgetId = "30000000000000000000000000000004";
+        using var fixture = CreateFixture(
+            Component(PageAId, "PageA", "Sample.Pages.PageA", "Pages/PageA.razor"),
+            Component(PageBId, "PageB", "Sample.Sibling.PageB", "Sibling/PageB.razor"),
+            Component(rootWidgetId, "RootWidget", "Sample.Shared.RootWidget", "Shared/RootWidget.razor"),
+            Component(otherRootWidgetId, "RootWidget", "Other.Shared.RootWidget", "Other/RootWidget.razor"),
+            Component(nestedWidgetId, "NestedWidget", "Sample.Admin.NestedWidget", "Admin/NestedWidget.razor"),
+            Component(otherNestedWidgetId, "NestedWidget", "Other.Admin.NestedWidget", "Other/NestedWidget.razor"),
+            RazorDirective("40000000000000000000000000000001", "_Imports.razor", "using", "Sample.Shared"),
+            RazorDirective("40000000000000000000000000000002", "Pages/_Imports.razor", "using", "Sample.Admin"));
+        AddReference(fixture, "fact-1", "Pages/PageA.razor", "RootWidget", "PageA", "[]");
+        AddReference(fixture, "fact-2", "Pages/PageA.razor", "NestedWidget", "PageA", "[]");
+        AddReference(fixture, "fact-3", "Sibling/PageB.razor", "NestedWidget", "PageB", "[]");
+
+        var facts = SqliteBridgeReader.Read(fixture.DbPath).StructuralFacts;
+        var edges = BlazorComponentGraphReader.Read(fixture.DbPath, facts);
+
+        Assert.Equal(
+            [new GraphEdge(PageAId, rootWidgetId, "uses"), new GraphEdge(PageAId, nestedWidgetId, "uses")],
+            edges);
+
+        var index = RepositoryIndexLoader.Load(fixture.DbPath);
+        Assert.Contains(index.Dependents(rootWidgetId), dependent => dependent.SymbolId == PageAId);
+        Assert.Contains(index.Dependents(nestedWidgetId), dependent => dependent.SymbolId == PageAId);
+        Assert.DoesNotContain(index.Dependents(nestedWidgetId), dependent => dependent.SymbolId == PageBId);
+    }
+
+    [Fact]
+    public void Read_NearestImportNamespaceAddsDescendantFolderSuffix()
+    {
+        using var fixture = CreateFixture(
+            Component(PageAId, "PageA", "PageA", "Pages/Admin/PageA.razor"),
+            Component(AdminWidgetId, "Widget", "Widget", "Pages/Admin/Widget.razor"),
+            Component(StoreWidgetId, "Widget", "Sample.Store.Widget", "Store/Widget.razor"),
+            RazorDirective("40000000000000000000000000000001", "_Imports.razor", "namespace", "Sample.Root"),
+            RazorDirective("40000000000000000000000000000002", "Pages/_Imports.razor", "namespace", "Sample.Pages"));
+        AddReference(fixture, "fact-1", "Pages/Admin/PageA.razor", "Widget", "PageA", "[]");
+
+        var facts = SqliteBridgeReader.Read(fixture.DbPath).StructuralFacts;
+
+        Assert.Equal(
+            [new GraphEdge(PageAId, AdminWidgetId, "uses")],
+            BlazorComponentGraphReader.Read(fixture.DbPath, facts));
+    }
+
+    [Theory]
+    [InlineData("Alias = Sample.Admin")]
+    [InlineData("static Sample.Admin")]
+    [InlineData("Sample.Admin<T>")]
+    [InlineData("$(Root).Admin")]
+    public void Read_UnsupportedInheritedUsing_ProducesNoEdge(string directiveValue)
+    {
+        using var fixture = CreateFixture(
+            Component(PageAId, "PageA", "Sample.Pages.PageA", "Pages/PageA.razor"),
+            Component(AdminWidgetId, "Widget", "Sample.Admin.Widget", "Admin/Widget.razor"),
+            RazorDirective("40000000000000000000000000000001", "_Imports.razor", "using", directiveValue));
+        AddReference(fixture, "fact-1", "Pages/PageA.razor", "Widget", "PageA", "[]");
+
+        var facts = SqliteBridgeReader.Read(fixture.DbPath).StructuralFacts;
+
+        Assert.Empty(BlazorComponentGraphReader.Read(fixture.DbPath, facts));
+    }
+
+    [Fact]
+    public void Read_DuplicateTargetsInOneImportedNamespace_ProducesNoEdge()
+    {
+        using var fixture = CreateFixture(
+            Component(PageAId, "PageA", "Sample.Pages.PageA", "Pages/PageA.razor"),
+            Component(AdminWidgetId, "Widget", "Sample.Admin.Widget", "Admin/Widget.razor"),
+            Component(StoreWidgetId, "Widget", "Sample.Admin.Widget", "Store/Widget.razor"),
+            RazorDirective("40000000000000000000000000000001", "_Imports.razor", "using", "Sample.Admin"));
+        AddReference(fixture, "fact-1", "Pages/PageA.razor", "Widget", "PageA", "[]");
+
+        var facts = SqliteBridgeReader.Read(fixture.DbPath).StructuralFacts;
+
+        Assert.Empty(BlazorComponentGraphReader.Read(fixture.DbPath, facts));
+    }
+
+    [Fact]
+    public void Read_BackslashArtifactPathsUseImportsWithoutCrossingSiblings()
+    {
+        using var fixture = CreateFixture(
+            Component(PageAId, "PageA", "Sample.Pages.PageA", @"Pages\PageA.razor"),
+            Component(PageBId, "PageB", "Sample.Sibling.PageB", @"Sibling\PageB.razor"),
+            Component(AdminWidgetId, "Widget", "Sample.Admin.Widget", @"Admin\Widget.razor"),
+            Component(StoreWidgetId, "Widget", "Other.Admin.Widget", @"Other\Widget.razor"),
+            RazorDirective("40000000000000000000000000000001", @"Pages\_Imports.razor", "using", "Sample.Admin"));
+        AddReference(fixture, "fact-1", @"Pages\PageA.razor", "Widget", "PageA", "[]");
+        AddReference(fixture, "fact-2", @"Sibling\PageB.razor", "Widget", "PageB", "[]");
+
+        var facts = SqliteBridgeReader.Read(fixture.DbPath).StructuralFacts;
+
+        Assert.Equal(
+            [new GraphEdge(PageAId, AdminWidgetId, "uses")],
+            BlazorComponentGraphReader.Read(fixture.DbPath, facts));
+    }
+
+    [Fact]
+    public void Read_ViewImportsDirectiveDoesNotScopeRazorComponentReference()
+    {
+        using var fixture = CreateFixture(
+            Component(PageAId, "PageA", "Sample.Pages.PageA", "Pages/PageA.razor"),
+            Component(AdminWidgetId, "Widget", "Sample.Admin.Widget", "Admin/Widget.razor"),
+            RazorDirective("40000000000000000000000000000001", "_ViewImports.cshtml", "using", "Sample.Admin"));
+        AddReference(fixture, "fact-1", "Pages/PageA.razor", "Widget", "PageA", "[]");
+
+        var facts = SqliteBridgeReader.Read(fixture.DbPath).StructuralFacts;
+
+        Assert.Empty(BlazorComponentGraphReader.Read(fixture.DbPath, facts));
+    }
+
+    [Fact]
+    public void Read_TokenDirectiveDoesNotScopeRazorComponentReference()
+    {
+        using var fixture = CreateFixture(
+            Component(PageAId, "PageA", "Sample.Pages.PageA", "Pages/PageA.razor"),
+            Component(AdminWidgetId, "Widget", "Sample.Admin.Widget", "Admin/Widget.razor"),
+            RazorDirective(
+                "40000000000000000000000000000001",
+                "_Imports.razor",
+                "using",
+                "Sample.Admin",
+                "razor-token-directive"));
+        AddReference(fixture, "fact-1", "Pages/PageA.razor", "Widget", "PageA", "[]");
+
+        var facts = SqliteBridgeReader.Read(fixture.DbPath).StructuralFacts;
+
+        Assert.Empty(BlazorComponentGraphReader.Read(fixture.DbPath, facts));
+    }
+
     private static JulieDbFixture.SymbolRow Component(
         string id,
         string name,
@@ -97,6 +264,25 @@ public sealed class BlazorComponentGraphReaderTests
         {
             Metadata = $$"""{"type":"razor-component","qualifiedName":"{{qualifiedName}}"}""",
         };
+
+    private static JulieDbFixture.SymbolRow RazorDirective(
+        string id,
+        string path,
+        string directiveName,
+        string directiveValue,
+        string metadataType = "razor-directive")
+    {
+        string symbolName = directiveName == "using" ? directiveValue : $"@{directiveName}";
+        return new(id, symbolName, "import", "razor", path, $"@{directiveName} {directiveValue}", 1, null)
+        {
+            Metadata = JsonSerializer.Serialize(new
+            {
+                type = metadataType,
+                directiveName,
+                directiveValue,
+            }),
+        };
+    }
 
     private static JulieDbFixture CreateFixture(params JulieDbFixture.SymbolRow[] rows) =>
         JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, rows);

@@ -27,14 +27,22 @@ public static class BlazorComponentGraphReader
             return [];
         }
 
-        var components = ReadComponents(dbPath);
-        var byName = components
+        var evidence = ReadEvidence(dbPath);
+        var namespaces = BlazorNamespaceCatalog.Build(
+            ExtractReader.ReadRootPath(dbPath),
+            evidence.Components,
+            evidence.Directives);
+        var byName = evidence.Components
             .GroupBy(component => component.Name, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
-        var byQualifiedName = components
-            .GroupBy(component => component.QualifiedName, StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
-        var byPath = components
+        var byQualifiedName = evidence.Components
+            .SelectMany(component => namespaces.QualifiedNames(component).Select(name => (Name: name, Component: component)))
+            .GroupBy(candidate => candidate.Name, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(candidate => candidate.Component).DistinctBy(component => component.Id).ToArray(),
+                StringComparer.Ordinal);
+        var byPath = evidence.Components
             .GroupBy(component => component.Path, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
 
@@ -45,12 +53,13 @@ public static class BlazorComponentGraphReader
                     fact.PatternId,
                     BridgeStructuralPatterns.BlazorComponentReference,
                     StringComparison.Ordinal)
+                || !string.Equals(Path.GetExtension(fact.Path), ".razor", StringComparison.OrdinalIgnoreCase)
                 || !fact.Metadata.TryGetValue("tag", out var tag)
                 || string.IsNullOrWhiteSpace(tag)
                 || !fact.Metadata.TryGetValue("containing_component", out var containingComponent)
                 || string.IsNullOrWhiteSpace(containingComponent)
-                || !TryResolveSource(byPath, fact.Path, containingComponent, out var source)
-                || !TryResolveTarget(fact, tag, byName, byQualifiedName, out var target)
+                || !TryResolveSource(byPath, namespaces, fact.Path, containingComponent, out var source)
+                || !TryResolveTarget(fact, source, tag, byName, byQualifiedName, namespaces, out var target)
                 || string.Equals(source.Id, target.Id, StringComparison.Ordinal))
             {
                 continue;
@@ -62,39 +71,53 @@ public static class BlazorComponentGraphReader
         return edges;
     }
 
-    private static IReadOnlyList<ComponentSymbol> ReadComponents(string dbPath)
+    private static BlazorEvidence ReadEvidence(string dbPath)
     {
         using var connection = SqliteReadOnlyAccess.Open(dbPath);
         using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT symbol_id, path, name, metadata_json
+            SELECT symbol_id, path, name, kind, metadata_json
             FROM symbols
-            WHERE kind = 'class' AND metadata_json IS NOT NULL
+            WHERE metadata_json IS NOT NULL AND kind IN ('class', 'import')
             ORDER BY path, start_line, symbol_id;
             """;
 
-        var components = new List<ComponentSymbol>();
+        var components = new List<BlazorComponentIdentity>();
+        var directives = new List<RazorImportDirective>();
         using var reader = command.ExecuteReader();
         int idOrdinal = reader.GetOrdinal("symbol_id");
         int pathOrdinal = reader.GetOrdinal("path");
         int nameOrdinal = reader.GetOrdinal("name");
+        int kindOrdinal = reader.GetOrdinal("kind");
         int metadataOrdinal = reader.GetOrdinal("metadata_json");
         while (reader.Read())
         {
-            if (TryReadQualifiedName(reader.GetString(metadataOrdinal), out var qualifiedName))
+            string? path = BlazorNamespaceCatalog.NormalizePath(reader.GetString(pathOrdinal));
+            if (path is null)
+                continue;
+
+            string kind = reader.GetString(kindOrdinal);
+            string metadataJson = reader.GetString(metadataOrdinal);
+            if (string.Equals(kind, "class", StringComparison.Ordinal)
+                && TryReadComponentQualifiedName(metadataJson, out var qualifiedName))
             {
-                components.Add(new ComponentSymbol(
+                components.Add(new BlazorComponentIdentity(
                     reader.GetString(idOrdinal),
-                    reader.GetString(pathOrdinal),
+                    path,
                     reader.GetString(nameOrdinal),
                     qualifiedName));
             }
+            else if (string.Equals(kind, "import", StringComparison.Ordinal)
+                     && TryReadDirective(metadataJson, out var directiveName, out var directiveValue))
+            {
+                directives.Add(new RazorImportDirective(path, directiveName, directiveValue));
+            }
         }
 
-        return components;
+        return new BlazorEvidence(components, directives);
     }
 
-    private static bool TryReadQualifiedName(string metadataJson, out string qualifiedName)
+    private static bool TryReadComponentQualifiedName(string metadataJson, out string qualifiedName)
     {
         qualifiedName = string.Empty;
         try
@@ -118,20 +141,53 @@ public static class BlazorComponentGraphReader
         }
     }
 
+    private static bool TryReadDirective(
+        string metadataJson,
+        out string directiveName,
+        out string directiveValue)
+    {
+        directiveName = string.Empty;
+        directiveValue = string.Empty;
+        try
+        {
+            using var document = JsonDocument.Parse(metadataJson);
+            if (document.RootElement.ValueKind != JsonValueKind.Object
+                || !document.RootElement.TryGetProperty("type", out var type)
+                || !string.Equals(type.GetString(), "razor-directive", StringComparison.Ordinal)
+                || !document.RootElement.TryGetProperty("directiveName", out var nameElement)
+                || nameElement.ValueKind != JsonValueKind.String
+                || !document.RootElement.TryGetProperty("directiveValue", out var valueElement)
+                || valueElement.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            directiveName = nameElement.GetString() ?? string.Empty;
+            directiveValue = valueElement.GetString() ?? string.Empty;
+            return directiveName.Length > 0 && directiveValue.Length > 0;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     private static bool TryResolveSource(
-        IReadOnlyDictionary<string, ComponentSymbol[]> byPath,
+        IReadOnlyDictionary<string, BlazorComponentIdentity[]> byPath,
+        BlazorNamespaceCatalog namespaces,
         string path,
         string containingComponent,
-        out ComponentSymbol source)
+        out BlazorComponentIdentity source)
     {
         source = default!;
-        if (!byPath.TryGetValue(path, out var pathComponents))
+        string? normalizedPath = BlazorNamespaceCatalog.NormalizePath(path);
+        if (normalizedPath is null || !byPath.TryGetValue(normalizedPath, out var pathComponents))
             return false;
 
         var candidates = pathComponents
             .Where(component =>
                 string.Equals(component.Name, containingComponent, StringComparison.Ordinal)
-                || string.Equals(component.QualifiedName, containingComponent, StringComparison.Ordinal))
+                || namespaces.QualifiedNames(component).Contains(containingComponent, StringComparer.Ordinal))
             .ToArray();
         if (candidates.Length != 1)
             return false;
@@ -142,10 +198,12 @@ public static class BlazorComponentGraphReader
 
     private static bool TryResolveTarget(
         StructuralFactRecord fact,
+        BlazorComponentIdentity source,
         string tag,
-        IReadOnlyDictionary<string, ComponentSymbol[]> byName,
-        IReadOnlyDictionary<string, ComponentSymbol[]> byQualifiedName,
-        out ComponentSymbol target)
+        IReadOnlyDictionary<string, BlazorComponentIdentity[]> byName,
+        IReadOnlyDictionary<string, BlazorComponentIdentity[]> byQualifiedName,
+        BlazorNamespaceCatalog namespaces,
+        out BlazorComponentIdentity target)
     {
         target = default!;
         if (tag.Contains('.', StringComparison.Ordinal))
@@ -163,16 +221,11 @@ public static class BlazorComponentGraphReader
         if (!byName.TryGetValue(tag, out var candidates))
             return false;
 
-        if (candidates.Length == 1)
-        {
-            target = candidates[0];
-            return true;
-        }
-
-        var namespaces = ReadNamespaceContext(fact);
+        var effectiveNamespaces = namespaces.EffectiveNamespaces(source, ReadNamespaceContext(fact));
         var contextualCandidates = candidates
-            .Where(candidate => namespaces.Any(ns =>
-                string.Equals(candidate.QualifiedName, ns + "." + tag, StringComparison.Ordinal)))
+            .Where(candidate => namespaces.QualifiedNames(candidate).Any(qualifiedName =>
+                effectiveNamespaces.Any(ns =>
+                    string.Equals(qualifiedName, ns + "." + tag, StringComparison.Ordinal))))
             .DistinctBy(candidate => candidate.Id, StringComparer.Ordinal)
             .ToArray();
         if (contextualCandidates.Length != 1)
@@ -210,5 +263,7 @@ public static class BlazorComponentGraphReader
         }
     }
 
-    private sealed record ComponentSymbol(string Id, string Path, string Name, string QualifiedName);
+    private sealed record BlazorEvidence(
+        IReadOnlyList<BlazorComponentIdentity> Components,
+        IReadOnlyList<RazorImportDirective> Directives);
 }
