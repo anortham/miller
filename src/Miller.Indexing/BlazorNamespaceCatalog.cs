@@ -72,8 +72,12 @@ internal sealed class BlazorNamespaceCatalog
         foreach (string qualifiedName in QualifiedNames(source))
         {
             int separator = qualifiedName.LastIndexOf('.');
-            if (separator > 0)
-                namespaces.Add(qualifiedName[..separator]);
+            while (separator > 0)
+            {
+                string enclosingNamespace = qualifiedName[..separator];
+                namespaces.Add(enclosingNamespace);
+                separator = enclosingNamespace.LastIndexOf('.');
+            }
         }
 
         return namespaces.Order(StringComparer.Ordinal).ToArray();
@@ -341,7 +345,8 @@ internal sealed class BlazorNamespaceCatalog
                     if (IsReparsePoint(path)
                         || !TryReadXml(path, out XDocument? document)
                         || ContainsElement(document!, "RootNamespace")
-                        || ContainsElement(document!, "Import"))
+                        || ContainsElement(document!, "Import")
+                        || ContainsSdkDeclaration(document!))
                     {
                         return true;
                     }
@@ -364,7 +369,8 @@ internal sealed class BlazorNamespaceCatalog
             rootNamespace = string.Empty;
             if (!TryReadXml(projectPath, out XDocument? document)
                 || !string.Equals(document!.Root!.Name.LocalName, "Project", StringComparison.Ordinal)
-                || ContainsElement(document, "Import"))
+                || ContainsElement(document, "Import")
+                || !HasSupportedSdkDeclaration(document.Root))
             {
                 return false;
             }
@@ -396,6 +402,46 @@ internal sealed class BlazorNamespaceCatalog
             return TryNormalizeNamespace(declaration.Value, out rootNamespace);
         }
 
+        private static bool HasSupportedSdkDeclaration(XElement project)
+        {
+            XAttribute[] sdkAttributes = project.Attributes()
+                .Where(attribute => string.Equals(
+                    attribute.Name.LocalName,
+                    "Sdk",
+                    StringComparison.Ordinal))
+                .ToArray();
+            XElement[] sdkElements = project.Descendants()
+                .Where(element => string.Equals(
+                    element.Name.LocalName,
+                    "Sdk",
+                    StringComparison.Ordinal))
+                .ToArray();
+
+            if (sdkAttributes.Length == 0 && sdkElements.Length == 0)
+                return true;
+
+            if (sdkAttributes.Length == 1)
+                return sdkElements.Length == 0 && IsSupportedSdk(sdkAttributes[0].Value);
+
+            if (sdkAttributes.Length != 0 || sdkElements.Length != 1)
+                return false;
+
+            XElement sdk = sdkElements[0];
+            XAttribute[] attributes = sdk.Attributes().ToArray();
+            return ReferenceEquals(sdk.Parent, project)
+                && !sdk.HasElements
+                && string.IsNullOrWhiteSpace(sdk.Value)
+                && attributes.Length == 1
+                && string.Equals(attributes[0].Name.LocalName, "Name", StringComparison.Ordinal)
+                && IsSupportedSdk(attributes[0].Value);
+        }
+
+        private static bool IsSupportedSdk(string value) => value is
+            "Microsoft.NET.Sdk"
+            or "Microsoft.NET.Sdk.Web"
+            or "Microsoft.NET.Sdk.Razor"
+            or "Microsoft.NET.Sdk.BlazorWebAssembly";
+
         private static bool TryReadXml(string path, out XDocument? document)
         {
             document = null;
@@ -424,6 +470,11 @@ internal sealed class BlazorNamespaceCatalog
         private static bool ContainsElement(XDocument document, string localName) =>
             document.Descendants().Any(element =>
                 string.Equals(element.Name.LocalName, localName, StringComparison.Ordinal));
+
+        private static bool ContainsSdkDeclaration(XDocument document) =>
+            document.Root!.Attributes().Any(attribute =>
+                string.Equals(attribute.Name.LocalName, "Sdk", StringComparison.Ordinal))
+            || ContainsElement(document, "Sdk");
 
         private static bool HasCondition(XElement element) =>
             element.Attributes().Any(attribute =>

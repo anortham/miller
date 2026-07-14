@@ -788,7 +788,7 @@ public sealed class BackendHttpBridgeProvider : IBridgeProvider
                 continue;
             }
 
-            var key = symbol.ParentClassName + ' ' + symbol.Name;
+            var key = symbol.ParentClassName + '\0' + symbol.Name;
             index[key] = index.ContainsKey(key) ? null : symbol.Id; // second match ⇒ ambiguous (null), never binds.
         }
         return index;
@@ -799,7 +799,7 @@ public sealed class BackendHttpBridgeProvider : IBridgeProvider
         IReadOnlyDictionary<string, string?> controllerMethods,
         string controllerClass,
         string action) =>
-        controllerMethods.TryGetValue(controllerClass + ' ' + action, out var id) ? id : null;
+        controllerMethods.TryGetValue(controllerClass + '\0' + action, out var id) ? id : null;
 
     /// <summary>
     /// The allowed action set from <c>only</c>/<c>except</c> (null ⇒ every conventional action). <c>only</c> keeps

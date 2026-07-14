@@ -99,6 +99,22 @@ public sealed class BlazorComponentGraphReaderTests
     }
 
     [Fact]
+    public void Read_SimpleTagUsesEnclosingSourceNamespace()
+    {
+        using var fixture = CreateFixture(
+            Component(PageAId, "PageA", "Sample.Pages.Admin.PageA", "Pages/Admin/PageA.razor"),
+            Component(AdminWidgetId, "Widget", "Sample.Pages.Widget", "Pages/Widget.razor"),
+            Component(StoreWidgetId, "Widget", "Other.Pages.Widget", "Other/Widget.razor"));
+        AddReference(fixture, "fact-1", "Pages/Admin/PageA.razor", "Widget", "PageA", "[]");
+
+        var facts = SqliteBridgeReader.Read(fixture.DbPath).StructuralFacts;
+
+        Assert.Equal(
+            [new GraphEdge(PageAId, AdminWidgetId, "uses")],
+            BlazorComponentGraphReader.Read(fixture.DbPath, facts));
+    }
+
+    [Fact]
     public void Read_FullyQualifiedTag_ResolvesExactQualifiedName()
     {
         using var fixture = CreateFixture(

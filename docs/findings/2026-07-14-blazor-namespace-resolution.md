@@ -1,6 +1,6 @@
 # Blazor namespace resolution evidence
 
-**Status:** Implemented locally on `codex/julie-extract-2.14`; final branch SHA and branch-wide gates remain pending Task 6.
+**Status:** Implemented and branch-verified on `codex/julie-extract-2.14`; no release, push, or merge has occurred.
 
 ## Current behavior
 
@@ -13,17 +13,20 @@ Project inference starts at a materialized component path, walks only toward the
 at the nearest directory containing project files. Exactly one `.csproj` is required. Miller accepts one
 unconditional literal `RootNamespace`, or the SDK-style project-name default with spaces replaced by underscores,
 then appends the component folder. A nearer inherited `@namespace` is authoritative and appends its descendant
-folder suffix. Same-folder and project-root component namespaces are implicit source scopes.
+folder suffix. Same-folder, enclosing, and project-root component namespaces are implicit source scopes. SDK
+inference accepts one standard `Microsoft.NET.Sdk`, `.Web`, `.Razor`, or `.BlazorWebAssembly` declaration.
 
 | Behavior | Proving test |
 | --- | --- |
 | Fully qualified tags resolve only the exact qualified component. | `BlazorComponentGraphReaderTests.Read_FullyQualifiedTag_ResolvesExactQualifiedName` |
 | Fact-local namespace context resolves a simple tag and preserves reverse reachability. | `BlazorComponentGraphReaderTests.Read_SimpleComponentWithLocalNamespaceContext_ProducesUsesEdgeAndReverseReachability` |
 | A source component namespace can disambiguate a simple tag. | `BlazorComponentGraphReaderTests.Read_AmbiguousSimpleTag_UsesSourceNamespace` |
+| An enclosing source namespace resolves a simple tag without selecting an unrelated homonym. | `BlazorComponentGraphReaderTests.Read_SimpleTagUsesEnclosingSourceNamespace` |
 | Root-to-leaf inherited `@using` directives accumulate without crossing sibling subtrees. | `BlazorComponentGraphReaderTests.Read_InheritedUsingsAccumulateRootToLeafAndStayWithinSubtree` |
 | The nearest inherited `@namespace` supplies the base namespace plus the descendant folder suffix. | `BlazorComponentGraphReaderTests.Read_NearestImportNamespaceAddsDescendantFolderSuffix`; `BlazorNamespaceCatalogTests.QualifiedNames_NearestNamespaceDirectiveOverridesProjectRootAndAppendsSuffix` |
 | A literal project root, project-relative folders, same-folder scope, and project-root scope resolve deterministically. | `BlazorComponentGraphReaderTests.Read_LiteralProjectRootNamespaceResolvesSameFolderAndProjectRootComponents`; `BlazorNamespaceCatalogTests.QualifiedNames_LiteralRootNamespaceIncludesProjectRelativeFolders`; `BlazorNamespaceCatalogTests.EffectiveNamespaces_IncludeSourceFolderAndProjectRoot` |
 | The project-name default replaces spaces with underscores and works with both artifact separators. | `BlazorComponentGraphReaderTests.Read_ProjectNameDefaultReplacesSpacesForBothArtifactSeparators`; `BlazorNamespaceCatalogTests.QualifiedNames_ProjectFileNameDefaultReplacesSpacesOnly` |
+| A single standard .NET/Blazor SDK declaration preserves project-name namespace inference. | `BlazorNamespaceCatalogTests.QualifiedNames_StandardSdkFormsUseProjectNameDefault` |
 | A globally unique simple component still requires effective namespace evidence. | `BlazorComponentGraphReaderTests.Read_SimpleUniqueComponentOutsideEffectiveNamespaces_ProducesNoEdge` |
 | The live extractor builds navigation, component, reverse-dependency, and path evidence from inherited namespaces without linking the wrong homonym. | `LiveBridgeTraceTests.BlazorFixture_LiveExtractBuildsNavigationComponentAndDependencyChains` (`Category=Scale`) |
 
@@ -36,8 +39,8 @@ loading.
 | Boundary | Proving test |
 | --- | --- |
 | Aliased, static, generic, and property-expression `@using` values do not resolve simple tags. | `BlazorComponentGraphReaderTests.Read_UnsupportedInheritedUsing_ProducesNoEdge` |
-| Conditional, property-expanded, conflicting, imported, target/choose-derived, DTD-bearing, invalid, and malformed `RootNamespace` project XML fails closed. | `BlazorNamespaceCatalogTests.QualifiedNames_UnsupportedProjectEvaluationFailsClosed` |
-| Visible `Directory.Build.props`/`Directory.Build.targets` namespace or import evidence fails closed. | `BlazorNamespaceCatalogTests.QualifiedNames_VisibleDirectoryBuildNamespaceEvidenceFailsClosed` |
+| Conditional, property-expanded, conflicting, imported, target/choose-derived, DTD-bearing, invalid, malformed, custom-SDK, and additive-SDK project XML fails closed. | `BlazorNamespaceCatalogTests.QualifiedNames_UnsupportedProjectEvaluationFailsClosed` |
+| Visible `Directory.Build.props`/`Directory.Build.targets` namespace, import, or SDK evidence fails closed. | `BlazorNamespaceCatalogTests.QualifiedNames_VisibleDirectoryBuildNamespaceEvidenceFailsClosed` |
 | Multiple nearest project files stop resolution instead of falling through to a parent project. | `BlazorNamespaceCatalogTests.QualifiedNames_AmbiguousNearestProjectStopsBeforeParentProject` |
 | Sibling projects remain isolated. | `BlazorNamespaceCatalogTests.QualifiedNames_SiblingProjectsStayIsolated` |
 | Symlinked component directories, symlinked project files, and paths outside the artifact root fail closed. | `BlazorNamespaceCatalogTests.QualifiedNames_SymlinkedComponentDirectoryFailsClosed`; `BlazorNamespaceCatalogTests.QualifiedNames_SymlinkedProjectFileFailsClosed`; `BlazorNamespaceCatalogTests.QualifiedNames_PathOutsideWorkspaceFailsClosed` |
@@ -85,3 +88,17 @@ Verification head: `58eabefd14cd3e101f2d28f18eadbcb8e655d9bf`, with `julie-extra
 
 The closeout commit after this verification changes evidence checkboxes only. Its handoff SHA is reported outside
 this self-referential document.
+
+## Review-fix verification
+
+The release-review repairs were verified in a working tree based on `589940feef5d0fb7e7edd952665c7375c7e1278e`.
+
+- Focused Blazor, Rails bridge, and source-text coverage: PASS, 74 tests.
+- `dotnet build Miller.slnx -c Release`: PASS, 0 warnings and 0 errors.
+- `scripts/test.sh all`: PASS, 3,269 fast tests in 27 seconds and 52 Scale tests in 16 seconds.
+- `scripts/test-plugin.sh`: PASS, 28 tests.
+- Fresh julie-extract 2.14.0 self-scan: PASS, 943 files discovered, 908 extracted, 35 unsupported, 0 failed.
+- The self-scan reports 4 Razor whole-file diagnostics and 0 C# diagnostics. The remaining Razor diagnostics are
+  upstream extractor limitations; component symbols and structural facts remain available.
+- `SourceTextConventionTests.CSharpSourceFiles_DoNotContainNulBytes` prevents literal NUL bytes from returning to
+  production C# source.

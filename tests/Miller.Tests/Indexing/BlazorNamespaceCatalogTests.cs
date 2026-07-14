@@ -31,6 +31,24 @@ public sealed class BlazorNamespaceCatalogTests
         Assert.Equal(["Sample_Portal.Features.Widget"], catalog.QualifiedNames(component));
     }
 
+    [Theory]
+    [InlineData("<Project Sdk=\"Microsoft.NET.Sdk\" />")]
+    [InlineData("<Project Sdk=\"Microsoft.NET.Sdk.Web\" />")]
+    [InlineData("<Project Sdk=\"Microsoft.NET.Sdk.Razor\" />")]
+    [InlineData("<Project Sdk=\"Microsoft.NET.Sdk.BlazorWebAssembly\" />")]
+    [InlineData("<Project><Sdk Name=\"Microsoft.NET.Sdk.Razor\" /></Project>")]
+    public void QualifiedNames_StandardSdkFormsUseProjectNameDefault(string projectXml)
+    {
+        using var fixture = CreateFixture();
+        WriteFile(fixture, "Sample.csproj", projectXml);
+        var component = Component("Features/Widget.razor", "Widget");
+        MaterializeComponent(fixture, component.Path);
+
+        var catalog = BlazorNamespaceCatalog.Build(fixture.WorkspaceRoot, [component], []);
+
+        Assert.Equal(["Sample.Features.Widget"], catalog.QualifiedNames(component));
+    }
+
     [Fact]
     public void QualifiedNames_NearestNamespaceDirectiveOverridesProjectRootAndAppendsSuffix()
     {
@@ -89,7 +107,9 @@ public sealed class BlazorNamespaceCatalogTests
 
         var catalog = BlazorNamespaceCatalog.Build(fixture.WorkspaceRoot, [source], []);
 
-        Assert.Equal(["Sample.Web", "Sample.Web.Features.Admin"], catalog.EffectiveNamespaces(source, []));
+        Assert.Equal(
+            ["Sample", "Sample.Web", "Sample.Web.Features", "Sample.Web.Features.Admin"],
+            catalog.EffectiveNamespaces(source, []));
     }
 
     [Fact]
@@ -113,6 +133,10 @@ public sealed class BlazorNamespaceCatalogTests
     [InlineData("<Project><PropertyGroup><RootNamespace>$(Company).Web</RootNamespace></PropertyGroup></Project>")]
     [InlineData("<Project><PropertyGroup><RootNamespace>Sample.One</RootNamespace><RootNamespace>Sample.Two</RootNamespace></PropertyGroup></Project>")]
     [InlineData("<Project><Import Project=\"Shared.props\" /><PropertyGroup><RootNamespace>Sample.Web</RootNamespace></PropertyGroup></Project>")]
+    [InlineData("<Project Sdk=\"Custom.Build.Sdk\"><PropertyGroup><RootNamespace>Sample.Web</RootNamespace></PropertyGroup></Project>")]
+    [InlineData("<Project Sdk=\"Microsoft.NET.Sdk;Custom.Build.Sdk\"><PropertyGroup><RootNamespace>Sample.Web</RootNamespace></PropertyGroup></Project>")]
+    [InlineData("<Project><Sdk Name=\"Custom.Build.Sdk\" /><PropertyGroup><RootNamespace>Sample.Web</RootNamespace></PropertyGroup></Project>")]
+    [InlineData("<Project Sdk=\"Microsoft.NET.Sdk\"><Sdk Name=\"Custom.Build.Sdk\" /><PropertyGroup><RootNamespace>Sample.Web</RootNamespace></PropertyGroup></Project>")]
     [InlineData("<Project><Target Name=\"SetNamespace\"><PropertyGroup><RootNamespace>Sample.Web</RootNamespace></PropertyGroup></Target></Project>")]
     [InlineData("<Project><Choose><Otherwise><PropertyGroup><RootNamespace>Sample.Web</RootNamespace></PropertyGroup></Otherwise></Choose></Project>")]
     [InlineData("<!DOCTYPE Project [<!ENTITY root 'Sample.Web'>]><Project><PropertyGroup><RootNamespace>&root;</RootNamespace></PropertyGroup></Project>")]
@@ -133,6 +157,8 @@ public sealed class BlazorNamespaceCatalogTests
     [Theory]
     [InlineData("Directory.Build.props", "<Project><PropertyGroup><RootNamespace>Imported.Root</RootNamespace></PropertyGroup></Project>")]
     [InlineData("Directory.Build.targets", "<Project><Import Project=\"Shared.targets\" /></Project>")]
+    [InlineData("Directory.Build.props", "<Project Sdk=\"Custom.Build.Sdk\" />")]
+    [InlineData("Directory.Build.targets", "<Project><Sdk Name=\"Custom.Build.Sdk\" /></Project>")]
     public void QualifiedNames_VisibleDirectoryBuildNamespaceEvidenceFailsClosed(string fileName, string content)
     {
         using var fixture = CreateFixture();
