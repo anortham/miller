@@ -255,6 +255,47 @@ public sealed class BlazorComponentGraphReaderTests
         Assert.Empty(BlazorComponentGraphReader.Read(fixture.DbPath, facts));
     }
 
+    [Fact]
+    public void Read_LiteralProjectRootNamespaceResolvesSameFolderAndProjectRootComponents()
+    {
+        using var fixture = CreateFixture(
+            Component(PageAId, "PageA", "PageA", "Pages/PageA.razor"),
+            Component(AdminWidgetId, "Widget", "Widget", "Pages/Widget.razor"),
+            Component(SharedWidgetId, "RootWidget", "RootWidget", "RootWidget.razor"));
+        fixture.SetArtifactMetadata("root_path", fixture.WorkspaceRoot);
+        WriteProject(fixture, "Miller.Blazor.csproj", "<Project><PropertyGroup><RootNamespace>Sample.Web</RootNamespace></PropertyGroup></Project>");
+        AddReference(fixture, "fact-1", "Pages/PageA.razor", "Widget", "PageA", "[]");
+        AddReference(fixture, "fact-2", "Pages/PageA.razor", "RootWidget", "PageA", "[]");
+
+        var facts = SqliteBridgeReader.Read(fixture.DbPath).StructuralFacts;
+
+        Assert.Equal(
+            [new GraphEdge(PageAId, AdminWidgetId, "uses"), new GraphEdge(PageAId, SharedWidgetId, "uses")],
+            BlazorComponentGraphReader.Read(fixture.DbPath, facts));
+    }
+
+    [Theory]
+    [InlineData("Areas/PageA.razor", "Areas/Widget.razor")]
+    [InlineData(@"Areas\PageA.razor", @"Areas\Widget.razor")]
+    public void Read_ProjectNameDefaultReplacesSpacesForBothArtifactSeparators(
+        string pagePath,
+        string widgetPath)
+    {
+        using var fixture = CreateFixture(
+            Component(PageAId, "PageA", "PageA", pagePath),
+            Component(AdminWidgetId, "Widget", "Widget", widgetPath));
+        fixture.SetArtifactMetadata("root_path", fixture.WorkspaceRoot);
+        WriteProject(fixture, "Fancy App.csproj", "<Project />");
+        System.IO.Directory.CreateDirectory(Path.Combine(fixture.WorkspaceRoot, "Areas"));
+        AddReference(fixture, "fact-1", pagePath, "Widget", "PageA", "[]");
+
+        var facts = SqliteBridgeReader.Read(fixture.DbPath).StructuralFacts;
+
+        Assert.Equal(
+            [new GraphEdge(PageAId, AdminWidgetId, "uses")],
+            BlazorComponentGraphReader.Read(fixture.DbPath, facts));
+    }
+
     private static JulieDbFixture.SymbolRow Component(
         string id,
         string name,
@@ -286,6 +327,13 @@ public sealed class BlazorComponentGraphReaderTests
 
     private static JulieDbFixture CreateFixture(params JulieDbFixture.SymbolRow[] rows) =>
         JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, rows);
+
+    private static void WriteProject(JulieDbFixture fixture, string relativePath, string content)
+    {
+        string path = Path.Combine(fixture.WorkspaceRoot, relativePath);
+        System.IO.Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, content);
+    }
 
     private static void AddReference(
         JulieDbFixture fixture,

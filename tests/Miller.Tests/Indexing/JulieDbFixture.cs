@@ -127,6 +127,17 @@ internal sealed class JulieDbFixture : IDisposable
         command.ExecuteNonQuery();
     }
 
+    public void SetArtifactMetadata(string key, string value) =>
+        ExecuteWrite("""
+            INSERT INTO artifact_metadata (key, value)
+            VALUES ($key, $value)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+            """, parameters =>
+        {
+            parameters.AddWithValue("$key", key);
+            parameters.AddWithValue("$value", value);
+        });
+
     /// <summary>
     /// The five-symbol test-role/currency evidence scenario proven identically by the artifact reader
     /// (<c>SqliteSymbolReaderTests</c>) and the symbols export feed (<c>SymbolExportReaderTests</c>): one
