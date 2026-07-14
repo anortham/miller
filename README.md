@@ -313,8 +313,9 @@ selector: display ID, unique prefix, full ID, registered root path, `current`, o
 
 `trace` is the graph workflow tool: `mode=refs` lists name-based identifier references, `mode=path` shows the
 shortest extracted graph path to `to`, and `mode=bridge` follows provider-scoped bridge evidence. Current providers
-are `dotnet-web`, `nextjs`, `nextjs-api`, `nuxt`, `nuxt-api`, `vue`, `react`, and `backend-http`; they link route
-references to file routes/definitions, client requests to Next.js/Nuxt route handlers, and client requests
+are `dotnet-web`, `nextjs`, `nextjs-api`, `nuxt`, `nuxt-api`, `vue`, `react`, `blazor`, and `backend-http`; they link
+route references to file routes/definitions, Blazor navigation references to Razor page routes, client requests to
+Next.js/Nuxt route handlers, and client requests
 (fetch/axios/`requests`/`httpx`/`net/http`/`Net::HTTP`/`HttpClient`/Ktor/Guzzle/Req/reqwest) to
 Express/Fastify/FastAPI/Flask/Django/Spring/Go/gin/echo/Rails/NestJS/Laravel/Phoenix/axum/actix route templates —
 not every framework route shape.
@@ -694,12 +695,20 @@ Warnings are errors (`Directory.Build.props`).
   providers are `dotnet-web` (ASP.NET controllers, TypeScript/JS client URL calls, AutoMapper, Entity Framework),
   `nextjs`/`nextjs-api` (route references to file routes, client requests to Next.js route handlers),
   `nuxt`/`nuxt-api` (NuxtLink route references to Nuxt file routes, client requests to Nuxt server routes), `vue`
-  (Vue route references to route definitions), `react` (React route references to route definitions), and
+  (Vue route references to route definitions), `react` (React route references to route definitions), `blazor`
+  (navigation references to Razor page routes), and
   `backend-http` (client requests to Express/Fastify/FastAPI/Flask/Django/Spring/Go/gin/echo/Rails/
   NestJS/Laravel/Phoenix/axum/actix route templates).
   API handlers, server actions, middleware rewrites, redirects, and runtime route rules need extractor facts before bridge can claim them. The mode intentionally uses the full bridge graph
   for provider-scoped evidence. Normal `search`, `inspect`, graph-only `context`, `impact`, non-bridge `trace`,
   and workspace status/list stay on projection-specific read paths.
+- Blazor `.razor` component dependencies resolve fully qualified tags exactly and simple tags only with namespace
+  evidence from the reference fact, source component, inherited `_Imports.razor` `@using`/`@namespace` directives,
+  or a bounded nearest-single-`.csproj` root/folder heuristic. Aliased, static, generic, conditional, imported,
+  property-expanded, conflicting, ambiguous, unsafe, oversized, or malformed inputs fail closed. `.cshtml` and
+  `_ViewImports.cshtml` component resolution remains deferred because julie-extract 2.14 emits directives but no
+  component-reference facts for that surface. See
+  [the namespace-resolution evidence](docs/findings/2026-07-14-blazor-namespace-resolution.md).
 - The main `miller` release binary publishes with Native AOT (no .NET SDK required to run it). The packaged
   dashboard helper stays self-contained/non-AOT because ASP.NET Razor Components do not yet support Native AOT.
 - A rebuilt MCP server is picked up only after the MCP client restarts the Miller subprocess. Use

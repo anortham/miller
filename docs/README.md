@@ -115,6 +115,12 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`plans/2026-06-07-content-corpus-fts5-search-plan.md`](plans/2026-06-07-content-corpus-fts5-search-plan.md) - implemented content corpus plan; current contract is in `contracts/content-corpus-v1.md`.
 - [`reference/static-ssr-htmx-alpine-pattern.md`](reference/static-ssr-htmx-alpine-pattern.md) - Miller UI pattern for static SSR Razor, Minimal API fragments, htmx, and Alpine CSP (`Miller.Dashboard` reference).
 
+## Current Blazor and bridge evidence
+
+- [`findings/2026-07-14-blazor-namespace-resolution.md`](findings/2026-07-14-blazor-namespace-resolution.md) - current supported and fail-closed Blazor component namespace behavior, with fast and live-test evidence.
+- [`plans/2026-07-13-blazor-import-namespace-resolution.md`](plans/2026-07-13-blazor-import-namespace-resolution.md) - implemented follow-up plan for inherited `_Imports.razor` and bounded project/folder namespace resolution.
+- [`plans/2026-07-11-blazor-bridge-support-implementation-plan.md`](plans/2026-07-11-blazor-bridge-support-implementation-plan.md) - historical implementation plan for the initial Blazor navigation, component-reference, and dependency-injection graph support; it predates the namespace follow-up above.
+
 ## Historical evidence
 
 The `m*-design.md`, `miller-mvp-plan.md`, most dated `docs/plans/`, and dated `docs/findings/` files are
