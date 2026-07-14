@@ -186,18 +186,35 @@ public sealed class LiveBridgeTraceTests
         Assert.Contains(BridgeStructuralPatterns.RazorRouteReference, patternIds);
         Assert.Contains(BridgeStructuralPatterns.BlazorComponentReference, patternIds);
 
+        var directives = RazorDirectiveEvidence(work.Db);
+        Assert.Contains(("_Imports.razor", "using", "BlazorFixture.Shared.Imported"), directives);
+        Assert.Contains(("Pages/_Imports.razor", "namespace", "BlazorFixture.Pages"), directives);
+        string namespaceContext = Assert.Single(
+            BlazorReferenceNamespaceContexts(work.Db, "Pages/Orders.razor", "SharedWidget"));
+        Assert.DoesNotContain("BlazorFixture.Shared.Imported", namespaceContext, StringComparison.Ordinal);
+
         var navigation = Assert.Single(index.BridgeGraph.Edges, edge =>
             edge.Edge.Kind == BridgeKind.NavigatesTo
             && string.Equals(edge.Edge.SourceRef.Display, "/orders", StringComparison.Ordinal)
             && string.Equals(edge.Edge.TargetRef.Display, "/orders/{orderId?}", StringComparison.Ordinal));
         Assert.Equal(ConfidenceBand.High, navigation.Band);
 
-        string ordersId = FindSymbolId(index, "Orders", "class");
-        string sharedWidgetId = FindSymbolId(index, "SharedWidget", "class");
+        string ordersId = Assert.Single(SymbolIdsInFile(index, "Orders", "Pages/Orders.razor"));
+        string sharedWidgetId = Assert.Single(
+            SymbolIdsInFile(index, "SharedWidget", "Shared/Imported/SharedWidget.razor"));
+        string otherSharedWidgetId = Assert.Single(
+            SymbolIdsInFile(index, "SharedWidget", "Shared/Other/SharedWidget.razor"));
+        string qualifiedWidgetId = Assert.Single(
+            SymbolIdsInFile(index, "QualifiedWidget", "Explicit/QualifiedWidget.razor"));
         Assert.Contains(
             index.Graph.ReachWithEvidence([sharedWidgetId], 1, 10, Direction.Reverse).Nodes,
             node => node.Id == ordersId && node.Hop == 1);
         Assert.Equal([ordersId, sharedWidgetId], index.Graph.ShortestPath(ordersId, sharedWidgetId, 1));
+        Assert.Null(index.Graph.ShortestPath(ordersId, otherSharedWidgetId, 1));
+        Assert.Contains(
+            index.Graph.ReachWithEvidence([qualifiedWidgetId], 1, 10, Direction.Reverse).Nodes,
+            node => node.Id == ordersId && node.Hop == 1);
+        Assert.Equal([ordersId, qualifiedWidgetId], index.Graph.ShortestPath(ordersId, qualifiedWidgetId, 1));
 
         var codeBehind = Assert.Single(index.FindByName("CodeBehindMarker"));
         Assert.Equal("Pages/Orders.razor.cs", codeBehind.FilePath);
@@ -217,6 +234,7 @@ public sealed class LiveBridgeTraceTests
         _output.WriteLine($"BLAZOR FIXTURE — live {MillerExtractContract.PinnedJulieExtractVersion} chains verified:");
         _output.WriteLine($"  NavigateTo: {navigation.Edge.SourceRef.Display} -> {navigation.Edge.TargetRef.Display}");
         _output.WriteLine($"  Component: Orders -> SharedWidget ({ordersId} -> {sharedWidgetId})");
+        _output.WriteLine($"  Qualified component: Orders -> QualifiedWidget ({ordersId} -> {qualifiedWidgetId})");
         _output.WriteLine($"  Dependency: {index.FindBySymbolId(instantiates.From)?.Name} -> WidgetService kind={instantiates.Kind}");
     }
 
@@ -1465,17 +1483,35 @@ public sealed class LiveBridgeTraceTests
     private static void WriteBlazorFixture(string repo)
     {
         string pages = Path.Combine(repo, "Pages");
-        string shared = Path.Combine(repo, "Shared");
+        string sharedImported = Path.Combine(repo, "Shared", "Imported");
+        string sharedOther = Path.Combine(repo, "Shared", "Other");
+        string explicitComponents = Path.Combine(repo, "Explicit");
         Directory.CreateDirectory(pages);
-        Directory.CreateDirectory(shared);
+        Directory.CreateDirectory(sharedImported);
+        Directory.CreateDirectory(sharedOther);
+        Directory.CreateDirectory(explicitComponents);
+
+        File.WriteAllText(Path.Combine(repo, "BlazorFixture.csproj"), """
+            <Project Sdk="Microsoft.NET.Sdk.Web">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <RootNamespace>BlazorFixture</RootNamespace>
+              </PropertyGroup>
+            </Project>
+            """);
+        File.WriteAllText(Path.Combine(repo, "_Imports.razor"), """
+            @using BlazorFixture.Shared.Imported
+            """);
+        File.WriteAllText(Path.Combine(pages, "_Imports.razor"), """
+            @namespace BlazorFixture.Pages
+            """);
 
         File.WriteAllText(Path.Combine(pages, "Orders.razor"), """
             @page "/orders/{orderId?}"
-            @namespace BlazorFixture.Pages
-            @using BlazorFixture.Shared
             @inject Microsoft.AspNetCore.Components.NavigationManager Navigation
 
             <SharedWidget />
+            <BlazorFixture.Explicit.QualifiedWidget />
 
             @code {
                 [Parameter]
@@ -1492,10 +1528,14 @@ public sealed class LiveBridgeTraceTests
                 public void CodeBehindMarker() { }
             }
             """);
-        File.WriteAllText(Path.Combine(shared, "SharedWidget.razor"), """
-            @namespace BlazorFixture.Shared
-
-            <span>Shared widget</span>
+        File.WriteAllText(Path.Combine(sharedImported, "SharedWidget.razor"), """
+            <span>Imported shared widget</span>
+            """);
+        File.WriteAllText(Path.Combine(sharedOther, "SharedWidget.razor"), """
+            <span>Other shared widget</span>
+            """);
+        File.WriteAllText(Path.Combine(explicitComponents, "QualifiedWidget.razor"), """
+            <span>Qualified widget</span>
             """);
         File.WriteAllText(Path.Combine(repo, "Program.cs"), """
             using Microsoft.Extensions.DependencyInjection;
@@ -2328,6 +2368,60 @@ public sealed class LiveBridgeTraceTests
         while (reader.Read())
             ids.Add(reader.GetString(0));
         return ids;
+    }
+
+    private static IReadOnlyCollection<(string Path, string Name, string Value)> RazorDirectiveEvidence(string dbPath)
+    {
+        using var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder { DataSource = dbPath, Mode = SqliteOpenMode.ReadOnly }.ToString());
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT path,
+                   json_extract(metadata_json, '$.directiveName'),
+                   json_extract(metadata_json, '$.directiveValue')
+            FROM symbols
+            WHERE kind = 'import'
+              AND language = 'razor'
+              AND json_extract(metadata_json, '$.type') = 'razor-directive'
+            ORDER BY path, start_line, symbol_id;
+            """;
+
+        using var reader = command.ExecuteReader();
+        var directives = new List<(string Path, string Name, string Value)>();
+        while (reader.Read())
+            directives.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2)));
+        return directives;
+    }
+
+    private static IReadOnlyCollection<string> BlazorReferenceNamespaceContexts(
+        string dbPath,
+        string path,
+        string tag)
+    {
+        using var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder { DataSource = dbPath, Mode = SqliteOpenMode.ReadOnly }.ToString());
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT COALESCE(json_extract(metadata_json, '$.namespace_context'), '[]')
+            FROM structural_facts
+            WHERE pattern_id = $patternId
+              AND path = $path
+              AND json_extract(metadata_json, '$.tag') = $tag
+            ORDER BY structural_fact_id;
+            """;
+        command.Parameters.AddWithValue("$patternId", BridgeStructuralPatterns.BlazorComponentReference);
+        command.Parameters.AddWithValue("$path", path);
+        command.Parameters.AddWithValue("$tag", tag);
+
+        using var reader = command.ExecuteReader();
+        var contexts = new List<string>();
+        while (reader.Read())
+            contexts.Add(reader.GetString(0));
+        return contexts;
     }
 
     // How many facts one pattern id emitted for one file — proves a specific source SHAPE fired (e.g. both
