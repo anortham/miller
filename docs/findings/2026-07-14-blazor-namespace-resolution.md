@@ -67,5 +67,21 @@ loading.
 - `891541a` — bounded project/folder namespace inference and filesystem/XML guardrails.
 - `3598bb2` — malformed-metadata and repository-load hardening.
 - `79bf1cb` — live 2.14 artifact coverage for inherited and project/folder namespace resolution.
-- The Task 5 documentation commit, final branch SHA, and fast/Scale/all/Release branch gates are intentionally
-  recorded as pending until Task 6 verifies one final HEAD.
+- `58eabef` — reviewed plan, current public documentation, and this implementation evidence.
+
+## Final verification
+
+Verification head: `58eabefd14cd3e101f2d28f18eadbcb8e655d9bf`, with `julie-extract 2.14.0` at the SHA-256 above.
+
+- Focused reader/catalog/loader/provider/path tests: PASS, 77 tests.
+- `dotnet build Miller.slnx -c Release`: PASS, 0 warnings and 0 errors.
+- `scripts/test.sh`: PASS, 3,256 fast tests in 26 seconds.
+- `scripts/test.sh scale`: PASS, 52 Scale tests in 16 seconds.
+- `scripts/test.sh all`: PASS, 3,256 fast tests in 24 seconds and 52 Scale tests in 16 seconds.
+- Final branch review: no findings; public signatures, graph edge kind, MCP/CLI surface, and ownership boundaries
+  remain unchanged.
+- All three Miller worktrees were clean at their recorded heads. No Eros change, push, tag, publish, or release
+  occurred.
+
+The closeout commit after this verification changes evidence checkboxes only. Its handoff SHA is reported outside
+this self-referential document.

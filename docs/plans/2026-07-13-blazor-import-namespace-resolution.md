@@ -448,7 +448,7 @@ Run root, branch, HEAD, status, and worktree inventory checks. Inspect every rel
 Use `serial-worker-commit`; record the final SHA, Julie binary version, verification ledger, and any platform-specific CI evidence. Do not push, version-bump, tag, or publish without explicit approval.
 
 **Acceptance criteria:**
-- [ ] Fast, Scale, all, and Release build gates pass at one HEAD.
-- [ ] Public and ownership boundaries remain intact.
-- [ ] Final evidence records Miller SHA and Julie binary version.
-- [ ] No Eros change, push, or release occurred.
+- [x] Fast, Scale, all, and Release build gates pass at one HEAD.
+- [x] Public and ownership boundaries remain intact.
+- [x] Final evidence records Miller SHA and Julie binary version.
+- [x] No Eros change, push, or release occurred.
