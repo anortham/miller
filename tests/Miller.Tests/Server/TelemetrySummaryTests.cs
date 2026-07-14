@@ -58,6 +58,35 @@ public sealed class TelemetrySummaryTests : IDisposable
         cmd.ExecuteNonQuery();
     }
 
+    private void InsertRows(string tool, IEnumerable<(long DurationMs, string Timestamp)> rows)
+    {
+        using var c = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _dbPath, Mode = SqliteOpenMode.ReadWrite, Pooling = false,
+        }.ToString());
+        c.Open();
+        using var transaction = c.BeginTransaction();
+        using var cmd = c.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText =
+            "INSERT INTO tool_telemetry (id, ts, tool, workspace_id, duration_ms, outcome, est_tokens) " +
+            "VALUES ($id, $ts, $tool, 'ws1', $dur, 'ok', 1);";
+        SqliteParameter id = cmd.Parameters.Add("$id", SqliteType.Text);
+        SqliteParameter ts = cmd.Parameters.Add("$ts", SqliteType.Text);
+        cmd.Parameters.AddWithValue("$tool", tool);
+        SqliteParameter duration = cmd.Parameters.Add("$dur", SqliteType.Integer);
+
+        foreach ((long durationMs, string timestamp) in rows)
+        {
+            id.Value = Guid.CreateVersion7().ToString();
+            ts.Value = timestamp;
+            duration.Value = durationMs;
+            cmd.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+    }
+
     [Fact]
     public void Summarize_EmptyLedger_ReturnsEmptySummary()
     {
@@ -163,8 +192,8 @@ public sealed class TelemetrySummaryTests : IDisposable
         using var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ws1");
         // 100 rows, durations 1..100. p95 offset = floor((100-1)*0.95) = floor(94.05) = 94 → the 95th value
         // when ordered ascending (0-based offset 94) = 95.
-        for (int i = 1; i <= 100; i++)
-            InsertRow("search", i, "ok", 1, $"2026-05-01T00:00:{i:00}.000Z");
+        InsertRows("search", Enumerable.Range(1, 100)
+            .Select(i => ((long)i, $"2026-05-01T00:00:{i:00}.000Z")));
 
         var summary = ledger.Summarize();
         var search = Assert.Single(summary.Tools);
@@ -244,10 +273,9 @@ public sealed class DashboardTelemetrySummaryTests : IDisposable
     {
         _dir = Path.Combine(Path.GetTempPath(), "miller-dash-summary-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_dir);
-        // The dashboard reader derives the registry path as the telemetry DB's sibling, so they MUST co-locate
-        // (this mirrors DashboardPaths, which resolves both under ~/.miller by default).
         _telemetryDb = Path.Combine(_dir, "telemetry.db");
         _registryDb = Path.Combine(_dir, "workspaces.db");
+        using TelemetryLedger ledger = TelemetryLedger.Open(_telemetryDb, "ws-a", "/repo/test");
     }
 
     public void Dispose()
@@ -272,11 +300,6 @@ public sealed class DashboardTelemetrySummaryTests : IDisposable
         string? errorDetail = null,
         string? id = null)
     {
-        using (TelemetryLedger.Open(_telemetryDb, workspaceId, "/repo/test"))
-        {
-            // Ensure schema exists before the deterministic direct insert.
-        }
-
         using var c = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = _telemetryDb, Mode = SqliteOpenMode.ReadWrite, Pooling = false,
@@ -301,6 +324,35 @@ public sealed class DashboardTelemetrySummaryTests : IDisposable
         return rowId;
     }
 
+    private void InsertRows(string tool, IEnumerable<(long DurationMs, string Timestamp)> rows)
+    {
+        using var c = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _telemetryDb, Mode = SqliteOpenMode.ReadWrite, Pooling = false,
+        }.ToString());
+        c.Open();
+        using var transaction = c.BeginTransaction();
+        using var cmd = c.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText =
+            "INSERT INTO tool_telemetry (id, ts, tool, workspace_id, duration_ms, outcome) " +
+            "VALUES ($id, $ts, $tool, 'ws-a', $dur, 'ok');";
+        SqliteParameter id = cmd.Parameters.Add("$id", SqliteType.Text);
+        SqliteParameter ts = cmd.Parameters.Add("$ts", SqliteType.Text);
+        cmd.Parameters.AddWithValue("$tool", tool);
+        SqliteParameter duration = cmd.Parameters.Add("$dur", SqliteType.Integer);
+
+        foreach ((long durationMs, string timestamp) in rows)
+        {
+            id.Value = Guid.CreateVersion7().ToString();
+            ts.Value = timestamp;
+            duration.Value = durationMs;
+            cmd.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+    }
+
     private void SeedRegistry(string workspaceId, string displayId)
     {
         using var registry = WorkspaceRegistry.Open(_registryDb);
@@ -322,8 +374,8 @@ public sealed class DashboardTelemetrySummaryTests : IDisposable
     public void P95_KnownDistribution_Scoped_UsesFloorOffset()
     {
         // 100 rows durations 1..100. offset = floor((100-1)*0.95) = floor(94.05) = 94 → 0-based index 94 = 95.
-        for (int i = 1; i <= 100; i++)
-            InsertRow("search", i, "ok", $"2026-05-01T00:{i / 60:00}:{i % 60:00}.000Z");
+        InsertRows("search", Enumerable.Range(1, 100)
+            .Select(i => ((long)i, $"2026-05-01T00:{i / 60:00}:{i % 60:00}.000Z")));
 
         DashboardToolStat search = ToolStat("ws-a", "search");
         Assert.Equal(100, search.Calls);
@@ -335,8 +387,8 @@ public sealed class DashboardTelemetrySummaryTests : IDisposable
     public void P95_KnownDistribution_MachineWide_MatchesScopedFormula()
     {
         // Exercises the allWorkspaces SQL branch. Same 1..100 distribution → same p95 = 95.
-        for (int i = 1; i <= 100; i++)
-            InsertRow("search", i, "ok", $"2026-05-01T00:{i / 60:00}:{i % 60:00}.000Z");
+        InsertRows("search", Enumerable.Range(1, 100)
+            .Select(i => ((long)i, $"2026-05-01T00:{i / 60:00}:{i % 60:00}.000Z")));
 
         DashboardToolStat search = ToolStat("all", "search");
         Assert.Equal(95, search.P95Ms);
@@ -363,8 +415,8 @@ public sealed class DashboardTelemetrySummaryTests : IDisposable
     [Fact]
     public void P95_AllEqualDurations_IsThatDuration()
     {
-        for (int i = 0; i < 5; i++)
-            InsertRow("search", 42, "ok", $"2026-05-01T00:00:{i:00}.000Z");
+        InsertRows("search", Enumerable.Range(0, 5)
+            .Select(i => (42L, $"2026-05-01T00:00:{i:00}.000Z")));
         Assert.Equal(42, ToolStat("ws-a", "search").P95Ms); // offset floor(4*0.95)=3 → sorted[3] = 42
     }
 
@@ -385,8 +437,8 @@ public sealed class DashboardTelemetrySummaryTests : IDisposable
         // tool-b: 1 row 99 → offset 0 → 99
         InsertRow("tool-b", 99, "ok", "2026-05-01T00:00:03.000Z");
         // tool-c: 20 rows 1..20 → offset floor(19*0.95)=18 → sorted[18] = 19
-        for (int i = 1; i <= 20; i++)
-            InsertRow("tool-c", i, "ok", $"2026-05-01T00:01:{i:00}.000Z");
+        InsertRows("tool-c", Enumerable.Range(1, 20)
+            .Select(i => ((long)i, $"2026-05-01T00:01:{i:00}.000Z")));
 
         Assert.Equal(20, ToolStat("ws-a", "tool-a").P95Ms);
         Assert.Equal(99, ToolStat("ws-a", "tool-b").P95Ms);
