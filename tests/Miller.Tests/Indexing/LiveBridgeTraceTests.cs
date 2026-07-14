@@ -206,6 +206,13 @@ public sealed class LiveBridgeTraceTests
             SymbolIdsInFile(index, "SharedWidget", "Shared/Other/SharedWidget.razor"));
         string qualifiedWidgetId = Assert.Single(
             SymbolIdsInFile(index, "QualifiedWidget", "Explicit/QualifiedWidget.razor"));
+        string inFileSourceId = Assert.Single(
+            SymbolIdsInFile(index, "InFileSource", "InFile/InFileSource.razor"));
+        string localWidgetId = Assert.Single(
+            SymbolIdsInFile(index, "LocalWidget", "LocalOnly/LocalWidget.razor"));
+        string inFileNamespaceContext = Assert.Single(
+            BlazorReferenceNamespaceContexts(work.Db, "InFile/InFileSource.razor", "LocalWidget"));
+        Assert.Contains("BlazorFixture.LocalOnly", inFileNamespaceContext, StringComparison.Ordinal);
         Assert.Contains(
             index.Graph.ReachWithEvidence([sharedWidgetId], 1, 10, Direction.Reverse).Nodes,
             node => node.Id == ordersId && node.Hop == 1);
@@ -215,6 +222,7 @@ public sealed class LiveBridgeTraceTests
             index.Graph.ReachWithEvidence([qualifiedWidgetId], 1, 10, Direction.Reverse).Nodes,
             node => node.Id == ordersId && node.Hop == 1);
         Assert.Equal([ordersId, qualifiedWidgetId], index.Graph.ShortestPath(ordersId, qualifiedWidgetId, 1));
+        Assert.Equal([inFileSourceId, localWidgetId], index.Graph.ShortestPath(inFileSourceId, localWidgetId, 1));
 
         var codeBehind = Assert.Single(index.FindByName("CodeBehindMarker"));
         Assert.Equal("Pages/Orders.razor.cs", codeBehind.FilePath);
@@ -1486,10 +1494,14 @@ public sealed class LiveBridgeTraceTests
         string sharedImported = Path.Combine(repo, "Shared", "Imported");
         string sharedOther = Path.Combine(repo, "Shared", "Other");
         string explicitComponents = Path.Combine(repo, "Explicit");
+        string inFileComponents = Path.Combine(repo, "InFile");
+        string localOnlyComponents = Path.Combine(repo, "LocalOnly");
         Directory.CreateDirectory(pages);
         Directory.CreateDirectory(sharedImported);
         Directory.CreateDirectory(sharedOther);
         Directory.CreateDirectory(explicitComponents);
+        Directory.CreateDirectory(inFileComponents);
+        Directory.CreateDirectory(localOnlyComponents);
 
         File.WriteAllText(Path.Combine(repo, "BlazorFixture.csproj"), """
             <Project Sdk="Microsoft.NET.Sdk.Web">
@@ -1536,6 +1548,17 @@ public sealed class LiveBridgeTraceTests
             """);
         File.WriteAllText(Path.Combine(explicitComponents, "QualifiedWidget.razor"), """
             <span>Qualified widget</span>
+            """);
+        File.WriteAllText(Path.Combine(inFileComponents, "InFileSource.razor"), """
+            @namespace BlazorFixture.InFileOnly
+            @using BlazorFixture.LocalOnly
+
+            <LocalWidget />
+            """);
+        File.WriteAllText(Path.Combine(localOnlyComponents, "LocalWidget.razor"), """
+            @namespace BlazorFixture.LocalOnly
+
+            <span>Local widget</span>
             """);
         File.WriteAllText(Path.Combine(repo, "Program.cs"), """
             using Microsoft.Extensions.DependencyInjection;

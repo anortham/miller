@@ -13,8 +13,9 @@ Project inference starts at a materialized component path, walks only toward the
 at the nearest directory containing project files. Exactly one `.csproj` is required. Miller accepts one
 unconditional literal `RootNamespace`, or the SDK-style project-name default with spaces replaced by underscores,
 then appends the component folder. A nearer inherited `@namespace` is authoritative and appends its descendant
-folder suffix. Same-folder, enclosing, and project-root component namespaces are implicit source scopes. SDK
-inference accepts one standard `Microsoft.NET.Sdk`, `.Web`, `.Razor`, or `.BlazorWebAssembly` declaration.
+folder suffix. Same-folder and enclosing component namespaces are implicit source scopes. The project root is
+in scope only when it encloses the source's effective namespace, not when `@namespace` deliberately diverges.
+SDK inference accepts one standard `Microsoft.NET.Sdk`, `.Web`, `.Razor`, or `.BlazorWebAssembly` declaration.
 
 | Behavior | Proving test |
 | --- | --- |
@@ -25,10 +26,11 @@ inference accepts one standard `Microsoft.NET.Sdk`, `.Web`, `.Razor`, or `.Blazo
 | Root-to-leaf inherited `@using` directives accumulate without crossing sibling subtrees. | `BlazorComponentGraphReaderTests.Read_InheritedUsingsAccumulateRootToLeafAndStayWithinSubtree` |
 | The nearest inherited `@namespace` supplies the base namespace plus the descendant folder suffix. | `BlazorComponentGraphReaderTests.Read_NearestImportNamespaceAddsDescendantFolderSuffix`; `BlazorNamespaceCatalogTests.QualifiedNames_NearestNamespaceDirectiveOverridesProjectRootAndAppendsSuffix` |
 | A literal project root, project-relative folders, same-folder scope, and project-root scope resolve deterministically. | `BlazorComponentGraphReaderTests.Read_LiteralProjectRootNamespaceResolvesSameFolderAndProjectRootComponents`; `BlazorNamespaceCatalogTests.QualifiedNames_LiteralRootNamespaceIncludesProjectRelativeFolders`; `BlazorNamespaceCatalogTests.EffectiveNamespaces_IncludeSourceFolderAndProjectRoot` |
+| A divergent inherited `@namespace` does not import the unrelated project-root namespace. | `BlazorComponentGraphReaderTests.Read_DivergentNamespaceDirectiveDoesNotImportProjectRootNamespace` |
 | The project-name default replaces spaces with underscores and works with both artifact separators. | `BlazorComponentGraphReaderTests.Read_ProjectNameDefaultReplacesSpacesForBothArtifactSeparators`; `BlazorNamespaceCatalogTests.QualifiedNames_ProjectFileNameDefaultReplacesSpacesOnly` |
 | A single standard .NET/Blazor SDK declaration preserves project-name namespace inference. | `BlazorNamespaceCatalogTests.QualifiedNames_StandardSdkFormsUseProjectNameDefault` |
 | A globally unique simple component still requires effective namespace evidence. | `BlazorComponentGraphReaderTests.Read_SimpleUniqueComponentOutsideEffectiveNamespaces_ProducesNoEdge` |
-| The live extractor builds navigation, component, reverse-dependency, and path evidence from inherited namespaces without linking the wrong homonym. | `LiveBridgeTraceTests.BlazorFixture_LiveExtractBuildsNavigationComponentAndDependencyChains` (`Category=Scale`) |
+| The live extractor builds navigation, component, reverse-dependency, and path evidence from inherited namespaces and in-file `@namespace`/`@using` directives without linking the wrong homonym. | `LiveBridgeTraceTests.BlazorFixture_LiveExtractBuildsNavigationComponentAndDependencyChains` (`Category=Scale`) |
 
 ## Fail-closed boundary
 
@@ -91,14 +93,24 @@ this self-referential document.
 
 ## Review-fix verification
 
-The release-review repairs were verified in a working tree based on `589940feef5d0fb7e7edd952665c7375c7e1278e`.
+The release-review repairs were verified in a working tree based on `0267d5843c2f06e12f8673386768cfe7f6f17791`.
 
-- Focused Blazor, Rails bridge, and source-text coverage: PASS, 74 tests.
+- Focused Blazor namespace and graph coverage: PASS, 62 tests.
+- Live julie-extract 2.14.0 in-file `@namespace` and `@using` coverage: PASS.
 - `dotnet build Miller.slnx -c Release`: PASS, 0 warnings and 0 errors.
-- `scripts/test.sh all`: PASS, 3,269 fast tests in 27 seconds and 52 Scale tests in 16 seconds.
+- `scripts/test.sh all`: PASS, 3,270 fast tests in 27 seconds and 52 Scale tests in 18 seconds.
 - `scripts/test-plugin.sh`: PASS, 28 tests.
+- Eight sequential full-suite stress runs passed all 3,269 then-current fast tests; four simultaneous stress runs
+  passed all 3,270 current fast tests. The independently reported SQLite failure did not reproduce.
 - Fresh julie-extract 2.14.0 self-scan: PASS, 943 files discovered, 908 extracted, 35 unsupported, 0 failed.
 - The self-scan reports 4 Razor whole-file diagnostics and 0 C# diagnostics. The remaining Razor diagnostics are
   upstream extractor limitations; component symbols and structural facts remain available.
 - `SourceTextConventionTests.CSharpSourceFiles_DoNotContainNulBytes` prevents literal NUL bytes from returning to
   production C# source.
+
+## Independent release review
+
+- Fixed: project-root namespaces are no longer unconditionally added when an inherited `@namespace` diverges.
+- Fixed: the live 2.14 fixture again proves in-file `@namespace` folding and fact-local `@using` context.
+- Dismissed: the reported intermittent `BuildChainDb` SQLite failure could not be reproduced under sequential or
+  concurrent full-suite stress; the branch-added write connection is scoped and disposed before repository load.

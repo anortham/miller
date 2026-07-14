@@ -290,6 +290,26 @@ public sealed class BlazorComponentGraphReaderTests
             BlazorComponentGraphReader.Read(fixture.DbPath, facts));
     }
 
+    [Fact]
+    public void Read_DivergentNamespaceDirectiveDoesNotImportProjectRootNamespace()
+    {
+        using var fixture = CreateFixture(
+            Component(PageAId, "PageA", "PageA", "Pages/PageA.razor"),
+            Component(SharedWidgetId, "Widget", "Sample.Web.Widget", "Widget.razor"),
+            RazorDirective(
+                "40000000000000000000000000000001",
+                "Pages/_Imports.razor",
+                "namespace",
+                "Custom.Pages"));
+        fixture.SetArtifactMetadata("root_path", fixture.WorkspaceRoot);
+        WriteProject(fixture, "Miller.Blazor.csproj", "<Project><PropertyGroup><RootNamespace>Sample.Web</RootNamespace></PropertyGroup></Project>");
+        AddReference(fixture, "fact-1", "Pages/PageA.razor", "Widget", "PageA", "[]");
+
+        var facts = SqliteBridgeReader.Read(fixture.DbPath).StructuralFacts;
+
+        Assert.Empty(BlazorComponentGraphReader.Read(fixture.DbPath, facts));
+    }
+
     [Theory]
     [InlineData("Areas/PageA.razor", "Areas/Widget.razor")]
     [InlineData(@"Areas\PageA.razor", @"Areas\Widget.razor")]

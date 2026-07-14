@@ -65,10 +65,6 @@ internal sealed class BlazorNamespaceCatalog
                 namespaces.Add(normalized);
         }
 
-        string? projectRootNamespace = _projects.ProjectRootNamespace(source.Path);
-        if (projectRootNamespace is not null)
-            namespaces.Add(projectRootNamespace);
-
         foreach (string qualifiedName in QualifiedNames(source))
         {
             int separator = qualifiedName.LastIndexOf('.');
@@ -239,9 +235,6 @@ internal sealed class BlazorNamespaceCatalog
 
         public BlazorProjectNamespaceResolver(string? workspaceRoot) =>
             _workspaceRoot = NormalizeWorkspaceRoot(workspaceRoot);
-
-        public string? ProjectRootNamespace(string componentPath) =>
-            Resolve(componentPath)?.RootNamespace;
 
         public string? ComponentNamespace(string componentPath) =>
             Resolve(componentPath)?.ComponentNamespace;
