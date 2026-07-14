@@ -1,6 +1,6 @@
 ---
 name: miller-patterns-audit
-description: Use when an agent needs extractor-recognized code-shape facts such as routes, htmx attributes, Alpine directives, SQL DDL, or data-document structure.
+description: Use when an agent needs extractor-recognized code-shape facts such as routes, htmx attributes, Alpine directives, SQL DDL/DML, or data-document structure.
 user-invocable: true
 arguments: "<pattern family, path, language, or metadata filter>"
 allowed-tools: mcp__miller__patterns, mcp__miller__search, mcp__miller__inspect, mcp__miller__workspace
@@ -8,9 +8,9 @@ allowed-tools: mcp__miller__patterns, mcp__miller__search, mcp__miller__inspect,
 
 # Miller Patterns Audit
 
-Use `patterns` when the question is about known structural facts emitted by `julie-extractors`, not arbitrary
-AST matching. Start by listing observed pattern IDs in the selected workspace, then search the relevant ID with
-path, language, and metadata filters.
+The current extractor catalog contains 175 pattern IDs across 36 languages. Use `patterns` when the question is
+about known structural facts emitted by `julie-extractors`, not arbitrary AST matching. Start by listing observed
+pattern IDs in the selected workspace, then search the relevant ID with path, language, and metadata filters.
 
 ## Workflow
 
@@ -30,6 +30,7 @@ before inventing a raw text grep.
 patterns(operation="search", pattern_id="aspnet.minimal_api.route.v1", where="verb=GET")
 patterns(operation="search", pattern_id="htmx.attribute.v1", where="name=hx-get", path="Views/**")
 patterns(operation="search", pattern_id="alpine.directive.v1", where="directive=x-data", path="Views/**")
+patterns(operation="search", pattern_id="sql.merge_statement.v1")
 ```
 
 3. Summarize before broad audits:
@@ -49,7 +50,7 @@ inspect(target="<path from pattern row>")
 
 - List ASP.NET minimal API routes without scanning source text.
 - Find htmx or Alpine usage in Razor/HTML views.
-- Audit SQL DDL, JSON/YAML/TOML keys, or Markdown structure.
+- Audit SQL DDL/DML, including MERGE, JSON/YAML/TOML keys, or Markdown structure.
 - Compare code-shape facts across registered workspaces with `workspace_id`.
 
 ## Limits

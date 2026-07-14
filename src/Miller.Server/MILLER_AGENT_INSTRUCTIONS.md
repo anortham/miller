@@ -19,7 +19,7 @@ Fresh index of this workspace's code. One Miller call beats shell greps and full
 - trace — follow references, shortest dependency paths, or cross-language route chains (frontend→backend).
 - impact — before a refactor or after edits: impacted symbols plus likely tests, from a symbol, file, or git diff.
 - edit — index-aware replace/rename/body-rewrite with a diff preview and match proof.
-- patterns — pre-extracted code-shape facts (routes, config keys, doc structure) across ~36 languages.
+- patterns — pre-extracted code-shape facts (routes, config keys, doc structure) across 36 languages.
 - content — import then search/read logs, CI output, web markdown, and other large text without full-file reads.
 - workspace — index lifecycle: status, refresh, health, list (filter/limit), onboarding, dashboard.
 

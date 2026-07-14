@@ -214,7 +214,7 @@ public sealed class LiveBridgeTraceTests
             [instantiates.From, widgetServiceId],
             index.Graph.ShortestPath(instantiates.From, widgetServiceId, 1));
 
-        _output.WriteLine("BLAZOR FIXTURE — live 2.13.0 chains verified:");
+        _output.WriteLine($"BLAZOR FIXTURE — live {MillerExtractContract.PinnedJulieExtractVersion} chains verified:");
         _output.WriteLine($"  NavigateTo: {navigation.Edge.SourceRef.Display} -> {navigation.Edge.TargetRef.Display}");
         _output.WriteLine($"  Component: Orders -> SharedWidget ({ordersId} -> {sharedWidgetId})");
         _output.WriteLine($"  Dependency: {index.FindBySymbolId(instantiates.From)?.Name} -> WidgetService kind={instantiates.Kind}");

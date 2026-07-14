@@ -22,6 +22,6 @@ internal static class MillerExtractContract
     public const string ExpectedHashAlgorithm = "blake3";
 
     // Download pin only (restore-script + julie-pins.json target). This is the PRODUCT version,
-    // orthogonal to the runtime schema/contract gate above (D7): product 2.9.x through 2.13.x ships schema 4 / contract 3.
-    public const string PinnedJulieExtractVersion = "2.13.0"; // julie-extractors v2.13.0; schema and contract versions are unchanged.
+    // orthogonal to the runtime schema/contract gate above (D7): product 2.9.x through 2.14.x ships schema 4 / contract 3.
+    public const string PinnedJulieExtractVersion = "2.14.0"; // julie-extractors v2.14.0; schema and contract versions are unchanged.
 }
