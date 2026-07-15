@@ -33,6 +33,11 @@ Miller release archive, verifies its `.sha256` sidecar, caches it under `~/.mill
 `miller serve` as an MCP server. That archive includes Miller's pinned `.tools/julie-extract` binary, so plugin
 users do not install `julie-extract` or the .NET SDK separately.
 
+> **Plugin installs require [Node.js](https://nodejs.org/) on `PATH`** — the launcher is a Node script. If
+> Node.js is missing (common with Claude Code's native installer, which does not need Node itself), the plugin
+> fails to connect with the opaque MCP error `-32000` and writes no Miller log. Install Node.js LTS and restart
+> your agent. The manual install paths below run the `miller` binary directly and do not need Node.js.
+
 Claude Code:
 
 ```bash
@@ -469,6 +474,8 @@ Miller's first plugin distribution path lives in this repository, not a separate
 - `bin/miller-plugin-launcher.cjs` downloads the configured GitHub release archive, verifies the `.sha256`
   sidecar, caches it under `~/.miller/plugin-cache/`, and runs `miller serve`. Workspace binding is handled
   by Miller via MCP client roots; set `MILLER_WORKSPACE_ROOT` only when your client lacks roots support.
+  The launcher runs under Node.js (declared as `command: "node"` in the plugin manifests), so plugin installs
+  require Node.js on `PATH`; without it the MCP client cannot spawn the launcher at all.
 
 The plugin launcher consumes the release version in `miller-plugin.json`. Use
 `MILLER_BINARY=/absolute/path/to/miller` when testing an unreleased local build.
@@ -716,6 +723,10 @@ Warnings are errors (`Directory.Build.props`).
 
 ## Troubleshooting
 
+- Plugin install shows `failed` in `/mcp` with error `-32000` and no Miller log is written: Node.js is missing
+  from `PATH`. The plugin launcher is a Node script, and Claude Code's native installer does not itself require
+  Node — install Node.js LTS (for example `winget install OpenJS.NodeJS.LTS` on Windows), then fully restart the
+  agent so the new `PATH` is picked up; an in-session reconnect keeps the old environment and still fails.
 - `no Miller index`: run `miller workspace full`, or open the folder in the Miller MCP server so the
   index can be created. If the missing target is another repo, run `miller workspace open --path /absolute/repo --full`
   or MCP `workspace operation=open path=/absolute/repo`, then pass that repo's selector as `workspace_id`.
