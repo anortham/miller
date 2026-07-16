@@ -915,7 +915,7 @@ public sealed class SearchTool
             outsideScope.Clear();
             if (fileMode)
             {
-                IReadOnlyList<IndexedSymbol> symbols = index.FindByFilePathFragment(query, window);
+                IReadOnlyList<IndexedSymbol> symbols = FindByFilePathWithPrefixRecovery(index, query, window);
                 foreach (IndexedSymbol sym in symbols)
                     AddIfVisible(sym, score: 1.0);
                 return (symbols.Count, kept.Count);
@@ -1607,6 +1607,87 @@ public sealed class SearchTool
         }
         return false;
     }
+
+    /// <summary>
+    /// Resolve a file-path query that may carry a prefix ABOVE the workspace root. Indexed paths are
+    /// workspace-RELATIVE, so <c>./x</c>, <c>~/x</c>, <c>/abs/root/x</c>, and <c>&lt;repo-dir&gt;/x</c> can never be
+    /// a substring of one and miss no matter how correct the agent's path is. Runs entirely above
+    /// <see cref="ISymbolLookupIndex"/> so every backend gets it — the in-memory tables and the default-on FTS
+    /// sidecar carry SEPARATE copies of the fragment-ranking logic, and fixing only one would leave the shipped
+    /// default broken.
+    /// </summary>
+    private static IReadOnlyList<IndexedSymbol> FindByFilePathWithPrefixRecovery(
+        ISymbolLookupIndex index, string query, int limit)
+    {
+        IReadOnlyList<IndexedSymbol> direct = index.FindByFilePathFragment(query, limit);
+        if (direct.Count > 0)
+            return direct;
+
+        string normalized = NormalizePathQuery(query);
+        if (normalized.Length == 0)
+            return direct;
+
+        if (!string.Equals(normalized, query.Trim().Replace('\\', '/'), StringComparison.Ordinal))
+        {
+            IReadOnlyList<IndexedSymbol> viaNormalized = index.FindByFilePathFragment(normalized, limit);
+            if (viaNormalized.Count > 0)
+                return viaNormalized;
+        }
+
+        foreach (string suffix in PathQuerySuffixes(normalized))
+        {
+            IReadOnlyList<IndexedSymbol> viaSuffix = index.FindByFilePathFragment(suffix, limit);
+            if (viaSuffix.Count > 0)
+                return viaSuffix;
+        }
+
+        return direct;
+    }
+
+    // Strips only the prefixes that CANNOT appear in a workspace-relative path, so this is normalization rather
+    // than guessing: a leading ./, ../, ~/, or / carries no information the index could match on.
+    private static string NormalizePathQuery(string query)
+    {
+        string normalized = query.Trim().Replace('\\', '/');
+        while (normalized.Length > 0)
+        {
+            if (normalized.StartsWith("./", StringComparison.Ordinal))
+                normalized = normalized[2..];
+            else if (normalized.StartsWith("../", StringComparison.Ordinal))
+                normalized = normalized[3..];
+            else if (normalized.StartsWith("~/", StringComparison.Ordinal))
+                normalized = normalized[2..];
+            else if (normalized[0] == '/')
+                normalized = normalized[1..];
+            else
+                break;
+        }
+
+        return normalized;
+    }
+
+    // Drops leading segments one at a time to find the part of an over-qualified path the index actually holds
+    // (`/Users/me/repo/src/App.cs` → `src/App.cs`). Stops before the query would decay to a bare basename: that
+    // would turn "right filename, wrong directory" from an honest miss into a confident wrong answer.
+    private static IEnumerable<string> PathQuerySuffixes(string normalizedQuery)
+    {
+        string remainder = normalizedQuery;
+        while (true)
+        {
+            int separator = remainder.IndexOf('/', StringComparison.Ordinal);
+            if (separator < 0)
+                yield break;
+
+            remainder = remainder[(separator + 1)..];
+            if (SegmentCount(remainder) < 2)
+                yield break;
+
+            yield return remainder;
+        }
+    }
+
+    private static int SegmentCount(string path) =>
+        path.Split('/', StringSplitOptions.RemoveEmptyEntries).Length;
 
     private static bool LooksLikeSourceBodyQuery(string query)
     {

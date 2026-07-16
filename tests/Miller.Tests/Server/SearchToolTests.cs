@@ -543,6 +543,78 @@ public sealed class SearchToolTests
             output);
     }
 
+    private static ISymbolLookupIndex FilePathProbeIndex() =>
+        SymbolSearchProjection.Build([
+            Symbol(0, "sym-probe-search", "SearchTool", "class",
+                "src/Miller.Server/Tools/SearchTool.cs", 56),
+            Symbol(1, "sym-probe-root", "Program", "class", "Program.cs", 3),
+            Symbol(2, "sym-probe-other", "AppHost", "class", "src/Miller.Dashboard/AppHost.cs", 9),
+        ]);
+
+    private static (string Output, int Count) FileModeQuery(string query)
+    {
+        string output = SearchTool.Run(FilePathProbeIndex(), query, SearchToolMode.File, limit: 10,
+            excludeTests: null, json: false, out int count);
+        return (output, count);
+    }
+
+    private static void AssertResolvesTo(string query, string expectedPath)
+    {
+        (string output, int count) = FileModeQuery(query);
+
+        Assert.True(count > 0, $"'{query}' resolved nothing; output was: {output}");
+        Assert.StartsWith("File match", output, StringComparison.Ordinal);
+        Assert.Contains(expectedPath, output, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("src/Miller.Server/Tools")]
+    [InlineData("Tools/SearchTool.cs")]
+    [InlineData("SearchTool.cs")]
+    [InlineData("src\\Miller.Server\\Tools\\SearchTool.cs")]
+    [InlineData("src/Miller.Server/Tools/")]
+    [InlineData("src/Miller.Server/Tools/SearchTool.cs")]
+    public void Run_FileMode_ShippedPathForms_StillResolve(string query) =>
+        AssertResolvesTo(query, "src/Miller.Server/Tools/SearchTool.cs");
+
+    [Theory]
+    [InlineData("./src/Miller.Server/Tools/SearchTool.cs")]
+    [InlineData(".\\src\\Miller.Server\\Tools\\SearchTool.cs")]
+    [InlineData("../miller/src/Miller.Server/Tools/SearchTool.cs")]
+    [InlineData("~/src/Miller.Server/Tools/SearchTool.cs")]
+    [InlineData("/Users/murphy/source/miller/src/Miller.Server/Tools/SearchTool.cs")]
+    [InlineData("miller/src/Miller.Server/Tools/SearchTool.cs")]
+    [InlineData("/src/Miller.Server/Tools/SearchTool.cs")]
+    public void Run_FileMode_PathFormsCarryingAPrefixAboveTheWorkspaceRoot_Resolve(string query) =>
+        AssertResolvesTo(query, "src/Miller.Server/Tools/SearchTool.cs");
+
+    [Theory]
+    [InlineData("./Program.cs")]
+    [InlineData("/Program.cs")]
+    public void Run_FileMode_RootLevelFileWithPrefix_Resolves(string query) =>
+        AssertResolvesTo(query, "Program.cs");
+
+    [Theory]
+    [InlineData("wrongdir/SearchTool.cs")]
+    [InlineData("src/Miller.Dashboard/SearchTool.cs")]
+    public void Run_FileMode_WrongDirectoryForRealBasename_StaysAMissRatherThanDegrading(string query)
+    {
+        (string output, int count) = FileModeQuery(query);
+
+        Assert.Equal(0, count);
+        Assert.StartsWith("No indexed file matches", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Run_FileMode_PrefixRecovery_LeavesBasenameRankingUnchanged()
+    {
+        (string output, int count) = FileModeQuery("SearchTool.cs");
+
+        Assert.Equal(1, count);
+        Assert.Contains("src/Miller.Server/Tools/SearchTool.cs", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("AppHost.cs", output, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Run_FileMode_Empty_ReturnsFileRecoveryHint()
     {

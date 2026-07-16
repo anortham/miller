@@ -165,10 +165,10 @@ The highest-leverage fix: the diagnosis Miller already computes must reach the a
 **Dependency reason:** Same files as T1.1/T1.2; runs after T1.2 lands.
 
 **Acceptance criteria:**
-- [ ] Shipped path forms pinned as regression tests (fragment, suffix, basename, backslash).
-- [ ] Each probed-and-confirmed failing form either fixed with a test or documented in the findings as out of scope with a reason.
-- [ ] No ranking change for basename queries (existing tests stay green).
-- [ ] Focused SearchToolTests pass; handed to lead per commit mode.
+- [x] Shipped path forms pinned as regression tests (fragment, suffix, basename, backslash).
+- [x] Each probed-and-confirmed failing form either fixed with a test or documented in the findings as out of scope with a reason.
+- [x] No ranking change for basename queries (existing tests stay green).
+- [x] Focused SearchToolTests pass; handed to lead per commit mode.
 
 ### Task T1.4: Content-search empty output surfaces its diagnosis
 
