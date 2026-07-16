@@ -248,7 +248,13 @@ public sealed class SearchToolTests
 
         public int TextContentSearchResolveCount { get; private set; }
 
-        public WorkspaceSymbolSearchContext ResolveSymbolSearch(string? workspaceId, bool ensureFresh) => _context;
+        public int SymbolSearchResolveCount { get; private set; }
+
+        public WorkspaceSymbolSearchContext ResolveSymbolSearch(string? workspaceId, bool ensureFresh)
+        {
+            SymbolSearchResolveCount++;
+            return _context;
+        }
 
         public WorkspaceContentSearchContext ResolveContentSearch(string? workspaceId, bool ensureFresh) =>
             throw new NotSupportedException("FixedSymbolSearchProvider serves symbol search only.");
@@ -1177,6 +1183,295 @@ public sealed class SearchToolTests
 
         Assert.Contains("no literal match", output, StringComparison.Ordinal);
         AssertSinglePrimaryAction(output);
+    }
+
+    private static IReadOnlyList<IndexedSymbol> NearMatches(params string[] names) =>
+        names.Select((name, i) => Symbol(
+                i,
+                $"bb11223344556677889900aabbccdd{i:D2}",
+                name,
+                "method",
+                $"src/Miller.Server/References/ReferenceReader{i}.cs",
+                12 + i,
+                $"Task {name}()"))
+            .ToList();
+
+    private static readonly string[] ThreeNearMatches =
+        ["ReadReferencesAsync", "ReadReferenceAsync", "ReadReferencesSync"];
+
+    [Fact]
+    public void RunTextContent_SourceEmpty_IdentifierLikeNearMatch_RendersCorrectedRetryAndTry()
+    {
+        string output = SearchTool.RunTextContent(
+            TextContentIndex(), "ReadReferencesAsyncc", new[] { TextContentKind.WorkspaceSource },
+            limit: 10, excludeTests: false, json: false, out int count, out long _,
+            suggestionLookup: _ => NearMatches(ThreeNearMatches));
+
+        Assert.Equal(0, count);
+        Assert.Contains("close to 'ReadReferencesAsyncc'", output, StringComparison.Ordinal);
+        Assert.Contains("Next: search query=\"ReadReferencesAsync\" mode=source", output, StringComparison.Ordinal);
+        Assert.Contains("Try: ReadReferencesAsync (src/Miller.Server/References/ReferenceReader0.cs:12)",
+            output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunContentCorpus_Empty_IdentifierLikeNearMatch_RendersCorrectedRetryInContentMode()
+    {
+        string output = SearchTool.RunContentCorpus(
+            TextContentIndex(), "ReadReferencesAsyncc", limit: 10, json: false,
+            out int count, out long _,
+            suggestionLookup: _ => NearMatches(ThreeNearMatches));
+
+        Assert.Equal(0, count);
+        Assert.Contains("Next: search query=\"ReadReferencesAsync\" mode=content", output, StringComparison.Ordinal);
+        Assert.Contains("Try: ReadReferencesAsync", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunTextContent_SourceEmpty_QueryIsItselfAnIndexedSymbol_PivotsToInspect()
+    {
+        string output = SearchTool.RunTextContent(
+            TextContentIndex(), "ReadReferencesAsync", new[] { TextContentKind.WorkspaceSource },
+            limit: 10, excludeTests: false, json: false, out int count, out long _,
+            suggestionLookup: _ => NearMatches(ThreeNearMatches));
+
+        Assert.Equal(0, count);
+        Assert.Contains("indexed symbol", output, StringComparison.Ordinal);
+        Assert.Contains("Next: inspect target=\"ReadReferencesAsync\" depth=overview",
+            output, StringComparison.Ordinal);
+        Assert.DoesNotContain("Next: search", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunTextContent_SourceEmpty_IdentifierLikeNoNearMatch_RendersUnchangedT11Output()
+    {
+        string withEngine = SearchTool.RunTextContent(
+            TextContentIndex(), "ZZTopNothingMatches", new[] { TextContentKind.WorkspaceSource },
+            limit: 10, excludeTests: false, json: false, out _, out long _,
+            suggestionLookup: _ => []);
+
+        string withoutEngine = SearchTool.RunTextContent(
+            TextContentIndex(), "ZZTopNothingMatches", new[] { TextContentKind.WorkspaceSource },
+            limit: 10, excludeTests: false, json: false, out _, out long _);
+
+        Assert.Equal(withoutEngine, withEngine);
+        Assert.DoesNotContain("Try: ", withEngine, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("install guide")]
+    [InlineData("if (value == null)")]
+    [InlineData("how does refresh work")]
+    [InlineData("ab")]
+    [InlineData("src/Widget.cs")]
+    public void RunTextContent_NonIdentifierShape_NeverConsultsSuggestionEngine(string query)
+    {
+        int calls = 0;
+
+        SearchTool.RunTextContent(
+            TextContentIndex(), query, new[] { TextContentKind.WorkspaceSource },
+            limit: 10, excludeTests: false, json: false, out _, out long _,
+            suggestionLookup: _ => { calls++; return NearMatches(ThreeNearMatches); });
+
+        Assert.Equal(0, calls);
+    }
+
+    [Fact]
+    public void RunTextContent_NonEmptyResults_NeverConsultsSuggestionEngine()
+    {
+        int calls = 0;
+        var index = TextContentIndex(
+            CorpusHit("src/App.cs", TextContentKind.WorkspaceSource, 4, "ReadReferencesAsyncc();", "csharp"));
+
+        SearchTool.RunTextContent(
+            index, "ReadReferencesAsyncc", new[] { TextContentKind.WorkspaceSource },
+            limit: 10, excludeTests: false, json: false, out int count, out long _,
+            suggestionLookup: _ => { calls++; return NearMatches(ThreeNearMatches); });
+
+        Assert.Equal(1, count);
+        Assert.Equal(0, calls);
+    }
+
+    [Fact]
+    public void RunTextContent_EmptyJson_NeverConsultsEngineAndStaysEmptyArray()
+    {
+        int calls = 0;
+
+        string output = SearchTool.RunTextContent(
+            TextContentIndex(), "ReadReferencesAsyncc", new[] { TextContentKind.WorkspaceSource },
+            limit: 10, excludeTests: false, json: true, out int count, out long _,
+            suggestionLookup: _ => { calls++; return NearMatches(ThreeNearMatches); });
+
+        Assert.Equal(0, count);
+        Assert.Equal(0, calls);
+        Assert.Equal("[]", output);
+        Assert.Equal(JsonValueKind.Array, JsonDocument.Parse(output).RootElement.ValueKind);
+    }
+
+    [Fact]
+    public void RunContentCorpus_EmptyJson_NeverConsultsEngineAndStaysEmptyArray()
+    {
+        int calls = 0;
+
+        string output = SearchTool.RunContentCorpus(
+            TextContentIndex(), "ReadReferencesAsyncc", limit: 10, json: true, out int count, out long _,
+            suggestionLookup: _ => { calls++; return NearMatches(ThreeNearMatches); });
+
+        Assert.Equal(0, count);
+        Assert.Equal(0, calls);
+        Assert.Equal("[]", output);
+    }
+
+    [Theory]
+    [InlineData(TextContentKind.ExternalFile)]
+    [InlineData(TextContentKind.Web)]
+    public void RunTextContent_ImportedKindEmpty_IdentifierLike_NeverConsultsSuggestionEngine(string kind)
+    {
+        int calls = 0;
+
+        SearchTool.RunTextContent(
+            TextContentIndex(), "ReadReferencesAsyncc", new[] { kind },
+            limit: 10, excludeTests: false, json: false, out _, out long _,
+            suggestionLookup: _ => { calls++; return NearMatches(ThreeNearMatches); });
+
+        Assert.Equal(0, calls);
+    }
+
+    [Fact]
+    public void RunTextContent_FilteredMiss_NeverConsultsSuggestionEngine()
+    {
+        int calls = 0;
+        var index = TextContentIndex(
+            CorpusHit("docs/guide.md", TextContentKind.WorkspaceSource, 4, "ReadReferencesAsyncc", "markdown"));
+
+        SearchTool.RunTextContent(
+            index, "ReadReferencesAsyncc", new[] { TextContentKind.WorkspaceSource },
+            limit: 10, excludeTests: false, json: false, out int count, out long _,
+            filePattern: "src/**",
+            suggestionLookup: _ => { calls++; return NearMatches(ThreeNearMatches); });
+
+        Assert.Equal(0, count);
+        Assert.Equal(0, calls);
+    }
+
+    [Theory]
+    [InlineData("ReadReferencesAsyncc")]
+    [InlineData("ReadReferencesAsync")]
+    public void EmptyCompact_TextModeNearMatch_StaysWithinBudget(string query)
+    {
+        string output = SearchTool.RunTextContent(
+            TextContentIndex(), query, new[] { TextContentKind.WorkspaceSource },
+            limit: 10, excludeTests: false, json: false, out _, out long _,
+            suggestionLookup: _ => NearMatches(ThreeNearMatches));
+
+        string[] lines = output.Split('\n');
+        Assert.InRange(lines.Length, 3, 6);
+        Assert.InRange(output.Length, 1, 400);
+        Assert.Single(lines, static l => l.StartsWith("Next: ", StringComparison.Ordinal));
+        string tryLine = Assert.Single(lines, static l => l.StartsWith("Try: ", StringComparison.Ordinal));
+        Assert.Equal(3, tryLine.Split(", ").Length);
+        Assert.DoesNotContain("do NOT", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static (SearchTool Tool, FixedSymbolSearchProvider Provider) TextRouteToolWithSymbol(string symbolName)
+    {
+        var provider = new FixedSymbolSearchProvider(
+            SymbolSearchProjection.Build([
+                Symbol(0, "dd11223344556677889900aabbccdd01", symbolName, "method",
+                    "src/References/Reader.cs", 12, $"Task {symbolName}()"),
+            ]),
+            "/tmp/miller-t12-root",
+            TextContentIndex());
+        return (new SearchTool(provider, provider), provider);
+    }
+
+    [Fact]
+    public void Search_ModeSource_EmptyIdentifierLike_RendersNearMatchThroughMcpRoute()
+    {
+        (SearchTool tool, FixedSymbolSearchProvider provider) = TextRouteToolWithSymbol("ReadReferencesAsync");
+
+        string output = tool.Search("ReadReferencesAsyncc", mode: "source", limit: 3);
+
+        Assert.Contains("Next: search query=\"ReadReferencesAsync\" mode=source", output, StringComparison.Ordinal);
+        Assert.Contains("Try: ReadReferencesAsync (src/References/Reader.cs:12)", output, StringComparison.Ordinal);
+        Assert.Equal(1, provider.SymbolSearchResolveCount);
+    }
+
+    [Fact]
+    public void Search_ModeContent_EmptyIdentifierLike_RendersNearMatchThroughMcpRoute()
+    {
+        (SearchTool tool, FixedSymbolSearchProvider provider) = TextRouteToolWithSymbol("ReadReferencesAsync");
+
+        string output = tool.Search("ReadReferencesAsyncc", mode: "content", limit: 3);
+
+        Assert.Contains("Next: search query=\"ReadReferencesAsync\" mode=content", output, StringComparison.Ordinal);
+        Assert.Contains("Try: ReadReferencesAsync", output, StringComparison.Ordinal);
+        Assert.Equal(1, provider.SymbolSearchResolveCount);
+    }
+
+    [Theory]
+    [InlineData("install guide")]
+    [InlineData("how does refresh work")]
+    public void Search_ModeSource_NonIdentifierShape_NeverResolvesSymbolIndex(string query)
+    {
+        (SearchTool tool, FixedSymbolSearchProvider provider) = TextRouteToolWithSymbol("ReadReferencesAsync");
+
+        tool.Search(query, mode: "source", limit: 3);
+
+        Assert.Equal(0, provider.SymbolSearchResolveCount);
+    }
+
+    private static IReadOnlyList<IndexedSymbol> LongPathNearMatches() =>
+        new[]
+            {
+                ("VerifyPinnedJulieExtractVersion", "src/Miller.Server/Hosting/MillerServiceRegistration.cs", 412),
+                ("VerifyPinnedJulieExtractVersio", "src/Miller.Server/Workspaces/WorkspaceTextContentSearchContext.cs", 88),
+                ("VerifyPinnedJulieExtractVrsion", "src/Miller.Indexing/SearchIndexWriter.cs", 191),
+            }
+            .Select((c, i) => Symbol(i, $"cc11223344556677889900aabbccdd{i:D2}", c.Item1, "method", c.Item2, c.Item3))
+            .ToList();
+
+    [Fact]
+    public void AppendSuggestions_LongPathsOnTextRoute_StayWithinBudgetAndReportOmitted()
+    {
+        string output = SearchTool.RunTextContent(
+            TextContentIndex(), "VerifyPinnedJulieExtractVersionn", new[] { TextContentKind.WorkspaceSource },
+            limit: 10, excludeTests: false, json: false, out _, out long _,
+            suggestionLookup: _ => LongPathNearMatches());
+
+        Assert.InRange(output.Length, 1, 400);
+        Assert.InRange(output.Split('\n').Length, 3, 6);
+        Assert.Contains("Try: VerifyPinnedJulieExtractVersion (src/Miller.Server/Hosting/MillerServiceRegistration.cs:412)",
+            output, StringComparison.Ordinal);
+        Assert.Contains("more", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AppendSuggestions_LongPathsOnSymbolRoute_StayWithinBudgetAndReportOmitted()
+    {
+        var candidates = LongPathNearMatches().ToArray();
+        var index = StubSymbolSearchIndex.WithSymbolsOnly(candidates);
+
+        string output = SearchTool.Run(index, "VerifyPinnedJulieExtractVersionn", SearchToolMode.Auto,
+            limit: 10, excludeTests: null, json: false, out int count);
+
+        Assert.Equal(0, count);
+        Assert.InRange(output.Length, 1, 400);
+        Assert.InRange(output.Split('\n').Length, 2, 6);
+    }
+
+    [Fact]
+    public void AppendSuggestions_ShortPaths_RenderAllThreeWithNoOverflowNote()
+    {
+        string output = SearchTool.RunTextContent(
+            TextContentIndex(), "ReadReferencesAsyncc", new[] { TextContentKind.WorkspaceSource },
+            limit: 10, excludeTests: false, json: false, out _, out long _,
+            suggestionLookup: _ => NearMatches(ThreeNearMatches));
+
+        string tryLine = Assert.Single(
+            output.Split('\n'), static l => l.StartsWith("Try: ", StringComparison.Ordinal));
+        Assert.DoesNotContain("more", tryLine, StringComparison.Ordinal);
+        Assert.Equal(3, tryLine.Split(", ").Length);
     }
 
     public static TheoryData<string, string> ReachableEmptyCompactPairs()

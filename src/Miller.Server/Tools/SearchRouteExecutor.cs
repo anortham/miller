@@ -10,7 +10,8 @@ internal sealed record SearchRouteExecutionRequest(
     string? CompactBanner = null,
     string? FilePattern = null,
     string? Language = null,
-    Func<IReadOnlyCollection<string>, IReadOnlySet<string>>? HasDocLookup = null);
+    Func<IReadOnlyCollection<string>, IReadOnlySet<string>>? HasDocLookup = null,
+    Func<string, IReadOnlyList<IndexedSymbol>>? SuggestionLookup = null);
 
 internal sealed record SearchRouteExecutionResult(string Output, int Count, long SourceBytes = 0);
 
@@ -59,7 +60,8 @@ internal static class SearchRouteExecutor
             out long sourceBytes,
             request.CompactBanner,
             request.FilePattern,
-            request.Language);
+            request.Language,
+            request.SuggestionLookup);
 
         return new SearchRouteExecutionResult(output, count, sourceBytes);
     }
@@ -85,7 +87,8 @@ internal static class SearchRouteExecutor
             out long sourceBytes,
             request.CompactBanner,
             request.FilePattern,
-            request.Language);
+            request.Language,
+            request.SuggestionLookup);
 
         return new SearchRouteExecutionResult(output, count, sourceBytes);
     }

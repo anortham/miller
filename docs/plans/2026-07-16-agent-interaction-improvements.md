@@ -141,10 +141,10 @@ The highest-leverage fix: the diagnosis Miller already computes must reach the a
 **What to build:** When a text-mode search for an identifier-shaped query returns nothing, run the existing suggestion engine against the identifier and offer near matches. Converts hallucinated-name dead ends into one-call recoveries.
 
 **Acceptance criteria:**
-- [ ] Identifier-like empty source/content searches with near symbol matches render ≤3 suggestions inside the ≤6-line budget; no suggestions block when nothing is near.
-- [ ] Suggestion lookup is invoked **only** on the empty text-mode path — unit test asserts the engine is not called for non-empty results or non-identifier shapes.
-- [ ] Empty JSON responses unchanged (pinned).
-- [ ] Focused SearchToolTests pass; handed to lead per commit mode.
+- [x] Identifier-like empty source/content searches with near symbol matches render ≤3 suggestions inside the ≤6-line budget; no suggestions block when nothing is near.
+- [x] Suggestion lookup is invoked **only** on the empty text-mode path — unit test asserts the engine is not called for non-empty results or non-identifier shapes.
+- [x] Empty JSON responses unchanged (pinned).
+- [x] Focused SearchToolTests pass; handed to lead per commit mode.
 
 ### Task T1.3: File-mode residual path-form fixes (probe-first)
 
@@ -214,10 +214,10 @@ Re-baselined 2026-07-16: exact/unique display_path resolution and kind aliases a
 **Dependency reason:** Same files as T1.4; runs after T1.4 lands.
 
 **Acceptance criteria:**
-- [ ] Shipped exact/unique display_path + ambiguity behaviors pinned as regression tests.
-- [ ] Unique suffix resolves; ambiguous suffix lists ≤5 candidates; full miss suggests ≤3 near paths.
-- [ ] `content remove` behavior unchanged (strict source_id), asserted by test.
-- [ ] Focused ContentToolTests pass; handed to lead per commit mode.
+- [x] Shipped exact/unique display_path + ambiguity behaviors pinned as regression tests.
+- [x] Unique suffix resolves; ambiguous suffix lists ≤5 candidates; full miss suggests ≤3 near paths.
+- [x] `content remove` behavior unchanged (strict source_id), asserted by test.
+- [x] Focused ContentToolTests pass; handed to lead per commit mode.
 
 ### Task T2.2: Read-window clamp with exact semantics + kind-alias regression pins
 

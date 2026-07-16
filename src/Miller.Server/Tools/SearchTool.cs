@@ -242,7 +242,9 @@ public sealed class SearchTool
                         exclude_tests,
                         contentBanner,
                         FilePattern: file_pattern,
-                        Language: language));
+                        Language: language,
+                        SuggestionLookup: identifier =>
+                            SuggestSymbolsBestEffort(identifier, workspace_id, ensureFresh)));
                 output = result.Output;
                 count = result.Count;
                 if (scope is not null)
@@ -267,7 +269,9 @@ public sealed class SearchTool
                         exclude_tests,
                         contentBanner,
                         FilePattern: file_pattern,
-                        Language: language));
+                        Language: language,
+                        SuggestionLookup: identifier =>
+                            SuggestSymbolsBestEffort(identifier, workspace_id, ensureFresh)));
                 output = result.Output;
                 count = result.Count;
                 if (scope is not null)
@@ -662,7 +666,10 @@ public sealed class SearchTool
     // search·source/content/all-text empty (36-47% empty): no text hits. The right "next call" depends on whether
     // the searched kinds are workspace text (refresh re-indexes files) or imported (content list shows what's
     // loaded), so route the hint by kind instead of claiming a one-size refresh.
-    private static string TextContentEmptyHint(IReadOnlyCollection<string> contentKinds, string query)
+    private static string TextContentEmptyHint(
+        IReadOnlyCollection<string> contentKinds,
+        string query,
+        IReadOnlyList<IndexedSymbol>? suggestions = null)
     {
         string q = Truncate(query, EmptyHintQueryLimit);
         string queryShape = QueryShapeFor(query);
@@ -675,13 +682,61 @@ public sealed class SearchTool
                 $"No text hits. Text search ranks terms from {MinQueryLengthNote}; '{q}' is {query.Trim().Length}.",
                 new SearchNextAction(SearchCall(q + "<more>"), "extend the term")),
             "mode_mismatch" => ModeMismatchHint("No text hits.", q, queryShape),
-            _ => TrueNoHitTextHint(contentKinds, query, q, queryShape),
+            _ => TrueNoHitTextHint(contentKinds, query, q, queryShape, suggestions ?? []),
         };
     }
 
-    private static string TrueNoHitTextHint(
-        IReadOnlyCollection<string> contentKinds, string query, string q, string queryShape)
+    /// <summary>
+    /// Near-match names recovered for an identifier-like text miss, or empty when the lookup does not apply.
+    /// Gated so <see cref="SymbolSuggestionEngine"/> is consulted ONLY for an empty, compact, unfiltered
+    /// identifier-like miss on the source/content routes — the shape where the symbol index plausibly knows the
+    /// name the agent misremembered. Callers invoke it after the JSON and filtered-miss returns, so those paths
+    /// never reach the engine.
+    /// </summary>
+    private static IReadOnlyList<IndexedSymbol> TextEmptySuggestions(
+        IReadOnlyCollection<string> contentKinds,
+        string query,
+        Func<string, IReadOnlyList<IndexedSymbol>>? suggestionLookup)
     {
+        if (suggestionLookup is null)
+            return [];
+        if (QueryShapeFor(query) != "identifier_like")
+            return [];
+        if (ModeNameForContentKinds(contentKinds) is not ("source" or "content"))
+            return [];
+
+        return suggestionLookup(query.Trim());
+    }
+
+    // The suggestions come from the SYMBOL index, so the pasteable call has to match where the name actually
+    // lives: an exact hit means the name IS indexed and only its TEXT is absent (inspect it), while a near hit
+    // means the agent misremembered the name (retry the same text mode with the corrected one).
+    private static string NearNameTextHint(
+        IReadOnlyCollection<string> contentKinds, string query, string q, IReadOnlyList<IndexedSymbol> suggestions)
+    {
+        IndexedSymbol top = suggestions[0];
+        bool queryIsIndexedName = string.Equals(top.Name, query.Trim(), StringComparison.OrdinalIgnoreCase);
+        string sentence = queryIsIndexedName
+            ? $"No text hits. '{q}' is an indexed symbol; its text has no match."
+            : $"No text hits. These indexed names are close to '{q}'.";
+        SearchNextAction action = queryIsIndexedName
+            ? new SearchNextAction(
+                $"inspect target=\"{EscapeCallString(Truncate(top.Name, EmptyHintQueryLimit))}\" depth=overview",
+                "read the indexed symbol")
+            : new SearchNextAction(
+                SearchCall(top.Name, ModeNameForContentKinds(contentKinds)),
+                "retry with the nearest indexed name");
+
+        return AppendSuggestions(RenderEmptyHint(sentence, action), suggestions);
+    }
+
+    private static string TrueNoHitTextHint(
+        IReadOnlyCollection<string> contentKinds, string query, string q, string queryShape,
+        IReadOnlyList<IndexedSymbol> suggestions)
+    {
+        if (suggestions.Count > 0)
+            return NearNameTextHint(contentKinds, query, q, suggestions);
+
         bool hasWorkspace = false;
         bool hasImported = false;
         foreach (string kind in contentKinds)
@@ -1025,7 +1080,8 @@ public sealed class SearchTool
         out long sourceBytes,
         string? compactBanner = null,
         string? filePattern = null,
-        string? language = null)
+        string? language = null,
+        Func<string, IReadOnlyList<IndexedSymbol>>? suggestionLookup = null)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
@@ -1068,9 +1124,13 @@ public sealed class SearchTool
             sourceBytes = 0;
             if (json)
                 return "[]";
-            return outsideScope.Count > 0
-                ? RenderFilteredMissContentCompact(filters, compactBanner, outsideScope)
-                : ReadToolWorkspaceRouting.PrefixCompact(TextContentEmptyHint(WorkspaceContentSearchKinds, query), compactBanner);
+            if (outsideScope.Count > 0)
+                return RenderFilteredMissContentCompact(filters, compactBanner, outsideScope);
+
+            IReadOnlyList<IndexedSymbol> suggestions =
+                TextEmptySuggestions(WorkspaceContentSearchKinds, query, suggestionLookup);
+            return ReadToolWorkspaceRouting.PrefixCompact(
+                TextContentEmptyHint(WorkspaceContentSearchKinds, query, suggestions), compactBanner);
         }
 
         sourceBytes = hits
@@ -1122,7 +1182,8 @@ public sealed class SearchTool
         out long sourceBytes,
         string? compactBanner = null,
         string? filePattern = null,
-        string? language = null)
+        string? language = null,
+        Func<string, IReadOnlyList<IndexedSymbol>>? suggestionLookup = null)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
@@ -1161,9 +1222,13 @@ public sealed class SearchTool
             sourceBytes = 0;
             if (json)
                 return "[]";
-            return outsideScope.Count > 0
-                ? RenderFilteredMissTextContentCompact(filters, compactBanner, outsideScope)
-                : ReadToolWorkspaceRouting.PrefixCompact(TextContentEmptyHint(contentKinds, query), compactBanner);
+            if (outsideScope.Count > 0)
+                return RenderFilteredMissTextContentCompact(filters, compactBanner, outsideScope);
+
+            IReadOnlyList<IndexedSymbol> suggestions =
+                TextEmptySuggestions(contentKinds, query, suggestionLookup);
+            return ReadToolWorkspaceRouting.PrefixCompact(
+                TextContentEmptyHint(contentKinds, query, suggestions), compactBanner);
         }
 
         sourceBytes = hits
@@ -1668,6 +1733,30 @@ public sealed class SearchTool
         return true;
     }
 
+    /// <summary>
+    /// Near-match symbol names for an identifier the text corpus had no hit for. Resolving the SYMBOL index is
+    /// deferred into this method on purpose: the text routes never need it, so it is paid for only when an empty
+    /// identifier-like text miss actually asks. A workspace that cannot resolve suggests nothing rather than
+    /// failing a search that already has a usable answer.
+    /// </summary>
+    private IReadOnlyList<IndexedSymbol> SuggestSymbolsBestEffort(
+        string identifier,
+        string? workspaceId,
+        bool ensureFresh)
+    {
+        try
+        {
+            WorkspaceSymbolSearchContext context = _workspaceProvider.ResolveSymbolSearch(workspaceId, ensureFresh);
+            return SymbolSuggestionEngine.Suggest(context.Index, identifier, EmptySuggestionLimit);
+        }
+        catch (Exception ex) when (
+            ex is FileNotFoundException or InvalidOperationException or IOException or UnauthorizedAccessException
+                or ArgumentException or NotSupportedException)
+        {
+            return [];
+        }
+    }
+
     private static IReadOnlySet<string> ReadHasDocCommentBestEffort(
         string dbPath,
         IReadOnlyCollection<string> symbolIds)
@@ -1834,13 +1923,57 @@ public sealed class SearchTool
         string query,
         IReadOnlyList<IndexedSymbol> suggestions)
     {
-        string output = ReadToolWorkspaceRouting.PrefixCompact(SymbolEmptyHint(query), compactBanner);
-        if (suggestions.Count == 0)
-            return output;
-
-        string list = string.Join(", ", suggestions.Select(static s => $"{s.Name} ({s.FilePath}:{s.StartLine})"));
-        return output + "\nTry: " + list;
+        return ReadToolWorkspaceRouting.PrefixCompact(
+            AppendSuggestions(SymbolEmptyHint(query), suggestions), compactBanner);
     }
+
+    /// <summary>Hard ceiling on a compact empty result, banner excluded.</summary>
+    private const int EmptyCompactBudget = 400;
+
+    private const string TryLinePrefix = "\nTry: ";
+    private const string SuggestionSeparator = ", ";
+
+    /// <summary>
+    /// The one <c>Try:</c> near-match renderer, shared by the symbol-route and text-route empty paths. Entries are
+    /// fitted against <see cref="EmptyCompactBudget"/> and any that do not fit are reported as <c>… N more</c>
+    /// rather than dropped silently: suggestion text is variable-length (a deep path plus a long symbol name runs
+    /// ~90 chars an entry), so a fixed 3-entry line would blow the budget on real workspaces even though it fits
+    /// short-path fixtures. Callers pass the banner-free hint — the budget excludes the workspace banner.
+    /// </summary>
+    private static string AppendSuggestions(string hint, IReadOnlyList<IndexedSymbol> suggestions)
+    {
+        if (suggestions.Count == 0)
+            return hint;
+
+        string[] entries = suggestions
+            .Select(static s => $"{s.Name} ({s.FilePath}:{s.StartLine})")
+            .ToArray();
+
+        int budget = EmptyCompactBudget - hint.Length - TryLinePrefix.Length;
+        var kept = new List<string>(entries.Length);
+        int used = 0;
+        foreach (string entry in entries)
+        {
+            int cost = entry.Length + (kept.Count > 0 ? SuggestionSeparator.Length : 0);
+            bool isLast = kept.Count + 1 == entries.Length;
+            int reserve = isLast ? 0 : OverflowNoteLength(entries.Length - kept.Count - 1);
+            if (used + cost + reserve > budget)
+                break;
+            kept.Add(entry);
+            used += cost;
+        }
+
+        if (kept.Count == 0)
+            return hint;
+
+        string line = string.Join(SuggestionSeparator, kept);
+        int omitted = entries.Length - kept.Count;
+        return hint + TryLinePrefix + (omitted > 0 ? line + OverflowNote(omitted) : line);
+    }
+
+    private static string OverflowNote(int omitted) => $"{SuggestionSeparator}… {omitted} more";
+
+    private static int OverflowNoteLength(int omitted) => OverflowNote(omitted).Length;
 
     // Escape a symbol name for embedding inside a quoted tool-call argument, matching context's NextInspectLine
     // precedent: backslash first, then quote, so a name containing either stays a single well-formed hint line.
