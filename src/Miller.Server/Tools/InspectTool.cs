@@ -472,10 +472,18 @@ public sealed class InspectTool
             sb.Append(body.Text ?? RenderBodyUnavailableNote(body.UnavailableReason));
         }
 
-        // Delivery-time nudge (compact only; this path is overview/full — summary returned early). A symbol
-        // with many dependents is a natural impact-analysis target; a test symbol is not, so suppress it there.
-        // Rendered last, exactly once, and only in compact output (JSON shape stays byte-identical).
-        if (!sym.IsTest && refs.Count >= ImpactHintMinReferences)
+        // Delivery-time nudge (compact only; this path is overview/full — summary returned early). Rendered
+        // last, at most once, and only in compact output (JSON shape stays byte-identical). Recovering refs
+        // this render dropped outranks the impact nudge, because that data is otherwise lost from the answer.
+        // Only the RefLimit cap qualifies: the overview cap already advertises depth=full as its recovery, and
+        // firing there would displace the impact nudge on every overview read of a hot symbol. The explicit
+        // limit is load-bearing — trace mode=refs defaults to 20, so a bare call would hand back FEWER refs
+        // than the render that prompted it.
+        bool refsTruncatedAtRefLimit = relationLimit == RefLimit && refs.Count > relationLimit;
+        if (refsTruncatedAtRefLimit)
+            sb.Append('\n').Append(NextStepHint.Render(
+                $"trace target=\"{sym.Name}\" mode=refs limit={refs.Count}", "full reference list"));
+        else if (!sym.IsTest && refs.Count >= ImpactHintMinReferences)
             sb.Append('\n').Append(NextStepHint.Render(
                 $"impact target=\"{sym.Name}\"", $"{refs.Count} dependents"));
 

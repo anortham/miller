@@ -16,6 +16,12 @@ namespace Miller.Tests.Server;
 /// symbol→summary (signature + doc_comment via ReadDetail), symbol→full (children via parent_id, name-based
 /// refs, one-hop callers/callees, body slice with graceful NULL degradation), ambiguous→candidates (never
 /// pick-first), and an unknown path → a note (not an error). Exercises <see cref="InspectTool.Run"/> directly.
+///
+/// <para>Nudge precedence (compact only; JSON never carries one, and at most one <c>next:</c> line renders per
+/// response): refs truncated at the full-depth <c>RefLimit</c> → <c>trace</c>, else ≥<c>ImpactHintMinReferences</c>
+/// dependents on a non-test symbol → <c>impact</c>, else none. Truncation wins because those refs are otherwise
+/// lost. The overview cap is deliberately NOT a trigger — its omitted line already points at <c>depth=full</c>,
+/// which does recover them, so firing there would displace the impact nudge on every hot-symbol overview.</para>
 /// </summary>
 public sealed class InspectToolTests
 {
@@ -749,6 +755,110 @@ public sealed class InspectToolTests
         using var doc = JsonDocument.Parse(output); // still valid JSON, byte-shape unchanged
         Assert.Equal("Hot", doc.RootElement.GetProperty("symbol").GetProperty("name").GetString());
     }
+
+    [Fact]
+    public void Run_SymbolFull_RefsTruncatedAtRefLimit_AppendsTraceHintLast()
+    {
+        using var fx = HotSymbolFixture(refCount: 51, isTest: false);
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "Hot", depth: "full", kind: null, scope: null, limit: 50, json: false, out _);
+
+        Assert.Contains("... 1 more refs", output);
+        Assert.EndsWith("next: trace target=\"Hot\" mode=refs limit=51 — full reference list", output);
+    }
+
+    [Fact]
+    public void Run_SymbolFull_RefsTruncatedAtRefLimit_TraceHintReplacesImpactHint()
+    {
+        using var fx = HotSymbolFixture(refCount: 51, isTest: false);
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "Hot", depth: "full", kind: null, scope: null, limit: 50, json: false, out _);
+
+        Assert.DoesNotContain("next: impact", output);
+        Assert.Equal(1, NextLineCount(output));
+    }
+
+    [Fact]
+    public void Run_SymbolFull_RefsExactlyAtRefLimit_KeepsImpactHint()
+    {
+        using var fx = HotSymbolFixture(refCount: 50, isTest: false);
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "Hot", depth: "full", kind: null, scope: null, limit: 50, json: false, out _);
+
+        Assert.DoesNotContain("more refs", output);
+        Assert.EndsWith("next: impact target=\"Hot\" — 50 dependents", output);
+    }
+
+    [Fact]
+    public void Run_SymbolOverview_RefsTruncatedAtPreviewLimit_KeepsImpactHint()
+    {
+        using var fx = HotSymbolFixture(refCount: 51, isTest: false);
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "Hot", depth: "overview", kind: null, scope: null, limit: 50, json: false, out _);
+
+        Assert.Contains("... 48 more refs (use depth=full)", output);
+        Assert.DoesNotContain("next: trace", output);
+        Assert.EndsWith("next: impact target=\"Hot\" — 51 dependents", output);
+    }
+
+    [Fact]
+    public void Run_SymbolFull_TestSymbolWithRefsTruncatedAtRefLimit_StillAppendsTraceHint()
+    {
+        using var fx = HotSymbolFixture(refCount: 51, isTest: true);
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "Hot", depth: "full", kind: null, scope: null, limit: 50, json: false, out _);
+
+        Assert.EndsWith("next: trace target=\"Hot\" mode=refs limit=51 — full reference list", output);
+    }
+
+    [Fact]
+    public void Run_SymbolFull_RefsTruncatedAtRefLimit_Json_OmitsTraceHint()
+    {
+        using var fx = HotSymbolFixture(refCount: 51, isTest: false);
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "Hot", depth: "full", kind: null, scope: null, limit: 50, json: true, out _);
+
+        Assert.DoesNotContain("next:", output);
+        using var doc = JsonDocument.Parse(output);
+        Assert.Equal("Hot", doc.RootElement.GetProperty("symbol").GetProperty("name").GetString());
+    }
+
+    [Theory]
+    [InlineData("overview", 3, false)]
+    [InlineData("overview", 4, false)]
+    [InlineData("overview", 51, false)]
+    [InlineData("overview", 4, true)]
+    [InlineData("full", 3, false)]
+    [InlineData("full", 4, false)]
+    [InlineData("full", 50, false)]
+    [InlineData("full", 51, false)]
+    [InlineData("full", 51, true)]
+    [InlineData("summary", 51, false)]
+    public void Run_Symbol_RendersAtMostOneNextLine(string depth, int refCount, bool isTest)
+    {
+        using var fx = HotSymbolFixture(refCount, isTest);
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "Hot", depth, kind: null, scope: null, limit: 50, json: false, out _);
+
+        Assert.InRange(NextLineCount(output), 0, 1);
+    }
+
+    private static int NextLineCount(string output) =>
+        output.Split('\n').Count(line => line.StartsWith("next: ", StringComparison.Ordinal));
 
     // ---- Ambiguity ----
 

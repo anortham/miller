@@ -391,8 +391,8 @@ Re-baselined 2026-07-16: exact/unique display_path resolution and kind aliases a
 **Dependency reason:** Depends on T4.2 wording being final so hints match descriptions.
 
 **Acceptance criteria:**
-- [ ] Truncated-refs inspect responses carry the trace nudge; exactly one `next:` line per response in all cases.
-- [ ] Focused InspectToolTests pass; handed to lead per commit mode.
+- [x] Truncated-refs inspect responses carry the trace nudge; exactly one `next:` line per response in all cases.
+- [x] Focused InspectToolTests pass; handed to lead per commit mode.
 
 # Phase 5 — Injection-only session hooks (Claude Code + Codex plugins)
 
