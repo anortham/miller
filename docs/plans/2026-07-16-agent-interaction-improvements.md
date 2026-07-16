@@ -282,8 +282,8 @@ Re-baselined 2026-07-16: exact/unique display_path resolution and kind aliases a
 **Dependency reason:** Same files as T2.2; runs after T2.2 lands.
 
 **Acceptance criteria:**
-- [ ] Multi-hit-per-source results render each `source_id`/workspace id exactly once; JSON pinned unchanged.
-- [ ] Focused ContentToolTests pass; handed to lead per commit mode.
+- [x] Multi-hit-per-source results render each `source_id`/workspace id exactly once; JSON pinned unchanged.
+- [x] Focused ContentToolTests pass; handed to lead per commit mode.
 
 ### Task T3.3: Compress edit's match-proof block in compact output
 

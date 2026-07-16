@@ -1,5 +1,6 @@
 using System.IO.Pipelines;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Data.Sqlite;
@@ -113,7 +114,8 @@ public sealed class ContentToolTests : IDisposable
         Assert.True(importedDoc.RootElement.GetProperty("source_bytes").GetInt64() > 0);
 
         string search = tool.Content("search", query: "SecretToken42", limit: 5);
-        Assert.Contains("ci.log:2  external_file", search);
+        Assert.Contains("ci.log  external_file  source_id=", search);
+        Assert.Contains("  :2  ", search);
         Assert.Contains("SecretToken42 failed", search);
 
         string read = tool.Content("read", source_id: sourceId, line: 2, context_lines: 0);
@@ -328,6 +330,96 @@ public sealed class ContentToolTests : IDisposable
         string range = header[(header.LastIndexOf(':') + 1)..];
         string[] parts = range.Split('-');
         return (int.Parse(parts[0]), int.Parse(parts[1]));
+    }
+
+    private ContentTool ToolWithNeedleSource(string displayPath, params int[] needleLines)
+    {
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        string file = Path.Combine(_dir, displayPath.Replace('/', '-'));
+        string[] lines = Enumerable.Range(1, 400)
+            .Select(i => needleLines.Contains(i) ? $"GroupNeedle marker at line {i}" : $"filler line {i}")
+            .ToArray();
+        File.WriteAllText(file, string.Join('\n', lines));
+        tool.Content("import", path: file, display_path: displayPath);
+        return tool;
+    }
+
+    private static string SearchBody(string compact)
+    {
+        int handoff = compact.IndexOf("\n\nread: ", StringComparison.Ordinal);
+        return handoff < 0 ? compact : compact[..handoff];
+    }
+
+    [Fact]
+    public void Content_SearchMultipleHitsInOneSource_RendersSourceIdExactlyOnce()
+    {
+        ContentTool tool = ToolWithNeedleSource("logs/app.log", 5, 350);
+        string sourceId = ImportedSourceId(tool, "logs/app.log");
+
+        string compact = tool.Content("search", query: "GroupNeedle", limit: 10);
+        string body = SearchBody(compact);
+
+        Assert.Equal(1, CountOccurrences(body, sourceId));
+        Assert.Equal(1, CountOccurrences(body, "logs/app.log  external_file  source_id="));
+        Assert.Contains("  :5  ", body, StringComparison.Ordinal);
+        Assert.Contains("  :350  ", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_SearchMultipleHitsInOneSource_KeepsTrailingReadHandoff()
+    {
+        ContentTool tool = ToolWithNeedleSource("logs/app.log", 5, 350);
+        string sourceId = ImportedSourceId(tool, "logs/app.log");
+
+        string compact = tool.Content("search", query: "GroupNeedle", limit: 10);
+
+        Assert.Matches($@"\n\nread: content read source_id={Regex.Escape(sourceId)} line=(5|350)$", compact);
+    }
+
+    [Fact]
+    public void Content_SearchAcrossTwoSources_RendersOneHeaderPerSource()
+    {
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        foreach (string name in new[] { "one", "two" })
+        {
+            string file = Path.Combine(_dir, $"{name}.log");
+            File.WriteAllText(file, "GroupNeedle marker here.\nfiller.");
+            tool.Content("import", path: file, display_path: $"logs/{name}.log");
+        }
+
+        string body = SearchBody(tool.Content("search", query: "GroupNeedle", limit: 10));
+
+        Assert.Equal(1, CountOccurrences(body, "logs/one.log  external_file  source_id="));
+        Assert.Equal(1, CountOccurrences(body, "logs/two.log  external_file  source_id="));
+    }
+
+    [Fact]
+    public void Content_SearchGroupedCompact_LeavesSearchJsonUnchanged()
+    {
+        ContentTool tool = ToolWithNeedleSource("logs/app.log", 5, 350);
+        string sourceId = ImportedSourceId(tool, "logs/app.log");
+
+        string json = tool.Content("search", query: "GroupNeedle", limit: 10, format: "json");
+
+        using JsonDocument doc = JsonDocument.Parse(json);
+        Assert.Equal(JsonValueKind.Array, doc.RootElement.ValueKind);
+        JsonElement[] results = doc.RootElement.EnumerateArray().ToArray();
+        Assert.Equal(2, results.Length);
+        foreach (JsonElement result in results)
+        {
+            Assert.Equal(sourceId, result.GetProperty("source_id").GetString());
+            Assert.Equal("external_file", result.GetProperty("content_kind").GetString());
+            Assert.Equal("logs/app.log", result.GetProperty("display_path").GetString());
+        }
+
+        Assert.Equal(new[] { 5, 350 }, results.Select(r => r.GetProperty("line").GetInt32()).OrderBy(l => l).ToArray());
+        Assert.Equal(
+            new[]
+            {
+                "source_id", "chunk_id", "content_kind", "display_path", "url",
+                "line", "line_start", "line_end", "score", "snippet", "source_bytes",
+            },
+            results[0].EnumerateObject().Select(static p => p.Name).ToArray());
     }
 
     [Fact]
@@ -835,7 +927,8 @@ public sealed class ContentToolTests : IDisposable
         Assert.Equal("https://example.test/web-tool", importedDoc.RootElement.GetProperty("url").GetString());
 
         string webSearch = tool.Content("search", query: "WebToolMarker", content_kind: TextContentKind.Web);
-        Assert.Contains("Example Web Tool:3  web", webSearch);
+        Assert.Contains("Example Web Tool  web  source_id=", webSearch);
+        Assert.Contains("  :3  ", webSearch);
         Assert.Contains("WebToolMarker appears in markdown", webSearch);
         Assert.DoesNotContain("ci.log", webSearch);
 
@@ -908,8 +1001,12 @@ public sealed class ContentToolTests : IDisposable
             workspace_id: "all",
             limit: 10);
 
-        Assert.Contains("alpha (ws-alpha)  alpha.log:1  external_file", compact);
-        Assert.Contains("beta (ws-beta)  beta.log:1  external_file", compact);
+        Assert.Contains("alpha (ws-alpha)", compact, StringComparison.Ordinal);
+        Assert.Contains("beta (ws-beta)", compact, StringComparison.Ordinal);
+        Assert.Equal(1, CountOccurrences(compact, "alpha (ws-alpha)"));
+        Assert.Equal(1, CountOccurrences(compact, "beta (ws-beta)"));
+        Assert.Contains("alpha.log  external_file  source_id=", compact, StringComparison.Ordinal);
+        Assert.Contains("beta.log  external_file  source_id=", compact, StringComparison.Ordinal);
         Assert.Matches(
             @"\nread: content read source_id=external_file:[0-9a-f]+ line=1 workspace_id=ws-(alpha|beta)\b",
             compact);
@@ -1100,7 +1197,8 @@ public sealed class ContentToolTests : IDisposable
         string search = tool.Content("search", query: "SourceIdFooterMarker", limit: 5);
 
         Assert.Contains("source_id=external_file:", search, StringComparison.Ordinal);
-        Assert.Contains("ci.log:2  external_file", search, StringComparison.Ordinal);
+        Assert.Contains("ci.log  external_file  source_id=", search, StringComparison.Ordinal);
+        Assert.Contains("  :2  ", search, StringComparison.Ordinal);
         Assert.Contains("SourceIdFooterMarker failed", search, StringComparison.Ordinal);
         Assert.Matches(@"\nread: content read source_id=external_file:[0-9a-f]+ line=2\b", search);
     }

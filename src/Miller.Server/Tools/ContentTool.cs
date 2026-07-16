@@ -582,15 +582,15 @@ public sealed class ContentTool
         if (hits.Count == 0)
             return RenderNoResultsCompact("search", query, contentKind);
 
-        var blocks = new List<string>(hits.Count);
-        foreach (TextContentSearchHit hit in hits)
+        var blocks = new List<string>();
+        foreach (IGrouping<string, TextContentSearchHit> group in GroupBySource(hits))
         {
+            TextContentSearchHit head = group.First();
             var block = new StringBuilder();
-            block.Append(hit.DisplayPath).Append(':').Append(hit.Line)
-                .Append("  ").Append(hit.ContentKind)
-                .Append("  source_id=").Append(hit.SourceId);
-            foreach (string line in hit.Snippet.Split('\n'))
-                block.Append('\n').Append("  ").Append(line);
+            block.Append(head.DisplayPath)
+                .Append("  ").Append(head.ContentKind)
+                .Append("  source_id=").Append(head.SourceId);
+            AppendGroupedHitRows(block, group, indent: "  ");
             blocks.Add(block.ToString());
         }
 
@@ -599,29 +599,49 @@ public sealed class ContentTool
             + "\n\nread: content read source_id=" + first.SourceId + " line=" + first.Line;
     }
 
+    private static IEnumerable<IGrouping<string, TextContentSearchHit>> GroupBySource(
+        IReadOnlyList<TextContentSearchHit> hits) =>
+        hits.GroupBy(static hit => hit.SourceId, StringComparer.Ordinal);
+
+    private static void AppendGroupedHitRows(
+        StringBuilder block,
+        IEnumerable<TextContentSearchHit> hits,
+        string indent)
+    {
+        foreach (TextContentSearchHit hit in hits)
+        {
+            string[] snippetLines = hit.Snippet.Split('\n');
+            block.Append('\n').Append(indent).Append(':').Append(hit.Line).Append("  ").Append(snippetLines[0]);
+            string continuation = indent + new string(' ', hit.Line.ToString().Length + 3);
+            for (int i = 1; i < snippetLines.Length; i++)
+                block.Append('\n').Append(continuation).Append(snippetLines[i]);
+        }
+    }
+
     private static string RenderWorkspaceSearchCompact(IReadOnlyList<WorkspaceContentSearchHit> hits, string query, string contentKind)
     {
         if (hits.Count == 0)
             return RenderNoResultsCompact("search", query, contentKind);
 
-        var blocks = new List<string>(hits.Count);
-        foreach (WorkspaceContentSearchHit workspaceHit in hits)
+        var blocks = new List<string>();
+        foreach (IGrouping<string, WorkspaceContentSearchHit> workspaceGroup in
+                 hits.GroupBy(static hit => hit.Workspace.WorkspaceId, StringComparer.Ordinal))
         {
-            TextContentSearchHit hit = workspaceHit.Hit;
+            WorkspaceRegistryRow workspace = workspaceGroup.First().Workspace;
             var block = new StringBuilder();
-            block.Append(workspaceHit.Workspace.DisplayId)
-                .Append(" (")
-                .Append(workspaceHit.Workspace.WorkspaceId)
-                .Append(")  ")
-                .Append(hit.DisplayPath)
-                .Append(':')
-                .Append(hit.Line)
-                .Append("  ")
-                .Append(hit.ContentKind)
-                .Append("  source_id=")
-                .Append(hit.SourceId);
-            foreach (string line in hit.Snippet.Split('\n'))
-                block.Append('\n').Append("  ").Append(line);
+            block.Append(workspace.DisplayId).Append(" (").Append(workspace.WorkspaceId).Append(')');
+
+            foreach (IGrouping<string, TextContentSearchHit> sourceGroup in
+                     GroupBySource([.. workspaceGroup.Select(static hit => hit.Hit)]))
+            {
+                TextContentSearchHit head = sourceGroup.First();
+                block.Append('\n').Append("  ")
+                    .Append(head.DisplayPath)
+                    .Append("  ").Append(head.ContentKind)
+                    .Append("  source_id=").Append(head.SourceId);
+                AppendGroupedHitRows(block, sourceGroup, indent: "    ");
+            }
+
             blocks.Add(block.ToString());
         }
 

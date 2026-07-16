@@ -828,7 +828,8 @@ public sealed class CliDispatchTests : IDisposable
         var (searchCode, searchOut, searchErr) = Run(new[] { "content", "search", "CliExternalMarker" }, ctx);
         Assert.Equal(0, searchCode);
         Assert.Empty(searchErr);
-        Assert.Contains("ci.log:2  external_file", searchOut);
+        Assert.Contains("ci.log  external_file  source_id=", searchOut);
+        Assert.Contains("  :2  ", searchOut);
         Assert.Contains("CliExternalMarker failed", searchOut);
 
         var (readCode, readOut, readErr) = Run(
@@ -888,7 +889,8 @@ public sealed class CliDispatchTests : IDisposable
             ctx);
         Assert.Equal(0, searchCode);
         Assert.Empty(searchErr);
-        Assert.Contains("CLI Page:3  web", searchOut);
+        Assert.Contains("CLI Page  web  source_id=", searchOut);
+        Assert.Contains("  :3  ", searchOut);
         Assert.DoesNotContain("ci.log", searchOut);
 
         var (readCode, readOut, readErr) = Run(
@@ -981,8 +983,10 @@ public sealed class CliDispatchTests : IDisposable
 
         Assert.Equal(0, code);
         Assert.Empty(errText);
-        Assert.Contains("alpha (ws-alpha)  alpha.log:1  external_file", outText);
-        Assert.Contains("beta (ws-beta)  beta.log:1  external_file", outText);
+        Assert.Contains("alpha (ws-alpha)", outText);
+        Assert.Contains("beta (ws-beta)", outText);
+        Assert.Contains("alpha.log  external_file  source_id=", outText);
+        Assert.Contains("beta.log  external_file  source_id=", outText);
     }
 
     [Fact]
