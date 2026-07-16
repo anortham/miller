@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/miller-session-hook.cjs\" session-start",
+            "statusMessage": "Loading Miller routing guidance",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

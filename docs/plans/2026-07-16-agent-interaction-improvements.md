@@ -438,9 +438,9 @@ Policy note: this softens the repo's no-hooks stance to "prompt-injection-only h
 **Dependency reason:** Consumes T5.1's routing block file.
 
 **Acceptance criteria:**
-- [ ] Script emits the verified payload shape per host×event, selected by the explicit event argument (unit-tested by invoking the script with each argument and faked stdin); every failure path (missing block file, wedged stdin, bad payload, `MILLER_SESSION_HOOKS=0`) exits 0 — silently for opt-out/errors, within 1s for wedged stdin.
-- [ ] Verified host payload facts + doc URLs recorded in task findings.
-- [ ] `node --test` passes.
+- [x] Script emits the verified payload shape per host×event, selected by the explicit event argument (unit-tested by invoking the script with each argument and faked stdin); every failure path (missing block file, wedged stdin, bad payload, `MILLER_SESSION_HOOKS=0`) exits 0 — silently for opt-out/errors, within 1s for wedged stdin.
+- [x] Verified host payload facts + doc URLs recorded in task findings.
+- [x] `node --test` passes.
 
 ### Task T5.3: Wire hooks into the Claude Code and Codex plugin manifests
 
