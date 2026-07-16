@@ -1320,13 +1320,17 @@ public sealed class DashboardRegistryReadTests : IDisposable
             ["Index"] = SampleWorkspaceIndex(),
         });
 
+        int headerRows = CountOccurrences(html, "<div class=\"ws-index-head\" role=\"row\">");
         int columnHeaders = CountOccurrences(html, "role=\"columnheader\"");
         int dataRows = CountOccurrences(html, "<div class=\"ws-index-row\"");
         int cells = CountOccurrences(html, "role=\"cell\"");
 
+        Assert.Equal(2, headerRows);
         Assert.Equal(2, dataRows);
-        Assert.Equal(8, columnHeaders);
-        Assert.Equal(columnHeaders * dataRows, cells);
+
+        int columnsPerTable = columnHeaders / headerRows;
+        Assert.Equal(8, columnsPerTable);
+        Assert.Equal(columnsPerTable * dataRows, cells);
     }
 
     [Fact]
@@ -1339,7 +1343,24 @@ public sealed class DashboardRegistryReadTests : IDisposable
 
         Assert.Contains("role=\"columnheader\" aria-sort=\"none\"", html);
         Assert.DoesNotContain("aria-sort=\"none\" x-on:click", html);
-        Assert.DoesNotContain("class=\"ws-sort\" data-sort-col=\"workspace\" aria-sort", html);
+        Assert.DoesNotContain("class=\"col-sort\" data-sort-col=\"workspace\" aria-sort", html);
+    }
+
+    [Fact]
+    public async Task WorkspaceIndex_StaleTableCarriesItsOwnHeaderRow()
+    {
+        string html = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
+        {
+            ["Index"] = SampleWorkspaceIndex(),
+        });
+
+        int staleAt = html.IndexOf("ws-index-stale", StringComparison.Ordinal);
+        Assert.True(staleAt >= 0);
+        string staleSection = html[staleAt..];
+
+        Assert.Contains("ws-index-head", staleSection);
+        Assert.Contains("Languages", staleSection);
+        Assert.DoesNotContain("col-sort", staleSection);
     }
 
     private static int CountOccurrences(string haystack, string needle)
@@ -1370,7 +1391,7 @@ public sealed class DashboardRegistryReadTests : IDisposable
         Assert.Contains("data-sort-col=\"rev\"", html);
         Assert.Contains("data-sort-col=\"activity\"", html);
         Assert.Contains("aria-sort=\"none\"", html);
-        Assert.Contains("class=\"ws-sort", html);
+        Assert.Contains("class=\"col-sort", html);
         // Rows expose clean numeric sort keys so JS sorts values, not formatted strings.
         Assert.Contains("data-sort-files=\"4\"", html);
         Assert.Contains("data-sort-symbols=\"3\"", html);

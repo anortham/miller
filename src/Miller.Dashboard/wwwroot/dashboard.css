@@ -147,9 +147,12 @@ code {
 }
 
 /* ---- Hero ----------------------------------------------------------- */
+/* The side column's minimum must stay >= 4 * the .hero-metrics min track + the strip's 2px
+   border, or the 4-metric strip on / drops its last metric onto a second row in the band just
+   above the 1080px stacking breakpoint. */
 .dashboard-hero {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(360px, 0.62fr);
+  grid-template-columns: minmax(0, 1fr) minmax(396px, 0.62fr);
   gap: 28px;
   align-items: stretch;
   margin-bottom: 22px;
@@ -306,9 +309,11 @@ html[data-theme="dark"] .theme-label-light { display: inline; }
 }
 
 /* ---- Hero metrics — a strip of mono readouts ------------------------ */
+/* auto-fit tracks the metric count: 3 on the workspace page, 4 on /. A fixed column count
+   orphans the extra metric on whichever page has more. */
 .hero-metrics {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
   border: 1px solid var(--rule);
   border-radius: var(--radius);
   overflow: hidden;
@@ -334,6 +339,22 @@ html[data-theme="dark"] .theme-label-light { display: inline; }
   font-weight: 700;
   line-height: 1;
   color: var(--ink);
+}
+
+/* The shell caps at 1500px, so the two-column hero's side never exceeds ~544px — too narrow for a
+   4-metric strip to show a 9-digit count at 24px, and the ellipsis above would render 3,056,345 as
+   the plausible-but-wrong "3,056…". Scale the readout to its track instead: a track fits ~9 mono
+   digits at 0.6em when font <= (track - padding) / 5.4, i.e. ~4.6cqi - 5.2px. Only the 4-metric
+   strip on / is affected; the 3-metric workspace strip and the stacked hero (<=1080px, where the
+   strip spans the shell) keep the full 24px. */
+@media (min-width: 1081px) {
+  .hero-metrics:has(> div:nth-child(4)) {
+    container-type: inline-size;
+  }
+
+  .hero-metrics:has(> div:nth-child(4)) strong {
+    font-size: clamp(13px, calc(4.6cqi - 5.2px), 24px);
+  }
 }
 
 .hero-metrics span,
@@ -1041,6 +1062,19 @@ html[data-theme="dark"] .theme-label-light { display: inline; }
   list-style: none;
 }
 
+/* A grid item's automatic minimum is its content's min-content width, so the unbreakable path in
+   the detail line (src/Miller.Dashboard/DashboardData.cs:476) props the row open and .panel's
+   overflow:hidden then silently eats the right-aligned count — no scrollbar, no ellipsis. */
+.breakdown li,
+.tool-savings li {
+  min-width: 0;
+}
+
+.breakdown small,
+.tool-savings small {
+  overflow-wrap: anywhere;
+}
+
 .breakdown-row {
   display: flex;
   justify-content: space-between;
@@ -1457,11 +1491,10 @@ tr.has-errors td:nth-child(6) {
   .recent-error-duration { justify-self: start; }
 }
 
-/* ---- Workspace-list sortable headers ------------------------------- */
-/* Sort controls in .ws-index-head. Reset the button chrome so they read as
-   header labels while staying keyboard-focusable; inherit the head's mono/
-   uppercase styling. The ::after caret reflects the current aria-sort state. */
-.ws-sort {
+/* ---- Sortable column headers (workspace list + telemetry table) ----- */
+/* Reset the button chrome so these read as header labels while staying keyboard-focusable;
+   they inherit the head's mono/uppercase styling. The ::after caret reflects aria-sort. */
+.col-sort {
   appearance: none;
   -webkit-appearance: none;
   margin: 0;
@@ -1478,83 +1511,39 @@ tr.has-errors td:nth-child(6) {
   gap: 4px;
 }
 
-.ws-sort.ws-num { justify-self: end; }
+.col-sort.ws-num { justify-self: end; }
 
-.ws-sort:hover { color: var(--ink); }
+.col-sort:hover { color: var(--ink); }
 
-.ws-sort:focus-visible {
+.col-sort:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
-/* The caret reflects the columnheader's aria-sort (the button is not the header element).
+/* The caret reflects the header's aria-sort, never the button's own state.
    An idle two-way caret advertises sortability before the first click. */
-.ws-sort::after {
+.col-sort::after {
   content: "\2195";
   font-size: 9px;
   line-height: 1;
   opacity: 0.35;
 }
 
-[role="columnheader"][aria-sort="ascending"] .ws-sort::after {
+/* Both header forms are matched: .ws-index-head spans carry an explicit role="columnheader",
+   while the telemetry table's <th> has the implicit role and never matches the attribute selector. */
+[role="columnheader"][aria-sort="ascending"] .col-sort::after,
+th[aria-sort="ascending"] .col-sort::after {
   content: "\25B2";
   opacity: 0.7;
 }
 
-[role="columnheader"][aria-sort="descending"] .ws-sort::after {
+[role="columnheader"][aria-sort="descending"] .col-sort::after,
+th[aria-sort="descending"] .col-sort::after {
   content: "\25BC";
   opacity: 0.7;
 }
 
-.ws-sort:hover::after { opacity: 0.7; }
-
-/* ---- Telemetry sortable headers ------------------------------------- */
-/* Same affordance as .ws-sort, but the telemetry table is a real <table>: aria-sort sits on
-   the <th> itself, which has an implicit columnheader role and so never matches the
-   [role="columnheader"] attribute selector those rules key off. */
-.telemetry-sort {
-  appearance: none;
-  -webkit-appearance: none;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  letter-spacing: inherit;
-  text-transform: inherit;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.telemetry-sort:hover { color: var(--ink); }
-
-.telemetry-sort:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-/* An idle two-way caret advertises sortability before the first click. */
-.telemetry-sort::after {
-  content: "\2195";
-  font-size: 9px;
-  line-height: 1;
-  opacity: 0.35;
-}
-
-th[aria-sort="ascending"] .telemetry-sort::after {
-  content: "\25B2";
-  opacity: 0.7;
-}
-
-th[aria-sort="descending"] .telemetry-sort::after {
-  content: "\25BC";
-  opacity: 0.7;
-}
-
-.telemetry-sort:hover::after { opacity: 0.7; }
+.col-sort:hover::after { opacity: 0.7; }
 
 /* ---- Detail-page polish (Task 6): refresh indicator, chips, sparkline scale ---- */
 

@@ -60,21 +60,21 @@
                 <div class="ws-index-head" role="row">
                     <span aria-hidden="true"></span>
                     <span class="ws-col" role="columnheader" aria-sort="none">
-                        <button type="button" class="ws-sort" data-sort-col="workspace" x-on:click="onSort($event)">Workspace</button>
+                        <button type="button" class="col-sort" data-sort-col="workspace" x-on:click="onSort($event)">Workspace</button>
                     </span>
                     <span class="ws-col" role="columnheader">State</span>
                     <span class="ws-col ws-col-num" role="columnheader" aria-sort="none">
-                        <button type="button" class="ws-sort ws-num" data-sort-col="files" x-on:click="onSort($event)">Files</button>
+                        <button type="button" class="col-sort ws-num" data-sort-col="files" x-on:click="onSort($event)">Files</button>
                     </span>
                     <span class="ws-col ws-col-num" role="columnheader" aria-sort="none">
-                        <button type="button" class="ws-sort ws-num" data-sort-col="symbols" x-on:click="onSort($event)">Symbols</button>
+                        <button type="button" class="col-sort ws-num" data-sort-col="symbols" x-on:click="onSort($event)">Symbols</button>
                     </span>
                     <span class="ws-col" role="columnheader">Languages</span>
                     <span class="ws-col ws-col-num" role="columnheader" aria-sort="none">
-                        <button type="button" class="ws-sort ws-num" data-sort-col="rev" x-on:click="onSort($event)">Rev</button>
+                        <button type="button" class="col-sort ws-num" data-sort-col="rev" x-on:click="onSort($event)">Rev</button>
                     </span>
                     <span class="ws-col ws-col-num" role="columnheader" aria-sort="none">
-                        <button type="button" class="ws-sort ws-num" data-sort-col="activity" x-on:click="onSort($event)">Last used</button>
+                        <button type="button" class="col-sort ws-num" data-sort-col="activity" x-on:click="onSort($event)">Last used</button>
                     </span>
                     <span class="ws-col ws-col-actions" role="columnheader"><span class="sr-only">Actions</span></span>
                 </div>
@@ -139,6 +139,18 @@
                     </form>
                 }
                 <div class="ws-index ws-index-stale" role="table" aria-label="Stale registrations">
+                    @* Labels only: the client-side sort store drives the live table, so these columns stay static. *@
+                    <div class="ws-index-head" role="row">
+                        <span aria-hidden="true"></span>
+                        <span class="ws-col" role="columnheader">Workspace</span>
+                        <span class="ws-col" role="columnheader">State</span>
+                        <span class="ws-col ws-col-num" role="columnheader"><span class="ws-num">Files</span></span>
+                        <span class="ws-col ws-col-num" role="columnheader"><span class="ws-num">Symbols</span></span>
+                        <span class="ws-col" role="columnheader">Languages</span>
+                        <span class="ws-col ws-col-num" role="columnheader"><span class="ws-num">Rev</span></span>
+                        <span class="ws-col ws-col-num" role="columnheader"><span class="ws-num">Last used</span></span>
+                        <span class="ws-col ws-col-actions" role="columnheader"><span class="sr-only">Actions</span></span>
+                    </div>
                     @foreach (DashboardWorkspaceIndexEntry entry in stale)
                     {
                         <div class="ws-index-row" role="row" @attributes="SortKeys(entry)">

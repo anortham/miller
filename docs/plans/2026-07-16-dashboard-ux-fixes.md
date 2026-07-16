@@ -371,6 +371,6 @@ Commit modes: Batch B (Tasks 2, 3) uses `parallel-lead-commit`. All serial tasks
 **What to build:** `.hero-metrics` becomes `repeat(auto-fit, minmax(96px, 1fr))` (4 metrics fit one row on `/`, 3 on the workspace page). Then fix every ≤640px clip found in the review: detail-action rows wrap, language pills wrap, JSON nav wraps, metric bands collapse to 2 then 1 columns, no clipped right-aligned numerals.
 
 **Acceptance criteria:**
-- [ ] 390px screenshots of both pages show no right-edge clipping and no horizontal scroll.
-- [ ] 1440px hero metrics render on one row on both pages, light and dark intact.
-- [ ] Worker-scope verification passes and the change is committed per `serial-worker-commit`.
+- [x] 390px screenshots of both pages show no right-edge clipping and no horizontal scroll.
+- [x] 1440px hero metrics render on one row on both pages, light and dark intact.
+- [x] Worker-scope verification passes and the change is committed per `serial-worker-commit`.

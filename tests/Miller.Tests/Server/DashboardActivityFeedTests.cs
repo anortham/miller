@@ -471,6 +471,7 @@ public sealed class DashboardActivityFeedTests : IDisposable
         Assert.Contains("data-sort-col=\"errors\"", html);
         Assert.Contains("data-sort-col=\"tokens\"", html);
         Assert.Contains("aria-sort=\"none\"", html);
+        Assert.Contains("class=\"col-sort", html);
 
         Assert.Contains("data-sort-tool=\"search\"", html);
         Assert.Contains("data-sort-calls=\"1234\"", html);

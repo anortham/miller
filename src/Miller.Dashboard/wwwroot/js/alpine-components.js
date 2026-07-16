@@ -2,6 +2,16 @@
 // Factories run as plain JS; attribute expressions stay in the CSP-safe subset
 // (property access, `foo($event)` calls only — no inline logic).
 
+// A row's own textContent also carries the remove-confirm form ("Cancel", "rebuildable via
+// workspace open"), so filtering on it matches every row for those words. Read the data cells only.
+function workspaceRowFilterText(row) {
+    var text = '';
+    row.querySelectorAll('.workspace-row-main, .ws-cell:not(.ws-row-actions)').forEach(function (cell) {
+        text += cell.textContent + ' ';
+    });
+    return text.toLowerCase();
+}
+
 document.addEventListener('alpine:init', function () {
     Alpine.data('workspaceIndexFilter', function () {
         return {
@@ -66,7 +76,7 @@ document.addEventListener('alpine:init', function () {
                 var q = (this.query || '').trim().toLowerCase();
                 var anyVisible = false;
                 root.querySelectorAll('.ws-index-row').forEach(function (row) {
-                    var hide = q.length > 0 && row.textContent.toLowerCase().indexOf(q) < 0;
+                    var hide = q.length > 0 && workspaceRowFilterText(row).indexOf(q) < 0;
                     row.hidden = hide;
                     if (!hide) anyVisible = true;
                 });
