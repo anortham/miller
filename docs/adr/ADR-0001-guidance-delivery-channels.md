@@ -50,8 +50,8 @@ their own CLAUDE.md.
    **5,899 re-measured 2026-07-16**, after the affirmative-redirect sweep replaced bare prohibitions
    with redirects (params-inclusive schema total 13,917 on the same date, surfaced in the gate's
    failure message as report-only evidence). These are dated snapshots for context;
-   `CombinedToolDescriptions_StayWithinTotalSchemaBudget` is authoritative, so a stale figure here is
-   documentation lag, never a budget change.
+   `AgentInstructionsTests.CombinedToolDescriptions_StayWithinTotalSchemaBudget` is authoritative, so a
+   stale figure here is documentation lag, never a budget change.
 3. **Success-path nudges = the adoption lever.** One contextual next-step line through the shared
    `NextStepHint` formatter — compact output only, max one line per response, real copyable
    targets, per-tool suppression rules. JSON output is byte-identical (no nudges). Nudges reinforce
