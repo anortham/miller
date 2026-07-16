@@ -72,6 +72,9 @@ internal sealed class CliOptions
         return options;
     }
 
+    /// <summary>The names of every supplied flag, for verbs that reject options they do not define.</summary>
+    public IReadOnlyCollection<string> FlagNames => _flags.Keys;
+
     /// <summary>True when <paramref name="name"/> was supplied (with or without a value).</summary>
     public bool Has(string name) => _flags.ContainsKey(name);
 

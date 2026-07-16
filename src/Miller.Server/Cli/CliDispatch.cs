@@ -242,6 +242,17 @@ public static class CliDispatch
         if (o.Positionals.Count > 0)
             return Usage(err, usage);
 
+        // Unlike the read verbs, rules stdout is redirected into harness config files, so a misspelled option
+        // (--harnes cursor) must fail loudly rather than silently emit the unframed block into a rules file.
+        foreach (string flag in o.FlagNames)
+        {
+            if (!flag.Equals("harness", StringComparison.OrdinalIgnoreCase))
+            {
+                err.WriteLine($"unknown option '--{flag}'.");
+                return Usage(err, usage);
+            }
+        }
+
         if (!o.Has("harness"))
         {
             outw.WriteLine(RulesRender.Render());

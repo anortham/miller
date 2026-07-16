@@ -21,7 +21,7 @@ archive ships no repo checkout, so the verb reads the compiled assembly and neve
 | **stdout** | The file content, and nothing else. |
 | **stderr** | One `write to: <path> — <note>` line, when `--harness` is given. |
 | **exit 0** | Rendered. |
-| **exit 2** | Unknown harness, `--harness` with no value, or a positional argument. |
+| **exit 2** | Unknown harness, `--harness` with no value, a positional argument, or an unknown option (a misspelled `--harnes` fails loudly instead of silently emitting the unframed block into a rules file). |
 
 The target path is a **stderr** note rather than a stdout header specifically so that redirection produces a
 usable file:
@@ -85,9 +85,10 @@ Code extension all use today.
 configured by *"front matter… at the very beginning of the file, enclosed by triple dashes"*, and
 `inclusion: always` is documented verbatim as a code block. A file with **no** frontmatter is always-included by
 default (the docs head that mode *"Always included (default)"*); Miller emits the explicit key so the intent
-survives an edit. Caveat: the Kiro **CLI** docs never mention inclusion modes — frontmatter support there rests
-on the Web docs' *"Steering files work the same way across Kiro IDE, Kiro CLI, and Kiro Web"*. Also: *"When using
-custom agents, steering files are not automatically included."*
+survives an edit. Caveat: `inclusion: always` is verified for Kiro **IDE/Web** only — the Kiro CLI docs confirm
+`.kiro/steering/*.md` auto-loading but never mention inclusion modes, so treat frontmatter support in the CLI as
+provisional (harmless if ignored: a steering file is always-included by default). Also: *"When using custom
+agents, steering files are not automatically included."*
 
 **copilot** — `.github/copilot-instructions.md`, plain markdown; *"Instructions are automatically added to
 requests that you submit to Copilot."* Copilot also supports path-specific `.github/instructions/NAME.instructions.md`

@@ -167,6 +167,16 @@ public sealed class RulesCliTests
     }
 
     [Fact]
+    public void Rules_MisspelledHarnessOption_IsAUsageErrorWithEmptyStdout()
+    {
+        var (code, outText, errText) = Run("rules", "--harnes", "cursor");
+
+        Assert.Equal(2, code);
+        Assert.Empty(outText);
+        Assert.Contains("unknown option '--harnes'", errText);
+    }
+
+    [Fact]
     public void Rules_IsACliInvocation()
     {
         Assert.True(CliDispatch.IsCliInvocation(new[] { "rules" }));
