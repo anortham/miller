@@ -95,6 +95,8 @@ public static class CliDispatch
                     return 0;
                 case "capabilities":
                     return Capabilities(rest, stdout, stderr);
+                case "rules":
+                    return Rules(rest, stdout, stderr);
                 case "search":
                     return Search(rest, context, stdout, stderr);
                 case "todos":
@@ -226,6 +228,39 @@ public static class CliDispatch
             return Usage(err, "miller capabilities [--json]");
 
         outw.WriteLine(CliCapabilities.Render(o.Has("json")));
+        return 0;
+    }
+
+    // `rules` is a version/help-class verb: it prints guidance embedded in this assembly and never touches a
+    // workspace, so it stays above every index-loading verb. The rendered file goes to stdout alone, so
+    // `miller rules --harness cursor > .cursor/rules/miller.mdc` writes a usable file; the target path is a
+    // stderr note rather than a stdout header for exactly that reason.
+    private static int Rules(IReadOnlyList<string> args, TextWriter outw, TextWriter err)
+    {
+        string usage = $"miller rules [--harness {RulesRender.HarnessChoices}]";
+        CliOptions o = CliOptions.Parse(args);
+        if (o.Positionals.Count > 0)
+            return Usage(err, usage);
+
+        if (!o.Has("harness"))
+        {
+            outw.WriteLine(RulesRender.Render());
+            return 0;
+        }
+
+        string? requested = o.Value("harness");
+        if (string.IsNullOrWhiteSpace(requested))
+            return Usage(err, usage);
+
+        RulesRender.Harness? harness = RulesRender.FindHarness(requested);
+        if (harness is null)
+        {
+            err.WriteLine($"unknown harness '{requested}'. Supported: {RulesRender.HarnessNames}.");
+            return Usage(err, usage);
+        }
+
+        err.WriteLine($"write to: {harness.TargetPath} — {harness.Note}");
+        outw.WriteLine(RulesRender.Render(harness));
         return 0;
     }
 
@@ -2390,6 +2425,9 @@ public static class CliDispatch
         Commands:
           capabilities      Print Miller build, extract-contract, optional feature, and export-format facts.
                              [--json]
+          rules              Print the Miller routing block for agent-instruction files. The rendered file goes to
+                             stdout and the target path to stderr, so `miller rules --harness cursor > FILE` works.
+                             [--harness cursor|windsurf|cline|kiro|copilot|agents]
           search <query>     Find code by name, identifier, or phrase.
                              [--workspace-id SELECTOR] [--workspace DIR] [--mode auto|text|symbol|file|markers|content|source|external|web|all-text] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--include-tests|--exclude-tests]
           todos              CLI alias for search --mode markers over TODO/FIXME/HACK/XXX comment markers.

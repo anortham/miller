@@ -519,9 +519,9 @@ Policy note: this softens the repo's no-hooks stance to "prompt-injection-only h
 **Dependency reason:** Consumes final T4.1 wording + T5.1 routing block as embedded source text.
 
 **Acceptance criteria:**
-- [ ] Each shipped `--harness` variant has a verified format with doc URL recorded in the contract doc; unverifiable harnesses documented as dropped.
-- [ ] Bare verb prints the embedded block; verb dispatch happens before workspace hydration (no index load, asserted by test pattern used for `version`).
-- [ ] Resource-embedding test proves the block loads from the compiled assembly, not the repo path; fast suite passes.
+- [x] Each shipped `--harness` variant has a verified format with doc URL recorded in the contract doc; unverifiable harnesses documented as dropped.
+- [x] Bare verb prints the embedded block; verb dispatch happens before workspace hydration (no index load, asserted by test pattern used for `version`).
+- [x] Resource-embedding test proves the block loads from the compiled assembly, not the repo path; fast suite passes.
 
 ### Task T6.2: Document the instruction-tier install paths
 
