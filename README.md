@@ -149,45 +149,6 @@ Rules:
 4. These rules also apply to any subagents you dispatch.
 ```
 
-### Other Harnesses (instruction tier)
-
-Miller installs at two tiers, and the difference is worth naming before you pick one. The MCP tools are identical
-in both; what an instruction-tier install gives up is the `miller-*` skills and automatic guidance injection.
-
-| Tier | Harnesses | MCP tools | `miller-*` skills | Routing block |
-|---|---|---|---|---|
-| Plugin | Claude Code, Codex | yes | yes | injected at session start (Codex: see the hook note in the Quickstart) |
-| Plugin | Cursor | yes | yes | add it yourself: `miller rules --harness cursor` |
-| Instruction | any other MCP-speaking harness | yes, via manual config | no | add it yourself: `miller rules --harness <name>` |
-
-Two steps replace what the plugin does for you:
-
-1. **Point the harness at `miller serve`** with an MCP config entry — the `~/.cursor/mcp.json` example in the
-   Quickstart shows the `command`/`args` shape most MCP-speaking harnesses use.
-2. **Write the routing block** into the file that harness always loads:
-
-```bash
-miller rules --harness cursor > .cursor/rules/miller.mdc
-miller rules --harness agents >> AGENTS.md
-```
-
-`miller rules` prints the file content to stdout and the target path to stderr, so redirecting produces a usable
-file. Run `miller rules` with no flag to print the bare block for pasting anywhere. Miller only prints — it never
-writes into your project.
-
-| `--harness` | Writes to |
-|---|---|
-| `cursor` | `.cursor/rules/miller.mdc` |
-| `windsurf` | `.windsurf/rules/miller.md` |
-| `cline` | `.clinerules/miller.md` |
-| `kiro` | `.kiro/steering/miller.md` |
-| `copilot` | `.github/copilot-instructions.md` |
-| `agents` | `AGENTS.md` (append) |
-
-Each harness's file format is verified against that harness's official documentation, with the source URL and any
-verification caveat recorded in [`docs/contracts/rules-v1.md`](docs/contracts/rules-v1.md). Vendors move these
-formats — check that contract before trusting a path you remember.
-
 ### Manual Binary Install
 
 Use this path when your MCP client does not use Miller's plugin package.
@@ -237,6 +198,33 @@ Use this path when your MCP client does not use Miller's plugin package.
 
    On Windows, use the full path to `miller.exe` as `command`. For Cursor, put this in `~/.cursor/mcp.json` or
    install the Miller plugin — Miller resolves the open project via MCP `roots/list` on the first tool call.
+
+### Other Harnesses (instruction tier)
+
+Miller installs at two tiers. The MCP tools are identical in both; an instruction-tier install gives up the
+`miller-*` skills and automatic guidance injection.
+
+| Tier | Harnesses | `miller-*` skills | Routing block |
+|---|---|---|---|
+| Plugin | Claude Code, Codex | yes | injected at session start (Codex: see the hook note in the Quickstart) |
+| Plugin | Cursor | yes | add it yourself: `miller rules --harness cursor` |
+| Instruction | any other MCP-speaking harness | no | add it yourself: `miller rules --harness <name>` |
+
+With the MCP config above in place, write the routing block into the file your harness always loads:
+
+```bash
+miller rules --harness cursor > .cursor/rules/miller.mdc
+```
+
+`miller rules` prints the block to stdout and the target path to stderr, so a redirect produces a usable file; run
+it with no flag to print the bare block for pasting anywhere. Miller only prints — it never writes into your
+project, and it never updates a block you already wrote, so re-run the command after a Miller upgrade to pick up
+routing changes.
+
+Supported harnesses: `cursor`, `windsurf`, `cline`, `kiro`, `copilot`, `agents`. Each one's target path and file
+format — with the official doc URL it was verified against — lives in
+[`docs/contracts/rules-v1.md`](docs/contracts/rules-v1.md); `miller rules --harness <name>` prints the same target
+path to stderr.
 
 ### Source Checkout
 
