@@ -130,10 +130,10 @@ Commit modes: Batch B (Tasks 2, 3) uses `parallel-lead-commit`. All serial tasks
 - Pattern inventory: keep the `family — N facts` row. In the sub-line, show `languages: …` always, add `· N patterns` only when `PatternCount > 1`, and show `captures: …` only when the capture set differs from the family's trailing segment (e.g. family `json.property` capture `property` is redundant; omit).
 
 **Acceptance criteria:**
-- [ ] Rendered onboarding panel says "common misses" (test with 2+ misses) and shows at most one unresolved-targets row.
-- [ ] Rendered pattern inventory omits `captures:` when redundant and omits `1 pattern`.
-- [ ] FormatCount two-arg behavior unchanged (regression assertions for "file"/"symbol").
-- [ ] Worker-scope verification passes; verified diff handed to the lead per `parallel-lead-commit`.
+- [x] Rendered onboarding panel says "common misses" (test with 2+ misses) and shows at most one unresolved-targets row.
+- [x] Rendered pattern inventory omits `captures:` when redundant and omits `1 pattern`.
+- [x] FormatCount two-arg behavior unchanged (regression assertions for "file"/"symbol").
+- [x] Worker-scope verification passes; verified diff handed to the lead per `parallel-lead-commit`.
 
 ### Task 3: Styled 404, version footer, JSON links open in new tab
 

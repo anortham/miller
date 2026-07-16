@@ -11,8 +11,12 @@ public static class DashboardFormat
 {
     public static string Esc(string? value) => Uri.EscapeDataString(value ?? string.Empty);
 
-    public static string FormatCount(long value, string singular) =>
-        value.ToString("N0", CultureInfo.InvariantCulture) + " " + (value == 1 ? singular : singular + "s");
+    /// <summary>
+    /// Formats a count with its unit. Nouns whose plural is not "+s" (e.g. "common miss" → "common misses")
+    /// pass <paramref name="plural"/> explicitly.
+    /// </summary>
+    public static string FormatCount(long value, string singular, string? plural = null) =>
+        value.ToString("N0", CultureInfo.InvariantCulture) + " " + (value == 1 ? singular : plural ?? singular + "s");
 
     public static string FormatNullableCount(long? value) =>
         value?.ToString("N0", CultureInfo.InvariantCulture) ?? "—";

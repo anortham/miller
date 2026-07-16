@@ -738,6 +738,128 @@ public sealed class DashboardActivityFeedTests : IDisposable
         Assert.Contains("dashboard/wwwroot/lib/alpine/cspalpine.min.js", workflow, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task WorkspaceOnboardingPanel_PluralizesCommonMisses()
+    {
+        var onboarding = new DashboardWorkspaceOnboardingPanel(
+            "ws-a",
+            "ready",
+            TotalCalls: 20,
+            Array.Empty<string>(),
+            Array.Empty<DashboardOnboardingTarget>(),
+            [
+                new DashboardOnboardingMiss("search", "auto", "no results", 4),
+                new DashboardOnboardingMiss("inspect", null, "unknown symbol", 2),
+            ],
+            Array.Empty<string>());
+
+        string html = await RenderComponentAsync<WorkspaceOnboardingPanel>(new Dictionary<string, object?>
+        {
+            ["Onboarding"] = onboarding,
+        });
+
+        Assert.Contains("2 common misses", html);
+        Assert.DoesNotContain("misss", html);
+    }
+
+    [Fact]
+    public async Task WorkspaceOnboardingPanel_CollapsesUnresolvedHotTargetsIntoOneSummaryRow()
+    {
+        var onboarding = new DashboardWorkspaceOnboardingPanel(
+            "ws-a",
+            "ready",
+            TotalCalls: 30,
+            Array.Empty<string>(),
+            [
+                new DashboardOnboardingTarget("resolved", "FullRebuildPromotion", "class", "src/A.cs", 10, 9),
+                new DashboardOnboardingTarget("unresolved_hash", null, null, null, null, 4),
+                new DashboardOnboardingTarget("unresolved_hash", null, null, null, null, 3),
+                new DashboardOnboardingTarget("unresolved_hash", null, null, null, null, 1),
+            ],
+            Array.Empty<DashboardOnboardingMiss>(),
+            Array.Empty<string>());
+
+        string html = await RenderComponentAsync<WorkspaceOnboardingPanel>(new Dictionary<string, object?>
+        {
+            ["Onboarding"] = onboarding,
+        });
+
+        Assert.Contains("FullRebuildPromotion", html);
+        Assert.Contains("9 calls", html);
+        Assert.Contains("3 unresolved targets", html);
+        Assert.Contains("8 calls", html);
+        Assert.Contains("hashes not present in the current index", html);
+        Assert.DoesNotContain("unresolved_hash", html);
+        Assert.Equal(1, html.Split("unresolved target").Length - 1);
+        Assert.Contains("<strong>1 hot target</strong>", html);
+        Assert.DoesNotContain("4 hot targets", html);
+    }
+
+    [Fact]
+    public async Task WorkspaceOnboardingPanel_AllHotTargetsUnresolved_RendersSummaryRowOnly()
+    {
+        var onboarding = new DashboardWorkspaceOnboardingPanel(
+            "ws-a",
+            "ready",
+            TotalCalls: 12,
+            Array.Empty<string>(),
+            [
+                new DashboardOnboardingTarget("unresolved_hash", null, null, null, null, 5),
+                new DashboardOnboardingTarget("unresolved_hash", "   ", null, null, null, 2),
+            ],
+            Array.Empty<DashboardOnboardingMiss>(),
+            Array.Empty<string>());
+
+        string html = await RenderComponentAsync<WorkspaceOnboardingPanel>(new Dictionary<string, object?>
+        {
+            ["Onboarding"] = onboarding,
+        });
+
+        Assert.Contains("2 unresolved targets", html);
+        Assert.Contains("7 calls", html);
+        Assert.DoesNotContain("No hot targets.", html);
+        Assert.Equal(1, html.Split("<li>").Length - 1);
+        Assert.Contains("<strong>0 hot targets</strong>", html);
+    }
+
+    [Fact]
+    public async Task PatternInventoryPanel_OmitsRedundantCapturesAndSinglePatternCount()
+    {
+        var inventory = new DashboardPatternInventoryPanel(
+            "ws-a",
+            "ready",
+            [new DashboardPatternFamily("json.property", 1, 128, ["json"], ["property"])]);
+
+        string html = await RenderComponentAsync<PatternInventoryPanel>(new Dictionary<string, object?>
+        {
+            ["Inventory"] = inventory,
+        });
+
+        Assert.Contains("json.property", html);
+        Assert.Contains("128 facts", html);
+        Assert.Contains("languages: json", html);
+        Assert.DoesNotContain("captures:", html);
+        Assert.DoesNotContain("1 pattern", html);
+    }
+
+    [Fact]
+    public async Task PatternInventoryPanel_ShowsPatternCountAndCapturesWhenInformative()
+    {
+        var inventory = new DashboardPatternInventoryPanel(
+            "ws-a",
+            "ready",
+            [new DashboardPatternFamily("dotnet.route", 3, 12, ["csharp", "razor"], ["route", "verb"])]);
+
+        string html = await RenderComponentAsync<PatternInventoryPanel>(new Dictionary<string, object?>
+        {
+            ["Inventory"] = inventory,
+        });
+
+        Assert.Contains("3 patterns", html);
+        Assert.Contains("languages: csharp, razor", html);
+        Assert.Contains("captures: route, verb", html);
+    }
+
     private static async Task<string> RenderComponentAsync<TComponent>(Dictionary<string, object?> parameters)
         where TComponent : IComponent
     {

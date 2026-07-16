@@ -124,4 +124,31 @@ public sealed class DashboardFormatTests
     {
         Assert.Equal(expected, DashboardFormat.FormatBytes(bytes));
     }
+
+    [Theory]
+    [InlineData(0, "file", "0 files")]
+    [InlineData(1, "file", "1 file")]
+    [InlineData(2, "file", "2 files")]
+    [InlineData(1234, "symbol", "1,234 symbols")]
+    [InlineData(1, "symbol", "1 symbol")]
+    public void FormatCount_WithoutPlural_AppendsS(long value, string singular, string expected)
+    {
+        Assert.Equal(expected, DashboardFormat.FormatCount(value, singular));
+    }
+
+    [Theory]
+    [InlineData(0, "0 common misses")]
+    [InlineData(1, "1 common miss")]
+    [InlineData(2, "2 common misses")]
+    [InlineData(1500, "1,500 common misses")]
+    public void FormatCount_WithPlural_UsesPluralForEveryNonSingularValue(long value, string expected)
+    {
+        Assert.Equal(expected, DashboardFormat.FormatCount(value, "common miss", "common misses"));
+    }
+
+    [Fact]
+    public void FormatCount_NullPlural_MatchesTwoArgumentBehaviour()
+    {
+        Assert.Equal(DashboardFormat.FormatCount(3, "file"), DashboardFormat.FormatCount(3, "file", null));
+    }
 }

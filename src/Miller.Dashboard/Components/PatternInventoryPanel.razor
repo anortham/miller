@@ -34,11 +34,7 @@
                         <code>@family.Family</code>
                         <span>@family.FactCount facts</span>
                     </div>
-                    <small>
-                        @family.PatternCount pattern@(family.PatternCount == 1 ? string.Empty : "s");
-                        languages: @string.Join(", ", family.Languages);
-                        captures: @string.Join(", ", family.Captures)
-                    </small>
+                    <small>@FamilyDetails(family)</small>
                 </li>
             }
         </ol>
@@ -47,6 +43,29 @@
 
 @code {
     [Parameter] public DashboardPatternInventoryPanel? Inventory { get; set; }
+
+    private static string FamilyDetails(DashboardPatternFamily family)
+    {
+        var parts = new List<string> { "languages: " + string.Join(", ", family.Languages) };
+        if (family.PatternCount > 1)
+            parts.Add(FormatCount(family.PatternCount, "pattern"));
+        if (HasInformativeCaptures(family))
+            parts.Add("captures: " + string.Join(", ", family.Captures));
+        return string.Join(" · ", parts);
+    }
+
+    /// <summary>A lone capture that just repeats the family's trailing segment (json.property → "property")
+    /// restates the family name, so it is dropped rather than rendered.</summary>
+    private static bool HasInformativeCaptures(DashboardPatternFamily family)
+    {
+        if (family.Captures.Count == 0)
+            return false;
+        if (family.Captures.Count > 1)
+            return true;
+
+        string tail = family.Family[(family.Family.LastIndexOf('.') + 1)..];
+        return !string.Equals(family.Captures[0], tail, StringComparison.OrdinalIgnoreCase);
+    }
 
     private static string HealthStateClass(string state) => state switch
     {

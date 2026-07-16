@@ -29,11 +29,11 @@
                 <span>telemetry calls</span>
             </div>
             <div class="metric">
-                <strong>@FormatCount(Onboarding.HotTargets.Count, "hot target")</strong>
+                <strong>@FormatCount(NamedHotTargetCount, "hot target")</strong>
                 <span>resolved from hashes</span>
             </div>
             <div class="metric">
-                <strong>@FormatCount(Onboarding.CommonMisses.Count, "common miss")</strong>
+                <strong>@FormatCount(Onboarding.CommonMisses.Count, "common miss", "common misses")</strong>
                 <span>recent empty results</span>
             </div>
             <div class="metric">
@@ -68,8 +68,10 @@
                 }
                 else
                 {
+                    var named = Onboarding.HotTargets.Where(IsNamed).ToList();
+                    var unresolved = Onboarding.HotTargets.Where(static target => !IsNamed(target)).ToList();
                     <ol>
-                        @foreach (DashboardOnboardingTarget target in Onboarding.HotTargets)
+                        @foreach (DashboardOnboardingTarget target in named)
                         {
                             <li>
                                 <div class="breakdown-row">
@@ -77,6 +79,16 @@
                                     <span>@FormatCount(target.Calls, "call")</span>
                                 </div>
                                 <small>@TargetDetails(target)</small>
+                            </li>
+                        }
+                        @if (unresolved.Count > 0)
+                        {
+                            <li>
+                                <div class="breakdown-row">
+                                    <span>@FormatCount(unresolved.Count, "unresolved target")</span>
+                                    <span>@FormatCount(unresolved.Sum(static target => target.Calls), "call")</span>
+                                </div>
+                                <small>hashes not present in the current index</small>
                             </li>
                         }
                     </ol>
@@ -132,6 +144,13 @@
     private string Subtitle => Onboarding is null
         ? "No workspace selected"
         : Onboarding.TotalCalls.ToString("N0", CultureInfo.InvariantCulture) + " calls in the local profile";
+
+    /// <summary>Only named targets were actually resolved from their hashes, so the metric excludes the
+    /// unresolved ones the hot-target list collapses into its summary row.</summary>
+    private int NamedHotTargetCount => Onboarding is null ? 0 : Onboarding.HotTargets.Count(IsNamed);
+
+    private static bool IsNamed(DashboardOnboardingTarget target) =>
+        !string.IsNullOrWhiteSpace(target.Name);
 
     private static string TargetName(DashboardOnboardingTarget target) =>
         string.IsNullOrWhiteSpace(target.Name) ? target.Confidence : target.Name;
