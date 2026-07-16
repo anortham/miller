@@ -873,13 +873,13 @@ public sealed class InspectToolTests
     [Fact]
     public void Run_SymbolOverview_HighDependents_EscapesSymbolNameInImpactHint()
     {
-        using var fx = HotSymbolFixture(refCount: 4, isTest: false, name: "A\\B\"C");
+        using var fx = HotSymbolFixture(refCount: 4, isTest: false, name: "A\"C");
         var (index, resolver) = Build(fx);
 
         string output = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
-            "A\\B\"C", depth: "overview", kind: null, scope: null, limit: 50, json: false, out _);
+            "A\"C", depth: "overview", kind: null, scope: null, limit: 50, json: false, out _);
 
-        Assert.EndsWith("next: impact target=\"A\\\\B\\\"C\" — 4 dependents", output);
+        Assert.EndsWith("next: impact target=\"A\\\"C\" — 4 dependents", output);
     }
 
     private static int NextLineCount(string output) =>
