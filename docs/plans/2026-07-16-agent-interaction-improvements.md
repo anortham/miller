@@ -264,8 +264,8 @@ Re-baselined 2026-07-16: exact/unique display_path resolution and kind aliases a
 **Dependency reason:** None - safe parallel batch.
 
 **Acceptance criteria:**
-- [ ] Compact impact output never exceeds 40 impacted rows; overflow line states remainder + JSON escape hatch; JSON pinned unchanged.
-- [ ] Focused ImpactToolTests pass; handed to lead per commit mode.
+- [x] Compact impact output never exceeds 40 impacted rows; overflow line states remainder + JSON escape hatch; JSON pinned unchanged.
+- [x] Focused ImpactToolTests pass; handed to lead per commit mode.
 
 ### Task T3.2: Deduplicate source_id noise in content-search compact output
 

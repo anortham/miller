@@ -37,6 +37,7 @@ namespace Miller.Server.Tools;
 public sealed class ImpactTool
 {
     private const int CompactLikelyTestsLimit = 20;
+    private const int CompactImpactedLimit = 40;
 
     private readonly IWorkspaceIndexProvider _workspaceProvider;
     private readonly IGitDiffReader _gitDiffReader;
@@ -752,7 +753,17 @@ public sealed class ImpactTool
         else if (visibleImpacted.Count == 0)
             sb.Append("(only low_signal rows hidden; use format=json for full list.)\n");
         else
-            AppendReachedGroups(sb, visibleImpacted);
+        {
+            int shownImpacted = Math.Min(visibleImpacted.Count, CompactImpactedLimit);
+            AppendReachedGroups(sb, visibleImpacted.Take(shownImpacted).ToList());
+
+            int hiddenImpacted = visibleImpacted.Count - shownImpacted;
+            if (hiddenImpacted > 0)
+            {
+                sb.Append("... ").Append(hiddenImpacted)
+                    .Append(" more impacted; use format=json for full list.\n");
+            }
+        }
 
         if (hiddenLowSignal > 0)
         {

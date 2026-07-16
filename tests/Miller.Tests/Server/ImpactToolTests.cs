@@ -88,6 +88,37 @@ public sealed class ImpactToolTests
         return (index, new SmartTargetResolver(index));
     }
 
+    private static (MillerRepositoryIndex index, SmartTargetResolver resolver) BuildManyImpactedFixture(
+        int impactedCount, int lowSignalCount = 0)
+    {
+        var symbols = new List<IndexedSymbol>
+        {
+            new(0, ValidateId, "Validate", "void Validate()", "method", "csharp", "src/Service.cs", 10, 14, null, false),
+        };
+        var edges = new List<GraphEdge>();
+
+        for (int i = 0; i < impactedCount; i++)
+        {
+            string id = (i + 100).ToString("x32");
+            string name = $"Dependent{i + 1:00}";
+            symbols.Add(new(symbols.Count, id, name, $"void {name}()", "method", "csharp",
+                "src/Service.cs", i + 1, i + 1, null, false));
+            edges.Add(new GraphEdge(id, ValidateId, "calls"));
+        }
+
+        for (int i = 0; i < lowSignalCount; i++)
+        {
+            string id = (i + 900).ToString("x32");
+            string name = $"Namespace{i + 1:00}";
+            symbols.Add(new(symbols.Count, id, name, $"using {name};", "import", "csharp",
+                "src/Service.cs", i + 1, i + 1, null, false));
+            edges.Add(new GraphEdge(id, ValidateId, "uses"));
+        }
+
+        var index = MillerRepositoryIndex.Build(symbols, edges);
+        return (index, new SmartTargetResolver(index));
+    }
+
     private static (MillerRepositoryIndex index, SmartTargetResolver resolver) BuildNoisyImpactFixture()
     {
         var symbols = new List<IndexedSymbol>
@@ -315,6 +346,53 @@ public sealed class ImpactToolTests
             target: "Validate", changedPaths: null, diff: null, maxDepth: 1, limit: 100, json: true, out _, out _);
         using var doc = JsonDocument.Parse(json);
         Assert.Equal(25, doc.RootElement.GetProperty("tests").GetArrayLength());
+    }
+
+    [Fact]
+    public void Run_Compact_CapsImpactedRows_ButJsonKeepsFullList()
+    {
+        var (index, resolver) = BuildManyImpactedFixture(impactedCount: 55);
+
+        string compact = ImpactTool.Run(index, resolver,
+            target: "Validate", changedPaths: null, diff: null, maxDepth: 1, limit: 100, json: false, out _, out _);
+
+        Assert.Contains("# impacted (55)", compact);
+        Assert.Equal(40, compact.Split('\n').Count(line => line.Contains(" hop=", StringComparison.Ordinal)));
+        Assert.Contains("Dependent40", compact);
+        Assert.DoesNotContain("Dependent41", compact);
+        Assert.DoesNotContain("Dependent55", compact);
+        Assert.Contains("... 15 more impacted; use format=json for full list.", compact);
+
+        string json = ImpactTool.Run(index, resolver,
+            target: "Validate", changedPaths: null, diff: null, maxDepth: 1, limit: 100, json: true, out _, out _);
+        using var doc = JsonDocument.Parse(json);
+        Assert.Equal(55, doc.RootElement.GetProperty("impacted").GetArrayLength());
+    }
+
+    [Fact]
+    public void Run_Compact_ImpactedCapCountsVisibleRows_AndKeepsLowSignalCountSeparate()
+    {
+        var (index, resolver) = BuildManyImpactedFixture(impactedCount: 45, lowSignalCount: 3);
+
+        string compact = ImpactTool.Run(index, resolver,
+            target: "Validate", changedPaths: null, diff: null, maxDepth: 1, limit: 100, json: false, out _, out _);
+
+        Assert.Contains("# impacted (48)", compact);
+        Assert.Equal(40, compact.Split('\n').Count(line => line.Contains(" hop=", StringComparison.Ordinal)));
+        Assert.Contains("... 5 more impacted; use format=json for full list.", compact);
+        Assert.Contains("low_signal hidden: 3 imports/modules (use format=json for full list.)", compact);
+    }
+
+    [Fact]
+    public void Run_Compact_ImpactedRowsUnderTheCap_ShowNoOverflowLine()
+    {
+        var (index, resolver) = BuildManyImpactedFixture(impactedCount: 40);
+
+        string compact = ImpactTool.Run(index, resolver,
+            target: "Validate", changedPaths: null, diff: null, maxDepth: 1, limit: 100, json: false, out _, out _);
+
+        Assert.Equal(40, compact.Split('\n').Count(line => line.Contains(" hop=", StringComparison.Ordinal)));
+        Assert.DoesNotContain("more impacted", compact);
     }
 
     [Fact]
