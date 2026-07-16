@@ -187,9 +187,9 @@ The highest-leverage fix: the diagnosis Miller already computes must reach the a
 **Dependency reason:** None - safe parallel batch.
 
 **Acceptance criteria:**
-- [ ] Content-search empty output carries the diagnosis-specific hint + ≤2 next actions within budget; nothing stacked on the old text.
-- [ ] Empty JSON pinned byte-identical.
-- [ ] Focused ContentToolTests pass; handed to lead per commit mode.
+- [x] Content-search empty output carries the diagnosis-specific hint + ≤2 next actions within budget; nothing stacked on the old text.
+- [x] Empty JSON pinned byte-identical.
+- [x] Focused ContentToolTests pass; handed to lead per commit mode.
 
 # Phase 2 — Content contract friction (kill the wasted round-trips)
 

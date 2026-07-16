@@ -593,16 +593,85 @@ public sealed class ContentTool
             ? $"removed {result.SourceId} ({result.ChunkCount} chunks)"
             : $"not found: {result.SourceId}";
 
+    private const int EmptyHintQueryLimit = 40;
+
     private static string RenderNoResultsCompact(string operation, string query, string contentKind)
     {
+        string queryShape = SearchTool.QueryShapeFor(query);
+        string diagnosis = SearchTool.EmptyDiagnosisForContentSearch(contentKind, queryShape);
         var sb = new StringBuilder();
-        // State the fact of what was attempted, then let the structured Next block carry the recovery
-        // advice exactly once (it already encodes content_kind=all-text, workspace_id=all, mode=source).
         sb.Append("No results for content ").Append(operation).Append(".")
           .Append('\n')
-          .Append("Tried content_kind=").Append(contentKind).Append('.');
-        AppendContentNextActions(sb, SearchNoResultsNextActions(query, contentKind));
+          .Append(NoResultsDiagnosisHint(diagnosis, queryShape, query, contentKind));
+        AppendContentNextActions(sb, NoResultsCompactNextActions(diagnosis, queryShape, query, contentKind));
         return sb.ToString();
+    }
+
+    private static string NoResultsDiagnosisHint(string diagnosis, string queryShape, string query, string contentKind)
+    {
+        string q = SearchTool.Truncate(query.Trim(), EmptyHintQueryLimit);
+        return (diagnosis, queryShape) switch
+        {
+            ("mode_mismatch", "source_like") =>
+                $"'{q}' looks like source code; {contentKind} holds prose. Source bodies live in search mode=source.",
+            ("mode_mismatch", _) =>
+                $"'{q}' reads like prose; {contentKind} holds source bodies. Docs and config prose live in search mode=content.",
+            ("query_shape", "path_like") =>
+                $"'{q}' looks like a path; content search matches text inside files. Paths resolve through search mode=file.",
+            ("query_shape", _) =>
+                $"'{q}' is too short for lexical matching; use a longer literal phrase, e.g. query=\"connection refused\".",
+            (_, "natural_language") =>
+                $"No lexical match for '{q}' in {contentKind}. Retry with words that appear literally in the {CorpusNoun(contentKind)} text.",
+            _ => $"No lexical match for '{q}' in {contentKind}.",
+        };
+    }
+
+    private static string CorpusNoun(string contentKind) => contentKind switch
+    {
+        TextContentKind.WorkspaceDocs => "docs",
+        TextContentKind.WorkspaceConfig => "config",
+        TextContentKind.WorkspaceSource => "source",
+        TextContentKind.Web => "web",
+        _ => "imported",
+    };
+
+    private static IReadOnlyList<ContentNextAction> NoResultsCompactNextActions(
+        string diagnosis,
+        string queryShape,
+        string query,
+        string contentKind)
+    {
+        if (string.Equals(diagnosis, "mode_mismatch", StringComparison.Ordinal))
+        {
+            return string.Equals(queryShape, "source_like", StringComparison.Ordinal)
+                ? [NextAction("search", "search current workspace source-body text", ("query", query), ("mode", "source"))]
+                : [NextAction("search", "search workspace docs and config prose", ("query", query), ("mode", "content"))];
+        }
+
+        if (string.Equals(diagnosis, "query_shape", StringComparison.Ordinal))
+        {
+            return string.Equals(queryShape, "path_like", StringComparison.Ordinal)
+                ? [NextAction("search", "resolve a path fragment to indexed files", ("query", query), ("mode", "file"))]
+                : [NextAction("search", "retry with a longer literal phrase", ("query", "<phrase>"), ("mode", "all-text"))];
+        }
+
+        ContentNextAction widen = NextAction(
+            "search",
+            "widen to every indexed text kind",
+            ("query", query),
+            ("mode", "all-text"));
+
+        return IsWorkspaceContentKind(contentKind)
+            ? [widen]
+            :
+            [
+                NextAction(
+                    "content",
+                    "confirm what is imported under this kind",
+                    ("operation", "list"),
+                    ("content_kind", contentKind)),
+                widen,
+            ];
     }
 
     private static string RenderDiagnosticCompact(

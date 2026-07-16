@@ -188,36 +188,142 @@ public sealed class ContentToolTests : IDisposable
     }
 
     [Fact]
-    public void Content_SearchNoResults_CompactStatesRecoveryAdviceOnceInNextBlock()
+    public void Content_SearchNoResults_CompactStatesTheDiagnosisInsteadOfTheGenericTriedLine()
     {
         var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
 
         string output = tool.Content("search", query: "MissingSecretValue", content_kind: "docs", limit: 3);
 
-        // States what was attempted (a fact, not advice) ...
-        // "docs" is normalized to the canonical workspace_docs kind before rendering.
         Assert.Contains("No results for content search.", output, StringComparison.Ordinal);
-        Assert.Contains("Tried content_kind=workspace_docs.", output, StringComparison.Ordinal);
+        Assert.Contains("No lexical match for 'MissingSecretValue' in workspace_docs.", output, StringComparison.Ordinal);
 
-        // ... and encodes the recovery advice exactly once, as structured Next actions.
-        Assert.Contains("Next:", output, StringComparison.Ordinal);
-        Assert.Equal(1, CountOccurrences(output, "workspace_id=all"));
-        Assert.Equal(1, CountOccurrences(output, "mode=source"));
-
-        // The old duplicated prose sentence is gone (advice is not said twice).
+        Assert.DoesNotContain("Tried content_kind=", output, StringComparison.Ordinal);
         Assert.DoesNotContain("Try content_kind=docs, source, external_file", output, StringComparison.Ordinal);
         Assert.DoesNotContain("use workspace_id=all only for registered workspace audits", output, StringComparison.Ordinal);
-        Assert.DoesNotContain("use search mode=source for current workspace source-body text", output, StringComparison.Ordinal);
+
+        Assert.Single(NextActionLines(output));
     }
 
-    private static int CountOccurrences(string haystack, string needle)
+    [Fact]
+    public void Content_SearchNoResults_CompactSourceLikeQueryAgainstDocs_NamesSourceMode()
     {
-        int count = 0;
-        for (int i = haystack.IndexOf(needle, StringComparison.Ordinal);
-             i >= 0;
-             i = haystack.IndexOf(needle, i + needle.Length, StringComparison.Ordinal))
-            count++;
-        return count;
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+
+        string output = tool.Content("search", query: "if (value == null)", content_kind: "docs", limit: 3);
+
+        Assert.Contains("looks like source code", output, StringComparison.Ordinal);
+        Assert.Contains("search mode=source", output, StringComparison.Ordinal);
+        string action = Assert.Single(NextActionLines(output));
+        Assert.Contains("search query=if (value == null) mode=source", action, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_SearchNoResults_CompactDocsLikeQueryAgainstSource_NamesContentMode()
+    {
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+
+        string output = tool.Content("search", query: "installation guide", content_kind: "source", limit: 3);
+
+        Assert.Contains("reads like prose", output, StringComparison.Ordinal);
+        Assert.Contains("search mode=content", output, StringComparison.Ordinal);
+        string action = Assert.Single(NextActionLines(output));
+        Assert.Contains("search query=installation guide mode=content", action, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_SearchNoResults_CompactShortQuery_ShowsOneCorrectedExample()
+    {
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+
+        string output = tool.Content("search", query: "ab", content_kind: "docs", limit: 3);
+
+        Assert.Contains("too short", output, StringComparison.Ordinal);
+        Assert.Contains("e.g. query=\"connection refused\"", output, StringComparison.Ordinal);
+        Assert.Single(NextActionLines(output));
+    }
+
+    [Fact]
+    public void Content_SearchNoResults_CompactPathLikeQuery_RedirectsToFileMode()
+    {
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+
+        string output = tool.Content("search", query: "src/Miller.Server/Tools/ContentTool.cs", content_kind: "docs", limit: 3);
+
+        Assert.Contains("looks like a path", output, StringComparison.Ordinal);
+        Assert.Contains("search mode=file", output, StringComparison.Ordinal);
+        string action = Assert.Single(NextActionLines(output));
+        Assert.Contains("mode=file", action, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_SearchNoResults_CompactNaturalLanguageTrueNoHit_SaysRetryWithLiteralWords()
+    {
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+
+        string output = tool.Content("search", query: "retry budget exceeded", content_kind: "docs", limit: 3);
+
+        Assert.Contains("No lexical match for 'retry budget exceeded' in workspace_docs.", output, StringComparison.Ordinal);
+        Assert.Contains("words that appear literally in the docs text", output, StringComparison.Ordinal);
+        string action = Assert.Single(NextActionLines(output));
+        Assert.Contains("mode=all-text", action, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_SearchNoResults_CompactImportedKindTrueNoHit_OffersListThenWiden()
+    {
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+
+        string output = tool.Content("search", query: "MissingSecretValue", content_kind: "web", limit: 3);
+
+        Assert.Contains("No lexical match for 'MissingSecretValue' in web.", output, StringComparison.Ordinal);
+        string[] actions = NextActionLines(output);
+        Assert.Equal(2, actions.Length);
+        Assert.Contains("content list content_kind=web", actions[0], StringComparison.Ordinal);
+        Assert.Contains("mode=all-text", actions[1], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_SearchNoResults_CompactNeverSuggestsContentKindAllText_WhichContentSearchRejects()
+    {
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+
+        foreach (string kind in new[] { "docs", "source", "config", "external", "web" })
+        {
+            string output = tool.Content("search", query: "retry budget exceeded", content_kind: kind, limit: 3);
+            Assert.DoesNotContain("content_kind=all-text", output, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("if (value == null)", "docs")]
+    [InlineData("if (value == null)", "config")]
+    [InlineData("installation guide", "source")]
+    [InlineData("ab", "docs")]
+    [InlineData("src/Miller.Server/Tools/ContentTool.cs", "docs")]
+    [InlineData("retry budget exceeded", "docs")]
+    [InlineData("MissingSecretValue", "web")]
+    [InlineData("MissingSecretValue", "external")]
+    public void Content_SearchNoResults_CompactStaysWithinLineAndCharBudget(string query, string contentKind)
+    {
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+
+        string output = tool.Content("search", query: query, content_kind: contentKind, limit: 3);
+
+        Assert.InRange(output.Split('\n').Length, 1, 6);
+        Assert.InRange(output.Length, 1, 400);
+        Assert.InRange(NextActionLines(output).Length, 1, 2);
+    }
+
+    private static string[] NextActionLines(string output)
+    {
+        int start = output.IndexOf("Next:", StringComparison.Ordinal);
+        if (start < 0)
+            return [];
+        return output[start..]
+            .Split('\n')
+            .Skip(1)
+            .Where(static line => line.StartsWith("  ", StringComparison.Ordinal))
+            .ToArray();
     }
 
     [Fact]
@@ -242,6 +348,35 @@ public sealed class ContentToolTests : IDisposable
         Assert.Contains(actions, action =>
             action.GetProperty("tool").GetString() == "search"
             && action.GetProperty("args").GetProperty("mode").GetString() == "source");
+    }
+
+    [Fact]
+    public void Content_SearchNoResults_JsonTopLevelShapeIsFrozen()
+    {
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+
+        string output = tool.Content("search", query: "retry budget exceeded", content_kind: "docs", format: "json", limit: 3);
+
+        using JsonDocument doc = JsonDocument.Parse(output);
+        JsonElement root = doc.RootElement;
+
+        Assert.Equal(
+            new[] { "operation", "error", "diagnostic_code", "content_kind", "results", "next_actions" },
+            root.EnumerateObject().Select(static property => property.Name).ToArray());
+        Assert.Equal("search", root.GetProperty("operation").GetString());
+        Assert.Equal("No results.", root.GetProperty("error").GetString());
+        Assert.Equal("no_results", root.GetProperty("diagnostic_code").GetString());
+        Assert.Equal("workspace_docs", root.GetProperty("content_kind").GetString());
+        Assert.Empty(root.GetProperty("results").EnumerateArray());
+
+        JsonElement[] actions = root.GetProperty("next_actions").EnumerateArray().ToArray();
+        Assert.Equal(3, actions.Length);
+        Assert.Equal(
+            new[] { "content", "content", "search" },
+            actions.Select(static action => action.GetProperty("tool").GetString()).ToArray());
+        Assert.Equal("all-text", actions[0].GetProperty("args").GetProperty("content_kind").GetString());
+        Assert.Equal("all", actions[1].GetProperty("args").GetProperty("workspace_id").GetString());
+        Assert.Equal("source", actions[2].GetProperty("args").GetProperty("mode").GetString());
     }
 
     [Fact]
